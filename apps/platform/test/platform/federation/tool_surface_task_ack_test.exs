@@ -541,9 +541,11 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
     # A refusal must leave the suppression UNARMED. This is the half that
     # actually matters: an envelope the caller ignores is cosmetic, a
     # written execution.acked row parks the stage for the safety-net window.
+    #
+    # A direct row query, not a reader: the row from ANY runtime is what must
+    # be absent, and the unscoped `last_stage_ack_at/2` that used to sit here
+    # was deleted (task 01a0db63-c4f3).
     defp refute_suppression_armed(task_id, stage_id) do
-      assert Platform.Orchestration.last_stage_ack_at(task_id, stage_id) == nil
-
       refute Repo.exists?(
                from(e in RuntimeEvent,
                  where:

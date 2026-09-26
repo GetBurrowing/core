@@ -9077,7 +9077,7 @@ defmodule Platform.Federation.ToolSurface do
   #
   # SCOPE, stated as scope and not as an exception: this guard covers
   # acks naming a stage of the SAME task the caller passed. It is not a
-  # cross-task defence and does not need to be — `last_stage_ack_at/2`
+  # cross-task defence and does not need to be — `last_stage_ack_at/3`
   # keys on (task_id, stage_id) and the event is written under the
   # CALLER's task_id, so an ack can never write a suppression row a
   # sibling task's router would read.

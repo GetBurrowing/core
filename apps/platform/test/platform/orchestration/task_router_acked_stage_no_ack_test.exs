@@ -14,7 +14,8 @@ defmodule Platform.Orchestration.TaskRouterAckedStageNoAckTest do
   THE ALARM FIRES. Both were OBSERVED FIRING against an acked stage — that is
   the recorded evidence of the defect, and it is why the guard exists. Stage 3
   has now landed the durable per-stage guard in `maybe_fire_no_ack/3` (it
-  consults `Platform.Orchestration.stage_acked?/2`, landed in stage 1), so
+  consulted `Platform.Orchestration.stage_acked?/2`, landed in stage 1; since
+  task 01a0db63-c4f3 it reads the runtime-scoped `last_stage_ack_at/3`), so
   cases 1 and 2 are INVERTED here: the alarm must stay silent and the ETS
   lease must show `ack_at` re-stamped. Deleting the guard turns both red
   again; that vacuity check was run and reported for stage 3.
@@ -188,10 +189,24 @@ defmodule Platform.Orchestration.TaskRouterAckedStageNoAckTest do
     assert %{ack_at: %DateTime{}} = LeaseManager.get(task.id),
            "the real ack path must land on the live lease"
 
-    assert Orchestration.stage_acked?(task.id, stage.id),
+    assert Orchestration.last_stage_ack_at(task.id, stage.id, assignee.id),
            "the real ack path must leave a durable per-stage row"
 
     :ok
+  end
+
+  # "Did ANY runtime write an ack row for this stage" — for the refutations
+  # whose meaning is "no ack of any kind". Deliberately a direct row query:
+  # the unscoped `stage_acked?/2` was deleted (task 01a0db63-c4f3), and the
+  # scoped `/3` read would only prove the OWNER did not ack.
+  defp any_ack_row?(task_id, stage_id) do
+    Platform.Repo.exists?(
+      from(e in Platform.Orchestration.RuntimeEvent,
+        where:
+          e.task_id == ^task_id and e.event_type == "execution.acked" and
+            fragment("?->>'stage_id' = ?", e.payload, ^stage_id)
+      )
+    )
   end
 
   # Advance the clock, not the state. Identical to the helper in
@@ -321,7 +336,7 @@ defmodule Platform.Orchestration.TaskRouterAckedStageNoAckTest do
 
       # ...while the durable per-stage row survives. That asymmetry is the
       # entire fix surface for stage 3.
-      assert Orchestration.stage_acked?(task.id, stage.id)
+      assert Orchestration.last_stage_ack_at(task.id, stage.id, assignee.id)
 
       # Real disposition: the human approves, `maybe_resolve_request/1`
       # broadcasts `{:review_request_resolved, outcome: :passed}` and passes
@@ -344,19 +359,19 @@ defmodule Platform.Orchestration.TaskRouterAckedStageNoAckTest do
       assert lease.stage_id == stage.id, "same stage — no boundary was crossed"
 
       assert lease.ack_at == nil,
-             "THE DEFECT: the fresh lease forgets the ack that stage_acked?/2 still remembers"
+             "THE DEFECT: the fresh lease forgets the ack that the durable row still remembers"
 
       assert lease.no_ack_at, "and re-opens a five-minute countdown against a working agent"
 
       # Five minutes later. STAGE 2 OBSERVED THE ALARM FIRE HERE — it produced
       # the `execution.no_ack_timeout` broadcast and a `needs_human: true`
       # blocker against an agent that had acked this exact stage. Stage 3's
-      # guard in `maybe_fire_no_ack/3` consults `stage_acked?/2` and suppresses
+      # guard in `maybe_fire_no_ack/3` consults the durable ack row and suppresses
       # it. Removing the guard turns this assertion red again (verified).
       expire_no_ack_deadline!(task.id)
       :ok = refute_alarm_and_assert_restamped!(pid, task.id)
 
-      assert Orchestration.stage_acked?(task.id, stage.id),
+      assert Orchestration.last_stage_ack_at(task.id, stage.id, assignee.id),
              "the durable ack for this exact stage is what suppressed the alarm"
     end
 
@@ -419,7 +434,7 @@ defmodule Platform.Orchestration.TaskRouterAckedStageNoAckTest do
       assert lease.stage_id == next_stage.id,
              "the re-dispatch is for the NEXT stage, not the acked one"
 
-      refute Orchestration.stage_acked?(task.id, next_stage.id)
+      refute any_ack_row?(task.id, next_stage.id)
 
       expire_no_ack_deadline!(task.id)
       {event, _blocker} = observe_alarm!(pid, task.id)
@@ -453,7 +468,7 @@ defmodule Platform.Orchestration.TaskRouterAckedStageNoAckTest do
 
       :ok = sync_router(task.id)
       assert LeaseManager.get(task.id) == nil, "execution.finished clears the lease"
-      assert Orchestration.stage_acked?(task.id, stage.id)
+      assert Orchestration.last_stage_ack_at(task.id, stage.id, assignee.id)
 
       # The re-dispatch: the same running stage re-broadcast, exactly as the
       # heartbeat / stage-transition paths do in production.
@@ -470,7 +485,7 @@ defmodule Platform.Orchestration.TaskRouterAckedStageNoAckTest do
       expire_no_ack_deadline!(task.id)
       :ok = refute_alarm_and_assert_restamped!(pid, task.id)
 
-      assert Orchestration.stage_acked?(task.id, stage.id)
+      assert Orchestration.last_stage_ack_at(task.id, stage.id, assignee.id)
     end
   end
 
@@ -490,7 +505,7 @@ defmodule Platform.Orchestration.TaskRouterAckedStageNoAckTest do
       # durable row is the ONLY surviving evidence of the ack.
       :ok = LeaseManager.clear(task.id)
       assert LeaseManager.get(task.id) == nil
-      assert Orchestration.stage_acked?(task.id, stage.id)
+      assert Orchestration.last_stage_ack_at(task.id, stage.id, assignee.id)
 
       # A fresh dispatch arms a lease that has never seen an ack.
       :ok =
@@ -513,7 +528,7 @@ defmodule Platform.Orchestration.TaskRouterAckedStageNoAckTest do
 
       # No ack of any kind — neither lease nor durable row.
       assert %{ack_at: nil} = LeaseManager.get(task.id)
-      refute Orchestration.stage_acked?(task.id, stage.id)
+      refute any_ack_row?(task.id, stage.id)
 
       expire_no_ack_deadline!(task.id)
       {event, blocker} = observe_alarm!(pid, task.id)
@@ -628,7 +643,7 @@ defmodule Platform.Orchestration.TaskRouterAckedStageNoAckTest do
 
       # 1. The runtime acks, exactly as every dispatch prompt tells it to.
       :ok = ack_via_tool!(task, stage, assignee)
-      pre_blocker_ack_at = Orchestration.last_stage_ack_at(task.id, stage.id)
+      pre_blocker_ack_at = Orchestration.last_stage_ack_at(task.id, stage.id, assignee.id)
       assert %DateTime{} = pre_blocker_ack_at
 
       # 2. ...then parks itself on a person. The hold clears the liveness row,
@@ -666,8 +681,7 @@ defmodule Platform.Orchestration.TaskRouterAckedStageNoAckTest do
 
       # 5. THE RUNTIME IGNORES IT. No `task_ack`, no event of any kind. The
       #    durable ack on this stage is still the PRE-BLOCKER one.
-      assert Orchestration.last_stage_ack_at(task.id, stage.id) == pre_blocker_ack_at
-      assert Orchestration.stage_acked?(task.id, stage.id)
+      assert Orchestration.last_stage_ack_at(task.id, stage.id, assignee.id) == pre_blocker_ack_at
 
       # 6. Five minutes later. Under the unbounded `stage_acked?/2` guard the
       #    pre-blocker ack suppressed this forever and only the 90-minute
@@ -687,7 +701,7 @@ defmodule Platform.Orchestration.TaskRouterAckedStageNoAckTest do
       assert %{no_ack_fired?: true} = LeaseManager.get(task.id)
 
       # And the reason it fired is the BOUND, not the absence of an ack.
-      assert Orchestration.stage_acked?(task.id, stage.id),
+      assert Orchestration.last_stage_ack_at(task.id, stage.id, assignee.id),
              "a durable ack exists; it is older than the release, which is why it no longer suppresses"
     end
 
@@ -699,7 +713,7 @@ defmodule Platform.Orchestration.TaskRouterAckedStageNoAckTest do
       pid = boot_router!(task, assignee)
 
       :ok = ack_via_tool!(task, stage, assignee)
-      pre_blocker_ack_at = Orchestration.last_stage_ack_at(task.id, stage.id)
+      pre_blocker_ack_at = Orchestration.last_stage_ack_at(task.id, stage.id, assignee.id)
 
       hold = file_needs_human_blocker!(task, stage, assignee.id)
       :ok = sync_router(task.id)
@@ -717,7 +731,7 @@ defmodule Platform.Orchestration.TaskRouterAckedStageNoAckTest do
 
       # THE ONE DIFFERENCE FROM 6a. The runtime took the re-dispatch.
       :ok = ack_via_tool!(task, stage, assignee)
-      post_release_ack_at = Orchestration.last_stage_ack_at(task.id, stage.id)
+      post_release_ack_at = Orchestration.last_stage_ack_at(task.id, stage.id, assignee.id)
 
       assert DateTime.compare(post_release_ack_at, released_at) == :gt,
              "the new ack must postdate the release, or this is not the control it claims to be"
@@ -760,7 +774,8 @@ defmodule Platform.Orchestration.TaskRouterAckedStageNoAckTest do
       expire_no_ack_deadline!(task.id)
       :ok = refute_alarm_and_assert_restamped!(pid, task.id)
 
-      assert Orchestration.last_stage_ack_at(task.id, stage.id) == post_release_ack_at
+      assert Orchestration.last_stage_ack_at(task.id, stage.id, assignee.id) ==
+               post_release_ack_at
     end
   end
 

@@ -189,24 +189,38 @@ defmodule Platform.Orchestration.TaskRouterLiveAckedExecutorTest do
 
     :ok = sync_router(task.id)
 
-    assert Orchestration.stage_acked?(task.id, stage.id),
-           "the ack path must leave a durable per-stage row, or the guard has " <>
-             "nothing to read and this test proves nothing"
-
-    assert %DateTime{} = Orchestration.last_stage_ack_at(task.id, stage.id)
+    assert %DateTime{} = Orchestration.last_stage_ack_at(task.id, stage.id, assignee.id),
+           "the ack path must leave a durable per-stage row written by the " <>
+             "dispatched runtime, or the guard has nothing to read and this " <>
+             "test proves nothing"
 
     :ok
+  end
+
+  # "Did ANY runtime write an ack row for this stage" — for the refutations
+  # whose meaning is "no ack of any kind". Deliberately a direct row query:
+  # the unscoped `stage_acked?/2` was deleted (task 01a0db63-c4f3), and the
+  # scoped `/3` read would only prove the OWNER did not ack.
+  defp any_ack_row?(task_id, stage_id) do
+    Repo.exists?(
+      from(e in RuntimeEvent,
+        where:
+          e.task_id == ^task_id and e.event_type == "execution.acked" and
+            fragment("?->>'stage_id' = ?", e.payload, ^stage_id)
+      )
+    )
   end
 
   # Ages the durable ack so it falls outside the stage kind's safety net. This
   # is the ONLY condition varied between the withheld case and the dispatched
   # case in the paired test — move two and neither probe proves anything.
-  defp age_ack!(task_id, stage_id, ms_ago) do
+  defp age_ack!(task_id, stage_id, runtime_id, ms_ago) do
     event =
       Repo.one!(
         from(e in RuntimeEvent,
           where:
             e.task_id == ^task_id and e.event_type == "execution.acked" and
+              e.runtime_id == ^runtime_id and
               fragment("?->>'stage_id' = ?", e.payload, ^stage_id),
           order_by: [desc: e.occurred_at, desc: e.id],
           limit: 1
@@ -219,7 +233,8 @@ defmodule Platform.Orchestration.TaskRouterLiveAckedExecutorTest do
     |> Ecto.Changeset.change(%{occurred_at: aged})
     |> Repo.update!()
 
-    assert DateTime.compare(Orchestration.last_stage_ack_at(task_id, stage_id), aged) == :eq,
+    assert DateTime.compare(Orchestration.last_stage_ack_at(task_id, stage_id, runtime_id), aged) ==
+             :eq,
            "the lookup must see the aged timestamp, or the second half of the " <>
              "pair is varying nothing"
 
@@ -263,7 +278,7 @@ defmodule Platform.Orchestration.TaskRouterLiveAckedExecutorTest do
       #    The executor is presumed dead and the stage must be re-dispatched —
       #    this is what makes the guard self-healing rather than a stall.
       stop_router(task.id)
-      age_ack!(task.id, stage.id, coding_safety_net_ms() + 60_000)
+      age_ack!(task.id, stage.id, assignee.id, coding_safety_net_ms() + 60_000)
       start_router(task.id, assignee)
 
       assert_dispatched!(
@@ -304,7 +319,7 @@ defmodule Platform.Orchestration.TaskRouterLiveAckedExecutorTest do
       pid = start_router(task.id, assignee)
       assert_dispatched!()
 
-      refute Orchestration.stage_acked?(task.id, stage.id),
+      refute any_ack_row?(task.id, stage.id),
              "this test is about the NEVER-ACKED path; an ack here would " <>
                "make the assertion below test the wrong branch"
 
@@ -347,8 +362,8 @@ defmodule Platform.Orchestration.TaskRouterLiveAckedExecutorTest do
           }
         })
 
-      assert Orchestration.stage_acked?(task.id, other_stage.id)
-      refute Orchestration.stage_acked?(task.id, stage.id)
+      assert %DateTime{} = Orchestration.last_stage_ack_at(task.id, other_stage.id, assignee.id)
+      refute any_ack_row?(task.id, stage.id)
 
       send(pid, :dispatch)
       :ok = sync_router(task.id)
@@ -382,7 +397,7 @@ defmodule Platform.Orchestration.TaskRouterLiveAckedExecutorTest do
 
       assert DateTime.diff(
                DateTime.utc_now(),
-               Orchestration.last_stage_ack_at(task.id, stage.id),
+               Orchestration.last_stage_ack_at(task.id, stage.id, assignee.id),
                :millisecond
              ) < coding_safety_net_ms(),
              "the ack must still be INSIDE its window, or this test passes on " <>
@@ -441,13 +456,13 @@ defmodule Platform.Orchestration.TaskRouterLiveAckedExecutorTest do
 
       assert DateTime.compare(
                restarted_at,
-               Orchestration.last_stage_ack_at(task.id, stage.id)
+               Orchestration.last_stage_ack_at(task.id, stage.id, assignee.id)
              ) == :gt,
              "the restart must postdate the ack, or this is not the incident shape"
 
       assert DateTime.diff(
                DateTime.utc_now(),
-               Orchestration.last_stage_ack_at(task.id, stage.id),
+               Orchestration.last_stage_ack_at(task.id, stage.id, assignee.id),
                :millisecond
              ) < coding_safety_net_ms(),
              "the ack must still be INSIDE its window, or this test passes on " <>

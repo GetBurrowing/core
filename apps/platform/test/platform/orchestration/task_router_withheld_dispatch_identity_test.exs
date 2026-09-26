@@ -137,7 +137,8 @@ defmodule Platform.Orchestration.TaskRouterWithheldDispatchIdentityTest do
       # constant `0m` cannot pass by accident.
       age_ack!(ctx.task, ctx.stage, 25 * 60_000)
 
-      {acked_at, read_back_subagent} = Orchestration.last_stage_ack(ctx.task.id, ctx.stage.id)
+      {acked_at, read_back_subagent} =
+        Orchestration.last_stage_ack(ctx.task.id, ctx.stage.id, ctx.assignee.id)
 
       assert read_back_subagent == subagent_id,
              "the helper must hand back the subagent id the ack actually recorded, " <>
@@ -209,7 +210,8 @@ defmodule Platform.Orchestration.TaskRouterWithheldDispatchIdentityTest do
       ack!(ctx.task, ctx.stage, ctx.assignee)
       strip_subagent_id!(ctx.task.id, ctx.stage.id)
 
-      {acked_at, read_back_subagent} = Orchestration.last_stage_ack(ctx.task.id, ctx.stage.id)
+      {acked_at, read_back_subagent} =
+        Orchestration.last_stage_ack(ctx.task.id, ctx.stage.id, ctx.assignee.id)
 
       assert is_nil(read_back_subagent),
              "the legacy shape must actually be in place, or this test is the " <>
@@ -297,11 +299,13 @@ defmodule Platform.Orchestration.TaskRouterWithheldDispatchIdentityTest do
     |> Ecto.Changeset.change(%{started_at: DateTime.add(aged, -60, :second)})
     |> Repo.update!()
 
-    latest_ack_row!(task.id, stage.id)
+    row = latest_ack_row!(task.id, stage.id)
+
+    row
     |> Ecto.Changeset.change(%{occurred_at: aged})
     |> Repo.update!()
 
-    {read_back, _subagent} = Orchestration.last_stage_ack(task.id, stage.id)
+    {read_back, _subagent} = Orchestration.last_stage_ack(task.id, stage.id, row.runtime_id)
 
     assert DateTime.compare(read_back, aged) == :eq,
            "the lookup must see the aged timestamp, or the age assertion varies nothing"
@@ -343,9 +347,10 @@ defmodule Platform.Orchestration.TaskRouterWithheldDispatchIdentityTest do
 
     :ok = sync_router(task.id)
 
-    assert Orchestration.stage_acked?(task.id, stage.id),
-           "the ack must leave a durable per-stage row, or the suppression under " <>
-             "test never triggers and there is no notice to read"
+    assert %DateTime{} = Orchestration.last_stage_ack_at(task.id, stage.id, assignee.id),
+           "the ack must leave a durable per-stage row written by the dispatched " <>
+             "runtime, or the suppression under test never triggers and there is " <>
+             "no notice to read"
 
     subagent_id
   end

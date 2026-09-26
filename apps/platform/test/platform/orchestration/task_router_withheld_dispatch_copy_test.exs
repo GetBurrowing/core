@@ -382,9 +382,10 @@ defmodule Platform.Orchestration.TaskRouterWithheldDispatchCopyTest do
 
     :ok = sync_router(task.id)
 
-    assert Orchestration.stage_acked?(task.id, stage.id),
-           "the ack must leave a durable per-stage row, or the suppression under " <>
-             "test never triggers and the copy half reads nothing"
+    assert %DateTime{} = Orchestration.last_stage_ack_at(task.id, stage.id, assignee.id),
+           "the ack must leave a durable per-stage row written by the dispatched " <>
+             "runtime, or the suppression under test never triggers and the copy " <>
+             "half reads nothing"
 
     :ok
   end

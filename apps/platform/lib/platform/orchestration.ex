@@ -40,102 +40,51 @@ defmodule Platform.Orchestration do
   defdelegate current_lease_for_task_runtime(task_id, runtime_id), to: RuntimeSupervision
 
   @doc """
-  Has ANY runtime already acked this specific stage of this task?
+  The most recent ack of this stage BY ONE RUNTIME, as `{occurred_at, subagent_id}`,
+  or `nil`.
 
-  The durable answer to "did someone ack stage X". `LeaseManager` is ETS keyed
-  by task_id ALONE and `clear/1` deletes the whole row, so the in-memory ack
-  flag does not survive the ~15 `clear_liveness/1` sites in `TaskRouter` —
-  several of which immediately re-dispatch and re-arm a fresh 5-minute no-ack
-  countdown against a stage whose executor already acked and has no reason to
-  ack again. That is the `execution.no_ack_timeout` false positive. The
-  `execution.acked` runtime_event row, by contrast, is permanent.
+  ## Why the read is durable
 
-  Note the storage shape: `runtime_events` has NO `stage_id` COLUMN. The schema
-  is task_id / lease_id / phase / runtime_id / event_type / occurred_at /
-  idempotency_key / payload, and `ToolSurface.emit_task_ack/4` writes the stage
-  id into `payload["stage_id"]`. Hence the JSONB `->>` fragment rather than a
-  plain column comparison.
+  `LeaseManager` is ETS keyed by task_id ALONE and `clear/1` deletes the whole
+  row, so the in-memory ack flag does not survive the ~15 `clear_liveness/1`
+  sites in `TaskRouter` — several of which immediately re-dispatch and re-arm a
+  fresh 5-minute no-ack countdown against a stage whose executor already acked
+  and has no reason to ack again. That is the `execution.no_ack_timeout` false
+  positive (ADR 0051). `TaskRouter.terminate/2` calls `clear_liveness/1` too,
+  so a router that stops and restarts reads back no deadline at all while the
+  executor it dispatched is still running: task `01a04135` saw an ack at 02:09
+  with a 03:39 safety net, a router restart, and a re-dispatch of the same
+  stage at 02:17. The `execution.acked` runtime_event row is permanent, and
+  Postgres is the only store that survives it.
 
-  A nil or empty `stage_id` returns `false` WITHOUT querying. Planning-phase
-  acks are emitted with `stage_id: ""`, and matching those would make this
-  function answer "acked" for stages nobody acked — an alarm that suppresses
-  itself everywhere is strictly worse than one that fires spuriously.
+  ## Why the scope
 
-  ## Query cost — deliberately un-indexed, do not "fix" this
+  Task `01a0c762` stage 2. Every router decision that reads an ack is really
+  asking "did the runtime the stage was DISPATCHED to ack it", and that differs
+  from "did anybody ack it" whenever a row was written by someone else:
+  `RuntimeChannel`'s `execution_event` handler lets any authenticated runtime
+  write an `execution.acked` row naming any `stage_id` (it forces only
+  `runtime_id` to the sender's own), and after a reassignment the previous
+  owner's fresh ack is a real row about the wrong runtime. Task `01a0db63-c4f3`
+  deleted the unscoped `/2` forms (`stage_acked?/2`, `last_stage_ack_at/2`,
+  `last_stage_ack/2`) rather than leave them for a future caller to pick up;
+  CI's `--warnings-as-errors` compile now rejects any call to them.
 
-  Migration `20260325013000_create_execution_leases_and_runtime_events.exs`
-  indexes `runtime_events` on `[:task_id]`, `[:runtime_id]`, `[:event_type]`
-  and `[:occurred_at]`, plus a unique index on `idempotency_key`. There is no
-  composite `(task_id, event_type)` index and no index on `payload`, so this
-  plans as an index scan on `task_id` followed by an in-memory filter on
-  `event_type` and the JSONB key. Rows per task run tens-to-hundreds and this
-  is called ONLY on the alarm path — once per elapsed no-ack deadline, never in
-  a request hot path. No new index is warranted; please do not add a
-  speculative one.
-  """
-  @spec stage_acked?(String.t(), String.t() | nil) :: boolean()
-  def stage_acked?(_task_id, stage_id) when stage_id in [nil, ""], do: false
+  Filters on the `runtime_events.runtime_id` COLUMN — the value both federation
+  transports stamp from authenticated state and `ToolSurface.emit_task_ack/4`
+  writes — never on the caller-asserted payload. A nil, blank or non-binary
+  `runtime_id` returns `nil`: "no owner is known" must never widen back to
+  "anyone's ack counts".
 
-  def stage_acked?(task_id, stage_id) when is_binary(task_id) and is_binary(stage_id) do
-    Repo.exists?(
-      from(e in RuntimeEvent,
-        where:
-          e.task_id == ^task_id and e.event_type == "execution.acked" and
-            fragment("?->>'stage_id' = ?", e.payload, ^stage_id),
-        limit: 1
-      )
-    )
-  end
+  ## Why the subagent_id
 
-  def stage_acked?(_task_id, _stage_id), do: false
-
-  @doc """
-  When a stage was most recently acked, from the durable `runtime_events` log.
-
-  The recency twin of `stage_acked?/2`, and it exists because the boolean is
-  not enough to answer "is an executor still working this stage?". Callers
-  that need to compare an ack against a deadline need the instant, not the
-  fact.
-
-  ## Why not read `LeaseManager`'s `safety_net_at` instead
-
-  Because it is gone exactly when the question is hardest. `TaskRouter.terminate/2`
-  calls `clear_liveness/1`, which deletes the whole ETS lease row, so a router
-  that stops and restarts reads back no deadline at all — while the executor it
-  dispatched is still running. That is the shape reported in task `01a04135`:
-  an ack at 02:09 with a 03:39 safety net, a router restart, and a re-dispatch
-  of the same stage at 02:17. Postgres is the only store that survives it.
-
-  Returns `nil` when the stage has never been acked, and for a nil/blank
-  `stage_id` — planning-phase acks are emitted with `stage_id: ""` and matching
-  those would hand back an ack belonging to no stage, the same trap
-  `stage_acked?/2` documents.
-
-  Ordered by `occurred_at` then `id` so a re-ack in the same microsecond still
-  resolves to the newer row (ids are UUIDv7, monotonic in time). Shares
-  `stage_acked?/2`'s deliberately un-indexed query shape — see that function's
-  cost note before adding an index for this.
-
-  UNSCOPED: counts an ack from ANY runtime. Since task `01a0c762` stage 2 no
-  `TaskRouter` decision reads this form — the dispatch guard and the no-ack
-  alarm use `last_stage_ack_at/3`, scoped to the dispatched runtime. Reach for
-  `/3` for anything that decides; this form is for "did anyone ack at all".
-  """
-  @spec last_stage_ack_at(String.t(), String.t() | nil) :: DateTime.t() | nil
-  def last_stage_ack_at(task_id, stage_id),
-    do: last_stage_event_at(task_id, stage_id, "execution.acked")
-
-  @doc """
-  The most recent stage ack as `{occurred_at, subagent_id}`, or `nil`.
-
-  The identity twin of `last_stage_ack_at/2`, and it exists because an INSTANT
-  alone does not let a reader tell a live executor from a dead one. On the
-  2026-09-11 incident (ticket `01a08e86`) the router withheld a dispatch saying
-  the stage "already has an acked executor"; the executor had returned twenty
-  minutes earlier, and the notice named neither when the ack happened nor who
-  made it, so the only way to check the assertion was to query `runtime_events`
-  by hand. Handing back the subagent handle alongside the instant is what makes
-  the notice checkable by the person reading it.
+  An INSTANT alone does not let a reader tell a live executor from a dead one.
+  On the 2026-09-11 incident (ticket `01a08e86`) the router withheld a dispatch
+  saying the stage "already has an acked executor"; the executor had returned
+  twenty minutes earlier, and the notice named neither when the ack happened
+  nor who made it, so the only way to check the assertion was to query
+  `runtime_events` by hand. Handing back the subagent handle alongside the
+  instant is what makes the notice checkable by the person reading it.
 
   `subagent_id` is read from the `execution.acked` payload, whose shape is
   documented at `RuntimeSupervision`'s `@event_statuses` entry:
@@ -145,36 +94,37 @@ defmodule Platform.Orchestration do
   rather than crash on it.
 
   Returns the `occurred_at` column, NOT the payload's `"acked_at"` string: the
-  column is what `last_stage_ack_at/2` compares against `safety_net_ms`, and a
-  notice quoting a different field than the guard measured would be the kind of
-  near-miss this stage exists to remove. Same `stage_id` guard, ordering and
-  deliberately un-indexed query shape as `last_stage_event_at/3` — read
-  `stage_acked?/2`'s cost note before adding an index for this.
-  """
-  @spec last_stage_ack(String.t(), String.t() | nil) :: {DateTime.t(), String.t() | nil} | nil
-  def last_stage_ack(_task_id, stage_id) when stage_id in [nil, ""], do: nil
+  column is what `last_stage_ack_at/3` compares against `safety_net_ms`, and a
+  notice quoting a different field than the guard measured would be a
+  near-miss. Ordered by `occurred_at` then `id` so a re-ack in the same
+  microsecond still resolves to the newer row (ids are UUIDv7, monotonic in
+  time).
 
-  def last_stage_ack(task_id, stage_id) when is_binary(task_id) and is_binary(stage_id),
-    do: do_last_stage_ack(task_id, stage_id, :any_runtime)
+  ## Storage shape
 
-  def last_stage_ack(_task_id, _stage_id), do: nil
+  `runtime_events` has NO `stage_id` COLUMN. The schema is task_id / lease_id /
+  phase / runtime_id / event_type / occurred_at / idempotency_key / payload,
+  and `ToolSurface.emit_task_ack/4` writes the stage id into
+  `payload["stage_id"]`. Hence the JSONB `->>` fragment rather than a plain
+  column comparison.
 
-  @doc """
-  `last_stage_ack/2` scoped to the acks ONE runtime wrote, or `nil`.
+  A nil or empty `stage_id` returns `nil` WITHOUT querying. Planning-phase acks
+  are emitted with `stage_id: ""`, and matching those would hand back an ack
+  belonging to no stage — an alarm that suppresses itself everywhere is
+  strictly worse than one that fires spuriously.
 
-  Task `01a0c762` stage 2. The `/2` form answers "did anybody ack this stage",
-  and every router decision that reads it is really asking "did the runtime the
-  stage was DISPATCHED to ack it". Those differ whenever a row was written by
-  someone else: `RuntimeChannel`'s `execution_event` handler lets any
-  authenticated runtime write an `execution.acked` row naming any `stage_id`
-  (it forces only `runtime_id` to the sender's own), and after a reassignment
-  the previous owner's fresh ack is a real row about the wrong runtime.
+  ## Query cost — deliberately un-indexed, do not "fix" this
 
-  Filters on the `runtime_events.runtime_id` COLUMN — the value both federation
-  transports stamp from authenticated state and `ToolSurface.emit_task_ack/4`
-  writes — never on the caller-asserted payload. Same nil/blank `stage_id`
-  guard as the `/2` form. A nil, blank or non-binary `runtime_id` returns `nil`:
-  "no owner is known" must never widen back to "anyone's ack counts".
+  Migration `20260325013000_create_execution_leases_and_runtime_events.exs`
+  indexes `runtime_events` on `[:task_id]`, `[:runtime_id]`, `[:event_type]`
+  and `[:occurred_at]`, plus a unique index on `idempotency_key`. There is no
+  composite `(task_id, event_type)` index and no index on `payload`, so this
+  plans as an index scan on `task_id` followed by an in-memory filter on
+  `event_type`, `runtime_id` and the JSONB key. Rows per task run
+  tens-to-hundreds and this is read on `TaskRouter`'s dispatch-guard and
+  no-ack-alarm paths, never in a request hot path. No new index is warranted;
+  please do not add a speculative one. `last_stage_event_at/3` shares this
+  query shape and this note.
   """
   @spec last_stage_ack(String.t(), String.t() | nil, String.t() | nil) ::
           {DateTime.t(), String.t() | nil} | nil
@@ -188,10 +138,12 @@ defmodule Platform.Orchestration do
   def last_stage_ack(_task_id, _stage_id, _runtime_id), do: nil
 
   @doc """
-  `last_stage_ack_at/2` scoped to one runtime's acks: the `occurred_at` of the
+  When ONE runtime most recently acked this stage: the `occurred_at` of the
   newest `execution.acked` row for the stage whose `runtime_id` column equals
-  `runtime_id`, or `nil`. See `last_stage_ack/3` for why the scope exists and
-  for the nil/blank guards, which are identical.
+  `runtime_id`, or `nil`. The recency form of `last_stage_ack/3` — callers that
+  compare an ack against a deadline need the instant, not the fact. See
+  `last_stage_ack/3` for why the read is durable and scoped, the nil/blank
+  guards (identical), the storage shape and the query-cost note.
   """
   @spec last_stage_ack_at(String.t(), String.t() | nil, String.t() | nil) :: DateTime.t() | nil
   def last_stage_ack_at(task_id, stage_id, runtime_id) do
@@ -201,10 +153,7 @@ defmodule Platform.Orchestration do
     end
   end
 
-  # One query for both the scoped and unscoped forms, so the two cannot drift
-  # apart in ordering or stage matching. `:any_runtime` is an atom precisely so
-  # it can never collide with a runtime_id string.
-  defp do_last_stage_ack(task_id, stage_id, runtime_scope) do
+  defp do_last_stage_ack(task_id, stage_id, runtime_id) do
     from(e in RuntimeEvent,
       where:
         e.task_id == ^task_id and e.event_type == "execution.acked" and
@@ -213,11 +162,9 @@ defmodule Platform.Orchestration do
       limit: 1,
       select: {e.occurred_at, fragment("?->>'subagent_id'", e.payload)}
     )
-    |> scope_ack_runtime(runtime_scope)
+    |> scope_ack_runtime(runtime_id)
     |> Repo.one()
   end
-
-  defp scope_ack_runtime(query, :any_runtime), do: query
 
   defp scope_ack_runtime(query, runtime_id) when is_binary(runtime_id),
     do: from(e in query, where: e.runtime_id == ^runtime_id)
@@ -225,14 +172,17 @@ defmodule Platform.Orchestration do
   @doc """
   When a stage last emitted `event_type`, from the durable `runtime_events` log.
 
-  The general form behind `last_stage_ack_at/2`. It exists because "was this
-  stage acked recently" is not on its own the same question as "is an executor
-  still on it": an `execution.finished` arriving AFTER the ack says the
-  subagent is gone, and a caller comparing the two instants can tell the
-  difference. `TaskRouter`'s live-acked-executor guard does exactly that.
+  It exists because "was this stage acked recently" is not on its own the same
+  question as "is an executor still on it": an `execution.finished` arriving
+  AFTER the ack says the subagent is gone, and a caller comparing the two
+  instants can tell the difference. `TaskRouter`'s live-acked-executor guard
+  does exactly that.
+
+  UNSCOPED: matches a row from ANY runtime. Ack reads must use
+  `last_stage_ack_at/3`, never this function with `"execution.acked"`.
 
   Same `stage_id` guard and the same deliberately un-indexed query shape as
-  `stage_acked?/2` — read that function's cost note before adding an index.
+  `last_stage_ack/3` — read its cost note before adding an index.
   """
   @spec last_stage_event_at(String.t(), String.t() | nil, String.t()) :: DateTime.t() | nil
   def last_stage_event_at(_task_id, stage_id, _event_type) when stage_id in [nil, ""], do: nil

@@ -37,6 +37,7 @@ defmodule Platform.Orchestration.TaskRouterAckOwnershipTest do
   alias Platform.Federation.ToolSurface
   alias Platform.Orchestration
   alias Platform.Orchestration.LeaseManager
+  alias Platform.Orchestration.RuntimeEvent
   alias Platform.Orchestration.TaskRouter
   alias Platform.Repo
   alias Platform.Tasks
@@ -181,15 +182,25 @@ defmodule Platform.Orchestration.TaskRouterAckOwnershipTest do
   # ── (b) the no-ack alarm ──────────────────────────────────────────────────
 
   describe "(b) a non-owner's durable ack does not suppress the no-ack alarm" do
-    test "B's row exists, is visible to the unscoped reader, and the alarm still fires",
+    test "B's row exists unscoped, is invisible to A's scoped reader, and the alarm still fires",
          ctx do
       pid = boot_dispatched_to_a!(ctx)
 
       record_ack_event!(ctx.task, ctx.stage, ctx.runtime_b)
 
-      # Anti-vacuity: the row IS there, and the pre-stage-2 reader would have
-      # counted it. Only the runtime scope separates it from the owner's.
-      assert %DateTime{} = Orchestration.last_stage_ack_at(ctx.task.id, ctx.stage.id)
+      # Anti-vacuity: B's row IS there, and the pre-stage-2 unscoped reader
+      # would have counted it. Only the runtime scope separates it from the
+      # owner's. Asserted on the row itself: the unscoped `/2` readers were
+      # deleted (task 01a0db63-c4f3), so a direct query is the only unscoped
+      # view left.
+      assert Repo.exists?(
+               from(e in RuntimeEvent,
+                 where:
+                   e.task_id == ^ctx.task.id and e.event_type == "execution.acked" and
+                     e.runtime_id == ^ctx.runtime_b and
+                     fragment("?->>'stage_id' = ?", e.payload, ^ctx.stage.id)
+               )
+             )
 
       assert %DateTime{} =
                Orchestration.last_stage_ack_at(ctx.task.id, ctx.stage.id, ctx.runtime_b)

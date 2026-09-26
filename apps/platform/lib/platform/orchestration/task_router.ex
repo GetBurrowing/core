@@ -2727,14 +2727,14 @@ defmodule Platform.Orchestration.TaskRouter do
   # the same stage re-dispatched at 02:17. A guard reading the lease would have
   # suppressed nothing on the one occasion it was needed most.
   #
-  # `Platform.Orchestration.last_stage_ack_at/2` reads `runtime_events`, which
+  # `Platform.Orchestration.last_stage_ack_at/3` reads `runtime_events`, which
   # survives `clear_liveness/1`, a `LeaseManager` restart and a node restart —
-  # the same durability argument ADR 0051 makes for `stage_acked?/2` on the
-  # alarm path.
+  # the same durability argument ADR 0051 makes for the durable ack read on
+  # the alarm path.
   #
   # ## Why the window, and not simply "has it ever acked"
   #
-  # An ack is not a permanent claim on a stage. `stage_acked?/2` stays true
+  # An ack is not a permanent claim on a stage. "Has it ever acked" stays true
   # forever, so suppressing on it alone would park a stage whose executor died
   # after acking, with nothing left to re-dispatch it — the failure this system
   # is least able to notice. Bounding the suppression by the stage kind's own
@@ -2888,7 +2888,7 @@ defmodule Platform.Orchestration.TaskRouter do
   # `record_dispatch/4` preserves `ack_at` when the row already names this stage
   # and builds a fresh zero-ack row when it does not, so re-arming here cannot
   # erase an ack (task 019fa469 stage 6) and cannot invent one. The no-ack alarm
-  # reads Postgres via `stage_acked?/2` regardless, per ADR 0051.
+  # reads Postgres via `last_stage_ack_at/3` regardless, per ADR 0051.
   defp suppress_live_acked_executor(state, task, stage) do
     stage_kind = current_stage_type(%{state | current_stage_id: stage.id})
     arm_liveness_timers(state.task_id, stage, stage_kind, state.assignee.id)
@@ -3345,8 +3345,8 @@ defmodule Platform.Orchestration.TaskRouter do
   # That case remains covered by `execution.safety_net_fired`, untouched here.
   #
   # Stage-scoped by construction: a lease with a nil/blank stage_id falls
-  # through to the alarm (`last_stage_ack_at/2` returns nil for a blank stage,
-  # carrying the same guard `stage_acked?/2` documents), and an ack on stage N
+  # through to the alarm (`last_stage_ack_at/3` returns nil for a blank stage,
+  # carrying the guard `last_stage_ack/3` documents), and an ack on stage N
   # never suppresses the alarm for stage N+1.
   # Best-effort stage label for the ack log line: the event payload is the
   # authority (the ack names its own stage), the router's current stage is
@@ -3383,7 +3383,7 @@ defmodule Platform.Orchestration.TaskRouter do
   end
 
   # The bounded form of the durable-ack read — see the guard note above.
-  # `last_stage_ack_at/2` is the recency twin of `stage_acked?/2` (same query
+  # `last_stage_ack_at/3` is the recency form of `last_stage_ack/3` (same query
   # shape, same nil/blank-stage_id guard), so the only behavioural difference
   # from the unbounded version is the `human_released_since?/3` clause.
   #

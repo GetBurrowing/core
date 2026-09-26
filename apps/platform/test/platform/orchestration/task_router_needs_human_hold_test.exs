@@ -517,7 +517,7 @@ defmodule Platform.Orchestration.TaskRouterNeedsHumanHoldTest do
       # dispatch getting past the guard below.
       assert DateTime.diff(
                DateTime.utc_now(),
-               Orchestration.last_stage_ack_at(ctx.task.id, ctx.stage.id),
+               Orchestration.last_stage_ack_at(ctx.task.id, ctx.stage.id, ctx.assignee.id),
                :millisecond
              ) < coding_safety_net_ms()
 
@@ -613,7 +613,8 @@ defmodule Platform.Orchestration.TaskRouterNeedsHumanHoldTest do
 
     :ok = sync_router(ctx.task.id)
 
-    assert %DateTime{} = Orchestration.last_stage_ack_at(ctx.task.id, ctx.stage.id),
+    assert %DateTime{} =
+             Orchestration.last_stage_ack_at(ctx.task.id, ctx.stage.id, ctx.assignee.id),
            "the ack path must leave a durable per-stage row, or the guard has " <>
              "nothing to read and this test proves nothing"
 
