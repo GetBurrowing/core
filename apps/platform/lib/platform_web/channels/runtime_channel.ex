@@ -260,6 +260,45 @@ defmodule PlatformWeb.RuntimeChannel do
     {:noreply, socket}
   end
 
+  # ── Play host frames (task 01a0db5f stage 2) ─────────────────────────
+  #
+  # The host → core half of `Platform.GameStream.Protocol`. Both are inert
+  # while GAME_STREAM_ENABLED is unset: the frame is logged ONCE per channel
+  # process (a host that keeps sending must not flood the log) and dropped.
+  # With the flag on, `Platform.GameStream` checks that the SENDING runtime
+  # is the session's host — a runtime can only speak for its own session.
+  @impl true
+  def handle_in("play_session_status", payload, socket) when is_map(payload) do
+    RuntimePresence.touch(socket.assigns.runtime_id)
+
+    if Platform.GameStream.enabled?() do
+      log_play_frame_result(
+        "play_session_status",
+        Platform.GameStream.handle_host_status(socket.assigns.runtime_id, payload)
+      )
+
+      {:noreply, socket}
+    else
+      {:noreply, log_play_frame_disabled(socket, "play_session_status")}
+    end
+  end
+
+  @impl true
+  def handle_in("play_signal", payload, socket) when is_map(payload) do
+    RuntimePresence.touch(socket.assigns.runtime_id)
+
+    if Platform.GameStream.enabled?() do
+      log_play_frame_result(
+        "play_signal",
+        Platform.GameStream.relay_to_viewer(socket.assigns.runtime_id, payload)
+      )
+
+      {:noreply, socket}
+    else
+      {:noreply, log_play_frame_disabled(socket, "play_signal")}
+    end
+  end
+
   # The receipt for a `meeting_say` dispatch (task 01a06672 stage 2). Same
   # shape as the join ack above, with one difference worth naming: the log
   # line carries the utterance id and never the text. The text is already in
@@ -720,6 +759,10 @@ defmodule PlatformWeb.RuntimeChannel do
     runtime_id = socket.assigns.runtime_id
     RuntimePresence.untrack(runtime_id)
 
+    # Task 01a0db5f: a play host that goes away fails its session. A no-op
+    # (and never raises) while GAME_STREAM_ENABLED is unset.
+    Platform.GameStream.host_disconnected(runtime_id)
+
     Logger.info("[RuntimeChannel] runtime disconnected: runtime_id=#{runtime_id}")
 
     :telemetry.execute(
@@ -732,6 +775,31 @@ defmodule PlatformWeb.RuntimeChannel do
   end
 
   # ── Helpers ─────────────────────────────────────────────────────────
+
+  defp log_play_frame_disabled(socket, event) do
+    if socket.assigns[:game_stream_disabled_logged] do
+      socket
+    else
+      # `warning`, not `info`: a play host talking to an install with the
+      # feature off is a misconfiguration an operator should see, and it is
+      # logged at most once per channel process.
+      Logger.warning(
+        "[RuntimeChannel] #{event} from runtime_id=#{socket.assigns.runtime_id} dropped: " <>
+          "game_stream is disabled (GAME_STREAM_ENABLED is unset); further play frames " <>
+          "on this channel are dropped silently"
+      )
+
+      assign(socket, :game_stream_disabled_logged, true)
+    end
+  end
+
+  defp log_play_frame_result(_event, :ok), do: :ok
+
+  defp log_play_frame_result(event, {:error, reason}) do
+    Logger.info("[RuntimeChannel] #{event} dropped: #{inspect(reason)}")
+  end
+
+  defp log_play_frame_result(_event, _other), do: :ok
 
   # `usage_event` payloads come from external runtimes we do not control, and
   # every `:binary_id` field on `UsageEvent` is OPTIONAL — only `model`,

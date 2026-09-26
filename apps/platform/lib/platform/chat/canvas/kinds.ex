@@ -5,6 +5,22 @@ defmodule Platform.Chat.Canvas.Kinds do
   Single source of truth. Tool schemas, patch validation, and renderer dispatch
   all read from here. Adding a new kind is a two-step operation: create the
   module under `Platform.Chat.Canvas.Kinds.*` and list it in `@modules`.
+
+  ## Flag-gated kinds (task 01a0db5f)
+
+  `@modules` is compile-time, so a kind that must exist only behind a
+  runtime flag cannot live in it. `all/0` is `@modules ++ gated_modules()`,
+  evaluated on every call, and EVERY registry reader — `by_name/0`,
+  `names/0`, `summaries/0`, `tool_schemas/0` — reads `all/0` rather than
+  `@modules`, so a gated kind is either wholly registered or wholly absent.
+  Today the only gated kind is `game_stream`
+  (`Platform.Chat.Canvas.Kinds.GameStream`), present exactly while
+  `Platform.GameStream.enabled?/0` is true. With it off, an existing
+  document holding a `game_stream` node renders that node through
+  `Platform.Chat.Canvas.Renderer`'s fallback.
+
+  No caller may capture `names/0` or `all/0` into a module attribute: that
+  would freeze the flag's value at compile time.
   """
 
   alias Platform.Chat.Canvas.Kind
@@ -47,14 +63,21 @@ defmodule Platform.Chat.Canvas.Kinds do
     Table
   ]
 
-  @doc "Returns all registered kind modules."
+  @doc "Returns all registered kind modules, including any flag-gated kind that is on."
   @spec all() :: [module()]
-  def all, do: @modules
+  def all, do: @modules ++ gated_modules()
+
+  # Evaluated per call, never cached — see the moduledoc.
+  defp gated_modules do
+    if Platform.GameStream.enabled?(),
+      do: [Platform.Chat.Canvas.Kinds.GameStream],
+      else: []
+  end
 
   @doc "Returns a map from kind name to kind module."
   @spec by_name() :: %{String.t() => module()}
   def by_name do
-    Map.new(@modules, fn mod -> {mod.name(), mod} end)
+    Map.new(all(), fn mod -> {mod.name(), mod} end)
   end
 
   @doc "Returns the module that implements `name`, or `nil` if unknown."
@@ -68,7 +91,7 @@ defmodule Platform.Chat.Canvas.Kinds do
 
   @doc "Returns the list of known kind names."
   @spec names() :: [String.t()]
-  def names, do: Enum.map(@modules, & &1.name())
+  def names, do: Enum.map(all(), & &1.name())
 
   @doc """
   Ergonomic kind summaries for agent-facing discovery tools.
@@ -81,7 +104,7 @@ defmodule Platform.Chat.Canvas.Kinds do
   """
   @spec summaries() :: [map()]
   def summaries do
-    Enum.map(@modules, fn mod ->
+    Enum.map(all(), fn mod ->
       name = mod.name()
 
       %{
@@ -117,6 +140,12 @@ defmodule Platform.Chat.Canvas.Kinds do
 
   defp describe("checklist"), do: "Titled checklist. Children must be `checklist_item` nodes."
   defp describe("checklist_item"), do: "Single checklist row."
+
+  defp describe("game_stream"),
+    do:
+      "Live, playable stream of a task's review build from the play host. " <>
+        "Props: session_id, task_id, review_sha (40-hex), branch, title, latency_warn_ms; no children."
+
   defp describe(_), do: ""
 
   defp children_rule(:none), do: "none"
@@ -230,7 +259,7 @@ defmodule Platform.Chat.Canvas.Kinds do
   """
   @spec tool_schemas() :: %{String.t() => map()}
   def tool_schemas do
-    Map.new(@modules, fn mod ->
+    Map.new(all(), fn mod ->
       {mod.name(), node_schema(mod)}
     end)
   end

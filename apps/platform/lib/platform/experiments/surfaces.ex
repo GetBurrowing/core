@@ -58,7 +58,11 @@ defmodule Platform.Experiments.Surfaces do
     Platform.Experiments.Surfaces.DispatchPrompt,
     Platform.Experiments.Surfaces.MailDraftGenerator,
     Platform.Experiments.Surfaces.PlannerStageBudget,
-    Platform.Experiments.Surfaces.ChatContextSummary
+    Platform.Experiments.Surfaces.ChatContextSummary,
+    # Task 01a0db5f: the play host's NVENC settings. Registered whether or
+    # not GAME_STREAM_ENABLED is set — a surface is a declaration, and its
+    # only read point (`GameStream.start_session/2`) is itself gated.
+    Platform.Experiments.Surfaces.GameStreamEncoder
   ]
 
   @prompt_surface "dispatch.prompt"

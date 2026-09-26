@@ -52,6 +52,7 @@ defmodule PlatformWeb.ChatLive do
   alias PlatformWeb.ChatLive.SearchHooks
   alias PlatformWeb.ChatLive.SettingsComponent
   alias PlatformWeb.ChatLive.UploadHooks
+  alias PlatformWeb.GameStreamHooks
   alias PlatformWeb.LifecycleActions
   alias PlatformWeb.ShellLive
   alias PlatformWeb.SpaceTopics
@@ -787,6 +788,7 @@ defmodule PlatformWeb.ChatLive do
       |> MentionsHooks.attach()
       |> UploadHooks.attach()
       |> CanvasHooks.attach()
+      |> GameStreamHooks.attach()
       |> ActiveAgentHooks.attach()
       |> MessageContextHooks.attach()
 

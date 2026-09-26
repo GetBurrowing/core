@@ -78,7 +78,7 @@ defmodule Platform.Federation.ToolSurface do
 
   import Ecto.Query, only: [from: 2]
 
-  @bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments)
+  @bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments play)
 
   # Per-message content cap (graphemes) for space_get_messages /
   # space_search_messages. Anything longer is sliced and flagged via the
@@ -176,6 +176,11 @@ defmodule Platform.Federation.ToolSurface do
   # Task 01a0d415 stage 2: definitions in ExperimentTools, behaviour in Experiments.Tools.
   defp tools_for_bundle("experiments"),
     do: tag(Platform.Federation.ExperimentTools.definitions(), "experiments")
+
+  # Task 01a0db5f stage 2: definitions in PlayTools, behaviour in GameStream.Tools.
+  # `[]` while GAME_STREAM_ENABLED is unset, so the catalogue is exactly main's.
+  defp tools_for_bundle("play"),
+    do: tag(Platform.Federation.PlayTools.definitions(), "play")
 
   defp tools_for_bundle(_), do: []
 
@@ -7163,6 +7168,12 @@ defmodule Platform.Federation.ToolSurface do
   # Every `experiment_*` tool (task 01a0d415 stage 2); no other tool name has this prefix.
   def execute("experiment_" <> _ = tool, args, context),
     do: Platform.Experiments.Tools.execute(tool, args, context)
+
+  # Every `play_session_*` tool (task 01a0db5f stage 2); no other tool name has
+  # this prefix. With GAME_STREAM_ENABLED unset it answers the structured
+  # `game_stream_disabled` refusal before anything else runs.
+  def execute("play_session_" <> _ = tool, args, context),
+    do: Platform.GameStream.Tools.execute(tool, args, context)
 
   def execute(unknown_tool, _args, _context) do
     tool_names =

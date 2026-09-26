@@ -490,6 +490,64 @@ config :platform,
        :agents_goal_surface,
        System.get_env("AGENTS_GOAL_SURFACE") in ["true", "1"]
 
+# ── Game stream (task 01a0db5f) ──────────────────────────────────────────────
+# Gates playable review builds: the `game_stream` canvas kind, the `play`
+# bundle's tools, and the play-host frames on the runtime channel. OFF BY
+# DEFAULT IN EVERY ENVIRONMENT, dev included — it mirrors AGENTS_GOAL_SURFACE
+# above, not WEBMCP_ENABLED. With it unset the canvas kind list and the tool
+# list are exactly main's. Read only through `Platform.GameStream.enabled?/0`.
+config :platform,
+       :game_stream_enabled,
+       System.get_env("GAME_STREAM_ENABLED") in ["true", "1"]
+
+# TURN for game streams (task 01a0db5f stage 5). Reuses hive's coturn (the
+# meetings one); no second coturn. GAME_STREAM_TURN_URLS is a comma list
+# (`turn:host:3479?transport=udp,...`), GAME_STREAM_TURN_USERNAME a static
+# lt-cred-mech user, and the credential comes ONLY from the file named by
+# GAME_STREAM_TURN_CREDENTIAL_FILE, read here at boot. Neither this block nor
+# `Platform.GameStream.ice_servers/0` ever writes the credential to a log:
+# a read failure reports the path and the POSIX reason, never the body. With
+# any of the three missing, `ice_servers/0` is `[]` (host candidates, LAN).
+game_stream_turn_urls =
+  "GAME_STREAM_TURN_URLS"
+  |> System.get_env("")
+  |> String.split(",", trim: true)
+  |> Enum.map(&String.trim/1)
+  |> Enum.reject(&(&1 == ""))
+
+game_stream_turn_credential =
+  case System.get_env("GAME_STREAM_TURN_CREDENTIAL_FILE") do
+    path when is_binary(path) and path != "" ->
+      case File.read(path) do
+        {:ok, body} ->
+          case String.trim(body) do
+            "" -> nil
+            credential -> credential
+          end
+
+        {:error, reason} ->
+          IO.puts(
+            :stderr,
+            "[runtime.exs] GAME_STREAM_TURN_CREDENTIAL_FILE #{path} unreadable " <>
+              "(#{:file.format_error(reason)}); game stream TURN is off"
+          )
+
+          nil
+      end
+
+    _ ->
+      nil
+  end
+
+config :platform, :game_stream_turn,
+  urls: game_stream_turn_urls,
+  username:
+    (case System.get_env("GAME_STREAM_TURN_USERNAME") do
+       u when is_binary(u) and u != "" -> String.trim(u)
+       _ -> nil
+     end),
+  credential: game_stream_turn_credential
+
 # ── LiveKit (Meetings) ────────────────────────────────────────────────────────
 # Feature-gated: meetings are inert unless LIVEKIT_API_KEY + LIVEKIT_API_SECRET
 # are set. See ADR 0030.

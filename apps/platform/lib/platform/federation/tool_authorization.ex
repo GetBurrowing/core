@@ -163,6 +163,25 @@ defmodule Platform.Federation.ToolAuthorization do
   `Closest declared name: ''`.
   """
   def deny_message(name) do
+    if disabled_play_tool?(name) do
+      # Task 01a0db5f: a `play` tool while GAME_STREAM_ENABLED is unset is
+      # absent from the catalogue, so without this it would read as a
+      # name-lookup miss — true but useless. The flag, not the spelling, is
+      # why it was refused. Message text only: `authorize/2` and
+      # `deny_reason/1` are unchanged, and both transports still call this
+      # one formatter, so they cannot disagree.
+      Platform.Federation.PlayTools.disabled_error().error
+    else
+      deny_message_for_reason(name)
+    end
+  end
+
+  defp disabled_play_tool?(name) do
+    is_binary(name) and name in Platform.Federation.PlayTools.names() and
+      not Platform.GameStream.enabled?()
+  end
+
+  defp deny_message_for_reason(name) do
     case deny_reason(name) do
       :forbidden ->
         "tool '#{name}' not in allowed bundles"

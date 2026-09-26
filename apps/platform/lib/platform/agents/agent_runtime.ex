@@ -21,7 +21,10 @@ defmodule Platform.Agents.AgentRuntime do
   #
   # Being GRANTABLE is not being GRANTED: adding a bundle here does not add it
   # to `@default_allowed_bundles` below, and must not.
-  @valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments)
+  #
+  # `play` (task 01a0db5f) is grantable and deliberately NOT a default: it
+  # drives a physical GPU on a LAN machine.
+  @valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments play)
 
   # `meetings` is a DEFAULT, not merely grantable (task 01a066af stage 4).
   # `meeting_say` is the only way an invited agent can speak in a room, and it

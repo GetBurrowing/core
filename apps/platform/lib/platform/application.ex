@@ -59,6 +59,10 @@ defmodule Platform.Application do
            {Registry, keys: :unique, name: Platform.Meetings.Registry},
            Platform.Agents.RuntimeSupervisor,
            Platform.Chat.CanvasSupervisor,
+           # Live play sessions (task 01a0db5f). Always started and empty
+           # unless GAME_STREAM_ENABLED is set; before the Endpoint so a
+           # runtime channel's terminate/2 can always reach its Registry.
+           Platform.GameStream.Supervisor,
            # ContextBroker — must start after the agent registry/runtime tree
            Platform.Agents.ContextBroker,
            # Context plane supervisor — must start after PubSub

@@ -183,6 +183,60 @@ defmodule Platform.Federation do
     end
   end
 
+  # ── Declared client features ────────────────────────────────────────
+
+  @doc """
+  The feature list a runtime DECLARED at join, or `:undeclared`.
+
+  Reads `metadata["client_info"]["features"]`, the shape
+  `PlatformWeb.RuntimeChannel` persists from the join payload. A
+  `client_info` that exists but carries no `features` key is `:undeclared`
+  rather than `[]`: only a list that is actually present is evidence about
+  what the client can do. One reader for every "does this runtime advertise
+  feature X" question (task 01a0db5f; `Platform.Meetings` voice capability
+  and `Platform.GameStream` host discovery both call it), so the two cannot
+  drift into reading different keys.
+  """
+  @spec declared_features(map() | nil) :: [String.t()] | :undeclared
+  def declared_features(metadata) when is_map(metadata) do
+    with %{} = client_info <- Map.get(metadata, "client_info"),
+         features when is_list(features) <- Map.get(client_info, "features") do
+      features
+    else
+      _ -> :undeclared
+    end
+  end
+
+  def declared_features(_), do: :undeclared
+
+  @doc """
+  Active runtimes that are CONNECTED right now and declare `feature`.
+
+  Presence is `RuntimePresence.list_online/0`, keyed by the human-readable
+  `runtime_id`; the declaration is `declared_features/1`. Sorted by
+  `runtime_id` so a caller that takes the first one is deterministic.
+  """
+  @spec present_runtimes_with_feature(String.t()) :: [AgentRuntime.t()]
+  def present_runtimes_with_feature(feature) when is_binary(feature) do
+    case RuntimePresence.list_online() do
+      [] ->
+        []
+
+      online ->
+        from(r in AgentRuntime,
+          where: r.runtime_id in ^online and r.status == "active",
+          order_by: [asc: r.runtime_id]
+        )
+        |> Repo.all()
+        |> Enum.filter(fn %AgentRuntime{metadata: metadata} ->
+          case declared_features(metadata) do
+            features when is_list(features) -> feature in features
+            :undeclared -> false
+          end
+        end)
+    end
+  end
+
   # ── Runtime ↔ Agent linking ─────────────────────────────────────────
 
   @doc "Link an agent to a runtime, setting it as external."

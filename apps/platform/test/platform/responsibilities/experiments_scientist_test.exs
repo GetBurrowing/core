@@ -247,6 +247,7 @@ defmodule Platform.Responsibilities.ExperimentsScientistTest do
                [
                  "chat.context_summary",
                  "dispatch.prompt",
+                 "game_stream.encoder_preset",
                  "mail.draft.generator",
                  "planner.stage_budget"
                ]

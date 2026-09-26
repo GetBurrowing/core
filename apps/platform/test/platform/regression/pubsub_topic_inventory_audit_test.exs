@@ -117,7 +117,7 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
   # in order to change the topic safely; the full payload-and-subscriber table
   # lives in the stage-2 classification posted to the task's execution space.
   #
-  # 26 global, 10 space, 6 user, 5 task, 2 project, 1 org, 1 runtime,
+  # 26 global, 10 space, 6 user, 6 task, 2 project, 1 org, 1 runtime,
   # 1 resource, 1 not-a-topic.
   @topics [
     # ── space ──
@@ -155,6 +155,12 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
     {"ctx:<id>", :task},
     {"execution:runs:<id>", :task},
     {"review_requests:<id>", :task},
+    # Task 01a0db5f: one play session's status and WebRTC signalling, keyed
+    # by the session id. A session builds exactly one task's review build and
+    # its canvas lives in that task's execution space; stage 4's hook
+    # subscribes only for a session_id carried by a canvas the viewer can
+    # read. Only published while GAME_STREAM_ENABLED is set.
+    {"game_stream:<id>", :task},
 
     # ── project ──
     {"files:project:<id>", :project},

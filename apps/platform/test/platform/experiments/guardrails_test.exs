@@ -84,6 +84,7 @@ defmodule Platform.Experiments.GuardrailsTest do
                [
                  "chat.context_summary",
                  "dispatch.prompt",
+                 "game_stream.encoder_preset",
                  "mail.draft.generator",
                  "mail.test.generator",
                  "planner.stage_budget",

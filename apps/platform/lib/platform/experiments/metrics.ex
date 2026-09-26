@@ -118,6 +118,15 @@ defmodule Platform.Experiments.Metrics do
           "per plan, over the plans of a variant's subjects.",
       direction: :lower_is_better
     },
+    # Task 01a0db5f: the `game_stream.encoder_preset` surface's metric.
+    "game_stream_input_to_photon" => %{
+      module: Platform.Experiments.Metrics.GameStreamInputToPhoton,
+      label: "Game stream input-to-photon",
+      description:
+        "Mean per-session median input-to-photon round trip (ms), over a variant's " <>
+          "ended play sessions that reported stats.",
+      direction: :lower_is_better
+    },
     "time_in_phase" => %{
       module: Platform.Experiments.Metrics.TimeInPhase,
       label: "Time in phase",

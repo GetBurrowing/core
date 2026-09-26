@@ -74,7 +74,12 @@ defmodule Platform.Security.TransportCapabilityParityTest do
     {"the default six", ~w(federation space context_read messaging attachment skill)},
     {"broad chat+task+canvas", ~w(messaging space context_read task canvas)},
     {"the full production grant",
-     ~w(federation space context_read messaging review canvas task plan memory skill attachment)}
+     ~w(federation space context_read messaging review canvas task plan memory skill attachment)},
+    # Task 01a0db5f: the grantable, non-default `play` bundle. With
+    # GAME_STREAM_ENABLED unset (the default here) it lists nothing, and both
+    # transports must still agree on that.
+    {"production grant plus play",
+     ~w(federation space context_read messaging review canvas task plan memory skill attachment play)}
   ]
 
   # Spans granted / ungranted / legacy-alias / external-allowlist names.

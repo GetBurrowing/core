@@ -6741,16 +6741,18 @@ defmodule Platform.Meetings do
   # `persist_client_info/2` writes. A `client_info` that exists but carries no
   # `features` key is treated as undeclared rather than empty: only a list
   # that is actually present is evidence about what the client can do.
-  defp capability_from_metadata(metadata) when is_map(metadata) do
-    with %{} = client_info <- Map.get(metadata, "client_info"),
-         features when is_list(features) <- Map.get(client_info, "features") do
-      if @voice_feature in features, do: :capable, else: :incapable
-    else
-      _ -> :unknown
+  #
+  # The read itself is `Federation.declared_features/1` (task 01a0db5f), the
+  # one reader `Platform.GameStream`'s host discovery shares.
+  defp capability_from_metadata(metadata) do
+    case Federation.declared_features(metadata) do
+      features when is_list(features) ->
+        if @voice_feature in features, do: :capable, else: :incapable
+
+      :undeclared ->
+        :unknown
     end
   end
-
-  defp capability_from_metadata(_), do: :unknown
 
   # Positive evidence beats negative evidence beats no evidence: one row that
   # can do it is enough, one row that declared it cannot outranks silence.

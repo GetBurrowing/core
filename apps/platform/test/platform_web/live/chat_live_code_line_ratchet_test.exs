@@ -442,7 +442,15 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   # not here.
   #
   # RE-DERIVED from the guard's own measurement on this tree (measured: 2303).
-  @chat_live_code_line_count 2303
+  #
+  # ── 2026-09-26, task 01a0db5f stage 4: +2 (2,303 -> 2,305) ──────────────
+  #
+  # The `game_stream` canvas: one `alias` of `PlatformWeb.GameStreamHooks`
+  # and its `attach()` in the mount pipeline, next to `CanvasHooks.attach()`.
+  # Every event, info message and assign lives in the hook module, not here.
+  #
+  # RE-DERIVED from the guard's own measurement on this tree (measured: 2305).
+  @chat_live_code_line_count 2305
 
   @doc """
   Count the CODE lines of a source file.
