@@ -59,6 +59,30 @@
 # be unpicked. Spaces, the task and the meeting are keyed on deterministic
 # slugs/titles and REUSED, so re-running does not accumulate spaces.
 #
+# Runs on a FRESH, freshly migrated database (task 01a08c4f). The only row it
+# assumes is the root org, which every migrated DB holds from
+# `20260519143620_seed_root_orgs.exs`; it never creates an org. It creates what
+# else it needs when absent and reuses it when present:
+#
+#   * the PROJECT the fixture task and meeting hang off: the oldest unarchived
+#     project if there is one (so a DB seeded first by `tasks_seed.exs`, or a
+#     real dev DB, keeps using its own), else a new `<tag>-project` under the
+#     root org via `Platform.Tasks.create_project/1`;
+#   * the DEV USER, resolved through `Platform.Accounts.find_or_create_from_oidc/1`
+#     with the same identity `/dev/login` uses, so a later `/dev/login` lands on
+#     the same row. `FIXTURE_DEV_USER=<slug>` picks the `?as=<slug>` identity
+#     instead. On an empty DB this user is the first membership on the root
+#     org, so it is bootstrap-admined exactly as a first `/dev/login` would be.
+#
+# The dev user is JOINED to all 16 fixture spaces (a `user` participant row,
+# added only when absent). The explorer's space set is the active space plus
+# `Chat.list_user_conversations/2`, which only sees spaces the user
+# participates in; without the join the explorer shows 2 groups, not 16.
+#
+# Re-running stays idempotent: the project, the dev user, the spaces, the
+# participant rows, the task and the meeting are all reused, and the canvas
+# corpus is retired and rewritten as described above.
+#
 # Timestamp note for later stages: `inserted_at` / `updated_at` across the bulk
 # corpus are spread backwards over a few months by one statement below, so the
 # explorer is not looking at 400 rows that all claim to have been written in
@@ -68,13 +92,15 @@
 # Run from apps/platform:
 #   mix run priv/scripts/seed_canvas_explorer_fixture.exs
 #
-# Prints SPACE_SLUGS, EXECUTION_SPACE_SLUG, TASK_ID and CLUSTER_SPACE_SLUG on
-# the last lines for the caller to capture.
+# Prints SPACE_SLUGS, EXECUTION_SPACE_SLUG, TASK_ID, CLUSTER_SPACE_SLUG,
+# DEV_USER_ID and PROJECT_ID on the last lines for the caller to capture.
 
 import Ecto.Query
 
+alias Platform.Accounts
 alias Platform.Chat
 alias Platform.Chat.Canvas
+alias Platform.Chat.Participant
 alias Platform.Meetings
 alias Platform.Meetings.Meeting
 alias Platform.Orchestration.ExecutionSpace
@@ -82,6 +108,7 @@ alias Platform.Repo
 alias Platform.Tasks
 alias Platform.Tasks.CanvasAttachment
 alias Platform.Tasks.CanvasAttachments
+alias Platform.Tenancy
 
 tag = System.get_env("FIXTURE_TAG") || "canvas-explorer-fixture"
 now = DateTime.utc_now()
@@ -168,6 +195,34 @@ end
 
 IO.puts("retired #{retired} canvas(es) from earlier runs")
 
+# ── the dev user ────────────────────────────────────────────────────────────
+#
+# KEEP IN SYNC with `PlatformWeb.AuthController.dev_login/2`
+# (lib/platform_web/controllers/auth_controller.ex), which builds the same
+# `{sub, email, name}` triple: the default `/dev/login` identity, or the
+# `?as=<slug>` one. A drift here would create a second user that `/dev/login`
+# never lands on, and the explorer would again show that user nothing.
+{dev_sub, dev_email, dev_name} =
+  case System.get_env("FIXTURE_DEV_USER") do
+    slug when is_binary(slug) and slug != "" ->
+      slug = String.downcase(slug)
+      {"dev-#{slug}", "#{slug}@localhost", "Dev #{String.capitalize(slug)}"}
+
+    _ ->
+      {"dev-local-user", "dev@localhost", "Dev User"}
+  end
+
+dev_user =
+  case Accounts.find_or_create_from_oidc(%{sub: dev_sub, email: dev_email, name: dev_name}) do
+    {:ok, user} ->
+      user
+
+    other ->
+      raise "could not resolve the dev user #{dev_sub}: #{inspect(other)}"
+  end
+
+IO.puts("dev user #{dev_sub} is #{dev_user.id}")
+
 # ── spaces ──────────────────────────────────────────────────────────────────
 
 ensure_space = fn name, slug, kind, metadata ->
@@ -198,10 +253,17 @@ end
 
 # `chat_canvases.created_by` is an FK onto `chat_participants(id)`, NOT onto
 # `users(id)` — the trap both sibling seed scripts record.
+#
+# Selects the space's AGENT row with this display name, never "the first
+# participant": the dev user (and, in an execution space, the TaskRouter's
+# `system` participant) also joins these spaces, and returning one of those as
+# the canvas author would contradict `created_by_participant_type: "agent"`.
 ensure_participant = fn space_id, display_name ->
   Repo.one(
-    from(p in Chat.Participant,
-      where: p.space_id == ^space_id,
+    from(p in Participant,
+      where:
+        p.space_id == ^space_id and p.participant_type == "agent" and
+          p.display_name == ^display_name,
       order_by: [asc: p.joined_at],
       limit: 1
     )
@@ -217,6 +279,32 @@ ensure_participant = fn space_id, display_name ->
 
        p
      end).()
+end
+
+# Joins the dev user to a fixture space. Queries first rather than relying on
+# `chat_participants_unique` to reject a duplicate, so a re-run is a no-op and
+# not a swallowed `{:error, changeset}`.
+ensure_dev_user_participant = fn space_id ->
+  present? =
+    Repo.exists?(
+      from(p in Participant,
+        where:
+          p.space_id == ^space_id and p.participant_type == "user" and
+            p.participant_id == ^dev_user.id
+      )
+    )
+
+  unless present? do
+    {:ok, _} =
+      Chat.add_participant(space_id, %{
+        participant_type: "user",
+        participant_id: dev_user.id,
+        display_name: dev_user.name,
+        joined_at: DateTime.utc_now()
+      })
+  end
+
+  :ok
 end
 
 create_canvas = fn space_id, participant_id, author_name, title, extra ->
@@ -244,6 +332,7 @@ bulk_results =
   Enum.map(bulk_spaces, fn {name, slug_suffix, count} ->
     space = ensure_space.(name, "#{tag}-#{slug_suffix}", "channel", %{"fixture" => tag})
     participant = ensure_participant.(space.id, "#{name} Bot")
+    :ok = ensure_dev_user_participant.(space.id)
 
     # Titles are generated so that ALPHABETICAL order differs from insertion
     # order. `Enum.at` on the two vocabularies with different strides walks
@@ -270,9 +359,12 @@ bulk_results =
 # ── the near-duplicate cluster ──────────────────────────────────────────────
 
 {cluster_name, cluster_slug_suffix} = cluster_space_spec
+
 cluster_space =
   ensure_space.(cluster_name, "#{tag}-#{cluster_slug_suffix}", "channel", %{"fixture" => tag})
+
 cluster_author = ensure_participant.(cluster_space.id, "Priya Raman")
+:ok = ensure_dev_user_participant.(cluster_space.id)
 cluster_author_name = "Priya Raman"
 
 cluster_canvas = fn title, parent ->
@@ -343,9 +435,7 @@ end
   |> Canvas.delete_changeset(%{deleted_at: now})
   |> Repo.update()
 
-IO.puts(
-  "  #{cluster_space.slug}: 7 canvases (5-title cluster + retired original + orphan)"
-)
+IO.puts("  #{cluster_space.slug}: 7 canvases (5-title cluster + retired original + orphan)")
 
 # ── the execution space, its task, its attachments and its meeting ──────────
 
@@ -357,7 +447,32 @@ project =
       limit: 1
     )
   ) ||
-    raise("no unarchived project in this database — the fixture task and meeting need one")
+    (fn ->
+       # No project yet (a fresh DB). Create one under the root org, found
+       # structurally (`parent_org_id IS NULL`), never by slug. Never create an
+       # org: the migration named in the raise always seeds the root, and a
+       # second root is refused by the `orgs_single_root` index.
+       root =
+         Tenancy.get_root_org() ||
+           raise(
+             "no root org in this database — it is seeded by the migration " <>
+               "20260519143620_seed_root_orgs.exs; run `mix ecto.migrate` first"
+           )
+
+       case Tasks.create_project(%{
+              name: "Canvas explorer fixture",
+              slug: "#{tag}-project",
+              org_id: root.id
+            }) do
+         {:ok, p} ->
+           p
+
+         {:error, reason} ->
+           raise "could not create the fixture project #{tag}-project: #{inspect(reason)}"
+       end
+     end).()
+
+IO.puts("project #{project.slug} is #{project.id}")
 
 task_title = "#{tag}: canvas explorer pinned-group fixture"
 
@@ -390,6 +505,7 @@ execution_space =
   )
 
 execution_participant = ensure_participant.(execution_space.id, "Execution Fixture Bot")
+:ok = ensure_dev_user_participant.(execution_space.id)
 
 exec_canvases =
   for title <- ["Stage 1 evidence", "Stage 2 evidence", "Stage 3 evidence (superseded)"] do
@@ -408,11 +524,7 @@ exec_canvases =
 {cleared_attachments, _} =
   Repo.delete_all(from(a in CanvasAttachment, where: a.task_id == ^task.id))
 
-attacher =
-  case Repo.one(from(u in Platform.Accounts.User, order_by: [asc: u.inserted_at], limit: 1)) do
-    nil -> %{kind: "agent", id: Ecto.UUID.generate()}
-    user -> %{kind: "user", id: user.id}
-  end
+attacher = %{kind: "user", id: dev_user.id}
 
 for canvas <- exec_canvases do
   {:ok, _attachment} =
@@ -575,6 +687,24 @@ unless attachment_count == 3 and stale_count == 1 do
   """
 end
 
+# The explorer's space set is the active space plus this call. If it does not
+# return every fixture space, the dev user sees a fraction of the corpus and
+# every downstream screenshot is of the wrong thing.
+conversation_ids =
+  dev_user.id
+  |> Chat.list_user_conversations()
+  |> MapSet.new(& &1.id)
+
+missing_space_ids = Enum.reject(space_ids, &MapSet.member?(conversation_ids, &1))
+
+unless missing_space_ids == [] do
+  raise """
+  Chat.list_user_conversations/2 for the dev user #{dev_user.id} is missing
+  #{length(missing_space_ids)} of #{length(space_ids)} fixture spaces:
+  #{Enum.join(missing_space_ids, ", ")}
+  """
+end
+
 live_total =
   Repo.aggregate(
     from(c in Canvas,
@@ -590,6 +720,12 @@ IO.puts("verified: #{length(groups)} groups, largest #{paging_group.total_count}
 IO.puts("verified: clone chain resolves, orphan parent resolves to :deleted")
 IO.puts("verified: find_by_task_id/1 and get_live_meeting_for_space/1 both resolve")
 IO.puts("verified: 3 task canvas attachments, 1 stale")
+
+IO.puts(
+  "verified: list_user_conversations/2 returns all #{length(space_ids)} fixture spaces " <>
+    "for the dev user"
+)
+
 IO.puts("")
 
 for group <- Enum.sort_by(groups, & &1.total_count, :desc) do
@@ -604,3 +740,5 @@ IO.puts("CLUSTER_SPACE_SLUG=#{cluster_space.slug}")
 IO.puts("EXECUTION_SPACE_SLUG=#{execution_space.slug}")
 IO.puts("TASK_ID=#{task.id}")
 IO.puts("MEETING_SLUG=#{meeting.slug}")
+IO.puts("DEV_USER_ID=#{dev_user.id}")
+IO.puts("PROJECT_ID=#{project.id}")
