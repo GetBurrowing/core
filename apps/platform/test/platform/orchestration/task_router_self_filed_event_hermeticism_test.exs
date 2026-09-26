@@ -77,9 +77,9 @@ defmodule Platform.Orchestration.TaskRouterSelfFiledEventHermeticismTest do
       # stage" would clear a `:stalled` status that a no-ack or safety-net
       # alarm had set.
       %{task: task} = fixture = stage_task(project)
-      %{pid: pid} = start_router!(fixture)
+      %{pid: pid, runtime_id: owner} = start_router!(fixture)
 
-      stalled_at = stall!(pid, task)
+      stalled_at = stall!(pid, task, owner)
 
       send(pid, {:runtime_event, self_filed_event(task.id, "execution.dispatch_stageless")})
 
@@ -100,9 +100,9 @@ defmodule Platform.Orchestration.TaskRouterSelfFiledEventHermeticismTest do
       project: project
     } do
       %{task: task} = fixture = stage_task(project)
-      %{pid: pid} = start_router!(fixture)
+      %{pid: pid, runtime_id: owner} = start_router!(fixture)
 
-      stalled_at = stall!(pid, task)
+      stalled_at = stall!(pid, task, owner)
 
       send(pid, {:runtime_event, self_filed_event(task.id, "execution.dispatch_unanswered")})
 
@@ -223,9 +223,9 @@ defmodule Platform.Orchestration.TaskRouterSelfFiledEventHermeticismTest do
       # A foreign `execution.heartbeat` must still run the generic arm: stamp
       # `last_runtime_event_at` and reset `:stalled` → `:running`.
       %{task: task} = fixture = stage_task(project)
-      %{pid: pid} = start_router!(fixture)
+      %{pid: pid, runtime_id: owner} = start_router!(fixture)
 
-      stall!(pid, task)
+      stall!(pid, task, owner)
 
       event = foreign_event(task.id, "execution.heartbeat")
       send(pid, {:runtime_event, event})
@@ -280,10 +280,16 @@ defmodule Platform.Orchestration.TaskRouterSelfFiledEventHermeticismTest do
   # ── helpers ────────────────────────────────────────────────────────────
 
   # Drives the router to `:stalled` through the ordinary runtime path
-  # (`execution.failed` → `clear_liveness/1` → `:stalled`) and ASSERTS it got
+  # (`execution.failed` → lease cleared → `:stalled`) and ASSERTS it got
   # there. Every "stays :stalled" test below is vacuous without this check.
-  defp stall!(pid, task) do
-    send(pid, {:runtime_event, foreign_event(task.id, "execution.failed")})
+  #
+  # Task 01a0dd2c stage 2: the failure is sent in the LEASE OWNER's name. A
+  # foreign runtime's terminal event is now refused by
+  # `LeaseManager.clear_if_owner/2` and no longer stalls the router, so the
+  # stall must come from the runtime the stage was dispatched to.
+  defp stall!(pid, task, owner_runtime_id) do
+    event = %{foreign_event(task.id, "execution.failed") | runtime_id: owner_runtime_id}
+    send(pid, {:runtime_event, event})
 
     # A plain `current_status/1` call, NOT `barrier/1`. `sync_router/2` drains
     # the debounced dispatch as well as the mailbox, and a drained dispatch
@@ -299,7 +305,7 @@ defmodule Platform.Orchestration.TaskRouterSelfFiledEventHermeticismTest do
              inspect(Map.take(observed, [:status, :last_runtime_event_at, :task_status]))
 
     # Returned so callers can assert the self-filed event did not RE-stamp it.
-    # `stall!/2` drives the stall through a foreign `execution.failed`, which
+    # `stall!/3` drives the stall through the owner's `execution.failed`, which
     # legitimately stamps liveness — "still nil" would be the wrong assertion.
     observed.last_runtime_event_at
   end

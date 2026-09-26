@@ -69,8 +69,23 @@ defmodule Platform.Orchestration.LeaseManager do
   row is left exactly as it was, and `[:platform, :orchestration,
   :progress_refused]` telemetry plus one warning record the refusal.
   Before this, a heartbeat from ANY runtime pushed the net of a stage
-  whose dispatched owner was dead another 90 to 120 minutes out. Both
-  gates share one compare (`owner?/2`) and one refusal path.
+  whose dispatched owner was dead another 90 to 120 minutes out.
+
+  ## Clear ownership (task 01a0dd2c stage 1)
+
+  `clear_if_owner/2` is the event-driven delete: only the lease owner's
+  terminal event removes the row. A non-owner, `nil` or non-binary
+  caller gets `{:error, {:not_owner, owner}}`, the row is left exactly
+  as it was, and `[:platform, :orchestration, :clear_refused]`
+  telemetry plus one warning record the refusal. Before this, any
+  runtime's `execution.finished` (or failed / abandoned /
+  assignment.rejected) deleted the row through `clear/1`, and with the
+  row gone both the no-ack and the safety-net alarm went quiet.
+  `clear/1` stays unconditional: it is the router-internal path.
+
+  All three gates (`record_ack/3`, `record_progress/2`,
+  `clear_if_owner/2`) share one compare (`owner?/2`) and one refusal
+  path.
 
   ## Dispatch vs. re-dispatch (task 019fa469 stage 6)
 
@@ -118,7 +133,8 @@ defmodule Platform.Orchestration.LeaseManager do
 
   Reads (`get/1`) hit ETS directly and are lock-free thanks to
   `read_concurrency: true`. Every mutating call (`record_*`,
-  `mark_*_fired`, but NOT `clear/1` which is a single-op delete) is
+  `mark_*_fired`, `clear_if_owner/2`, but NOT `clear/1` which is a
+  single-op delete) is
   serialised through the owning GenServer so the read-modify-write
   pair sees a consistent snapshot — critical for
   `mark_no_ack_fired/1`'s once-only semantics.
@@ -384,11 +400,18 @@ defmodule Platform.Orchestration.LeaseManager do
   end
 
   @doc """
-  Delete the lease row for `task_id`. Called on stage transition
-  (router upgrades to a new lease via `record_dispatch/5` on the
-  next dispatch, but explicit `clear/1` between stages is cleaner)
-  or router termination. Idempotent — `:ok` whether or not a row
+  Delete the lease row for `task_id` UNCONDITIONALLY. The
+  router-internal path: stage transition (router upgrades to a new
+  lease via `record_dispatch/5` on the next dispatch, but explicit
+  `clear/1` between stages is cleaner), human gates, phase boundaries
+  and router termination. Those callers are the allowlist; none of them
+  acts on a runtime's say-so. Idempotent — `:ok` whether or not a row
   existed.
+
+  A clear driven by a RUNTIME EVENT (a terminal event naming a sender)
+  must go through `clear_if_owner/2` instead, so a non-owner's event
+  cannot delete the owner's lease and silence its alarms (task
+  01a0dd2c).
   """
   @spec clear(binary()) :: :ok
   def clear(task_id) when is_binary(task_id) do
@@ -397,6 +420,29 @@ defmodule Platform.Orchestration.LeaseManager do
     end
 
     :ok
+  end
+
+  @doc """
+  Delete the lease row for `task_id` only when `caller_runtime_id` is
+  the lease owner (task 01a0dd2c stage 1). The event-driven counterpart
+  of `clear/1`.
+
+  `caller_runtime_id` must equal the lease's `owner_runtime_id` under
+  the same fail-closed compare `record_ack/3` and `record_progress/2`
+  use. A non-owner, `nil` or non-binary caller — and any caller against
+  a row with no owner — gets `{:error, {:not_owner, owner}}`; the row is
+  left exactly as it was, and the refusal is recorded as
+  `[:platform, :orchestration, :clear_refused]` telemetry and one
+  warning.
+
+  Returns `{:error, :not_found}` when no lease exists, checked before
+  the owner compare. The check and the delete run in one GenServer
+  call, so no dispatch can replace the row between them.
+  """
+  @spec clear_if_owner(binary(), term()) ::
+          :ok | {:error, :not_found} | {:error, {:not_owner, binary() | nil}}
+  def clear_if_owner(task_id, caller_runtime_id) when is_binary(task_id) do
+    GenServer.call(__MODULE__, {:clear_if_owner, task_id, caller_runtime_id})
   end
 
   # ── Handlers ───────────────────────────────────────────────────────────────
@@ -509,6 +555,26 @@ defmodule Platform.Orchestration.LeaseManager do
     {:reply, reply, state}
   end
 
+  def handle_call({:clear_if_owner, task_id, caller_runtime_id}, _from, state) do
+    reply =
+      case direct_get(task_id) do
+        nil ->
+          {:error, :not_found}
+
+        lease ->
+          owner = Map.get(lease, :owner_runtime_id)
+
+          if owner?(caller_runtime_id, owner) do
+            :ets.delete(@table, task_id)
+            :ok
+          else
+            refuse(:clear, task_id, lease, caller_runtime_id, owner)
+          end
+      end
+
+    {:reply, reply, state}
+  end
+
   def handle_call({:mark_no_ack_fired, task_id}, _from, state) do
     reply =
       case direct_get(task_id) do
@@ -582,20 +648,20 @@ defmodule Platform.Orchestration.LeaseManager do
   # Fail closed: only a binary caller equal to a binary owner is the
   # owner. `nil == nil` (an ownerless row and a caller with no
   # authenticated runtime) must NOT count as a match. The ONE compare
-  # behind both gated writes, `record_ack/3` and `record_progress/2`, so
-  # the two gates cannot drift apart.
+  # behind all three gated writes, `record_ack/3`, `record_progress/2`
+  # and `clear_if_owner/2`, so the gates cannot drift apart.
   defp owner?(caller, owner) when is_binary(caller) and is_binary(owner),
     do: caller == owner
 
   defp owner?(_caller, _owner), do: false
 
-  # A refused ack or progress call writes NOTHING to the row: no ack_at,
-  # no last_progress_at, no safety_net_at, no no_ack change. The audit
-  # trail is the telemetry event and the warning, never the lease. One
-  # helper for both gated writes; only the event name and the verb in
-  # the log line differ.
+  # A refused ack, progress or clear call writes NOTHING to the row: no
+  # ack_at, no last_progress_at, no safety_net_at, no no_ack change, no
+  # delete. The audit trail is the telemetry event and the warning, never
+  # the lease. One helper for all three gated writes; only the event name
+  # and the verb in the log line differ.
   defp refuse(action, task_id, lease, caller_runtime_id, owner)
-       when action in [:ack, :progress] do
+       when action in [:ack, :progress, :clear] do
     :telemetry.execute(
       [:platform, :orchestration, refused_event(action)],
       %{count: 1},
@@ -616,6 +682,7 @@ defmodule Platform.Orchestration.LeaseManager do
 
   defp refused_event(:ack), do: :ack_refused
   defp refused_event(:progress), do: :progress_refused
+  defp refused_event(:clear), do: :clear_refused
 
   # A re-dispatch of the stage this task is ALREADY leasing (task
   # 019fa469 stage 6). Rebuilding the row from scratch here erased an

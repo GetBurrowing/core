@@ -32,7 +32,14 @@ defmodule Platform.Orchestration.TaskRouter do
      the no-ack idempotency. Only the lease owner's events extend the net
      (task 01a0db63); another runtime's are refused and are not treated as
      liveness. Validation activity does not call it.
-  6. **Silent drops**: on `:check_no_ack` firing with no ack, the router
+  6. **Terminal events clear only for the owner**: an `execution.finished` /
+     `execution.failed` / `execution.abandoned` / `assignment.rejected`
+     runtime_event clears the lease through `LeaseManager.clear_if_owner/2`
+     with the event's `runtime_id` (task 01a0dd2c). Another runtime's is
+     refused: the lease stays, no failure is posted, the status is unchanged,
+     so the owner's alarms still fire. Router-internal clears (gates,
+     boundaries, termination) stay unconditional.
+  7. **Silent drops**: on `:check_no_ack` firing with no ack, the router
      broadcasts a single `execution.no_ack_timeout` runtime_event, posts an
      `execution.blocked needs_human=true` message to the execution space,
      transitions to `:stalled`, and does NOT re-arm. On `:check_safety_net`
@@ -3157,13 +3164,28 @@ defmodule Platform.Orchestration.TaskRouter do
 
   defp arm_liveness_timers(_task_id, _other, _stage_kind, _owner_runtime_id), do: :ok
 
-  # Clear the LeaseManager row for the task. Pending `:check_no_ack` /
-  # `:check_safety_net` timers may still fire later — their handlers
-  # short-circuit on `LeaseManager.get/1 == nil`. Used on human-gate
-  # transitions, phase boundaries, and router termination.
+  # Clear the LeaseManager row for the task, unconditionally. Pending
+  # `:check_no_ack` / `:check_safety_net` timers may still fire later — their
+  # handlers short-circuit on `LeaseManager.get/1 == nil`. This is the
+  # router-internal clear (human gates, blockers, phase and stage boundaries,
+  # termination). A clear driven by a runtime's TERMINAL event does not come
+  # through here: it goes through `LeaseManager.clear_if_owner/2` so only the
+  # lease owner can end its own liveness (task 01a0dd2c).
   defp clear_liveness(%State{task_id: task_id} = state) do
     LeaseManager.clear(task_id)
     state
+  end
+
+  # Task 01a0dd2c stage 2. A terminal event from a runtime that does not own
+  # the lease is not evidence the stage ended, so the arm returns `base_state`
+  # untouched: no clear, no failure post, no status change. Mirrors the
+  # progress arm's refusal (task 01a0db63).
+  defp refuse_terminal_event(state, event, owner) do
+    Logger.warning(
+      "[TaskRouter] task #{state.task_id} stage #{inspect(state.current_stage_id)} — " <>
+        "#{event.event_type} from runtime #{inspect(event.runtime_id)} refused: the " <>
+        "lease is owned by runtime #{inspect(owner)}. Not clearing the lease."
+    )
   end
 
   # Reset the router from `:stalled` → `:running` when fresh runtime activity
@@ -3877,30 +3899,46 @@ defmodule Platform.Orchestration.TaskRouter do
         end
 
       "execution.finished" ->
-        if still_awaiting_human?(base_state) do
-          base_state
-          |> clear_liveness()
-          |> Map.put(:status, :waiting_human)
-        else
-          base_state
-          |> clear_liveness()
-          |> Map.put(:status, :running)
+        # Task 01a0dd2c stage 2: only the lease OWNER's terminal event may
+        # clear the lease. A stranger's (e.g. openclaw `finishOtherPhases`
+        # finishing an OLD phase after a re-dispatch to another runtime)
+        # used to delete the owner's row, and with it both alarms.
+        case LeaseManager.clear_if_owner(state.task_id, event.runtime_id) do
+          {:error, {:not_owner, owner}} ->
+            refuse_terminal_event(state, event, owner)
+            base_state
+
+          _ok_or_not_found ->
+            # The row is already gone on `:ok`; on `:not_found` there was
+            # nothing to protect.
+            if still_awaiting_human?(base_state) do
+              Map.put(base_state, :status, :waiting_human)
+            else
+              Map.put(base_state, :status, :running)
+            end
         end
 
       type when type in ["execution.failed", "execution.abandoned", "assignment.rejected"] ->
-        task = Tasks.get_task_detail(state.task_id)
+        # Task 01a0dd2c stage 2: gated like `execution.finished` above. A
+        # refused event posts no failure log and does not stall the router.
+        case LeaseManager.clear_if_owner(state.task_id, event.runtime_id) do
+          {:error, {:not_owner, owner}} ->
+            refuse_terminal_event(state, event, owner)
+            base_state
 
-        if base_state.execution_space_id && task do
-          ExecutionSpace.post_log(
-            base_state.execution_space_id,
-            "Runtime failure detected | event=#{type} | " <>
-              runtime_event_summary(event) <> " | " <> diagnostic_snapshot(base_state, task)
-          )
+          _ok_or_not_found ->
+            task = Tasks.get_task_detail(state.task_id)
+
+            if base_state.execution_space_id && task do
+              ExecutionSpace.post_log(
+                base_state.execution_space_id,
+                "Runtime failure detected | event=#{type} | " <>
+                  runtime_event_summary(event) <> " | " <> diagnostic_snapshot(base_state, task)
+              )
+            end
+
+            Map.put(base_state, :status, :stalled)
         end
-
-        base_state
-        |> clear_liveness()
-        |> Map.put(:status, :stalled)
 
       _ ->
         base_state
