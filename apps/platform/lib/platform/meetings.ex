@@ -4122,15 +4122,16 @@ defmodule Platform.Meetings do
   here** — it is what makes "currently failed" the actual predicate instead
   of "has ever failed since this column existed."
 
-  Concretely, this is not only hypothetical: `reopen_transcript/1` (the
-  rejoin path) sets a failed row's status back to `"recording"` but does
-  NOT clear `failure_reason` — only `complete_transcript/2` does. A
-  transcript that failed, was rejoined, and is now recording again still
-  carries the old reason, and `not is_nil(failure_reason)` alone still
-  misreports it as an unrecovered failure today. `complete_transcript/2`'s
-  path is closed (stage 2's clear + stage 3's CHECK constraint), but the
-  `reopen_transcript/1` path is not, which is exactly why this function
-  filters on status rather than relying on the column alone.
+  Concretely, this is not only hypothetical. Both code paths that take a
+  row out of `failed` now clear the column: `complete_transcript/2` (stage
+  2, backed by the CHECK constraint) and `reopen_transcript/1` (the rejoin
+  path, task 01a08a25). But rows reopened BEFORE task 01a08a25 are still
+  sitting in `recording` / `processing` with their old reason. No backfill
+  cleared them, and the CHECK constraint is deliberately scoped to
+  `complete`, so it does not forbid them. Any raw write can produce the same
+  shape. `not is_nil(failure_reason)` alone misreports those rows as
+  unrecovered failures, which is exactly why this function filters on
+  status rather than relying on the column alone.
 
   ## Options
 
@@ -4303,13 +4304,29 @@ defmodule Platform.Meetings do
   end
 
   @doc """
-  Reopen a transcript for recording after a rejoin, clearing the failure /
-  completion timestamp so the reopened row is not read as terminal.
+  Reopen a transcript for recording after a rejoin. Clears `completed_at`
+  so the reopened row is not read as terminal, AND clears `failure_reason`
+  (task 01a08a25).
+
+  `failure_reason` says why the row is CURRENTLY failed (see the field
+  comment in `Platform.Meetings.Transcript`). A reopened row is not failed,
+  so a reason left on it is false. It is also misleading on a later
+  failure: `fail_transcript/1` and `/2` pass `reason = nil`, which does not
+  overwrite the column, so a kept reason would be read as the explanation of
+  a DIFFERENT run. Failure history is not lost by the clear. Every failure
+  is recorded durably in `audit_events`
+  (`event_type = "platform.meetings.transcription_failed"`).
   """
   @spec reopen_transcript(Transcript.t()) :: {:ok, Transcript.t()} | {:error, Ecto.Changeset.t()}
   def reopen_transcript(%Transcript{} = transcript) do
     transcript
     |> Transcript.changeset(%{status: "recording", completed_at: nil})
+    # `put_change/3` rather than a `failure_reason: nil` key in the attrs map
+    # above, mirroring `complete_transcript/2`: the clearing is the point, and
+    # a nil value threaded through `cast/3` is exactly the sort of thing that
+    # silently no-ops. Stated here, it also survives a later refactor of the
+    # attrs.
+    |> Ecto.Changeset.put_change(:failure_reason, nil)
     |> Repo.update()
   end
 

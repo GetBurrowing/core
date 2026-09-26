@@ -27,10 +27,21 @@ defmodule Platform.Meetings.Transcript do
     field(:completed_at, :utc_datetime_usec)
     field(:router_dispatched_at, :utc_datetime_usec)
     # Why this row is CURRENTLY failed — task 019ff6f3 stage 3. Single-valued
-    # and overwritten by every `fail_transcript/3` call, so it is a latch, not
-    # a history. `Meetings.complete_transcript/2` CLEARS it on success: a
-    # non-nil value on a row that is not `failed` is a bug, enforced by the
-    # `meeting_transcripts_no_reason_when_complete` CHECK constraint.
+    # and overwritten by every `fail_transcript/3` call that carries a reason,
+    # so it is a latch, not a history. A non-nil value on a row that is not
+    # `failed` is a bug. It is cleared at BOTH points where a row leaves
+    # `failed`:
+    #   * `Meetings.complete_transcript/2`, on success (task 01a089b3 stage 2);
+    #   * `Meetings.reopen_transcript/1`, on rejoin (task 01a08a25).
+    # Decision (task 01a08a25): CLEAR on reopen rather than keep. A reopened
+    # row is not currently failed, and a kept reason would be misattributed to
+    # a later reason-less `fail_transcript/1`/`/2`.
+    # The DB enforces the invariant ONLY for `complete`, via the
+    # `meeting_transcripts_no_reason_when_complete` CHECK constraint. That scope
+    # is deliberate: rows reopened before task 01a08a25 still sit in
+    # `recording`/`processing` holding a reason. Extending the constraint would
+    # need a backfill that nulls the ONLY record of failures that predate the
+    # audit bridge, and that is a separate decision.
     # Failure HISTORY lives in `audit_events`
     # (`event_type = "platform.meetings.transcription_failed"`), not here.
     # Nullable because every row written before the column existed has no

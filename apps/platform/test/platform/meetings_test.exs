@@ -2781,32 +2781,26 @@ defmodule Platform.MeetingsTest do
 
       {:ok, recovered} = Meetings.complete_transcript(recovered.id, "recovered on retry")
 
-      # SECOND recovery path, via `reopen_transcript/1` (a rejoin) rather than
-      # `complete_transcript/2`. This one is the actual live discriminator:
-      # post stage-2/3, `complete_transcript/2` clears `failure_reason` AND
-      # the CHECK constraint forbids a `complete` row from carrying one, so a
-      # recovered-by-completion row can no longer produce the incident's 6th
-      # row at all (see the next test — that path is now permanently closed).
-      # `reopen_transcript/1` does NOT clear `failure_reason` (it only clears
-      # `completed_at`), so a transcript that failed, was rejoined, and is now
-      # back in `"recording"` status STILL carries the stale timeout reason.
-      # That row is not `"failed"` — it is actively recording again — so a
-      # `failure_reason`-only filter still misclassifies it as an unrecovered
-      # failure today. This is the case `status == "failed"` guards.
-      reopened_id =
-        fresh_transcript()
-        |> then(fn transcript ->
-          {:ok, failed} =
-            Meetings.fail_transcript(
-              transcript.id,
-              nil,
-              {:llm_failed, %Req.TransportError{reason: :timeout}}
-            )
+      # The live discriminator for the mutation probe below: a row that is
+      # NOT `failed` (here `recording`) yet still carries a timeout-shaped
+      # `failure_reason`. It models PRE-FIX PRODUCTION ROWS — transcripts that
+      # failed, were rejoined through `reopen_transcript/1` before task
+      # 01a08a25 made it clear the column, and are still sitting in
+      # `recording`/`processing` with the old reason. No code path writes this
+      # shape any more (`complete_transcript/2` and `reopen_transcript/1` both
+      # clear), so it is inserted RAW via `raw_insert/2`, bypassing the
+      # changeset; the CHECK constraint is scoped to `complete` and permits it.
+      # A `failure_reason`-only filter misclassifies this row as an
+      # unrecovered failure. This is the case `status == "failed"` guards.
+      {1, _} = raw_insert("recording", "{:llm_failed, %Req.TransportError{reason: :timeout}}")
 
-          {:ok, reopened} = Meetings.reopen_transcript(failed)
-          reopened
-        end)
-        |> Map.fetch!(:id)
+      raw_recording_id =
+        Repo.one!(
+          from(t in Transcript,
+            where: t.status == "recording" and ilike(t.failure_reason, "%timeout%"),
+            select: t.id
+          )
+        )
 
       # Non-matching failed row: guards against `:reason_matching` being
       # applied unconditionally even when the caller passes no opts.
@@ -2818,7 +2812,7 @@ defmodule Platform.MeetingsTest do
       %{
         still_failed_ids: still_failed_ids,
         recovered_id: recovered.id,
-        reopened_id: reopened_id,
+        raw_recording_id: raw_recording_id,
         other_failed_id: other_failed.id
       }
     end
@@ -2827,7 +2821,7 @@ defmodule Platform.MeetingsTest do
          %{
            still_failed_ids: still_failed_ids,
            recovered_id: recovered_id,
-           reopened_id: reopened_id
+           raw_recording_id: raw_recording_id
          } do
       results = Meetings.unrecovered_failures(reason_matching: "timeout")
       result_ids = Enum.map(results, & &1.id)
@@ -2835,7 +2829,7 @@ defmodule Platform.MeetingsTest do
       assert length(results) == 5
       assert Enum.sort(result_ids) == Enum.sort(still_failed_ids)
       refute recovered_id in result_ids
-      refute reopened_id in result_ids
+      refute raw_recording_id in result_ids
     end
 
     # A completed-via-`complete_transcript/2` recovery no longer produces a
@@ -2861,10 +2855,11 @@ defmodule Platform.MeetingsTest do
     # The mutation probe: dropping the `status == "failed"` clause from the
     # query (i.e. filtering on `failure_reason` alone) makes this fixture
     # return 6 instead of 5 and the `correct_count == 5` assertion below go
-    # red. The reopened (rejoined) row is what still supplies the 6th row
-    # today — the complete_transcript/2 recovery no longer can (previous
-    # test). This is the evidence the fixture discriminates rather than
-    # passing vacuously.
+    # red. The raw `recording` row (a pre-fix production shape) is what
+    # supplies the 6th row — neither recovery path can any more:
+    # complete_transcript/2 clears the column (previous test) and, since task
+    # 01a08a25, so does reopen_transcript/1. This is the evidence the fixture
+    # discriminates rather than passing vacuously.
     test "the status conjunction is load-bearing: without it the count would be 6, not 5" do
       naive_count =
         Repo.aggregate(
@@ -2891,6 +2886,125 @@ defmodule Platform.MeetingsTest do
 
     test "stale_failure_reason_count/0 is 0 for this fixture" do
       assert Meetings.stale_failure_reason_count() == 0
+    end
+  end
+
+  describe "reopen_transcript/1 clears failure_reason (task 01a08a25)" do
+    # Decision: CLEAR on reopen. `failure_reason` is why the row is CURRENTLY
+    # failed; a reopened row is not failed, and failure history is durable in
+    # `audit_events`. Every test here FAILS a row with a reason first and
+    # asserts the reason is present before reopening — a test that reopens a
+    # never-failed row would pass against the unfixed code and prove nothing.
+    defp processing_transcript(room_id \\ "space-#{Ecto.UUID.generate()}") do
+      {:ok, transcript} =
+        Meetings.create_transcript(%{room_id: room_id, status: "processing"})
+
+      transcript
+    end
+
+    defp failure_audit_count(transcript_id) do
+      Repo.aggregate(
+        from(e in Platform.Audit.Event,
+          where:
+            e.event_type == "platform.meetings.transcription_failed" and
+              e.resource_id == ^transcript_id
+        ),
+        :count
+      )
+    end
+
+    test "fail -> reopen leaves the row recording with a NULL failure_reason" do
+      transcript = processing_transcript()
+
+      {:ok, failed} =
+        Meetings.fail_transcript(
+          transcript.id,
+          nil,
+          {:llm_failed, %Req.TransportError{reason: :timeout}}
+        )
+
+      # Precondition: without this the test is vacuous.
+      refute is_nil(failed.failure_reason)
+      assert failed.failure_reason =~ "timeout"
+
+      assert {:ok, reopened} = Meetings.reopen_transcript(failed)
+      assert reopened.status == "recording"
+      assert is_nil(reopened.failure_reason)
+      assert is_nil(reopened.completed_at)
+
+      reloaded = Repo.reload!(reopened)
+      assert reloaded.status == "recording"
+      assert is_nil(reloaded.failure_reason)
+    end
+
+    test "the rejoin entry point ensure_transcript/1 reuses the failed row and clears its reason" do
+      room_id = "space-#{Ecto.UUID.generate()}"
+      transcript = processing_transcript(room_id)
+
+      {:ok, failed} =
+        Meetings.fail_transcript(
+          transcript.id,
+          nil,
+          {:llm_failed, %Req.TransportError{reason: :timeout}}
+        )
+
+      refute is_nil(failed.failure_reason)
+
+      assert {:ok, rejoined} = Meetings.ensure_transcript(%{room_id: room_id})
+      assert rejoined.id == transcript.id
+      assert rejoined.status == "recording"
+      assert is_nil(rejoined.failure_reason)
+      assert is_nil(Repo.reload!(rejoined).failure_reason)
+    end
+
+    # The misattribution case: `fail_transcript/1` passes `reason = nil`, which
+    # does NOT overwrite the column. Were the first run's reason kept across the
+    # reopen, it would be read as the explanation of the SECOND failure.
+    test "a reason-less re-fail after reopen lands with a NULL reason, not the first run's" do
+      transcript = processing_transcript()
+
+      {:ok, failed} =
+        Meetings.fail_transcript(
+          transcript.id,
+          nil,
+          {:llm_failed, %Req.TransportError{reason: :timeout}}
+        )
+
+      refute is_nil(failed.failure_reason)
+
+      {:ok, _reopened} = Meetings.reopen_transcript(failed)
+
+      assert {:ok, refailed} = Meetings.fail_transcript(transcript.id)
+      assert refailed.status == "failed"
+      assert is_nil(refailed.failure_reason)
+      assert is_nil(Repo.reload!(refailed).failure_reason)
+    end
+
+    # Positive control: the fix must not degenerate into "never write this
+    # column". A re-fail WITH a reason still records it, and the audit log
+    # keeps both failures even though the column held only one at a time.
+    test "a re-fail with a reason after reopen records it, and both failures stay audited" do
+      Platform.Audit.TelemetryHandler.attach()
+      transcript = processing_transcript()
+
+      {:ok, failed} =
+        Meetings.fail_transcript(
+          transcript.id,
+          nil,
+          {:llm_failed, %Req.TransportError{reason: :timeout}}
+        )
+
+      refute is_nil(failed.failure_reason)
+
+      {:ok, _reopened} = Meetings.reopen_transcript(failed)
+
+      assert {:ok, refailed} =
+               Meetings.fail_transcript(transcript.id, nil, {:llm_failed, :bad_audio_format})
+
+      assert refailed.status == "failed"
+      assert refailed.failure_reason =~ "bad_audio_format"
+      refute refailed.failure_reason =~ "timeout"
+      assert failure_audit_count(transcript.id) == 2
     end
   end
 end
