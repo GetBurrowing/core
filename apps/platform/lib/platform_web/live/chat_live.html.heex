@@ -16,7 +16,13 @@
      media intent. On a LiveKit reconnect (task 019e4b3e stage 3) the JS
      hook reads these off the dataset to re-engage the camera/mic WITHOUT
      waiting for a fresh LV push — reconnect-safe (Rowan's exact error was
-     "unable to push hook event. LiveView not connected"). --%>
+     "unable to push hook event. LiveView not connected").
+     data-transcriber-markers (task 01a0d4fe stage 3): the server's
+     transcriber identity markers, so MeetingClient skips the worker's tile
+     without a hard-coded copy of the list in JS.
+     It reads @transcriber_markers_json, which
+     TranscriberMarkersHook recomputes on every event and message (stage
+     5): an assign-free expression is static and never re-sent. --%>
 <div
   :if={!@embedded}
   id="meeting-client"
@@ -24,6 +30,7 @@
   class="hidden"
   data-camera-enabled={to_string(@camera_enabled)}
   data-mic-enabled={to_string(@mic_enabled)}
+  data-transcriber-markers={@transcriber_markers_json}
 >
 </div>
 <div :if={!@embedded} id="meeting-room" phx-hook="MeetingRoom" class="hidden"></div>

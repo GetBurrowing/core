@@ -3309,7 +3309,7 @@ defmodule Platform.Meetings do
   # Substrings matched against BOTH `display_name` and
   # `metadata["identity"]` of a `meeting_participants` row. The match is
   # case-insensitive by downcasing the haystacks only (see
-  # `transcriber_marker?/1`), so every entry here must be lowercase.
+  # `marker_match?/1`), so every entry here must be lowercase.
   #
   # Both of those fields arrive on the LiveKit `participant_joined`
   # webhook and are minted by the external transcriber worker, which does
@@ -3399,15 +3399,57 @@ defmodule Platform.Meetings do
     transcriber_presence_seconds(transcript) >= transcriber_presence_threshold_seconds()
   end
 
-  defp transcriber_marker?(%Participant{} = participant) do
-    identity =
-      case participant.metadata do
-        %{"identity" => value} when is_binary(value) -> value
-        _ -> nil
-      end
+  @doc """
+  Whether a participant is the meeting transcriber, and so should be
+  hidden from the participant UI.
 
+  Accepts either a `meeting_participants` row or a LiveKit-participant
+  shaped map (`:identity` and/or `:name` / `:display_name` keys).
+
+  A row carrying a `user_id` or `agent_id` FK is a human or a Suite agent
+  by construction and is NEVER a transcriber, whatever its strings say.
+  That FK guard is what makes "a human never loses their tile" structural
+  rather than a property of the marker strings. It applies to this hide
+  predicate only; `transcriber_presence_seconds/1` keeps its own matching.
+
+  Only rows with neither FK are matched, against `display_name` and
+  `metadata["identity"]`, using `transcriber_identity_markers/0`. The
+  LiveKit participant `kind` is deliberately not consulted: the webhook
+  path does not persist it on the row, and the identity markers are the
+  authority.
+  """
+  @spec transcriber_participant?(Participant.t() | map() | term()) :: boolean()
+  def transcriber_participant?(%Participant{user_id: nil, agent_id: nil} = participant),
+    do: marker_match?([participant.display_name, participant_identity(participant)])
+
+  def transcriber_participant?(%Participant{}), do: false
+
+  def transcriber_participant?(%{} = participant)
+      when is_map_key(participant, :identity) or is_map_key(participant, :name) or
+             is_map_key(participant, :display_name) do
+    marker_match?([
+      Map.get(participant, :identity),
+      Map.get(participant, :name),
+      Map.get(participant, :display_name)
+    ])
+  end
+
+  def transcriber_participant?(_), do: false
+
+  defp transcriber_marker?(%Participant{} = participant),
+    do: marker_match?([participant.display_name, participant_identity(participant)])
+
+  defp participant_identity(%Participant{metadata: %{"identity" => value}}) when is_binary(value),
+    do: value
+
+  defp participant_identity(%Participant{}), do: nil
+
+  # Case-insensitive substring match of any configured marker against the
+  # binary haystacks. Non-binaries (nil, missing metadata) are dropped.
+  @spec marker_match?([String.t() | nil]) :: boolean()
+  defp marker_match?(haystacks) when is_list(haystacks) do
     haystacks =
-      [participant.display_name, identity]
+      haystacks
       |> Enum.filter(&is_binary/1)
       |> Enum.map(&String.downcase/1)
 
@@ -3416,7 +3458,17 @@ defmodule Platform.Meetings do
     end)
   end
 
-  defp transcriber_identity_markers do
+  @doc """
+  The substrings that identify a transcriber participant, matched
+  case-insensitively against `display_name` and `metadata["identity"]`.
+
+  This is the ONLY source of the marker list: read it from here rather
+  than copying it. Overridable at runtime via
+  `config :platform, :transcriber_identity_markers`; every entry must be
+  lowercase, because only the haystacks are downcased.
+  """
+  @spec transcriber_identity_markers() :: [String.t()]
+  def transcriber_identity_markers do
     Application.get_env(:platform, :transcriber_identity_markers, @transcriber_identity_markers)
   end
 

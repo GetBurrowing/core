@@ -387,13 +387,19 @@
       <%!-- data-camera-enabled / data-mic-enabled: committed media intent the
          JS hook reads on a LiveKit reconnect to re-engage media without a
          fresh LV push (task 019e4b3e stage 3). MeetingHooks.attach/1 owns
-         :camera_enabled / :mic_enabled here just as it does in ChatLive. --%>
+         :camera_enabled / :mic_enabled here just as it does in ChatLive.
+         data-transcriber-markers (task 01a0d4fe stage 3): the server's
+         transcriber identity markers for MeetingClient's tile skip.
+         It reads @transcriber_markers_json, which
+         TranscriberMarkersHook recomputes on every event and message (stage
+         5): an assign-free expression is static and never re-sent. --%>
       <div
         id="meeting-client"
         phx-hook="MeetingClient"
         class="hidden"
         data-camera-enabled={to_string(@camera_enabled)}
         data-mic-enabled={to_string(@mic_enabled)}
+        data-transcriber-markers={@transcriber_markers_json}
       >
       </div>
       <div id="meeting-room" phx-hook="MeetingRoom" class="hidden"></div>
@@ -635,11 +641,30 @@
 
            `basis` is untouched, so a long meeting name still truncates rather
            than overflowing the page: the h1 keeps `min-w-0 truncate` and this
-           box's hypothetical size does not follow its content. --%>
+           box's hypothetical size does not follow its content.
+
+           THE TRANSCRIBING PILL JOINS THE CONDITION (task 01a0d4fe stage 4).
+           It is a third state pill in this same basis-driven box, so it costs
+           the name its width exactly as the rec pill did. Measured at 390x844,
+           transcriber present and no recording: with this box at `shrink` the
+           name rendered at 1.69px; at `shrink-[0.2]` it renders at 57.45px
+           (title 187.09, control 48.91), above the rec-only 55.75.
+
+           ALL THREE PILLS at 390x844 is NOT fixed by this weight, and no
+           weight fixes it. The name measures 5.91px at 0.2, and even at
+           `shrink-0` only 38.41px, by which point the segmented control's
+           scroll port is 16.41px — the control gone to save the title. The
+           three pills (live 45.64, rec 43.55, transcribing 40, plus gaps) are
+           wider than the slack the line has. 0.2 is kept for the three-pill
+           case rather than trading the control away; that trade is a top-bar
+           layout decision, not this pill's. --%>
           <div
             class={[
               "flex min-w-0 grow basis-[60%] items-center gap-2 sm:basis-[50%]",
-              if(@room_recording?, do: "shrink-[0.2] sm:shrink", else: "shrink")
+              if(@room_recording? or @transcriber_present?,
+                do: "shrink-[0.2] sm:shrink",
+                else: "shrink"
+              )
             ]}
             data-role="meeting-title"
           >
@@ -725,6 +750,65 @@
             >
               <span class="size-1.5 rounded-full bg-error" aria-hidden="true"></span>
               <span>rec<span class="sr-only sm:not-sr-only">ording</span></span>
+            </span>
+
+            <%!-- `● transcribing` (task 01a0d4fe stage 4; Saru's design
+             direction, canvas 01a0e061-ebe5-7001-af76-ee2f38e755d0). Third in
+             the live, rec, transcribing order; the same 10px pill family, not a
+             new component. The transcriber appears in no tile, roster or count
+             (stage 2 filters it at `meeting_presence/1`), so this pill is its
+             ONLY representation.
+
+             OBSERVED, NEVER ASSUMED. `@transcriber_present?` is recomputed by
+             `meeting_presence/1` on every `refresh_participants/1`, which both
+             `{:participant_left, _}` and `{:meeting_presence_update, _}` reach —
+             `Meetings.mark_live_participant_left/2` broadcasts both. So the node
+             is REMOVED when the transcriber's row leaves, with no remount. `:if`,
+             never a hidden node and never `hidden sm:flex`: this is state.
+
+             SLOT: `info`, not the cyan action colour — a status pill in the
+             action hue reads as a button. The dot is filled and static (no
+             pulse). Below `sm` the word goes `sr-only` and `hero-document-text`
+             paints beside the dot, so the indicator is never colour-only.
+
+             CONTRAST, measured with Platform.Design.WcagContrast (float-through),
+             compositing every alpha over the real ground: header `bg-base-200/60`
+             over the shell's `bg-base-100`. The same method reproduces the rec
+             pill's recorded 3.1799 / 4.6703 dot and 17.1452 / 15.7191 word.
+
+               * Fill `bg-info/10` composites to #E1E9F2 light / #141C28 dark.
+               * Dot `bg-info` on that fill: 4.1857:1 light / 6.9102:1 dark,
+                 over the 3:1 non-text floor in both, so `/10` ships as
+                 specified (no nearer fill was needed).
+               * Word `text-base-content` on that fill: 17.1738:1 light /
+                 14.8095:1 dark, over 4.5:1. `text-info` is not used: a word in
+                 the pill's own hue is the rec pill's measured failure mode.
+               * `border-info/40` against the ground: 1.7571:1 light / 2.1711:1
+                 dark, so it is shape only; the dot and word carry the pill.
+
+             WIDTH at 390x844: see the title box's shrink note above.
+
+             WIDTH at lg (1024-1536, sidebar expanded): the title box is
+             already 0-160px wide on main at these widths, and the live and
+             rec pills already overflow it, under the roster count and the
+             Join meeting button — that overlap PREDATES this pill. This pill
+             lands under the controls with them. Measured at 1280x800, dark,
+             all three pills showing: title box 236-267.75 (31.75px, name 0px);
+             rec pill 370.25-445.67, already 47.64px under Join meeting
+             (398.03-531.34); this pill 453.67-541.59, 77.67px of its 87.92px
+             under Join. The lg top bar is a separate ticket; this stage does
+             not redesign it. --%>
+            <span
+              :if={@transcriber_present?}
+              class="inline-flex flex-shrink-0 items-center gap-1 rounded-full border border-info/40 bg-info/10 px-2 py-0.5 text-[10px] font-medium leading-4 text-base-content"
+              data-role="meeting-transcribing-pill"
+              role="status"
+              aria-label="This meeting is being transcribed"
+              title="Meeting transcriber is in the room"
+            >
+              <span class="size-1.5 rounded-full bg-info" aria-hidden="true"></span>
+              <span class="hero-document-text size-3 sm:hidden" aria-hidden="true"></span>
+              <span class="sr-only sm:not-sr-only">transcribing</span>
             </span>
           </div>
 

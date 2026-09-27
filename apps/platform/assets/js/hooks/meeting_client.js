@@ -1086,6 +1086,11 @@ const MeetingClient = {
     // into [data-local-video-dock], not this tile. Skip it so the local user
     // renders exactly once (parity with remote: one roster row + one tile).
     if (participant.isLocal) return
+    // Task 01a0d4fe stage 3: the meeting transcriber worker joins the room
+    // as a LiveKit participant but is not a person, so it gets no tile.
+    // Every tile path (ParticipantConnected, adopt, rejoin, _attachTrack)
+    // funnels through here, so one check covers them all.
+    if (this._isTranscriber(participant)) return
     const { identity } = participant
     if (this._tiles.has(identity)) return
 
@@ -1119,6 +1124,40 @@ const MeetingClient = {
 
     grid.appendChild(tile)
     this._tiles.set(identity, tile)
+  },
+
+  // The transcriber identity markers, pushed by the server as JSON on
+  // `#meeting-client[data-transcriber-markers]` from
+  // `Platform.Meetings.transcriber_identity_markers/0` — the ONLY definition
+  // of the list. Nothing is hard-coded here. Re-read on every call (no
+  // caching) so a config change applied on the next LiveView patch takes
+  // effect. A missing or malformed attribute yields `[]`: showing a tile
+  // for the worker is the safe failure, hiding a human is not.
+  _transcriberMarkers() {
+    const raw = this.el && this.el.dataset && this.el.dataset.transcriberMarkers
+    if (!raw) return []
+    try {
+      const parsed = JSON.parse(raw)
+      if (!Array.isArray(parsed)) return []
+      // Markers are used as given (the server does not downcase them
+      // either). Empty strings are dropped: `"x".includes("")` is true, so
+      // one would hide every participant.
+      return parsed.filter((m) => typeof m === "string" && m !== "")
+    } catch (_err) {
+      return []
+    }
+  },
+
+  // Mirrors `marker_match?/1` in Platform.Meetings: downcased substring
+  // match of the participant's identity and name against each marker.
+  _isTranscriber(participant) {
+    if (!participant) return false
+    const markers = this._transcriberMarkers()
+    if (markers.length === 0) return false
+    const haystacks = [participant.identity, participant.name]
+      .filter((v) => typeof v === "string")
+      .map((v) => v.toLowerCase())
+    return haystacks.some((h) => markers.some((m) => h.includes(m)))
   },
 
   _removeTile(identity) {

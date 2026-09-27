@@ -1490,8 +1490,12 @@ defmodule PlatformWeb.ChatLive.MeetingHooksTest do
       assert seeded.assigns.screen_share_enabled == false
       assert seeded.assigns.meeting_counts == %{}
       assert seeded.assigns.meeting_participants == []
-      # And confirm the hook actually landed on the `:meeting_events` slot.
-      assert [_hook] = seeded.private.lifecycle.handle_event
+      # And confirm the hook actually landed on the `:meeting_events` slot,
+      # preceded by the transcriber-markers refresh hook (task 01a0d4fe
+      # stage 5): `:meeting_events` halts the events it owns, so the markers
+      # hook must run first or those events never refresh the markers.
+      assert [:transcriber_markers, :meeting_events] =
+               Enum.map(seeded.private.lifecycle.handle_event, & &1.id)
     end
   end
 end

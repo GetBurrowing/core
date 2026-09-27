@@ -1841,3 +1841,167 @@ describe("MeetingClient — remote audio survives a LiveView navigation", () => 
     expect(sinkAudioFor("TR_local")).toEqual([])
   })
 })
+
+// ── Transcriber tile skip (task 01a0d4fe stage 3) ────────────────────────
+//
+// The meeting transcriber worker joins the LiveKit room as a participant.
+// MeetingClient must not paint a quick-meet tile for it. The marker list is
+// pushed by the server on `#meeting-client[data-transcriber-markers]`; the
+// JS carries no copy of it (the source-text guard at the end pins that).
+describe("MeetingClient — transcriber gets no quick-meet tile (01a0d4fe)", () => {
+  let priorWindow
+  const DEFAULT_MARKERS = JSON.stringify(["meeting-transcriber", "transcriber:"])
+
+  function buildGridDocument() {
+    const grid = fakeNode()
+    return {
+      _grid: grid,
+      createElement() {
+        return fakeNode()
+      },
+      getElementById(id) {
+        return id === "meeting-participants" ? grid : null
+      },
+      querySelector() {
+        return null
+      },
+      querySelectorAll() {
+        return []
+      },
+      addEventListener() {},
+      removeEventListener() {},
+      dispatchEvent() {
+        return true
+      },
+    }
+  }
+
+  function remote(identity, name) {
+    return { identity, name, isLocal: false, trackPublications: new Map() }
+  }
+
+  function setup(markersAttr) {
+    const doc = buildGridDocument()
+    globalThis.document = doc
+    const dataset = markersAttr === undefined ? {} : { transcriberMarkers: markersAttr }
+    const hook = buildReconnectHook(fakeHookEl(dataset))
+    const room = fakeRoom({ state: "connected" })
+    hook._bindRoomEvents(room)
+    return { hook, room, grid: doc._grid }
+  }
+
+  function tileIds(grid) {
+    return grid.children.map((c) => c.dataset.participant)
+  }
+
+  beforeEach(() => {
+    globalThis.console = globalThis.console || { warn() {}, error() {}, info() {} }
+    priorWindow = globalThis.window
+    globalThis.window = {
+      __livekit_room: null,
+      __livekitRoom: null,
+      addEventListener() {},
+      removeEventListener() {},
+      dispatchEvent() {
+        return true
+      },
+      matchMedia() {
+        return { matches: true, addEventListener() {}, removeEventListener() {} }
+      },
+    }
+  })
+
+  afterEach(() => {
+    delete globalThis.document
+    globalThis.window = priorWindow
+  })
+
+  it("a transcriber ParticipantConnected adds NO child to the grid", () => {
+    const { room, grid } = setup(DEFAULT_MARKERS)
+    room.emit("participantConnected", remote("transcriber:space-x", "Transcription"))
+    expect(grid.children.length).toBe(0)
+  })
+
+  it("POSITIVE CONTROL: a camera-less human DOES get a .meeting-tile", () => {
+    const { room, grid } = setup(DEFAULT_MARKERS)
+    room.emit("participantConnected", remote("user:abc", "Marlowe"))
+    expect(grid.children.length).toBe(1)
+    expect(grid.children[0].className).toBe("meeting-tile")
+    expect(tileIds(grid)).toEqual(["user:abc"])
+  })
+
+  it("matches the display name too (meeting-transcriber)", () => {
+    const { room, grid } = setup(DEFAULT_MARKERS)
+    room.emit("participantConnected", remote("worker-7", "Meeting-Transcriber"))
+    expect(grid.children.length).toBe(0)
+  })
+
+  it("CONFIG DRIVES IT: with custom markers, transcriber:space-x gets a tile and custom-scribe:1 does not", () => {
+    const { room, grid } = setup(JSON.stringify(["custom-scribe:"]))
+    room.emit("participantConnected", remote("transcriber:space-x", "Transcription"))
+    room.emit("participantConnected", remote("custom-scribe:1", "Scribe"))
+    expect(tileIds(grid)).toEqual(["transcriber:space-x"])
+  })
+
+  it("re-reads the attribute on every call (no caching)", () => {
+    const { hook, room, grid } = setup(JSON.stringify(["custom-scribe:"]))
+    hook.el.dataset.transcriberMarkers = DEFAULT_MARKERS
+    room.emit("participantConnected", remote("transcriber:space-x", "Transcription"))
+    expect(grid.children.length).toBe(0)
+  })
+
+  it("a malformed attribute still creates tiles and does not throw", () => {
+    for (const bad of ["not json", '{"a":1}', "[1,null,{}]", '[""]']) {
+      const { hook, room, grid } = setup(bad)
+      expect(() => hook._transcriberMarkers()).not.toThrow()
+      expect(() =>
+        room.emit("participantConnected", remote("transcriber:space-x", "Transcription")),
+      ).not.toThrow()
+      expect(tileIds(grid)).toEqual(["transcriber:space-x"])
+    }
+  })
+
+  it("a missing attribute yields [] and tiles everyone", () => {
+    const { hook, room, grid } = setup(undefined)
+    expect(hook._transcriberMarkers()).toEqual([])
+    room.emit("participantConnected", remote("transcriber:space-x", "Transcription"))
+    expect(grid.children.length).toBe(1)
+  })
+
+  it("_attachTrack for a transcriber participant creates no tile", () => {
+    const { hook, grid } = setup(DEFAULT_MARKERS)
+    const track = fakeTrack("camera")
+    hook._attachTrack(track, remote("transcriber:space-x", "Transcription"))
+    expect(grid.children.length).toBe(0)
+    expect(track.attachCalls.length).toBe(0)
+  })
+
+  it("_attachTrack for a human still creates the tile (control)", () => {
+    const { hook, grid } = setup(DEFAULT_MARKERS)
+    const track = fakeTrack("camera")
+    track.attach = function () {
+      this.attachCalls.push(null)
+      return fakeNode()
+    }
+    const tile = fakeNode()
+    tile.querySelector = () => null
+    tile.insertBefore = (child) => tile.appendChild(child)
+    globalThis.document.createElement = () => {
+      const n = fakeNode()
+      n.querySelector = () => null
+      n.insertBefore = (child) => n.appendChild(child)
+      return n
+    }
+    hook._attachTrack(track, remote("user:abc", "Marlowe"))
+    expect(tileIds(grid)).toEqual(["user:abc"])
+  })
+
+  it("SOURCE GUARD: meeting_client.js carries no hard-coded transcriber marker", async () => {
+    const { readFileSync } = await import("node:fs")
+    const { fileURLToPath } = await import("node:url")
+    const path = fileURLToPath(new URL("../../js/hooks/meeting_client.js", import.meta.url))
+    const src = readFileSync(path, "utf8")
+    expect(src).not.toContain("transcriber:")
+    expect(src).not.toContain("meeting-transcriber")
+  })
+})

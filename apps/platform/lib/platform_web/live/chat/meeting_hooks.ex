@@ -95,6 +95,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   alias Platform.Tenancy
   alias PlatformWeb.Components.Meetings.CallShell
   alias PlatformWeb.Components.Meetings.CandidateRail
+  alias PlatformWeb.ChatLive.TranscriberMarkersHook
   alias PlatformWeb.SpaceTopics
 
   @doc """
@@ -135,6 +136,9 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
       # hold it is supposed to accompany.
       |> assign(:roster_changed_downstream?, true)
       |> assign_call_shell_defaults()
+      # Task 01a0d4fe stage 5: BEFORE the two hooks below, which halt the
+      # events they own (the mic toggle among them). See the module.
+      |> TranscriberMarkersHook.attach()
       |> attach_hook(:meeting_events, :handle_event, &handle_event/3)
       |> attach_hook(:meeting_info, :handle_info, &handle_info/2)
 
@@ -331,6 +335,9 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     # `attach_hook/4` raises on duplicate id; detach first so both
     # entry points are safe to call.
     |> detach_hook(:meeting_events, :handle_event)
+    # Task 01a0d4fe stage 5: re-attached ahead of `:meeting_events` on every
+    # pass, for the same halt-order reason as in `attach/2`.
+    |> TranscriberMarkersHook.attach()
     |> attach_hook(:meeting_events, :handle_event, &handle_guest_event/3)
   end
 

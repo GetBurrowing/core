@@ -689,10 +689,10 @@ defmodule PlatformWeb.MeetingLive do
   # `enter_meeting_as_guest/3` which then overrides some values. All
   # side-effect-free (no PubSub subscribes, no LiveKit calls).
   defp seed_guest_shell_tree_assigns(socket, meeting) do
-    participants =
+    {participants, transcriber_present?} =
       if is_binary(meeting.chat_space_id),
-        do: build_meeting_participants(meeting.chat_space_id),
-        else: []
+        do: meeting_presence(meeting.chat_space_id),
+        else: {[], false}
 
     socket
     |> assign(:meeting, meeting)
@@ -704,6 +704,7 @@ defmodule PlatformWeb.MeetingLive do
     # badge on first paint rather than only after the next toggle.
     |> assign(:intent_muted?, Meetings.intent_muted?(meeting.id))
     |> assign(:participants, participants)
+    |> assign(:transcriber_present?, transcriber_present?)
     |> assign(:room_live?, room_live?(meeting.chat_space_id))
     |> assign(:room_recording?, room_recording?(meeting.chat_space_id))
     |> assign(:agents_by_id, %{})
@@ -1105,10 +1106,10 @@ defmodule PlatformWeb.MeetingLive do
             seed_ask_floor_holders(socket, meeting.id)
           end
 
-        participants =
+        {participants, transcriber_present?} =
           if meeting.chat_space_id,
-            do: build_meeting_participants(meeting.chat_space_id),
-            else: []
+            do: meeting_presence(meeting.chat_space_id),
+            else: {[], false}
 
         agents_by_id = load_agents_by_id(participants)
 
@@ -1132,6 +1133,7 @@ defmodule PlatformWeb.MeetingLive do
           |> assign(:page_title, "Meeting · #{meeting.name}")
           |> assign(:meeting, meeting)
           |> assign(:participants, participants)
+          |> assign(:transcriber_present?, transcriber_present?)
           |> assign(:room_live?, room_live?(meeting.chat_space_id))
           |> assign(:room_recording?, room_recording?(meeting.chat_space_id))
           |> assign(:agents_by_id, agents_by_id)
@@ -5614,10 +5616,11 @@ defmodule PlatformWeb.MeetingLive do
 
   defp refresh_participants(%{assigns: %{meeting: %{chat_space_id: space_id}}} = socket)
        when is_binary(space_id) do
-    participants = build_meeting_participants(space_id)
+    {participants, transcriber_present?} = meeting_presence(space_id)
 
     socket
     |> assign(:participants, participants)
+    |> assign(:transcriber_present?, transcriber_present?)
     |> assign(:room_live?, room_live?(space_id))
     |> assign(:room_recording?, room_recording?(space_id))
     |> assign(:agents_by_id, load_agents_by_id(participants))
@@ -5998,14 +6001,43 @@ defmodule PlatformWeb.MeetingLive do
   view-model the rail/gallery already pattern-match on: `:id`,
   `:participant_id`, `:participant_type`, `:display_name`, `:avatar_url`,
   `:attention_config`.
+
+  Transcriber rows are EXCLUDED (task 01a0d4fe). The meeting transcriber
+  joins LiveKit as a participant with no user or agent FK, so without this
+  it rendered as an "Unknown participant" tile, sized the grid for one cell
+  too many and inflated the top-bar count. Every LiveView participant
+  surface (gallery, strip, rail, counts, lobby line, and the /chat
+  quick-meet roster via `MeetingHooks.meeting_participants/1`) reads this
+  list, so rejecting the row here, once, removes it from all of them. The
+  decision is `Meetings.transcriber_participant?/1`; see `meeting_presence/1`
+  for the split that also reports whether a transcriber is present.
   """
-  def build_meeting_participants(space_id) when is_binary(space_id) do
-    space_id
-    |> Meetings.active_participants_for_space()
-    |> Enum.map(&meeting_participant_view_model/1)
+  def build_meeting_participants(space_id), do: space_id |> meeting_presence() |> elem(0)
+
+  @doc """
+  Live meeting presence for `space_id`, split once on
+  `Meetings.transcriber_participant?/1`: `{participants, transcriber_present?}`.
+
+  `participants` are the non-transcriber rows mapped through
+  `meeting_participant_view_model/1` (what `build_meeting_participants/1`
+  returns). `transcriber_present?` is `true` when at least one active row is
+  a transcriber, and backs the `:transcriber_present?` assign. The split runs
+  on the `%Meetings.Participant{}` row, before the view model, because the
+  view model has already dropped the nil-FK row's display name.
+
+  A non-binary `space_id` returns `{[], false}`.
+  """
+  @spec meeting_presence(term()) :: {[map()], boolean()}
+  def meeting_presence(space_id) when is_binary(space_id) do
+    {transcribers, participants} =
+      space_id
+      |> Meetings.active_participants_for_space()
+      |> Enum.split_with(&Meetings.transcriber_participant?/1)
+
+    {Enum.map(participants, &meeting_participant_view_model/1), transcribers != []}
   end
 
-  def build_meeting_participants(_), do: []
+  def meeting_presence(_), do: {[], false}
 
   # Map a single live `Meetings.Participant` row into the rail/gallery
   # view-model. `:participant_id` is the preloaded `user.id` / `agent.id`
