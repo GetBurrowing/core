@@ -9,10 +9,27 @@ defmodule PlatformWeb.Plugs.RequireAuth do
 
     * `PlatformWeb.ApiClientRequest.api_client?/1` is true (an
       `authorization` header, or an `accept` header that asks for neither
-      `text/html` nor `*/*`) -> `401` with a JSON body
-      `%{"error" => "unauthorized", "reason" => <reason>}`.
+      `text/html` nor `*/*`) -> `401` with a JSON body (see "JSON error
+      envelope" below).
     * otherwise (a browser navigation) -> `302` redirect to `/auth/login`,
       exactly as before.
+
+  JSON error envelope (task 01a0ac9c). The API-client arm emits
+
+      {"error": {"code": "unauthorized",
+                 "message": "Authentication required.",
+                 "reason": "no_session" | "stale_session" | "user_archived"}}
+
+  which is the envelope `docs/contracts/editable-messages-contract.md`
+  section B.4 specifies (`{"error": {"code": ..., "message": ...}}`, 401 ->
+  `code` `"unauthorized"`) and the one `PlatformWeb.Plugs.RequireAuthAPI`
+  already returns, with the same human `message` per reason ("Authentication
+  required.", "Session is stale; sign in again.", "Account is archived.").
+  `reason` is an optional extra key and lives INSIDE `error`; nothing is
+  emitted at the top level besides `error`. Clients branch on the stable
+  machine key `error.code`, never on `message`. The next auth surface that
+  answers an unauthenticated JSON caller must copy this shape: a stable
+  machine `code`, a human `message`, and any extra keys inside `error`.
 
   `401` and not `403`: the caller presented no valid identity at all, which
   is an authentication failure. Per-resource ownership checks downstream
@@ -25,11 +42,12 @@ defmodule PlatformWeb.Plugs.RequireAuth do
   pipelines whose `:accepts` list admits the caller's media type: on a
   pipeline declaring `plug(:accepts, ["html"])`, an `Accept:
   application/json` request is refused by content negotiation with 406
-  before this plug runs. `PlatformWeb.Router`'s `:blob_browser` pipeline
-  (used only by `/files/blob/:id`) is the one that has opted in, by
-  declaring `plug(:accepts, ["html", "json"])`. On every other browser
-  pipeline the reachable API-caller signal remains the `authorization`
-  header.
+  before this plug runs. Two pipelines in `PlatformWeb.Router` pipe
+  through this plug AND declare `plug(:accepts, ["html", "json"])`, so an
+  `Accept: application/json` caller reaches `deny/2` on them:
+  `:blob_browser` (used only by `/files/blob/:id`) and `:agent_avatar`
+  (`GET /agents/:id/avatar`). On every other browser pipeline the reachable
+  API-caller signal remains the `authorization` header.
 
   Both outcomes emit the same `[:platform, :auth, :access_blocked]`
   telemetry, and the stale-session / archived-user branches drop the
@@ -85,7 +103,10 @@ defmodule PlatformWeb.Plugs.RequireAuth do
   # (`unauthorized_json/1` vs. the session redirect).
   defp deny(conn, reason) do
     if PlatformWeb.ApiClientRequest.api_client?(conn) do
-      body = Jason.encode!(%{error: "unauthorized", reason: to_string(reason)})
+      body =
+        Jason.encode!(%{
+          error: %{code: "unauthorized", message: message(reason), reason: to_string(reason)}
+        })
 
       conn
       |> put_resp_content_type("application/json")
@@ -97,6 +118,12 @@ defmodule PlatformWeb.Plugs.RequireAuth do
       |> halt()
     end
   end
+
+  # Same human messages as `PlatformWeb.Plugs.RequireAuthAPI`, so one reason
+  # reads identically whichever of the two plugs denied it.
+  defp message(:no_session), do: "Authentication required."
+  defp message(:stale_session), do: "Session is stale; sign in again."
+  defp message(:user_archived), do: "Account is archived."
 
   # Pure-function derivation of MT/RBAC assigns from an already-preloaded
   # user struct (task 019e3c4a stage 2). `Accounts.get_user/1` preloaded

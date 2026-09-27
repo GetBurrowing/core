@@ -89,6 +89,10 @@ defmodule PlatformWeb.Plugs.RequireAuthAPITest do
 
       assert conn.halted
       assert conn.status == 401
+
+      body = Jason.decode!(conn.resp_body)
+      assert body["error"]["code"] == "unauthorized"
+      assert body["error"]["message"] == "Authentication required."
     end
   end
 end

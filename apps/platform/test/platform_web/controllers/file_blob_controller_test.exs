@@ -459,7 +459,7 @@ defmodule PlatformWeb.FileBlobControllerTest do
       # The negative alone would be satisfied by an empty body from a 500 or
       # a vanished route, so it is paired with a positive decode.
       refute conn.resp_body =~ "<html"
-      assert Jason.decode!(conn.resp_body)["error"] == "unauthorized"
+      assert Jason.decode!(conn.resp_body)["error"]["code"] == "unauthorized"
     end
 
     test "positive control: an authenticated session still gets the exact bytes",
@@ -492,7 +492,7 @@ defmodule PlatformWeb.FileBlobControllerTest do
       # The negative alone would be satisfied by an empty body from a 500 or
       # a vanished route, so it is paired with a positive decode.
       refute conn.resp_body =~ "<html"
-      assert Jason.decode!(conn.resp_body)["error"] == "unauthorized"
+      assert Jason.decode!(conn.resp_body)["error"]["code"] == "unauthorized"
     end
 
     test "an authenticated session sending Accept: application/json still gets the exact bytes",

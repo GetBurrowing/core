@@ -12,6 +12,13 @@ defmodule PlatformWeb.Plugs.RequireAuthAPI do
   to authenticate the requester *and* return JSON on failure (vs the
   redirect-on-failure behavior of `RequireAuth`, which is appropriate
   for browser-rendered routes but breaks API clients).
+
+  `RequireAuth`'s own API-client arm (its `deny/2`, reached on pipelines
+  that admit JSON callers) emits the SAME envelope, plus an optional
+  `reason` key INSIDE `error` (`"no_session"`, `"stale_session"`,
+  `"user_archived"`) and with the same human messages as this plug (task
+  01a0ac9c). `error.code` is the stable key clients branch on; `message`
+  is for humans and may change.
   """
 
   import Plug.Conn

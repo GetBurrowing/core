@@ -155,7 +155,7 @@ defmodule PlatformWeb.Plugs.RequireAuthTest do
     end
   end
 
-  describe "denial shape for API vs browser callers (01a09415 stage 2)" do
+  describe "denial shape for API vs browser callers (01a09415 stage 2; nested envelope 01a0ac9c)" do
     test "no session + accept: application/json → 401 JSON, no location header", %{conn: conn} do
       conn =
         conn
@@ -164,9 +164,14 @@ defmodule PlatformWeb.Plugs.RequireAuthTest do
 
       assert conn.status == 401
       assert conn.halted
-      assert Jason.decode!(conn.resp_body)["error"] == "unauthorized"
-      assert Jason.decode!(conn.resp_body)["reason"] == "no_session"
       assert Plug.Conn.get_resp_header(conn, "location") == []
+
+      body = Jason.decode!(conn.resp_body)
+      assert is_map(body["error"])
+      assert body["error"]["code"] == "unauthorized"
+      assert is_binary(body["error"]["message"]) and body["error"]["message"] != ""
+      assert body["error"]["reason"] == "no_session"
+      refute Map.has_key?(body, "reason")
     end
 
     test "no session + authorization: Bearer → 401", %{conn: conn} do
@@ -177,7 +182,13 @@ defmodule PlatformWeb.Plugs.RequireAuthTest do
 
       assert conn.status == 401
       assert conn.halted
-      assert Jason.decode!(conn.resp_body)["error"] == "unauthorized"
+
+      body = Jason.decode!(conn.resp_body)
+      assert is_map(body["error"])
+      assert body["error"]["code"] == "unauthorized"
+      assert is_binary(body["error"]["message"]) and body["error"]["message"] != ""
+      assert body["error"]["reason"] == "no_session"
+      refute Map.has_key?(body, "reason")
     end
 
     # POSITIVE CONTROL. Without this, a plug that stopped running at all
@@ -201,8 +212,37 @@ defmodule PlatformWeb.Plugs.RequireAuthTest do
 
       assert conn.status == 401
       assert conn.halted
-      assert Jason.decode!(conn.resp_body)["reason"] == "stale_session"
       assert conn.private[:plug_session_info] == :drop
+
+      body = Jason.decode!(conn.resp_body)
+      assert is_map(body["error"])
+      assert body["error"]["code"] == "unauthorized"
+      assert is_binary(body["error"]["message"]) and body["error"]["message"] != ""
+      assert body["error"]["reason"] == "stale_session"
+      refute Map.has_key?(body, "reason")
+    end
+
+    test "archived user + accept: json → 401 nested envelope, reason user_archived, session dropped",
+         %{conn: conn} do
+      user = create_user!()
+      {:ok, _archived} = Accounts.archive_user(user)
+
+      conn =
+        conn
+        |> Plug.Conn.put_req_header("accept", "application/json")
+        |> call(user.id)
+
+      assert conn.status == 401
+      assert conn.halted
+      assert conn.private[:plug_session_info] == :drop
+      refute Map.has_key?(conn.assigns, :current_user)
+
+      body = Jason.decode!(conn.resp_body)
+      assert is_map(body["error"])
+      assert body["error"]["code"] == "unauthorized"
+      assert body["error"]["message"] == "Account is archived."
+      assert body["error"]["reason"] == "user_archived"
+      refute Map.has_key?(body, "reason")
     end
   end
 end
