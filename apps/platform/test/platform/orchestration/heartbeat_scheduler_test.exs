@@ -1000,13 +1000,11 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
   end
 
   describe "select_review_template/3 payload_amendments (task 01a0acb4 stage 3)" do
-    # The assign is `inspect/1` output, not JSON: `encode_payload_json/1` is
-    # guarded `is_map/1` and the rendered entries are a list. These tests pin
-    # that rendering as it is, so the unamended case stays byte-identical.
-    defp rendered_entries(json) do
-      {entries, _} = json |> Code.string_to_quoted!() |> Code.eval_quoted()
-      entries
-    end
+    # The assign is pretty-printed JSON as of task 01a0e25e (it was `inspect/1`
+    # output before: `encode_payload_json/1` was guarded `is_map/1` and the
+    # rendered entries are a list). Entries are read back with `Jason.decode!/1`,
+    # so a rendering that is not JSON fails here rather than being evaluated.
+    defp rendered_entries(json), do: Jason.decode!(json)
 
     @amendment %{
       "prior_payload" => %{"setup" => "old-setup", "actions" => "old", "expected" => "old"},
@@ -1062,10 +1060,29 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
                  execution_space_id: "exec-un"
                })
 
-      # Literal pin of the pre-change rendering.
-      assert assigns.pending_e2e_validations_json ==
-               ~s([%{"evaluation_payload" => %{"setup" => "s-u"}, "validation_id" => "val-unamended"}, ) <>
-                 ~s(%{"evaluation_payload" => %{"setup" => "s-m"}, "validation_id" => "val-map-empty"}])
+      # Literal pin of the JSON rendering (task 01a0e25e). HAND-WRITTEN: an
+      # expectation computed with `Jason.encode!/2` here would be derived from
+      # the function under test and could not fail. Keys are in sorted order
+      # because Jason walks small maps in term order.
+      expected =
+        String.trim_trailing(~S"""
+        [
+          {
+            "evaluation_payload": {
+              "setup": "s-u"
+            },
+            "validation_id": "val-unamended"
+          },
+          {
+            "evaluation_payload": {
+              "setup": "s-m"
+            },
+            "validation_id": "val-map-empty"
+          }
+        ]
+        """)
+
+      assert assigns.pending_e2e_validations_json == expected
 
       for entry <- rendered_entries(assigns.pending_e2e_validations_json) do
         assert Map.keys(entry) |> Enum.sort() == ["evaluation_payload", "validation_id"]
@@ -1100,6 +1117,125 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       assert Map.has_key?(a, "payload_amendments")
       assert b["validation_id"] == "val-b"
       assert Map.keys(b) |> Enum.sort() == ["evaluation_payload", "validation_id"]
+    end
+  end
+
+  describe "pending_e2e_validations_json is JSON and untruncated (task 01a0e25e)" do
+    # Before task 01a0e25e this assign was `inspect/1` of a list: Elixir term
+    # syntax, and every string cut at inspect's default 4096-byte
+    # `printable_limit`. Sentinels sit at the TAIL of >4096-byte strings, so a
+    # truncating renderer loses exactly the byte these tests look for. The
+    # sentinels and lengths are literals, never recomputed from the code under
+    # test. The rendered-prompt half (through `dispatch_prompt/4` and the
+    # seeded template) needs the DB and lives in
+    # `heartbeat_scheduler_unmet_gate_template_test.exs`.
+
+    @tail_sentinel "TAIL-SENTINEL-01a0e25e"
+    @amend_sentinel "AMEND-TAIL-01a0e25e"
+    @quoted_expected ~s(he said "ok" \\ then ```done``` — café 🚀)
+
+    @long_amendment %{
+      "prior_payload" => %{"setup" => "old-setup", "actions" => "old", "expected" => "old"},
+      "amended_by" => "amender-slug",
+      "actor_type" => "agent",
+      "reason" => String.duplicate("r", 4500) <> "AMEND-TAIL-01a0e25e",
+      "amended_at" => "2026-09-27T10:00:00Z",
+      "last_ruling" => nil
+    }
+
+    defp e2e_assigns(pending) do
+      assert {"dispatch.review_e2e", assigns} =
+               HeartbeatScheduler.select_review_template(pending, %{
+                 id: "task-01a0e25e",
+                 execution_space_id: "exec-01a0e25e"
+               })
+
+      assigns.pending_e2e_validations_json
+    end
+
+    test "a >4096-byte actions string survives whole, as JSON not term syntax" do
+      actions = String.duplicate("a", 5000) <> @tail_sentinel
+
+      json =
+        e2e_assigns([
+          %{
+            id: "val-long",
+            kind: "e2e_behavior",
+            status: "pending",
+            evaluation_payload: %{"setup" => "s", "actions" => actions, "expected" => "e"}
+          }
+        ])
+
+      assert json =~ @tail_sentinel
+
+      assert [entry] = Jason.decode!(json)
+      decoded_actions = entry["evaluation_payload"]["actions"]
+      assert String.length(decoded_actions) == 5022
+      assert String.ends_with?(decoded_actions, @tail_sentinel)
+
+      refute json =~ "%{"
+      refute json =~ " => "
+    end
+
+    test "two validations render as a JSON array of two objects" do
+      json =
+        e2e_assigns([
+          %{
+            id: "val-1",
+            kind: "e2e_behavior",
+            status: "pending",
+            evaluation_payload: %{"setup" => "one"}
+          },
+          %{
+            id: "val-2",
+            kind: "e2e_behavior",
+            status: "failed",
+            evaluation_payload: %{"setup" => "two"}
+          }
+        ])
+
+      decoded = Jason.decode!(json)
+      assert is_list(decoded)
+      assert length(decoded) == 2
+      assert Enum.all?(decoded, &is_map/1)
+      assert Enum.map(decoded, & &1["validation_id"]) == ["val-1", "val-2"]
+
+      assert json |> String.replace(~r/\s/, "") |> String.starts_with?("[{\"")
+    end
+
+    test "quotes, backslashes, fences and non-ASCII round-trip byte-equal" do
+      json =
+        e2e_assigns([
+          %{
+            id: "val-quoted",
+            kind: "e2e_behavior",
+            status: "pending",
+            evaluation_payload: %{"setup" => "", "actions" => "a", "expected" => @quoted_expected}
+          }
+        ])
+
+      assert [entry] = Jason.decode!(json)
+      assert entry["evaluation_payload"]["expected"] == @quoted_expected
+    end
+
+    test "an amended entry carries its full payload_amendments, tail intact" do
+      json =
+        e2e_assigns([
+          %Platform.Tasks.Validation{
+            id: "val-amended-long",
+            kind: "e2e_behavior",
+            status: "pending",
+            evaluation_payload: %{"setup" => "new-setup"},
+            payload_amendments: [@long_amendment]
+          }
+        ])
+
+      assert [entry] = Jason.decode!(json)
+      assert entry["payload_amendments"] == [@long_amendment]
+      assert [amendment] = entry["payload_amendments"]
+      assert String.length(amendment["reason"]) == 4519
+      assert String.ends_with?(amendment["reason"], @amend_sentinel)
+      assert amendment["last_ruling"] == nil
     end
   end
 

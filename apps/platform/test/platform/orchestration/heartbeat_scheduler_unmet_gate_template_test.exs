@@ -88,7 +88,9 @@ defmodule Platform.Orchestration.HeartbeatSchedulerUnmetGateTemplateTest do
   # The live repro shape: lint and test gates already passed, the behavioural
   # gate came back FAILED and the stage was re-opened to `running`. Nothing is
   # at literal status "pending", which is the whole defect.
-  defp failed_e2e_plan_and_stage do
+  defp failed_e2e_plan_and_stage(
+         actions \\ "Run the plan in the staging root and read the summary line."
+       ) do
     stage = %{
       id: "01a0180b-0625-74a2-b79d-9157457d4341",
       position: 4,
@@ -104,7 +106,7 @@ defmodule Platform.Orchestration.HeartbeatSchedulerUnmetGateTemplateTest do
           status: "failed",
           evaluation_payload: %{
             "setup" => "Check out the task branch in a worktree.",
-            "actions" => "Run the plan in the staging root and read the summary line.",
+            "actions" => actions,
             "expected" => @payload_sentinel
           }
         }
@@ -159,6 +161,29 @@ defmodule Platform.Orchestration.HeartbeatSchedulerUnmetGateTemplateTest do
                "manual_approval gate — this is the four-times-observed defect"
 
       assert prompt =~ @behavioural_opening
+    end
+  end
+
+  describe "pending_e2e_validations_json is JSON and untruncated (task 01a0e25e)" do
+    # The rendered-prompt half of the describe of the same name in
+    # `heartbeat_scheduler_test.exs`. Before task 01a0e25e the block was
+    # `inspect/1` output, which cut any string at 4096 bytes; the sentinel sits
+    # at the tail of a 5,022-character actions string, so it only reaches the
+    # prompt if neither the assign nor the seeded template's interpolation
+    # truncates it.
+    @tail_sentinel "TAIL-SENTINEL-01a0e25e"
+
+    test "a >4096-byte actions string reaches the rendered prompt whole" do
+      {plan, stage} = failed_e2e_plan_and_stage(String.duplicate("a", 5000) <> @tail_sentinel)
+
+      prompt =
+        HeartbeatScheduler.dispatch_prompt(task_fixture(), plan, stage,
+          execution_space_id: @execution_space_id
+        )
+
+      assert prompt =~ @pending_e2e_heading
+      assert prompt =~ String.duplicate("a", 5000) <> @tail_sentinel
+      assert prompt =~ @tail_sentinel
     end
   end
 

@@ -1544,13 +1544,14 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   # append-only history to the gate agent, so the reviewer can tell the text in
   # force from the text the planner wrote. The key is added ONLY for a
   # non-empty list: an unamended entry keeps exactly `validation_id` and
-  # `evaluation_payload`, so its rendering is byte-identical to before. The
-  # `dispatch.review_e2e` template text is untouched (seeded rows make template
-  # edits a runtime no-op); the key travels inside the rendered entries.
+  # `evaluation_payload`. The `dispatch.review_e2e` template text is untouched
+  # (seeded rows make template edits a runtime no-op); the key travels inside
+  # the rendered entries.
   #
-  # Note: `encode_payload_json/1` is guarded `is_map/1` and `rendered` is a
-  # list, so this assign is `inspect/1` output, not JSON (since #277). Left as
-  # is here to keep unamended dispatches byte-identical.
+  # The assign is JSON (`Jason.encode/2`, pretty) as of task 01a0e25e: both the
+  # seeded template and the hardcoded fallback announce the block as
+  # "pre-rendered as JSON", and JSON carries every string at full length, where
+  # the `inspect/1` rendering it replaced cut strings over 4096 bytes.
   defp put_payload_amendments(entry, validation) do
     case Map.get(validation, :payload_amendments) || Map.get(validation, "payload_amendments") do
       [_ | _] = amendments -> Map.put(entry, "payload_amendments", amendments)
@@ -1639,16 +1640,35 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     )
   end
 
-  defp encode_payload_json(payload) when is_map(payload) do
+  # Task 01a0e25e. `e2e_review_assigns/3` hands this a LIST; until this task
+  # the guard was `is_map/1` only, so every e2e dispatch fell through to a bare
+  # `inspect/1` — Elixir term syntax, and silently cut at inspect's default
+  # `printable_limit: 4096` / `limit: 50`. Lists and maps now encode as JSON.
+  # Any fallback is non-truncating AND logged, so a payload that cannot be
+  # JSON-encoded degrades loudly instead of quietly losing its tail.
+  defp encode_payload_json(payload) when is_map(payload) or is_list(payload) do
     case Jason.encode(payload, pretty: true) do
-      {:ok, json} -> json
-      {:error, _} -> inspect(payload)
+      {:ok, json} ->
+        json
+
+      {:error, error} ->
+        inspect_payload_fallback(payload, error)
     end
   rescue
-    _ -> inspect(payload)
+    error -> inspect_payload_fallback(payload, error)
   end
 
-  defp encode_payload_json(other), do: inspect(other)
+  defp encode_payload_json(other),
+    do: inspect_payload_fallback(other, :not_a_map_or_list)
+
+  defp inspect_payload_fallback(payload, error) do
+    Logger.warning(
+      "encode_payload_json: payload is not JSON-encodable, falling back to " <>
+        "untruncated inspect/2 output: #{inspect(error)}"
+    )
+
+    inspect(payload, printable_limit: :infinity, limit: :infinity)
+  end
 
   defp task_field(nil, _), do: nil
 
