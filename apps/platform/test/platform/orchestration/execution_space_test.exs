@@ -229,6 +229,38 @@ defmodule Platform.Orchestration.ExecutionSpaceTest do
       assert message.metadata["kind"] == "log"
       assert message.metadata["log_only"] == true
     end
+
+    test "metadata is exactly the fixed map (task 01a0e266 stage 2: /3 changed nothing for /2)" do
+      {:ok, space} = ExecutionSpace.find_or_create(@task_id)
+      assert {:ok, message} = ExecutionSpace.post_log(space.id, "Task started")
+
+      assert message.metadata == %{
+               "source" => "task_router",
+               "kind" => "log",
+               "log_only" => true
+             }
+    end
+  end
+
+  describe "post_log/3" do
+    test "merges :metadata over the fixed map and stays log-only" do
+      {:ok, space} = ExecutionSpace.find_or_create(@task_id)
+
+      assert {:ok, message} =
+               ExecutionSpace.post_log(space.id, "Case amended",
+                 metadata: %{"reason" => "validation_payload_amended", "kind" => "override"}
+               )
+
+      assert message.log_only == true
+      assert message.content_type == "system"
+
+      assert message.metadata == %{
+               "source" => "task_router",
+               "kind" => "override",
+               "log_only" => true,
+               "reason" => "validation_payload_amended"
+             }
+    end
   end
 
   describe "post_engagement/2" do

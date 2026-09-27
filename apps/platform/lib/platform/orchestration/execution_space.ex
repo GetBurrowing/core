@@ -182,17 +182,27 @@ defmodule Platform.Orchestration.ExecutionSpace do
 
   Log-only messages are persisted and broadcast to LiveView but do NOT
   trigger attention routing to agents.
+
+  `opts[:metadata]` is merged OVER the fixed
+  `%{"source" => "task_router", "kind" => "log", "log_only" => true}` map,
+  mirroring `post_engagement/3` (task 01a0e266 stage 2). With no option the
+  metadata is exactly the fixed map, as it was for every `post_log/2`
+  caller.
   """
-  @spec post_log(binary(), String.t()) :: {:ok, struct()} | {:error, term()}
-  def post_log(space_id, content) do
+  @spec post_log(binary(), String.t(), keyword()) :: {:ok, struct()} | {:error, term()}
+  def post_log(space_id, content, opts \\ []) do
     with {:ok, participant} <- ensure_system_participant(space_id) do
+      metadata =
+        %{"source" => "task_router", "kind" => "log", "log_only" => true}
+        |> Map.merge(Keyword.get(opts, :metadata, %{}))
+
       Chat.post_message(%{
         space_id: space_id,
         participant_id: participant.id,
         content_type: "system",
         content: content,
         log_only: true,
-        metadata: %{"source" => "task_router", "kind" => "log", "log_only" => true}
+        metadata: metadata
       })
     end
   end

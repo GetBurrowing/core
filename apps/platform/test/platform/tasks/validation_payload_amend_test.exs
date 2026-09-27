@@ -429,6 +429,77 @@ defmodule Platform.Tasks.ValidationPayloadAmendTest do
     end
   end
 
+  # ── The executor under judgement (task 01a0e266 stage 1) ────────────────
+
+  describe "the actor's agent_id against the execution-phase assignee" do
+    setup do
+      executor_id = Ecto.UUID.generate()
+      planner_id = Ecto.UUID.generate()
+      ctx = seed()
+
+      task =
+        ctx.task
+        |> Ecto.Changeset.change(%{
+          phase_assignees: %{
+            "planning" => %{"assignee_id" => planner_id, "assignee_type" => "agent"},
+            "execution" => %{"assignee_id" => executor_id, "assignee_type" => "agent"}
+          }
+        })
+        |> Repo.update!()
+
+      Map.merge(ctx, %{task: task, executor_id: executor_id, planner_id: planner_id})
+    end
+
+    test "the executor is refused with :amender_is_executor and every row is unchanged", ctx do
+      before = snapshot([ctx.task.id])
+
+      assert {:error, :amender_is_executor} =
+               Tasks.amend_validation_payload(
+                 ctx.a.id,
+                 @amended,
+                 "r",
+                 {"executor-agent", "agent", ctx.executor_id}
+               )
+
+      assert changed_keys(before, snapshot([ctx.task.id])) == []
+    end
+
+    test "the refusal precedes the kind check (the executor learns nothing else)", ctx do
+      assert {:error, :amender_is_executor} =
+               Tasks.amend_validation_payload(
+                 ctx.test_pass.id,
+                 @amended,
+                 "r",
+                 {"executor-agent", "agent", ctx.executor_id}
+               )
+    end
+
+    test "POSITIVE CONTROL: the planner, a different agent, amends the same row", ctx do
+      assert {:ok, updated} =
+               Tasks.amend_validation_payload(
+                 ctx.a.id,
+                 @amended,
+                 "r",
+                 {"planner-agent", "agent", ctx.planner_id}
+               )
+
+      assert updated.evaluation_payload == @amended
+    end
+
+    test "the two-element operator actor carries no agent_id and is not checked", ctx do
+      assert {:ok, updated} =
+               Tasks.amend_validation_payload(
+                 ctx.a.id,
+                 @amended,
+                 "r",
+                 {"operator:test", "system"}
+               )
+
+      assert [%{"amended_by" => "operator:test", "actor_type" => "system"}] =
+               updated.payload_amendments
+    end
+  end
+
   # ── The other writers cannot touch the column ──────────────────────────
 
   describe "payload_amendments is not writable through the ordinary writers" do

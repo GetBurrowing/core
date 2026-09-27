@@ -93,12 +93,6 @@ defmodule Platform.Federation.ReviewReadToolsTest do
     * **Read-only** — after every call above, the request, item and validation
       rows were byte-identical to their seeded values, contradiction intact.
 
-  Known wart, not a defect in this change: the denial envelope inherits its
-  `suggestion` verbatim from `authorize_org_filter/2`, so it still reads
-  "Tenant agents may only filter memory_search by their own org_id". This
-  mirrors `file_unauthorized_envelope/1`, which also re-keys only `:error`.
-  It leaks nothing; it is merely worded for the wrong caller.
-
   Out of scope, filed for its own ticket: `plan_get` resolves approved plans
   only, so plan-REJECTION notes have exactly the same no-read-path problem this
   ticket fixes for review feedback — a rejected plan's feedback is written

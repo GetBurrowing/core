@@ -41,6 +41,7 @@ defmodule Platform.Tasks do
     Epic,
     EvidenceCarry,
     Indexer,
+    PayloadAmendmentNotice,
     Plan,
     PlanEngine,
     Project,
@@ -5956,7 +5957,30 @@ defmodule Platform.Tasks do
   Correct ONE `e2e_behavior` validation's `evaluation_payload` on an approved
   or executing plan without re-planning (task 01a0acb4 stage 1).
 
-  `actor` is `{actor_id, actor_type}`. The prior payload is appended to the
+  `actor` is `{actor_label, actor_type, agent_id}` (task 01a0e266 stage 1):
+  `actor_label` is what the history records as `amended_by` (an agent's slug,
+  or e.g. `"operator:<name>"`), `actor_type` is `"agent"` or `"system"`, and
+  `agent_id` is the calling agent's UUID or `nil`. The two-element
+  `{actor_label, actor_type}` form is the OPERATOR path: it delegates with a
+  `nil` agent_id, so no executor check applies and the audit row's
+  `actor_id` is nil. An operator correcting a case by hand calls this from a
+  remote console with an explicit actor such as `{"operator:<name>", "system"}`.
+
+  THE EXECUTOR MAY NOT AMEND ITS OWN GATE. When `agent_id` equals the task's
+  EXECUTION-PHASE assignee (`assignee_for_phase(task, "execution")`, which
+  falls back to the top-level assignee), the call is refused with
+  `:amender_is_executor` before any other check, so the executor learns
+  nothing else about the row. The assignee, not the lease holder, is the
+  identity: it is what `PhaseRuntime` dispatches on, and the in-memory lease
+  row belongs to the review dispatch by the time a task-level case is
+  amended. Known limit, stated rather than hidden: an agent that first
+  reassigns `phase_assignees["execution"]` away from itself defeats the
+  check. That reassignment is itself audited, and `amended_by` still records
+  who amended. An agent that plans, executes AND reviews its own task is the
+  execution assignee, so it is refused even while acting as reviewer: the
+  case grades its work.
+
+  The prior payload is appended to the
   row's `payload_amendments` history (never replaced) with who, when and why,
   plus `last_ruling`: the LAST element of `evidence["prior_rulings"]` at
   amend time, kept because the next verdict replaces `evidence` wholesale and
@@ -5974,20 +5998,30 @@ defmodule Platform.Tasks do
     * `running` — an evaluation is in flight against the old text.
 
   Refusals, checked in this order after the row is locked:
-  `{:error, :not_found}` (malformed or unknown id), the project write-freeze
+  `{:error, :not_found}` (malformed or unknown id), `:amender_is_executor`
+  (the caller is the task's execution-phase assignee), the project write-freeze
   error, `:not_e2e_behavior`, `:plan_not_amendable`,
   `{:validation_not_pending, status}`, `:reason_required`, `:unchanged`
   (the string-keyed new payload equals the current one), then a changeset
   error when the new payload lacks non-blank setup/actions/expected.
 
   Writes ONLY the target validation row. After commit emits
-  `[:platform, :tasks, :validation_payload_amended]` (audited) and
-  broadcasts `{:plan_updated, plan}`.
+  `[:platform, :tasks, :validation_payload_amended]` (audited),
+  broadcasts `{:plan_updated, plan}`, and posts one log-only notice into the
+  task's execution space via `Platform.Tasks.PayloadAmendmentNotice.post/4`
+  (nothing when the task has no execution space; a refusal posts nothing;
+  the notice never changes the return value).
   """
-  @spec amend_validation_payload(term(), term(), term(), {term(), String.t()}) ::
+  @spec amend_validation_payload(
+          term(),
+          term(),
+          term(),
+          {term(), String.t()} | {term(), String.t(), Ecto.UUID.t() | nil}
+        ) ::
           {:ok, Validation.t()}
           | {:error,
              :not_found
+             | :amender_is_executor
              | :invalid_payload
              | :not_e2e_behavior
              | :plan_not_amendable
@@ -5996,7 +6030,16 @@ defmodule Platform.Tasks do
              | :unchanged
              | Ecto.Changeset.t()
              | term()}
-  def amend_validation_payload(validation_id, new_payload, reason, {actor_id, actor_type}) do
+  def amend_validation_payload(validation_id, new_payload, reason, {actor_label, actor_type}),
+    do:
+      amend_validation_payload(validation_id, new_payload, reason, {actor_label, actor_type, nil})
+
+  def amend_validation_payload(
+        validation_id,
+        new_payload,
+        reason,
+        {actor_id, actor_type, agent_id}
+      ) do
     Repo.transaction(fn ->
       Platform.UUID.valid?(validation_id) || Repo.rollback(:not_found)
 
@@ -6004,8 +6047,14 @@ defmodule Platform.Tasks do
         Validation |> lock("FOR UPDATE") |> Repo.get(validation_id) ||
           Repo.rollback(:not_found)
 
-      validation = Repo.preload(validation, stage: :plan)
+      # The task rides the preload (no new Repo.get site): the executor check
+      # below needs its phase_assignees.
+      validation = Repo.preload(validation, stage: [plan: :task])
       plan = validation.stage.plan
+
+      # Before ANY state check, so the executor learns nothing else about the
+      # row (task 01a0e266 stage 1).
+      amender_is_executor?(plan.task, agent_id) && Repo.rollback(:amender_is_executor)
 
       with :ok <- Lifecycle.ensure_task_project_writable(plan.task_id),
            :ok <- amendable_kind(validation),
@@ -6034,14 +6083,28 @@ defmodule Platform.Tasks do
     end)
     |> case do
       {:ok, {updated, plan, entry}} ->
-        emit_validation_payload_amended(updated, plan, entry)
+        emit_validation_payload_amended(updated, plan, entry, agent_id)
         broadcast_board({:plan_updated, plan})
+        # After commit, never inside the transaction: a post there would be
+        # broadcast to the space even when a later check rolls the amendment
+        # back. Always returns :ok, so it cannot change this return value
+        # (task 01a0e266 stage 2).
+        :ok = PayloadAmendmentNotice.post(updated, plan, entry, agent_id)
         {:ok, updated}
 
       {:error, reason} ->
         {:error, reason}
     end
   end
+
+  # The executor under judgement is the task's EXECUTION-PHASE assignee, the
+  # same resolver (and the same `{id, "agent"}` comparison) as
+  # `Platform.Tasks.TaskAccess.phase_assignee?/2`. An agentless (operator)
+  # call carries a nil agent_id and is never the executor.
+  defp amender_is_executor?(%Task{} = task, agent_id) when is_binary(agent_id),
+    do: assignee_for_phase(task, "execution") == {agent_id, "agent"}
+
+  defp amender_is_executor?(_task, _agent_id), do: false
 
   defp amendable_kind(%Validation{kind: "e2e_behavior"}), do: :ok
   defp amendable_kind(%Validation{}), do: {:error, :not_e2e_behavior}
@@ -6091,10 +6154,16 @@ defmodule Platform.Tasks do
   defp last_ruling(%Validation{}), do: nil
 
   # Registered in `Platform.Audit.TelemetryHandler` `@events`; an emit with
-  # no registration fails SILENTLY. `amended_by` travels in metadata, not as
-  # the audit row's `actor_id`, because that column is a UUID and an agent
-  # caller is identified by slug.
-  defp emit_validation_payload_amended(%Validation{} = validation, %Plan{} = plan, entry) do
+  # no registration fails SILENTLY. The audit row's `actor_id` is the calling
+  # agent's UUID (nil on the operator path): that column is `Ecto.UUID`, so
+  # only a UUID goes there, never the slug. `amended_by` (the slug or
+  # operator label) stays in metadata beside it.
+  defp emit_validation_payload_amended(
+         %Validation{} = validation,
+         %Plan{} = plan,
+         entry,
+         agent_id
+       ) do
     :telemetry.execute(
       [:platform, :tasks, :validation_payload_amended],
       %{count: 1},
@@ -6109,7 +6178,8 @@ defmodule Platform.Tasks do
         resource_type: "validation",
         resource_id: validation.id,
         action: "validation_payload_amended",
-        actor_type: entry["actor_type"]
+        actor_type: entry["actor_type"],
+        actor_id: agent_id
       }
     )
   end

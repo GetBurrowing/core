@@ -5289,6 +5289,224 @@ defmodule PlatformWeb.TasksLiveTest do
       assert html =~ "task-level review"
       assert html =~ "2 test cases"
     end
+
+    # Task 01a0e266 stage 3: one page, two e2e cases. A is amended twice
+    # (first `actions`, then `expected`); sibling B is never amended.
+    defp seed_amended_e2e_pair!(title) do
+      project = create_project()
+      task = create_task(project, %{title: title, status: "in_review"})
+      plan = insert_active_plan!(task)
+
+      {:ok, _impl_stage} =
+        Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Implement", status: "passed"})
+
+      {:ok, review_stage} =
+        Tasks.create_stage(%{
+          plan_id: plan.id,
+          position: 2,
+          name: "Task-level review",
+          status: "pending"
+        })
+
+      {:ok, a} =
+        Tasks.create_validation(%{
+          stage_id: review_stage.id,
+          kind: "e2e_behavior",
+          status: "pending",
+          evaluation_payload: %{
+            "setup" => "Seed case A fixture.",
+            "actions" => "curl -H 'Accept: application/json' /probe",
+            "expected" => "Probe answers 200 within 2s."
+          }
+        })
+
+      {:ok, b} =
+        Tasks.create_validation(%{
+          stage_id: review_stage.id,
+          kind: "e2e_behavior",
+          status: "pending",
+          evaluation_payload: %{
+            "setup" => "Seed case B fixture.",
+            "actions" => "Open task B and click the dependency badge.",
+            "expected" => "The dependency badge renders the linked task title."
+          }
+        })
+
+      {:ok, _} =
+        Tasks.amend_validation_payload(
+          a.id,
+          %{
+            "setup" => "Seed case A fixture.",
+            "actions" => "curl -H 'Accept: text/html' /probe",
+            "expected" => "Probe answers 200 within 2s."
+          },
+          "Accept header made the browser pipeline 406",
+          {"amender-one", "agent"}
+        )
+
+      {:ok, _} =
+        Tasks.amend_validation_payload(
+          a.id,
+          %{
+            "setup" => "Seed case A fixture.",
+            "actions" => "curl -H 'Accept: text/html' /probe",
+            "expected" => "Probe answers 200 within 5s."
+          },
+          "Cold start takes 3s on the rig",
+          {"amender-two", "agent"}
+        )
+
+      %{task: task, plan: plan, a: a, b: b}
+    end
+
+    # The unamended card, as `element/2 |> render/1` serialises it, with its
+    # validation id replaced by a fixed placeholder.
+    defp e2e_card_html(view, validation_id) do
+      view
+      |> element(~s([data-role="e2e-behavior-validation"][data-validation-id="#{validation_id}"]))
+      |> render()
+      |> String.replace(validation_id, "B_ID")
+    end
+
+    # ── Amended e2e case marker (task 01a0e266 stage 3) ─────────────────────
+
+    # B's card as origin/main (cdc9dfed) rendered it for this exact fixture,
+    # captured by running e2e_card_html/2 on a throwaway branch off main
+    # BEFORE the marker existed. Pasted, never regenerated from the new code.
+    @unamended_card_on_main "<div data-role=\"e2e-behavior-validation\" data-validation-id=\"B_ID\" class=\"space-y-2 rounded border border-edge bg-base-100/40 p-2 text-xs\"><div class=\"flex items-center gap-2\"><span class=\"size-3 hero-clock text-base-content/40\"></span><span class=\"badge badge-xs badge-ghost\">pending</span></div><div data-role=\"e2e-setup\" class=\"space-y-0.5\"><div class=\"text-[10px] font-semibold uppercase tracking-wider text-base-content/50\">\n            Setup\n          </div><pre class=\"whitespace-pre-wrap break-words rounded bg-base-100 p-2 text-[11px] leading-snug text-base-content/80\">Seed case B fixture.</pre></div><div data-role=\"e2e-actions\" class=\"space-y-0.5\"><div class=\"text-[10px] font-semibold uppercase tracking-wider text-base-content/50\">\n            Actions\n          </div><pre class=\"whitespace-pre-wrap break-words rounded bg-base-100 p-2 text-[11px] leading-snug text-base-content/80\">Open task B and click the dependency badge.</pre></div><div data-role=\"e2e-expected\" class=\"space-y-0.5\"><div class=\"text-[10px] font-semibold uppercase tracking-wider text-base-content/50\">\n            Expected\n          </div><pre class=\"whitespace-pre-wrap break-words rounded bg-base-100 p-2 text-[11px] leading-snug text-base-content/80\">The dependency badge renders the linked task title.</pre></div></div>"
+
+    defp e2e_card_nodes(view, validation_id, selector) do
+      view
+      |> element(~s([data-role="e2e-behavior-validation"][data-validation-id="#{validation_id}"]))
+      |> render()
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query(selector)
+    end
+
+    test "an amended case carries the chip, one dot per changed field and the history, " <>
+           "newest first; its unamended sibling carries none of them",
+         %{conn: conn} do
+      %{task: task, a: a, b: b} = seed_amended_e2e_pair!("Amended pair")
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      chip = e2e_card_nodes(view, a.id, ~s([data-role="e2e-amended-chip"]))
+      assert Enum.count(chip) == 1
+      assert LazyHTML.text(chip) |> String.trim() == "Amended · 2"
+
+      dots = e2e_card_nodes(view, a.id, ~s([data-role="e2e-amended-field-dot"]))
+      assert Enum.count(dots) == 2
+      assert LazyHTML.attribute(dots, "data-field") == ["actions", "expected"]
+
+      assert Enum.count(
+               e2e_card_nodes(
+                 view,
+                 a.id,
+                 ~s([data-role="e2e-setup"] [data-role="e2e-amended-field-dot"])
+               )
+             ) == 0
+
+      details = e2e_card_nodes(view, a.id, ~s(details[data-role="e2e-payload-amendments"]))
+      assert Enum.count(details) == 1
+      # Closed by default.
+      assert LazyHTML.attribute(details, "open") == []
+      # MARKUP PIN ONLY: the client keeps its own `open` across patches. The
+      # behaviour itself lives in the JS patcher, which LiveViewTest does not
+      # run, so this asserts the binding is rendered, not that it works.
+      assert [mounted] = LazyHTML.attribute(details, "phx-mounted")
+      assert mounted =~ "ignore_attrs"
+      assert mounted =~ "open"
+
+      summary =
+        e2e_card_nodes(view, a.id, ~s(details[data-role="e2e-payload-amendments"] > summary))
+
+      assert LazyHTML.text(summary) |> String.trim() == "evaluation_payload as amended (2)"
+
+      entries = e2e_card_nodes(view, a.id, ~s([data-role="e2e-payload-amendment"]))
+      assert LazyHTML.attribute(entries, "data-amendment-number") == ["2", "1"]
+
+      [newest, oldest] = Enum.map(entries, &LazyHTML.text/1)
+      assert newest =~ "Expected"
+      assert newest =~ "amender-two"
+      assert newest =~ "Reason: Cold start takes 3s on the rig"
+      assert newest =~ "Probe answers 200 within 2s."
+      refute newest =~ "Accept: application/json"
+      assert oldest =~ "Actions"
+      assert oldest =~ "amender-one"
+      assert oldest =~ "Reason: Accept header made the browser pipeline 406"
+      assert oldest =~ "curl -H 'Accept: application/json' /probe"
+
+      # The current text stays where it was, and stays the amended text.
+      assert LazyHTML.text(e2e_card_nodes(view, a.id, ~s([data-role="e2e-expected"] pre))) ==
+               "Probe answers 200 within 5s."
+
+      for role <- ~w(e2e-amended-chip e2e-amended-field-dot e2e-payload-amendments) do
+        assert Enum.count(e2e_card_nodes(view, b.id, ~s([data-role="#{role}"]))) == 0
+      end
+    end
+
+    test "an unamended card renders exactly as origin/main rendered it", %{conn: conn} do
+      %{task: task, b: b} = seed_amended_e2e_pair!("Unamended literal")
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      assert e2e_card_html(view, b.id) == @unamended_card_on_main
+    end
+
+    test "an operator-path amendment is attributed to system (no agent)", %{conn: conn} do
+      %{task: task, b: b} = seed_amended_e2e_pair!("Operator amend")
+
+      {:ok, _} =
+        Tasks.amend_validation_payload(
+          b.id,
+          %{
+            "setup" => "Seed case B fixture.",
+            "actions" => "Open task B and click the dependency badge twice.",
+            "expected" => "The dependency badge renders the linked task title."
+          },
+          "operator correction",
+          {"operator:test", "system"}
+        )
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      by = e2e_card_nodes(view, b.id, ~s([data-role="e2e-amendment-by"]))
+      assert LazyHTML.text(by) |> String.trim() == "system (no agent)"
+      refute LazyHTML.text(by) =~ "operator:test"
+    end
+
+    test "an open task page shows the marker after an amend broadcast, without a reload",
+         %{conn: conn} do
+      %{task: task, b: b} = seed_amended_e2e_pair!("Live amend")
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      assert Enum.count(e2e_card_nodes(view, b.id, ~s([data-role="e2e-amended-chip"]))) == 0
+
+      {:ok, _} =
+        Tasks.amend_validation_payload(
+          b.id,
+          %{
+            "setup" => "Seed case B fixture.",
+            "actions" => "Open task B and click the dependency badge.",
+            "expected" => "The badge renders the linked task title and its status."
+          },
+          "expected was too weak",
+          {"amender-live", "agent"}
+        )
+
+      chip = e2e_card_nodes(view, b.id, ~s([data-role="e2e-amended-chip"]))
+      assert LazyHTML.text(chip) |> String.trim() == "Amended · 1"
+
+      assert LazyHTML.attribute(
+               e2e_card_nodes(view, b.id, ~s([data-role="e2e-amended-field-dot"])),
+               "data-field"
+             ) == ["expected"]
+    end
   end
 
   describe "inline title edit (stage 1)" do

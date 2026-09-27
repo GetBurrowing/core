@@ -124,6 +124,13 @@ defmodule Platform.Chat.AttentionRouterTest do
     })
   end
 
+  defp participant_count(space_id) do
+    Repo.aggregate(
+      from(p in Platform.Chat.Participant, where: p.space_id == ^space_id),
+      :count
+    )
+  end
+
   defp drain do
     :ok = GenServer.call(AttentionRouter, :__drain__)
   end
@@ -159,6 +166,109 @@ defmodule Platform.Chat.AttentionRouterTest do
       assert {:ok, []} = AttentionRouter.route(message)
       refute_receive {:agent_chat_called, _, _}, 100
       drain()
+    end
+
+    # Task 01a0e266 remediation. The two lines above ("log_only messages
+    # return empty") pass whether or not the log_only exit works: that space
+    # has no task, so there is no assignee to route to and no mutex, and the
+    # router returns [] by falling silent. This test seeds the case that
+    # discriminates: an execution space whose task HAS an agent assignee who
+    # is NOT yet a participant, which is exactly the space the rule-6
+    # fallback (`execution_assignee_participant/1`) would join and wake.
+    #
+    # Before the fix the exit was a bare `if` whose value Elixir discarded, so
+    # every `ExecutionSpace.post_log/3` added the assignee (attention "all")
+    # and woke it. Paired with the positive control below it in the SAME
+    # space, so a vacuous pass (the router never processing the post at all)
+    # is ruled out: the same path demonstrably joins and dispatches for a
+    # non-log message.
+    test "post_log leaves an absent assignee out and dispatches nothing; a non-log post still routes to it" do
+      agent = create_agent(%{name: "Beacon"})
+      {:ok, project} = Tasks.create_project(%{name: "Execution log_only project"})
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Execution log_only task",
+          status: "in_progress",
+          assignee_id: agent.id,
+          assignee_type: "agent"
+        })
+
+      {:ok, space} = ExecutionSpace.find_or_create(task.id)
+      # post_log inserts the TaskRouter system participant on a space's first
+      # log line; create it first so the count below measures routing only.
+      {:ok, _system} = ExecutionSpace.ensure_system_participant(space.id)
+      :ok = Platform.Chat.PubSub.subscribe(space.id)
+
+      before = participant_count(space.id)
+      assert Chat.get_agent_participant(space.id, agent.id) == nil
+
+      # Through the production path: post_message -> telemetry -> router.
+      {:ok, log} = ExecutionSpace.post_log(space.id, "Dispatch withheld: control log line")
+      assert log.log_only == true
+      drain()
+
+      assert participant_count(space.id) == before
+      assert Chat.get_agent_participant(space.id, agent.id) == nil
+      assert ActiveAgentStore.get_active(space.id) == nil
+      refute_received {:attention_needed, _}
+      refute_received {:agent_chat_called, _, _}
+
+      # And directly: the router's own decision for that message is empty.
+      assert {:ok, []} = AttentionRouter.route(log)
+      assert participant_count(space.id) == before
+      assert Chat.get_agent_participant(space.id, agent.id) == nil
+      refute_receive {:attention_needed, _}, 100
+
+      # POSITIVE CONTROL, same space, same production path: a non-log post
+      # joins the assignee and dispatches to it, as before this fix.
+      user = create_participant(space.id)
+      before_control = participant_count(space.id)
+
+      {:ok, _steer} =
+        Chat.post_message(%{
+          space_id: space.id,
+          participant_id: user.id,
+          content_type: "text",
+          content: "are you still working?"
+        })
+
+      drain()
+
+      assert %{id: assignee_participant_id} = Chat.get_agent_participant(space.id, agent.id)
+      assert participant_count(space.id) == before_control + 1
+      assert ActiveAgentStore.get_active(space.id) == assignee_participant_id
+
+      assert_receive {:attention_needed,
+                      %{participant_id: ^assignee_participant_id, reason: :watch}},
+                     500
+
+      assert_receive {:agent_chat_called, "are you still working?", _opts}, 500
+      drain()
+    end
+
+    # Task 01a0e266 remediation, the sibling exit. Before the fix
+    # `unless space do ... end` discarded its value too, so a message whose
+    # space row does not exist fell through to `route_agents/3`, whose
+    # `%Space{}` head raised FunctionClauseError inside the GenServer call.
+    test "a message whose space does not exist routes to nobody and does not crash the router" do
+      router = Process.whereis(AttentionRouter)
+
+      message = %Message{
+        id: Ecto.UUID.generate(),
+        space_id: Ecto.UUID.generate(),
+        participant_id: Ecto.UUID.generate(),
+        content_type: "text",
+        content: "orphan",
+        log_only: false
+      }
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:ok, []} = AttentionRouter.route(message)
+      end)
+
+      assert Process.whereis(AttentionRouter) == router
     end
 
     test "non-log steering routes to the assigned task agent even without an active mutex" do

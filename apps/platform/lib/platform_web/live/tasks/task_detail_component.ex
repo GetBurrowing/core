@@ -77,6 +77,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
   alias Platform.Tasks
   alias Platform.Tasks.CanvasAttachments
   alias Platform.Tasks.ChatPins
+  alias Platform.Tasks.PayloadAmendmentChanges
   alias Platform.Tasks.PlanRejection
   alias Platform.Tasks.{Plan, Task}
 
@@ -2297,10 +2298,16 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
   defp plan_body(assigns) do
     {stages, e2e_validations} = split_e2e_behavior_validations(assigns.plan.stages || [])
 
+    # `assign/3`, not `Map.put/3`: a key written with Map.put is never marked
+    # in `__changed__`, so on a re-render LiveView treated `@stages` and
+    # `@e2e_validations` as unchanged and kept the stale cards. An amendment
+    # (or any validation change) broadcast while the page was open reached
+    # the reloaded task but not the rendered e2e cards (task 01a0e266
+    # stage 3).
     assigns =
       assigns
-      |> Map.put(:stages, stages)
-      |> Map.put(:e2e_validations, e2e_validations)
+      |> assign(:stages, stages)
+      |> assign(:e2e_validations, e2e_validations)
 
     ~H"""
     <div data-role="plan-body-inner" class="space-y-3">
@@ -2371,11 +2378,29 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
           data-validation-id={v.id}
           class="space-y-2 rounded border border-edge bg-base-100/40 p-2 text-xs"
         >
-          <div class="flex items-center gap-2">
+          <% amendments = PayloadAmendmentChanges.history(v) %>
+          <% amended_fields = PayloadAmendmentChanges.amended_fields(v) %>
+          <div class={
+            if amendments == [],
+              do: "flex items-center gap-2",
+              else: "flex flex-wrap items-center gap-2"
+          }>
             <span class={"size-3 #{stage_status_icon(v.status)}"}></span>
             <span class={"badge badge-xs #{validation_badge_class(v.status)}"}>{v.status}</span>
             <span :if={v.evaluated_by} class="text-base-content/50">
               by {v.evaluated_by}
+            </span>
+            <%!-- Text colour is text-base-content, the design's named fallback:
+                text-warning-content on this bg-warning/15 fill measured 1.4382:1 in
+                the dark theme (painted pixels, task 01a0e266 stage 3), because the
+                dark theme's warning-content is black. text-base-content measured
+                12.5851:1 dark and 18.1865:1 light on the same composited fill. --%>
+            <span
+              :if={amendments != []}
+              data-role="e2e-amended-chip"
+              class="badge badge-xs badge-outline shrink-0 bg-warning/15 text-base-content"
+            >
+              Amended · {length(amendments)}
             </span>
             <a
               :if={validation_evidence_link(v)}
@@ -2395,11 +2420,66 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
             <% value = e2e_payload_field(v, key) %>
             <div :if={value} data-role={"e2e-#{key}"} class="space-y-0.5">
               <div class="text-[10px] font-semibold uppercase tracking-wider text-base-content/50">
-                {label}
+                {label}<span
+                  :if={key in amended_fields}
+                  data-role="e2e-amended-field-dot"
+                  data-field={key}
+                  class="ml-1 inline-block size-1.5 rounded-full bg-warning align-middle"
+                  title="Changed after the plan was approved"
+                ></span>
               </div>
               <pre class="whitespace-pre-wrap break-words rounded bg-base-100 p-2 text-[11px] leading-snug text-base-content/80">{value}</pre>
             </div>
           <% end %>
+
+          <%!-- phx-mounted ignore_attributes keeps a reader's open/closed state
+               across LiveView patches: the server renders the element without
+               `open`, so any plan_updated re-render used to close it mid-read
+               (task 01a0e266 review). --%>
+          <details
+            :if={amendments != []}
+            data-role="e2e-payload-amendments"
+            class="space-y-1"
+            phx-mounted={JS.ignore_attributes(["open"])}
+          >
+            <summary class="cursor-pointer text-[10px] font-semibold uppercase tracking-wider text-base-content/50">
+              evaluation_payload as amended ({length(amendments)})
+            </summary>
+            <div
+              :for={change <- Enum.reverse(amendments)}
+              data-role="e2e-payload-amendment"
+              data-amendment-number={change.number}
+              class="mt-1 space-y-1 border-l border-edge pl-2"
+            >
+              <div class="text-[10px] text-base-content/60">
+                <span class="font-semibold">#{change.number}</span>
+                <span>{amended_fields_label(change.changed)}</span>
+                ·
+                <span data-role="e2e-amendment-by">
+                  {PayloadAmendmentChanges.amended_by_label(change.entry)}
+                </span>
+                · <span>{format_amended_at(change.entry["amended_at"])}</span>
+              </div>
+              <div class="text-[10px] text-base-content/60">
+                Reason: {change.entry["reason"]}
+              </div>
+              <div class="text-[10px] text-base-content/60">Before:</div>
+              <%= for {label, key} <- [
+                    {"Setup", "setup"},
+                    {"Actions", "actions"},
+                    {"Expected", "expected"}
+                  ],
+                  key in change.changed do %>
+                <% prior = e2e_payload_value(change.entry["prior_payload"], key) %>
+                <div data-role={"e2e-amendment-prior-#{key}"} class="space-y-0.5">
+                  <div class="text-[10px] font-semibold uppercase tracking-wider text-base-content/50">
+                    {label}
+                  </div>
+                  <pre class="whitespace-pre-wrap break-words rounded bg-base-200 p-2 text-[11px] leading-snug text-base-content/60">{prior || "(empty)"}</pre>
+                </div>
+              <% end %>
+            </div>
+          </details>
         </div>
       </div>
     </div>
@@ -2472,6 +2552,29 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
   end
 
   defp e2e_payload_field(_, _), do: nil
+
+  # Same lookup over a bare payload map: an amendment entry's `prior_payload`
+  # (task 01a0e266 stage 3). Non-string values render as nil.
+  defp e2e_payload_value(payload, key) when is_map(payload),
+    do: e2e_payload_field(%{evaluation_payload: payload}, key)
+
+  defp e2e_payload_value(_payload, _key), do: nil
+
+  # "Actions, Expected" for one amendment's changed fields.
+  defp amended_fields_label([]), do: "no field changed"
+
+  defp amended_fields_label(fields),
+    do: Enum.map_join(fields, ", ", &String.capitalize/1)
+
+  # `amended_at` is stored as an ISO8601 string in the JSONB entry.
+  defp format_amended_at(iso) when is_binary(iso) do
+    case DateTime.from_iso8601(iso) do
+      {:ok, dt, _offset} -> Calendar.strftime(dt, "%Y-%m-%d %H:%M UTC")
+      _ -> iso
+    end
+  end
+
+  defp format_amended_at(_), do: ""
 
   defp safe_atom(key) when is_binary(key) do
     String.to_existing_atom(key)

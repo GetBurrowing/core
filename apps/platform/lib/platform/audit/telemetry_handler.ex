@@ -114,9 +114,10 @@ defmodule Platform.Audit.TelemetryHandler do
     # by `Platform.Tasks.amend_validation_payload/4` after its transaction
     # commits. Metadata carries validation_id, stage_id, plan_id, task_id,
     # amended_by, reason and prior_payload, plus resource_type "validation" /
-    # resource_id / action / actor_type for the Audit.Event columns.
-    # `amended_by` stays in metadata (not actor_id) because an agent caller
-    # is identified by slug and actor_id is a UUID column. Sync (default
+    # resource_id / action / actor_type / actor_id for the Audit.Event
+    # columns. `actor_id` is the calling agent's UUID (task 01a0e266 stage 1)
+    # and nil on the operator path; `amended_by` (the slug or operator label)
+    # stays in metadata beside it, because actor_id is a UUID column. Sync (default
     # handle_event clause) so the row exists when the call returns. An
     # unregistered emit fails SILENTLY.
     [:platform, :tasks, :validation_payload_amended],

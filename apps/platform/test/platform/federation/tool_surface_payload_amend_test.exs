@@ -3,6 +3,11 @@ defmodule Platform.Federation.ToolSurfacePayloadAmendTest do
   Task 01a0acb4 stage 2 — `validation_payload_amend`, the `plan`-bundle tool
   over `Tasks.amend_validation_payload/4`.
 
+  Task 01a0e266 stage 1 adds: the task's execution-phase assignee is refused
+  (`:amender_is_executor`, mutations M1 and M4), an agentless context is
+  refused (`:agent_context_required`, M2), and the audit row's `actor_id` is
+  the agent's UUID (M3).
+
   What this file pins, each against the tool boundary an agent touches:
 
     * the amender is the AUTHENTICATED caller: an `amended_by` key in the
@@ -56,10 +61,16 @@ defmodule Platform.Federation.ToolSurfacePayloadAmendTest do
 
   defp seed(org, opts \\ []) do
     plan_status = Keyword.get(opts, :plan_status, "approved")
+    task_attrs = Keyword.get(opts, :task_attrs, %{})
     n = u()
 
     {:ok, project} = Tasks.create_project(%{name: "Amend Tool Project #{n}", org_id: org.id})
-    {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Amend Tool Task #{n}"})
+
+    {:ok, task} =
+      Tasks.create_task(
+        Map.merge(%{project_id: project.id, title: "Amend Tool Task #{n}"}, task_attrs)
+      )
+
     {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
 
     {:ok, impl} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Land the change"})
@@ -227,6 +238,280 @@ defmodule Platform.Federation.ToolSurfacePayloadAmendTest do
     test "the own-org agent on the same row is permitted (the denial is org-keyed)", ctx do
       s = seed(ctx.own_org)
       assert {:ok, _} = amend(s.a.id, ctx_for(ctx.agent))
+    end
+  end
+
+  # ── The executor under judgement (task 01a0e266 stage 1) ────────────────
+  #
+  # The refused identity is the task's EXECUTION-PHASE assignee. Every test
+  # here seeds a planner P that differs from the executor E, and asserts BOTH
+  # that E is refused and that P is permitted on the same row: a check keyed
+  # on the planning assignee instead (mutation M4) inverts both outcomes, and
+  # a blanket refusal fails the P half.
+
+  defp phase(%Agent{id: id}), do: %{"assignee_id" => id, "assignee_type" => "agent"}
+
+  defp amend_events(validation_id) do
+    Platform.Audit.list(event_type: "platform.tasks.validation_payload_amended")
+    |> Enum.filter(&(&1.resource_id == validation_id))
+  end
+
+  describe "the task's execution-phase assignee" do
+    setup ctx do
+      %{
+        executor: create_agent("amend-executor", %{"org_id" => ctx.own_org.id}),
+        planner: ctx.agent
+      }
+    end
+
+    test "is refused before any state check and the full row is unchanged", ctx do
+      s =
+        seed(ctx.own_org,
+          task_attrs: %{
+            phase_assignees: %{
+              "planning" => phase(ctx.planner),
+              "execution" => phase(ctx.executor)
+            }
+          }
+        )
+
+      envelope = assert_refused_unchanged(s.a, ctx_for(ctx.executor))
+      assert envelope.code == :amender_is_executor
+      refute envelope.recoverable
+      assert envelope.error =~ "execution-phase assignee"
+      assert envelope.suggestion =~ "execution space"
+      assert envelope.suggestion =~ "planner"
+      assert reload(s.a).payload_amendments == []
+
+      # Refused before the status check: a passed row answers the same way,
+      # so the executor learns nothing else about it.
+      passed = set_status!(s.b, "passed")
+      assert assert_refused_unchanged(passed, ctx_for(ctx.executor)).code == :amender_is_executor
+
+      # POSITIVE CONTROL on the same row: the planner, a different same-org
+      # agent, amends it. The refusal is identity-keyed, not blanket.
+      assert {:ok, result} = amend(s.a.id, ctx_for(ctx.planner))
+      assert [%{"amended_by" => slug}] = result.payload_amendments
+      assert slug == ctx.planner.slug
+    end
+
+    test "falls back to the top-level assignee when phase_assignees has no execution slot",
+         ctx do
+      s =
+        seed(ctx.own_org,
+          task_attrs: %{phase_assignees: %{"planning" => phase(ctx.planner)}}
+        )
+
+      s.task
+      |> Ecto.Changeset.change(%{assignee_id: ctx.executor.id, assignee_type: "agent"})
+      |> Repo.update!()
+
+      task = Tasks.get_task_record(s.task.id)
+      refute Map.has_key?(task.phase_assignees, "execution")
+      assert Tasks.assignee_for_phase(task, "execution") == {ctx.executor.id, "agent"}
+
+      envelope = assert_refused_unchanged(s.a, ctx_for(ctx.executor))
+      assert envelope.code == :amender_is_executor
+
+      assert {:ok, _} = amend(s.a.id, ctx_for(ctx.planner))
+    end
+
+    test "an agent that plans, executes and reviews its own task is refused", ctx do
+      x = ctx.executor
+
+      s =
+        seed(ctx.own_org,
+          task_attrs: %{
+            phase_assignees: %{
+              "planning" => phase(x),
+              "execution" => phase(x),
+              "review" => phase(x)
+            }
+          }
+        )
+
+      envelope = assert_refused_unchanged(s.a, ctx_for(x))
+      assert envelope.code == :amender_is_executor
+    end
+
+    test "a task with no assignee at all refuses nobody", ctx do
+      s = seed(ctx.own_org)
+      assert Tasks.assignee_for_phase(s.task, "execution") == {nil, nil}
+      assert {:ok, _} = amend(s.a.id, ctx_for(ctx.executor))
+    end
+  end
+
+  describe "an agentless context" do
+    test "%{}, agent_id nil and an unknown agent id are each refused; the row is unchanged",
+         ctx do
+      s = seed(ctx.own_org)
+
+      for context <- [
+            %{},
+            %{agent_id: nil, runtime_id: "rig"},
+            %{agent_id: Ecto.UUID.generate()}
+          ] do
+        envelope = assert_refused_unchanged(s.a, context)
+        assert envelope.code == :agent_context_required, inspect(context)
+        refute envelope.recoverable
+        assert envelope.suggestion =~ "Platform.Tasks.amend_validation_payload/4"
+      end
+
+      assert reload(s.a).payload_amendments == []
+      assert amend_events(s.a.id) == []
+    end
+
+    test "the operator path is the context function with an explicit system actor", ctx do
+      s = seed(ctx.own_org)
+
+      assert {:ok, updated} =
+               Tasks.amend_validation_payload(
+                 s.a.id,
+                 @amended,
+                 @reason,
+                 {"operator:test", "system"}
+               )
+
+      assert [%{"amended_by" => "operator:test", "actor_type" => "system"}] =
+               updated.payload_amendments
+    end
+  end
+
+  describe "audit actor_id" do
+    test "an agent amendment records the agent's UUID; an operator one records nil", ctx do
+      Platform.TelemetryHelpers.ensure_boot_handler!(Platform.Audit.TelemetryHandler)
+      s = seed(ctx.own_org)
+
+      assert {:ok, _} = amend(s.a.id, ctx_for(ctx.agent))
+
+      assert {:ok, _} =
+               Tasks.amend_validation_payload(
+                 s.b.id,
+                 @amended,
+                 @reason,
+                 {"operator:test", "system"}
+               )
+
+      assert [agent_row] = amend_events(s.a.id)
+      assert agent_row.actor_id == ctx.agent.id
+      assert agent_row.actor_type == "agent"
+      assert agent_row.metadata["amended_by"] == ctx.agent.slug
+
+      assert [operator_row] = amend_events(s.b.id)
+      assert operator_row.actor_id == nil
+      assert operator_row.actor_type == "system"
+      assert operator_row.metadata["amended_by"] == "operator:test"
+    end
+  end
+
+  describe "the shared review-access denial" do
+    test "names no memory_search, for validation_payload_amend and for plan_get", ctx do
+      s = seed(ctx.own_org)
+
+      amend_envelope = assert_refused_unchanged(s.a, ctx_for(ctx.sibling_agent))
+
+      assert {:error, plan_envelope} =
+               ToolSurface.execute(
+                 "plan_get",
+                 %{"task_id" => s.task.id},
+                 ctx_for(ctx.sibling_agent)
+               )
+
+      for envelope <- [amend_envelope, plan_envelope] do
+        assert envelope.error == "unauthorized: review is in an org you are not a member of"
+        refute envelope.suggestion =~ "memory_search"
+        assert envelope.suggestion =~ "org you are not a member of"
+      end
+    end
+  end
+
+  # ── The execution-space notice (task 01a0e266 stage 2) ──────────────────
+  #
+  # M5 (delete the notice call) turns the +1 test red. M7 (post inside the
+  # transaction, before the update) turns the refusal test red through the
+  # PubSub half: a message inserted inside the amend transaction is rolled
+  # back with it, so a row count alone cannot see M7, but the chat broadcast
+  # fires when the INNER post transaction returns and is not rolled back.
+
+  defp amendment_notices(space_id) do
+    import Ecto.Query
+
+    from(m in Platform.Chat.Message,
+      where:
+        m.space_id == ^space_id and
+          fragment("?->>'reason' = ?", m.metadata, "validation_payload_amended")
+    )
+    |> Repo.all()
+  end
+
+  defp exec_space!(task) do
+    {:ok, space} = Platform.Orchestration.ExecutionSpace.find_or_create(task.id)
+    space
+  end
+
+  describe "the execution-space notice" do
+    test "a tool amendment posts exactly one log-only notice with the composed body", ctx do
+      s = seed(ctx.own_org)
+      space = exec_space!(s.task)
+      before = length(amendment_notices(space.id))
+
+      assert {:ok, result} = amend(s.a.id, ctx_for(ctx.agent))
+
+      notices = amendment_notices(space.id)
+      assert length(notices) == before + 1
+      assert [notice] = notices
+      assert notice.log_only == true
+      assert notice.metadata["validation_id"] == s.a.id
+      assert notice.metadata["amendment_number"] == 1
+
+      [entry] = result.payload_amendments
+      validation = reload(s.a)
+
+      expected =
+        "E2E case amended: #{s.a.id} (amendment 1, changed: actions). " <>
+          "Amended by #{ctx.agent.name}. Reason: #{@reason}"
+
+      assert Tasks.PayloadAmendmentNotice.compose_message(validation, entry, 1, ctx.agent.name) ==
+               expected
+
+      assert notice.content == expected
+    end
+
+    test "executor, :unchanged and changeset refusals post and broadcast nothing", ctx do
+      executor = create_agent("amend-executor", %{"org_id" => ctx.own_org.id})
+
+      s =
+        seed(ctx.own_org,
+          task_attrs: %{
+            phase_assignees: %{
+              "planning" => phase(ctx.agent),
+              "execution" => phase(executor)
+            }
+          }
+        )
+
+      space = exec_space!(s.task)
+      :ok = Platform.Chat.PubSub.subscribe(space.id)
+
+      assert assert_refused_unchanged(s.a, ctx_for(executor)).code == :amender_is_executor
+
+      assert_refused_unchanged(s.a, ctx_for(ctx.agent), %{"evaluation_payload" => @payload})
+
+      # A changeset refusal is raised by the UPDATE itself, so it is the one
+      # refusal that gets past every earlier check: a notice posted anywhere
+      # inside the transaction before the update is reached by it.
+      assert_refused_unchanged(s.a, ctx_for(ctx.agent), %{
+        "evaluation_payload" => Map.delete(@amended, "expected")
+      })
+
+      assert amendment_notices(space.id) == []
+      refute_receive {:new_message, _}, 100
+
+      # POSITIVE CONTROL: the same subscription does see a committed notice,
+      # so the refute above is a measurement.
+      assert {:ok, _} = amend(s.a.id, ctx_for(ctx.agent))
+      assert_receive {:new_message, %{metadata: %{"reason" => "validation_payload_amended"}}}, 500
+      assert length(amendment_notices(space.id)) == 1
     end
   end
 

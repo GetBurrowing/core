@@ -606,7 +606,9 @@ defmodule Platform.Tasks.ArchitectureRejection do
   # THE DIGEST IS `log_only: true`, AND THAT IS THE POINT.
   #
   # `AttentionRouter` silently skips `log_only` messages in execution spaces
-  # (`chat/attention_router.ex:8`, `:220-221`). Stage 3's feedback post is
+  # (`AttentionRouter.do_route/1`; that skip was a discarded `if` value, i.e.
+  # dead, until task 01a0e266 — so before it this digest DID wake the
+  # assignee). Stage 3's feedback post is
   # `post_engagement/3` — NOT log-only — precisely BECAUSE it must wake the
   # planner and get a v2 written. This post must NOT wake the planner: a v3
   # is exactly the spin the bound exists to stop, and an engagement message

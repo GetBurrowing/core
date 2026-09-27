@@ -213,19 +213,46 @@ defmodule Platform.Chat.AttentionRouter do
 
   # ── Core routing logic (ADR 0027 — mutex-based) ────────────────────────────
 
-  defp do_route(%Message{space_id: space_id, id: message_id, participant_id: author_id} = message) do
+  # The two early exits are a `cond`, not bare `unless`/`if` statements.
+  #
+  # From #84 (906c8bd0, 2026-03-23) until task 01a0e266 they were written as
+  # `unless space do ... return_empty() end` and
+  # `if space && space.kind == "execution" && message.log_only do ... end`.
+  # Elixir has no early return: each block's value was discarded and routing
+  # carried on. Consequences, both measured by the task 01a0e266 review:
+  #
+  #   * every `ExecutionSpace.post_log/3` (router status lines, "Dispatch
+  #     withheld", "Heartbeat suppressed", the architecture-escalation digest,
+  #     the payload-amendment notice, ...) reached `route_no_mention/3`, which
+  #     added the task's assignee as an `attention_mode: "all"` participant
+  #     and woke it through `AgentResponder` — the opposite of rule 1 above
+  #     and of every caller that chose `post_log` precisely so as NOT to wake
+  #     the assignee (see `Platform.Tasks.ArchitectureRejection`'s digest);
+  #   * a message whose space row is gone fell through to `route_agents/3`,
+  #     whose `%Space{}` head raised `FunctionClauseError`.
+  #
+  # Both are pinned in `attention_router_test.exs` ("execution spaces").
+  defp do_route(%Message{space_id: space_id} = message) do
     space = Repo.get(Space, space_id)
 
-    unless space do
-      Logger.warning("[AttentionRouter] space not found: #{space_id}")
-      return_empty()
-    end
+    cond do
+      is_nil(space) ->
+        Logger.warning("[AttentionRouter] space not found: #{space_id}")
+        return_empty()
 
-    # Execution spaces: log_only messages skip attention routing entirely
-    if space && space.kind == "execution" && message.log_only do
-      return_empty()
-    end
+      # Execution spaces: log_only messages skip attention routing entirely
+      space.kind == "execution" and message.log_only == true ->
+        return_empty()
 
+      true ->
+        route_in_space(space, message)
+    end
+  end
+
+  defp route_in_space(
+         %Space{} = space,
+         %Message{space_id: space_id, id: message_id, participant_id: author_id} = message
+       ) do
     participants = active_participants(space_id)
 
     # Exclude the message author

@@ -3031,13 +3031,13 @@ defmodule Platform.Federation.ToolSurface do
             type: "string",
             required: true,
             description:
-              "Non-blank: what was wrong with the CASE (not with the code under test). Persisted in the amendment history and the audit log."
+              "Non-blank: what was wrong with the CASE (not with the code under test). Persisted in the amendment history and the audit log, and quoted in the log-only notice posted to the task's execution space (mention tokens neutralised)."
           }
         },
         returns:
           "The amended validation (same shape as stage_list's full-detail rows) with `payload_amendments` — each entry carrying prior_payload, amended_at, amended_by, actor_type, reason and last_ruling — plus `status_changed: false`.",
         limitations:
-          "e2e_behavior validations only (test_pass, pr_merged and every other kind are refused). The plan must be approved or executing; a draft plan is corrected with plan_update instead. Only a PENDING validation is amended: a passed one is refused (its verdict was measured against the text in force and is not re-opened), a failed one is refused until the remediation stage re-pends it, and a running one is refused because an evaluation is in flight against the old text. The tool never changes a validation's status. The amender is always the authenticated caller; it cannot be supplied as an argument.",
+          "e2e_behavior validations only (test_pass, pr_merged and every other kind are refused). The plan must be approved or executing; a draft plan is corrected with plan_update instead. Only a PENDING validation is amended: a passed one is refused (its verdict was measured against the text in force and is not re-opened), a failed one is refused until the remediation stage re-pends it, and a running one is refused because an evaluation is in flight against the old text. The tool never changes a validation's status. The amender is always the authenticated caller; it cannot be supplied as an argument. A call with no agent identity is refused (code agent_context_required; an operator uses Platform.Tasks.amend_validation_payload/4 instead), and the task's execution-phase assignee is refused (code amender_is_executor): a case that grades your work is not amendable by you.",
         when_to_use:
           "When a gate case itself is defective — e.g. its actions send a header the pipeline refuses, or a threshold was copied from another run — and the plan is past draft. NOT to loosen a case the code fails honestly."
       },
@@ -6488,18 +6488,32 @@ defmodule Platform.Federation.ToolSurface do
   # would make the history's attribution forgeable. Authorization is the same
   # `authorize_review_access/2` plan_get uses, resolved from the validation's
   # own stage -> plan -> task, and it runs before the writer is called.
+  #
+  # Task 01a0e266 stage 1: an AGENTLESS context is refused first
+  # (`:agent_context_required`), because `authorize_review_access/2` permits
+  # a nil agent outright and would let an unattributable caller write
+  # `amended_by: "system"` onto any org's task. The only production callers
+  # of this function are `MCPController` and `RuntimeChannel`, so an
+  # agentless context there is a runtime whose agent is unset or deleted
+  # (`agent_runtimes.agent_id` is nullable, `on_delete: :nilify_all`). The
+  # operator path is `Tasks.amend_validation_payload/4`, not this tool. The
+  # loaded agent's id then travels to the writer, which refuses the task's
+  # execution-phase assignee (`:amender_is_executor`).
   def execute("validation_payload_amend", args, context) do
     with {:ok, validation_id} <-
            require_non_blank_string(args, "validation_id", "validation_payload_amend"),
          {:ok, reason} <- require_non_blank_string(args, "reason", "validation_payload_amend"),
          {:ok, payload} <- require_amend_payload(args),
+         {:ok, %Agent{} = agent} <- require_amend_agent(context),
          {:ok, target, plan} <- amend_target(validation_id),
          :ok <- authorize_review_access(context, plan.task_id) do
+      {actor_label, actor_type} = context_caller_identity(context)
+
       case Tasks.amend_validation_payload(
              validation_id,
              payload,
              reason,
-             context_caller_identity(context)
+             {actor_label, actor_type, agent.id}
            ) do
         {:ok, validation} ->
           {:ok, validation |> serialize_validation() |> Map.put(:status_changed, false)}
@@ -7762,6 +7776,26 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
+  # `%{}`, `agent_id: nil` and an `agent_id` naming no agent row all load no
+  # `%Agent{}`, and all are refused the same way.
+  defp require_amend_agent(context) do
+    case load_agent(context) do
+      %Agent{} = agent ->
+        {:ok, agent}
+
+      _ ->
+        {:error,
+         %{
+           error:
+             "validation_payload_amend: the call carries no agent identity; an amendment must be attributable to an agent",
+           code: :agent_context_required,
+           recoverable: false,
+           suggestion:
+             "Call through an agent-bound runtime. An operator correcting a case by hand calls `Platform.Tasks.amend_validation_payload/4` from a remote console with an explicit actor such as `{\"operator:<name>\", \"system\"}`; the history records it as actor_type system."
+         }}
+    end
+  end
+
   # Resolves the validation's plan (and so its task) for authorization. A
   # missing or malformed id is the not-found envelope, never a raise and
   # never a write.
@@ -7788,6 +7822,17 @@ defmodule Platform.Federation.ToolSurface do
   # Every refusal names the path to take INSTEAD (the plan_update_suggestion/1
   # discipline). The atoms are `Tasks.amend_validation_payload/4`'s.
   defp payload_amend_error(:not_found, target, _plan), do: payload_amend_not_found(target.id)
+
+  defp payload_amend_error(:amender_is_executor, _target, _plan) do
+    %{
+      error:
+        "validation_payload_amend: you are this task's execution-phase assignee; a case that grades your work is not amendable by you",
+      code: :amender_is_executor,
+      recoverable: false,
+      suggestion:
+        "Post the defect (validation id, what is wrong with the case, the corrected text) in the task's execution space and ask the planner (if it is a different agent), another agent in the task's org, or a human operator to amend it."
+    }
+  end
 
   defp payload_amend_error(:not_e2e_behavior, target, _plan) do
     %{
@@ -12252,11 +12297,21 @@ defmodule Platform.Federation.ToolSurface do
   end
 
   defp review_unauthorized_envelope(envelope) do
-    # Re-key the message so callers can tell review_request_get /
-    # review_item_list produced the rejection (vs memory_search or file_list).
-    # The shape is identical. Deliberately carries no item label, feedback or
-    # content — the denial must not leak the thing it is protecting.
-    Map.put(envelope, :error, "unauthorized: review is in an org you are not a member of")
+    # Re-key the message so callers can tell a review-access tool produced the
+    # rejection (vs memory_search or file_list). The shape is identical.
+    # Deliberately carries no item label, feedback or content — the denial
+    # must not leak the thing it is protecting.
+    #
+    # Shared by seven tools (review_request_get, review_item_list,
+    # task_transition_list, runtime_event_list, execution_lease_list, plan_get,
+    # validation_payload_amend), so the suggestion is caller-neutral rather
+    # than `authorize_org_filter/2`'s memory_search wording (task 01a0e266).
+    envelope
+    |> Map.put(:error, "unauthorized: review is in an org you are not a member of")
+    |> Map.put(
+      :suggestion,
+      "This task belongs to an org you are not a member of; only agents pinned to that org, or root agents, can read or change it."
+    )
   end
 
   defp normalize_limit(nil, default, _max), do: default
