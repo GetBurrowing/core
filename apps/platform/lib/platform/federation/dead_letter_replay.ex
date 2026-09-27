@@ -241,6 +241,13 @@ defmodule Platform.Federation.DeadLetterReplay do
     {:reply, Map.get(state.drains, runtime_id, 0), state}
   end
 
+  # Sync barrier, mirroring `Platform.Chat.AttentionRouter`'s `:__drain__`.
+  # The mailbox is serial, so this reply cannot be sent until every drain
+  # queued by `schedule/1` ahead of it has finished its Repo work. The test
+  # teardown (`Platform.SandboxHelpers.settle_singletons/1`) calls it before
+  # the sandbox owner is stopped; nothing in production sends it.
+  def handle_call(:__drain__, _from, state), do: {:reply, :ok, state}
+
   @impl true
   def handle_info(:prune, state) do
     case safely(fn -> DeadLetters.prune(days: @prune_days) end) do

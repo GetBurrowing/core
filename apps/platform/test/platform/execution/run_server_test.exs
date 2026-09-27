@@ -10,8 +10,36 @@ defmodule Platform.Execution.RunServerTest do
   """
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias Platform.Context
   alias Platform.Execution.{ContextSession, Run, RunServer, RunSupervisor}
+
+  defmodule StubRunner do
+    @moduledoc false
+    # Records every spawn_run/2 call to the pid passed as `:test_pid` and
+    # never starts a process: exits are delivered by the test itself as
+    # `{:runner_exited, run_id, %{exit_code: _, exit_state: _}}`.
+    @behaviour Platform.Execution.Runner
+
+    @impl true
+    def spawn_run(run, opts) do
+      send(Keyword.fetch!(opts, :test_pid), {:spawn_run, run.id, run.status})
+      {:ok, %{stub: true}}
+    end
+
+    @impl true
+    def request_stop(_run, _opts), do: :ok
+
+    @impl true
+    def force_stop(_run, _opts), do: :ok
+
+    @impl true
+    def describe_run(_run, _opts), do: {:ok, %{}}
+
+    @impl true
+    def push_context(_run, _context, _opts), do: :ok
+  end
 
   # Start a run with very short SLA timers for stale tests
   defp start_run(task_id, opts \\ []) do
@@ -224,6 +252,118 @@ defmodule Platform.Execution.RunServerTest do
       RunServer.push_context(run.id, %{"k2" => "v2"})
       assert_receive {:run_ctx_status_changed, ^run_id, :pending}, 300
       assert_receive {:run_ctx_status_changed, ^run_id, :stale}, 300
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Provider spawn and runner exits go through the state machine
+  # ---------------------------------------------------------------------------
+
+  defp spawn_stub(run_id) do
+    RunServer.spawn_provider(run_id, StubRunner, test_pid: self())
+  end
+
+  # `send/2` then a `GenServer.call/2` from the same process: the call is
+  # queued behind the exit message, so the reply reflects the handled exit.
+  defp deliver_exit(run_id, exit_code, exit_state) do
+    [{pid, _}] = Registry.lookup(Platform.Execution.Registry, {:run_server, run_id})
+    send(pid, {:runner_exited, run_id, %{exit_code: exit_code, exit_state: exit_state}})
+    {:ok, run} = RunServer.get_run(run_id)
+    run
+  end
+
+  defp to_running(run_id) do
+    {:ok, _} = RunServer.transition(run_id, :starting)
+    {:ok, %Run{status: :running}} = RunServer.transition(run_id, :running)
+  end
+
+  describe "spawn_provider/3" do
+    test "a :created run spawns and moves to :starting" do
+      run = start_run(unique_task())
+      run_id = run.id
+
+      assert {:ok, %Run{status: :starting, runner_ref: %{stub: true}}} = spawn_stub(run_id)
+      assert_received {:spawn_run, ^run_id, :created}
+    end
+
+    test "a :running run spawns and stays :running (no demotion)" do
+      run = start_run(unique_task())
+      run_id = run.id
+      to_running(run_id)
+
+      assert {:ok, %Run{status: :running, runner_ref: %{stub: true}}} = spawn_stub(run_id)
+      assert_received {:spawn_run, ^run_id, :running}
+      assert {:ok, %Run{status: :running}} = RunServer.get_run(run_id)
+    end
+
+    test "a terminal run is refused and the provider is never spawned" do
+      run = start_run(unique_task())
+      run_id = run.id
+      {:ok, %Run{status: :cancelled}} = RunServer.transition(run_id, :cancelled)
+
+      assert {:error, {:invalid_transition, :cancelled, :starting}} = spawn_stub(run_id)
+      refute_received {:spawn_run, ^run_id, _}
+      assert {:ok, %Run{status: :cancelled, runner_ref: runner_ref}} = RunServer.get_run(run_id)
+      assert runner_ref == run.runner_ref
+    end
+  end
+
+  describe "runner exits" do
+    test ":running + :completed exit records :completed" do
+      run = start_run(unique_task())
+      to_running(run.id)
+
+      exited = deliver_exit(run.id, 0, :completed)
+
+      assert exited.status == :completed
+      assert exited.exit_code == 0
+      assert %DateTime{} = exited.finished_at
+    end
+
+    test ":starting + :completed exit records :failed, logs an error and emits telemetry" do
+      run = start_run(unique_task())
+      run_id = run.id
+      {:ok, %Run{status: :starting}} = RunServer.transition(run_id, :starting)
+
+      test_pid = self()
+      handler_id = "run-server-invalid-exit-#{run_id}"
+
+      :telemetry.attach(
+        handler_id,
+        [:platform, :execution, :run, :invalid_exit_transition],
+        fn event, measurements, metadata, _ ->
+          send(test_pid, {:telemetry, event, measurements, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      {exited, log} = with_log(fn -> deliver_exit(run_id, 0, :completed) end)
+
+      assert exited.status == :failed
+      assert exited.exit_code == 0
+      assert %DateTime{} = exited.finished_at
+
+      assert log =~ run_id
+      assert log =~ "invalid runner-exit transition starting → completed"
+
+      assert_received {:telemetry, [:platform, :execution, :run, :invalid_exit_transition],
+                       %{count: 1}, %{run_id: ^run_id, from: :starting, to: :completed}}
+    end
+
+    test ":cancelled + :killed exit keeps :cancelled and the first finished_at" do
+      run = start_run(unique_task())
+      to_running(run.id)
+
+      {:ok, %Run{status: :cancelled, finished_at: finished_at}} =
+        RunServer.transition(run.id, :cancelled)
+
+      exited = deliver_exit(run.id, 137, :killed)
+
+      assert exited.status == :cancelled
+      assert exited.finished_at == finished_at
+      assert exited.exit_code == 137
     end
   end
 end

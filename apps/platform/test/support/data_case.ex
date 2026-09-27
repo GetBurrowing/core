@@ -101,15 +101,19 @@ defmodule Platform.DataCase do
     test_pid = self()
 
     on_exit(fn ->
-      for name <- [Platform.Chat.AttentionRouter, Platform.Chat.ContextPlane] do
-        if pid = Process.whereis(name) do
-          try do
-            GenServer.call(pid, :__drain__, 2_000)
-          catch
-            :exit, _ -> :ok
-          end
-        end
-      end
+      # Sync `:__drain__` barrier on the Repo-using singletons (AttentionRouter,
+      # ContextPlane, and since task 01a0d4d6 stage 1 DeadLetterReplay), in
+      # BOTH modes and FIRST. A timeout now warns, naming the singleton.
+      Platform.SandboxHelpers.settle_singletons()
+
+      # Task 01a0d4d6 stage 2: no TaskRouter may outlive the owner. Supervised
+      # routers are stopped through the production path; routers a test
+      # start_link'ed are already exiting with it and are waited for. Either
+      # way `TaskRouter.terminate/2`'s log write lands on a live connection.
+      # Before the drain, which then waits for the settle watch a stopped
+      # router ends. Shared mode only, for the same reason as
+      # `drain_or_warn/1`; see `Platform.SandboxHelpers.stop_task_routers_or_warn/1`.
+      if shared_mode?, do: Platform.SandboxHelpers.stop_task_routers_or_warn()
 
       # Task 01a0d265 stage 2. TWO things before the owner is stopped, in BOTH
       # modes, because both modes leak the same way.

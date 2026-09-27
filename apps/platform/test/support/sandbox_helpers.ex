@@ -199,6 +199,249 @@ defmodule Platform.SandboxHelpers do
     end
   end
 
+  # Default deadline for a singleton whose `:__drain__` only has to wait for
+  # short telemetry handlers (AttentionRouter, ContextPlane). Unchanged from
+  # the inline loop this replaced.
+  @singleton_settle_ms 2_000
+
+  # Headroom on top of a full DeadLetterReplay drain, for the Repo reads and
+  # writes around the spaced deliveries.
+  @dlr_settle_margin_ms 5_000
+
+  @doc """
+  Synchronously settle the app-supervised singletons that do Repo work off a
+  cast or a telemetry message, so none of it is still in flight when the
+  sandbox owner is stopped.
+
+  Each singleton answers `:__drain__` with `{:reply, :ok, state}`; because a
+  GenServer mailbox is serial, that reply cannot be sent until every message
+  queued ahead of it has been handled. Waiting on the reply is therefore
+  waiting on the in-flight work.
+
+  `Platform.Federation.DeadLetterReplay` is the one added in task 01a0d4d6
+  stage 1: `RuntimeChannel.join/3` casts `schedule/1`, the drain runs inline in
+  `handle_cast` with `spacing_ms/0` sleeps between deliveries, and nothing
+  waited for it, so the owner exited mid-`pending_for_runtime/1`. Its deadline
+  is derived from its own accessors (one full drain plus a margin), not a
+  literal, so a change to the cap or the spacing moves it too.
+
+  `targets` defaults to `settle_targets/0`; the parameter exists so the
+  warning path can be pinned against a private process instead of suspending
+  a real singleton.
+
+  Resolved with `Process.whereis/1` at call time, never a cached pid: a test
+  that restarts a singleton (`dead_letters_test.exs`) replaces it.
+
+  A timeout or exit is **logged, naming the singleton**, and teardown carries
+  on — it never terminates anything. Callers: `Platform.DataCase`,
+  `PlatformWeb.ConnCase` and `PlatformWeb.ChannelCase` `on_exit`, in BOTH
+  sandbox modes, before any drain, quiesce or `Sandbox.stop_owner/1`.
+  """
+  @spec settle_singletons([{atom(), pos_integer()}]) :: :ok
+  def settle_singletons(targets \\ settle_targets()) do
+    Enum.each(targets, fn {name, timeout} -> settle_singleton(name, timeout) end)
+  end
+
+  @doc false
+  @spec settle_targets() :: [{atom(), pos_integer()}]
+  def settle_targets do
+    dlr = Platform.Federation.DeadLetterReplay
+
+    [
+      {Platform.Chat.AttentionRouter, @singleton_settle_ms},
+      {Platform.Chat.ContextPlane, @singleton_settle_ms},
+      {dlr, dlr.max_per_reconnect() * dlr.spacing_ms() + @dlr_settle_margin_ms}
+    ]
+  end
+
+  defp settle_singleton(name, timeout) do
+    case Process.whereis(name) do
+      nil ->
+        :ok
+
+      pid ->
+        try do
+          GenServer.call(pid, :__drain__, timeout)
+        catch
+          :exit, reason ->
+            Logger.warning(
+              "[SandboxHelpers] #{inspect(name)} did not settle within #{timeout}ms " <>
+                "before the sandbox owner released its connection " <>
+                "(#{inspect(reason, limit: 5)}) — its in-flight Repo work may be " <>
+                "killed mid-query. See Platform.SandboxHelpers.settle_singletons/1."
+            )
+
+            :ok
+        end
+    end
+  end
+
+  @doc """
+  Make sure no `Platform.Orchestration.TaskRouter` is still running when the
+  sandbox owner is stopped. **Shared mode only.**
+
+  ## The leak
+
+  A router traps exits, and its `terminate/2` writes the "Task router stopped
+  for task …" row through `ExecutionSpace.post_log/2`. A router still alive at
+  `Sandbox.stop_owner/1` was mid-query in `terminate/2` or in a
+  `handle_info/2` (a `:dispatch_now` preload,
+  `suppress_unresolved_stage_dispatch/3`), and the owner exited under it. That
+  is the TASKROUTER class of "owner exited — client is still using a
+  connection" events (task 01a0d4d6 stage 2): 9/9/7 per full run at seeds
+  77/7700/70007 in the 01a0d265 sweep.
+
+  Neither drain could see it. A router has no `$callers` link to its test, so
+  `quiesce_own_or_warn/3` misses it, and it is not a `Platform.TaskSupervisor`
+  child, so `drain_or_warn/1` misses it too.
+
+  ## Two kinds of router, two remedies
+
+    * **Children of `Platform.Orchestration.TaskRouterSupervisor`**, which are
+      started by `start_assignment/2` or by a `TaskRouterWatcher`. Nothing ends
+      these when the test does. Each is stopped with
+      `DynamicSupervisor.terminate_child/2`, exactly as
+      `TaskRouterSupervisor.stop_assignment/1` does, so `terminate/2` runs its
+      real body against a live connection. The child spec is the default
+      `GenServer` one, and its 5 000 ms shutdown is enough for `terminate/2`.
+      A router the supervisor had to kill is logged by name; the timeout is not
+      widened.
+    * **Every other router in `Platform.Orchestration.Registry`**. These are
+      started with `TaskRouter.start_link/1` straight from a test body, so they
+      are linked to the test process. That process has already exited
+      (`:shutdown`), so each of these routers already has its parent's EXIT
+      queued and is already on its way out. It only needs time to finish the
+      handler it is in and then run `terminate/2`. So the helper WAITS for them
+      and never terminates them, bounded by `:timeout`, and logs any still
+      alive. Measured on the stage-1 tip (`task_router_test.exs`, seed 77, with
+      probes): every TASKROUTER event was a start_link router registered under
+      a task other than the file's setup task, so the file's own `on_exit`
+      never stopped it. It was still registered when `stop_owner/1` ran,
+      milliseconds after its test exited.
+
+  Run this before `drain_or_warn/1`. A stopped router ends the preplan settle
+  watch it owns (`Platform.Design.PreplanLifecycleStep`), and the unconditional
+  drain then waits for that watch.
+
+  ## Why shared mode only
+
+  The reasoning is the same as for `drain_or_warn/1`. In shared mode one test
+  owns the VM, so every running router is that test's. In `async: true` mode a
+  router could belong to a sibling module that is still running. An async
+  file that starts a router must stop it itself, by registering
+  `on_exit(fn -> TaskRouterSupervisor.stop_assignment(id) end)` in the test,
+  which runs before the case template's callback. No async file starts one
+  today.
+
+  Options: `:supervisor` (default `Platform.Orchestration.TaskRouterSupervisor`),
+  `:registry` (default `Platform.Orchestration.Registry`) and `:timeout` for
+  the wait (default `#{@default_timeout_ms}`, the unconditional drain's). The
+  guard test uses the first two to point the helper at private processes.
+  """
+  @spec stop_task_routers_or_warn(keyword()) :: :ok
+  def stop_task_routers_or_warn(opts \\ []) do
+    supervisor = Keyword.get(opts, :supervisor, Platform.Orchestration.TaskRouterSupervisor)
+    registry = Keyword.get(opts, :registry, Platform.Orchestration.Registry)
+    timeout = Keyword.get(opts, :timeout, @default_timeout_ms)
+
+    supervised = supervised_routers(supervisor)
+    Enum.each(supervised, &stop_supervised_router(supervisor, &1))
+
+    registry
+    |> registered_routers()
+    |> Enum.reject(&(&1 in supervised))
+    |> await_exits(System.monotonic_time(:millisecond) + timeout)
+  end
+
+  defp supervised_routers(supervisor) do
+    case GenServer.whereis(supervisor) do
+      nil ->
+        []
+
+      _pid ->
+        for {_id, pid, _type, _modules} <- DynamicSupervisor.which_children(supervisor),
+            is_pid(pid),
+            do: pid
+    end
+  end
+
+  defp registered_routers(registry) do
+    case GenServer.whereis(registry) do
+      nil -> []
+      _pid -> Registry.select(registry, [{{:_, :"$1", :_}, [], [:"$1"]}])
+    end
+  end
+
+  # Bounds only the gap between the supervisor's reply and our own `:DOWN`
+  # (see `stop_supervised_router/2`); it never waits on a live router.
+  @router_down_confirm_ms 250
+
+  defp stop_supervised_router(supervisor, pid) do
+    ref = Process.monitor(pid)
+
+    try do
+      DynamicSupervisor.terminate_child(supervisor, pid)
+    catch
+      :exit, reason ->
+        Logger.warning(
+          "[SandboxHelpers] could not stop task router #{inspect(pid)} " <>
+            "(#{inspect(reason, limit: 5)}) before the sandbox owner released its " <>
+            "connection. See Platform.SandboxHelpers.stop_task_routers_or_warn/1."
+        )
+    end
+
+    # `terminate_child/2` returns only after the child is gone (or
+    # `{:error, :not_found}` when it exited on its own first), so the `:DOWN`
+    # has already been sent. Erlang does not order signals from different
+    # senders, so it can land a moment after the supervisor's reply.
+    receive do
+      {:DOWN, ^ref, :process, ^pid, :killed} ->
+        Logger.warning(
+          "[SandboxHelpers] task router #{inspect(pid)} was killed by its supervisor " <>
+            "shutdown timeout. Its terminate/2 did not finish, so its Repo work was cut " <>
+            "off. See Platform.SandboxHelpers.stop_task_routers_or_warn/1."
+        )
+
+      {:DOWN, ^ref, :process, ^pid, _reason} ->
+        :ok
+    after
+      @router_down_confirm_ms ->
+        Process.demonitor(ref, [:flush])
+        :ok
+    end
+  end
+
+  defp await_exits([], _deadline), do: :ok
+
+  defp await_exits(pids, deadline) do
+    refs = Map.new(pids, &{Process.monitor(&1), &1})
+    await_downs(refs, deadline)
+  end
+
+  defp await_downs(refs, _deadline) when map_size(refs) == 0, do: :ok
+
+  defp await_downs(refs, deadline) do
+    remaining = max(deadline - System.monotonic_time(:millisecond), 0)
+
+    receive do
+      {:DOWN, ref, :process, _pid, _reason} when is_map_key(refs, ref) ->
+        await_downs(Map.delete(refs, ref), deadline)
+    after
+      remaining ->
+        Enum.each(refs, fn {ref, _pid} -> Process.demonitor(ref, [:flush]) end)
+
+        Logger.warning(
+          "[SandboxHelpers] #{map_size(refs)} task router(s) " <>
+            "#{inspect(Map.values(refs))} still running when the sandbox owner " <>
+            "released its connection. They are not TaskRouterSupervisor children, " <>
+            "so they were waited for, not stopped. See " <>
+            "Platform.SandboxHelpers.stop_task_routers_or_warn/1."
+        )
+
+        :ok
+    end
+  end
+
   @doc false
   @spec drain_or_warn(keyword()) :: :ok
   def drain_or_warn(opts \\ []) do

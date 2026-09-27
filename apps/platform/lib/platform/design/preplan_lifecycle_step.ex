@@ -52,6 +52,13 @@ defmodule Platform.Design.PreplanLifecycleStep do
   deliver a settlement for a run the executor has already timed out. The BUDGET
   is what bounds the wait — `Platform.Lifecycle.step_timeout_ms/0` and
   `edge_budget_ms/0` — exactly as `Platform.Lifecycle.Step` requires.
+
+  It also stops, silently, when the run it serves is gone: when the awaiting
+  process (`:reply_to`) exits, or when the context's `:owner` exits. The owner
+  is the TaskRouter that fired the designer edge. A stopped router leaves its
+  runner waiting out the budget so that it still fails open, but the watch no
+  longer re-reads the task for a router that no longer exists (task 01a0d4d6
+  stage 2).
   """
 
   @behaviour Platform.Lifecycle.Step
@@ -118,14 +125,15 @@ defmodule Platform.Design.PreplanLifecycleStep do
     ref = make_ref()
     reply_to = Map.get(context, :reply_to, self())
     budget_ms = Map.get(context, :step_timeout_ms, Lifecycle.step_timeout_ms())
+    lifelines = Enum.filter([reply_to, Map.get(context, :owner)], &is_pid/1)
 
     # Supervised, not a bare `spawn/1` — see the note on
-    # `Platform.Tasks.run_architect_edge/1` (ticket 01a06638). `watch_loop/4`
+    # `Platform.Tasks.run_architect_edge/1` (ticket 01a06638). `watch_loop/5`
     # re-reads the board through `Repo`, so it needs `$callers` to resolve a
     # sandbox owner and it needs to be drainable before that owner exits.
     Task.Supervisor.start_child(Platform.TaskSupervisor, fn ->
       try do
-        watch_loop(task.id, ref, reply_to, deadline(budget_ms))
+        watch_loop(task.id, ref, reply_to, lifelines, deadline(budget_ms))
       rescue
         DBConnection.OwnershipError ->
           # TEST-ENV ONLY. Clause head spelled bare and immediately after
@@ -156,12 +164,20 @@ defmodule Platform.Design.PreplanLifecycleStep do
 
   # ── the watcher ───────────────────────────────────────────────────────────
 
-  defp watch_loop(task_id, ref, reply_to, deadline) do
+  # The watch lives only as long as the run it serves. `lifelines` are the
+  # awaiting process (`reply_to`) and, when the context names one, the run's
+  # `:owner`: the TaskRouter that spawned the designer edge. Without this the
+  # watch outlived a stopped router and kept re-reading the task once per
+  # `settle_poll_ms/0` for up to the 30-minute budget, with nobody left to
+  # report to (task 01a0d4d6 stage 2). Like the budget branch below, a lost
+  # lifeline stops the watch silently.
+  defp watch_loop(task_id, ref, reply_to, lifelines, deadline) do
     Tasks.subscribe_board()
-    poll(task_id, ref, reply_to, deadline)
+    monitors = Enum.map(lifelines, &Process.monitor/1)
+    poll(task_id, ref, reply_to, monitors, deadline)
   end
 
-  defp poll(task_id, ref, reply_to, deadline) do
+  defp poll(task_id, ref, reply_to, monitors, deadline) do
     case closed_outcome(task_id) do
       nil ->
         remaining = deadline - now_ms()
@@ -171,13 +187,21 @@ defmodule Platform.Design.PreplanLifecycleStep do
           # a settlement now would resolve a run it has stopped listening for.
           :ok
         else
-          receive do
-            _board_message -> :ok
-          after
-            min(settle_poll_ms(), remaining) -> :ok
-          end
+          wake =
+            receive do
+              {:DOWN, mref, :process, _pid, _reason} = down ->
+                if mref in monitors, do: :lifeline_down, else: down
 
-          poll(task_id, ref, reply_to, deadline)
+              board_message ->
+                board_message
+            after
+              min(settle_poll_ms(), remaining) -> :ok
+            end
+
+          case wake do
+            :lifeline_down -> :ok
+            _other -> poll(task_id, ref, reply_to, monitors, deadline)
+          end
         end
 
       outcome ->

@@ -91,6 +91,20 @@ defmodule PlatformWeb.ConnCase do
       end
 
     on_exit(fn ->
+      # Task 01a0d4d6 stage 1: settle the Repo-using singletons (incl.
+      # DeadLetterReplay's cast-driven drain) FIRST, in both modes, exactly as
+      # `Platform.DataCase` does. Waits only; never terminates.
+      Platform.SandboxHelpers.settle_singletons()
+
+      # Task 01a0d4d6 stage 2: no TaskRouter may outlive the owner. Supervised
+      # routers are stopped through the production path; routers a test
+      # start_link'ed are already exiting with it and are waited for. Either
+      # way `TaskRouter.terminate/2`'s log write lands on a live connection.
+      # Before the drain, which then waits for the settle watch a stopped
+      # router ends. Shared mode only, for the same reason as
+      # `drain_or_warn/1`; see `Platform.SandboxHelpers.stop_task_routers_or_warn/1`.
+      if shared_mode?, do: Platform.SandboxHelpers.stop_task_routers_or_warn()
+
       # TWO drains, because ownership is what separates them — NOT one drain
       # widened to cover both modes.
       #

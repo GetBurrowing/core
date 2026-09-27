@@ -5134,6 +5134,20 @@ defmodule Platform.Orchestration.TaskRouterTest do
 
   defp reload_task(task), do: Platform.Repo.get!(Platform.Tasks.Task, task.id)
 
+  # The Platform.TaskSupervisor child whose `$callers` names `runner_pid`, or
+  # nil. `Task.Supervisor.start_child/2` seeds the caller chain, so this is
+  # the settle watch the designer runner started.
+  defp watch_started_by(runner_pid) do
+    Platform.TaskSupervisor
+    |> Task.Supervisor.children()
+    |> Enum.find(fn child ->
+      case Process.info(child, :dictionary) do
+        {:dictionary, dictionary} -> runner_pid in Keyword.get(dictionary, :"$callers", [])
+        nil -> false
+      end
+    end)
+  end
+
   # Move the lease's no-ack deadline into the past so `:check_no_ack` takes
   # its fire path (task 019fa469 stage 6). Before the handler level-checked
   # `no_ack_at`, `send(pid, :check_no_ack)` alone was enough — which is
@@ -5325,6 +5339,44 @@ defmodule Platform.Orchestration.TaskRouterTest do
       :ok = sync_router(control.id)
 
       assert %{} = LeaseManager.get(control.id)
+    end
+
+    # Task 01a0d4d6 stage 2. The router passes itself to the designer edge as
+    # the run's `:owner`, so the step's settle watch stops with the router.
+    # Before this, a stopped router left its watch re-reading the task every
+    # `settle_poll_ms/0` for the whole 30-minute budget, with nobody to report
+    # to. Under the sandbox it was mid-read when a later test's owner exited
+    # (the PREPLAN leak class). The runner is deliberately NOT tied to the
+    # router: it still waits out its budget so it can fail open.
+    test "stopping the router ends its settle watch; the runner keeps its fail-open budget",
+         %{project: project, assignee: assignee} do
+      stub_designer_dispatcher()
+      wire_designer!()
+      put_step_budget(@long_step_budget)
+
+      held = design_task!(project, @design_ui_title)
+      {:ok, pid} = TaskRouter.start_link(task_id: held.id, assignee: assignee)
+      :ok = sync_router(held.id)
+
+      assert_eventually(fn -> reload_task(held).planning_step == "designing" end)
+      assert %{design_run: {runner_pid, _ref}} = :sys.get_state(pid)
+
+      # The watch is the Platform.TaskSupervisor child the runner started.
+      watch = assert_eventually(fn -> watch_started_by(runner_pid) end)
+      watch_ref = Process.monitor(watch)
+
+      # POSITIVE CONTROL: with the router alive, the watch keeps watching.
+      # Without it the DOWN below could be a watch that stops on its own.
+      refute_receive {:DOWN, ^watch_ref, :process, ^watch, _}, 300
+
+      GenServer.stop(pid, :normal)
+
+      assert_receive {:DOWN, ^watch_ref, :process, ^watch, _}, 2_000
+      assert Process.alive?(runner_pid)
+
+      # The runner is parked on a ten-minute budget with nothing left to wake
+      # it inside this test. It holds no connection while it waits.
+      Process.exit(runner_pid, :kill)
     end
 
     test "settling the step wakes the planner exactly once", %{

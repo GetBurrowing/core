@@ -26,6 +26,10 @@ defmodule Platform.Design.PreplanLifecycleStepTest do
   # enough that it is never the reason a settlement arrives.
   @budget_ms 3_000
 
+  # Far past anything this file waits for, so the budget can never be the
+  # reason a watch stops in the lifetime tests.
+  @long_budget_ms 600_000
+
   setup do
     previous = Application.get_env(:platform, :design_settle_poll_ms)
     Application.put_env(:platform, :design_settle_poll_ms, 50)
@@ -247,6 +251,96 @@ defmodule Platform.Design.PreplanLifecycleStepTest do
       # it stopped listening for.
       assert PreplanStep.open?(reload(task))
       refute_receive {:lifecycle_step_settled, ^ref, _}, 1_500
+    end
+
+    # Task 01a0d4d6 stage 2. The watch serves one run. Once the awaiting process
+    # (`:reply_to`) or the run's `:owner` (the TaskRouter) is gone, nobody can
+    # receive its settlement, so it stops instead of re-reading the task until
+    # the budget runs out. Each case pairs a DOWN with a refute taken while the
+    # lifeline was alive, so a watch that stopped on its own cannot pass.
+    test "the watch stops when the context's owner exits", %{project: project} do
+      task = task!(project, @ui_title)
+
+      owner =
+        spawn(fn ->
+          receive do
+            :stop -> :ok
+          end
+        end)
+
+      assert {:running, ref} =
+               start_with(task, %{owner: owner, step_timeout_ms: @long_budget_ms})
+
+      watch = watch_for(self())
+      watch_ref = Process.monitor(watch)
+
+      refute_receive {:DOWN, ^watch_ref, :process, ^watch, _}, 300
+
+      send(owner, :stop)
+
+      assert_receive {:DOWN, ^watch_ref, :process, ^watch, _}, 2_000
+      refute_received {:lifecycle_step_settled, ^ref, _}
+      assert PreplanStep.open?(reload(task)), "the watch must not close the step on its way out"
+    end
+
+    test "the watch stops when the awaiting process exits", %{project: project} do
+      task = task!(project, @ui_title)
+      test = self()
+
+      awaiting =
+        spawn(fn ->
+          result = start_with(task, %{reply_to: self(), step_timeout_ms: @long_budget_ms})
+          send(test, {:started, result})
+
+          receive do
+            :stop -> :ok
+          end
+        end)
+
+      assert_receive {:started, {:running, _ref}}, 5_000
+
+      watch = watch_for(awaiting)
+      watch_ref = Process.monitor(watch)
+
+      refute_receive {:DOWN, ^watch_ref, :process, ^watch, _}, 300
+
+      send(awaiting, :stop)
+
+      assert_receive {:DOWN, ^watch_ref, :process, ^watch, _}, 2_000
+    end
+  end
+
+  defp start_with(task, overrides) do
+    {result, _log} =
+      ExUnit.CaptureLog.with_log([level: :debug], fn ->
+        PreplanLifecycleStep.start(%{}, Map.merge(context(task), overrides))
+      end)
+
+    result
+  end
+
+  # The watch is the Platform.TaskSupervisor child started from `caller`
+  # (`Task.Supervisor.start_child/2` seeds `$callers`) whose entry point is
+  # this module's watcher closure.
+  defp watch_for(caller) do
+    Platform.TaskSupervisor
+    |> Task.Supervisor.children()
+    |> Enum.filter(fn child ->
+      case Process.info(child, :dictionary) do
+        {:dictionary, dictionary} ->
+          caller in Keyword.get(dictionary, :"$callers", []) and
+            match?({PreplanLifecycleStep, _, _}, Keyword.get(dictionary, :"$initial_call"))
+
+        nil ->
+          false
+      end
+    end)
+    |> case do
+      [watch] ->
+        watch
+
+      other ->
+        flunk("expected exactly one settle watch for #{inspect(caller)}, got #{inspect(other)}")
     end
   end
 

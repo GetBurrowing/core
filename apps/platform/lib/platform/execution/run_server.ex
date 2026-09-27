@@ -52,6 +52,7 @@ defmodule Platform.Execution.RunServer do
 
   @default_stale_timeout_ms 30_000
   @default_dead_timeout_ms 120_000
+  @terminal_statuses [:completed, :failed, :cancelled]
 
   # ---------------------------------------------------------------------------
   # State
@@ -233,14 +234,25 @@ defmodule Platform.Execution.RunServer do
     {:reply, {:ok, run}, state}
   end
 
+  # Spawning never moves the run backwards. A `:created` run advances to
+  # `:starting`; a run the caller already moved to `:starting` or `:running`
+  # (ProofOfLife transitions to `:running` BEFORE spawning, so a fast exit
+  # cannot race its own launcher) keeps its status; a terminal run is
+  # refused before any provider process exists.
   def handle_call({:spawn_provider, runner, opts}, _from, %State{run: %Run{} = run} = state) do
-    spawn_opts = Keyword.put(opts, :run_server, self())
+    case spawn_status(run.status) do
+      {:ok, status_after_spawn} ->
+        spawn_opts = Keyword.put(opts, :run_server, self())
 
-    case runner.spawn_run(run, spawn_opts) do
-      {:ok, provider_ref} ->
-        updated_run = %Run{run | runner_ref: provider_ref, status: :starting}
-        new_state = %State{state | run: updated_run, runner: runner}
-        {:reply, {:ok, updated_run}, new_state}
+        case runner.spawn_run(run, spawn_opts) do
+          {:ok, provider_ref} ->
+            updated_run = %Run{run | runner_ref: provider_ref, status: status_after_spawn}
+            new_state = %State{state | run: updated_run, runner: runner}
+            {:reply, {:ok, updated_run}, new_state}
+
+          {:error, _} = error ->
+            {:reply, error, state}
+        end
 
       {:error, _} = error ->
         {:reply, error, state}
@@ -309,30 +321,59 @@ defmodule Platform.Execution.RunServer do
     {:noreply, new_state}
   end
 
-  # Runner process exited — update run state accordingly
+  # Runner process exited — route the exit through the state machine.
+  #
+  #   * a legal edge (`:running -> :completed`, `:starting -> :failed`, ...)
+  #     is applied as-is;
+  #   * an already-terminal run (the normal cancel-then-exit sequence:
+  #     `Execution.stop_run/1` records `:cancelled`, then the runner's
+  #     `:cancelled`/`:killed` exit arrives) keeps its first terminal status
+  #     and `finished_at`; only a missing `exit_code` is filled in;
+  #   * any other edge (e.g. `:starting -> :completed`, a run never seen
+  #     `:running`) is logged, emitted as
+  #     `[:platform, :execution, :run, :invalid_exit_transition]` telemetry,
+  #     and recorded as `:failed`. Not `:completed`: the table says a run
+  #     that never ran cannot have completed. Not a crash: that loses the
+  #     in-memory run. Not a refusal: the exit is irreversible, so refusing
+  #     would leave the run non-terminal with no provider.
   def handle_info(
         {:runner_exited, run_id, %{exit_code: code, exit_state: exit_state}},
         %State{run: %Run{id: run_id} = run} = state
       ) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    target = exit_target_status(exit_state)
 
-    new_status =
-      case exit_state do
-        :completed -> :completed
-        :cancelled -> :cancelled
-        :killed -> :cancelled
-        _ -> :failed
-      end
+    cond do
+      valid_transition?(run.status, target) ->
+        Logger.debug(
+          "[RunServer] #{run.id} runner exited with code=#{code}, state=#{exit_state} → #{target}"
+        )
 
-    updated_run = %Run{run | status: new_status, exit_code: code, finished_at: now}
-    new_state = %State{state | run: updated_run}
-    new_state = handle_terminal(updated_run, new_state)
+        {:noreply, apply_exit(state, target, code, now)}
 
-    Logger.debug(
-      "[RunServer] #{run.id} runner exited with code=#{code}, state=#{exit_state} → #{new_status}"
-    )
+      run.status in @terminal_statuses ->
+        Logger.debug(
+          "[RunServer] #{run.id} runner exited with code=#{code}, state=#{exit_state} " <>
+            "after terminal #{run.status}; keeping #{run.status}"
+        )
 
-    {:noreply, new_state}
+        updated_run = %Run{run | exit_code: run.exit_code || code}
+        {:noreply, %State{state | run: updated_run}}
+
+      true ->
+        Logger.error(
+          "[RunServer] #{run.id} invalid runner-exit transition #{run.status} → #{target} " <>
+            "(exit_state=#{exit_state}, code=#{code}); recording :failed"
+        )
+
+        :telemetry.execute(
+          [:platform, :execution, :run, :invalid_exit_transition],
+          %{count: 1},
+          %{run_id: run.id, from: run.status, to: target}
+        )
+
+        {:noreply, apply_exit(state, :failed, code, now)}
+    end
   end
 
   def handle_info({:runner_exited, _other_run_id, _}, state), do: {:noreply, state}
@@ -343,6 +384,20 @@ defmodule Platform.Execution.RunServer do
 
   defp via(run_id) do
     {:via, Registry, {Platform.Execution.Registry, {:run_server, run_id}}}
+  end
+
+  defp spawn_status(:created), do: {:ok, :starting}
+  defp spawn_status(status) when status in [:starting, :running], do: {:ok, status}
+  defp spawn_status(status), do: {:error, {:invalid_transition, status, :starting}}
+
+  defp exit_target_status(:completed), do: :completed
+  defp exit_target_status(:cancelled), do: :cancelled
+  defp exit_target_status(:killed), do: :cancelled
+  defp exit_target_status(_other), do: :failed
+
+  defp apply_exit(%State{run: %Run{} = run} = state, status, code, now) do
+    updated_run = %Run{run | status: status, exit_code: code, finished_at: now}
+    handle_terminal(updated_run, %State{state | run: updated_run})
   end
 
   defp valid_transition?(from, to) do

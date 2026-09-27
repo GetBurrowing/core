@@ -165,6 +165,12 @@ defmodule Platform.Lifecycle.Executor do
     * `:registry` — the `StepRegistry` server to resolve names against.
     * `:reply_to` — where async steps deliver settlement. Defaults to
       `self()`, which is the process doing the awaiting.
+    * `:owner` — the process whose lifetime the run belongs to, when that is
+      not the awaiting process. It is passed to async steps on the context as
+      `:owner`, so a step's watcher can stop when its owner is gone. The one
+      caller is `Platform.Orchestration.TaskRouter`, which runs the designer
+      edge in a spawned runner and passes itself (task 01a0d4d6 stage 2).
+      Defaults to `nil`, which adds nothing to watch.
   """
   @spec run_edge(TaskSchema.t(), binary(), keyword()) :: {outcome(), map()}
   def run_edge(%TaskSchema{} = task, edge_name, opts \\ []) when is_binary(edge_name) do
@@ -183,6 +189,7 @@ defmodule Platform.Lifecycle.Executor do
       run_seq: run_seq,
       registry: Keyword.get(opts, :registry, StepRegistry.server()),
       reply_to: Keyword.get(opts, :reply_to, self()),
+      owner: Keyword.get(opts, :owner),
       step_timeout_ms: Keyword.get(opts, :step_timeout_ms, Lifecycle.step_timeout_ms()),
       deadline: now_ms() + Keyword.get(opts, :edge_budget_ms, Lifecycle.edge_budget_ms())
     }
@@ -482,6 +489,7 @@ defmodule Platform.Lifecycle.Executor do
           task: state.task,
           edge: state.edge,
           reply_to: state.reply_to,
+          owner: state.owner,
           # A step that spawns its own watcher needs the budget the executor
           # will actually wait for, or the watcher outlives the run it serves.
           step_timeout_ms: state.step_timeout_ms

@@ -4493,6 +4493,11 @@ defmodule Platform.Orchestration.TaskRouter do
     {outcome, _summary} =
       Executor.run_edge(task, edge,
         steps: Edges.default_steps(edge),
+        # The run belongs to this router. The runner outlives a stopped router
+        # on purpose, so that it still expires an open step at its budget
+        # (`close_open_step/1` below). The step's settle watch has nobody left
+        # to report to, so it stops with the router (task 01a0d4d6 stage 2).
+        owner: router,
         step_timeout_ms: Lifecycle.step_timeout_ms(),
         edge_budget_ms: Lifecycle.edge_budget_ms()
       )

@@ -129,12 +129,15 @@ defmodule Platform.Tasks.ProofOfLife do
              },
              kind: :task_metadata
            ),
-         # The run must read :running BEFORE the provider exists. RunServer
-         # applies a runner exit directly (no transition check), so spawning
-         # first leaves a window where a fast run reaches :completed before
-         # the launcher's `:running` transition, which the engine then
-         # refuses as {:invalid_transition, :completed, :running}
-         # (seed-flake Class 4, task 01a0d265). The state machine only
+         # The run must read :running BEFORE the provider exists. Before
+         # task 01a0d4d6, RunServer applied a runner exit directly (no
+         # transition check), so spawning first left a window where a fast
+         # run reached :completed before the launcher's `:running`
+         # transition (seed-flake Class 4, task 01a0d265). RunServer now
+         # routes exits through its transition table and records a
+         # `:starting -> :completed` exit as :failed, and spawn_provider
+         # keeps a :running run :running, so this order is what lets a
+         # fast run be recorded :completed at all. The state machine only
          # allows created → starting → running, so the two-step choreography
          # mirrors `ProofRun.transition_to_running/1`. A failed transition
          # short-circuits this `with` and returns {:error, reason} before
