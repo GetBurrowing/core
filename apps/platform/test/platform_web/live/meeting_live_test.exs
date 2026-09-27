@@ -13730,6 +13730,65 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       assert people_count(render(view)) == ["1"]
     end
+
+    # STRUCTURE ONLY (task 01a0e091 stage 1). LiveViewTest cannot measure
+    # layout, so this pins the facts the measured fix rests on, not pixels:
+    # the controls are ONE node in the right grid track, the switcher and
+    # toggles carry the `order` pair that keeps below-`lg` painting as it
+    # was, the roster count yields between `lg` and `2xl` (stage 3), and the
+    # truncating title carries its full name as a tooltip.
+    test "lg top bar: controls sit in the right track, the count yields below 2xl", %{
+      conn: conn,
+      meeting: meeting,
+      space: space
+    } do
+      seed_meeting_presence(space, "user", "Ada Human")
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+      doc = frag(html)
+
+      [header_class] =
+        doc
+        |> LazyHTML.query("header:has([data-role=meeting-header-end])")
+        |> LazyHTML.attribute("class")
+
+      assert header_class =~ "lg:grid-cols-[1fr_auto_1fr]"
+
+      assert count(html, ~s([data-role="meeting-controls"])) == 1
+
+      assert count(
+               html,
+               ~s([data-role="meeting-header-end"] > [data-role="meeting-controls"] [data-role="meeting-join"])
+             ) == 1
+
+      assert count(html, ~s([data-role="meeting-header-start"] [data-role="meeting-controls"])) ==
+               0
+
+      for sel <- [~s([data-stage-mode-control]), ~s([data-role="chat-panel-toggle"])] do
+        [class] = doc |> LazyHTML.query(sel) |> LazyHTML.attribute("class")
+        classes = String.split(class)
+        assert "order-1" in classes, "#{sel} lost order-1"
+        assert "lg:order-none" in classes, "#{sel} lost lg:order-none"
+      end
+
+      [rail_class] =
+        doc |> LazyHTML.query(~s([data-role="call-rail-toggle"])) |> LazyHTML.attribute("class")
+
+      assert "order-1" in String.split(rail_class)
+
+      [roster_class] =
+        doc
+        |> LazyHTML.query(~s([data-role="meeting-roster-count"]))
+        |> LazyHTML.attribute("class")
+
+      roster_classes = String.split(roster_class)
+      assert "lg:hidden" in roster_classes
+      assert "2xl:flex" in roster_classes
+
+      assert doc
+             |> LazyHTML.query(~s([data-role="meeting-title"] h1))
+             |> LazyHTML.attribute("title") ==
+               ["Top Bar"]
+    end
   end
 
   # ── Recording indicator (task 01a0740d stage 2, FE-7) ────────────────────

@@ -8442,6 +8442,18 @@ defmodule PlatformWeb.MeetingLive do
   # pill stays at every width because "live" IS state, and this bar
   # never hides state on a phone (see the mute-badge note in the
   # template). The full sentence is in `title` for hover.
+  #
+  # `lg:hidden 2xl:flex` (task 01a0e091 stages 1 and 3, canvas
+  # 01a0e0cf-25c6-7001-a8d0-a2eb14115efe): from `lg` the header is a
+  # `1fr auto 1fr` grid and this readout sits in the left track with the
+  # title and up to three state pills. The canvas ranks it the FIRST thing
+  # to yield, so it is hidden from 1024px and returns at 1536px. The title
+  # keeps >= 96px there because the pills stay in their short forms until
+  # 1730px (h1 123.88 at 1536 with this count showing; see the header's
+  # comment). Stage 2 had returned it at 1730px instead; the task-level
+  # review failed that against the canvas's "hidden below 1536".
+  # Class-only, never `:if`: the node stays in the DOM at every width, which
+  # the roster tests in meeting_live_test.exs read attributes from.
   attr(:participants, :list, required: true)
 
   defp roster_readout(assigns) do
@@ -8455,7 +8467,7 @@ defmodule PlatformWeb.MeetingLive do
 
     ~H"""
     <span
-      class="hidden flex-shrink-0 items-center whitespace-nowrap text-[11px] text-base-content/50 sm:flex"
+      class="hidden flex-shrink-0 items-center whitespace-nowrap text-[11px] text-base-content/50 sm:flex lg:hidden 2xl:flex"
       data-role="meeting-roster-count"
       data-people={@people}
       data-agents={@agents}

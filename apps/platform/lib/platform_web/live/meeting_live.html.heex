@@ -596,7 +596,143 @@
            1280px, the switcher's natural 390px fits inside the `auto`
            column with room to spare on both `1fr` sides, so the "does an
            `auto` track shrink under pressure" question that mattered at
-           700px never arises in the range this rule actually applies to. --%>
+           700px never arises in the range this rule actually applies to.
+
+           THE CONTROLS LIVE IN THE RIGHT TRACK (task 01a0e091 stage 1; Saru's
+           design direction, canvas 01a0e0cf-25c6-7001-a8d0-a2eb14115efe). With
+           three state pills in the title box (live, rec, transcribing) the
+           LEFT `1fr` track carried the title, the pills, the roster count, the
+           identity badges AND `[data-role="meeting-controls"]` (the widest
+           item, Join), while the RIGHT track held one 32px icon button. Equal
+           `1fr` tracks cannot lend the empty side's slack to the full one, so
+           the `min-w-0` title box shrank below its own `flex-shrink-0` pills
+           and they painted under the roster count and Join (measured on main
+           @ 47373639, see the transcribing pill's WIDTH note). The canvas ranks
+           what yields: pills never; controls never; switcher stays centred;
+           title truncates (`title` tooltip on the h1); roster count first.
+           This stage applies the first two cuts:
+
+             1. `[data-role="meeting-controls"]` (mute chip + Join, ONE node,
+                one data-role) now sits in `[data-role="meeting-header-end"]`,
+                before `chat-panel-toggle`: `[... Join] [chat]`, flush right.
+             2. The roster count is `lg:hidden` (see `roster_readout/1`); the
+                rail carries the same numbers. It returns at `2xl` (1536px);
+                stage 2 briefly moved that to 1730px and stage 3 moved it
+                back; see below.
+
+           The grid template is UNCHANGED, `grid-cols-[1fr_auto_1fr]`.
+           `1fr_auto_auto` was considered and REJECTED on the canvas: it
+           un-centres the switcher at every lg width and undoes task
+           01a0cf5d's reason for the grid.
+
+           BELOW `lg` THE PAINTED ORDER IS UNCHANGED, via `order`. Both
+           wrappers are still `display:contents` there, so the move put
+           `meeting-controls` AFTER the switcher in DOM order. The switcher,
+           `chat-panel-toggle` and `call-rail-toggle` carry `order-1` (and the
+           first two `lg:order-none`), so below `lg` everything else (title,
+           roster, badges, controls) stays at order 0 and paints first, in its
+           DOM order: title, roster, badges, controls, switcher, chat, rail,
+           as before. At `lg` the order classes are inert (`order-none`, and
+           the rail toggle is `lg:hidden`), and DOM order equals painted order.
+           TRADEOFF, recorded rather than hidden: below `lg`, Tab now reaches
+           the stage-mode buttons BEFORE Join even though Join paints to their
+           left. No mechanism keeps DOM order equal to painted order in both
+           bands: Join paints before the switcher below `lg` and after it at
+           `lg`, and the only alternative (placing a left-DOM node into grid
+           column 3) overlaps the header-end grid item. Rendering Join twice
+           (`lg:hidden` + `hidden lg:flex`) is FORBIDDEN: it duplicates the
+           data-role the mount tests select on and puts a hidden second Join
+           in the accessibility tree. The desktop band, where keyboard use is
+           likeliest, keeps DOM order equal to painted order.
+
+           MEASURED after this move (task 01a0e091 stage 1; dev-on-moon, CDP
+           getBoundingClientRect, dark, sidebar expanded at 224px, pre-join so
+           Join shows, live + rec + transcribing all on; pills 90.25 / 75.42 /
+           87.92px at every lg width). Left track = right track width.
+
+             width  track   h1     pill overlaps         switcher offset
+             1024   167.34  0      rec 30.33, tx 87.92   -0.01
+                                   into the switcher
+             1280   295.34  0      none                  -0.01
+             1440   375.34  69.75  none                  -0.01
+             1536   423.34  0      none (roster back)    -0.01
+
+           Before the move (main @ 47373639) every width had a pill overlap
+           (1280: rec 47.64 and tx 77.67px under Join; 1536: tx 60.36px under
+           the roster count). This stage clears 1280-1536 and NOT 1024, and
+           the title floor of about 96px is met at none of the four widths;
+           1536 is 0 because the roster count (106.28px) returns there. The
+           remaining canvas steps (short pills, icon-only switcher) are the
+           next stage's, applied only where these numbers say. At 1024 the
+           right track is 5.95px narrower than Join + gap + chat, so the
+           controls overhang their track by 5.95px into the 12px column gap
+           (6.05px clear of the switcher). At 390x844 every header child's
+           box is unchanged from main within 0.5px.
+
+           STAGE 2 (task 01a0e091): the canvas's steps 3 and 4, each applied
+           only in the band these numbers say needs it.
+
+             3. SHORT PILL FORMS from `lg` until `2xl` (1024-1535px; stage 3
+                extends this to 1730px, see below): the forms
+                the pills already use below `sm` ("live", "rec", dot + document
+                icon), words `sr-only`, never `hidden`. Needed: with full words
+                and the roster hidden, h1 = 0 at 1024 and 1280 and 69.75 at
+                1440. Full words would give h1 >= 96 from about 1493px
+                (extrapolated from the measured 1440 and 1536 rows, 0.5px of
+                h1 per px of viewport); `2xl` (1536, h1 117.75 measured) is
+                used instead of a third arbitrary breakpoint.
+             4. ICON-ONLY STAGE-MODE SWITCHER from `lg` until `xl` (1024-
+                1279px). Needed at 1024: with short pills and labelled
+                segments the transcribing pill still ran 1.85px into the
+                switcher, and with the agents-muted chip on the controls ran
+                109.95px into it. Not needed at 1280 (h1 114.16 with labels;
+                controls 18.05px clear of the switcher with the chip on), so
+                labels return at `xl`.
+
+           STAGE 3 (task 01a0e091, after the task-level review): THE ROSTER
+           COUNT RETURNS AT `2xl` (1536px) AND THE SHORT PILL FORMS LAST UNTIL
+           `min-[108.125rem]` (1730px). Stage 2 had it the other way round
+           (short pills until 2xl, roster back at 1730px), which kept the title
+           but broke the canvas's "roster hidden below 1536" clause. Reason for
+           the swap: the short forms save 124.4px (three pills), more than the
+           118.28px the roster costs (106.28 + a 12px gap), so both clauses
+           hold at once. Measured with full words and the
+           roster showing: h1 0 at 1536, 71.47 at 1680, 95.47 at 1728, 96.47 at
+           1730, so 1730 is the first width where full words clear the ~96px
+           floor, and the words return there. With short pills and the roster,
+           h1 is 123.88 at 1536. The breakpoint is `min-[108.125rem]`, NOT
+           `min-[1730px]`: Tailwind v4 cannot order a px arbitrary breakpoint
+           against the rem theme breakpoints and emitted `min-[1730px]:flex`
+           BEFORE `lg:hidden` (measured display:none at 1730 in stage 2). In
+           rem it sorts after `lg:`; measured below, the words compute
+           `position:static` and the icon `display:none` at 1730, and
+           `position:absolute` / `block` at 1729.
+
+           MEASURED after stage 3 (same rig and state as the table above; the
+           agents-muted chip off unless stated). Pills are 45.64 / 43.55 / 40
+           (short) or 90.25 / 75.42 / 87.92 (full). Every pill-vs-(roster,
+           controls, Join, switcher, chat) intersection and controls-vs-
+           switcher is 0 at every row.
+
+             width  pills  h1      roster  switcher      offset
+             1024   short  109.31  none    538.5-709.5   0.00  (icon-only)
+             1024   short  109.31  none    538.5-709.5   0.00  chip on, controls
+                                                             722.69-972
+             1280   short  114.16  none    543.34-960.64 -0.01 (chip on: same,
+                                                             controls 978.69)
+             1440   short  194.16  none    623.34-1040.64 -0.01
+             1535   short  198.88  none    670.84-1088.14 -0.01
+             1536   short  123.88  flex    671.34-1088.64 -0.01
+             1729   short  198.88  flex    767.84-1185.14 -0.01
+             1730   full   96.47   flex    768.34-1185.64 -0.01
+
+           The transcribing icon computes `display:block` below `sm` and
+           again from `lg` until 1730px (`lg:block`), 12px wide at 1024-1729,
+           none (0px) at 1730. At 390x844 every header child's box equals
+           main's (0.00px delta) in the three-pill state, and the name is
+           57.45px transcriber-only and 53.91px rec-only on BOTH main and this
+           branch (the 55.75 in the title box's note is from task 01a0740d's
+           layout and no longer reproduces on main). --%>
         <div
           class="contents lg:flex lg:min-w-0 lg:items-center lg:gap-3"
           data-role="meeting-header-start"
@@ -669,7 +805,7 @@
             data-role="meeting-title"
           >
             <span class="hero-video-camera size-5 flex-shrink-0 text-primary"></span>
-            <h1 class="truncate text-sm font-semibold">{@meeting.name}</h1>
+            <h1 class="truncate text-sm font-semibold" title={@meeting.name}>{@meeting.name}</h1>
 
             <%!-- `● meeting live` (task 01a05b14 stage 5, approved target
              embed 1 `.pill`): 10px, fully rounded, on the `success` slot
@@ -686,14 +822,20 @@
              Colour is never the only signal: the word "live" is painted at
              EVERY width. Only the leading "meeting " yields below `sm`,
              where the title, this pill, the count and the controls all
-             compete for one 390px line. --%>
+             compete for one 390px line, and again from `lg` until 1730px
+             (`lg:sr-only min-[108.125rem]:not-sr-only`, task 01a0e091 stages
+             2 and 3), where the
+             left grid track is too narrow for three full-word pills and a
+             title; see the header's comment for the widths. --%>
             <span
               :if={@room_live?}
               class="inline-flex flex-shrink-0 items-center gap-1 rounded-full border border-success/40 bg-success/15 px-2 py-0.5 text-[10px] font-medium leading-4 text-success"
               data-role="meeting-live-pill"
             >
               <span class="size-1.5 rounded-full bg-success" aria-hidden="true"></span>
-              <span><span class="sr-only sm:not-sr-only">meeting </span>live</span>
+              <span>
+                <span class="sr-only sm:not-sr-only lg:sr-only min-[108.125rem]:not-sr-only">meeting </span>live
+              </span>
             </span>
 
             <%!-- `● recording` (task 01a0740d stage 2, FE-7). Same 10px fully
@@ -718,7 +860,9 @@
 
              COLOUR IS NOT THE ONLY SIGNAL, and the word does not yield: below
              `sm` only the "ording" tail goes `sr-only`, so `rec` is painted at
-             every width and the full word stays in the accessibility tree. This
+             every width and the full word stays in the accessibility tree. The
+             same short form returns from `lg` until 1730px (task 01a0e091
+             stages 2 and 3; see the header's comment). This
              is STATE, so `hidden sm:flex` is banned on it — that treatment
              belongs to the roster count below, which is informational.
 
@@ -749,7 +893,9 @@
               aria-label="This meeting is being recorded"
             >
               <span class="size-1.5 rounded-full bg-error" aria-hidden="true"></span>
-              <span>rec<span class="sr-only sm:not-sr-only">ording</span></span>
+              <span>
+                rec<span class="sr-only sm:not-sr-only lg:sr-only min-[108.125rem]:not-sr-only">ording</span>
+              </span>
             </span>
 
             <%!-- `● transcribing` (task 01a0d4fe stage 4; Saru's design
@@ -769,7 +915,14 @@
              SLOT: `info`, not the cyan action colour — a status pill in the
              action hue reads as a button. The dot is filled and static (no
              pulse). Below `sm` the word goes `sr-only` and `hero-document-text`
-             paints beside the dot, so the indicator is never colour-only.
+             paints beside the dot, so the indicator is never colour-only. The
+             same short form returns from `lg` until 1730px (task 01a0e091
+             stages 2 and 3): the word is `lg:sr-only
+             min-[108.125rem]:not-sr-only` and the icon `lg:block
+             min-[108.125rem]:hidden`. `block` because that is what the icon
+             computes to below `sm` (measured); it is 12px wide at 1280. A hero
+             span with the wrong display paints nothing while every
+             class-string test still passes, so the width was measured.
 
              CONTRAST, measured with Platform.Design.WcagContrast (float-through),
              compositing every alpha over the real ground: header `bg-base-200/60`
@@ -797,7 +950,10 @@
              rec pill 370.25-445.67, already 47.64px under Join meeting
              (398.03-531.34); this pill 453.67-541.59, 77.67px of its 87.92px
              under Join. The lg top bar is a separate ticket; this stage does
-             not redesign it. --%>
+             not redesign it. (It was task 01a0e091: the controls moved to the
+             right track, the roster count yields below `2xl` and the pills
+             take their short forms below 1730px; see the header's comment for
+             the widths measured after the move.) --%>
             <span
               :if={@transcriber_present?}
               class="inline-flex flex-shrink-0 items-center gap-1 rounded-full border border-info/40 bg-info/10 px-2 py-0.5 text-[10px] font-medium leading-4 text-base-content"
@@ -807,8 +963,14 @@
               title="Meeting transcriber is in the room"
             >
               <span class="size-1.5 rounded-full bg-info" aria-hidden="true"></span>
-              <span class="hero-document-text size-3 sm:hidden" aria-hidden="true"></span>
-              <span class="sr-only sm:not-sr-only">transcribing</span>
+              <span
+                class="hero-document-text size-3 sm:hidden lg:block min-[108.125rem]:hidden"
+                aria-hidden="true"
+              >
+              </span>
+              <span class="sr-only sm:not-sr-only lg:sr-only min-[108.125rem]:not-sr-only">
+                transcribing
+              </span>
             </span>
           </div>
 
@@ -824,7 +986,12 @@
            (measured; see `roster_readout/1` in meeting_live.ex). That
            is NOT the reveal-over-persistence pattern the mute badge
            note below bans — that rule protects STATE, and a count is
-           not state. The live pill above is state and stays. --%>
+           not state. The live pill above is state and stays.
+
+           ALSO HIDDEN FROM `lg` UNTIL `2xl` (1024-1535px; task 01a0e091
+           stages 1 and 3): it is the canvas's rank-5 item, the first
+           to yield when the left track cannot hold the title and the pills.
+           See `roster_readout/1` and the header's comment. --%>
           <.roster_readout participants={@participants} />
 
           <%!-- Guest identity badge (task 019f498d stage 4). Only rendered on
@@ -881,14 +1048,206 @@
             <span class="hero-user size-3.5 flex-shrink-0" aria-hidden="true"></span>
             <span class="truncate">{@display_name}</span>
           </span>
+        </div>
 
+        <%!-- CENTRE grid item at `lg:` (task 01a0cf5d stage 1, item 2 — see
+           the header's own comment above for the two rejected alternatives
+           and their measurements). Unwrapped, on purpose: below `lg` it is
+           a plain flex child in its original document position, exactly as
+           on `main`. At `lg:` and up it is simply the third top-level child
+           of the header's `grid-cols-[1fr_auto_1fr]`, which is what makes
+           it the `auto` column — no positioning classes of its own are
+           needed for the centring, because grid track placement does that
+           by construction. `min-w-0 shrink overflow-x-auto` below are
+           UNCHANGED from before this ticket at every width: below `lg`
+           they do the same job they always did (the control is a normal
+           flex child); at `lg:` `shrink` is inert (nothing squeezes an
+           `auto` grid track that already fits, per the header comment's
+           measurements) but costs nothing left in place.
+
+           `order-1 lg:order-none` (task 01a0e091 stage 1): below `lg` this
+           control must paint AFTER `[data-role="meeting-controls"]`, which
+           now follows it in DOM order inside `meeting-header-end`. Inert at
+           `lg`, where it is the grid's centre track. --%>
+        <%!-- Stage-mode segmented control (ADR 0042). Four hero-icon buttons;
+           clicking one pushes `set_stage_mode` with the target mode and
+           the LV swaps `@current_stage_mode`. The active button gets the
+           daisyui segmented-active treatment (`bg-base-200 text-primary`);
+           switching is pure presentation — the other modes' underlying
+           state is untouched.
+
+           The control scrolls on narrow viewports so it never overflows the
+           top bar — that was ALWAYS the claim here, and `flex-shrink-0` made
+           it false. A shrink-0 flex item cannot be squeezed, so
+           `overflow-x-auto` never engaged and the four buttons simply ran off
+           the right edge (measured at 390px: Gallery ending at 415.9,
+           Whiteboard at 456.9 — both outside the viewport and UNREACHABLE,
+           with no page scroll to recover them). `min-w-0 shrink` is what
+           makes the documented behaviour actually happen: the control gives
+           up width under pressure and its own scroller keeps every mode
+           reachable.
+
+           The same defect was found independently on `main` during the
+           stage-5 e2e review of task 019fbaac, with its own measurements;
+           that account is kept below verbatim because it names a second
+           casualty (the chat-panel drawer toggle) this one does not. NOTE
+           that the "only flexible region" claim it makes is no longer true
+           after this rollup: the meeting title and the identity badge are
+           shrinkable too (see the header comments above). The conclusion —
+           do not re-add `flex-shrink-0` — is unchanged and holds for both.
+
+           THIS WAS THE TOP BAR'S ONLY FLEXIBLE REGION, and that is
+           load-bearing. Until the stage-5 e2e review of task 019fbaac
+           the class list here was `join flex-shrink-0 overflow-x-auto`,
+           alongside a comment
+           claiming "the control wraps/scrolls on narrow viewports so it
+           never overflows the top bar". That claim was false and the
+           `overflow-x-auto` was inert: `flex-shrink-0` pinned the
+           control at its natural 165px, so `clientWidth == scrollWidth`
+           and there was nothing to scroll. The bar overflowed instead —
+           at 375px it measured scrollWidth 391 / clientWidth 375
+           unmuted, and 431 once the agents-muted badge appeared. Every
+           one of those overflow pixels landed on the LAST item in the
+           row, `chat-panel-toggle`, which went from 12 of its 28px
+           visible to −28. That control is the only affordance that
+           opens the drawer holding the mute toggle, so muting became a
+           one-way door on a phone: a fresh 375px load of an
+           already-muted meeting had no route back to unmuting.
+
+           Dropping `flex-shrink-0` (and stating `min-w-0`, which
+           `overflow-x-auto` already implies, so the intent survives a
+           future class edit) makes the control absorb the squeeze into
+           its own scroll port instead of exporting it to its siblings.
+           The four modes stay reachable by scrolling; every other
+           control in the bar — including the drawer toggle — stays
+           where it is. Nothing changes at widths where the bar fits,
+           because flex-shrink only engages on overflow.
+
+           Do NOT re-add `flex-shrink-0`, and do not solve a future
+           top-bar squeeze by hiding the drawer toggle or the mute
+           badge: per Marlowe's `persistent-controls-over-reveal` ruling
+           (task 019f340a) controls stay visible and get disabled at
+           boundaries rather than hidden, and a control that disappears
+           as a direct consequence of being used is the worst case that
+           ruling exists to forbid.
+
+           `scrollbar-width: none` matches the horizontal scroll strips
+           in tasks_live/chat_live: a classic 15px scrollbar inside this
+           48px (`h-12`) bar would eat the row it is scrolling. --%>
+        <div
+          class="join order-1 min-w-0 shrink overflow-x-auto rounded-field border border-edge bg-base-200 p-0.5 lg:order-none"
+          style="scrollbar-width: none; -webkit-overflow-scrolling: touch;"
+          role="group"
+          aria-label="Stage mode"
+          data-stage-mode-control="active"
+        >
+          <%!-- ONE outline, not two (task 01a0cf5d stage 1, item 1). The
+             mock (`.modes` in Meeting_Desktop.html, attachment
+             01a0c6f1-3839-7001-86f2-c97d9b05c5b5) puts the border on the
+             GROUP container only — `.modes` carries
+             `border:1px solid var(--base-300)`, and `.modes button` itself
+             carries none. This markup used to stack a second `border-edge`
+             on every individual button on top of the container's, doubling
+             the outline exactly as the ticket described. `border-edge`
+             lives on the container div above; it is deliberately absent
+             from the per-button class list below.
+
+             Left untouched: the separate `:focus-visible` ring (app.css /
+             daisyUI) that outlines whichever button has keyboard focus.
+             That is a different rule for a different state and was never
+             part of this resting-state double border — removing it here
+             would delete an accessibility signal a screenshot of the
+             resting control cannot show was missing. --%>
+          <button
+            :for={mode <- @stage_modes}
+            type="button"
+            phx-click="set_stage_mode"
+            phx-value-mode={mode}
+            aria-label={
+              if(mode == :canvas and any_canvas_changed?(assigns),
+                do: stage_mode_label(mode) <> " (a canvas changed)",
+                else: stage_mode_label(mode)
+              )
+            }
+            aria-pressed={to_string(@current_stage_mode == mode)}
+            title={stage_mode_label(mode)}
+            data-stage-mode-button={mode}
+            data-active={to_string(@current_stage_mode == mode)}
+            class={[
+              "join-item btn btn-sm relative min-h-11 gap-1.5",
+              if(@current_stage_mode == mode,
+                do: "bg-base-200 text-primary",
+                else: "btn-ghost text-base-content/60"
+              )
+            ]}
+          >
+            <span class={[stage_mode_icon(mode), "size-4"]}></span>
+            <%!-- `lg:hidden xl:inline` (task 01a0e091 stage 2, the canvas's
+               step 4): icon-only from 1024 to 1279px, where the left track
+               could not hold the pills and the right track could not hold
+               the controls with the agents-muted chip on. The switcher
+               measured 171px wide there and stayed centred (offset 0.00).
+               `title` and `aria-label` on the button carry the label. --%>
+            <span class="hidden sm:inline lg:hidden xl:inline">{stage_mode_label(mode)}</span>
+            <%!-- The same changed-signal, paired onto the mode control so
+               it survives leaving canvas mode: the picker is rendered
+               ONLY in canvas mode, so without this the signal would be
+               invisible from gallery / screen / whiteboard — which is
+               where someone watching the grid actually is.
+
+               ABSOLUTE, not an inline sibling. This control is a tight
+               `overflow-x-auto` row that already lost buttons off-screen
+               once at 375px; a dot that takes layout width would push it
+               again, and a control that reflows when a peer edits a
+               canvas is its own small yank. No animation here either.
+
+               The label carries the news too — `aria-label` on the
+               button suppresses inner text for assistive tech, so an
+               sr-only span in here would announce nothing. --%>
+            <span
+              :if={mode == :canvas and any_canvas_changed?(assigns)}
+              class="absolute right-1 top-1 size-1.5 rounded-full bg-secondary"
+              data-role="canvas-changed-indicator"
+              aria-hidden="true"
+            >
+            </span>
+          </button>
+        </div>
+
+        <%!-- RIGHT grid item at `lg:` (task 01a0cf5d stage 1, item 2 — see
+           the header's own comment for the two rejected alternatives).
+           `contents` below `lg` (these two buttons stay plain, unwrapped
+           flex children at the tail of the SAME single row the meeting name
+           opens, exactly as on `main`); `lg:flex ... lg:justify-end` at
+           `lg:` and up makes this box the grid's trailing `1fr` item, with
+           its content pushed flush to the bar's right edge inside it.
+
+           Since task 01a0e091 stage 1 it holds THREE items, not two:
+           `[data-role="meeting-controls"]` first, then the two toggles. The
+           toggles (and the switcher) carry `order-1 lg:order-none` so that
+           below `lg`, where this box is `contents`, the controls still paint
+           before the switcher; see the header's comment. --%>
+        <div
+          class="contents lg:flex lg:min-w-0 lg:items-center lg:justify-end lg:gap-3"
+          data-role="meeting-header-end"
+        >
           <%!-- Local-media controls + Join/Leave CTA. Visual treatment
            mirrors meeting_bar_live.ex's mini-bar: hero-microphone /
            hero-video-camera glyphs, base-content/70 when active, error-
            toned when muted/off, base-content/40 when off. Each button
            pushes the matching MeetingHooks event — the LiveKit lifecycle
            lives there (see meeting_hooks.ex), no client-side state
-           here. --%>
+           here. 
+
+           MOVED HERE, into `[data-role="meeting-header-end"]` (task 01a0e091
+           stage 1, canvas 01a0e0cf-25c6-7001-a8d0-a2eb14115efe). It used to
+           be the last item of `meeting-header-start`, the crowded left `1fr`
+           track; at `lg` it is now the first item of the right track, before
+           `chat-panel-toggle`. Below `lg` it still PAINTS where it always did
+           (after the badges, before the switcher) because the switcher and
+           the two toggles carry `order-1`; see the header comment for why,
+           and for the focus-order tradeoff that costs. Still ONE node:
+           never duplicate it per breakpoint. --%>
           <div class="flex flex-shrink-0 items-center gap-1" data-role="meeting-controls">
             <%!-- Agents-muted badge (task 019fbaac stage 3). State is
              VISIBLE, not merely settable.
@@ -1029,172 +1388,7 @@
               </button>
             <% end %>
           </div>
-        </div>
 
-        <%!-- CENTRE grid item at `lg:` (task 01a0cf5d stage 1, item 2 — see
-           the header's own comment above for the two rejected alternatives
-           and their measurements). Unwrapped, on purpose: below `lg` it is
-           a plain flex child in its original document position, exactly as
-           on `main`. At `lg:` and up it is simply the third top-level child
-           of the header's `grid-cols-[1fr_auto_1fr]`, which is what makes
-           it the `auto` column — no positioning classes of its own are
-           needed for the centring, because grid track placement does that
-           by construction. `min-w-0 shrink overflow-x-auto` below are
-           UNCHANGED from before this ticket at every width: below `lg`
-           they do the same job they always did (the control is a normal
-           flex child); at `lg:` `shrink` is inert (nothing squeezes an
-           `auto` grid track that already fits, per the header comment's
-           measurements) but costs nothing left in place. --%>
-        <%!-- Stage-mode segmented control (ADR 0042). Four hero-icon buttons;
-           clicking one pushes `set_stage_mode` with the target mode and
-           the LV swaps `@current_stage_mode`. The active button gets the
-           daisyui segmented-active treatment (`bg-base-200 text-primary`);
-           switching is pure presentation — the other modes' underlying
-           state is untouched.
-
-           The control scrolls on narrow viewports so it never overflows the
-           top bar — that was ALWAYS the claim here, and `flex-shrink-0` made
-           it false. A shrink-0 flex item cannot be squeezed, so
-           `overflow-x-auto` never engaged and the four buttons simply ran off
-           the right edge (measured at 390px: Gallery ending at 415.9,
-           Whiteboard at 456.9 — both outside the viewport and UNREACHABLE,
-           with no page scroll to recover them). `min-w-0 shrink` is what
-           makes the documented behaviour actually happen: the control gives
-           up width under pressure and its own scroller keeps every mode
-           reachable.
-
-           The same defect was found independently on `main` during the
-           stage-5 e2e review of task 019fbaac, with its own measurements;
-           that account is kept below verbatim because it names a second
-           casualty (the chat-panel drawer toggle) this one does not. NOTE
-           that the "only flexible region" claim it makes is no longer true
-           after this rollup: the meeting title and the identity badge are
-           shrinkable too (see the header comments above). The conclusion —
-           do not re-add `flex-shrink-0` — is unchanged and holds for both.
-
-           THIS WAS THE TOP BAR'S ONLY FLEXIBLE REGION, and that is
-           load-bearing. Until the stage-5 e2e review of task 019fbaac
-           the class list here was `join flex-shrink-0 overflow-x-auto`,
-           alongside a comment
-           claiming "the control wraps/scrolls on narrow viewports so it
-           never overflows the top bar". That claim was false and the
-           `overflow-x-auto` was inert: `flex-shrink-0` pinned the
-           control at its natural 165px, so `clientWidth == scrollWidth`
-           and there was nothing to scroll. The bar overflowed instead —
-           at 375px it measured scrollWidth 391 / clientWidth 375
-           unmuted, and 431 once the agents-muted badge appeared. Every
-           one of those overflow pixels landed on the LAST item in the
-           row, `chat-panel-toggle`, which went from 12 of its 28px
-           visible to −28. That control is the only affordance that
-           opens the drawer holding the mute toggle, so muting became a
-           one-way door on a phone: a fresh 375px load of an
-           already-muted meeting had no route back to unmuting.
-
-           Dropping `flex-shrink-0` (and stating `min-w-0`, which
-           `overflow-x-auto` already implies, so the intent survives a
-           future class edit) makes the control absorb the squeeze into
-           its own scroll port instead of exporting it to its siblings.
-           The four modes stay reachable by scrolling; every other
-           control in the bar — including the drawer toggle — stays
-           where it is. Nothing changes at widths where the bar fits,
-           because flex-shrink only engages on overflow.
-
-           Do NOT re-add `flex-shrink-0`, and do not solve a future
-           top-bar squeeze by hiding the drawer toggle or the mute
-           badge: per Marlowe's `persistent-controls-over-reveal` ruling
-           (task 019f340a) controls stay visible and get disabled at
-           boundaries rather than hidden, and a control that disappears
-           as a direct consequence of being used is the worst case that
-           ruling exists to forbid.
-
-           `scrollbar-width: none` matches the horizontal scroll strips
-           in tasks_live/chat_live: a classic 15px scrollbar inside this
-           48px (`h-12`) bar would eat the row it is scrolling. --%>
-        <div
-          class="join min-w-0 shrink overflow-x-auto rounded-field border border-edge bg-base-200 p-0.5"
-          style="scrollbar-width: none; -webkit-overflow-scrolling: touch;"
-          role="group"
-          aria-label="Stage mode"
-          data-stage-mode-control="active"
-        >
-          <%!-- ONE outline, not two (task 01a0cf5d stage 1, item 1). The
-             mock (`.modes` in Meeting_Desktop.html, attachment
-             01a0c6f1-3839-7001-86f2-c97d9b05c5b5) puts the border on the
-             GROUP container only — `.modes` carries
-             `border:1px solid var(--base-300)`, and `.modes button` itself
-             carries none. This markup used to stack a second `border-edge`
-             on every individual button on top of the container's, doubling
-             the outline exactly as the ticket described. `border-edge`
-             lives on the container div above; it is deliberately absent
-             from the per-button class list below.
-
-             Left untouched: the separate `:focus-visible` ring (app.css /
-             daisyUI) that outlines whichever button has keyboard focus.
-             That is a different rule for a different state and was never
-             part of this resting-state double border — removing it here
-             would delete an accessibility signal a screenshot of the
-             resting control cannot show was missing. --%>
-          <button
-            :for={mode <- @stage_modes}
-            type="button"
-            phx-click="set_stage_mode"
-            phx-value-mode={mode}
-            aria-label={
-              if(mode == :canvas and any_canvas_changed?(assigns),
-                do: stage_mode_label(mode) <> " (a canvas changed)",
-                else: stage_mode_label(mode)
-              )
-            }
-            aria-pressed={to_string(@current_stage_mode == mode)}
-            title={stage_mode_label(mode)}
-            data-stage-mode-button={mode}
-            data-active={to_string(@current_stage_mode == mode)}
-            class={[
-              "join-item btn btn-sm relative min-h-11 gap-1.5",
-              if(@current_stage_mode == mode,
-                do: "bg-base-200 text-primary",
-                else: "btn-ghost text-base-content/60"
-              )
-            ]}
-          >
-            <span class={[stage_mode_icon(mode), "size-4"]}></span>
-            <span class="hidden sm:inline">{stage_mode_label(mode)}</span>
-            <%!-- The same changed-signal, paired onto the mode control so
-               it survives leaving canvas mode: the picker is rendered
-               ONLY in canvas mode, so without this the signal would be
-               invisible from gallery / screen / whiteboard — which is
-               where someone watching the grid actually is.
-
-               ABSOLUTE, not an inline sibling. This control is a tight
-               `overflow-x-auto` row that already lost buttons off-screen
-               once at 375px; a dot that takes layout width would push it
-               again, and a control that reflows when a peer edits a
-               canvas is its own small yank. No animation here either.
-
-               The label carries the news too — `aria-label` on the
-               button suppresses inner text for assistive tech, so an
-               sr-only span in here would announce nothing. --%>
-            <span
-              :if={mode == :canvas and any_canvas_changed?(assigns)}
-              class="absolute right-1 top-1 size-1.5 rounded-full bg-secondary"
-              data-role="canvas-changed-indicator"
-              aria-hidden="true"
-            >
-            </span>
-          </button>
-        </div>
-
-        <%!-- RIGHT grid item at `lg:` (task 01a0cf5d stage 1, item 2 — see
-           the header's own comment for the two rejected alternatives).
-           `contents` below `lg` (these two buttons stay plain, unwrapped
-           flex children at the tail of the SAME single row the meeting name
-           opens, exactly as on `main`); `lg:flex ... lg:justify-end` at
-           `lg:` and up makes this box the grid's trailing `1fr` item, with
-           its content pushed flush to the bar's right edge inside it. --%>
-        <div
-          class="contents lg:flex lg:min-w-0 lg:items-center lg:justify-end lg:gap-3"
-          data-role="meeting-header-end"
-        >
           <%!-- Chat toggle. RE-POINTED, not deleted (task 01a084bf stage 3).
            It used to open `#meeting-chat-drawer`, which was
            `lg:!hidden` — so this control was `lg:hidden` too, on the
@@ -1222,7 +1416,7 @@
             aria-expanded={to_string(@active_meeting_tab == "chat" and not @chat_panel_collapsed)}
             aria-controls="meeting-call-rail-pane"
             title="Toggle chat panel"
-            class="btn btn-sm btn-ghost btn-square text-base-content/60"
+            class="btn btn-sm btn-ghost btn-square order-1 text-base-content/60 lg:order-none"
             data-role="chat-panel-toggle"
           >
             <span class="hero-chat-bubble-left-right size-5"></span>
@@ -1245,7 +1439,7 @@
             aria-expanded={to_string(@call_rail_open)}
             aria-controls="meeting-call-rail"
             title="Toggle call panel"
-            class="btn btn-sm btn-ghost btn-square text-base-content/60 lg:hidden"
+            class="btn btn-sm btn-ghost btn-square order-1 text-base-content/60 lg:hidden"
             data-role="call-rail-toggle"
           >
             <span class="hero-user-group size-5"></span>
