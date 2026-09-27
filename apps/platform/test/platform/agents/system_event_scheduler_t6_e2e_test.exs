@@ -696,7 +696,12 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
     # `experiment_*` tools in a NEW bundle that is not a default grant. Not a
     # T6 concern — it adds no schedule, no trigger and no historian surface
     # (+14 experiment_* -> 119)
-    @t6_baseline_tool_count 119
+    # bumped by task 01a0acb4 stage 2 — `validation_payload_amend`, added to
+    # the existing `plan` bundle beside `plan_reject`. Corrects ONE e2e case's
+    # text on an approved/executing plan with an append-only history. Not a
+    # T6 concern — it adds no schedule, no trigger and no historian surface
+    # (+validation_payload_amend -> 120)
+    @t6_baseline_tool_count 120
 
     defp t6_root, do: Mix.Project.project_file() |> Path.dirname()
 

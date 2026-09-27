@@ -999,6 +999,110 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
     end
   end
 
+  describe "select_review_template/3 payload_amendments (task 01a0acb4 stage 3)" do
+    # The assign is `inspect/1` output, not JSON: `encode_payload_json/1` is
+    # guarded `is_map/1` and the rendered entries are a list. These tests pin
+    # that rendering as it is, so the unamended case stays byte-identical.
+    defp rendered_entries(json) do
+      {entries, _} = json |> Code.string_to_quoted!() |> Code.eval_quoted()
+      entries
+    end
+
+    @amendment %{
+      "prior_payload" => %{"setup" => "old-setup", "actions" => "old", "expected" => "old"},
+      "amended_by" => "amender-slug",
+      "actor_type" => "agent",
+      "reason" => "the case sent a header the pipeline refuses",
+      "amended_at" => "2026-09-27T10:00:00Z",
+      "last_ruling" => nil
+    }
+
+    test "an amended case's entry carries payload_amendments" do
+      pending = [
+        %Platform.Tasks.Validation{
+          id: "val-amended",
+          kind: "e2e_behavior",
+          status: "pending",
+          evaluation_payload: %{"setup" => "new-setup"},
+          payload_amendments: [@amendment]
+        }
+      ]
+
+      assert {"dispatch.review_e2e", assigns} =
+               HeartbeatScheduler.select_review_template(pending, %{
+                 id: "task-am",
+                 execution_space_id: "exec-am"
+               })
+
+      assert [entry] = rendered_entries(assigns.pending_e2e_validations_json)
+      assert entry["payload_amendments"] == [@amendment]
+      assert entry["validation_id"] == "val-amended"
+    end
+
+    test "an unamended case's entry has exactly validation_id and evaluation_payload" do
+      pending = [
+        %Platform.Tasks.Validation{
+          id: "val-unamended",
+          kind: "e2e_behavior",
+          status: "pending",
+          evaluation_payload: %{"setup" => "s-u"}
+        },
+        %{
+          id: "val-map-empty",
+          kind: "e2e_behavior",
+          status: "pending",
+          evaluation_payload: %{"setup" => "s-m"},
+          payload_amendments: []
+        }
+      ]
+
+      assert {"dispatch.review_e2e", assigns} =
+               HeartbeatScheduler.select_review_template(pending, %{
+                 id: "task-un",
+                 execution_space_id: "exec-un"
+               })
+
+      # Literal pin of the pre-change rendering.
+      assert assigns.pending_e2e_validations_json ==
+               ~s([%{"evaluation_payload" => %{"setup" => "s-u"}, "validation_id" => "val-unamended"}, ) <>
+                 ~s(%{"evaluation_payload" => %{"setup" => "s-m"}, "validation_id" => "val-map-empty"}])
+
+      for entry <- rendered_entries(assigns.pending_e2e_validations_json) do
+        assert Map.keys(entry) |> Enum.sort() == ["evaluation_payload", "validation_id"]
+      end
+    end
+
+    test "in a mixed dispatch only the amended entry carries the key" do
+      pending = [
+        %Platform.Tasks.Validation{
+          id: "val-a",
+          kind: "e2e_behavior",
+          status: "pending",
+          evaluation_payload: %{"setup" => "a"},
+          payload_amendments: [@amendment]
+        },
+        %Platform.Tasks.Validation{
+          id: "val-b",
+          kind: "e2e_behavior",
+          status: "pending",
+          evaluation_payload: %{"setup" => "b"}
+        }
+      ]
+
+      assert {"dispatch.review_e2e", assigns} =
+               HeartbeatScheduler.select_review_template(pending, %{
+                 id: "task-mixed",
+                 execution_space_id: "exec-mixed"
+               })
+
+      assert [a, b] = rendered_entries(assigns.pending_e2e_validations_json)
+      assert a["validation_id"] == "val-a"
+      assert Map.has_key?(a, "payload_amendments")
+      assert b["validation_id"] == "val-b"
+      assert Map.keys(b) |> Enum.sort() == ["evaluation_payload", "validation_id"]
+    end
+  end
+
   describe "nudge_prompt/2 (task 019f640d stage 4 — short-form nudge)" do
     # Payload discipline: the nudge is the router's SAFETY-NET / NO-ACK re-poke
     # and must NOT carry the fat first-dispatch context (skills_reference,

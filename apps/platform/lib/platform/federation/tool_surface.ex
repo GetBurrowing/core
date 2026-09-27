@@ -3003,6 +3003,44 @@ defmodule Platform.Federation.ToolSurface do
         when_to_use:
           "When your own draft plan is wrong or obsolete and you want to replace it with a fresh plan_create on the same task"
       },
+      # Task 01a0acb4 stage 2. The correction path for ONE defective gate case
+      # on a plan that is already approved or executing, where plan_update
+      # (draft only) cannot reach and a re-plan would throw away every passed
+      # stage. The writer is `Tasks.amend_validation_payload/4`; this entry
+      # only exposes it. There is deliberately NO actor parameter: the
+      # amendment is attributed to the authenticated caller, because a
+      # self-reported `amended_by` would be forgeable and attribution is the
+      # point of the history.
+      %{
+        name: "validation_payload_amend",
+        description:
+          "Correct ONE e2e_behavior validation's evaluation_payload (setup/actions/expected) on an approved or executing plan without re-planning; the prior payload is kept in an append-only payload_amendments history with who, when and why.",
+        parameters: %{
+          validation_id: %{
+            type: "string",
+            required: true,
+            description: "The e2e_behavior validation whose case text is being corrected"
+          },
+          evaluation_payload: %{
+            type: "object",
+            required: true,
+            description:
+              "The full replacement case: an object with non-blank `setup`, `actions` and `expected` strings. It replaces the current payload wholesale; the current one is kept in payload_amendments."
+          },
+          reason: %{
+            type: "string",
+            required: true,
+            description:
+              "Non-blank: what was wrong with the CASE (not with the code under test). Persisted in the amendment history and the audit log."
+          }
+        },
+        returns:
+          "The amended validation (same shape as stage_list's full-detail rows) with `payload_amendments` — each entry carrying prior_payload, amended_at, amended_by, actor_type, reason and last_ruling — plus `status_changed: false`.",
+        limitations:
+          "e2e_behavior validations only (test_pass, pr_merged and every other kind are refused). The plan must be approved or executing; a draft plan is corrected with plan_update instead. Only a PENDING validation is amended: a passed one is refused (its verdict was measured against the text in force and is not re-opened), a failed one is refused until the remediation stage re-pends it, and a running one is refused because an evaluation is in flight against the old text. The tool never changes a validation's status. The amender is always the authenticated caller; it cannot be supplied as an argument.",
+        when_to_use:
+          "When a gate case itself is defective — e.g. its actions send a header the pipeline refuses, or a threshold was copied from another run — and the plan is past draft. NOT to loosen a case the code fails honestly."
+      },
       %{
         name: "plan_architecture_verdict",
         description:
@@ -6440,6 +6478,38 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
+  # ── Task 01a0acb4 stage 2 — correct ONE gate case past draft ─────────────
+  #
+  # The body lives in `Tasks.amend_validation_payload/4` (ADR-0050: handler
+  # logic in the context, not inline here); this clause only checks the
+  # arguments, authorizes, and names the path to take INSTEAD for each
+  # refusal. The amender is `context_caller_identity/1` ALONE — an
+  # `amended_by` key in `args` is never read, because a self-reported actor
+  # would make the history's attribution forgeable. Authorization is the same
+  # `authorize_review_access/2` plan_get uses, resolved from the validation's
+  # own stage -> plan -> task, and it runs before the writer is called.
+  def execute("validation_payload_amend", args, context) do
+    with {:ok, validation_id} <-
+           require_non_blank_string(args, "validation_id", "validation_payload_amend"),
+         {:ok, reason} <- require_non_blank_string(args, "reason", "validation_payload_amend"),
+         {:ok, payload} <- require_amend_payload(args),
+         {:ok, target, plan} <- amend_target(validation_id),
+         :ok <- authorize_review_access(context, plan.task_id) do
+      case Tasks.amend_validation_payload(
+             validation_id,
+             payload,
+             reason,
+             context_caller_identity(context)
+           ) do
+        {:ok, validation} ->
+          {:ok, validation |> serialize_validation() |> Map.put(:status_changed, false)}
+
+        {:error, refusal} ->
+          {:error, payload_amend_error(refusal, target, plan)}
+      end
+    end
+  end
+
   # ── ADR-0046 member 5 stage 4: the architect's verdict surface ────────
   #
   # ONE of the two ways a verdict gets in (the other is
@@ -7672,6 +7742,169 @@ defmodule Platform.Federation.ToolSurface do
 
   defp plan_update_suggestion(_status),
     do: "the plan is immutable to this tool"
+
+  # ── validation_payload_amend helpers (task 01a0acb4 stage 2) ────────────
+
+  defp require_amend_payload(args) do
+    case Map.get(args, "evaluation_payload") do
+      payload when is_map(payload) ->
+        {:ok, payload}
+
+      _ ->
+        {:error,
+         %{
+           error:
+             "validation_payload_amend: `evaluation_payload` is required and must be an object",
+           recoverable: true,
+           suggestion:
+             "Pass the full replacement case as an object with non-blank `setup`, `actions` and `expected` strings."
+         }}
+    end
+  end
+
+  # Resolves the validation's plan (and so its task) for authorization. A
+  # missing or malformed id is the not-found envelope, never a raise and
+  # never a write.
+  defp amend_target(validation_id) do
+    case get_by_uuid(Validation, validation_id) do
+      nil ->
+        {:error, payload_amend_not_found(validation_id)}
+
+      validation ->
+        validation = Repo.preload(validation, stage: :plan)
+        {:ok, validation, validation.stage.plan}
+    end
+  end
+
+  defp payload_amend_not_found(validation_id) do
+    %{
+      error: "validation_payload_amend: validation not found: #{validation_id}",
+      recoverable: false,
+      suggestion:
+        "Use plan_get (or stage_list with detail \"full\") on the task to find the e2e_behavior validation's id."
+    }
+  end
+
+  # Every refusal names the path to take INSTEAD (the plan_update_suggestion/1
+  # discipline). The atoms are `Tasks.amend_validation_payload/4`'s.
+  defp payload_amend_error(:not_found, target, _plan), do: payload_amend_not_found(target.id)
+
+  defp payload_amend_error(:not_e2e_behavior, target, _plan) do
+    %{
+      error:
+        "validation_payload_amend: validation #{target.id} is a #{target.kind} validation, not e2e_behavior",
+      recoverable: false,
+      suggestion:
+        "Only e2e_behavior case text is amendable. A #{target.kind} gate carries no case to correct; deploy gates such as pr_merged route by their payload and are never rewritten by this tool."
+    }
+  end
+
+  defp payload_amend_error(:plan_not_amendable, _target, %Plan{status: "draft"}) do
+    %{
+      error: "validation_payload_amend: the plan is still a draft",
+      recoverable: false,
+      suggestion:
+        "use plan_update to correct a draft plan's stages and evaluation_payloads in place, then plan_submit"
+    }
+  end
+
+  defp payload_amend_error(:plan_not_amendable, _target, %Plan{status: status}) do
+    %{
+      error:
+        "validation_payload_amend: the plan is #{status}; only an approved or executing plan's cases are amendable",
+      recoverable: false,
+      suggestion: payload_amend_plan_suggestion(status)
+    }
+  end
+
+  defp payload_amend_error({:validation_not_pending, "failed"}, target, _plan) do
+    %{
+      error: "validation_payload_amend: validation #{target.id} is failed, not pending",
+      recoverable: true,
+      suggestion:
+        "wait for the remediation stage to re-pend the case, then amend it; resetting a failed case here would race that handoff"
+    }
+  end
+
+  defp payload_amend_error({:validation_not_pending, "passed"}, target, _plan) do
+    %{
+      error: "validation_payload_amend: validation #{target.id} is passed, not pending",
+      recoverable: false,
+      suggestion:
+        "a passed verdict is not re-opened by this tool: it was measured against the text in force, and editing that text would detach the verdict from what it measured"
+    }
+  end
+
+  defp payload_amend_error({:validation_not_pending, "running"}, target, _plan) do
+    %{
+      error: "validation_payload_amend: validation #{target.id} is running, not pending",
+      recoverable: true,
+      suggestion:
+        "an evaluation is in flight against the current text; wait for its verdict (a failure is re-pended by remediation, after which the case can be amended)"
+    }
+  end
+
+  defp payload_amend_error({:validation_not_pending, status}, target, _plan) do
+    %{
+      error: "validation_payload_amend: validation #{target.id} is #{status}, not pending",
+      recoverable: false,
+      suggestion:
+        "only a pending case is amendable; a #{status} verdict is not re-opened by this tool"
+    }
+  end
+
+  defp payload_amend_error(:reason_required, _target, _plan),
+    do: non_blank_string_error("validation_payload_amend", "reason")
+
+  defp payload_amend_error(:unchanged, target, _plan) do
+    %{
+      error:
+        "validation_payload_amend: the new evaluation_payload equals validation #{target.id}'s current one",
+      recoverable: true,
+      suggestion:
+        "Nothing was written. Pass the corrected case; an unchanged payload would add an empty history entry."
+    }
+  end
+
+  defp payload_amend_error(:invalid_payload, _target, _plan), do: require_amend_payload_error()
+
+  defp payload_amend_error(:project_archived, _target, _plan) do
+    %{
+      error: "validation_payload_amend: the task's project is archived",
+      recoverable: false,
+      suggestion: "An archived project's plans are read-only; restore the project first."
+    }
+  end
+
+  defp payload_amend_error(%Ecto.Changeset{} = changeset, _target, _plan) do
+    %{
+      error: "validation_payload_amend: invalid evaluation_payload: #{inspect_errors(changeset)}",
+      recoverable: true,
+      suggestion:
+        "The amended case must still carry non-blank `setup`, `actions` and `expected` strings. Nothing was written."
+    }
+  end
+
+  defp payload_amend_error(other, _target, _plan) do
+    %{
+      error: "validation_payload_amend: failed: #{inspect(other)}",
+      recoverable: true,
+      suggestion: "Check the validation and retry."
+    }
+  end
+
+  defp require_amend_payload_error do
+    {:error, envelope} = require_amend_payload(%{})
+    envelope
+  end
+
+  defp payload_amend_plan_suggestion("pending_review"),
+    do:
+      "the plan is awaiting review; wait for approval (the draft-time fix was plan_update), then amend"
+
+  defp payload_amend_plan_suggestion(status),
+    do:
+      "a #{status} plan is history and its cases are not amended; correct the case on the task's current plan (plan_get) instead"
 
   # `stages` is REQUIRED and must be a non-empty list: the parameter contract
   # mirrors plan_create's (same shape), but an EMPTY array is refused here —
@@ -13728,11 +13961,13 @@ defmodule Platform.Federation.ToolSurface do
   defp serialize_validation_row(validation, false) do
     row = serialize_validation(validation)
 
-    Enum.reduce([:evidence, :evaluation_payload], row, fn key, acc ->
+    # Task 01a0acb4 stage 2: `payload_amendments` is a LIST, emptied to `[]`
+    # (not `%{}`) when omitted, so its type is stable across detail levels.
+    Enum.reduce([:evidence, :evaluation_payload, :payload_amendments], row, fn key, acc ->
       case Map.get(acc, key) do
-        blob when is_map(blob) and map_size(blob) > 0 ->
+        blob when (is_map(blob) and map_size(blob) > 0) or (is_list(blob) and blob != []) ->
           acc
-          |> Map.put(key, %{})
+          |> Map.put(key, if(is_list(blob), do: [], else: %{}))
           |> Map.put(:"#{key}_omitted", true)
           |> Map.put(:"#{key}_length", byte_size(Jason.encode!(blob)))
 
@@ -13912,6 +14147,10 @@ defmodule Platform.Federation.ToolSurface do
       status: validation.status,
       evidence: validation.evidence,
       evaluation_payload: Map.get(validation, :evaluation_payload),
+      # Task 01a0acb4 stage 2: the append-only amendment history, `[]` for a
+      # case that was never amended. Map.get, like evaluation_payload, for
+      # callers that pass a bare map rather than the schema struct.
+      payload_amendments: Map.get(validation, :payload_amendments) || [],
       evaluated_by: validation.evaluated_by,
       evaluated_at: format_datetime(validation.evaluated_at),
       inserted_at: format_datetime(validation.inserted_at),

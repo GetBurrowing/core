@@ -1526,6 +1526,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
             Map.get(validation, :evaluation_payload) ||
               Map.get(validation, "evaluation_payload") || %{}
         }
+        |> put_payload_amendments(validation)
       end)
 
     %{
@@ -1537,6 +1538,24 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
       # truncated prefix that may name a sibling's tree.
       task_slug: member_slug(task || %{})
     }
+  end
+
+  # Task 01a0acb4 stage 3. A case amended after authoring carries its
+  # append-only history to the gate agent, so the reviewer can tell the text in
+  # force from the text the planner wrote. The key is added ONLY for a
+  # non-empty list: an unamended entry keeps exactly `validation_id` and
+  # `evaluation_payload`, so its rendering is byte-identical to before. The
+  # `dispatch.review_e2e` template text is untouched (seeded rows make template
+  # edits a runtime no-op); the key travels inside the rendered entries.
+  #
+  # Note: `encode_payload_json/1` is guarded `is_map/1` and `rendered` is a
+  # list, so this assign is `inspect/1` output, not JSON (since #277). Left as
+  # is here to keep unamended dispatches byte-identical.
+  defp put_payload_amendments(entry, validation) do
+    case Map.get(validation, :payload_amendments) || Map.get(validation, "payload_amendments") do
+      [_ | _] = amendments -> Map.put(entry, "payload_amendments", amendments)
+      _ -> entry
+    end
   end
 
   # `execution_space_id` is a REQUIRED assign for `dispatch.review_e2e` — it is

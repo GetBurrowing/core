@@ -109,6 +109,17 @@ defmodule Platform.Audit.TelemetryHandler do
     # assert the row immediately after the tool call. Registration here is
     # load-bearing: an emit with no matching @events entry fails SILENTLY.
     [:platform, :tasks, :plan_updated],
+    # Task 01a0acb4 stage 1 — the in-place correction of ONE e2e_behavior
+    # validation's evaluation_payload on an approved/executing plan. Emitted
+    # by `Platform.Tasks.amend_validation_payload/4` after its transaction
+    # commits. Metadata carries validation_id, stage_id, plan_id, task_id,
+    # amended_by, reason and prior_payload, plus resource_type "validation" /
+    # resource_id / action / actor_type for the Audit.Event columns.
+    # `amended_by` stays in metadata (not actor_id) because an agent caller
+    # is identified by slug and actor_id is a UUID column. Sync (default
+    # handle_event clause) so the row exists when the call returns. An
+    # unregistered emit fails SILENTLY.
+    [:platform, :tasks, :validation_payload_amended],
     # Task 019e95ea — channel lifecycle. Emitted by `Platform.Chat.archive_space/1,2`
     # and `unarchive_space/2`; metadata carries actor_id (nil for system
     # callers), resource_type: "chat_space", space kind + name.

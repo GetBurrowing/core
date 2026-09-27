@@ -159,7 +159,10 @@ defmodule Platform.Federation.ToolSurfaceTest do
       # 119 as of task 01a0d415 stage 2, which added the `experiments` bundle:
       # 14 genuinely new `experiment_*` tools, in a new bundle that is NOT a
       # default grant (`tool_surface_experiments_test.exs` pins that).
-      assert length(tools) == 119
+      # 120 as of task 01a0acb4 stage 2, which added `validation_payload_amend`
+      # to the `plan` bundle: the correction path for ONE defective e2e case
+      # on an approved/executing plan. A genuinely new tool, no new bundle.
+      assert length(tools) == 120
 
       tool_names = Enum.map(tools, & &1.name)
       assert "task_close_as_delivered" in tool_names
@@ -427,7 +430,9 @@ defmodule Platform.Federation.ToolSurfaceTest do
     # report_blocker, prompt templates) because a plan's stages and
     # validations ARE the plan surface. Deliberate, not incidental: a tool
     # here is an agent-facing commitment.
-    test "plan bundle is exactly the previous set plus plan_reject and plan_update" do
+    # Task 01a0acb4 stage 2 added `validation_payload_amend`, the past-draft
+    # counterpart to plan_update for ONE e2e case's text.
+    test "plan bundle is exactly the previous set plus plan_reject, plan_update and validation_payload_amend" do
       tools = ToolSurface.list_tools(["plan"])
       names = tools |> Enum.map(& &1.name) |> Enum.sort()
 
@@ -449,7 +454,8 @@ defmodule Platform.Federation.ToolSurfaceTest do
                  "stage_start",
                  "validation_evaluate",
                  "validation_list",
-                 "validation_pass"
+                 "validation_pass",
+                 "validation_payload_amend"
                ])
 
       assert Enum.all?(tools, &(&1.bundle == "plan"))

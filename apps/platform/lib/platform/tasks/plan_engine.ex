@@ -468,9 +468,12 @@ defmodule Platform.Tasks.PlanEngine do
       failed
       |> Enum.with_index(1)
       |> Enum.map(fn {v, i} ->
+        amendments = amendments_of(v)
+
         "## Finding #{i} (e2e_behavior #{v.id})\n\n" <>
-          "### The case (planner-authored evaluation_payload, verbatim)\n\n" <>
+          case_heading(amendments) <>
           render_payload(v.evaluation_payload) <>
+          render_amendments(amendments) <>
           "\n\n### The gate agent's ruling (evidence)\n\n" <>
           "```json\n" <> encode_evidence(v.evidence) <> "\n```"
       end)
@@ -483,6 +486,40 @@ defmodule Platform.Tasks.PlanEngine do
     ]
     |> Enum.reject(&(is_nil(&1) or &1 == ""))
     |> Enum.join("\n\n")
+  end
+
+  # Task 01a0acb4 stage 3. A case corrected through `validation_payload_amend`
+  # after authoring must not read as planner-authored: the heading says the text
+  # is the AMENDED one, and the append-only `payload_amendments` history follows
+  # it, so the remediation executor sees what the case said before and who
+  # changed it, and why. The history is JSON-encoded for the same reason as the
+  # payload: an amendment `reason` is free text and can carry a `## Round N`
+  # line or a ``` run. An UNAMENDED row takes neither branch and renders
+  # byte-identical to the renderer before this change.
+  defp amendments_of(%{payload_amendments: [_ | _] = amendments}), do: amendments
+  defp amendments_of(_), do: []
+
+  defp case_heading([]),
+    do: "### The case (planner-authored evaluation_payload, verbatim)\n\n"
+
+  defp case_heading(_amendments),
+    do: "### The case (evaluation_payload as amended, verbatim)\n\n"
+
+  defp render_amendments([]), do: ""
+
+  defp render_amendments(amendments) do
+    n = length(amendments)
+    noun = if n == 1, do: "amendment", else: "amendments"
+
+    "\n\n### This case was amended after authoring (#{n} #{noun})\n\n" <>
+      "```json\n" <> encode_amendments(amendments) <> "\n```"
+  end
+
+  defp encode_amendments(amendments) do
+    case Jason.encode(amendments, pretty: true) do
+      {:ok, json} -> json
+      {:error, _} -> inspect(amendments)
+    end
   end
 
   @payload_key_order ~w(setup actions expected)

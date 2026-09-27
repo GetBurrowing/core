@@ -169,7 +169,16 @@ defmodule Platform.Federation.ToolArgumentsTest do
   # read under its declared key only, in `Platform.Experiments.Tools`, with
   # no alias and no context fallback, and an absent or blank value is the
   # `missing_<param>` refusal envelope before any read or write.
-  @surveyed_required_count 169
+  # 172 with `validation_payload_amend`'s `validation_id` + `evaluation_payload`
+  # + `reason` (task 01a0acb4 stage 2). All three HONEST: each is read under
+  # its declared key only, with no alias and no context fallback.
+  # `validation_id` and `reason` open with `require_non_blank_string/3`
+  # (absent, non-binary or blank is a recoverable parameter error before any
+  # lookup); `evaluation_payload` is refused unless it is a map by
+  # `require_amend_payload/1`, also before any lookup. None is tolerated
+  # absent, and `reason` may not be: the reason is what the amendment history
+  # records as WHY a gate case changed after authoring.
+  @surveyed_required_count 172
 
   defp read_source(relative) do
     # Resolved from __DIR__ (apps/platform/test/platform/federation) rather

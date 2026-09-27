@@ -35,6 +35,8 @@ defmodule Platform.Federation.PlayToolsTest do
   alias Platform.Tasks.CanvasAttachments
 
   # main's catalogue at 23ff27a0, in order (119 tools). Measured, not derived.
+  # 120 with `validation_payload_amend` after `plan_reject` (task 01a0acb4
+  # stage 2).
   @main_tool_names ~w(
     canvas.create canvas.patch canvas.describe canvas.list_kinds canvas.template canvas.versions
     canvas.restore send_media react project_list org_list_descendants project_update epic_list
@@ -44,7 +46,7 @@ defmodule Platform.Federation.PlayToolsTest do
     task_detach_canvas task_list_canvases stack_create stack_update stack_get stack_list
     stack_add stack_add_dependency stack_remove_dependency stack_eject stack_abandon
     stack_complete stack_start stack_retry_member_merge stack_start_planning stack_assign_agents
-    plan_create plan_update plan_get plan_submit plan_approve plan_reject
+    plan_create plan_update plan_get plan_submit plan_approve plan_reject validation_payload_amend
     plan_architecture_verdict stage_architecture_audit stage_start stage_list validation_evaluate
     validation_pass stage_complete report_blocker validation_list prompt_template_list
     prompt_template_update review_request_create review_request_get review_item_list
@@ -109,8 +111,8 @@ defmodule Platform.Federation.PlayToolsTest do
   defp catalogue_names, do: Enum.map(ToolSurface.tool_definitions(), & &1.name)
 
   describe "GUARD: with GAME_STREAM_ENABLED unset the tool list is main's" do
-    test "tool_definitions/0 names equal main's 119, in order" do
-      assert length(@main_tool_names) == 119
+    test "tool_definitions/0 names equal main's 120, in order" do
+      assert length(@main_tool_names) == 120
       assert catalogue_names() == @main_tool_names
     end
 

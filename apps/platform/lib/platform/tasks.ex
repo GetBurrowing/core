@@ -5947,6 +5947,173 @@ defmodule Platform.Tasks do
     end
   end
 
+  # Plan statuses under which a live e2e case may be corrected in place. A
+  # draft is `plan_update`'s job; completed / rejected / superseded plans are
+  # history and are not rewritten.
+  @amendable_plan_statuses ~w(approved executing)
+
+  @doc """
+  Correct ONE `e2e_behavior` validation's `evaluation_payload` on an approved
+  or executing plan without re-planning (task 01a0acb4 stage 1).
+
+  `actor` is `{actor_id, actor_type}`. The prior payload is appended to the
+  row's `payload_amendments` history (never replaced) with who, when and why,
+  plus `last_ruling`: the LAST element of `evidence["prior_rulings"]` at
+  amend time, kept because the next verdict replaces `evidence` wholesale and
+  would otherwise erase the failure that motivated the edit.
+
+  Only a `pending` row is amended and `status` is never changed:
+
+    * `passed` / `skipped` — the verdict was measured against the text in
+      force; editing the text under it detaches the verdict from what it
+      measured, and re-pending it would make this a gate-reopen tool.
+    * `failed` — a failed e2e row fails its running stage at once and the
+      router then opens a remediation stage (which re-pends the row) or
+      supersedes the plan. Amend after the re-pend; resetting it here would
+      race that handoff.
+    * `running` — an evaluation is in flight against the old text.
+
+  Refusals, checked in this order after the row is locked:
+  `{:error, :not_found}` (malformed or unknown id), the project write-freeze
+  error, `:not_e2e_behavior`, `:plan_not_amendable`,
+  `{:validation_not_pending, status}`, `:reason_required`, `:unchanged`
+  (the string-keyed new payload equals the current one), then a changeset
+  error when the new payload lacks non-blank setup/actions/expected.
+
+  Writes ONLY the target validation row. After commit emits
+  `[:platform, :tasks, :validation_payload_amended]` (audited) and
+  broadcasts `{:plan_updated, plan}`.
+  """
+  @spec amend_validation_payload(term(), term(), term(), {term(), String.t()}) ::
+          {:ok, Validation.t()}
+          | {:error,
+             :not_found
+             | :invalid_payload
+             | :not_e2e_behavior
+             | :plan_not_amendable
+             | {:validation_not_pending, String.t()}
+             | :reason_required
+             | :unchanged
+             | Ecto.Changeset.t()
+             | term()}
+  def amend_validation_payload(validation_id, new_payload, reason, {actor_id, actor_type}) do
+    Repo.transaction(fn ->
+      Platform.UUID.valid?(validation_id) || Repo.rollback(:not_found)
+
+      validation =
+        Validation |> lock("FOR UPDATE") |> Repo.get(validation_id) ||
+          Repo.rollback(:not_found)
+
+      validation = Repo.preload(validation, stage: :plan)
+      plan = validation.stage.plan
+
+      with :ok <- Lifecycle.ensure_task_project_writable(plan.task_id),
+           :ok <- amendable_kind(validation),
+           :ok <- amendable_plan(plan),
+           :ok <- amendable_status(validation),
+           {:ok, reason} <- amendment_reason(reason),
+           {:ok, payload} <- amendment_payload(validation, new_payload) do
+        entry = %{
+          "prior_payload" => validation.evaluation_payload,
+          "amended_at" => DateTime.utc_now() |> DateTime.to_iso8601(),
+          "amended_by" => actor_id,
+          "actor_type" => actor_type,
+          "reason" => reason,
+          "last_ruling" => last_ruling(validation)
+        }
+
+        case validation
+             |> Validation.payload_amendment_changeset(payload, entry)
+             |> Repo.update() do
+          {:ok, updated} -> {updated, plan, entry}
+          {:error, changeset} -> Repo.rollback(changeset)
+        end
+      else
+        {:error, refusal} -> Repo.rollback(refusal)
+      end
+    end)
+    |> case do
+      {:ok, {updated, plan, entry}} ->
+        emit_validation_payload_amended(updated, plan, entry)
+        broadcast_board({:plan_updated, plan})
+        {:ok, updated}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp amendable_kind(%Validation{kind: "e2e_behavior"}), do: :ok
+  defp amendable_kind(%Validation{}), do: {:error, :not_e2e_behavior}
+
+  defp amendable_plan(%Plan{status: status}) when status in @amendable_plan_statuses, do: :ok
+  defp amendable_plan(%Plan{}), do: {:error, :plan_not_amendable}
+
+  defp amendable_status(%Validation{status: "pending"}), do: :ok
+
+  defp amendable_status(%Validation{status: status}),
+    do: {:error, {:validation_not_pending, status}}
+
+  defp amendment_reason(reason) when is_binary(reason) do
+    case String.trim(reason) do
+      "" -> {:error, :reason_required}
+      trimmed -> {:ok, trimmed}
+    end
+  end
+
+  defp amendment_reason(_reason), do: {:error, :reason_required}
+
+  defp amendment_payload(%Validation{evaluation_payload: current}, new_payload)
+       when is_map(new_payload) do
+    payload = stringify_payload_keys(new_payload)
+
+    if payload == stringify_payload_keys(current || %{}),
+      do: {:error, :unchanged},
+      else: {:ok, payload}
+  end
+
+  defp amendment_payload(_validation, _new_payload), do: {:error, :invalid_payload}
+
+  # JSONB round-trips string keys; comparing and storing string-keyed maps is
+  # what makes `:unchanged` true for an atom-keyed copy of the current text.
+  defp stringify_payload_keys(%{} = map) when not is_struct(map) do
+    Map.new(map, fn {k, v} -> {to_string(k), stringify_payload_keys(v)} end)
+  end
+
+  defp stringify_payload_keys(list) when is_list(list),
+    do: Enum.map(list, &stringify_payload_keys/1)
+
+  defp stringify_payload_keys(value), do: value
+
+  defp last_ruling(%Validation{evidence: %{"prior_rulings" => [_ | _] = rulings}}),
+    do: List.last(rulings)
+
+  defp last_ruling(%Validation{}), do: nil
+
+  # Registered in `Platform.Audit.TelemetryHandler` `@events`; an emit with
+  # no registration fails SILENTLY. `amended_by` travels in metadata, not as
+  # the audit row's `actor_id`, because that column is a UUID and an agent
+  # caller is identified by slug.
+  defp emit_validation_payload_amended(%Validation{} = validation, %Plan{} = plan, entry) do
+    :telemetry.execute(
+      [:platform, :tasks, :validation_payload_amended],
+      %{count: 1},
+      %{
+        validation_id: validation.id,
+        stage_id: validation.stage_id,
+        plan_id: plan.id,
+        task_id: plan.task_id,
+        amended_by: entry["amended_by"],
+        reason: entry["reason"],
+        prior_payload: entry["prior_payload"],
+        resource_type: "validation",
+        resource_id: validation.id,
+        action: "validation_payload_amended",
+        actor_type: entry["actor_type"]
+      }
+    )
+  end
+
   # ── Kanban board queries ─────────────────────────────────────────────────
 
   # Kanban `@board_topic` event shapes (subscribe with `subscribe_board/0`,

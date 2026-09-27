@@ -27,6 +27,14 @@ defmodule Platform.Tasks.Validation do
     field(:evaluated_by, :string)
     field(:evaluated_at, :utc_datetime_usec)
 
+    # Task 01a0acb4 stage 1. Append-only history of in-place corrections to
+    # `evaluation_payload` on an approved/executing plan. Written ONLY by
+    # `payload_amendment_changeset/3`; it is deliberately absent from
+    # `changeset/2`'s cast list, which is what keeps plan_create, plan_update
+    # and validation_evaluate from writing (or forging) it. Not stored in
+    # `evidence` because an e2e verdict replaces `evidence` wholesale.
+    field(:payload_amendments, {:array, :map}, default: [])
+
     timestamps(type: :utc_datetime_usec)
   end
 
@@ -52,6 +60,24 @@ defmodule Platform.Tasks.Validation do
     |> validate_inclusion(:status, @statuses)
     |> validate_e2e_behavior_payload()
     |> foreign_key_constraint(:stage_id)
+  end
+
+  @doc """
+  The ONLY writer of `payload_amendments` (task 01a0acb4 stage 1).
+
+  Replaces `evaluation_payload` with `new_payload` and appends `entry` to
+  the existing `payload_amendments` list (never replaces it). The amended
+  payload goes through the same e2e_behavior payload check as authoring, so
+  it must still carry non-blank `setup`, `actions` and `expected`.
+  `status`, `evidence` and the evaluation fields are not touched.
+  """
+  def payload_amendment_changeset(%__MODULE__{} = validation, new_payload, entry)
+      when is_map(entry) do
+    existing = validation.payload_amendments || []
+
+    validation
+    |> change(%{evaluation_payload: new_payload, payload_amendments: existing ++ [entry]})
+    |> validate_e2e_behavior_payload()
   end
 
   # When kind is "e2e_behavior", evaluation_payload must be a non-empty map
