@@ -1953,7 +1953,7 @@ defmodule Platform.Federation.ToolSurface do
         returns:
           "%{task_id, status: \"done\", updated_at, previous_updated_at} \u2014 `previous_updated_at` is the `updated_at` the row held BEFORE this call, so a caller that passed no base can still see which revision it completed over. The status transition is RECORDED AGAINST THE CALLING AGENT: the resulting `task_phase_transitions` row carries `via: \"mcp_task_complete\"` and, when the call context carries an `agent_id`, `actor_kind: \"agent\"` with `actor_id` set to that id and `actor_label: \"agent\"`. The via is deliberately distinct from task_update's `\"mcp_task_update\"` so an agent ruling its own gate delivered is distinguishable from the same agent editing status.",
         limitations:
-          "`base_updated_at` GUARDS THE STATUS WRITE, WHICH IS THE ONLY WRITE THIS TOOL MAKES \u2014 so when it is supplied and the row has advanced, nothing at all happens: the status stays as it was and no `task_phase_transitions` row is written. (This is a stronger guarantee than task_update's base, which covers that tool's plain-field statement only.) An unparseable base is rejected before any write. Without it this tool is last-write-wins, unchanged. Task must exist and allow transition to done status. Attribution scope: this stamps the status write that this tool makes, and nothing else — it does not resolve, evaluate or hide any validation, so a `done` task can sit beside a still-`pending` gate. When the call context carries NO `agent_id`, the actor falls back to the bare `:agent` atom, which `TransitionActor.normalize/1` does not match and therefore records as `actor_kind: \"unknown\"`, `actor_id: nil`, `actor_label: nil` — `via` is still `\"mcp_task_complete\"`, so the row reads as \"known code path, caller not identifiable\" rather than \"not captured\".",
+          "`base_updated_at` GUARDS THE STATUS WRITE, WHICH IS THE ONLY WRITE THIS TOOL MAKES \u2014 so when it is supplied and the row has advanced, nothing at all happens: the status stays as it was and no `task_phase_transitions` row is written. An unparseable base is rejected before any write. Without it this tool is last-write-wins, unchanged. Task must exist and allow transition to done status. Attribution scope: this stamps the status write that this tool makes, and nothing else — it does not resolve, evaluate or hide any validation, so a `done` task can sit beside a still-`pending` gate. When the call context carries NO `agent_id`, the actor falls back to the bare `:agent` atom, which `TransitionActor.normalize/1` does not match and therefore records as `actor_kind: \"unknown\"`, `actor_id: nil`, `actor_label: nil` — `via` is still `\"mcp_task_complete\"`, so the row reads as \"known code path, caller not identifiable\" rather than \"not captured\".",
         when_to_use: "When you need to mark a task as complete/done"
       },
       %{
@@ -2033,7 +2033,7 @@ defmodule Platform.Federation.ToolSurface do
         returns:
           "The updated task object (includes sponsor: nil | %{id, name, email}), plus `previous_updated_at` — the `updated_at` the row held BEFORE this call, i.e. the revision this write displaced. Compare it against the `updated_at` you last read: if it is newer than yours, you overwrote a concurrent writer's edit. It is disclosure after the fact, not prevention — nothing warns the writer you displaced. Pass `base_updated_at` to be refused instead. This key is on the task_update envelope ONLY; task_get and task_list do not carry it, because a read displaces nothing.",
         limitations:
-          "`base_updated_at` GUARDS THE PLAIN-FIELD WRITE AND NOTHING ELSE, and it is LIVE ONLY IF THE CALL CARRIES AT LEAST ONE PLAIN FIELD (title, description, priority, epic_id, sponsor_user_id, deploy_target, auto_approve_plan). `status`, `phase_assignees` and `assignee_id`/`assignee_type` are NOT plain fields: status is applied by a separate statement, and a flat assignee is always routed into `phase_assignees`, which a third statement writes. So a call carrying a base plus ONLY those SUCCEEDS WITHOUT COMPARING ANYTHING — the guard is skipped, no error is raised, and the caller who armed it is the one who believes they are protected. Send the base together with at least one plain field, or it is decoration. On a call that does carry a plain field, the guarded write runs FIRST, so a stale base short-circuits and the later writes never run; the residual exposure is a row that advances BETWEEN statements. WITHOUT `base_updated_at` THIS TOOL IS LAST-WRITE-WINS: a concurrent writer's edit is overwritten silently and nothing tells either party; supplying it (alias `if_unmodified_since`) turns that into a recoverable `stale_base` refusal naming the current updated_at. An unparseable base is rejected before any write. Status transitions are validated; not all transitions are allowed. sponsor_user_id must reference an existing user; passing an unknown UUID returns a recoverable FK error.",
+          "The whole call is ONE write: plain fields, `status`, `phase_assignees` and a flat `assignee_id`/`assignee_type` are applied together in a single statement, and every check (transition table, plan gate, deploy target, stack gates, field validation) runs BEFORE it. Any refusal writes nothing and leaves updated_at unmoved: none of the fields in the call are applied, so retrying with the same `base_updated_at` is safe. `base_updated_at`, when supplied, guards that entire call in the statement's WHERE clause; if the row has advanced, the call is refused with a recoverable `stale_base` naming the current updated_at. WITHOUT `base_updated_at` THIS TOOL IS LAST-WRITE-WINS, as before: a concurrent writer's edit is overwritten silently and nothing tells either party. The gates themselves are read before the write, so a plan revoked in the instant between the check and the write is not caught; the atomicity guarantee covers the fields and the base. An unparseable base is rejected before any write. Status transitions are validated; not all transitions are allowed. sponsor_user_id must reference an existing user; passing an unknown UUID returns a recoverable FK error.",
         when_to_use: "When you need to update a task's details or move it between columns"
       },
       %{
@@ -4742,16 +4742,15 @@ defmodule Platform.Federation.ToolSurface do
         # Stacks, CommencementGate and ChatPins all call it). The MCP caller's
         # identity travels out-of-band so the recorded transition is attributed
         # to the calling agent instead of `unknown` — the same shape
-        # `maybe_transition_status/3` uses for task_update. The `via` differs on
+        # `Tasks.apply_task_update/3` uses for task_update. The `via` differs on
         # purpose: an agent ruling its own gate delivered via `task_complete`
         # must stay distinguishable from the same agent's `task_update`.
         actor = actor_from_mcp_context(context)
 
         # COMPARE-AND-SET (task 01a094d4 stage 3). `base_updated_at` (alias
         # `if_unmodified_since`) guards THE STATUS WRITE, which is the only
-        # write this tool makes — so unlike `task_update`, where the base
-        # covers the plain-field statement and leaves the status statement
-        # unguarded, here the guard's scope is the tool's whole effect.
+        # write this tool makes, so the guard's scope is the tool's whole
+        # effect (as it is for `task_update` since task 01a0a4aa).
         # Absent → unguarded, last-write-wins, exactly as before.
         # Unparseable → refused before any write.
         result =
@@ -7305,6 +7304,12 @@ defmodule Platform.Federation.ToolSurface do
     }
   end
 
+  # Appended to every task_update refusal reached BEFORE the write, from this
+  # one place so the sentence cannot drift between branches. True by
+  # construction: `Tasks.apply_task_update/3` runs every check before its
+  # single statement, and a refused statement commits nothing.
+  @task_update_nothing_written "Nothing was written: none of the fields in this call were applied and updated_at did not move."
+
   defp task_update_with_base(task_id, args, actor, base_updated_at) do
     case Tasks.get_task_record(task_id) do
       nil ->
@@ -7326,10 +7331,9 @@ defmodule Platform.Federation.ToolSurface do
                  # slot is never overwritten by the flat pair.
                  existing_phase_assignees: task.phase_assignees || %{}
                ) do
-          # Status transitions still route through
-          # `Tasks.transition_task_status/2` (validates the edge), while
-          # everything else flows through `Tasks.update_task/2`. Split
-          # so the two writers don't step on each other.
+          # Status travels separately from the plain fields so
+          # `Tasks.apply_task_update/3` can check the edge (and its gates)
+          # before the single write.
           status_change = Map.get(flat_attrs, :status)
           non_status_flat = Map.delete(flat_attrs, :status)
 
@@ -7345,36 +7349,17 @@ defmodule Platform.Federation.ToolSurface do
           auto_check =
             TaskAttrs.check_auto_approve_preconditions(flat_attrs, phase_attrs, task)
 
-          # Order: flat_attrs → phase_attrs → status_change. Phase-attrs
-          # writer (`Tasks.set_phase_assignees/2`) uses the task's
-          # CURRENT status to derive the flat pointer, so we apply it
-          # before any status transition — otherwise a same-call
-          # phase-slot write for the target phase would still see the
-          # old phase's derivation. The plan-approval gate runs AFTER
-          # phase_attrs so a same-call `phase_assignees.execution =
-          # <user>` rewrite is visible to `sponsor_bypasses_plan_gate?/2`
-          # (the predicate reads phase-resolved assignees, not the
-          # pre-update snapshot).
-          # SCOPE OF THE COMPARE-AND-SET GUARD — a PARTIAL guarantee, stated
-          # deliberately. `base_updated_at` guards the FIELD write below and
-          # nothing else. `maybe_transition_status/3` is a SEPARATE statement
-          # with its own WHERE clause and is NOT covered by the CAS filter, so
-          # a call supplying a base alongside a status change gets: field write
-          # guarded (refused if the row moved), transition unguarded (applied
-          # on whatever the row is by then). Ordering is what makes that safe
-          # to reason about — the guarded write runs FIRST, so a stale base
-          # short-circuits the `with` and the transition never runs at all.
-          # The residual exposure is the reverse window only: a row that
-          # advances BETWEEN the two statements. Making the transition atomic
-          # with the field write is deliberately out of scope for this stage;
-          # do not silently widen it here without saying so in the tool's
-          # `limitations` prose, which currently documents exactly this.
+          # ONE statement: fields, phase_assignees and status are written
+          # together, the base (when supplied) sits in that statement's WHERE
+          # clause, and every validation runs BEFORE it (Tasks.apply_task_update/3).
           with :ok <- auto_check,
                {:ok, updated} <-
-                 maybe_update_task(task, non_status_flat, actor, base_updated_at),
-               {:ok, updated} <- maybe_apply_phase_assignees(updated, phase_attrs),
-               :ok <- maybe_check_plan_gate(updated, status_change, actor),
-               {:ok, updated} <- maybe_transition_status(updated, status_change, actor) do
+                 Tasks.apply_task_update(task, non_status_flat,
+                   phase_assignees: phase_attrs,
+                   status: status_change,
+                   base_updated_at: base_updated_at,
+                   actor: actor
+                 ) do
             # `Tasks.update_task/2` and `Tasks.transition_task_status/2`
             # return the un-preloaded struct. Refresh sponsor so
             # `serialize_task` can emit the current shape — otherwise a
@@ -7400,7 +7385,7 @@ defmodule Platform.Federation.ToolSurface do
             # is `base_updated_at` (stage 2).
             #
             # Note the key is present but EQUAL to `updated_at` on a no-op call
-            # (empty attrs short-circuit in `maybe_update_task/4`), because
+            # (an empty call short-circuits in `Tasks.apply_task_update/3`), because
             # nothing was displaced. Strict inequality holds for real writes.
             {:ok, Map.put(serialize_task(updated), :previous_updated_at, task.updated_at)}
           else
@@ -7440,11 +7425,12 @@ defmodule Platform.Federation.ToolSurface do
                %{
                  error:
                    "Invalid status transition from '#{task.status}' to '#{status_change}'. " <>
-                     exits_sentence,
+                     exits_sentence <> " " <> @task_update_nothing_written,
                  recoverable: true,
                  submitted_args: args,
                  suggestion:
-                   exits_sentence <>
+                   "The row did not move, so you may retry with the same base_updated_at. " <>
+                     exits_sentence <>
                      " 'cancelled' is TERMINAL \u2014 it has no outbound edges and it means the " <>
                      "work was ABANDONED. Use it only to retire work that was genuinely " <>
                      "abandoned or superseded, never to close work that actually shipped. " <>
@@ -7465,7 +7451,8 @@ defmodule Platform.Federation.ToolSurface do
               {:error,
                %{
                  error:
-                   "Cannot transition to '#{status_change}': task has no approved plan and is not a sponsor-bypass candidate",
+                   "Cannot transition to '#{status_change}': task has no approved plan and is not a sponsor-bypass candidate. " <>
+                     @task_update_nothing_written,
                  recoverable: true,
                  submitted_args: args,
                  suggestion:
@@ -7482,7 +7469,7 @@ defmodule Platform.Federation.ToolSurface do
               # Mirror the `:invalid_transition` friendly envelope shape.
               {:error,
                %{
-                 error: "unresolved_deploy_target",
+                 error: "unresolved_deploy_target. " <> @task_update_nothing_written,
                  recoverable: true,
                  submitted_args: args,
                  suggestion:
@@ -7495,7 +7482,9 @@ defmodule Platform.Federation.ToolSurface do
             {:error, %Ecto.Changeset{} = changeset} ->
               {:error,
                %{
-                 error: "Failed to update task: #{inspect_errors(changeset)}",
+                 error:
+                   "Failed to update task: #{inspect_errors(changeset)}. " <>
+                     @task_update_nothing_written,
                  recoverable: true,
                  submitted_args: args,
                  suggestion: "Check that the provided values are valid"
@@ -7517,7 +7506,10 @@ defmodule Platform.Federation.ToolSurface do
               # delegating `waiting_on == []` envelope's recoverable flag
               # depends on the observed stack status, so the echo is
               # added only when the envelope is actually recoverable.
-              gate_envelope = stack_plans_pending_envelope(stack_id, waiting_on)
+              gate_envelope =
+                stack_id
+                |> stack_plans_pending_envelope(waiting_on)
+                |> with_task_update_nothing_written()
 
               {:error,
                if(Map.get(gate_envelope, :recoverable),
@@ -7532,7 +7524,7 @@ defmodule Platform.Federation.ToolSurface do
             {:error, :stack_already_shipped, %{message: message}} ->
               {:error,
                %{
-                 error: message,
+                 error: message <> " " <> @task_update_nothing_written,
                  recoverable: false,
                  suggestion:
                    "Create a new individual task (task_create) for the post-ship change. " <>
@@ -7552,7 +7544,8 @@ defmodule Platform.Federation.ToolSurface do
                  error:
                    "Cannot transition to 'stack_pending': task #{task.id} is not in a stack. " <>
                      "'stack_pending' means \"parked until the stack's dependencies land\" and is " <>
-                     "unreachable by the dispatcher, the promote sweep and the board once set on a stackless task.",
+                     "unreachable by the dispatcher, the promote sweep and the board once set on a stackless task. " <>
+                     @task_update_nothing_written,
                  recoverable: true,
                  suggestion:
                    "Put the task in a stack first with stack_add(stack_id, task_id) — a started stack " <>
@@ -8621,55 +8614,10 @@ defmodule Platform.Federation.ToolSurface do
   defp stale_base_stamp(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
   defp stale_base_stamp(nil), do: "unknown (the task could not be re-read)"
 
-  defp maybe_update_task(task, attrs, _actor, _base) when map_size(attrs) == 0, do: {:ok, task}
+  defp with_task_update_nothing_written(%{error: error} = envelope) when is_binary(error),
+    do: %{envelope | error: error <> " " <> @task_update_nothing_written}
 
-  # No base supplied: the pre-existing writer, untouched. This is the path
-  # every current agent caller takes and it must stay byte-identical in
-  # behaviour — routing it through the compare-and-set writer with an implicit
-  # base would wedge every caller that reads a task and edits it later.
-  defp maybe_update_task(task, attrs, actor, nil),
-    do: Tasks.update_task(task, attrs, actor: actor)
-
-  # Base supplied: the guard goes in the WHERE clause of the write. `base` is
-  # the CALLER'S token from `args`, never `task.updated_at` — the struct here
-  # was reloaded moments ago and is current by construction, so seeding the
-  # filter from it would make the guard a no-op that still passes any test
-  # built on a stale struct.
-  defp maybe_update_task(task, attrs, actor, %DateTime{} = base),
-    do: Tasks.update_task_if_unmodified(task, attrs, base, actor: actor)
-
-  defp maybe_transition_status(task, nil, _actor), do: {:ok, task}
-
-  # `transition_task_status/2` deliberately takes no actor (it is called by
-  # the router, Stacks, CommencementGate, ChatPins and more). The MCP
-  # caller's identity is supplied out-of-band so the recorded transition is
-  # attributed to the calling agent instead of `unknown`.
-  defp maybe_transition_status(task, new_status, actor),
-    do:
-      Tasks.TransitionActor.with_actor(actor, "mcp_task_update", fn ->
-        Tasks.transition_task_status(task, new_status)
-      end)
-
-  # Task 019f6380 stage 2: consult `Tasks.require_approved_plan_for/3`
-  # before an MCP-initiated status transition. When there's no status
-  # change in this call (`nil`), skip the check entirely — bare
-  # metadata updates should never hit the plan gate. Also skip when the
-  # transition would fail as `:invalid_transition` in
-  # `transition_task_status/2` — otherwise the gate would mask the more-
-  # specific transition-table error (e.g. `cancelled → in_progress`
-  # would surface as `:no_approved_plan` instead of the terminal-state
-  # refusal). When the gate returns `{:error, :no_approved_plan}`,
-  # propagate as-is so the outer `with` chain hits the friendly envelope
-  # branch above.
-  defp maybe_check_plan_gate(_task, nil, _actor), do: :ok
-
-  defp maybe_check_plan_gate(task, new_status, actor) do
-    if Tasks.transition_valid?(task, new_status) do
-      Tasks.require_approved_plan_for(task, new_status, actor)
-    else
-      :ok
-    end
-  end
+  defp with_task_update_nothing_written(envelope), do: envelope
 
   # Derive an `actor` tuple for the plan-gate call from the MCP call
   # context. MCP callers are agents by default — the `:agent_id` key

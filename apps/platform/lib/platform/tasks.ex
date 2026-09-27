@@ -694,24 +694,177 @@ defmodule Platform.Tasks do
   def update_task_if_unmodified(%Task{} = task, attrs, %DateTime{} = base_updated_at, opts \\ []) do
     task
     |> Task.changeset(attrs)
+    |> update_if_unmodified(task.id, base_updated_at)
+    |> case do
+      {:ok, updated} -> after_task_update(task, updated, opts)
+      error -> error
+    end
+  end
+
+  @doc """
+  The single pre-validated write behind MCP `task_update` (task 01a0a4aa).
+
+  `fields` are the plain `Task.changeset/2` fields (never `:status`). `opts`:
+
+    * `:phase_assignees` — per-phase map merged exactly as
+      `set_phase_assignees/2` merges it, or `nil`.
+    * `:status` — target status, or `nil` for no transition.
+    * `:base_updated_at` — the `updated_at` the caller composed against, or
+      `nil`. When supplied it guards the WHOLE call (fields, phase_assignees
+      and status) in the WHERE clause of one statement. When `nil` the write
+      is last-write-wins, deliberately unguarded, as before.
+    * `:actor` — attributes the recorded phase transition (`via:
+      "mcp_task_update"`) and feeds the plan gate's sponsor bypass.
+
+  Everything that can refuse runs BEFORE the write, against the projected
+  struct (so a same-call `deploy_target` or `phase_assignees` is visible):
+  the transition table, then `require_deploy_target_for/2`,
+  `require_stack_commencement_for/2`, `require_stack_not_shipped_for/2` and
+  `require_approved_plan_for/3`. `:invalid_transition` therefore takes
+  precedence over the plan gate. A refusal writes nothing and leaves
+  `updated_at` unmoved, so a caller can retry with the same base.
+
+  Atomicity covers the fields and the base. The gates are read-then-write:
+  a plan revoked between the pre-check and the write is not caught, which
+  matches the behaviour of every other status writer.
+
+  ONE changeset, ONE `Repo.update`, not a transaction around the three
+  older writers: those broadcast inside their own calls, so a rollback
+  after the first would already have announced state that never committed.
+  Side effects (`after_task_update/3`, then `after_status_transition/3`
+  when status changed) run once, after the write succeeds.
+
+  Returns `{:ok, task}` (an empty call writes nothing and returns the task
+  as given), `{:error, {:stale_base, %{current_updated_at, base_updated_at}}}`,
+  the gate errors those functions return today (2- and 3-tuples), or
+  `{:error, %Ecto.Changeset{}}`.
+  """
+  @spec apply_task_update(Task.t(), map(), keyword()) ::
+          {:ok, Task.t()}
+          | {:error,
+             {:stale_base,
+              %{current_updated_at: DateTime.t() | nil, base_updated_at: DateTime.t()}}}
+          | {:error, atom()}
+          | {:error, atom(), map()}
+          | {:error, Ecto.Changeset.t()}
+  def apply_task_update(%Task{} = task, fields, opts \\ []) when is_map(fields) do
+    if Map.has_key?(fields, :status) or Map.has_key?(fields, "status") do
+      raise ArgumentError,
+            "apply_task_update/3: pass the status as the :status option, not in fields"
+    end
+
+    phase_attrs = Keyword.get(opts, :phase_assignees)
+    status = Keyword.get(opts, :status)
+    base = Keyword.get(opts, :base_updated_at)
+    actor = Keyword.get(opts, :actor, :unattributed)
+
+    if map_size(fields) == 0 and is_nil(phase_attrs) and is_nil(status) do
+      {:ok, task}
+    else
+      do_apply_task_update(task, fields, phase_attrs, status, base, actor)
+    end
+  end
+
+  defp do_apply_task_update(task, fields, phase_attrs, status, base, actor) do
+    field_changeset = Task.changeset(task, with_phase_assignee_attrs(task, fields, phase_attrs))
+
+    with :ok <- valid_changeset(field_changeset),
+         projected = Ecto.Changeset.apply_changes(field_changeset),
+         {:ok, status_changes, pointer_attrs} <- precheck_status(projected, status, actor) do
+      changeset = Ecto.Changeset.change(field_changeset, status_changes)
+
+      TransitionActor.with_actor(actor, "mcp_task_update", fn ->
+        write_task_update(changeset, task.id, base)
+      end)
+      |> case do
+        {:ok, updated} ->
+          {:ok, updated} = after_task_update(task, updated, actor: actor)
+
+          if status do
+            TransitionActor.with_actor(actor, "mcp_task_update", fn ->
+              after_status_transition(updated, status, pointer_attrs)
+            end)
+          else
+            {:ok, updated}
+          end
+
+        error ->
+          error
+      end
+    end
+  end
+
+  # Folds a same-call `phase_assignees` write into the field attrs, deriving
+  # the flat pointer for the task's CURRENT phase exactly as
+  # `set_phase_assignees/2` does. The derivation reads the projection of the
+  # plain fields, because on the old multi-statement path the phase write ran
+  # after the field write and saw its result.
+  defp with_phase_assignee_attrs(_task, fields, nil), do: fields
+
+  defp with_phase_assignee_attrs(%Task{} = task, fields, phase_attrs) when is_map(phase_attrs) do
+    pre = Ecto.Changeset.apply_changes(Task.changeset(task, fields))
+    merged = merged_phase_assignees(pre, phase_attrs)
+
+    {derived_id, derived_type} =
+      assignee_for_phase(%{pre | phase_assignees: merged}, current_phase(pre))
+
+    # `cast/3` refuses a map mixing atom and string keys, so match the caller's.
+    put = fn map, key, value ->
+      if Enum.any?(Map.keys(fields), &is_binary/1),
+        do: Map.put(map, Atom.to_string(key), value),
+        else: Map.put(map, key, value)
+    end
+
+    fields
+    |> put.(:phase_assignees, merged)
+    |> put.(:assignee_id, derived_id)
+    |> put.(:assignee_type, derived_type)
+  end
+
+  defp valid_changeset(%Ecto.Changeset{valid?: true}), do: :ok
+  defp valid_changeset(%Ecto.Changeset{} = changeset), do: {:error, changeset}
+
+  defp precheck_status(_projected, nil, _actor), do: {:ok, %{}, %{}}
+
+  defp precheck_status(%Task{} = projected, new_status, actor) do
+    # Transition table FIRST, so `:invalid_transition` is never masked by a
+    # gate error (the plan gate in particular).
+    with {:ok, status_changeset, pointer_attrs} <-
+           status_transition_changeset(projected, new_status),
+         :ok <- require_deploy_target_for(projected, new_status),
+         :ok <- require_stack_commencement_for(projected, new_status),
+         :ok <- require_stack_not_shipped_for(projected, new_status),
+         :ok <- require_approved_plan_for(projected, new_status, actor),
+         :ok <- valid_changeset(status_changeset) do
+      {:ok, status_changeset.changes, pointer_attrs}
+    end
+  end
+
+  defp write_task_update(changeset, _task_id, nil), do: Repo.update(changeset)
+
+  defp write_task_update(changeset, task_id, %DateTime{} = base),
+    do: update_if_unmodified(changeset, task_id, base)
+
+  # The one guarded-write tail shared by `update_task_if_unmodified/4`,
+  # `transition_task_status_if_unmodified/3` and `apply_task_update/3`, so
+  # the `:stale_base` shape is defined once. The base goes into the UPDATE's
+  # WHERE clause; it is never a read-then-compare.
+  defp update_if_unmodified(%Ecto.Changeset{} = changeset, task_id, %DateTime{} = base) do
+    changeset
     |> Ecto.Changeset.optimistic_lock(:updated_at, fn _old ->
       DateTime.truncate(DateTime.utc_now(), :microsecond)
     end)
-    |> force_updated_at_filter(base_updated_at)
+    |> force_updated_at_filter(base)
     |> guarded_update()
     |> case do
       {:ok, updated} ->
-        after_task_update(task, updated, opts)
+        {:ok, updated}
 
       {:error, :stale_entry} ->
-        fresh = get_task_record(task.id)
+        fresh = get_task_record(task_id)
 
         {:error,
-         {:stale_base,
-          %{
-            current_updated_at: fresh && fresh.updated_at,
-            base_updated_at: base_updated_at
-          }}}
+         {:stale_base, %{current_updated_at: fresh && fresh.updated_at, base_updated_at: base}}}
 
       error ->
         error
@@ -1688,13 +1841,7 @@ defmodule Platform.Tasks do
   the task at; the status write runs under a `WHERE updated_at = ^base` filter,
   so a row that advanced since is REFUSED and nothing is written.
 
-  WHY THIS EXISTS RATHER THAN REUSING `update_task_if_unmodified/4`: that
-  function guards the PLAIN-FIELD write only. A status transition is applied by
-  a different statement and its own changeset, so before this function there was
-  no guarded path for a status write at all — `task_update`'s own `limitations`
-  prose says a base plus only a status change "SUCCEEDS WITHOUT COMPARING
-  ANYTHING". `task_complete` is a pure status transition, so the guard had to be
-  built for the status write itself.
+  This is `task_complete`'s guarded path; `task_update`'s is `apply_task_update/3`.
 
   The changeset is built by the SAME private builder `transition_task_status/2`
   uses (`status_transition_changeset/2`) and the SAME post-write side effects
@@ -1728,27 +1875,10 @@ defmodule Platform.Tasks do
          :ok <- require_stack_not_shipped_for(task, new_status),
          {:ok, changeset, pointer_attrs} <- status_transition_changeset(task, new_status) do
       changeset
-      |> Ecto.Changeset.optimistic_lock(:updated_at, fn _old ->
-        DateTime.truncate(DateTime.utc_now(), :microsecond)
-      end)
-      |> force_updated_at_filter(base_updated_at)
-      |> guarded_update()
+      |> update_if_unmodified(task.id, base_updated_at)
       |> case do
-        {:ok, updated} ->
-          after_status_transition(updated, new_status, pointer_attrs)
-
-        {:error, :stale_entry} ->
-          fresh = get_task_record(task.id)
-
-          {:error,
-           {:stale_base,
-            %{
-              current_updated_at: fresh && fresh.updated_at,
-              base_updated_at: base_updated_at
-            }}}
-
-        error ->
-          error
+        {:ok, updated} -> after_status_transition(updated, new_status, pointer_attrs)
+        error -> error
       end
     end
   end
@@ -6633,10 +6763,7 @@ defmodule Platform.Tasks do
   """
   @spec set_phase_assignees(%Task{}, map()) :: {:ok, %Task{}} | {:error, Ecto.Changeset.t()}
   def set_phase_assignees(%Task{} = task, attrs_by_phase) when is_map(attrs_by_phase) do
-    merged =
-      task.phase_assignees
-      |> Kernel.||(%{})
-      |> Map.merge(stringify_phase_attrs(attrs_by_phase))
+    merged = merged_phase_assignees(task, attrs_by_phase)
 
     {derived_id, derived_type} =
       assignee_for_phase(%{task | phase_assignees: merged}, current_phase(task))
@@ -6659,6 +6786,14 @@ defmodule Platform.Tasks do
       error ->
         error
     end
+  end
+
+  # Shared by `set_phase_assignees/2` and `apply_task_update/3` so the two
+  # writers cannot drift in how a per-phase map is merged.
+  defp merged_phase_assignees(%Task{} = task, attrs_by_phase) do
+    task.phase_assignees
+    |> Kernel.||(%{})
+    |> Map.merge(stringify_phase_attrs(attrs_by_phase))
   end
 
   defp stringify_phase_attrs(attrs) do

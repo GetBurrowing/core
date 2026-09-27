@@ -1101,7 +1101,10 @@ defmodule Platform.Federation.ToolSurfaceTest do
           %{}
         )
 
-      assert error.error == "unresolved_deploy_target"
+      # The machine code stays the prefix; task 01a0a4aa appends the
+      # nothing-was-written sentence every pre-write refusal carries.
+      assert String.starts_with?(error.error, "unresolved_deploy_target")
+      assert error.error =~ "Nothing was written"
       assert error.recoverable == true
       assert is_binary(error.suggestion)
       assert error.suggestion =~ ~r/project_update|task_update/

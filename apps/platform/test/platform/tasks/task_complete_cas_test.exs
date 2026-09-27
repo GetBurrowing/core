@@ -2,13 +2,9 @@ defmodule Platform.Tasks.TaskCompleteCasTest do
   @moduledoc """
   Task 01a094d4 stage 3 — `task_complete`'s compare-and-set token.
 
-  WHAT IS BEING GUARDED, AND WHY IT IS NEW CODE: `task_update`'s
-  `base_updated_at` routes into `Tasks.update_task_if_unmodified/4`, which
-  guards the PLAIN-FIELD write only; a status change is applied by a separate
-  unguarded statement, which that tool's own `limitations` prose states in
-  capitals. `task_complete` is a pure status transition, so there was no
-  guarded path to reuse — `Tasks.transition_task_status_if_unmodified/3` is
-  built for the status write itself.
+  WHAT IS BEING GUARDED: `task_complete` is a pure status transition, guarded
+  by `Tasks.transition_task_status_if_unmodified/3`. (`task_update`'s base
+  guards its whole call through `Tasks.apply_task_update/3`, task 01a0a4aa.)
 
   The refusal must be REFUSAL, not acceptance-with-a-complaint: the stale-base
   test re-reads the row and asserts the status is unchanged AND that no new
