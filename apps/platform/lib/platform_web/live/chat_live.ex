@@ -37,6 +37,7 @@ defmodule PlatformWeb.ChatLive do
   alias Platform.Chat.HiddenChannels
   alias Platform.Chat.PinnedSpaces
   alias Platform.Chat.PubSub, as: ChatPubSub
+  alias Platform.Chat.Section
   alias Platform.Chat.Sidebar
 
   alias PlatformWeb.ChatLive.ActiveAgentHooks
@@ -1671,26 +1672,22 @@ defmodule PlatformWeb.ChatLive do
     end
   end
 
-  # Rename an org-default section (admin-edit). Inline form per section header.
+  # Set or clear an org-default section's sidebar label (admin-edit). A blank
+  # name CLEARS the label so the header follows the org again (task 01a08212);
+  # the "Use organisation name" reset sends exactly that.
   def handle_event("rename_section_default", %{"section_id" => section_id} = params, socket)
       when is_binary(section_id) do
     name = String.trim(params["name"] || "")
 
-    cond do
-      name == "" ->
-        {:noreply, socket}
+    case Sidebar.rename_section(%{id: socket.assigns.user_id}, section_id, name) do
+      {:ok, _section} ->
+        {:noreply, recompute_sidebar_after_admin_write(socket)}
 
-      true ->
-        case Sidebar.rename_section(%{id: socket.assigns.user_id}, section_id, name) do
-          {:ok, _section} ->
-            {:noreply, recompute_sidebar_after_admin_write(socket)}
+      {:error, :unauthorized} ->
+        {:noreply, put_flash(socket, :error, "You don't have permission to do that.")}
 
-          {:error, :unauthorized} ->
-            {:noreply, put_flash(socket, :error, "You don't have permission to do that.")}
-
-          {:error, _other} ->
-            {:noreply, put_flash(socket, :error, "Could not rename the section.")}
-        end
+      {:error, _other} ->
+        {:noreply, put_flash(socket, :error, "Could not rename the section.")}
     end
   end
 
@@ -3351,7 +3348,7 @@ defmodule PlatformWeb.ChatLive do
   defp section_summary(sidebar_sections, section_id) when is_binary(section_id) do
     Enum.find_value(sidebar_sections, fn
       %{section: %{id: ^section_id} = s} ->
-        %{section_id: s.id, org_id: s.org_id, name: s.name, color: s.color}
+        %{section_id: s.id, org_id: s.org_id, name: Section.display_name(s), color: s.color}
 
       _ ->
         nil
@@ -3361,11 +3358,17 @@ defmodule PlatformWeb.ChatLive do
   defp section_summary(_sidebar_sections, _section_id), do: nil
 
   # The rail's own label for the org a channel is moving OUT of, falling back
-  # to the org record's name when that org has no section in the rail.
+  # to the org record's name when that org has no section in the rail. Both
+  # readers here go through `Section.display_name/1` (task 01a08212): a
+  # following section's `name` is nil, and a nil must never reach the move
+  # dialog or `raise_move_toast/4`'s is_binary guard, which drops the toast.
   defp source_section_name(sidebar_sections, %Platform.Tenancy.Org{} = org) do
     Enum.find_value(sidebar_sections, org.name, fn
-      %{section: %{org_id: section_org_id, name: name}} when section_org_id == org.id -> name
-      _ -> nil
+      %{section: %{org_id: section_org_id} = section} when section_org_id == org.id ->
+        Section.display_name(section)
+
+      _ ->
+        nil
     end)
   end
 
@@ -3390,7 +3393,7 @@ defmodule PlatformWeb.ChatLive do
       &%{
         section_id: &1.id,
         org_id: &1.org_id,
-        name: &1.name,
+        name: Section.display_name(&1),
         dot: section_dot_class(&1.color)
       }
     )

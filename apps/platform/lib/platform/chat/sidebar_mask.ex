@@ -114,6 +114,8 @@ defmodule Platform.Chat.SidebarMask do
   is recorded debt, not an oversight.
   """
 
+  alias Platform.Chat.Section
+
   @placeholder_prefix "Workspace"
 
   @typedoc "A resolved sidebar entry — `Platform.Chat.Sidebar.resolved/0`."
@@ -159,9 +161,10 @@ defmodule Platform.Chat.SidebarMask do
   @doc """
   The string to render for one section header.
 
-  Returns the real `section.name` when masking is off, or when this section's
-  id has been individually revealed while masking is still on. Otherwise the
-  placeholder. A section missing from `placeholders` falls back to the generic
+  Returns the section's real display name (`Platform.Chat.Section.display_name/1`:
+  its label override, else its org's current name) when masking is off, or
+  when this section's id has been individually revealed while masking is
+  still on. Otherwise the placeholder. A section missing from `placeholders` falls back to the generic
   `"Workspace"` rather than leaking the real name.
   """
   @spec label(%{optional(binary()) => binary()}, map(), boolean(), MapSet.t() | [binary()]) ::
@@ -169,7 +172,7 @@ defmodule Platform.Chat.SidebarMask do
   def label(placeholders, section, masked?, revealed_ids)
 
   def label(placeholders, section, masked?, revealed_ids) when is_map(section),
-    do: label(placeholders, section.id, section.name, masked?, revealed_ids)
+    do: label(placeholders, section.id, Section.display_name(section), masked?, revealed_ids)
 
   @doc """
   The id/name form of `label/4`, for a caller with no section struct in hand —
@@ -335,7 +338,12 @@ defmodule Platform.Chat.SidebarMask do
       normalise(channel_name) == candidate
       or String.starts_with?(normalise(channel_name), candidate <> "-")
 
-  for each of the section's name and colour slug. Leading token only, not a
+  for each of the section's displayed name, its org's current name and its
+  colour slug. The org name is a candidate in its own right (task 01a08212):
+  a section carrying a custom label must still match a bucket or channel that
+  names its ORG, which is what the hidden drawer and the scope pill hand in.
+  When that comparison ran against a stale stored copy, the lookup missed and
+  a masked pill fell back to the bare `"Workspace"` (the 01a0938b symptom). Leading token only, not a
   free `contains`: `#builds-cyberdyne` and `#retro-cyberdyne-notes` still
   render verbatim. A bare `contains` would mask on any coincidental substring
   anywhere in a name (an org called `Ex` would swallow half the rail), which
@@ -346,7 +354,7 @@ defmodule Platform.Chat.SidebarMask do
     normalised = normalise(channel_name)
 
     normalised != "" and
-      [section.name, Map.get(section, :color)]
+      [Section.display_name(section), Map.get(section, :org_name), Map.get(section, :color)]
       |> Enum.map(&normalise/1)
       |> Enum.any?(fn candidate ->
         candidate != "" and

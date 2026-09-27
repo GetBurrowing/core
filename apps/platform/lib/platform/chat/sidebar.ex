@@ -40,15 +40,28 @@ defmodule Platform.Chat.Sidebar do
   @pinned_spaces_key "chat_pinned_spaces"
 
   @doc """
-  The org-default sections, ordered by admin position then name.
+  The org-default sections, ordered by admin position then displayed name.
 
   ALL rows, including sections whose org is archived — the curation writes
   and the admin editor need the full set. The RENDER path must use
   `list_active_default_sections/0` instead.
+
+  Each section carries its org's CURRENT name in the virtual `org_name`
+  (task 01a08212), so `Section.display_name/1` can render a following
+  section (`name` nil) without a second query. The tie-break orders by
+  `coalesce(s.name, o.name)`, the name the header shows: a bare
+  `asc: s.name` would sort every following section's NULL last.
   """
   @spec list_default_sections() :: [Section.t()]
   def list_default_sections do
-    Repo.all(from(s in Section, order_by: [asc: s.position, asc: s.name]))
+    Repo.all(
+      from(s in Section,
+        join: o in Platform.Tenancy.Org,
+        on: o.id == s.org_id,
+        select_merge: %{org_name: o.name},
+        order_by: [asc: s.position, asc: fragment("coalesce(?, ?)", s.name, o.name)]
+      )
+    )
   end
 
   @doc """
@@ -65,6 +78,9 @@ defmodule Platform.Chat.Sidebar do
   keeps returning every row; only the render path filters. Restoring the org
   brings the section back with no extra work, because nothing about the
   section row ever changed.
+
+  Carries `org_name` and orders ties by the displayed name exactly as
+  `list_default_sections/0` does (task 01a08212).
   """
   @spec list_active_default_sections() :: [Section.t()]
   def list_active_default_sections do
@@ -73,7 +89,8 @@ defmodule Platform.Chat.Sidebar do
         join: o in Platform.Tenancy.Org,
         on: o.id == s.org_id,
         where: is_nil(o.archived_at),
-        order_by: [asc: s.position, asc: s.name]
+        select_merge: %{org_name: o.name},
+        order_by: [asc: s.position, asc: fragment("coalesce(?, ?)", s.name, o.name)]
       )
     )
   end
@@ -87,6 +104,11 @@ defmodule Platform.Chat.Sidebar do
   after that date had no section, so `default_section_id/3` fell through to
   `fallback_section_id/1` and its channels rendered under whichever section
   happened to hold the lowest `position`. That is the Cyberdyne symptom.
+
+  `name` is stored NULL (task 01a08212): a new org's section follows its
+  org's name from birth, so a later rename of the org is picked up with no
+  sync step. The returned struct carries `org_name`, so
+  `Section.display_name/1` reads the org name straight off it.
 
   Idempotent via `on_conflict: :nothing` against the real
   `unique_index(:channel_sections, [:org_id])`, so a second call for the same
@@ -112,7 +134,7 @@ defmodule Platform.Chat.Sidebar do
     %Section{}
     |> Section.changeset(%{
       org_id: org.id,
-      name: org.name,
+      name: nil,
       color: String.replace(org.slug || "", "_", "-"),
       position: next_position
     })
@@ -123,12 +145,26 @@ defmodule Platform.Chat.Sidebar do
       # evidence of the row that's actually in the table. Re-read by `org_id`
       # (the unique key) so a second call returns the EXISTING section rather
       # than a phantom carrying an id no row has.
-      {:ok, %Section{}} -> {:ok, Repo.get_by(Section, org_id: org.id)}
-      other -> other
+      {:ok, %Section{}} ->
+        case Repo.get_by(Section, org_id: org.id) do
+          %Section{} = section -> {:ok, %{section | org_name: org.name}}
+          nil -> {:ok, nil}
+        end
+
+      other ->
+        other
     end
   end
 
-  @doc "Rename an org-default section (Fabrikam admin only)."
+  @doc """
+  Set an org-default section's sidebar label (Fabrikam admin only).
+
+  `name` is a label OVERRIDE (task 01a08212). A blank or whitespace `name`
+  CLEARS it to nil, so the header follows the org's name again;
+  `Section.changeset/2` does the normalising. The returned struct's
+  `org_name` is not loaded; re-read through `list_default_sections/0` to
+  render it.
+  """
   @spec rename_section(map(), binary(), String.t()) ::
           {:ok, Section.t()} | {:error, :unauthorized | :not_found | Ecto.Changeset.t()}
   def rename_section(actor, section_id, name) when is_binary(name) do

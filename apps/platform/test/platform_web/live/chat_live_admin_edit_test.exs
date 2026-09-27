@@ -74,6 +74,15 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
     ch
   end
 
+  # The header text a section renders (task 01a08212): its label override,
+  # else its org's CURRENT name. A following section stores a nil `name`, so
+  # reading the column would build an expectation of "".
+  defp displayed_name(section_id) do
+    Sidebar.list_default_sections()
+    |> Enum.find(&(&1.id == section_id))
+    |> Section.display_name()
+  end
+
   defp section_id_for_org(org_slug) do
     org_id = Tenancy.get_org_by_slug!(org_slug).id
     section = Enum.find(Sidebar.list_default_sections(), &(&1.org_id == org_id))
@@ -380,6 +389,33 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       assert Repo.get!(Section, fabrikam_section).name == "Brand & Social"
     end
 
+    # Task 01a08212 stage 2: the input is an optional sidebar-only label, so a
+    # blank submit is "clear the label" (the header then follows the org),
+    # not the silent no-op it was when `name` was the only copy of the name.
+    test "a blank rename_section_default clears the label and the header follows the org",
+         %{conn: conn} do
+      admin = admin_user!("rename_blank")
+      conn = authenticated_conn(conn, admin)
+      create_channel("general", "fabrikam")
+      fabrikam_section = section_id_for_org("fabrikam")
+      {:ok, _} = Sidebar.rename_section(admin, fabrikam_section, "Brand & Social")
+
+      {:ok, view, _html} = live_following_redirect(conn)
+
+      render_hook(view, "rename_section_default", %{
+        "section_id" => fabrikam_section,
+        "name" => "   "
+      })
+
+      assert Repo.get!(Section, fabrikam_section).name == nil
+      assert displayed_name(fabrikam_section) == Tenancy.get_org_by_slug!("fabrikam").name
+
+      assert has_element?(
+               view,
+               ~s(#chat-sidebar section#section-#{fabrikam_section}[aria-label="#{displayed_name(fabrikam_section)} channels"])
+             )
+    end
+
     test "recolor_section_default sets the section color to a scope token",
          %{conn: conn} do
       admin = admin_user!("recolor")
@@ -459,8 +495,8 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       sxi_section = section_id_for_org("sxi")
       fabrikam_org_id = Tenancy.get_org_by_slug!("fabrikam").id
       sxi_org_id = Tenancy.get_org_by_slug!("sxi").id
-      to_label = Repo.get!(Section, sxi_section).name
-      from_label = Repo.get!(Section, section_id_for_org("fabrikam")).name
+      to_label = displayed_name(sxi_section)
+      from_label = displayed_name(section_id_for_org("fabrikam"))
 
       {:ok, view, _html} = live_following_redirect(conn)
 
@@ -683,7 +719,7 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       channel = create_channel("confirmer", "fabrikam")
       sxi_section = section_id_for_org("sxi")
       sxi_org_id = Tenancy.get_org_by_slug!("sxi").id
-      to_label = Repo.get!(Section, sxi_section).name
+      to_label = displayed_name(sxi_section)
 
       expected = "Moved ##{channel.name} to #{to_label}."
 
@@ -737,7 +773,7 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       moved = create_channel("moved-second", "fabrikam")
       hidden_last = create_channel("hidden-last", "fabrikam")
       sxi_section = section_id_for_org("sxi")
-      to_label = Repo.get!(Section, sxi_section).name
+      to_label = displayed_name(sxi_section)
 
       expected_move = "Moved ##{moved.name} to #{to_label}."
 
@@ -900,7 +936,7 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       _blocker = create_channel("general", "sxi")
       sxi_section = section_id_for_org("sxi")
       fabrikam_org_id = Tenancy.get_org_by_slug!("fabrikam").id
-      to_label = Repo.get!(Section, sxi_section).name
+      to_label = displayed_name(sxi_section)
 
       {:ok, view, _html} = live_following_redirect(conn)
 
@@ -934,7 +970,12 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       conn = authenticated_conn(conn, admin)
       create_channel("general", "fabrikam")
       fabrikam_section = section_id_for_org("fabrikam")
-      original_name = Repo.get!(Section, fabrikam_section).name
+      original_label = Repo.get!(Section, fabrikam_section).name
+
+      # The header text is the DISPLAYED name (task 01a08212): the label
+      # override, else the org's current name. A following section's stored
+      # `name` is nil, so the stored column alone says nothing about the text.
+      original_name = displayed_name(fabrikam_section)
 
       {:ok, view, _html} = live_following_redirect(conn)
       html_before = enter_admin_edit(view)
@@ -944,7 +985,7 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       # rename input shows its real name. (The recolor target — paragon — must
       # NOT already be the fabrikam dot's color.)
       assert sidebar_before =~ "bg-fabrikam-dot"
-      assert sidebar_before =~ ~s(value="#{original_name}")
+      assert sidebar_before =~ ~s(aria-label="Collapse #{original_name}")
 
       # Recolor Fabrikam → paragon (the "yellow" swatch in the palette).
       html_after =
@@ -960,9 +1001,9 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
              "Recoloring to paragon should change the section's color dot"
 
       # …but the section's NAME is unchanged — the recolor did NOT rename it.
-      assert Repo.get!(Section, fabrikam_section).name == original_name
+      assert Repo.get!(Section, fabrikam_section).name == original_label
 
-      assert sidebar_after =~ ~s(value="#{original_name}"),
+      assert sidebar_after =~ ~s(aria-label="Collapse #{original_name}"),
              "Recolor must not change the rendered section name"
 
       # And crucially the header NEVER renders the color-derived scope label

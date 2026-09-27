@@ -1138,13 +1138,21 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
             phx-submit="rename_section_default"
             class="channel-section-rename-form"
           >
+            <%!-- Task 01a08212 stage 2 (Saru's canvas 01a0dff3-bb77, option
+                   2b): the input is an OPTIONAL sidebar-only label, not the
+                   org's name. Empty = follow the org, and the placeholder
+                   showing the live org name is the whole explanation of that
+                   state. The hint below the header says which state it is
+                   in; its reset reuses `rename_section_default` with a blank
+                   name, which clears the label. --%>
             <input type="hidden" name="section_id" value={section.id} />
             <input
               type="text"
               name="name"
               value={section.name}
-              class="channel-section-rename-input"
-              aria-label={"Rename #{section.name} section"}
+              placeholder={section.org_name}
+              class="channel-section-rename-input placeholder:text-base-content/40"
+              aria-label={"Sidebar label for #{section.org_name}"}
               maxlength="60"
             />
           </form>
@@ -1233,6 +1241,35 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
             class="relative ml-auto opacity-0 focus-within:opacity-100 group-hover:opacity-100"
           />
         </div>
+        <%!-- Admin-edit label hint (task 01a08212 stage 2): which state the
+               header is in, below the header row at the palette's inset so it
+               reads at the rail's full width rather than wrapping inside the
+               input's column. The reset is phx-click, not a submit, so it
+               needs no form around it. --%>
+        <p
+          :if={@sidebar_admin_edit and not custom_label?(section)}
+          data-role="section-label-hint"
+          class="px-3 pb-1 text-xs text-base-content/60"
+        >
+          Uses the organisation name.
+        </p>
+        <p
+          :if={@sidebar_admin_edit and custom_label?(section)}
+          data-role="section-label-hint"
+          class="px-3 pb-1 text-xs text-base-content/60"
+        >
+          Sidebar label only. The organisation is {section.org_name}.
+          <button
+            type="button"
+            data-role="section-label-reset"
+            phx-click="rename_section_default"
+            phx-value-section_id={section.id}
+            phx-value-name=""
+            class="font-medium text-[var(--color-interactive)] hover:underline focus-visible-ring"
+          >
+            Use organisation name
+          </button>
+        </p>
         <%!-- Admin-edit (Stage 6): compact recolor palette — the 5 scope
                tokens ARE the palette (no free-form color picker). Each swatch
                posts `recolor_section_default` with the section id + token; the
@@ -1811,4 +1848,11 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
   # name keeps the line intact and the render byte-identical; the render-diff
   # harness caught this on the drawer rows and nowhere else.
   defp mask_name(mask_assigns, name), do: ChatLive.masked_space_name(mask_assigns, name)
+
+  # Task 01a08212: whether the admin set a sidebar-only label on this section,
+  # i.e. whether `Section.display_name/1` reads the stored `name` rather than
+  # the org's. Keyed on the same non-blank test so the hint can never disagree
+  # with the header it describes.
+  defp custom_label?(%{name: name}) when is_binary(name), do: String.trim(name) != ""
+  defp custom_label?(_section), do: false
 end

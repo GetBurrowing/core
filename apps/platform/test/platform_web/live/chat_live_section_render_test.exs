@@ -771,7 +771,7 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
       assert collapse_toggle_attr(sidebar, section.id, "aria-expanded") == "true"
 
       assert collapse_toggle_attr(sidebar, section.id, "aria-label") ==
-               "Collapse #{section.name}",
+               "Collapse #{Section.display_name(section)}",
              "The accessible name must name the section, not read a bare \"Collapse\""
     end
 
@@ -788,13 +788,14 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
       assert sidebar =~ ~s(data-section-id="#{section.id}"),
              "A collapsed section must still render — collapse is not hide"
 
-      assert sidebar =~ ~r/<span[^>]*class="channel-section-label"[^>]*>\s*#{section.name}/,
+      assert sidebar =~
+               ~r/<span[^>]*class="channel-section-label"[^>]*>\s*#{Section.display_name(section)}/,
              "A collapsed section must still render its header label"
 
       assert collapse_toggle_attr(sidebar, section.id, "aria-expanded") == "false"
 
       assert collapse_toggle_attr(sidebar, section.id, "aria-label") ==
-               "Expand #{section.name}",
+               "Expand #{Section.display_name(section)}",
              "A collapsed toggle must offer to expand, and name its section"
     end
 
@@ -837,8 +838,10 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
     setup %{conn: conn} do
       {conn, user} = authenticated_conn_with_user(conn)
 
+      # Sidebar list, not a bare Repo.all: the struct must carry `org_name`
+      # for `Section.display_name/1` (task 01a08212).
       [section, quiet_section | _] =
-        Platform.Chat.Section |> Repo.all() |> Enum.sort_by(& &1.position)
+        Sidebar.list_default_sections() |> Enum.sort_by(& &1.position)
 
       noisy = create_channel_in("Noisy", "noisy", section)
       quiet = create_channel_in("Quiet", "quiet", section)
@@ -903,7 +906,7 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
       # marker: collapsed-quiet is an ordinary accordion, so the header label and
       # the drag handle are the only text it may render. No peeked rows and no
       # "Show all" line.
-      assert section_text(html, quiet_section.id) == "#{quiet_section.name} ☰",
+      assert section_text(html, quiet_section.id) == "#{Section.display_name(quiet_section)} ☰",
              "A collapsed section with nothing new is a plain header"
     end
 
@@ -920,7 +923,7 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
       # that count and the section, because the left rule that groups the peeked
       # rows communicates nothing to a screen reader.
       assert LazyHTML.attribute(button, "aria-label") ==
-               ["Show all 2 channels in #{section.name}"]
+               ["Show all 2 channels in #{Section.display_name(section)}"]
 
       assert button |> LazyHTML.text() |> String.trim() == "Show all (2)"
 
@@ -1047,7 +1050,9 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
   # One channel filed into the lowest-position org section, returned with that
   # section so a test can address the exact header it collapsed.
   defp seed_channel_in_first_section do
-    section = Platform.Chat.Section |> Repo.all() |> Enum.min_by(& &1.position)
+    # Through the Sidebar list (not a bare Repo.all) so the struct carries
+    # `org_name`: the header text is `Section.display_name/1` (task 01a08212).
+    section = Sidebar.list_default_sections() |> Enum.min_by(& &1.position)
 
     {:ok, channel} =
       Chat.create_space(%{

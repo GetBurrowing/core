@@ -464,7 +464,30 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   #
   # RE-DERIVED from the guard's own measurement on this tree (CI run
   # 36276668869 at 7aff3118: measured 2320).
-  @chat_live_code_line_count 2320
+  #
+  # ── 2026-09-27, task 01a08212 stage 1: +3 (2,320 -> 2,323) ──────────────
+  #
+  # `channel_sections.name` became a nullable label override, so the move
+  # dialog's two section readers (`section_summary/2`,
+  # `source_section_name/2`) read `Section.display_name/1` instead of
+  # `.name`: one `alias Platform.Chat.Section`, and the second reader's
+  # clause no longer fits one line, so the formatter breaks both of that
+  # `fn`'s clauses onto two lines each. Pulled forward from stage 2 because a
+  # nil name silently dropped the move toast on this stage's tip.
+  #
+  # RE-DERIVED from the guard's own measurement on this tree (measured: 2323).
+  #
+  # ── 2026-09-27, task 01a08212 stage 2: -5 (2,323 -> 2,318) ──────────────
+  #
+  # `rename_section_default` no longer no-ops on a blank name: a blank submit
+  # CLEARS the sidebar label so the header follows the org (the admin-edit
+  # "Use organisation name" reset sends exactly that). The `cond` that
+  # guarded the blank case is gone, leaving the bare `case` on
+  # `Sidebar.rename_section/3`. `reassign_destinations/2` reads
+  # `Section.display_name/1` in place of `.name` (same line count).
+  #
+  # RE-DERIVED from the guard's own measurement on this tree (measured: 2318).
+  @chat_live_code_line_count 2318
 
   @doc """
   Count the CODE lines of a source file.

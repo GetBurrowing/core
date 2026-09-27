@@ -169,17 +169,22 @@ if Process.whereis(Platform.Repo) do
 
       org_rows
       |> Enum.with_index()
-      |> Enum.each(fn {[org_id, name, slug], idx} ->
+      |> Enum.each(fn {[org_id, _name, slug], idx} ->
         section_id = Ecto.UUID.dump!(Platform.Types.UUIDv7.generate())
         color = String.replace(slug, "_", "-")
 
+        # `name` is NULL, mirroring `Sidebar.ensure_default_section/1` since
+        # task 01a08212: a section FOLLOWS its org's name unless an admin sets
+        # a label. Inserting the org name here would make every test-DB
+        # section a custom label that happens to equal the org name, and the
+        # follow path would never be exercised.
         Platform.Repo.query!(
           """
           INSERT INTO channel_sections (id, org_id, name, color, position, inserted_at, updated_at)
-          VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+          VALUES ($1, $2, NULL, $3, $4, NOW(), NOW())
           ON CONFLICT (org_id) DO UPDATE SET position = EXCLUDED.position
           """,
-          [section_id, org_id, name, color, idx]
+          [section_id, org_id, color, idx]
         )
       end)
 

@@ -99,7 +99,7 @@ defmodule Platform.Chat.SidebarOrgFallbackTest do
       assert section.org_id == org.id,
              """
              Channel (org_id=#{org.id}) resolved into a section owned by a
-             DIFFERENT org (section.org_id=#{section.org_id}, name=#{section.name},
+             DIFFERENT org (section.org_id=#{section.org_id}, name=#{inspect(section.name)},
              position=#{section.position}).
 
              This is the Cyberdyne symptom: `Tenancy.Lifecycle.create_org/2`

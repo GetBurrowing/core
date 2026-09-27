@@ -118,7 +118,7 @@ defmodule Platform.Chat.SidebarTest do
       sections = Sidebar.list_default_sections()
 
       assert length(sections) == length(Tenancy.list_orgs())
-      assert Enum.all?(sections, &(is_binary(&1.org_id) and is_binary(&1.name)))
+      assert Enum.all?(sections, &(is_binary(&1.org_id) and is_binary(Section.display_name(&1))))
 
       positions = Enum.map(sections, & &1.position)
       assert positions == Enum.sort(positions)
@@ -127,6 +127,40 @@ defmodule Platform.Chat.SidebarTest do
       fabrikam = Tenancy.get_org_by_slug!("fabrikam")
       fabrikam_section = Enum.find(sections, &(&1.org_id == fabrikam.id))
       assert fabrikam_section.color == "fabrikam"
+    end
+
+    # Task 01a08212: a following section has a NULL name, and `asc: s.name`
+    # sorts NULLs LAST, so the tie-break has to order by the name the header
+    # actually shows, `coalesce(s.name, o.name)`.
+    test "ties on position break by the DISPLAYED name, so a following section is not sorted last" do
+      admin = admin_user!()
+
+      {:ok, following} =
+        Tenancy.create_org(admin, %{
+          name: "Aaa Follows",
+          slug: "tiefollow#{System.unique_integer([:positive])}"
+        })
+
+      {:ok, labelled} =
+        Tenancy.create_org(admin, %{
+          name: "Aaa Labelled",
+          slug: "tielabel#{System.unique_integer([:positive])}"
+        })
+
+      Repo.update_all(from(s in Section, where: s.org_id in ^[following.id, labelled.id]),
+        set: [position: 10_000]
+      )
+
+      Repo.update_all(from(s in Section, where: s.org_id == ^following.id), set: [name: nil])
+
+      Repo.update_all(from(s in Section, where: s.org_id == ^labelled.id),
+        set: [name: "Zzz Label"]
+      )
+
+      for list <- [Sidebar.list_default_sections(), Sidebar.list_active_default_sections()] do
+        tied = list |> Enum.filter(&(&1.position == 10_000)) |> Enum.map(&Section.display_name/1)
+        assert tied == ["Aaa Follows", "Zzz Label"]
+      end
     end
   end
 
@@ -223,6 +257,22 @@ defmodule Platform.Chat.SidebarTest do
 
       assert {:ok, updated} = Sidebar.rename_section(admin, section.id, "Brand & Social")
       assert updated.name == "Brand & Social"
+    end
+
+    # Task 01a08212: `name` is a label OVERRIDE; nil means "follow the org".
+    # A blank rename is how an admin hands the header back to the org name.
+    test "a blank or whitespace name clears the label so the section follows its org" do
+      admin = admin_user!()
+      section = hd(Sidebar.list_default_sections())
+      {:ok, _} = Sidebar.rename_section(admin, section.id, "Temporary Label")
+
+      assert {:ok, cleared} = Sidebar.rename_section(admin, section.id, "   ")
+      assert cleared.name == nil
+      assert Repo.get!(Section, section.id).name == nil
+
+      reread = Enum.find(Sidebar.list_default_sections(), &(&1.id == section.id))
+      assert Section.display_name(reread) == reread.org_name
+      assert is_binary(reread.org_name)
     end
 
     test "non-admin is rejected and nothing changes" do
@@ -1002,7 +1052,10 @@ defmodule Platform.Chat.SidebarTest do
 
       assert [section] = sections_for(org.id)
       assert section.org_id == org.id
-      assert section.name == org.name
+      # Task 01a08212: a new org's section follows the org name from birth —
+      # it stores no copy, so there is nothing to go stale on a rename.
+      assert section.name == nil
+      assert Section.display_name(section_for!(org)) == org.name
     end
 
     test "the new section is NOT at the lowest position, so a fallback cannot impersonate it" do
