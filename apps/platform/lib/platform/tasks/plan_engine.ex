@@ -191,8 +191,10 @@ defmodule Platform.Tasks.PlanEngine do
       blames a stage that is not wrong and makes the plan's record false.
 
   The new stage lands AT the gate's position (the gate and everything after
-  it shift by +1) so the gate still re-runs afterwards, carries the gate
-  agent's finding verbatim as its description, and gets the ordinary
+  it shift by +1) so the gate still re-runs afterwards, carries BOTH the
+  failed case's planner-authored `evaluation_payload` (setup, actions,
+  expected) and the gate agent's evidence verbatim as its description (task
+  01a08e81), and gets the ordinary
   `test_pass` + `lint_pass` validations so it can pass by the normal route.
 
   The failed gate validations are reset to `pending` with their ruling
@@ -246,8 +248,9 @@ defmodule Platform.Tasks.PlanEngine do
           end
 
         Enum.each(failed, fn validation ->
+          # `change/2`, not `Validation.changeset/2`: legacy e2e rows with no payload must not crash remediation, and a re-pend never writes the payload.
           validation
-          |> Validation.changeset(%{
+          |> Ecto.Changeset.change(%{
             status: "pending",
             evidence: archive_ruling(validation),
             evaluated_by: nil,
@@ -439,15 +442,36 @@ defmodule Platform.Tasks.PlanEngine do
 
   defp reset_gate_stage(gate), do: gate
 
-  # The gate agent's evidence goes in VERBATIM. A summary would drop exactly
-  # the expected-vs-observed detail the dispatched executor needs, and that
-  # detail is the only thing that makes the synthesized stage actionable.
+  # Each Finding carries TWO texts, both VERBATIM, in this order (task
+  # 01a08e81):
+  #
+  #   1. the case itself — the validation's planner-authored
+  #      `evaluation_payload`, keys ordered setup, actions, expected, then any
+  #      others (nothing dropped); and
+  #   2. the gate agent's ruling — its evidence map, unchanged.
+  #
+  # The payload is read from the validation ROW, never from anything the
+  # reviewer echoed. Before this the description carried the evidence alone,
+  # so an executor saw only the reviewer's paraphrase of `expected`, which can
+  # stop short of its last clause: the executor closes half the finding and
+  # the identical case fails on re-review. A summary of either text would
+  # reintroduce exactly that loss.
+  #
+  # Both are JSON-encoded, not rendered as raw text. `round_count/1` counts
+  # `^## Round \d+$` lines over the WHOLE accumulated description, and a
+  # planner-authored string can contain such a line, or a ``` run that closes
+  # the fence early. JSON puts every string on one line inside quotes, so
+  # neither can escape. The price is that quotes, backslashes and newlines
+  # read escaped; byte-identity holds after `Jason.decode!/1`.
   defp remediation_description(gate, failed, feedback) do
     findings =
       failed
       |> Enum.with_index(1)
       |> Enum.map(fn {v, i} ->
         "## Finding #{i} (e2e_behavior #{v.id})\n\n" <>
+          "### The case (planner-authored evaluation_payload, verbatim)\n\n" <>
+          render_payload(v.evaluation_payload) <>
+          "\n\n### The gate agent's ruling (evidence)\n\n" <>
           "```json\n" <> encode_evidence(v.evidence) <> "\n```"
       end)
 
@@ -459,6 +483,32 @@ defmodule Platform.Tasks.PlanEngine do
     ]
     |> Enum.reject(&(is_nil(&1) or &1 == ""))
     |> Enum.join("\n\n")
+  end
+
+  @payload_key_order ~w(setup actions expected)
+
+  # Legacy rows can carry no payload (the changeset requires one only for rows
+  # written since); they render a placeholder rather than an empty block.
+  defp render_payload(payload) when payload in [nil, %{}],
+    do: "(this validation carries no evaluation_payload)"
+
+  defp render_payload(payload) when is_map(payload) do
+    "```json\n" <> encode_payload(payload) <> "\n```"
+  end
+
+  defp encode_payload(payload) do
+    stringified = Map.new(payload, fn {k, val} -> {to_string(k), val} end)
+    {known, rest} = Map.split(stringified, @payload_key_order)
+
+    pairs =
+      Enum.flat_map(@payload_key_order, fn k ->
+        if Map.has_key?(known, k), do: [{k, Map.fetch!(known, k)}], else: []
+      end) ++ Enum.sort_by(rest, &elem(&1, 0))
+
+    case Jason.encode(Jason.OrderedObject.new(pairs), pretty: true) do
+      {:ok, json} -> json
+      {:error, _} -> inspect(payload)
+    end
   end
 
   defp encode_evidence(evidence) do

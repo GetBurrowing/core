@@ -138,6 +138,13 @@ defmodule Platform.Tasks.PlanEngineRemediationTest do
     assert stage.description =~ "tool answered :unauthorized for an agent with no DB grant"
     assert stage.description =~ "history readable without DB access"
     assert stage.description =~ "Task-level review"
+
+    # Task 01a08e81: the reviewer's `expected` above is its OWN paraphrase and
+    # differs from the case's. The case the planner wrote travels too, beside
+    # the ruling rather than instead of it.
+    assert stage.description =~ @payload["expected"]
+    assert stage.description =~ @payload["setup"]
+    assert stage.description =~ @payload["actions"]
   end
 
   test "supplied feedback is carried alongside the evidence", ctx do
@@ -488,5 +495,188 @@ defmodule Platform.Tasks.PlanEngineRemediationTest do
 
     assert Repo.get!(Stage, ctx.impl1.id).status == "passed"
     assert Repo.get!(Stage, ctx.impl2.id).status == "running"
+  end
+
+  # ── The case text travels with the finding (task 01a08e81) ─────────────
+  #
+  # A reviewer's evidence paraphrases the case's `expected` and can stop short
+  # of its last clause. Before this the synthesized description carried the
+  # evidence ALONE, so an executor could close half a finding and fail the
+  # same case on re-review. Each Finding now carries the validation's
+  # planner-authored `evaluation_payload` too, JSON-encoded so no payload
+  # string can forge a `## Round N` marker or close a fence.
+
+  @payload_block ~r/### The case \(planner-authored evaluation_payload, verbatim\)\n\n```json\n(.*?)\n```/s
+
+  defp payload_blocks(description) do
+    @payload_block
+    |> Regex.scan(description, capture: :all_but_first)
+    |> Enum.map(fn [json] -> Jason.decode!(json) end)
+  end
+
+  defp set_payload!(validation_id, payload) do
+    Validation
+    |> Repo.get!(validation_id)
+    |> Validation.changeset(%{evaluation_payload: payload})
+    |> Repo.update!()
+  end
+
+  defp fail_validation!(validation_id, evidence) do
+    Validation
+    |> Repo.get!(validation_id)
+    |> Validation.changeset(%{
+      status: "failed",
+      evidence: evidence,
+      evaluated_by: "review_gate",
+      evaluated_at: DateTime.utc_now()
+    })
+    |> Repo.update!()
+  end
+
+  test "the case's full expected is rendered even when the reviewer quoted only part of it",
+       ctx do
+    first_two = "The first sentence states the outcome. The second sentence names a bound."
+    third = "The third sentence names the clause the reviewer left out."
+
+    set_payload!(ctx.e2e.id, %{
+      "setup" => "A distinct setup string for the anti-vacuity case",
+      "actions" => "A distinct actions string for the anti-vacuity case",
+      "expected" => first_two <> " " <> third
+    })
+
+    fail_gate!(ctx, %{"expected" => first_two, "observed" => "only the bound was labelled"})
+
+    assert {:ok, stage} = PlanEngine.open_remediation_stage(ctx.gate.id)
+
+    # THE ASSERTION the ticket names: the sentence the reviewer never quoted.
+    assert stage.description =~ third
+
+    # And the reviewer's own text is still there, beside the case.
+    assert stage.description =~ ~s("expected": "#{first_two}")
+    assert stage.description =~ "only the bound was labelled"
+    assert stage.description =~ "A distinct setup string for the anti-vacuity case"
+    assert stage.description =~ "A distinct actions string for the anti-vacuity case"
+  end
+
+  @hostile_payload %{
+    "setup" => ~s(A "quoted" setup with a back\\slash),
+    "actions" => "Line one with a \"quote\" and a \\ backslash\n```\n## Round 9\nlast line",
+    "expected" => "The history is readable\nacross two lines"
+  }
+
+  test "the payload block decodes byte-identical to the stored evaluation_payload", ctx do
+    set_payload!(ctx.e2e.id, @hostile_payload)
+    fail_gate!(ctx, %{"observed" => "hostile payload round"})
+
+    assert {:ok, stage} = PlanEngine.open_remediation_stage(ctx.gate.id)
+
+    stored = Repo.get!(Validation, ctx.e2e.id).evaluation_payload
+    assert stored == @hostile_payload
+    assert [decoded] = payload_blocks(stage.description)
+    assert decoded == stored
+
+    # Keys in the reading order the executor needs.
+    [json] = Regex.run(@payload_block, stage.description, capture: :all_but_first)
+
+    positions =
+      for k <- ~w(setup actions expected), do: :binary.match(json, ~s("#{k}")) |> elem(0)
+
+    assert positions == Enum.sort(positions)
+  end
+
+  test "a payload carrying a `## Round 9` line cannot forge a round marker", ctx do
+    set_payload!(ctx.e2e.id, @hostile_payload)
+
+    fail_gate_via_engine!(ctx, "round one observed")
+    assert {:ok, first} = PlanEngine.open_remediation_stage(ctx.gate.id)
+    pass_remediation_via_engine!(first.id)
+
+    fail_gate_via_engine!(ctx, "round two observed")
+    assert {:ok, second} = PlanEngine.open_remediation_stage(ctx.gate.id)
+    assert second.id == first.id
+    pass_remediation_via_engine!(first.id)
+
+    fail_gate_via_engine!(ctx, "round three observed")
+    assert {:ok, _} = PlanEngine.open_remediation_stage(ctx.gate.id)
+
+    assert [stage] =
+             Enum.filter(stages(ctx.plan.id), &(&1.name == PlanEngine.remediation_stage_name()))
+
+    d = stage.description
+    assert length(Regex.scan(~r/^## Round 2$/m, d)) == 1
+    assert length(Regex.scan(~r/^## Round 3$/m, d)) == 1
+    refute d =~ ~r/^## Round 9$/m
+    refute d =~ ~r/^## Round 4$/m
+
+    # Every fence closed: bare ``` lines come in pairs.
+    assert rem(length(Regex.scan(~r/^```$/m, d)), 2) == 0
+
+    stored = Repo.get!(Validation, ctx.e2e.id).evaluation_payload
+    assert payload_blocks(d) == [stored, stored, stored]
+  end
+
+  test "each Finding carries its OWN validation's payload", ctx do
+    payload_a = %{
+      "setup" => "setup-A-marker",
+      "actions" => "actions-A-marker",
+      "expected" => "expected-A-marker"
+    }
+
+    payload_b = %{
+      "setup" => "setup-B-marker",
+      "actions" => "actions-B-marker",
+      "expected" => "expected-B-marker"
+    }
+
+    set_payload!(ctx.e2e.id, payload_a)
+
+    {:ok, e2e_b} =
+      Tasks.create_validation(%{
+        stage_id: ctx.gate.id,
+        kind: "e2e_behavior",
+        evaluation_payload: payload_b
+      })
+
+    fail_validation!(ctx.e2e.id, %{"observed" => "observed-A"})
+    fail_validation!(e2e_b.id, %{"observed" => "observed-B"})
+    ctx.gate |> Stage.changeset(%{status: "failed"}) |> Repo.update!()
+
+    assert {:ok, stage} = PlanEngine.open_remediation_stage(ctx.gate.id)
+
+    assert payload_blocks(stage.description) == [payload_a, payload_b]
+
+    [_, finding1, finding2] = String.split(stage.description, ~r/^## Finding /m)
+    assert finding1 =~ ctx.e2e.id
+    assert finding1 =~ "observed-A"
+    refute finding1 =~ "B-marker"
+    assert finding2 =~ e2e_b.id
+    assert finding2 =~ "observed-B"
+    refute finding2 =~ "A-marker"
+  end
+
+  test "a legacy validation with no evaluation_payload renders a placeholder", ctx do
+    fail_gate!(ctx, %{"observed" => "legacy row observed"})
+
+    # Bypass the changeset, which requires a payload for e2e rows written now.
+    {1, _} =
+      Validation
+      |> Ecto.Query.where([v], v.id == ^ctx.e2e.id)
+      |> Repo.update_all(set: [evaluation_payload: nil])
+
+    assert {:ok, stage} = PlanEngine.open_remediation_stage(ctx.gate.id)
+    assert stage.description =~ "(this validation carries no evaluation_payload)"
+    assert stage.description =~ "legacy row observed"
+    assert payload_blocks(stage.description) == []
+
+    # The re-pend really ran on the legacy row (not skipped), and left its
+    # payload as it found it.
+    reloaded = Repo.get!(Validation, ctx.e2e.id)
+    assert reloaded.status == "pending"
+    assert reloaded.evaluated_by == nil
+
+    assert [%{"evidence" => %{"observed" => "legacy row observed"}}] =
+             reloaded.evidence["prior_rulings"]
+
+    assert reloaded.evaluation_payload == nil
   end
 end
