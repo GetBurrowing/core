@@ -490,8 +490,23 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       # validation since the builder no longer emits it.
       refute prompt =~ "manual_approval"
 
-      # blocker instruction specific to deploy
-      assert prompt =~ "do NOT attempt code fixes"
+      # Deploy Stage Contract red-CI + blocker lines (task 01a0e362). The
+      # contract must agree with the ONE rule in Deploy boundaries. Controls
+      # come BEFORE the refutes so a mutant fails on the refute by name.
+      section = deploy_contract_section(prompt)
+
+      assert section =~ "Current stage_id: `stage-deploy-1`"
+      assert section =~ "A red CI follows the ONE rule"
+      assert section =~ "call `task_update` with `task_id=task-deploy-1` and status `in_progress`"
+
+      assert section =~
+               "- Use `report_blocker` with `task_id=task-deploy-1` and `stage_id=stage-deploy-1` only when the deploy itself cannot proceed"
+
+      assert prompt =~ "there is ONE rule"
+
+      refute prompt =~ "do NOT attempt code fixes"
+      refute prompt =~ "If CI fails or the deploy breaks"
+      refute Regex.match?(~r/^- If CI fails.*with `task_id=/m, prompt)
 
       # Deploy boundaries — fix-forward inside the task's diff only, no local
       # test re-runs (the "Do NOT modify code" line was replaced by the ONE
@@ -500,6 +515,61 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       assert prompt =~ "call `task_update` with status `in_progress`"
       assert prompt =~ "Do NOT re-run tests or lint locally"
       assert prompt =~ "branch is already pushed from execution"
+    end
+
+    test "execution_contract blocker line is unchanged by the report_blocker_instruction signature change (task 01a0e362)" do
+      task = %{
+        id: "task-exec-1",
+        title: "Build",
+        description: "Build it",
+        status: "in_progress",
+        priority: "medium"
+      }
+
+      stage = %{
+        id: "stage-exec-1",
+        position: 1,
+        name: "Implement",
+        validations: [%{id: "val-test-1", kind: "test_pass"}]
+      }
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, %{version: 1, stages: [%{}]}, stage)
+
+      assert prompt =~ "## Stage Execution Contract"
+
+      assert prompt =~
+               "\n- Use `report_blocker` with `task_id=task-exec-1` and `stage_id=stage-exec-1` if you cannot make forward progress.\n"
+    end
+
+    test "deploy contract blocker line keeps its verb when the stage has no id (task 01a0e362)" do
+      task = %{
+        id: "task-deploy-nil",
+        title: "Deploy feature",
+        description: "Ship the feature",
+        status: "deploying",
+        priority: "high",
+        deploy_strategy: %{"type" => "pr_merge", "config" => %{"auto_merge" => false}},
+        project: %{repo_url: "https://github.com/test/app", default_branch: "main"}
+      }
+
+      stage = %{
+        position: 1,
+        name: "Deploy: PR merge",
+        validations: [%{id: "val-pr-merged-nil", kind: "pr_merged"}]
+      }
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, %{version: 1, stages: [%{}]}, stage)
+      section = deploy_contract_section(prompt)
+
+      assert section =~
+               "call `task_update` with `task_id=task-deploy-nil` and status `in_progress`"
+
+      assert Regex.match?(
+               ~r/^- Use `report_blocker` with .*only when the deploy itself cannot proceed/m,
+               section
+             )
+
+      refute Regex.match?(~r/^- If CI fails/m, section)
     end
 
     test "deploying uses manual fallback when no strategy set" do
@@ -3976,5 +4046,16 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
 
       assert PromptTemplates.render_default("no.such.slug", %{}) == {:error, :not_found}
     end
+  end
+
+  # The "## Deploy Stage Contract" section, up to the next `## ` heading or the
+  # attention-signal anchor, whichever comes first.
+  defp deploy_contract_section(prompt) do
+    [_, rest] = String.split(prompt, "## Deploy Stage Contract", parts: 2)
+
+    ["\n## ", "\nThe attention signal"]
+    |> Enum.reduce(rest, fn anchor, acc ->
+      acc |> String.split(anchor, parts: 2) |> hd()
+    end)
   end
 end

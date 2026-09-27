@@ -2153,7 +2153,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   # Phase → Contract → Concern
   # in_progress → execution_contract → code, tests, commit, push (no PR)
   # in_review   → review_contract   → exercise feature, screenshots, evidence
-  # deploying   → deploy_contract   → PR, CI, merge (no code changes)
+  # deploying   → deploy_contract   → PR, CI, merge (fix-forward only inside the task's diff)
   # nudge       → nudge_contract    → pending validation IDs + ack fork
 
   defp enrich_in_progress_prompt(prompt, task, stage) do
@@ -2394,9 +2394,22 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     ## Deploy Stage Contract
     #{contract_target_lines(task_id, stage_id)}
     #{validation_lines}
-    #{report_blocker_instruction(task_id, stage_id, "If CI fails or the deploy breaks")}
-    - do NOT attempt code fixes during deploy.
+    #{red_ci_instruction(task_id)}
+    #{report_blocker_instruction(task_id, stage_id, "only when the deploy itself cannot proceed for a reason outside your reach: a missing repository, a PR you cannot merge, or a webhook that never fires. Never for a red CI")}
     """
+  end
+
+  # The red-CI bullet restates the ONE rule from the `### Deploy boundaries`
+  # section on purpose: a hand-edited live `dispatch.deploying` row may lack
+  # that section, and this contract is the one part of the dispatch that is
+  # code on every install (task 01a0e362).
+  defp red_ci_instruction(task_id) do
+    task_ref =
+      if is_binary(task_id),
+        do: "`task_id=#{task_id}`",
+        else: "the task_id from the attention context"
+
+    "- A red CI follows the ONE rule in this dispatch's Deploy boundaries section: fix forward on this task's branch only for a failure inside this task's own diff or a documented flake. If the fix needs a plan change, call `task_update` with #{task_ref} and status `in_progress`. Do NOT call `report_blocker` for a red CI."
   end
 
   # `nudge_contract/2` — the "## Completion Reminder" block appended after the
@@ -2452,16 +2465,23 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   defp contract_target_line(_label, nil), do: nil
   defp contract_target_line(label, value), do: "Current #{label}: `#{value}`"
 
-  defp report_blocker_instruction(task_id, stage_id, prefix \\ "Use `report_blocker`") do
+  # The verb is fixed; callers may only vary the CONDITION clause. A caller
+  # once passed a whole conditional as the old `prefix` argument and rendered
+  # a verbless line ("- If CI fails or the deploy breaks with `task_id=...`").
+  defp report_blocker_instruction(
+         task_id,
+         stage_id,
+         condition \\ "if you cannot make forward progress"
+       ) do
     case {task_id, stage_id} do
       {task_id, stage_id} when is_binary(task_id) and is_binary(stage_id) ->
-        "- #{prefix} with `task_id=#{task_id}` and `stage_id=#{stage_id}` if you cannot make forward progress."
+        "- Use `report_blocker` with `task_id=#{task_id}` and `stage_id=#{stage_id}` #{condition}."
 
       {nil, stage_id} when is_binary(stage_id) ->
-        "- #{prefix} with the task_id from the attention context and `stage_id=#{stage_id}` if you cannot make forward progress."
+        "- Use `report_blocker` with the task_id from the attention context and `stage_id=#{stage_id}` #{condition}."
 
       _ ->
-        "- #{prefix} with the current task and stage IDs from the attention context if you cannot make forward progress."
+        "- Use `report_blocker` with the current task and stage IDs from the attention context #{condition}."
     end
   end
 
