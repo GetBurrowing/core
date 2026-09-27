@@ -86,6 +86,7 @@ defmodule Platform.Meetings.AskFloor do
 
   use GenServer
 
+  alias Platform.Meetings
   alias Platform.Meetings.PressWindow
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
 
@@ -152,6 +153,15 @@ defmodule Platform.Meetings.AskFloor do
   succeeds and still expires on schedule, it just cannot self-announce
   its own expiry (there is nobody on a room topic to tell).
 
+  `space_id` (task 01a0e47c stage 2), when supplied, is stored the SAME
+  way and for the SAME reason as `room_id` — purely so a stuck-claim
+  eviction with no LiveView socket involved can still tell
+  `Platform.Meetings.ask_floor_window_signal/3` which room's LiveKit
+  data channel to signal "closed" on for the ONE agent kind that
+  listens for it (a `services/meeting-voice-agent` worker). It is never
+  compared, never part of the claim's identity, and every existing
+  5-arg caller is unaffected — this is a new, defaulted 6th argument.
+
   Returns:
 
     * `{:ok, holder}` — claimed (or already held by the SAME identity,
@@ -159,11 +169,11 @@ defmodule Platform.Meetings.AskFloor do
     * `{:error, {:held_by, holder}}` — held by a DIFFERENT identity.
     * `{:error, :invalid_identity}` — blank/non-binary identity.
   """
-  @spec claim(binary(), binary(), String.t(), String.t() | nil, binary() | nil) ::
+  @spec claim(binary(), binary(), String.t(), String.t() | nil, binary() | nil, binary() | nil) ::
           {:ok, holder()} | {:error, {:held_by, holder()}} | {:error, :invalid_identity}
-  def claim(meeting_id, agent_id, identity, display_name, room_id \\ nil)
+  def claim(meeting_id, agent_id, identity, display_name, room_id \\ nil, space_id \\ nil)
 
-  def claim(meeting_id, agent_id, identity, display_name, room_id)
+  def claim(meeting_id, agent_id, identity, display_name, room_id, space_id)
       when is_binary(meeting_id) and is_binary(agent_id) do
     case normalize_identity(identity) do
       nil ->
@@ -171,14 +181,14 @@ defmodule Platform.Meetings.AskFloor do
 
       known ->
         evict_if_stale(meeting_id, agent_id)
-        do_claim(meeting_id, agent_id, known, display_name || known, room_id, 3)
+        do_claim(meeting_id, agent_id, known, display_name || known, room_id, space_id, 3)
     end
   end
 
-  def claim(_meeting_id, _agent_id, _identity, _display_name, _room_id),
+  def claim(_meeting_id, _agent_id, _identity, _display_name, _room_id, _space_id),
     do: {:error, :invalid_identity}
 
-  defp do_claim(meeting_id, agent_id, _identity, _display_name, _room_id, 0) do
+  defp do_claim(meeting_id, agent_id, _identity, _display_name, _room_id, _space_id, 0) do
     # Practically unreachable — would need `retries` concurrent
     # claim/release races on the same key — but a bounded retry beats an
     # infinite recursion on a pathological interleaving.
@@ -188,7 +198,7 @@ defmodule Platform.Meetings.AskFloor do
     end
   end
 
-  defp do_claim(meeting_id, agent_id, identity, display_name, room_id, retries) do
+  defp do_claim(meeting_id, agent_id, identity, display_name, room_id, space_id, retries) do
     entry = %{
       meeting_id: meeting_id,
       agent_id: agent_id,
@@ -198,7 +208,7 @@ defmodule Platform.Meetings.AskFloor do
     }
 
     if :ets.insert_new(@table, {{meeting_id, agent_id}, entry}) do
-      schedule_stuck_timeout(meeting_id, agent_id, entry.pressed_at, room_id)
+      schedule_stuck_timeout(meeting_id, agent_id, entry.pressed_at, room_id, space_id)
       {:ok, entry}
     else
       case lookup(meeting_id, agent_id) do
@@ -210,7 +220,7 @@ defmodule Platform.Meetings.AskFloor do
 
         nil ->
           # Raced with a release/eviction between insert_new and lookup.
-          do_claim(meeting_id, agent_id, identity, display_name, room_id, retries - 1)
+          do_claim(meeting_id, agent_id, identity, display_name, room_id, space_id, retries - 1)
       end
     end
   end
@@ -300,7 +310,10 @@ defmodule Platform.Meetings.AskFloor do
   # ── The stuck-claim eviction ─────────────────────────────────────────────
 
   @impl true
-  def handle_info({:stuck_claim_elapsed, meeting_id, agent_id, pressed_at, room_id}, state) do
+  def handle_info(
+        {:stuck_claim_elapsed, meeting_id, agent_id, pressed_at, room_id, space_id},
+        state
+      ) do
     # Only act if this is still THE SAME claim that armed the timer — a
     # release-and-reclaim, or a claim that was never made stale in the
     # first place, carries a different `pressed_at` and this clause is a
@@ -313,6 +326,18 @@ defmodule Platform.Meetings.AskFloor do
           MeetingsPubSub.broadcast_room(room_id, {:ask_floor_released, %{agent_id: agent_id}})
         end
 
+        # Task 01a0e47c stage 2: the ONLY place a stuck (dropped-socket)
+        # claim's LiveKit "listening window" ever gets told to close —
+        # there is no LiveView process left to have called
+        # `release_ask_floor/4` for this claim, so this GenServer, which
+        # already runs exactly once regardless of how many viewers are
+        # connected, is the single correct place to do it. A no-op for
+        # every agent but the one LiveKit-dispatched voice worker (see
+        # `Meetings.ask_floor_window_signal/3`), and a no-op outright
+        # when this claim never had a `space_id` (an older/positional
+        # 5-arg caller, or no room active yet at claim time).
+        Meetings.ask_floor_window_signal(agent_id, space_id, :closed)
+
       _ ->
         :ok
     end
@@ -324,10 +349,10 @@ defmodule Platform.Meetings.AskFloor do
 
   # ── Internals ──────────────────────────────────────────────────────────────
 
-  defp schedule_stuck_timeout(meeting_id, agent_id, pressed_at, room_id) do
+  defp schedule_stuck_timeout(meeting_id, agent_id, pressed_at, room_id, space_id) do
     Process.send_after(
       __MODULE__,
-      {:stuck_claim_elapsed, meeting_id, agent_id, pressed_at, room_id},
+      {:stuck_claim_elapsed, meeting_id, agent_id, pressed_at, room_id, space_id},
       stuck_claim_ms()
     )
   end

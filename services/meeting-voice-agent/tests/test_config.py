@@ -175,3 +175,20 @@ def test_invalid_float_env_raises(monkeypatch):
     monkeypatch.setenv("MVA_VAD_MIN_SILENCE_DURATION", "not-a-float")
     with pytest.raises(ValueError, match="MVA_VAD_MIN_SILENCE_DURATION"):
         AgentConfig.from_env()
+
+
+def test_ask_floor_grace_ms_defaults_to_300_and_is_not_hardcoded_elsewhere():
+    config = AgentConfig.from_env()
+    assert config.ask_floor.grace_ms == 300
+
+
+def test_ask_floor_grace_ms_env_override_wins(monkeypatch):
+    monkeypatch.setenv("MVA_ASK_FLOOR_GRACE_MS", "750")
+    config = AgentConfig.from_env()
+    assert config.ask_floor.grace_ms == 750
+
+
+def test_ask_floor_grace_ms_can_be_zero(monkeypatch):
+    monkeypatch.setenv("MVA_ASK_FLOOR_GRACE_MS", "0")
+    config = AgentConfig.from_env()
+    assert config.ask_floor.grace_ms == 0

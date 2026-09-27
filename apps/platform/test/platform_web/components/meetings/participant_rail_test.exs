@@ -19,6 +19,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
   import Phoenix.LiveViewTest
 
   alias Platform.Meetings.AgentActivity
+  alias PlatformWeb.Components.Meetings.CandidateDisplay
   alias PlatformWeb.Components.Meetings.ParticipantRail
 
   # `/60`, not `/50` — task 01a0cf5d stage 3 raised both headings' label
@@ -1250,6 +1251,40 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       [classes] = Floki.attribute(control, "class")
       assert classes =~ "bg-base-300"
       assert classes =~ "text-neutral"
+    end
+  end
+
+  # Task 01a0e47c stage 3 (canvas 01a0e47d-3005 / Harper's mockup
+  # 01a0e47c-a1b4): the ask-veil's HEARD box is dashed, not the flat
+  # solid card it used to be, and carries a numbered ladder-rung label —
+  # the SAME text `CandidateDisplay.stage_label(:heard)` produces, so a
+  # future rename of the rung's wording cannot drift between this box
+  # and the card it flies into (`CandidateRail.live_card/1`).
+  describe "the ask-veil's HEARD box" do
+    test "is dashed, carries the '1 · heard' rung, and still hosts the transcript and meter" do
+      html = hold_rail([agent("Octavius", "oct-1")], hold_to_talk?: true)
+
+      [heard_box] =
+        Floki.parse_fragment!(html) |> Floki.find(~s([data-role="meeting-ask-heard-box"]))
+
+      [classes] = Floki.attribute(heard_box, "class")
+      assert classes =~ "border-dashed"
+
+      [step] = Floki.find(heard_box, ~s([data-role="meeting-ask-step"]))
+      assert Floki.text(step) |> String.trim() == CandidateDisplay.stage_label(:heard)
+
+      # The transcript and meter still live INSIDE the dashed box, not
+      # beside it — the box is the whole "HEARD" unit the mockup draws,
+      # not a separate label floating above the existing card.
+      assert Floki.find(heard_box, ~s([data-role="meeting-ask-transcript"])) != []
+      assert Floki.find(heard_box, ~s([data-role="meeting-ask-meter"])) != []
+
+      # The overlay header ("Asking …") is a SIBLING of the dashed box,
+      # not inside it — the header names WHO is being asked, the box is
+      # the HEARD unit underneath it, matching the mockup's layout.
+      parsed = Floki.parse_fragment!(html)
+      [label] = Floki.find(parsed, ~s([data-role="meeting-ask-label"]))
+      assert Floki.find([label], ~s([data-role="meeting-ask-heard-box"])) == []
     end
   end
 end

@@ -160,6 +160,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
   import PlatformWeb.Components.Meetings.AgentActivityBadge
 
   alias PlatformWeb.Components.Meetings.AgentActivityBadge
+  alias PlatformWeb.Components.Meetings.CandidateDisplay
 
   import PlatformWeb.AvatarComponents
 
@@ -881,7 +882,40 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
            relayout, at the size/colour the canvas specifies for that
            text ahead of time (`text-base text-base-content`, one step up
            from the chat body's `text-sm`, no mono/display font — "it is
-           speech, not data"). --%>
+           speech, not data").
+
+           Task 01a0e47c stage 3, design canvas 01a0e47d-3005: the
+           transcript/meter pair sits inside its own dashed "HEARD box"
+           (`meeting-ask-heard-box`), matching Harper's own mockup
+           (canvas 01a0e47c-a1b4) rather than the flat card this used to
+           be. `rounded-box border-dashed border-base-content/30
+           bg-base-100` is the direction's own palette row, not
+           `border-edge` (the dashed token `call_recap.ex`/`call_shell.ex`
+           use elsewhere): the direction did the contrast math for THIS
+           specific box on THIS specific fill and rejected the obvious
+           choices for it by name ("cyan on white is 1.79:1 and fails as
+           a visible border"). A screenshot render of `border-edge` here
+           measured the same failure — `--edge` is `oklch(88% 0 0)` on
+           `--color-base-100`'s `oklch(100% 0 0)` in the light theme, a
+           12-point gap that reads as barely-there on the same white
+           fill, where `base-content/30` (black at 30% opacity over
+           white) is the direction's actual answer and the one that
+           paints visibly. `base-content` at a fractional opacity is
+           still a semantic slot, not a hand-picked hex — the same
+           pattern `text-base-content/60` already uses throughout this
+           file — so this is not a new one-off token, just the specific
+           slot the direction names for this specific box. The step label inside it
+           (`meeting-ask-step`) reads `CandidateDisplay.stage_label(:heard)`
+           — the SAME "1 · heard" ladder rung `CandidateRail` now paints
+           on the card this box becomes (see that module's `live_card/1`),
+           so the number is not a running counter invented here: it is
+           the one MeetingCandidate rung both surfaces already agree on.
+           Per the direction's own self-critique, continuity is carried
+           by the SAME OBJECT flying into the card
+           (`MeetingAskFloorVeil._flyCard`), not by the numbers matching
+           a sequence — the shared "1 · heard" label is what lets a
+           viewer read that this box IS step 1 of the ladder the landed
+           card keeps climbing, nothing more. --%>
       <div
         :if={@hold_to_talk?}
         id={"#{@id_prefix}-ask-veil"}
@@ -897,24 +931,35 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
           data-role="meeting-ask-card"
         >
           <span
-            class="text-xs font-medium text-base-content/60"
+            class="text-sm font-semibold text-base-content"
             data-role="meeting-ask-label"
           >
             Asking…
           </span>
-          <p
-            class="min-h-10 text-base text-base-content"
-            data-role="meeting-ask-transcript"
+          <div
+            class="flex flex-col gap-2 rounded-box border border-dashed border-base-content/30 bg-base-100 p-3"
+            data-role="meeting-ask-heard-box"
           >
-          </p>
-          <div class="flex h-6 items-center gap-1" data-role="meeting-ask-meter">
             <span
-              :for={_bar <- 1..12}
-              data-ptt-bar
-              class="h-full w-1 origin-center rounded-full bg-primary opacity-70 transition-transform duration-75"
-              style="transform: scaleY(0.08)"
+              class="text-[10px] font-semibold uppercase tracking-wider text-base-content/60"
+              data-role="meeting-ask-step"
             >
+              {CandidateDisplay.stage_label(:heard)}
             </span>
+            <p
+              class="min-h-10 text-base text-base-content"
+              data-role="meeting-ask-transcript"
+            >
+            </p>
+            <div class="flex h-6 items-center gap-1" data-role="meeting-ask-meter">
+              <span
+                :for={_bar <- 1..12}
+                data-ptt-bar
+                class="h-full w-1 origin-center rounded-full bg-primary opacity-70 transition-transform duration-75"
+                style="transform: scaleY(0.08)"
+              >
+              </span>
+            </div>
           </div>
         </div>
       </div>

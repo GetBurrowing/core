@@ -4284,6 +4284,15 @@ defmodule PlatformWeb.MeetingLive do
   # to disable and label every OTHER agent's row; the presser's OWN row
   # still reads `:pressed_agent_id` for its "Talking…" cue, so the two
   # never collide for the person actually holding the floor.
+  #
+  # This clause deliberately does NOT also fire the task 01a0e47c stage 2
+  # LiveKit ask-floor signal — every connected client's socket receives
+  # THIS broadcast, so doing it here would send one real "open"/"closed"
+  # per viewer instead of once per event. `claim_ask_floor/4` and
+  # `release_ask_floor/4` below call `Meetings.ask_floor_window_signal/3`
+  # directly instead, since each of those runs exactly once per real
+  # claim/release (on the presser's own socket, which is also the only
+  # socket that ever calls them).
   def handle_info({:ask_floor_taken, %{agent_id: agent_id, display_name: display_name}}, socket) do
     holders = Map.put(socket.assigns[:ask_floor_holders] || %{}, agent_id, display_name)
     {:noreply, assign(socket, :ask_floor_holders, holders)}
@@ -4295,6 +4304,12 @@ defmodule PlatformWeb.MeetingLive do
   # `AskFloor` broadcasts it itself when a dropped socket's claim goes
   # stale. Either way the agent's button should un-freeze; this clause
   # does not need to know which case it is.
+  #
+  # Same reasoning as `:ask_floor_taken` above for NOT also signaling
+  # LiveKit here: `release_ask_floor/4` covers the explicit-release path
+  # exactly once, and `AskFloor`'s own stuck-claim timer covers the
+  # dropped-socket path exactly once (see its moduledoc) — both fire
+  # this same broadcast, but neither needs THIS clause to also act.
   def handle_info({:ask_floor_released, %{agent_id: agent_id}}, socket) do
     holders = Map.delete(socket.assigns[:ask_floor_holders] || %{}, agent_id)
     {:noreply, assign(socket, :ask_floor_holders, holders)}
@@ -6288,12 +6303,40 @@ defmodule PlatformWeb.MeetingLive do
   # fires with no LiveView process involved), but this one is ordinary
   # request/response and belongs with every other room-topic publish
   # this module already owns.
+  # The chat space id `claim_ask_floor/4`/`release_ask_floor/4` pass to
+  # `Meetings.ask_floor_window_signal/3` — the room name the LiveKit
+  # signal reaches is derived from THIS, via `Meetings.room_name_for_space/1`,
+  # the same convention every other LiveKit room-name caller in this
+  # codebase uses. `nil` when `:meeting` hasn't landed in assigns yet
+  # (there is no room for a floor event to have fired against in that
+  # case, so `ask_floor_window_signal/3`'s own `is_binary(space_id)`
+  # guard makes this a no-op rather than a crash).
+  defp ask_floor_signal_space_id(socket) do
+    case socket.assigns[:meeting] do
+      %{chat_space_id: space_id} -> space_id
+      _ -> nil
+    end
+  end
+
   defp claim_ask_floor(_socket, _meeting_id, nil, _identity), do: :untargeted
 
   defp claim_ask_floor(socket, meeting_id, agent_id, identity) do
     room_id = socket.assigns[:subscribed_room_id]
+    space_id = ask_floor_signal_space_id(socket)
 
-    case AskFloor.claim(meeting_id, agent_id, identity, socket.assigns[:display_name], room_id) do
+    # `space_id` is passed to `AskFloor.claim/6` (a new, defaulted 6th
+    # argument — every existing 5-arg caller/test is unaffected) purely
+    # so a LATER stuck-claim eviction (no LiveView socket involved,
+    # task 01a0e47c stage 2) can still close this exact LiveKit window;
+    # it is never compared and never gates the claim itself.
+    case AskFloor.claim(
+           meeting_id,
+           agent_id,
+           identity,
+           socket.assigns[:display_name],
+           room_id,
+           space_id
+         ) do
       {:ok, holder} = ok ->
         if is_binary(room_id) do
           MeetingsPubSub.broadcast_room(
@@ -6301,6 +6344,17 @@ defmodule PlatformWeb.MeetingLive do
             {:ask_floor_taken, %{agent_id: agent_id, display_name: holder.display_name}}
           )
         end
+
+        # Task 01a0e47c stage 2: signal "listening window open" into this
+        # agent's LiveKit room — exactly once, since this branch only
+        # ever runs for a claim `AskFloor.claim/6`'s atomic lock actually
+        # granted (never for a `{:error, {:held_by, _}}` refusal below,
+        # so a refused second claim can never partially open the gate).
+        # `ask_floor_window_signal/3` is itself a no-op for every agent
+        # but the one LiveKit-dispatched voice worker
+        # (`Meetings.livekit_dispatch_target/1`), so every other roster
+        # agent's hold-to-ask flow is completely unaffected by this line.
+        Meetings.ask_floor_window_signal(agent_id, space_id, :open)
 
         ok
 
@@ -6328,6 +6382,12 @@ defmodule PlatformWeb.MeetingLive do
           _ ->
             :ok
         end
+
+        # Task 01a0e47c stage 2: the explicit-release half of "listening
+        # window closed" — the stuck-claim-timeout half lives inside
+        # `AskFloor` itself (see its moduledoc), exactly like the
+        # `:ask_floor_released` PubSub broadcast this mirrors.
+        Meetings.ask_floor_window_signal(agent_id, ask_floor_signal_space_id(socket), :closed)
 
       _not_held_or_missing ->
         :ok

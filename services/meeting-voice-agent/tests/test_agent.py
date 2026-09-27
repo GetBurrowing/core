@@ -45,6 +45,7 @@ def test_entrypoint_connects_builds_session_and_starts():
         patch.object(agent_module, "build_tool_surface", return_value=fake_tools) as mock_tools,
         patch.object(agent_module, "MeetingVoiceAgent") as mock_persona_cls,
         patch.object(agent_module.tool_telemetry, "attach_tool_call_telemetry") as mock_attach,
+        patch.object(agent_module.ask_floor_gate, "attach_ask_floor_gate") as mock_ask_floor,
     ):
         mock_agent_instance = MagicMock()
         mock_persona_cls.return_value = mock_agent_instance
@@ -60,6 +61,9 @@ def test_entrypoint_connects_builds_session_and_starts():
     assert mock_persona_cls.call_args.kwargs["tools"] == fake_tools
     assert mock_persona_cls.call_args.kwargs["space_id"] is None
     mock_attach.assert_called_once_with(mock_session, ctx.room)
+    mock_ask_floor.assert_called_once()
+    assert mock_ask_floor.call_args.args[0] is mock_session
+    assert mock_ask_floor.call_args.args[1] is ctx.room
     mock_session.start.assert_awaited_once_with(
         agent=mock_agent_instance, room=ctx.room, room_options=NOT_GIVEN
     )

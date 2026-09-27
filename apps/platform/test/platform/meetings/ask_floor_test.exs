@@ -32,8 +32,8 @@ defmodule Platform.Meetings.AskFloorTest do
   # technique `press_card_test.exs` uses for `PressWindow`'s
   # `:grace_elapsed` timer, so the anti-vacuity claims below stay well
   # under `AskFloor.stuck_claim_ms/0` (120s) without sleeping through it.
-  defp elapse_stuck_claim(meeting_id, agent_id, pressed_at, room_id) do
-    send(AskFloor, {:stuck_claim_elapsed, meeting_id, agent_id, pressed_at, room_id})
+  defp elapse_stuck_claim(meeting_id, agent_id, pressed_at, room_id, space_id \\ nil) do
+    send(AskFloor, {:stuck_claim_elapsed, meeting_id, agent_id, pressed_at, room_id, space_id})
     # Synchronise on the GenServer so handle_info has run before the
     # caller asserts on the table or polls for a broadcast.
     :sys.get_state(AskFloor)

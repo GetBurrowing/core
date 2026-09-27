@@ -18,7 +18,7 @@ from livekit.agents import AgentSession, JobContext, WorkerOptions, cli
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.voice.room_io import RoomOptions
 
-from meeting_voice_agent import mcp_tools, tool_telemetry
+from meeting_voice_agent import ask_floor_gate, mcp_tools, tool_telemetry
 from meeting_voice_agent.config import AgentConfig
 from meeting_voice_agent.persona import MeetingVoiceAgent
 from meeting_voice_agent.session import build_agent_session
@@ -108,6 +108,13 @@ async def entrypoint(ctx: JobContext) -> None:
     # actually happened, instead of the harness's `tool_call` field always
     # reading `False`. See `tool_telemetry.py`.
     tool_telemetry.attach_tool_call_telemetry(session, ctx.room)
+
+    # Task 01a0e47c stage 2: gate the whole VAD/STT/LLM pipeline to the
+    # hold-to-ask window Core's `AskFloor.claim/5`/`release/3` open and
+    # close on this exact room's data channel. Attached BEFORE
+    # `session.start()` so input starts detached -- nothing is listened to
+    # before the first real "open". See `ask_floor_gate.py`.
+    ask_floor_gate.attach_ask_floor_gate(session, ctx.room, config.ask_floor.grace_ms)
 
     room_options = build_room_options(human_identity)
     await session.start(agent=agent, room=ctx.room, room_options=room_options)

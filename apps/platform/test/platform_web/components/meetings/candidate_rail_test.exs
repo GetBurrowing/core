@@ -440,20 +440,39 @@ defmodule PlatformWeb.Components.Meetings.CandidateRailTest do
                "candidate-card--forming"
     end
 
-    test "the stage-machine label is gone from every card" do
-      cards = [
-        candidate(%{state: :heard, classified_intent: nil}),
-        candidate(%{state: :thinking}),
-        candidate(%{state: :shaping}),
-        candidate(%{state: :acting})
-      ]
+    test "the stage-machine label leads no FORMING card, but a settled card carries its ladder rung" do
+      # Task 01a0e47c stage 3 (canvas 01a0e47d-3005) revisits this
+      # ruling, not reverses it. The defect the original removal fixed
+      # was leading a still-shimmering, nothing-to-show-yet card with a
+      # bare ordinal instead of the actor sentence below — that stays
+      # fixed, asserted here on the skeleton/forming pair exactly as
+      # before. What changed is Harper's later, more specific complaint
+      # ("the connection to the cards") and his own mockup: a `:full`
+      # card, which already carries a title/quote/byline and is not
+      # what the original removal was about, now carries its rung
+      # (`data-role="meeting-candidate-step"`, never the old
+      # `meeting-candidate-stage`) so a viewer can read "3 · taking
+      # shape" / "4 · acting" on the SAME card the ask-veil's own
+      # "1 · heard" flew into.
+      skeleton = candidate(%{state: :heard, classified_intent: nil})
+      forming = candidate(%{state: :thinking})
+      shaping = candidate(%{state: :shaping})
+      acting = candidate(%{state: :acting})
 
-      html = rail(cards)
+      html = rail([skeleton, forming, shaping, acting])
 
-      # Not on any card, and not as the words either — `1 · heard` was
-      # a fact about our pipeline, not about the card.
+      # Never the pre-01a0e47c stage element name.
       refute present?(LazyHTML.from_fragment(html), "[data-role='meeting-candidate-stage']")
-      refute html =~ "taking shape"
+
+      for card <- [skeleton, forming] do
+        refute present?(node(html, card), "[data-role='meeting-candidate-step']")
+      end
+
+      assert text_of(node(html, shaping), "[data-role='meeting-candidate-step']") =~
+               "taking shape"
+
+      assert text_of(node(html, acting), "[data-role='meeting-candidate-step']") =~
+               "acting"
     end
 
     test "the forming sentence names a REAL agent, or says nothing at all" do

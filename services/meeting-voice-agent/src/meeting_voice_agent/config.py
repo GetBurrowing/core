@@ -178,6 +178,42 @@ class EndpointingConfig:
 
 
 @dataclass(frozen=True)
+class AskFloorConfig:
+    """Hold-to-ask listening-window gating (task 01a0e47c stage 2).
+
+    Core (Elixir) signals "listening window open" over the room's LiveKit
+    data channel the instant `Platform.Meetings.AskFloor.claim/5` succeeds
+    for this agent, and "closed" on release (or the existing stuck-claim
+    timeout) -- see `ask_floor_gate.py`. Before the first "open" and after
+    every "closed", this session's own audio INPUT is detached
+    (`AgentSession.input.set_audio_enabled(False)`), which the SDK's
+    `_ParticipantAudioInputStream._forward_task` (room_io/_input.py) turns
+    into an outright DISCARD at the source -- frames are read off the
+    track and dropped, never queued or buffered -- so nothing ever crosses
+    from one hold into the next.
+
+    `grace_ms` is the ONE declared experiment surface for this gate: how
+    many milliseconds of audio still reach VAD/STT after a "closed" signal
+    before the pipe is force-detached. It exists because release and the
+    LAST word spoken are not simultaneous -- a human's finger comes up
+    slightly before their sentence finishes, or the "closed" signal simply
+    arrives a beat after the true release. Zero grace clips trailing
+    words (false cutoff, measured as truncated final syllables/words in a
+    hold's transcript); too much grace lets ambient/next-turn speech leak
+    into a reply that was never asked for (false bleed-through, measured
+    as a reply generated from audio spoken after the human's own release).
+    Tune by replaying recorded hold sessions and counting each rate
+    against this value -- never hard-coded, always this field.
+    """
+
+    grace_ms: int = 300
+
+    @classmethod
+    def from_env(cls) -> AskFloorConfig:
+        return cls(grace_ms=_env_int("MVA_ASK_FLOOR_GRACE_MS", 300))
+
+
+@dataclass(frozen=True)
 class McpConfig:
     """Core's MCP tool surface (task 01a0d4a0 stage 3).
 
@@ -223,6 +259,7 @@ class AgentConfig:
     turn_detector: TurnDetectorConfig
     interruption: InterruptionConfig
     endpointing: EndpointingConfig
+    ask_floor: AskFloorConfig
     mcp: McpConfig
     preemptive_generation: bool
     agent_name: str
@@ -251,6 +288,7 @@ class AgentConfig:
             turn_detector=TurnDetectorConfig.from_env(),
             interruption=InterruptionConfig.from_env(),
             endpointing=EndpointingConfig.from_env(),
+            ask_floor=AskFloorConfig.from_env(),
             mcp=McpConfig.from_env(),
             preemptive_generation=_env_bool("MVA_PREEMPTIVE_GENERATION", True),
             agent_name=_env_str("MVA_AGENT_NAME", "meeting-voice-agent"),

@@ -6874,6 +6874,12 @@ defmodule Platform.Meetings do
   # declares a LiveKit `agent_name`. Rows come brain-first from
   # `runtimes_for_agent/1`, matching `resolve_voice_target/1`'s own order of
   # preference.
+  #
+  # Public (not `defp`) since task 01a0e47c stage 2: `ask_floor_window_signal/3`
+  # uses this exact resolution to decide whether a claimed/released agent is
+  # the ONE Python service that listens for an ask-floor LiveKit signal at
+  # all — every other roster agent (text-only, or RuntimeChannel-based
+  # voice) has no target here and the signal call is a no-op for it.
   @spec livekit_dispatch_target(Agent.t()) ::
           {:ok,
            %{
@@ -6883,7 +6889,7 @@ defmodule Platform.Meetings do
              livekit_agent_name: String.t()
            }}
           | {:error, :no_livekit_dispatch_target}
-  defp livekit_dispatch_target(%Agent{} = agent) do
+  def livekit_dispatch_target(%Agent{} = agent) do
     agent
     |> Federation.runtimes_for_agent()
     |> Enum.find_value(fn %AgentRuntime{runtime_id: runtime_id, metadata: metadata} = runtime ->
@@ -7155,6 +7161,130 @@ defmodule Platform.Meetings do
 
       case Req.post(livekit_req_client(),
              url: "#{twirp_url}/twirp/livekit.AgentDispatchService/CreateDispatch",
+             json: body,
+             headers: [{"authorization", "Bearer #{token}"}],
+             receive_timeout: 5_000,
+             retry: false
+           ) do
+        {:ok, %{status: status}} when status in [200, 201] -> :ok
+        {:ok, %{status: status, body: resp_body}} -> {:error, {:http_error, status, resp_body}}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+  rescue
+    e -> {:error, {:exception, Exception.message(e)}}
+  end
+
+  # Task 01a0e47c stage 2's data-channel topic. Documented (and MUST stay in
+  # sync — no shared constant crosses the Elixir/Python boundary) in
+  # `services/meeting-voice-agent/src/meeting_voice_agent/ask_floor_gate.py`'s
+  # `ASK_FLOOR_TOPIC`.
+  @ask_floor_data_topic "mva.ask_floor"
+
+  @doc """
+  Send `"listening window open"` / `"listening window closed"` into a
+  meeting's LiveKit room over the data channel, for the meeting-assistant
+  voice agent ONLY (task 01a0e47c stage 2 — the actual gap: the hold-to-ask
+  UI/lock existed, but the voice backend never heard about it).
+
+  ## Why this is a no-op for every other roster agent
+
+  `AskFloor.claim/5`/`release/3` are agent-id-agnostic — they know nothing
+  about voice at all, by design (see `AskFloor`'s moduledoc). This function
+  is the one place that DOES care: it resolves `agent_id` and asks
+  `livekit_dispatch_target/1` whether it is the one kind of runtime that
+  actually listens on a LiveKit data channel (a `services/meeting-voice-agent`
+  worker, dispatched via LiveKit Agent Dispatch rather than `RuntimeChannel`).
+  Every text-only agent, and every OTHER voice worker that never declared a
+  LiveKit `agent_name`, resolves to `{:error, :no_livekit_dispatch_target}`
+  here and this is a silent, total no-op for it — `AskFloor`'s existing
+  behavior for any agent but this one Python service is unchanged.
+
+  ## Best-effort, by design
+
+  Any resolution failure (unknown agent, no space_id, LiveKit unreachable
+  or unconfigured) returns `:ok` — this rides alongside `AskFloor.claim/5`/
+  `release/3`, which must keep working (and the floor lock itself must stay
+  correct) even when LiveKit is completely unreachable. A real LiveKit
+  failure is logged at `warning`, never raised into the caller.
+
+  `event` is `:open` (claim succeeded) or `:closed` (release, or the
+  stuck-claim timeout — see `PlatformWeb.MeetingLive`'s shared
+  `handle_info({:ask_floor_released, ...})` clause, which the moduledoc
+  there already notes fires identically for both cases). `space_id` is
+  the meeting's chat space id; the room name is derived from it via
+  `room_name_for_space/1`, the SAME convention every other LiveKit room-name
+  caller in this module uses, so this reaches the exact room the worker is
+  already connected to.
+  """
+  @spec ask_floor_window_signal(binary(), binary() | nil, :open | :closed) :: :ok
+  def ask_floor_window_signal(agent_id, space_id, event)
+      when is_binary(agent_id) and event in [:open, :closed] do
+    with true <- is_binary(space_id),
+         %Agent{} = agent <- resolve_agent(agent_id),
+         {:ok, target} <- livekit_dispatch_target(agent) do
+      room_name = room_name_for_space(space_id)
+      payload = Jason.encode!(%{"event" => Atom.to_string(event), "agent_id" => agent_id})
+
+      case send_livekit_room_data(room_name, @ask_floor_data_topic, payload) do
+        :ok ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning(
+            "[Meetings] ask-floor LiveKit signal failed agent=#{agent_id} " <>
+              "runtime=#{target.runtime_id} event=#{event} room=#{room_name}: #{inspect(reason)}"
+          )
+
+          :ok
+      end
+    else
+      _ -> :ok
+    end
+  end
+
+  def ask_floor_window_signal(_agent_id, _space_id, _event), do: :ok
+
+  @doc """
+  Send an application data message into a LiveKit room over
+  `RoomService/SendData` (task 01a0e47c stage 2). `topic` and `payload` are
+  opaque to this function — `ask_floor_window_signal/3` is the only caller
+  today and documents the wire shape both sides agree on. Uses the same
+  `roomAdmin`-scoped token `create_livekit_agent_dispatch/3` and
+  `list_livekit_participants/1` do; RoomService refuses anything narrower.
+  Sent `RELIABLE` (not `LOSSY`) — a dropped open/close signal would either
+  strand the worker listening past its window or never let it listen at
+  all, so this is exactly the kind of message worth the extra delivery
+  guarantee.
+  """
+  @spec send_livekit_room_data(String.t(), String.t(), String.t()) ::
+          :ok | {:error, :livekit_not_configured | term()}
+  def send_livekit_room_data(room_name, topic, payload)
+      when is_binary(room_name) and is_binary(topic) and is_binary(payload) do
+    config = livekit_config()
+    url = config[:url]
+    api_key = config[:api_key]
+    api_secret = config[:api_secret]
+
+    if is_nil(url) or is_nil(api_key) or is_nil(api_secret) do
+      {:error, :livekit_not_configured}
+    else
+      token = room_admin_token(api_key, api_secret, room_name)
+
+      twirp_url =
+        url
+        |> String.replace_prefix("wss://", "https://")
+        |> String.replace_prefix("ws://", "http://")
+
+      body = %{
+        "room" => room_name,
+        "data" => Base.encode64(payload),
+        "kind" => "RELIABLE",
+        "topic" => topic
+      }
+
+      case Req.post(livekit_req_client(),
+             url: "#{twirp_url}/twirp/livekit.RoomService/SendData",
              json: body,
              headers: [{"authorization", "Bearer #{token}"}],
              receive_timeout: 5_000,

@@ -355,6 +355,51 @@ defmodule PlatformWeb.Components.Meetings.CandidateRail do
       data-candidate-id={@candidate.id}
       data-stage={CandidateDisplay.slug(@candidate.state)}
     >
+      <%!-- THE LADDER RUNG (task 01a0e47c stage 3, canvas 01a0e47d-3005).
+             `1 · HEARD` was removed from the FORMING card below for a
+             real reason (see that comment) — a bare ordinal is a fact
+             about the pipeline, not the card, while it is still
+             shimmering with nothing to show. A `:full` card is past
+             that: it already carries a title, a quote and a byline, so
+             a small rung label ADDS the one thing Harper named
+             explicitly missing — "the connection to the cards" — without
+             repeating the removed defect, because there is a real card
+             here for the number to be ABOUT.
+
+             This is deliberately the SAME text
+             `CandidateDisplay.stage_label/1` already produces (no
+             second copy of "3 · taking shape" invented here) and the
+             SAME classes the ask-veil's own `meeting-ask-step` node
+             wears (`ParticipantRail`) — a viewer who watched "1 · heard"
+             in the overlay and then sees "3 · taking shape" here, on the
+             card that flew out of it (`data-candidate-id` matches the
+             `meeting_ask_outcome` payload's `candidate_id`), reads both
+             as rungs of ONE ladder rather than two unrelated captions.
+             Per the design canvas's self-critique this is NOT a running
+             1-2-3 counter across the two surfaces — the numbers are
+             fixed rungs (heard=1, thinking=2, shaping=3, acting=4) and
+             the object flying between them is what carries continuity,
+             this label just makes each rung legible where it lands.
+
+             `presentation(@candidate) == :full` is exactly "shaping or
+             acting" here — a live (non-closed) card only reaches `:full`
+             once it has left `:heard`/`:thinking` (see `presentation/1`)
+             — so this can never appear beside the forming sentence
+             above, which is gated on the complementary
+             `forming?(@candidate)`. The kind note (`TASK`/`CANVAS`)
+             rides along when one is known: `outcome_kind_label/1` once
+             a deliverable exists, `armed_outcome_label/1` while it is
+             still armed and counting down — the same two functions
+             `card_head`/`countdown_foot` already trust for that fact,
+             not a third guess at it here. --%>
+      <p
+        :if={presentation(@candidate) == :full}
+        class="text-[10px] font-semibold uppercase tracking-wider text-base-content/60"
+        data-role="meeting-candidate-step"
+      >
+        {step_label_text(@candidate)}
+      </p>
+
       <%!-- ACTOR AND ACTION, where the numbered stage label used to
              be. `1 · HEARD` named a position in a state machine, which
              is a fact about our pipeline rather than about the card;
@@ -1235,6 +1280,34 @@ defmodule PlatformWeb.Components.Meetings.CandidateRail do
   # reach.
   defp flip_label(%{outcome_kind: :artifact}), do: "Make it a task instead"
   defp flip_label(_candidate), do: "Make it a canvas instead"
+
+  # The ladder-rung caption for a `:full` live card — `CandidateDisplay.
+  # stage_label/1`'s "3 · taking shape", plus the kind note when one is
+  # known. `outcome_kind_label/1` is checked FIRST because it answers
+  # from a stored id (a reached deliverable); `armed_outcome_label/1` is
+  # the fallback for a still-counting-down card that has not reached one
+  # yet. Both can answer nil (an unarmed, disarmed, or not-yet-classified
+  # `:acting` row) and the label simply carries no kind note then — never
+  # a third, invented guess.
+  defp step_label_text(candidate) do
+    case ladder_kind_note(candidate) do
+      nil -> CandidateDisplay.stage_label(candidate.state)
+      note -> CandidateDisplay.stage_label(candidate.state) <> " · " <> note
+    end
+  end
+
+  defp ladder_kind_note(candidate) do
+    case CandidateDisplay.outcome_kind_label(candidate) do
+      nil ->
+        case CandidateDisplay.armed_outcome_label(candidate) do
+          nil -> nil
+          noun -> String.upcase(noun)
+        end
+
+      kind ->
+        kind
+    end
+  end
 
   # ── Derivations ────────────────────────────────────────────────────────
 
