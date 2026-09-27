@@ -20,7 +20,7 @@ defmodule Platform.Org.Wiki.SearchLexicalQueryTest do
   depends on when CI runs. Everything asserted here is lexical.
   """
 
-  use Platform.DataCase, async: false
+  use Platform.DataCase, async: true
 
   alias Platform.Org.Wiki.Search
   alias Platform.Repo

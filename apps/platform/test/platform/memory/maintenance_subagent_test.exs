@@ -15,7 +15,7 @@ defmodule Platform.Memory.MaintenanceSubagentTest do
       would silently balloon the LLM subagent context once the runner
       grows an LLM invocation in the follow-up stage.
   """
-  use Platform.DataCase, async: false
+  use Platform.DataCase, async: true
 
   alias Platform.Audit
   alias Platform.Memory.MaintenanceSubagent

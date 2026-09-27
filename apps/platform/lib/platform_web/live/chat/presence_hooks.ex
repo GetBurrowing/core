@@ -774,16 +774,19 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
   defp ensure_native_agent_presence(space_id) do
     status = WorkspaceBootstrap.status()
 
+    # Task 01a089e5 stage 3: both branches were a bare `Task.start` — see
+    # `WorkspaceBootstrap.boot_async/1` for why this now runs under
+    # `Platform.TaskSupervisor`.
     case status do
       %{configured?: true, agent: %{}} ->
         if status.pid, do: allow_runtime_sandbox(status.pid)
 
         unless status.reachable? do
-          Task.start(fn -> WorkspaceBootstrap.boot() end)
+          WorkspaceBootstrap.boot_async()
         end
 
       _ ->
-        Task.start(fn -> WorkspaceBootstrap.boot() end)
+        WorkspaceBootstrap.boot_async()
     end
 
     ChatPresence.native_agent_presence(space_id)

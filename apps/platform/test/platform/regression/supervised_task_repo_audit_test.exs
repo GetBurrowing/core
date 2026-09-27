@@ -84,6 +84,39 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
   #     guard against that shadowing shape itself.
   @task_supervisor_site_regex ~r/(?:Elixir\.)?Task\.Supervisor\.(?:async_nolink|start_child)\(\s*(?:Platform\.TaskSupervisor|[a-z_]*task_supervisor\(\))/
 
+  # THE single definition of "this source contains a rescue clause that
+  # protects DBConnection.OwnershipError". Widened 2026-09-27 (task
+  # 01a089e5 stage 2) — the previous inline regex,
+  # `~r/rescue\s+DBConnection\.OwnershipError\s*->/`, matched ONLY the
+  # literal unbound clause head. Two real, correctly-protected shapes
+  # read as "no rescue at all" under that regex:
+  #
+  #   * a BOUND form, `rescue e in DBConnection.OwnershipError -> ...`
+  #     (any valid Elixir identifier as the binding);
+  #   * a comment or blank line inserted between the `rescue` keyword
+  #     and the `DBConnection.OwnershipError ->` clause head (common
+  #     when the author leaves a note on WHY the rescue exists).
+  #
+  # This is a DETECTION fix only — it does not change what counts as
+  # "protected" behaviorally, only what SOURCE SYNTAX the audit can
+  # recognize as the existing protection. It is deliberately NOT the
+  # same as the moduledoc's "Necessary, not sufficient" caveat above
+  # (task 019f9d80 stage 3) about the `async: false` shape, where the
+  # child inherits the sandbox owner's connection and the owner exiting
+  # mid-write arrives as a process EXIT no `rescue` clause can catch —
+  # that gap is closed by `Platform.SandboxHelpers.await_supervised_writes/1`
+  # via `DataCase`'s `on_exit`, not by this regex, and remains exactly as
+  # documented.
+  #
+  # A regex (rather than a hand-written parser) is enough to express all
+  # three accepted shapes cleanly: `(?:\s|#[^\n]*)*` walks across any mix
+  # of whitespace/newlines and full-line comments between `rescue` and
+  # the clause head, and `(?:[a-zA-Z_]\w*\s+in\s+)?` optionally consumes
+  # a single bound identifier immediately before the exception name.
+  # Scoped to exactly these named shapes — this is not a general
+  # Elixir `rescue`-clause parser and isn't meant to be.
+  @rescue_clause_regex ~r/rescue(?:\s|#[^\n]*)*(?:[a-zA-Z_]\w*\s+in\s+)?DBConnection\.OwnershipError\s*->/
+
   # Modules that call `Task.Supervisor.(async_nolink|start_child)` under
   # `Platform.TaskSupervisor` but do NOT need a `rescue
   # DBConnection.OwnershipError` clause. Each entry MUST cite the reason
@@ -294,6 +327,67 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
     end
   end
 
+  # ── Anti-vacuity: rescue-clause detection widening ────────────────
+  #
+  # Task 01a089e5 stage 2. These fixtures are synthetic source strings
+  # (never edits to real lib/ files) that pin `rescues_ownership_error?/1`
+  # against exactly the shapes the widening was meant to accept — and the
+  # one shape it must still reject — so the relaxation is proven to widen
+  # accepted SYNTAX without widening what counts as protected BEHAVIOR.
+  describe "rescues_ownership_error?/1 (fixture-based, anti-vacuity)" do
+    test "PASSES a bound rescue form (`e in DBConnection.OwnershipError ->`)" do
+      source = """
+      defmodule Fixture.BoundRescue do
+        def spawn_it do
+          Task.Supervisor.async_nolink(Platform.TaskSupervisor, fn ->
+            try do
+              Repo.get(User, 1)
+            rescue
+              e in DBConnection.OwnershipError -> {:error, e}
+            end
+          end)
+        end
+      end
+      """
+
+      assert rescues_ownership_error?(source)
+    end
+
+    test "PASSES an unbound form with a comment between `rescue` and the clause head" do
+      source = """
+      defmodule Fixture.CommentedRescue do
+        def spawn_it do
+          Task.Supervisor.async_nolink(Platform.TaskSupervisor, fn ->
+            try do
+              Repo.get(User, 1)
+            rescue
+              # sandbox owner may have already checked its connection back
+              # in by the time this child runs — expected under async: true.
+              DBConnection.OwnershipError -> :ok
+            end
+          end)
+        end
+      end
+      """
+
+      assert rescues_ownership_error?(source)
+    end
+
+    test "FAILS a Task.Supervisor site with genuinely no rescue clause at all" do
+      source = """
+      defmodule Fixture.NoRescue do
+        def spawn_it do
+          Task.Supervisor.async_nolink(Platform.TaskSupervisor, fn ->
+            Repo.get(User, 1)
+          end)
+        end
+      end
+      """
+
+      refute rescues_ownership_error?(source)
+    end
+  end
+
   # ── Assertion 2: Start-flag audit ─────────────────────────────────
 
   describe "Platform.Application maybe_add_* start flags" do
@@ -403,16 +497,11 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
 
         # Match the literal clause head `DBConnection.OwnershipError ->`
         # rather than the bare token so a docstring / comment mention
-        # or a bindings-only reference doesn't satisfy the audit.
-        # `rescue` can appear either as a keyword-style block
-        # (`rescue DBConnection.OwnershipError ->`) or as a `do/rescue`
-        # pair with a newline between them — the `\s+` handles both.
-        # The `->` on the same clause head is the load-bearing bit that
-        # task-level review flagged as missing from the previous regex.
-        Regex.match?(
-          ~r/rescue\s+DBConnection\.OwnershipError\s*->/,
-          source
-        ) ->
+        # or a bindings-only reference doesn't satisfy the audit. The
+        # `->` on the same clause head is the load-bearing bit. See
+        # `@rescue_clause_regex` above for the accepted shapes (unbound,
+        # bound, comment-interposed).
+        rescues_ownership_error?(source) ->
           acc
 
         true ->
@@ -471,6 +560,15 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
 
     #{body}
     """
+  end
+
+  # Returns true when `source` contains a rescue clause protecting
+  # DBConnection.OwnershipError in one of the shapes described at
+  # `@rescue_clause_regex` above. Extracted to a named predicate so
+  # fixture-based tests can exercise the matching logic directly against
+  # synthetic source strings without touching real lib/ files.
+  defp rescues_ownership_error?(source) do
+    Regex.match?(@rescue_clause_regex, source)
   end
 
   # Parses `Platform.Application`'s source for every

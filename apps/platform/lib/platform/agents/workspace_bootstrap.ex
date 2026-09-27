@@ -12,6 +12,8 @@ defmodule Platform.Agents.WorkspaceBootstrap do
 
   import Ecto.Query
 
+  require Logger
+
   alias Platform.Agents.{Agent, AgentServer, Config, MemoryContext, WorkspaceFile}
   alias Platform.Repo
 
@@ -133,6 +135,47 @@ defmodule Platform.Agents.WorkspaceBootstrap do
          error: nil
        }}
     end
+  end
+
+  @doc """
+  Fire-and-forget variant of `boot/1` for callers that must not block their
+  own process on the runtime boot — LiveView mount/event hooks
+  (`ShellLive.default_agent_status/0`, `PresenceHooks.ensure_native_agent_presence/1`)
+  that kick a boot when the agent is unreachable.
+
+  Spawns under `Platform.TaskSupervisor` (task 01a089e5 stage 3) rather than
+  a bare `Task.start`, for two reasons: an `async: true` test whose sandbox
+  connection this process doesn't own gets a `rescue` instead of an unlinked
+  crash racing test output, and a shared-mode (`async: false`) test gets this
+  child drained by `Platform.DataCase`'s `on_exit`
+  (`Platform.SandboxHelpers.await_supervised_writes/1`) instead of it
+  potentially outliving the sandbox checkin — the same hazard bare
+  `Task.start` sites in this module's callers were invisible to.
+  """
+  @spec boot_async(keyword()) :: {:ok, pid()} | {:error, term()}
+  def boot_async(opts \\ []) do
+    # `start_child`, not `async_nolink`. Callers here are LiveView
+    # mount/event hooks that fire this and move on — nothing awaits or
+    # `Task.yield`s the result. `async_nolink` sends a `{ref, result}` reply
+    # back to whichever process called `boot_async/1`; `ShellLive` and
+    # `PresenceHooks` are mixed into every shell-wrapped LiveView (not just
+    # ShellLive itself), and a sibling like `ChangelogLive` has no
+    # catch-all `handle_info/2` clause — that reply arriving there is a
+    # real `FunctionClauseError` crash, not a hypothetical (it's what this
+    # fix actually produced under `async_nolink` before this rewrite,
+    # task 01a089e5 stage 3).
+    Task.Supervisor.start_child(Platform.TaskSupervisor, fn ->
+      try do
+        boot(opts)
+      rescue
+        DBConnection.OwnershipError ->
+          Logger.debug(
+            "[WorkspaceBootstrap] boot_async sandbox-owned DB call from Task.Supervised child — dropping"
+          )
+
+          {:error, :sandbox_unowned}
+      end
+    end)
   end
 
   defp workspace_path(opts) do

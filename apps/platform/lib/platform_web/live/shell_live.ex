@@ -883,9 +883,11 @@ defmodule PlatformWeb.ShellLive do
         _ -> fallback_default_agent_status()
       end
 
-    # Boot the runtime asynchronously if not already running
+    # Boot the runtime asynchronously if not already running. Task 01a089e5
+    # stage 3: was a bare `Task.start` — see `WorkspaceBootstrap.boot_async/1`
+    # for why this now runs under `Platform.TaskSupervisor`.
     unless status.reachable? do
-      Task.start(fn -> WorkspaceBootstrap.boot() end)
+      WorkspaceBootstrap.boot_async()
     end
 
     result

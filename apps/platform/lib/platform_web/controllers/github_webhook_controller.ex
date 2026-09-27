@@ -418,30 +418,40 @@ defmodule PlatformWeb.GithubWebhookController do
         )
 
       repo_url ->
-        # Spawn async task for the merge (with timeout)
-        Elixir.Task.start(fn ->
-          case find_pr_number_for_branch(repo_url, branch) do
-            {:ok, pr_number} ->
-              # Pass the task so AutoMerger's defense-in-depth guards —
-              # the planning-gate refusal and the stack-member
-              # short-circuit — still run even though the controller
-              # already checked the latter.
-              result = AutoMerger.execute_merge(task, repo_url, pr_number, method)
-              AutoMerger.record_merge_result(validation.id, result)
+        # Spawn async task for the merge (with timeout). Skip in test env —
+        # task 01a089e5 stage 3: no test drives `should_auto_merge?/2` to
+        # `:yes` with a resolvable `merge_target/2` through this controller
+        # (every webhook test that reaches `decide_auto_merge/5` sets
+        # `"auto_merge" => false`; the tests that DO set `auto_merge: true`
+        # exercise `AutoMerger`/`DeployStageBuilder`/`StackDeployer`
+        # directly, never this controller), so this branch has never fired
+        # under the sandbox. Mirrors `Platform.Notifications.fan_out_to_humans/3`'s
+        # gate rather than adding a `rescue` for a path nothing exercises.
+        if Application.get_env(:platform, :env) != :test do
+          Elixir.Task.start(fn ->
+            case find_pr_number_for_branch(repo_url, branch) do
+              {:ok, pr_number} ->
+                # Pass the task so AutoMerger's defense-in-depth guards —
+                # the planning-gate refusal and the stack-member
+                # short-circuit — still run even though the controller
+                # already checked the latter.
+                result = AutoMerger.execute_merge(task, repo_url, pr_number, method)
+                AutoMerger.record_merge_result(validation.id, result)
 
-            {:error, reason} ->
-              Logger.warning(
-                "[Webhook] Could not find PR for branch #{branch} on #{repo_url}: " <>
-                  inspect(reason)
-              )
+              {:error, reason} ->
+                Logger.warning(
+                  "[Webhook] Could not find PR for branch #{branch} on #{repo_url}: " <>
+                    inspect(reason)
+                )
 
-              AutoMerger.record_merge_result(
-                validation.id,
-                {:error, :not_found,
-                 "Could not find PR for branch #{branch} on #{repo_url}: #{inspect(reason)}"}
-              )
-          end
-        end)
+                AutoMerger.record_merge_result(
+                  validation.id,
+                  {:error, :not_found,
+                   "Could not find PR for branch #{branch} on #{repo_url}: #{inspect(reason)}"}
+                )
+            end
+          end)
+        end
     end
   end
 

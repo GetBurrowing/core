@@ -12,7 +12,7 @@ defmodule Platform.Org.Wiki.SearchTest do
   by `priv/repo/migrations/20260520020000_add_search_vector_to_org_wiki.exs`.
   """
 
-  use Platform.DataCase, async: false
+  use Platform.DataCase, async: true
 
   import ExUnit.CaptureLog
   import Platform.TenancyFixtures

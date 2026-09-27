@@ -36,12 +36,39 @@ defmodule Platform.Chat.AgentResponder do
         :ok
 
       _ ->
-        Task.start(fn ->
-          _ = respond(signal)
+        # `start_child`, not `async_nolink` — this is genuinely
+        # fire-and-forget (no caller ever awaits or `Task.yield`s it).
+        # `async_nolink` sends a `{ref, result}` reply to whichever process
+        # called `maybe_dispatch/1`; that reply arriving at a caller with no
+        # catch-all `handle_info/2` clause is a real crash, not a
+        # hypothetical — see the `boot_async/1` fix note in
+        # `WorkspaceBootstrap` for the one that actually surfaced this.
+        Task.Supervisor.start_child(Platform.TaskSupervisor, fn ->
+          safe_respond(signal)
         end)
 
         :ok
     end
+  end
+
+  # `respond/1` reaches Repo transitively via `load_context/1` (participant,
+  # message and context-plane reads). `chat_agent_dispatch_mode` defaults to
+  # `:async` (task 01a089e5 stage 3) — most tests that exercise real routing
+  # through `AttentionRouter` don't override it, so this branch fires under
+  # the shared DataCase sandbox for real, not just hypothetically. Wrapping
+  # here (rather than deeper in `load_context/1`) mirrors
+  # `Platform.Responsibilities.Router.safe_assignee_for/1`'s style: rescue at
+  # the outermost point the spawned closure calls into Repo-touching code.
+  defp safe_respond(signal) do
+    _ = respond(signal)
+    :ok
+  rescue
+    DBConnection.OwnershipError ->
+      Logger.debug(
+        "[AgentResponder] sandbox-owned DB call from Task.Supervised child — dropping async dispatch signal=#{inspect(Map.take(signal, [:participant_id, :reason, :message_id]))}"
+      )
+
+      :ok
   end
 
   @doc """

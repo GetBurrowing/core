@@ -12,7 +12,7 @@ defmodule Platform.Org.Wiki.SearchOrgScopeTest do
   Every scoping assertion carries a positive control in the same test body,
   because "zero rows" is also what an empty index returns.
   """
-  use Platform.DataCase, async: false
+  use Platform.DataCase, async: true
 
   import Platform.TenancyFixtures
 

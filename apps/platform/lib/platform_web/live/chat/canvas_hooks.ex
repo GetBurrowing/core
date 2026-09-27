@@ -1502,8 +1502,34 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
 
   # The version row is written async by Canvas.Server. Briefly poll for it
   # then update the ops field to reflect the restore intent. Best effort.
+  #
+  # Task 01a089e5 stage 3: was a bare `Task.start`. `canvas_versions_restore_confirm`
+  # is exercised for real by LiveView tests under the shared DataCase sandbox
+  # (chat_live_test.exs, canvas_versions_panel_test.exs), and the retry loop
+  # below can still be polling up to ~520ms (26 * 20ms) after the triggering
+  # test itself returns — exactly the outlive-the-checkin shape
+  # `Task.Supervisor` + the shared-mode `on_exit` drain
+  # (`Platform.SandboxHelpers.await_supervised_writes/1`) exists to catch.
   defp tag_restore_ops(canvas_id, revision, source_revision) do
-    Task.start(fn -> do_tag_restore_ops(canvas_id, revision, source_revision, 0) end)
+    # `start_child`, not `async_nolink` — fire-and-forget, nothing awaits
+    # this. See `WorkspaceBootstrap.boot_async/1`'s comment for why
+    # `async_nolink`'s reply message is a real crash risk for a caller
+    # with no catch-all `handle_info/2` (ChatLive itself has one, but this
+    # follows the same convention as the other stage-3 conversions).
+    Task.Supervisor.start_child(Platform.TaskSupervisor, fn ->
+      safe_tag_restore_ops(canvas_id, revision, source_revision, 0)
+    end)
+  end
+
+  defp safe_tag_restore_ops(canvas_id, revision, source_revision, attempt) do
+    do_tag_restore_ops(canvas_id, revision, source_revision, attempt)
+  rescue
+    DBConnection.OwnershipError ->
+      Logger.debug(
+        "[CanvasHooks] tag_restore_ops sandbox-owned DB call from Task.Supervised child — dropping canvas_id=#{canvas_id} revision=#{revision}"
+      )
+
+      :ok
   end
 
   defp do_tag_restore_ops(_canvas_id, _revision, _source_revision, attempt) when attempt > 25,
