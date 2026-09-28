@@ -451,7 +451,7 @@ defmodule Platform.Audit.TelemetryHandlerTest do
     # `:telemetry.execute` directly and assert the audit_events row lands
     # via the child spawn under Platform.TaskSupervisor.
 
-    test "handler is attached to both agents.historian events" do
+    test "handler is attached to all three agents.historian events" do
       events = TelemetryHandler.events()
 
       agents_historian_events =
@@ -460,9 +460,35 @@ defmodule Platform.Audit.TelemetryHandlerTest do
           _ -> false
         end)
 
-      assert length(agents_historian_events) == 2
+      # 2 → 3 for task 01a0a12e stage 3: `meeting_curation_withheld` is the
+      # audit row for a meeting-ended curation dispatch the handler declined
+      # by default. An unregistered emit would be a silent drop.
+      assert length(agents_historian_events) == 3
       assert [:platform, :agents, :historian, :no_op_pass] in agents_historian_events
       assert [:platform, :agents, :historian, :dispatch_debounced] in agents_historian_events
+
+      assert [:platform, :agents, :historian, :meeting_curation_withheld] in agents_historian_events
+    end
+
+    test "meeting_curation_withheld with org_id spawns a Task.Supervisor child" do
+      org_id = Ecto.UUID.generate()
+
+      before_children = children_pids()
+
+      :telemetry.execute(
+        [:platform, :agents, :historian, :meeting_curation_withheld],
+        %{count: 1},
+        %{
+          org_id: org_id,
+          meeting_id: Ecto.UUID.generate(),
+          project_id: Ecto.UUID.generate(),
+          reason: :default_withheld,
+          action: "meeting_curation_withheld",
+          actor_type: "system"
+        }
+      )
+
+      wait_for_new_child(before_children, 500)
     end
 
     test "no_op_pass with workspace_id spawns a Task.Supervisor child" do

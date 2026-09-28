@@ -357,6 +357,21 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
   # ── Case C: meeting_ended scope leak guard ───────────────────────────
 
   describe "Case C — meeting_ended dispatch carries only the meeting's project + space scope" do
+    # Task 01a0a12e: meeting-ended curation is withheld by default; opt in.
+    setup do
+      original = Application.fetch_env(:platform, :meeting_historian_curation)
+      Application.put_env(:platform, :meeting_historian_curation, :dispatch)
+
+      on_exit(fn ->
+        case original do
+          {:ok, v} -> Application.put_env(:platform, :meeting_historian_curation, v)
+          :error -> Application.delete_env(:platform, :meeting_historian_curation)
+        end
+      end)
+
+      :ok
+    end
+
     test "Project P + space S in dispatch metadata; unrelated project Q + space S2 nowhere in metadata or rendered prompt" do
       # setup: project P with meeting M; unrelated project Q with its own
       # meeting (chat_space_id S2).

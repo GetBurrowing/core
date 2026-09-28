@@ -33,6 +33,14 @@ defmodule Platform.Agents.Historian do
   | `"transcripts"` | `meeting_transcripts`      | `completed_at`   | `byte_size(summary) + segments JSON` |
   | `"files"`       | `org_wiki_pages`, cards    | `updated_at`     | `byte_size(content)` — the CARD      |
 
+  **`"transcripts"` is excluded by default** (task 01a0a12e):
+  `Meetings.digest_eligible_transcripts_query/1` matches zero rows unless
+  a caller sets its `:meeting_transcripts` opt to `:included`, and no
+  production caller does. The corpus stays registered (all six sites) and its byte
+  signal is 0 — inherited from the seam, not special-cased here. A call
+  summary can carry a participant's private position; that harm is
+  uncorrelated with byte volume, so the digest budget is not a control.
+
   ## The pages / files partition — a deliberate decision, do NOT "fix" it
 
   A catalog card is a wiki page, so `pages` and `files` read the same

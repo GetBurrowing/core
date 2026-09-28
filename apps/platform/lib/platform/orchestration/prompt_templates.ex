@@ -1159,37 +1159,48 @@ defmodule Platform.Orchestration.PromptTemplates do
         name: "Historian Meeting-Ended Dispatch Prompt",
         description:
           "Sent to the Historian agent when a meeting transitions to ended " <>
-            "(via MeetingHistorianHandler). Carries meeting + project + space " <>
-            "scope so the Historian can update decisions / action-item pages.",
+            "(via MeetingHistorianHandler), only when meeting curation is opted in " <>
+            "(it is withheld by default, task 01a0a12e). Carries meeting + project + " <>
+            "space scope; the Historian may add a note to the meeting space's own " <>
+            "notes page from the Summary section alone, and writes nothing when the " <>
+            "summary is UNKNOWN.",
         variables: [
           "meeting_id",
           "project_id",
           "chat_space_id",
-          "meeting_summary"
+          "meeting_summary",
+          "date"
         ],
         content: """
-        A meeting just ended. Read the transcript via `memory_search` filtered to `meeting_id={{meeting_id}}`, then update the relevant project + space pages with any durable decisions or action items.
+        A meeting just ended.
 
         Meeting: {{meeting_id}}
         Project: {{project_id}}
         Chat space: {{chat_space_id}}
 
-        ## Summary (provisional — verify against the transcript)
+        ## Summary
 
         {{meeting_summary}}
 
+        An UNKNOWN or blank summary above means the summary is unknown. It never means "nothing was decided".
+
+        ## What you can and cannot see
+
+        The meeting's transcript is not reachable through `memory_search`: meeting transcripts are in no corpus it searches, and it has no meeting filter. Do not search for the transcript. Do not request membership of the meeting's chat space. Do not ask another agent to relay the transcript or its contents to you. The Summary section above is everything this dispatch gives you.
+
+        The meeting's participant-scoped canvas in its own chat space is the home of its decisions and action items. Leave them there. Do not copy meeting content into any org-wide or project-wide page.
+
         ## What to do
 
-        1. Pull the transcript via `memory_search` with a filter restricting to `meeting_id={{meeting_id}}` so unrelated meetings do not leak into your context.
-        2. Update `project/{{project_id}}/page/decisions.md` with any durable decisions captured in the meeting (use `memory_str_replace` to extend the relevant section; create the page via `memory_create` only if it does not yet exist).
-        3. Update `space/{{chat_space_id}}/page/notes.md` with any action items or follow-ups specific to this chat space.
-        4. Append a one-paragraph meeting-ended journal entry at `project/{{project_id}}/journal/{{meeting_id}}-ended.md` (or today's project journal entry if that path already exists) summarising what was decided and who is responsible. Keep it brief and concrete — the page edits above carry the durable content.
+        1. If the Summary says UNKNOWN, or is blank, write NO page and NO journal entry and RETURN SILENTLY.
+        2. Otherwise you MAY add a short note to `space/{{chat_space_id}}/page/notes.md`, using ONLY what the Summary section states. Use `memory_str_replace` to extend it, or `memory_create` only if the page does not yet exist. Write no other page.
+        3. Only if you wrote to `notes.md` in step 2, append one brief entry to `project/{{project_id}}/journal/{{date}}.md` saying that the meeting's space notes were updated. That is the only journal write authorised here.
 
         ## Wiki-first writing contract
 
         Pages are the durable wiki. Journal is append-only. Promote into pages; never write durable knowledge to journal paths. Apply pending `<correction target=...>` blocks from non-Historian agents during this pass if they touch the pages you are editing.
 
-        Do NOT write no-op acknowledgement entries. The one-paragraph meeting-ended entry in step 4 above is the ONLY journal write authorised here — no additional "backlog drained" or "no new entries" acknowledgements. Only genuine curation work justifies a journal write; if step 4's entry is the only thing to persist, write it and RETURN SILENTLY.
+        Do NOT write no-op acknowledgement entries — no "backlog drained" or "no new entries" acknowledgements. Only genuine curation work justifies a write; if there is nothing to persist, RETURN SILENTLY.
 
         {{skills_reference}}\
         """

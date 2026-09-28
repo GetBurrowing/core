@@ -166,8 +166,19 @@ defmodule Platform.Security.ExternalHistorianScopeTest do
       s = seed_three_spaces()
       {ws, we} = window()
 
+      # Task 01a0a12e: the transcripts corpus is excluded from the digest by
+      # default, in BOTH partitions. The partition itself is pinned below with
+      # `meeting_transcripts: :included` passed explicitly.
+      assert Meetings.list_transcripts_since(ws, window_end: we) == []
+
+      assert Meetings.list_transcripts_since(ws,
+               window_end: we,
+               scope: {:external_spaces, Chat.participant_space_ids_for_user(s.ext.id)}
+             ) == []
+
       internal_summaries =
-        Meetings.list_transcripts_since(ws, window_end: we) |> Enum.map(& &1.summary)
+        Meetings.list_transcripts_since(ws, window_end: we, meeting_transcripts: :included)
+        |> Enum.map(& &1.summary)
 
       assert "eng-transcript-internal" in internal_summaries
       refute "support-transcript-external" in internal_summaries
@@ -178,7 +189,8 @@ defmodule Platform.Security.ExternalHistorianScopeTest do
       external_summaries =
         Meetings.list_transcripts_since(ws,
           window_end: we,
-          scope: {:external_spaces, ext_space_ids}
+          scope: {:external_spaces, ext_space_ids},
+          meeting_transcripts: :included
         )
         |> Enum.map(& &1.summary)
 
@@ -214,9 +226,13 @@ defmodule Platform.Security.ExternalHistorianScopeTest do
       # is excluded.
       assert mbytes == byte_size("internal-hist-msg")
 
+      # Task 01a0a12e: transcripts are excluded from the digest by default, so
+      # neither the internal nor the external transcript contributes bytes.
+      # `pending_windows_input/1` takes no opts, so the scope arithmetic on
+      # this corpus is pinned at the seam instead
+      # (`list_transcripts_since(..., meeting_transcripts: :included)` above).
       {_, tbytes} = input.transcripts
-      assert tbytes >= byte_size("internal-hist-mtg")
-      assert tbytes < byte_size("internal-hist-mtg") + 200
+      assert tbytes == 0
     end
   end
 

@@ -132,7 +132,11 @@ defmodule Platform.Agents.ActivityDigestTest do
       assert result =~ "…"
     end
 
-    test "includes completed meeting transcripts in the window" do
+    # Task 01a0a12e: meeting transcripts are excluded from the digest by
+    # default, at `Meetings.digest_eligible_transcripts_query/1`. A complete,
+    # in-window, small transcript — eligible on every other filter — does
+    # not render.
+    test "excludes completed meeting transcripts in the window by default" do
       space = insert_space(%{name: "Board Room", slug: "board", kind: "channel"})
 
       insert_transcript(%{
@@ -145,10 +149,10 @@ defmodule Platform.Agents.ActivityDigestTest do
 
       result = ActivityDigest.build(@window_start, @window_end)
 
-      assert result =~ "### Meetings"
-      assert result =~ "\"Board Room\""
-      assert result =~ "Reviewed Q2 priorities"
-      assert result =~ "45 min"
+      refute result =~ "### Meetings"
+      refute result =~ "\"Board Room\""
+      refute result =~ "Reviewed Q2 priorities"
+      assert result =~ "_No activity in this window._"
     end
 
     test "excludes in-progress and failed transcripts" do
@@ -232,10 +236,57 @@ defmodule Platform.Agents.ActivityDigestTest do
 
       assert result =~ "### Chat"
       assert result =~ "chat line"
-      assert result =~ "### Meetings"
-      assert result =~ "meeting summary here"
+      # Task 01a0a12e: the meetings section is empty by default.
+      refute result =~ "### Meetings"
+      refute result =~ "meeting summary here"
       assert result =~ "### Tasks"
       assert result =~ "Mixed task"
+    end
+  end
+
+  # ── Skip notice wording (task 01a0a12e, ticket clause 10) ────────────────
+  #
+  # The notice says WHY the item was skipped and that the skip is audited,
+  # and stops there. It must not tell the handler to go and get the skipped
+  # content by another route: the size cap is what stopped the 2026-09-14
+  # one-to-one, and a notice that points around it defeats it.
+  describe "build_windowed_result/1 — skip notice wording" do
+    test "names the skip and its audit row, and never points at the skipped content" do
+      space = insert_space(%{name: "Sprint", slug: "sprint-skip", kind: "channel"})
+      participant = insert_participant(space.id, %{display_name: "Ada"})
+
+      content = String.duplicate("lorem ", 1700)
+      bytes = byte_size(content)
+      assert bytes > 10_000
+
+      insert_message(space.id, participant.id, %{content: content, inserted_at: within_window()})
+
+      {:ok, body, meta} =
+        ActivityDigest.build_windowed_result(%{
+          corpus: :messages,
+          window_start: @window_start,
+          window_end: @window_end,
+          oversize: true,
+          budget_tokens: 500
+        })
+
+      # Behaviour unchanged: the row is skipped, nothing is included.
+      assert %{count: 1} = meta.skipped
+      assert meta.included_count == 0
+
+      # The notice still says what happened, with every figure.
+      assert body =~ "_(skipped —"
+      assert body =~ "#{bytes} bytes"
+      assert body =~ "2000-byte window budget"
+      assert body =~ "0 of 1 items included"
+      assert body =~ "item_skipped"
+
+      # ...and no route to the skipped content.
+      refute body =~ ~r/read/i
+      refute body =~ ~r/directly/i
+      refute body =~ ~r/memory_view/
+      refute body =~ ~r/fetch/i
+      refute body =~ "lorem"
     end
   end
 
@@ -407,7 +458,8 @@ defmodule Platform.Agents.ActivityDigestTest do
 
       assert result =~ "#fabrikam-eng"
       assert result =~ "internal chatter"
-      assert result =~ "internal meeting notes"
+      # Task 01a0a12e: transcripts are excluded by default in either scope.
+      refute result =~ "internal meeting notes"
 
       refute result =~ "external chatter"
       refute result =~ "external meeting notes"
@@ -418,7 +470,8 @@ defmodule Platform.Agents.ActivityDigestTest do
       result = ActivityDigest.build_external(ext.id, @window_start, @window_end)
 
       assert result =~ "external chatter"
-      assert result =~ "external meeting notes"
+      # Task 01a0a12e: transcripts are excluded by default in either scope.
+      refute result =~ "external meeting notes"
 
       refute result =~ "internal chatter"
       refute result =~ "internal meeting notes"
@@ -739,7 +792,13 @@ defmodule Platform.Agents.ActivityDigestTest do
       assert ActivityDigest.corpus_items("nonsense", @window_start, @window_end) == []
     end
 
-    test "a transcript weighs its summary AND its segments, and is clocked on completed_at" do
+    # Task 01a0a12e: `corpus_items(:transcripts, ...)` composes
+    # `Meetings.list_transcripts_since/2` without `:meeting_transcripts`, so
+    # it returns nothing by default — however fat the rows. The
+    # summary+segments weight (`transcript_bytes/1`) is unreachable from
+    # here while the corpus is excluded; the fixture stays so the rows are
+    # eligible on every OTHER filter (complete, in-window on completed_at).
+    test "transcripts are excluded by default: corpus_items(:transcripts) is empty" do
       # `segments: []` encodes to two bytes, so every fixture in this repo
       # that uses it gives the segments term a degenerate value: dropping
       # segments from the weight entirely is invisible against it. These
@@ -775,25 +834,21 @@ defmodule Platform.Agents.ActivityDigestTest do
       {2, _} =
         Repo.update_all(Transcript, set: [updated_at: DateTime.add(@window_end, 86_400, :second)])
 
-      items = ActivityDigest.corpus_items(:transcripts, @window_start, @window_end)
+      assert ActivityDigest.corpus_items(:transcripts, @window_start, @window_end) == []
+      assert ActivityDigest.corpus_items("transcripts", @window_start, @window_end) == []
 
-      refute Enum.empty?(items)
-      assert length(items) == 2
+      # POSITIVE CONTROL: both rows are eligible apart from the exclusion,
+      # clocked on completed_at (updated_at is out of the window).
+      included =
+        Platform.Meetings.list_transcripts_since(@window_start,
+          window_end: @window_end,
+          meeting_transcripts: :included
+        )
 
-      [first, second] = items
-
-      # Clocked on completed_at, not updated_at.
-      assert first.at == DateTime.add(@window_start, 3_600, :second)
-
-      # POSITIVE CONTROL on the fixture: the segments payload is not a
-      # rounding error next to the summary.
-      big_json = byte_size(Jason.encode!(big_segments))
-      assert big_json > 500
-
-      assert first.bytes == 900 + big_json
-      assert first.bytes > byte_size(early.summary)
-      assert second.bytes == 300 + byte_size(Jason.encode!(small_segments))
-      assert first.bytes != second.bytes
+      assert length(included) == 2
+      assert hd(included).id == early.id
+      assert byte_size(Jason.encode!(big_segments)) > 500
+      assert small_segments != []
     end
   end
 
@@ -866,7 +921,11 @@ defmodule Platform.Agents.ActivityDigestTest do
       refute body =~ "_No activity in this window._"
     end
 
-    test "a credential-shaped transcript summary is withheld, benign summary is not" do
+    # Task 01a0a12e: transcripts no longer reach build/3 at all, so neither
+    # the credential-shaped nor the benign summary renders and nothing is
+    # withheld on this corpus. The message-corpus withholding tests above
+    # still pin the redactor at this call site.
+    test "transcript summaries (credential-shaped or benign) are excluded by default" do
       secret = synthetic_credential()
       benign = benign_sentinel()
 
@@ -893,9 +952,9 @@ defmodule Platform.Agents.ActivityDigestTest do
       body = ActivityDigest.build(@window_start, @window_end)
 
       refute body =~ secret
-      assert body =~ benign
-      assert body =~ "[WITHHELD: credential-shaped span]"
-      assert body =~ "### Meetings"
+      refute body =~ benign
+      refute body =~ "[WITHHELD: credential-shaped span]"
+      refute body =~ "### Meetings"
     end
   end
 
@@ -1034,7 +1093,9 @@ defmodule Platform.Agents.ActivityDigestTest do
       refute body =~ benign
     end
 
-    test "applies to :transcripts" do
+    # Task 01a0a12e: the :transcripts window is empty by default, so there
+    # is nothing to withhold. Both rows are eligible on every other filter.
+    test ":transcripts window is empty by default (nothing rendered, nothing withheld)" do
       secret = synthetic_credential()
       benign = benign_sentinel()
 
@@ -1068,8 +1129,10 @@ defmodule Platform.Agents.ActivityDigestTest do
         })
 
       refute body =~ secret
-      assert body =~ benign
-      assert meta.credential_withheld_count == 1
+      refute body =~ benign
+      assert body =~ "_No activity in this window._"
+      assert meta.credential_withheld_count == 0
+      assert meta.item_count == 0
     end
 
     test "applies to :pages" do

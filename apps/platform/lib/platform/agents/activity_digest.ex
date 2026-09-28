@@ -503,11 +503,15 @@ defmodule Platform.Agents.ActivityDigest do
       "the remainder re-dispatches next pass.)_"
   end
 
+  # Says why the item was skipped and that the skip is audited, and stops
+  # there (task 01a0a12e, ticket clause 10). It must not point the handler at
+  # another route to the skipped content: the window budget is what kept the
+  # 2026-09-14 one-to-one out of the digest, and a notice that suggests
+  # going around it defeats it.
   defp skipped_line(%{bytes: bytes, count: count}, item_count, cap_bytes) do
     "_(skipped — the next #{count} item(s) weigh #{bytes} bytes and exceed the " <>
       "#{cap_bytes}-byte window budget alone; 0 of #{item_count} items included. " <>
-      "The skip is recorded as an `item_skipped` audit row so the content can be " <>
-      "read directly.)_"
+      "Recorded as an `item_skipped` audit row.)_"
   end
 
   defp render_corpus(:messages, included) do

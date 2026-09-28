@@ -209,6 +209,12 @@ defmodule Platform.Audit.TelemetryHandler do
     # (audit rows without a scope are dropped — see scope_check/2).
     [:platform, :agents, :historian, :no_op_pass],
     [:platform, :agents, :historian, :dispatch_debounced],
+    # Task 01a0a12e stage 3 — emitted by MeetingHistorianHandler when the
+    # meeting-ended curation dispatch is withheld by default (config
+    # `:meeting_historian_curation` is not `:dispatch`). Same handler clause
+    # and scope contract as `dispatch_debounced`; the emitter carries
+    # `org_id` from the meeting's project so the row persists.
+    [:platform, :agents, :historian, :meeting_curation_withheld],
     # Task 019f5e0b — meeting-scribe dispatch fallback. Emitted by
     # Platform.Federation.dispatch_scribe_attention/2 (via
     # emit_scribe_dispatch_fallback/3) when the scribe agent can't be

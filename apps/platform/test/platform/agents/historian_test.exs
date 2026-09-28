@@ -357,7 +357,12 @@ defmodule Platform.Agents.HistorianTest do
       assert result == %{day => 255}
     end
 
-    test "transcripts: sums octet_length(summary) + octet_length(segments::text) per day",
+    # Task 01a0a12e: the transcripts corpus is excluded from the digest by
+    # default at `Meetings.digest_eligible_transcripts_query/1`, and the
+    # byte signal composes that seam, so every day sums to nothing.
+    # `pending_bytes_per_day/4` takes no opts, so the summary+segments
+    # arithmetic is unreachable while the corpus is excluded.
+    test "transcripts: excluded by default — no per-day bytes for eligible rows",
          %{workspace_id: workspace_id} do
       day = ~D[2001-09-01]
 
@@ -390,15 +395,17 @@ defmodule Platform.Agents.HistorianTest do
           workspace_id
         )
 
-      # Two buckets — day and 2001-09-03.
-      assert map_size(result) == 2
-      # Summary octets alone are 250 on `day`; segments JSON adds a
-      # small overhead per row. Assert >= 250 (summary lower bound).
-      assert Map.fetch!(result, day) >= 250
-      # `2001-09-03` has one row with 40 summary octets + segments
-      # JSON. Empty-array `[]::text` serializes to 2 bytes. Assert
-      # >= 40 as the lower bound.
-      assert Map.fetch!(result, ~D[2001-09-03]) >= 40
+      assert result == %{}
+
+      # POSITIVE CONTROL: all three rows are eligible apart from the
+      # exclusion — the seam admits them when opted in.
+      included =
+        Meetings.list_transcripts_since(~U[2001-09-01 00:00:00Z],
+          window_end: ~U[2001-09-05 00:00:00Z],
+          meeting_transcripts: :included
+        )
+
+      assert length(included) == 3
     end
   end
 
@@ -520,6 +527,12 @@ defmodule Platform.Agents.HistorianTest do
       assert Map.fetch!(after_result, day) == eligible_bytes + byte_size(c.content)
     end
 
+    # Task 01a0a12e: transcripts are excluded by default, so the byte signal
+    # is 0 for every row. The status and `completed_at` clock filters are
+    # still pinned at the seam, through the renderer's accessor with
+    # `meeting_transcripts: :included`; the byte-signal half of the clock
+    # pin is unreachable while the corpus is excluded (the Historian byte
+    # functions take no opts).
     test "transcripts: incomplete and never-completed rows contribute no bytes" do
       day = ~D[2001-12-12]
       start_at = ~U[2001-12-12 00:00:00Z]
@@ -569,22 +582,32 @@ defmodule Platform.Agents.HistorianTest do
           nil
         )
 
-      assert Map.fetch!(earlier, ~D[2001-12-10]) >= byte_size(late_edit.summary)
+      assert earlier == %{}
+
+      earlier_included =
+        Meetings.list_transcripts_since(~U[2001-12-10 00:00:00Z],
+          window_end: ~U[2001-12-11 00:00:00Z],
+          meeting_transcripts: :included
+        )
+
+      assert Enum.map(earlier_included, & &1.id) == [late_edit.id]
 
       result = Historian.pending_bytes_per_day("transcripts", start_at, end_at, nil)
+      assert result == %{}
 
-      # POSITIVE CONTROL first.
-      assert map_size(result) == 1
-      assert Map.fetch!(result, day) > 0
+      # The renderer's accessor agrees: nothing by default...
+      assert Meetings.list_transcripts_since(start_at, window_end: end_at, scope: :internal) ==
+               []
 
-      # Segments JSON adds a few bytes on top of the summary octets, so bound
-      # rather than equate — the discriminating claim is that the 1800 bytes
-      # of ineligible summary are absent.
-      assert Map.fetch!(result, day) >= byte_size(eligible.summary)
-      assert Map.fetch!(result, day) < byte_size(eligible.summary) + 100
+      # ...and, opted in, exactly the eligible row — the status and clock
+      # filters are still in the seam.
+      rendered =
+        Meetings.list_transcripts_since(start_at,
+          window_end: end_at,
+          scope: :internal,
+          meeting_transcripts: :included
+        )
 
-      # Agreement with the renderer's own accessor.
-      rendered = Meetings.list_transcripts_since(start_at, window_end: end_at, scope: :internal)
       assert length(rendered) == 1
       assert hd(rendered).id == eligible.id
 
@@ -598,17 +621,21 @@ defmodule Platform.Agents.HistorianTest do
 
       {cursor_at, summed} = Historian.pending_windows_input(nil).transcripts
       assert DateTime.compare(cursor_at, ~U[2001-12-11 00:00:00Z]) == :eq
-      assert summed > 0
-      assert summed >= byte_size(eligible.summary)
-      assert summed < byte_size(eligible.summary) + 100
+      assert summed == 0
 
       # DELTA CONTROL: completing the recording transcript inside the span
-      # must raise the total by at least its summary bytes.
-      before = Map.fetch!(result, day)
+      # makes it eligible on the seam's other filters, and still adds no
+      # bytes by default.
       set_transcript_fields!(recording.id, status: "complete", completed_at: ts)
 
-      after_result = Historian.pending_bytes_per_day("transcripts", start_at, end_at, nil)
-      assert Map.fetch!(after_result, day) >= before + byte_size(recording.summary)
+      assert Historian.pending_bytes_per_day("transcripts", start_at, end_at, nil) == %{}
+
+      assert length(
+               Meetings.list_transcripts_since(start_at,
+                 window_end: end_at,
+                 meeting_transcripts: :included
+               )
+             ) == 2
     end
   end
 
@@ -710,7 +737,10 @@ defmodule Platform.Agents.HistorianTest do
       assert Historian.pending_bytes_in_range("messages", day_start, day_start) == 0
     end
 
-    test "transcripts: the range sum is bounded on the completed_at corpus clock" do
+    # Task 01a0a12e: transcripts are excluded by default, so every range sums
+    # to 0. `pending_bytes_in_range/3` takes no opts; the completed_at clock
+    # is still pinned at the seam via `meeting_transcripts: :included`.
+    test "transcripts: the range sum is 0 by default; the seam's clock is completed_at" do
       day = ~D[2001-10-20]
       hour_start = ~U[2001-10-20 04:00:00Z]
       hour_end = ~U[2001-10-20 05:00:00Z]
@@ -740,30 +770,33 @@ defmodule Platform.Agents.HistorianTest do
         updated_at: ~U[2001-10-20 04:30:00Z]
       )
 
-      measured = Historian.pending_bytes_in_range("transcripts", hour_start, hour_end)
+      included = fn from, to ->
+        from
+        |> Meetings.list_transcripts_since(window_end: to, meeting_transcripts: :included)
+        |> Enum.map(& &1.id)
+        |> Enum.sort()
+      end
 
-      # POSITIVE CONTROL before the exclusions: the eligible row is counted.
-      assert measured >= byte_size(eligible.summary)
-      # ...and ONLY it (summary + the empty-segments JSON, well under +100).
-      assert measured < byte_size(eligible.summary) + 100
+      assert Historian.pending_bytes_in_range("transcripts", hour_start, hour_end) == 0
+      # POSITIVE CONTROL: opted in, the seam admits ONLY the eligible row.
+      assert included.(hour_start, hour_end) == [eligible.id]
 
       # FIXTURE CONTROL (a): the still-recording row really is inside the
-      # hour — completing it raises the measured total by its summary. A
-      # "measured == eligible only" assertion would otherwise pass just as
-      # well against a fixture whose recording row was never in the span.
+      # hour — completing it makes the seam admit it. Bytes stay 0.
       set_transcript_fields!(recording.id, status: "complete")
 
-      assert Historian.pending_bytes_in_range("transcripts", hour_start, hour_end) >=
-               measured + byte_size(recording.summary)
+      assert Historian.pending_bytes_in_range("transcripts", hour_start, hour_end) == 0
+      assert included.(hour_start, hour_end) == Enum.sort([eligible.id, recording.id])
 
-      # FIXTURE CONTROL (b): the late-edited row exists and is owned by the
-      # day it COMPLETED on, not the day it was edited on — bounding on
-      # `updated_at` would have moved it into the hour above.
+      # FIXTURE CONTROL (b): the late-edited row is owned by the day it
+      # COMPLETED on, not the day it was edited on.
       assert Historian.pending_bytes_in_range(
                "transcripts",
                ~U[2001-10-19 00:00:00Z],
                ~U[2001-10-20 00:00:00Z]
-             ) >= byte_size(late_edit.summary)
+             ) == 0
+
+      assert included.(~U[2001-10-19 00:00:00Z], ~U[2001-10-20 00:00:00Z]) == [late_edit.id]
 
       assert raw_transcript_summary_bytes(hour_start, hour_end) >= byte_size(late_edit.summary)
     end
@@ -1425,9 +1458,11 @@ defmodule Platform.Agents.HistorianTest do
       {_, mbytes} = input.messages
       assert mbytes == byte_size("internal-msg")
 
+      # Task 01a0a12e: transcripts are excluded by default — internal AND
+      # external contribute 0. The scope partition on this corpus is pinned
+      # at the seam (transcript_digest_scope_test.exs).
       {_, tbytes} = input.transcripts
-      assert tbytes >= byte_size("internal-mtg")
-      assert tbytes < byte_size("internal-mtg") + 200
+      assert tbytes == 0
 
       {_, jbytes} = input.journal
       assert jbytes == byte_size("journal-body")
@@ -1471,8 +1506,9 @@ defmodule Platform.Agents.HistorianTest do
       {_, mbytes} = input.messages
       assert mbytes == byte_size("internal-msg")
 
+      # Task 01a0a12e: transcripts are excluded by default.
       {_, tbytes} = input.transcripts
-      assert tbytes >= byte_size("internal-mtg")
+      assert tbytes == 0
     end
   end
 end

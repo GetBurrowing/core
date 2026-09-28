@@ -103,6 +103,59 @@ defmodule Platform.Agents.MeetingHistorianHandlerTest do
     handler_id
   end
 
+  @withheld_event [:platform, :agents, :historian, :meeting_curation_withheld]
+
+  defp attach_withheld_telemetry! do
+    test = self()
+    handler_id = "meeting-historian-withheld-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        @withheld_event,
+        fn _event, measurements, metadata, _ ->
+          send(test, {:curation_withheld, measurements, metadata})
+        end,
+        nil
+      )
+
+    ExUnit.Callbacks.on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    handler_id
+  end
+
+  # Set (or, with `:unset`, delete) `:meeting_historian_curation` for one
+  # test, restoring whatever was there before on exit.
+  defp put_curation!(value) do
+    original = Application.fetch_env(:platform, :meeting_historian_curation)
+
+    case value do
+      :unset -> Application.delete_env(:platform, :meeting_historian_curation)
+      v -> Application.put_env(:platform, :meeting_historian_curation, v)
+    end
+
+    ExUnit.Callbacks.on_exit(fn ->
+      case original do
+        {:ok, v} -> Application.put_env(:platform, :meeting_historian_curation, v)
+        :error -> Application.delete_env(:platform, :meeting_historian_curation)
+      end
+    end)
+
+    :ok
+  end
+
+  defp create_named_meeting(project, name) do
+    {:ok, meeting} = Meetings.create_meeting(%{project_id: project.id, name: name})
+    meeting
+  end
+
+  # Text between the `## Summary` heading line and the next `##` heading.
+  defp summary_section(content) do
+    [_, after_heading] = String.split(content, ~r/^## Summary[^\n]*\n/m, parts: 2)
+    [section | _] = String.split(after_heading, ~r/^## /m, parts: 2)
+    section
+  end
+
   # Wait until the predicate returns truthy or the timeout elapses. Polling
   # avoids hard-coded sleeps for PubSub fan-out + the dispatcher's chained
   # writes (space + participant + message inserts).
@@ -165,6 +218,11 @@ defmodule Platform.Agents.MeetingHistorianHandlerTest do
   end
 
   describe "meeting_ended dispatch" do
+    # Task 01a0a12e: curation is withheld by default; these cases opt in.
+    setup do
+      put_curation!(:dispatch)
+    end
+
     test "dispatches the historian on :meeting_ended for an existing-at-boot project" do
       agent = create_historian_agent()
       project = create_project("Existing Project")
@@ -251,6 +309,10 @@ defmodule Platform.Agents.MeetingHistorianHandlerTest do
 
   describe "per-meeting debounce" do
     setup do
+      # Task 01a0a12e: curation is withheld by default; opt in so the debounce
+      # is measured against a real dispatch.
+      put_curation!(:dispatch)
+
       # Pick a debounce window that outruns the whole test — every subsequent
       # fire in the test window should hit the "already dispatched" branch.
       original = Application.get_env(:platform, :meeting_historian_debounce_ms)
@@ -338,6 +400,127 @@ defmodule Platform.Agents.MeetingHistorianHandlerTest do
       end)
 
       refute_receive {:dispatch_debounced, _, _}, 100
+    end
+  end
+
+  # ── Task 01a0a12e: curation withheld by default ──────────────────────────
+  #
+  # Declining is a property of the code that fires, not of the curator
+  # recognising a meeting id: every meeting below is freshly created, so no
+  # recognition is possible.
+  describe "default: meeting curation withheld" do
+    setup do
+      put_curation!(:unset)
+    end
+
+    test "with the key unset, a fresh meeting's end dispatches nothing and emits one withheld event" do
+      agent = create_historian_agent()
+      project = create_project("Withheld Project")
+
+      pid = start_handler!()
+      attach_withheld_telemetry!()
+
+      meeting = create_named_meeting(project, "Sprint planning")
+      _ended = transition_meeting_to_ended(meeting)
+
+      assert_receive {:curation_withheld, %{count: 1}, metadata}, 2_000
+      assert metadata.meeting_id == meeting.id
+      assert metadata.project_id == project.id
+      assert metadata.reason == :default_withheld
+      # Scoped so the audit handler persists it rather than dropping it.
+      assert metadata.org_id == project.org_id
+
+      # Flush the handler mailbox, give any dispatch a window to land, then
+      # assert absence.
+      _ = MeetingHistorianHandler.subscribed_projects()
+      Process.sleep(200)
+
+      case system_space_for(agent) do
+        nil -> :ok
+        space -> assert message_count_for(space) == 0
+      end
+
+      refute_receive {:curation_withheld, _, _}, 100
+      assert Process.alive?(pid)
+    end
+
+    test "re-deliveries of a withheld meeting are debounced, not re-emitted" do
+      _agent = create_historian_agent()
+      project = create_project("Withheld Debounce Project")
+
+      pid = start_handler!()
+      attach_withheld_telemetry!()
+      attach_debounce_telemetry!()
+
+      meeting = create_named_meeting(project, "Sprint planning")
+
+      for _ <- 1..3, do: send(pid, {:meeting_ended, meeting})
+      _ = MeetingHistorianHandler.subscribed_projects()
+
+      assert_receive {:curation_withheld, _, %{meeting_id: mid}}, 1_000
+      assert mid == meeting.id
+      refute_receive {:curation_withheld, _, _}, 100
+
+      for _ <- 1..2 do
+        assert_receive {:dispatch_debounced, _, %{meeting_id: ^mid}}, 500
+      end
+    end
+
+    test "fails closed: a string \"dispatch\" or `true` withholds" do
+      agent = create_historian_agent()
+      project = create_project("Fail Closed Project")
+
+      pid = start_handler!()
+      attach_withheld_telemetry!()
+
+      for value <- ["dispatch", true] do
+        put_curation!(value)
+        meeting = create_named_meeting(project, "Sprint planning #{inspect(value)}")
+
+        send(pid, {:meeting_ended, meeting})
+        _ = MeetingHistorianHandler.subscribed_projects()
+
+        assert_receive {:curation_withheld, _, %{meeting_id: mid}}, 1_000
+        assert mid == meeting.id, "value #{inspect(value)} did not withhold"
+      end
+
+      Process.sleep(200)
+
+      case system_space_for(agent) do
+        nil -> :ok
+        space -> assert message_count_for(space) == 0
+      end
+    end
+
+    test "opt-in `:dispatch` fires once and the Summary section says UNKNOWN, never blank" do
+      put_curation!(:dispatch)
+
+      agent = create_historian_agent()
+      project = create_project("Opt In Project")
+
+      _pid = start_handler!()
+      attach_withheld_telemetry!()
+
+      meeting = create_named_meeting(project, "Sprint planning")
+      _ended = transition_meeting_to_ended(meeting)
+
+      wait_until(fn ->
+        case system_space_for(agent) do
+          nil -> false
+          space -> last_message_for(space)
+        end
+      end)
+
+      space = system_space_for(agent)
+      assert message_count_for(space) == 1
+      message = last_message_for(space)
+      assert message.metadata["meeting_id"] == meeting.id
+
+      section = summary_section(message.content)
+      assert String.trim(section) != ""
+      assert section =~ "UNKNOWN"
+
+      refute_receive {:curation_withheld, _, _}, 100
     end
   end
 

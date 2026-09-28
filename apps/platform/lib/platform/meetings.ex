@@ -4238,9 +4238,16 @@ defmodule Platform.Meetings do
   Used by the Historian's activity digest. Only status="complete" transcripts
   are returned; in-progress or failed transcripts are skipped.
 
+  **Returns `[]` by default.** Meeting transcripts are excluded from the
+  digest unless the caller passes `meeting_transcripts: :included` — see
+  `digest_eligible_transcripts_query/1`. Opts pass through to that seam
+  unchanged, so this accessor inherits its default.
+
   ## Options
 
     * `:window_end` — upper bound (exclusive); default `DateTime.utc_now/0`
+    * `:scope` — see `digest_eligible_transcripts_query/1`
+    * `:meeting_transcripts` — see `digest_eligible_transcripts_query/1`
   """
   @spec list_transcripts_since(DateTime.t(), keyword()) :: [Transcript.t()]
   def list_transcripts_since(%DateTime{} = window_start, opts \\ []) do
@@ -4275,6 +4282,28 @@ defmodule Platform.Meetings do
   windows where the renderer would produce nothing: the same
   bytes-without-content shape that made the `messages` corpus fire spurious
   oversize windows.
+
+  ## Meeting transcripts are excluded by default (task 01a0a12e)
+
+  `:meeting_transcripts` — `:excluded` (the default) or `:included`. Any
+  other value, including a missing opt, is treated as `:excluded`: the
+  query matches zero rows. It fails closed.
+
+  A call's summary is derived from the whole conversation, including
+  positions a participant stated to the people in the room and nobody
+  else. Indexing it into an org-wide digest is a disclosure, and the harm
+  is uncorrelated with byte volume: the 2026-09-14 one-to-one was kept out
+  only by `take_within_budget/2` and the 120000-byte window, a volume cap
+  that a short call passes. The budget is not a control, so the exclusion
+  lives here, where the renderer (`list_transcripts_since/2` →
+  `ActivityDigest`) and the byte signal (`Historian.sum_corpus_bytes/3`,
+  `per_day_bytes_query/4`) both inherit it.
+
+  No production call site passes `:included`
+  (`Platform.Meetings.TranscriptDigestExclusionTest` scans `lib/` for it).
+  A future per-meeting conversation-kind signal is the intended gate for
+  `:included`; until then the `transcripts` corpus stays registered and is
+  empty by default.
   """
   @spec digest_eligible_transcripts_query(keyword()) :: Ecto.Query.t()
   def digest_eligible_transcripts_query(opts \\ []) do
@@ -4283,8 +4312,14 @@ defmodule Platform.Meetings do
     from(t in Transcript,
       where: t.status == "complete" and not is_nil(t.completed_at)
     )
+    |> apply_meeting_transcripts(Keyword.get(opts, :meeting_transcripts, :excluded))
     |> apply_digest_scope(scope)
   end
+
+  # Fail closed: only the literal `:included` admits rows. See the
+  # "excluded by default" section of `digest_eligible_transcripts_query/1`.
+  defp apply_meeting_transcripts(query, :included), do: query
+  defp apply_meeting_transcripts(query, _excluded), do: where(query, [t], false)
 
   # External-space digest partition (stack member 12, rbac-external-users).
   # Mirrors `Chat.list_messages_since/2`'s `:scope` opt on the transcript

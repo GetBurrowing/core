@@ -22,14 +22,49 @@ defmodule Platform.Agents.MeetingHistorianHandler do
        `{:project_meetings_topic_added, project_id}` on that topic, and
        the handler subscribes to the new project topic in response.
 
+  ## Default: withheld (task 01a0a12e)
+
+  The meeting-ended curation dispatch does NOT fire by default. It fires
+  only when `Application.get_env(:platform, :meeting_historian_curation)`
+  is exactly the atom `:dispatch`, read at fire time. Every other value —
+  unset, the string `"dispatch"`, `true` — withholds. It fails closed.
+
+  Why: the dispatch is blind to what kind of conversation the meeting was.
+  `Platform.Meetings.Meeting` carries no conversation-kind signal, so a
+  candid one-to-one and a sprint planning call produce byte-identical
+  instructions, and the Historian writes org-wide pages. Whether a
+  meeting's content is fit for org-wide curation cannot be decided here,
+  so the code that fires declines by default instead of relying on the
+  curator happening to recognise a meeting id. No heuristic (meeting id,
+  name, participant count) is used; this is a default-off gate, not a
+  classifier. The key is deliberately absent from `config/*.exs`.
+
+  On withhold the handler:
+
+    * does not call `HistorianDispatcher`;
+    * emits `[:platform, :agents, :historian, :meeting_curation_withheld]`
+      with `%{count: 1}` and `%{meeting_id, project_id, org_id, reason:
+      :default_withheld}` — `org_id` (from the meeting's project) is what
+      lets `Platform.Audit.TelemetryHandler` persist it as an audit row
+      rather than drop it for missing scope;
+    * logs one info line naming the meeting and the config key;
+    * records the meeting in the debounce map, so a re-delivery inside the
+      window is debounced rather than re-emitting the withheld event.
+
   ## Dispatch metadata
 
-  On `{:meeting_ended, %Meeting{}}` the handler dispatches via
+  When opted in (`:dispatch`), on `{:meeting_ended, %Meeting{}}` the
+  handler dispatches via
   `HistorianDispatcher.dispatch("historian", "historian.meeting_ended",
   %{trigger: "meeting_ended", meeting_id: m.id, project_id: m.project_id,
-  chat_space_id: m.chat_space_id})` — the Historian's prompt template
-  interpolates the scope IDs so the agent's `memory_search` calls filter
-  to that meeting / project / space namespace.
+  chat_space_id: m.chat_space_id, meeting_summary: @unknown_summary})` —
+  the Historian's prompt template interpolates the scope IDs so the agent's
+  `memory_search` calls filter to that meeting / project / space namespace.
+
+  `meeting_summary` is always the explicit UNKNOWN sentence. The handler
+  has no summary source at meeting-end time (the summarizer runs
+  separately), and a missing template var renders as `""`, which reads as
+  "nothing was decided" rather than "not known".
 
   ## Failure isolation
 
@@ -77,6 +112,13 @@ defmodule Platform.Agents.MeetingHistorianHandler do
   @default_debounce_ms 15 * 60 * 1_000
 
   @dispatch_debounced_event [:platform, :agents, :historian, :dispatch_debounced]
+  @curation_withheld_event [:platform, :agents, :historian, :meeting_curation_withheld]
+
+  @curation_config_key :meeting_historian_curation
+
+  @unknown_summary "UNKNOWN — no summary was available when this dispatch was composed. " <>
+                     "This is not evidence that nothing was decided; write nothing on the " <>
+                     "strength of this section."
 
   # ── Public API ────────────────────────────────────────────────────────────
 
@@ -84,6 +126,14 @@ defmodule Platform.Agents.MeetingHistorianHandler do
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
+
+  @doc """
+  The `meeting_summary` sentence every opted-in meeting-ended dispatch
+  carries. Public so the `historian.meeting_ended` template tests render
+  with exactly what the handler sends.
+  """
+  @spec unknown_summary() :: String.t()
+  def unknown_summary, do: @unknown_summary
 
   @doc "Returns the set of project_ids the handler is currently subscribed to."
   @spec subscribed_projects() :: MapSet.t()
@@ -186,11 +236,64 @@ defmodule Platform.Agents.MeetingHistorianHandler do
   # ── Dispatch + debounce internals ─────────────────────────────────────────
 
   defp fire_dispatch(%Meeting{} = meeting, %DateTime{} = now, debounce, state) do
+    # Read at fire time, not compile time. Only the exact atom `:dispatch`
+    # fires; anything else withholds (fail closed). See "Default: withheld".
+    if Application.get_env(:platform, @curation_config_key, :withheld) === :dispatch do
+      do_dispatch(meeting)
+    else
+      withhold_dispatch(meeting)
+    end
+
+    new_last =
+      state.last_dispatched_at
+      |> Map.put(meeting.id, now)
+      |> prune_stale(now, debounce)
+
+    {:noreply, %{state | last_dispatched_at: new_last}}
+  end
+
+  defp withhold_dispatch(%Meeting{} = meeting) do
+    Logger.info(
+      "[MeetingHistorianHandler] meeting_ended curation withheld — meeting=#{meeting.id} " <>
+        "(config :platform, #{inspect(@curation_config_key)} is not :dispatch)"
+    )
+
+    :telemetry.execute(
+      @curation_withheld_event,
+      %{count: 1},
+      %{
+        meeting_id: meeting.id,
+        project_id: meeting.project_id,
+        org_id: project_org_id(meeting.project_id),
+        reason: :default_withheld,
+        action: "meeting_curation_withheld",
+        actor_type: "system"
+      }
+    )
+  end
+
+  # The audit handler drops `[:platform, :agents, :historian | _]` events
+  # that carry neither workspace_id nor org_id, so derive the org from the
+  # meeting's project. `nil` (no project row) still emits; it is then
+  # dropped by the audit handler with a logged warning, never silently.
+  defp project_org_id(nil), do: nil
+
+  # `project_id` comes off a `%Meeting{}` loaded from the database (a
+  # `belongs_to` binary_id), never from a request boundary.
+  defp project_org_id(project_id) do
+    case Tasks.get_project(project_id) do
+      %{org_id: org_id} -> org_id
+      nil -> nil
+    end
+  end
+
+  defp do_dispatch(%Meeting{} = meeting) do
     metadata = %{
       trigger: "meeting_ended",
       meeting_id: meeting.id,
       project_id: meeting.project_id,
-      chat_space_id: meeting.chat_space_id
+      chat_space_id: meeting.chat_space_id,
+      meeting_summary: @unknown_summary
     }
 
     Logger.info(
@@ -208,13 +311,6 @@ defmodule Platform.Agents.MeetingHistorianHandler do
             "#{meeting.id}: #{inspect(reason)}"
         )
     end
-
-    new_last =
-      state.last_dispatched_at
-      |> Map.put(meeting.id, now)
-      |> prune_stale(now, debounce)
-
-    {:noreply, %{state | last_dispatched_at: new_last}}
   end
 
   defp skip_dispatch(%Meeting{} = meeting, elapsed_ms, debounce, state) do

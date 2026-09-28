@@ -264,29 +264,35 @@ defmodule Platform.Agents.HistorianDispatcherTest do
     # second-precision sigil.
     @pinned_oversize_now ~U[2026-03-05 12:00:00.000000Z]
 
+    # Task 01a0a12e moved this case from the transcripts corpus to messages:
+    # transcripts are excluded from the digest by default, so an oversized
+    # transcript no longer produces a window at all (the sibling case below
+    # pins that). The skip-line / `item_skipped` / forward-progress coverage
+    # is corpus-agnostic and is kept here on one oversized chat message.
     test "names the skipped row instead of cutting it, and steps past it", %{
       agent: agent
     } do
-      # Budget = 500 tokens (2000 bytes). One transcript row with a
-      # 10_000-byte summary alone forces the slicer past the halving
-      # floor once the transcripts cursor is bounded at ~2h. The 30-day
-      # default lookback would distribute the bytes too thinly per day
-      # to hit oversize — pre-stamping the cursor at 2h ago tightens the
-      # slice range so the halve-until-min-sub-window branch fires.
+      # Budget = 500 tokens (2000 bytes). One chat message with a
+      # 10_000-byte body alone forces the slicer past the halving floor
+      # once the messages cursor is bounded at ~2h. The 30-day default
+      # lookback would distribute the bytes too thinly per day to hit
+      # oversize — pre-stamping the cursor at 2h ago tightens the slice
+      # range so the halve-until-min-sub-window branch fires.
       Application.put_env(:platform, :historian_window_token_budget, 500)
       Application.put_env(:platform, :historian_max_windows_per_pass, 20)
 
       space = insert_channel_space("board-room")
+      participant = insert_user_participant(space.id, "Ada")
 
       now = @pinned_oversize_now
       two_hours_ago = DateTime.add(now, -7_200, :second)
-      completed_at = DateTime.add(now, -1_200, :second)
+      posted_at = DateTime.add(now, -1_200, :second)
 
-      # Pre-stamp the transcripts cursor so the slicer only walks
+      # Pre-stamp the messages cursor so the slicer only walks
       # `[two_hours_ago, now)`. Under the default 30-day lookback the
       # per-day byte estimate would fall below budget and skip oversize.
       {:ok, _} =
-        Historian.advance_cursor(@org_workspace, "transcripts", nil, two_hours_ago)
+        Historian.advance_cursor(@org_workspace, "messages", nil, two_hours_ago)
 
       # Park the corpora this case does not seed AT the pinned instant so
       # their slice ranges are zero-width. Required once the clock is pinned
@@ -294,20 +300,15 @@ defmodule Platform.Agents.HistorianDispatcherTest do
       # wall-clock time and `Historian.sum_corpus_bytes/3` has no upper bound,
       # so the pages corpus would otherwise report bytes > 0 while the per-day
       # query over the pinned sweep range finds none.
-      Enum.each(~w(pages journal messages), fn corpus ->
+      Enum.each(~w(pages journal transcripts), fn corpus ->
         {:ok, _} = Historian.advance_cursor(@org_workspace, corpus, nil, now)
       end)
 
-      insert_transcript!(%{
-        space_id: space.id,
-        status: "complete",
-        started_at: two_hours_ago,
-        completed_at: completed_at,
-        # Long summary → summary bytes dominate byte accounting. 10_000
-        # bytes against a 2_000-byte cap: this single row cannot fit the
-        # window budget no matter how the span is sliced.
-        summary: String.duplicate("z ", 5_000),
-        segments: []
+      # 10_000 bytes against a 2_000-byte cap: this single row cannot fit
+      # the window budget no matter how the span is sliced.
+      insert_message!(space.id, participant.id, %{
+        content: String.duplicate("z ", 5_000),
+        inserted_at: posted_at
       })
 
       test_pid = self()
@@ -340,12 +341,12 @@ defmodule Platform.Agents.HistorianDispatcherTest do
 
       oversized =
         Enum.find(messages, fn m ->
-          get_in(m.metadata, ["cursor", "namespace"]) == "transcripts" and
+          get_in(m.metadata, ["cursor", "namespace"]) == "messages" and
             m.metadata["oversize"] == true
         end)
 
       assert oversized,
-             "expected a transcripts-corpus message with oversize: true, got: #{inspect(Enum.map(messages, & &1.metadata))}"
+             "expected a messages-corpus message with oversize: true, got: #{inspect(Enum.map(messages, & &1.metadata))}"
 
       # The row is NAMED, not cut at a byte offset mid-grapheme.
       assert oversized.content =~ "_(skipped —"
@@ -356,26 +357,107 @@ defmodule Platform.Agents.HistorianDispatcherTest do
       assert oversized.metadata["included_count"] == 0
 
       # The skip is a queryable audit signal, not a silent advance.
-      assert_received {:item_skipped, %{bytes: bytes}, %{corpus: "transcripts"} = meta}
+      assert_received {:item_skipped, %{bytes: bytes}, %{corpus: "messages"} = meta}
       assert bytes >= 10_000
       assert is_binary(meta.message_id)
 
       # FORWARD PROGRESS: the sweep steps past the unfittable row rather
       # than stalling on it forever. Under a "retry with a smaller span"
       # fix this assertion is what livelocks.
-      cursor =
-        Repo.one!(
-          from(c in HistorianCursor,
-            where: is_nil(c.workspace_id) and c.corpus == "transcripts"
-          )
-        )
+      cursor = messages_cursor()
 
-      assert DateTime.compare(cursor.last_processed_at, completed_at) == :gt
+      assert DateTime.compare(cursor.last_processed_at, posted_at) == :gt
 
       # ...and not one instant further than it needed to. The old
       # unconditional `advance_cursor(…, window.window_end)` would land at
       # or after the window end, which is `now`-ish.
       assert DateTime.compare(cursor.last_processed_at, now) == :lt
+    end
+
+    # Task 01a0a12e: the SAME oversized row as a transcript is not eligible
+    # for the digest by default, so it yields no transcripts-corpus window,
+    # no oversize message and no `item_skipped` — it is excluded, not
+    # skipped. The size is irrelevant: a small transcript is excluded too
+    # (transcript_digest_exclusion_test.exs).
+    test "an oversized transcript is excluded, not skipped: no window, no item_skipped", %{
+      agent: agent
+    } do
+      Application.put_env(:platform, :historian_window_token_budget, 500)
+      Application.put_env(:platform, :historian_max_windows_per_pass, 20)
+
+      space = insert_channel_space("board-room-tx")
+
+      now = @pinned_oversize_now
+      two_hours_ago = DateTime.add(now, -7_200, :second)
+      completed_at = DateTime.add(now, -1_200, :second)
+
+      {:ok, _} =
+        Historian.advance_cursor(@org_workspace, "transcripts", nil, two_hours_ago)
+
+      Enum.each(~w(pages journal messages), fn corpus ->
+        {:ok, _} = Historian.advance_cursor(@org_workspace, corpus, nil, now)
+      end)
+
+      transcript =
+        insert_transcript!(%{
+          space_id: space.id,
+          status: "complete",
+          started_at: two_hours_ago,
+          completed_at: completed_at,
+          summary: String.duplicate("z ", 5_000),
+          segments: []
+        })
+
+      # POSITIVE CONTROL: the row is eligible apart from the exclusion.
+      assert [%{id: id}] =
+               Platform.Meetings.list_transcripts_since(two_hours_ago,
+                 window_end: now,
+                 meeting_transcripts: :included
+               )
+
+      assert id == transcript.id
+
+      # ...and the byte signal reads it as 0.
+      assert {_, 0} = Historian.pending_windows_input(@org_workspace).transcripts
+
+      test_pid = self()
+      handler_id = "historian-item-skipped-tx-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        [:platform, :historian, :item_skipped],
+        fn _event, measurements, metadata, _config ->
+          send(test_pid, {:item_skipped, measurements, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      assert {:ok, %{}} =
+               HistorianDispatcher.dispatch_windowed(
+                 "historian",
+                 "historian.threshold",
+                 %{trigger: "threshold"},
+                 @org_workspace,
+                 now: now
+               )
+
+      messages =
+        case Chat.get_space_by_slug("system-#{agent.slug}") do
+          nil -> []
+          system_space -> system_space_messages(system_space)
+        end
+
+      refute Enum.any?(messages, fn m ->
+               get_in(m.metadata, ["cursor", "namespace"]) == "transcripts" and
+                 m.metadata["oversize"] == true
+             end),
+             "expected no transcripts-corpus oversize message, got: " <>
+               inspect(Enum.map(messages, & &1.metadata))
+
+      refute Enum.any?(messages, &(&1.content =~ "_(skipped —"))
+      refute_received {:item_skipped, _, %{corpus: "transcripts"}}
     end
 
     test "a window that fits reaches window_end and emits no truncation event" do
@@ -713,26 +795,35 @@ defmodule Platform.Agents.HistorianDispatcherTest do
     # (historian_dispatcher.ex:840-842), and for a per-day bucket that is
     # UTC midnight of the bucket's date — the date the row's own corpus
     # clock falls on, per `Historian.pending_bytes_per_day/4`. For the
-    # transcripts corpus that clock is `completed_at`, which the fixture
+    # messages corpus that clock is `inserted_at`, which the fixture
     # sets to `thirty_min_ago`. So the anchor is `thirty_min_ago`'s date:
     # anchoring on `now`'s date or on `one_hour_ago`'s date each leaves a
     # 30-minute band per day where the filter looks for a date the event
     # never carries.
-    test "(a) 120KB transcript, tight-range oversize path stamps day_bytes on the seeded day",
+    #
+    # Task 01a0a12e moved this case from a 120KB transcript to a 120KB chat
+    # message: transcripts are excluded from the digest by default, so a
+    # transcript can no longer drive the oversize path. A same-size
+    # transcript is seeded alongside and must contribute nothing.
+    test "(a) 120KB message, tight-range oversize path stamps day_bytes on the seeded day",
          %{agent: agent} do
       Application.put_env(:platform, :historian_window_token_budget, 500)
       Application.put_env(:platform, :historian_max_windows_per_pass, 20)
 
-      space = insert_channel_space("concentrated-transcript")
+      space = insert_channel_space("concentrated-message")
+      participant = insert_user_participant(space.id, "Voice")
+      transcript_space = insert_channel_space("concentrated-transcript")
 
       now = @pinned_density_now
       one_hour_ago = DateTime.add(now, -3_600, :second)
       thirty_min_ago = DateTime.add(now, -1_800, :second)
 
-      # Pre-stamp the transcripts cursor at 1h ago so the slice range is
-      # tightly [1h_ago, now) = 3600s span — the halving floor.
-      {:ok, _} =
-        Historian.advance_cursor(@org_workspace, "transcripts", nil, one_hour_ago)
+      # Pre-stamp the messages AND transcripts cursors at 1h ago so the
+      # slice range is tightly [1h_ago, now) = 3600s span — the halving
+      # floor. The transcripts cursor is live so its exclusion is observed,
+      # not parked away.
+      {:ok, _} = Historian.advance_cursor(@org_workspace, "messages", nil, one_hour_ago)
+      {:ok, _} = Historian.advance_cursor(@org_workspace, "transcripts", nil, one_hour_ago)
 
       # Park every other corpus AT the pinned instant so its slice range is
       # zero-width. Required, not cosmetic: `Platform.Org.Seeds` inserts
@@ -741,18 +832,23 @@ defmodule Platform.Agents.HistorianDispatcherTest do
       # pinned past `now` the pages corpus would report bytes > 0 while the
       # per-day query over the sweep range finds none — a spurious empty
       # window that perturbs the `dispatched` count.
-      Enum.each(~w(pages journal messages), fn corpus ->
+      Enum.each(~w(pages journal), fn corpus ->
         {:ok, _} = Historian.advance_cursor(@org_workspace, corpus, nil, now)
       end)
 
+      # 120KB body — exceeds the 2000-byte budget many times over.
+      # 120_000 / 4 = 30_000 tokens; budget = 500 tokens.
+      insert_message!(space.id, participant.id, %{
+        content: String.duplicate("x", 120_000),
+        inserted_at: thirty_min_ago
+      })
+
       transcript =
         insert_transcript!(%{
-          space_id: space.id,
+          space_id: transcript_space.id,
           status: "complete",
           started_at: one_hour_ago,
           completed_at: thirty_min_ago,
-          # 120KB summary — exceeds the 2000-byte budget many times over.
-          # 120_000 / 4 = 30_000 tokens; budget = 500 tokens.
           summary: String.duplicate("x", 120_000),
           segments: []
         })
@@ -789,24 +885,25 @@ defmodule Platform.Agents.HistorianDispatcherTest do
 
       oversized =
         Enum.find(messages, fn m ->
-          get_in(m.metadata, ["cursor", "namespace"]) == "transcripts" and
+          get_in(m.metadata, ["cursor", "namespace"]) == "messages" and
             m.metadata["oversize"] == true
         end)
 
       assert oversized,
-             "expected an oversize transcripts message, got: " <>
+             "expected an oversize messages-corpus message, got: " <>
                inspect(Enum.map(messages, & &1.metadata))
 
-      # The 120KB summary exceeds the 2_000-byte cap on its own, so it is
+      # The 120KB body exceeds the 2_000-byte cap on its own, so it is
       # named and stepped past rather than cut at a byte offset.
       assert oversized.content =~ "_(skipped —"
       assert String.valid?(oversized.content)
 
-      # Drain telemetry events and locate the transcripts-corpus event on
-      # the seeded row's day whose day_bytes matches the seeded summary.
-      # `octet_length` of the summary is 120_000 and `octet_length` of
-      # `[]::text` is 2; the transcripts corpus sums both, so
-      # day_bytes >= 120_000.
+      # Task 01a0a12e: the same-size transcript produced no window.
+      refute Enum.any?(messages, &(get_in(&1.metadata, ["cursor", "namespace"]) == "transcripts"))
+
+      # Drain telemetry events and locate the messages-corpus event on
+      # the seeded row's day whose day_bytes matches the seeded body.
+      # `octet_length` of the body is 120_000, so day_bytes >= 120_000.
       #
       # ONE binding for the day, used by the filter AND by the failure
       # message. That is the structural half of the fix: with two bindings
@@ -815,25 +912,33 @@ defmodule Platform.Agents.HistorianDispatcherTest do
       events = drain_window_dispatched_events()
       expected_day = DateTime.to_date(thirty_min_ago)
 
-      transcripts_events_on_day =
+      messages_events_on_day =
         Enum.filter(events, fn {_m, meta} ->
-          meta.corpus == :transcripts and
+          meta.corpus == :messages and
             String.starts_with?(meta.day_span, Date.to_iso8601(expected_day))
         end)
 
-      assert Enum.any?(transcripts_events_on_day, fn {m, _meta} ->
+      assert Enum.any?(messages_events_on_day, fn {m, _meta} ->
                is_map_key(m, :day_bytes) and m.day_bytes >= 120_000 and m.day_bytes <= 130_000
              end),
-             "expected a transcripts telemetry event on #{expected_day} with day_bytes ≈ 120_000, got: " <>
-               inspect(transcripts_events_on_day)
+             "expected a messages telemetry event on #{expected_day} with day_bytes ≈ 120_000, got: " <>
+               inspect(messages_events_on_day)
+
+      refute Enum.any?(events, fn {_m, meta} -> meta.corpus == :transcripts end),
+             "expected no transcripts-corpus window events, got: " <> inspect(events)
     end
 
     # (b) Cross-corpus independence: seed one messages row + one
-    # transcripts row, both 30min ago inside a pre-stamped 1h cursor
-    # window. Assert exactly two messages dispatched (one per corpus),
-    # each with its own cursor namespace and day_bytes attribution — no
-    # commingling of byte sums across corpora.
-    test "(b) messages + transcripts dispatch independently with per-corpus day_bytes",
+    # journal row, both 30min ago inside a pre-stamped 1h cursor
+    # window. Assert one dispatch per corpus, each with its own cursor
+    # namespace and day_bytes attribution — no commingling of byte sums
+    # across corpora.
+    #
+    # Task 01a0a12e: the second corpus was `transcripts`, which is now
+    # excluded from the digest by default. The independence pair moves to
+    # messages + journal; an equally large transcript is still seeded and
+    # must dispatch nothing.
+    test "(b) messages + journal dispatch independently with per-corpus day_bytes",
          %{agent: agent} do
       Application.put_env(:platform, :historian_window_token_budget, 500)
       Application.put_env(:platform, :historian_max_windows_per_pass, 20)
@@ -846,8 +951,8 @@ defmodule Platform.Agents.HistorianDispatcherTest do
       one_hour_ago = DateTime.add(now, -3_600, :second)
       thirty_min_ago = DateTime.add(now, -1_800, :second)
 
-      # Pre-stamp both cursors 1h ago so the messages + transcripts slice
-      # ranges match at exactly the halving floor. This is what makes the
+      # Pre-stamp the cursors 1h ago so the messages + journal (+ excluded
+      # transcripts) slice ranges match at exactly the halving floor. This is what makes the
       # two independent single-window emissions land on one day, one per
       # corpus. The clock is pinned mid-day for that reason: this case
       # carries no date-valued filter (it groups on `meta.corpus` alone, so
@@ -855,13 +960,12 @@ defmodule Platform.Agents.HistorianDispatcherTest do
       # "exactly one window per corpus at the halving floor" shape does
       # change silently when the seeded hour straddles UTC midnight.
       {:ok, _} = Historian.advance_cursor(@org_workspace, "messages", nil, one_hour_ago)
+      {:ok, _} = Historian.advance_cursor(@org_workspace, "journal", nil, one_hour_ago)
       {:ok, _} = Historian.advance_cursor(@org_workspace, "transcripts", nil, one_hour_ago)
 
-      # Park the corpora this case does not seed at the pinned instant —
+      # Park the corpus this case does not seed at the pinned instant —
       # same zero-width reasoning as case (a).
-      Enum.each(~w(pages journal), fn corpus ->
-        {:ok, _} = Historian.advance_cursor(@org_workspace, corpus, nil, now)
-      end)
+      {:ok, _} = Historian.advance_cursor(@org_workspace, "pages", nil, now)
 
       # 100KB message body → 25k tokens > 500 budget → per-day fanout →
       # halve until 1h floor → oversize. Same story for transcripts.
@@ -874,6 +978,15 @@ defmodule Platform.Agents.HistorianDispatcherTest do
       # `insert_message!` forces `inserted_at` via put_change; verify by
       # re-reading (defence-in-depth for the timestamps callback).
       _ = message
+
+      # 100KB org journal entry on the same instant.
+      journal = insert_journal!(nil, String.duplicate("j", 100_000))
+
+      {1, _} =
+        Repo.update_all(
+          from(e in MemoryEntry, where: e.id == ^journal.id),
+          set: [inserted_at: thirty_min_ago]
+        )
 
       transcript =
         insert_transcript!(%{
@@ -910,7 +1023,7 @@ defmodule Platform.Agents.HistorianDispatcherTest do
                  now: now
                )
 
-      assert n >= 2, "expected at least one message per corpus, got #{n}"
+      assert n >= 2, "expected at least one message per non-excluded corpus, got #{n}"
 
       system_space = Chat.get_space_by_slug("system-#{agent.slug}")
       messages = system_space_messages(system_space)
@@ -920,23 +1033,31 @@ defmodule Platform.Agents.HistorianDispatcherTest do
       assert Map.has_key?(by_corpus, "messages"),
              "expected a messages-corpus dispatched message"
 
-      assert Map.has_key?(by_corpus, "transcripts"),
-             "expected a transcripts-corpus dispatched message"
+      assert Map.has_key?(by_corpus, "journal"),
+             "expected a journal-corpus dispatched message"
+
+      # Task 01a0a12e: the equally large transcript dispatches nothing.
+      refute Map.has_key?(by_corpus, "transcripts"),
+             "expected NO transcripts-corpus dispatched message"
 
       # Telemetry: each corpus must carry its OWN day_bytes value —
       # never the sum of both corpora. Both land on the seeded day.
       events = drain_window_dispatched_events()
 
       messages_evts = for {m, meta} <- events, meta.corpus == :messages, do: m.day_bytes
+      journal_evts = for {m, meta} <- events, meta.corpus == :journal, do: m.day_bytes
       transcripts_evts = for {m, meta} <- events, meta.corpus == :transcripts, do: m.day_bytes
 
       assert Enum.any?(messages_evts, &(&1 >= 100_000 and &1 <= 110_000)),
              "expected a messages telemetry event with day_bytes ≈ 100_000, got: " <>
                inspect(messages_evts)
 
-      assert Enum.any?(transcripts_evts, &(&1 >= 100_000 and &1 <= 110_000)),
-             "expected a transcripts telemetry event with day_bytes ≈ 100_000, got: " <>
-               inspect(transcripts_evts)
+      assert Enum.any?(journal_evts, &(&1 >= 100_000 and &1 <= 110_000)),
+             "expected a journal telemetry event with day_bytes ≈ 100_000, got: " <>
+               inspect(journal_evts)
+
+      assert transcripts_evts == [],
+             "expected no transcripts telemetry events, got: " <> inspect(transcripts_evts)
 
       # Cross-corpus independence: no telemetry event should attribute the
       # sum of both corpora's bytes (200_000+) to a single window.
@@ -944,7 +1065,12 @@ defmodule Platform.Agents.HistorianDispatcherTest do
              "day_bytes commingling detected — events: #{inspect(events)}"
     end
 
-    # (c) Cap-resume: seed 25 distinct days of transcripts, cap at 20
+    # Task 01a0a12e: seeded on the messages corpus (was transcripts, now
+    # excluded from the digest by default). The historian's own dispatched
+    # instructions land in a `kind: "system"` space, which the messages
+    # eligibility seam excludes, so they cannot feed back into sweep 2.
+    #
+    # (c) Cap-resume: seed 25 distinct days of messages, cap at 20
     # windows per pass. First sweep drains 20; second sweep picks up the
     # remaining 5 with the per-day histogram recomputed against the
     # advanced cursor.
@@ -953,51 +1079,43 @@ defmodule Platform.Agents.HistorianDispatcherTest do
       Application.put_env(:platform, :historian_max_windows_per_pass, 20)
 
       space = insert_channel_space("cap-resume")
+      participant = insert_user_participant(space.id, "Voice")
       now = DateTime.utc_now()
 
-      # Pre-stamp the non-transcripts cursors 1h in the future so ONLY
-      # the transcripts corpus contributes pending windows across the
-      # two sweeps. Sweep 1 dispatches 20 chat_messages into the
-      # historian system space with `inserted_at ≈ real utc_now`; the
-      # future cursor guarantees those are BEFORE the cursor watermark
-      # and don't fire a spurious messages-corpus window on sweep 2.
+      # Pre-stamp the other cursors 1h in the future so ONLY the messages
+      # corpus contributes pending windows across the two sweeps.
       future = DateTime.add(now, 3_600, :second)
 
-      Enum.each(~w(pages journal messages), fn c ->
+      Enum.each(~w(pages journal transcripts), fn c ->
         {:ok, _} = Historian.advance_cursor(@org_workspace, c, nil, future)
       end)
 
-      # Seed 25 transcripts, one per day, at `now - offset * 24h`. Every
+      # Seed 25 messages, one per day, at `now - offset * 24h`. Every
       # timestamp is <= now (so the range-end filter in
       # `pending_bytes_per_day` includes each row). Days are 24h apart,
       # so each row's `DateTime.to_date/1` lands on a distinct UTC
       # calendar day (except at the microsecond edge of midnight —
       # not a concern for a test bounded well within a single second).
-      transcripts_per_day =
+      messages_per_day =
         Enum.map(0..24, fn offset ->
           ts = DateTime.add(now, -offset * 86_400, :second)
 
           row =
-            insert_transcript!(%{
-              space_id: space.id,
-              status: "complete",
-              started_at: ts,
-              completed_at: ts,
-              # 100KB summary → 25k tokens per day, under 30k budget.
-              summary: String.duplicate("c", 100_000),
-              segments: []
+            insert_message!(space.id, participant.id, %{
+              # 100KB body → 25k tokens per day, under 30k budget.
+              content: String.duplicate("c", 100_000),
+              inserted_at: ts
             })
 
-          force_transcript_updated_at!(row, ts)
           {ts, row}
         end)
 
-      # Nil cursor precondition: no transcripts cursor row yet.
+      # Nil cursor precondition: no messages cursor row yet.
       # Task 019f5e7d: advance_cursor coerces sentinel → nil, so the org-scope
       # cursor lives at `workspace_id IS NULL`.
       refute Repo.one(
                from(c in HistorianCursor,
-                 where: is_nil(c.workspace_id) and c.corpus == "transcripts"
+                 where: is_nil(c.workspace_id) and c.corpus == "messages"
                )
              )
 
@@ -1013,32 +1131,27 @@ defmodule Platform.Agents.HistorianDispatcherTest do
       assert dispatched_1 == 20
       assert remaining_1 >= 5
 
-      cursor_after_1 =
-        Repo.one!(
-          from(c in HistorianCursor,
-            where: is_nil(c.workspace_id) and c.corpus == "transcripts"
-          )
-        )
+      cursor_after_1 = messages_cursor()
 
       assert %DateTime{} = cursor_after_1.last_processed_at
 
       # The 20th window (oldest-first) covers the day 5 days ago — its
       # window_end is midnight of the day 4 days ago. Cursor should be
-      # at-or-past that boundary. We seeded transcripts up through today,
+      # at-or-past that boundary. We seeded messages up through today,
       # so at least 5 days of pending content remain.
       #
-      # `transcripts_per_day` is ordered `offset = 0..24` — index 0 is
+      # `messages_per_day` is ordered `offset = 0..24` — index 0 is
       # today, index 24 is the oldest (24d ago). The cursor should now
       # sit past the oldest but strictly before today.
-      oldest_seeded = transcripts_per_day |> List.last() |> elem(0)
-      newest_seeded = transcripts_per_day |> List.first() |> elem(0)
+      oldest_seeded = messages_per_day |> List.last() |> elem(0)
+      newest_seeded = messages_per_day |> List.first() |> elem(0)
 
       assert DateTime.compare(cursor_after_1.last_processed_at, oldest_seeded) == :gt,
-             "expected cursor to advance past the oldest seeded transcript, got " <>
+             "expected cursor to advance past the oldest seeded message, got " <>
                inspect(cursor_after_1.last_processed_at)
 
       assert DateTime.compare(cursor_after_1.last_processed_at, newest_seeded) == :lt,
-             "expected cursor to still be behind today's transcript, got " <>
+             "expected cursor to still be behind today's message, got " <>
                inspect(cursor_after_1.last_processed_at)
 
       # Second sweep — drains the remaining 5. `pending_bytes_per_day`
@@ -1087,6 +1200,14 @@ defmodule Platform.Agents.HistorianDispatcherTest do
     # calendar day, and call `force_transcript_updated_at!/2` only so the
     # autogenerated `updated_at` cannot contradict it in a future reading.
     #
+    # Task 01a0a12e: transcripts are excluded from the digest by default,
+    # so CASES 1 and 2 now place the 120KB row on the messages corpus
+    # (clock `inserted_at`) — the day-attribution logic under test lives in
+    # the slicer and is corpus-agnostic. Each case still seeds the
+    # transcript as it was and asserts it produced no event at all. The
+    # transcripts `completed_at` clock is pinned at the seam instead
+    # (historian_test.exs, via `meeting_transcripts: :included`).
+    #
     # Microsecond precision is mandatory, not stylistic — see the note at
     # `@pinned_sweep_now`. Ecto raises `ArgumentError: expects microsecond
     # precision` on a second-precision sigil for `:utc_datetime_usec`.
@@ -1116,15 +1237,25 @@ defmodule Platform.Agents.HistorianDispatcherTest do
       # Sweep range [23:45 Mar-5, 00:45 Mar-6) — one hour across the
       # boundary, so both sides of midnight are live candidates.
       {:ok, _} =
+        Historian.advance_cursor(@org_workspace, "messages", nil, @straddle_after_cursor)
+
+      {:ok, _} =
         Historian.advance_cursor(@org_workspace, "transcripts", nil, @straddle_after_cursor)
 
       # Park the other three corpora AT the pinned instant so their slice
       # ranges are zero-width — same reasoning as the concentrated-density
       # cases: `Platform.Org.Seeds` writes nil-workspace pages at real
       # wall-clock time and `sum_corpus_bytes/3` has no upper bound.
-      Enum.each(~w(pages journal messages), fn corpus ->
+      Enum.each(~w(pages journal), fn corpus ->
         {:ok, _} = Historian.advance_cursor(@org_workspace, corpus, nil, now)
       end)
+
+      participant = insert_user_participant(space.id, "Voice")
+
+      insert_message!(space.id, participant.id, %{
+        content: String.duplicate("x", 120_000),
+        inserted_at: @straddle_after_completed_at
+      })
 
       transcript =
         insert_transcript!(%{
@@ -1165,15 +1296,19 @@ defmodule Platform.Agents.HistorianDispatcherTest do
       # negative alone is vacuous — it passes against a dispatcher that
       # emits nothing at all.
       assert Enum.any?(events, fn {m, meta} ->
-               meta.corpus == :transcripts and
+               meta.corpus == :messages and
                  String.starts_with?(meta.day_span, Date.to_iso8601(attributed_day)) and
                  m.day_bytes >= 120_000 and m.day_bytes <= 130_000
              end),
-             "expected a transcripts event on #{attributed_day} with day_bytes ≈ 120_000, got: " <>
+             "expected a messages event on #{attributed_day} with day_bytes ≈ 120_000, got: " <>
                inspect(events)
 
+      # Task 01a0a12e: the same-size transcript is excluded — no event at all.
+      refute Enum.any?(events, fn {_m, meta} -> meta.corpus == :transcripts end),
+             "expected no transcripts events, got: " <> inspect(events)
+
       refute Enum.any?(events, fn {m, meta} ->
-               meta.corpus == :transcripts and
+               meta.corpus == :messages and
                  String.starts_with?(meta.day_span, Date.to_iso8601(other_side_of_midnight)) and
                  m.day_bytes >= 120_000 and m.day_bytes <= 130_000
              end),
@@ -1204,11 +1339,21 @@ defmodule Platform.Agents.HistorianDispatcherTest do
       now = @straddle_before_now
 
       {:ok, _} =
+        Historian.advance_cursor(@org_workspace, "messages", nil, @straddle_before_cursor)
+
+      {:ok, _} =
         Historian.advance_cursor(@org_workspace, "transcripts", nil, @straddle_before_cursor)
 
-      Enum.each(~w(pages journal messages), fn corpus ->
+      Enum.each(~w(pages journal), fn corpus ->
         {:ok, _} = Historian.advance_cursor(@org_workspace, corpus, nil, now)
       end)
+
+      participant = insert_user_participant(space.id, "Voice")
+
+      insert_message!(space.id, participant.id, %{
+        content: String.duplicate("y", 120_000),
+        inserted_at: @straddle_before_completed_at
+      })
 
       transcript =
         insert_transcript!(%{
@@ -1242,15 +1387,19 @@ defmodule Platform.Agents.HistorianDispatcherTest do
       other_side_of_midnight = DateTime.to_date(@straddle_before_now)
 
       assert Enum.any?(events, fn {m, meta} ->
-               meta.corpus == :transcripts and
+               meta.corpus == :messages and
                  String.starts_with?(meta.day_span, Date.to_iso8601(attributed_day)) and
                  m.day_bytes >= 120_000 and m.day_bytes <= 130_000
              end),
-             "expected a transcripts event on #{attributed_day} with day_bytes ≈ 120_000, got: " <>
+             "expected a messages event on #{attributed_day} with day_bytes ≈ 120_000, got: " <>
                inspect(events)
 
+      # Task 01a0a12e: the same-size transcript is excluded — no event at all.
+      refute Enum.any?(events, fn {_m, meta} -> meta.corpus == :transcripts end),
+             "expected no transcripts events, got: " <> inspect(events)
+
       refute Enum.any?(events, fn {m, meta} ->
-               meta.corpus == :transcripts and
+               meta.corpus == :messages and
                  String.starts_with?(meta.day_span, Date.to_iso8601(other_side_of_midnight)) and
                  m.day_bytes >= 120_000 and m.day_bytes <= 130_000
              end),
@@ -1750,8 +1899,19 @@ defmodule Platform.Agents.HistorianDispatcherTest do
         assert sentinel == random,
                "#{corpus}: sentinel #{inspect(sentinel)} != random #{inspect(random)}"
 
-        refute sentinel == %{},
-               "#{corpus}: expected non-empty per-day sums after seeding"
+        case corpus do
+          "messages" ->
+            refute sentinel == %{},
+                   "#{corpus}: expected non-empty per-day sums after seeding"
+
+          # Task 01a0a12e: transcripts are excluded from the digest by
+          # default, so the per-day sums are empty for every workspace
+          # variant. The sentinel/nil/random agreement above is therefore
+          # vacuous for this corpus until a caller can opt in.
+          "transcripts" ->
+            assert sentinel == %{},
+                   "transcripts: expected empty per-day sums (excluded by default), got #{inspect(sentinel)}"
+        end
       end
     end
   end

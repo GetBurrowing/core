@@ -7,6 +7,7 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
 
   import Ecto.Query, only: [from: 2]
 
+  alias Platform.Agents.MeetingHistorianHandler
   alias Platform.Chat
   alias Platform.Orchestration.ContextAssembler
   alias Platform.Orchestration.HeartbeatScheduler
@@ -2726,34 +2727,97 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
 
       assert descriptor, "historian.meeting_ended should appear in default_templates/0"
 
-      for var <- ~w(meeting_id project_id chat_space_id meeting_summary) do
+      for var <- ~w(meeting_id project_id chat_space_id meeting_summary date) do
         assert var in descriptor.variables,
                "historian.meeting_ended must declare #{var} as a variable"
       end
 
       :ok = PromptTemplates.seed_defaults()
 
-      assigns = %{
-        meeting_id: "00000000-0000-0000-0000-meetingaaaaaa",
-        project_id: "00000000-0000-0000-0000-projectaaaaaa",
-        chat_space_id: "00000000-0000-0000-0000-spaceaaaaaaa",
-        meeting_summary: "Decision: ship the historian on the every-6h cadence."
-      }
+      assigns =
+        meeting_ended_assigns(
+          "Sprint planning notes: Priya to deliver list of demands to Marcus by end of week."
+        )
 
       assert {:ok, rendered} = PromptTemplates.render_template("historian.meeting_ended", assigns)
 
-      assert rendered =~ "00000000-0000-0000-0000-meetingaaaaaa"
-      assert rendered =~ "00000000-0000-0000-0000-projectaaaaaa"
-      assert rendered =~ "00000000-0000-0000-0000-spaceaaaaaaa"
-      assert rendered =~ "Decision: ship the historian on the every-6h cadence."
-      # Wiki-first contract: explicit instruction to update page paths, not
-      # to write durable content to journal paths.
-      assert rendered =~ "memory_search"
+      assert rendered =~ assigns.meeting_id
+      assert rendered =~ assigns.project_id
+      assert rendered =~ assigns.chat_space_id
+      assert rendered =~ "Priya to deliver list of demands to Marcus by end of week."
+      # The only page the body may name is the meeting's own space notes page.
+      assert rendered =~ "space/#{assigns.chat_space_id}/page/notes.md"
+      assert rendered =~ "project/#{assigns.project_id}/journal/2026-09-28.md"
+    end
 
-      assert rendered =~ "project/{{project_id}}/page/decisions.md" or
-               rendered =~ "/page/decisions.md"
+    # ── Task 01a0a12e stage 4 (ticket clauses 6 and 7) ────────────────────
+    #
+    # Rendered through the production path (`render_template/2` over the
+    # seeded row) with the stage-3 UNKNOWN sentinel the handler supplies.
 
-      assert rendered =~ "/page/notes.md"
+    test "historian.meeting_ended: no memory_search meeting filter — it does not exist" do
+      rendered =
+        render_meeting_ended!(meeting_ended_assigns(MeetingHistorianHandler.unknown_summary()))
+
+      refute rendered =~ "meeting_id="
+      refute rendered =~ "filtered to"
+      refute rendered =~ "filter restricting"
+      # The body says plainly the transcript is not reachable, and what not to do.
+      assert rendered =~ "not reachable through `memory_search`"
+      assert rendered =~ "membership"
+      assert rendered =~ "relay"
+    end
+
+    test "historian.meeting_ended: no org-wide or project-wide page write" do
+      assigns = meeting_ended_assigns(MeetingHistorianHandler.unknown_summary())
+      rendered = render_meeting_ended!(assigns)
+
+      refute rendered =~ "page/decisions.md"
+      refute rendered =~ "org/page/"
+      refute rendered =~ ~r{project/[^/\s`]+/page/}
+      refute rendered =~ "project/#{assigns.project_id}/page/"
+      # The meeting's own canvas stays the home of its decisions.
+      assert rendered =~ "canvas"
+    end
+
+    test "historian.meeting_ended: every journal path it names is routable (real Routing.classify/1)" do
+      assigns = meeting_ended_assigns(MeetingHistorianHandler.unknown_summary())
+      rendered = render_meeting_ended!(assigns)
+
+      journal_paths =
+        ~r|[\w\-]+(?:/[\w\-]+)?/journal/[^\s`)]+\.md|
+        |> Regex.scan(rendered)
+        |> List.flatten()
+        |> Enum.uniq()
+
+      assert journal_paths != [], "expected the body to name its journal path"
+
+      for path <- journal_paths do
+        assert %{kind: :journal} = Platform.Org.Wiki.Routing.classify(path),
+               "journal path #{inspect(path)} is rejected by Platform.Org.Wiki.Routing"
+      end
+    end
+
+    test "historian.meeting_ended: the UNKNOWN summary is visible and non-blank under ## Summary" do
+      rendered =
+        render_meeting_ended!(meeting_ended_assigns(MeetingHistorianHandler.unknown_summary()))
+
+      section = meeting_summary_section(rendered)
+      assert String.trim(section) != ""
+      assert section =~ "UNKNOWN"
+      # An UNKNOWN summary means write nothing and return silently.
+      assert rendered =~ "RETURN SILENTLY"
+    end
+
+    test "historian.meeting_ended: an absent summary still reads as unknown, never as empty" do
+      assigns = Map.delete(meeting_ended_assigns("unused"), :meeting_summary)
+      rendered = render_meeting_ended!(assigns)
+
+      section = meeting_summary_section(rendered)
+      assert String.trim(section) != ""
+      assert section =~ ~r/blank/i
+      assert section =~ ~r/unknown/i
+      assert section =~ "never"
     end
 
     test "historian.threshold declares workspace + token variables and renders them" do
@@ -5555,5 +5619,30 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
       )
 
     :ok
+  end
+
+  # ── historian.meeting_ended helpers (task 01a0a12e stage 4) ─────────────
+
+  defp meeting_ended_assigns(summary) do
+    %{
+      meeting_id: Ecto.UUID.generate(),
+      project_id: Ecto.UUID.generate(),
+      chat_space_id: Ecto.UUID.generate(),
+      date: "2026-09-28",
+      meeting_summary: summary
+    }
+  end
+
+  defp render_meeting_ended!(assigns) do
+    :ok = PromptTemplates.seed_defaults()
+    assert {:ok, rendered} = PromptTemplates.render_template("historian.meeting_ended", assigns)
+    rendered
+  end
+
+  # Text between the `## Summary` heading line and the next `## ` heading.
+  defp meeting_summary_section(rendered) do
+    [_, after_heading] = String.split(rendered, ~r/^## Summary[^\n]*\n/m, parts: 2)
+    [section | _] = String.split(after_heading, ~r/^## /m, parts: 2)
+    section
   end
 end
