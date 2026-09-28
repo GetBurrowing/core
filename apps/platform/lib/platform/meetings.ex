@@ -7154,6 +7154,228 @@ defmodule Platform.Meetings do
   end
 
   @doc """
+  Force `identity` off the LiveKit media room `room_name`, via LiveKit's own
+  `RoomService/RemoveParticipant` Twirp RPC (task 01a0e906).
+
+  This is the LOW-LEVEL WIRE CALL and does NO authorization: it will remove
+  any identity, human or agent, from any room the configured credentials can
+  administer. Its only sanctioned caller is `remove_agent_from_call/3`, which
+  enforces host-only and agent-only before it gets here; do not call this
+  from a LiveView, a tool, or anything reachable by a client-supplied
+  identity.
+
+  Built exactly as `list_livekit_participants/1` is: the `roomAdmin` token
+  scoped to the room, the injectable `:livekit_req_client`, the ws->http
+  scheme rewrite. `:ok` on 200. `{:error, :not_found}` on a 404 or a Twirp
+  `not_found` body, which is how LiveKit answers for an identity that is not
+  (or no longer) in the room. `{:error, :livekit_not_configured}` without
+  credentials; any other HTTP or transport failure is `{:error, reason}`. It
+  must never raise into its caller.
+  """
+  @spec remove_livekit_participant(String.t(), String.t()) ::
+          :ok | {:error, :livekit_not_configured | :not_found | term()}
+  def remove_livekit_participant(room_name, identity)
+      when is_binary(room_name) and is_binary(identity) do
+    config = livekit_config()
+    url = config[:url]
+    api_key = config[:api_key]
+    api_secret = config[:api_secret]
+
+    if is_nil(url) or is_nil(api_key) or is_nil(api_secret) do
+      {:error, :livekit_not_configured}
+    else
+      token = room_admin_token(api_key, api_secret, room_name)
+
+      twirp_url =
+        url
+        |> String.replace_prefix("wss://", "https://")
+        |> String.replace_prefix("ws://", "http://")
+
+      case Req.post(livekit_req_client(),
+             url: "#{twirp_url}/twirp/livekit.RoomService/RemoveParticipant",
+             json: %{"room" => room_name, "identity" => identity},
+             headers: [{"authorization", "Bearer #{token}"}],
+             receive_timeout: 2_000,
+             retry: false
+           ) do
+        {:ok, %{status: 200}} ->
+          :ok
+
+        {:ok, %{status: status, body: body}} ->
+          if status == 404 or twirp_not_found?(body),
+            do: {:error, :not_found},
+            else: {:error, {:http_error, status, body}}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  rescue
+    e -> {:error, {:exception, Exception.message(e)}}
+  end
+
+  # Twirp reports errors as `{"code": "...", "msg": "..."}`. Req decodes it
+  # when LiveKit sends `application/json`; a raw binary body is decoded here.
+  defp twirp_not_found?(%{"code" => "not_found"}), do: true
+
+  defp twirp_not_found?(body) when is_binary(body) do
+    case Jason.decode(body) do
+      {:ok, %{"code" => "not_found"}} -> true
+      _ -> false
+    end
+  end
+
+  defp twirp_not_found?(_), do: false
+
+  @doc """
+  Kick an AGENT out of a live meeting (task 01a0e906 stage 2).
+
+  `row_id` is a `meeting_participants` row id (the rail's row id, never a
+  client-supplied LiveKit identity). `actor` is the viewer's own
+  `Platform.Chat.Participant`, and only the meeting's host may act.
+
+  Every refusal happens before any LiveKit call, in this order:
+
+    1. `{:error, :forbidden}` unless `actor` is a `"user"` chat participant
+       whose id is the meeting's `host_participant_id` (re-read from the DB).
+       A nil host, a nil actor (a guest) and a non-host are all refused.
+    2. `{:error, :not_found}` for a malformed id, a missing row, a row from
+       another room, or a row that has already left. `{:error, :not_an_agent}`
+       for a human, guest or nil-FK row.
+    3. The identity is the one LiveKit reported (`metadata["identity"]`),
+       falling back to `"agent:<slug>"`; a `user:`/`guest:` identity is
+       `:not_an_agent`.
+
+  Then `remove_livekit_participant/2` runs. `:ok` is outcome `:removed`; a
+  LiveKit `:not_found` is outcome `:already_gone` and the row is still
+  closed. Any other error is returned and NOTHING is written, so the row
+  stays active and the host can retry.
+
+  Closing the row sets `left_at`, which is also the re-entry gate:
+  `say/4`'s `ensure_agent_in_room/2` then answers `:not_in_room`. Chat
+  space membership is deliberately left alone — this is not
+  `Chat.remove_participant/1`, which is durable dismissal. A later
+  `invite_agent/3` inserts a fresh active row. A one-line system message
+  tells the room; a failed post is logged and never fails the removal.
+  """
+  @spec remove_agent_from_call(Meeting.t(), binary(), Platform.Chat.Participant.t() | nil) ::
+          {:ok, %{participant: Participant.t(), outcome: :removed | :already_gone}}
+          | {:error, :forbidden | :not_an_agent | :not_found | :livekit_not_configured | term()}
+  def remove_agent_from_call(%Meeting{} = meeting, row_id, actor) do
+    with {:ok, meeting} <- reload_meeting(meeting),
+         :ok <- authorize_meeting_host(meeting, actor),
+         {:ok, room, row} <- resolve_removable_agent_row(meeting, row_id),
+         {:ok, identity} <- removable_agent_identity(row),
+         {:ok, outcome} <- kick_from_livekit(room, identity) do
+      {:ok, updated} =
+        row
+        |> Participant.changeset(%{left_at: DateTime.utc_now()})
+        |> Repo.update()
+
+      MeetingsPubSub.broadcast_room(room.id, {:participant_left, updated})
+      broadcast_presence_change(room.id, room.space_id)
+
+      post_agent_removed_to_space(meeting, actor, row)
+
+      {:ok, %{participant: updated, outcome: outcome}}
+    end
+  end
+
+  defp reload_meeting(%Meeting{id: id}) do
+    case Repo.get(Meeting, id) do
+      %Meeting{} = meeting -> {:ok, meeting}
+      nil -> {:error, :not_found}
+    end
+  end
+
+  defp authorize_meeting_host(
+         %Meeting{host_participant_id: host_id},
+         %Platform.Chat.Participant{participant_type: "user", id: actor_id}
+       )
+       when is_binary(host_id) and actor_id == host_id,
+       do: :ok
+
+  defp authorize_meeting_host(_meeting, _actor), do: {:error, :forbidden}
+
+  defp resolve_removable_agent_row(%Meeting{} = meeting, row_id) do
+    with true <- Platform.UUID.valid?(row_id),
+         %Room{id: room_id} = room <- get_active_room(meeting.chat_space_id),
+         %Participant{room_id: ^room_id, left_at: nil} = row <-
+           Participant |> Repo.get(row_id) |> Repo.preload(:agent) do
+      case row do
+        %Participant{agent_id: agent_id, user_id: nil, agent: %Agent{}}
+        when is_binary(agent_id) ->
+          {:ok, room, row}
+
+        _ ->
+          {:error, :not_an_agent}
+      end
+    else
+      _ -> {:error, :not_found}
+    end
+  end
+
+  defp removable_agent_identity(%Participant{agent: %Agent{} = agent} = row) do
+    identity =
+      case row.metadata do
+        %{"identity" => identity} when is_binary(identity) and identity != "" -> identity
+        _ -> "agent:#{agent.slug}"
+      end
+
+    case parse_identity(identity) do
+      {:user, _} -> {:error, :not_an_agent}
+      {:guest, _} -> {:error, :not_an_agent}
+      _ -> {:ok, identity}
+    end
+  end
+
+  defp kick_from_livekit(%Room{} = room, identity) do
+    case remove_livekit_participant(room.livekit_room_name, identity) do
+      :ok -> {:ok, :removed}
+      {:error, :not_found} -> {:ok, :already_gone}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp post_agent_removed_to_space(%Meeting{} = meeting, actor, %Participant{} = row) do
+    host_name = actor.display_name || "The host"
+    agent_name = row.agent.name || row.display_name || row.agent.slug
+
+    with {:ok, participant} <-
+           Platform.Orchestration.ExecutionSpace.ensure_system_participant(meeting.chat_space_id),
+         {:ok, _message} <-
+           Chat.post_message(%{
+             space_id: meeting.chat_space_id,
+             participant_id: participant.id,
+             content_type: "system",
+             content: "#{host_name} removed #{agent_name}",
+             metadata: %{
+               "source" => "meeting_agent_removed",
+               "agent_id" => row.agent_id,
+               "meeting_id" => meeting.id
+             }
+           }) do
+      :ok
+    else
+      error ->
+        Logger.warning(
+          "[Meetings] agent removed from meeting=#{meeting.id} but the system message " <>
+            "failed to post: #{inspect(error)}"
+        )
+
+        :ok
+    end
+  rescue
+    e ->
+      Logger.warning(
+        "[Meetings] agent removed from meeting=#{meeting.id} but the system message " <>
+          "raised: #{Exception.message(e)}"
+      )
+
+      :ok
+  end
+
+  @doc """
   Create an explicit LiveKit Agent Dispatch: ask LiveKit's own
   `AgentDispatchService/CreateDispatch` Twirp RPC to route a job for
   `room_name` to the worker registered under `livekit_agent_name` (task

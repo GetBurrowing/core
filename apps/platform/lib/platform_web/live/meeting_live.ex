@@ -369,6 +369,10 @@ defmodule PlatformWeb.MeetingLive do
   # short enough that it does not become permanent chrome.
   @canvas_changed_ms 6_000
 
+  # How long the "Removed <agent> from the meeting." toast offers Undo
+  # (task 01a0e906 stage 4, canvas 01a0e99d-2af5 "Signature element").
+  @agent_removal_undo_ms 8_000
+
   # Rows per page in the canvas-mode picker's `CanvasExplorer` group. Matches
   # that component's own default page size on purpose — see
   # `ChatLive.CanvasHooks`'s identical constant and comment: the component
@@ -704,6 +708,9 @@ defmodule PlatformWeb.MeetingLive do
     # badge on first paint rather than only after the next toggle.
     |> assign(:intent_muted?, Meetings.intent_muted?(meeting.id))
     |> assign(:participants, participants)
+    |> assign(:removing_agent_ids, MapSet.new())
+    |> assign(:agent_removal_errors, %{})
+    |> assign(:agent_removal_undo, nil)
     |> assign(:transcriber_present?, transcriber_present?)
     |> assign(:room_live?, room_live?(meeting.chat_space_id))
     |> assign(:room_recording?, room_recording?(meeting.chat_space_id))
@@ -1133,6 +1140,14 @@ defmodule PlatformWeb.MeetingLive do
           |> assign(:page_title, "Meeting · #{meeting.name}")
           |> assign(:meeting, meeting)
           |> assign(:participants, participants)
+          # Task 01a0e906 stage 3: the host's "Remove from meeting" state.
+          # Row ids in flight read "Leaving…"; a failed one carries its
+          # message until the next attempt.
+          |> assign(:removing_agent_ids, MapSet.new())
+          |> assign(:agent_removal_errors, %{})
+          # Task 01a0e906 stage 4: nil, or `%{agent_id, agent_name, ref}` for
+          # the 8-second Undo toast after a removal.
+          |> assign(:agent_removal_undo, nil)
           |> assign(:transcriber_present?, transcriber_present?)
           |> assign(:room_live?, room_live?(meeting.chat_space_id))
           |> assign(:room_recording?, room_recording?(meeting.chat_space_id))
@@ -3984,6 +3999,72 @@ defmodule PlatformWeb.MeetingLive do
 
   def handle_event("undo_stop_candidate", _params, socket), do: {:noreply, socket}
 
+  # Remove an agent from the live call (task 01a0e906 stage 3, Saru's
+  # canvas 01a0e99d-2af5).
+  #
+  # The actor is read off THIS socket (`:current_participant`) and never
+  # from the click payload, which carries only the `meeting_participants`
+  # row id — the same rule `undo_stop_candidate` above states. There is NO
+  # local host pre-check that skips the context: the button is hidden for
+  # non-hosts, but `Meetings.remove_agent_from_call/3` is the one
+  # authorization seam, so a forged event from a non-host reaches it and
+  # is refused there with `:forbidden` before any LiveKit call.
+  #
+  # `start_async/3`, so the row reads "Leaving…" while the LiveKit
+  # RemoveParticipant round-trip (up to ~2s) runs off the LiveView process.
+  def handle_event("remove_agent_from_call", %{"participant-id" => id}, socket)
+      when is_binary(id) do
+    actor = socket.assigns[:current_participant]
+
+    socket =
+      case socket.assigns[:meeting] do
+        %Meetings.Meeting{} = meeting ->
+          name = removal_display_name(socket, id)
+
+          socket
+          |> assign(:removing_agent_ids, MapSet.put(removing_agent_ids(socket), id))
+          |> clear_agent_removal_error(id)
+          # The name is captured NOW, while the row is on screen: the
+          # context's `{:participant_left, _}` broadcast usually lands (and
+          # refreshes the roster without it) before `handle_async/3` runs.
+          |> start_async({:remove_agent, id}, fn ->
+            {name, Meetings.remove_agent_from_call(meeting, id, actor)}
+          end)
+
+        # No meeting on this socket (index / not-found paths): nothing to
+        # remove from.
+        _ ->
+          socket
+      end
+
+    {:noreply, socket}
+  end
+
+  def handle_event("remove_agent_from_call", _params, socket), do: {:noreply, socket}
+
+  # Undo a removal (task 01a0e906 stage 4). The payload is IGNORED: the
+  # agent id is read from `:agent_removal_undo`, which only the host's own
+  # successful removal on THIS socket sets. Host-ness is re-checked on the
+  # server anyway, so a forged push from a non-host is a no-op even if the
+  # assign were somehow set. The re-invite is the ordinary
+  # `meeting_invite_agent` seam (`MeetingHooks.invite_agent_into_call/3`),
+  # which authorizes, finds-or-inserts a fresh active meeting_participants
+  # row and dispatches `meeting_join`; an agent that is no longer invitable
+  # gets that seam's error flash.
+  def handle_event("undo_remove_agent", _params, socket) do
+    socket =
+      with %{agent_id: agent_id} when is_binary(agent_id) <- socket.assigns[:agent_removal_undo],
+           true <- host?(socket.assigns[:current_participant], socket.assigns[:meeting]) do
+        socket
+        |> assign(:agent_removal_undo, nil)
+        |> invite_agent_into_call(agent_id)
+      else
+        _ -> socket
+      end
+
+    {:noreply, socket}
+  end
+
   # ── The correction panel (task 01a0740e stage 2) ────────────────────────
   #
   # Five handlers for the pencil on an armed card and the three choices
@@ -4225,6 +4306,103 @@ defmodule PlatformWeb.MeetingLive do
     anchor = Date.add(socket.assigns.calendar_anchor_date, days)
     selected = Date.add(socket.assigns.calendar_selected_date, days)
     assign_calendar_week(socket, anchor, selected)
+  end
+
+  # ── Remove an agent: the landing half (task 01a0e906 stage 3) ───────────
+  #
+  # Every branch takes the id out of `:removing_agent_ids` and ends in
+  # `refresh_participants/1`, and none raises: a refused or crashed kick is
+  # a flash or a row error, never a dead LiveView.
+  @impl true
+  def handle_async({:remove_agent, id}, result, socket) do
+    {name, result} =
+      case result do
+        {:ok, {name, inner}} -> {name, {:ok, inner}}
+        # The task died; its row is still on screen, so the roster has it.
+        other -> {removal_display_name(socket, id), other}
+      end
+
+    socket =
+      socket
+      |> assign(:removing_agent_ids, MapSet.delete(removing_agent_ids(socket), id))
+      |> apply_agent_removal_result(id, name, result)
+      |> refresh_participants()
+
+    {:noreply, socket}
+  end
+
+  # Task 01a0e906 stage 4: the 8-second Undo toast replaces the flash. The
+  # agent id comes from the CLOSED ROW the context returned, never from the
+  # click, and `undo_remove_agent` reads it back from this assign. Each
+  # removal gets a fresh ref, so the timer of an earlier removal cannot cut
+  # a later toast short (see the `:clear_agent_removal_undo` handler).
+  #
+  # Only `:removed` offers Undo. `:already_gone` (LiveKit had no such
+  # participant) keeps its plain flash: nothing this click did needs undoing.
+  defp apply_agent_removal_result(
+         socket,
+         id,
+         name,
+         {:ok, {:ok, %{outcome: :removed, participant: %{agent_id: agent_id}}}}
+       )
+       when is_binary(agent_id) do
+    ref = make_ref()
+    Process.send_after(self(), {:clear_agent_removal_undo, ref}, @agent_removal_undo_ms)
+
+    socket
+    |> clear_agent_removal_error(id)
+    |> assign(:agent_removal_undo, %{agent_id: agent_id, agent_name: name, ref: ref})
+  end
+
+  defp apply_agent_removal_result(socket, id, name, {:ok, {:ok, %{outcome: :removed}}}) do
+    socket
+    |> clear_agent_removal_error(id)
+    |> put_flash(:info, "Removed #{name} from the meeting.")
+  end
+
+  defp apply_agent_removal_result(socket, id, name, {:ok, {:ok, %{outcome: :already_gone}}}) do
+    socket
+    |> clear_agent_removal_error(id)
+    |> put_flash(:info, "#{name} had already left the call.")
+  end
+
+  defp apply_agent_removal_result(socket, id, _name, {:ok, {:error, :forbidden}}) do
+    socket
+    |> clear_agent_removal_error(id)
+    |> put_flash(:error, "Only the host can remove agents from this meeting.")
+  end
+
+  defp apply_agent_removal_result(socket, id, _name, {:ok, {:error, reason}})
+       when reason in [:not_an_agent, :not_found] do
+    socket
+    |> clear_agent_removal_error(id)
+    |> put_flash(:error, "That participant can't be removed.")
+  end
+
+  # Anything else — a LiveKit 5xx, `:livekit_not_configured`, a transport
+  # error, or the task exiting — leaves the agent in the call, so the ROW
+  # says so and its button stays tappable.
+  defp apply_agent_removal_result(socket, id, name, _other) do
+    assign(
+      socket,
+      :agent_removal_errors,
+      Map.put(agent_removal_errors(socket), id, "Couldn't remove #{name}. Try again")
+    )
+  end
+
+  defp clear_agent_removal_error(socket, id),
+    do: assign(socket, :agent_removal_errors, Map.delete(agent_removal_errors(socket), id))
+
+  defp removing_agent_ids(socket), do: socket.assigns[:removing_agent_ids] || MapSet.new()
+  defp agent_removal_errors(socket), do: socket.assigns[:agent_removal_errors] || %{}
+
+  # The name the viewer saw on the row, read BEFORE `refresh_participants/1`
+  # drops it.
+  defp removal_display_name(socket, id) do
+    case Enum.find(socket.assigns[:participants] || [], &(Map.get(&1, :id) == id)) do
+      %{display_name: name} when is_binary(name) and name != "" -> name
+      _ -> "the agent"
+    end
   end
 
   # ── PubSub ───────────────────────────────────────────────────────────────
@@ -4573,6 +4751,16 @@ defmodule PlatformWeb.MeetingLive do
 
       _ ->
         {:noreply, socket}
+    end
+  end
+
+  # Expire the Undo toast (task 01a0e906 stage 4). Only the timer of the
+  # CURRENT toast clears it: a second removal inside 8s mints a new ref, and
+  # the first removal's timer then arrives stale and is ignored.
+  def handle_info({:clear_agent_removal_undo, ref}, socket) do
+    case socket.assigns[:agent_removal_undo] do
+      %{ref: ^ref} -> {:noreply, assign(socket, :agent_removal_undo, nil)}
+      _ -> {:noreply, socket}
     end
   end
 

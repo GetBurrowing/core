@@ -1287,4 +1287,143 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       assert Floki.find([label], ~s([data-role="meeting-ask-heard-box"])) == []
     end
   end
+
+  # ── Remove from meeting (task 01a0e906 stage 3) ──────────────────────────
+  #
+  # Saru's canvas 01a0e99d-2af5: one neutral, always-visible icon button per
+  # AGENT row for the host, none on any human row (the host's included).
+  # Every "zero buttons" assertion below sits next to a rendered human row or
+  # a rendered agent row, so an empty find cannot pass on an empty rail.
+
+  defp remove_rail(participants, opts) do
+    render_component(
+      &ParticipantRail.participant_rail/1,
+      [
+        participants: participants,
+        agents_by_id: %{},
+        meeting: %{id: "m-1", host_participant_id: "u-1"}
+      ] ++ opts
+    )
+  end
+
+  defp remove_buttons(nodes), do: Floki.find(nodes, ~s([data-role="meeting-agent-remove"]))
+
+  defp remove_roster do
+    [
+      human("Marlowe", "u-1"),
+      human("Rowan", "u-2"),
+      agent("Meeting Assistant", "ma-1"),
+      agent("Saru", "saru-1")
+    ]
+  end
+
+  describe "remove-from-meeting button" do
+    test "renders exactly one per agent row and none in the humans section" do
+      html = remove_rail(remove_roster(), can_remove_agents?: true)
+      doc = Floki.parse_fragment!(html)
+
+      agent_rows = Floki.find(doc, ~s(li[data-participant-type="agent"]))
+      human_rows = Floki.find(doc, ~s(li[data-participant-type="user"]))
+
+      # Positive controls: both sections actually rendered their rows,
+      # including the host's own.
+      assert length(agent_rows) == 2
+      assert length(human_rows) == 2
+      assert Floki.find(doc, ~s([data-role="host-badge"])) != []
+
+      for row <- agent_rows do
+        assert length(remove_buttons([row])) == 1
+      end
+
+      assert remove_buttons(human_rows) == []
+      assert remove_buttons(Floki.find(doc, ~s(section[data-section="humans"]))) == []
+      assert length(remove_buttons(doc)) == 2
+    end
+
+    test "is wired to the event with the row id, named for the agent, and neutral" do
+      html = remove_rail([agent("Meeting Assistant", "ma-1")], can_remove_agents?: true)
+      [button] = html |> Floki.parse_fragment!() |> remove_buttons()
+
+      assert Floki.attribute(button, "type") == ["button"]
+      assert Floki.attribute(button, "phx-click") == ["remove_agent_from_call"]
+      # The meeting_participants ROW id (`p.id`), not the agent id.
+      assert Floki.attribute(button, "phx-value-participant-id") == ["p-ma-1"]
+
+      assert Floki.attribute(button, "aria-label") == [
+               "Remove Meeting Assistant from the meeting"
+             ]
+
+      assert Floki.attribute(button, "title") == ["Remove from meeting"]
+      assert Floki.attribute(button, "disabled") == []
+
+      [class] = Floki.attribute(button, "class")
+      assert class =~ "btn-ghost"
+      assert class =~ "text-base-content/60"
+      assert class =~ "max-sm:min-h-11"
+      assert class =~ "max-sm:min-w-11"
+      # Neutral, and always visible.
+      refute class =~ "error"
+      refute class =~ "opacity-0"
+      refute class =~ "group-hover"
+
+      assert Floki.find(button, ".hero-user-minus") != []
+      refute html =~ "Kick"
+    end
+
+    test "is absent by default, with the agent row still rendered" do
+      html = remove_rail(remove_roster(), [])
+      doc = Floki.parse_fragment!(html)
+
+      assert length(Floki.find(doc, ~s(li[data-participant-type="agent"]))) == 2
+      assert remove_buttons(doc) == []
+    end
+
+    test "a row in removing_ids reads Leaving… with its button disabled; the others do not" do
+      html =
+        remove_rail(remove_roster(),
+          can_remove_agents?: true,
+          removing_ids: MapSet.new(["p-ma-1"])
+        )
+
+      doc = Floki.parse_fragment!(html)
+      leaving_row = Floki.find(doc, ~s(li[data-participant-id="p-ma-1"]))
+      other_row = Floki.find(doc, ~s(li[data-participant-id="p-saru-1"]))
+
+      [word] = Floki.find(leaving_row, ~s([data-role="meeting-agent-leaving"]))
+      assert Floki.text(word) |> String.trim() == "Leaving…"
+      assert Floki.attribute(word, "class") |> hd() =~ "text-base-content/60"
+      assert Floki.find(leaving_row, ~s([data-role="agent-activity-primary"])) == []
+
+      [button] = remove_buttons(leaving_row)
+      assert Floki.attribute(button, "disabled") != []
+
+      assert Floki.find(other_row, ~s([data-role="meeting-agent-leaving"])) == []
+      assert Floki.find(other_row, ~s([data-role="agent-activity-primary"])) != []
+      [other_button] = remove_buttons(other_row)
+      assert Floki.attribute(other_button, "disabled") == []
+    end
+
+    test "a row in removal_errors shows the failure line and keeps its button enabled" do
+      html =
+        remove_rail(remove_roster(),
+          can_remove_agents?: true,
+          removal_errors: %{"p-ma-1" => "Couldn't remove Meeting Assistant. Try again"}
+        )
+
+      doc = Floki.parse_fragment!(html)
+      failed_row = Floki.find(doc, ~s(li[data-participant-id="p-ma-1"]))
+
+      [line] = Floki.find(failed_row, ~s([data-role="meeting-agent-remove-error"]))
+      assert Floki.text(line) |> String.trim() == "Couldn't remove Meeting Assistant. Try again"
+      [class] = Floki.attribute(line, "class")
+      assert class =~ "text-error"
+      assert class =~ "text-xs"
+
+      [button] = remove_buttons(failed_row)
+      assert Floki.attribute(button, "disabled") == []
+
+      # Only that row.
+      assert length(Floki.find(doc, ~s([data-role="meeting-agent-remove-error"]))) == 1
+    end
+  end
 end

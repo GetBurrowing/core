@@ -1646,6 +1646,9 @@
                 id_prefix="meeting-left-ptt"
                 pressed_agent_id={assigns[:pressed_agent_id]}
                 ask_floor_holders={assigns[:ask_floor_holders] || %{}}
+                can_remove_agents?={host?(assigns[:current_participant], @meeting)}
+                removing_ids={assigns[:removing_agent_ids] || MapSet.new()}
+                removal_errors={assigns[:agent_removal_errors] || %{}}
               />
             </div>
           </section>
@@ -2770,6 +2773,9 @@
               hold_to_talk_id_prefix="meeting-people-ptt"
               pressed_agent_id={assigns[:pressed_agent_id]}
               ask_floor_holders={assigns[:ask_floor_holders] || %{}}
+              can_remove_agents?={host?(assigns[:current_participant], @meeting)}
+              removing_ids={assigns[:removing_agent_ids] || MapSet.new()}
+              removal_errors={assigns[:agent_removal_errors] || %{}}
               participants={assigns[:participants] || []}
               agents_by_id={assigns[:agents_by_id] || %{}}
               meeting={@meeting}
@@ -3315,6 +3321,30 @@
         aria-label="Meeting captions"
       >
       </div>
+    </div>
+    <%!-- Task 01a0e906 stage 4: the Undo toast after the host removes an
+       agent (canvas 01a0e99d-2af5, "Signature element"). Visible for 8s;
+       `:clear_agent_removal_undo` hides it. The copy deliberately makes no
+       "won't rejoin" promise: a worker still holding an unexpired LiveKit
+       token can reconnect on its own. Positioned like the page's other
+       bottom toasts so it clears both the iOS home indicator and the
+       mobile bottom nav. --%>
+    <div
+      :if={assigns[:agent_removal_undo]}
+      data-role="meeting-agent-removed-toast"
+      role="status"
+      aria-live="polite"
+      class="fixed inset-x-0 max-sm:inset-x-4 bottom-[calc(env(safe-area-inset-bottom)+1.5rem+var(--bottom-nav-height,0px))] z-40 mx-auto flex w-fit max-w-sm items-center gap-3 rounded-box bg-base-300 px-4 py-2 text-sm text-base-content shadow-md"
+    >
+      <span class="min-w-0">Removed {@agent_removal_undo.agent_name} from the meeting.</span>
+      <button
+        type="button"
+        phx-click="undo_remove_agent"
+        data-role="meeting-agent-removed-undo"
+        class="link link-primary shrink-0 font-medium max-sm:min-h-11"
+      >
+        Undo
+      </button>
     </div>
   <% true -> %>
     <%!-- `:index` action — grouped meetings list (live / upcoming / ended).

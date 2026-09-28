@@ -163,6 +163,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
   alias PlatformWeb.Components.Meetings.CandidateDisplay
 
   import PlatformWeb.AvatarComponents
+  import PlatformWeb.CoreComponents, only: [icon: 1]
 
   alias Platform.Agents.Agent
   alias Platform.Meetings
@@ -295,6 +296,38 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
     the mechanism this depends on for correctness — the real backstop is
     `AskFloor.claim/5` refusing the press server-side regardless of what
     the client shows.
+    """
+  )
+
+  attr(:can_remove_agents?, :boolean,
+    default: false,
+    doc: """
+    Render the "Remove from meeting" icon button on every AGENT row (task
+    01a0e906 stage 3, Saru's canvas 01a0e99d-2af5). `MeetingLive` passes
+    `host?(current_participant, meeting)`; nothing else sets it, so the
+    chat quick-meet (`Chat.Partials`, via `CallShell.call_rail/1`) renders
+    no button — removal from the quick-meet is out of scope. This is a
+    DISPLAY gate only: `Meetings.remove_agent_from_call/3` re-checks the
+    host on every click, so a forged event from a non-host changes nothing.
+    Never rendered on a human row, including the host's own.
+    """
+  )
+
+  attr(:removing_ids, :any,
+    default: MapSet.new(),
+    doc: """
+    `meeting_participants` row ids (`p.id`) whose removal is in flight. Such
+    a row reads "Leaving…" in place of its activity word and its remove
+    button is disabled, until `{:participant_left, _}` drops the row.
+    """
+  )
+
+  attr(:removal_errors, :map,
+    default: %{},
+    doc: """
+    Row id => failure message ("Couldn't remove <name>. Try again") for a
+    removal that did not land. Rendered under the row name in `text-error`;
+    the button stays enabled so the host can tap again.
     """
   )
 
@@ -558,14 +591,29 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                    `flex-wrap` row so it drops to a second line rather than
                    being clipped — the node used to carry `truncate`, which
                    is exactly the clip this stage removes. --%>
+              <%!-- Task 01a0e906 stage 3: while this row's removal is in
+                   flight the WORD is "Leaving…" at the canvas's `/60` rest
+                   tone, replacing the activity reading, until
+                   `{:participant_left, _}` drops the row. --%>
+              <% leaving? = removing?(@removing_ids, p.id) %>
               <div
                 data-role="agent-activity-word"
-                class={["flex flex-wrap items-baseline gap-x-1 text-[11px] font-medium", info.text]}
+                class={[
+                  "flex flex-wrap items-baseline gap-x-1 text-[11px] font-medium",
+                  if(leaving?, do: "text-base-content/60", else: info.text)
+                ]}
               >
-                <span data-role="agent-activity-primary" class="whitespace-nowrap">
+                <span
+                  :if={leaving?}
+                  data-role="meeting-agent-leaving"
+                  class="whitespace-nowrap text-base-content/60"
+                >
+                  Leaving…
+                </span>
+                <span :if={!leaving?} data-role="agent-activity-primary" class="whitespace-nowrap">
                   {info.primary}
                 </span>
-                <span :if={info.note} data-role="agent-activity-reason">
+                <span :if={!leaving? and info.note} data-role="agent-activity-reason">
                   {"· " <> info.note}
                 </span>
               </div>
@@ -593,6 +641,15 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                 class="break-words text-[11px] font-normal text-base-content/60"
               >
                 {info.delay_reason}
+              </div>
+              <%!-- The one use of the `error` slot on this control (canvas
+                   01a0e99d-2af5): a removal that did not land. --%>
+              <div
+                :if={removal_error(@removal_errors, p.id)}
+                data-role="meeting-agent-remove-error"
+                class="break-words text-xs text-error"
+              >
+                {removal_error(@removal_errors, p.id)}
               </div>
             </div>
 
@@ -833,6 +890,29 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
               mic_state={mic_state(@muted, p)}
               camera_state={camera_state(@camera_off, p)}
             />
+
+            <%!-- REMOVE FROM MEETING (task 01a0e906 stage 3, Saru's canvas
+                 01a0e99d-2af5). NEUTRAL, not red: removing an agent destroys
+                 nothing — it can be invited back, and stage 4's Undo is the
+                 guard, so there is no confirm dialog and no row menu. Always
+                 visible at every width (never hover-revealed: hover does not
+                 exist on touch, and the phone People sheet is where hosts
+                 look). The payload carries ONLY the row id; the actor is read
+                 off the LiveView socket and `Meetings.remove_agent_from_call/3`
+                 re-checks the host. --%>
+            <button
+              :if={@can_remove_agents?}
+              type="button"
+              phx-click="remove_agent_from_call"
+              phx-value-participant-id={p.id}
+              data-role="meeting-agent-remove"
+              disabled={leaving?}
+              aria-label={"Remove #{p.display_name || "this agent"} from the meeting"}
+              title="Remove from meeting"
+              class="btn btn-ghost btn-xs btn-square flex-shrink-0 self-center text-base-content/60 hover:bg-base-300 hover:text-base-content focus-visible:bg-base-300 focus-visible:text-base-content max-sm:min-h-11 max-sm:min-w-11"
+            >
+              <.icon name="hero-user-minus" class="size-4" />
+            </button>
           </li>
         </ul>
       </section>
@@ -1033,6 +1113,23 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
   # `meeting_client.js` (`_publicationMuted(null)` is `true`, "no
   # publication reads as off"), so a silent agent reads muted rather than
   # reading live.
+  # Task 01a0e906 stage 3. Tolerant of any enumerable (a `MapSet` from
+  # `MeetingLive`, a list from a test) and of `nil`, so a caller that omits
+  # the attr never crashes the rail.
+  defp removing?(nil, _id), do: false
+  defp removing?(%MapSet{} = ids, id), do: MapSet.member?(ids, id)
+  defp removing?(ids, id) when is_list(ids), do: id in ids
+  defp removing?(_ids, _id), do: false
+
+  defp removal_error(errors, id) when is_map(errors) do
+    case Map.get(errors, id) do
+      msg when is_binary(msg) and msg != "" -> msg
+      _ -> nil
+    end
+  end
+
+  defp removal_error(_errors, _id), do: nil
+
   defp mic_state(muted, participant) do
     if MapSet.member?(muted, MeetingLive.gallery_identity(participant)),
       do: :off,

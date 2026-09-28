@@ -473,6 +473,27 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
     """
   )
 
+  attr(:can_remove_agents?, :boolean,
+    default: false,
+    doc: """
+    Forwarded to `ParticipantRail.participant_rail/1` (task 01a0e906 stage
+    3): render the host's "Remove from meeting" button on agent rows.
+    `/meetings` passes `host?(current_participant, meeting)`; the chat
+    quick-meet passes nothing and so renders no button — removal from the
+    quick-meet is out of scope.
+    """
+  )
+
+  attr(:removing_ids, :any,
+    default: MapSet.new(),
+    doc: "Forwarded to the rail: row ids whose removal is in flight (\"Leaving…\")."
+  )
+
+  attr(:removal_errors, :map,
+    default: %{},
+    doc: "Forwarded to the rail: row id => failed-removal message."
+  )
+
   attr(:hold_to_talk_id_prefix, :string,
     default: "meeting-people-ptt",
     doc: "Forwarded to the rail as `id_prefix` — distinct from the left rail's."
@@ -744,6 +765,9 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
               id_prefix={@hold_to_talk_id_prefix}
               pressed_agent_id={@pressed_agent_id}
               ask_floor_holders={@ask_floor_holders}
+              can_remove_agents?={@can_remove_agents?}
+              removing_ids={@removing_ids}
+              removal_errors={@removal_errors}
             />
             {render_slot(@people_extra)}
             <.invite_section
