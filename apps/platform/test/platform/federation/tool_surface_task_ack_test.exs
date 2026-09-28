@@ -150,6 +150,33 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
       assert blob =~ ~r/running/i,
              "alarm_silence must state the running requirement"
     end
+
+    # 019f9b61 stage 1: the stage_id parameter doc used to promise that
+    # planning-phase agents could ack with stage_id omitted. They cannot:
+    # the derived path resolves through the approved-only `current_plan/1`.
+    test "task_ack stage_id param no longer promises a planning-phase ack" do
+      task_ack = ToolSurface.list_tools(["task"]) |> Enum.find(&(&1.name == "task_ack"))
+      doc = task_ack.parameters.stage_id.description
+
+      refute doc =~ "can still ack the task-level dispatch"
+      refute doc =~ "planning-phase agents before the plan exists"
+
+      # Positive control on the same field: the refutes read a real doc.
+      assert doc =~ "needs no ack"
+      assert doc =~ "no running stage — cannot ack without a stage_id"
+    end
+
+    test "alarm_silence stage_id param states the planning-phase refusal" do
+      silence =
+        ToolSurface.list_tools(["task"]) |> Enum.find(&(&1.name == "alarm_silence"))
+
+      doc = silence.parameters.stage_id.description
+
+      refute doc =~ "can still ack"
+
+      assert doc =~ "no running stage — cannot silence without a stage_id"
+      assert doc =~ "during planning"
+    end
   end
 
   describe "execute/3 happy path" do
@@ -256,6 +283,58 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
       assert err.error =~ "no running stage"
       assert err.recoverable == true
       assert err.suggestion =~ "stage_id"
+    end
+
+    # 019f9b61 stage 1: the real planning case — the task has NO plan row.
+    test "refuses with no running stage when the task has no plan at all (planning)",
+         %{project: project} do
+      {:ok, planning_task} =
+        Tasks.create_task(%{project_id: project.id, title: "Task still in planning"})
+
+      assert Tasks.current_plan(planning_task.id) == nil
+
+      {:error, err} =
+        ToolSurface.execute(
+          "task_ack",
+          %{"task_id" => planning_task.id, "subagent_id" => "x.moon"},
+          %{}
+        )
+
+      assert err.error =~ "no running stage"
+      assert err.recoverable == true
+    end
+
+    # Positive control: a RUNNING stage exists, but its plan is only
+    # pending_review. The refusal is driven by the approved-only filter the
+    # parameter doc names, not by stage absence.
+    test "refuses when the only running stage belongs to a pending_review plan",
+         %{project: project} do
+      {:ok, review_task} =
+        Tasks.create_task(%{project_id: project.id, title: "Task with unapproved plan"})
+
+      {:ok, review_plan} =
+        Tasks.create_plan(%{task_id: review_task.id, status: "pending_review", version: 1})
+
+      {:ok, stage} =
+        Tasks.create_stage(%{
+          plan_id: review_plan.id,
+          position: 1,
+          name: "coding",
+          description: "running under an unapproved plan"
+        })
+
+      {:ok, stage} = Tasks.transition_stage(stage, "running")
+      assert stage.status == "running"
+
+      {:error, err} =
+        ToolSurface.execute(
+          "task_ack",
+          %{"task_id" => review_task.id, "subagent_id" => "x.moon"},
+          %{}
+        )
+
+      assert err.error =~ "no running stage"
+      assert err.recoverable == true
     end
   end
 

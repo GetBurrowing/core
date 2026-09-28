@@ -371,6 +371,64 @@ defmodule Platform.Federation.ToolSurfaceAlarmSilenceTest do
       assert err.recoverable == true
       assert err.suggestion =~ "stage_id"
     end
+
+    # 019f9b61 stage 1: the real planning case — the task has NO plan row.
+    test "no running stage when the task has no plan at all (planning)", %{project: project} do
+      {:ok, planning_task} =
+        Tasks.create_task(%{project_id: project.id, title: "Task still in planning"})
+
+      assert Tasks.current_plan(planning_task.id) == nil
+
+      {:error, err} =
+        ToolSurface.execute(
+          "alarm_silence",
+          %{
+            "task_id" => planning_task.id,
+            "until_seconds" => 600,
+            "reason" => "planning has no stage"
+          },
+          %{}
+        )
+
+      assert err.error =~ "no running stage"
+      assert err.recoverable == true
+    end
+
+    # Positive control: a RUNNING stage under a pending_review plan still
+    # refuses — the approved-only `current_plan/1` filter drives the refusal.
+    test "no running stage when the only running stage belongs to a pending_review plan",
+         %{project: project} do
+      {:ok, review_task} =
+        Tasks.create_task(%{project_id: project.id, title: "Task with unapproved plan"})
+
+      {:ok, review_plan} =
+        Tasks.create_plan(%{task_id: review_task.id, status: "pending_review", version: 1})
+
+      {:ok, stage} =
+        Tasks.create_stage(%{
+          plan_id: review_plan.id,
+          position: 1,
+          name: "coding",
+          description: "running under an unapproved plan"
+        })
+
+      {:ok, stage} = Tasks.transition_stage(stage, "running")
+      assert stage.status == "running"
+
+      {:error, err} =
+        ToolSurface.execute(
+          "alarm_silence",
+          %{
+            "task_id" => review_task.id,
+            "until_seconds" => 600,
+            "reason" => "unapproved plan has no stage"
+          },
+          %{}
+        )
+
+      assert err.error =~ "no running stage"
+      assert err.recoverable == true
+    end
   end
 
   # Task 01a0a633 stage 2 — the supplied-stage_id guard added to

@@ -2072,7 +2072,7 @@ defmodule Platform.Federation.ToolSurface do
             type: "string",
             required: false,
             description:
-              "Optional — the running stage_id from your dispatch context. When supplied it must exist, belong to this `task_id`, and be `running`; any other stage is refused with a recoverable error naming which of the three failed, because an honoured ack parks that stage for the safety-net window. When omitted the tool resolves it via `current_running_stage(current_plan(task_id))`, so callers who lack a stage_id (e.g. planning-phase agents before the plan exists) can still ack the task-level dispatch."
+              "Optional — the running stage_id from your dispatch context. When supplied it must exist, belong to this `task_id`, and be `running`; any other stage is refused with a recoverable error naming which of the three failed, because an honoured ack parks that stage for the safety-net window. When omitted the tool resolves the running stage of the task's current APPROVED plan (`current_running_stage(current_plan(task_id))`); when there is none — always the case during planning, before any plan is approved — the call is refused with `no running stage — cannot ack without a stage_id`. A planning dispatch arms no no-ack timer and needs no ack, so do not call this during planning."
           },
           subagent_id: %{
             type: "string",
@@ -2102,7 +2102,7 @@ defmodule Platform.Federation.ToolSurface do
             type: "string",
             required: false,
             description:
-              "Optional — the running stage_id from your dispatch context. When supplied it must exist, belong to this `task_id`, and be `running`; anything else is refused with a recoverable error naming which of the three failed. When omitted the tool resolves it via `current_running_stage(current_plan(task_id))`, matching the `task_ack` convention."
+              "Optional — the running stage_id from your dispatch context. When supplied it must exist, belong to this `task_id`, and be `running`; anything else is refused with a recoverable error naming which of the three failed. When omitted the tool resolves the running stage of the task's current APPROVED plan (`current_running_stage(current_plan(task_id))`), exactly as `task_ack` does; when there is none — always the case during planning — the call is refused with `no running stage — cannot silence without a stage_id`. A planning dispatch arms no no-ack timer, so there is no alarm to silence."
           },
           until_seconds: %{
             type: "integer",

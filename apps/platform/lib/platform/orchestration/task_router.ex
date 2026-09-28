@@ -1297,211 +1297,30 @@ defmodule Platform.Orchestration.TaskRouter do
 
   # Board PubSub: stage transitioned
   def handle_info({:stage_transitioned, stage}, %State{} = state) do
-    # Only react if this stage belongs to our task's current plan
-    plan = Tasks.current_plan(state.task_id)
+    # Three outcomes. `Tasks.subscribe_board/0` is the global `tasks:board`
+    # firehose, so every router receives every task's stage transitions:
+    #
+    #   * a stage of ANOTHER task's plan is ignored silently — logging it
+    #     would emit N routers x M transitions of noise;
+    #   * a stage of OUR task on a plan that is not the current approved plan
+    #     (none approved yet, or a superseded version) is ignored with a
+    #     warning — it must not drive dispatch, lease clearing or in_review
+    #     entry, and dropping it silently hid real confusion;
+    #   * a stage of our current approved plan drives the router.
+    if Tasks.plan_task_id(stage.plan_id) == state.task_id do
+      plan = Tasks.current_plan(state.task_id)
 
-    if plan && stage.plan_id == plan.id do
-      # Revoke deploy lease when a deploy stage completes (passed or failed)
-      state =
-        if stage.status in ["passed", "failed"] do
-          revoke_deploy_lease(state)
-        else
-          state
-        end
+      if plan && stage.plan_id == plan.id do
+        handle_current_plan_stage_transition(stage, plan, state)
+      else
+        Logger.warning(
+          "[TaskRouter] ignoring stage_transitioned for task #{state.task_id}: " <>
+            "stage #{stage.id} (status #{stage.status}) is on plan #{stage.plan_id}, " <>
+            "not the current approved plan (#{if plan, do: plan.id, else: "none approved"})"
+        )
 
-      # On a `passed` transition the broadcast payload is the just-completed
-      # stage — its status is already `passed` and `find_stage(plan, id)` will
-      # still resolve it, so keying `current_stage_id` off `stage.id` here
-      # pins the router to a finished stage. `do_dispatch/2` then filters
-      # that stage's validations to `["pending", "running"]` (empty) and
-      # echoes "No validations are pending…" until the next broadcast lands.
-      # Instead, resolve to the currently-running stage from the freshly
-      # reloaded plan; fall back to `nil` when no stage is running yet (next
-      # dispatch/hydrate will fill it in). Other statuses (`running`,
-      # `failed`) still key off the transitioned stage as before — the
-      # failure-bounce branch below expects `stage` to be the failing one,
-      # and a `running` broadcast is exactly the stage we should track.
-      # Capture the previous stage BEFORE the state overwrite so we know
-      # which stage's leases to drop on the boundary crossing.
-      previous_stage_id = state.current_stage_id
-
-      next_stage_id =
-        case stage.status do
-          "passed" ->
-            case current_running_stage(plan) do
-              %Stage{id: id} -> id
-              nil -> nil
-            end
-
-          _ ->
-            stage.id
-        end
-
-      # A stage-boundary crossing invalidates the prior stage's liveness
-      # bookkeeping — the next dispatch will call `record_dispatch/4` with a
-      # fresh row. Clear here so a lingering `:check_no_ack` / `:check_safety_net`
-      # doesn't fire against stale state before the new dispatch arrives.
-      if next_stage_id != previous_stage_id do
-        LeaseManager.clear(state.task_id)
-
-        # Task 019f6791: unconditionally clean-slate the outgoing stage's
-        # RuntimeSupervision leases too. Leftover `blocked` rows from the
-        # prior stage were the direct source of the leak on task 019f6380
-        # (router rehydrated into `:waiting_human` on any subsequent boot).
-        if previous_stage_id do
-          RuntimeSupervision.drop_leases_for_stage(state.task_id, previous_stage_id)
-        end
+        {:noreply, state}
       end
-
-      # Rehydrate `lease_status` from the incoming stage's own lease row
-      # (nil when the fresh stage has no lease yet — the intended state
-      # before the next dispatch arms one). Never carry the prior stage's
-      # `blocked` status forward into diagnostics / state-machine checks.
-      rehydrated_lease_status =
-        case next_stage_id do
-          nil ->
-            nil
-
-          stage_id ->
-            case RuntimeSupervision.current_lease_for_stage(state.task_id, stage_id) do
-              %{status: status} -> status
-              _ -> nil
-            end
-        end
-
-      state =
-        state
-        |> Map.put(:current_stage_id, next_stage_id)
-        |> Map.put(:stage_started_at, DateTime.utc_now())
-        |> Map.put(:last_evidence_at, DateTime.utc_now())
-        |> then(fn s ->
-          # A stage boundary crossing invalidates the prior stage's
-          # activity timestamp — the old blocker's runtime-event `at`
-          # was masking `no_ack` alarms for the new stage.
-          if next_stage_id != previous_stage_id do
-            Map.put(s, :last_runtime_event_at, nil)
-          else
-            s
-          end
-        end)
-        |> Map.put(:lease_status, rehydrated_lease_status)
-        |> maybe_reset_stalled()
-        |> maybe_reset_stale_waiting_human(next_stage_id, previous_stage_id)
-        |> then(fn s ->
-          # Task 01a04a8c. The hold is stage-scoped, and the boundary crossing
-          # above has already abandoned the outgoing stage's leases — so the
-          # blocker that was holding this router no longer exists. Drop the
-          # narration key and the board stamp with it rather than waiting for
-          # the next reminder to notice.
-          if next_stage_id != previous_stage_id, do: release_awaiting_human(s), else: s
-        end)
-
-      # If a review or deploy stage fails, bounce the task back to in_progress
-      # (regression-critical — preserved byte-for-byte from the pre-redesign
-      # state machine per task 019f640d stage 3 spec).
-      state =
-        if stage.status == "failed" do
-          task = Tasks.get_task_detail(state.task_id)
-
-          failure_outcome =
-            cond do
-              # Deploy stage failed — bounce deploying → in_progress
-              task && task.status == "deploying" ->
-                handle_deploy_stage_failure(state, task, stage)
-                :bounced
-
-              # Review stage failed — bounce in_review → in_progress, unless
-              # this was the round that exhausts the bound (task 019ff788
-              # stage 3), in which case the task goes back to PLANNING.
-              task && task.status == "in_review" ->
-                handle_review_stage_failure(state, task, stage)
-
-              true ->
-                :bounced
-            end
-
-          # Re-dispatch so the agent picks up the in_progress prompt. The
-          # subsequent `do_dispatch/2` call will `record_dispatch/4` +
-          # re-arm liveness timers automatically.
-          if state.execution_space_id do
-            log_line =
-              case failure_outcome do
-                :replanned ->
-                  "Stage failure exhausted the review-round bound — task returned to planning | "
-
-                _ ->
-                  "Stage failure bounced task back to in_progress | "
-              end
-
-            ExecutionSpace.post_log(
-              state.execution_space_id,
-              log_line <> diagnostic_snapshot(state, task, stage_override: stage)
-            )
-          end
-
-          # Same defect as the promotion path (task 019fbe9e stage 3). The
-          # bounce puts the task back at `in_progress`, but the stage it
-          # bounced off is `failed` and every execution stage is already
-          # `passed` — so `send(self(), :dispatch)` alone prompts an agent at
-          # a task with no stage it can complete. Re-open one here, AFTER the
-          # transition (so the `!= "in_progress"` early return does not
-          # swallow it) and BEFORE the dispatch. When no pending stage exists
-          # this is a no-op and the withhold clause in `handle_info(:dispatch,
-          # _)` catches the resulting dead end.
-          #
-          # A re-planned task is the one case that must NOT re-open an
-          # execution stage: its plan has just been superseded and the next
-          # dispatch is a PLANNING dispatch, so opening a stage on a dead
-          # plan would hand the planner an executable stage it never wrote.
-          state =
-            if failure_outcome != :replanned and stage_needs_opening?(state.task_id) do
-              ensure_execution_stage_started(state, state.task_id)
-            else
-              state
-            end
-
-          send(self(), :dispatch)
-          %{state | status: :running}
-        else
-          # ADR 0029: the task must HOLD `in_review` while the review gate runs.
-          # Ordering is load-bearing — `HeartbeatScheduler.dispatch_prompt/4`
-          # selects its template off the task's status, so a write that lands
-          # after `send(self(), :dispatch)` changes nothing observable and the
-          # gate keeps rendering the implementation prompt.
-          if stage.status == "running" do
-            maybe_enter_in_review(state.task_id, stage)
-          end
-
-          if waiting_for_human_review?(state) do
-            if stage.status == "running" do
-              send(self(), :dispatch)
-            end
-
-            # Edge-triggered (task 019f9b34): stage broadcasts repeat for the
-            # same running stage, and this call passes no `:reason` so it
-            # emits the generic "waiting for manual approval" copy. Same bug
-            # class as the `:dispatch` and `:review_request_pending` sites —
-            # the 019e00cb predicate cannot elide it on a mixed-validation
-            # stage, because `heartbeat_suppressible?/2` needs EVERY pending
-            # validation to be a `manual_approval` with an open review request.
-            if state.status != :waiting_human do
-              maybe_log_heartbeat_suppressed(state, stage)
-            end
-
-            state |> clear_liveness() |> Map.put(:status, :waiting_human)
-          else
-            # When a new stage becomes running, re-dispatch so the agent gets
-            # an updated prompt that describes the current stage. Timers arm
-            # via `do_dispatch/2`.
-            if stage.status == "running" do
-              send(self(), :dispatch)
-            end
-
-            state
-          end
-        end
-
-      {:noreply, state}
     else
       {:noreply, state}
     end
@@ -1697,6 +1516,212 @@ defmodule Platform.Orchestration.TaskRouter do
   def handle_info({:plan_updated, _plan}, state), do: {:noreply, state}
   def handle_info({:task_updated, _task}, state), do: {:noreply, state}
   def handle_info(_msg, state), do: {:noreply, state}
+
+  # Matched path of the `{:stage_transitioned, stage}` clause: the stage
+  # belongs to this task's current approved plan.
+  defp handle_current_plan_stage_transition(stage, plan, %State{} = state) do
+    # Revoke deploy lease when a deploy stage completes (passed or failed)
+    state =
+      if stage.status in ["passed", "failed"] do
+        revoke_deploy_lease(state)
+      else
+        state
+      end
+
+    # On a `passed` transition the broadcast payload is the just-completed
+    # stage — its status is already `passed` and `find_stage(plan, id)` will
+    # still resolve it, so keying `current_stage_id` off `stage.id` here
+    # pins the router to a finished stage. `do_dispatch/2` then filters
+    # that stage's validations to `["pending", "running"]` (empty) and
+    # echoes "No validations are pending…" until the next broadcast lands.
+    # Instead, resolve to the currently-running stage from the freshly
+    # reloaded plan; fall back to `nil` when no stage is running yet (next
+    # dispatch/hydrate will fill it in). Other statuses (`running`,
+    # `failed`) still key off the transitioned stage as before — the
+    # failure-bounce branch below expects `stage` to be the failing one,
+    # and a `running` broadcast is exactly the stage we should track.
+    # Capture the previous stage BEFORE the state overwrite so we know
+    # which stage's leases to drop on the boundary crossing.
+    previous_stage_id = state.current_stage_id
+
+    next_stage_id =
+      case stage.status do
+        "passed" ->
+          case current_running_stage(plan) do
+            %Stage{id: id} -> id
+            nil -> nil
+          end
+
+        _ ->
+          stage.id
+      end
+
+    # A stage-boundary crossing invalidates the prior stage's liveness
+    # bookkeeping — the next dispatch will call `record_dispatch/4` with a
+    # fresh row. Clear here so a lingering `:check_no_ack` / `:check_safety_net`
+    # doesn't fire against stale state before the new dispatch arrives.
+    if next_stage_id != previous_stage_id do
+      LeaseManager.clear(state.task_id)
+
+      # Task 019f6791: unconditionally clean-slate the outgoing stage's
+      # RuntimeSupervision leases too. Leftover `blocked` rows from the
+      # prior stage were the direct source of the leak on task 019f6380
+      # (router rehydrated into `:waiting_human` on any subsequent boot).
+      if previous_stage_id do
+        RuntimeSupervision.drop_leases_for_stage(state.task_id, previous_stage_id)
+      end
+    end
+
+    # Rehydrate `lease_status` from the incoming stage's own lease row
+    # (nil when the fresh stage has no lease yet — the intended state
+    # before the next dispatch arms one). Never carry the prior stage's
+    # `blocked` status forward into diagnostics / state-machine checks.
+    rehydrated_lease_status =
+      case next_stage_id do
+        nil ->
+          nil
+
+        stage_id ->
+          case RuntimeSupervision.current_lease_for_stage(state.task_id, stage_id) do
+            %{status: status} -> status
+            _ -> nil
+          end
+      end
+
+    state =
+      state
+      |> Map.put(:current_stage_id, next_stage_id)
+      |> Map.put(:stage_started_at, DateTime.utc_now())
+      |> Map.put(:last_evidence_at, DateTime.utc_now())
+      |> then(fn s ->
+        # A stage boundary crossing invalidates the prior stage's
+        # activity timestamp — the old blocker's runtime-event `at`
+        # was masking `no_ack` alarms for the new stage.
+        if next_stage_id != previous_stage_id do
+          Map.put(s, :last_runtime_event_at, nil)
+        else
+          s
+        end
+      end)
+      |> Map.put(:lease_status, rehydrated_lease_status)
+      |> maybe_reset_stalled()
+      |> maybe_reset_stale_waiting_human(next_stage_id, previous_stage_id)
+      |> then(fn s ->
+        # Task 01a04a8c. The hold is stage-scoped, and the boundary crossing
+        # above has already abandoned the outgoing stage's leases — so the
+        # blocker that was holding this router no longer exists. Drop the
+        # narration key and the board stamp with it rather than waiting for
+        # the next reminder to notice.
+        if next_stage_id != previous_stage_id, do: release_awaiting_human(s), else: s
+      end)
+
+    # If a review or deploy stage fails, bounce the task back to in_progress
+    # (regression-critical — preserved byte-for-byte from the pre-redesign
+    # state machine per task 019f640d stage 3 spec).
+    state =
+      if stage.status == "failed" do
+        task = Tasks.get_task_detail(state.task_id)
+
+        failure_outcome =
+          cond do
+            # Deploy stage failed — bounce deploying → in_progress
+            task && task.status == "deploying" ->
+              handle_deploy_stage_failure(state, task, stage)
+              :bounced
+
+            # Review stage failed — bounce in_review → in_progress, unless
+            # this was the round that exhausts the bound (task 019ff788
+            # stage 3), in which case the task goes back to PLANNING.
+            task && task.status == "in_review" ->
+              handle_review_stage_failure(state, task, stage)
+
+            true ->
+              :bounced
+          end
+
+        # Re-dispatch so the agent picks up the in_progress prompt. The
+        # subsequent `do_dispatch/2` call will `record_dispatch/4` +
+        # re-arm liveness timers automatically.
+        if state.execution_space_id do
+          log_line =
+            case failure_outcome do
+              :replanned ->
+                "Stage failure exhausted the review-round bound — task returned to planning | "
+
+              _ ->
+                "Stage failure bounced task back to in_progress | "
+            end
+
+          ExecutionSpace.post_log(
+            state.execution_space_id,
+            log_line <> diagnostic_snapshot(state, task, stage_override: stage)
+          )
+        end
+
+        # Same defect as the promotion path (task 019fbe9e stage 3). The
+        # bounce puts the task back at `in_progress`, but the stage it
+        # bounced off is `failed` and every execution stage is already
+        # `passed` — so `send(self(), :dispatch)` alone prompts an agent at
+        # a task with no stage it can complete. Re-open one here, AFTER the
+        # transition (so the `!= "in_progress"` early return does not
+        # swallow it) and BEFORE the dispatch. When no pending stage exists
+        # this is a no-op and the withhold clause in `handle_info(:dispatch,
+        # _)` catches the resulting dead end.
+        #
+        # A re-planned task is the one case that must NOT re-open an
+        # execution stage: its plan has just been superseded and the next
+        # dispatch is a PLANNING dispatch, so opening a stage on a dead
+        # plan would hand the planner an executable stage it never wrote.
+        state =
+          if failure_outcome != :replanned and stage_needs_opening?(state.task_id) do
+            ensure_execution_stage_started(state, state.task_id)
+          else
+            state
+          end
+
+        send(self(), :dispatch)
+        %{state | status: :running}
+      else
+        # ADR 0029: the task must HOLD `in_review` while the review gate runs.
+        # Ordering is load-bearing — `HeartbeatScheduler.dispatch_prompt/4`
+        # selects its template off the task's status, so a write that lands
+        # after `send(self(), :dispatch)` changes nothing observable and the
+        # gate keeps rendering the implementation prompt.
+        if stage.status == "running" do
+          maybe_enter_in_review(state.task_id, stage)
+        end
+
+        if waiting_for_human_review?(state) do
+          if stage.status == "running" do
+            send(self(), :dispatch)
+          end
+
+          # Edge-triggered (task 019f9b34): stage broadcasts repeat for the
+          # same running stage, and this call passes no `:reason` so it
+          # emits the generic "waiting for manual approval" copy. Same bug
+          # class as the `:dispatch` and `:review_request_pending` sites —
+          # the 019e00cb predicate cannot elide it on a mixed-validation
+          # stage, because `heartbeat_suppressible?/2` needs EVERY pending
+          # validation to be a `manual_approval` with an open review request.
+          if state.status != :waiting_human do
+            maybe_log_heartbeat_suppressed(state, stage)
+          end
+
+          state |> clear_liveness() |> Map.put(:status, :waiting_human)
+        else
+          # When a new stage becomes running, re-dispatch so the agent gets
+          # an updated prompt that describes the current stage. Timers arm
+          # via `do_dispatch/2`.
+          if stage.status == "running" do
+            send(self(), :dispatch)
+          end
+
+          state
+        end
+      end
+
+    {:noreply, state}
+  end
 
   # Terminal task statuses. Source: `Platform.Tasks.Task` `@statuses` and the
   # comment above it recording that `cancelled` has `[]` outbound transitions

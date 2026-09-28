@@ -2551,6 +2551,20 @@ defmodule Platform.Tasks do
     |> Repo.preload(:stages)
   end
 
+  @doc """
+  Return the `task_id` of the plan `plan_id`, or `nil` when no such plan
+  exists or `plan_id` is not a UUID. A narrow ownership lookup: no preloads,
+  one column.
+  """
+  @spec plan_task_id(term()) :: binary() | nil
+  def plan_task_id(plan_id) when is_binary(plan_id) do
+    if Platform.UUID.valid?(plan_id) do
+      Repo.one(from(p in Plan, where: p.id == ^plan_id, select: p.task_id))
+    end
+  end
+
+  def plan_task_id(_plan_id), do: nil
+
   @doc "Get the latest approved plan for a task."
   def current_plan(task_id) do
     Plan
