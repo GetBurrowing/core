@@ -20,6 +20,8 @@ defmodule Platform.Federation.FederationStatusBuildProofTest do
   alias Platform.Federation.ToolSurface
   alias Platform.Repo
 
+  doctest Platform.Agents.AgentRuntime, only: [client_build_status: 1, client_build_error: 1]
+
   setup do
     on_exit(fn -> Agent.update(RuntimePresence, fn _ -> %{} end) end)
     :ok
@@ -257,6 +259,48 @@ defmodule Platform.Federation.FederationStatusBuildProofTest do
 
       assert tool_row.process_started_at == DateTime.to_iso8601(started_at)
       refute tool_row.process_started_at == tool_row.connected_at
+    end
+  end
+
+  describe "client_build_status (task 01a09e63)" do
+    test "each stored client_info shape maps to its own status, in both surfaces" do
+      cases = %{
+        "reported" => %{"build" => "85e499f47f579868afda64ec93ced00b28fe06ad"},
+        "unresolved" => %{"build" => nil, "build_error" => "not a git checkout"},
+        "not_reported" => %{"product" => "claude_channel", "version" => "0.3.0"},
+        "no_client_info" => nil
+      }
+
+      for {expected, client_info} <- cases do
+        runtime_id = active_runtime!("rt-status-#{expected}", client_info)
+
+        assert row_for(runtime_id).client_build_status == expected
+        assert tool_row_for(runtime_id).client_build_status == expected
+      end
+    end
+
+    test "the tool contract names client_build_status and does not promise a build for every runtime" do
+      tool = Enum.find(ToolSurface.tool_definitions(), &(&1.name == "federation_status"))
+      text = tool.description <> " " <> tool.returns <> " " <> tool.limitations
+
+      assert tool.limitations =~ "client_build_status"
+
+      for status <- ~w(reported unresolved not_reported no_client_info) do
+        assert tool.limitations =~ ~s("#{status}"), "limitations omit the #{status} status"
+      end
+
+      assert tool.limitations =~ "BUILD IS NOT POPULATED FOR EVERY RUNTIME"
+      # The two plugin commits that first report a build are named.
+      assert tool.limitations =~ "85e499f"
+      assert tool.limitations =~ "098cfec"
+      # process_started_at is qualified: never connect time, one-way test.
+      assert tool.limitations =~ "never the connect time"
+      assert tool.limitations =~ "one-way test"
+      assert tool.limitations =~ "CLIENT ATTESTATION"
+
+      # The old wording implied every runtime has a build unless it "never
+      # told us"; it must be gone.
+      refute text =~ "never told us"
     end
   end
 

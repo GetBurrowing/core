@@ -180,6 +180,94 @@ defmodule Platform.Agents.AgentRuntime do
   def client_build(_), do: nil
 
   @doc """
+  Reads `metadata["client_info"]["build_error"]` — why the client could NOT
+  report a build on its most recent declaring join: the client's own reason
+  (no `.git` beside the plugin, a missing `build-info.json` stamp), or core's
+  rejection of a `build` it could not accept. `nil` when absent, not a
+  non-empty binary, or when a build WAS reported.
+
+      iex> Platform.Agents.AgentRuntime.client_build_error(%{metadata: %{"client_info" => %{"build_error" => "build-info.json missing at /x"}}})
+      "build-info.json missing at /x"
+
+      iex> Platform.Agents.AgentRuntime.client_build_error(%{metadata: %{"client_info" => %{"build" => "abc", "build_error" => nil}}})
+      nil
+
+  Pure function, no DB access.
+  """
+  @spec client_build_error(%__MODULE__{} | %{metadata: map()}) :: String.t() | nil
+  def client_build_error(%{metadata: metadata}) when is_map(metadata) do
+    case client_info_field(metadata, "build_error") do
+      error when is_binary(error) and error != "" -> error
+      _ -> nil
+    end
+  end
+
+  def client_build_error(_), do: nil
+
+  @doc """
+  Says WHY `client_build/1` has or lacks a value, so an absent build is never
+  one undifferentiated `"unknown"`. One of:
+
+    * `"reported"` — a usable build is recorded. It is still CLIENT
+      ATTESTATION (the process says what it loaded); fine for diagnosis,
+      never for authorization or deploy gating.
+    * `"unresolved"` — no build, but a `build_error`: the client is on the
+      build contract and says why it could not name its code (see
+      `client_build_error/1`).
+    * `"not_reported"` — a `client_info` is recorded but carries neither key:
+      the client predates the build contract. Its `version`, if any, is NOT
+      a build and is never promoted to one.
+    * `"no_client_info"` — no `client_info` recorded at all: a legacy client
+      that declares nothing on join (or a row that never joined).
+
+  ## The client build contract (both plugin families implement this)
+
+  `client_info` on the `runtime:<id>` join carries, besides
+  product/version/features:
+
+    * `build` — the commit the running process LOADED: a 40-hex git sha,
+      `-dirty` appended when the tree differed from HEAD (<= 64 bytes; over
+      that is rejected). Resolved ONCE at process/module load, never at
+      join time, so a reconnect re-sends the resident code's identity.
+      Never the package version (commit 7288017 shipped a fix without a
+      version bump) and never inferred from `features`.
+    * `build_error` — only when `build` is omitted: a short reason
+      (<= 200 bytes kept). Omitted whenever `build` is sent.
+    * `started_at` — ISO-8601 PROCESS start, never a connection time.
+      See `client_started_at/1` for why it is a one-way test.
+
+  Implementers: `claude-code-suite-channel` (git at module load, or the
+  docker image's `SUITE_CHANNEL_BUILD`) from 85e499f, and
+  `openclaw-suite-channel` (a `build-info.json` stamped by
+  install.sh/update.sh/`npm run build`) from 098cfec.
+
+      iex> alias Platform.Agents.AgentRuntime
+      iex> AgentRuntime.client_build_status(%{metadata: %{"client_info" => %{"build" => "85e499f47f579868afda64ec93ced00b28fe06ad"}}})
+      "reported"
+      iex> AgentRuntime.client_build_status(%{metadata: %{"client_info" => %{"build" => nil, "build_error" => "not a git checkout"}}})
+      "unresolved"
+      iex> AgentRuntime.client_build_status(%{metadata: %{"client_info" => %{"product" => "claude_channel", "version" => "0.3.0"}}})
+      "not_reported"
+      iex> AgentRuntime.client_build_status(%{metadata: %{}})
+      "no_client_info"
+      iex> AgentRuntime.client_build_status(%{metadata: nil})
+      "no_client_info"
+
+  Pure function, no DB access.
+  """
+  @spec client_build_status(%__MODULE__{} | %{metadata: map()} | term()) ::
+          String.t()
+  def client_build_status(%{metadata: %{"client_info" => %{}}} = runtime) do
+    cond do
+      client_build(runtime) -> "reported"
+      client_build_error(runtime) -> "unresolved"
+      true -> "not_reported"
+    end
+  end
+
+  def client_build_status(_), do: "no_client_info"
+
+  @doc """
   Reads `metadata["client_info"]["started_at"]` — when the client PROCESS
   started — and parses it back from its stored ISO8601 form into a UTC
   `DateTime`.

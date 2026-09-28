@@ -1,0 +1,9 @@
+{
+  "product": "claude_channel",
+  "version": "0.3.0",
+  "features": [
+    "system_event_prompt"
+  ],
+  "build": "90ae8781eefcc63f383e43c8de905a3fd5dcbf68",
+  "started_at": "2026-09-28T23:08:37.276Z"
+}

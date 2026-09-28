@@ -503,6 +503,7 @@ defmodule PlatformWeb.RuntimeChannelTest do
                product: "openclaw",
                version: "1.2.3",
                build: nil,
+               build_error: nil,
                started_at: nil,
                features: []
              }
@@ -529,6 +530,7 @@ defmodule PlatformWeb.RuntimeChannelTest do
                product: "unknown",
                version: nil,
                build: nil,
+               build_error: nil,
                started_at: nil,
                features: []
              }
@@ -555,6 +557,7 @@ defmodule PlatformWeb.RuntimeChannelTest do
                product: "unknown",
                version: nil,
                build: nil,
+               build_error: nil,
                started_at: nil,
                features: []
              }
@@ -635,6 +638,7 @@ defmodule PlatformWeb.RuntimeChannelTest do
                product: "claude_channel",
                version: "0.3.0",
                build: nil,
+               build_error: nil,
                started_at: nil,
                features: ["system_event_prompt"]
              }
@@ -1127,6 +1131,242 @@ defmodule PlatformWeb.RuntimeChannelTest do
 
       reloaded = Repo.get(AgentRuntime, ctx.runtime.id)
       assert AgentRuntime.client_started_at(reloaded) == ~U[2026-09-04 10:00:00Z]
+    end
+  end
+
+  # Task 01a09e63 stage 3. Before this, every runtime without a build rendered
+  # the same "unknown" — a client that TRIED and could not resolve its sha, a
+  # client that predates the build contract, and a legacy client that
+  # declares nothing were indistinguishable, and the uniform "unknown" read as
+  # an answer. `client_build_status` says which of the four a row is.
+  #
+  # The `claude_channel*.json` / `openclaw*.json` fixtures are the payloads the
+  # two plugins ACTUALLY send, copied verbatim from their PRs (provenance in
+  # test/support/fixtures/client_info/README.md) — so these tests assert the
+  # round trip against the real client halves, not against a shape core
+  # imagined for them.
+  describe "client_build_status in federation_status (task 01a09e63)" do
+    @client_info_fixtures Path.expand("../../support/fixtures/client_info", __DIR__)
+
+    defp client_info_fixture(name) do
+      @client_info_fixtures |> Path.join(name <> ".json") |> File.read!() |> Jason.decode!()
+    end
+
+    defp join_without_client_info(runtime, raw_token) do
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => runtime.runtime_id,
+          "token" => raw_token
+        })
+
+      {:ok, _reply, joined} = subscribe_and_join(socket, "runtime:#{runtime.runtime_id}", %{})
+      joined
+    end
+
+    defp context_row(runtime_id),
+      do: Enum.find(Federation.federation_status(), &(&1.runtime_id == runtime_id))
+
+    defp tool_row(runtime_id) do
+      {:ok, %{runtimes: runtimes}} = ToolSurface.execute("federation_status", %{}, %{})
+      Enum.find(runtimes, &(&1.runtime_id == runtime_id))
+    end
+
+    test "NEGATIVE CONTROL: build / build_error / version-only / no client_info are four distinct statuses",
+         ctx do
+      {rt_unresolved, tok_unresolved} = register_second_runtime(ctx.user)
+      {rt_precontract, tok_precontract} = register_second_runtime(ctx.user)
+      {rt_legacy, tok_legacy} = register_second_runtime(ctx.user)
+
+      reported = client_info_fixture("claude_channel")
+      unresolved = client_info_fixture("openclaw_unresolved")
+
+      join_with_client_info(ctx.runtime, ctx.raw_token, reported)
+      join_with_client_info(rt_unresolved, tok_unresolved, unresolved)
+
+      # A client that predates the contract: product + version, nothing else.
+      join_with_client_info(rt_precontract, tok_precontract, %{
+        "product" => "claude_channel",
+        "version" => "0.3.0"
+      })
+
+      join_without_client_info(rt_legacy, tok_legacy)
+
+      ids = %{
+        reported: ctx.runtime.runtime_id,
+        unresolved: rt_unresolved.runtime_id,
+        precontract: rt_precontract.runtime_id,
+        legacy: rt_legacy.runtime_id
+      }
+
+      expected = %{
+        reported: "reported",
+        unresolved: "unresolved",
+        precontract: "not_reported",
+        legacy: "no_client_info"
+      }
+
+      for {label, row_fun} <- [context: &context_row/1, tool: &tool_row/1] do
+        rows = Map.new(ids, fn {k, id} -> {k, row_fun.(id)} end)
+
+        statuses = Map.new(rows, fn {k, row} -> {k, row.client_build_status} end)
+        assert statuses == expected, "#{label}: #{inspect(statuses)}"
+
+        assert statuses |> Map.values() |> Enum.uniq() |> length() == 4,
+               "#{label}: the four client kinds collapsed onto fewer statuses"
+
+        assert rows.unresolved.client_build_error == unresolved["build_error"]
+        assert rows.reported.client_build_error == nil
+        assert rows.precontract.client_build_error == nil
+        assert rows.legacy.client_build_error == nil
+      end
+
+      # The version-only runtime: never promoted to a build.
+      assert context_row(ids.precontract).client_build == nil
+      assert tool_row(ids.precontract).client_build == "unknown"
+      refute tool_row(ids.precontract).client_build == "0.3.0"
+
+      # Only the reporting runtime carries a sha.
+      assert tool_row(ids.reported).client_build == reported["build"]
+
+      for id <- [ids.unresolved, ids.precontract, ids.legacy] do
+        assert tool_row(id).client_build == "unknown"
+      end
+    end
+
+    for family <- ["claude_channel", "openclaw"] do
+      @family family
+      test "ROUND TRIP (#{family}): the tool row reports exactly the build and process start the plugin sent",
+           ctx do
+        sent = client_info_fixture(@family)
+        assert sent["build"] =~ ~r/\A[0-9a-f]{40}\z/, "fixture is not the reported shape"
+
+        join_with_client_info(ctx.runtime, ctx.raw_token, sent)
+
+        row = tool_row(ctx.runtime.runtime_id)
+
+        assert row.client_build == sent["build"]
+        assert row.client_build_status == "reported"
+        assert row.client_build_error == nil
+        assert row.process_started_at == sent["started_at"]
+
+        # A process start, not a connection time: the join just happened,
+        # the plugin process started when the fixture was captured.
+        assert row.online == true
+        assert is_binary(row.connected_at)
+        refute row.process_started_at == row.connected_at
+
+        refute row.client_build == sent["version"]
+      end
+
+      test "ROUND TRIP (#{family} unresolved): the tool row carries the plugin's own reason",
+           ctx do
+        sent = client_info_fixture(@family <> "_unresolved")
+        refute Map.has_key?(sent, "build"), "fixture is not the unresolved shape"
+
+        join_with_client_info(ctx.runtime, ctx.raw_token, sent)
+
+        row = tool_row(ctx.runtime.runtime_id)
+
+        assert row.client_build == "unknown"
+        assert row.client_build_status == "unresolved"
+        assert row.client_build_error == sent["build_error"]
+        assert row.process_started_at == sent["started_at"]
+      end
+    end
+
+    test "rejoin with a build after an unresolved join flips to reported and clears the error; the reverse LOSES the sha",
+         ctx do
+      unresolved = client_info_fixture("claude_channel_unresolved")
+      reported = client_info_fixture("claude_channel")
+
+      join_with_client_info(ctx.runtime, ctx.raw_token, unresolved)
+      assert context_row(ctx.runtime.runtime_id).client_build_status == "unresolved"
+
+      join_with_client_info(ctx.runtime, ctx.raw_token, reported)
+      row = context_row(ctx.runtime.runtime_id)
+      assert row.client_build_status == "reported"
+      assert row.client_build == reported["build"]
+      assert row.client_build_error == nil
+
+      reloaded = Repo.get(AgentRuntime, ctx.runtime.id)
+      assert reloaded.metadata["client_info"]["build_error"] == nil
+
+      # Replace-not-merge: a process that now says it cannot name its build
+      # must not keep advertising the previous process's sha.
+      join_with_client_info(ctx.runtime, ctx.raw_token, unresolved)
+      row = context_row(ctx.runtime.runtime_id)
+      assert row.client_build_status == "unresolved"
+      assert row.client_build == nil
+      assert row.client_build_error == unresolved["build_error"]
+      assert tool_row(ctx.runtime.runtime_id).client_build == "unknown"
+    end
+
+    test "a non-binary or blank build_error degrades to nil without failing the join", ctx do
+      for bad <- [42, %{"nested" => "map"}, ["list"], "", "   ", nil] do
+        joined =
+          join_with_client_info(ctx.runtime, ctx.raw_token, %{
+            "product" => "claude_channel",
+            "version" => "0.3.0",
+            "build_error" => bad
+          })
+
+        assert joined.assigns.client_info.build_error == nil, "for #{inspect(bad)}"
+
+        row = context_row(ctx.runtime.runtime_id)
+        assert row.client_build_error == nil, "for #{inspect(bad)}"
+        assert row.client_build_status == "not_reported", "for #{inspect(bad)}"
+      end
+    end
+
+    test "an oversized build_error is bounded to 200 bytes at a UTF-8 boundary, not dropped",
+         ctx do
+      # Deliberately TRUNCATED, unlike an oversized build (rejected to nil):
+      # a truncated reason is still true, while dropping it would demote an
+      # honest "I tried and could not" to "predates the contract".
+      # A one-byte prefix puts byte 200 in the MIDDLE of a two-byte "é", so a
+      # plain binary_part would leave invalid UTF-8 (and fail the jsonb write).
+      oversized = "x" <> String.duplicate("é", 500)
+
+      joined =
+        join_with_client_info(ctx.runtime, ctx.raw_token, %{
+          "product" => "openclaw",
+          "build_error" => oversized
+        })
+
+      kept = joined.assigns.client_info.build_error
+      assert is_binary(kept)
+      assert byte_size(kept) == 199
+      assert String.valid?(kept)
+      assert String.starts_with?(oversized, kept)
+
+      row = context_row(ctx.runtime.runtime_id)
+      assert row.client_build_status == "unresolved"
+      assert row.client_build_error == kept
+    end
+
+    test "a build core rejects is reported as unresolved with core's reason, never as not_reported",
+         ctx do
+      join_with_client_info(ctx.runtime, ctx.raw_token, %{
+        "product" => "claude_channel",
+        "build" => String.duplicate("f", 65)
+      })
+
+      row = context_row(ctx.runtime.runtime_id)
+      assert row.client_build == nil
+      assert row.client_build_status == "unresolved"
+      assert row.client_build_error =~ "core rejected client_info.build"
+    end
+
+    test "a reported build carries no build_error even if the client sent one", ctx do
+      join_with_client_info(ctx.runtime, ctx.raw_token, %{
+        "product" => "claude_channel",
+        "build" => "85e499f47f579868afda64ec93ced00b28fe06ad",
+        "build_error" => "stale reason"
+      })
+
+      row = context_row(ctx.runtime.runtime_id)
+      assert row.client_build_status == "reported"
+      assert row.client_build_error == nil
     end
   end
 

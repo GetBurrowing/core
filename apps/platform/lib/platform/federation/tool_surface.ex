@@ -268,12 +268,12 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "federation_status",
         description:
-          "Check the status of all registered agent runtimes. Reports three groups of facts that routinely disagree: connection (is a socket up), build (which code the process is running), and proven (which capabilities core has actually OBSERVED this runtime exercise).",
+          "Check the status of all registered agent runtimes. Reports three groups of facts that routinely disagree: connection (is a socket up), build (which code the process SAYS it is running, and why that is unknown when it is), and proven (which capabilities core has actually OBSERVED this runtime exercise).",
         parameters: %{},
         returns:
-          "Array of runtime status objects with runtime_id, agent_name, agent_slug; connection: online, connected_at, last_seen_at, last_connected_at; build: client_build (\"unknown\" if the client never told us), process_started_at; proven: {capability => ISO8601 timestamp or \"never\"}; declared_features",
+          "Array of runtime status objects with runtime_id, agent_name, agent_slug; connection: online, connected_at, last_seen_at, last_connected_at; build: client_build (a commit sha when client_build_status is \"reported\", otherwise the literal \"unknown\"), client_build_status (\"reported\" | \"unresolved\" | \"not_reported\" | \"no_client_info\"), client_build_error (string or null), process_started_at (ISO8601 or null); proven: {capability => ISO8601 timestamp or \"never\"}; declared_features",
         limitations:
-          "Only shows active runtimes. `online` means the socket is live and nothing more — it says nothing about which build is loaded or what that build can do. Presence and `proven` are in-memory and reset on restart, so `never` after a core restart means \"not since restart\". `declared_features` is the runtime's own claim and cannot discriminate builds that ship a capability from builds that do not; read `client_build` and `proven` instead.",
+          "Only shows active runtimes. CONNECTION is populated for every online runtime; `online` means the socket is live and nothing more. BUILD IS NOT POPULATED FOR EVERY RUNTIME: `client_build` carries a sha only when `client_build_status` is \"reported\", which needs claude-code-suite-channel at or after commit 85e499f or openclaw-suite-channel at or after commit 098cfec, AND a client process restart since that update. Every other row reads \"unknown\", and the status says why: \"unresolved\" = the client is on the build contract but could not resolve its commit (`client_build_error` says why); \"not_reported\" = the client declared client_info but predates the build contract; \"no_client_info\" = the client declared nothing on join. `version` is never used as a build. `client_build` and `process_started_at` are CLIENT ATTESTATION: fine for diagnosis, never for authorization or deploy gating. `process_started_at` is the client PROCESS start as reported by the client, null when not sent, never the connect time. It is a one-way test: a start before a fix landed refutes that the process runs the fix; a later start proves nothing (the checkout may have been behind). A reconnect moves `connected_at` but not `process_started_at`; a restart moves both. PROVEN and presence are in-memory and reset on core restart, so `never` after a core restart means \"not since restart\". `declared_features` is the runtime's own claim and cannot discriminate builds that ship a capability from builds that do not; read `client_build` and `proven` instead.",
         when_to_use:
           "When you need to diagnose connectivity issues or verify which agent runtimes are currently reachable"
       }
@@ -7093,6 +7093,12 @@ defmodule Platform.Federation.ToolSurface do
           # 2. Build. Independent of connection: a runtime that is offline
           # right now still reports the build from its last handshake.
           client_build: format_build(r.client_build),
+          # WHY client_build is or is not a sha — so the literal "unknown"
+          # above is never ambiguous between a client that could not resolve
+          # its build, one that predates the contract, and one that declared
+          # nothing. See AgentRuntime.client_build_status/1.
+          client_build_status: r.client_build_status,
+          client_build_error: r.client_build_error,
           process_started_at: format_datetime(r.process_started_at),
 
           # 3. Proven — what core observed, `never` where it observed nothing.

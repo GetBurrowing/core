@@ -709,9 +709,14 @@ defmodule Platform.Federation do
 
     * connection — `online`, `connected_at`, `last_seen_at`,
       `last_connected_at`. Whether a socket is up.
-    * build — `client_build`, `process_started_at`. Which code the process is
-      running. Read from the DB row, so an OFFLINE runtime still reports the
-      build it declared on its last handshake.
+    * build — `client_build`, `client_build_status`, `client_build_error`,
+      `process_started_at`. Which code the process is running, AS THE CLIENT
+      REPORTS IT. Read from the DB row, so an OFFLINE runtime still reports
+      the build it declared on its last handshake. `client_build` is nil
+      unless `client_build_status` is `"reported"`; the status says why it is
+      absent (`"unresolved"` / `"not_reported"` / `"no_client_info"`, see
+      `AgentRuntime.client_build_status/1`) so absence is never one
+      undifferentiated blank.
     * proven — `%{capability => DateTime}` of what core actually OBSERVED
       arrive from this runtime, `%{}` when offline or nothing was observed.
 
@@ -767,6 +772,8 @@ defmodule Platform.Federation do
         # its last handshake. Both are nil when the client has not told us —
         # never a fabricated sha, never a `utc_now/0` stand-in.
         client_build: AgentRuntime.client_build(runtime),
+        client_build_status: AgentRuntime.client_build_status(runtime),
+        client_build_error: AgentRuntime.client_build_error(runtime),
         process_started_at: AgentRuntime.client_started_at(runtime),
 
         # What core OBSERVED: %{capability => DateTime}. `%{}` when the runtime

@@ -50,6 +50,15 @@ defmodule PlatformWeb.RuntimeChannel do
   # Absent is honest; wrong-but-well-formed is not.
   @max_client_build_bytes 64
 
+  # Max byte size of a client-declared `build_error` — the client's own
+  # short reason why it could NOT resolve its build (no .git, missing stamp
+  # file). Unlike `build`, an over-long value is TRUNCATED (at a UTF-8
+  # boundary), not rejected: a truncated reason is still a true statement,
+  # whereas dropping it would demote a client that honestly said "I tried
+  # and could not" to one that "predates the contract" — the exact
+  # distinction `AgentRuntime.client_build_status/1` exists to keep.
+  @max_client_build_error_bytes 200
+
   # How often to re-affirm this runtime's presence from the live channel
   # process. Belt-and-suspenders against RuntimePresence Agent crashes /
   # hot-reloads that would otherwise leave the map permanently empty.
@@ -1023,17 +1032,74 @@ defmodule PlatformWeb.RuntimeChannel do
             _ -> nil
           end
 
+        raw_build = Map.get(ci, "build")
+        build = normalize_build(raw_build)
+
         {%{
            product: product,
            version: version,
-           build: normalize_build(Map.get(ci, "build")),
+           build: build,
+           build_error: resolve_build_error(build, raw_build, Map.get(ci, "build_error")),
            started_at: normalize_started_at(Map.get(ci, "started_at")),
            features: normalize_features(Map.get(ci, "features"))
          }, true}
 
       _ ->
-        {%{product: "unknown", version: nil, build: nil, started_at: nil, features: []}, false}
+        {%{
+           product: "unknown",
+           version: nil,
+           build: nil,
+           build_error: nil,
+           started_at: nil,
+           features: []
+         }, false}
     end
+  end
+
+  # Why this runtime has no build, or nil.
+  #
+  #   * a usable `build` was declared  => nil. A reported build carries no
+  #     error, whatever else the client sent.
+  #   * the client sent its own `build_error` => that reason, bounded.
+  #   * the client sent a `build` core could not accept (not a non-empty
+  #     binary, or over the byte cap) and no reason of its own => a
+  #     core-authored reason. The client IS on the build contract and tried;
+  #     reporting it as "not_reported" (predates the contract) would be false.
+  #   * otherwise nil — the client said nothing about its build at all.
+  defp resolve_build_error(build, _raw_build, _raw_error) when is_binary(build), do: nil
+
+  defp resolve_build_error(nil, raw_build, raw_error) do
+    case normalize_build_error(raw_error) do
+      nil when not is_nil(raw_build) ->
+        "core rejected client_info.build: not a non-empty string of at most " <>
+          "#{@max_client_build_bytes} bytes"
+
+      error ->
+        error
+    end
+  end
+
+  # Normalize a client-declared build error into a bounded binary, or nil.
+  # Non-binaries, blank strings and invalid UTF-8 degrade to nil rather than
+  # raising — a hostile payload must not be a denial of service on the
+  # handshake. See @max_client_build_error_bytes for why this truncates.
+  defp normalize_build_error(error) when is_binary(error) do
+    trimmed = String.trim(error)
+
+    if trimmed != "" and String.valid?(trimmed),
+      do: truncate_utf8(trimmed, @max_client_build_error_bytes),
+      else: nil
+  end
+
+  defp normalize_build_error(_), do: nil
+
+  defp truncate_utf8(string, max) when byte_size(string) <= max, do: string
+  defp truncate_utf8(string, max), do: drop_partial_codepoint(binary_part(string, 0, max))
+
+  defp drop_partial_codepoint(bin) do
+    if String.valid?(bin),
+      do: bin,
+      else: drop_partial_codepoint(binary_part(bin, 0, byte_size(bin) - 1))
   end
 
   # Normalize a client-declared build identifier — the plugin commit sha or
@@ -1151,6 +1217,7 @@ defmodule PlatformWeb.RuntimeChannel do
          product: product,
          version: version,
          build: build,
+         build_error: build_error,
          started_at: started_at,
          features: features
        }) do
@@ -1175,6 +1242,12 @@ defmodule PlatformWeb.RuntimeChannel do
         # connection ages and reset on a reconnect that never restarted
         # anything.
         "build" => build,
+        # Why there is no `build` (client-reported, or core's rejection of an
+        # unusable one); nil whenever `build` is set. Same replace-not-merge
+        # rule: a rejoin that reports a build clears a prior error, and a
+        # rejoin that reports an error LOSES the prior build.
+        # `AgentRuntime.client_build_status/1` reads the pair.
+        "build_error" => build_error,
         "started_at" => started_at && DateTime.to_iso8601(started_at),
         # `features` is ALWAYS written, including as `[]`.
         #
