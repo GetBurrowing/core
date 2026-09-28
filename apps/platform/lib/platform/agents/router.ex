@@ -20,6 +20,7 @@ defmodule Platform.Agents.Router do
   """
 
   alias Platform.Agents.Agent
+  alias Platform.Agents.SlugLookup
   alias Platform.Agents.Providers.{Anthropic, OpenAI}
   alias Platform.Repo
 
@@ -351,10 +352,9 @@ defmodule Platform.Agents.Router do
         end
 
       true ->
-        case Repo.get_by(Agent, slug: value) do
-          %Agent{} = agent -> {:ok, agent}
-          nil -> {:error, :not_found}
-        end
+        # {:error, :ambiguous_slug} when two workspaces share the slug (task
+        # 01a0e77c) -- never a pick, never Ecto.MultipleResultsError.
+        SlugLookup.resolve(value)
     end
   end
 

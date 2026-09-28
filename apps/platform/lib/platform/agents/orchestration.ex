@@ -30,7 +30,8 @@ defmodule Platform.Agents.Orchestration do
     ContextShare,
     Memory,
     MemoryContext,
-    Session
+    Session,
+    SlugLookup
   }
 
   alias Platform.Repo
@@ -243,7 +244,7 @@ defmodule Platform.Agents.Orchestration do
   defp resolve_existing_child(_parent_agent, %{"id" => agent_id}), do: fetch_agent(agent_id)
 
   defp resolve_existing_child(%Agent{} = parent_agent, %{"slug" => slug}) when is_binary(slug) do
-    {:ok, find_agent_by_workspace_slug(parent_agent.workspace_id, slug)}
+    find_agent_by_workspace_slug(parent_agent.workspace_id, slug)
   end
 
   defp resolve_existing_child(_parent_agent, _spec), do: {:ok, nil}
@@ -500,12 +501,18 @@ defmodule Platform.Agents.Orchestration do
 
   defp session_duration_ms(_session), do: nil
 
-  defp find_agent_by_workspace_slug(nil, slug) do
-    Repo.get_by(Agent, slug: slug)
-  end
-
+  # Looks for a reusable child in the PARENT's workspace only. `workspace_id`
+  # nil means the parent's NULL workspace (IS NULL) -- this head used to be an
+  # unscoped get_by, which matched agents in every workspace and raised
+  # Ecto.MultipleResultsError when two of them shared the slug (task 01a0e77c).
+  # {:ok, nil} = no such agent (caller creates one); an ambiguous slug is
+  # surfaced, never resolved by picking a row.
   defp find_agent_by_workspace_slug(workspace_id, slug) do
-    Repo.get_by(Agent, workspace_id: workspace_id, slug: slug)
+    case SlugLookup.resolve(slug, workspace_id: workspace_id) do
+      {:ok, %Agent{} = agent} -> {:ok, agent}
+      {:error, :not_found} -> {:ok, nil}
+      {:error, :ambiguous_slug} -> {:error, :ambiguous_slug}
+    end
   end
 
   defp fetch_agent(%Agent{} = agent), do: {:ok, agent}
@@ -522,10 +529,9 @@ defmodule Platform.Agents.Orchestration do
         end
 
       true ->
-        case Repo.get_by(Agent, slug: value) do
-          %Agent{} = agent -> {:ok, agent}
-          nil -> {:error, :not_found}
-        end
+        # {:error, :ambiguous_slug} when two workspaces share the slug (task
+        # 01a0e77c) -- never a pick, never Ecto.MultipleResultsError.
+        SlugLookup.resolve(value)
     end
   end
 

@@ -29,8 +29,8 @@ IO.puts("✅ Space: #{space.id} (#{space.name} / #{space.slug})")
 
 # 2. Create agent record for "main" (OpenClaw's default agent slug)
 {:ok, agent} =
-  case Repo.get_by(Agent, slug: "main") do
-    nil ->
+  case Platform.Agents.SlugLookup.resolve("main", workspace_id: nil) do
+    {:error, :not_found} ->
       %Agent{}
       |> Agent.changeset(%{
         slug: "main",
@@ -40,8 +40,11 @@ IO.puts("✅ Space: #{space.id} (#{space.name} / #{space.slug})")
       })
       |> Repo.insert()
 
-    existing ->
+    {:ok, existing} ->
       {:ok, existing}
+
+    {:error, :ambiguous_slug} ->
+      raise "more than one NULL-workspace agent has slug \"main\"; resolve the duplicate first"
   end
 
 IO.puts("✅ Agent: #{agent.id} (#{agent.slug} / #{agent.name})")

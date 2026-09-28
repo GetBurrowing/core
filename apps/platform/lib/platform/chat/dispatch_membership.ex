@@ -57,9 +57,11 @@ defmodule Platform.Chat.DispatchMembership do
   ## Refusals are distinct atoms, and that is load-bearing
 
   `:no_space_named`, `:invalid_space_id`, `:space_not_found`, `:space_archived`,
-  `:direct_space`, `:no_agent_named`, `:agent_not_found` and `:insert_failed`
-  are eight separate values because they are eight separate operator
-  situations. Collapsing any of them into a shared `:refused` / `:skipped` is
+  `:direct_space`, `:no_agent_named`, `:agent_not_found`,
+  `:ambiguous_agent_slug` and `:insert_failed` are nine separate values because
+  they are nine separate operator situations. (`:ambiguous_agent_slug`, task
+  01a0e77c: the slug names agents in more than one workspace; the fix is to
+  address the agent by UUID, not to create one.) Collapsing any of them into a shared `:refused` / `:skipped` is
   the exact defect `Platform.Responsibilities.Providers` was written to kill:
   when "the module was never written" and "this feature deliberately has no
   provider" produced the same value, `architecture.*` sat broken for months and
@@ -94,7 +96,7 @@ defmodule Platform.Chat.DispatchMembership do
 
       :no_space_named -> :invalid_space_id -> :space_not_found
         -> :direct_space -> :space_archived
-        -> :no_agent_named -> :agent_not_found
+        -> :no_agent_named -> :agent_not_found | :ambiguous_agent_slug
         -> :insert_failed
 
   Space first because the space is what the dispatch *named*: it is the scope
@@ -179,6 +181,7 @@ defmodule Platform.Chat.DispatchMembership do
           | :direct_space
           | :no_agent_named
           | :agent_not_found
+          | :ambiguous_agent_slug
           | {:insert_failed, term()}
           | {:raised, String.t()}
           | {:exited, String.t()}
@@ -281,16 +284,21 @@ defmodule Platform.Chat.DispatchMembership do
   defp resolve_agent(agent_id) when is_binary(agent_id) do
     # Agents are addressed by UUID *or* slug across the dispatch surfaces, so
     # both lookups are real paths, not defensive padding.
+    # A slug shared across workspaces is its own refusal,
+    # `:ambiguous_agent_slug`, not `:agent_not_found`: the fix is to name the
+    # agent by UUID, not to create it (task 01a0e77c).
     found =
       if Platform.UUID.valid?(agent_id) do
         Repo.get(Agent, agent_id)
       else
-        Repo.get_by(Agent, slug: agent_id)
+        Platform.Agents.SlugLookup.resolve(agent_id)
       end
 
     case found do
       %Agent{} = agent -> {:ok, agent}
-      nil -> {:skip, :agent_not_found}
+      {:ok, %Agent{} = agent} -> {:ok, agent}
+      {:error, :ambiguous_slug} -> {:skip, :ambiguous_agent_slug}
+      _ -> {:skip, :agent_not_found}
     end
   end
 

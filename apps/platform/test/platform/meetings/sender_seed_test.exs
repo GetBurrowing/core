@@ -30,12 +30,13 @@ defmodule Platform.Meetings.SenderSeedTest do
     test "is idempotent: two calls leave exactly one row and return the same id" do
       # The count assertion is the load-bearing one. Asserting `{:ok, _}`
       # twice passes just as happily against a seeder that inserts a second
-      # row every boot — and it would, because `agents_unique_slug` is a
-      # plain UNIQUE index over (workspace_id, slug) with
-      # `indnullsnotdistinct = false`, so it constrains nothing when
-      # workspace_id IS NULL. Measured on Postgres 16.12: two
-      # `ON CONFLICT (workspace_id, slug) DO NOTHING` inserts produce two
-      # rows. Idempotency here comes from an advisory lock instead; see
+      # row every boot — and before migration 20260928230000 it would have,
+      # because `agents_unique_slug` was a plain UNIQUE index over
+      # (workspace_id, slug) with `indnullsnotdistinct = false`, which
+      # constrained nothing when workspace_id IS NULL (measured on Postgres
+      # 16.12: two `ON CONFLICT (workspace_id, slug) DO NOTHING` inserts
+      # produced two rows). The index is NULLS NOT DISTINCT now (task
+      # 01a0e77c), but idempotency still comes from the advisory lock; see
       # the SenderSeed moduledoc.
       assert seeded_count() == 0
 

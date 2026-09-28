@@ -242,16 +242,25 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgent do
       "  WARNING: the token is shown once and will not be shown again; only its hash is stored."
   end
 
+  # Scoped to the NULL workspace (IS NULL): the row the insert below would
+  # collide with. An unscoped slug lookup raised Ecto.MultipleResultsError as
+  # soon as two workspaces shared the slug (task 01a0e77c).
   defp find_or_create_agent! do
-    case Repo.get_by(Agent, slug: @agent_slug) do
-      nil ->
+    case Platform.Agents.SlugLookup.resolve(@agent_slug, workspace_id: nil) do
+      {:error, :not_found} ->
         %Agent{}
         |> Agent.changeset(%{slug: @agent_slug, name: @agent_name, status: "active"})
         |> Repo.insert()
         |> unwrap!("insert Meeting Assistant agent")
 
-      %Agent{} = agent ->
+      {:ok, %Agent{} = agent} ->
         agent
+
+      {:error, :ambiguous_slug} ->
+        Mix.raise(
+          "more than one agent has slug #{inspect(@agent_slug)} with no workspace; " <>
+            "refusing to pick one. Resolve the duplicate (or address the agent by UUID) and rerun"
+        )
     end
   end
 

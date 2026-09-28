@@ -45,6 +45,30 @@ defmodule Platform.Mix.Tasks.IntentEvalPrelabelTest do
         Prelabel.fetch_agent!("no-such-agent")
       end
     end
+
+    # Task 01a0e77c stage 3: a slug shared across workspaces used to raise
+    # Ecto.MultipleResultsError out of `Repo.get_by/2`; it is now an operator
+    # error telling them to pass the UUID.
+    test "a slug shared by agents in two workspaces is a Mix.Error naming the UUID fix" do
+      slug = "prelabel-collide-#{System.unique_integer([:positive])}"
+
+      for _ <- 1..2 do
+        %Agent{}
+        |> Agent.changeset(%{
+          slug: slug,
+          name: "Collide",
+          status: "active",
+          workspace_id: Ecto.UUID.generate()
+        })
+        |> Repo.insert!()
+      end
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert_raise Mix.Error, ~r/more than one agent has slug.*UUID/, fn ->
+          Prelabel.fetch_agent!(slug)
+        end
+      end)
+    end
   end
 
   describe "prelabel/4" do

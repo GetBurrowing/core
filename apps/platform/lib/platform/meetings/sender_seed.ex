@@ -46,26 +46,32 @@ defmodule Platform.Meetings.SenderSeed do
   The obvious route —
   `Repo.insert(cs, on_conflict: :nothing, conflict_target: [:workspace_id, :slug])`
   against `unique_index(:agents, [:workspace_id, :slug], name: :agents_unique_slug)`
-  — **does not work here**, because this row's `workspace_id` is `NULL`.
+  — **did not work here** when this module was written, because this row's
+  `workspace_id` is `NULL`.
 
-  Measured, not assumed (Postgres 16.12):
+  Measured, not assumed (Postgres 16.12, before migration
+  `20260928230000_enforce_agent_slug_uniqueness_across_null_workspace`):
 
       SELECT ix.indisunique, ix.indnullsnotdistinct
         FROM pg_index ix JOIN pg_class i ON i.oid = ix.indexrelid
        WHERE i.relname = 'agents_unique_slug';
       -- indisunique = true, indnullsnotdistinct = false
 
-  The index is plain `UNIQUE`, not `UNIQUE NULLS NOT DISTINCT`, so two
-  rows with a `NULL` `workspace_id` are never "equal" and the index
-  constrains nothing between them. Running the `ON CONFLICT ... DO NOTHING`
+  The index was plain `UNIQUE`, not `UNIQUE NULLS NOT DISTINCT`, so two
+  rows with a `NULL` `workspace_id` were never "equal" and the index
+  constrained nothing between them. Running the `ON CONFLICT ... DO NOTHING`
   insert twice against a live database produced two rows.
 
-  A partial `unique_index(:agents, [:slug], where: "workspace_id IS NULL")`
-  would fix it, but that index is shared by every other agent row in the
-  system and would newly forbid two unrelated workspace-less agents from
-  sharing a slug. Out of scope for this stage; recorded as a finding.
+  **As of migration
+  `20260928230000_enforce_agent_slug_uniqueness_across_null_workspace`
+  (task 01a0e77c) the index is `NULLS NOT DISTINCT`** — same name, same
+  columns — so two NULL-workspace agents can no longer share a slug and
+  `indnullsnotdistinct` is true. The advisory lock below is kept anyway: it
+  is cheap, it was correct before the index changed and still is, and it
+  turns a racing second booter into a clean read of the winner's row rather
+  than a changeset error it would have to handle.
 
-  The route taken instead is `Repo.transaction/1` wrapping
+  The route taken is `Repo.transaction/1` wrapping
   `SELECT pg_advisory_xact_lock($1)` on a constant key, then a
   `get_by`/`insert` inside the lock. This is the same idiom as
   `Platform.Tasks.Stacks.allocate_migration_slot/1` and
@@ -77,9 +83,9 @@ defmodule Platform.Meetings.SenderSeed do
   serialization itself — the observable contract is the same either way.
 
   `Agent.changeset/2` also carries
-  `unique_constraint(:slug, name: :agents_unique_slug)`, so if that index
-  ever gains NULL-distinctness a losing racer gets a changeset error rather
-  than a raise.
+  `unique_constraint(:slug, name: :agents_unique_slug)`, so now that the
+  index is `NULLS NOT DISTINCT` a racer that somehow bypassed the lock gets a
+  changeset error rather than a raise.
   """
 
   import Ecto.Query, only: [from: 2]

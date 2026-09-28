@@ -10,7 +10,7 @@ defmodule Platform.GameStream.SeedTest do
   import ExUnit.CaptureLog
 
   alias Platform.Accounts.User
-  alias Platform.Agents.AgentRuntime
+  alias Platform.Agents.{Agent, AgentRuntime}
   alias Platform.Federation
   alias Platform.GameStream.Seed
   alias Platform.Repo
@@ -67,6 +67,40 @@ defmodule Platform.GameStream.SeedTest do
     assert {:ok, %{token_written: true}} = Seed.run(Keyword.put(opts, :rotate, true))
     refute File.read!(path) == token
     assert Federation.get_runtime_by_token(token) == nil
+  end
+
+  # Task 01a0e77c stage 3. Two `play-host` agents in two OTHER (non-nil)
+  # workspaces made the old unscoped `Repo.get_by(Agent, slug:)` raise
+  # Ecto.MultipleResultsError. The seed now looks only in the NULL workspace
+  # it inserts into.
+  @tag :tmp_dir
+  test "a play-host slug shared by two other workspaces does not break the seed", ctx do
+    others =
+      for _ <- 1..2 do
+        %Agent{}
+        |> Agent.changeset(%{
+          slug: "play-host",
+          name: "Elsewhere",
+          status: "active",
+          workspace_id: Ecto.UUID.generate()
+        })
+        |> Repo.insert!()
+      end
+
+    path = Path.join(ctx.tmp_dir, "token")
+
+    assert {:ok, %{agent: agent}} =
+             Seed.run(owner_email: ctx.user.email, token_path: path, runtime_id: ctx.runtime_id)
+
+    assert agent.slug == "play-host"
+    assert is_nil(agent.workspace_id)
+    refute agent.id in Enum.map(others, & &1.id)
+
+    # A rerun reuses that NULL-workspace row rather than inserting another.
+    assert {:ok, %{agent: again}} =
+             Seed.run(owner_email: ctx.user.email, token_path: path, runtime_id: ctx.runtime_id)
+
+    assert again.id == agent.id
   end
 
   test "an unknown owner or a missing option is refused", ctx do

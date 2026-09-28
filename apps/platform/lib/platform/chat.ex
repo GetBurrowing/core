@@ -1787,7 +1787,13 @@ defmodule Platform.Chat do
     if Platform.UUID.valid?(id) do
       Repo.get(Agent, id)
     else
-      Repo.get_by(Agent, slug: id)
+      # Fail closed on a slug shared across workspaces (task 01a0e77c): an
+      # ambiguous slug resolves to nothing rather than raising
+      # Ecto.MultipleResultsError; SlugLookup logs the ambiguity.
+      case Platform.Agents.SlugLookup.resolve(id) do
+        {:ok, agent} -> agent
+        {:error, _} -> nil
+      end
     end
   end
 
@@ -4946,15 +4952,17 @@ defmodule Platform.Chat do
   # codebase — is a direct equality check. Returns `nil` when nothing
   # matches; caller skips the pin without noise.
   defp resolve_pin_target(token) when is_binary(token) do
-    cond do
-      user = Repo.get_by(Platform.Accounts.User, email: token) ->
+    case Repo.get_by(Platform.Accounts.User, email: token) do
+      %Platform.Accounts.User{} = user ->
         %{kind: "user", id: user.email}
 
-      agent = Repo.get_by(Platform.Agents.Agent, slug: token) ->
-        %{kind: "agent", id: agent.slug}
-
-      true ->
-        nil
+      nil ->
+        # An ambiguous slug (shared across workspaces) pins nothing, same as
+        # a miss (task 01a0e77c); SlugLookup logs the ambiguity.
+        case Platform.Agents.SlugLookup.resolve(token) do
+          {:ok, agent} -> %{kind: "agent", id: agent.slug}
+          {:error, _} -> nil
+        end
     end
   end
 

@@ -769,11 +769,18 @@ defmodule Platform.Tasks.ReviewRequests do
   #
   # `slug` is a plain string column, so the fallback cannot raise whatever it is
   # handed: `"system:auto"` simply misses and falls through to the raw-id arm.
+  #
+  # A slug shared across workspaces resolves to nil (task 01a0e77c), so the
+  # caller falls through to its raw-id arm instead of raising
+  # Ecto.MultipleResultsError into the outer rescue and losing the inbox row.
   defp fetch_agent_for_display(value) do
     if Platform.UUID.valid?(value) do
       Repo.get(Agent, value)
     else
-      Repo.get_by(Agent, slug: value)
+      case Platform.Agents.SlugLookup.resolve(value) do
+        {:ok, agent} -> agent
+        {:error, _} -> nil
+      end
     end
   end
 

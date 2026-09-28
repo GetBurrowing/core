@@ -12,6 +12,7 @@ defmodule Platform.Agents.Config do
 
   alias Platform.Agents.Agent
   alias Platform.Agents.MemoryContext
+  alias Platform.Agents.SlugLookup
   alias Platform.Repo
 
   @type parsed_agent :: %{
@@ -642,10 +643,9 @@ defmodule Platform.Agents.Config do
         end
 
       true ->
-        case Repo.get_by(Agent, slug: value) do
-          %Agent{} = agent -> {:ok, agent}
-          nil -> {:error, :not_found}
-        end
+        # {:error, :ambiguous_slug} when two workspaces share the slug (task
+        # 01a0e77c) -- never a pick, never Ecto.MultipleResultsError.
+        SlugLookup.resolve(value)
     end
   end
 

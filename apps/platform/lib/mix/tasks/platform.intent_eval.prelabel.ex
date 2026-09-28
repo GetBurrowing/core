@@ -30,9 +30,8 @@ defmodule Mix.Tasks.Platform.IntentEval.Prelabel do
 
   use Mix.Task
 
-  alias Platform.Agents.Agent
+  alias Platform.Agents.SlugLookup
   alias Platform.Meetings.IntentEval
-  alias Platform.Repo
   alias Platform.Roles
 
   @shortdoc "Pre-label intent-eval candidates with a strong model"
@@ -89,9 +88,18 @@ defmodule Mix.Tasks.Platform.IntentEval.Prelabel do
 
   @doc "Resolve the pre-labelling agent by slug, or fail loudly."
   def fetch_agent!(slug) do
-    case Repo.get_by(Agent, slug: slug) do
-      nil -> Mix.raise("no agent with slug #{inspect(slug)}")
-      agent -> agent
+    case SlugLookup.resolve(slug) do
+      {:ok, agent} ->
+        agent
+
+      {:error, :not_found} ->
+        Mix.raise("no agent with slug #{inspect(slug)}")
+
+      {:error, :ambiguous_slug} ->
+        Mix.raise(
+          "more than one agent has slug #{inspect(slug)} (in different workspaces); " <>
+            "pass the agent's UUID instead"
+        )
     end
   end
 

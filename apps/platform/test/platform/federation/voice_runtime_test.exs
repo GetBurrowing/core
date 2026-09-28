@@ -326,6 +326,30 @@ defmodule Platform.Federation.VoiceRuntimeTest do
       end
     end
 
+    # Task 01a0e77c stage 3: a slug shared across workspaces used to raise
+    # Ecto.MultipleResultsError; it is now refused with a Mix.Error telling
+    # the operator to pass the UUID, and no runtime row is minted.
+    test "a slug shared by agents in two workspaces raises a Mix.Error naming the UUID fix" do
+      user = create_user()
+      slug = "voice-collide-#{System.unique_integer([:positive])}"
+      a = create_agent(%{slug: slug, workspace_id: Ecto.UUID.generate()})
+      _b = create_agent(%{slug: slug, workspace_id: Ecto.UUID.generate()})
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert_raise Mix.Error, ~r/Ambiguous agent .*UUID/, fn ->
+          capture_io(fn ->
+            Mix.Tasks.Platform.VoiceRuntime.run(["--agent", slug, "--owner", user.email])
+          end)
+        end
+      end)
+
+      # The UUID form still works for either agent.
+      capture_io(fn ->
+        assert :ok =
+                 Mix.Tasks.Platform.VoiceRuntime.run(["--agent", a.id, "--owner", user.email])
+      end)
+    end
+
     test "an unknown owner email raises a Mix.Error" do
       agent = create_agent()
 

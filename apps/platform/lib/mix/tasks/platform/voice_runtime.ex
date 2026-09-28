@@ -74,10 +74,23 @@ defmodule Mix.Tasks.Platform.VoiceRuntime do
 
   # Slug first, then primary key. A slug that happens to look like a UUID is
   # still resolved as a slug before we try it as an id.
+  #
+  # A slug shared by agents in different workspaces is refused, never picked
+  # (task 01a0e77c): the operator passes the UUID instead.
   defp resolve_agent!(ref) do
-    with nil <- Repo.get_by(Agent, slug: ref),
-         nil <- get_agent_by_id(ref) do
-      Mix.raise("Unknown agent #{inspect(ref)} — no agent has that slug or id")
+    case Platform.Agents.SlugLookup.resolve(ref) do
+      {:ok, agent} ->
+        agent
+
+      {:error, :ambiguous_slug} ->
+        Mix.raise(
+          "Ambiguous agent #{inspect(ref)} — more than one agent has that slug " <>
+            "(in different workspaces); pass the agent's UUID instead"
+        )
+
+      {:error, :not_found} ->
+        get_agent_by_id(ref) ||
+          Mix.raise("Unknown agent #{inspect(ref)} — no agent has that slug or id")
     end
   end
 

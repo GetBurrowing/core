@@ -18,7 +18,7 @@ defmodule Platform.Agents.AgentServer do
 
   import Ecto.Changeset, only: [put_change: 3]
 
-  alias Platform.Agents.{Agent, Context, ContextDelta, Memory, MemoryContext, Session}
+  alias Platform.Agents.{Agent, Context, ContextDelta, Memory, MemoryContext, Session, SlugLookup}
   alias Platform.Repo
 
   @valid_session_statuses ~w(completed failed cancelled)
@@ -555,10 +555,9 @@ defmodule Platform.Agents.AgentServer do
         end
 
       true ->
-        case Repo.get_by(Agent, slug: value) do
-          %Agent{} = agent -> {:ok, agent}
-          nil -> {:error, :not_found}
-        end
+        # {:error, :ambiguous_slug} when two workspaces share the slug (task
+        # 01a0e77c) -- never a pick, never Ecto.MultipleResultsError.
+        SlugLookup.resolve(value)
     end
   end
 

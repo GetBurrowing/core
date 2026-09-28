@@ -50,6 +50,33 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgentTest do
              ) == 1
     end
 
+    # Task 01a0e77c stage 3: two `meeting-assistant` agents in two OTHER
+    # (non-nil) workspaces made the old unscoped slug lookup raise
+    # Ecto.MultipleResultsError. The seed looks only in the NULL workspace it
+    # inserts into.
+    test "a meeting-assistant slug shared by two other workspaces does not break the seed" do
+      owner = owner!()
+
+      others =
+        for _ <- 1..2 do
+          Repo.insert!(
+            Agent.changeset(%Agent{}, %{
+              slug: "meeting-assistant",
+              name: "Elsewhere",
+              status: "active",
+              workspace_id: Ecto.UUID.generate()
+            })
+          )
+        end
+
+      assert {:ok, %{agent: agent}} = SeedMeetingVoiceAgent.seed!(owner)
+      assert is_nil(agent.workspace_id)
+      refute agent.id in Enum.map(others, & &1.id)
+
+      assert {:ok, %{agent: again}} = SeedMeetingVoiceAgent.seed!(owner)
+      assert again.id == agent.id
+    end
+
     test "creates exactly one voice runtime row, and a second run reuses it" do
       owner = owner!()
 

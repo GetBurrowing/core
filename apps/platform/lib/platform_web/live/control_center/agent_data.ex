@@ -172,15 +172,25 @@ defmodule PlatformWeb.ControlCenter.AgentData do
       %{workspace_managed?: true} ->
         case WorkspaceBootstrap.ensure_agent(slug: slug) do
           {:ok, agent} -> agent
-          {:error, _reason} -> Repo.get_by(Agent, slug: slug)
+          {:error, _reason} -> agent_by_slug(slug)
         end
 
       _ ->
-        Repo.get_by(Agent, slug: slug)
+        agent_by_slug(slug)
     end
   end
 
   def ensure_selected_agent(_slug, _agents), do: nil
+
+  # A slug shared across workspaces is treated as not found (nil) rather than
+  # raising Ecto.MultipleResultsError into the LiveView (task 01a0e77c);
+  # SlugLookup logs the ambiguity.
+  defp agent_by_slug(slug) do
+    case Platform.Agents.SlugLookup.resolve(slug) do
+      {:ok, agent} -> agent
+      {:error, _} -> nil
+    end
+  end
 
   def find_agent_directory_entry(agents, slug) when is_binary(slug) do
     Enum.find(agents, &(&1.slug == slug))

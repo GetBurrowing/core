@@ -5366,11 +5366,17 @@ defmodule Platform.Meetings do
   # 16-byte binary and returns {:ok, _}, so a 16-character slug would clear it,
   # skip the slug fallback, and raise inside Repo anyway. Branch structure
   # mirrors Platform.Agents.Orchestration.fetch_agent/1; the predicate does not.
+  #
+  # A slug shared across workspaces resolves to nil (task 01a0e77c): callers
+  # already treat nil as :agent_not_found, and SlugLookup logs the ambiguity.
   defp resolve_agent(agent_id) when is_binary(agent_id) do
     if Platform.UUID.valid?(agent_id) do
       Repo.get(Agent, agent_id)
     else
-      Repo.get_by(Agent, slug: agent_id)
+      case Platform.Agents.SlugLookup.resolve(agent_id) do
+        {:ok, agent} -> agent
+        {:error, _} -> nil
+      end
     end
   end
 

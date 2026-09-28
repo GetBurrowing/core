@@ -26,7 +26,7 @@ defmodule Platform.GameStream.Seed do
   """
 
   alias Platform.Accounts.User
-  alias Platform.Agents.{Agent, AgentRuntime}
+  alias Platform.Agents.{Agent, AgentRuntime, SlugLookup}
   alias Platform.Federation
   alias Platform.Repo
 
@@ -95,15 +95,21 @@ defmodule Platform.GameStream.Seed do
   defp bind_agent(runtime, agent),
     do: runtime |> AgentRuntime.changeset(%{agent_id: agent.id}) |> Repo.update()
 
+  # Scoped to the NULL workspace (IS NULL) -- the row the insert below would
+  # collide with. An unscoped slug lookup raised Ecto.MultipleResultsError as
+  # soon as any two workspaces had a `play-host` (task 01a0e77c).
   defp find_or_create_agent do
-    case Repo.get_by(Agent, slug: @agent_slug) do
-      nil ->
+    case SlugLookup.resolve(@agent_slug, workspace_id: nil) do
+      {:error, :not_found} ->
         %Agent{}
         |> Agent.changeset(%{slug: @agent_slug, name: @agent_name, status: "active"})
         |> Repo.insert()
 
-      %Agent{} = agent ->
+      {:ok, %Agent{} = agent} ->
         {:ok, agent}
+
+      {:error, :ambiguous_slug} ->
+        {:error, :ambiguous_slug}
     end
   end
 

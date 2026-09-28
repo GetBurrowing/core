@@ -14,7 +14,7 @@ defmodule Platform.Agents.WorkspaceBootstrap do
 
   require Logger
 
-  alias Platform.Agents.{Agent, AgentServer, Config, MemoryContext, WorkspaceFile}
+  alias Platform.Agents.{Agent, AgentServer, Config, MemoryContext, SlugLookup, WorkspaceFile}
   alias Platform.Repo
 
   @workspace_files ~w(SOUL.md IDENTITY.md USER.md AGENTS.md MEMORY.md TOOLS.md HEARTBEAT.md)
@@ -44,7 +44,13 @@ defmodule Platform.Agents.WorkspaceBootstrap do
     with {:ok, layout} <- resolve_layout(requested_path),
          {:ok, parsed} <- Config.parse_file(layout.config_path),
          {:ok, parsed_agent} <- select_agent(parsed.agents, opts) do
-      agent = Repo.get_by(Agent, slug: parsed_agent.id)
+      {agent, error} =
+        case lookup_parsed_agent(parsed_agent) do
+          {:ok, agent} -> {agent, nil}
+          {:error, :not_found} -> {nil, nil}
+          {:error, :ambiguous_slug} -> {nil, {:ambiguous_slug, parsed_agent.id}}
+        end
+
       pid = agent && AgentServer.whereis(agent.id)
 
       %{
@@ -57,7 +63,7 @@ defmodule Platform.Agents.WorkspaceBootstrap do
         agent_name: parsed_agent.name,
         agent: agent,
         pid: pid,
-        error: nil
+        error: error
       }
     else
       {:error, reason} ->
@@ -280,17 +286,33 @@ defmodule Platform.Agents.WorkspaceBootstrap do
         Map.merge(metadata || %{}, source_metadata(layout))
       end)
 
-    case Repo.get_by(Agent, slug: parsed_agent.id) do
-      nil ->
+    case lookup_parsed_agent(parsed_agent) do
+      {:error, :not_found} ->
         %Agent{}
         |> Agent.changeset(attrs)
         |> Repo.insert!()
 
-      %Agent{} = agent ->
+      {:ok, %Agent{} = agent} ->
         agent
         |> Agent.changeset(attrs)
         |> Repo.update!()
+
+      {:error, :ambiguous_slug} ->
+        raise ArgumentError,
+              "cannot upsert agent #{inspect(parsed_agent.id)}: more than one agent has that " <>
+                "slug in workspace #{inspect(Map.get(parsed_agent.attrs, :workspace_id))}; " <>
+                "refusing to pick one to update"
     end
+  end
+
+  # Scoped to the parsed agent's OWN workspace (nil = IS NULL), because that
+  # is the row an insert would collide with. An unscoped slug lookup raised
+  # Ecto.MultipleResultsError whenever any two workspaces shared the slug
+  # (task 01a0e77c).
+  defp lookup_parsed_agent(parsed_agent) do
+    SlugLookup.resolve(parsed_agent.id,
+      workspace_id: Map.get(parsed_agent.attrs, :workspace_id)
+    )
   end
 
   defp sync_workspace_files!(agent_id, workspace_path) do
