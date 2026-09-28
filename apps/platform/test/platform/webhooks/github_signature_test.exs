@@ -196,6 +196,86 @@ defmodule Platform.Webhooks.GithubSignatureTest do
     end
   end
 
+  describe "verify/3 — ambiguous repo_url (two projects sharing one repo_url)" do
+    test "neither project's secret validates a webhook when repo_url is ambiguous" do
+      repo_url = "https://github.com/test/ambiguous-#{System.unique_integer([:positive])}"
+      secret_a = "secret-for-project-a"
+      secret_b = "secret-for-project-b"
+
+      create_project!(%{repo_url: repo_url, deploy_config: %{"webhook_secret" => secret_a}})
+      create_project!(%{repo_url: repo_url, deploy_config: %{"webhook_secret" => secret_b}})
+
+      with_env_secret(nil, fn ->
+        refute :ok == GithubSignature.verify(@body, sign(@body, secret_a), repo_url)
+        refute :ok == GithubSignature.verify(@body, sign(@body, secret_b), repo_url)
+
+        assert {:error, :no_secret_configured} ==
+                 GithubSignature.verify(@body, sign(@body, secret_a), repo_url)
+      end)
+    end
+
+    test "the env fallback still verifies when repo_url is ambiguous" do
+      repo_url = "https://github.com/test/ambiguous-env-#{System.unique_integer([:positive])}"
+
+      create_project!(%{
+        repo_url: repo_url,
+        deploy_config: %{"webhook_secret" => "secret-for-project-a"}
+      })
+
+      create_project!(%{
+        repo_url: repo_url,
+        deploy_config: %{"webhook_secret" => "secret-for-project-b"}
+      })
+
+      assert :ok == GithubSignature.verify(@body, sign(@body, env_secret()), repo_url)
+    end
+
+    test "positive control: a single project at a unique repo_url still resolves and validates" do
+      repo_url = "https://github.com/test/unique-#{System.unique_integer([:positive])}"
+      secret = "secret-for-only-project"
+
+      create_project!(%{repo_url: repo_url, deploy_config: %{"webhook_secret" => secret}})
+
+      assert :ok == GithubSignature.verify(@body, sign(@body, secret), repo_url)
+    end
+  end
+
+  describe "secrets_for_repo/1 — ambiguous repo_url" do
+    test "excludes both projects' secrets, keeping only the env fallback" do
+      repo_url = "https://github.com/test/ambiguous-list-#{System.unique_integer([:positive])}"
+
+      create_project!(%{
+        repo_url: repo_url,
+        deploy_config: %{"webhook_secret" => "secret-for-project-a"}
+      })
+
+      create_project!(%{
+        repo_url: repo_url,
+        deploy_config: %{"webhook_secret" => "secret-for-project-b"}
+      })
+
+      assert [env_secret()] == GithubSignature.secrets_for_repo(repo_url)
+    end
+
+    test "with no env fallback, an ambiguous repo_url yields no candidates at all" do
+      repo_url = "https://github.com/test/ambiguous-empty-#{System.unique_integer([:positive])}"
+
+      create_project!(%{
+        repo_url: repo_url,
+        deploy_config: %{"webhook_secret" => "secret-for-project-a"}
+      })
+
+      create_project!(%{
+        repo_url: repo_url,
+        deploy_config: %{"webhook_secret" => "secret-for-project-b"}
+      })
+
+      with_env_secret(nil, fn ->
+        assert [] == GithubSignature.secrets_for_repo(repo_url)
+      end)
+    end
+  end
+
   describe "secrets_for_repo/1" do
     test "returns the project secret first, then the env fallback" do
       repo_url = "https://github.com/test/order-#{System.unique_integer([:positive])}"

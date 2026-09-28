@@ -528,6 +528,22 @@ defmodule Platform.VaultTest do
       assert log.accessor_type == "agent"
       assert log.accessor_id == agent_id
     end
+
+    test "without :scope an ambiguous slug is refused and neither row is touched" do
+      owner_id = Ecto.UUID.generate()
+      slug = unique_slug("get-ambiguous")
+      {platform, agent} = ambiguous_pair!(slug, owner_id, :platform_first)
+
+      assert {:error, :ambiguous_slug} = Vault.get(slug, accessor: {:agent, owner_id})
+
+      for cred <- [platform, agent] do
+        row = reload(cred)
+        assert is_nil(row.last_used_at)
+      end
+
+      logs = logs_for_slug(slug)
+      refute Enum.any?(logs, &(&1.action == "use"))
+    end
   end
 
   # ── get/2 — access control ───────────────────────────────────────────────────
@@ -1067,6 +1083,37 @@ defmodule Platform.VaultTest do
 
     test "returns :not_found for an unknown slug" do
       assert {:error, :not_found} = Vault.delete("no-such-cred-#{System.unique_integer()}")
+    end
+
+    test "without :scope an ambiguous slug is refused and nothing is deleted" do
+      owner_id = Ecto.UUID.generate()
+      slug = unique_slug("del-ambiguous")
+      {platform, agent} = ambiguous_pair!(slug, owner_id, :platform_first)
+
+      assert {:error, :ambiguous_slug} = Vault.delete(slug, accessor: {:system, nil})
+
+      for cred <- [platform, agent] do
+        assert Repo.get(Credential, cred.id) != nil
+      end
+
+      assert Repo.all(from(g in AccessGrant, where: g.credential_id == ^platform.id)) != [],
+             "the platform row's grant should be untouched by a refused delete"
+
+      logs = logs_for_slug(slug)
+      refute Enum.any?(logs, &(&1.action == "revoke"))
+    end
+
+    test "a credential at a unique slug still deletes normally" do
+      owner_id = Ecto.UUID.generate()
+      slug = unique_slug("del-unique")
+      cred = insert_credential!(slug, scope: {:agent, owner_id})
+      grant!(cred, Ecto.UUID.generate(), ["use"])
+
+      assert {:ok, _} = Vault.delete(slug, accessor: {:agent, owner_id})
+
+      assert Repo.get(Credential, cred.id) == nil
+      assert Repo.all(from(g in AccessGrant, where: g.credential_id == ^cred.id)) == []
+      assert [%{action: "revoke"}] = logs_for_slug(slug)
     end
   end
 

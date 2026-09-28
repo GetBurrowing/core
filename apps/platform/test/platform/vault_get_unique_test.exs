@@ -2,10 +2,11 @@ defmodule Platform.VaultGetUniqueTest do
   @moduledoc """
   `Platform.Vault.get_unique/2` — the refusing read (task 01a0cf21 stage 1).
 
-  `get/2` resolves a slug with `limit(1)` and no `order_by`, so a slug living
-  at two scopes reads an undetermined one of them. `get_unique/2` resolves the
-  way `rotate/3` does and refuses instead of guessing. Every mail secret read
-  goes through it.
+  `get_unique/2` resolves a slug the way `rotate/3` does and refuses instead
+  of guessing when the slug matches more than one credential. `get/2` now
+  refuses the same way (task 019f9cb8 stage 1) — the two are behaviourally
+  equivalent for target selection. Every mail secret read goes through
+  `get_unique/2`.
   """
   use Platform.DataCase, async: true
 
@@ -81,11 +82,10 @@ defmodule Platform.VaultGetUniqueTest do
                Vault.get_unique(slug, scope: {:platform, nil}, accessor: {:integration, iid})
     end
 
-    test "get/2 is unchanged: it still answers for the same ambiguous slug" do
+    test "get/2 now refuses the same ambiguous slug (task 019f9cb8 stage 1)" do
       %{slug: slug, integration_id: iid} = ambiguous_pair!()
 
-      assert {:ok, value} = Vault.get(slug, accessor: {:integration, iid})
-      assert value in ["INTEGRATION-SECRET", "PLATFORM-SECRET"]
+      assert {:error, :ambiguous_slug} = Vault.get(slug, accessor: {:integration, iid})
     end
   end
 

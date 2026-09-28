@@ -225,23 +225,19 @@ defmodule Platform.Vault do
     * `:accessor`     - `{accessor_type, accessor_id}` tuple identifying the requester
     * `:scope`        - `{scope_type, scope_id}` naming the credential exactly.
                         Optional. Without it the lookup matches on slug alone,
-                        and a slug living at two scopes resolves to an
-                        undetermined one of them — see `rotate/3`.
+                        and a slug living at two scopes is refused — see
+                        `rotate/3`.
     * `:workspace_id` - workspace context (used to narrow the lookup)
   """
   @spec get(String.t(), keyword()) ::
-          {:ok, binary()} | {:error, :not_found | :access_denied}
+          {:ok, binary()} | {:error, :not_found | :ambiguous_slug | :access_denied}
   def get(slug, opts \\ []) do
     accessor = Keyword.get(opts, :accessor)
 
-    credential = lookup_by_slug(slug, opts)
-
-    case credential do
-      nil ->
-        {:error, :not_found}
-
-      cred ->
-        use_credential(cred, slug, accessor)
+    case resolve_one_by_slug(slug, opts) do
+      {:error, :not_found} -> {:error, :not_found}
+      {:error, :ambiguous_slug} -> refuse_ambiguous(slug, opts, "read")
+      {:ok, cred} -> use_credential(cred, slug, accessor)
     end
   end
 
@@ -250,17 +246,14 @@ defmodule Platform.Vault do
 
   Same options, same `:use` authorization, same access-log row, the same
   `last_used_at` bump and the same `[:platform, :vault, :credential_used]`
-  telemetry as `get/2`. The one difference is target selection: `get/2`
-  takes whichever row the planner returns first when a slug matches more than
-  one credential, while `get_unique/2` resolves exactly as `rotate/3` does and
-  returns `{:error, :ambiguous_slug}` for two or more matches — decrypting
-  nothing, bumping nothing, and logging a warning that names the matching
-  scopes (never a value).
+  telemetry as `get/2`. Target selection is now identical too: both resolve
+  exactly as `rotate/3` does and return `{:error, :ambiguous_slug}` for two or
+  more matches — decrypting nothing, bumping nothing, and logging a warning
+  that names the matching scopes (never a value). `get_unique/2` exists as an
+  explicit name for that same behaviour, for callers who want the refusal
+  spelled out at the call site; either function works.
 
-  Pass `:scope` to name the credential exactly. New callers that hold a scope
-  should use this instead of `get/2`; `get/2` itself is unchanged because a
-  read that starts failing is a different blast radius (task 019f9cb8 tracks
-  tightening it).
+  Pass `:scope` to name the credential exactly.
 
   ## Options
 
@@ -333,6 +326,28 @@ defmodule Platform.Vault do
   the migration were parked under `__dup_`-suffixed slugs rather than deleted,
   so a slug that used to be ambiguous within its scope now resolves.
 
+  ### The uniqueness-constraint question is settled — no new migration here
+
+  Task 019f9cb8 stage 3 (Part C) re-checked this deliberately, because it is
+  the kind of thing that looks unfinished from a support ticket alone: a
+  slug (`t3`) with two rows in production. `check_access/3`'s per-scope
+  dispatch above and `scope_type`/`scope_id` being independent namespaces (see
+  the moduledoc's "Scopes" section) are BY DESIGN — the same slug legitimately
+  exists at more than one scope at once, on purpose, not as a defect.
+
+  `20260829140000_enforce_vault_slug_uniqueness_across_null_scopes` already
+  ships the correct constraint for that design:
+  `vault_credentials_unique_slug_per_scope` on
+  `(workspace_id, scope_type, scope_id, slug)`, `NULLS NOT DISTINCT`, live on
+  `main`. It already parks pre-existing same-scope duplicates under
+  `__dup_`-suffixed slugs rather than deleting them, and it is re-runnable —
+  it already satisfies "don't ship blind." Prod's two `t3` rows do not
+  violate this constraint; they coexist at different scopes, which the schema
+  intentionally permits. There is nothing here for a new migration to fix.
+  The bug that ticket was really describing was `get/2`/`delete/2` resolving a
+  slug alone while ignoring scope — that is the defect this task's stages 1-2
+  fixed (see `resolve_one_by_slug/2` below).
+
   Rotation is what you run *because* a key leaked, so picking arbitrarily is
   the worst available behaviour — it leaves the compromised value live and
   overwrites an unrelated integration, both silently. Instead:
@@ -341,11 +356,9 @@ defmodule Platform.Vault do
     * with no `:scope`, an ambiguous slug is **refused** with
       `{:error, :ambiguous_slug}` and nothing is mutated.
 
-  `get/2` and `delete/2` still resolve by slug alone and carry the same
-  ambiguity; both accept `:scope` to narrow, but neither refuses.
-  `get_unique/2` is the refusing read. Tightening
-  those is separate work — a read that starts failing is a different blast
-  radius from a write that hits the wrong row.
+  `get/2`, `get_unique/2` and `delete/2` all now refuse an ambiguous slug the
+  same way: `:scope` narrows it, and with no `:scope` the call returns
+  `{:error, :ambiguous_slug}` rather than picking a row.
 
   ## Options
 
@@ -505,20 +518,24 @@ defmodule Platform.Vault do
 
     * `:accessor`     - `{accessor_type, accessor_id}` performing the deletion
     * `:scope`        - `{scope_type, scope_id}` naming the credential exactly.
-                        Optional, and **not** enforced: unlike `rotate/3`, an
-                        ambiguous slug is not refused here. See `rotate/3`.
+                        Optional. Without it the lookup matches on slug alone,
+                        and a slug living at two scopes is refused — see
+                        `rotate/3`.
     * `:workspace_id` - workspace context (used to narrow the lookup)
   """
   @spec delete(String.t(), keyword()) ::
-          {:ok, Credential.t()} | {:error, :not_found | :access_denied | any()}
+          {:ok, Credential.t()} | {:error, :not_found | :ambiguous_slug | :access_denied | any()}
   def delete(slug, opts \\ []) do
     accessor = Keyword.get(opts, :accessor)
 
-    case lookup_by_slug(slug, opts) do
-      nil ->
+    case resolve_one_by_slug(slug, opts) do
+      {:error, :not_found} ->
         {:error, :not_found}
 
-      credential ->
+      {:error, :ambiguous_slug} ->
+        refuse_ambiguous(slug, opts, "revoke")
+
+      {:ok, credential} ->
         case check_access(credential, accessor, :revoke) do
           {:error, :access_denied} -> deny(credential, slug, accessor)
           :ok -> do_delete(credential, slug, accessor)
@@ -643,16 +660,6 @@ defmodule Platform.Vault do
   end
 
   # ── Private: Lookup ──────────────────────────────────────────────────────────
-
-  # The unnarrowed lookup, kept for get/2 and delete/2: takes the first row the
-  # planner returns. Correct only when the slug is unambiguous — see rotate/3's
-  # docs. Pass `:scope` to make it exact.
-  defp lookup_by_slug(slug, opts) do
-    slug
-    |> slug_query(opts)
-    |> limit(1)
-    |> Repo.one()
-  end
 
   # Resolve a slug to exactly ONE credential, or say why not. Fetches two rows
   # so "more than one" is a fact about the data rather than an inference from a

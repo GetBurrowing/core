@@ -126,15 +126,20 @@ defmodule Platform.Webhooks.GithubSignature do
 
   defp project_secret(nil), do: nil
 
+  # `repo_url` has no uniqueness constraint (only `projects.slug` does — see
+  # `unique_index(:projects, [:slug])`), so two projects can legitimately share
+  # one `repo_url`. The old `limit(1) |> Repo.one()` here picked whichever row
+  # Postgres happened to return first and quietly verified against THAT
+  # project's secret — the same "arbitrary row on a non-unique key" defect
+  # `Platform.Vault.get/2` and `delete/2` had on `slug` before this task's
+  # stages 1-2, just on a signature-verification path instead of a fetch/delete
+  # one. Fail closed instead: with more than one match, no per-project secret
+  # is offered to `secrets_for_repo/1` at all, so an ambiguous `repo_url` can
+  # still authenticate via the app-level fallback but never via either
+  # project's `webhook_secret`.
   defp project_secret(repo_url) when is_binary(repo_url) do
-    project =
-      Project
-      |> where([p], p.repo_url == ^repo_url)
-      |> limit(1)
-      |> Repo.one()
-
-    case project do
-      %{deploy_config: %{"webhook_secret" => secret}} when is_binary(secret) and secret != "" ->
+    case Repo.all(from(p in Project, where: p.repo_url == ^repo_url)) do
+      [%{deploy_config: %{"webhook_secret" => secret}}] when is_binary(secret) and secret != "" ->
         secret
 
       _ ->

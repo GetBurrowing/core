@@ -1278,8 +1278,25 @@ defmodule Platform.RepoLookupBoundaryTest do
     # does NOT use `get_org_by_slug!("fabrikam")`: resolving the root by slug would
     # both raise on a bare DB and let a rename silently reparent new orgs.
     "platform/tenancy/lifecycle.ex" => 3,
-    "platform/vault.ex" => 4,
-    "platform/webhooks/github_signature.ex" => 1,
+    # 4 → 3 for task 019f9cb8 stage 2: `delete/2` now resolves through
+    # `resolve_one_by_slug/2` (a `Repo.all` with `limit(2)`) instead of the
+    # private `lookup_by_slug/2`, which wrapped a `limit(1) |> Repo.one()` and
+    # picked whichever row the planner reached first on an ambiguous slug.
+    # That function is now unused and deleted along with its `Repo.one` call
+    # — no `where:` clause survives to triage.
+    "platform/vault.ex" => 3,
+    # 1 → 0 for task 019f9cb8 stage 3 Part A: `project_secret/1`'s
+    # `limit(1) |> Repo.one()` on `where: p.repo_url == ^repo_url` picked
+    # whichever project row Postgres reached first when two projects shared a
+    # `repo_url` (no uniqueness constraint on that column), silently offering
+    # an arbitrarily-chosen project's `webhook_secret` as a signature
+    # candidate. Now `Repo.all/1` on the identical `where:` clause, matched
+    # against `[single_row]` — two-or-more collapses to `nil` instead of
+    # picking one. No `Platform.UUID.valid?/1` guard is owed: `repo_url` is a
+    # `:string` column (`Platform.Tasks.Project.repo_url`), not a UUID-cast
+    # id, so the `Ecto.Query.CastError` this map exists to catch cannot occur
+    # here regardless of what arrives from the webhook payload.
+    "platform/webhooks/github_signature.ex" => 0,
     # Task 019fa63a: was 2 before stage 3, 1 after it, 0 now. Both of this
     # file's `Repo.one`s were the same defect in two spellings — `limit: 1`
     # deciding WHICH REPOSITORY an event belongs to by row order:

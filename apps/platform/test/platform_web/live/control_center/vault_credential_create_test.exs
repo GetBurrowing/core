@@ -93,8 +93,8 @@ defmodule PlatformWeb.ControlCenter.VaultCredentialCreateTest do
 
   # Reads the stored value off the ROW, not through `Vault.get/2`. Two reasons:
   # `get/2` enforces `:use`, which an agent-scoped credential denies to a nil
-  # accessor, and its `lookup_by_slug/2` matches on slug alone — so at a slug
-  # that exists at two scopes `get/2` cannot say WHICH value it returned. The
+  # accessor, and at a slug that exists at two scopes `get/2` now refuses
+  # outright (`{:error, :ambiguous_slug}`) rather than naming either row. The
   # Cloak type decrypts on load, so this is the plaintext.
   defp stored_value(%Credential{id: id}), do: Repo.get!(Credential, id).encrypted_data
 
