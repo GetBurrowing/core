@@ -3452,7 +3452,12 @@ defmodule Platform.Federation.ToolSurface do
           }
         },
         returns: "Structured result describing the completed stage and updated plan state",
-        limitations: "Fails if the stage is not running or still has pending/failed validations.",
+        limitations:
+          "Fails if the stage is not running or still has pending/failed validations. " <>
+            "The refusal names each unsatisfied validation by id, kind and status " <>
+            "(also returned as `unsatisfied_validations`). A `skipped` validation is " <>
+            "unsatisfied here. If the plan engine refuses the pass, the call reports the " <>
+            "stage's real status (`stage_status: \"running\"`), not success.",
         when_to_use: "When you have completed a running stage and need the plan engine to advance"
       },
       %{
@@ -6921,9 +6926,12 @@ defmodule Platform.Federation.ToolSurface do
          false <- plan_superseded?(current_plan) && {:error, :plan_superseded},
          true <- stage.status in ["running", "passed"] || {:error, :not_running},
          validations <- Tasks.list_validations(stage.id),
+         # Admission is unchanged: every row `passed`, or no rows. `skipped`
+         # stays UNSATISFIED for this tool (an agent must not complete a stage
+         # by skipping). The refusal names each unsatisfied row (01a0e8c1).
          true <-
            Enum.all?(validations, &(&1.status == "passed")) || validations == [] ||
-             {:error, :pending_validations},
+             {:error, {:pending_validations, Enum.reject(validations, &(&1.status == "passed"))}},
          # Scoped to the asserted stage (task 019fec3a): the admission guard
          # above deliberately accepts an already-`passed` stage so idempotent
          # re-calls succeed, but such a call must not advance a stage it does
@@ -6968,10 +6976,15 @@ defmodule Platform.Federation.ToolSurface do
            suggestion: "Use stage_list to inspect the current stage status"
          }}
 
-      {:error, :pending_validations} ->
+      {:error, {:pending_validations, rows}} ->
+        unsatisfied = Enum.map(rows, &%{id: &1.id, kind: &1.kind, status: &1.status})
+
         {:error,
          %{
-           error: "Stage still has pending or failed validations",
+           error:
+             "Stage still has unsatisfied validations: " <>
+               Enum.map_join(unsatisfied, ", ", &"#{&1.kind} #{&1.id} (#{&1.status})"),
+           unsatisfied_validations: unsatisfied,
            recoverable: true,
            suggestion: "Use validation_pass or validation_evaluate before stage_complete"
          }}

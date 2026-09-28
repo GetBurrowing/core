@@ -17,6 +17,28 @@ defmodule Platform.Tasks.PlanEngine do
   - `start_stage/1`        — transition stage from pending to running
 
   All transitions emit telemetry events for observability.
+
+  ## The pass invariant (task 01a0e8c1 stage 2)
+
+  `transition_stage/4` is the ONE write that makes a stage `passed`, and it
+  refuses to make it while any of the stage's validation rows is `pending`,
+  `running` or `failed`, or is a prior-round failed row (`owed?/2`). It
+  returns `{:error, {:unsatisfied_validations, [%{id, kind, status}]}}`, logs
+  an error naming the stage and each row, and emits
+  `[:platform, :tasks, :stage_pass_refused]`. The verdict should never ask for
+  a pass the guard refuses; the guard is the belt behind it, so no future
+  caller path can pass a stage over an unmet row.
+
+  `skipped` counts as SATISFIED here, deliberately. It is the designed product
+  of `skip_unevaluated_validations/2` (task 01a0665e), which runs just before
+  the transition in the same transaction, and of a human skip. Making
+  `skipped` block would wedge every 01a0665e gate. So the rule is "every row
+  passed or skipped", not "every row passed".
+
+  A refused pass leaves the stage as it was and does not advance the plan;
+  the validation write that triggered it still commits. Skips written for a
+  pass that is then refused are rolled back to a savepoint (`pass_stage/3`),
+  so no row is left `skipped` on a stage that stayed running.
   """
 
   import Ecto.Query
@@ -609,7 +631,7 @@ defmodule Platform.Tasks.PlanEngine do
           stage.status == "running" and status == "failed" ->
             advance_stage(stage)
 
-          all_validations_resolved?(stage.id) ->
+          all_validations_resolved?(stage) ->
             maybe_advance_resolved_stage(stage)
 
           true ->
@@ -764,13 +786,10 @@ defmodule Platform.Tasks.PlanEngine do
           stage ->
             case stage_verdict(stage) do
               :all_passed ->
-                {:ok, _passed_stage} = transition_stage(stage, "passed", completed_by)
-                maybe_advance_next(plan, stages, stage.position)
+                pass_and_advance_plan(plan, stages, stage, [], completed_by)
 
               {:passed_with_unevaluated, rows} ->
-                skip_unevaluated_validations(stage, rows)
-                {:ok, _passed_stage} = transition_stage(stage, "passed", completed_by)
-                maybe_advance_next(plan, stages, stage.position)
+                pass_and_advance_plan(plan, stages, stage, rows, completed_by)
 
               :has_failures ->
                 {:ok, _failed_stage} = transition_stage(stage, "failed")
@@ -1370,40 +1389,125 @@ defmodule Platform.Tasks.PlanEngine do
     end
   end
 
-  defp transition_stage(stage, new_status, completed_by \\ nil) do
+  # `opts[:keep_started_at]` — the internal failed->running flip-reopen in
+  # `maybe_advance_resolved_stage/1` re-judges the SAME round it is reopening,
+  # so it must not restart the round clock: a fresh `started_at` would make
+  # every row of that round look prior-round (see `owed?/2`) and wedge the
+  # designed failed->passed flip (task 01a0e8c1 stage 1).
+  defp transition_stage(stage, new_status, completed_by \\ nil, opts \\ []) do
     allowed = Map.get(@valid_stage_transitions, stage.status, [])
 
-    if new_status in allowed do
-      now = DateTime.utc_now()
+    cond do
+      new_status not in allowed ->
+        {:error, :invalid_transition}
 
-      extra =
-        case new_status do
-          "running" -> %{started_at: now, completed_at: nil}
-          s when s in ~w(passed failed skipped) -> %{completed_at: now}
-          _ -> %{}
+      new_status == "passed" ->
+        case unsatisfied_validations(stage) do
+          [] -> do_transition_stage(stage, new_status, completed_by, opts)
+          unsatisfied -> refuse_pass(stage, unsatisfied)
         end
 
-      {:ok, updated} =
-        stage
-        |> Stage.changeset(Map.put(extra, :status, new_status))
-        |> Repo.update()
+      true ->
+        do_transition_stage(stage, new_status, completed_by, opts)
+    end
+  end
 
-      emit_stage_telemetry(updated, stage.status, completed_by)
+  # The pass guard's row set: a row is unsatisfied when its status is unmet
+  # (`pending`/`running`/`failed`) or when stage 1's `owed?/2` says so. The
+  # second clause is subsumed today (a prior-round failed row is `failed`) and
+  # is kept so the guard cannot drift from the verdict if `owed?/2` grows.
+  defp unsatisfied_validations(%Stage{} = stage) do
+    validations = Repo.all(from(v in Validation, where: v.stage_id == ^stage.id))
+    round = round_cutoff(stage, validations)
+    unmet = Validation.unmet_statuses()
 
-      # ADR-0044 stage 4: post-executor drift hook. Fire the architect's
-      # `architecture.audit_diff` responsibility once per successful stage
-      # completion. Progressive-enhancement — no-ops when no architect is
-      # assigned. Wrapped in try/rescue/catch :exit inside the helper so a
-      # handler crash cannot stall the state machine or the board broadcast
-      # (memory ref: `[Suite engine quirks]` cascade-fix 019f3440).
-      if new_status == "passed" do
-        _ = after_stage_completed(updated)
+    validations
+    |> Enum.filter(&(&1.status in unmet or owed?(round, &1)))
+    |> Enum.map(&%{id: &1.id, kind: &1.kind, status: &1.status})
+  end
+
+  defp refuse_pass(%Stage{} = stage, unsatisfied) do
+    Logger.error(
+      "[PlanEngine] refused to pass stage #{stage.id}: unsatisfied validations " <>
+        Enum.map_join(unsatisfied, ", ", &"#{&1.kind} #{&1.id} (#{&1.status})")
+    )
+
+    :telemetry.execute(
+      [:platform, :tasks, :stage_pass_refused],
+      %{system_time: System.system_time(), count: length(unsatisfied)},
+      %{
+        stage_id: stage.id,
+        plan_id: stage.plan_id,
+        validation_ids: Enum.map(unsatisfied, & &1.id),
+        validations: unsatisfied
+      }
+    )
+
+    {:error, {:unsatisfied_validations, unsatisfied}}
+  end
+
+  # Pass `stage`, first moving each `could_not_evaluate` row in `skip_rows`
+  # `failed -> skipped`. The skips and the transition share a SAVEPOINT: if
+  # the guard in `transition_stage/4` refuses the pass, the skips (and the
+  # task stamp / engagement they wrote) are rolled back so no row is left
+  # `skipped` on a stage that stayed running. Ecto's nested transactions do
+  # not use savepoints (an inner rollback aborts the whole outer transaction,
+  # losing the triggering validation write), hence the raw SQL. Every caller
+  # already runs inside a transaction. Telemetry the skips emitted is not
+  # retracted.
+  @pass_savepoint "plan_engine_pass_guard"
+  defp pass_stage(%Stage{} = stage, skip_rows, completed_by) do
+    Repo.query!("SAVEPOINT #{@pass_savepoint}")
+
+    if skip_rows != [], do: skip_unevaluated_validations(stage, skip_rows)
+
+    case transition_stage(stage, "passed", completed_by) do
+      {:ok, passed} ->
+        Repo.query!("RELEASE SAVEPOINT #{@pass_savepoint}")
+        {:ok, passed}
+
+      {:error, {:unsatisfied_validations, _rows}} = refused ->
+        Repo.query!("ROLLBACK TO SAVEPOINT #{@pass_savepoint}")
+        Repo.query!("RELEASE SAVEPOINT #{@pass_savepoint}")
+        refused
+    end
+  end
+
+  defp do_transition_stage(stage, new_status, completed_by, opts) do
+    now = DateTime.utc_now()
+
+    extra =
+      case new_status do
+        "running" ->
+          if Keyword.get(opts, :keep_started_at, false),
+            do: %{completed_at: nil},
+            else: %{started_at: now, completed_at: nil}
+
+        s when s in ~w(passed failed skipped) ->
+          %{completed_at: now}
+
+        _ ->
+          %{}
       end
 
-      {:ok, updated}
-    else
-      {:error, :invalid_transition}
+    {:ok, updated} =
+      stage
+      |> Stage.changeset(Map.put(extra, :status, new_status))
+      |> Repo.update()
+
+    emit_stage_telemetry(updated, stage.status, completed_by)
+
+    # ADR-0044 stage 4: post-executor drift hook. Fire the architect's
+    # `architecture.audit_diff` responsibility once per successful stage
+    # completion. Progressive-enhancement — no-ops when no architect is
+    # assigned. Wrapped in try/rescue/catch :exit inside the helper so a
+    # handler crash cannot stall the state machine or the board broadcast
+    # (memory ref: `[Suite engine quirks]` cascade-fix 019f3440).
+    if new_status == "passed" do
+      _ = after_stage_completed(updated)
     end
+
+    {:ok, updated}
   end
 
   # ADR-0044 stage 4 hook — kept private so `transition_stage/2` reads as
@@ -1559,14 +1663,16 @@ defmodule Platform.Tasks.PlanEngine do
 
     cond do
       validations == [] -> :all_passed
-      Enum.any?(validations, &(&1.kind == "e2e_behavior")) -> e2e_host_verdict(validations)
+      Enum.any?(validations, &(&1.kind == "e2e_behavior")) -> e2e_host_verdict(stage, validations)
       Enum.any?(validations, &(&1.status == "failed")) -> :has_failures
       Enum.all?(validations, &(&1.status in ~w(passed skipped))) -> :all_passed
       true -> :pending
     end
   end
 
-  defp e2e_host_verdict(validations) do
+  defp e2e_host_verdict(stage, validations) do
+    round = round_cutoff(stage, validations)
+
     classified =
       validations
       |> Enum.filter(&(&1.status == "failed"))
@@ -1597,7 +1703,16 @@ defmodule Platform.Tasks.PlanEngine do
       # A genuine failure is DELAYED here, never swallowed: once the last
       # sibling lands, this arm goes false and the `:has_failures` arm below
       # fails the stage exactly as it did before.
-      Enum.any?(validations, &(&1.status in ~w(pending running))) ->
+      #
+      # PRIOR-ROUND VERDICTS (task 01a0e8c1 stage 1). A `failed` row whose
+      # `evaluated_at` is strictly before the stage's `started_at` was written
+      # by an EARLIER round and is owed exactly like a `pending` row — see
+      # `owed?/2`. Without this, a stage put back to `running` without its
+      # rows re-pended let four stale `could_not_evaluate` rows satisfy the
+      # skip arm below the moment the reviewer passed one case (specimen
+      # 01a0d4a0 stage 4, 2026-09-28 04:13:15). Keyed on the rows, not on
+      # the path that reopened the stage, so it holds whichever path did.
+      Enum.any?(validations, &owed?(round, &1)) ->
         :pending
 
       # A real verdict about the feature fails the stage — unchanged, except
@@ -1771,13 +1886,41 @@ defmodule Platform.Tasks.PlanEngine do
       )
   end
 
-  defp all_validations_resolved?(stage_id) do
-    pending_count =
-      Validation
-      |> where([v], v.stage_id == ^stage_id and v.status in ~w(pending running))
-      |> Repo.aggregate(:count)
+  @doc false
+  # Public only so the prior-round test can assert this and the e2e host
+  # verdict agree. Both go through `owed?/2`; they must not drift.
+  @spec all_validations_resolved?(Stage.t()) :: boolean()
+  def all_validations_resolved?(%Stage{} = stage) do
+    validations = Repo.all(from(v in Validation, where: v.stage_id == ^stage.id))
+    round = round_cutoff(stage, validations)
 
-    pending_count == 0
+    not Enum.any?(validations, &owed?(round, &1))
+  end
+
+  # The ONE owed-row predicate (task 01a0e8c1 stage 1), shared by
+  # `e2e_host_verdict/2` and `all_validations_resolved?/1`.
+  #
+  # A row is owed when it has no verdict yet (`pending`/`running`), or when it
+  # is `failed` by a PRIOR round: `evaluated_at` strictly before the round's
+  # cutoff (the stage's `started_at`). Strictly: a row evaluated in the same
+  # microsecond as `started_at` is this round. A nil cutoff or a nil
+  # `evaluated_at` counts as current (legacy rows, stages driven to running
+  # without a clock). A `passed` row is never stale — a pass is a verdict
+  # whatever round wrote it.
+  defp owed?(_cutoff, %Validation{status: status}) when status in ~w(pending running),
+    do: true
+
+  defp owed?(%DateTime{} = cutoff, %Validation{status: "failed", evaluated_at: %DateTime{} = at}),
+    do: DateTime.compare(at, cutoff) == :lt
+
+  defp owed?(_cutoff, _validation), do: false
+
+  # The prior-round clause applies to e2e host stages only — the stage kind
+  # whose verdict has the settled-round hold and the could_not_evaluate skip
+  # arm. Every other stage keeps its pending/running-only resolution (nil
+  # cutoff), so a non-e2e stage's behaviour is unchanged.
+  defp round_cutoff(%Stage{started_at: started_at}, validations) do
+    if Enum.any?(validations, &(&1.kind == "e2e_behavior")), do: started_at
   end
 
   defp maybe_advance_resolved_stage(%Stage{} = stage) do
@@ -1787,12 +1930,14 @@ defmodule Platform.Tasks.PlanEngine do
 
       "failed" ->
         case stage_verdict(stage) do
+          # The reopen re-judges the round it reopens, so it keeps that
+          # round's `started_at` (see `transition_stage/4`).
           :all_passed ->
-            {:ok, reopened_stage} = transition_stage(stage, "running")
+            {:ok, reopened_stage} = transition_stage(stage, "running", nil, keep_started_at: true)
             advance_stage(reopened_stage)
 
           {:passed_with_unevaluated, _rows} ->
-            {:ok, reopened_stage} = transition_stage(stage, "running")
+            {:ok, reopened_stage} = transition_stage(stage, "running", nil, keep_started_at: true)
             advance_stage(reopened_stage)
 
           :has_failures ->
@@ -1807,20 +1952,40 @@ defmodule Platform.Tasks.PlanEngine do
     end
   end
 
-  defp advance_stage(stage) do
-    case stage_verdict(stage) do
-      :all_passed ->
-        {:ok, _} = transition_stage(stage, "passed")
+  # `advance/2`'s pass seam. A refused pass (task 01a0e8c1 stage 2) leaves
+  # the stage as it is, does not advance the plan, and returns the reloaded
+  # plan so the enclosing transaction — and the write that triggered it —
+  # commits.
+  defp pass_and_advance_plan(plan, stages, stage, skip_rows, completed_by) do
+    case pass_stage(stage, skip_rows, completed_by) do
+      {:ok, _passed_stage} ->
+        maybe_advance_next(plan, stages, stage.position)
+
+      {:error, {:unsatisfied_validations, _rows}} ->
+        Repo.preload(Repo.get!(Plan, plan.id), stages_query())
+    end
+  end
+
+  # `advance_stage/1`'s pass seam: same contract, returns `:ok` on refusal.
+  defp pass_and_advance_stage(stage, skip_rows) do
+    case pass_stage(stage, skip_rows, nil) do
+      {:ok, _passed_stage} ->
         plan = Repo.get!(Plan, stage.plan_id)
         stages = ordered_stages(plan.id)
         maybe_advance_next(plan, stages, stage.position)
 
+      {:error, {:unsatisfied_validations, _rows}} ->
+        :ok
+    end
+  end
+
+  defp advance_stage(stage) do
+    case stage_verdict(stage) do
+      :all_passed ->
+        pass_and_advance_stage(stage, [])
+
       {:passed_with_unevaluated, rows} ->
-        skip_unevaluated_validations(stage, rows)
-        {:ok, _} = transition_stage(stage, "passed")
-        plan = Repo.get!(Plan, stage.plan_id)
-        stages = ordered_stages(plan.id)
-        maybe_advance_next(plan, stages, stage.position)
+        pass_and_advance_stage(stage, rows)
 
       :has_failures ->
         {:ok, failed_stage} = transition_stage(stage, "failed")
