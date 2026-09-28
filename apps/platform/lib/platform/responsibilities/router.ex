@@ -173,6 +173,11 @@ defmodule Platform.Responsibilities.Router do
 
   @pubsub Platform.PubSub
 
+  # PubSub topic a writer of a responsibility row broadcasts
+  # `{:responsibilities_changed, :cron}` on, so every node's Router
+  # re-reads its cron bucket without a restart (task 01a0e882 stage 1).
+  @changed_topic "responsibilities:changed"
+
   # Telemetry event the chat ingest publishes on every persisted message
   # (see `Platform.Chat.publish_message_posted/2`). The Router subscribes
   # to it as a SIBLING fan-out to `Platform.Chat.AttentionRouter`, not a
@@ -202,7 +207,8 @@ defmodule Platform.Responsibilities.Router do
           cron_last_fire: %{binary() => DateTime.t()},
           subscribed_topics: MapSet.t(binary()),
           compiled_chat_patterns: [{Regex.t(), Responsibility.t()}],
-          chat_telemetry_handler_id: binary()
+          chat_telemetry_handler_id: binary(),
+          now_fn: (-> DateTime.t())
         }
 
   # ── start_link / init ──────────────────────────────────────────────────────
@@ -224,9 +230,16 @@ defmodule Platform.Responsibilities.Router do
         Keyword.get(config, :check_interval_ms, @default_check_interval_ms)
       )
 
+    # Clock seam (task 01a0e882 stage 1). Every read of "now" on the cron
+    # path goes through this fun, so a test can drive simulated time; see
+    # the `{:tick_at, now}` clause.
+    now_fn = Keyword.get(opts, :now_fn, &DateTime.utc_now/0)
+
     {snapshot, by_trigger} = walk_registry()
 
-    cron_next_fire = compute_initial_cron_schedule(by_trigger.cron, DateTime.utc_now())
+    cron_next_fire = compute_initial_cron_schedule(by_trigger.cron, now_fn.())
+
+    :ok = Phoenix.PubSub.subscribe(@pubsub, @changed_topic)
 
     subscribed_topics = subscribe_event_topics(by_trigger.event_topics)
 
@@ -256,7 +269,8 @@ defmodule Platform.Responsibilities.Router do
       cron_last_fire: %{},
       subscribed_topics: subscribed_topics,
       compiled_chat_patterns: compiled_chat_patterns,
-      chat_telemetry_handler_id: chat_telemetry_handler_id
+      chat_telemetry_handler_id: chat_telemetry_handler_id,
+      now_fn: now_fn
     }
 
     {:ok, state}
@@ -282,6 +296,25 @@ defmodule Platform.Responsibilities.Router do
   """
   @spec snapshot(GenServer.server()) :: snapshot()
   def snapshot(server \\ __MODULE__), do: GenServer.call(server, :snapshot)
+
+  @doc """
+  Re-read the enabled cron rows and replace the Router's cron bucket,
+  without a restart. Synchronous: returns `:ok` once the new bucket is
+  in place, so a caller can use it as a barrier.
+
+  Performs the same reload as a `{:responsibilities_changed, :cron}`
+  broadcast on `changed_topic/0`. A row whose `trigger_config` is
+  unchanged keeps its pending next fire; a new or changed row is
+  rescheduled from now; a row no longer returned (disabled, deleted,
+  or moved off cron) leaves the bucket and the schedule. The per-row
+  `cron_last_fire` debounce is carried forward untouched.
+  """
+  @spec reload_cron(GenServer.server()) :: :ok
+  def reload_cron(server \\ __MODULE__), do: GenServer.call(server, :reload_cron)
+
+  @doc "PubSub topic that carries `{:responsibilities_changed, :cron}`."
+  @spec changed_topic() :: binary()
+  def changed_topic, do: @changed_topic
 
   @doc """
   Dispatch a fired trigger to the responsibility's assignee.
@@ -407,21 +440,33 @@ defmodule Platform.Responsibilities.Router do
     {:reply, state.by_trigger, state}
   end
 
+  def handle_call(:reload_cron, _from, state) do
+    {:reply, :ok, reload_cron_bucket(state)}
+  end
+
   @impl GenServer
   def handle_info(:tick, state) do
-    now = DateTime.utc_now()
-
-    {new_next, new_last} =
-      Enum.reduce(
-        state.by_trigger.cron,
-        {state.cron_next_fire, state.cron_last_fire},
-        fn responsibility, {next_acc, last_acc} ->
-          maybe_fire_cron(responsibility, now, next_acc, last_acc)
-        end
-      )
-
+    state = run_cron_tick(state, state.now_fn.())
     schedule_check(state.check_interval_ms)
-    {:noreply, %{state | cron_next_fire: new_next, cron_last_fire: new_last}}
+    {:noreply, state}
+  end
+
+  # Simulated-time tick: the SAME reduce as `:tick` at the supplied
+  # instant, without re-arming the timer, so a test can step the cron
+  # schedule minute by minute with no sleeps.
+  def handle_info({:tick_at, %DateTime{} = now}, state) do
+    {:noreply, run_cron_tick(state, now)}
+  end
+
+  # Cron reload broadcast on `@changed_topic`.
+  #
+  # CLAUSE ORDER IS LOAD-BEARING: this MUST stay above the generic
+  # `{event, payload} when is_atom(event)` clause below. That clause
+  # matches this message too, would hand it to `fire_event_match/3` as an
+  # event named "responsibilities_changed", and the reload would silently
+  # never happen.
+  def handle_info({:responsibilities_changed, :cron}, state) do
+    {:noreply, reload_cron_bucket(state)}
   end
 
   # Chat ingest fan-out: a sibling subscriber to AttentionRouter. The
@@ -614,6 +659,21 @@ defmodule Platform.Responsibilities.Router do
 
   # ── Cron firing ───────────────────────────────────────────────────────────
 
+  # One cron pass over the current bucket at `now`. Shared by `:tick` and
+  # `{:tick_at, now}` so the real and simulated clocks cannot drift.
+  defp run_cron_tick(state, %DateTime{} = now) do
+    {new_next, new_last} =
+      Enum.reduce(
+        state.by_trigger.cron,
+        {state.cron_next_fire, state.cron_last_fire},
+        fn responsibility, {next_acc, last_acc} ->
+          maybe_fire_cron(responsibility, now, next_acc, last_acc)
+        end
+      )
+
+    %{state | cron_next_fire: new_next, cron_last_fire: new_last}
+  end
+
   defp maybe_fire_cron(%Responsibility{id: id} = responsibility, now, next_acc, last_acc) do
     next = Map.get(next_acc, id)
 
@@ -636,6 +696,15 @@ defmodule Platform.Responsibilities.Router do
         end
 
       true ->
+        # Counting seam (task 01a0e882 stage 1): one event per cron fire
+        # that reaches `fire_trigger/2`. Deliberately NOT registered with
+        # `Platform.Audit.TelemetryHandler`.
+        :telemetry.execute(
+          [:platform, :responsibility, :cron_fired],
+          %{count: 1},
+          %{key: responsibility.key, responsibility_id: id, fired_at: now}
+        )
+
         fire_trigger(responsibility, %{kind: :cron, fired_at: now})
 
         next_acc =
@@ -646,6 +715,72 @@ defmodule Platform.Responsibilities.Router do
 
         {next_acc, Map.put(last_acc, id, now)}
     end
+  end
+
+  # Replace the cron bucket with a fresh read. Unchanged rows (same
+  # `trigger_config`) keep their `cron_next_fire` entry, so a pending fire
+  # is not pushed to the next slot; new or changed rows are rescheduled
+  # from `state.now_fn`. `Cron.next_fire_after/3` starts at the NEXT
+  # minute boundary, so a recompute cannot return the minute that just
+  # fired. Ids no longer returned drop out of `cron_next_fire`;
+  # `cron_last_fire` is carried forward as-is so the debounce survives.
+  #
+  # A read that raises keeps the current bucket: unlike boot, a failed
+  # reload must not read as "no cron rows" and silence every schedule.
+  defp reload_cron_bucket(state) do
+    case read_cron_rows() do
+      {:ok, rows} -> apply_cron_reload(state, rows)
+      :error -> state
+    end
+  end
+
+  defp read_cron_rows do
+    {:ok, Responsibilities.get_by_trigger(:cron)}
+  rescue
+    error ->
+      Logger.warning(
+        "[ResponsibilityRouter] cron reload read failed, keeping current bucket: " <>
+          Exception.message(error)
+      )
+
+      :error
+  end
+
+  defp apply_cron_reload(state, rows) do
+    now = state.now_fn.()
+    old_rows = state.by_trigger.cron
+    old_by_id = Map.new(old_rows, &{&1.id, &1})
+
+    next_fire =
+      Enum.reduce(rows, %{}, fn %Responsibility{id: id} = row, acc ->
+        kept = Map.get(state.cron_next_fire, id)
+
+        case Map.get(old_by_id, id) do
+          %Responsibility{trigger_config: config}
+          when config == row.trigger_config and kept != nil ->
+            Map.put(acc, id, kept)
+
+          _ ->
+            case compute_next_fire(row, now) do
+              {:ok, dt} -> Map.put(acc, id, dt)
+              :error -> acc
+            end
+        end
+      end)
+
+    old_ids = MapSet.new(Map.keys(old_by_id))
+
+    registry_snapshot =
+      Enum.reject(state.registry_snapshot, &MapSet.member?(old_ids, &1.id)) ++ rows
+
+    Logger.info("[ResponsibilityRouter] cron reload: #{length(old_rows)} -> #{length(rows)} rows")
+
+    %{
+      state
+      | by_trigger: %{state.by_trigger | cron: rows},
+        registry_snapshot: registry_snapshot,
+        cron_next_fire: next_fire
+    }
   end
 
   # Mirrors `SystemEventScheduler.recently_fired?/4` but keyed at minute

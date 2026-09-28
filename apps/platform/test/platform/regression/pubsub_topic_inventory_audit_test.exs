@@ -223,6 +223,12 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
     {"stage:completed", :global},
     {"task:planning_started", :global},
     {"projects:lifecycle", :global},
+    # Task 01a0e882 stage 2. Payload is the bare `{:responsibilities_changed,
+    # :cron}`: no row, no key, no actor, no schedule. The one subscriber is the
+    # supervised Responsibilities.Router, which re-reads its cron rows itself.
+    # A non-member learns only that SOME cron responsibility changed at that
+    # moment.
+    {"responsibilities:changed", :global},
     {"roles:assignments", :global},
     # {:roster_changed_any, space_id}. An id, not a roster: receivers recompute
     # their own union under their own scoping.

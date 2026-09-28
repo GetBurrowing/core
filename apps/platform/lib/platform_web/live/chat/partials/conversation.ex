@@ -94,6 +94,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
   alias Platform.Chat.Sidebar
   alias Platform.Responsibilities.Handlers.AgentsGoalHeartbeat
   alias PlatformWeb.ChatLive
+  alias PlatformWeb.ChatLive.GoalCadenceForm
   alias PlatformWeb.ChatLive.CanvasHooks
   alias PlatformWeb.ChatLive.PresenceHooks
 
@@ -142,6 +143,11 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
   # channel's org cannot see (`:unknown_project`, else nil).
   attr(:goal_scope_options, :list, default: [])
   attr(:goal_scope_error, :atom, default: nil)
+  # Task 01a0e882 stage 3: the Check progress selection while the editor
+  # is open (`GoalCadenceForm.selection/0`, else nil) and the viewer's
+  # resolved IANA zone (nil renders UTC).
+  attr(:goal_cadence_form, :map, default: nil)
+  attr(:goal_time_zone, :string, default: nil)
 
   @doc """
   The conversation `<header>` — space title, meeting entry, search, the
@@ -559,40 +565,59 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
                label beyond `aria-label`; base tokens only, `--color-primary`
                stays on Save. The scope's READING state is the existing
                "open tasks in <name>" measurement clause, not new markup. --%>
+          <%!-- CHECK PROGRESS (task 01a0e882 stage 3, Saru's canvas "Design
+               direction: goal check cadence"). The cadence controls are a
+               SECOND LINE inside the SAME form, so Save and Cancel commit or
+               discard both. The first line keeps the one-row classes it had
+               on its own `<form>` (now on the inner row), so from `sm:` up
+               the goal row lays out exactly as before. `phx-change` only
+               re-assigns the preview selection; nothing is written until
+               Save. No cron text anywhere: options and preview are words
+               and wall-clock times from `GoalCadenceForm`. --%>
           <form
             phx-submit="save_goal"
-            class="flex flex-wrap items-center gap-2 sm:flex-nowrap"
+            phx-change="goal_form_change"
+            class="flex flex-col gap-2"
             data-role="agents-goal-form"
           >
-            <input
-              type="text"
-              name="goal"
-              value={@goal_panel && @goal_panel.goal}
-              maxlength="500"
-              aria-label="Goal"
-              placeholder="Close backlog items"
-              phx-mounted={JS.focus()}
-              class="input input-bordered input-sm min-w-0 flex-1 max-sm:basis-full"
-            />
-            <select
-              name="goal_project_id"
-              aria-label="Project"
-              class="select select-bordered select-sm sm:shrink-0 max-sm:min-h-11"
-              data-role="agents-goal-scope"
-            >
-              <option value="" selected={goal_scope_value(@active_space) == ""}>All projects</option>
-              <option
-                :for={{label, value} <- @goal_scope_options}
-                value={value}
-                selected={goal_scope_value(@active_space) == value}
+            <div class="flex flex-wrap items-center gap-2 sm:flex-nowrap">
+              <input
+                type="text"
+                name="goal"
+                value={@goal_panel && @goal_panel.goal}
+                maxlength="500"
+                aria-label="Goal"
+                placeholder="Close backlog items"
+                phx-mounted={JS.focus()}
+                class="input input-bordered input-sm min-w-0 flex-1 max-sm:basis-full"
+              />
+              <select
+                name="goal_project_id"
+                aria-label="Project"
+                class="select select-bordered select-sm sm:shrink-0 max-sm:min-h-11"
+                data-role="agents-goal-scope"
               >
-                {label}
-              </option>
-            </select>
-            <button type="submit" class="btn btn-sm btn-primary">Save</button>
-            <button type="button" phx-click="cancel_goal_edit" class="btn btn-sm btn-ghost">
-              Cancel
-            </button>
+                <option value="" selected={goal_scope_value(@active_space) == ""}>
+                  All projects
+                </option>
+                <option
+                  :for={{label, value} <- @goal_scope_options}
+                  value={value}
+                  selected={goal_scope_value(@active_space) == value}
+                >
+                  {label}
+                </option>
+              </select>
+              <button type="submit" class="btn btn-sm btn-primary">Save</button>
+              <button type="button" phx-click="cancel_goal_edit" class="btn btn-sm btn-ghost">
+                Cancel
+              </button>
+            </div>
+            <.goal_cadence_controls
+              :if={@can_edit_goal? && @goal_cadence_form}
+              selection={@goal_cadence_form}
+              time_zone={@goal_time_zone}
+            />
           </form>
           <%!-- The refusal renders INLINE under the form, in `--color-error`,
                and nowhere else: not a flash, not a warning. --%>
@@ -679,6 +704,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
                   data-role="agents-goal-measurement-uncounted"
                 >
                   {AgentsGoalHeartbeat.format_measurement(@goal_panel.measurement)}
+                  <.goal_cadence_tail cadence={@goal_panel[:cadence]} />
                 </span>
               <% @goal_panel.measurement[:missing?] -> %>
                 <%!-- The warning is reserved for a genuine fault:
@@ -690,6 +716,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
                   data-role="agents-goal-measurement-missing"
                 >
                   {AgentsGoalHeartbeat.format_measurement(@goal_panel.measurement)}
+                  <.goal_cadence_tail cadence={@goal_panel[:cadence]} />
                 </span>
               <% true -> %>
                 <span
@@ -704,6 +731,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
                     {@goal_panel.measurement.value}
                   </span>
                   {AgentsGoalHeartbeat.format_measurement_tail(@goal_panel.measurement)}
+                  <.goal_cadence_tail cadence={@goal_panel[:cadence]} />
                 </span>
             <% end %>
             <%!-- TAP TARGET, and this is independent of the reflow above:
@@ -733,6 +761,88 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
     </div>
     """
   end
+
+  attr(:selection, :map, required: true)
+  attr(:time_zone, :string, default: nil)
+
+  # The Check progress line: a cadence select, an "at" hour select for
+  # Once a day only (option VALUE is the UTC hour, label the viewer's local
+  # time), and the xs /60 preview. Tokens: the scope select's
+  # `select select-bordered select-sm` and its `max-sm:min-h-11` tap
+  # target; helper text on the muted `/60` slot; no accent or warning.
+  defp goal_cadence_controls(assigns) do
+    now = DateTime.utc_now()
+
+    assigns =
+      assigns
+      |> assign(:cadence_value, Atom.to_string(assigns.selection.cadence))
+      |> assign(:cadence_options, GoalCadenceForm.cadence_options(assigns.selection))
+      |> assign(:hour_options, GoalCadenceForm.hour_options(assigns.time_zone, now))
+      |> assign(:preview, GoalCadenceForm.preview(assigns.selection, assigns.time_zone, now))
+
+    ~H"""
+    <div class="flex flex-col gap-1" data-role="agents-goal-cadence-line">
+      <div class="flex flex-wrap items-center gap-2">
+        <label class="text-xs text-base-content/60" for="agents-goal-cadence">
+          Check progress
+        </label>
+        <select
+          id="agents-goal-cadence"
+          name="goal_cadence"
+          class="select select-bordered select-sm max-sm:min-h-11"
+          data-role="agents-goal-cadence"
+        >
+          <option
+            :for={{label, value} <- @cadence_options}
+            value={value}
+            selected={value == @cadence_value}
+          >
+            {label}
+          </option>
+        </select>
+        <%= if @selection.cadence == :daily do %>
+          <label class="text-xs text-base-content/60" for="agents-goal-cadence-hour">at</label>
+          <select
+            id="agents-goal-cadence-hour"
+            name="goal_cadence_hour"
+            class="select select-bordered select-sm max-sm:min-h-11"
+            data-role="agents-goal-cadence-hour"
+          >
+            <option
+              :for={{label, hour} <- @hour_options}
+              value={hour}
+              selected={hour == @selection.hour_utc}
+            >
+              {label}
+            </option>
+          </select>
+        <% end %>
+      </div>
+      <span class="text-xs text-base-content/60" data-role="agents-goal-cadence-preview">
+        {@preview}
+      </span>
+    </div>
+    """
+  end
+
+  attr(:cadence, :any, default: nil)
+
+  # The strip's cadence tail, inside the measurement span so it truncates
+  # with the clause. Hourly (the default) renders NOTHING. Its own `/60`
+  # keeps it out of `text-warning` in the missing branch; Off is a choice,
+  # not a fault, so it is never warning-coloured.
+  defp goal_cadence_tail(assigns) do
+    assigns = assign(assigns, :tail, GoalCadenceForm.tail(cadence_of(assigns.cadence)))
+
+    ~H"""
+    <span :if={@tail} class="text-base-content/60" data-role="agents-goal-cadence-tail">
+      {@tail}
+    </span>
+    """
+  end
+
+  defp cadence_of(%{cadence: cadence}), do: cadence
+  defp cadence_of(_), do: nil
 
   attr(:active_space, :any, required: true)
   attr(:embedded, :boolean, required: true)

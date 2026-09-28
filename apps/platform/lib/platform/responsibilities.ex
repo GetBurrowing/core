@@ -36,12 +36,21 @@ defmodule Platform.Responsibilities do
   `feature`, `trigger_kind`, `trigger_config`, `scope`,
   `context_provided`, `output_contract`, `default_prompt_template`,
   `cost_profile`, `metadata`, `updated_at`.
+
+  **One exception, `trigger_config["operator_set"] == true`.** A stored
+  `trigger_config` carrying that marker is KEPT on conflict; the declared
+  value is discarded. This is the ONE way an operator's schedule survives
+  a deploy (task 01a0e882 stage 2). Only operator writes set it
+  (`set_cron_cadence/4` via `Platform.Responsibilities.GoalCadence`); a
+  row without the marker is replaced exactly as before.
   """
 
   import Ecto.Query
 
+  alias Platform.Audit
   alias Platform.Repo
-  alias Platform.Responsibilities.Responsibility
+  alias Platform.Responsibilities.{GoalCadence, Responsibility}
+  alias Platform.Tenancy
 
   @typedoc "One of the `trigger_kind` atoms accepted by `get_by_trigger/1`."
   @type trigger_kind :: :cron | :event_topic | :chat_pattern | :webhook
@@ -49,10 +58,17 @@ defmodule Platform.Responsibilities do
   # Mutable-on-upsert: everything a provider can declare in source.
   # NOT in this list: `:id`, `:key` (conflict_target), `:enabled`
   # (operator-set), `:inserted_at` (only set on first insert).
+  # `trigger_config` is replaced UNLESS the stored value carries
+  # `"operator_set": true`; see `upsert_on_conflict/0`, which must set
+  # exactly these fields.
   @upsert_replace_fields ~w(feature trigger_kind trigger_config scope
                             context_provided output_contract
                             default_prompt_template cost_profile metadata
                             updated_at)a
+
+  @changed_topic "responsibilities:changed"
+  @cadence_event_type "platform.responsibilities.cadence_changed"
+  @goal_heartbeat_key "agents.goal_heartbeat"
 
   @doc "List all responsibilities ordered ascending by key."
   @spec list_responsibilities() :: [Responsibility.t()]
@@ -150,7 +166,7 @@ defmodule Platform.Responsibilities do
 
     if changeset.valid? do
       Repo.insert(changeset,
-        on_conflict: {:replace, @upsert_replace_fields},
+        on_conflict: upsert_on_conflict(),
         conflict_target: :key,
         returning: true
       )
@@ -159,6 +175,178 @@ defmodule Platform.Responsibilities do
       {:error, %{changeset | action: :insert}}
     end
   end
+
+  # `{:replace, @upsert_replace_fields}` with ONE difference:
+  # `trigger_config` keeps the stored value when it carries the operator
+  # marker. `upsert_replace_fields/0` (test-visible) pins that this set
+  # list and the attribute name the same fields.
+  defp upsert_on_conflict do
+    from(r in Responsibility,
+      update: [
+        set: [
+          feature: fragment("EXCLUDED.feature"),
+          trigger_kind: fragment("EXCLUDED.trigger_kind"),
+          trigger_config:
+            fragment(
+              "CASE WHEN ?->>'operator_set' = 'true' THEN ? ELSE EXCLUDED.trigger_config END",
+              r.trigger_config,
+              r.trigger_config
+            ),
+          scope: fragment("EXCLUDED.scope"),
+          context_provided: fragment("EXCLUDED.context_provided"),
+          output_contract: fragment("EXCLUDED.output_contract"),
+          default_prompt_template: fragment("EXCLUDED.default_prompt_template"),
+          cost_profile: fragment("EXCLUDED.cost_profile"),
+          metadata: fragment("EXCLUDED.metadata"),
+          updated_at: fragment("EXCLUDED.updated_at")
+        ]
+      ]
+    )
+  end
+
+  @doc false
+  # Test seam: the fields `upsert_by_key/1` overwrites on conflict, read
+  # from the on_conflict query itself so a field added to one list and not
+  # the other is caught.
+  @spec upsert_replace_fields() :: {[atom()], [atom()]}
+  def upsert_replace_fields do
+    %Ecto.Query{updates: [%{expr: [set: set]}]} = upsert_on_conflict()
+    {Enum.sort(@upsert_replace_fields), set |> Keyword.keys() |> Enum.sort()}
+  end
+
+  # ── operator cadence writes (task 01a0e882 stage 2) ────────────────────────
+
+  @doc """
+  Set how often agents check progress on their goal: the cadence of the
+  per-install `agents.goal_heartbeat` row. See `set_cron_cadence/4`.
+  """
+  @spec set_goal_heartbeat_cadence(any(), GoalCadence.cadence(), keyword()) ::
+          {:ok, Responsibility.t() | :unchanged}
+          | {:error, :forbidden | :not_found | :bad_hour | :bad_cadence | term()}
+  def set_goal_heartbeat_cadence(actor, cadence, opts \\ []) do
+    set_cron_cadence(actor, @goal_heartbeat_key, cadence, opts)
+  end
+
+  @doc """
+  The `agents.goal_heartbeat` row's cadence as `GoalCadence.from_row/1`
+  reads it; hourly when the row does not exist.
+  """
+  @spec goal_heartbeat_cadence() :: GoalCadence.reading()
+  def goal_heartbeat_cadence do
+    case get_by_key(@goal_heartbeat_key) do
+      %Responsibility{} = row -> GoalCadence.from_row(row)
+      nil -> %{cadence: :hourly, hour_utc: nil}
+    end
+  end
+
+  @doc """
+  Operator write of a cron responsibility's cadence.
+
+  Admin-only, enforced HERE so every caller is gated:
+  `Platform.Tenancy.fabrikam_admin?/1` or `{:error, :forbidden}`. `opts[:hour_utc]`
+  is required for `:daily`.
+
+  Inside one transaction the row is locked `FOR UPDATE`, the current
+  cadence read with `GoalCadence.from_row/1`, and when it already equals
+  the requested one the call returns `{:ok, :unchanged}` with no write
+  and no audit row. Otherwise the row update and one
+  `platform.responsibilities.cadence_changed` audit row (old and new
+  cadence, hour, expression, enabled) commit together or not at all.
+
+  `:off` sets `enabled: false` and leaves the expression and the prompt
+  alone, so `get_by_trigger(:cron)` drops the row and no tick reaches it.
+
+  Only AFTER the commit, and only on a real change, broadcasts
+  `{:responsibilities_changed, :cron}` on `"responsibilities:changed"`,
+  which `Platform.Responsibilities.Router` consumes to reload without a
+  restart. Broadcasting inside the transaction would let the Router
+  re-read the pre-commit row.
+  """
+  @spec set_cron_cadence(any(), String.t(), GoalCadence.cadence(), keyword()) ::
+          {:ok, Responsibility.t() | :unchanged}
+          | {:error, :forbidden | :not_found | :bad_hour | :bad_cadence | term()}
+  def set_cron_cadence(actor, key, cadence, opts \\ []) when is_binary(key) do
+    hour_utc = Keyword.get(opts, :hour_utc)
+
+    with :ok <- authorize_cadence_write(actor),
+         {:ok, _} <- GoalCadence.to_trigger(cadence, hour_utc) do
+      result =
+        Repo.transaction(fn ->
+          row =
+            Repo.one(from(r in Responsibility, where: r.key == ^key, lock: "FOR UPDATE")) ||
+              Repo.rollback(:not_found)
+
+          write_cadence(actor, row, cadence, hour_utc)
+        end)
+
+      case result do
+        {:ok, :unchanged} ->
+          {:ok, :unchanged}
+
+        {:ok, %Responsibility{} = updated} ->
+          Phoenix.PubSub.broadcast(
+            Platform.PubSub,
+            @changed_topic,
+            {:responsibilities_changed, :cron}
+          )
+
+          {:ok, updated}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  defp authorize_cadence_write(actor) do
+    if Tenancy.fabrikam_admin?(actor), do: :ok, else: {:error, :forbidden}
+  end
+
+  defp write_cadence(actor, %Responsibility{} = row, cadence, hour_utc) do
+    old = GoalCadence.from_row(row)
+    new = %{cadence: cadence, hour_utc: if(cadence == :daily, do: hour_utc)}
+
+    if old == new do
+      :unchanged
+    else
+      {:ok, attrs} = GoalCadence.to_trigger(cadence, hour_utc, row.trigger_config)
+
+      with {:ok, updated} <- update_responsibility(row, attrs),
+           {:ok, _event} <- Audit.record(cadence_audit_attrs(actor, row, updated, old, new)) do
+        updated
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end
+  end
+
+  defp cadence_audit_attrs(actor, before, updated, old, new) do
+    %{
+      event_type: @cadence_event_type,
+      action: "responsibility_cadence_changed",
+      actor_id: actor.id,
+      actor_type: "user",
+      resource_type: "responsibility",
+      resource_id: before.id,
+      metadata: %{
+        "key" => before.key,
+        "old_cadence" => Atom.to_string(old.cadence),
+        "new_cadence" => Atom.to_string(new.cadence),
+        "old_hour_utc" => old.hour_utc,
+        "new_hour_utc" => new.hour_utc,
+        "old_expression" => expression_of(before),
+        "new_expression" => expression_of(updated),
+        "old_enabled" => before.enabled,
+        "new_enabled" => updated.enabled
+      }
+    }
+  end
+
+  defp expression_of(%Responsibility{trigger_config: config}) when is_map(config) do
+    Map.get(config, "expression") || Map.get(config, :expression)
+  end
+
+  defp expression_of(_), do: nil
 
   @doc """
   Register every responsibility declared by `provider_module` (M1 stage 3).

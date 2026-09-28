@@ -42,6 +42,7 @@ defmodule PlatformWeb.ChatLive do
 
   alias PlatformWeb.ChatLive.ActiveAgentHooks
   alias PlatformWeb.ChatLive.CanvasHooks
+  alias PlatformWeb.ChatLive.GoalCadenceForm
   alias PlatformWeb.ChatLive.MeetingHooks
   alias PlatformWeb.ChatLive.MentionsHooks
   alias PlatformWeb.ChatLive.MessageContextHooks
@@ -449,6 +450,15 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:goal_invite?, false)
       |> assign(:goal_scope_options, [])
       |> assign(:goal_scope_error, nil)
+      # Check progress (task 01a0e882 stage 3): the open editor's cadence
+      # selection (nil while closed) and the viewer's zone for its hour
+      # labels. `get_connect_params/1` is root-and-mount-only, so the
+      # embedded child LV (no goal editor) never asks.
+      |> assign(:goal_cadence_form, nil)
+      |> assign(
+        :goal_time_zone,
+        if(!embedded?, do: GoalCadenceForm.time_zone(get_connect_params(socket)))
+      )
       |> assign(:archived_channels, archived_channels)
       # Collapse state for the sidebar's "Archived" group (task 019e95ea
       # stage 2) — collapsed by default, toggled by `toggle_archived_section`.
@@ -1272,12 +1282,34 @@ defmodule PlatformWeb.ChatLive do
     %{can_edit_goal?: editable?, active_space: space} = socket.assigns
     options = if editable?, do: Sidebar.goal_scope_options(space), else: []
 
+    cadence_form =
+      if editable?,
+        do: GoalCadenceForm.open(socket.assigns.goal_panel, socket.assigns.goal_time_zone)
+
     {:noreply,
-     assign(socket, goal_edit: editable?, goal_scope_error: nil, goal_scope_options: options)}
+     assign(socket,
+       goal_edit: editable?,
+       goal_scope_error: nil,
+       goal_scope_options: options,
+       goal_cadence_form: cadence_form
+     )}
   end
 
   def handle_event("cancel_goal_edit", _params, socket) do
-    {:noreply, assign(socket, :goal_edit, false)}
+    {:noreply, assign(socket, goal_edit: false, goal_cadence_form: nil)}
+  end
+
+  # Preview only: re-assigns the Check progress selection so the "at"
+  # select and the "Next check" line follow the admin's pick. NEVER writes;
+  # `save_goal` is the only write.
+  def handle_event("goal_form_change", params, socket) do
+    case socket.assigns.goal_cadence_form do
+      nil ->
+        {:noreply, socket}
+
+      current ->
+        {:noreply, assign(socket, :goal_cadence_form, GoalCadenceForm.change(current, params))}
+    end
   end
 
   def handle_event("save_goal", %{"goal" => goal} = params, socket) do
@@ -1306,6 +1338,11 @@ defmodule PlatformWeb.ChatLive do
             {:noreply, assign(socket, :goal_scope_error, :unknown_project)}
 
           {:ok, updated} ->
+            # The cadence rides the same Save (task 01a0e882 stage 3). The
+            # context re-checks admin and audits; an old client that sends
+            # no `goal_cadence` changes nothing.
+            socket = maybe_save_goal_cadence(socket, params)
+
             # RE-DERIVE, never carry forward. `goal_panel/1` recomputes the
             # measurement from the SAVED goal, so a goal that can no longer
             # name a number shows the no-measurement state immediately rather
@@ -5081,6 +5118,7 @@ defmodule PlatformWeb.ChatLive do
     # a different space's goal would save this space's text onto that one.
     |> assign(:goal_panel, Sidebar.goal_panel(space))
     |> assign(:goal_edit, false)
+    |> assign(:goal_cadence_form, nil)
     |> assign(:goal_scope_options, [])
     |> assign(:goal_scope_error, nil)
     # `and` short-circuits: non-admins never run the predicate's query.
@@ -5201,5 +5239,17 @@ defmodule PlatformWeb.ChatLive do
   def terminate(_reason, socket) do
     MeetingHooks.on_terminate(socket)
     :ok
+  end
+
+  # ── Check progress cadence (task 01a0e882 stage 3) ─────────────────────────
+  # The logic lives in `GoalCadenceForm`; this only maps its refusal to a flash.
+  defp maybe_save_goal_cadence(socket, params) do
+    %{goal_panel: panel, goal_cadence_form: form, goal_time_zone: zone, user_id: id} =
+      socket.assigns
+
+    case GoalCadenceForm.save(%{id: id}, panel, form, zone, params) do
+      :ok -> socket
+      {:error, message} -> put_flash(socket, :error, message)
+    end
   end
 end

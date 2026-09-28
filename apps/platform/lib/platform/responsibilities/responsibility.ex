@@ -26,6 +26,11 @@ defmodule Platform.Responsibilities.Responsibility do
       pre-filters on this column; `Platform.Responsibilities.upsert_by_key/1`
       deliberately omits `enabled` from its replace-set so operator toggles
       survive boot-time re-registration.
+    * `trigger_config["operator_set"]` — when `true`, the ONE way an
+      operator override of `trigger_config` survives a deploy:
+      `upsert_by_key/1` keeps a marked config instead of replacing it with
+      the declared one. Written only by `Platform.Responsibilities.GoalCadence`
+      through `Responsibilities.set_cron_cadence/4` (task 01a0e882).
     * `metadata` — free-form provider-specific extras (jsonb). Not
       interpreted by the platform.
 

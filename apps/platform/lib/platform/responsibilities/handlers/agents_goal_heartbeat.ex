@@ -406,12 +406,13 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
         # `Roles.assignee_for/1` in the Router, so with no leader pinned this
         # costs nothing, whatever the cadence.
         #
-        # NOTE FOR ANYONE CHANGING THIS: `trigger_config` is listed in
-        # `Responsibilities.@upsert_replace_fields`, so `register/0` REPLACES
-        # whatever is in the database on every boot. Editing the row alone
-        # works until the next deploy and then silently reverts to this
-        # literal -- which is how a schedule change appears to take and then
-        # undoes itself. Change it here, not only in the row.
+        # NOTE FOR ANYONE CHANGING THIS: this literal is the DEFAULT. On
+        # every boot `upsert_by_key/1` replaces the stored `trigger_config`
+        # with it UNLESS the stored value carries `"operator_set": true`,
+        # which only an admin's cadence write
+        # (`Responsibilities.set_goal_heartbeat_cadence/3`, task 01a0e882)
+        # sets. A hand-edit of the row without the marker still reverts on
+        # the next deploy.
         trigger_config: %{"expression" => "0 * * * *"},
         scope: "global",
         context_provided: ["goal", "measurement", "leader", "delegates", "prior_claim"],

@@ -811,7 +811,11 @@ defmodule Platform.Chat.Sidebar do
         space: space,
         goal: goal,
         measurement: AgentsGoalHeartbeat.measure(space, goal),
-        leader: agents_leader(space)
+        leader: agents_leader(space),
+        # How often agents check progress (task 01a0e882 stage 3). Read
+        # through the Responsibilities context, never its schema: the one
+        # install-wide `agents.goal_heartbeat` row, hourly when absent.
+        cadence: Platform.Responsibilities.goal_heartbeat_cadence()
       }
     end
   end

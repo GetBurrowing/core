@@ -927,4 +927,251 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
       assert scope_of(f.space) == f.pf.id
     end
   end
+
+  # ── Check progress cadence (task 01a0e882 stage 3) ─────────────────────
+
+  describe "the Check progress cadence control (task 01a0e882 stage 3)" do
+    @cadence_goal "Close backlog items in Suite"
+    @cadence_event "platform.responsibilities.cadence_changed"
+    @cron_shape ~r/(\*|\d+)\s+(\*|\d+)\s+\*\s+\*\s+\*/
+
+    defp cadence_fixture(conn, role, connect_params \\ nil) do
+      {conn, user} = authenticated_conn(conn)
+      enable_flag()
+
+      case role do
+        :admin -> make_fabrikam_admin(user)
+        :member -> fabrikam_member(user)
+      end
+
+      {:ok, [row]} =
+        Platform.Responsibilities.register(Platform.Responsibilities.Handlers.AgentsGoalHeartbeat)
+
+      {:ok, _} = Platform.Responsibilities.update_responsibility(row, %{enabled: true})
+
+      space = create_space(goal: @cadence_goal)
+      add_user(space, user)
+
+      conn = if connect_params, do: put_connect_params(conn, connect_params), else: conn
+      %{conn: conn, user: user, space: space}
+    end
+
+    defp heartbeat, do: Platform.Responsibilities.get_by_key("agents.goal_heartbeat")
+
+    defp cadence_audits do
+      import Ecto.Query, only: [from: 2]
+
+      Repo.aggregate(
+        from(e in Platform.Audit.Event, where: e.event_type == @cadence_event),
+        :count
+      )
+    end
+
+    defp set_as_admin!(cadence, opts \\ []) do
+      admin =
+        Repo.insert!(%User{
+          email: "cadence_admin_#{System.unique_integer([:positive])}@example.com",
+          name: "Cadence Admin",
+          oidc_sub: "oidc-cadence-admin-#{System.unique_integer([:positive])}"
+        })
+
+      make_fabrikam_admin(admin)
+      {:ok, _} = Platform.Responsibilities.set_goal_heartbeat_cadence(admin, cadence, opts)
+    end
+
+    defp tail_nodes(html), do: role_nodes(html, "agents-goal-cadence-tail")
+
+    test "an admin picks Once a day, the hour picker appears, and daily@16 persists and shows",
+         %{conn: conn} do
+      f = cadence_fixture(conn, :admin)
+      {:ok, view, _html} = live_at(f.conn, "/chat/#{f.space.id}")
+
+      html = render_click(view, "edit_goal", %{})
+      assert [_] = role_nodes(html, "agents-goal-cadence")
+      assert role_nodes(html, "agents-goal-cadence-hour") == []
+
+      html =
+        view
+        |> form(~s([data-role="agents-goal-form"]), %{goal_cadence: "daily"})
+        |> render_change()
+
+      assert [_] = role_nodes(html, "agents-goal-cadence-hour")
+      assert Floki.text(role_nodes(html, "agents-goal-cadence-preview")) =~ "Next check:"
+      # A preview is not a write.
+      assert heartbeat().trigger_config["expression"] == "0 * * * *"
+
+      html =
+        view
+        |> form(~s([data-role="agents-goal-form"]), %{
+          goal: @cadence_goal,
+          goal_cadence: "daily",
+          goal_cadence_hour: "16"
+        })
+        |> render_submit()
+
+      assert heartbeat().trigger_config["expression"] == "0 16 * * *"
+      assert Floki.text(tail_nodes(html)) =~ "checked daily"
+    end
+
+    test "no cron typing and no cron text, for every cadence including custom", %{conn: conn} do
+      f = cadence_fixture(conn, :admin)
+
+      settings = [
+        {:hourly, []},
+        {:every_4h, []},
+        {:twice_daily, []},
+        {:daily, [hour_utc: 16]},
+        {:off, []},
+        :custom
+      ]
+
+      for setting <- settings do
+        case setting do
+          :custom ->
+            {:ok, _} =
+              Platform.Responsibilities.update_responsibility(heartbeat(), %{
+                enabled: true,
+                trigger_config: %{"expression" => "*/5 * * * *", "operator_set" => true}
+              })
+
+          {cadence, opts} ->
+            set_as_admin!(cadence, opts)
+        end
+
+        {:ok, view, strip_html} = live_at(f.conn, "/chat/#{f.space.id}")
+        html = render_click(view, "edit_goal", %{})
+
+        for page <- [strip_html, html] do
+          assert Floki.find(Floki.parse_document!(page), ~s(input[name^="goal_cadence"])) == []
+          refute page =~ @cron_shape, "cron text rendered for #{inspect(setting)}"
+        end
+
+        assert [_] = role_nodes(html, "agents-goal-cadence")
+
+        if setting == :custom do
+          [selected] =
+            html
+            |> Floki.parse_document!()
+            |> Floki.find(~s([data-role="agents-goal-cadence"] option[selected]))
+
+          assert Floki.text(selected) |> String.trim() == "Custom schedule"
+          # The tail is on the reading strip, which the open editor replaces.
+          assert Floki.text(tail_nodes(strip_html)) =~ "custom schedule"
+        end
+      end
+    end
+
+    test "hourly (the default) renders no tail; Off renders a muted, never-warning tail",
+         %{conn: conn} do
+      f = cadence_fixture(conn, :admin)
+
+      {:ok, _view, html} = live_at(f.conn, "/chat/#{f.space.id}")
+      assert role_nodes(html, "agents-goal-strip") != []
+      assert tail_nodes(html) == []
+
+      set_as_admin!(:off)
+      {:ok, _view, html} = live_at(f.conn, "/chat/#{f.space.id}")
+
+      [tail] = tail_nodes(html)
+      assert Floki.text(tail) |> String.trim() == "· not checked automatically"
+      class = tail |> Floki.attribute("class") |> Enum.join(" ")
+      assert class =~ "text-base-content/60"
+      refute class =~ "text-warning"
+    end
+
+    test "a non-admin sees no control and a forged save changes nothing; an admin's identical save does",
+         %{conn: conn} do
+      f = cadence_fixture(conn, :member)
+      {:ok, view, html} = live_at(f.conn, "/chat/#{f.space.id}")
+      assert role_nodes(html, "agents-goal-strip") != []
+      assert role_nodes(html, "agents-goal-cadence") == []
+
+      before = heartbeat()
+      audits = cadence_audits()
+
+      render_submit(view, "save_goal", %{"goal" => @cadence_goal, "goal_cadence" => "off"})
+
+      after_row = heartbeat()
+      assert after_row.enabled == before.enabled
+      assert after_row.trigger_config == before.trigger_config
+      assert cadence_audits() == audits
+
+      # POSITIVE CONTROL: the same submit from an admin on the same space.
+      {admin_conn, admin} = authenticated_conn(build_conn())
+      make_fabrikam_admin(admin)
+      add_user(f.space, admin)
+      {:ok, admin_view, _html} = live_at(admin_conn, "/chat/#{f.space.id}")
+
+      render_submit(admin_view, "save_goal", %{"goal" => @cadence_goal, "goal_cadence" => "off"})
+
+      assert heartbeat().enabled == false
+      assert cadence_audits() == audits + 1
+    end
+
+    test "hour labels are the viewer's local time, the value is the UTC hour", %{conn: conn} do
+      zone = "America/Chicago"
+      f = cadence_fixture(conn, :admin, %{"timezone" => zone})
+      {:ok, view, _html} = live_at(f.conn, "/chat/#{f.space.id}")
+      render_click(view, "edit_goal", %{})
+
+      html =
+        view
+        |> form(~s([data-role="agents-goal-form"]), %{goal_cadence: "daily"})
+        |> render_change()
+
+      html =
+        view
+        |> form(~s([data-role="agents-goal-form"]), %{
+          goal_cadence: "daily",
+          goal_cadence_hour: "16"
+        })
+        |> render_change()
+
+      expected =
+        Date.utc_today()
+        |> DateTime.new!(~T[16:00:00], "Etc/UTC")
+        |> DateTime.shift_zone!(zone)
+        |> Calendar.strftime("%-I:%M %p")
+
+      [option] =
+        html
+        |> Floki.parse_document!()
+        |> Floki.find(~s([data-role="agents-goal-cadence-hour"] option[value="16"]))
+
+      assert Floki.text(option) |> String.trim() == expected
+      assert expected in ["10:00 AM", "11:00 AM"]
+      assert Floki.text(role_nodes(html, "agents-goal-cadence-preview")) =~ "(16:00 UTC)"
+
+      view
+      |> form(~s([data-role="agents-goal-form"]), %{
+        goal: @cadence_goal,
+        goal_cadence: "daily",
+        goal_cadence_hour: "16"
+      })
+      |> render_submit()
+
+      assert heartbeat().trigger_config["expression"] == "0 16 * * *"
+    end
+
+    test "with no zone the labels are UTC and carry no UTC suffix", %{conn: conn} do
+      f = cadence_fixture(conn, :admin)
+      {:ok, view, _html} = live_at(f.conn, "/chat/#{f.space.id}")
+      render_click(view, "edit_goal", %{})
+
+      html =
+        view
+        |> form(~s([data-role="agents-goal-form"]), %{
+          goal_cadence: "daily"
+        })
+        |> render_change()
+
+      [option] =
+        html
+        |> Floki.parse_document!()
+        |> Floki.find(~s([data-role="agents-goal-cadence-hour"] option[value="16"]))
+
+      assert Floki.text(option) |> String.trim() == "4:00 PM"
+      refute Floki.text(role_nodes(html, "agents-goal-cadence-preview")) =~ "UTC"
+    end
+  end
 end

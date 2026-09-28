@@ -487,7 +487,21 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   # `Section.display_name/1` in place of `.name` (same line count).
   #
   # RE-DERIVED from the guard's own measurement on this tree (measured: 2318).
-  @chat_live_code_line_count 2318
+  #
+  # ── 2026-09-28, task 01a0e882 stages 3-4: +32 (2,318 -> 2,350) ──────────
+  #
+  # The goal editor's Check progress control. What stays in ChatLive is
+  # wiring only: two mount assigns (`:goal_cadence_form`, `:goal_time_zone`,
+  # the latter read from connect params, which is legal only in mount), the
+  # editor opening on the stored cadence in `edit_goal`, closing it in
+  # `cancel_goal_edit` and `assign_active_space`, a preview-only
+  # `goal_form_change` handler, and a one-call `maybe_save_goal_cadence/2`
+  # after a successful `save_goal` that maps a refusal to a flash. Parsing,
+  # comparison, labels, preview and the write itself live in
+  # `PlatformWeb.ChatLive.GoalCadenceForm` (moved there in stage 4, from +56).
+  #
+  # RE-DERIVED from the guard's own measurement on this tree (measured: 2350).
+  @chat_live_code_line_count 2350
 
   @doc """
   Count the CODE lines of a source file.

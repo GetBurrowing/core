@@ -873,6 +873,11 @@ defmodule Platform.RepoLookupBoundaryTest do
     # verdict as the two above.
     "platform/agents/historian_audit.ex" => 4,
     "platform/analytics.ex" => 1,
+    # 0 → 1 for task 01a0e882 stage 2: `set_cron_cadence/4` locks its row
+    # with `Repo.one(... where: r.key == ^key, lock: "FOR UPDATE")`. Triaged
+    # by hand: the where clause pins `key`, a `:string` column, not an id,
+    # so no value can raise Ecto.Query.CastError; no UUID guard needed.
+    "platform/responsibilities.ex" => 1,
     # Task 019fa61c: `task_id_for/1`'s `where: p.id == ^plan_id`, whose plan_id
     # is `stage.plan_id` off a loaded `%Stage{}` — a UUID column read from a
     # persisted row, never a boundary input. Triaged by hand as this map asks:
