@@ -160,12 +160,15 @@ defmodule Platform.Tasks.PlanEngine do
   # Task 01a006e7. The name of the stage synthesized by
   # `open_remediation_stage/2`.
   #
-  # The wording is FUNCTIONAL, not cosmetic: `e2e_host_stage_name?/1` is a
-  # case-insensitive substring match on stage NAME, so a remediation stage
-  # called "Fix the failed review" would be adopted by the engine as the
-  # e2e host the next time a plan is built. `plan_engine_remediation_test.exs`
-  # asserts this constant against that same predicate rather than a copied
-  # regex, so the two cannot drift.
+  # Task 019fe383: the wording used to matter FUNCTIONALLY, because
+  # `e2e_host_stage_name?/1` adopted any stage whose name merely contained
+  # "review" or "validation" as the e2e host — a remediation stage called
+  # "Fix the failed review" would have been silently adopted the next time a
+  # plan was built. That name-based adoption path is gone: the engine now
+  # only ever adopts a stage the author explicitly marks `"e2e_host": true`,
+  # so this stage's name carries no such hazard anymore. The wording is kept
+  # descriptive rather than reworded back to something trigger-shaped,
+  # purely so a future reader is not left wondering why it was ever chosen.
   @remediation_stage_name "Address the failed behavioural gate"
 
   @doc "The stage name `open_remediation_stage/2` synthesizes."
@@ -798,19 +801,6 @@ defmodule Platform.Tasks.PlanEngine do
     "_web/components/"
   ]
 
-  # Case-insensitive substring triggers that make the engine adopt an
-  # ALREADY-AUTHORED stage as the host for a plan's `e2e_behavior`
-  # validations. This list, and the exemption below, are the single copy:
-  # every consumer (the router, and any write-time detector) must read them
-  # through `e2e_host_name_match/1` rather than restating them, because a
-  # detector holding its own copy is precisely the drift this guard exists
-  # to prevent.
-  @e2e_host_name_triggers ["review", "validation"]
-
-  # Name prefixes that are NEVER adopted as the e2e host even when they
-  # contain a trigger (a "Deploy: ... review" stage is a deploy, not a gate).
-  @e2e_host_exempt_prefixes ["deploy:"]
-
   @doc """
   Re-route any `e2e_behavior` validations in a list of planner-authored
   stage_input maps to a single task-level review stage.
@@ -818,10 +808,13 @@ defmodule Platform.Tasks.PlanEngine do
   Behavior:
   - If any stage already has `kind: "e2e_behavior"` validations, strip them
     from that stage and collect them all into one final review stage.
-  - If a stage already exists whose name matches "review"/"validation" (the
-    final task-level review stage), append the e2e_behavior validations to its
-    validations list. Otherwise, synthesize a new "Task-level review" stage at
-    `max_position + 1` carrying just the lifted e2e_behavior validations.
+  - If exactly one stage explicitly opts in via `"e2e_host": true`, append the
+    e2e_behavior validations to its validations list. Otherwise, ALWAYS
+    synthesize a new "Task-level review" stage at `max_position + 1` carrying
+    just the lifted e2e_behavior validations — an existing stage is never
+    adopted by NAME alone (task 019fe383: a stage merely named "...review" or
+    "...validation" used to be silently adopted as the host, which could
+    deadlock the task when that stage's other work never advanced).
   - If multiple e2e_behavior validations were emitted, all are kept (the
     planner template forbids this; we don't enforce here so a misbehaving
     planner can still surface for the human reviewer to catch).
@@ -857,36 +850,31 @@ defmodule Platform.Tasks.PlanEngine do
   def route_e2e_behavior_validations(other), do: other
 
   @doc """
-  Refuse a plan whose stage NAME would silently make it the e2e host.
+  Refuse a plan where MORE THAN ONE stage explicitly opts in as the e2e host.
 
-  Returns `:ok`, or `{:error, %{stage_name:, stage_position:, matched_substring:,
-  e2e_case_count:}}` for the FIRST offending stage.
+  Returns `:ok`, or `{:error, %{reason: :multiple_e2e_hosts, hosts: [%{stage_name:,
+  stage_position:}, ...], e2e_case_count:}}` naming every opted-in stage.
 
   Reads RAW planner stages, so it must run BEFORE
   `route_e2e_behavior_validations/1`.
 
-  Why the ordering matters (corrected in stage 4 by probe; the earlier
-  rationale here was wrong): routing RELOCATES e2e cases, it does not delete
-  them, so `e2e_case_count` survives the rewrite and rule 1 would still fire.
-  The real hazard is the other direction — routing SYNTHESIZES a stage named
-  "Task-level review", which itself carries the trigger, so a detector running
-  after the rewrite refuses every clean e2e plan. The pin for this ordering is
-  therefore the DIRECTION CONTROL test in `tool_surface_test.exs`, not the
-  rejection test.
+  Task 019fe383: this used to also refuse a plan whose stage NAME merely
+  CONTAINED "review" or "validation", on the theory that the engine would
+  silently adopt that stage as the e2e host. That name-matching adoption
+  path is now gone entirely (see `route_e2e_behavior_validations/1` and
+  `attach_e2e_validations_to_review_stage/2`) — the engine ALWAYS synthesizes
+  a fresh "Task-level review" stage unless an author explicitly opts a stage
+  in with `"e2e_host": true`. With no name-based adoption left, the only way
+  two stages can genuinely collide over the host role is two explicit
+  opt-ins, which is what this now detects.
   """
   # DISPOSITION: reject, not warn.
   #
-  # In all three confirmed incidents the relocation was unintended, by authors
-  # who already had the naming rule written down — so a warning is exactly the
-  # signal they had already internalised and still tripped over. Worse, the
-  # moment after `plan_create` returns is when the author can no longer act: a
-  # draft/pending_review plan blocks `plan_create` and cannot be read back
-  # (`plan_get` returns approved plans only). A warning delivered where nothing
-  # can act on it is not a mitigation. Rejection happens pre-persistence and
-  # leaves the author free to rename and retry.
-  #
-  # The risk of rejecting a legitimately-named stage is retired by the explicit
-  # `e2e_host` opt-in below — an expressed field, never inferred from prose.
+  # A plan with two `"e2e_host": true` stages is a genuine structural
+  # ambiguity the author must resolve — the engine cannot silently pick one
+  # without leaving the other's opt-in dead code the author never asked to
+  # write. Rejection happens pre-persistence and leaves the author free to
+  # drop the extra opt-in and retry.
   @spec detect_e2e_host_collision([map()]) :: :ok | {:error, map()}
   def detect_e2e_host_collision(stages_input) when is_list(stages_input) do
     e2e_case_count =
@@ -894,39 +882,94 @@ defmodule Platform.Tasks.PlanEngine do
         acc + Enum.count(stage_validations_field(stage), &e2e_behavior_validation?/1)
       end)
 
+    opted_in_hosts =
+      stages_input
+      |> Enum.with_index(1)
+      |> Enum.filter(fn {stage, _idx} -> e2e_host_opt_in?(stage) end)
+
     cond do
-      # 1. No e2e cases at all — the trigger word is harmless here, and firing
-      #    would reject plans the bug cannot touch.
+      # 1. No e2e cases at all — nothing to host, so firing here would reject
+      #    plans the bug cannot touch.
       e2e_case_count == 0 ->
         :ok
 
-      # 2. Exactly one stage explicitly opts in as the host.
-      Enum.count(stages_input, &e2e_host_opt_in?/1) == 1 ->
+      # 2. Zero or one explicit opt-in — zero means the engine will
+      #    unconditionally synthesize a task-level review stage, one means
+      #    that stage is the unambiguous host. Neither can collide.
+      length(opted_in_hosts) <= 1 ->
         :ok
 
       true ->
-        # 3. First stage adopted by NAME alone.
-        stages_input
-        |> Enum.with_index(1)
-        |> Enum.find_value(:ok, fn {stage, idx} ->
-          case e2e_host_name_match(stage) do
-            nil ->
-              nil
-
-            substring ->
-              {:error,
+        # 3. Two or more stages both explicitly claim the host role — a
+        #    genuine structural conflict, not an inference from prose.
+        {:error,
+         %{
+           reason: :multiple_e2e_hosts,
+           hosts:
+             Enum.map(opted_in_hosts, fn {stage, idx} ->
                %{
                  stage_name: stage_field(stage, "name"),
-                 stage_position: stage_field(stage, "position") || idx,
-                 matched_substring: substring,
-                 e2e_case_count: e2e_case_count
-               }}
-          end
-        end)
+                 stage_position: stage_field(stage, "position") || idx
+               }
+             end),
+           e2e_case_count: e2e_case_count
+         }}
     end
   end
 
   def detect_e2e_host_collision(_other), do: :ok
+
+  @doc """
+  Regression guard: refuse a plan where e2e_behavior cases exist but, after
+  `route_e2e_behavior_validations/1` runs, there is no single stage hosting
+  all of them (neither an explicit `"e2e_host": true` opt-in nor the
+  freshly-synthesized "Task-level review" stage).
+
+  Returns `:ok`, or `{:error, %{reason: :missing_e2e_host, e2e_case_count:}}`.
+
+  Task 019fe383: since `attach_e2e_validations_to_review_stage/2` now ALWAYS
+  synthesizes a task-level review stage when no stage opts in, this should be
+  structurally unreachable by construction — there is no longer a code path
+  that drops e2e cases on the floor. Rather than assert that invariant by
+  NAME (which is exactly the failure mode this ticket is about — a detector
+  restating an assumption instead of checking it), this actually re-derives
+  the outcome by running the real rewrite pipe and counting where the cases
+  landed. If a future change to the attach logic reintroduces a gap, this is
+  the detector that catches it, rather than the task silently dispatching
+  with an unhosted e2e case.
+
+  Reads RAW planner stages, so — like `detect_e2e_host_collision/1` — it must
+  run BEFORE the real, persisted call to `route_e2e_behavior_validations/1`
+  (this function's own internal use of it is a pure, side-effect-free
+  simulation for verification only).
+  """
+  @spec detect_missing_e2e_host([map()]) :: :ok | {:error, map()}
+  def detect_missing_e2e_host(stages_input) when is_list(stages_input) do
+    e2e_case_count =
+      Enum.reduce(stages_input, 0, fn stage, acc ->
+        acc + Enum.count(stage_validations_field(stage), &e2e_behavior_validation?/1)
+      end)
+
+    case e2e_case_count do
+      0 ->
+        :ok
+
+      _ ->
+        host_stages =
+          stages_input
+          |> route_e2e_behavior_validations()
+          |> Enum.filter(fn stage ->
+            Enum.any?(stage_validations_field(stage), &e2e_behavior_validation?/1)
+          end)
+
+        case host_stages do
+          [_single_host] -> :ok
+          _ -> {:error, %{reason: :missing_e2e_host, e2e_case_count: e2e_case_count}}
+        end
+    end
+  end
+
+  def detect_missing_e2e_host(_other), do: :ok
 
   @doc """
   Refuse a plan whose `manual_approval` gate does not NAME the UI surface it
@@ -1157,13 +1200,10 @@ defmodule Platform.Tasks.PlanEngine do
   end
 
   defp attach_e2e_validations_to_review_stage(stages_input, e2e_validations) do
-    # An explicit `e2e_host` stage WINS over name matching: the opt-in is the
-    # author's expressed intent, the name match is only an inference.
-    review_idx =
-      Enum.find_index(stages_input, &e2e_host_opt_in?/1) ||
-        Enum.find_index(stages_input, &(e2e_host_name_match(&1) != nil))
-
-    case review_idx do
+    # Task 019fe383: name-based adoption is gone. The ONLY non-synthesis path
+    # is the explicit `"e2e_host": true` opt-in — an expressed field, never
+    # inferred from a stage's prose.
+    case Enum.find_index(stages_input, &e2e_host_opt_in?/1) do
       nil ->
         stages_input ++ [synthesize_task_level_review_stage(stages_input, e2e_validations)]
 
@@ -1172,46 +1212,6 @@ defmodule Platform.Tasks.PlanEngine do
           existing = stage_validations_field(stage)
           put_stage_validations(stage, existing ++ e2e_validations)
         end)
-    end
-  end
-
-  @doc """
-  Whether a stage NAME makes the engine adopt that stage as the e2e host.
-
-  An existing "task-level review" or generic "review"/"validation" stage is
-  reused; "Deploy: ..." stages are NEVER reused as the e2e gate.
-
-  Public, and the single copy: any stage the engine SYNTHESIZES must be
-  checked against this predicate (see `remediation_stage_name/0`), and a
-  test that hand-copies the substring list would drift from the matcher it
-  claims to be testing.
-  """
-  @spec e2e_host_stage_name?(String.t() | nil) :: boolean()
-  def e2e_host_stage_name?(name), do: e2e_host_name_match(name) != nil
-
-  @doc """
-  The FIRST trigger substring that makes a stage the e2e host, or `nil`.
-
-  Accepts either a planner-authored stage_input map or a bare name. Matching
-  is case-insensitive substring matching against `@e2e_host_name_triggers`;
-  a name starting with any of `@e2e_host_exempt_prefixes` never matches.
-
-  Returns the substring rather than a boolean so a caller refusing the plan
-  can NAME which trigger fired (e.g. `"review"` inside
-  `"task_plan_review"`) instead of asserting an unexplained match.
-  """
-  @spec e2e_host_name_match(map() | String.t() | nil) :: String.t() | nil
-  def e2e_host_name_match(stage) when is_map(stage) do
-    e2e_host_name_match(stage_field(stage, "name"))
-  end
-
-  def e2e_host_name_match(name) do
-    name = String.downcase(name || "")
-
-    if Enum.any?(@e2e_host_exempt_prefixes, &String.starts_with?(name, &1)) do
-      nil
-    else
-      Enum.find(@e2e_host_name_triggers, &String.contains?(name, &1))
     end
   end
 

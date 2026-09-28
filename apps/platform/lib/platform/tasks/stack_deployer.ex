@@ -856,12 +856,38 @@ defmodule Platform.Tasks.StackDeployer do
 
   defp report_merge_ready(%TaskRecord{}, _ready_reason), do: :ok
 
-  # A task's review stages are the stages whose name marks them as a
-  # review/validation stage in the plan. Mirrors the heuristic used
-  # elsewhere (e.g. `PlanEngine.attach_e2e_validations_to_review_stage/2`):
-  # name contains "review" or "validation", and is NOT a "Deploy:"
-  # stage. Stack members never reach a Deploy stage in the per-member
-  # path anyway, but the filter is kept conservative.
+  # A task's review stages are the stages that HOST at least one
+  # `e2e_behavior` validation — a structural fact, not a name match.
+  # (Task 019fe383 stage 2; stage 1 made the equivalent change in
+  # `PlanEngine`.) `PlanEngine.route_e2e_behavior_validations/1` routes
+  # every e2e_behavior case in a plan onto exactly one stage (a
+  # single-host invariant), so "hosts an e2e_behavior validation" is
+  # both necessary and sufficient to identify that stage — no name
+  # substring involved.
+  #
+  # NOT `stages.origin == "synthesized"`. That column also marks the
+  # engine's OTHER synthesized stage — the remediation stage inserted by
+  # `PlanEngine.insert_remediation_stage/3` after a failed behavioral
+  # gate ("Address the failed behavioural gate") — which only ever
+  # carries `test_pass`/`lint_pass` validations, never `e2e_behavior`.
+  # Gating on `origin == "synthesized"` would silently start requiring
+  # THAT stage's own validations too whenever it sits at a non-`passed`
+  # status while the task is back at `in_review` — a behavior change the
+  # old name-based code never exhibited (the remediation stage's name
+  # contains neither "review" nor "validation"). Checking for a hosted
+  # e2e_behavior validation instead stays exclusive to the true gate
+  # stage by construction.
+  #
+  # NO BACKFILL / NO FALLBACK NEEDED: this reads validations that
+  # already exist on every plan, old or new — a pre-existing in-flight
+  # plan whose gate stage was adopted by the OLD name-match logic still
+  # carries its `e2e_behavior` validations on that stage right now, so
+  # this query recognizes it immediately with zero data migration.
+  # Mirrors the precedent set by `20260908230000_add_origin_to_stages.exs`'s
+  # moduledoc, which rejected a retroactive name-based reclassification
+  # pass over old rows as "exactly the failure mode this column exists
+  # to make impossible" — don't re-derive a structural fact from a name
+  # here either.
   #
   # SCOPING (task 019fa3e0): the lookup is restricted to the task's
   # CURRENT plan via `Tasks.current_plan/1`. An unscoped join across
@@ -886,25 +912,15 @@ defmodule Platform.Tasks.StackDeployer do
         ids =
           PlanStage
           |> where([s], s.plan_id == ^plan_id)
-          |> select([s], %{id: s.id, name: s.name})
+          |> join(:inner, [s], v in Validation, on: v.stage_id == s.id)
+          |> where([_s, v], v.kind == "e2e_behavior")
+          |> distinct([s], s.id)
+          |> select([s], s.id)
           |> Repo.all()
-          |> Enum.filter(&review_stage?/1)
-          |> Enum.map(& &1.id)
 
         {:ok, ids}
     end
   end
-
-  defp review_stage?(%{name: nil}), do: false
-
-  defp review_stage?(%{name: name}) when is_binary(name) do
-    lower = String.downcase(name)
-
-    not String.starts_with?(lower, "deploy:") and
-      (String.contains?(lower, "review") or String.contains?(lower, "validation"))
-  end
-
-  defp review_stage?(_), do: false
 
   defp load_stack(stack_id) when is_binary(stack_id) do
     case Stacks.get_stack(stack_id) do

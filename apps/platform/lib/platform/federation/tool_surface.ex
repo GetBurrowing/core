@@ -6421,12 +6421,18 @@ defmodule Platform.Federation.ToolSurface do
         {:error, e2e_host_collision_envelope(info)}
 
       :ok ->
-        case Platform.Tasks.PlanEngine.detect_unnamed_manual_gate(raw_stages_input) do
+        case Platform.Tasks.PlanEngine.detect_missing_e2e_host(raw_stages_input) do
           {:error, info} ->
-            {:error, unnamed_manual_gate_envelope(info)}
+            {:error, missing_e2e_host_envelope(info)}
 
           :ok ->
-            do_plan_create(task_id, raw_stages_input)
+            case Platform.Tasks.PlanEngine.detect_unnamed_manual_gate(raw_stages_input) do
+              {:error, info} ->
+                {:error, unnamed_manual_gate_envelope(info)}
+
+              :ok ->
+                do_plan_create(task_id, raw_stages_input)
+            end
         end
     end
   end
@@ -6677,12 +6683,18 @@ defmodule Platform.Federation.ToolSurface do
               {:error, e2e_host_collision_envelope(info)}
 
             :ok ->
-              case Platform.Tasks.PlanEngine.detect_unnamed_manual_gate(stages_input) do
+              case Platform.Tasks.PlanEngine.detect_missing_e2e_host(stages_input) do
                 {:error, info} ->
-                  {:error, unnamed_manual_gate_envelope(info)}
+                  {:error, missing_e2e_host_envelope(info)}
 
                 :ok ->
-                  do_plan_update(plan, stages_input, args, context)
+                  case Platform.Tasks.PlanEngine.detect_unnamed_manual_gate(stages_input) do
+                    {:error, info} ->
+                      {:error, unnamed_manual_gate_envelope(info)}
+
+                    :ok ->
+                      do_plan_update(plan, stages_input, args, context)
+                  end
               end
           end
       end
@@ -10992,26 +11004,51 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
-  # A guard that fires without explaining itself is the failure mode this
-  # ticket is about, so the envelope IS the explanation: it names the stage,
-  # the position, the substring that matched IN QUOTES (the author cannot see
-  # `"review"` inside `"task_plan_review"` otherwise), and the consequence.
-  # `recoverable: true` is literal — nothing was persisted, so the author can
-  # fix and immediately retry.
+  # Task 019fe383: this used to fire on a stage NAME merely containing
+  # "review"/"validation" — that name-based adoption path is gone. The only
+  # way stages can genuinely collide over the e2e host role now is two or
+  # more explicit `"e2e_host": true` opt-ins, so the envelope names every
+  # opted-in stage and its position, and the fix is always the same: drop
+  # the opt-in from all but one. `recoverable: true` is literal — nothing
+  # was persisted, so the author can fix and immediately retry.
   defp e2e_host_collision_envelope(info) do
+    host_list =
+      info.hosts
+      |> Enum.map(fn h -> "stage #{h.stage_position} (\"#{h.stage_name}\")" end)
+      |> Enum.join(", ")
+
     %{
       error:
-        "Stage #{info.stage_position} (\"#{info.stage_name}\") contains the e2e host trigger " <>
-          "\"#{info.matched_substring}\", so all #{info.e2e_case_count} e2e_behavior case(s) in " <>
-          "this plan would attach to that stage instead of the synthesised task-level review " <>
-          "gate — a failing case would then fail that stage, which can leave the task with no " <>
-          "dispatchable stage.",
+        "#{length(info.hosts)} stages explicitly opt in as the e2e host (\"e2e_host\": true): " <>
+          "#{host_list}. Only one stage may host the #{info.e2e_case_count} e2e_behavior " <>
+          "case(s) in this plan — with more than one opted in, which stage actually hosts them " <>
+          "is ambiguous.",
       recoverable: true,
       suggestion:
-        "Either rename the stage using a neutral verb (Add, Wire, Surface, Guard, Expose) so it " <>
-          "no longer contains \"review\" or \"validation\", or set \"e2e_host\": true on the " <>
-          "stage that should genuinely host the e2e cases. Nothing was written; retry " <>
-          "plan_create once the stages are adjusted."
+        "Remove \"e2e_host\": true from all but one of the stages listed above — the one " <>
+          "that should genuinely host the e2e cases. Nothing was written; retry plan_create " <>
+          "once the stages are adjusted."
+    }
+  end
+
+  # Task 019fe383: `detect_missing_e2e_host/1` is a regression guard for a
+  # code path that should be structurally unreachable now that
+  # `attach_e2e_validations_to_review_stage/2` always synthesizes a
+  # task-level review stage when no stage opts in. If it ever DOES fire, that
+  # means the unconditional-synthesis invariant broke elsewhere, so this
+  # envelope is deliberately blunt rather than offering a specific fix — the
+  # author did nothing wrong; the engine's own guarantee failed.
+  defp missing_e2e_host_envelope(info) do
+    %{
+      error:
+        "This plan has #{info.e2e_case_count} e2e_behavior case(s) but the plan engine could " <>
+          "not confirm a single stage will host them after routing. This should not be " <>
+          "reachable — it indicates a bug in the plan engine's e2e host synthesis, not a " <>
+          "mistake in this plan's stages.",
+      recoverable: false,
+      suggestion:
+        "Do not retry with the same stages. Report this to a human as a plan engine defect " <>
+          "(task 019fe383's detect_missing_e2e_host/1 regression guard fired)."
     }
   end
 

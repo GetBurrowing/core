@@ -160,15 +160,11 @@ defmodule Platform.Tasks.PlanEngineRemediationTest do
     assert stage.description =~ "nothing happened"
   end
 
-  test "the synthesized name does not make the engine adopt it as the e2e host" do
-    # Asserted against the ENGINE'S OWN matcher, not a copied substring list,
-    # so the name and the predicate cannot drift apart.
-    refute PlanEngine.e2e_host_stage_name?(PlanEngine.remediation_stage_name())
-
-    # The predicate is really the one that fires — shown by a name that does match.
-    assert PlanEngine.e2e_host_stage_name?("Task-level review")
-    assert PlanEngine.e2e_host_stage_name?("Final validation")
-  end
+  # Task 019fe383: `e2e_host_stage_name?/1` and name-based e2e host adoption
+  # are both gone — a stage is only ever adopted as the e2e host via an
+  # explicit `"e2e_host": true` opt-in on planner input, never inferred from
+  # its name. The remediation stage this module synthesizes is never planner
+  # input to begin with, so there is no adoption hazard left to test here.
 
   test "a gate with no failed e2e validation is refused", ctx do
     assert {:error, :no_failed_gate_validations} =

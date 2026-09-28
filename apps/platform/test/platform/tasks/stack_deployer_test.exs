@@ -1670,7 +1670,13 @@ defmodule Platform.Tasks.StackDeployerTest do
     #   2. current plan whose review stage carries ZERO validations —
     #      `stacks.ex` requires `all_validations != []`, documented as "we
     #      want evidence, not silence"; the merge gate treats an empty set
-    #      as vacuously satisfied ("no blocking validations remain").
+    #      as vacuously satisfied ("no blocking validations remain"). Since
+    #      task 019fe383 stage 2, a zero-validation stage also can't carry
+    #      an `e2e_behavior` validation, so `review_stage_ids_for_task/1`
+    #      no longer selects it at all — the reason surfaces as
+    #      `:no_review_stages` rather than `:validations_passed`, but the
+    #      verdict (`:ready`) and the divergence from `stacks.ex` are
+    #      unchanged.
     #   3. member whose ONLY plan is `rejected` — plan ROWS exist, but
     #      `Tasks.current_plan/1` selects `status in ["approved",
     #      "completed"]`, so it resolves to nil and case 1's reasoning
@@ -1699,7 +1705,7 @@ defmodule Platform.Tasks.StackDeployerTest do
         )
 
       assert %{} = Tasks.current_plan(silent.id)
-      assert {:ready, :validations_passed} = StackDeployer.review_readiness(silent)
+      assert {:ready, :no_review_stages} = StackDeployer.review_readiness(silent)
       refute Stacks.member_review_validations_all_passed?(silent)
 
       # 3. Only plan is `rejected` — rows exist, no current plan.
@@ -1709,6 +1715,81 @@ defmodule Platform.Tasks.StackDeployerTest do
       assert [%{status: "rejected"}] = Tasks.list_plans(rejected_only.id)
       assert {:ready, :no_current_plan} = StackDeployer.review_readiness(rejected_only)
       refute Stacks.member_review_validations_all_passed?(rejected_only)
+    end
+
+    # Task 019fe383 stage 3 — proof that the stage-2 fix needs no migration.
+    #
+    # `review_stage_ids_for_task/1` now selects a stage by "hosts an
+    # `e2e_behavior` validation", not by name or by `origin`. This fixture
+    # hand-inserts two stages with `origin: "authored"` — the untouched
+    # default, simulating rows that predate this task's structural mark
+    # entirely (a pre-fix row would never have had any other origin) — so
+    # if the selection secretly depended on `origin` or on a migration
+    # backfill, this is what would catch it.
+    test "a pre-fix authored stage hosting e2e_behavior is still selected; a plain authored stage is not" do
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "backfill-free-selection")
+
+      task = create_member_task!(project, nil)
+      {:ok, task} = Tasks.update_task(task, %{stack_id: stack.id, stack_position: 1})
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+
+      # FIRST: origin "authored" (default), hosts an e2e_behavior case,
+      # already PASSED — this is the stage the fix must still pick out.
+      {:ok, e2e_stage} =
+        Tasks.create_stage(%{
+          plan_id: plan.id,
+          position: 1,
+          name: "Implement the thing",
+          status: "passed",
+          origin: "authored"
+        })
+
+      assert e2e_stage.origin == "authored"
+
+      {:ok, _} =
+        Tasks.create_validation(%{
+          stage_id: e2e_stage.id,
+          kind: "e2e_behavior",
+          status: "passed",
+          evaluation_payload: %{
+            "setup" => "seed the thing",
+            "actions" => "exercise the thing",
+            "expected" => "the thing behaves"
+          }
+        })
+
+      # SECOND: also origin "authored", carries only non-e2e validations.
+      # If this stage were wrongly swept into the review gate, its PENDING
+      # test_pass row would flip the verdict from :ready to :not_ready.
+      {:ok, plain_stage} =
+        Tasks.create_stage(%{
+          plan_id: plan.id,
+          position: 2,
+          name: "Wire up logging",
+          status: "running",
+          origin: "authored"
+        })
+
+      assert plain_stage.origin == "authored"
+
+      {:ok, _} =
+        Tasks.create_validation(%{
+          stage_id: plain_stage.id,
+          kind: "test_pass",
+          status: "pending"
+        })
+
+      reloaded = Tasks.get_task_record(task.id)
+
+      # If the plain stage were selected too, its pending test_pass would
+      # be counted and the verdict would be `{:not_ready, {:stages_pending,
+      # 1, 2}}`. Getting exactly `:validations_passed` (total 1, all
+      # passed) is only possible if the FIRST stage was selected and the
+      # SECOND was not — proof by outcome, not by inspecting a private
+      # function directly.
+      assert {:ready, :validations_passed} = StackDeployer.review_readiness(reloaded)
     end
 
     # TEST 4 — the loop closes on the original symptom: "one such member
@@ -2793,8 +2874,23 @@ defmodule Platform.Tasks.StackDeployerTest do
         status: "running"
       })
 
+    # kind: "e2e_behavior" (task 019fe383 stage 2) — `review_stage_ids_for_task/1`
+    # now selects a stage structurally, by "hosts an e2e_behavior validation",
+    # not by name. A `manual_approval` validation here would leave this stage
+    # unselected and collapse the scenario into "no review stage", which is
+    # not what this fixture is for. `evaluation_payload` is required by
+    # `Validation.changeset/2` for this kind.
     {:ok, _} =
-      Tasks.create_validation(%{stage_id: stage.id, kind: "manual_approval", status: "pending"})
+      Tasks.create_validation(%{
+        stage_id: stage.id,
+        kind: "e2e_behavior",
+        status: "pending",
+        evaluation_payload: %{
+          "setup" => "build the member",
+          "actions" => "merge it",
+          "expected" => "it merges"
+        }
+      })
 
     Tasks.get_task_record(task.id)
   end

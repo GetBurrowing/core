@@ -119,6 +119,84 @@ defmodule Platform.Tasks.StageOriginTest do
     end
   end
 
+  describe "decoy stage names never affect origin marking (task 019fe383)" do
+    # Task 019fe383. Before this fix, `attach_e2e_validations_to_review_stage/2`
+    # picked its host by substring-matching a stage's NAME against
+    # "review"/"validation" — so a plan built entirely of decoy names could
+    # get one of its own authored stages silently adopted as the e2e host
+    # (and, separately, refused outright by the collision guard). Origin
+    # marking must be blind to all of that: every decoy-named stage here
+    # stays "authored", and the ONE "synthesized" stage is identified by
+    # that column alone, never by its name.
+    defp decoy_named_stages do
+      [
+        %{
+          "name" => "Add cross-field validation guard",
+          "description" => "Add it",
+          "position" => 1,
+          "validations" => [%{"kind" => "test_pass"}, e2e_case("cross-field guard")]
+        },
+        %{
+          "name" => "Widen task_plan_review output class",
+          "description" => "Widen it",
+          "position" => 2,
+          "validations" => [%{"kind" => "test_pass"}]
+        },
+        %{
+          "name" => "Score the evaluation harness",
+          "description" => "Score it",
+          "position" => 3,
+          # "evaluation" was never even an OLD trigger word — included so
+          # that no word, old-trigger or not, is left able to matter.
+          "validations" => [%{"kind" => "lint_pass"}]
+        }
+      ]
+    end
+
+    test "three decoy names (validation/review/evaluation) all stay authored; exactly one synthesized stage hosts the case, by id" do
+      t = task()
+
+      {:ok, plan} =
+        ToolSurface.execute(
+          "plan_create",
+          %{"task_id" => t.id, "stages" => decoy_named_stages()},
+          %{}
+        )
+
+      stages = Tasks.list_stages(plan.id)
+      assert length(stages) == 4
+
+      decoy_names = [
+        "Add cross-field validation guard",
+        "Widen task_plan_review output class",
+        "Score the evaluation harness"
+      ]
+
+      decoys = Enum.filter(stages, &(&1.name in decoy_names))
+      assert length(decoys) == 3
+      assert Enum.all?(decoys, &(&1.origin == "authored"))
+
+      # Existence check: exactly one synthesized stage, found by origin —
+      # never by position (`Enum.at/List.last`) and never by name.
+      assert [synthesized] = Enum.filter(stages, &(&1.origin == "synthesized"))
+      assert synthesized.name not in decoy_names
+
+      # IDENTITY check: the e2e_behavior validation's stage_id equals the
+      # synthesized stage's id, not merely "whichever stage sits last".
+      [e2e_validation] =
+        Platform.Repo.all(
+          from(v in Platform.Tasks.Validation,
+            join: s in Platform.Tasks.Stage,
+            on: v.stage_id == s.id,
+            where: s.plan_id == ^plan.id and v.kind == "e2e_behavior"
+          )
+        )
+
+      assert e2e_validation.stage_id == synthesized.id
+      assert Tasks.authored_stage_count(plan.id) == 3
+    end
+  end
+
   describe "THE PROSE PROBE" do
     test "reworded description and renamed stage do not change classification" do
       # The engine's OWN synthesized stage map, taken from the real routing

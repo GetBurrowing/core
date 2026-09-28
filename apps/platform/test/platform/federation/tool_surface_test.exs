@@ -3361,40 +3361,95 @@ defmodule Platform.Federation.ToolSurfaceTest do
 
     # ── e2e host collision guard (task 01a006d1 stage 3) ─────────────────
 
-    test "plan_create refuses a plan whose stage name would silently host the e2e cases" do
+    test "plan_create no longer refuses a plan whose stage names merely CONTAIN \"review\"/\"validation\"/\"evaluation\" (regression, task 019fe383)" do
+      # The shipped incident: a stage whose name merely MENTIONS an
+      # identifier containing "review" used to be silently adopted as the
+      # e2e host by name-match alone, which could deadlock the task if that
+      # stage's own work never advanced. Name-based adoption is gone now —
+      # this must succeed and synthesize a task-level review stage, exactly
+      # like a plan with a clean name would.
+      #
+      # ANTI-VACUITY (task 019fe383 stage 3, binding): three decoy stage
+      # names, one per OLD trigger word ("review", "validation") plus a
+      # THIRD word ("evaluation") that was never a trigger even under the
+      # pre-fix matcher — included anyway, since after this fix NO word in a
+      # stage's name is supposed to matter at all.
+      #
+      # RED-FIRST: against the pre-019fe383 code, this exact payload was
+      # refused by `detect_e2e_host_collision/1`'s retired name-match case 3,
+      # citing the "validation"/"review" substring in stage 1's/2's name.
       project = create_project()
-      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Collision task"})
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Formerly-collision task"})
 
-      {:error, env} =
+      {:ok, plan} =
         ToolSurface.execute(
           "plan_create",
           %{
             "task_id" => task.id,
             "stages" => [
               %{
-                "name" => "Widen task_plan_review output class",
-                "description" => "Widen it",
+                "name" => "Add cross-field validation guard",
+                "description" => "Add it",
                 "position" => 1,
                 "validations" => [%{"kind" => "test_pass"}, e2e_case("widened plan")]
+              },
+              %{
+                "name" => "Widen task_plan_review output class",
+                "description" => "Widen it",
+                "position" => 2,
+                "validations" => [%{"kind" => "test_pass"}]
+              },
+              %{
+                "name" => "Score the evaluation harness",
+                "description" => "Score it",
+                "position" => 3,
+                "validations" => [%{"kind" => "lint_pass"}]
               }
             ]
           },
           %{}
         )
 
-      # The envelope must NAME the stage and the substring that matched — the
-      # author cannot see "review" inside "task_plan_review" unaided.
-      assert env.error =~ "Widen task_plan_review output class"
-      assert env.error =~ "review"
-      assert env.recoverable == true
+      names = Enum.map(plan.stages, & &1.name)
 
-      assert env.suggestion =~ "rename"
-      assert env.suggestion =~ "e2e_host"
+      assert names == [
+               "Add cross-field validation guard",
+               "Widen task_plan_review output class",
+               "Score the evaluation harness",
+               "Task-level review"
+             ]
 
-      # PERSISTENCE CONTROL — same call. Refusing while leaving a draft plan
-      # behind would recreate the exact lockout this guard exists to prevent
-      # (a live draft blocks the retry), and only this assertion can see it.
-      assert Tasks.latest_plan(task.id) == nil
+      # None of the three decoy-named stages absorbed the e2e case just
+      # because their name happens to contain a trigger word.
+      decoys = Enum.take(plan.stages, 3)
+
+      refute Enum.any?(decoys, fn s ->
+               Enum.any?(s.validations, &(&1.kind == "e2e_behavior"))
+             end)
+
+      # IDENTITY, not position (task 019fe383 anti-vacuity requirement):
+      # find the synthesized stage by its structural `origin` mark, read
+      # straight from the DB — `origin` is a server-side marker and is not
+      # part of the serialized plan the tool hands back — and confirm the
+      # e2e_behavior validation's `stage_id` actually points at it, rather
+      # than assuming it is first/last/at-some-index in the stage list.
+      synthesized_stages =
+        plan.id
+        |> Tasks.list_stages()
+        |> Enum.filter(&(&1.origin == "synthesized"))
+
+      # Existence check: exactly one synthesized stage exists whenever the
+      # plan carries an e2e_behavior validation — guards against a future
+      # regression where synthesis silently stops firing (or fires twice).
+      assert [%{id: synthesized_id}] = synthesized_stages
+
+      e2e_validations =
+        plan.stages
+        |> Enum.flat_map(& &1.validations)
+        |> Enum.filter(&(&1.kind == "e2e_behavior"))
+
+      assert length(e2e_validations) == 1
+      assert Enum.all?(e2e_validations, &(&1.stage_id == synthesized_id))
     end
 
     # DIRECTION CONTROL — fails outright if the guard rejects everything.
@@ -3586,6 +3641,45 @@ defmodule Platform.Federation.ToolSurfaceTest do
 
       host = Enum.find(plan.stages, &(&1.name == "Cross-surface validation sweep"))
       assert Enum.count(host.validations, &(&1.kind == "e2e_behavior")) == 1
+    end
+
+    test "plan_create refuses two stages that both opt in as e2e_host and writes nothing (task 019fe383)" do
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Multi-host task"})
+
+      {:error, env} =
+        ToolSurface.execute(
+          "plan_create",
+          %{
+            "task_id" => task.id,
+            "stages" => [
+              %{
+                "name" => "First host",
+                "description" => "Host one",
+                "position" => 1,
+                "e2e_host" => true,
+                "validations" => [e2e_case("a")]
+              },
+              %{
+                "name" => "Second host",
+                "description" => "Host two",
+                "position" => 2,
+                "e2e_host" => true,
+                "validations" => [e2e_case("b")]
+              }
+            ]
+          },
+          %{}
+        )
+
+      assert env.error =~ "First host"
+      assert env.error =~ "Second host"
+      assert env.recoverable == true
+      assert env.suggestion =~ "e2e_host"
+
+      # PERSISTENCE CONTROL — same discipline as every other pre-persistence
+      # gate: nothing written, so the author can fix and retry.
+      assert Tasks.latest_plan(task.id) == nil
     end
 
     # ── unnamed manual_approval gate guard (task 01a00b91 stage 3) ────────
@@ -4544,34 +4638,71 @@ defmodule Platform.Federation.ToolSurfaceTest do
       refute Enum.any?(authored.validations, &(&1.kind == "e2e_behavior"))
     end
 
-    test "plan_update refuses a trigger-named stage carrying e2e cases and writes nothing" do
-      %{plan: plan} = staged_draft_task("Collision update task")
+    test "plan_update no longer refuses trigger-named stages carrying e2e cases — it synthesizes a task-level review stage (regression, task 019fe383)" do
+      # Same decoy set as the plan_create regression above: "validation",
+      # "review", and "evaluation" (the last never a trigger even pre-fix),
+      # none of which may matter to the router anymore.
+      %{plan: plan} = staged_draft_task("Formerly-collision update task")
 
-      {:error, env} =
+      {:ok, updated} =
         ToolSurface.execute(
           "plan_update",
           %{
             "plan_id" => plan.id,
             "stages" => [
               %{
-                "name" => "Widen task_plan_review output class",
-                "description" => "Widen it",
+                "name" => "Add cross-field validation guard",
+                "description" => "Add it",
                 "position" => 1,
                 "validations" => [%{"kind" => "test_pass"}, e2e_case("collide")]
+              },
+              %{
+                "name" => "Widen task_plan_review output class",
+                "description" => "Widen it",
+                "position" => 2,
+                "validations" => [%{"kind" => "test_pass"}]
+              },
+              %{
+                "name" => "Score the evaluation harness",
+                "description" => "Score it",
+                "position" => 3,
+                "validations" => [%{"kind" => "lint_pass"}]
               }
             ]
           },
           %{}
         )
 
-      assert env.recoverable == true
-      assert env.error =~ "Widen task_plan_review output class"
+      names = Enum.map(updated.stages, & &1.name)
 
-      # PERSISTENCE CONTROL — a refused update leaves the draft's CURRENT
-      # tree byte-identical, so the planner can fix and retry.
-      reloaded = plan_tree(plan.id)
-      assert Enum.map(reloaded.stages, & &1.name) == ["Wrong stage"]
-      assert plan_validation_ids(plan.id) == 1
+      assert names == [
+               "Add cross-field validation guard",
+               "Widen task_plan_review output class",
+               "Score the evaluation harness",
+               "Task-level review"
+             ]
+
+      decoys = Enum.take(updated.stages, 3)
+
+      refute Enum.any?(decoys, fn s ->
+               Enum.any?(s.validations, &(&1.kind == "e2e_behavior"))
+             end)
+
+      # IDENTITY, not position — same discipline as the plan_create case.
+      synthesized_stages =
+        updated.id
+        |> Tasks.list_stages()
+        |> Enum.filter(&(&1.origin == "synthesized"))
+
+      assert [%{id: synthesized_id}] = synthesized_stages
+
+      e2e_validations =
+        updated.stages
+        |> Enum.flat_map(& &1.validations)
+        |> Enum.filter(&(&1.kind == "e2e_behavior"))
+
+      assert length(e2e_validations) == 1
+      assert Enum.all?(e2e_validations, &(&1.stage_id == synthesized_id))
     end
 
     test "plan_update refuses an empty stages array and leaves the draft untouched" do
