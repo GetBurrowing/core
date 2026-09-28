@@ -114,6 +114,7 @@ defmodule Platform.Orchestration.RuntimeSupervision do
             {:ok, %{event: %RuntimeEvent{} = event, lease: lease}} ->
               event = Repo.preload(event, :lease)
               broadcast_and_mirror(event, lease, attrs)
+              maybe_reconcile_late_ack(task, attrs)
               {:ok, event}
 
             {:error, :event, changeset, _changes} ->
@@ -125,6 +126,37 @@ defmodule Platform.Orchestration.RuntimeSupervision do
       end
     end
   end
+
+  # Task 01a0e7ac stage 2. A NEW `execution.acked` row may be the late ack of
+  # a dispatch the no-ack alarm already blocked; `LateAckReconcile` decides.
+  # Runs after the transaction committed and only on the new-row branch, so a
+  # replayed duplicate never reconciles twice. Best-effort: an ack must never
+  # fail because the reconcile did, so nothing here reaches the return value.
+  defp maybe_reconcile_late_ack(task, %{event_type: "execution.acked"} = attrs) do
+    Platform.Orchestration.LateAckReconcile.maybe_reconcile(
+      task.id,
+      attrs.stage_id,
+      attrs.runtime_id
+    )
+
+    :ok
+  rescue
+    error ->
+      Logger.warning(
+        "[RuntimeSupervision] task #{task.id} — late-ack reconcile raised: #{Exception.message(error)}"
+      )
+
+      :ok
+  catch
+    kind, reason ->
+      Logger.warning(
+        "[RuntimeSupervision] task #{task.id} — late-ack reconcile #{kind}: #{inspect(reason)}"
+      )
+
+      :ok
+  end
+
+  defp maybe_reconcile_late_ack(_task, _attrs), do: :ok
 
   @doc """
   Return the newest active lease for the task across every stage. Kept for

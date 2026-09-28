@@ -1923,10 +1923,17 @@ defmodule Platform.Tasks do
       # `:metadata`, so the second is folded onto the first's output rather
       # than `Map.merge`d beside it — a merge of two `%{metadata: ...}` maps
       # keeps one and silently drops the other.
+      #
+      # Task 01a0e7ac stage 1: the `blocked_cause` stamp clears on the SAME
+      # changeset on every exit from `blocked`, folded onto the output of the
+      # two clears above for the same reason. That is what makes the cause
+      # episode-scoped: a cause from an earlier block can never authorize
+      # clearing a later one.
       clear_attrs =
         task
         |> awaiting_human_action_clear_attrs(new_status)
         |> delivered_but_open_clear_attrs(task, new_status)
+        |> blocked_cause_clear_attrs(task, new_status)
 
       changeset =
         Task.changeset(
@@ -2099,6 +2106,25 @@ defmodule Platform.Tasks do
   end
 
   defp delivered_but_open_clear_attrs(attrs, _task, _new_status), do: attrs
+
+  # Task 01a0e7ac stage 1. `blocked_cause` says "THIS block episode was caused
+  # by X". Leaving `blocked` ends the episode, so every exit clears it; a
+  # transition that does not leave `blocked` leaves it alone. Reads
+  # `:metadata` off the accumulated attrs when present, like
+  # `delivered_but_open_clear_attrs/3`, and writes nothing when there is no
+  # cause to clear.
+  defp blocked_cause_clear_attrs(attrs, %Task{status: "blocked"} = task, new_status)
+       when new_status != "blocked" do
+    metadata = Map.get(attrs, :metadata, task.metadata || %{})
+
+    if Map.has_key?(metadata, "blocked_cause") do
+      Map.put(attrs, :metadata, Map.delete(metadata, "blocked_cause"))
+    else
+      attrs
+    end
+  end
+
+  defp blocked_cause_clear_attrs(attrs, _task, _new_status), do: attrs
 
   defp drop_delivered_but_open_keys(metadata) when is_map(metadata) do
     metadata
@@ -4979,27 +5005,81 @@ defmodule Platform.Tasks do
   """
   @spec stamp_blocked_reason(Task.t() | String.t(), String.t()) ::
           {:ok, Task.t()} | {:error, term()}
-  def stamp_blocked_reason(task_or_id, sentence)
+  def stamp_blocked_reason(task_or_id, sentence),
+    do: stamp_blocked_reason(task_or_id, sentence, [])
 
-  def stamp_blocked_reason(id, sentence) when is_binary(id) do
+  @doc """
+  `stamp_blocked_reason/2` plus a machine-readable cause (task 01a0e7ac
+  stage 1).
+
+  `opts[:cause]` is a map with `:kind`, `:stage_id` and `:runtime_id`. It is
+  written to `metadata["blocked_cause"]` as
+  `%{"kind", "stage_id", "runtime_id", "prior_status", "at"}`, where
+  `prior_status` is the task's status read BEFORE `ensure_blocked/1`. For a
+  task that is already `blocked`, `prior_status` is carried over from the
+  existing cause when there is one, and is `nil` otherwise.
+
+  With no `:cause`, any existing `blocked_cause` is DELETED, so a later
+  escalation of a different kind never inherits an earlier one's cause.
+
+  The cause is episode-scoped: `status_transition_changeset/2` clears it on
+  every transition out of `blocked`. `blocked_reason` persists after unblock
+  on purpose and is not a cause. Code that must know why a task is blocked
+  reads `blocked_cause`, never the sentence and never `status` alone.
+  """
+  @spec stamp_blocked_reason(Task.t() | String.t(), String.t(), keyword()) ::
+          {:ok, Task.t()} | {:error, term()}
+  def stamp_blocked_reason(id, sentence, opts) when is_binary(id) do
     case get_task_record(id) do
-      %Task{} = task -> stamp_blocked_reason(task, sentence)
+      %Task{} = task -> stamp_blocked_reason(task, sentence, opts)
       nil -> {:error, :not_found}
     end
   end
 
-  def stamp_blocked_reason(%Task{} = task, sentence) when is_binary(sentence) do
+  def stamp_blocked_reason(%Task{} = task, sentence, opts) when is_binary(sentence) do
+    prior_status = blocked_cause_prior_status(task)
+    cause = Keyword.get(opts, :cause)
+
     with {:ok, blocked} <- ensure_blocked(task) do
       existing_metadata = blocked.metadata || %{}
+      now = DateTime.utc_now() |> DateTime.to_iso8601()
 
       merged_metadata =
         existing_metadata
         |> Map.put("blocked_reason", sentence)
-        |> Map.put("blocked_reason_at", DateTime.utc_now() |> DateTime.to_iso8601())
+        |> Map.put("blocked_reason_at", now)
+        |> put_blocked_cause(cause, prior_status, now)
 
       update_task(blocked, %{metadata: merged_metadata})
     end
   end
+
+  # The status the task held before THIS block episode began. A task already
+  # in `blocked` is mid-episode: keep the prior status an earlier caused stamp
+  # recorded, and admit it is unknown (`nil`) when there is none.
+  defp blocked_cause_prior_status(%Task{status: "blocked", metadata: metadata}) do
+    case metadata do
+      %{"blocked_cause" => %{"prior_status" => prior}} -> prior
+      _ -> nil
+    end
+  end
+
+  defp blocked_cause_prior_status(%Task{status: status}), do: status
+
+  defp put_blocked_cause(metadata, nil, _prior_status, _at),
+    do: Map.delete(metadata, "blocked_cause")
+
+  defp put_blocked_cause(metadata, cause, prior_status, at) when is_map(cause) do
+    Map.put(metadata, "blocked_cause", %{
+      "kind" => cause_field(cause, :kind),
+      "stage_id" => cause_field(cause, :stage_id),
+      "runtime_id" => cause_field(cause, :runtime_id),
+      "prior_status" => prior_status,
+      "at" => at
+    })
+  end
+
+  defp cause_field(cause, key), do: Map.get(cause, key, Map.get(cause, Atom.to_string(key)))
 
   defp ensure_blocked(%Task{status: "blocked"} = task), do: {:ok, task}
   # The only caller of `stamp_blocked_reason/2` is the TaskRouter's
@@ -7351,6 +7431,7 @@ defmodule Platform.Tasks do
             attrs =
               %{}
               |> delivered_but_open_clear_attrs(task, target_status)
+              |> blocked_cause_clear_attrs(task, target_status)
               |> Map.put(:status, target_status)
 
             case task |> Task.changeset(attrs) |> Repo.update() do

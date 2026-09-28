@@ -30,7 +30,9 @@ defmodule Platform.Orchestration.RecordAckNotFoundLoggingTest do
   alias Platform.Orchestration.{LeaseManager, TaskRouter}
   alias Platform.Tasks
 
-  @tool_surface_marker "no ETS lease armed yet (expected during the dispatch race)"
+  # Task 01a0e7ac stage 4: reworded so a late ack after a no-ack block (no
+  # router, so no lease) is not described as a dispatch race.
+  @tool_surface_marker "no ETS lease (the dispatch race, or a late ack after the no-ack block stopped the router)"
   @router_marker "ETS lease row missing for an acked stage"
 
   setup do

@@ -162,6 +162,7 @@ defmodule Platform.Orchestration.TaskRouter do
     DispatchPhase,
     ExecutionSpace,
     HeartbeatScheduler,
+    LateAckReconcile,
     LeaseManager,
     PhaseRuntime,
     RuntimeSupervision
@@ -3428,11 +3429,47 @@ defmodule Platform.Orchestration.TaskRouter do
     case LeaseManager.mark_no_ack_fired(task_id) do
       {:ok, :fired} ->
         fire_no_ack_alert(state, lease)
+        recheck_ack_after_block(task_id, lease)
         {:noreply, %{state | status: :stalled}}
 
       _ ->
         {:noreply, state}
     end
+  end
+
+  # Task 01a0e7ac stage 3: the block side of a TWO-SIDED ordering.
+  #
+  # `maybe_fire_no_ack/3` reads the durable ack and only then stamps the
+  # block, so an ack that commits between the two is a check-then-act race:
+  # the ack's own reconcile (`LateAckReconcile`, run from
+  # `RuntimeSupervision.record_event/1`) sees a task that is not yet
+  # `blocked` and skips, and the stamp then blocks a task whose executor has
+  # already acked. Each side therefore WRITES first and CHECKS the other
+  # second: the ack side writes its row, then checks for the block; this
+  # side writes the block, then checks for the ack. Whichever commits second
+  # sees the other. The read uses the same bound as
+  # `durable_ack_suppresses_alarm?/3` (owner-scoped, not older than the last
+  # human release). The router stays `:stalled` either way; if the reconcile
+  # moves the task, the watcher restarts the router on that transition.
+  defp recheck_ack_after_block(task_id, lease) do
+    owner = Map.get(lease, :owner_runtime_id)
+
+    if is_binary(owner) and durable_ack_suppresses_alarm?(task_id, lease.stage_id, owner) do
+      result = LateAckReconcile.maybe_reconcile(task_id, lease.stage_id, owner)
+
+      Logger.info(
+        "[TaskRouter] task #{task_id} stage #{lease.stage_id} — owner ack landed while the no-ack block was being written; reconcile: #{inspect(result)}"
+      )
+    end
+
+    :ok
+  rescue
+    error ->
+      Logger.warning(
+        "[TaskRouter] task #{task_id} — post-block ack re-check raised: #{Exception.message(error)}"
+      )
+
+      :ok
   end
 
   defp fire_no_ack_alert(%State{} = state, lease) do
@@ -3456,7 +3493,11 @@ defmodule Platform.Orchestration.TaskRouter do
         "#{div(elapsed_ms, 1_000)}s of dispatch. The cause is not known to the router. " <>
         "Manual intervention required."
 
-    stamp_blocked_reason(state.task_id, sentence)
+    stamp_blocked_reason(state.task_id, sentence, %{
+      kind: "execution.no_ack_timeout",
+      stage_id: lease.stage_id,
+      runtime_id: Map.get(lease, :owner_runtime_id)
+    })
 
     post_router_blocker(
       state,
@@ -3489,7 +3530,11 @@ defmodule Platform.Orchestration.TaskRouter do
 
     sentence = safety_net_sentence(lease, elapsed_ms)
 
-    stamp_blocked_reason(state.task_id, sentence)
+    stamp_blocked_reason(state.task_id, sentence, %{
+      kind: "execution.safety_net_fired",
+      stage_id: lease.stage_id,
+      runtime_id: Map.get(lease, :owner_runtime_id)
+    })
 
     post_router_blocker(
       state,
@@ -3524,8 +3569,13 @@ defmodule Platform.Orchestration.TaskRouter do
   # (`metadata["blocked_reason"]`) alongside the transient chat post, using
   # the SAME string so the two can never disagree. This is a failure path:
   # it logs and continues on error rather than crashing the router.
-  defp stamp_blocked_reason(task_id, sentence) do
-    case Tasks.stamp_blocked_reason(task_id, sentence) do
+  #
+  # Task 01a0e7ac stage 1: `cause` is written to `metadata["blocked_cause"]`
+  # so a later reconcile can discriminate on WHY the task is blocked rather
+  # than on the sentence or on `status`. Both escalations share the
+  # `"blocked_escalation"` transition `via`, so the cause cannot come from it.
+  defp stamp_blocked_reason(task_id, sentence, cause) do
+    case Tasks.stamp_blocked_reason(task_id, sentence, cause: cause) do
       {:ok, _task} ->
         :ok
 

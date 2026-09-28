@@ -127,6 +127,97 @@ how the original defect stayed invisible.
 
 ---
 
+## Decision 3 — a late ack reconciles a no-ack block, by cause (2026-09-28, task 01a0e7ac)
+
+Added 2026-09-28. Decisions 1 and 2 above are unchanged.
+
+**The defect.** The no-ack alarm moves a task to `blocked` after 300 s without
+an owner ack. An executor that acked at 305 s kept working, but nothing moved
+the task back, and the router dispatched no later stage. That happened three
+times in 16 hours, twice on deploy stages.
+
+**Why the reconcile cannot live in the router.** Once the task is `blocked`,
+`TaskRouterWatcher.evaluate_task/1` stops its router (`blocked` is not in
+`@active_statuses`), and `TaskRouter.terminate/2` clears the ETS lease. A late
+ack therefore has no router to consume it, and `task_ack` finds no lease, so
+the lease ownership check never runs. Both ack transports, the MCP `task_ack`
+tool and the RuntimeChannel socket, write through
+`RuntimeSupervision.record_event/1`. That is where the reconcile runs:
+`Platform.Orchestration.LateAckReconcile.maybe_reconcile/3`, called after a NEW
+`execution.acked` row commits (never on an idempotent duplicate). It is
+best-effort: an ack never fails because the reconcile did.
+
+**The block records its cause.** Router escalations write
+`metadata["blocked_cause"] = %{kind, stage_id, runtime_id, prior_status, at}`
+next to the prose `blocked_reason`. The no-ack alarm writes kind
+`execution.no_ack_timeout` and the safety net writes
+`execution.safety_net_fired`. A stamp with no cause deletes any existing cause.
+The cause is **episode-scoped**: `status_transition_changeset/2`, and the board
+drop path that builds its own changeset, clear it on every exit from `blocked`.
+A cause from an earlier block therefore never authorises clearing a later one,
+and a person or agent who re-blocks with `task_update` leaves no cause. The
+`blocked_reason` sentence persists after unblock on purpose, so code decides
+on `blocked_cause` and never on the sentence or on `status` alone.
+
+**The five conditions.** The reconcile clears a block only when every one of
+these holds:
+
+1. the task is `blocked`;
+2. `blocked_cause.kind == "execution.no_ack_timeout"`. A safety-net block, a
+   block from `task_update`, a dependency block, or a block with no cause is
+   never cleared here;
+3. the ack's stage equals the cause's stage, AND that stage is the running
+   stage of the current plan;
+4. the acking runtime equals the cause's `runtime_id`, which was the lease
+   owner when the alarm fired. This replaces the ETS ownership check that the
+   late path skips. A nil recorded owner never matches;
+5. there is no open `needs_human` hold for the stage. An executor that acked
+   and then filed `report_blocker(needs_human: true)` keeps the task blocked.
+
+**Stale acks are ignored.** An ack for any other stage (an older stage, a
+sibling, a stage no longer running) is still persisted, but clears nothing.
+It says nothing about whether anyone took the dispatch that timed out.
+
+**What the reconcile writes.** The task returns to `blocked_cause.prior_status`.
+The fallback is `in_progress` when that is nil or is not a valid edge out of
+`blocked`. The ticket said "back to in_progress", but deploy stages block from
+`deploying`, and forcing those to `in_progress` would mis-phase the deployer.
+The write is `Tasks.transition_task_status_if_unmodified/3`, a compare-and-set
+on the `updated_at` just read, so a person who moves or re-blocks the task in
+between wins. It runs under `TransitionActor.with_actor(:system,
+"late_ack_reconciled", ...)`, so the phase-transition row carries actor
+`system:auto` and via `late_ack_reconciled`. One engagement notice is posted to
+the execution space. It is not a blocker.
+
+**The reconcile broadcasts `{:task_updated, _}` itself.** A status transition
+through `transition_task_status/2` or `transition_task_status_if_unmodified/3`
+broadcasts `{:task_updated, _}` only when the phase-assignee pointer changes.
+The watcher restarts routers off that broadcast, so without an explicit one a
+reconciled task sat in `in_progress` with no router. The stage 3 resume test
+caught this. After the broadcast, the watcher starts a router. Its boot dispatch
+finds the owner's durable ack through `live_acked_executor?/2` and WITHHOLDS the
+re-prompt, while `suppress_live_acked_executor/3` re-arms the liveness timers.
+The executor that is already working is not prompted a second time.
+
+**The race is closed from both sides.** The alarm reads the durable ack in
+`maybe_fire_no_ack/3` and only then stamps the block. An ack that commits
+between those two steps sees a task that is not yet `blocked`, so its reconcile
+skips, and the stamp would then block an executor that has already acked. So
+each side writes first and checks the other second. The ack side writes its row
+and then checks for the block (above). The alarm side, `do_fire_no_ack/3`,
+writes the block and then re-reads the owner's ack, using the same bound as
+`durable_ack_suppresses_alarm?/3` (not older than the last human release). If
+the ack is there, it calls `maybe_reconcile/3` itself. Whichever side commits
+second sees the other.
+
+**The 300 s budget is deliberately unchanged.** Raising it is not a fix. An ack
+at any budget plus one second hits the same stuck block. A longer budget also
+delays detecting a runtime that really dropped the dispatch, which is the only
+thing the alarm exists for. The defect was that a late ack was never
+reconciled, not that the window was short.
+
+---
+
 ## Consequences
 
 **Positive**
