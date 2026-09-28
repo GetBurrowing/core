@@ -716,7 +716,12 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
     # text on an approved/executing plan with an append-only history. Not a
     # T6 concern — it adds no schedule, no trigger and no historian surface
     # (+validation_payload_amend -> 120)
-    @t6_baseline_tool_count 120
+    # bumped by task 01a044b0 stage 4 — `task_delivery_candidate_list`, a
+    # read-only sweep in the existing `task` bundle beside
+    # `task_close_as_delivered`. On demand, never scheduled. Not a T6
+    # concern — it adds no schedule, no trigger and no historian surface
+    # (+task_delivery_candidate_list -> 121)
+    @t6_baseline_tool_count 121
 
     defp t6_root, do: Mix.Project.project_file() |> Path.dirname()
 

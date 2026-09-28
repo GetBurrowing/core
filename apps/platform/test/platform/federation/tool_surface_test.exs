@@ -162,10 +162,14 @@ defmodule Platform.Federation.ToolSurfaceTest do
       # 120 as of task 01a0acb4 stage 2, which added `validation_payload_amend`
       # to the `plan` bundle: the correction path for ONE defective e2e case
       # on an approved/executing plan. A genuinely new tool, no new bundle.
-      assert length(tools) == 120
+      # 121 as of task 01a044b0 stage 4, which added the read-only
+      # `task_delivery_candidate_list` to the `task` bundle. A genuinely new
+      # tool, no new bundle.
+      assert length(tools) == 121
 
       tool_names = Enum.map(tools, & &1.name)
       assert "task_close_as_delivered" in tool_names
+      assert "task_delivery_candidate_list" in tool_names
       assert "send_media" in tool_names
       assert "react" in tool_names
       assert "canvas.versions" in tool_names

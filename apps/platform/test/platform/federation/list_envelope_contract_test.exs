@@ -71,9 +71,10 @@ defmodule Platform.Federation.ListEnvelopeContractTest do
       assert missing == []
     end
 
-    test "the registry covers the 25 audited tools, each with an atom rows key" do
+    # 25 audited by task 01a04a7a, plus task_delivery_candidate_list (01a044b0).
+    test "the registry covers the 26 registered tools, each with an atom rows key" do
       tools = ToolSurface.list_envelope_tools()
-      assert map_size(tools) == 25
+      assert map_size(tools) == 26
       assert Enum.all?(tools, fn {_name, key} -> is_atom(key) and not is_nil(key) end)
     end
 
@@ -190,6 +191,74 @@ defmodule Platform.Federation.ListEnvelopeContractTest do
     assert length(rows) == corpus
     assert env.has_more == false
     assert env.total == length(rows)
+  end
+
+  describe "runtime conformance: task_delivery_candidate_list" do
+    defmodule CandidateStubRunner do
+      @moduledoc false
+      @behaviour Platform.Tasks.DeliveryReference.Runner
+
+      @impl true
+      def commit(_slug, _sha), do: {:error, :not_found}
+
+      @impl true
+      def pull_request(_slug, _number), do: {:error, :not_found}
+
+      @impl true
+      def merged_pull_requests(_slug, _limit),
+        do: {:ok, Application.get_env(:platform, :list_envelope_candidate_prs, [])}
+
+      @impl true
+      def code_search(_slug, _term), do: {:error, {:unavailable, "not stubbed"}}
+    end
+
+    setup do
+      previous_runner = Application.get_env(:platform, :delivery_reference)
+      Application.put_env(:platform, :delivery_reference, runner: CandidateStubRunner)
+
+      {:ok, project} =
+        Tasks.create_project(%{
+          name: "Envelope Cand #{u()}",
+          repo_url: "https://github.com/Envelope-Org/cand-#{u()}"
+        })
+
+      prs =
+        for i <- 1..3 do
+          {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Cand #{i}"})
+
+          %{
+            "number" => i,
+            "title" => "Ships #{task.id}",
+            "body" => "",
+            "mergedAt" => "2999-01-01T00:00:00Z",
+            "mergeCommit" => %{"oid" => "sha#{i}"},
+            "url" => "https://github.com/Envelope-Org/cand/pull/#{i}"
+          }
+        end
+
+      Application.put_env(:platform, :list_envelope_candidate_prs, prs)
+
+      on_exit(fn ->
+        Application.delete_env(:platform, :list_envelope_candidate_prs)
+
+        case previous_runner do
+          nil -> Application.delete_env(:platform, :delivery_reference)
+          value -> Application.put_env(:platform, :delivery_reference, value)
+        end
+      end)
+
+      %{project: project}
+    end
+
+    test "truncated: limit 2 over 3 rows", %{project: p} do
+      env = call("task_delivery_candidate_list", %{"project_id" => p.id, "limit" => 2})
+      assert_truncated("task_delivery_candidate_list", env, 3)
+    end
+
+    test "untruncated: limit 50 over 3 rows", %{project: p} do
+      env = call("task_delivery_candidate_list", %{"project_id" => p.id, "limit" => 50})
+      assert_whole("task_delivery_candidate_list", env, 3)
+    end
   end
 
   describe "runtime conformance: task_list" do

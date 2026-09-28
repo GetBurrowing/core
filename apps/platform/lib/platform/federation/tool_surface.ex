@@ -67,6 +67,7 @@ defmodule Platform.Federation.ToolSurface do
     Validation
   }
 
+  alias Platform.Tasks.DeliverySweep
   alias Platform.Tasks.Stacks.CommencementGate
   alias Platform.Tenancy
   alias Platform.Tenancy.Org
@@ -110,6 +111,10 @@ defmodule Platform.Federation.ToolSurface do
                          ~w(send_media react space_list space_get_context space_get_messages space_search_messages)
                        )
 
+  # Task 01a044b0 — bounds for task_delivery_candidate_list's GitHub spend.
+  @delivery_sweep_max_pr_limit 1000
+  @delivery_sweep_max_code_searches 100
+
   # Task 01a04a7a — the list-envelope contract. Every list-shaped tool is
   # either REGISTERED here (tool name => the key its rows live under; its
   # response must carry `total` and `has_more`, built with
@@ -148,7 +153,8 @@ defmodule Platform.Federation.ToolSurface do
     "space_list_agents" => :agents,
     "org_list_descendants" => :descendants,
     "task_list_canvases" => :canvases,
-    "canvas.list_kinds" => :kinds
+    "canvas.list_kinds" => :kinds,
+    "task_delivery_candidate_list" => :candidates
   }
 
   # List-returning tools outside task 01a04a7a's scope, each with the reason.
@@ -2057,6 +2063,47 @@ defmodule Platform.Federation.ToolSurface do
           "Refuses `not_authorized` (non-admin owner) before reading the task at all, so the refusal cannot be used to probe a task's status or existence. Refuses an unparseable reference, a reference that names another repository, a sha/PR that does not exist (`not_found`), an unmerged PR (`not_merged`), and \u2014 RECOVERABLY, never as not-found \u2014 a lookup that could not run because `gh` is unavailable.",
         when_to_use:
           "When work shipped outside the plan pipeline and the task is stranded in a status from which `done` is unreachable. Not a general completion route: use task_complete for a task that has a legitimate transition."
+      },
+      %{
+        name: "task_delivery_candidate_list",
+        description:
+          "List open tickets whose work looks already delivered: a `backlog` / `planning` / `blocked` / `stack_pending` task that a merged pull request names, or whose defect string is gone from the repository. READ-ONLY: this closes NOTHING and writes nothing. Closing is `task_close_as_delivered`, called after a human or agent has checked the evidence. Every candidate is a HYPOTHESIS. `id-named-in-commit` means a merged PR's title or body names the task by full UUID, or by an 8-hex prefix that resolves to exactly ONE task; a prefix shared by more than one task never matches and is reported under `ambiguous_prefixes` instead. `defect-string-absent` means a code-like backtick token from the ticket body was named by a PR merged after the ticket was created and GitHub code search no longer finds it; code search reads the default branch only and can miss matches, so treat it as the weaker signal. `cannot_verify` lists tickets that could NOT be checked, because their project has no usable GitHub repo_url or the GitHub lookup failed, so an empty `candidates` next to a non-empty `cannot_verify` is NOT \"nothing to close\".",
+        parameters: %{
+          project_id: %{
+            type: "string",
+            required: false,
+            description: "Only sweep open tasks in this project. Omit to sweep every project."
+          },
+          pr_limit: %{
+            type: "integer",
+            required: false,
+            description:
+              "How many most-recent merged PRs to read per repository. Default #{DeliverySweep.default_pr_limit()}, 1..#{@delivery_sweep_max_pr_limit}; out of range is refused."
+          },
+          max_code_searches: %{
+            type: "integer",
+            required: false,
+            description:
+              "Cap on GitHub code searches this call may spend (code search is heavily rate-limited). Default #{DeliverySweep.default_max_code_searches()}, 0..#{@delivery_sweep_max_code_searches}; out of range is refused. Searches past the cap are listed under `not_checked`."
+          },
+          limit: %{
+            type: "integer",
+            required: false,
+            description:
+              "Maximum candidates to return. Defaults to #{ResultBound.default_limit()}, capped at #{ResultBound.max_limit()}."
+          },
+          offset: %{
+            type: "integer",
+            required: false,
+            description: "Number of candidates to skip before returning results. Defaults to 0."
+          }
+        },
+        returns:
+          "%{candidates: [%{task_id, title, status, confidence: \"id-named-in-commit\" | \"defect-string-absent\", pr_number, pr_url, merge_commit, merged_at, evidence}], total, has_more, cannot_verify: [%{task_id, project_id, reason}], not_checked: [%{task_id, token, reason}], ambiguous_prefixes: [%{prefix, task_ids, pr: %{number, url}}], scanned: %{tasks, projects, prs_by_slug}, limit, offset}. `total` counts ALL candidates the sweep found and `has_more` is true when offset + the returned page is still short of `total`; `cannot_verify`, `not_checked` and `ambiguous_prefixes` are always returned whole, whatever the page.",
+        limitations:
+          "Scoping mirrors task_list: no org filter beyond `project_id`. The sweep runs in full on every call (paging only slices its candidates), and reads GitHub through `gh`, so it costs one merged-PR listing per repository plus up to `max_code_searches` code searches. A ticket surfaces only through a PR in its own project's repository. Tickets are matched only by full UUID or a unique 8-hex prefix. `defect-string-absent` needs every named token to be absent; any token still found means no candidate.",
+        when_to_use:
+          "When sweeping the backlog for tickets that shipped but were never closed. Read each candidate's evidence, then close the ones that hold with task_close_as_delivered. Read `cannot_verify` before concluding there is nothing to close."
       },
       %{
         name: "task_update",
@@ -4982,6 +5029,57 @@ defmodule Platform.Federation.ToolSurface do
   # text to probe whether an id names a row or what status it is in. Same
   # rationale as `Platform.Tasks.close_as_delivered/4`'s own first cond
   # clause.
+  # ── task_delivery_candidate_list — READ-ONLY (task 01a044b0) ──
+  #
+  # Calls DeliverySweep.run/1 and pages its candidates. Nothing here writes:
+  # closing a candidate is task_close_as_delivered, a separate verified call.
+  # `total` / `has_more` are computed from the FULL candidate list, and the
+  # cannot_verify / not_checked / ambiguous_prefixes lists ride along whole,
+  # because "no candidates" beside a non-empty cannot_verify is not "nothing
+  # to close".
+  def execute("task_delivery_candidate_list", args, _context) do
+    tool = "task_delivery_candidate_list"
+
+    with {:ok, pr_limit} <-
+           optional_int_in_range(
+             args,
+             "pr_limit",
+             tool,
+             DeliverySweep.default_pr_limit(),
+             1..@delivery_sweep_max_pr_limit
+           ),
+         {:ok, max_searches} <-
+           optional_int_in_range(
+             args,
+             "max_code_searches",
+             tool,
+             DeliverySweep.default_max_code_searches(),
+             0..@delivery_sweep_max_code_searches
+           ) do
+      {:ok, report} =
+        DeliverySweep.run(
+          project_id: Map.get(args, "project_id"),
+          pr_limit: pr_limit,
+          max_code_searches: max_searches,
+          runner: DeliveryReference.runner()
+        )
+
+      {limit, offset} = ResultBound.page(args)
+      all = report.candidates
+      page = all |> Enum.drop(offset) |> Enum.take(limit)
+
+      {:ok,
+       ResultBound.paged(:candidates, page, length(all), offset, %{
+         cannot_verify: report.cannot_verify,
+         not_checked: report.not_checked,
+         ambiguous_prefixes: report.ambiguous_prefixes,
+         scanned: report.scanned,
+         limit: limit,
+         offset: offset
+       })}
+    end
+  end
+
   def execute("task_close_as_delivered", args, context) do
     with {:ok, admin} <- delivery_closure_principal(context),
          {:ok, task_id} <- require_string(args, "task_id", "task_close_as_delivered"),
@@ -11761,6 +11859,29 @@ defmodule Platform.Federation.ToolSurface do
       recoverable: true,
       suggestion: "Provide a non-blank `#{key}` argument."
     }
+  end
+
+  # Absent => default; present => an integer inside `range`, else a
+  # recoverable parameter error (never a silent clamp).
+  defp optional_int_in_range(args, key, tool, default, range) do
+    case Map.get(args, key) do
+      nil ->
+        {:ok, default}
+
+      _ ->
+        with {:ok, n} <- require_integer(args, key, tool) do
+          if n in range do
+            {:ok, n}
+          else
+            {:error,
+             %{
+               error: "#{tool}: `#{key}` must be between #{range.first} and #{range.last}",
+               recoverable: true,
+               suggestion: "Pass `#{key}` within #{range.first}..#{range.last}, or omit it."
+             }}
+          end
+        end
+    end
   end
 
   defp require_integer(args, key, tool) do
