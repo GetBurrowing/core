@@ -4,7 +4,6 @@ defmodule Platform.Tasks.PlanEngineTest do
   alias Platform.Tasks
   alias Platform.Tasks.DeployStageBuilder
   alias Platform.Tasks.PlanEngine
-  alias Platform.Tasks.StackDeployer
 
   setup do
     {:ok, project} = Tasks.create_project(%{name: "Engine Project"})
@@ -1857,19 +1856,19 @@ defmodule Platform.Tasks.PlanEngineTest do
 
       assert_single_repo_wording(deploy_stage.description)
 
-      # Strongest available form: the injected text must be exactly what the
-      # builder emits for an undeclared repo set — the rendering
-      # `deploy_stage_builder_test.exs` pins as byte-identical to
-      # pre-multi-repo output. Substring checks alone would tolerate an
-      # enumerating sentence appended to a single-repo opening.
-      assert deploy_stage.description ==
-               DeployStageBuilder.build_stage(
-                 %{"type" => "pr_merge", "config" => %{}},
-                 deploy_stage.position,
-                 StackDeployer.member_branch_for(task)
-               ).description,
-             "the injected deploy stage must render the SAME description a task " <>
-               "that declares no repo set has always rendered"
+      # NOT byte-identical to the builder's raw no-repos-key output any more
+      # (task 01a0e5f6 stage 2). It used to be: the single-repo path
+      # DISCARDED the resolved entry's `ci` and fell back to the same
+      # config-only renderer the truly-repo-less catch-all uses, so the two
+      # calls were coincidentally identical for every ci state, including
+      # ones where that shared text was a false claim (Stark Industries/
+      # orion's `ci: "unenforced"`). This task's PlanEngine resolution DOES
+      # carry a repo identity (`Tasks.resolve_deploy_strategy_with_repos/1`
+      # synthesizes one from `project.repo_url`, `ci: "required"` here), and
+      # the injected description now makes the claim that identity is
+      # entitled to.
+      assert deploy_stage.description =~
+               "CI is required and enforced by branch protection"
     end
 
     # `inject_deploy_stage/1` (exercised above via `advance/1`) and

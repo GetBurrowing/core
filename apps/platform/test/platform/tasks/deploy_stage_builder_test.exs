@@ -545,6 +545,63 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
       assert msg =~ "require_ci_pass is not expressible for Startup-Suite/openclaw-suite-channel"
     end
 
+    # `ci: "unenforced"` (Stark Industries/orion's actual live state:
+    # `gh api repos/Stark Industries/orion/branches/main` reports
+    # `protected: false`, `required_status_checks.contexts: []`, while its
+    # CI workflows genuinely run and pass) mirrors `ci: "none"` here for the
+    # same reason: nothing is REQUIRED, so nothing exists for auto-merge or
+    # a CI gate to wait on, whether or not checks happen to run.
+    test "refuses auto_merge: true on a ci: unenforced repo, naming the repo" do
+      strategy = %{
+        "type" => "pr_merge",
+        "repos" => [
+          %{
+            "repo_url" => "https://github.com/Stark Industries/orion",
+            "ci" => "unenforced",
+            "config" => %{"auto_merge" => true}
+          }
+        ]
+      }
+
+      assert {:error, msg} = DeployStageBuilder.validate_strategy(strategy)
+      assert msg =~ "auto_merge is not expressible for Stark Industries/orion"
+      assert msg =~ "nothing was required to pass, not that checks passed"
+    end
+
+    test "refuses require_ci_pass: true on a ci: unenforced repo" do
+      strategy = %{
+        "type" => "pr_merge",
+        "repos" => [
+          %{
+            "repo_url" => "Stark Industries/orion",
+            "ci" => "unenforced",
+            "config" => %{"require_ci_pass" => true}
+          }
+        ]
+      }
+
+      assert {:error, msg} = DeployStageBuilder.validate_strategy(strategy)
+      assert msg =~ "require_ci_pass is not expressible for Stark Industries/orion"
+      assert msg =~ "nothing was required to pass, not that checks passed"
+    end
+
+    test "allows a ci: unenforced repo to opt out of an inherited auto_merge" do
+      strategy = %{
+        "type" => "pr_merge",
+        "config" => %{"auto_merge" => true},
+        "repos" => [
+          %{"repo_url" => "Startup-Suite/core", "ci" => "required"},
+          %{
+            "repo_url" => "Stark Industries/orion",
+            "ci" => "unenforced",
+            "config" => %{"auto_merge" => false}
+          }
+        ]
+      }
+
+      assert :ok == DeployStageBuilder.validate_strategy(strategy)
+    end
+
     # `ci: "none"` and `require_ci_pass: false` are DIFFERENT facts —
     # "there is no CI to gate on" vs "there is CI and we choose not to
     # gate". Both are storable; neither collapses into the other.
@@ -571,7 +628,7 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
       }
 
       assert :ok == DeployStageBuilder.validate_strategy(strategy)
-      assert DeployStageBuilder.valid_repo_ci_states() == ["required", "none"]
+      assert DeployStageBuilder.valid_repo_ci_states() == ["required", "none", "unenforced"]
     end
 
     # Stage 1 pinned the inverse of this ("declaring a repo set changes
@@ -631,6 +688,17 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
       "config" => %{"auto_merge" => false}
     }
 
+    # `ci: "unenforced"` (Stark Industries/orion's actual live state:
+    # workflows genuinely run and pass, but `branches/main` reports
+    # `protected: false` and `required_status_checks.contexts: []`).
+    @orion %{
+      "repo_url" => "https://github.com/Stark Industries/orion",
+      "slug" => "Stark Industries/orion",
+      "ci" => "unenforced",
+      "role" => "secondary",
+      "config" => %{}
+    }
+
     test "a one-repo set emits exactly ONE pr_merged, carrying that repo's identity" do
       strategy = %{
         "type" => "pr_merge",
@@ -651,22 +719,26 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
       refute result.description =~ "manual_approval"
       refute result.description =~ "ci_passed"
 
-      # Regression 019fa63a. A ONE-repo set reads exactly as an undeclared
-      # repo set does — one repository is one repository however the set was
-      # arrived at. This assertion used to expect the enumerating renderer's
-      # per-repo sentence ("Startup-Suite/core: CI is required…; auto-merge
-      # is disabled…"), which is how the enumerating text reached every
-      # ordinary task once `PlanEngine` started resolving the repo set:
-      # `resolve_deploy_strategy_with_repos/1` synthesizes a one-entry list
-      # from `project.repo_url`, so "one declared repo" became the shape
-      # EVERY task has. Pinned as an equality, not a substring, so nothing
-      # can satisfy it by appending single-repo phrasing to enumerated text.
-      assert result.description ==
-               DeployStageBuilder.build_stage(Map.delete(strategy, "repos"), 4, @recorded_branch).description,
-             "a one-repo set must render the same description as no declared repo set"
-
+      # Regression 019fa63a, still true: a ONE-repo set reads as a SINGULAR
+      # deploy, not as the enumerating multi-repo renderer's "this deploy
+      # covers N repositories" list framing — one repository is one
+      # repository however the set was arrived at.
       refute result.description =~ "This deploy covers"
       refute result.description =~ "is a partial deploy"
+
+      # It is NOT required to be byte-identical to the undeclared-repo-set
+      # description any more (task 01a0e5f6 stage 2). That used to be true
+      # only because the single-repo path DISCARDED the resolved entry and
+      # fell back to the same config-only renderer the undeclared-repo-set
+      # path uses — which has no per-repo `ci` and can never say anything
+      # but "CI is enforced by branch protection", true or not. This entry
+      # DOES carry a resolved identity (`ci: "required"`, `@core`'s shape),
+      # and the single-repo path now makes the claim that identity is
+      # entitled to, through the same helper the multi-repo renderer uses.
+      # See the "The actual bug (task 01a0e5f6 stage 2)" tests below for the
+      # case where that claim actually differs (ci: none / unenforced) from
+      # the undeclared-repo-set path's unconditional text.
+      assert result.description =~ "CI is required and enforced by branch protection"
 
       # ...and the single gate now names the repository it watches.
       assert [validation] = result.validations
@@ -768,6 +840,36 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
              "a repo with zero required checks has nothing for auto-merge to wait for"
     end
 
+    # `repo_gate/2` used to collapse anything non-"none" into "required",
+    # which would have swallowed "unenforced" the moment it was added as a
+    # valid state. This pins that the pass-through is explicit per value.
+    test "a ci: unenforced entry is preserved, not collapsed into required" do
+      strategy = %{
+        "type" => "pr_merge",
+        "config" => %{},
+        "repos" => [
+          @core,
+          %{
+            "repo_url" => "https://github.com/Stark Industries/orion",
+            "slug" => "Stark Industries/orion",
+            "ci" => "unenforced",
+            "role" => "secondary",
+            "config" => %{}
+          }
+        ]
+      }
+
+      result = DeployStageBuilder.build_stage(strategy, 1, @recorded_branch)
+
+      [core_gate, orion_gate] = result.validations
+
+      assert core_gate.evaluation_payload["ci"] == "required"
+      assert orion_gate.evaluation_payload["ci"] == "unenforced"
+
+      assert orion_gate.evaluation_payload["auto_merge"] == false,
+             "a repo with nothing required has nothing for auto-merge to wait on"
+    end
+
     test "the description says plainly what CLEAN means on a ci: none repo" do
       result =
         DeployStageBuilder.build_stage(
@@ -785,6 +887,142 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
       # The sentence is about the ci: none repo ONLY — it must not be
       # attached to the repo that does have checks.
       refute result.description =~ "Startup-Suite/core has no required status checks"
+    end
+
+    # ── The actual bug (task 01a0e5f6 stage 2) ──────────────────────────
+    #
+    # `pr_merge_description(config, [_single])` used to DISCARD the resolved
+    # single-repo entry (with its computed `ci`) and fall back to the
+    # config-only renderer, which has no per-repo `ci` and can never say
+    # anything but "CI is enforced by branch protection". This is the COMMON
+    # case — `Tasks.resolve_deploy_strategy_with_repos/1` synthesizes a
+    # one-entry `"repos"` list from `project.repo_url` for every ordinary
+    # task — so the single-repo path never reached ci-aware code at all.
+    # Every test below exercises BOTH renderers: a test exercising only
+    # `repo_sentence/1` (the multi-repo enumerator) would not catch this,
+    # since that renderer was already correct-ish.
+    test "ci: required single-repo gate (core's shape) renders the required claim via the single-repo path" do
+      result =
+        DeployStageBuilder.build_stage(
+          %{"type" => "pr_merge", "config" => %{}, "repos" => [@core]},
+          1,
+          @recorded_branch
+        )
+
+      assert result.description =~ "CI is required and enforced by branch protection"
+    end
+
+    test "ci: unenforced single-repo gate (orion's shape) renders the NEW claim via the single-repo path, and neither the none nor the required claim" do
+      result =
+        DeployStageBuilder.build_stage(
+          %{"type" => "pr_merge", "config" => %{}, "repos" => [@orion]},
+          1,
+          @recorded_branch
+        )
+
+      assert result.description =~
+               "CI runs on this repo but is NOT required — MERGEABLE/CLEAN means nothing " <>
+                 "blocks the merge, not that checks passed or even finished"
+
+      assert result.description =~ "gh run watch <id> --exit-status"
+
+      refute result.description =~ "has no required status checks"
+      refute result.description =~ "CI is required and enforced"
+    end
+
+    test "ci: required and ci: unenforced both render their claims via repo_sentence/1 in a two-repo scenario" do
+      result =
+        DeployStageBuilder.build_stage(
+          %{"type" => "pr_merge", "config" => %{}, "repos" => [@core, @orion]},
+          1,
+          @recorded_branch
+        )
+
+      assert result.description =~
+               "Startup-Suite/core: CI is required and enforced by branch protection"
+
+      assert result.description =~
+               "Stark Industries/orion: CI runs on this repo but is NOT required"
+
+      refute result.description =~ "Stark Industries/orion has no required status checks"
+      refute result.description =~ "Stark Industries/orion: CI is required and enforced"
+    end
+
+    test "ci: none still renders unchanged in both the single-repo path and repo_sentence/1 (regression guard)" do
+      single =
+        DeployStageBuilder.build_stage(
+          %{"type" => "pr_merge", "config" => %{}, "repos" => [@channel]},
+          1,
+          @recorded_branch
+        )
+
+      multi =
+        DeployStageBuilder.build_stage(
+          %{"type" => "pr_merge", "config" => %{}, "repos" => [@core, @channel]},
+          1,
+          @recorded_branch
+        )
+
+      for result <- [single, multi] do
+        assert result.description =~ "has no required status checks"
+
+        assert result.description =~
+                 "a CLEAN merge state means zero checks ran, not checks passed"
+      end
+    end
+
+    test "the enforcement claim matches between the single-repo path and repo_sentence/1, for all three ci states" do
+      required_claim = "CI is required and enforced by branch protection"
+
+      none_claim =
+        "has no required status checks — a CLEAN merge state means zero checks ran, not " <>
+          "checks passed"
+
+      unenforced_claim =
+        "CI runs on this repo but is NOT required — MERGEABLE/CLEAN means nothing blocks " <>
+          "the merge, not that checks passed or even finished. Watch the run to conclusion " <>
+          "(`gh run watch <id> --exit-status`) before merging by hand."
+
+      single_required =
+        DeployStageBuilder.build_stage(
+          %{"type" => "pr_merge", "config" => %{}, "repos" => [@core]},
+          1,
+          @recorded_branch
+        ).description
+
+      single_none =
+        DeployStageBuilder.build_stage(
+          %{"type" => "pr_merge", "config" => %{}, "repos" => [@channel]},
+          1,
+          @recorded_branch
+        ).description
+
+      single_unenforced =
+        DeployStageBuilder.build_stage(
+          %{"type" => "pr_merge", "config" => %{}, "repos" => [@orion]},
+          1,
+          @recorded_branch
+        ).description
+
+      multi =
+        DeployStageBuilder.build_stage(
+          %{"type" => "pr_merge", "config" => %{}, "repos" => [@core, @channel, @orion]},
+          1,
+          @recorded_branch
+        ).description
+
+      # Same claim, extracted from BOTH renderers — NOT asserting the two
+      # renderers produce byte-identical strings, since their surrounding
+      # prose (repo-count language, list framing, merge-method wording)
+      # legitimately differs.
+      assert single_required =~ required_claim
+      assert multi =~ required_claim
+
+      assert single_none =~ none_claim
+      assert multi =~ none_claim
+
+      assert single_unenforced =~ unenforced_claim
+      assert multi =~ unenforced_claim
     end
 
     # `Tasks.resolve_deploy_repos/1` KEEPS a declared entry whose

@@ -19,7 +19,7 @@ defmodule Platform.Tasks.DeployStageBuilder do
           "repo_url" => "https://github.com/Startup-Suite/core",
           "branch" => "task/019fba18-d074-7185-8e0e-032ee6d02fbe",
           "branch_tip_sha" => "9fcec268…" | nil,
-          "ci" => "required" | "none",
+          "ci" => "required" | "none" | "unenforced",
           "auto_merge" => boolean(),
           "merge_method" => "squash" | "merge" | "rebase"
         }}
@@ -84,6 +84,15 @@ defmodule Platform.Tasks.DeployStageBuilder do
   review stage by `PlanEngine` during plan ingestion — this builder only emits
   deterministic deploy-time validations (`pr_merged`, `ci_passed`, `test_pass`,
   `manual_approval`). Do NOT add `e2e_behavior` to any deploy-stage definition.
+
+  ## Scope boundary vs. `Platform.Orchestration.PromptTemplates`
+
+  This module fixes the ci-aware `pr_merge` `description` persisted on the
+  Stage row (task 01a0e5f6-4619). It does not touch the separate, per-turn
+  `dispatch.deploying` prompt built by `PromptTemplates`/`HeartbeatScheduler`
+  — that template's static "Merge mechanics on Startup-Suite/core" block was
+  evaluated and left out of scope by the same task; see the comment above
+  that block in `prompt_templates.ex` for the reasoning.
   """
 
   alias Platform.Tasks.RepoRef
@@ -91,21 +100,26 @@ defmodule Platform.Tasks.DeployStageBuilder do
   @valid_strategy_types ~w(none pr_merge docker_deploy fly skill_driven manual project_files email no_op_wait_for_rollup)
   @valid_merge_methods ~w(squash merge rebase)
 
-  # A `pr_merge` repo entry's `"ci"` is a THREE-STATE fact once you read it
+  # A `pr_merge` repo entry's `"ci"` is a FOUR-STATE fact once you read it
   # together with `config["require_ci_pass"]`:
   #
   #   * `ci: "required"` + `require_ci_pass: true`  — there is CI and we gate on it.
   #   * `ci: "required"` + `require_ci_pass: false` — there IS CI and we choose not to gate.
-  #   * `ci: "none"`                                — there is NO CI to gate on.
+  #   * `ci: "unenforced"`                           — CI runs (workflows exist and execute,
+  #     e.g. Stark Industries/orion: `branches/main` reports `protected: false` and
+  #     `required_status_checks.contexts: []`), but nothing about it is required or
+  #     blocking, so there is nothing for auto-merge or a CI gate to wait on.
+  #   * `ci: "none"`                                — there is NO CI at all to gate on.
   #
-  # The last two MUST NEVER COLLAPSE INTO ONE VALUE, for the same reason
+  # None of these may collapse into another, for the same reason
   # `Task.planning_step_outcomes` keeps `not_applicable` and `failed` apart:
   # a gate that never ran must not become indistinguishable from a gate
   # that ran and passed. On a repo with zero required checks, GitHub
   # reports `mergeStateStatus: CLEAN` — which means "nothing blocks the
   # merge", NOT "checks passed". `auto_merge` there is a fiction, and
-  # `validate_strategy/1` refuses to store it.
-  @valid_repo_ci_states ~w(required none)
+  # `validate_strategy/1` refuses to store it, whether CI runs unenforced
+  # or does not exist at all.
+  @valid_repo_ci_states ~w(required none unenforced)
 
   # Every stage this module mints is named `"Deploy: <something>"`. That prefix
   # is the ONLY reliable marker that a stage is a system-injected deploy stage:
@@ -339,15 +353,20 @@ defmodule Platform.Tasks.DeployStageBuilder do
         "config" => %{"auto_merge" => false},
         "repos" => [
           %{"repo_url" => "https://github.com/Startup-Suite/core", "ci" => "required"},
-          %{"repo_url" => "Startup-Suite/claude-code-suite-channel", "ci" => "none"}
+          %{"repo_url" => "Startup-Suite/claude-code-suite-channel", "ci" => "none"},
+          %{"repo_url" => "Stark Industries/orion", "ci" => "unenforced"}
         ]}
 
   Each entry's own `"config"` overrides the strategy-level `"config"`.
   Validation refuses the config that is a FICTION rather than refusing
   the task: `auto_merge: true` (or `require_ci_pass: true`) on an entry
-  with `ci: "none"` is rejected here, naming the repository, because on a
-  repo with zero required checks there is nothing for auto-merge to wait
-  for.
+  with `ci: "none"` OR `ci: "unenforced"` is rejected here, naming the
+  repository, because on a repo with zero required checks there is nothing
+  for auto-merge to wait for — whether that's because no CI runs at all
+  (`"none"`) or because CI runs but nothing about it is required or
+  blocking (`"unenforced"`, e.g. `Stark Industries/orion`: workflows
+  genuinely run and pass, but `branches/main` reports `protected: false`
+  and `required_status_checks.contexts: []`).
   """
   @spec validate_strategy(map()) :: :ok | {:error, String.t()}
   def validate_strategy(%{"type" => "pr_merge"} = strategy) do
@@ -480,24 +499,52 @@ defmodule Platform.Tasks.DeployStageBuilder do
   defp validate_repo_ci_expressibility(_entry, _slug, "required", _strategy_config), do: :ok
 
   defp validate_repo_ci_expressibility(entry, slug, "none", strategy_config) do
+    reject_unexpressible_ci(entry, slug, "none", strategy_config)
+  end
+
+  # `ci: "unenforced"` means CI genuinely runs on the repository (workflows
+  # exist and execute) but nothing about it is required or blocking — the
+  # same reason `auto_merge` and `require_ci_pass` are unexpressible as for
+  # `ci: "none"`: there is nothing REQUIRED for auto-merge to wait on or for
+  # a CI gate to gate against, even though checks may run and pass.
+  defp validate_repo_ci_expressibility(entry, slug, "unenforced", strategy_config) do
+    reject_unexpressible_ci(entry, slug, "unenforced", strategy_config)
+  end
+
+  defp reject_unexpressible_ci(entry, slug, ci_state, strategy_config) do
     config = Map.merge(strategy_config, Map.get(entry, "config", %{}))
 
     cond do
       Map.get(config, "auto_merge") == true ->
-        {:error, ci_none_error("auto_merge", slug)}
+        {:error, unexpressible_ci_error("auto_merge", slug, ci_state)}
 
       Map.get(config, "require_ci_pass") == true ->
-        {:error, ci_none_error("require_ci_pass", slug)}
+        {:error, unexpressible_ci_error("require_ci_pass", slug, ci_state)}
 
       true ->
         :ok
     end
   end
 
-  defp ci_none_error(key, slug) do
-    "#{key} is not expressible for #{slug}: ci is \"none\" (no required checks), " <>
-      "so a CLEAN mergeStateStatus means zero checks ran, not checks passed. " <>
+  defp unexpressible_ci_error(key, slug, ci_state) do
+    "#{key} is not expressible for #{slug}: #{ci_unexpressible_reason(ci_state)} " <>
       "Set #{key}: false for this repo and merge it by hand."
+  end
+
+  # The reason genuinely differs between the two states — "none" means no CI
+  # exists to run, "unenforced" means CI runs but nothing about it is
+  # required — so it cannot be a single literal sentence. What's shared (the
+  # `#{key} is not expressible for #{slug}` framing and the `Set #{key}:
+  # false` remedy) lives once in `unexpressible_ci_error/3` above; only the
+  # true-for-that-state clause is parameterized here.
+  defp ci_unexpressible_reason("none") do
+    "ci is \"none\" (no required checks), so a CLEAN mergeStateStatus means zero checks " <>
+      "ran, not checks passed."
+  end
+
+  defp ci_unexpressible_reason("unenforced") do
+    "ci is \"unenforced\" (CI runs but nothing about it is required or blocking), so a " <>
+      "CLEAN mergeStateStatus means nothing was required to pass, not that checks passed."
   end
 
   # ── Private helpers ────────────────────────────────────────────────────
@@ -524,7 +571,13 @@ defmodule Platform.Tasks.DeployStageBuilder do
   defp repo_gate(entry, strategy_config) when is_map(entry) do
     repo_url = Map.get(entry, "repo_url")
     config = Map.merge(strategy_config, Map.get(entry, "config", %{}))
-    ci = if Map.get(entry, "ci", "required") == "none", do: "none", else: "required"
+
+    ci =
+      case Map.get(entry, "ci", "required") do
+        "none" -> "none"
+        "unenforced" -> "unenforced"
+        _ -> "required"
+      end
 
     %{
       # A declared entry whose `repo_url` will not normalize keeps its
@@ -616,7 +669,35 @@ defmodule Platform.Tasks.DeployStageBuilder do
   # paragraph already said, at greater length.
   #
   # Must precede the general clause — pattern matching is ordered.
-  defp pr_merge_description(config, [_single]), do: pr_merge_description(config)
+  #
+  # The bug this ticket exists to fix: this clause used to discard `entries`
+  # entirely and fall back to `pr_merge_description(config)` — the
+  # config-only renderer below, which has no per-repo `ci` and can therefore
+  # never say anything but "CI is enforced by branch protection". That is
+  # the COMMON case (most tasks resolve to exactly one repo via
+  # `Tasks.resolve_deploy_strategy_with_repos/1`), so the single-repo path
+  # never reached ci-aware code at all — on a repo like
+  # Stark Industries/orion (`ci: "unenforced"`) it asserted an
+  # enforcement claim that is false. Route through the SAME claim helper
+  # `repo_sentence/1` uses instead, keyed on this entry's own `ci`.
+  defp pr_merge_description(config, [entry]) do
+    require_review = Map.get(config, "require_review_approval", false)
+
+    parts = [
+      "Deploy via PR merge flow.",
+      "Push the task branch and open a PR against the default branch.",
+      "Stage completes when the PR is merged " <>
+        "(pr_merged validation, auto-evaluated by the GitHub pull_request.closed webhook).",
+      single_repo_ci_sentence(entry),
+      if(require_review,
+        do: "PR review approval is required.",
+        else: "PR review approval is not required."
+      ),
+      single_repo_merge_sentence(entry)
+    ]
+
+    parts |> Enum.reject(&is_nil/1) |> Enum.join(" ")
+  end
 
   defp pr_merge_description(config, entries) do
     require_review = Map.get(config, "require_review_approval", false)
@@ -666,9 +747,21 @@ defmodule Platform.Tasks.DeployStageBuilder do
   # CLEAN` — "nothing blocks the merge", not "checks passed". Verified on
   # both bridge repos: neither has a GitHub webhook or a protected `main`.
   defp repo_sentence(%{ci: "none"} = gate) do
-    "#{repo_label(gate)} has no required status checks — a CLEAN merge state means " <>
-      "zero checks ran, not checks passed. This repo is merged by hand; a human must " <>
-      "look at it."
+    "#{repo_label(gate)} #{ci_enforcement_claim(gate_ci_state(gate))}. This repo is " <>
+      "merged by hand; a human must look at it."
+  end
+
+  # `ci: "unenforced"` means CI genuinely runs (workflows exist and execute,
+  # e.g. Stark Industries/orion) but nothing about it is required or
+  # blocking, so MERGEABLE/CLEAN means "nothing blocks the merge", not
+  # "checks passed" — the same shape of lie `ci: "none"` guards against
+  # above, but for the opposite reason (CI exists here; it just isn't
+  # gating). Must NOT reuse the `ci: "none"` clause's text: that sentence
+  # asserts "zero checks ran", which is false on a repo that genuinely runs
+  # CI, and reusing it would reintroduce this ticket's bug in the other
+  # direction.
+  defp repo_sentence(%{ci: "unenforced"} = gate) do
+    "#{repo_label(gate)}: #{ci_enforcement_claim(gate_ci_state(gate))}"
   end
 
   # `auto_merge: true` in the strategy config is a DECLARATION, not an armed
@@ -677,14 +770,19 @@ defmodule Platform.Tasks.DeployStageBuilder do
   # green from a retry green the deployer must not arm it (ticket 01a08d81).
   # The sentence therefore sends a trusting reader to a check whose safe
   # branch is the hand-merge — a wrong trust here merges to main silently.
+  #
+  # `repo_gate/2` only ever sets `auto_merge: true` when `ci == "required"`
+  # (there is nothing for auto-merge to wait for otherwise), so this clause
+  # never competes with the `"none"` / `"unenforced"` clauses above for the
+  # same gate.
   defp repo_sentence(%{auto_merge: true} = gate) do
-    "#{repo_label(gate)}: CI is required and enforced by branch protection; strategy " <>
+    "#{repo_label(gate)}: #{ci_enforcement_claim(gate_ci_state(gate))}; strategy " <>
       "config declares auto_merge: true (merge method: #{gate.merge_method}). " <>
       auto_merge_declaration_caveat()
   end
 
   defp repo_sentence(gate) do
-    "#{repo_label(gate)}: CI is required and enforced by branch protection; strategy " <>
+    "#{repo_label(gate)}: #{ci_enforcement_claim(gate_ci_state(gate))}; strategy " <>
       "config declares auto_merge: false (merge method: #{gate.merge_method}). " <>
       "A human or the deployer merges the PR by hand via GitHub once CI is green and " <>
       "verifies `mergedAt`."
@@ -706,6 +804,82 @@ defmodule Platform.Tasks.DeployStageBuilder do
       "`pr_merged` is passed by the pull_request.closed webhook."
   end
 
+  # `repo_gate/2` already normalizes a declared entry's raw `"ci"` into one
+  # of `@valid_repo_ci_states` before any description code sees it. This is
+  # the one place PAST that point where description logic reads it back off
+  # a resolved gate to decide which enforcement claim it is entitled to
+  # make — not a second normalizer, the read side of the same fact, shared
+  # by `single_repo_ci_sentence/1` and `repo_sentence/1` so neither can drift
+  # from the other about what a given `ci` value means.
+  defp gate_ci_state(%{ci: ci}) when ci in @valid_repo_ci_states, do: ci
+
+  # The enforcement CLAIM fragment for each state — what a green/CLEAN merge
+  # state does and does not mean on a repo in that state. Consumed by BOTH
+  # `single_repo_ci_sentence/1` (the single-repo path of
+  # `pr_merge_description/2`) and `repo_sentence/1` (the per-repo path).
+  # Each renderer's surrounding prose — repo-count language, list framing,
+  # merge-method wording, whether a repo label prefixes the sentence — may
+  # legitimately differ; this fragment must not, since divergent claim text
+  # between the two renderers is exactly the bug this ticket fixes.
+  defp ci_enforcement_claim("required") do
+    "CI is required and enforced by branch protection"
+  end
+
+  defp ci_enforcement_claim("none") do
+    "has no required status checks — a CLEAN merge state means zero checks ran, not " <>
+      "checks passed"
+  end
+
+  defp ci_enforcement_claim("unenforced") do
+    "CI runs on this repo but is NOT required — MERGEABLE/CLEAN means nothing blocks " <>
+      "the merge, not that checks passed or even finished. Watch the run to conclusion " <>
+      "(`gh run watch <id> --exit-status`) before merging by hand."
+  end
+
+  # The single-repo counterpart to `repo_sentence/1`'s per-repo CI clauses.
+  # No repo label prefix — there is only one repository in this path, so
+  # naming it would repeat what the rest of the paragraph already implies
+  # (unlike `repo_sentence/1`, which enumerates several and must say which
+  # one it means).
+  defp single_repo_ci_sentence(entry) do
+    case gate_ci_state(entry) do
+      "required" ->
+        "#{ci_enforcement_claim("required")}."
+
+      "none" ->
+        "This repository #{ci_enforcement_claim("none")}. This repo is merged by hand; " <>
+          "a human must look at it."
+
+      "unenforced" ->
+        ci_enforcement_claim("unenforced")
+    end
+  end
+
+  # The single-repo counterpart to `repo_sentence/1`'s auto_merge clauses.
+  # `entry.auto_merge` is already the gate's COMPUTED value from
+  # `repo_gate/2` — `false` whenever `ci` is `"none"` or `"unenforced"`,
+  # since there is nothing for auto-merge to wait for on either — so this
+  # never needs to re-check `ci` itself.
+  defp single_repo_merge_sentence(%{auto_merge: true} = entry) do
+    "Strategy config declares auto_merge: true (merge method: #{entry.merge_method}). " <>
+      auto_merge_declaration_caveat()
+  end
+
+  defp single_repo_merge_sentence(entry) do
+    "Strategy config declares auto_merge: false (merge method: #{entry.merge_method}). " <>
+      "A human or the deployer merges the PR by hand via GitHub once CI is green and " <>
+      "verifies `mergedAt`."
+  end
+
+  # The genuinely zero-repo-info renderer. Reached ONLY from `build_stage/4`'s
+  # catch-all clause when `Tasks.resolve_deploy_strategy_with_repos/1` could
+  # not resolve ANY repo at all (no `project.repo_url` to synthesize one
+  # from) — there is no repository identity here to key a `ci` claim on, so
+  # this keeps its pre-existing unconditional "CI is enforced by branch
+  # protection" sentence rather than reaching for `ci_enforcement_claim/1`.
+  # That is deliberate, not a missed case: `single_repo_ci_sentence/1` above
+  # is the ci-aware sibling for when a repo IS resolved (the common case),
+  # and this function is left untouched for when one is not.
   defp pr_merge_description(config) do
     auto_merge = Map.get(config, "auto_merge", false)
     require_review = Map.get(config, "require_review_approval", false)

@@ -1480,6 +1480,24 @@ defmodule Platform.Orchestration.PromptTemplates do
           "deploy_strategy_config",
           "federation_preamble"
         ],
+        # NOTE (task 01a0e5f6-4619): the "### Merge mechanics on
+        # Startup-Suite/core" block below is core-repo-specific — it hardcodes
+        # this repo's protection API path and the `Test`/`first-run-green`
+        # check names from ticket 01a08d81 — and renders verbatim on every
+        # `pr_merge` deploy dispatch regardless of the target repo. It is
+        # redundant for other repos with `HeartbeatScheduler.ci_instruction/1`
+        # and `merge_instruction/2`, which already derive the equivalent
+        # per-repo arming guidance correctly, immediately above this block in
+        # the same rendered dispatch. This was evaluated and explicitly left
+        # OUT OF SCOPE by task 01a0e5f6-4619 (this task instead fixes
+        # `DeployStageBuilder`'s Stage#description — a different render
+        # path). Follow-up, if ever picked up: parameterize or delete this
+        # static block in favor of `{{deploy_strategy_instructions}}` —
+        # requires a force-update `prompt_templates` seed-row migration (see
+        # `20260731120000_add_deploy_strategy_instructions_to_dispatch_deploying`
+        # and `20260911003000_force_update_prompt_templates_sync_live_rows_2026_09_10`)
+        # since `seed_defaults/0` is INSERT-only and an Elixir-source edit
+        # alone would never reach already-seeded rows.
         content: """
         #{task_ack_preamble}
         Task is deploying — execute the deploy stage based on the resolved strategy.
