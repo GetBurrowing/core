@@ -85,6 +85,11 @@ defmodule Mix.Tasks.Suite.Deploy.ScopeGateTest do
       Process.get(:stub_results, %{})
       |> Map.get(branch, {:ok, nil})
     end
+
+    # Not exercised by these tests — present only so this module keeps
+    # satisfying the `MergeRunner` behaviour.
+    @impl true
+    def commits_between(_query, _base_sha, _head_sha), do: {:ok, []}
   end
 
   defp script(branch, result),

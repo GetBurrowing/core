@@ -70,6 +70,26 @@ defmodule Platform.Tasks.DeployMergeReconcilerTest do
         if String.contains?(repo, key) or key == branch, do: result
       end)
     end
+
+    # Not yet wired into `poll/7` — that lands in a later stage of this
+    # ticket. This stub exists now so `StubRunner` keeps satisfying the
+    # `MergeRunner` behaviour, and so a later stage can script a
+    # fix-forward compare via `script_commits/2` without shelling out to
+    # `gh`. Unscripted, it answers "zero commits", the same shape
+    # `commits_between/3`'s contract gives a genuinely-empty compare.
+    @impl true
+    def commits_between(%{repo: repo, branch: branch} = query, base_sha, head_sha) do
+      send(
+        self(),
+        {:commits_between_called, Map.merge(query, %{base_sha: base_sha, head_sha: head_sha})}
+      )
+
+      :stub_commits
+      |> Process.get(%{})
+      |> Enum.find_value({:ok, []}, fn {key, result} ->
+        if String.contains?(repo, key) or key == branch, do: result
+      end)
+    end
   end
 
   # Reports a merge for LITERALLY ANY query. Used only where the assertion is
@@ -102,8 +122,17 @@ defmodule Platform.Tasks.DeployMergeReconcilerTest do
          # so a zero result cannot be blamed on it having nothing to say, and
          # a head sha that matched nothing would give it a second way to
          # decline.
-         head_sha: nil
+         head_sha: nil,
+         author_login: nil
        }}
+    end
+
+    # Same rationale as `StubRunner.commits_between/3`: not exercised by
+    # `poll/7` yet, present so this module keeps satisfying the behaviour.
+    @impl true
+    def commits_between(query, _base_sha, _head_sha) do
+      send(self(), {:commits_between_called, query})
+      {:ok, []}
     end
   end
 
@@ -112,6 +141,16 @@ defmodule Platform.Tasks.DeployMergeReconcilerTest do
   defp script(repo_or_branch, result),
     do:
       Process.put(:stub_results, Map.put(Process.get(:stub_results, %{}), repo_or_branch, result))
+
+  # Same shape as `script/2`, kept as a separate process key (`:stub_commits`
+  # vs `:stub_results`) so scripting a compare for one repo/branch can never
+  # collide with scripting its `merged_pr` answer.
+  defp script_commits(repo_or_branch, result),
+    do:
+      Process.put(
+        :stub_commits,
+        Map.put(Process.get(:stub_commits, %{}), repo_or_branch, result)
+      )
 
   defp merged(number, opts \\ []) do
     {:ok,
@@ -130,8 +169,25 @@ defmodule Platform.Tasks.DeployMergeReconcilerTest do
        # like it exercised the comparison. Tests that mean to compare trees
        # pin BOTH sides explicitly — see `sweep/1 — the merge must carry the
        # reviewed tree`.
-       head_sha: Keyword.get(opts, :head_sha)
+       head_sha: Keyword.get(opts, :head_sha),
+       # Same default-to-nil discipline, one field further: unscripted, no
+       # test here relies on WHO authored the merge, only on when it merged
+       # and which tree it carried. A pinned default would let a future
+       # fix-forward test read a login this fixture never chose.
+       author_login: Keyword.get(opts, :author_login)
      }}
+  end
+
+  # A commit as `MergeRunner.commit()` describes it, for scripting
+  # `commits_between/3` via `script_commits/2`. Defaults mirror `merged/2`:
+  # every field is nil unless a test pins it, so an unscripted call cannot
+  # be mistaken for one that exercised the date or author checks.
+  defp commit(sha, opts \\ []) do
+    %{
+      sha: sha,
+      committer_date: Keyword.get(opts, :committer_date),
+      author_login: Keyword.get(opts, :author_login)
+    }
   end
 
   # An ISO8601 merge time that POSTDATES every stage this file mints.
@@ -442,6 +498,17 @@ defmodule Platform.Tasks.DeployMergeReconcilerTest do
       assert log =~ "919"
       assert log =~ stale
       assert log =~ DateTime.to_iso8601(reload_stage(stage.id).started_at)
+
+      # REGRESSION PIN (task 01a0e663, stage 3, validation 01a0e66d-1d34-700c):
+      # this specimen must be caught by `merge_postdates_stage?/2` and pend
+      # via `pend_stale/5` WITHOUT the fix-forward author/window check ever
+      # running. `cond`'s clause order in `poll/7` makes this true by
+      # construction, but the fix-forward check calls the SAME runner
+      # (`commits_between/3`) the `{:ok, pr}` branch above already proved was
+      # reachable, so a future reordering that let a stale merge fall through
+      # to the new check would be invisible to every assertion above this
+      # line. It would not be invisible to this one.
+      refute_received {:commits_between_called, _}
     end
 
     # The boundary, pinned separately because "after or equal" and "strictly
@@ -795,6 +862,293 @@ defmodule Platform.Tasks.DeployMergeReconcilerTest do
 
       assert reload(gates[@core]).status == "passed"
       assert reload(gates[@bridge]).status == "pending"
+    end
+  end
+
+  # ── A fix-forward delta can still carry the reviewed tree ────────────────
+  #
+  # `merge_carries_reviewed_tree?/2` is an equality, and a legitimate
+  # fix-forward push after review — a typo fixed, a lint failure answered —
+  # moves the tip and fails it exactly like a stranger's force-push does.
+  # This block is the narrow exception: a delta is accepted only when every
+  # commit strictly between the recorded tip and the merged head is BOTH
+  # committed strictly after the stage started AND authored by the PR's own
+  # login. Every negative control below is something that must STILL pend —
+  # stage 3 of this task exercises them as its own specimens, and this file
+  # is where the rule they are testing actually lives.
+  describe "sweep/1 — a fix-forward delta accepted" do
+    @reviewed_tip "3333333333333333333333333333333333333333"
+    @fixed_forward_head "4444444444444444444444444444444444444444"
+
+    test "accepts a single commit that postdates the stage and shares the PR's author" do
+      %{gates: gates, stage: stage} = one_repo_task!()
+      record_tip!(gates[@bridge], @reviewed_tip)
+
+      fresh = stage_relative_merge_time(stage, 30)
+      commit_time = stage_relative_merge_time(stage, 10)
+
+      script(
+        @bridge,
+        merged(950, merged_at: fresh, head_sha: @fixed_forward_head, author_login: "shipper")
+      )
+
+      script_commits(
+        @bridge,
+        {:ok, [commit(@fixed_forward_head, committer_date: commit_time, author_login: "shipper")]}
+      )
+
+      assert DeployMergeReconciler.sweep(runner: StubRunner) == 1
+
+      gate = reload(gates[@bridge])
+      assert gate.status == "passed"
+      assert gate.evaluated_by == "deploy_merge_reconciler"
+      assert gate.evidence["head_sha"] == @fixed_forward_head
+
+      assert gate.evidence["fix_forward_commits"] == [
+               %{
+                 "sha" => @fixed_forward_head,
+                 "committer_date" => commit_time,
+                 "author_login" => "shipper"
+               }
+             ]
+
+      assert_received {:commits_between_called,
+                       %{
+                         repo: "https://github.com/" <> @bridge,
+                         base_sha: @reviewed_tip,
+                         head_sha: @fixed_forward_head
+                       }}
+    end
+
+    test "accepts multiple commits when every one qualifies" do
+      %{gates: gates, stage: stage} = one_repo_task!()
+      record_tip!(gates[@bridge], @reviewed_tip)
+
+      fresh = stage_relative_merge_time(stage, 60)
+
+      script(
+        @bridge,
+        merged(951, merged_at: fresh, head_sha: @fixed_forward_head, author_login: "shipper")
+      )
+
+      script_commits(
+        @bridge,
+        {:ok,
+         [
+           commit("aaa111",
+             committer_date: stage_relative_merge_time(stage, 10),
+             author_login: "shipper"
+           ),
+           commit(@fixed_forward_head,
+             committer_date: stage_relative_merge_time(stage, 20),
+             author_login: "shipper"
+           )
+         ]}
+      )
+
+      assert DeployMergeReconciler.sweep(runner: StubRunner) == 1
+
+      gate = reload(gates[@bridge])
+      assert gate.status == "passed"
+      assert length(gate.evidence["fix_forward_commits"]) == 2
+
+      assert Enum.map(gate.evidence["fix_forward_commits"], & &1["sha"]) == [
+               "aaa111",
+               @fixed_forward_head
+             ]
+    end
+
+    # Same-window timing is not sufficient on its own — this commit lands
+    # inside the accepted time window and still must pend, because it was
+    # not authored by the PR's own login. An interloper's commit on the same
+    # branch, force-pushed or not, looks exactly like this.
+    test "rejects when a commit's author differs from the PR's author" do
+      %{gates: gates, stage: stage} = one_repo_task!()
+      record_tip!(gates[@bridge], @reviewed_tip)
+
+      fresh = stage_relative_merge_time(stage, 30)
+
+      script(
+        @bridge,
+        merged(952, merged_at: fresh, head_sha: @fixed_forward_head, author_login: "shipper")
+      )
+
+      script_commits(
+        @bridge,
+        {:ok,
+         [
+           commit(@fixed_forward_head,
+             committer_date: stage_relative_merge_time(stage, 10),
+             author_login: "an-interloper"
+           )
+         ]}
+      )
+
+      log =
+        capture_log(fn ->
+          assert DeployMergeReconciler.sweep(runner: StubRunner) == 0
+        end)
+
+      gate = reload(gates[@bridge])
+      assert gate.status == "pending"
+      assert gate.evidence == %{}
+      refute Map.has_key?(gate.evidence, "fix_forward_commits")
+      assert log =~ "did not carry the reviewed tree"
+
+      assert_received {:commits_between_called, %{repo: "https://github.com/" <> @bridge}}
+    end
+
+    # The edge case this design specifically introduces (validation
+    # 01a0e66d-1d34-700b): same-window timing alone must not be sufficient,
+    # even when it rides alongside a genuinely-qualifying commit. No
+    # force-push here — ancestry stays intact, A -> B -> C. B is a real
+    # same-author fix-forward commit that on its own would satisfy
+    # `fix_forward_commit_accepted?/3`. C lands in the SAME accepted time
+    # window but from a different GitHub login, and the merged PR's head is
+    # C. `Enum.all?/2` in `fix_forward_delta/6` must reject the whole delta
+    # the moment any one commit in it fails the check — accepting because
+    # SOME commit in the compare happened to qualify would let an
+    # interloper's commit ride in on the back of a legitimate one.
+    test "rejects the whole delta when a same-window interloper commit rides alongside a genuine same-author fix-forward commit" do
+      %{gates: gates, stage: stage} = one_repo_task!()
+      record_tip!(gates[@bridge], @reviewed_tip)
+
+      fresh = stage_relative_merge_time(stage, 30)
+      legit_time = stage_relative_merge_time(stage, 10)
+      interloper_time = stage_relative_merge_time(stage, 20)
+
+      script(
+        @bridge,
+        merged(958, merged_at: fresh, head_sha: @fixed_forward_head, author_login: "shipper")
+      )
+
+      script_commits(
+        @bridge,
+        {:ok,
+         [
+           commit("bbb222", committer_date: legit_time, author_login: "shipper"),
+           commit(@fixed_forward_head,
+             committer_date: interloper_time,
+             author_login: "an-interloper"
+           )
+         ]}
+      )
+
+      log =
+        capture_log(fn ->
+          assert DeployMergeReconciler.sweep(runner: StubRunner) == 0
+        end)
+
+      gate = reload(gates[@bridge])
+      assert gate.status == "pending"
+      assert gate.evidence == %{}
+      refute Map.has_key?(gate.evidence, "fix_forward_commits")
+      assert log =~ "did not carry the reviewed tree"
+
+      assert_received {:commits_between_called, %{repo: "https://github.com/" <> @bridge}}
+    end
+
+    test "rejects when a commit predates the stage's started_at" do
+      %{gates: gates, stage: stage} = one_repo_task!()
+      record_tip!(gates[@bridge], @reviewed_tip)
+
+      fresh = stage_relative_merge_time(stage, 30)
+
+      script(
+        @bridge,
+        merged(953, merged_at: fresh, head_sha: @fixed_forward_head, author_login: "shipper")
+      )
+
+      # Same author, same accepted window otherwise — the ONLY thing wrong
+      # with this commit is that it does not postdate the stage. If this
+      # test passed anyway, the date check would not be doing anything.
+      script_commits(
+        @bridge,
+        {:ok,
+         [
+           commit(@fixed_forward_head,
+             committer_date: stage_relative_merge_time(stage, -60),
+             author_login: "shipper"
+           )
+         ]}
+      )
+
+      capture_log(fn ->
+        assert DeployMergeReconciler.sweep(runner: StubRunner) == 0
+      end)
+
+      gate = reload(gates[@bridge])
+      assert gate.status == "pending"
+      refute Map.has_key?(gate.evidence, "fix_forward_commits")
+    end
+
+    test "rejects when commits_between/3 fails outright" do
+      %{gates: gates, stage: stage} = one_repo_task!()
+      record_tip!(gates[@bridge], @reviewed_tip)
+
+      fresh = stage_relative_merge_time(stage, 30)
+
+      script(
+        @bridge,
+        merged(954, merged_at: fresh, head_sha: @fixed_forward_head, author_login: "shipper")
+      )
+
+      script_commits(@bridge, {:error, {:gh_error, "compare: not found"}})
+
+      capture_log(fn ->
+        assert DeployMergeReconciler.sweep(runner: StubRunner) == 0
+      end)
+
+      gate = reload(gates[@bridge])
+      assert gate.status == "pending"
+      assert gate.evidence == %{}
+    end
+
+    # `commits_between/3`'s contract: `{:ok, []}` is a genuinely empty
+    # compare, never a stand-in for a failed call — but a genuinely empty
+    # compare is also not acceptance. There is no commit to have carried the
+    # reviewed tree forward, so this is non-acceptance, same as an error.
+    test "rejects a genuinely empty compare rather than treating it as vacuously accepted" do
+      %{gates: gates, stage: stage} = one_repo_task!()
+      record_tip!(gates[@bridge], @reviewed_tip)
+
+      fresh = stage_relative_merge_time(stage, 30)
+
+      script(
+        @bridge,
+        merged(955, merged_at: fresh, head_sha: @fixed_forward_head, author_login: "shipper")
+      )
+
+      script_commits(@bridge, {:ok, []})
+
+      capture_log(fn ->
+        assert DeployMergeReconciler.sweep(runner: StubRunner) == 0
+      end)
+
+      assert reload(gates[@bridge]).status == "pending"
+    end
+
+    # The fast path — `head_sha == tip` — must stay exactly as cheap as it
+    # was before this rule existed. If this test fails, the fast path is
+    # calling `commits_between/3` on every ordinary deploy, not just the
+    # ones whose head actually moved.
+    test "the fast path (head_sha == tip) never calls commits_between/3" do
+      %{gates: gates, stage: stage} = one_repo_task!()
+      record_tip!(gates[@bridge], @reviewed_tip)
+
+      script(
+        @bridge,
+        merged(956,
+          merged_at: stage_relative_merge_time(stage, 30),
+          head_sha: @reviewed_tip,
+          author_login: "shipper"
+        )
+      )
+
+      assert DeployMergeReconciler.sweep(runner: StubRunner) == 1
+
+      assert reload(gates[@bridge]).status == "passed"
+      refute_received {:commits_between_called, _}
     end
   end
 
@@ -1400,17 +1754,122 @@ defmodule Platform.Tasks.DeployMergeReconcilerTest do
   # ── The behaviour has no merge callback, and that is the guard ───────────
 
   describe "MergeRunner behaviour" do
-    test "declares only `available?/0` and `merged_pr/1`" do
+    test "declares only `available?/0`, `merged_pr/1`, and `commits_between/3`" do
       # The ticket's hard constraint is that a second PR is never
       # machine-merged without that repository's own CI gating it, and the
       # bridge repos have no CI at all. A poller running every five minutes
       # against exactly those repositories must not have a merge callback
-      # within reach. Pinned structurally, not by convention.
+      # within reach. `commits_between/3` is a compare — a GET against two
+      # shas that already exist — and adding it does not change that.
+      # Pinned structurally, not by convention.
       callbacks =
         Platform.Tasks.DeployMergeReconciler.MergeRunner.behaviour_info(:callbacks)
         |> Enum.sort()
 
-      assert callbacks == [available?: 0, merged_pr: 1]
+      assert callbacks == [available?: 0, commits_between: 3, merged_pr: 1]
+    end
+  end
+
+  # ── `commits_between/3` and `author_login` — the plumbing the fix-forward ─
+  # ── check in `poll/7` is built on. See "sweep/1 — the merge must carry ────
+  # ── the reviewed tree" below for the wired-in behavior these doubles ──────
+  # ── support. ───────────────────────────────────────────────────────────────
+
+  describe "MergeRunner test doubles: commits_between/3" do
+    test "an unscripted query answers {:ok, []} — never a stand-in for a failed call" do
+      assert StubRunner.commits_between(
+               %{repo: "https://github.com/#{@core}", branch: "task/unscripted"},
+               "base-sha",
+               "head-sha"
+             ) == {:ok, []}
+    end
+
+    test "a scripted compare returns a non-empty commit list with dates and logins" do
+      script_commits(
+        @core,
+        {:ok,
+         [
+           commit("aaa111", committer_date: "2026-09-20T10:00:00Z", author_login: "octocat"),
+           commit("bbb222", committer_date: "2026-09-20T10:05:00Z", author_login: "octocat"),
+           # No opts: a commit whose author/committer GitHub genuinely did
+           # not answer — `commit/2`'s defaults mirror `merged/2`'s nil
+           # discipline for exactly this shape of row.
+           commit("ccc333")
+         ]}
+      )
+
+      assert {:ok, [first, second, third]} =
+               StubRunner.commits_between(
+                 %{repo: "https://github.com/#{@core}", branch: "task/fix-forward"},
+                 "base-sha",
+                 "head-sha"
+               )
+
+      assert first == %{
+               sha: "aaa111",
+               committer_date: "2026-09-20T10:00:00Z",
+               author_login: "octocat"
+             }
+
+      assert second.sha == "bbb222"
+      assert third == %{sha: "ccc333", committer_date: nil, author_login: nil}
+
+      assert_received {:commits_between_called,
+                       %{
+                         repo: "https://github.com/" <> @core,
+                         branch: "task/fix-forward",
+                         base_sha: "base-sha",
+                         head_sha: "head-sha"
+                       }}
+    end
+
+    test "a scripted GENUINELY EMPTY compare is {:ok, []}, distinguishable from a failure" do
+      script_commits(@core, {:ok, []})
+
+      assert StubRunner.commits_between(
+               %{repo: "https://github.com/#{@core}", branch: "task/no-commits"},
+               "base-sha",
+               "head-sha"
+             ) == {:ok, []}
+    end
+
+    test "a scripted lookup failure is {:error, _}, never folded into {:ok, []}" do
+      script_commits(@core, {:error, {:gh_error, "compare: not found"}})
+
+      assert StubRunner.commits_between(
+               %{repo: "https://github.com/#{@core}", branch: "task/failure"},
+               "base-sha",
+               "head-sha"
+             ) == {:error, {:gh_error, "compare: not found"}}
+    end
+
+    test "AlwaysMergedRunner still satisfies the callback" do
+      # It does not script `commits_between/3` and its `merged_pr/1` never
+      # returns a `head_sha`, so `poll/7` never reaches the fix-forward
+      # branch through this runner — it must still keep compiling against
+      # the behaviour, and calling it directly must not raise.
+      assert AlwaysMergedRunner.commits_between(%{repo: @core, branch: "x"}, "a", "b") ==
+               {:ok, []}
+
+      assert_received {:commits_between_called, %{repo: @core, branch: "x"}}
+    end
+  end
+
+  describe "MergeRunner test doubles: author_login on merged_pr" do
+    test "`merged/2` defaults `author_login` to nil, matching `head_sha`'s discipline" do
+      assert {:ok, %{author_login: nil}} = merged(1)
+    end
+
+    test "`merged/2` carries a pinned `author_login` through StubRunner" do
+      script(@core, merged(2, author_login: "shipper"))
+
+      assert {:ok, %{author_login: "shipper"}} =
+               StubRunner.merged_pr(%{repo: "https://github.com/#{@core}", branch: "task/x"})
+    end
+
+    test "AlwaysMergedRunner's merged_pr carries an explicit nil author_login" do
+      assert {:ok, %{author_login: nil}} =
+               AlwaysMergedRunner.merged_pr(%{repo: @core, branch: "x"})
     end
   end
 end
@@ -1463,6 +1922,14 @@ defmodule Platform.Tasks.DeployMergeReconcilerTickLogTest do
     def merged_pr(query) do
       send(self(), {:merged_pr_called, query})
       {:ok, nil}
+    end
+
+    # Not exercised by these tests — present only so this module keeps
+    # satisfying the `MergeRunner` behaviour.
+    @impl true
+    def commits_between(query, _base_sha, _head_sha) do
+      send(self(), {:commits_between_called, query})
+      {:ok, []}
     end
   end
 

@@ -55,13 +55,37 @@ defmodule Platform.Tasks.DeployMergeReconciler.MergeRunner do
   evidence is worse than an absent one. `DeployMergeReconciler.poll/7` treats
   an absent `:head_sha` as "this question was not answered", not as "the
   trees differ".
+
+  `:author_login` is the merged PR's own author — the GitHub login that
+  opened it, not the login of whoever merged it or pushed a later commit.
+  It is `nil` only when GitHub genuinely does not answer it (a deleted
+  account, a bot with no `login`), never fabricated to stand in for an
+  absent value.
   """
   @type merged_pr :: %{
           required(:number) => pos_integer(),
           required(:url) => String.t() | nil,
           required(:merged_at) => String.t() | nil,
           required(:merge_commit_sha) => String.t() | nil,
-          required(:head_sha) => String.t() | nil
+          required(:head_sha) => String.t() | nil,
+          required(:author_login) => String.t() | nil
+        }
+
+  @typedoc """
+  One commit as GitHub's `compare` API describes it — `sha` is always
+  present; `committer_date` and `author_login` follow the same nil
+  discipline as `merged_pr/1`'s fields: either may be `nil` when GitHub
+  genuinely does not answer it, and neither is a stand-in for a failed
+  lookup. `committer_date` (not `author_date`) is the timestamp a
+  fix-forward check needs, because it is what moves when a commit is
+  amended or rebased onto a new tip — `author_date` would still read the
+  original authoring time and defeat a "committed after the stage started"
+  test.
+  """
+  @type commit :: %{
+          sha: String.t(),
+          committer_date: String.t() | nil,
+          author_login: String.t() | nil
         }
 
   @doc """
@@ -83,4 +107,23 @@ defmodule Platform.Tasks.DeployMergeReconciler.MergeRunner do
     `{:ok, nil}`; a failed question must never be recorded as a "no".
   """
   @callback merged_pr(query()) :: {:ok, merged_pr() | nil} | {:error, term()}
+
+  @doc """
+  Every commit strictly between `base_sha` and `head_sha` on `query.repo` —
+  GitHub's `compare/BASE...HEAD` semantics: commits reachable from
+  `head_sha` and not from `base_sha`.
+
+  * `{:ok, commits}` — the compare API answered. `{:ok, []}` means it
+    genuinely reports zero commits between the two shas — NOT a stand-in
+    for a failed call.
+  * `{:error, reason}` — the lookup itself failed. Emphatically distinct
+    from `{:ok, []}`, for the same reason `merged_pr/1`'s `{:error, reason}`
+    is distinct from `{:ok, nil}`: a failed question must never be recorded
+    as a "no".
+
+  Read-only, like `merged_pr/1` — a compare is a GET against two shas that
+  already exist and cannot create, merge, or push anything.
+  """
+  @callback commits_between(query(), base_sha :: String.t(), head_sha :: String.t()) ::
+              {:ok, [commit()]} | {:error, term()}
 end

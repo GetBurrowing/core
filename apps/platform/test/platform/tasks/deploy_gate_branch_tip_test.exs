@@ -121,6 +121,12 @@ defmodule Platform.Tasks.DeployGateBranchTipTest do
         if String.contains?(repo, slug), do: result
       end)
     end
+
+    # Not exercised by these tests — present only so this module keeps
+    # satisfying the `MergeRunner` behaviour. See
+    # `deploy_merge_reconciler_test.exs` for the fixture that scripts it.
+    @impl true
+    def commits_between(_query, _base_sha, _head_sha), do: {:ok, []}
   end
 
   defp script(slug, result),
@@ -133,7 +139,8 @@ defmodule Platform.Tasks.DeployGateBranchTipTest do
        url: "https://github.com/x/pull/#{number}",
        merged_at: merged_at,
        merge_commit_sha: "cccc3333cccc3333cccc3333cccc3333cccc3333",
-       head_sha: head_sha
+       head_sha: head_sha,
+       author_login: nil
      }}
   end
 

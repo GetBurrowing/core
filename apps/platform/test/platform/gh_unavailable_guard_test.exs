@@ -20,6 +20,7 @@ defmodule Platform.GhUnavailableGuardTest do
   use ExUnit.Case, async: false
 
   alias Platform.Tasks.AutoMerger
+  alias Platform.Tasks.DeployMergeReconciler.GhMergeRunner
   alias PlatformWeb.GithubWebhookController
 
   test "AutoMerger.execute_merge/3 returns {:error, :gh_unavailable, _} when gh is missing" do
@@ -43,6 +44,34 @@ defmodule Platform.GhUnavailableGuardTest do
       end)
 
     assert result == {:error, :gh_unavailable}
+  end
+
+  test "GhMergeRunner.merged_pr/1 returns {:error, :gh_unavailable} when gh is missing" do
+    result =
+      without_gh(fn ->
+        GhMergeRunner.merged_pr(%{repo: "test/repo", branch: "task/x"})
+      end)
+
+    assert result == {:error, :gh_unavailable}
+  end
+
+  test "GhMergeRunner.commits_between/3 returns {:error, :gh_unavailable} when gh is missing" do
+    result =
+      without_gh(fn ->
+        GhMergeRunner.commits_between(%{repo: "test/repo", branch: "task/x"}, "base", "head")
+      end)
+
+    assert result == {:error, :gh_unavailable}
+  end
+
+  test "GhMergeRunner.commits_between/3 returns {:error, {:invalid_repo, _}} for an " <>
+         "unnormalizable repo, without ever shelling out to gh" do
+    # A repo that will not normalize to an owner/name slug cannot be turned
+    # into a `repos/<slug>/compare/...` path, so this must fail BEFORE
+    # `gh` is invoked at all — proven by leaving `PATH` untouched and
+    # asserting no `ErlangError` and no `gh_unavailable` surfaces.
+    assert GhMergeRunner.commits_between(%{repo: "not a repo", branch: "task/x"}, "b", "h") ==
+             {:error, {:invalid_repo, "not a repo"}}
   end
 
   # Run `fun` with a `PATH` that resolves nothing, then restore. Without the

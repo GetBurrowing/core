@@ -47,9 +47,16 @@ defmodule Platform.Tasks.DeployMergeReconciler do
   `started_at` leaves the gate pending at `warning` — it is never a failure,
   and never a pass.
 
-  This bounds WHEN, not WHAT: it does not establish that the merged commit
-  contains this stage's work. That containment check is separate, and is not
-  in this module today.
+  This bounds WHEN, not WHAT: on its own it does not establish that the
+  merged commit contains this stage's work. Task 01a0e663 added a WHAT
+  check — `merge_carries_reviewed_tree?/2` (does `head_sha` equal the
+  gate's recorded `branch_tip_sha`?), with a narrow accept-by-author-and-
+  window exception for a legitimate fix-forward push after review; see "Is
+  this merge THE TREE the gate was minted for?" below. It is not general
+  containment or ancestry — `main` squash-merges, so `git merge-base
+  --is-ancestor` is deliberately never used (see the reasoning there) — it
+  answers only "did the reviewed tip ship, or a same-author, post-stage-
+  start fix-forward of it?".
 
   ## It never merges
 
@@ -565,11 +572,17 @@ defmodule Platform.Tasks.DeployMergeReconciler do
           not merge_postdates_stage?(pr, stage) ->
             pend_stale(validation, slug, pr, branch, stage)
 
-          not merge_carries_reviewed_tree?(pr, tip) ->
-            pend_wrong_tree(validation, slug, pr, branch, tip)
+          merge_carries_reviewed_tree?(pr, tip) ->
+            pass(validation, slug, pr, branch)
 
           true ->
-            pass(validation, slug, pr, branch)
+            case fix_forward_delta(runner, target, branch, tip, pr, stage) do
+              {:ok, commits} ->
+                pass(validation, slug, pr, branch, %{"fix_forward_commits" => commits})
+
+              {:reject, reason} ->
+                pend_wrong_tree(validation, slug, pr, branch, tip, reason)
+            end
         end
 
       # A failed question is not a "no". Leave the gate pending and say so
@@ -659,6 +672,17 @@ defmodule Platform.Tasks.DeployMergeReconciler do
   # review stage passed. `head_sha` is GitHub's `headRefOid` on the merged
   # PR. Equal means the reviewed commit is what went in.
   #
+  # Equal is sufficient to pass the gate on the spot, but UNEQUAL is no
+  # longer sufficient to reject it outright. A mismatch here only means
+  # `poll/7` hands the pair to `fix_forward_delta/6`, which accepts the
+  # delta between `tip` and `head_sha` when — and only when — EVERY commit
+  # in it is BOTH committed strictly after this stage's `started_at` AND
+  # authored by the same GitHub login that opened the merged PR; see
+  # "Fix-forward: a moved tip is not automatically a wrong tree" below. So
+  # this section documents the equality invariant
+  # `merge_carries_reviewed_tree?/2` itself checks — accept-by-author-and-
+  # window, not bare identity, is what actually decides a mismatched tip.
+  #
   # ## Why this is an EQUALITY and not an ancestry test
   #
   # `git merge-base --is-ancestor` is the obvious expression of "the merge
@@ -718,23 +742,169 @@ defmodule Platform.Tasks.DeployMergeReconciler do
 
   defp merge_carries_reviewed_tree?(_pr, _tip), do: true
 
+  # ── Fix-forward: a moved tip is not automatically a wrong tree ──────────
+
+  # `merge_carries_reviewed_tree?/2` is an EQUALITY, and a legitimate
+  # fix-forward push after review — a typo fixed, a lint failure answered —
+  # moves the branch tip and fails that equality exactly like a stranger's
+  # force-push does. Both look identical to `pend_wrong_tree/6`: head_sha and
+  # tip differ. This is the narrow exception that tells them apart WITHOUT
+  # ancestry (`git merge-base --is-ancestor` is deliberately not used here —
+  # see the moduledoc reasoning above `merge_carries_reviewed_tree?/2` on
+  # squash merges making it both too strict and too loose).
+  #
+  # The delta is accepted only when EVERY commit strictly between the
+  # recorded tip and the merged head is BOTH committed strictly after this
+  # stage started AND authored by the same GitHub login that opened the
+  # merged PR. Either fact alone is not enough: same-window timing alone
+  # admits an interloper's commit landed in the same few minutes, and
+  # same-author alone admits a historical or unrelated commit replayed onto
+  # the branch. `commits_between/3` failing, or answering an empty compare,
+  # is treated as non-acceptance, not as vacuously satisfied — an empty or
+  # failed compare has told us nothing about what shipped.
+  #
+  # Fails CLOSED on missing or unparseable per-commit data. This is
+  # deliberately NOT the same concession `merge_carries_reviewed_tree?/2`
+  # makes for an absent `branch_tip_sha`/`head_sha` — that fallback exists to
+  # avoid hanging every gate minted before the tip was recorded, a
+  # population this check has no bearing on. A `commits_between/3` result
+  # with a nil or unparseable `committer_date` or `author_login` on any
+  # commit is data this stage was given and declined to read, not data it
+  # never had, so it rejects rather than falling through.
+  #
+  # Returns `{:ok, commits}` on acceptance or `{:reject, reason}` on
+  # non-acceptance, where `reason` names WHICH check refused the delta —
+  # `:no_commits_in_delta`, `{:commits_lookup_error, term}`,
+  # `:author_mismatch`, or `:window_violation` — so `pend_wrong_tree/6` can
+  # log something more specific than "the two shas differ". The reason is
+  # diagnostic only: it is derived from the same `Enum.all?/2` that already
+  # decided pass vs. reject, via `fix_forward_rejection_reason/3` below, and
+  # cannot change what passes.
+  defp fix_forward_delta(runner, target, branch, tip, %{head_sha: head_sha} = pr, stage) do
+    case runner.commits_between(%{repo: target, branch: branch}, tip, head_sha) do
+      {:ok, []} ->
+        {:reject, :no_commits_in_delta}
+
+      {:ok, commits} ->
+        if Enum.all?(commits, &fix_forward_commit_accepted?(&1, stage, pr.author_login)) do
+          {:ok, Enum.map(commits, &fix_forward_commit_evidence/1)}
+        else
+          {:reject, fix_forward_rejection_reason(commits, stage, pr.author_login)}
+        end
+
+      {:error, reason} ->
+        {:reject, {:commits_lookup_error, reason}}
+    end
+  end
+
+  # Names the SPECIFIC check that failed, for the one commit that failed
+  # first — mirrors `fix_forward_commit_accepted?/3`'s own check order
+  # (author login, then window) so it cannot report a different failure
+  # than the one that actually decided the `Enum.all?/2` above. Only
+  # called on the reject path, where at least one commit fails one of the
+  # two checks, so the `nil` default is not reachable in practice; it is
+  # there so a future caller gets a legible atom instead of a crash if that
+  # ever stops being true.
+  defp fix_forward_rejection_reason(commits, stage, pr_login) do
+    Enum.find_value(commits, :author_mismatch, fn commit ->
+      cond do
+        not (is_binary(commit.author_login) and commit.author_login == pr_login) ->
+          :author_mismatch
+
+        not commit_postdates_stage?(commit.committer_date, stage) ->
+          :window_violation
+
+        true ->
+          nil
+      end
+    end)
+  end
+
+  # Both halves of the rule, ANDed: the commit's own login must match the
+  # PR's own login (a login GitHub genuinely declined to give, on either
+  # side, can never equal another `nil` and pass — see the moduledoc for why
+  # that is deliberate), and the commit must have been committed strictly
+  # after the stage started, by `committer_date` (not `author_date` — the
+  # field the `commit/0` typedoc names as the one that moves under a rebase
+  # or amend, which is what a fix-forward push onto a new tip actually is).
+  defp fix_forward_commit_accepted?(
+         %{committer_date: committer_date, author_login: commit_login},
+         stage,
+         pr_login
+       ) do
+    is_binary(commit_login) and commit_login == pr_login and
+      commit_postdates_stage?(committer_date, stage)
+  end
+
+  # Same parser and the same strictness as `merge_postdates_stage?/2` — a
+  # commit whose timestamp we cannot show postdates the stage is treated as
+  # not-after, never as maybe-after.
+  defp commit_postdates_stage?(committer_date, %Stage{started_at: %DateTime{} = started}) do
+    case parse_merged_at(committer_date) do
+      {:ok, committed} -> DateTime.compare(committed, started) == :gt
+      :error -> false
+    end
+  end
+
+  defp commit_postdates_stage?(_committer_date, _stage), do: false
+
+  # The evidence shape for an accepted fix-forward delta — one map per
+  # accepted commit, string-keyed to match every other key `pass/5` writes.
+  # `pend_wrong_tree/6` writes nothing queryable today; this is what lets a
+  # pass under this rule answer "which commits did this gate actually
+  # accept?" from the evidence alone, the same standard `head_sha` and
+  # `observed_by` are already held to.
+  defp fix_forward_commit_evidence(%{
+         sha: sha,
+         committer_date: committer_date,
+         author_login: author_login
+       }) do
+    %{"sha" => sha, "committer_date" => committer_date, "author_login" => author_login}
+  end
+
   # `warning`, and for the same reason as `pend_stale/5`: a merge the sweeper
   # found but will not accept is not the routine answer, it is a deploy that
   # now hangs until an operator looks. Both shas are in the line because the
   # single most useful thing an operator can do with this message is compare
   # them by eye — one is the commit the review passed on, the other is what
   # actually merged, and knowing WHICH tree shipped is the entire question.
-  defp pend_wrong_tree(validation, slug, pr, branch, tip) do
+  #
+  # `reason` is `fix_forward_delta/6`'s `{:reject, reason}` — naming WHICH of
+  # the fix-forward checks refused the delta, not only that the two shas
+  # differ, so an operator does not have to re-derive the compare by hand to
+  # learn why this one didn't qualify.
+  defp pend_wrong_tree(validation, slug, pr, branch, tip, reason) do
     Logger.warning(
       "[deploy_merge_reconciler] #{slug} PR ##{pr.number} for #{branch} merged head " <>
         "#{inspect(pr.head_sha)}, but this gate was minted for branch tip #{inspect(tip)}; " <>
-        "the merge did not carry the reviewed tree, so leaving validation " <>
-        "#{validation.id} pending. This is what a force-push after review looks like. " <>
-        "Re-review the branch as it now stands rather than passing the gate by hand."
+        "the merge did not carry the reviewed tree (#{fix_forward_rejection_text(reason)}), " <>
+        "so leaving validation #{validation.id} pending. This is what a force-push after " <>
+        "review looks like. Re-review the branch as it now stands rather than passing the " <>
+        "gate by hand."
     )
 
     0
   end
+
+  # One clause per `fix_forward_rejection_reason/3` (plus the lookup-error
+  # shape from `fix_forward_delta/6` itself) so the log line names the exact
+  # check that refused the delta. The catch-all is defensive only — every
+  # reason `fix_forward_delta/6` can actually produce has its own clause
+  # above it.
+  defp fix_forward_rejection_text(:no_commits_in_delta),
+    do: "commits_between/3 found no commits between the recorded tip and the merged head"
+
+  defp fix_forward_rejection_text({:commits_lookup_error, error}),
+    do: "commits_between/3 could not be resolved: #{inspect(error)}"
+
+  defp fix_forward_rejection_text(:author_mismatch),
+    do: "a commit in the delta was not authored by the merged PR's own author"
+
+  defp fix_forward_rejection_text(:window_violation),
+    do:
+      "a commit in the delta does not have a committer_date strictly after the stage's started_at"
+
+  defp fix_forward_rejection_text(other), do: "fix-forward check failed: #{inspect(other)}"
 
   # `warning`, matching `refuse/2` and NOT the `{:ok, nil}` branch's `debug`.
   # "No merged PR yet" is the routine answer for every open gate on every
@@ -765,26 +935,33 @@ defmodule Platform.Tasks.DeployMergeReconciler do
 
   defp stage_started_display(_stage), do: "nil (the stage records no start time)"
 
-  defp pass(validation, slug, pr, branch) do
-    evidence = %{
-      "pr_url" => pr.url,
-      "pr_number" => pr.number,
-      "merged_at" => pr.merged_at,
-      "merge_commit_sha" => pr.merge_commit_sha,
-      # The tree, next to the merge commit. Under a squash merge
-      # `merge_commit_sha` is a NEW commit on the base and shares no sha with
-      # anything the branch held, so it cannot answer "which work shipped?".
-      # `head_sha` can. Recorded for the same reason as `observed_by`: the
-      # question "what did this gate actually accept?" has to stay answerable
-      # from the evidence alone, months later, without re-asking GitHub about
-      # a PR whose branch may no longer exist.
-      "head_sha" => Map.get(pr, :head_sha),
-      "repo" => slug,
-      # The provenance key. A webhook-passed gate does not carry this, so
-      # "was this merge pushed to us or did we go looking?" stays answerable
-      # from the evidence alone.
-      "observed_by" => "reconciler"
-    }
+  # `extra_evidence` defaults to empty for the fast path and every other
+  # existing caller, so the change here is additive: only
+  # `fix_forward_delta/6`'s caller passes a non-empty map, keyed
+  # `"fix_forward_commits"`, and `Map.merge/2` puts it alongside the fields
+  # every pass already wrote rather than replacing any of them.
+  defp pass(validation, slug, pr, branch, extra_evidence \\ %{}) do
+    evidence =
+      %{
+        "pr_url" => pr.url,
+        "pr_number" => pr.number,
+        "merged_at" => pr.merged_at,
+        "merge_commit_sha" => pr.merge_commit_sha,
+        # The tree, next to the merge commit. Under a squash merge
+        # `merge_commit_sha` is a NEW commit on the base and shares no sha with
+        # anything the branch held, so it cannot answer "which work shipped?".
+        # `head_sha` can. Recorded for the same reason as `observed_by`: the
+        # question "what did this gate actually accept?" has to stay answerable
+        # from the evidence alone, months later, without re-asking GitHub about
+        # a PR whose branch may no longer exist.
+        "head_sha" => Map.get(pr, :head_sha),
+        "repo" => slug,
+        # The provenance key. A webhook-passed gate does not carry this, so
+        # "was this merge pushed to us or did we go looking?" stays answerable
+        # from the evidence alone.
+        "observed_by" => "reconciler"
+      }
+      |> Map.merge(extra_evidence)
 
     case PlanEngine.evaluate_validation(validation.id, %{
            status: "passed",

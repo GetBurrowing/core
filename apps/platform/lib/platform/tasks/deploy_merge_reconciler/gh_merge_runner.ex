@@ -3,10 +3,11 @@ defmodule Platform.Tasks.DeployMergeReconciler.GhMergeRunner do
   Default `MergeRunner` — asks the GitHub CLI whether a branch's PR merged.
 
       gh pr list -R <repo> --head <branch> --state merged \\
-        --json number,mergedAt,mergeCommit,headRefOid,url --limit 1
+        --json number,mergedAt,mergeCommit,headRefOid,url,author --limit 1
 
-  Read-only. This module runs exactly one `gh` subcommand and it is
-  `pr list`; there is no code path here that mutates a repository.
+  Read-only. This module runs exactly two `gh` subcommands, `pr list` and
+  `api repos/<slug>/compare/<base>...<head>`; there is no code path here
+  that mutates a repository.
 
   ## Why `--state merged` and not `--state all`
 
@@ -61,7 +62,7 @@ defmodule Platform.Tasks.DeployMergeReconciler.GhMergeRunner do
       "--state",
       "merged",
       "--json",
-      "number,mergedAt,mergeCommit,headRefOid,url",
+      "number,mergedAt,mergeCommit,headRefOid,url,author",
       "--limit",
       "1"
     ]
@@ -71,15 +72,75 @@ defmodule Platform.Tasks.DeployMergeReconciler.GhMergeRunner do
         {:error, :gh_unavailable}
 
       gh ->
-        run(gh, args)
+        run(gh, args, &decode/1)
     end
   end
 
-  defp run(gh, args) do
+  @doc """
+  Every commit strictly between `base_sha` and `head_sha`:
+
+      gh api repos/<owner>/<name>/compare/<base_sha>...<head_sha>
+
+  `query.repo` arrives in whichever spelling the gate declared (a full URL
+  or a bare slug, same as `merged_pr/1`'s `repo`), so it is normalized to
+  the `owner/name` slug the REST path requires via
+  `Platform.Tasks.RepoRef.normalize/1` rather than handed to `gh` raw —
+  `gh api`'s path is a literal string, not `-R`, and does no normalization
+  of its own.
+  """
+  @impl true
+  def commits_between(%{repo: repo}, base_sha, head_sha) do
+    case Platform.Tasks.RepoRef.normalize(repo) do
+      {:ok, slug} ->
+        args = ["api", "repos/#{slug}/compare/#{base_sha}...#{head_sha}"]
+
+        case System.find_executable("gh") do
+          nil -> {:error, :gh_unavailable}
+          gh -> run(gh, args, &decode_compare/1)
+        end
+
+      :error ->
+        {:error, {:invalid_repo, repo}}
+    end
+  end
+
+  # Shared by `merged_pr/1` and `commits_between/3` — both shell out to `gh`
+  # the same way and differ only in how they decode a `0`-exit response.
+  # `decoder` is `&decode/1` or `&decode_compare/1`.
+  defp run(gh, args, decoder) do
     case System.cmd(gh, args, stderr_to_stdout: true) do
-      {output, 0} -> decode(output)
+      {output, 0} -> decoder.(output)
       {output, _exit_code} -> {:error, {:gh_error, String.trim(output)}}
     end
+  end
+
+  # `{:ok, []}` here must mean "the compare API says there are genuinely
+  # zero commits between these shas" — the same discipline `decode/1` above
+  # applies to `{:ok, nil}`. A response this shape does not recognize is a
+  # parse error, never silently folded into an empty list.
+  defp decode_compare(output) do
+    case Jason.decode(output) do
+      {:ok, %{"commits" => commits}} when is_list(commits) ->
+        if Enum.all?(commits, &valid_commit?/1) do
+          {:ok, Enum.map(commits, &decode_commit/1)}
+        else
+          {:error, {:parse_error, String.slice(output, 0, 500)}}
+        end
+
+      _ ->
+        {:error, {:parse_error, String.slice(output, 0, 500)}}
+    end
+  end
+
+  defp valid_commit?(%{"sha" => sha}), do: is_binary(sha)
+  defp valid_commit?(_), do: false
+
+  defp decode_commit(%{"sha" => sha} = commit) do
+    %{
+      sha: sha,
+      committer_date: get_in(commit, ["commit", "committer", "date"]),
+      author_login: get_in(commit, ["author", "login"])
+    }
   end
 
   defp decode(output) do
@@ -91,7 +152,8 @@ defmodule Platform.Tasks.DeployMergeReconciler.GhMergeRunner do
            url: pr["url"],
            merged_at: pr["mergedAt"],
            merge_commit_sha: merge_commit_sha(pr["mergeCommit"]),
-           head_sha: head_sha(pr["headRefOid"])
+           head_sha: head_sha(pr["headRefOid"]),
+           author_login: author_login(pr["author"])
          }}
 
       {:ok, []} ->
@@ -101,6 +163,20 @@ defmodule Platform.Tasks.DeployMergeReconciler.GhMergeRunner do
         {:error, {:parse_error, String.slice(output, 0, 500)}}
     end
   end
+
+  # `author` is `%{"login" => …}` when `gh` answers it and `null` for a
+  # deleted account or some bot identities. Same nil discipline as
+  # `merge_commit_sha/1` and `head_sha/1`: record what GitHub actually said,
+  # never a placeholder that would misattribute a fix-forward commit to the
+  # wrong person.
+  defp author_login(%{"login" => login}) when is_binary(login) do
+    case String.trim(login) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp author_login(_), do: nil
 
   # `mergeCommit` is `null` for some merge methods and `%{"oid" => sha}`
   # otherwise. Record `nil` rather than a placeholder string: a fabricated
