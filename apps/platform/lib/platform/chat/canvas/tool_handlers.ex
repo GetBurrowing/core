@@ -266,7 +266,8 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
   """
   @spec list_kinds(map(), map()) :: {:ok, map()}
   def list_kinds(_args, _context) do
-    {:ok, %{kinds: Kinds.summaries()}}
+    # Task 01a04a7a stage 4: the kind registry is static and returned whole.
+    {:ok, Platform.Federation.ResultBound.whole(:kinds, Kinds.summaries())}
   end
 
   @doc """

@@ -77,7 +77,9 @@ defmodule Platform.Chat.HistoryVisibleFromReadBoundTest do
       %{"space_id" => space_id, "limit" => 20}
       |> Map.merge(Map.new(opts, fn {k, v} -> {to_string(k), v} end))
 
-    {:ok, messages} = ToolSurface.execute("space_get_messages", args, %{agent_id: agent.id})
+    {:ok, %{messages: messages}} =
+      ToolSurface.execute("space_get_messages", args, %{agent_id: agent.id})
+
     Enum.map(messages, & &1.id)
   end
 

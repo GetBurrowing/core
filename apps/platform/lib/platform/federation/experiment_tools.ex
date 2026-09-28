@@ -39,7 +39,7 @@ defmodule Platform.Federation.ExperimentTools do
           "List the decision points (surfaces) an experiment can vary, with the payload shape each arm must carry. A surface is declared once in code; every experiment on it is data.",
         parameters: %{},
         returns:
-          "%{surfaces: [%{key, subject_type, path, payload_schema, targets}]} — path is \"dispatch\" or \"draft\"; there is never a send path. targets is the list of surface_target values the surface is resolved at, or null when any target is accepted (dispatch.prompt: any template slug).",
+          "%{surfaces: [%{key, subject_type, path, payload_schema, targets}], total, has_more} — `total` is the number of registered surfaces returned (this tool has no limit and returns every match); `has_more` is always false here. A server-side payload cap that drops records sets `has_more` to true. path is \"dispatch\" or \"draft\"; there is never a send path. targets is the list of surface_target values the surface is resolved at, or null when any target is accepted (dispatch.prompt: any template slug).",
         limitations:
           "Lists registered surfaces only. A surface not listed here cannot be experimented on and cannot be allowed in guardrails.",
         when_to_use: "Before experiment_create, to pick a surface_key and shape variant payloads."
@@ -63,9 +63,9 @@ defmodule Platform.Federation.ExperimentTools do
           }
         },
         returns:
-          "%{count, limit, experiments: [experiment]} — each experiment carries id, slug, name, status, approval_state, surface_key, surface_target, org_id, project_id, goal_id, stop_feedback, stopped_by_user_id, stopped_at.",
+          "%{count, limit, total, has_more, experiments: [experiment]} — `count` is the number RETURNED; `total` is the number of experiments matching the filters that the caller may see (same org scope as the rows), counted independent of `limit`; `has_more` is true exactly when matching experiments exist beyond the ones returned. Each experiment carries id, slug, name, status, approval_state, surface_key, surface_target, org_id, project_id, goal_id, stop_feedback, stopped_by_user_id, stopped_at.",
         limitations:
-          "A tenant-pinned agent sees its own org's experiments and install-wide ones (org_id null), never a sibling org's. `count == limit` may mean truncation.",
+          "A tenant-pinned agent sees its own org's experiments and install-wide ones (org_id null), never a sibling org's. Read `has_more`, not `count == limit`, to tell a truncated list from a complete one.",
         when_to_use:
           "To see what is live, what is awaiting approval, and what a human stopped and why before proposing the next experiment."
       },
@@ -249,7 +249,8 @@ defmodule Platform.Federation.ExperimentTools do
             description: "Filter: labelled | unlabelled | rejected_output."
           }
         },
-        returns: "%{count, signals: [%{label, subject_id, confidence, reason, status}]}",
+        returns:
+          "%{count, total, has_more, signals: [%{label, subject_id, confidence, reason, status}]} — `count` and `total` are both the number of signals returned (every match); `has_more` is always false here unless a server-side payload cap dropped records.",
         limitations:
           "Returns those five fields only. subject_id is null for a signal that matched no subject; such rows are recorded, not dropped.",
         when_to_use: "To see what outcomes the results are built from."
@@ -326,7 +327,8 @@ defmodule Platform.Federation.ExperimentTools do
           },
           org_id: %{type: "string", required: false, description: "Filter by org UUID."}
         },
-        returns: "%{count, goals: [%{id, statement, metric_spec, status, org_id, project_id}]}",
+        returns:
+          "%{count, total, has_more, goals: [%{id, statement, metric_spec, status, org_id, project_id}]} — at most 200 goals, newest first. `count` is the number RETURNED; `total` is the number of goals matching the filters that the caller may see, counted independent of the 200 cap; `has_more` is true exactly when the cap cut matching goals.",
         limitations: "A tenant-pinned agent sees its own org's goals and install-wide ones.",
         when_to_use: "At the start of each pass, to know what you are working towards."
       },

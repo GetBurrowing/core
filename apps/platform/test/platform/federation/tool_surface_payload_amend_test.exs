@@ -200,7 +200,7 @@ defmodule Platform.Federation.ToolSurfacePayloadAmendTest do
       assert [%{"amended_by" => _}] = a.payload_amendments
       assert b.payload_amendments == []
 
-      assert {:ok, full} =
+      assert {:ok, %{stages: full}} =
                ToolSurface.execute(
                  "stage_list",
                  %{"plan_id" => s.plan.id, "detail" => "full"},
@@ -210,7 +210,9 @@ defmodule Platform.Federation.ToolSurfacePayloadAmendTest do
       full_a = full |> Enum.flat_map(& &1.validations) |> Enum.find(&(&1.id == s.a.id))
       assert length(full_a.payload_amendments) == 1
 
-      assert {:ok, summary} = ToolSurface.execute("stage_list", %{"plan_id" => s.plan.id}, %{})
+      assert {:ok, %{stages: summary}} =
+               ToolSurface.execute("stage_list", %{"plan_id" => s.plan.id}, %{})
+
       rows = Enum.flat_map(summary, & &1.validations)
       sum_a = Enum.find(rows, &(&1.id == s.a.id))
       sum_b = Enum.find(rows, &(&1.id == s.b.id))

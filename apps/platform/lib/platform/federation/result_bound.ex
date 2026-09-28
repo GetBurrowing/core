@@ -126,6 +126,40 @@ defmodule Platform.Federation.ResultBound do
   defp coerce_offset(_), do: 0
 
   @doc """
+  Build a paged list envelope: `rows` under `rows_key`, plus `total` and
+  `has_more` (task 01a04a7a).
+
+  `total` is the size of the whole corpus the page was cut from, as counted by
+  the caller (a real `SELECT count(*)`, or the length of the full in-memory
+  list) — never inferred from the page. `has_more` is
+  `offset + length(rows) < total`, NEVER `length(rows) == limit`: the cheap
+  form reports "more" on a corpus of exactly `limit` and sends the caller to
+  fetch an empty page.
+
+  `extra` carries the head's other keys (`limit`, `offset`, `filters`,
+  `count`, ...). `total` and `has_more` are merged LAST, so a caller-supplied
+  key of the same name can never override them.
+  """
+  def paged(rows_key, rows, total, offset, extra \\ %{})
+      when is_list(rows) and is_integer(total) and total >= 0 and is_integer(offset) and
+             offset >= 0 and is_map(extra) do
+    Map.merge(extra, %{rows_key => rows, total: total, has_more: offset + length(rows) < total})
+  end
+
+  @doc """
+  Build a list envelope for a head that provably returns EVERYTHING it read:
+  `total` is `length(rows)` and `has_more` is `false`.
+
+  Only correct where nothing between the read and the response drops rows. A
+  head that pages, caps (`LIMIT n`), or filters after counting must use
+  `paged/5` with a real total instead. Like `paged/5`, `total` and `has_more`
+  win over any same-named key in `extra`.
+  """
+  def whole(rows_key, rows, extra \\ %{}) when is_list(rows) and is_map(extra) do
+    Map.merge(extra, %{rows_key => rows, total: length(rows), has_more: false})
+  end
+
+  @doc """
   Whole-payload backstop: shrink `data` until it encodes to at most
   `max_bytes`.
 

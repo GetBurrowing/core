@@ -90,7 +90,9 @@ defmodule Platform.Orchestration.SystemParticipantTypeTest do
     refute router.id in presence_ids
 
     # federation/tool_surface.ex path — through the real tool
-    assert {:ok, rows} = ToolSurface.execute("space_list_agents", %{"space_id" => space.id}, %{})
+    assert {:ok, %{agents: rows}} =
+             ToolSurface.execute("space_list_agents", %{"space_id" => space.id}, %{})
+
     refute router.id in Enum.map(rows, & &1.participant_id)
     assert agent.id in Enum.map(rows, & &1.agent_id)
   end

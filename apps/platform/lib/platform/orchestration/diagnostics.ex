@@ -63,12 +63,29 @@ defmodule Platform.Orchestration.Diagnostics do
   deterministically instead of leaving the order up to the planner.
   """
   def list_runtime_events(task_id, opts \\ []) do
-    RuntimeEvent
-    |> where([e], e.task_id == ^task_id)
-    |> filter_event_type(Keyword.get(opts, :event_type))
+    task_id
+    |> runtime_events_query(Keyword.get(opts, :event_type))
     |> order_by([e], desc: e.occurred_at, desc: e.inserted_at)
     |> limit(^clamp_limit(Keyword.get(opts, :limit)))
     |> Repo.all()
+  end
+
+  @doc """
+  Count a task's runtime events over the SAME filter as
+  `list_runtime_events/2` (`:event_type`), ignoring `:limit` (task 01a04a7a
+  stage 2). Both share `runtime_events_query/2`, so the count and the page
+  cannot be taken over different sets.
+  """
+  def count_runtime_events(task_id, opts \\ []) do
+    task_id
+    |> runtime_events_query(Keyword.get(opts, :event_type))
+    |> Repo.aggregate(:count)
+  end
+
+  defp runtime_events_query(task_id, event_type) do
+    RuntimeEvent
+    |> where([e], e.task_id == ^task_id)
+    |> filter_event_type(event_type)
   end
 
   @doc """
@@ -97,9 +114,8 @@ defmodule Platform.Orchestration.Diagnostics do
     case validate_status(Keyword.get(opts, :status)) do
       {:ok, status} ->
         leases =
-          ExecutionLease
-          |> where([l], l.task_id == ^task_id)
-          |> filter_status(status)
+          task_id
+          |> execution_leases_query(status)
           |> order_by([l], desc: l.started_at, desc: l.inserted_at)
           |> limit(^clamp_limit(Keyword.get(opts, :limit)))
           |> Repo.all()
@@ -109,6 +125,24 @@ defmodule Platform.Orchestration.Diagnostics do
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  @doc """
+  Count a task's execution leases over the SAME filter as
+  `list_execution_leases/2` (`:status`, validated identically), ignoring
+  `:limit` (task 01a04a7a stage 2). Returns `{:ok, count}` or
+  `{:error, :invalid_status}`.
+  """
+  def count_execution_leases(task_id, opts \\ []) do
+    with {:ok, status} <- validate_status(Keyword.get(opts, :status)) do
+      {:ok, task_id |> execution_leases_query(status) |> Repo.aggregate(:count)}
+    end
+  end
+
+  defp execution_leases_query(task_id, status) do
+    ExecutionLease
+    |> where([l], l.task_id == ^task_id)
+    |> filter_status(status)
   end
 
   defp filter_event_type(query, nil), do: query

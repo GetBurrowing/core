@@ -50,6 +50,7 @@ defmodule Platform.Experiments.Tools do
   alias Platform.Experiments.Surfaces
   alias Platform.Experiments.Variant
   alias Platform.Federation.ExperimentTools
+  alias Platform.Federation.ResultBound
   alias Platform.Repo
   alias Platform.Tenancy.Org
 
@@ -76,37 +77,44 @@ defmodule Platform.Experiments.Tools do
   # ── dispatch ────────────────────────────────────────────────────────────
 
   defp run("experiment_surface_list", _args, _caller) do
-    {:ok,
-     %{
-       surfaces:
-         Enum.map(Surfaces.list(), fn surface ->
-           %{
-             key: surface.key(),
-             subject_type: surface.subject_type(),
-             path: to_string(surface.path()),
-             payload_schema: surface.payload_schema(),
-             targets: surface_targets(surface)
-           }
-         end)
-     }}
+    surfaces =
+      Enum.map(Surfaces.list(), fn surface ->
+        %{
+          key: surface.key(),
+          subject_type: surface.subject_type(),
+          path: to_string(surface.path()),
+          payload_schema: surface.payload_schema(),
+          targets: surface_targets(surface)
+        }
+      end)
+
+    # Task 01a04a7a stage 4: the surface registry is returned whole.
+    {:ok, ResultBound.whole(:surfaces, surfaces)}
   end
 
   defp run("experiment_list", args, caller) do
     with {:ok, limit} <- limit(args),
          {:ok, query} <- list_filters(from(e in Experiment), args) do
+      # Task 01a04a7a stage 2: ONE scoped query feeds both the page and the
+      # count, so `total` applies the same `visible/2` scope and
+      # `list_filters/2` as the rows — a count taken outside `visible/2` would
+      # disclose rows in orgs the caller cannot read. `count` keeps meaning
+      # the page length.
+      scoped = visible(query, caller)
+
       experiments =
-        query
-        |> visible(caller)
+        scoped
         |> order_by([e], desc: e.inserted_at, desc: e.id)
         |> limit(^limit)
         |> Repo.all()
 
+      total = Repo.aggregate(scoped, :count)
+
       {:ok,
-       %{
+       ResultBound.paged(:experiments, Enum.map(experiments, &serialize/1), total, 0, %{
          count: length(experiments),
-         limit: limit,
-         experiments: Enum.map(experiments, &serialize/1)
-       }}
+         limit: limit
+       })}
     end
   end
 
@@ -255,7 +263,9 @@ defmodule Platform.Experiments.Tools do
           }
         end)
 
-      {:ok, %{count: length(signals), signals: signals}}
+      # Task 01a04a7a stage 4: `Signals.list/2` has no LIMIT; `count` keeps
+      # its meaning (== total).
+      {:ok, ResultBound.whole(:signals, signals, %{count: length(signals)})}
     end
   end
 
@@ -305,13 +315,25 @@ defmodule Platform.Experiments.Tools do
   end
 
   defp run("experiment_goal_list", args, caller) do
-    query =
-      from(g in Goal, order_by: [desc: g.inserted_at, desc: g.id], limit: @max_limit)
-      |> maybe_where_status(Map.get(args, "status"))
+    query = from(g in Goal) |> maybe_where_status(Map.get(args, "status"))
 
     with {:ok, query} <- maybe_where_org(query, Map.get(args, "org_id")) do
-      goals = query |> visible(caller) |> Repo.all() |> Enum.map(&serialize_goal/1)
-      {:ok, %{count: length(goals), goals: goals}}
+      # Task 01a04a7a stage 2: the hard `@max_limit` cap stays (this tool
+      # takes no caller limit), but it no longer truncates SILENTLY. `total`
+      # counts over the same status/org filters and `visible/2` scope as the
+      # rows. No offset, so `has_more` is `length(goals) < total`.
+      scoped = visible(query, caller)
+
+      goals =
+        scoped
+        |> order_by([g], desc: g.inserted_at, desc: g.id)
+        |> limit(^@max_limit)
+        |> Repo.all()
+        |> Enum.map(&serialize_goal/1)
+
+      total = Repo.aggregate(scoped, :count)
+
+      {:ok, ResultBound.paged(:goals, goals, total, 0, %{count: length(goals)})}
     end
   end
 

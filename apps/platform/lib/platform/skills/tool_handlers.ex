@@ -28,11 +28,12 @@ defmodule Platform.Skills.ToolHandlers do
         q -> Enum.filter(skills, &matches?(&1, q))
       end
 
+    # Task 01a04a7a stage 4: `Skills.list_skills/0` has no LIMIT, so every
+    # match is returned; `count` keeps its meaning (== total).
     {:ok,
-     %{
-       count: length(filtered),
-       skills: Enum.map(filtered, &summary/1)
-     }}
+     Platform.Federation.ResultBound.whole(:skills, Enum.map(filtered, &summary/1), %{
+       count: length(filtered)
+     })}
   end
 
   @doc """

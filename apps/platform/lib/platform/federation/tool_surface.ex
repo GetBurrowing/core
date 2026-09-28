@@ -110,6 +110,77 @@ defmodule Platform.Federation.ToolSurface do
                          ~w(send_media react space_list space_get_context space_get_messages space_search_messages)
                        )
 
+  # Task 01a04a7a — the list-envelope contract. Every list-shaped tool is
+  # either REGISTERED here (tool name => the key its rows live under; its
+  # response must carry `total` and `has_more`, built with
+  # `ResultBound.paged/5` or `ResultBound.whole/3`) or EXEMPT with a reason.
+  # `test/platform/federation/list_envelope_contract_test.exs` fails for any
+  # list-named tool in neither map, so a new `*_list` cannot ship a silently
+  # short list. There is no central default in `ToolArguments.dispatch/3`: a
+  # transport-level `has_more: false` would be a claim about a list the
+  # transport cannot see inside.
+  #
+  # Keys for heads that return a bare array today are the plural noun of the
+  # row; `memory_search`'s degraded path (`:partial_results`) is handled where
+  # that path is built.
+  @list_envelope_tools %{
+    "file_list" => :files,
+    "skill.list" => :skills,
+    "review_item_list" => :items,
+    "space_list" => :spaces,
+    "canvas_list" => :canvases,
+    "project_list" => :projects,
+    "epic_list" => :epics,
+    "task_transition_list" => :transitions,
+    "runtime_event_list" => :events,
+    "execution_lease_list" => :leases,
+    "task_list" => :tasks,
+    "stack_list" => :stacks,
+    "stage_list" => :stages,
+    "validation_list" => :validations,
+    "prompt_template_list" => :templates,
+    "experiment_surface_list" => :surfaces,
+    "experiment_list" => :experiments,
+    "experiment_signals_list" => :signals,
+    "experiment_goal_list" => :goals,
+    "memory_search" => :results,
+    "space_get_messages" => :messages,
+    "space_list_agents" => :agents,
+    "org_list_descendants" => :descendants,
+    "task_list_canvases" => :canvases,
+    "canvas.list_kinds" => :kinds
+  }
+
+  # List-returning tools outside task 01a04a7a's scope, each with the reason.
+  @list_envelope_exempt %{
+    "canvas.versions" =>
+      "cursor-paged: `next_cursor` is the continuation signal, so a count/offset envelope would be a second, competing contract",
+    "space_search_messages" =>
+      "ranked search hits, not an enumeration of a corpus; a total over a relevance ranking is not defined",
+    "file_search" =>
+      "ranked search hits, not an enumeration of a corpus; a total over a relevance ranking is not defined",
+    "principal_search" =>
+      "typeahead lookup capped for autocomplete; callers refine the query rather than page",
+    "org_memory_recently_edited" =>
+      "a recency window by design (most recent N), not a paged enumeration",
+    "org_memory_recently_deleted" =>
+      "a recency window by design (most recent N), not a paged enumeration",
+    "org_memory_feedback_at_path" =>
+      "feedback for one memory path; out of scope for task 01a04a7a",
+    "federation_status" =>
+      "a status report whose lists are components of one snapshot, not a paged corpus",
+    "canvas.template" => "a static template catalogue returned whole from code, not a data corpus"
+  }
+
+  @doc """
+  Tool name => rows key for every tool bound by the list-envelope contract
+  (`total` + `has_more` on every response). See `@list_envelope_tools`.
+  """
+  def list_envelope_tools, do: @list_envelope_tools
+
+  @doc "Tool name => reason for list-returning tools exempt from the envelope contract."
+  def list_envelope_exempt, do: @list_envelope_exempt
+
   @doc "Known capability bundle names."
   def all_bundles, do: @bundles
 
@@ -322,7 +393,9 @@ defmodule Platform.Federation.ToolSurface do
           }
         },
         returns:
-          "%{files: [%{id, name, original_filename, content_type, byte_size, inserted_at, ingest_status, ingest_intent, agent_content_available, agent_content_note}], project_id, count}",
+          "%{files: [%{id, name, original_filename, content_type, byte_size, inserted_at, ingest_status, ingest_intent, agent_content_available, agent_content_note}], project_id, count, total, has_more} — " <>
+            "`count` is the number of files RETURNED (the page); `total` is the number of non-deleted files in the project matching the `content_type` filter, counted in the database independent of `limit`; " <>
+            "`has_more` is true exactly when matching files exist beyond the ones returned. Read `has_more` rather than comparing `count` against `limit`.",
         limitations:
           "Tenant-pinned agents calling with a sibling-org project return an `unauthorized: …` envelope (NOT an empty list, so existence can't be probed). Unknown project_id returns `:not_found`. Files still ingesting carry `ingest_status: \"pending\"` — call file_get_text only on \"ingested\" rows. Files marked human-only (`ingest_intent: \"human_only\"`) ARE listed here, deliberately: their content is never retrievable by an agent (`agent_content_available: false`, and `file_get_text` returns `:human_only`), but the file exists and a person can read it. Surface such a file to the human by name and quote `agent_content_note` — do NOT tell them no such file exists.",
         when_to_use:
@@ -500,7 +573,7 @@ defmodule Platform.Federation.ToolSurface do
           }
         },
         returns:
-          "%{count, skills: [%{id, slug, name, description, content_size, inserted_at, updated_at}]}",
+          "%{count, total, has_more, skills: [%{id, slug, name, description, content_size, inserted_at, updated_at}]} — `count` and `total` are both the number of matching skills returned (every match); `has_more` is always false here unless a server-side payload cap dropped records.",
         limitations:
           "Returns every matching skill in one call — no pagination. Content body is omitted; fetch with skill.get.",
         when_to_use:
@@ -772,7 +845,7 @@ defmodule Platform.Federation.ToolSurface do
           }
         },
         returns:
-          "HEALTHY (`retrieval_status: \"ok\"`, every channel answered): %{results: [%{source, id, path, space_id, content, content_truncated, content_length, score, semantic_rank, lexical_rank, authored_by, date_or_inserted_at}], retrieval_status: \"ok\", fusion_constant_k: 60, truncated: boolean, dead_channels: [], dropped: %{page, journal, message, task}, payload_truncated: boolean} — and no `degraded` key. DEGRADED WITH SURVIVING HITS: `retrieval_status: \"degraded\"`, the hits under `partial_results` and NO `results` KEY AT ALL, plus `degraded: %{dead_channels, channels_down: [\"semantic\" | \"lexical:<corpus>\"], implication}`. The rename is deliberate: a search with a dead channel is a FAILED MEASUREMENT, not a negative result, so the hits are reachable only through a key whose name says they are partial. DEGRADED WITH ZERO SURVIVING HITS: an ERROR, `code: :search_degraded`, carrying `dead_channels` and no `results` key — an empty `results` there would read as an established absence, which it is not. `dead_channels` lists every search channel that did not answer the query — it timed out, it crashed, or its provider returned an error (e.g. a refused connection or a 5xx) — as a `[channel, corpus]` pair (e.g. `[\"semantic\", \"all\"]` or `[\"lexical\", \"task\"]`) — empty when every channel answered; `dropped` counts, per corpus, the fused hits that hydration refused (row deleted or not readable by the caller) and always carries all four keys. `content` is a 500-character snippet; `content_truncated` says whether the body was longer and `content_length` is its full byte size — fetch the body with `memory_view` on `path`. Task hits (source: \"task\") carry additional advisory fields: `status`, `priority`, `updated_at`, `merged_pr_url` (or nil), `follow_up_task_ids` (list of open tasks that reference this one), and `cancellation_note` (rework directive for cancelled tasks).",
+          "HEALTHY (`retrieval_status: \"ok\"`, every channel answered): %{results: [%{source, id, path, space_id, content, content_truncated, content_length, score, semantic_rank, lexical_rank, authored_by, date_or_inserted_at}], retrieval_status: \"ok\", fusion_constant_k: 60, truncated: boolean, dead_channels: [], dropped: %{page, journal, message, task}, payload_truncated: boolean, total: integer, has_more: boolean} — and no `degraded` key. DEGRADED WITH SURVIVING HITS: `retrieval_status: \"degraded\"`, the hits under `partial_results` and NO `results` KEY AT ALL, plus `degraded: %{dead_channels, channels_down: [\"semantic\" | \"lexical:<corpus>\"], implication}`, and the same `total` / `has_more` pair. `total` is the number of hits the search returned BEFORE the 20_000-byte payload bound (so `total - length(results)` hits were dropped from the tail); `has_more` is `payload_truncated or truncated`. The one documented exception to \"`has_more` true implies `total` > the hits returned\": when `truncated` is true because a channel hit its cap (or died), `total` is only a LOWER bound and `has_more` is true even when `total` equals the number of hits returned — a search has no knowable corpus count. The rename is deliberate: a search with a dead channel is a FAILED MEASUREMENT, not a negative result, so the hits are reachable only through a key whose name says they are partial. DEGRADED WITH ZERO SURVIVING HITS: an ERROR, `code: :search_degraded`, carrying `dead_channels` and no `results` key — an empty `results` there would read as an established absence, which it is not. `dead_channels` lists every search channel that did not answer the query — it timed out, it crashed, or its provider returned an error (e.g. a refused connection or a 5xx) — as a `[channel, corpus]` pair (e.g. `[\"semantic\", \"all\"]` or `[\"lexical\", \"task\"]`) — empty when every channel answered; `dropped` counts, per corpus, the fused hits that hydration refused (row deleted or not readable by the caller) and always carries all four keys. `content` is a 500-character snippet; `content_truncated` says whether the body was longer and `content_length` is its full byte size — fetch the body with `memory_view` on `path`. Task hits (source: \"task\") carry additional advisory fields: `status`, `priority`, `updated_at`, `merged_pr_url` (or nil), `follow_up_task_ids` (list of open tasks that reference this one), and `cancellation_note` (rework directive for cancelled tasks).",
         limitations:
           "Message hits are filtered to spaces the calling agent participates in (anonymous callers get no message hits). Deleted or orphaned rows are dropped and counted in `dropped`. `truncated: true` means the result set is incomplete for ANY reason: a channel hit its `2*limit` cap (a higher `limit` may surface more hits) OR a channel died (see `dead_channels` — a non-empty list always forces `truncated: true`; retry later rather than raising `limit`). `payload_truncated: true` is a different thing: the whole response is capped at 20_000 bytes, and lowest-ranked hits were dropped from the tail to fit. Degraded-vs-healthy is decided BEFORE that byte bound is applied, so a payload bound that empties the kept list never reports itself as `:search_degraded`. A caller written against `results` will see that key MISSING on a degraded search — that is the intended fail-loud: read `partial_results` and the `degraded` map, or treat the `:search_degraded` error as an unestablished absence.",
         when_to_use:
@@ -1044,6 +1117,7 @@ defmodule Platform.Federation.ToolSurface do
         returns:
           "A map with task_id, count, and `items` — each item carries id, label, status, feedback, reviewed_by, reviewed_at, canvas_id, content, plus review_request_id, request_status and validation_id so you can tell a live ruling from one whose evidence was replaced. " <>
             "`count` is the TOTAL number of items on the task, not the number returned; `returned_count`, `offset` and `next_offset` (null on the last page) describe the page you got. " <>
+            "`total` is the same all-items count as `count`, and `has_more` is true exactly when items remain beyond this page (the same condition as a non-null `next_offset`). " <>
             "In the default summary detail `content` and `feedback` are previews, each with `_truncated` and `_length` siblings.",
         limitations:
           "Reads only. Scoped to the org that owns the task — a tenant-pinned agent reading a sibling org's task is denied before any label or feedback is serialized. A malformed or unknown task_id returns an empty list, not an error.",
@@ -1143,7 +1217,8 @@ defmodule Platform.Federation.ToolSurface do
             description: "Filter by kind: channel, dm (optional)"
           }
         },
-        returns: "Array of space objects with id, name, kind, description",
+        returns:
+          "%{spaces: [%{id, name, kind, description}], total, has_more} — an ENVELOPE, not a bare array. `total` is the number of spaces returned (this tool has no limit and returns every match); `has_more` is always false here. A server-side payload cap that drops records sets `has_more` to true.",
         limitations: "Only returns spaces the agent is a participant in",
         when_to_use:
           "When you need to discover available spaces or find a space ID for proactive messaging"
@@ -1156,7 +1231,7 @@ defmodule Platform.Federation.ToolSurface do
           space_id: %{type: "string", required: true, description: "UUID of the Suite space"}
         },
         returns:
-          "Array of `{agent_id, slug, name, display_name, participant_id, joined_at}`. Only active agent participants are returned (humans excluded, left agents excluded).",
+          "%{agents: [%{agent_id, slug, name, display_name, participant_id, joined_at}], total, has_more} — an ENVELOPE, not a bare array. `total` is the number of agents returned (this tool has no limit and returns every match); `has_more` is always false here. A server-side payload cap that drops records sets `has_more` to true. Only active agent participants are returned (humans excluded, left agents excluded).",
         limitations:
           "Only agent participants currently in the space. Name matching is case-sensitive — compare against `slug` for stable lookups or `name` for the human-readable label.",
         when_to_use:
@@ -1272,9 +1347,11 @@ defmodule Platform.Federation.ToolSurface do
           }
         },
         returns:
-          "Array of message objects with id, participant_id, content_type, content, inserted_at, attachments. Each attachments entry is %{url, content_type, byte_size, filename}; the array is empty when the message has no attachments.",
+          "%{messages: [...], total, limit, has_more} — an ENVELOPE, not a bare array. `messages` is newest first; each is a message object with id, participant_id, content_type, content, content_truncated, thread_id, inserted_at, attachments. Each attachments entry is %{url, content_type, byte_size, filename}; the array is empty when the message has no attachments. " <>
+            "`total` is the number of top-level messages this call could reach — same space, not deleted, older than `before_id` when one is given, and not earlier than your history grant — counted independent of `limit`; `has_more` is true exactly when such messages remain beyond the ones returned. " <>
+            "Read `has_more` rather than comparing `messages` against `limit`; to page back, pass the OLDEST returned id as `before_id`.",
         limitations:
-          "Only works for spaces the agent is a participant in. Max 20 messages per call.",
+          "Only works for spaces the agent is a participant in. Max 20 messages per call. `content_truncated` is a separate, per-message bound (a very long message body is capped); it does not affect `total` or `has_more`.",
         when_to_use: "When you need to read the recent conversation history in a space"
       },
       %{
@@ -1289,7 +1366,7 @@ defmodule Platform.Federation.ToolSurface do
           space_id: %{type: "string", required: true, description: "UUID of the Suite space"}
         },
         returns:
-          "Array of canvas summary objects with id, title, type, view_url, inserted_at, updated_at",
+          "%{canvases: [%{id, title, kind, view_url, inserted_at, updated_at}], total, has_more} — an ENVELOPE, not a bare array. `total` is the number of canvases returned (this tool has no limit and returns every match); `has_more` is always false here. A server-side payload cap that drops records sets `has_more` to true.",
         limitations: "Only works for spaces the agent is a participant in.",
         when_to_use:
           "When you need to discover what canvases exist in a space before reading or updating one"
@@ -1445,7 +1522,8 @@ defmodule Platform.Federation.ToolSurface do
         description:
           "List every registered canvas node kind with a one-line description, its child rule, a props summary, and an example node. Call this first if you're not sure what to emit in canvas.create.",
         parameters: %{},
-        returns: "%{kinds: [%{kind, description, accepts_children, props, example}]}",
+        returns:
+          "%{kinds: [%{kind, description, accepts_children, props, example}], total, has_more} — `total` is the number of registered kinds returned (this tool has no limit and returns every match); `has_more` is always false here. A server-side payload cap that drops records sets `has_more` to true.",
         limitations: "Static — same output regardless of caller or space.",
         when_to_use:
           "Before canvas.create when you need to pick a kind or remember props; before canvas.patch when building replacement child nodes."
@@ -1536,7 +1614,8 @@ defmodule Platform.Federation.ToolSurface do
               "ADR-0042 tenant filter — only return projects belonging to this org. Omit to return every project."
           }
         },
-        returns: "Array of project objects with id, name, slug, repo_url, org_id, org_slug",
+        returns:
+          "%{projects: [%{id, name, slug, repo_url, org_id, org_slug}], total, has_more} — an ENVELOPE, not a bare array. `total` is the number of projects returned (this tool has no limit and returns every match); `has_more` is always false here. A server-side payload cap that drops records sets `has_more` to true.",
         limitations:
           "No authorization check on the filter today — any caller can request any org's project list (read-only).",
         when_to_use:
@@ -1555,7 +1634,7 @@ defmodule Platform.Federation.ToolSurface do
           }
         },
         returns:
-          "Array of %{id, slug, name, role} where `role` is `\"tenant\"` for child orgs (today's only descendant tier) or `\"root\"` for the root org itself when it has no descendants below it.",
+          "%{descendants: [%{id, slug, name, role}], total, has_more} — an ENVELOPE, not a bare array. `total` is the number of descendants returned (this tool has no limit and returns every match); `has_more` is always false here. A server-side payload cap that drops records sets `has_more` to true. `role` is `\"tenant\"` for child orgs (today's only descendant tier) or `\"root\"` for the root org itself when it has no descendants below it.",
         limitations:
           "Unknown `org_id` → `:not_found`. Returns an empty list for any leaf-tier org.",
         when_to_use:
@@ -1618,7 +1697,8 @@ defmodule Platform.Federation.ToolSurface do
             description: "Filter epics by project ID. Omit to list all epics."
           }
         },
-        returns: "Array of epic objects with id, name, description, project_id, status",
+        returns:
+          "%{epics: [%{id, name, description, project_id, status}], total, has_more} — an ENVELOPE, not a bare array. `total` is the number of epics returned (this tool has no limit and returns every match); `has_more` is always false here. A server-side payload cap that drops records sets `has_more` to true.",
         limitations: "None",
         when_to_use: "When you need to find an epic to assign a task to"
       },
@@ -1785,7 +1865,7 @@ defmodule Platform.Federation.ToolSurface do
           }
         },
         returns:
-          "%{task_id, count, transitions: [%{from_status, to_status, occurred_at, actor_kind, actor_id, actor_label, via}], note} — transitions are OLDEST FIRST. `from_status` is null when no prior status was recorded. `actor_kind` is one of user | agent | system | unknown; `unknown` means the write was unattributed, not that it was automated.",
+          "%{task_id, count, total, has_more, transitions: [%{from_status, to_status, occurred_at, actor_kind, actor_id, actor_label, via}], note} — transitions are OLDEST FIRST. `count` and `total` are both the number of transitions returned (every one recorded); `has_more` is always false here unless a server-side payload cap dropped records. `from_status` is null when no prior status was recorded. `actor_kind` is one of user | agent | system | unknown; `unknown` means the write was unattributed, not that it was automated.",
         limitations:
           "ZERO ROWS IS NOT ZERO DATA. A task with `count: 0` predates this instrumentation — the `note` field says so explicitly. It does NOT mean the task never changed status, and nothing here may be reconstructed from tasks.inserted_at / updated_at (backfill is forbidden). Denied non-recoverably for a tenant-pinned agent whose org does not own the task's project, and for a task_id that cannot be resolved to an org.",
         when_to_use:
@@ -1814,9 +1894,10 @@ defmodule Platform.Federation.ToolSurface do
           }
         },
         returns:
-          "%{task_id, count, limit, events: [%{event_type, payload, runtime_id, phase, lease_id, occurred_at}]} — events are NEWEST FIRST. `payload` is returned verbatim, including `payload[\"stage_id\"]`, which is how you attribute an event to a specific stage: there is no top-level stage_id column.",
+          "%{task_id, count, limit, total, has_more, events: [%{event_type, payload, runtime_id, phase, lease_id, occurred_at}]} — events are NEWEST FIRST. " <>
+            "`count` is the number of events RETURNED; `total` is the number of the task's events matching `event_type`, counted independent of `limit`; `has_more` is true exactly when older matching events were cut by `limit`. `payload` is returned verbatim, including `payload[\"stage_id\"]`, which is how you attribute an event to a specific stage: there is no top-level stage_id column.",
         limitations:
-          "A TASK WITH RUNTIME EVENTS AND ZERO EXECUTION LEASES IS NORMAL, NOT A DEFECT. Leases are created only by the blocker/lifecycle path, never by a plain dispatch-ack: `RuntimeSupervision`'s `@event_statuses` maps `\"execution.acked\" => nil`, and a nil status makes `upsert_lease/2` return the existing lease and insert nothing. Do not read an empty `execution_lease_list` alongside a populated event stream as missing data. `limit` is CLAMPED to 200, not rejected, so a `count` of 200 may mean truncation rather than exhaustion. `event_type` is an open vocabulary and is not validated — an unknown value returns zero events. Denied non-recoverably for a tenant-pinned agent whose org does not own the task's project, and for a task_id that cannot be resolved to an org.",
+          "A TASK WITH RUNTIME EVENTS AND ZERO EXECUTION LEASES IS NORMAL, NOT A DEFECT. Leases are created only by the blocker/lifecycle path, never by a plain dispatch-ack: `RuntimeSupervision`'s `@event_statuses` maps `\"execution.acked\" => nil`, and a nil status makes `upsert_lease/2` return the existing lease and insert nothing. Do not read an empty `execution_lease_list` alongside a populated event stream as missing data. `limit` is CLAMPED to 200, not rejected; read `has_more` (backed by a real count, `total`) to tell truncation from exhaustion. `event_type` is an open vocabulary and is not validated — an unknown value returns zero events. Denied non-recoverably for a tenant-pinned agent whose org does not own the task's project, and for a task_id that cannot be resolved to an org.",
         when_to_use:
           "When diagnosing whether a runtime actually acked, heartbeat or blocked on a task — especially to confirm or refute a watchdog no-ack alarm — without database or SSH access."
       },
@@ -1843,9 +1924,10 @@ defmodule Platform.Federation.ToolSurface do
           }
         },
         returns:
-          "%{task_id, count, limit, status_filter, leases: [%{id, stage_id, phase, runtime_id, status, started_at, last_heartbeat_at, last_progress_at, expires_at, block_reason, metadata}]} — newest first by started_at.",
+          "%{task_id, count, limit, status_filter, total, has_more, leases: [%{id, stage_id, phase, runtime_id, status, started_at, last_heartbeat_at, last_progress_at, expires_at, block_reason, metadata}]} — newest first by started_at. " <>
+            "`count` is the number of leases RETURNED; `total` is the number of the task's leases matching `status`, counted independent of `limit`; `has_more` is true exactly when older matching leases were cut by `limit`.",
         limitations:
-          "AN EMPTY LIST IS A LEGITIMATE ANSWER FOR A LIVE, HEALTHY TASK. Leases are created only by the blocker/lifecycle path, never by dispatch: `@event_statuses` maps `\"execution.acked\" => nil`, and `upsert_lease/2` short-circuits on a nil status without inserting. So a task can show a full `runtime_event_list` and zero leases and be working exactly as designed — do NOT report that as missing data. An unknown `status` returns an invalid-argument error rather than every lease, because a silent empty result for a typo is indistinguishable from that genuinely-empty case. `limit` defaults to 50 and is CLAMPED to a maximum of 200 rather than refused, and the response echoes the EFFECTIVE limit it ran with: when `count` equals that echoed `limit`, the list is truncated at the bound and there may be older leases you did not see, so read `count == 50` or `count == 200` as truncation rather than exhaustion. Denied non-recoverably for a tenant-pinned agent whose org does not own the task's project, and for a task_id that cannot be resolved to an org.",
+          "AN EMPTY LIST IS A LEGITIMATE ANSWER FOR A LIVE, HEALTHY TASK. Leases are created only by the blocker/lifecycle path, never by dispatch: `@event_statuses` maps `\"execution.acked\" => nil`, and `upsert_lease/2` short-circuits on a nil status without inserting. So a task can show a full `runtime_event_list` and zero leases and be working exactly as designed — do NOT report that as missing data. An unknown `status` returns an invalid-argument error rather than every lease, because a silent empty result for a typo is indistinguishable from that genuinely-empty case. `limit` defaults to 50 and is CLAMPED to a maximum of 200 rather than refused, and the response echoes the EFFECTIVE limit it ran with. Read `has_more` (backed by a real count, `total`) to tell truncation from exhaustion; `count == limit` alone cannot. Denied non-recoverably for a tenant-pinned agent whose org does not own the task's project, and for a task_id that cannot be resolved to an org.",
         when_to_use:
           "When you need a task's lease lifecycle — whether one is active, blocked, expired, or was never created at all — to interpret a watchdog escalation without database or SSH access."
       },
@@ -2295,7 +2377,7 @@ defmodule Platform.Federation.ToolSurface do
           }
         },
         returns:
-          "%{canvases: [%{attachment_id, canvas_id, title, note, attached_at, canvas_present: bool}]}. `canvas_present: false` means the underlying canvas was soft-deleted upstream — call `task_detach_canvas` to clean up the stale row.",
+          "%{canvases: [%{attachment_id, canvas_id, title, note, attached_at, canvas_present: bool}], total, has_more}. `total` is the number of attachments returned (this tool has no limit and returns every match); `has_more` is always false here. A server-side payload cap that drops records sets `has_more` to true. `canvas_present: false` means the underlying canvas was soft-deleted upstream — call `task_detach_canvas` to clean up the stale row.",
         limitations:
           "Gated on the TASK, same standing as the two writes: you must be its assignee or " <>
             "phase assignee, a participant in its execution space, its sponsor, or a member of " <>
@@ -3228,7 +3310,10 @@ defmodule Platform.Federation.ToolSurface do
           }
         },
         returns:
-          "Array of stage objects with validations, each carrying its `plan_id`. " <>
+          "%{stages: [...], total, limit, offset, has_more} — an ENVELOPE, not a bare array. `total` is the " <>
+            "number of stages on the resolved plan, independent of `limit`; `has_more` is true exactly when " <>
+            "stages remain beyond this page. Read `has_more` rather than comparing `stages` against `limit`. " <>
+            "Each entry in `stages` is a stage object with validations, carrying its `plan_id`. " <>
             "In the default summary detail, stage `description` is a preview (with `description_truncated` / `description_length`) " <>
             "and each validation's `evidence` and `evaluation_payload` are EMPTY MAPS carrying `evidence_omitted` / `evidence_length` " <>
             "(and the same pair for `evaluation_payload`). They are emptied rather than partially serialized on purpose: a half map " <>
@@ -3400,7 +3485,8 @@ defmodule Platform.Federation.ToolSurface do
         parameters: %{
           stage_id: %{type: "string", required: true, description: "The stage ID"}
         },
-        returns: "Array of validation objects",
+        returns:
+          "%{validations: [validation], total, has_more} — an ENVELOPE, not a bare array. `total` is the number of validations returned (this tool has no limit and returns every match); `has_more` is always false here. A server-side payload cap that drops records sets `has_more` to true.",
         limitations: "None",
         when_to_use: "When you need to see the validation status for a specific stage"
       },
@@ -3409,7 +3495,8 @@ defmodule Platform.Federation.ToolSurface do
         description:
           "List all prompt templates (dispatch and heartbeat prompts used by the orchestrator).",
         parameters: %{},
-        returns: "Array of prompt template objects with slug, name, description, variables",
+        returns:
+          "%{templates: [%{slug, name, description, variables, updated_by, updated_at}], total, has_more} — an ENVELOPE, not a bare array. `total` is the number of templates returned (this tool has no limit and returns every match); `has_more` is always false here. A server-side payload cap that drops records sets `has_more` to true.",
         limitations: "None",
         when_to_use:
           "When you need to see or audit the current dispatch/heartbeat prompt templates"
@@ -3571,15 +3658,20 @@ defmodule Platform.Federation.ToolSurface do
       # would corrupt every caller that already branches on it. The new keys
       # are additive: `returned_count`, `offset`, and `next_offset` (nil when
       # this is the last page).
+      #
+      # Task 01a04a7a stage 2 adds `total` (== `count`, all items) and
+      # `has_more` through the shared builder, so this tool answers the same
+      # two questions under the same two names as every other list tool.
+      rows = Enum.map(page, &serialize_review_item_row(&1, full_detail?(args)))
+
       {:ok,
-       %{
+       ResultBound.paged(:items, rows, length(items), offset, %{
          task_id: task_id,
          count: length(items),
          returned_count: length(page),
          offset: offset,
-         next_offset: if(offset + length(page) < length(items), do: offset + length(page)),
-         items: Enum.map(page, &serialize_review_item_row(&1, full_detail?(args)))
-       }}
+         next_offset: if(offset + length(page) < length(items), do: offset + length(page))
+       })}
     end
   end
 
@@ -3698,10 +3790,14 @@ defmodule Platform.Federation.ToolSurface do
 
     spaces = Chat.list_spaces_for_agent(agent_id, kind: kind)
 
-    {:ok,
-     Enum.map(spaces, fn s ->
-       %{id: s.id, name: s.name, kind: s.kind, description: s.description}
-     end)}
+    # Task 01a04a7a stage 4: `list_spaces_for_agent/2` has no LIMIT, so this
+    # head returns everything it read and says so explicitly.
+    rows =
+      Enum.map(spaces, fn s ->
+        %{id: s.id, name: s.name, kind: s.kind, description: s.description}
+      end)
+
+    {:ok, ResultBound.whole(:spaces, rows)}
   end
 
   def execute("space_list_agents", args, _context) do
@@ -3737,7 +3833,8 @@ defmodule Platform.Federation.ToolSurface do
         end
       end)
 
-    {:ok, rows}
+    # Task 01a04a7a stage 4: `list_participants/2` has no LIMIT.
+    {:ok, ResultBound.whole(:agents, rows)}
   end
 
   def execute("space_leave", args, context) do
@@ -4010,21 +4107,32 @@ defmodule Platform.Federation.ToolSurface do
       messages = Chat.list_messages(space_id, opts)
       attachments_by_msg = Chat.list_attachments_for_messages(Enum.map(messages, & &1.id))
 
-      {:ok,
-       Enum.map(messages, fn m ->
-         {trimmed_content, truncated?} = cap_content(m.content || "")
+      # Task 01a04a7a stage 3: an ENVELOPE, not a bare array. `total` counts
+      # the messages matching the SAME filters as the page — space, not
+      # deleted, top-level only, the `before_id` cursor and the history grant
+      # (`Chat.count_messages/2` shares `list_messages/2`'s query builder) —
+      # i.e. how many messages this cursor position can still reach. The
+      # per-message `content_truncated` flag is a different bound and is
+      # unchanged.
+      total = Chat.count_messages(space_id, opts)
 
-         %{
-           id: m.id,
-           participant_id: m.participant_id,
-           content_type: m.content_type,
-           content: trimmed_content,
-           content_truncated: truncated?,
-           thread_id: m.thread_id,
-           inserted_at: format_datetime(m.inserted_at),
-           attachments: serialize_attachments(Map.get(attachments_by_msg, m.id, []))
-         }
-       end)}
+      rows =
+        Enum.map(messages, fn m ->
+          {trimmed_content, truncated?} = cap_content(m.content || "")
+
+          %{
+            id: m.id,
+            participant_id: m.participant_id,
+            content_type: m.content_type,
+            content: trimmed_content,
+            content_truncated: truncated?,
+            thread_id: m.thread_id,
+            inserted_at: format_datetime(m.inserted_at),
+            attachments: serialize_attachments(Map.get(attachments_by_msg, m.id, []))
+          }
+        end)
+
+      {:ok, ResultBound.paged(:messages, rows, total, 0, %{limit: limit})}
     end
   end
 
@@ -4048,17 +4156,20 @@ defmodule Platform.Federation.ToolSurface do
     with :ok <- assert_agent_in_space(space_id, context) do
       canvases = Chat.list_canvases(space_id)
 
-      {:ok,
-       Enum.map(canvases, fn c ->
-         %{
-           id: c.id,
-           title: c.title,
-           kind: Platform.Chat.CanvasDocument.root_kind(c.document),
-           view_url: Platform.Chat.Canvas.Links.view_url(c.id),
-           inserted_at: format_datetime(c.inserted_at),
-           updated_at: format_datetime(c.updated_at)
-         }
-       end)}
+      rows =
+        Enum.map(canvases, fn c ->
+          %{
+            id: c.id,
+            title: c.title,
+            kind: Platform.Chat.CanvasDocument.root_kind(c.document),
+            view_url: Platform.Chat.Canvas.Links.view_url(c.id),
+            inserted_at: format_datetime(c.inserted_at),
+            updated_at: format_datetime(c.updated_at)
+          }
+        end)
+
+      # Task 01a04a7a stage 4: `Chat.list_canvases/2` has no LIMIT.
+      {:ok, ResultBound.whole(:canvases, rows)}
     end
   end
 
@@ -4176,7 +4287,8 @@ defmodule Platform.Federation.ToolSurface do
         }
       end)
 
-    {:ok, projects}
+    # Task 01a04a7a stage 4: `list_projects_unscoped/1` has no LIMIT.
+    {:ok, ResultBound.whole(:projects, projects)}
   end
 
   def execute("org_list_descendants", args, _context) do
@@ -4263,7 +4375,8 @@ defmodule Platform.Federation.ToolSurface do
         }
       end)
 
-    {:ok, epics}
+    # Task 01a04a7a stage 4: `list_epics_for_project/1` has no LIMIT.
+    {:ok, ResultBound.whole(:epics, epics)}
   end
 
   def execute("epic_update", args, _context) do
@@ -4662,13 +4775,14 @@ defmodule Platform.Federation.ToolSurface do
       # `list_for_task/2`'s second argument is a Repo, not options. One arg.
       transitions = PhaseTransitions.list_for_task(task_id)
 
+      # Task 01a04a7a stage 4: `PhaseTransitions.list_for_task/2` has no
+      # LIMIT; `count` keeps its meaning (all transitions, == total).
       {:ok,
-       %{
+       ResultBound.whole(:transitions, Enum.map(transitions, &serialize_phase_transition/1), %{
          task_id: task_id,
          count: length(transitions),
-         transitions: Enum.map(transitions, &serialize_phase_transition/1),
          note: transition_list_note(transitions)
-       }}
+       })}
     end
   end
 
@@ -4689,19 +4803,22 @@ defmodule Platform.Federation.ToolSurface do
          :ok <- authorize_review_access(context, task_id) do
       limit = Diagnostics.clamp_limit_for(Map.get(args, "limit"))
 
-      events =
-        Diagnostics.list_runtime_events(task_id,
-          event_type: Map.get(args, "event_type"),
-          limit: limit
-        )
+      event_type = Map.get(args, "event_type")
+
+      events = Diagnostics.list_runtime_events(task_id, event_type: event_type, limit: limit)
+
+      # Task 01a04a7a stage 2: `total` is a count over the SAME filter, so a
+      # page of 200 no longer leaves "exhausted or truncated?" to a guess.
+      # `count` keeps meaning the page length. No offset: the page is always
+      # the newest `limit` events.
+      total = Diagnostics.count_runtime_events(task_id, event_type: event_type)
 
       {:ok,
-       %{
+       ResultBound.paged(:events, Enum.map(events, &serialize_runtime_event/1), total, 0, %{
          task_id: task_id,
          count: length(events),
-         limit: limit,
-         events: Enum.map(events, &serialize_runtime_event/1)
-       }}
+         limit: limit
+       })}
     end
   end
 
@@ -4712,18 +4829,21 @@ defmodule Platform.Federation.ToolSurface do
          :ok <- authorize_review_access(context, task_id),
          limit = Diagnostics.clamp_limit_for(Map.get(args, "limit")),
          {:ok, leases} <-
-           lease_list_result(task_id, Map.get(args, "status"), limit) do
+           lease_list_result(task_id, Map.get(args, "status"), limit),
+         {:ok, total} <-
+           Diagnostics.count_execution_leases(task_id, status: Map.get(args, "status")) do
+      # Task 01a04a7a stage 2: `total` counts over the same (already
+      # validated) status filter; `count` keeps meaning the page length.
       {:ok,
-       %{
+       ResultBound.paged(:leases, Enum.map(leases, &serialize_execution_lease/1), total, 0, %{
          task_id: task_id,
          count: length(leases),
          # The EFFECTIVE (clamped) limit, not what the caller asked for: a
          # response reporting `limit: 500` while the query ran with 200 would
          # make a truncated list read as exhaustive.
          limit: limit,
-         status_filter: Map.get(args, "status"),
-         leases: Enum.map(leases, &serialize_execution_lease/1)
-       }}
+         status_filter: Map.get(args, "status")
+       })}
     end
   end
 
@@ -5205,7 +5325,8 @@ defmodule Platform.Federation.ToolSurface do
                 }
               end)
 
-            {:ok, %{canvases: canvases}}
+            # Task 01a04a7a stage 4: `list_task_canvases/1` has no LIMIT.
+            {:ok, ResultBound.whole(:canvases, canvases)}
 
           # Previously `{:ok, %{canvases: []}}`: an unknown task id read as
           # "no attachments". Now it matches its two siblings.
@@ -5649,14 +5770,7 @@ defmodule Platform.Federation.ToolSurface do
     # `offset + length(rows) < total`, never `length(rows) == limit`: the
     # cheap form reports "more" on a corpus of exactly `limit` and sends the
     # caller to fetch an empty page. See `task_list` for the full argument.
-    {:ok,
-     %{
-       stacks: rows,
-       total: total,
-       limit: limit,
-       offset: offset,
-       has_more: offset + length(rows) < total
-     }}
+    {:ok, ResultBound.paged(:stacks, rows, total, offset, %{limit: limit, offset: offset})}
   end
 
   def execute("stack_add", args, _context) do
@@ -6617,15 +6731,21 @@ defmodule Platform.Federation.ToolSurface do
       # A plan's stage count is small, so `limit` matters far less here than
       # the per-field snippet does — `evidence` is the field that grows without
       # bound, because runners write logs into it.
+      #
+      # Task 01a04a7a stage 2: an ENVELOPE, not a bare array, for the same
+      # reason as `task_list` (#864) — a bare array cannot say whether it is
+      # the whole plan. `total` is the plan's stage count before drop/take.
+      all = Tasks.list_stages(plan_id)
+
       stages =
-        plan_id
-        |> Tasks.list_stages()
-        |> Repo.preload(:validations)
+        all
         |> Enum.drop(offset)
         |> Enum.take(limit)
+        |> Repo.preload(:validations)
         |> Enum.map(&serialize_stage_with_validations(&1, full_detail?(args)))
 
-      {:ok, stages}
+      {:ok,
+       ResultBound.paged(:stages, stages, length(all), offset, %{limit: limit, offset: offset})}
     end
   end
 
@@ -6766,7 +6886,8 @@ defmodule Platform.Federation.ToolSurface do
   def execute("validation_list", args, _context) do
     stage_id = Map.get(args, "stage_id")
     validations = Tasks.list_validations(stage_id)
-    {:ok, Enum.map(validations, &serialize_validation/1)}
+    # Task 01a04a7a stage 4: `Tasks.list_validations/1` has no LIMIT.
+    {:ok, ResultBound.whole(:validations, Enum.map(validations, &serialize_validation/1))}
   end
 
   def execute("prompt_template_list", _args, _context) do
@@ -6784,7 +6905,8 @@ defmodule Platform.Federation.ToolSurface do
         }
       end)
 
-    {:ok, result}
+    # Task 01a04a7a stage 4: `PromptTemplates.list_templates/0` has no LIMIT.
+    {:ok, ResultBound.whole(:templates, result)}
   end
 
   def execute("prompt_template_update", args, _context) do
@@ -7051,12 +7173,16 @@ defmodule Platform.Federation.ToolSurface do
           content_type: content_type
         )
 
+      # Task 01a04a7a stage 2: `total` is counted in the database over the
+      # same filters (shared query builder in `Platform.Files`); `count`
+      # keeps meaning the page length. No offset, so the page starts at 0.
+      total = Platform.Files.count_files_for_project(project.id, content_type: content_type)
+
       {:ok,
-       %{
+       ResultBound.paged(:files, Enum.map(files, &file_summary/1), total, 0, %{
          project_id: project.id,
-         count: length(files),
-         files: Enum.map(files, &file_summary/1)
-       }}
+         count: length(files)
+       })}
     end
   end
 
@@ -11024,11 +11150,29 @@ defmodule Platform.Federation.ToolSurface do
   # already present — and with `payload_truncated`'s longer `false`
   # rendering — so the flag we add can never push a payload back over
   # the budget we just measured it against.
+  #
+  # Task 01a04a7a stage 3: `total` and `has_more` are added the same way —
+  # BEFORE measuring, with `has_more` at its longer `false` rendering — so
+  # the two keys cannot push a fitted payload back over the budget either.
+  # `total` is the number of hits the search returned before this byte
+  # bound (`length(snipped)`); `has_more` is `payload_truncated or
+  # truncated`. When the search's own channel cap fired (`truncated`),
+  # `total` is only a LOWER bound and `has_more` is true even if nothing
+  # was dropped here: a search has no knowable corpus count.
   defp bound_memory_search_fit(base, key, snipped) do
-    base = Map.put(base, key, snipped)
+    base =
+      base
+      |> Map.put(key, snipped)
+      |> Map.put(:total, length(snipped))
+      |> Map.put(:has_more, false)
+
     {kept, dropped?} = fit_memory_search_payload(base, key, snipped)
 
-    {:ok, base |> Map.put(key, kept) |> Map.put(:payload_truncated, dropped?)}
+    {:ok,
+     base
+     |> Map.put(key, kept)
+     |> Map.put(:payload_truncated, dropped?)
+     |> Map.put(:has_more, dropped? or Map.get(base, :truncated) == true)}
   end
 
   # Four-key error convention, mirroring `stage_list_mismatch/2`. There is
@@ -11880,11 +12024,12 @@ defmodule Platform.Federation.ToolSurface do
             %{id: t.id, slug: t.slug, name: t.name, role: "tenant"}
           end)
 
-        {:ok, descendants}
+        # Task 01a04a7a stage 4: `Tenancy.list_tenants/0` has no LIMIT.
+        {:ok, ResultBound.whole(:descendants, descendants)}
 
       %Org{} ->
         # Today's two-tier topology has no third tier; leaf tenant returns [].
-        {:ok, []}
+        {:ok, ResultBound.whole(:descendants, [])}
     end
   end
 
@@ -14042,18 +14187,15 @@ defmodule Platform.Federation.ToolSurface do
     # nobody asked for at the cost of a read lock on the hottest list in the
     # product.
     {:ok,
-     %{
-       tasks: rows,
-       total: total,
+     ResultBound.paged(:tasks, rows, total, offset, %{
        limit: limit,
        offset: offset,
-       has_more: offset + length(rows) < total,
        # Task 01a0acc3 stage 3: exactly the filters that reached the query,
        # derived from the SAME `opts` list, so the echo cannot claim a filter
        # the query did not apply. A caller can tell "zero tasks are mine" from
        # "my filter was dropped" from this response alone.
        filters: Map.new(opts, fn {key, value} -> {Atom.to_string(key), value} end)
-     }}
+     })}
   end
 
   # `{:ok, keyword}` of validated assignee options, or a recoverable refusal.

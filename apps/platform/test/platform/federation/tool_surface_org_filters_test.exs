@@ -199,7 +199,8 @@ defmodule Platform.Federation.ToolSurfaceOrgFiltersTest do
     {:ok, _wayne_tech_proj} =
       Tasks.create_project(%{name: "WayneTech-only Stage4 #{rand()}", org_id: wayne_tech_id})
 
-    {:ok, results} = ToolSurface.execute("project_list", %{"org_id" => soylent_id}, %{})
+    {:ok, %{projects: results}} =
+      ToolSurface.execute("project_list", %{"org_id" => soylent_id}, %{})
 
     names = Enum.map(results, & &1.name)
     assert Enum.any?(names, &String.starts_with?(&1, "Soylent-only Stage4"))
@@ -215,7 +216,7 @@ defmodule Platform.Federation.ToolSurfaceOrgFiltersTest do
   test "org_list_descendants for the Fabrikam root returns the four seeded tenants in slug order" do
     root_id = fabrikam_org_id()
 
-    {:ok, descendants} =
+    {:ok, %{descendants: descendants}} =
       ToolSurface.execute("org_list_descendants", %{"org_id" => root_id}, %{})
 
     slugs = Enum.map(descendants, & &1.slug)
@@ -231,7 +232,7 @@ defmodule Platform.Federation.ToolSurfaceOrgFiltersTest do
   test "org_list_descendants for a tenant returns an empty list" do
     soylent_id = tenant_org_id("soylent")
 
-    assert {:ok, []} =
+    assert {:ok, %{descendants: [], total: 0, has_more: false}} =
              ToolSurface.execute("org_list_descendants", %{"org_id" => soylent_id}, %{})
   end
 

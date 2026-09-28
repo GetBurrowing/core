@@ -121,7 +121,7 @@ defmodule Platform.Federation.ToolResultSizeMeasureTest do
       {:ok, result} = ToolSurface.execute("stage_list", %{"plan_id" => plan.id}, %{})
 
       report("stage_list plan_id=<#{@stage_count} stages>", result)
-      IO.puts("[MEASURE]   records=#{length(result)}")
+      IO.puts("[MEASURE]   records=#{length(result.stages)}")
     end
   end
 

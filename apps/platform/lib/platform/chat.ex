@@ -2168,36 +2168,55 @@ defmodule Platform.Chat do
   @spec list_messages(binary(), keyword()) :: [Message.t()]
   def list_messages(space_id, opts \\ []) do
     limit = Keyword.get(opts, :limit, 50)
-    before_id = Keyword.get(opts, :before_id)
-    after_id = Keyword.get(opts, :after_id)
-    thread_id = Keyword.get(opts, :thread_id)
-    top_level_only = Keyword.get(opts, :top_level_only, false)
-    scope = Keyword.get(opts, :scope)
     order = if Keyword.get(opts, :order) == :asc, do: :asc, else: :desc
 
-    base =
-      from(m in Message,
-        where: m.space_id == ^space_id and is_nil(m.deleted_at),
-        # `m.id` is a REQUIRED tiebreaker, not decoration. `inserted_at` is
-        # `:utc_datetime_usec` and messages posted in the same microsecond DO
-        # collide — production currently holds 7,909 timestamps shared by more
-        # than one message. With ties, Postgres may return them in any order,
-        # so an anchored window can place the anchor row at a different index
-        # on each read and the reader sees the target surrounded by messages
-        # that are not its neighbours.
-        #
-        # `id` is `Platform.Types.UUIDv7`, which is time-ordered, so it agrees
-        # with insertion order rather than fighting it. Same defect and same
-        # remedy as the task-paging fix in #864.
-        #
-        # The leading key is `ordering_key/1`, NOT `inserted_at` — see the
-        # comment on that macro. It is `inserted_at` for every row that has
-        # no `spoken_at`, which is every row this product had before task
-        # 01a07401 and nearly every row it has now, so the tiebreaker
-        # reasoning above is untouched.
-        order_by: [{^order, ordering_key(m)}, {^order, m.id}],
-        limit: ^limit
-      )
+    space_id
+    |> messages_query(opts)
+    # `m.id` is a REQUIRED tiebreaker, not decoration. `inserted_at` is
+    # `:utc_datetime_usec` and messages posted in the same microsecond DO
+    # collide — production currently holds 7,909 timestamps shared by more
+    # than one message. With ties, Postgres may return them in any order,
+    # so an anchored window can place the anchor row at a different index
+    # on each read and the reader sees the target surrounded by messages
+    # that are not its neighbours.
+    #
+    # `id` is `Platform.Types.UUIDv7`, which is time-ordered, so it agrees
+    # with insertion order rather than fighting it. Same defect and same
+    # remedy as the task-paging fix in #864.
+    #
+    # The leading key is `ordering_key/1`, NOT `inserted_at` — see the
+    # comment on that macro. It is `inserted_at` for every row that has
+    # no `spoken_at`, which is every row this product had before task
+    # 01a07401 and nearly every row it has now, so the tiebreaker
+    # reasoning above is untouched.
+    |> order_by([m], [{^order, ordering_key(m)}, {^order, m.id}])
+    |> limit(^limit)
+    |> Repo.all()
+  end
+
+  @doc """
+  Count the messages `list_messages/2` could return for the same options,
+  ignoring `:limit` and `:order` (task 01a04a7a stage 3).
+
+  Every filter is shared through one private builder (`messages_query/2`):
+  `deleted_at` nil, `:thread_id` / `:top_level_only`, the `:before_id` /
+  `:after_id` keyset cursors, the `:as_participant` history grant and the
+  external `:scope`. The count therefore cannot see a row the page could not
+  — in particular it never counts history from before a participant's
+  `history_visible_from`, which would leak its size.
+  """
+  @spec count_messages(binary(), keyword()) :: non_neg_integer()
+  def count_messages(space_id, opts \\ []) do
+    space_id
+    |> messages_query(opts)
+    |> Repo.aggregate(:count)
+  end
+
+  defp messages_query(space_id, opts) do
+    thread_id = Keyword.get(opts, :thread_id)
+    top_level_only = Keyword.get(opts, :top_level_only, false)
+
+    base = from(m in Message, where: m.space_id == ^space_id and is_nil(m.deleted_at))
 
     base =
       cond do
@@ -2206,13 +2225,11 @@ defmodule Platform.Chat do
         true -> base
       end
 
-    base = keyset_before(base, before_id)
-    base = keyset_after(base, after_id)
-    base = bound_by_history_grant(base, Keyword.get(opts, :as_participant))
-
     base
-    |> ExternalScope.scope_by_space_id(scope)
-    |> Repo.all()
+    |> keyset_before(Keyword.get(opts, :before_id))
+    |> keyset_after(Keyword.get(opts, :after_id))
+    |> bound_by_history_grant(Keyword.get(opts, :as_participant))
+    |> ExternalScope.scope_by_space_id(Keyword.get(opts, :scope))
   end
 
   # NULL `history_visible_from`, an unknown id, or no `:as_participant` at all

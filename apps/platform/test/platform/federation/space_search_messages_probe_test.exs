@@ -70,7 +70,7 @@ defmodule Platform.Federation.SpaceSearchMessagesProbeTest do
 
   describe "step 1 — reproduce" do
     test "records which query classes return rows and which return []", ctx do
-      {:ok, all} =
+      {:ok, %{messages: all}} =
         ToolSurface.execute(
           "space_get_messages",
           %{"space_id" => ctx.space.id},

@@ -54,7 +54,7 @@ defmodule Platform.Federation.ToolSurfacePriorRulingsTest do
     test "reports the gate as pending AND carries the human's words under prior_rulings", ctx do
       :ok = reject_then_reopen!(ctx, "Contrast on the FAB is unreadable")
 
-      assert {:ok, [serialized]} =
+      assert {:ok, %{validations: [serialized]}} =
                ToolSurface.execute(
                  "validation_list",
                  %{"stage_id" => ctx.stage.id},
@@ -83,7 +83,7 @@ defmodule Platform.Federation.ToolSurfacePriorRulingsTest do
       :ok = reject_then_reopen!(ctx, "First round problem")
       :ok = reject_then_reopen!(ctx, "Second round problem")
 
-      assert {:ok, [serialized]} =
+      assert {:ok, %{validations: [serialized]}} =
                ToolSurface.execute(
                  "validation_list",
                  %{"stage_id" => ctx.stage.id},
@@ -99,7 +99,7 @@ defmodule Platform.Federation.ToolSurfacePriorRulingsTest do
     end
 
     test "a gate nobody has ruled on carries no prior_rulings key", ctx do
-      assert {:ok, [serialized]} =
+      assert {:ok, %{validations: [serialized]}} =
                ToolSurface.execute(
                  "validation_list",
                  %{"stage_id" => ctx.stage.id},
@@ -138,7 +138,7 @@ defmodule Platform.Federation.ToolSurfacePriorRulingsTest do
     test "serializer output matches the persisted evidence map", ctx do
       :ok = reject_then_reopen!(ctx, "Copy is wrong")
 
-      assert {:ok, [serialized]} =
+      assert {:ok, %{validations: [serialized]}} =
                ToolSurface.execute(
                  "validation_list",
                  %{"stage_id" => ctx.stage.id},

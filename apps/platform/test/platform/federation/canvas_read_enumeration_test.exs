@@ -471,7 +471,7 @@ defmodule Platform.Federation.CanvasReadEnumerationTest do
       member = UUID.generate()
       add_agent!(space.id, member)
 
-      assert {:ok, rows} =
+      assert {:ok, %{canvases: rows}} =
                ToolSurface.execute(
                  "canvas_list",
                  %{"space_id" => space.id},

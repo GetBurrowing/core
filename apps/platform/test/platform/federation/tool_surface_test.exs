@@ -607,7 +607,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
           %{}
         )
 
-      {:ok, listed} =
+      {:ok, %{epics: listed}} =
         ToolSurface.execute(
           "epic_list",
           %{"project_id" => project.id},
@@ -1009,7 +1009,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
     test "project_list returns projects" do
       _project = create_project(%{name: "Unique Project"})
 
-      {:ok, results} = ToolSurface.execute("project_list", %{}, %{})
+      {:ok, %{projects: results}} = ToolSurface.execute("project_list", %{}, %{})
 
       assert is_list(results)
       assert Enum.any?(results, fn p -> p.name == "Unique Project" end)
@@ -4698,7 +4698,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
       {:ok, stage} = Tasks.create_stage(%{plan_id: plan.id, name: "Build", position: 1})
       {:ok, _val} = Tasks.create_validation(%{stage_id: stage.id, kind: "ci_check"})
 
-      {:ok, results} =
+      {:ok, %{stages: results}} =
         ToolSurface.execute("stage_list", %{"plan_id" => plan.id}, %{})
 
       assert length(results) == 1
@@ -4729,7 +4729,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
       {:ok, _} = Tasks.create_validation(%{stage_id: stage.id, kind: "ci_check"})
       {:ok, _} = Tasks.create_validation(%{stage_id: stage.id, kind: "test_pass"})
 
-      {:ok, results} =
+      {:ok, %{validations: results}} =
         ToolSurface.execute("validation_list", %{"stage_id" => stage.id}, %{})
 
       assert length(results) == 2
@@ -5040,7 +5040,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
         display_name: agent.name
       })
 
-      {:ok, results} =
+      {:ok, %{spaces: results}} =
         ToolSurface.execute("space_list", %{}, %{agent_id: agent.id})
 
       assert is_list(results)
@@ -5063,7 +5063,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
         })
       end
 
-      {:ok, results} =
+      {:ok, %{spaces: results}} =
         ToolSurface.execute("space_list", %{"kind" => "dm"}, %{agent_id: agent.id})
 
       assert length(results) == 1
@@ -5083,7 +5083,8 @@ defmodule Platform.Federation.ToolSurfaceTest do
       {:ok, _geordi_p} =
         Chat.add_agent_participant(space.id, geordi, display_name: "Geordi")
 
-      {:ok, rows} = ToolSurface.execute("space_list_agents", %{"space_id" => space.id}, %{})
+      {:ok, %{agents: rows}} =
+        ToolSurface.execute("space_list_agents", %{"space_id" => space.id}, %{})
 
       assert length(rows) == 2
       higgins_row = Enum.find(rows, &(&1.agent_id == higgins.id))
@@ -5114,7 +5115,8 @@ defmodule Platform.Federation.ToolSurfaceTest do
       # Geordi leaves.
       {:ok, _} = Chat.remove_participant(geordi_p)
 
-      {:ok, rows} = ToolSurface.execute("space_list_agents", %{"space_id" => space.id}, %{})
+      {:ok, %{agents: rows}} =
+        ToolSurface.execute("space_list_agents", %{"space_id" => space.id}, %{})
 
       agent_ids = Enum.map(rows, & &1.agent_id)
       assert higgins.id in agent_ids
@@ -6922,7 +6924,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
         })
       end
 
-      {:ok, results} =
+      {:ok, %{messages: results}} =
         ToolSurface.execute(
           "space_get_messages",
           %{"space_id" => ctx.space.id},
@@ -6966,7 +6968,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
           state: "ready"
         })
 
-      {:ok, results} =
+      {:ok, %{messages: results}} =
         ToolSurface.execute(
           "space_get_messages",
           %{"space_id" => ctx.space.id},
@@ -7000,7 +7002,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
         })
       end
 
-      {:ok, results} =
+      {:ok, %{messages: results}} =
         ToolSurface.execute(
           "space_get_messages",
           %{"space_id" => ctx.space.id, "limit" => 50},
@@ -7048,7 +7050,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
           content: "Third"
         })
 
-      {:ok, results} =
+      {:ok, %{messages: results}} =
         ToolSurface.execute(
           "space_get_messages",
           %{"space_id" => ctx.space.id, "before_id" => msg3.id},
@@ -7071,7 +7073,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
           content: body
         })
 
-      {:ok, results} =
+      {:ok, %{messages: results}} =
         ToolSurface.execute(
           "space_get_messages",
           %{"space_id" => ctx.space.id},
@@ -7094,7 +7096,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
           content: body
         })
 
-      {:ok, results} =
+      {:ok, %{messages: results}} =
         ToolSurface.execute(
           "space_get_messages",
           %{"space_id" => ctx.space.id},
@@ -7217,7 +7219,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
           "title" => "Test Canvas"
         })
 
-      {:ok, results} =
+      {:ok, %{canvases: results}} =
         ToolSurface.execute(
           "canvas_list",
           %{"space_id" => ctx.space.id},
@@ -8827,7 +8829,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
       task = planned_task()
       plan = plan_with_stage(task, %{status: "approved", version: 1})
 
-      assert {:ok, [stage]} = stage_list(%{"task_id" => task.id})
+      assert {:ok, %{stages: [stage]}} = stage_list(%{"task_id" => task.id})
       assert stage.name == "Stage v1"
       assert stage.plan_id == plan.id
     end
@@ -8840,7 +8842,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
       v1 = plan_with_stage(task, %{status: "approved", version: 1})
       v2 = plan_with_stage(task, %{status: "pending_review", version: 2})
 
-      assert {:ok, [stage]} = stage_list(%{"task_id" => task.id})
+      assert {:ok, %{stages: [stage]}} = stage_list(%{"task_id" => task.id})
       assert stage.plan_id == v1.id
       refute stage.plan_id == v2.id
       assert stage.name == "Stage v1"
@@ -8881,7 +8883,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert stage_list(%{"plan_id" => plan.id}) ==
                ToolSurface.execute("stage_list", %{"plan_id" => plan.id}, %{})
 
-      assert {:ok, [stage]} = stage_list(%{"plan_id" => plan.id})
+      assert {:ok, %{stages: [stage]}} = stage_list(%{"plan_id" => plan.id})
       assert stage.plan_id == plan.id
     end
 
@@ -8893,7 +8895,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
       v1 = plan_with_stage(task, %{status: "approved", version: 1})
       v2 = plan_with_stage(task, %{status: "pending_review", version: 2})
 
-      assert {:ok, [stage]} = stage_list(%{"plan_id" => v2.id, "task_id" => task.id})
+      assert {:ok, %{stages: [stage]}} = stage_list(%{"plan_id" => v2.id, "task_id" => task.id})
       assert stage.plan_id == v2.id
       refute stage.plan_id == v1.id
     end

@@ -197,10 +197,13 @@ defmodule Platform.Federation.ToolResultSizeTest do
     end
 
     test "bounded, parses, and keeps stage identity and validation status", %{plan: plan} do
-      {:ok, stages} = ToolSurface.execute("stage_list", %{"plan_id" => plan.id}, %{})
+      {:ok, %{stages: stages} = envelope} =
+        ToolSurface.execute("stage_list", %{"plan_id" => plan.id}, %{})
 
-      assert bytes(stages) <= @max_result_bytes
-      assert stages |> Jason.encode!() |> Jason.decode!() |> length() == length(stages)
+      assert bytes(envelope) <= @max_result_bytes
+
+      assert envelope |> Jason.encode!() |> Jason.decode!() |> Map.fetch!("stages") |> length() ==
+               length(stages)
 
       for stage <- stages do
         assert is_binary(stage.id)
@@ -214,7 +217,7 @@ defmodule Platform.Federation.ToolResultSizeTest do
     end
 
     test "evidence is emptied with a marker, not half-serialized", %{plan: plan} do
-      {:ok, stages} = ToolSurface.execute("stage_list", %{"plan_id" => plan.id}, %{})
+      {:ok, %{stages: stages}} = ToolSurface.execute("stage_list", %{"plan_id" => plan.id}, %{})
       validation = stages |> hd() |> Map.fetch!(:validations) |> hd()
 
       # An empty map, NOT a partial one — a caller must not be able to read a
@@ -225,7 +228,7 @@ defmodule Platform.Federation.ToolResultSizeTest do
     end
 
     test "detail=full returns evidence whole", %{plan: plan} do
-      {:ok, stages} =
+      {:ok, %{stages: stages}} =
         ToolSurface.execute("stage_list", %{"plan_id" => plan.id, "detail" => "full"}, %{})
 
       validation = stages |> hd() |> Map.fetch!(:validations) |> hd()
@@ -243,7 +246,7 @@ defmodule Platform.Federation.ToolResultSizeTest do
 
       {:ok, _} = Tasks.create_validation(%{stage_id: stage.id, kind: "manual_approval"})
 
-      {:ok, [row]} = ToolSurface.execute("stage_list", %{"plan_id" => plan.id}, %{})
+      {:ok, %{stages: [row]}} = ToolSurface.execute("stage_list", %{"plan_id" => plan.id}, %{})
 
       assert row.name == "One"
       assert row.description == "short"

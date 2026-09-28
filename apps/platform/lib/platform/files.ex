@@ -305,21 +305,40 @@ defmodule Platform.Files do
   @spec list_files_for_project(binary(), keyword()) :: [File.t()]
   def list_files_for_project(project_id, opts \\ []) when is_binary(project_id) do
     limit = Keyword.get(opts, :limit, 50)
-    content_type = Keyword.get(opts, :content_type)
-    ingest_intent = Keyword.get(opts, :ingest_intent)
-    ingest_status = Keyword.get(opts, :ingest_status)
     preload = Keyword.get(opts, :preload, [])
 
-    File
-    |> not_deleted()
-    |> where([f], f.project_id == ^project_id)
-    |> maybe_filter_content_type(content_type)
-    |> maybe_filter_ingest_intent(ingest_intent)
-    |> maybe_filter_ingest_status(ingest_status)
+    project_id
+    |> project_files_query(opts)
     |> order_by([f], desc: f.inserted_at)
     |> maybe_limit(limit)
     |> Repo.all()
     |> Repo.preload(preload)
+  end
+
+  @doc """
+  Counts the files `list_files_for_project/2` would return with no limit
+  (task 01a04a7a stage 2), in the database.
+
+  Takes the same filter options (`:content_type`, `:ingest_intent`,
+  `:ingest_status`); `:limit` and `:preload` are ignored. The count and the
+  list share one private query builder (`project_files_query/2`), so they
+  cannot be taken over different sets — which is what lets `file_list`
+  report `total` / `has_more` truthfully.
+  """
+  @spec count_files_for_project(binary(), keyword()) :: non_neg_integer()
+  def count_files_for_project(project_id, opts \\ []) when is_binary(project_id) do
+    project_id
+    |> project_files_query(opts)
+    |> Repo.aggregate(:count)
+  end
+
+  defp project_files_query(project_id, opts) do
+    File
+    |> not_deleted()
+    |> where([f], f.project_id == ^project_id)
+    |> maybe_filter_content_type(Keyword.get(opts, :content_type))
+    |> maybe_filter_ingest_intent(Keyword.get(opts, :ingest_intent))
+    |> maybe_filter_ingest_status(Keyword.get(opts, :ingest_status))
   end
 
   @doc """
