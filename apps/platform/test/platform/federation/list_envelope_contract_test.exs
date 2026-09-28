@@ -697,17 +697,56 @@ defmodule Platform.Federation.ListEnvelopeContractTest do
       assert env.total == length(env.results)
     end
 
-    test "EXCEPTION: channel cap hit — total is a lower bound, has_more true with total == length" do
+    test "over-limit: 25 small pages beat the default limit of 20" do
+      # Regression for task 01a0e81b: total must be the true match count
+      # (25), not the post-limit page length (20) — and has_more must
+      # follow from that, not from the byte bound (bodies here are tiny).
+      seed_wiki_pages("envmany", 25, 40)
+      env = memory_search(%{"query" => "envmany"})
+
+      assert env.total == 25
+      assert env.has_more == true
+      assert length(env.results) == 20
+    end
+
+    test "positive control: 5 small pages, all returned, no more to fetch" do
+      seed_wiki_pages("envfew", 5, 40)
+      env = memory_search(%{"query" => "envfew"})
+
+      assert env.has_more == false
+      assert env.total == 5
+      assert env.total == length(env.results)
+    end
+
+    test "boundary: corpus size exactly equals the default limit (20)" do
+      # The wrong-direction bug this guards against: a corpus of exactly
+      # `limit` reporting has_more: true because something compared
+      # length(results) == limit instead of the true count against total.
+      # ResultBound.paged/5's sibling list tools already avoid that via
+      # `offset + length(rows) < total`; this proves memory_search's
+      # total/has_more matches that same correct comparison shape.
+      seed_wiki_pages("envtwty", 20, 40)
+      env = memory_search(%{"query" => "envtwty"})
+
+      assert env.total == 20
+      assert env.has_more == false
+      assert length(env.results) == 20
+    end
+
+    test "EXCEPTION: channel cap hit — total is the true (lower-bound) match count above the page" do
       # limit 1 => channel cap 2; three matching pages trip it, so the
-      # search itself reports `truncated`. Nothing is dropped by the byte
-      # bound, so total == length(results), and has_more is STILL true.
+      # search itself reports `truncated`. The lexical channel returns 2
+      # of the 3 matches before Search.do_search/2 takes just 1 for the
+      # page — total (match_count) is 2, not 1, even though nothing was
+      # dropped by the byte bound here. has_more is true both from
+      # `length(results) < total` (1 < 2) and from `truncated`.
       seed_wiki_pages("envcapp", 3, 40)
       env = memory_search(%{"query" => "envcapp", "limit" => 1})
 
       assert env.truncated == true
       assert env.payload_truncated == false
       assert length(env.results) == 1
-      assert env.total == length(env.results)
+      assert env.total == 2
       assert env.has_more == true
     end
 

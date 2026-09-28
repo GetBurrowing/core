@@ -851,7 +851,7 @@ defmodule Platform.Federation.ToolSurface do
           }
         },
         returns:
-          "HEALTHY (`retrieval_status: \"ok\"`, every channel answered): %{results: [%{source, id, path, space_id, content, content_truncated, content_length, score, semantic_rank, lexical_rank, authored_by, date_or_inserted_at}], retrieval_status: \"ok\", fusion_constant_k: 60, truncated: boolean, dead_channels: [], dropped: %{page, journal, message, task}, payload_truncated: boolean, total: integer, has_more: boolean} — and no `degraded` key. DEGRADED WITH SURVIVING HITS: `retrieval_status: \"degraded\"`, the hits under `partial_results` and NO `results` KEY AT ALL, plus `degraded: %{dead_channels, channels_down: [\"semantic\" | \"lexical:<corpus>\"], implication}`, and the same `total` / `has_more` pair. `total` is the number of hits the search returned BEFORE the 20_000-byte payload bound (so `total - length(results)` hits were dropped from the tail); `has_more` is `payload_truncated or truncated`. The one documented exception to \"`has_more` true implies `total` > the hits returned\": when `truncated` is true because a channel hit its cap (or died), `total` is only a LOWER bound and `has_more` is true even when `total` equals the number of hits returned — a search has no knowable corpus count. The rename is deliberate: a search with a dead channel is a FAILED MEASUREMENT, not a negative result, so the hits are reachable only through a key whose name says they are partial. DEGRADED WITH ZERO SURVIVING HITS: an ERROR, `code: :search_degraded`, carrying `dead_channels` and no `results` key — an empty `results` there would read as an established absence, which it is not. `dead_channels` lists every search channel that did not answer the query — it timed out, it crashed, or its provider returned an error (e.g. a refused connection or a 5xx) — as a `[channel, corpus]` pair (e.g. `[\"semantic\", \"all\"]` or `[\"lexical\", \"task\"]`) — empty when every channel answered; `dropped` counts, per corpus, the fused hits that hydration refused (row deleted or not readable by the caller) and always carries all four keys. `content` is a 500-character snippet; `content_truncated` says whether the body was longer and `content_length` is its full byte size — fetch the body with `memory_view` on `path`. Task hits (source: \"task\") carry additional advisory fields: `status`, `priority`, `updated_at`, `merged_pr_url` (or nil), `follow_up_task_ids` (list of open tasks that reference this one), and `cancellation_note` (rework directive for cancelled tasks).",
+          "HEALTHY (`retrieval_status: \"ok\"`, every channel answered): %{results: [%{source, id, path, space_id, content, content_truncated, content_length, score, semantic_rank, lexical_rank, authored_by, date_or_inserted_at}], retrieval_status: \"ok\", fusion_constant_k: 60, truncated: boolean, dead_channels: [], dropped: %{page, journal, message, task}, payload_truncated: boolean, total: integer, has_more: boolean} — and no `degraded` key. DEGRADED WITH SURVIVING HITS: `retrieval_status: \"degraded\"`, the hits under `partial_results` and NO `results` KEY AT ALL, plus `degraded: %{dead_channels, channels_down: [\"semantic\" | \"lexical:<corpus>\"], implication}`, and the same `total` / `has_more` pair. `total` is the true pre-limit match count — the number of hits that survived fusion and hydration BEFORE the search's own `limit` cuts the page, not merely how many fit under the 20_000-byte payload bound; `has_more` is `length(results) < total or payload_truncated or truncated`. `total` is a LOWER bound, not exact, whenever `truncated` is true: a channel hit its cap, or a channel died, so the count was already incomplete before it was ever computed (mirrors `Platform.Org.Wiki.Search`'s moduledoc \"Match count\" section) — and in that case `has_more` is true even when `total` equals the number of hits returned, because the undercount can hide matches a bare comparison would miss and a search with a capped or dead channel has no knowable corpus count. The rename is deliberate: a search with a dead channel is a FAILED MEASUREMENT, not a negative result, so the hits are reachable only through a key whose name says they are partial. DEGRADED WITH ZERO SURVIVING HITS: an ERROR, `code: :search_degraded`, carrying `dead_channels` and no `results` key — an empty `results` there would read as an established absence, which it is not. `dead_channels` lists every search channel that did not answer the query — it timed out, it crashed, or its provider returned an error (e.g. a refused connection or a 5xx) — as a `[channel, corpus]` pair (e.g. `[\"semantic\", \"all\"]` or `[\"lexical\", \"task\"]`) — empty when every channel answered; `dropped` counts, per corpus, the fused hits that hydration refused (row deleted or not readable by the caller) and always carries all four keys. `content` is a 500-character snippet; `content_truncated` says whether the body was longer and `content_length` is its full byte size — fetch the body with `memory_view` on `path`. Task hits (source: \"task\") carry additional advisory fields: `status`, `priority`, `updated_at`, `merged_pr_url` (or nil), `follow_up_task_ids` (list of open tasks that reference this one), and `cancellation_note` (rework directive for cancelled tasks).",
         limitations:
           "Message hits are filtered to spaces the calling agent participates in (anonymous callers get no message hits). Deleted or orphaned rows are dropped and counted in `dropped`. `truncated: true` means the result set is incomplete for ANY reason: a channel hit its `2*limit` cap (a higher `limit` may surface more hits) OR a channel died (see `dead_channels` — a non-empty list always forces `truncated: true`; retry later rather than raising `limit`). `payload_truncated: true` is a different thing: the whole response is capped at 20_000 bytes, and lowest-ranked hits were dropped from the tail to fit. Degraded-vs-healthy is decided BEFORE that byte bound is applied, so a payload bound that empties the kept list never reports itself as `:search_degraded`. A caller written against `results` will see that key MISSING on a degraded search — that is the intended fail-loud: read `partial_results` and the `degraded` map, or treat the `:search_degraded` error as an unestablished absence.",
         when_to_use:
@@ -11302,16 +11302,38 @@ defmodule Platform.Federation.ToolSurface do
   # Task 01a04a7a stage 3: `total` and `has_more` are added the same way —
   # BEFORE measuring, with `has_more` at its longer `false` rendering — so
   # the two keys cannot push a fitted payload back over the budget either.
-  # `total` is the number of hits the search returned before this byte
-  # bound (`length(snipped)`); `has_more` is `payload_truncated or
-  # truncated`. When the search's own channel cap fired (`truncated`),
-  # `total` is only a LOWER bound and `has_more` is true even if nothing
-  # was dropped here: a search has no knowable corpus count.
+  #
+  # Task 01a0e81b stage 2: `total` is `Search.search/2`'s `match_count` —
+  # the true pre-limit hydrated match count — NOT `length(snipped)`.
+  # `snipped` is already capped to `opts.limit` by `Search.do_search/2`
+  # (`Enum.take(hydrated, opts.limit)`), so `length(snipped)` was only
+  # ever the page size, never the count of what actually matched.
+  # `match_count` rides in on `base` from the `Search.search/2` envelope
+  # untouched by `bound_memory_search_payload/1` and is consumed (not
+  # re-exposed) here.
+  #
+  # `has_more` is `length(kept) < total or payload_truncated or
+  # truncated` — the same `offset + length(rows) < total` shape
+  # `Platform.Federation.ResultBound.paged/5` uses (offset is always 0
+  # here; `memory_search` has no offset param), with the OR-tail
+  # preserved for two cases the bare comparison cannot see:
+  #   * `payload_truncated` — the byte bound dropped hits AFTER `total`
+  #     was already fixed, so `length(kept) < total` alone would be
+  #     coincidentally true here anyway, but the OR keeps the intent
+  #     explicit.
+  #   * `truncated` — a channel hit its own cap, or died. `match_count`
+  #     is then a LOWER bound (see `Search`'s moduledoc "Match count"),
+  #     so `total` can UNDERcount and `length(kept) < total` can be
+  #     false — `has_more` must still be true, because a search with a
+  #     capped or dead channel has no knowable corpus count.
   defp bound_memory_search_fit(base, key, snipped) do
+    match_count = Map.fetch!(base, :match_count)
+
     base =
       base
+      |> Map.delete(:match_count)
       |> Map.put(key, snipped)
-      |> Map.put(:total, length(snipped))
+      |> Map.put(:total, match_count)
       |> Map.put(:has_more, false)
 
     {kept, dropped?} = fit_memory_search_payload(base, key, snipped)
@@ -11320,7 +11342,10 @@ defmodule Platform.Federation.ToolSurface do
      base
      |> Map.put(key, kept)
      |> Map.put(:payload_truncated, dropped?)
-     |> Map.put(:has_more, dropped? or Map.get(base, :truncated) == true)}
+     |> Map.put(
+       :has_more,
+       length(kept) < match_count or dropped? or Map.get(base, :truncated) == true
+     )}
   end
 
   # Four-key error convention, mirroring `stage_list_mismatch/2`. There is

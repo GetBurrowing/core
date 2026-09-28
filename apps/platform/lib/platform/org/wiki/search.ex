@@ -87,6 +87,31 @@ defmodule Platform.Org.Wiki.Search do
   false — the Noop provider) is NOT an outage: it contributes zero hits
   and is not dead. Only a timeout, a crash, or an error return is dead.
 
+  ## Match count
+
+  `match_count` is `length(hydrated)` — the number of hits that survived
+  fusion AND hydration, counted BEFORE `results` is truncated to
+  `opts.limit`. It exists so a caller can tell "there were more matches
+  than fit in this page" apart from "this is everything there was".
+
+  `match_count` is a LOWER BOUND, not an exact count, whenever
+  `truncated: true`: a channel hitting its `2*limit` cap, or a channel
+  dying outright, means `hits`/`fused`/`hydrated` were already missing
+  matches before `match_count` was ever computed from them — the same
+  caveat `truncated` itself carries (see above), inherited here rather
+  than re-derived.
+
+  It is ALSO a lower bound in one case where `truncated` stays `false`:
+  `fuse/2` caps fusion candidates at `max(limit * 4, limit)` before
+  hydration ever runs. Five channels (one semantic + up to four lexical)
+  can each return just UNDER their own `2*limit` cap — so none trips
+  `capped?` and `truncated` stays `false` — while still summing to more
+  than `4*limit` distinct `(corpus, id)` pairs once channel hits are
+  merged. `fuse/2`'s `Enum.take(max(limit * 4, limit))` silently drops
+  the excess before `hydrate/2` and `match_count` ever see it. There is
+  no signal for this case today; `match_count` can undercount even when
+  every other field says the response is complete.
+
   ## Hydration drops
 
   Every fused hit that hydration cannot turn into a result — the row is
@@ -165,7 +190,11 @@ defmodule Platform.Org.Wiki.Search do
           fusion_constant_k: 60,
           truncated: boolean(),
           dead_channels: [channel_label()],
-          dropped: dropped()
+          dropped: dropped(),
+          # Pre-limit hydrated count — a LOWER BOUND (not exact) when
+          # `truncated: true`, and in one case even when it's `false`.
+          # See moduledoc `## Match count`.
+          match_count: non_neg_integer()
         }
 
   @type search_opts :: [
@@ -200,11 +229,13 @@ defmodule Platform.Org.Wiki.Search do
   @doc """
   Hybrid (semantic + lexical) search across pages, journal entries,
   chat messages and tasks. Returns
-  `{:ok, %{results, fusion_constant_k, truncated, dead_channels, dropped}}`
+  `{:ok, %{results, fusion_constant_k, truncated, dead_channels, dropped, match_count}}`
   (see `t:response/0`): `dead_channels` names every channel that did not
   answer — it timed out, crashed, or its provider returned an error —
   and forces `truncated: true`; `dropped` counts the
-  fused hits hydration refused per corpus.
+  fused hits hydration refused per corpus; `match_count` is the
+  pre-limit hydrated match count (see moduledoc `## Match count` for why
+  it is a lower bound, not exact, in more than one case).
 
   ## Options
 
@@ -237,7 +268,8 @@ defmodule Platform.Org.Wiki.Search do
          fusion_constant_k: @fusion_constant_k,
          truncated: false,
          dead_channels: [],
-         dropped: @zero_dropped
+         dropped: @zero_dropped,
+         match_count: 0
        }}
     else
       do_search(trimmed, normalize_opts(opts))
@@ -297,6 +329,7 @@ defmodule Platform.Org.Wiki.Search do
     fused = fuse(hits, opts.limit)
 
     {hydrated, dropped} = hydrate(fused, opts)
+    match_count = length(hydrated)
 
     {:ok,
      %{
@@ -304,7 +337,8 @@ defmodule Platform.Org.Wiki.Search do
        fusion_constant_k: @fusion_constant_k,
        truncated: truncated?,
        dead_channels: dead_channels,
-       dropped: dropped
+       dropped: dropped,
+       match_count: match_count
      }}
   end
 
