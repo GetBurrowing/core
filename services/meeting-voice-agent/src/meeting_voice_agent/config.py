@@ -320,6 +320,15 @@ class AgentConfig:
             #      `messaging`+`context_read` `allowed_bundles` --
             #      see `mix platform.seed_meeting_voice_agent`) and saying
             #      explicitly that no other tool exists to call.
+            #
+            # Task 01a0e8c1-c1c1 stage 3: Dalton's live moon run also found
+            # the tool-call e2e case's own example prompt ("what's the
+            # context of this space?") triggered NO tool call at all. Naming
+            # space_get_context as an available tool (above) never told the
+            # model WHEN to reach for it. Fixed below by calling out that
+            # exact phrasing -- "context of this space" / "going on in this
+            # space" -- as the trigger for calling space_get_context, rather
+            # than answering from what it already believes it knows.
             instructions=_env_str(
                 "MVA_INSTRUCTIONS",
                 "You are a concise meeting assistant. Answer briefly by voice. "
@@ -330,6 +339,10 @@ class AgentConfig:
                 "mail_draft_create, or any other tool by name; if you are not "
                 "certain a tool is in this exact list, do not call it, and "
                 "just answer in words or say plainly that you cannot do that. "
+                'If asked something like "what\'s the context of this space?" '
+                'or "what\'s going on in this space?" -- or any similar '
+                "question about the space itself -- call space_get_context to "
+                "answer from real data; never guess or answer from memory. "
                 "For a short, simple, directly-answerable question -- basic "
                 "arithmetic, a yes/no fact, a one-sentence lookup -- just "
                 "answer it briefly by voice, right away. Do NOT hand off a "

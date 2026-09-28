@@ -89,6 +89,21 @@ def test_default_instructions_forbid_any_retry_unambiguously():
     assert "exactly once" in config.instructions
 
 
+def test_default_instructions_call_space_get_context_for_space_context_questions():
+    """Task 01a0e8c1-c1c1 stage 3: Dalton's live moon run found the tool-call
+    e2e case's own example prompt ("what's the context of this space?")
+    triggered no tool call at all. The default prompt names space_get_context
+    as an available tool but, before this fix, never told the model WHEN to
+    reach for it -- so a "what's the context of / going on in this space"
+    style question had no instruction pointing it at the tool that answers
+    it. The default prompt must call out that phrasing explicitly."""
+    config = AgentConfig.from_env()
+
+    assert "context of this space" in config.instructions.lower()
+    assert "going on in this space" in config.instructions.lower()
+    assert "space_get_context" in config.instructions
+
+
 def test_instructions_env_override_wins(monkeypatch):
     monkeypatch.setenv("MVA_INSTRUCTIONS", "custom persona instructions")
     config = AgentConfig.from_env()
