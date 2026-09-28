@@ -430,6 +430,10 @@ defmodule Platform.Responsibilities do
     * `{:ok, :placeholder}` — the row declares
       `metadata["dispatch"] == "inert"` and is deliberately not
       dispatchable yet; nothing was attempted.
+    * `{:ok, :no_measurement}` — a native assignee's provider refused
+      `build_prompt/1` with `{:no_measurement, reason}` (see
+      `Platform.Responsibilities.Router.dispatch_native/6`); there was
+      nothing to do, so the native hand-off was skipped entirely.
     * `{:ok, :unknown_responsibility}` — no row is seeded for the key.
     * `{:error, term}` — an assignee existed and the dispatch failed.
 
@@ -468,6 +472,8 @@ defmodule Platform.Responsibilities do
       :not_applicable
       iex> Platform.Responsibilities.outcome({:ok, :placeholder})
       :not_applicable
+      iex> Platform.Responsibilities.outcome({:ok, :no_measurement})
+      :not_applicable
       iex> Platform.Responsibilities.outcome({:ok, :unknown_responsibility})
       :not_applicable
       iex> Platform.Responsibilities.outcome({:error, {:dispatch_failed, :timeout}})
@@ -504,6 +510,11 @@ defmodule Platform.Responsibilities do
   # applicable to do. Mapping it to `:failed` would report a broken step
   # for a key the codebase deliberately has not finished.
   def outcome({:ok, :placeholder}), do: :not_applicable
+  # A native provider refusal that means "nothing to do" (currently only
+  # `AgentsGoalHeartbeat`'s `:no_measurement`) skipped the dispatch
+  # entirely — not a failure, and distinct from `:unfilled` because an
+  # assignee DID exist.
+  def outcome({:ok, :no_measurement}), do: :not_applicable
   def outcome({:ok, :unknown_responsibility}), do: :not_applicable
   def outcome({:error, _reason}), do: :failed
 end

@@ -270,15 +270,34 @@ defmodule Platform.Responsibilities.Handlers.AgentsGoalHeartbeat do
   lets the next beat read the leader's reply instead of reporting "first
   beat" forever.
 
-  ## Two states still refuse
+  ## Two states refuse, and the Router now skips the hand-off entirely
 
   No chat space carries a goal (`measure(nil, _)`), or the space's goal is
   blank (`measure(_, goal) when goal in [nil, ""]`). Those slots carry no
   `kind`, and `build_prompt/1` refuses with `{:error, {:no_measurement,
-  reason}}`. On the native path the Router still hands the leader a
-  signal for a refused render — with no `prompt` key and
-  `prompt_status: :render_gap` (`Router.build_native_signal/5`) — so
-  "refuses" means no prompt body is dispatched, not that nothing is.
+  reason}}`.
+
+  Task `01a0e881`: before this, the native path still handed the leader a
+  bare signal for this refusal — no `prompt` key,
+  `prompt_status: :render_gap` — which woke the runtime hourly to spend a
+  model turn saying "there is nothing to measure." A missing goal means
+  there is nothing to DO, not merely nothing to render, so
+  `Router.dispatch_native/6` now matches
+  `{:absent, {:refused, {:no_measurement, _}}}` before building any
+  signal and skips the whole hand-off: no native signal, no
+  `call_agent_responder/1` call, no broadcast to the runtime topic. It
+  logs at `:debug` and the fire returns `{:ok, :no_measurement}`
+  (`Platform.Responsibilities.outcome/1` maps it to `:not_applicable`,
+  alongside `:unfilled`).
+
+  This is deliberately narrower than `@no_work_refusals` — that whitelist
+  (`:no_transcript_text`, `:no_intent_text`) still dispatches a bare
+  `:no_work` envelope, because an agent that declined to summarize or
+  file an action item should still be able to wake and say so. A missing
+  goal is a different case: there is no work of any kind for the leader
+  to do, so waking it accomplishes nothing and costs a paid turn every
+  hour on every install with no goal. `:no_measurement` is therefore
+  matched on its own, not added to that list.
 
   ## Assignment IS the enable signal
 

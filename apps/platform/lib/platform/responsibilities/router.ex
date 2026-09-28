@@ -95,7 +95,7 @@ defmodule Platform.Responsibilities.Router do
   ## Fire outcomes (ADR-0046)
 
   `fire_trigger/2,3` returns `t:fire_outcome/0` —
-  `{:ok, :dispatched} | {:ok, :unfilled} | {:ok, :placeholder} | {:error, term()}`
+  `{:ok, :dispatched} | {:ok, :unfilled} | {:ok, :placeholder} | {:ok, :no_measurement} | {:error, term()}`
   — so a caller can tell "nobody holds this responsibility" apart from
   "the dispatch died". ADR-0046 requires a per-step
   `not_applicable | complete | failed` and those two states used to be the
@@ -143,6 +143,15 @@ defmodule Platform.Responsibilities.Router do
       is `not_applicable`, not `failed`; it gets its own tag rather than
       reusing `:unfilled` because an assignee may well exist — what is
       missing is the handler's downstream half, not a role holder.
+    * `{:ok, :no_measurement}` — the assignee is a native/federated agent
+      and the provider's `build_prompt/1` refused with
+      `{:no_measurement, reason}` (currently only
+      `AgentsGoalHeartbeat`). `dispatch_native/6` skips the hand-off
+      entirely rather than waking the runtime with a bare signal — there
+      is nothing to do, not merely nothing to say, which is a stronger
+      statement than the `:no_work` envelopes `@no_work_refusals`
+      dispatches. Native-only: `dispatch_external/5` already aborts on
+      any `{:error, _}` refusal, `:no_measurement` included.
     * `{:error, term()}` — an assignee existed and the dispatch died.
       Maps to the ADR's `failed`.
 
@@ -152,7 +161,11 @@ defmodule Platform.Responsibilities.Router do
   than sharing a bare `:ok` with success.
   """
   @type fire_outcome ::
-          {:ok, :dispatched} | {:ok, :unfilled} | {:ok, :placeholder} | {:error, term()}
+          {:ok, :dispatched}
+          | {:ok, :unfilled}
+          | {:ok, :placeholder}
+          | {:ok, :no_measurement}
+          | {:error, term()}
 
   @default_check_interval_ms :timer.seconds(60)
 
@@ -1685,35 +1698,59 @@ defmodule Platform.Responsibilities.Router do
         other -> other
       end
 
-    log_native_prompt_fidelity(responsibility, agent, outcome)
-    emit_prompt_absent_telemetry(responsibility, outcome)
-
-    signal = build_native_signal(responsibility, agent, trigger_meta, outcome, context)
-
-    Logger.info(
-      "[ResponsibilityRouter] #{kind} dispatch key=#{responsibility.key} " <>
-        "agent=#{agent_slug(agent)} signal=#{inspect(Map.take(signal, [:reason, :space_id]))}"
-    )
-
-    # The stamp + `fired` telemetry are conditional on the handoff being
-    # accepted. They used to fire unconditionally, which reported a
-    # successful dispatch even when the native dispatcher was missing or
-    # raised.
-    case call_agent_responder(signal) do
-      {:ok, :dispatched} ->
-        safe_stamp_last_fire(agent, Map.get(trigger_meta, :fired_at) || DateTime.utc_now())
-
-        emit_fired_telemetry(responsibility, agent, :native)
-        {:ok, :dispatched}
-
-      {:error, reason} ->
-        Logger.warning(
-          "[ResponsibilityRouter] #{kind} dispatch failed key=#{responsibility.key} " <>
-            "agent=#{agent_slug(agent)} reason=#{inspect(reason)}"
+    case outcome do
+      # `:no_measurement` is not a render gap and not deliberate silence —
+      # it is "there is nothing to do." Every other `{:absent, _}` still
+      # means a runtime SHOULD wake (to say so, or because the gap itself
+      # is actionable); this is the one case where waking accomplishes
+      # nothing, so the whole native hand-off — signal, responder call,
+      # runtime-topic broadcast — is skipped rather than sent bare. See
+      # `AgentsGoalHeartbeat`'s moduledoc, "## Two states refuse, and the
+      # Router now skips the hand-off entirely",
+      # for the two slots that produce this reason. Deliberately narrower
+      # than `@no_work_refusals`: that whitelist still dispatches a
+      # `:no_work` envelope; this skips dispatch entirely, which is why it
+      # is matched here rather than added to that list.
+      {:absent, {:refused, {:no_measurement, reason}}} ->
+        Logger.debug(
+          "[ResponsibilityRouter] #{kind} dispatch skipped (nothing to do) " <>
+            "key=#{responsibility.key} agent=#{agent_slug(agent)} " <>
+            "reason=#{inspect(reason)}"
         )
 
-        emit_failed_telemetry(responsibility, agent, :native, reason)
-        {:error, reason}
+        {:ok, :no_measurement}
+
+      _ ->
+        log_native_prompt_fidelity(responsibility, agent, outcome)
+        emit_prompt_absent_telemetry(responsibility, outcome)
+
+        signal = build_native_signal(responsibility, agent, trigger_meta, outcome, context)
+
+        Logger.info(
+          "[ResponsibilityRouter] #{kind} dispatch key=#{responsibility.key} " <>
+            "agent=#{agent_slug(agent)} signal=#{inspect(Map.take(signal, [:reason, :space_id]))}"
+        )
+
+        # The stamp + `fired` telemetry are conditional on the handoff being
+        # accepted. They used to fire unconditionally, which reported a
+        # successful dispatch even when the native dispatcher was missing or
+        # raised.
+        case call_agent_responder(signal) do
+          {:ok, :dispatched} ->
+            safe_stamp_last_fire(agent, Map.get(trigger_meta, :fired_at) || DateTime.utc_now())
+
+            emit_fired_telemetry(responsibility, agent, :native)
+            {:ok, :dispatched}
+
+          {:error, reason} ->
+            Logger.warning(
+              "[ResponsibilityRouter] #{kind} dispatch failed key=#{responsibility.key} " <>
+                "agent=#{agent_slug(agent)} reason=#{inspect(reason)}"
+            )
+
+            emit_failed_telemetry(responsibility, agent, :native, reason)
+            {:error, reason}
+        end
     end
   end
 

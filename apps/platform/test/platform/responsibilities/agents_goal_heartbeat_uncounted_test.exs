@@ -258,23 +258,25 @@ defmodule Platform.Responsibilities.AgentsGoalHeartbeatUncountedTest do
     refute prompt =~ "no count for this goal"
   end
 
-  # The refusal as the NATIVE path actually carries it. The plan said "no
-  # signal is captured"; measured against unmodified `baf0bc6c`, that is
-  # false: `Router.dispatch_native/6` classifies a `build_prompt/1` error
-  # as `{:absent, {:refused, _}}` and still hands the leader a signal,
-  # with NO `:prompt` key and `prompt_status: :render_gap`. What survives
-  # is the refusal to render a prompt, and that is what is asserted.
-  test "(e) no space carries a goal: build_prompt still refuses, so no prompt is dispatched",
+  # Task `01a0e881`: no signal is captured at all any more. Before this
+  # fix, `Router.dispatch_native/6` classified a `build_prompt/1`
+  # `:no_measurement` error as `{:absent, {:refused, _}}` and still
+  # handed the leader a bare signal (no `:prompt` key,
+  # `prompt_status: :render_gap`) — waking the runtime hourly to say
+  # there was nothing to measure. A missing goal means there is nothing
+  # to DO, so the Router now skips the whole native hand-off for this
+  # reason: no signal is built, `call_agent_responder/1` is never
+  # called, and nothing broadcasts to the runtime topic. `fire!/0`
+  # returns the new skip tag rather than `{:ok, :dispatched}`.
+  test "(e) no space carries a goal: the native hand-off is skipped entirely, not dispatched with a bare signal",
        ctx do
     assert Handler.agents_space() == nil
 
-    assert {:ok, :dispatched} = fire!()
-    assert_receive {:captured_signal, signal}
-    assert signal.metadata.agent_id == ctx.agent.id
+    assert {:ok, :no_measurement} = fire!()
+    refute_receive {:captured_signal, _signal}
 
-    refute Map.has_key?(signal.metadata, :prompt)
-    assert signal.metadata.prompt_status == :render_gap
-    assert signal.metadata.prompt_absence_reason =~ "no_measurement"
-    assert signal.metadata.prompt_absence_reason =~ "no chat space carries a goal"
+    # Positive control: this fixture's agent WOULD have been the
+    # assignee, so the absence above is the skip, not an unfilled role.
+    assert Roles.assignee_for(@key).id == ctx.agent.id
   end
 end
