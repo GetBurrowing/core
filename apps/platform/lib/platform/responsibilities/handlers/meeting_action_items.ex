@@ -80,7 +80,6 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItems do
   require Logger
 
   alias Platform.Meetings.IntentContext
-  alias Platform.Meetings.IntentQueue
   alias Platform.Meetings.IntentRouting
   alias Platform.Orchestration.PromptTemplates
   alias Platform.Responsibilities.ContextProviders
@@ -204,6 +203,19 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItems do
   @impl true
   def gather_context(%Responsibility{} = _responsibility, ctx) when is_map(ctx) do
     payload = Map.get(ctx, :payload) || Map.get(ctx, "payload") || %{}
+
+    # The candid-register floor (task 01a0e58f), asked BEFORE any context
+    # is gathered or any space resolved. It must be a GATHER refusal: a
+    # `build_prompt/1` refusal still sends a native assignee a signal that
+    # invites it into the meeting space. See `IntentContext.candid_refusal/1`.
+    with :ok <- IntentContext.candid_refusal(payload) do
+      gather_intent_context(payload)
+    end
+  end
+
+  def gather_context(_responsibility, _ctx), do: {:ok, %{}}
+
+  defp gather_intent_context(payload) do
     workspace_id = Map.get(payload, :workspace_id) || Map.get(payload, "workspace_id")
     base_opts = if workspace_id, do: [workspace_id: workspace_id], else: []
 
@@ -220,15 +232,24 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItems do
     # — an agent shown one space's canvases and made writable in
     # another is a worse dispatch than the dead one this closes.
     space_id = IntentContext.space_id(payload)
+    canvases = IntentContext.space_canvases(space_id)
 
-    with {:ok, %{org_identity: identity}} <-
+    # Task 01a0e58f, acceptance 4: a NEAR-MISS (see
+    # `IntentContext.near_miss/1`) into a space with no canvas yet is
+    # refused here, in code — the recipient would otherwise create a
+    # canvas for a line that adds no item. A near-miss into a space that
+    # already holds a canvas dispatches as before: reconciling an
+    # existing list is legitimate. At gather, because a build_prompt
+    # refusal still delivers a native signal.
+    with :ok <- IntentContext.near_miss_refusal(payload, canvases),
+         {:ok, %{org_identity: identity}} <-
            ContextProviders.gather_context(:org_identity, base_opts) do
       {:ok,
        %{
          org_identity: identity,
          meeting_intent: IntentContext.meeting_intent(payload),
          transcript_window: IntentContext.transcript_window(payload),
-         meeting_canvases: IntentContext.space_canvases(space_id),
+         meeting_canvases: canvases,
          # NOT a prompt slot. This is the provider OPTING IN to the
          # dispatch invite: `Router.build_native_signal/5` lifts it to
          # the native signal's `metadata.space_id`, which is the only
@@ -239,8 +260,6 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItems do
        }}
     end
   end
-
-  def gather_context(_responsibility, _ctx), do: {:ok, %{}}
 
   @impl true
   @spec build_prompt(map()) ::
@@ -340,20 +359,12 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItems do
   """
   @impl true
   @spec handle_refusal(Responsibility.t(), {atom(), term()} | term(), map()) :: :ok
-  def handle_refusal(%Responsibility{} = responsibility, refusal, trigger_meta)
+  def handle_refusal(%Responsibility{} = _responsibility, refusal, trigger_meta)
       when is_map(trigger_meta) do
-    payload = payload_of(trigger_meta)
-    meeting_id = payload_field(payload, :meeting_id)
-    intent_id = payload_field(payload, :intent_id)
-    reason = refusal_reason(refusal)
-
-    Logger.info(
-      "[#{@key}] dispatch refused before the model call " <>
-        "key=#{responsibility.key} meeting=#{inspect(meeting_id)} " <>
-        "intent=#{inspect(intent_id)} reason=#{inspect(reason)}"
-    )
-
-    close_intent_row(meeting_id, intent_id, {:error, reason})
+    # Task 01a0e58f moved the row-closing logic to `IntentContext` so the
+    # brief-worthy and open-question handlers share it. Behaviour is
+    # unchanged.
+    IntentContext.close_refused_intent(@key, refusal, trigger_meta)
   end
 
   # ── internals ─────────────────────────────────────────────────────────────
@@ -398,104 +409,4 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItems do
 
   defp to_text(value) when is_binary(value), do: value
   defp to_text(_), do: ""
-
-  # Unwrap the Router's seam label. `failure_reason/1` downstream still
-  # coerces anything non-atom/binary, so an unrecognised refusal shape
-  # lands as readable text rather than as Elixir debug output in the
-  # meeting's intent strip.
-  defp refusal_reason({kind, reason})
-       when kind in [:build_prompt_refused, :context_gather_refused],
-       do: reason
-
-  defp refusal_reason(other), do: other
-
-  defp payload_of(%{payload: payload}) when is_map(payload), do: payload
-  defp payload_of(%{"payload" => payload}) when is_map(payload), do: payload
-  defp payload_of(meta) when is_map(meta), do: meta
-  defp payload_of(_), do: %{}
-
-  # The router hands `trigger_meta` through verbatim and both key
-  # spellings occur in the wild: atom-keyed from an in-process
-  # broadcast, string-keyed from anything that made a JSON round trip.
-  defp payload_field(payload, key) when is_map(payload) and is_atom(key),
-    do: Map.get(payload, key) || Map.get(payload, Atom.to_string(key))
-
-  defp payload_field(_payload, _key), do: nil
-
-  # ── closing the queue row ─────────────────────────────────────────────────
-  #
-  # The dispatcher moved this row to `:dispatched` and, in doing so,
-  # pinned the meeting's serial cursor to it. On the refusal path
-  # nothing else closes it: no recipient was told the row exists, so no
-  # `intent_ack` is coming, and the only other exit is
-  # `IntentQueue.Server`'s 90s claim watchdog, which lands `:timed_out`.
-  defp close_intent_row(meeting_id, intent_id, result)
-       when is_binary(meeting_id) and is_binary(intent_id) do
-    case IntentQueue.get(meeting_id, intent_id) do
-      {:ok, %{status: status}} ->
-        # The terminal set is READ off the queue, not restated here. A
-        # tenth terminal status added there and not here would make this
-        # branch quietly stop protecting whatever it is.
-        if status in IntentQueue.terminal_statuses() do
-          # Already terminal — almost always `:timed_out`, i.e. the
-          # watchdog released the cursor before this ran. Writing over
-          # that would erase the timeout from the operator's view and
-          # claim a punctuality the dispatch did not have; `transition/4`
-          # does not police terminal→terminal, so it would succeed.
-          Logger.info("[#{@key}] intent=#{intent_id} already #{status} — leaving the row alone")
-
-          :ok
-        else
-          transition_intent_row(meeting_id, intent_id, result)
-        end
-
-      {:error, reason} ->
-        # No queue server for this meeting (it ended), or no such row.
-        # Nothing to close and nothing broken.
-        Logger.info(
-          "[#{@key}] intent row unavailable meeting=#{meeting_id} " <>
-            "intent=#{intent_id} reason=#{inspect(reason)}"
-        )
-
-        :ok
-    end
-  end
-
-  defp close_intent_row(_meeting_id, _intent_id, _result), do: :ok
-
-  # `{:error, reason}` is the only shape that reaches here. There was a
-  # `:ok -> :completed` clause beside it while this handler applied the
-  # model's answer server-side; it is deleted rather than kept, because
-  # the platform no longer has a success to report. A `:completed` this
-  # module could write would say "the canvas is up to date" on the
-  # strength of an HTTP 200, which is a claim only the recipient can
-  # make — and it makes it with `intent_ack`.
-  defp transition_intent_row(meeting_id, intent_id, {:error, reason}) do
-    log_transition(
-      meeting_id,
-      intent_id,
-      IntentQueue.transition(meeting_id, intent_id, :dispatch_failed, %{
-        dispatch_failure_reason: failure_reason(reason)
-      })
-    )
-  end
-
-  # The row's `dispatch_failure_reason` is typed `atom | binary | nil` and
-  # is rendered straight into the meeting UI's intent strip. Coerce here
-  # rather than trusting every caller upstream to have kept to that: a
-  # tuple reason reaching the strip renders as Elixir debug output at a
-  # person mid-meeting.
-  defp failure_reason(reason) when is_atom(reason) or is_binary(reason), do: reason
-  defp failure_reason(reason), do: inspect(reason)
-
-  defp log_transition(_meeting_id, _intent_id, {:ok, _row}), do: :ok
-
-  defp log_transition(meeting_id, intent_id, {:error, reason}) do
-    Logger.info(
-      "[#{@key}] could not close intent row meeting=#{meeting_id} " <>
-        "intent=#{intent_id} reason=#{inspect(reason)}"
-    )
-
-    :ok
-  end
 end

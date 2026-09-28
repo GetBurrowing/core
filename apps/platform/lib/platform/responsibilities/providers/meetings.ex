@@ -211,10 +211,17 @@ defmodule Platform.Responsibilities.Providers.Meetings do
   Route a pre-model refusal to the handler that owns per-dispatch state
   (task 019fb90f-36e3 e2e fix).
 
-  Only `meetings.action_items` implements it: it is the one meetings key
-  whose trigger arrives holding an `IntentQueue` row, and that row pins
-  the meeting's serial cursor until something closes it. Every other key
-  answers `:ok` — a refusal leaves nothing of theirs in flight.
+  Routed to any handler that exports `handle_refusal/3`, probed rather
+  than listed. Those are the intent keys whose trigger arrives holding an
+  `IntentQueue` row, which pins the meeting's serial cursor until
+  something closes it: `meetings.action_items` since task
+  `019fb90f-36e3`, and `meetings.brief_worthy` / `meetings.open_question`
+  since task `01a0e58f`, whose candid-register floor refuses at
+  `gather_context/2`. A listed clause is how those two shipped their
+  `handle_refusal/3` and still left the row `:dispatched`: this table
+  answered `:ok` for them, and only the router-level test in
+  `intent_privacy_dispatch_test.exs` could see it. Every key without the
+  callback answers `:ok` — a refusal leaves nothing of theirs in flight.
 
   An UNMAPPED key still routes through `unknown_key/1` rather than
   `:ok`, for the same reason `handle_output/3` does: a meetings key with
@@ -230,11 +237,12 @@ defmodule Platform.Responsibilities.Providers.Meetings do
       nil ->
         unknown_key(responsibility)
 
-      Handlers.MeetingActionItems ->
-        MeetingActionItems.handle_refusal(responsibility, refusal, trigger_meta)
-
-      _handler ->
-        :ok
+      handler ->
+        if Code.ensure_loaded?(handler) and function_exported?(handler, :handle_refusal, 3) do
+          handler.handle_refusal(responsibility, refusal, trigger_meta)
+        else
+          :ok
+        end
     end
   end
 

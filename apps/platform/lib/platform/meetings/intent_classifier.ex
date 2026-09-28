@@ -1037,6 +1037,11 @@ defmodule Platform.Meetings.IntentClassifier do
         correction_exemplars(payload, state)
       )
 
+    # Task 01a0e58f. Who is in the room, read ONCE per chunk and threaded
+    # into `decide/1` the way `roster` is. A failed read is `nil`, which
+    # the addressee gate treats as inert — see `read_participants/1`.
+    participants = read_participants(room_id)
+
     decision =
       decide(%{
         provider_module: state.provider_module,
@@ -1044,7 +1049,8 @@ defmodule Platform.Meetings.IntentClassifier do
         prompt: prompt,
         chunk_text: chunk_text,
         room_id: room_id,
-        roster: roster
+        roster: roster,
+        participants: participants
       })
 
     case decision do
@@ -1274,12 +1280,37 @@ defmodule Platform.Meetings.IntentClassifier do
     # `IntentAddressee.verdict/3`.
     roster = Map.get(args, :roster)
 
+    # Task 01a0e58f. The meeting's un-left participants, threaded from
+    # `classify_and_enqueue/4`. Absent key => `nil` => inert: the
+    # addressee gate never answers `{:absent, _}` without a real read.
+    participants = Map.get(args, :participants)
+
+    # Task 01a0e58f. The falsifier's seam: with the utterance gates
+    # disabled the frame gate skips `:frame_speech_act` and
+    # `:frame_quoted_label` ONLY; the five older classes keep firing.
+    gates_enabled? = IntentFrames.utterance_gates_enabled?(args)
+
+    frame_opts =
+      if gates_enabled?,
+        do: [],
+        else: [skip: IntentFrames.utterance_gate_classes()]
+
+    # Everything the post-model gates need beyond the answer itself.
+    gate_ctx = %{
+      roster: roster,
+      participants: participants,
+      frame_opts: frame_opts,
+      utterance_gates?: gates_enabled?
+    }
+
     with {:ok, content} <- call_provider(provider_module, agent, prompt, chunk_text, room_id),
          # SINGLE call site for `parse_content`. Task 01a03f57 widened it
          # to /3, threading `chunk_text` through so the evidence gate can
          # check the model's citation against the chunk it classified.
          # Task 01a05997 stage 5 widened it to /4 for the addressee gate.
-         {:ok, parsed} <- parse_content(content, room_id, chunk_text, roster) do
+         # Task 01a0e58f folded the roster, participants and the
+         # utterance-gate seam into one `gate_ctx` map.
+         {:ok, parsed} <- parse_content(content, room_id, chunk_text, gate_ctx) do
       {:ok,
        parsed
        |> Map.put_new(:evidence_quote, nil)
@@ -1852,7 +1883,7 @@ defmodule Platform.Meetings.IntentClassifier do
   # `Platform.Meetings.IntentFrames`. Same demotion, distinct
   # `:frame_*` reasons, so the telemetry stream tells "never cited"
   # apart from "cited a mention".
-  defp parse_content(content, room_id, chunk_text, roster) do
+  defp parse_content(content, room_id, chunk_text, gate_ctx) do
     case Jason.decode(content) do
       {:ok, %{"intent" => intent, "confidence" => confidence} = decoded}
       when is_binary(intent) and is_number(confidence) ->
@@ -1861,7 +1892,7 @@ defmodule Platform.Meetings.IntentClassifier do
             confidence = confidence * 1.0
             quote_text = Map.get(decoded, "evidence_quote", "")
 
-            case gate_verdict(intent, target_role, quote_text, chunk_text, roster) do
+            case gate_verdict(intent, target_role, quote_text, chunk_text, gate_ctx) do
               :ok ->
                 # The quote is CARRIED, not just judged. `decide/1` already
                 # advertises an `:evidence_quote` key (put_new below), and it
@@ -1992,31 +2023,48 @@ defmodule Platform.Meetings.IntentClassifier do
   # leading vocative, and a quote that is blank or fabricated is not a
   # span of anything — reading a vocative out of it would be reading a
   # vocative out of the model's imagination.
-  defp gate_verdict(intent, target_role, quote_text, chunk_text, roster) do
-    with :ok <- evidence_verdict(intent, quote_text, chunk_text) do
-      addressee_verdict(intent, target_role, quote_text, chunk_text, roster)
+  defp gate_verdict(intent, target_role, quote_text, chunk_text, gate_ctx) do
+    with :ok <- evidence_verdict(intent, quote_text, chunk_text, gate_ctx.frame_opts) do
+      addressee_verdict(intent, target_role, quote_text, chunk_text, gate_ctx)
     end
   end
 
   # A decline addresses nobody by definition; there is nothing to gate.
-  defp addressee_verdict("off_topic", _target_role, _quote_text, _chunk_text, _roster),
+  defp addressee_verdict("off_topic", _target_role, _quote_text, _chunk_text, _gate_ctx),
     do: :ok
 
   # An answer that already routes to nobody has nothing to rewrite, so
   # there is no marker and no event: the row takes the `:ok` branch and is
   # byte-identical to the model's own null answer. Exact match, like
   # `IntentDispatcher.no_target_role?/1` and `IntentRouting` (task 01a0919d).
-  defp addressee_verdict(_intent, @no_target_role, _quote_text, _chunk_text, _roster), do: :ok
+  defp addressee_verdict(_intent, @no_target_role, _quote_text, _chunk_text, _gate_ctx),
+    do: :ok
 
-  defp addressee_verdict(_intent, _target_role, quote_text, chunk_text, roster) do
-    case IntentAddressee.verdict(chunk_text, quote_text, roster) do
-      :ok -> :ok
-      {:off_roster, _name} -> {:null_role, :off_roster_addressee}
+  # Task 01a0e58f refines ruling 01a08fde, it does not reverse it: a
+  # person IN THE ROOM who is not an agent keeps the null-role path. An
+  # addressee on neither the roster nor the participant list is reported
+  # speech and DEMOTES, because a nulled role does not stop the
+  # dispatcher's responsibility fork. The demotion sits behind the
+  # utterance-gate seam; with the seam off, `{:absent, _}` falls back to
+  # the null path, which is exactly what `verdict/3` would have answered.
+  # `emit_demotion/3` carries the class and ids only — never the name.
+  defp addressee_verdict(_intent, _target_role, quote_text, chunk_text, gate_ctx) do
+    case IntentAddressee.verdict(chunk_text, quote_text, gate_ctx.roster, gate_ctx.participants) do
+      :ok ->
+        :ok
+
+      {:off_roster, _name} ->
+        {:null_role, :off_roster_addressee}
+
+      {:absent, _name} ->
+        if gate_ctx.utterance_gates?,
+          do: {:demote, :reported_speech},
+          else: {:null_role, :off_roster_addressee}
     end
   end
 
   # off_topic needs no citation — there is nothing to cite.
-  defp evidence_verdict("off_topic", _quote_text, _chunk_text), do: :ok
+  defp evidence_verdict("off_topic", _quote_text, _chunk_text, _frame_opts), do: :ok
 
   # Two questions, asked in this order, and they are NOT the same
   # question:
@@ -2032,7 +2080,12 @@ defmodule Platform.Meetings.IntentClassifier do
   # `off_topic_default` cassette supply valid verbatim quotes and so
   # sail through question 1 — the gate fired 0 of 174 — which is why
   # question 2 had to exist at all.
-  defp evidence_verdict(_intent, quote_text, chunk_text) when is_binary(quote_text) do
+  #
+  # `frame_opts` carries the utterance-gate seam (task 01a0e58f): when
+  # disabled it is `[skip: [:frame_speech_act, :frame_quoted_label]]`,
+  # so only the two new classes are skipped.
+  defp evidence_verdict(_intent, quote_text, chunk_text, frame_opts)
+       when is_binary(quote_text) do
     trimmed = String.trim(quote_text)
 
     cond do
@@ -2043,14 +2096,14 @@ defmodule Platform.Meetings.IntentClassifier do
         {:demote, :not_in_chunk}
 
       true ->
-        case IntentFrames.cancelling_frame(chunk_text, trimmed) do
+        case IntentFrames.cancelling_frame(chunk_text, trimmed, frame_opts) do
           {:cancelled, class} -> {:demote, class}
           :ok -> :ok
         end
     end
   end
 
-  defp evidence_verdict(_intent, _quote_text, _chunk_text), do: {:demote, :blank}
+  defp evidence_verdict(_intent, _quote_text, _chunk_text, _frame_opts), do: {:demote, :blank}
 
   defp substring?(chunk_text, needle) when is_binary(chunk_text) do
     String.contains?(String.downcase(chunk_text), String.downcase(needle))
@@ -2108,6 +2161,9 @@ defmodule Platform.Meetings.IntentClassifier do
     )
   end
 
+  # Task 01a0e58f: the reported-speech reason travels this path too, so
+  # the line and the telemetry carry the class and ids ONLY — never the
+  # addressed name and never the excerpt.
   defp emit_demotion(room_id, intent, reason) do
     Logger.info(
       "[IntentClassifier] uncited positive demoted to off_topic room=#{inspect(room_id)} " <>
@@ -2136,6 +2192,24 @@ defmodule Platform.Meetings.IntentClassifier do
 
   defp preview(binary) when is_binary(binary), do: String.slice(binary, 0, 200)
   defp preview(other), do: inspect(other)
+
+  # One read of the room's un-left participants per chunk. Any failure
+  # (a non-UUID room id, a raise, a dead Repo) is `nil`, which the
+  # addressee gate treats as inert — a failed read must never turn into
+  # "nobody is here", which would demote every addressed ask.
+  defp read_participants(room_id) when is_binary(room_id) do
+    if Platform.UUID.valid?(room_id) do
+      try do
+        Meetings.active_participants(room_id)
+      rescue
+        _ -> nil
+      catch
+        :exit, _ -> nil
+      end
+    end
+  end
+
+  defp read_participants(_room_id), do: nil
 
   # ── Dedupe key ────────────────────────────────────────────────────────────
 

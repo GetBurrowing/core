@@ -324,6 +324,36 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsTest do
   end
 
   describe "gather_context/2 — the live mid-meeting slots" do
+    # Task 01a0e58f, acceptance 2 and 3. A candid utterance is refused at
+    # GATHER, the one refusal that stops the native path as well as the
+    # external one. Synthesised row; invented names; shape filed from the
+    # 2026-09-14 one-to-one.
+    test "a candid-register excerpt is refused before any context is gathered" do
+      meeting = create_meeting!()
+
+      assert {:error, :candid_register} =
+               MeetingActionItems.gather_context(
+                 responsibility(),
+                 intent_trigger_meta(meeting, nil, %{
+                   chunk_excerpt: "Priya to deliver list of demands to Marcus by end of week"
+                 })
+               )
+    end
+
+    # The floor is not a threshold: full confidence does not buy a pass.
+    test "the same candid excerpt at confidence 1.0 is still refused" do
+      meeting = create_meeting!()
+
+      assert {:error, :candid_register} =
+               MeetingActionItems.gather_context(
+                 responsibility(),
+                 intent_trigger_meta(meeting, nil, %{
+                   chunk_excerpt: "Priya to deliver list of demands to Marcus by end of week",
+                   confidence: 1.0
+                 })
+               )
+    end
+
     # Every degraded case below asserts a DIFFERENT observable, on
     # purpose. If they all asserted "something is missing", one collapsed
     # `%{missing?: true}` map returned for every slot would satisfy the
@@ -865,6 +895,150 @@ defmodule Platform.Responsibilities.Handlers.MeetingActionItemsTest do
     test "an unparseable answer is still :ok — there is no contract to violate" do
       assert :ok = MeetingActionItems.handle_output(responsibility(), nil)
       assert :ok = MeetingActionItems.handle_output(responsibility(), "any prose at all")
+    end
+  end
+
+  # ── NEAR-MISS WITHOUT A CANVAS (task 01a0e58f, acceptance 4) ──────────
+  #
+  # A near-miss (see `IntentContext.near_miss/1`) dispatched into a space
+  # with NO canvas yet would have the recipient create one for a line that
+  # adds no item. Refused at gather, in code. Rows are synthesised; names
+  # are invented; the shape was filed from the 2026-09-14 one-to-one.
+  #
+  # Named mutations, applied and reverted, measured on
+  # `test/platform/responsibilities` + `test/platform/meetings` (2877):
+  #   * M-n1 — drop the `missing?: true` condition from
+  #     `IntentContext.near_miss_refusal/2`: 3 failures, the three
+  #     "already holds a canvas" tests (one per handler file).
+  #   * M-n2 — `near_miss/1` always answers `{:near_miss, :x}`: 46
+  #     failures, including all three FIRST-REAL controls and every
+  #     ordinary-line gather/dispatch test across the meeting handlers.
+  #   * M-n3 — move the check to `build_prompt/1`: 9 failures, including
+  #     all three native-dispatch near-miss tests in
+  #     `intent_privacy_dispatch_test.exs`, which get `{:ok, :dispatched}`.
+  #   * M-n4 — `near_miss/1` ignores the utterance-gate seam: 1 failure of
+  #     2878, the seam test below.
+  describe "gather_context/2 — a near-miss with no canvas" do
+    @near_miss "My contention is we log an action item for the retro"
+
+    defp room_with!(names) do
+      {:ok, space} = Platform.Chat.create_space(%{kind: "execution"})
+
+      room =
+        %Platform.Meetings.Room{}
+        |> Platform.Meetings.Room.changeset(%{
+          space_id: space.id,
+          livekit_room_name: "space:#{space.id}"
+        })
+        |> Platform.Repo.insert!()
+
+      for name <- names do
+        %Platform.Meetings.Participant{}
+        |> Platform.Meetings.Participant.changeset(%{
+          room_id: room.id,
+          display_name: name,
+          joined_at: DateTime.utc_now()
+        })
+        |> Platform.Repo.insert!()
+      end
+
+      room
+    end
+
+    # M-n3 would not show here (gather is called directly); the Router
+    # test in `intent_privacy_dispatch_test.exs` carries that one.
+    test "a speech-act near-miss in an empty space is refused" do
+      meeting = create_meeting!()
+
+      assert {:error, :near_miss_without_canvas} =
+               MeetingActionItems.gather_context(
+                 responsibility(),
+                 intent_trigger_meta(meeting, nil, %{chunk_excerpt: @near_miss})
+               )
+    end
+
+    # M-n1 (drop the `missing?` condition) kills this.
+    test "the same near-miss in a space that already holds a canvas dispatches" do
+      meeting = create_meeting!()
+      _canvas = create_canvas!(meeting.chat_space_id, "Action Items")
+
+      assert {:ok, ctx} =
+               MeetingActionItems.gather_context(
+                 responsibility(),
+                 intent_trigger_meta(meeting, nil, %{chunk_excerpt: @near_miss})
+               )
+
+      assert ctx.dispatch_space_id == meeting.chat_space_id
+    end
+
+    # FIRST-REAL-BRIEF control. M-n2 (near_miss always answers
+    # `{:near_miss, _}`) kills this: a clean line in an empty space is the
+    # first real action item, and must dispatch exactly as before.
+    test "FIRST REAL ACTION ITEM: a clean line in an empty space dispatches" do
+      meeting = create_meeting!()
+
+      assert {:ok, ctx} =
+               MeetingActionItems.gather_context(
+                 responsibility(),
+                 intent_trigger_meta(meeting, nil, %{
+                   chunk_excerpt: "Dana to send the sprint notes to the team by Friday"
+                 })
+               )
+
+      assert ctx.meeting_canvases.missing?
+      assert ctx.dispatch_space_id == meeting.chat_space_id
+    end
+
+    # The near-miss is a per-utterance gate, so it sits behind the same
+    # seam as stage 1-2's gates; the privacy floor does not. M-n4 (make
+    # `near_miss/1` ignore `utterance_gates_enabled?/1`) kills this.
+    test "with the utterance gates disabled a near-miss in an empty space dispatches" do
+      previous = Application.get_env(:platform, :meeting_utterance_gates)
+      Application.put_env(:platform, :meeting_utterance_gates, :disabled)
+
+      on_exit(fn ->
+        if previous == nil,
+          do: Application.delete_env(:platform, :meeting_utterance_gates),
+          else: Application.put_env(:platform, :meeting_utterance_gates, previous)
+      end)
+
+      meeting = create_meeting!()
+
+      assert {:ok, _ctx} =
+               MeetingActionItems.gather_context(
+                 responsibility(),
+                 intent_trigger_meta(meeting, nil, %{chunk_excerpt: @near_miss})
+               )
+    end
+
+    test "an absent-addressee near-miss in an empty space is refused" do
+      meeting = create_meeting!()
+      room = room_with!(["Priya", "Dana"])
+
+      assert {:error, :near_miss_without_canvas} =
+               MeetingActionItems.gather_context(
+                 responsibility(),
+                 intent_trigger_meta(meeting, nil, %{
+                   chunk_excerpt: "Tobias, can you send the deck over by Friday?",
+                   room_id: room.id
+                 })
+               )
+    end
+
+    # Anti-vacuity for the addressee half: with the addressee IN the room
+    # the same line is not a near-miss.
+    test "the same line with the addressee in the room dispatches" do
+      meeting = create_meeting!()
+      room = room_with!(["Priya", "Tobias"])
+
+      assert {:ok, _ctx} =
+               MeetingActionItems.gather_context(
+                 responsibility(),
+                 intent_trigger_meta(meeting, nil, %{
+                   chunk_excerpt: "Tobias, can you send the deck over by Friday?",
+                   room_id: room.id
+                 })
+               )
     end
   end
 

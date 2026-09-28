@@ -24,6 +24,11 @@ defmodule Platform.Meetings.IntentContext do
   `build_prompt/1` and is the one case that genuinely has nothing to
   work from: a blank excerpt.
 
+  The two exceptions are not context slots. `candid_refusal/1` is the
+  privacy floor (task `01a0e58f`) every handler asks at the top of
+  `gather_context/2`, and `close_refused_intent/3` is the row-closing
+  half of every handler's `handle_refusal/3`.
+
   ## Sentinels, not empty strings
 
   Each formatter renders absence as an explicit parenthetical. A marker
@@ -38,6 +43,7 @@ defmodule Platform.Meetings.IntentContext do
 
   alias Platform.Chat
   alias Platform.Meetings
+  alias Platform.Meetings.IntentQueue
   alias Platform.Meetings.SummaryPrompt
 
   # Bounded for the same reason `IntentClassifier` bounds its own
@@ -326,6 +332,248 @@ defmodule Platform.Meetings.IntentContext do
   def value(nil), do: "(unknown)"
   def value(value) when is_binary(value), do: value
   def value(value), do: to_string(value)
+
+  # ── the candid-register floor (task 01a0e58f) ───────────────────────────
+
+  @doc """
+  The privacy floor every meeting-intent handler asks in
+  `gather_context/2`, BEFORE it gathers any context or resolves a space.
+
+  Returns `{:error, :candid_register}` when the payload's excerpt is
+  non-blank and `Platform.Meetings.IntentPrivacy.candid_register/1` finds
+  it candid, else `:ok`. A blank excerpt is `:ok`, so the handler's own
+  `build_prompt/1` `:no_intent_text` refusal still owns it.
+
+  At gather and not at build_prompt because a gather refusal is the only
+  one that stops a native dispatch: `Router.refuse_dispatch/5` sends
+  nothing, so no signal carries the meeting space and no invite follows.
+  """
+  @spec candid_refusal(map()) :: :ok | {:error, :candid_register}
+  def candid_refusal(payload) do
+    excerpt = meeting_intent(payload).chunk_excerpt
+
+    if String.trim(excerpt) != "" and
+         match?({:candid, _}, Platform.Meetings.IntentPrivacy.candid_register(excerpt)) do
+      {:error, :candid_register}
+    else
+      :ok
+    end
+  end
+
+  # ── near-miss without a canvas (task 01a0e58f, acceptance 4) ─────────────
+
+  @doc """
+  Is this dispatch a NEAR-MISS?
+
+  DEFINITION (code-checkable): a dispatch is a NEAR-MISS iff its
+  non-blank chunk_excerpt, evaluated on its own, trips either of these:
+
+    * (i) `IntentFrames.cancelling_frame(excerpt, excerpt) != :ok`, with
+      the whole excerpt as the quote, so any operator anywhere counts,
+      across all classes including stage 1's two;
+    * (ii) `IntentAddressee.verdict/4` returns `{:absent, _}`, against the
+      agent roster and `Meetings.active_participants(room_id)` for the
+      payload's room_id (nil or [] inert, as in stage 2).
+
+  NOTHING ELSE is a near-miss. A clean excerpt in an empty space is the
+  first real brief, and it dispatches exactly as today.
+
+  Why re-check the excerpt here rather than read the classifier's
+  verdict: a row a gate DEMOTED is `off_topic` and never dispatches
+  (`IntentDispatcher.dispatch_row/3` fails unroutable intents before the
+  responsibility fork), so every row that reaches a handler passed the
+  gates on the model's own `evidence_quote`. The near-miss is what the
+  WHOLE excerpt says when no quote narrows it.
+
+  A per-utterance gate, so it honours the utterance-gate seam: when
+  `IntentFrames.utterance_gates_enabled?/1` answers false it is always
+  `:ok`. Returns `{:near_miss, class}` — a frame class, or
+  `:reported_speech` for (ii).
+  """
+  @spec near_miss(map()) :: :ok | {:near_miss, atom()}
+  def near_miss(payload) when is_map(payload) do
+    excerpt = meeting_intent(payload).chunk_excerpt
+
+    cond do
+      String.trim(excerpt) == "" ->
+        :ok
+
+      not Platform.Meetings.IntentFrames.utterance_gates_enabled?(payload) ->
+        :ok
+
+      true ->
+        case Platform.Meetings.IntentFrames.cancelling_frame(excerpt, excerpt) do
+          {:cancelled, class} -> {:near_miss, class}
+          :ok -> absent_addressee(excerpt, field(payload, :room_id))
+        end
+    end
+  end
+
+  def near_miss(_payload), do: :ok
+
+  @doc """
+  The gather-time refusal every meeting-intent handler asks after the
+  privacy floor: `{:error, :near_miss_without_canvas}` iff `near_miss/1`
+  answers `{:near_miss, _}` AND the space's canvas inventory (the
+  `space_canvases/1` map the handler already computed) is `missing?:
+  true`. A near-miss into a space that already has a canvas is `:ok`.
+  The refusal carries the reason atom only; nothing here logs.
+  """
+  @spec near_miss_refusal(map(), map()) :: :ok | {:error, :near_miss_without_canvas}
+  def near_miss_refusal(payload, %{missing?: true}) do
+    case near_miss(payload) do
+      {:near_miss, _class} -> {:error, :near_miss_without_canvas}
+      :ok -> :ok
+    end
+  end
+
+  def near_miss_refusal(_payload, _canvases), do: :ok
+
+  defp absent_addressee(excerpt, room_id) do
+    case Platform.Meetings.IntentAddressee.verdict(
+           excerpt,
+           excerpt,
+           agent_roster(),
+           room_participants(room_id)
+         ) do
+      {:absent, _name} -> {:near_miss, :reported_speech}
+      _other -> :ok
+    end
+  end
+
+  # A failed roster read is nil — INERT — never [] (which would make every
+  # vocative off-roster).
+  defp agent_roster do
+    Platform.Roles.assigned_agents()
+  rescue
+    _ -> nil
+  end
+
+  # Same contract as `IntentClassifier`'s participant read: a malformed
+  # room id or a failed read is nil, which the addressee gate treats as
+  # inert rather than as an empty room.
+  defp room_participants(room_id) when is_binary(room_id) do
+    if Platform.UUID.valid?(room_id) do
+      try do
+        Meetings.active_participants(room_id)
+      rescue
+        _ -> nil
+      catch
+        :exit, _ -> nil
+      end
+    end
+  end
+
+  defp room_participants(_room_id), do: nil
+
+  # ── closing the queue row a refusal leaves behind ────────────────────────
+
+  @doc """
+  Close the intent row when the Router refused to dispatch at all. Shared
+  by every meeting-intent handler's `handle_refusal/3` (moved here from
+  `Handlers.MeetingActionItems` in task `01a0e58f`, behaviour unchanged).
+
+  A refusal is the CORRECT decision, but `IntentDispatcher` had already
+  moved the row to `:dispatched`, which pins the meeting's serial cursor,
+  and no recipient was ever told the row exists. Without this the row
+  sits until the 90-second claim watchdog lands it `:timed_out`.
+
+  The row lands `:dispatch_failed` with `dispatch_failure_reason` set to
+  the INNER reason (`:no_intent_text`, `:candid_register`), not the
+  Router's `{:build_prompt_refused, _}` / `{:context_gather_refused, _}`
+  wrapper. An already-terminal row is left alone.
+
+  Logs the key, the meeting id, the intent id and the reason ONLY —
+  never the excerpt, a matched word or a name.
+  """
+  @spec close_refused_intent(String.t(), {atom(), term()} | term(), map()) :: :ok
+  def close_refused_intent(key, refusal, trigger_meta) when is_map(trigger_meta) do
+    payload = payload_of(trigger_meta)
+    meeting_id = field(payload, :meeting_id)
+    intent_id = field(payload, :intent_id)
+    reason = refusal_reason(refusal)
+
+    Logger.info(
+      "[#{key}] dispatch refused before the model call " <>
+        "key=#{key} meeting=#{inspect(meeting_id)} " <>
+        "intent=#{inspect(intent_id)} reason=#{inspect(reason)}"
+    )
+
+    close_intent_row(key, meeting_id, intent_id, {:error, reason})
+  end
+
+  def close_refused_intent(_key, _refusal, _trigger_meta), do: :ok
+
+  # Unwrap the Router's seam label. `failure_reason/1` downstream still
+  # coerces anything non-atom/binary, so an unrecognised refusal shape
+  # lands as readable text rather than as Elixir debug output in the
+  # meeting's intent strip.
+  defp refusal_reason({kind, reason})
+       when kind in [:build_prompt_refused, :context_gather_refused],
+       do: reason
+
+  defp refusal_reason(other), do: other
+
+  defp payload_of(%{payload: payload}) when is_map(payload), do: payload
+  defp payload_of(%{"payload" => payload}) when is_map(payload), do: payload
+  defp payload_of(meta) when is_map(meta), do: meta
+  defp payload_of(_), do: %{}
+
+  defp close_intent_row(key, meeting_id, intent_id, result)
+       when is_binary(meeting_id) and is_binary(intent_id) do
+    case IntentQueue.get(meeting_id, intent_id) do
+      {:ok, %{status: status}} ->
+        # The terminal set is READ off the queue, not restated here.
+        if status in IntentQueue.terminal_statuses() do
+          # Already terminal — almost always `:timed_out`. Writing over
+          # that would erase the timeout from the operator's view.
+          Logger.info("[#{key}] intent=#{intent_id} already #{status} — leaving the row alone")
+          :ok
+        else
+          transition_intent_row(key, meeting_id, intent_id, result)
+        end
+
+      {:error, reason} ->
+        # No queue server for this meeting (it ended), or no such row.
+        Logger.info(
+          "[#{key}] intent row unavailable meeting=#{meeting_id} " <>
+            "intent=#{intent_id} reason=#{inspect(reason)}"
+        )
+
+        :ok
+    end
+  end
+
+  defp close_intent_row(_key, _meeting_id, _intent_id, _result), do: :ok
+
+  # `{:error, reason}` is the only shape that reaches here: the platform
+  # has no success to report — the recipient says so with `intent_ack`.
+  defp transition_intent_row(key, meeting_id, intent_id, {:error, reason}) do
+    log_transition(
+      key,
+      meeting_id,
+      intent_id,
+      IntentQueue.transition(meeting_id, intent_id, :dispatch_failed, %{
+        dispatch_failure_reason: failure_reason(reason)
+      })
+    )
+  end
+
+  # `dispatch_failure_reason` is typed `atom | binary | nil` and rendered
+  # straight into the meeting UI's intent strip.
+  defp failure_reason(reason) when is_atom(reason) or is_binary(reason), do: reason
+  defp failure_reason(reason), do: inspect(reason)
+
+  defp log_transition(_key, _meeting_id, _intent_id, {:ok, _row}), do: :ok
+
+  defp log_transition(key, meeting_id, intent_id, {:error, reason}) do
+    Logger.info(
+      "[#{key}] could not close intent row meeting=#{meeting_id} " <>
+        "intent=#{intent_id} reason=#{inspect(reason)}"
+    )
+
+    :ok
+  end
 
   # ── internals ─────────────────────────────────────────────────────────────
 

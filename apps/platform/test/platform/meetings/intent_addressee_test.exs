@@ -45,6 +45,29 @@ defmodule Platform.Meetings.IntentAddresseeTest do
       (comma-less vocative), while leaving the comma cases green — which
       is what makes the two shapes separately tested rather than one
       test standing in for both.
+
+  ## Reported speech (task `01a0e58f`, acceptance 1(a))
+
+  An addressed name on neither the agent roster nor the meeting's
+  participant list means the speaker is REPORTING speech aimed at
+  someone who is not in the room. The shape was filed from the
+  2026-09-14 one-to-one; every row is synthesised, and every name in it
+  is invented.
+
+    * **M-a1** — make `participant_tokens/1` inert for every list.
+      Measured: 4 failures of 195 — "an addressee who is not in the room
+      is absent", "a participant's user name and its tokens count as
+      present", and the two `:reported_speech` tests in
+      `intent_classifier_test.exs` (`decide/1` and `classify_and_enqueue`).
+    * **M-a2** — map `{:absent, _}` to the null path in
+      `IntentClassifier.addressee_verdict` instead of the demotion.
+      Measured: 2 failures of 195 — the same two classifier tests. This
+      file stays green, as it should: `verdict/4` still answers
+      `{:absent, _}`; only the classifier's mapping changed.
+    * **M-a3** — drop `participants:` from the `decide/1` call in
+      `classify_and_enqueue/4`. Measured: 1 failure of 195 — the
+      `classify_and_enqueue` reported-speech test, the only one that
+      exercises the real participant read.
   """
 
   use ExUnit.Case, async: true
@@ -501,6 +524,113 @@ defmodule Platform.Meetings.IntentAddresseeTest do
       {:ok, unaddressed} = decide("Can somebody write that up?", @roster, ModelNullProvider)
 
       assert off_roster == unaddressed
+    end
+  end
+
+  # ── REPORTED SPEECH (task 01a0e58f) ───────────────────────────────
+  #
+  # Shape filed from the 2026-09-14 one-to-one. Rows are synthesised;
+  # names are invented.
+  describe "verdict/4 — an addressee who is not in the room" do
+    @participants [
+      %{display_name: "Priya", user: %{name: "Priya Okafor"}, agent: nil},
+      %{display_name: "Dana", user: nil, agent: nil}
+    ]
+
+    @scribe_roster [
+      %{role_key: "meeting_scribe", agent_slug: "rafe", agent_name: "Rafe"}
+    ]
+
+    @absent_line "Tobias, can you send the deck over by Friday?"
+
+    # M-a1 kills this.
+    test "an addressee who is not in the room is absent" do
+      assert {:absent, "Tobias"} =
+               IntentAddressee.verdict(
+                 @absent_line,
+                 "send the deck over by Friday",
+                 @roster,
+                 @participants
+               )
+    end
+
+    # Ruling 01a08fde is unchanged for people in the room: a present
+    # human who is not an agent keeps the null-role path.
+    test "the same line with the addressee in the room is off_roster, not absent" do
+      participants = [%{display_name: "Tobias", user: nil, agent: nil} | @participants]
+
+      assert {:off_roster, "Tobias"} =
+               IntentAddressee.verdict(
+                 @absent_line,
+                 "send the deck over by Friday",
+                 @roster,
+                 participants
+               )
+    end
+
+    test "a participant's user name and its tokens count as present" do
+      participants = [%{display_name: nil, user: %{name: "Kasia Nowak"}, agent: nil}]
+
+      assert {:off_roster, "Kasia"} =
+               IntentAddressee.verdict(
+                 "Kasia, can you send the deck over?",
+                 "",
+                 @roster,
+                 participants
+               )
+
+      assert {:absent, "Marcus"} =
+               IntentAddressee.verdict(
+                 "Marcus, can you send the deck over?",
+                 "",
+                 @roster,
+                 participants
+               )
+    end
+
+    test "an ask addressed to an agent by role is untouched" do
+      assert :ok =
+               IntentAddressee.verdict(
+                 "Scribe, log that Dana owns the deck",
+                 "log that Dana owns the deck",
+                 @scribe_roster,
+                 @participants
+               )
+    end
+
+    test "an unaddressed ask is untouched" do
+      assert :ok =
+               IntentAddressee.verdict(
+                 "Record the decision: we ship Tuesday.",
+                 "Record the decision: we ship Tuesday.",
+                 @roster,
+                 @participants
+               )
+    end
+
+    # A live utterance implies at least one participant row, so an empty
+    # list is a failed read, not a fact — and nil is no read at all.
+    # Both must behave exactly as `verdict/3`.
+    test "nil and [] participants are inert and match verdict/3 exactly" do
+      for participants <- [nil, []] do
+        assert {:off_roster, "Tobias"} =
+                 IntentAddressee.verdict(@absent_line, "", @roster, participants)
+
+        assert IntentAddressee.verdict(@absent_line, "", @roster, participants) ==
+                 IntentAddressee.verdict(@absent_line, "", @roster)
+
+        assert :ok =
+                 IntentAddressee.verdict(
+                   "Record the decision: we ship Tuesday.",
+                   "",
+                   @roster,
+                   participants
+                 )
+      end
+    end
+
+    test "a nil roster is inert whatever the participants" do
+      assert :ok = IntentAddressee.verdict(@absent_line, "", nil, @participants)
     end
   end
 end

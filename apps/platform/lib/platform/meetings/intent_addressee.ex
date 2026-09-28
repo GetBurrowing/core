@@ -91,7 +91,10 @@ defmodule Platform.Meetings.IntentAddressee do
 
   ## What the gate does to a hit
 
-  It does NOT demote (ruling: task `01a08fde`, 2026-09-11, Rowan: gate).
+  It does NOT demote (ruling: task `01a08fde`, 2026-09-11, Rowan: gate)
+  — for an addressee who is in the room. An addressee who is not in the
+  room at all is reported speech and does demote; see "Reported speech"
+  below.
   Migration `20260902140000` instructs the model that an ask aimed at a
   person KEEPS its intent and takes `target_role: null`; the gate applies
   the same rule to an answer the model got wrong. `IntentClassifier`
@@ -113,6 +116,41 @@ defmodule Platform.Meetings.IntentAddressee do
   `normalise_target_role/1` folds a JSON `null` answer onto the same
   string so both spellings share one dedupe key, and
   `build_dedupe_key/3` hashes the role.
+
+  ## Reported speech — an addressee who is not in the room
+
+  Task `01a0e58f` (acceptance 1(a)) REFINES ruling `01a08fde`; it does
+  not reverse it. `verdict/4` takes the meeting's participant list as a
+  fourth argument, and a located addressee (the same `addressees/1`
+  detector — there is no second one) that is on NEITHER the agent roster
+  NOR the participant list returns `{:absent, name}`. An addressed name
+  belonging to nobody in the meeting means the speaker is reporting an
+  ask made elsewhere ("Tobias, can you send the deck over?" said about
+  a conversation with Tobias, who is not here), and `IntentClassifier`
+  DEMOTES it with `demotion_reason: :reported_speech`.
+
+  Nulling the role would not be enough. `IntentDispatcher.dispatch_row/3`
+  forks on the intent's responsibility BEFORE it checks for a null role,
+  so a gate-nulled `action_items` row still reaches `MeetingActionItems`.
+
+  A human who IS in the room but is not an agent still returns
+  `{:off_roster, name}` and keeps the null-role path exactly as ruled in
+  `01a08fde`: an ask aimed at a person present is still that ask. Only
+  an ABSENT addressee demotes.
+
+  Participant tokens are the participant's `display_name`, its user's
+  `name` and its agent's `name`, each plus its whitespace tokens,
+  downcased, matched by the same rule as the roster (`on_roster?/2`).
+
+  ### nil and [] participants are both inert
+
+  Like a `nil` roster (see `verdict/3`), a `nil` participant list means
+  the caller could not read who is in the room, and it never produces
+  `{:absent, _}`. So does `[]`: a live utterance implies at least one
+  participant row — the speaker's — so an empty list is a failed read,
+  not a fact about the room. Treating it as a fact would demote every
+  addressed ask in a meeting whose participant read came back empty.
+  With inert participants `verdict/4` is byte-identical to `verdict/3`.
 
   ## What this does not reach
 
@@ -176,10 +214,23 @@ defmodule Platform.Meetings.IntentAddressee do
   """
   @spec verdict(String.t() | nil, String.t() | nil, [roster_entry()] | nil) ::
           :ok | {:off_roster, String.t()}
-  def verdict(_chunk_text, _quote_text, nil), do: :ok
+  def verdict(chunk_text, quote_text, roster), do: verdict(chunk_text, quote_text, roster, nil)
 
-  def verdict(chunk_text, quote_text, roster) when is_list(roster) do
+  @doc """
+  `verdict/3` with the meeting's participant list (task `01a0e58f`).
+
+  Returns `{:absent, name}` when a located addressee is on neither the
+  agent roster nor the participant list; otherwise exactly what
+  `verdict/3` returns. `nil` and `[]` participants are inert — see
+  "nil and [] participants are both inert" in the moduledoc.
+  """
+  @spec verdict(String.t() | nil, String.t() | nil, [roster_entry()] | nil, [map()] | nil) ::
+          :ok | {:off_roster, String.t()} | {:absent, String.t()}
+  def verdict(_chunk_text, _quote_text, nil, _participants), do: :ok
+
+  def verdict(chunk_text, quote_text, roster, participants) when is_list(roster) do
     allowed = roster_tokens(roster)
+    present = participant_tokens(participants)
 
     [chunk_text, quote_text]
     |> Enum.filter(&is_binary/1)
@@ -192,12 +243,55 @@ defmodule Platform.Meetings.IntentAddressee do
         # names an agent at all is not that.
         {:halt, :ok}
       else
-        {:cont, {:off_roster, candidate}}
+        {:cont, off_roster_or_absent(candidate, present)}
       end
     end)
   end
 
-  def verdict(_chunk_text, _quote_text, _roster), do: :ok
+  def verdict(_chunk_text, _quote_text, _roster, _participants), do: :ok
+
+  # `nil` present-set = inert participants: never absent.
+  defp off_roster_or_absent(candidate, nil), do: {:off_roster, candidate}
+
+  defp off_roster_or_absent(candidate, present) do
+    if on_roster?(candidate, present),
+      do: {:off_roster, candidate},
+      else: {:absent, candidate}
+  end
+
+  @doc """
+  Every string that counts as "in the room", downcased: each
+  participant's `display_name`, user `name` and agent `name`, plus their
+  whitespace tokens. Returns `nil` — inert — for a `nil` or empty list,
+  or for a list that yields no token at all.
+  """
+  @spec participant_tokens([map()] | nil) :: MapSet.t(String.t()) | nil
+  def participant_tokens(participants) when is_list(participants) and participants != [] do
+    tokens =
+      participants
+      |> Enum.flat_map(fn participant ->
+        [
+          field(participant, :display_name),
+          participant |> field(:user) |> field(:name),
+          participant |> field(:agent) |> field(:name)
+        ]
+      end)
+      |> Enum.filter(&is_binary/1)
+      |> Enum.flat_map(&[&1 | String.split(&1, ~r/\s+/)])
+      |> Enum.map(&(&1 |> String.trim() |> String.downcase()))
+      |> Enum.reject(&(&1 == ""))
+      |> MapSet.new()
+
+    if MapSet.size(tokens) == 0, do: nil, else: tokens
+  end
+
+  def participant_tokens(_participants), do: nil
+
+  # Reads a key from a struct or a plain map; an unloaded association or
+  # anything else reads as nil.
+  defp field(%Ecto.Association.NotLoaded{}, _key), do: nil
+  defp field(%{} = map, key), do: Map.get(map, key) || Map.get(map, to_string(key))
+  defp field(_other, _key), do: nil
 
   @doc """
   Every string that counts as "on the roster", downcased.

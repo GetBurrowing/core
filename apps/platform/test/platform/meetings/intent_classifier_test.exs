@@ -415,6 +415,111 @@ defmodule Platform.Meetings.IntentClassifierTest do
   # dispatcher drains and the live-tuning UI renders, with the extra
   # fields that surface makes use of. Stage 3 retired the legacy
   # room-keyed write, so this is now the only enqueue path.
+  # Task 01a0e58f, acceptance 1(a). `classify_and_enqueue/4` reads the
+  # room's un-left participants ONCE and threads them into `decide/1`.
+  # Without these two tests, dropping that read (or its threading) would
+  # leave every `decide/1`-level test green while production never
+  # demoted anything. Synthesised rows; invented names.
+  describe "classify_and_enqueue — reported speech reads the room's participants" do
+    setup do
+      agent = create_agent!(%{slug: "intent-agent-reported"})
+      assign_intent_role!(agent)
+
+      target = create_agent!(%{slug: "intent-target-reported"})
+      :ok = Roles.unassign_role("designer")
+      {:ok, _} = Roles.assign_role("designer", target.id)
+
+      {:ok, space} =
+        Platform.Chat.create_space(%{
+          name: "Reported Speech #{System.unique_integer([:positive])}",
+          slug: "reported-speech-#{System.unique_integer([:positive])}",
+          kind: "meeting"
+        })
+
+      room =
+        %Platform.Meetings.Room{}
+        |> Platform.Meetings.Room.changeset(%{
+          space_id: space.id,
+          livekit_room_name: "space:#{space.id}"
+        })
+        |> Repo.insert!()
+
+      meeting_id = unique_meeting_id()
+      on_exit(fn -> IntentQueue.stop(meeting_id) end)
+
+      %{room: room, meeting_id: meeting_id}
+    end
+
+    defp join!(room, display_name) do
+      %Platform.Meetings.Participant{}
+      |> Platform.Meetings.Participant.changeset(%{
+        room_id: room.id,
+        display_name: display_name,
+        joined_at: DateTime.utc_now()
+      })
+      |> Repo.insert!()
+    end
+
+    defp classify_in_room(room, meeting_id) do
+      {pid, _name} = start_classifier!()
+
+      plant_stub_fun(pid, fn _creds, messages, _opts ->
+        {:ok,
+         %{
+           content:
+             Jason.encode!(%{
+               "intent" => "visual_adjust",
+               "target_role" => "designer",
+               "confidence" => 0.95,
+               "evidence_quote" => echo_quote(messages)
+             })
+         }}
+      end)
+
+      :ok = MeetingsPubSub.subscribe_intents(meeting_id)
+
+      _ =
+        broadcast_chunk(room.id,
+          meeting_id: meeting_id,
+          segment: %{
+            id: "seg-#{System.unique_integer([:positive])}",
+            text: "Tobias, can you make the header teal?",
+            speaker_name: "Priya"
+          }
+        )
+
+      assert_receive {:intent_classified, row}, 1_000
+      row
+    end
+
+    test "an addressee absent from the room demotes as reported speech", %{
+      room: room,
+      meeting_id: meeting_id
+    } do
+      join!(room, "Priya")
+      join!(room, "Dana")
+
+      row = classify_in_room(room, meeting_id)
+
+      assert row.classified_intent == "off_topic"
+      assert row.demoted_from == "visual_adjust"
+    end
+
+    test "the same addressee in the room keeps the intent with a nulled role", %{
+      room: room,
+      meeting_id: meeting_id
+    } do
+      join!(room, "Priya")
+      join!(room, "Tobias")
+
+      row = classify_in_room(room, meeting_id)
+
+      assert row.classified_intent == "visual_adjust"
+      assert row.target_role == "null"
+      assert row.demoted_from == nil
+    end
+  end
+
   describe "classify_and_enqueue — per-meeting queue write" do
     setup do
       agent = create_agent!(%{slug: "intent-agent-permeeting"})
@@ -3549,6 +3654,143 @@ defmodule Platform.Meetings.IntentClassifierTest do
       assert decision.intent == "action_items"
       assert decision.target_role == "meeting_scribe"
       assert decision.demoted_from == nil
+    end
+
+    # Task 01a0e58f, acceptance 1(b). A speaker labelling their own
+    # speech act ("my contention is …") is stating a position, not making
+    # an ask, and the model citing the whole chunk at 0.95 does not change
+    # that. Synthesised row; shape filed from the 2026-09-14 one-to-one.
+    # M-b (delete the `:frame_speech_act` entry) turns this red.
+    test "a self-labelled speech act is demoted with reason :frame_speech_act" do
+      chunk = "My contention is we log an action item for the retro"
+      stub!(speech_act_stub(chunk))
+
+      assert {:ok, decision} = IntentClassifier.decide(decide_args(%{chunk_text: chunk}))
+      assert decision.intent == "off_topic"
+      assert decision.demoted_from == "action_items"
+      assert decision.demotion_reason == :frame_speech_act
+    end
+
+    # The falsifier's seam. With the utterance gates disabled the SAME
+    # answer on the SAME chunk comes back as the model's intent, so the
+    # demotion above is attributable to the new gate and nothing else.
+    # M-seam (make `utterance_gates_enabled?/1` always true) turns this red.
+    test "with utterance_gates: :disabled the same row returns the model's intent" do
+      chunk = "My contention is we log an action item for the retro"
+      stub!(speech_act_stub(chunk))
+
+      assert {:ok, decision} =
+               IntentClassifier.decide(
+                 decide_args(%{chunk_text: chunk, utterance_gates: :disabled})
+               )
+
+      assert decision.intent == "action_items"
+      assert decision.demoted_from == nil
+      assert decision.demotion_reason == nil
+    end
+
+    # Disabling the seam skips ONLY the two new classes: the five that
+    # predate it keep firing, so a falsifier run with the seam off still
+    # measures against the shipped gate rather than no gate.
+    test "with utterance_gates: :disabled the pre-existing frame classes still demote" do
+      chunk = "No, actually, never mind. As an action item, Marcus needs to start the podcast."
+
+      stub!(fn _c, _m, _o ->
+        {:ok,
+         %{
+           content:
+             Jason.encode!(%{
+               "intent" => "action_items",
+               "target_role" => "meeting_scribe",
+               "confidence" => 0.95,
+               "evidence_quote" => chunk
+             })
+         }}
+      end)
+
+      assert {:ok, decision} =
+               IntentClassifier.decide(
+                 decide_args(%{chunk_text: chunk, utterance_gates: :disabled})
+               )
+
+      assert decision.intent == "off_topic"
+      assert decision.demotion_reason == :frame_retraction
+    end
+
+    # Task 01a0e58f, acceptance 1(a). A vocative naming someone who is on
+    # neither the agent roster nor the participant list is REPORTED
+    # speech: the speaker is repeating an ask made to someone who is not
+    # here. Nulling the role would not stop it (the dispatcher forks on
+    # the responsibility before it looks at the role), so it DEMOTES.
+    # Synthesised row; shape filed from the 2026-09-14 one-to-one.
+    test "an addressee absent from the room is demoted with reason :reported_speech" do
+      chunk = "Tobias, can you send the deck over by Friday?"
+      stub!(speech_act_stub(chunk))
+
+      assert {:ok, decision} = IntentClassifier.decide(reported_speech_args(chunk))
+      assert decision.intent == "off_topic"
+      assert decision.demoted_from == "action_items"
+      assert decision.demotion_reason == :reported_speech
+    end
+
+    test "with utterance_gates: :disabled an absent addressee keeps the model's intent" do
+      chunk = "Tobias, can you send the deck over by Friday?"
+      stub!(speech_act_stub(chunk))
+
+      assert {:ok, decision} =
+               IntentClassifier.decide(
+                 Map.put(reported_speech_args(chunk), :utterance_gates, :disabled)
+               )
+
+      assert decision.intent == "action_items"
+      assert decision.demotion_reason == nil
+      # The off-roster null path (ruling 01a08fde) is NOT behind the
+      # seam: the role is still nulled.
+      assert decision.target_role == "null"
+      assert decision.addressee_nulled_from == "meeting_scribe"
+    end
+
+    # Anti-vacuity partner: the same line with the addressee in the room
+    # is ruling 01a08fde's null path, not a demotion.
+    test "an addressee present in the room keeps the intent with a nulled role" do
+      chunk = "Tobias, can you send the deck over by Friday?"
+      stub!(speech_act_stub(chunk))
+
+      args =
+        Map.update!(reported_speech_args(chunk), :participants, fn ps ->
+          [%{display_name: "Tobias", user: nil, agent: nil} | ps]
+        end)
+
+      assert {:ok, decision} = IntentClassifier.decide(args)
+      assert decision.intent == "action_items"
+      assert decision.demotion_reason == nil
+      assert decision.target_role == "null"
+    end
+
+    defp reported_speech_args(chunk) do
+      decide_args(%{
+        chunk_text: chunk,
+        roster: [%{role_key: "meeting_scribe", agent_slug: "rafe", agent_name: "Rafe"}],
+        participants: [
+          %{display_name: "Priya", user: nil, agent: nil},
+          %{display_name: "Dana", user: nil, agent: nil}
+        ]
+      })
+    end
+
+    defp speech_act_stub(chunk) do
+      fn _c, _m, _o ->
+        {:ok,
+         %{
+           content:
+             Jason.encode!(%{
+               "intent" => "action_items",
+               "target_role" => "meeting_scribe",
+               "confidence" => 0.95,
+               "evidence_quote" => chunk
+             })
+         }}
+      end
     end
 
     # The JSON `null` the prompt's own closed enum instructs the model to

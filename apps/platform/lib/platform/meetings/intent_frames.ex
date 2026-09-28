@@ -74,6 +74,42 @@ defmodule Platform.Meetings.IntentFrames do
   backward scope to catch this row would be fixing the wrong thing —
   see "What this does not reach" below.
 
+  ## Backward scope — the quoted-label exception
+
+  `:frame_quoted_label` (task `01a0e58f`) is the one class exempt from
+  forward scope, because its construction modifies BACKWARDS: the head
+  noun FOLLOWS the quote it labels.
+
+      We keep getting the "can we ship it?" kind of comments
+                          ^^^^^^^^^^^^^^^^^ ^^^^^^^^^^^^^^^
+                          quoted question   head noun
+
+  The question is not being asked; it names a kind of remark. So the
+  class has its own rule, applied to every `?` in the chunk: it cancels
+  iff
+
+      quote_start <= question_mark_offset <= quote_end + 1
+
+  and ONLY whitespace or a closing quote mark (`"` `”` `'` `’`) separates
+  that `?` from a head noun — `(kind|sort|type|style) of <word>`, or one
+  of `comment(s)`, `question(s)`, `remark(s)`, `energy`, `vibe`,
+  `moment`, `conversation(s)`, `thing`, `stuff`. Adjacency is the whole
+  rule: "Is this a demo? No, this is the…" is a question followed by its
+  answer, and "Can we ship it? Dana, decide by Friday." a question
+  followed by an instruction; neither `?` is followed by a head noun, so
+  neither cancels. A labelled question outside the quote's window does
+  not reach an ask that does not contain it.
+
+  ## The utterance-gate seam
+
+  `:frame_speech_act` and `:frame_quoted_label` are the utterance gates.
+  `utterance_gates_enabled?/1` reads the `decide/1` args map (key
+  `:utterance_gates`, else the `:meeting_utterance_gates` application
+  env, default `:enabled`); when it answers false,
+  `IntentClassifier.evidence_verdict` skips those two classes ONLY and
+  the five older classes keep firing. The seam exists so a falsifier can
+  measure the same row with and without the new gates.
+
   When a quote occurs more than once in the chunk, the FIRST occurrence
   is used. That is the conservative direction: the earliest occurrence
   gives the smallest `quote_end`, hence the narrowest window in which an
@@ -161,6 +197,8 @@ defmodule Platform.Meetings.IntentFrames do
   @type class ::
           :frame_retraction
           | :frame_delegation
+          | :frame_speech_act
+          | :frame_quoted_label
           | :frame_epistemic
           | :frame_perception
           | :frame_evaluative
@@ -196,8 +234,25 @@ defmodule Platform.Meetings.IntentFrames do
   @unconditional_frames [
     frame_retraction:
       ~r/\b(never ?mind|forget (it|that)|scratch that|strike that|disregard that|ignore that|cancel that|belay that|on second thought)\b|\b(no|wait),?\s+actually\b|\bactually,?\s+no\b/i,
-    frame_delegation: ~r/\b(ask|tell)\s+(him|her|them|someone|somebody)\b/i
+    frame_delegation: ~r/\b(ask|tell)\s+(him|her|them|someone|somebody)\b/i,
+    # Task 01a0e58f, acceptance 1(b). The speaker labels their own speech
+    # act: what follows is a position, a remark, or a thought out loud,
+    # not an ask. Closed lexicon; forward-scoped like the rest of the tier.
+    frame_speech_act:
+      ~r/\bmy (contention|point|argument|position|view) is\b|\b(all )?i'?m (just )?saying\b|\bi'?d argue\b|\bi would argue\b|\bfor the record,? i think\b|\bi'?m just thinking out loud\b|\bto play devil'?s advocate\b/i
   ]
+
+  # Task 01a0e58f, acceptance 1(c). An unconditional class with its OWN
+  # scope rule, so it is not in `@unconditional_frames` (whose members
+  # are all read by the forward-scope `first_hit/3`). Each match starts
+  # at a `?`; the class cancels iff that `?` lies in
+  # [quote_start, quote_end + 1] and — enforced by the regex itself —
+  # only whitespace or a closing quote mark stands between it and a head
+  # noun. See "Backward scope" in the moduledoc.
+  @quoted_label ~r/\?[\s"”'’]*(?:(?:kind|sort|type|style) of \w+|comments?|questions?|remarks?|energy|vibe|moment|conversations?|thing|stuff)\b/iu
+
+  # The classes `utterance_gates_enabled?/1` switches. Nothing else reads it.
+  @utterance_gate_classes [:frame_speech_act, :frame_quoted_label]
 
   # Cancels only when the quote NAMES one of our taxonomy labels, i.e.
   # the quote is talking about the category rather than issuing an ask
@@ -228,10 +283,20 @@ defmodule Platform.Meetings.IntentFrames do
   the chunk: those are the existing evidence gate's `:blank` and
   `:not_in_chunk` verdicts and this function must not restate them under
   a second name.
+
+  `opts` takes `:skip` — a list of classes never to return. The
+  classifier passes `utterance_gate_classes/0` here when
+  `utterance_gates_enabled?/1` is false; a skipped class is removed from
+  the scan rather than filtered from its result, so a skipped class that
+  would have matched first cannot hide an older class behind it.
   """
-  @spec cancelling_frame(term(), term()) :: {:cancelled, class()} | :ok
-  def cancelling_frame(chunk_text, quote_text)
+  @spec cancelling_frame(term(), term(), keyword()) :: {:cancelled, class()} | :ok
+  def cancelling_frame(chunk_text, quote_text, opts \\ [])
+
+  def cancelling_frame(chunk_text, quote_text, opts)
       when is_binary(chunk_text) and is_binary(quote_text) do
+    skip = Keyword.get(opts, :skip, [])
+
     # Offsets are taken in the DOWNCASED string and compared only against
     # offsets from that same string, so a case fold that changes byte
     # length cannot shift one relative to the other.
@@ -243,18 +308,39 @@ defmodule Platform.Meetings.IntentFrames do
     else
       case :binary.match(chunk, needle) do
         :nomatch -> :ok
-        {start, length} -> scan(chunk, needle, start + length)
+        {start, length} -> scan(chunk, needle, start, start + length, skip)
       end
     end
   end
 
-  def cancelling_frame(_chunk_text, _quote_text), do: :ok
+  def cancelling_frame(_chunk_text, _quote_text, _opts), do: :ok
 
-  defp scan(chunk, quote, quote_end) do
-    case first_hit(@unconditional_frames, chunk, quote_end) do
-      nil -> label_scoped(chunk, quote, quote_end)
-      class -> {:cancelled, class}
+  defp scan(chunk, quote, quote_start, quote_end, skip) do
+    forward = Keyword.drop(@unconditional_frames, skip)
+
+    cond do
+      class = first_hit(forward, chunk, quote_end) ->
+        {:cancelled, class}
+
+      :frame_quoted_label not in skip and
+          quoted_label?(chunk, quote_start, quote_end) ->
+        {:cancelled, :frame_quoted_label}
+
+      true ->
+        label_scoped(chunk, quote, quote_end)
     end
+  end
+
+  # The backward-scope rule. Every match of `@quoted_label` begins at its
+  # `?`, and the regex has already required that only whitespace or a
+  # closing quote mark separates that `?` from the head noun; what is
+  # left is the window test.
+  defp quoted_label?(chunk, quote_start, quote_end) do
+    @quoted_label
+    |> Regex.scan(chunk, return: :index)
+    |> Enum.any?(fn [{mark, _length} | _] ->
+      mark >= quote_start and mark <= quote_end + 1
+    end)
   end
 
   defp label_scoped(chunk, quote, quote_end) do
@@ -297,5 +383,36 @@ defmodule Platform.Meetings.IntentFrames do
 
   @doc "Every frame class this gate can return, in tier then check order."
   @spec classes() :: [class()]
-  def classes, do: Keyword.keys(@unconditional_frames) ++ Keyword.keys(@label_scoped_frames)
+  def classes,
+    do:
+      Keyword.keys(@unconditional_frames) ++
+        [:frame_quoted_label] ++ Keyword.keys(@label_scoped_frames)
+
+  @doc """
+  The classes the utterance-gate seam switches: `:frame_speech_act` and
+  `:frame_quoted_label`. The five older classes are never in this list.
+  """
+  @spec utterance_gate_classes() :: [class()]
+  def utterance_gate_classes, do: @utterance_gate_classes
+
+  @doc """
+  Are the utterance gates on for this `IntentClassifier.decide/1` call?
+
+  False iff `args[:utterance_gates] == :disabled`, or the key is absent
+  and `Application.get_env(:platform, :meeting_utterance_gates, :enabled)`
+  is `:disabled`. The key, when present, wins over the env either way.
+  This is the falsifier's seam; the privacy gate must never read it.
+  """
+  @spec utterance_gates_enabled?(map()) :: boolean()
+  def utterance_gates_enabled?(args) when is_map(args) do
+    setting =
+      case Map.fetch(args, :utterance_gates) do
+        {:ok, value} -> value
+        :error -> Application.get_env(:platform, :meeting_utterance_gates, :enabled)
+      end
+
+    setting != :disabled
+  end
+
+  def utterance_gates_enabled?(_args), do: true
 end

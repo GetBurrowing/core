@@ -54,6 +54,32 @@ defmodule Platform.Meetings.IntentFramesTest do
       both guards to be live. Together they are the control proving
       these tests read the real slice files rather than asserting
       `[] == []` against an empty read.
+
+  ## Utterance gates (task `01a0e58f`, acceptance 1(b) and 1(c))
+
+  Two unconditional classes read the speaker's own framing of an
+  utterance: `:frame_speech_act` (the speaker labels what they are doing
+  — "my contention is", "I'm just saying") and `:frame_quoted_label` (a
+  quoted question used as a label for a kind of remark — the
+  `"can we ship it?" kind of comments` shape). The shape was filed from
+  the 2026-09-14 one-to-one; every row below is synthesised, and every
+  name in it is invented.
+
+    * **M-b** — delete the `:frame_speech_act` entry from
+      `@unconditional_frames`. Measured: 4 failures of 141 — both
+      positives in "a speaker labelling their own speech act", the
+      classes/0 test, and the classifier-level `:frame_speech_act` test
+      in `intent_classifier_test.exs`.
+    * **M-c** — replace the adjacency check in `quoted_label?/3` with
+      "any `?` in the chunk". Measured: 3 failures of 141 — "a question
+      answered in the next breath is not a label" ("Is this a demo? No,
+      this is the…"), "a question followed by an addressed instruction
+      is not a label", and "a labelled question outside the quote does
+      not cancel it".
+    * **M-seam** — make `utterance_gates_enabled?/1` always return true.
+      Measured: 3 failures of 141 — both disabling tests in
+      `IntentFramesSeamTest` and the disabled-seam test in
+      `intent_classifier_test.exs`.
   """
 
   use ExUnit.Case, async: true
@@ -335,6 +361,8 @@ defmodule Platform.Meetings.IntentFramesTest do
       assert IntentFrames.classes() == [
                :frame_retraction,
                :frame_delegation,
+               :frame_speech_act,
+               :frame_quoted_label,
                :frame_epistemic,
                :frame_perception,
                :frame_evaluative
@@ -481,6 +509,132 @@ defmodule Platform.Meetings.IntentFramesTest do
                  "No, actually, never mind. Promote to prod.",
                  "Promote to prod."
                )
+    end
+  end
+
+  # ── UTTERANCE GATES (task 01a0e58f) ────────────────────────────────
+  #
+  # Shape filed from the 2026-09-14 one-to-one. Rows are synthesised;
+  # names are invented.
+  describe "a speaker labelling their own speech act (:frame_speech_act)" do
+    test "\"my contention is\" frames what follows as a position, not an ask" do
+      assert {:cancelled, :frame_speech_act} =
+               IntentFrames.cancelling_frame(
+                 "My contention is we log an action item for the retro",
+                 "we log an action item for the retro"
+               )
+    end
+
+    test "\"I'm just saying\" frames what follows as a remark, not an ask" do
+      assert {:cancelled, :frame_speech_act} =
+               IntentFrames.cancelling_frame(
+                 "I'm just saying, somebody should own the release notes",
+                 "somebody should own the release notes"
+               )
+    end
+
+    # The class obeys the same forward-scope rule as the rest of the
+    # unconditional tier: a label arriving after the ask ended does not
+    # reach back over it.
+    test "a speech-act label AFTER the quote does not scope backwards" do
+      assert :ok =
+               IntentFrames.cancelling_frame(
+                 "Rafe, send Kasia the deck. I'm just saying.",
+                 "send Kasia the deck"
+               )
+    end
+
+    test "a plain addressed ask naming a label is untouched" do
+      assert :ok =
+               IntentFrames.cancelling_frame(
+                 "Scribe, log an action item: Ines to send the notes by Friday.",
+                 "log an action item: Ines to send the notes by Friday."
+               )
+    end
+  end
+
+  describe "a quoted question used as a label (:frame_quoted_label)" do
+    test "a quoted question followed by a head noun is a mention, not an ask" do
+      assert {:cancelled, :frame_quoted_label} =
+               IntentFrames.cancelling_frame(
+                 ~s(We keep getting the "can we ship it?" kind of comments),
+                 "can we ship it?"
+               )
+    end
+
+    # M-c kills this: a `?` followed by its own answer is a question
+    # that was asked and answered, not a label for a kind of remark.
+    # One of the two real specimens allowed in this file.
+    test "a question answered in the next breath is not a label" do
+      assert :ok =
+               IntentFrames.cancelling_frame(
+                 "Is this a demo? No, this is the…",
+                 "Is this a demo? No, this is the…"
+               )
+    end
+
+    test "a question followed by an addressed instruction is not a label" do
+      assert :ok =
+               IntentFrames.cancelling_frame(
+                 "Can we ship it? Dana, decide by Friday.",
+                 "Can we ship it? Dana, decide by Friday."
+               )
+    end
+
+    # The construction modifies BACKWARDS, so its window is the quote
+    # itself: a labelled question elsewhere in the chunk does not cancel
+    # an ask that does not contain it.
+    test "a labelled question outside the quote does not cancel it" do
+      assert :ok =
+               IntentFrames.cancelling_frame(
+                 ~s(Tobias, book the room for Thursday. We had a "who owns this?" moment last week.),
+                 "book the room for Thursday"
+               )
+    end
+  end
+end
+
+defmodule Platform.Meetings.IntentFramesSeamTest do
+  @moduledoc """
+  The utterance-gate seam (task `01a0e58f`). Separate module because it
+  writes the `:meeting_utterance_gates` application env, which async
+  tests calling `IntentClassifier.decide/1` would otherwise read
+  mid-flight. `async: false` modules run after every async one.
+  """
+
+  use ExUnit.Case, async: false
+
+  alias Platform.Meetings.IntentFrames
+
+  describe "the utterance-gate seam" do
+    setup do
+      previous = Application.get_env(:platform, :meeting_utterance_gates)
+
+      on_exit(fn ->
+        if previous == nil,
+          do: Application.delete_env(:platform, :meeting_utterance_gates),
+          else: Application.put_env(:platform, :meeting_utterance_gates, previous)
+      end)
+
+      :ok
+    end
+
+    test "enabled by default" do
+      Application.delete_env(:platform, :meeting_utterance_gates)
+      assert IntentFrames.utterance_gates_enabled?(%{})
+      assert IntentFrames.utterance_gates_enabled?(%{utterance_gates: :enabled})
+    end
+
+    # M-seam kills this.
+    test "the decide arg disables it" do
+      refute IntentFrames.utterance_gates_enabled?(%{utterance_gates: :disabled})
+    end
+
+    # M-seam kills this too.
+    test "the application env disables it when the arg is absent, and the arg wins" do
+      Application.put_env(:platform, :meeting_utterance_gates, :disabled)
+      refute IntentFrames.utterance_gates_enabled?(%{})
+      assert IntentFrames.utterance_gates_enabled?(%{utterance_gates: :enabled})
     end
   end
 end

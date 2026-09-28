@@ -190,6 +190,19 @@ defmodule Platform.Responsibilities.Handlers.MeetingBriefWorthy do
   @impl true
   def gather_context(%Responsibility{} = _responsibility, ctx) when is_map(ctx) do
     payload = Map.get(ctx, :payload) || Map.get(ctx, "payload") || %{}
+
+    # The candid-register floor (task 01a0e58f), asked BEFORE any context
+    # is gathered or any space resolved. It must be a GATHER refusal: a
+    # `build_prompt/1` refusal still sends a native assignee a signal that
+    # invites it into the meeting space. See `IntentContext.candid_refusal/1`.
+    with :ok <- IntentContext.candid_refusal(payload) do
+      gather_intent_context(payload)
+    end
+  end
+
+  def gather_context(_responsibility, _ctx), do: {:ok, %{}}
+
+  defp gather_intent_context(payload) do
     workspace_id = Map.get(payload, :workspace_id) || Map.get(payload, "workspace_id")
     base_opts = if workspace_id, do: [workspace_id: workspace_id], else: []
 
@@ -199,15 +212,24 @@ defmodule Platform.Responsibilities.Handlers.MeetingBriefWorthy do
     # — an agent shown one space's canvases and made writable in
     # another is a worse dispatch than the dead one this closes.
     space_id = IntentContext.space_id(payload)
+    canvases = IntentContext.space_canvases(space_id)
 
-    with {:ok, %{org_identity: identity}} <-
+    # Task 01a0e58f, acceptance 4: a NEAR-MISS (see
+    # `IntentContext.near_miss/1`) into a space with no canvas yet is
+    # refused here, in code — the recipient would otherwise create a
+    # canvas for a line that adds no item. A near-miss into a space that
+    # already holds a canvas dispatches as before: reconciling an
+    # existing list is legitimate. At gather, because a build_prompt
+    # refusal still delivers a native signal.
+    with :ok <- IntentContext.near_miss_refusal(payload, canvases),
+         {:ok, %{org_identity: identity}} <-
            ContextProviders.gather_context(:org_identity, base_opts) do
       {:ok,
        %{
          org_identity: identity,
          meeting_intent: IntentContext.meeting_intent(payload),
          transcript_window: IntentContext.transcript_window(payload),
-         meeting_canvases: IntentContext.space_canvases(space_id),
+         meeting_canvases: canvases,
          # NOT a prompt slot. This is the provider OPTING IN to the
          # dispatch invite: `Router.build_native_signal/5` lifts it to
          # the native signal's `metadata.space_id`, which is the only
@@ -218,8 +240,6 @@ defmodule Platform.Responsibilities.Handlers.MeetingBriefWorthy do
        }}
     end
   end
-
-  def gather_context(_responsibility, _ctx), do: {:ok, %{}}
 
   @impl true
   @spec build_prompt(map()) ::
@@ -272,6 +292,21 @@ defmodule Platform.Responsibilities.Handlers.MeetingBriefWorthy do
 
         substitute(@fallback_prompt, assigns)
     end
+  end
+
+  @doc """
+  Close the intent row when the Router refused to dispatch at all (task
+  `01a0e58f`). Without this a refusal — the candid-register floor in
+  `gather_context/2`, or `build_prompt/1`'s `:no_intent_text` — leaves the
+  row `:dispatched`, pinning the meeting's serial cursor for the full
+  90-second claim watchdog. Shared with `MeetingActionItems` via
+  `IntentContext.close_refused_intent/3`.
+  """
+  @impl true
+  @spec handle_refusal(Responsibility.t(), {atom(), term()} | term(), map()) :: :ok
+  def handle_refusal(%Responsibility{} = _responsibility, refusal, trigger_meta)
+      when is_map(trigger_meta) do
+    IntentContext.close_refused_intent(@key, refusal, trigger_meta)
   end
 
   @doc """
