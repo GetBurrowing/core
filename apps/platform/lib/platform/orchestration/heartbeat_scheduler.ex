@@ -2064,7 +2064,8 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     case BranchFreshness.assess(repo_url, "task/" <> task_slug, default_branch) do
       {:stale_stub, behind} ->
         """
-           - Suite checked this branch before dispatching: `task/#{task_slug}` carries NO commits of its own and is #{behind} behind `origin/#{default_branch}`. If an earlier stage of THIS task already merged, its work is NOT in this worktree — treat a missing file as a stale branch, not as evidence the thing was never built.
+           - Suite checked this branch before dispatching: `task/#{task_slug}` carries no commits on origin and is #{behind} behind `origin/#{default_branch}`. Suite only probed the remote — if your LOCAL branch already has commits origin does not (for example, this worktree survived a kill mid-stage), push them first, then SKIP the fast-forward below and continue with the stage: the "stale stub" premise did not hold for this branch, it already carries real work, and reconciling with `origin/#{default_branch}` is not this step's job. Do not reset. If an earlier stage of THIS task already merged, its work is NOT in this worktree — treat a missing file as a stale branch, not as evidence the thing was never built.
+             If your local branch has NO commits beyond what Suite already found on origin — nothing to push, a genuine stale stub — run:
              ```
              git merge --ff-only origin/#{default_branch}
              ```

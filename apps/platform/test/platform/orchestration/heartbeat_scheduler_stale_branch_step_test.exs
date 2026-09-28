@@ -80,16 +80,30 @@ defmodule Platform.Orchestration.HeartbeatSchedulerStaleBranchStepTest do
     end
 
     test "names the branch, the distance, and what the absence actually means", %{prompt: p} do
-      assert p =~ "task/#{@task_id}` carries NO commits of its own and is 25 behind `origin/main`"
+      assert p =~ "task/#{@task_id}` carries no commits on origin and is 25 behind `origin/main`"
 
       assert p =~
                "treat a missing file as a stale branch, not as evidence the thing was never built"
     end
 
-    test "sanctions a fast-forward and nothing else", %{prompt: p} do
-      # `--ff-only` is the whole safety argument: git refuses it the moment
-      # the branch carries unmerged work, so following this step cannot
-      # discard commits even if the probe were wrong.
+    test "tells a resumed worktree with unpushed local commits to push and skip the fast-forward",
+         %{prompt: p} do
+      assert p =~ "Suite only probed the remote"
+      assert p =~ "push them first, then SKIP the fast-forward below and continue with the stage"
+      assert p =~ "Do not reset"
+    end
+
+    test "the fast-forward is offered only conditionally, for a branch with nothing to push", %{
+      prompt: p
+    } do
+      # The old wording told every executor to run `--ff-only` unconditionally.
+      # It must now read as conditional on having no local commits to push —
+      # an executor who just pushed local-only commits is told to skip it,
+      # not to attempt and then report_blocker on refusal.
+      assert p =~
+               "If your local branch has NO commits beyond what Suite already found on origin"
+
+      assert p =~ "nothing to push, a genuine stale stub"
       assert p =~ "git merge --ff-only origin/main"
       refute p =~ "git reset --hard origin/main"
     end
@@ -117,7 +131,7 @@ defmodule Platform.Orchestration.HeartbeatSchedulerStaleBranchStepTest do
       answering({:ok, %{ahead_by: 3, behind_by: 25}})
       p = prompt()
 
-      refute p =~ "carries NO commits of its own"
+      refute p =~ "carries no commits on origin"
       refute p =~ "git merge --ff-only"
       # ...while the surrounding block is untouched.
       assert p =~ "git push -u origin task/#{@task_id}"
@@ -127,7 +141,7 @@ defmodule Platform.Orchestration.HeartbeatSchedulerStaleBranchStepTest do
       answering({:ok, %{ahead_by: 0, behind_by: 0}})
       p = prompt()
 
-      refute p =~ "carries NO commits of its own"
+      refute p =~ "carries no commits on origin"
       refute p =~ "git merge --ff-only"
     end
 
@@ -135,7 +149,7 @@ defmodule Platform.Orchestration.HeartbeatSchedulerStaleBranchStepTest do
       answering({:error, {:gh_error, "502"}})
       p = prompt()
 
-      refute p =~ "carries NO commits of its own"
+      refute p =~ "carries no commits on origin"
       refute p =~ "git merge --ff-only"
     end
 
@@ -143,7 +157,7 @@ defmodule Platform.Orchestration.HeartbeatSchedulerStaleBranchStepTest do
       answering({:error, :branch_provisioning_disabled})
       p = prompt()
 
-      refute p =~ "carries NO commits of its own"
+      refute p =~ "carries no commits on origin"
       refute p =~ "git merge --ff-only"
     end
   end
@@ -171,7 +185,7 @@ defmodule Platform.Orchestration.HeartbeatSchedulerStaleBranchStepTest do
 
       p = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
 
-      refute p =~ "carries NO commits of its own"
+      refute p =~ "carries no commits on origin"
       refute p =~ "git merge --ff-only"
     end
   end
