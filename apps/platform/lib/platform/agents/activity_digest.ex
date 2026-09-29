@@ -69,8 +69,13 @@ defmodule Platform.Agents.ActivityDigest do
   #   * `@oversize_empty_*`   — could not digest: the byte signal said this
   #     window held content, the digest predicate found none of it eligible.
   #     NOT a quiet window; the raw row count names how much was out of scope.
-  #   * `partial_line/2` / `skipped_line/3` — could not digest ALL of it. The
-  #     cursor is held at the watermark, so the remainder re-dispatches.
+  #   * `partial_line/2` — could not digest ALL of it. The cursor is held at
+  #     the watermark, so the remainder re-dispatches.
+  #   * `skipped_line/3` — one row (or timestamp-tied group) exceeds the
+  #     budget on its own. The cursor steps PAST it and it does NOT
+  #     re-dispatch until the row changes again; the caller emits an
+  #     `:item_skipped` audit row so the step is never silent. See
+  #     `HistorianDispatcher.cursor_target/2`, case 3 (ticket 01a0978c).
   #
   # Consumers act on the difference rather than merely observing it:
   # `HistorianDispatcher.cursor_target/2` reads `truncated?` to decide
