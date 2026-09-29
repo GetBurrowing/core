@@ -63,6 +63,9 @@ defmodule Platform.Experiments.Surfaces do
     # not GAME_STREAM_ENABLED is set — a surface is a declaration, and its
     # only read point (`GameStream.start_session/2`) is itself gated.
     Platform.Experiments.Surfaces.GameStreamEncoder,
+    # Task 01a0dbd6: multiplayer play sessions: open as watch or join, and
+    # the player and spectator caps. Same gating note as the encoder.
+    Platform.Experiments.Surfaces.GameStreamRoster,
     # Task 01a0e8b5: which program decides a meeting open_question. The
     # control is today's intent prompt; nothing is seeded, so production
     # stays on it until an experiment row says otherwise.

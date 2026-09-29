@@ -32,16 +32,21 @@ defmodule PlatformWeb.GameStreamHooks do
   a canvas read. A session id that never passed `attach` is not in the
   assign and is refused.
 
-  ## Which window plays (stage 6)
+  ## Peers, slots and spectators (task 01a0dbd6 stage 2)
 
-  `game_stream_attach` carries `mode`: `"follow"` from a window whose node
-  was re-rendered onto a session someone ELSE restarted, anything else
-  (`"take"`) from a window the user acted in. The reply says whether this
-  window is now the viewer (`viewer`) and, if so, its `viewer_token`, which
-  every `game_stream_signal` must carry back: a signal from a window that is
-  not the current viewer is refused `"moved"` and never reaches the host.
-  "Start again" starts the session with this LiveView as its viewer, so the
-  clicking window wins. See `Platform.GameStream.Session`.
+  `game_stream_attach` attaches this LiveView as a peer and never moves
+  anyone: `mode: "follow"` is a window re-rendered onto a session someone
+  ELSE restarted, and every other mode, including the `"take"` older
+  clients still send, is `:watch`. There is no take on open any more. The
+  reply carries the peer's `peer_id`, `viewer_token`, `role`, `slots` and
+  the `roster`. `game_stream_join` (`src`, and an optional `slot` to prefer when it is
+  free), `game_stream_leave` (`src` or
+  none for all) and `game_stream_take_over` (`slot`, `src`) are the
+  explicit moves; each runs the full canvas grant check first, like
+  `attach`. `game_stream_signal` carries `peer_id` and `viewer_token`; a
+  signal for a peer this LiveView does not own, or with a stale token, is
+  refused `"moved"` and never reaches the host. "Start again" starts the
+  session with this LiveView as P1. See `Platform.GameStream.Session`.
 
   ## Restart writes the canvas
 
@@ -60,11 +65,16 @@ defmodule PlatformWeb.GameStreamHooks do
 
     * `type: "status"` — the session's public status (never the SDP);
     * `type: "signal"` — `kind` and `data` from the host (`offer`, `ice`);
-    * `type: "moved"` — another window took the session over. The socket
-      unsubscribes from the session's topic at that moment, so a moved
-      window receives no later offer and cannot answer one meant for the
-      window that took over; "Play here" (`game_stream_attach`) subscribes
-      again.
+    * `type: "moved"` — on a v1 host, another window took the stream over.
+      The socket unsubscribes from the session's topic at that moment, so a
+      moved window receives no later offer and cannot answer one meant for
+      the window that took over; "Play here" (`game_stream_take_over`, then
+      `game_stream_attach`) subscribes again;
+    * `type: "displaced"` — `slot` and `by` (a name): someone took this
+      peer's slot. The peer keeps its video;
+    * `type: "roster"` — `roster`: `slots` (slot to `peer_id` and `name`),
+      `spectators` (a count), `names`, `max_players` and `multi`;
+    * `type: "slot_activity"` — `slots` that saw input, for activity dots.
   """
 
   import Phoenix.Component, only: [assign: 3]
@@ -77,7 +87,7 @@ defmodule PlatformWeb.GameStreamHooks do
   alias Platform.GameStream
 
   @events ~w(game_stream_attach game_stream_signal game_stream_stats game_stream_end
-             game_stream_restart)
+             game_stream_restart game_stream_join game_stream_leave game_stream_take_over)
 
   @status_keys ~w(session_id task_id state detail elapsed_ms review_sha branch ended_reason)a
 
@@ -112,7 +122,12 @@ defmodule PlatformWeb.GameStreamHooks do
     with {:ok, session_id, grant} <- authorize(socket, params) do
       socket = grant(socket, session_id, grant)
 
-      case GameStream.attach_viewer(session_id, self(), attach_mode(params)) do
+      case GameStream.attach_viewer(
+             session_id,
+             self(),
+             attach_mode(params),
+             viewer_info(socket)
+           ) do
         {:ok, status} ->
           {%{
              ok: true,
@@ -121,7 +136,11 @@ defmodule PlatformWeb.GameStreamHooks do
              ice_transport_policy: GameStream.ice_transport_policy(status),
              pending_offer: Map.get(status, :pending_offer),
              viewer: Map.get(status, :viewer, true),
-             viewer_token: Map.get(status, :viewer_token)
+             viewer_token: Map.get(status, :viewer_token),
+             peer_id: Map.get(status, :peer_id),
+             role: Map.get(status, :role),
+             slots: Map.get(status, :slots, %{}),
+             roster: Map.get(status, :roster)
            }, socket}
 
         {:error, :not_found} ->
@@ -148,7 +167,7 @@ defmodule PlatformWeb.GameStreamHooks do
              session_id,
              kind,
              Map.get(params, "data"),
-             {self(), Map.get(params, "viewer_token")}
+             {self(), Map.get(params, "viewer_token"), Map.get(params, "peer_id")}
            ) do
       {%{ok: true}, socket}
     else
@@ -159,11 +178,43 @@ defmodule PlatformWeb.GameStreamHooks do
   defp dispatch("game_stream_stats", params, socket) do
     with {:ok, session_id} <- granted(socket, params),
          stats when is_map(stats) <- Map.get(params, "stats", %{}),
-         :ok <- GameStream.report_stats(session_id, stats) do
+         :ok <- GameStream.report_stats(session_id, stats, self(), Map.get(params, "slot")) do
       {%{ok: true}, socket}
     else
       {:error, reason} -> {refusal(reason), socket}
       _ -> {refusal("bad_stats"), socket}
+    end
+  end
+
+  defp dispatch("game_stream_join", params, socket) do
+    with {:ok, session_id, _grant} <- authorize(socket, params),
+         {:ok, src} <- non_neg(params, "src", 0),
+         {:ok, prefer} <- non_neg(params, "slot", nil),
+         {:ok, peer} <- GameStream.join(session_id, self(), src, prefer) do
+      {peer_reply(peer), socket}
+    else
+      {:error, reason} -> {refusal(reason), socket}
+    end
+  end
+
+  defp dispatch("game_stream_leave", params, socket) do
+    with {:ok, session_id, _grant} <- authorize(socket, params),
+         {:ok, src} <- non_neg(params, "src", :all),
+         {:ok, peer} <- GameStream.leave(session_id, self(), src) do
+      {peer_reply(peer), socket}
+    else
+      {:error, reason} -> {refusal(reason), socket}
+    end
+  end
+
+  defp dispatch("game_stream_take_over", params, socket) do
+    with {:ok, session_id, _grant} <- authorize(socket, params),
+         {:ok, slot} <- non_neg(params, "slot", 0),
+         {:ok, src} <- non_neg(params, "src", 0),
+         {:ok, peer} <- GameStream.take_over(session_id, self(), slot, src) do
+      {peer_reply(peer), socket}
+    else
+      {:error, reason} -> {refusal(reason), socket}
     end
   end
 
@@ -181,7 +232,11 @@ defmodule PlatformWeb.GameStreamHooks do
          {:ok, canvas} <- CanvasAccess.fetch_for_writer(grant.canvas_id, viewer(socket)),
          {:ok, task_id} <- node_task_id(grant),
          {:ok, status} <-
-           GameStream.start_session(task_id, started_by: viewer(socket), viewer: self()),
+           GameStream.start_session(task_id,
+             started_by: viewer(socket),
+             viewer: self(),
+             viewer_info: viewer_info(socket)
+           ),
          :ok <- patch_node(socket, canvas, grant.node_id, status) do
       socket = grant(socket, status.session_id, grant)
       {%{ok: true, session_id: status.session_id, status: public(status)}, socket}
@@ -212,6 +267,16 @@ defmodule PlatformWeb.GameStreamHooks do
     end
   end
 
+  # Sent to this pid directly, not on the topic: someone took this peer's
+  # slot. The peer keeps its video, so nothing is unsubscribed.
+  def handle_info({:game_stream, session_id, {:displaced, _slot, _by} = message}, socket) do
+    if Map.has_key?(grants(socket), session_id) do
+      {:halt, push_event(socket, "game_stream", client_message(session_id, message))}
+    else
+      {:halt, socket}
+    end
+  end
+
   def handle_info({:game_stream, session_id, message}, socket) do
     if Map.has_key?(grants(socket), session_id) and subscribed?(socket, session_id) do
       {:halt, push_event(socket, "game_stream", client_message(session_id, message))}
@@ -229,6 +294,16 @@ defmodule PlatformWeb.GameStreamHooks do
     do: %{session_id: id, type: "signal", kind: kind, data: data}
 
   defp client_message(id, :moved), do: %{session_id: id, type: "moved"}
+
+  defp client_message(id, {:displaced, slot, by}),
+    do: %{session_id: id, type: "displaced", slot: slot, by: by}
+
+  defp client_message(id, {:roster, roster}),
+    do: %{session_id: id, type: "roster", roster: roster}
+
+  defp client_message(id, {:slot_activity, slots}),
+    do: %{session_id: id, type: "slot_activity", slots: slots}
+
   defp client_message(id, _other), do: %{session_id: id, type: "unknown"}
 
   # ── Authorization ───────────────────────────────────────────────────────
@@ -285,9 +360,18 @@ defmodule PlatformWeb.GameStreamHooks do
   end
 
   # "follow" is sent by a window whose node was re-rendered onto a session
-  # someone else restarted; anything else is a window the user acted in.
+  # someone else restarted. Everything else watches: an open never takes.
   defp attach_mode(%{"mode" => "follow"}), do: :follow
-  defp attach_mode(_params), do: :take
+  defp attach_mode(_params), do: :watch
+
+  # An optional non-negative integer param, `default` when absent.
+  defp non_neg(params, key, default) do
+    case Map.get(params, key) do
+      nil -> {:ok, default}
+      n when is_integer(n) and n >= 0 and n < 64 -> {:ok, n}
+      _ -> {:error, :malformed}
+    end
+  end
 
   # The cheap check: the session passed `authorize/2` on this socket.
   defp granted(socket, %{"session_id" => session_id}) when is_binary(session_id) do
@@ -358,24 +442,48 @@ defmodule PlatformWeb.GameStreamHooks do
   end
 
   defp ended_by(socket) do
-    name =
-      case viewer(socket) do
-        {:user, id} ->
-          case Accounts.get_user(id) do
-            %{name: name} when is_binary(name) and name != "" -> name
-            _ -> nil
-          end
+    case viewer_name(socket) do
+      nil -> "Ended by a viewer"
+      name -> "Ended by " <> name
+    end
+  end
 
-        _ ->
-          nil
-      end
+  # Who this peer is, for the roster.
+  defp viewer_info(socket) do
+    case viewer(socket) do
+      {:user, id} -> %{user_id: id, name: viewer_name(socket)}
+      _ -> %{}
+    end
+  end
 
-    if name, do: "Ended by " <> name, else: "Ended by a viewer"
+  defp viewer_name(socket) do
+    case viewer(socket) do
+      {:user, id} ->
+        case Accounts.get_user(id) do
+          %{name: name} when is_binary(name) and name != "" -> name
+          _ -> nil
+        end
+
+      _ ->
+        nil
+    end
   end
 
   # ── Replies ─────────────────────────────────────────────────────────────
 
   defp public(status), do: Map.take(status, @status_keys)
+
+  defp peer_reply(peer) do
+    %{
+      ok: true,
+      peer_id: peer.peer_id,
+      role: peer.role,
+      slots: peer.slots,
+      viewer: peer.viewer,
+      viewer_token: peer.viewer_token,
+      pending_offer: Map.get(peer, :pending_offer)
+    }
+  end
 
   defp gone_status(session_id) do
     if GameStream.host_available?(),

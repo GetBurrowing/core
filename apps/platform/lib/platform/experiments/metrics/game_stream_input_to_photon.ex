@@ -15,12 +15,20 @@ defmodule Platform.Experiments.Metrics.GameStreamInputToPhoton do
 
   Sessions whose task is a non-excluded subject of the variant
   (`Metrics.subject_ids/2`) AND whose row records the same experiment and
-  variant. The second condition matters: a task can be played more than
+  variant, either as its encoder arm (`experiment_id` / `variant_slug`) or,
+  since task 01a0dbd6, as its roster arm (`roster_experiment_id` /
+  `roster_variant_slug`). The second condition matters: a task can be played more than
   once, and a session that ran after the experiment stopped resolved a
   different arm (or the default) — its latency is not evidence about this
   one. Sessions that never reported stats (`rtt_p50_ms IS NULL`) are
   EXCLUDED, not zero: a stream that never went live measured nothing, and
   zero would read as a perfect result.
+
+  ## Several players
+
+  A multiplayer row's `rtt_p50_ms` is its WORST slot's median
+  (`Platform.GameStream.SessionRecord`), so a session is as good as its
+  worst-served player. A one-player row is unchanged.
 
   An empty sample is `:insufficient_data`.
   """
@@ -44,7 +52,10 @@ defmodule Platform.Experiments.Metrics.GameStreamInputToPhoton do
       subject_ids ->
         from(s in SessionRecord,
           where: s.task_id in ^subject_ids,
-          where: s.experiment_id == ^experiment_id and s.variant_slug == ^variant_slug,
+          where:
+            (s.experiment_id == ^experiment_id and s.variant_slug == ^variant_slug) or
+              (s.roster_experiment_id == ^experiment_id and
+                 s.roster_variant_slug == ^variant_slug),
           where: not is_nil(s.rtt_p50_ms),
           select: s.rtt_p50_ms
         )

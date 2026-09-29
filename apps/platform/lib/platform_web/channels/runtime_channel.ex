@@ -308,6 +308,26 @@ defmodule PlatformWeb.RuntimeChannel do
     end
   end
 
+  # Task 01a0dbd6 stage 2: which player slots saw input, for the roster's
+  # activity dots. Same gate and same sender check as the two frames above;
+  # a peer-tagged `play_signal` needs no clause of its own, since
+  # `Protocol.parse_signal/2` reads its `peer_id`.
+  @impl true
+  def handle_in("play_slot_activity", payload, socket) when is_map(payload) do
+    RuntimePresence.touch(socket.assigns.runtime_id)
+
+    if Platform.GameStream.enabled?() do
+      log_play_frame_result(
+        "play_slot_activity",
+        Platform.GameStream.handle_slot_activity(socket.assigns.runtime_id, payload)
+      )
+
+      {:noreply, socket}
+    else
+      {:noreply, log_play_frame_disabled(socket, "play_slot_activity")}
+    end
+  end
+
   # The receipt for a `meeting_say` dispatch (task 01a06672 stage 2). Same
   # shape as the join ack above, with one difference worth naming: the log
   # line carries the utterance id and never the text. The text is already in

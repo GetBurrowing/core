@@ -28,7 +28,18 @@ const ASSETS = resolve(HERE, "..");
 // Mirrors `config :esbuild, platform: [args: ...]` in config/config.exs.
 // Keep in sync — if the profile changes, this guard must build the same thing
 // the profile does or it is measuring a bundle nobody ships.
-const MAX_BYTES = 800 * 1024;
+//
+// Raised from 800 KB to 896 KB by task 01a0dbd6 stage 4 (multiplayer
+// game_stream canvas), measured with this file's own build: app.js was
+// 810,955 bytes at e1956158 and 825,043 with the roster strip, per-pad slots
+// and the input router (the game_stream hook family went from 20,992 to
+// 35,069 bytes bundled). The ceiling exists to catch an island leaking in
+// (Excalidraw put app.js at ~8.2 MB under the recorded mutation), which 896 KB
+// still does by a factor of nine; 14 KB of first-party hook code is not that.
+// The structural alternative, if app.js keeps growing, is to load the
+// game_stream hook (flag-gated, GAME_STREAM_ENABLED) as an island like
+// emoji_island.js.
+const MAX_BYTES = 896 * 1024;
 
 // The profile also sets `env: %{"NODE_PATH" => [.../deps, build_path]}`, and
 // that half was missing here until this commit. js/app.js has exactly three
@@ -76,7 +87,7 @@ async function buildAppBundle() {
 // the loader on app.js's import graph for the first time. Verified this
 // narrowing does NOT defang the guard: with a top-level
 // `import "@excalidraw/excalidraw"` in js/app.js the test still fails on
-// hundreds of surviving occurrences (and the 800 KB ceiling below fires too).
+// hundreds of surviving occurrences (and the 896 KB ceiling below fires too).
 const LOADER_TOKENS = [
   "/assets/js/excalidraw_island.js",
   "/assets/js/excalidraw_island.css",
@@ -105,14 +116,14 @@ test("js/app.js bundle does not contain excalidraw", async () => {
   );
 });
 
-test("js/app.js bundle stays under 800 KB minified", async () => {
+test("js/app.js bundle stays under 896 KB minified", async () => {
   const js = await buildAppBundle();
   const bytes = js.contents.byteLength;
 
   assert.ok(
     bytes < MAX_BYTES,
     `js/app.js bundle is ${bytes} bytes (${(bytes / 1024).toFixed(1)} KB), over the ` +
-      `${MAX_BYTES} byte (800 KB) ceiling. Either something large was added to the ` +
+      `${MAX_BYTES} byte (896 KB) ceiling. Either something large was added to the ` +
       "application bundle, or a lazily-loaded island leaked into it."
   );
 });

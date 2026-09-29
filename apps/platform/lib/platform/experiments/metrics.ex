@@ -127,6 +127,15 @@ defmodule Platform.Experiments.Metrics do
           "ended play sessions that reported stats.",
       direction: :lower_is_better
     },
+    # Task 01a0dbd6: the `game_stream.roster` surface's metric.
+    "game_stream_input_to_photon_worst_slot_p95" => %{
+      module: Platform.Experiments.Metrics.GameStreamInputToPhotonP95,
+      label: "Game stream worst-slot p95 input-to-photon",
+      description:
+        "Mean per-session worst-player-slot p95 input-to-photon round trip (ms), over a " <>
+          "variant's ended play sessions that reported stats.",
+      direction: :lower_is_better
+    },
     "time_in_phase" => %{
       module: Platform.Experiments.Metrics.TimeInPhase,
       label: "Time in phase",

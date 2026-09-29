@@ -14,6 +14,10 @@ import {
   pathFromCandidateType,
   peerConfig,
   percentile,
+  probeCode,
+  probeSeqFor,
+  PROBE_MAX_SLOT,
+  PROBE_SEQ_MAX,
   readCorner,
 } from "../js/hooks/lib/game_stream_probe.js"
 
@@ -45,10 +49,63 @@ describe("probe code", () => {
     expect(decode(bits)).toBe(0)
   })
 
-  it("wraps 4095 to 1, never 0", () => {
+  it("wraps 1023 to 1, never 0: the top 2 code bits are the slot's (01a0dbd6)", () => {
+    expect(PROBE_SEQ_MAX).toBe(1023)
     expect(nextSeq(0)).toBe(1)
-    expect(nextSeq(4094)).toBe(4095)
-    expect(nextSeq(4095)).toBe(1)
+    expect(nextSeq(1022)).toBe(1023)
+    expect(nextSeq(1023)).toBe(1)
+    let seq = 0
+    for (let i = 0; i < 5000; i++) {
+      seq = nextSeq(seq)
+      expect(seq >= 1 && seq <= 1023).toBe(true)
+    }
+  })
+})
+
+// The host draws slot << 10 | (seq & 0x3FF) (play-host internal/input
+// ProbeCode, task 01a0dbd6 stage 3); a viewer decodes only its own slot's.
+describe("slot-prefixed probe codes (01a0dbd6)", () => {
+  it("probeCode mirrors play-host's ProbeCode", () => {
+    expect(probeCode(0, 5)).toBe(5)
+    expect(probeCode(1, 5)).toBe(1024 + 5)
+    expect(probeCode(3, 1023)).toBe(4095)
+    // The host masks the seq to 10 bits: a 12-bit seq loses its top bits.
+    expect(probeCode(0, 1029)).toBe(5)
+    expect(PROBE_MAX_SLOT).toBe(3)
+  })
+
+  it("each slot decodes only its own code, compared on the low 10 bits", () => {
+    for (const slot of [0, 1, 2, 3]) {
+      for (const seq of [1, 2, 511, 1023]) {
+        const code = probeCode(slot, seq)
+        // Through the corner, as the addon draws it.
+        const read = decode(readCorner(paint(code), CORNER_PX))
+        expect(read).toBe(code)
+        expect(probeSeqFor(read, slot)).toBe(seq)
+        for (const other of [0, 1, 2, 3].filter(s => s !== slot)) expect(probeSeqFor(read, other)).toBe(0)
+      }
+    }
+  })
+
+  it("slot 0 above seq 1023: the v1 12-bit decode failed it, the slot decode never sends it", () => {
+    // What origin/main sent: seq 1500 on slot 0. The host draws 1500 & 0x3FF.
+    const drawn = probeCode(0, 1500)
+    expect(drawn).toBe(476)
+    // origin/main compared the whole decoded code with the pending seq: a miss.
+    expect(decode(encode(drawn))).not.toBe(1500)
+    // Now the seq never leaves 1..1023, so the drawn code IS the seq.
+    let seq = 1022
+    const sent = []
+    for (let i = 0; i < 4; i++) sent.push((seq = nextSeq(seq)))
+    expect(sent).toEqual([1023, 1, 2, 3])
+    for (const s of sent) expect(probeSeqFor(decode(encode(probeCode(0, s))), 0)).toBe(s)
+  })
+
+  it("an idle corner, a bad slot or a slot beyond 3 decodes to nothing", () => {
+    expect(probeSeqFor(0, 0)).toBe(0)
+    expect(probeSeqFor(probeCode(1, 7), null)).toBe(0)
+    expect(probeSeqFor(probeCode(1, 7), 4)).toBe(0)
+    expect(probeSeqFor(probeCode(1, 7), -1)).toBe(0)
   })
 })
 

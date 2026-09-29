@@ -253,6 +253,38 @@ defmodule Platform.Chat.Canvas.KindsGameStreamTest do
       refute end_hidden?(html)
     end
 
+    test "connecting carries a hidden Still connecting line in text-warning with a Reload button (01a0dbd6)" do
+      html = render_state(status("connecting"))
+      [panel] = html |> doc() |> Floki.find(~s([data-gs-panel="connecting"]))
+
+      [line] = Floki.find(panel, "[data-gs-connecting-line]")
+      assert Floki.text(line) =~ "Connecting…"
+
+      [stuck] = Floki.find(panel, "[data-gs-stuck]")
+      # The hook reveals it after 10 s with no frame on the current peer.
+      assert Floki.attribute(stuck, "hidden") != []
+
+      [warning] = Floki.find(stuck, "p")
+      assert String.trim(Floki.text(warning)) == "Still connecting"
+      assert warning |> Floki.attribute("class") |> hd() =~ ~r/\btext-warning\b/
+
+      [reload] = Floki.find(stuck, "button[data-gs-reload]")
+      assert String.trim(Floki.text(reload)) == "Reload"
+      assert Floki.attribute(reload, "type") == ["button"]
+      classes = reload |> Floki.attribute("class") |> hd() |> String.split() |> Enum.sort()
+      assert classes == ["btn", "btn-sm"]
+    end
+
+    test "the Still connecting line exists only in the connecting panel" do
+      html = render_state(status("live"))
+      assert html |> doc() |> Floki.find("[data-gs-stuck]") |> length() == 1
+
+      in_connecting =
+        html |> doc() |> Floki.find(~s([data-gs-panel="connecting"] [data-gs-stuck]))
+
+      assert length(in_connecting) == 1
+    end
+
     test "live renders as connecting until this window has a frame" do
       html = render_state(status("live"))
       assert shown_panels(html) == ["connecting"]
@@ -262,14 +294,17 @@ defmodule Platform.Chat.Canvas.KindsGameStreamTest do
       refute end_hidden?(html)
     end
 
-    test "the capture ring is the only primary in the node, and starts hidden" do
+    test "the capture ring is the only primary in a v1 node, and starts hidden" do
       html = render_state(status("live"))
       [ring] = html |> doc() |> Floki.find("[data-gs-ring]")
       [class] = Floki.attribute(ring, "class")
       assert class =~ "ring-2"
       assert class =~ "ring-primary"
       assert Floki.attribute(ring, "hidden") != []
-      assert length(Regex.scan(~r/\bprimary\b/, html)) == 1
+      # The ring, plus YOUR roster chip's class, which the strip carries for
+      # the hook even while it is hidden (01a0dbd6 stage 4): nothing else.
+      assert Regex.scan(~r/[\w:-]*\bprimary\b[\w-]*/, html) |> List.flatten() |> Enum.sort() ==
+               ["bg-primary", "ring-primary", "text-primary-content"]
     end
 
     test "ended: the reason and Start again, End gone" do
@@ -348,6 +383,280 @@ defmodule Platform.Chat.Canvas.KindsGameStreamTest do
       assert hd(Floki.attribute(well, "class")) =~ "bg-black"
       [video] = Floki.find(well, "video")
       for attr <- ~w(muted autoplay playsinline), do: assert(Floki.attribute(video, attr) != [])
+    end
+  end
+
+  # ── Task 01a0dbd6 stage 4: the multiplayer roster, one case per state ─────
+
+  @harper %{peer_id: "p-harper", name: "Harper", user_id: "u1"}
+  @rowan %{peer_id: "p-rowan", name: "Rowan", user_id: "u2"}
+
+  defp roster(slots, extra \\ %{}) do
+    Map.merge(
+      %{slots: slots, spectators: 0, names: [], max_players: 4, multi: true},
+      extra
+    )
+  end
+
+  defp render_multi(roster, opts \\ []) do
+    node =
+      gs_node(%{
+        "session_id" => @session,
+        "task_id" => "t",
+        "review_sha" => @sha,
+        "title" => "Voltron: dash tuning"
+      })
+
+    render_component(&GameStreamKind.render/1,
+      node: node,
+      dom_id_scope: "canvas-x-expanded",
+      canvas_id: "canvas-x",
+      status: Keyword.get(opts, :status, status("live")),
+      roster: roster,
+      peer_id: Keyword.get(opts, :peer_id)
+    )
+  end
+
+  defp one(html, selector) do
+    [el] = html |> doc() |> Floki.find(selector)
+    el
+  end
+
+  defp hidden?(el), do: Floki.attribute(el, "hidden") != []
+  defp text(el), do: el |> Floki.text(sep: " ") |> String.split() |> Enum.join(" ")
+  defp classes(el), do: el |> Floki.attribute("class") |> hd() |> String.split()
+
+  defp chip_states(html, box) do
+    html
+    |> doc()
+    |> Floki.find("#{box} [data-gs-chip]")
+    |> Enum.map(
+      &{hd(Floki.attribute(&1, "data-gs-chip")), hd(Floki.attribute(&1, "data-gs-chip-state"))}
+    )
+  end
+
+  describe "multiplayer render (01a0dbd6 stage 4)" do
+    setup do
+      enable!()
+      :ok
+    end
+
+    test "watching: opening renders as a spectator with 'Watching' and 'Join as player N'" do
+      html = render_multi(roster(%{0 => @harper}, %{spectators: 1, names: ["Ann"]}))
+
+      watch = one(html, "[data-gs-watch]")
+      refute hidden?(watch)
+      assert text(one(html, "[data-gs-watch-line]")) == "Watching"
+
+      join = one(html, "[data-gs-join]")
+      refute hidden?(join)
+      assert text(join) == "Join as player 2"
+      assert Floki.attribute(join, "data-gs-join-slot") == ["1"]
+
+      # A spectator has nothing to leave, and End is in the overflow.
+      assert hidden?(one(html, "[data-gs-leave]"))
+      assert end_hidden?(html)
+      refute hidden?(one(html, "[data-gs-overflow]"))
+    end
+
+    test "slots full: the design's line and no Join" do
+      html = render_multi(roster(%{0 => @harper, 1 => @rowan}, %{max_players: 2}))
+
+      assert text(one(html, "[data-gs-watch-line]")) ==
+               "All 2 player slots are taken. You are watching."
+
+      assert hidden?(one(html, "[data-gs-join]"))
+
+      html4 =
+        render_multi(roster(%{0 => @harper, 1 => @rowan, 2 => @harper, 3 => @rowan}))
+
+      assert text(one(html4, "[data-gs-watch-line]")) ==
+               "All 4 player slots are taken. You are watching."
+    end
+
+    test "the roster strip: P1-P4 chips in mono xs, names truncating, the you chip in primary" do
+      html =
+        render_multi(roster(%{0 => @harper, 1 => @rowan}, %{spectators: 2, names: ["Ann", "Bo"]}),
+          peer_id: "p-rowan"
+        )
+
+      assert chip_states(html, "[data-gs-chips]") ==
+               [{"0", "other"}, {"1", "you"}, {"2", "open"}, {"3", "open"}]
+
+      [p1, p2, p3, _p4] = html |> doc() |> Floki.find("[data-gs-chips] [data-gs-chip]")
+
+      assert text(p1) == "P1 Harper"
+      assert text(p2) == "P2 You"
+      assert text(p3) == "P3 open"
+
+      for c <- ["bg-base-300", "text-base-content"], do: assert(c in classes(p1))
+      for c <- ["bg-primary", "text-primary-content"], do: assert(c in classes(p2))
+
+      for c <- ["border", "border-dashed", "border-base-content/40"],
+          do: assert(c in classes(p3))
+
+      # No per-player hue: no status colour anywhere in a chip.
+      for chip <- [p1, p2, p3], c <- classes(chip) do
+        refute c =~ ~r/(error|warning|success|info|accent|secondary)/
+      end
+
+      # Occupied chips are not buttons you can press; an open one is.
+      assert Floki.attribute(p1, "aria-disabled") == ["true"]
+      assert Floki.attribute(p3, "aria-disabled") == []
+
+      [label] = Floki.find(p1, "[data-gs-chip-label]")
+      assert "font-mono" in classes(label) and "text-xs" in classes(label)
+      assert "shrink-0" in classes(label)
+      [name] = Floki.find(p1, "[data-gs-chip-name]")
+      assert "truncate" in classes(name) and "text-xs" in classes(name)
+
+      # Activity dots on held slots only, in base-content.
+      [dot] = Floki.find(p1, "[data-gs-chip-dot]")
+      assert "bg-base-content" in classes(dot)
+      refute hidden?(dot)
+      [open_dot] = Floki.find(p3, "[data-gs-chip-dot]")
+      assert hidden?(open_dot)
+
+      watching = one(html, "[data-gs-watching]")
+      assert text(watching) == "2 watching"
+      assert Floki.attribute(watching, "title") == ["Ann, Bo"]
+    end
+
+    test "player (you P2): Leave replaces End, no watching row" do
+      html = render_multi(roster(%{0 => @harper, 1 => @rowan}), peer_id: "p-rowan")
+
+      leave = one(html, "[data-gs-leave]")
+      refute hidden?(leave)
+      assert text(leave) == "Leave"
+      assert end_hidden?(html)
+      assert hidden?(one(html, "[data-gs-watch]"))
+    end
+
+    test "two pads in one browser: both slots are yours" do
+      html = render_multi(roster(%{0 => @rowan, 1 => @rowan}), peer_id: "p-rowan")
+
+      assert chip_states(html, "[data-gs-chips]") ==
+               [{"0", "you"}, {"1", "you"}, {"2", "open"}, {"3", "open"}]
+
+      assert text(one(html, "[data-gs-roster-line-text]")) ==
+               "You are P1 and P2 · 0 others playing · 0 watching"
+    end
+
+    test "overflow: Take over per slot someone else holds, and End session for N people" do
+      html =
+        render_multi(roster(%{0 => @harper, 1 => @rowan}, %{spectators: 1}), peer_id: "p-rowan")
+
+      overflow = one(html, "[data-gs-overflow]")
+      refute hidden?(overflow)
+      [toggle] = Floki.find(overflow, "[data-gs-overflow-toggle]")
+      assert Floki.attribute(toggle, "aria-haspopup") == ["menu"]
+      [icon] = Floki.find(toggle, "span")
+      assert "hero-ellipsis-horizontal" in classes(icon)
+
+      menu = one(html, "[data-gs-overflow-menu]")
+      assert hidden?(menu)
+
+      items = Floki.find(menu, "[data-gs-take-items] [data-gs-take-over]")
+      assert Enum.map(items, &text/1) == ["Take over P1 from Harper"]
+      assert Enum.flat_map(items, &Floki.attribute(&1, "data-gs-take-over")) == ["0"]
+
+      # The one-line confirm is in the markup, hidden until an item is picked.
+      confirm = one(html, "[data-gs-confirm]")
+      assert hidden?(confirm)
+      assert text(one(html, "[data-gs-confirm-yes]")) == "Take over"
+      assert text(one(html, "[data-gs-confirm-no]")) == "Cancel"
+
+      assert text(one(html, "[data-gs-end-session]")) ==
+               "End session Ends the session for 3 people"
+
+      solo = render_multi(roster(%{0 => @rowan}), peer_id: "p-rowan")
+      assert text(one(solo, "[data-gs-end-line]")) == "Ends the session for 1 person"
+      assert solo |> doc() |> Floki.find("[data-gs-take-items] [data-gs-take-over]") == []
+    end
+
+    test "375px: the strip is a single line that opens the full roster in a sheet" do
+      html =
+        render_multi(
+          roster(%{0 => @harper, 1 => @rowan, 2 => %{peer_id: "p3", name: "Cy", user_id: nil}}, %{
+            spectators: 2,
+            names: ["Ann", "Bo"]
+          }),
+          peer_id: "p-rowan"
+        )
+
+      line = one(html, "[data-gs-roster-line]")
+      assert "@md:hidden" in classes(line)
+
+      assert text(one(html, "[data-gs-roster-line-text]")) ==
+               "You are P2 · 2 others playing · 2 watching"
+
+      strip = one(html, "[data-gs-roster-strip]")
+      assert "hidden" in classes(strip) and "@md:flex" in classes(strip)
+
+      sheet = one(html, "dialog[data-gs-sheet]")
+      assert "modal" in classes(sheet) and "modal-bottom" in classes(sheet)
+      assert Floki.find(sheet, ".modal-box") != []
+
+      assert chip_states(html, "[data-gs-sheet-chips]") ==
+               [{"0", "other"}, {"1", "you"}, {"2", "other"}, {"3", "open"}]
+
+      assert text(one(html, "[data-gs-sheet-watching]")) == "2 watching: Ann, Bo"
+
+      spectator = render_multi(roster(%{0 => @harper}, %{spectators: 1}))
+
+      assert text(one(spectator, "[data-gs-roster-line-text]")) ==
+               "You are watching · 1 playing · 1 watching"
+    end
+
+    test "the hook's templates and the chip classes are written once, here" do
+      html = render_multi(roster(%{}))
+      strip = one(html, "[data-gs-roster]")
+      classes = GameStreamKind.chip_classes()
+      assert Floki.attribute(strip, "data-gs-chip-you") == [classes.you]
+      assert Floki.attribute(strip, "data-gs-chip-other") == [classes.other]
+      assert Floki.attribute(strip, "data-gs-chip-open") == [classes.open]
+      assert classes.you == "bg-primary text-primary-content"
+      assert classes.other == "bg-base-300 text-base-content"
+
+      for t <- ~w(data-gs-chip-template data-gs-take-template data-gs-pad-template) do
+        assert html =~ "<template #{t}>"
+      end
+
+      # No hex anywhere in the node: semantic tokens only.
+      refute html =~ ~r/#[0-9a-fA-F]{3,8}\b/
+    end
+
+    test "the pad rows and the watching row are rendered for the hook to fill" do
+      html = render_multi(roster(%{0 => @rowan}), peer_id: "p-rowan")
+      assert hidden?(one(html, "[data-gs-pads]"))
+    end
+
+    test "not running: no Leave, no overflow, no watching row" do
+      html =
+        render_multi(roster(%{0 => @rowan}),
+          peer_id: "p-rowan",
+          status: status("ended", %{ended_reason: "Session ended"})
+        )
+
+      assert hidden?(one(html, "[data-gs-leave]"))
+      assert hidden?(one(html, "[data-gs-overflow]"))
+      assert hidden?(one(html, "[data-gs-watch]"))
+      assert end_hidden?(html)
+    end
+
+    test "a v1 host (no multi) renders none of it and keeps End" do
+      html = render_multi(roster(%{0 => @rowan}, %{multi: false, max_players: 1}))
+      assert hidden?(one(html, "[data-gs-roster]"))
+      assert hidden?(one(html, "[data-gs-watch]"))
+      assert hidden?(one(html, "[data-gs-leave]"))
+      assert hidden?(one(html, "[data-gs-overflow]"))
+      refute end_hidden?(html)
+    end
+
+    test "no roster at all (no session) is the v1 render" do
+      html = render_state(status("live"))
+      assert hidden?(one(html, "[data-gs-roster]"))
+      refute end_hidden?(html)
     end
   end
 end

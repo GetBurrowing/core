@@ -119,4 +119,45 @@ defmodule Platform.Experiments.Metrics.GameStreamInputToPhotonTest do
     assert {:ok, %Result{value: 50.0, n: 1}} = compute(e)
     assert {:ok, %Result{value: 10.0, n: 1}} = compute(e, "control")
   end
+
+  describe "the roster arm (task 01a0dbd6)" do
+    test "a session that ran the experiment as its ROSTER arm counts; another arm does not",
+         ctx do
+      e = ctx.experiment
+      a = subject(ctx.project, e)
+      b = subject(ctx.project, e)
+
+      session!(a, %{
+        roster_experiment_id: e.id,
+        roster_variant_slug: "treatment",
+        rtt_p50_ms: 50.0
+      })
+
+      session!(b, %{roster_experiment_id: e.id, roster_variant_slug: "control", rtt_p50_ms: 10.0})
+
+      assert {:ok, %Result{value: 50.0, n: 1}} = compute(e)
+    end
+
+    test "the worst-slot p95 metric means rtt_p95_ms, excluding sessions without one", ctx do
+      alias Platform.Experiments.Metrics.GameStreamInputToPhotonP95
+      e = ctx.experiment
+      a = subject(ctx.project, e)
+      b = subject(ctx.project, e)
+      c = subject(ctx.project, e)
+
+      session!(a, %{
+        roster_experiment_id: e.id,
+        roster_variant_slug: "treatment",
+        rtt_p95_ms: 60.0
+      })
+
+      session!(b, %{experiment_id: e.id, variant_slug: "treatment", rtt_p95_ms: 40.0})
+      session!(c, %{experiment_id: e.id, variant_slug: "treatment", rtt_p50_ms: 20.0})
+
+      assert {:ok, %Result{value: 50.0, n: 2}} =
+               GameStreamInputToPhotonP95.compute(e.id, "treatment")
+
+      assert GameStreamInputToPhotonP95.compute(e.id, "control") == :insufficient_data
+    end
+  end
 end

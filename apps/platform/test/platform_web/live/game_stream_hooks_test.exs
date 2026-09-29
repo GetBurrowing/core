@@ -71,14 +71,14 @@ defmodule PlatformWeb.GameStreamHooksTest do
   defp restore(key, nil), do: Application.delete_env(:platform, key)
   defp restore(key, value), do: Application.put_env(:platform, key, value)
 
-  defp host!(user) do
+  defp host!(user, features \\ ["game_stream_host"]) do
     runtime_id = "play-host-#{System.unique_integer([:positive])}"
 
     {:ok, runtime} =
       Federation.register_runtime(user.id, %{
         runtime_id: runtime_id,
         allowed_bundles: [],
-        metadata: %{"client_info" => %{"features" => ["game_stream_host"]}}
+        metadata: %{"client_info" => %{"features" => features}}
       })
 
     {:ok, runtime, _token} = Federation.activate_runtime(runtime)
@@ -269,10 +269,21 @@ defmodule PlatformWeb.GameStreamHooksTest do
       assert_reply(view, %{ok: true})
       {view2, _} = open(ctx.conn, ctx.user, canvas)
       render_hook(view2, "game_stream_attach", ids(canvas, s.session_id))
-      assert_reply(view2, %{ok: true, pending_offer: nil})
+      assert_reply(view2, %{ok: true, pending_offer: nil, viewer: false, peer_id: peer2})
+      assert is_binary(peer2)
 
-      # And the first window is told it was taken over.
+      # Opening a second window WATCHES (task 01a0dbd6): the first window is
+      # not moved.
+      refute_push_event(view, "game_stream", %{type: "moved"}, 100)
+
+      # "Play here" in the second window is a take-over of P1; the first
+      # window is told who took it, and (a v1 host has one peer) moved.
+      render_hook(view2, "game_stream_take_over", Map.put(ids(canvas, s.session_id), "slot", 0))
+      assert_reply(view2, %{ok: true, viewer: true, slots: %{0 => 0}, peer_id: ^peer2})
+      assert_push_event(view, "game_stream", %{type: "displaced", slot: 0, by: "Rowan"})
       assert_push_event(view, "game_stream", %{type: "moved"})
+      render_hook(view2, "game_stream_attach", ids(canvas, s.session_id))
+      assert_reply(view2, %{ok: true, viewer: true})
 
       # From then on only the window that took over hears the host: two
       # answers to one offer would leave the host's peer half-connected.
@@ -286,7 +297,10 @@ defmodule PlatformWeb.GameStreamHooksTest do
       assert_push_event(view2, "game_stream", %{type: "signal", data: %{"sdp" => "v=0 second"}})
       refute_push_event(view, "game_stream", %{type: "signal"}, 100)
 
-      # "Play here" in the first window re-attaches and hears the host again.
+      # "Play here" in the first window takes it back and re-attaches, which
+      # subscribes it again and hands it the offer nobody answered.
+      render_hook(view, "game_stream_take_over", Map.put(ids(canvas, s.session_id), "slot", 0))
+      assert_reply(view, %{ok: true, viewer: true})
       render_hook(view, "game_stream_attach", ids(canvas, s.session_id))
       assert_reply(view, %{ok: true, pending_offer: %{"sdp" => "v=0 second"}})
       assert_push_event(view2, "game_stream", %{type: "moved"})
@@ -370,6 +384,8 @@ defmodule PlatformWeb.GameStreamHooksTest do
       render_hook(x, "game_stream_attach", ids(canvas, id))
       assert_reply(x, %{ok: true} = x_reply)
       render_hook(y, "game_stream_attach", ids(canvas, id))
+      assert_reply(y, %{ok: true, viewer: false})
+      render_hook(y, "game_stream_take_over", ids(canvas, id))
       assert_reply(y, %{ok: true} = y_reply)
       assert_push_event(x, "game_stream", %{type: "moved"})
       x_token = x_reply[:viewer_token]
@@ -402,7 +418,9 @@ defmodule PlatformWeb.GameStreamHooksTest do
       assert_reply(y, %{ok: true, status: %{session_id: ^old_id}})
       render_hook(x, "game_stream_attach", ids(canvas, old_id))
       assert_reply(x, %{ok: true, status: %{session_id: ^old_id}})
-      # X was the last to open the canvas, so it held the old session.
+      # X pressed Play here, so it held the old session.
+      render_hook(x, "game_stream_take_over", ids(canvas, old_id))
+      assert_reply(x, %{ok: true, viewer: true})
       assert_push_event(y, "game_stream", %{type: "moved", session_id: ^old_id})
       {:ok, _} = GameStream.stop_session(old_id, "Stopped")
 
@@ -438,8 +456,10 @@ defmodule PlatformWeb.GameStreamHooksTest do
       assert_receive %Broadcast{event: "play_signal", payload: %{data: %{"sdp" => "from y"}}}
       refute_receive %Broadcast{event: "play_signal"}, 100
 
-      # "Play here" in X is the user's own action and does take it.
+      # An open in X does not take it (watch), "Play here" does.
       render_hook(x, "game_stream_attach", ids(canvas, new_id))
+      assert_reply(x, %{ok: true, viewer: false})
+      render_hook(x, "game_stream_take_over", ids(canvas, new_id))
       assert_reply(x, %{ok: true, viewer: true})
       assert_push_event(y, "game_stream", %{type: "moved"})
     end
@@ -475,6 +495,103 @@ defmodule PlatformWeb.GameStreamHooksTest do
     end
   end
 
+  describe "peers and slots on a game_stream_multi host (01a0dbd6)" do
+    setup ctx do
+      host!(ctx.user, ["game_stream_host", "game_stream_multi"])
+      s = session!(ctx.task)
+      canvas = canvas!(ctx.space, s.session_id, ctx.task.id)
+      %{s: s, canvas: canvas}
+    end
+
+    test "two windows both watch with video; join, take over and leave are explicit", ctx do
+      id = ctx.s.session_id
+      ids = ids(ctx.canvas, id)
+      other = create_user!(%{name: "Saru"})
+      add_user!(ctx.space.id, other.id)
+      {a, _} = open(ctx.conn, ctx.user, ctx.canvas)
+      {b, _} = open(build_conn(), other, ctx.canvas)
+
+      render_hook(a, "game_stream_attach", ids)
+      assert_reply(a, %{ok: true, viewer: true, role: :spectator, peer_id: pa, viewer_token: ta})
+      render_hook(b, "game_stream_attach", ids)
+      assert_reply(b, %{ok: true, viewer: true, role: :spectator, peer_id: pb})
+      refute pa == pb
+      assert_receive %Broadcast{event: "play_peer_open", payload: %{peer_id: ^pa}}
+      assert_receive %Broadcast{event: "play_peer_open", payload: %{peer_id: ^pb}}
+      refute_push_event(a, "game_stream", %{type: "moved"}, 50)
+
+      render_hook(a, "game_stream_join", Map.put(ids, "src", 0))
+      assert_reply(a, %{ok: true, role: :player, slots: %{0 => 0}})
+
+      assert_push_event(b, "game_stream", %{
+        type: "roster",
+        roster: %{slots: %{0 => %{name: "Rowan"}}}
+      })
+
+      render_hook(b, "game_stream_take_over", Map.merge(ids, %{"slot" => 0, "src" => 0}))
+      assert_reply(b, %{ok: true, slots: %{0 => 0}})
+      assert_push_event(a, "game_stream", %{type: "displaced", slot: 0, by: "Saru"})
+      # The displaced window keeps its video: it is never moved.
+      refute_push_event(a, "game_stream", %{type: "moved"}, 50)
+
+      # A's signal for its own peer still reaches the host, tagged.
+      render_hook(a, "game_stream_signal", %{
+        "session_id" => id,
+        "kind" => "answer",
+        "data" => %{"sdp" => "from a"},
+        "viewer_token" => ta,
+        "peer_id" => pa
+      })
+
+      assert_reply(a, %{ok: true})
+      assert_receive %Broadcast{event: "play_signal", payload: %{peer_id: ^pa}}
+
+      # A's LiveView naming B's peer is refused, and nothing is broadcast.
+      render_hook(a, "game_stream_signal", %{
+        "session_id" => id,
+        "kind" => "answer",
+        "data" => %{"sdp" => "forged"},
+        "viewer_token" => ta,
+        "peer_id" => pb
+      })
+
+      assert_reply(a, %{ok: false, error: "moved"})
+      refute_receive %Broadcast{event: "play_signal"}, 100
+
+      render_hook(b, "game_stream_leave", ids)
+      assert_reply(b, %{ok: true, role: :spectator})
+      render_hook(b, "game_stream_join", Map.put(ids, "src", "not a number"))
+      assert_reply(b, %{ok: false, error: "malformed"})
+
+      # An open chip names the slot it asks for (stage 4); a junk slot is malformed.
+      render_hook(b, "game_stream_join", Map.merge(ids, %{"src" => 0, "slot" => 3}))
+      assert_reply(b, %{ok: true, role: :player, slots: %{0 => 3}})
+
+      assert_push_event(a, "game_stream", %{
+        type: "roster",
+        roster: %{slots: %{3 => %{name: "Saru"}}, multi: true}
+      })
+
+      render_hook(a, "game_stream_join", Map.merge(ids, %{"src" => 0, "slot" => "P2"}))
+      assert_reply(a, %{ok: false, error: "malformed"})
+    end
+
+    test "slot activity from the host is pushed to every window", ctx do
+      id = ctx.s.session_id
+      {a, _} = open(ctx.conn, ctx.user, ctx.canvas)
+      render_hook(a, "game_stream_attach", ids(ctx.canvas, id))
+      assert_reply(a, %{ok: true})
+
+      :ok =
+        GameStream.handle_slot_activity(ctx.s.host_runtime_id, %{
+          "session_id" => id,
+          "slots" => [1]
+        })
+
+      assert_push_event(a, "game_stream", %{type: "slot_activity", slots: [1]})
+    end
+  end
+
   describe "refusals" do
     test "an event carrying a foreign session_id is refused and reaches no host", ctx do
       host!(ctx.user)
@@ -507,10 +624,16 @@ defmodule PlatformWeb.GameStreamHooksTest do
       render_hook(view, "game_stream_restart", ids(canvas, foreign.session_id))
       assert_reply(view, %{ok: false, error: "forbidden"})
 
+      # The slot events run the full canvas grant check too (01a0dbd6).
+      for event <- ~w(game_stream_join game_stream_leave game_stream_take_over) do
+        render_hook(view, event, ids(canvas, foreign.session_id))
+        assert_reply(view, %{ok: false, error: "forbidden"})
+      end
+
       refute_receive %Broadcast{event: "play_signal"}, 100
       refute_receive %Broadcast{event: "play_session_stop"}
       assert {:ok, %{state: "building"}} = GameStream.status(foreign.session_id)
-      assert :sys.get_state(session_pid(foreign.session_id)).viewer == nil
+      assert :sys.get_state(session_pid(foreign.session_id)).peers == %{}
     end
 
     test "the right session_id on a canvas the viewer cannot read is refused", ctx do
@@ -531,7 +654,7 @@ defmodule PlatformWeb.GameStreamHooksTest do
       {view, _} = open(ctx.conn, outsider, readable)
       render_hook(view, "game_stream_attach", ids(canvas, s.session_id))
       assert_reply(view, %{ok: false, error: "forbidden"})
-      assert :sys.get_state(session_pid(s.session_id)).viewer == nil
+      assert :sys.get_state(session_pid(s.session_id)).peers == %{}
     end
 
     test "the session_id must be on the NAMED node of the canvas", ctx do
@@ -566,7 +689,7 @@ defmodule PlatformWeb.GameStreamHooksTest do
 
       # The session was never attached and the window never subscribed: a
       # status published on the topic produces no push.
-      assert :sys.get_state(session_pid(s.session_id)).viewer == nil
+      assert :sys.get_state(session_pid(s.session_id)).peers == %{}
 
       Phoenix.PubSub.broadcast(
         Platform.PubSub,

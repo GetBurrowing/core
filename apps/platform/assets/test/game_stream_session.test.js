@@ -69,7 +69,20 @@ describe("attach replies and refused signals", () => {
     expect(attachOutcome({ ok: true, viewer: true, viewer_token: 7 })).toEqual({
       kind: "viewer",
       token: 7,
+      peerId: null,
     })
+  })
+
+  it("the viewer keeps its core-minted peer id (01a0dbd6)", () => {
+    expect(
+      attachOutcome({ ok: true, viewer: true, viewer_token: 3, peer_id: "p-1" }),
+    ).toEqual({ kind: "viewer", token: 3, peerId: "p-1" })
+  })
+
+  it("a watcher that does not hold a v1 stream still owns its peer (for Play here)", () => {
+    expect(
+      attachOutcome({ ok: true, viewer: false, viewer_token: null, peer_id: "p-2" }),
+    ).toEqual({ kind: "takeover", token: null, peerId: "p-2" })
   })
 
   it("a reply without a viewer flag (older server) is the viewer", () => {
@@ -80,6 +93,7 @@ describe("attach replies and refused signals", () => {
     expect(attachOutcome({ ok: true, viewer: false, viewer_token: null })).toEqual({
       kind: "takeover",
       token: null,
+      peerId: null,
     })
   })
 

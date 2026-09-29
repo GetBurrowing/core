@@ -19,14 +19,18 @@ defmodule Platform.GameStream do
 
   ## Decisions this module encodes
 
-    * One session per host in v1; a second start is `{:error, :host_busy}`.
-    * The latest window the user ACTED in wins (opened the canvas, "Play
-      here", "Start again"); the previous one is told `:moved` (the default
-      answer to the design's open question on multiple windows). A window
-      that merely re-rendered onto a session someone else restarted does
-      not take it (stage 6; `Platform.GameStream.Session`, "Which window
-      wins"). Only the current viewer's signals reach the host.
-    * A host disconnect fails the session with "The play host disconnected".
+    * One session per host; a second start is `{:error, :host_busy}`.
+    * N peers attach to a session (task 01a0dbd6). Opening a canvas attaches
+      as a SPECTATOR and never moves or disconnects anyone; joining a player
+      slot, leaving it and taking one over are explicit (`join/3`,
+      `leave/3`, `take_over/4`). Against a host that does not declare
+      `game_stream_multi`, only one peer holds the stream and "Play here" is
+      a take-over of slot 0. See `Platform.GameStream.Session`. Only a
+      peer's own LiveView, with its current token, signals for that peer.
+    * A host disconnect fails the session with "The play host disconnected",
+      unless the host rejoins and resumes it within the grace window
+      (`:game_stream_host_grace_ms`, task 01a0dbd6 stage 6; see
+      `Platform.GameStream.Protocol`, "Resume").
     * A viewer detaching does not end the session; the host idles it out
       after `idle_timeout_s` (default 600 s).
     * The UI's "Start again" and the `play_session_start` tool are the same
@@ -38,6 +42,7 @@ defmodule Platform.GameStream do
   alias Platform.Experiments.Subject
   alias Platform.Experiments.Surfaces
   alias Platform.Experiments.Surfaces.GameStreamEncoder
+  alias Platform.Experiments.Surfaces.GameStreamRoster
   alias Platform.Federation
   alias Platform.GameStream.Protocol
   alias Platform.GameStream.ReviewBuild
@@ -48,6 +53,7 @@ defmodule Platform.GameStream do
   @host_feature "game_stream_host"
   @encoder_surface "game_stream.encoder_preset"
   @encoder_target "play_session.start"
+  @roster_surface "game_stream.roster"
   @default_idle_timeout_s 600
   @max_idle_timeout_s 3600
 
@@ -130,11 +136,14 @@ defmodule Platform.GameStream do
     * `:idle_timeout_s` — passed to the host (default 600, clamped 60..3600);
     * `:force_relay` — `true` makes the viewer's peer connection
       `iceTransportPolicy: "relay"` (TURN only); default `false`;
-    * `:viewer` — a pid that holds the session as its viewer from the start
-      (the window that clicked "Start again", stage 6; see
-      `Platform.GameStream.Session`, "Which window wins");
+    * `:viewer` — a pid attached as a peer and joined as P1 from the start
+      (the window that clicked "Start again"); `:viewer_info` names it
+      (`%{user_id, name}`) for the roster;
     * `:runner` — the `BranchProvisioner` runner (tests);
-    * `:linger_ms` — how long an ended session stays readable (tests).
+    * `:linger_ms` — how long an ended session stays readable (tests);
+    * `:host_grace_ms` — how long the session waits for a host whose
+      channel dropped (default `config :platform, :game_stream_host_grace_ms`,
+      else 20 s; tests).
 
   Order of checks: flag, review build (task, `in_review`, repo, branch, sha),
   host present, host free. The review build is resolved BEFORE the host is
@@ -147,6 +156,7 @@ defmodule Platform.GameStream do
          {:ok, build} <- ReviewBuild.resolve(task_id, Keyword.take(opts, [:runner])),
          {:ok, host} <- find_free_host() do
       {experiment_id, variant_slug, encoder} = resolve_encoder(build.task.id)
+      {roster_experiment_id, roster_variant_slug, roster} = resolve_roster(build.task.id)
       session_id = UUIDv7.generate()
 
       args = %{
@@ -160,6 +170,10 @@ defmodule Platform.GameStream do
         encoder: encoder,
         experiment_id: experiment_id,
         variant_slug: variant_slug,
+        roster_experiment_id: roster_experiment_id,
+        roster_variant_slug: roster_variant_slug,
+        roster: roster,
+        multi: multi_host?(host),
         idle_timeout_s: idle_timeout(Keyword.get(opts, :idle_timeout_s)),
         ice_servers: ice_servers(),
         force_relay: Keyword.get(opts, :force_relay) == true
@@ -167,15 +181,17 @@ defmodule Platform.GameStream do
 
       args =
         case Keyword.get(opts, :viewer) do
-          pid when is_pid(pid) -> Map.put(args, :viewer, pid)
-          _ -> args
+          pid when is_pid(pid) ->
+            Map.merge(args, %{viewer: pid, viewer_info: Keyword.get(opts, :viewer_info, %{})})
+
+          _ ->
+            args
         end
 
       args =
-        case Keyword.fetch(opts, :linger_ms) do
-          {:ok, ms} -> Map.put(args, :linger_ms, ms)
-          :error -> args
-        end
+        opts
+        |> Keyword.take([:linger_ms, :host_grace_ms])
+        |> Enum.into(args)
 
       case DynamicSupervisor.start_child(GSSupervisor.sessions(), {Session, args}) do
         {:ok, _pid} -> status(session_id)
@@ -202,38 +218,98 @@ defmodule Platform.GameStream do
   end
 
   @doc """
-  Attaches `pid` (a viewer's LiveView) to the session.
+  Attaches `pid` (a viewer's LiveView) to the session as a peer.
 
-  `mode` is `:take` (the default: a window the user acted in, which becomes
-  the viewer and moves the previous one) or `:follow` (a window re-rendered
-  onto the session by someone else's restart, which becomes the viewer only
-  if nobody holds it). See `Platform.GameStream.Session`, "Which window wins".
+  `mode` is `:watch` (the default: a spectator; under the roster surface's
+  `open_as: "join"` variant it also joins a free slot) or `:follow` (a
+  window re-rendered onto a session someone else restarted, which never
+  joins). Neither moves anyone. A pid that already has a peer re-attaches it
+  with a fresh token, and a multi host is asked to re-offer at once. `info`
+  is `%{user_id, name}` for the roster.
 
-  The reply is the session status plus `viewer` (whether `pid` is now the
-  viewer), `viewer_token` (to be sent back with every signal) and
-  `pending_offer`: the host's latest offer that no viewer has answered yet,
-  or nil. A window that did not become the viewer gets neither.
+  The reply is the session status plus `peer_id`, `viewer` (whether this
+  peer receives the stream: always on a multi host, only the holder on a v1
+  one), `viewer_token` (sent back with every signal), `role`, `slots`
+  (`%{src => slot}`), `roster` and `pending_offer` (this peer's unanswered
+  offer, or nil). `{:error, :spectators_full}` when the spectator cap is
+  reached.
   """
-  @spec attach_viewer(String.t(), pid(), :take | :follow) ::
-          {:ok, map()} | {:error, :disabled | :not_found}
-  def attach_viewer(session_id, pid, mode \\ :take)
-      when is_pid(pid) and mode in [:take, :follow] do
+  @spec attach_viewer(String.t(), pid(), :watch | :follow, map()) ::
+          {:ok, map()} | {:error, :disabled | :not_found | :spectators_full}
+  def attach_viewer(session_id, pid, mode \\ :watch, info \\ %{})
+      when is_pid(pid) and mode in [:watch, :follow] and is_map(info) do
     with :ok <- ensure_enabled() do
-      Session.call(session_id, {:attach_viewer, pid, mode})
+      Session.call(session_id, {:attach, pid, mode, info})
+    end
+  end
+
+  @doc """
+  Gives `pid`'s peer the next free player slot for its local controller
+  `src` (0 = keyboard and first pad). Idempotent for a src that already
+  holds a slot. `{:error, :slots_full}` when none is free,
+  `{:error, :not_attached}` when `pid` has no peer.
+
+  `prefer` (task 01a0dbd6 stage 4: an open chip in the roster strip was
+  clicked) asks for that slot. It is taken only when it is free; when it is
+  not, the next free slot is given instead. A join never displaces anyone,
+  so two viewers clicking the same open chip cannot take it from each other.
+  """
+  @spec join(String.t(), pid(), non_neg_integer(), non_neg_integer() | nil) ::
+          {:ok, map()} | {:error, atom()}
+  def join(session_id, pid, src \\ 0, prefer \\ nil)
+      when is_pid(pid) and is_integer(src) and src >= 0 and
+             (is_nil(prefer) or (is_integer(prefer) and prefer >= 0)) do
+    with :ok <- ensure_enabled() do
+      message = if is_nil(prefer), do: {:join, pid, src}, else: {:join, pid, src, prefer}
+      Session.call(session_id, message)
+    end
+  end
+
+  @doc "Frees `pid`'s slot for `src`, or all of its slots with `:all`. The peer keeps its video."
+  @spec leave(String.t(), pid(), non_neg_integer() | :all) :: {:ok, map()} | {:error, atom()}
+  def leave(session_id, pid, src \\ :all)
+      when is_pid(pid) and (src == :all or (is_integer(src) and src >= 0)) do
+    with :ok <- ensure_enabled() do
+      Session.call(session_id, {:leave, pid, src})
+    end
+  end
+
+  @doc """
+  Gives `slot` to `pid`'s peer for its controller `src`. Whoever held it is
+  sent `{:game_stream, id, {:displaced, slot, by_name}}` and keeps its peer.
+  """
+  @spec take_over(String.t(), pid(), non_neg_integer(), non_neg_integer()) ::
+          {:ok, map()} | {:error, atom()}
+  def take_over(session_id, pid, slot, src \\ 0)
+      when is_pid(pid) and is_integer(src) and src >= 0 do
+    with :ok <- ensure_enabled() do
+      Session.call(session_id, {:take_over, pid, slot, src})
+    end
+  end
+
+  @doc "The session's current roster."
+  @spec roster(String.t()) :: {:ok, map()} | {:error, atom()}
+  def roster(session_id) do
+    with :ok <- ensure_enabled() do
+      Session.call(session_id, :roster)
     end
   end
 
   @doc """
   Relays a viewer's signal (`answer` | `ice`) to the session's host.
 
-  `viewer` is `{pid, viewer_token}` from `attach_viewer/3`. A signal from
-  anything but the CURRENT viewer is refused `{:error, :moved}` and never
-  reaches the host: two answers to one offer leave the host's peer
-  half-connected (task 01a0db5f stage 6).
+  `viewer` is `{pid, viewer_token}` or `{pid, viewer_token, peer_id}` from
+  `attach_viewer/4`; without a `peer_id` the pid's own peer is meant. The
+  signal reaches the host only when the named peer belongs to `pid` and
+  carries that token; anything else is refused `{:error, :moved}` and
+  nothing is broadcast.
   """
-  @spec relay_to_host(String.t(), String.t(), term(), {pid(), term()}) ::
-          :ok | {:error, atom()}
-  def relay_to_host(session_id, kind, data, {pid, _token} = viewer) when is_pid(pid) do
+  @spec relay_to_host(String.t(), String.t(), term(), tuple()) :: :ok | {:error, atom()}
+  def relay_to_host(session_id, kind, data, {pid, token}) when is_pid(pid),
+    do: relay_to_host(session_id, kind, data, {pid, token, nil})
+
+  def relay_to_host(session_id, kind, data, {pid, _token, peer_id} = viewer)
+      when is_pid(pid) and (is_nil(peer_id) or is_binary(peer_id)) do
     with :ok <- ensure_enabled(),
          {:ok, parsed} <-
            Protocol.parse_signal(:viewer, %{
@@ -244,6 +320,8 @@ defmodule Platform.GameStream do
       Session.call(session_id, {:viewer_signal, viewer, parsed})
     end
   end
+
+  def relay_to_host(_session_id, _kind, _data, _viewer), do: {:error, :moved}
 
   @doc """
   Relays a host frame to the session's viewer. `payload` is the raw
@@ -259,6 +337,19 @@ defmodule Platform.GameStream do
   end
 
   @doc """
+  Relays a host's `play_slot_activity` frame to every viewer's roster.
+  `runtime_id` is the SENDING runtime, which must be the session's host.
+  """
+  @spec handle_slot_activity(String.t(), map()) :: :ok | {:error, atom()}
+  def handle_slot_activity(runtime_id, payload)
+      when is_binary(runtime_id) and is_map(payload) do
+    with :ok <- ensure_enabled(),
+         {:ok, parsed} <- Protocol.parse_slot_activity(payload) do
+      Session.call(parsed.session_id, {:slot_activity, runtime_id, parsed})
+    end
+  end
+
+  @doc """
   Applies a host's `play_session_status` frame. `runtime_id` is the SENDING
   runtime, which must be the session's host.
   """
@@ -266,33 +357,59 @@ defmodule Platform.GameStream do
   def handle_host_status(runtime_id, payload) when is_binary(runtime_id) and is_map(payload) do
     with :ok <- ensure_enabled(),
          {:ok, parsed} <- Protocol.parse_status(payload) do
-      Session.call(parsed.session_id, {:host_status, runtime_id, parsed})
+      parsed.session_id
+      |> Session.call({:host_status, runtime_id, parsed})
+      |> stop_orphaned_resume(runtime_id, parsed)
     end
   end
 
+  # A host resuming a session core no longer runs (it ended, or the grace
+  # ran out while the socket was down) is told to stop, so it does not keep
+  # streaming to nobody. `:terminal` is only ever answered to the session's
+  # own host; `:not_found` names a session no one runs.
+  defp stop_orphaned_resume({:error, reason} = result, runtime_id, %{resume: true} = parsed)
+       when reason in [:not_found, :terminal] do
+    PlatformWeb.Endpoint.broadcast(
+      Protocol.host_topic(runtime_id),
+      "play_session_stop",
+      Protocol.session_stop_payload(parsed.session_id, "The play host disconnected")
+    )
+
+    result
+  end
+
+  defp stop_orphaned_resume(result, _runtime_id, _parsed), do: result
+
   @doc """
-  Records the viewer's latest stats: `rtt_p50_ms`, `rtt_p95_ms`, `fps_avg`
+  Records a viewer's latest stats: `rtt_p50_ms`, `rtt_p95_ms`, `fps_avg`
   (numbers) and `connection_path` (`"lan"` | `"turn"`). Unknown keys and
   ill-typed values are dropped. Written to the row when the session ends.
+
+  Stats are kept per player slot. With `pid` (the reporting LiveView) they
+  are filed under that peer's slot: `slot` when the peer holds it, else its
+  lowest; a spectator's are dropped. Without a pid they are slot 0's.
   """
-  @spec report_stats(String.t(), map()) :: :ok | {:error, atom()}
-  def report_stats(session_id, stats) when is_map(stats) do
+  @spec report_stats(String.t(), map(), pid() | nil, term()) :: :ok | {:error, atom()}
+  def report_stats(session_id, stats, pid \\ nil, slot \\ nil) when is_map(stats) do
     with :ok <- ensure_enabled() do
-      Session.call(session_id, {:report_stats, sanitize_stats(stats)})
+      Session.call(session_id, {:report_stats, pid, slot, sanitize_stats(stats)})
     end
   end
 
   @doc """
-  Called from `PlatformWeb.RuntimeChannel.terminate/2`: fails the session
-  `runtime_id` hosts, if any. Never raises — a channel's terminate must not
-  crash on a feature that is off or a registry that is not running.
+  Called from `PlatformWeb.RuntimeChannel.terminate/2` (so `self()` is the
+  dropping channel): the session `runtime_id` hosts, if any, starts waiting
+  for the host to rejoin and resume it, and fails when its grace runs out
+  (see `Platform.GameStream.Session`, "A host that drops"). Never raises — a
+  channel's terminate must not crash on a feature that is off or a registry
+  that is not running.
   """
   @spec host_disconnected(String.t()) :: :ok
   def host_disconnected(runtime_id) when is_binary(runtime_id) do
     if enabled?() do
       case Session.session_for_host(runtime_id) do
         nil -> :ok
-        session_id -> Session.call(session_id, :host_disconnected)
+        session_id -> Session.call(session_id, {:host_disconnected, self()})
       end
     end
 
@@ -335,6 +452,25 @@ defmodule Platform.GameStream do
       {:variant, experiment, variant_slug, payload} -> {experiment.id, variant_slug, payload}
       {:default, payload} when map_size(payload) > 0 -> {nil, nil, payload}
       _ -> {nil, nil, GameStreamEncoder.control()}
+    end
+  end
+
+  # The roster caps. Same never-raising resolution as the encoder; a
+  # promoted default or a variant replaces the control whole.
+  defp resolve_roster(task_id) do
+    subject = Subject.new("task", task_id)
+
+    case Surfaces.resolve(@roster_surface, @encoder_target, subject) do
+      {:variant, experiment, variant_slug, payload} -> {experiment.id, variant_slug, payload}
+      {:default, payload} when map_size(payload) > 0 -> {nil, nil, payload}
+      _ -> {nil, nil, GameStreamRoster.control()}
+    end
+  end
+
+  defp multi_host?(host) do
+    case Federation.declared_features(host.metadata) do
+      features when is_list(features) -> Protocol.multi_feature() in features
+      :undeclared -> false
     end
   end
 

@@ -1,13 +1,17 @@
 import { describe, it, expect } from "vitest"
 import {
+  InputRouter,
   KeyForwarder,
   PadDiffer,
+  PadSources,
   SLOT,
   controllerLabel,
   hintText,
   keyMessage,
   padName,
+  padPressed,
   pickGamepad,
+  pickGamepads,
 } from "../js/hooks/lib/game_stream_input.js"
 
 /**
@@ -56,12 +60,13 @@ function forwarder({ captured = true } = {}) {
 }
 
 describe("keyMessage", () => {
-  it("builds the host's key shape with slot 0", () => {
+  it("builds the host's key shape: src 0, slot 0", () => {
     expect(keyMessage(fakeEvent("KeyW"), true)).toEqual({
       t: "key",
       code: "KeyW",
       down: true,
       repeat: false,
+      src: 0,
       slot: 0,
     })
     expect(SLOT).toBe(0)
@@ -85,8 +90,8 @@ describe("KeyForwarder while captured", () => {
     expect(f.keydown(down)).toBe(true)
     expect(f.keyup(up)).toBe(true)
     expect(sent).toEqual([
-      { t: "key", code: "KeyA", down: true, repeat: false, slot: 0 },
-      { t: "key", code: "KeyA", down: false, repeat: false, slot: 0 },
+      { t: "key", code: "KeyA", down: true, repeat: false, src: 0, slot: 0 },
+      { t: "key", code: "KeyA", down: false, repeat: false, src: 0, slot: 0 },
     ])
     expect(down.prevented).toBe(1)
     expect(up.prevented).toBe(1)
@@ -142,7 +147,7 @@ describe("PadDiffer snapshot diffing", () => {
   it("sends the first snapshot, then only changes", () => {
     const d = new PadDiffer()
     const first = d.next(pad())
-    expect(first).toMatchObject({ t: "pad", slot: 0, seq: 1, connected: true })
+    expect(first).toMatchObject({ t: "pad", src: 0, slot: 0, seq: 1, connected: true })
     expect(first.buttons).toHaveLength(17)
     expect(first.axes).toHaveLength(4)
 
@@ -209,5 +214,146 @@ describe("pickGamepad and labels", () => {
     expect(hintText({ live: true, captured: true })).toBe("Esc to release")
     expect(hintText({ live: true, captured: false })).toBe("Click to play")
     expect(hintText({ live: false, captured: false })).toBe("")
+  })
+})
+
+// ── Several pads, sources and the router (task 01a0dbd6 stage 4) ─────────
+
+function idx(p, index) {
+  return { ...p, index }
+}
+
+describe("pickGamepads: a list", () => {
+  it("every connected pad, standard-mapped first, each group in index order", () => {
+    const odd = { id: "Odd", index: 0, mapping: "", connected: true, buttons: [], axes: [] }
+    const a = idx(pad(), 1)
+    const b = idx(pad(), 3)
+    const gone = idx(pad([], [0, 0, 0, 0], { connected: false }), 2)
+    expect(pickGamepads([odd, a, gone, b])).toEqual([a, b, odd])
+    expect(pickGamepads(undefined)).toEqual([])
+    expect(pickGamepad([odd, a, gone, b])).toBe(a)
+  })
+})
+
+describe("PadSources: one src per pad, kept while it stays connected", () => {
+  it("the first pad is src 0 (shared with the keyboard), the second src 1", () => {
+    const s = new PadSources()
+    const a = idx(pad(), 0)
+    const b = idx(pad(), 1)
+    const { assigned, gone } = s.assign([a, b])
+    expect(assigned.map(x => [x.src, x.pad])).toEqual([
+      [0, a],
+      [1, b],
+    ])
+    expect(gone).toEqual([])
+  })
+
+  it("a second pad unplugging does not move the first; the first unplugging does not move the second", () => {
+    const s = new PadSources()
+    const a = idx(pad(), 0)
+    const b = idx(pad(), 1)
+    s.assign([a, b])
+    expect(s.assign([a])).toEqual({ assigned: [{ src: 0, pad: a }], gone: [1] })
+    s.assign([a, b])
+    const r = s.assign([b])
+    expect(r.assigned).toEqual([{ src: 1, pad: b }])
+    expect(r.gone).toEqual([0])
+    // A pad that comes back takes the lowest free src.
+    const c = idx(pad(), 2)
+    expect(s.assign([b, c]).assigned).toEqual([
+      { src: 0, pad: c },
+      { src: 1, pad: b },
+    ])
+  })
+})
+
+describe("padPressed", () => {
+  it("true while any button is down", () => {
+    expect(padPressed(pad())).toBe(false)
+    expect(padPressed(pad([0, 0, 1]))).toBe(true)
+    expect(padPressed(null)).toBe(false)
+  })
+})
+
+describe("PadDiffer per src", () => {
+  it("carries its src and the slot it currently maps to", () => {
+    const d = new PadDiffer(2, 1)
+    expect(d.next(pad([1]))).toMatchObject({ t: "pad", src: 1, slot: 2, seq: 1 })
+    d.slot = 3
+    expect(d.next(null)).toMatchObject({ t: "pad", src: 1, slot: 3, connected: false })
+  })
+
+  it("two pads in one browser diff independently", () => {
+    const d0 = new PadDiffer(0, 0)
+    const d1 = new PadDiffer(1, 1)
+    expect(d0.next(pad([1]))).not.toBe(null)
+    expect(d1.next(pad())).not.toBe(null)
+    // Pad 0 unchanged, pad 1 pressed: only pad 1 sends.
+    expect(d0.next(pad([1]))).toBe(null)
+    expect(d1.next(pad([0, 1]))).toMatchObject({ src: 1, slot: 1, seq: 2 })
+  })
+})
+
+function router(slots) {
+  const events = []
+  const states = []
+  const r = new InputRouter({ sendEvent: m => events.push(m), sendState: m => states.push(m) })
+  r.setSlots(slots)
+  return { r, events, states }
+}
+
+describe("InputRouter: the only writer to the data channels", () => {
+  it("a SPECTATOR (no slots) sends nothing: no key, pad, release_all or probe", () => {
+    const { r, events, states } = router({})
+    expect(r.player).toBe(false)
+    expect(r.key(keyMessage(fakeEvent("KeyD"), true))).toBe(false)
+    expect(r.pad(new PadDiffer(0, 0).next(pad([1])))).toBe(false)
+    expect(r.pad({ t: "pad", src: 0, slot: 0, seq: 1, connected: false })).toBe(false)
+    expect(r.releaseAll()).toBe(false)
+    expect(r.probe(5, 3)).toBe(null)
+    expect(events).toEqual([])
+    expect(states).toEqual([])
+  })
+
+  it("positive control: the same calls as P2 all send, with src and the core slot", () => {
+    const { r, events, states } = router({ 0: 1 })
+    expect(r.player).toBe(true)
+    expect(r.key(keyMessage(fakeEvent("KeyD"), true))).toBe(true)
+    expect(r.pad(new PadDiffer(0, 0).next(pad([1])))).toBe(true)
+    expect(r.releaseAll()).toBe(true)
+    expect(r.probe(5, 3)).toBe(1)
+    expect(events).toEqual([
+      { t: "key", code: "KeyD", down: true, repeat: false, src: 0, slot: 1 },
+      { t: "release_all" },
+      { t: "probe", seq: 5, src: 0 },
+    ])
+    expect(states).toHaveLength(1)
+    expect(states[0]).toMatchObject({ t: "pad", src: 0, slot: 1 })
+  })
+
+  it("a pad whose src holds no slot sends nothing, while another src of the same peer does", () => {
+    const { r, states } = router(new Map([[0, 0]]))
+    expect(r.pad(new PadDiffer(0, 1).next(pad([1])))).toBe(false)
+    expect(r.pad(new PadDiffer(0, 0).next(pad([1])))).toBe(true)
+    expect(states.map(m => m.src)).toEqual([0])
+  })
+
+  it("a player holding only a second pad's slot: keys go nowhere, probes ride that pad's src", () => {
+    const { r, events } = router({ 1: 2 })
+    expect(r.key(keyMessage(fakeEvent("KeyW"), true))).toBe(false)
+    expect(r.probe(9, 3)).toBe(2)
+    expect(events).toEqual([{ t: "probe", seq: 9, src: 1 }])
+  })
+
+  it("no probe from a slot the 2-bit code cannot name", () => {
+    const { r, events } = router({ 0: 4 })
+    expect(r.probe(1, 3)).toBe(null)
+    expect(events).toEqual([])
+  })
+
+  it("the message's own slot is replaced by core's", () => {
+    const { r, events } = router({ 0: 3 })
+    r.key({ t: "key", code: "KeyA", down: true, repeat: false, src: 0, slot: 0 })
+    expect(events[0].slot).toBe(3)
   })
 })

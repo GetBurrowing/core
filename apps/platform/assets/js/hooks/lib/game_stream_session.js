@@ -62,14 +62,23 @@ export class SessionMemo {
 }
 
 /**
- * What an attach reply means for the window: `viewer` when it holds the
- * session (and must send `token` with every signal), `takeover` when
- * another window does.
+ * What an attach reply means for the window: `viewer` when it receives the
+ * stream (and must send `token` and `peerId` with every signal), `takeover`
+ * when another window holds a v1 host's single stream.
+ *
+ * `peerId` is the core-minted peer this LiveView owns (task 01a0dbd6). Every
+ * attach, including `takeover`, has one: "Play here" takes a slot over for
+ * that peer.
  */
 export function attachOutcome(reply) {
   if (!reply || !reply.ok) return { kind: "refused", error: reply && reply.error }
-  if (reply.viewer === false) return { kind: "takeover", token: null }
-  return { kind: "viewer", token: reply.viewer_token == null ? null : reply.viewer_token }
+  const peerId = reply.peer_id == null ? null : reply.peer_id
+  if (reply.viewer === false) return { kind: "takeover", token: null, peerId }
+  return {
+    kind: "viewer",
+    token: reply.viewer_token == null ? null : reply.viewer_token,
+    peerId,
+  }
 }
 
 /** A signal the server refused because this window is no longer the viewer. */

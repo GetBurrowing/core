@@ -12,6 +12,22 @@
  * `seq << 4 | check(seq)` with seq in 1..4095. A white cell is a 1; an
  * all-black corner never decodes, because check(0) != 0. The wire values are
  * pinned against code.go's in `test/game_stream_probe.test.js`.
+ *
+ * ## The 12-bit code carries the slot (task 01a0dbd6)
+ *
+ * With several players the host cannot draw every viewer's seq as sent: two
+ * players' probes would collide in the one corner. It draws
+ * `slot << 10 | (seq & 0x3FF)` instead (play-host `internal/input`
+ * `ProbeCode`, stage 3), so the top 2 bits are the player slot and the low 10
+ * the viewer's seq. A viewer therefore:
+ *   - sends seq in 1..1023 (`nextSeq` wraps at `PROBE_SEQ_MAX`), so slot 0's
+ *     code is never 0 and never loses its high bits to the host's mask;
+ *   - decodes only codes whose top 2 bits are ITS slot (`probeSeqFor`), and
+ *     compares on the low 10 bits;
+ *   - probes only from slots 0-3 (`PROBE_MAX_SLOT`): the host drops a probe
+ *     from a higher slot, since 2 bits cannot name it.
+ * A v1 host forwards the seq unchanged; with seq <= 1023 that IS slot 0's
+ * code, so the same rules hold there.
  */
 
 export const CELLS = 4
@@ -58,9 +74,32 @@ export function readCorner(data, width = CORNER_PX) {
   return bits
 }
 
-/** The next seq after `seq`, wrapping 4095 -> 1 (0 is never a seq). */
+export const PROBE_SLOT_BITS = 2
+export const PROBE_SEQ_BITS = 10
+export const PROBE_SEQ_MAX = (1 << PROBE_SEQ_BITS) - 1
+export const PROBE_MAX_SLOT = (1 << PROBE_SLOT_BITS) - 1
+
+/** The code the host draws for `seq` sent from `slot` (play-host ProbeCode). */
+export function probeCode(slot, seq) {
+  return ((slot & PROBE_MAX_SLOT) << PROBE_SEQ_BITS) | (seq & PROBE_SEQ_MAX)
+}
+
+/**
+ * The viewer seq a decoded corner `code` carries for `slot`, or 0 when the
+ * corner holds no code or another slot's probe.
+ */
+export function probeSeqFor(code, slot) {
+  if (!code || !Number.isInteger(slot) || slot < 0 || slot > PROBE_MAX_SLOT) return 0
+  if (code >> PROBE_SEQ_BITS !== slot) return 0
+  return code & PROBE_SEQ_MAX
+}
+
+/**
+ * The next seq after `seq`, wrapping 1023 -> 1 (0 is never a seq, and the
+ * top 2 of the 12 code bits belong to the slot).
+ */
 export function nextSeq(seq) {
-  return (seq % MAX_SEQ) + 1
+  return (seq % PROBE_SEQ_MAX) + 1
 }
 
 /** Nearest-rank percentile, as code.go's Summarize computes it. */
