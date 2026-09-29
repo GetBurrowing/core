@@ -249,6 +249,7 @@ defmodule Platform.Responsibilities.ExperimentsScientistTest do
                  "dispatch.prompt",
                  "game_stream.encoder_preset",
                  "mail.draft.generator",
+                 "meetings.open_question_classifier",
                  "planner.stage_budget"
                ]
     end

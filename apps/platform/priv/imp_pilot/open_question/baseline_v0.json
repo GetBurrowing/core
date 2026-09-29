@@ -1,0 +1,61 @@
+{
+  "artifact_type": "imp_program_artifact",
+  "payload": {
+    "adapter": "Elixir.Imp.Adapter.Chat",
+    "config": [],
+    "demos": [],
+    "dynamic_adapter": true,
+    "dynamic_lm": true,
+    "lm": null,
+    "metadata": {},
+    "signature": {
+      "inputs": [
+        {
+          "desc": null,
+          "kind": "input",
+          "metadata": {},
+          "name": "excerpt",
+          "prefix": "Excerpt:",
+          "type": "string"
+        },
+        {
+          "desc": null,
+          "kind": "input",
+          "metadata": {
+            "constraints": {
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "name": "participants",
+          "prefix": "Participants:",
+          "type": "array"
+        }
+      ],
+      "instructions": "Decide whether a meeting utterance is a GENUINE open question: something the speaker is actually asking or that the meeting still has to decide, and that someone could answer. Tag questions seeking agreement, rhetorical questions, questions only reported or quoted, and questions merely embedded in a statement are NOT open questions. `addressee` is the participant the question is put to by name, or \"none\".",
+      "metadata": {},
+      "outputs": [
+        {
+          "desc": null,
+          "kind": "output",
+          "metadata": {},
+          "name": "is_question",
+          "prefix": "Is Question:",
+          "type": "boolean"
+        },
+        {
+          "desc": null,
+          "kind": "output",
+          "metadata": {},
+          "name": "addressee",
+          "prefix": "Addressee:",
+          "type": "string"
+        }
+      ]
+    },
+    "type": "predict"
+  },
+  "payload_sha256": "sha256:b9ef620d74c0c62c696f486eb7141a1b7d9a1fe23a943580e085a21c03313514",
+  "schema_version": 1
+}

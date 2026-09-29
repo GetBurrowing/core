@@ -62,7 +62,11 @@ defmodule Platform.Experiments.Surfaces do
     # Task 01a0db5f: the play host's NVENC settings. Registered whether or
     # not GAME_STREAM_ENABLED is set — a surface is a declaration, and its
     # only read point (`GameStream.start_session/2`) is itself gated.
-    Platform.Experiments.Surfaces.GameStreamEncoder
+    Platform.Experiments.Surfaces.GameStreamEncoder,
+    # Task 01a0e8b5: which program decides a meeting open_question. The
+    # control is today's intent prompt; nothing is seeded, so production
+    # stays on it until an experiment row says otherwise.
+    Platform.Experiments.Surfaces.OpenQuestionClassifier
   ]
 
   @prompt_surface "dispatch.prompt"

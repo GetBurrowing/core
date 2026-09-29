@@ -173,10 +173,13 @@ defmodule Platform.Federation.Peers.ClientTest do
 
       assert Client.fetch_descriptor("https://peer.example.test") == {:error, :invalid_descriptor}
 
-      # control: the same stub, read by a Req that does decompress, decodes
+      # control: the same stub, read by a Req that does decompress, decodes.
+      # Req >= 0.6.1 no longer decompresses by default, so the control opts in
+      # with `compressed: true` (task 01a0e8b5 bumped Req 0.5 -> 0.7).
       assert {:ok, %{body: %{"protocol" => "suite-federation/1"}}} =
                Req.get("https://93.184.216.34/.well-known/suite-federation",
                  plug: {Req.Test, Client},
+                 compressed: true,
                  retry: false
                )
     end

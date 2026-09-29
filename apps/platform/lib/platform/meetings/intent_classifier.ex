@@ -225,6 +225,7 @@ defmodule Platform.Meetings.IntentClassifier do
   alias Platform.Meetings.IntentFrames
   alias Platform.Meetings.IntentQueue
   alias Platform.Meetings.MeetingCandidate
+  alias Platform.Meetings.OpenQuestionPilot
   alias Platform.Meetings.PressWindow
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
   alias Platform.Meetings.SpokenTarget
@@ -1042,16 +1043,29 @@ defmodule Platform.Meetings.IntentClassifier do
     # the addressee gate treats as inert — see `read_participants/1`.
     participants = read_participants(room_id)
 
+    # Task 01a0e8b5 stage 3. WHICH program decides open_question for this
+    # meeting: the `meetings.open_question_classifier` experiment surface.
+    # Resolved HERE, past every guard in `classify_or_skip/3`, so a muted,
+    # empty or agent-spoken chunk never creates an assignment. With no
+    # experiment and no surface default the arm is `:prompt`, and
+    # `OpenQuestionPilot.decide_live/3` is then exactly `decide/1` below:
+    # same args, one provider call, same messages.
+    arm = OpenQuestionPilot.Arm.resolve(meeting_id)
+
     decision =
-      decide(%{
-        provider_module: state.provider_module,
-        agent: agent,
-        prompt: prompt,
-        chunk_text: chunk_text,
-        room_id: room_id,
-        roster: roster,
-        participants: participants
-      })
+      OpenQuestionPilot.decide_live(
+        arm.arm,
+        %{
+          provider_module: state.provider_module,
+          agent: agent,
+          prompt: prompt,
+          chunk_text: chunk_text,
+          room_id: room_id,
+          roster: roster,
+          participants: participants
+        },
+        state.provider_module
+      )
 
     case decision do
       {:ok, %{intent: intent, target_role: target_role, confidence: confidence} = decided} ->
@@ -1115,7 +1129,11 @@ defmodule Platform.Meetings.IntentClassifier do
             target_role: target_role,
             confidence: confidence,
             dedupe_key: dedupe_key,
-            dedupe_key_hit_or_new: enqueue_result
+            dedupe_key_hit_or_new: enqueue_result,
+            # Task 01a0e8b5: which open_question arm decided this chunk,
+            # and under which experiment (nil when none applies).
+            arm: arm.name,
+            experiment_id: arm.experiment_id
           }
         )
 
@@ -1278,6 +1296,77 @@ defmodule Platform.Meetings.IntentClassifier do
     # answer against a roster the model never saw is a gate nobody can
     # reason about. Absent key => `nil` => the gate is inert; see
     # `IntentAddressee.verdict/3`.
+    gate_ctx = gate_ctx(args)
+
+    with {:ok, content} <- call_provider(provider_module, agent, prompt, chunk_text, room_id),
+         # SINGLE call site for `parse_content`. Task 01a03f57 widened it
+         # to /3, threading `chunk_text` through so the evidence gate can
+         # check the model's citation against the chunk it classified.
+         # Task 01a05997 stage 5 widened it to /4 for the addressee gate.
+         # Task 01a0e58f folded the roster, participants and the
+         # utterance-gate seam into one `gate_ctx` map.
+         {:ok, parsed} <- parse_content(content, room_id, chunk_text, gate_ctx) do
+      {:ok, normalise_decision(parsed)}
+    end
+  end
+
+  @doc """
+  Run an ALREADY-FORMED positive answer through the SAME post-model gates
+  `decide/1` applies to the model's parsed JSON (citation, frames,
+  addressee), and return exactly the decision shape `decide/1` returns.
+
+  `args` is the `decide/1` argument map; only `:chunk_text`, `:room_id`,
+  `:roster`, `:participants` and the utterance-gate seam are read. No
+  provider is called.
+
+  This exists so the open_question pilot (task 01a0e8b5,
+  `Platform.Meetings.OpenQuestionPilot`) can promote a chunk another
+  program judged to be a question WITHOUT a harness-side copy of the
+  gates: the gate chain has one implementation and this is a second
+  entrance to it, not a second chain. Nothing here changes a gate, a
+  lexicon or a threshold.
+  """
+  @spec gate_answer(
+          %{
+            intent: String.t(),
+            target_role: String.t(),
+            confidence: number(),
+            evidence_quote: String.t()
+          },
+          map()
+        ) :: {:ok, map()}
+  def gate_answer(
+        %{intent: intent, target_role: target_role, confidence: confidence} = answer,
+        %{chunk_text: chunk_text} = args
+      ) do
+    quote_text = Map.get(answer, :evidence_quote, "")
+
+    {:ok, decision} =
+      gated_decision(
+        intent,
+        target_role,
+        confidence * 1.0,
+        quote_text,
+        chunk_text,
+        Map.get(args, :room_id),
+        gate_ctx(args)
+      )
+
+    {:ok, normalise_decision(decision)}
+  end
+
+  defp normalise_decision(parsed) do
+    parsed
+    |> Map.put_new(:evidence_quote, nil)
+    |> Map.put_new(:demoted_from, nil)
+    |> Map.put_new(:demotion_reason, nil)
+    |> Map.put_new(:addressee_nulled_from, nil)
+  end
+
+  # Everything the post-model gates need beyond the answer itself, read
+  # from the `decide/1` argument map. ONE builder, shared by `decide/1`
+  # and `gate_answer/2`, so the two entrances cannot disagree on it.
+  defp gate_ctx(args) do
     roster = Map.get(args, :roster)
 
     # Task 01a0e58f. The meeting's un-left participants, threaded from
@@ -1296,28 +1385,12 @@ defmodule Platform.Meetings.IntentClassifier do
         else: [skip: IntentFrames.utterance_gate_classes()]
 
     # Everything the post-model gates need beyond the answer itself.
-    gate_ctx = %{
+    %{
       roster: roster,
       participants: participants,
       frame_opts: frame_opts,
       utterance_gates?: gates_enabled?
     }
-
-    with {:ok, content} <- call_provider(provider_module, agent, prompt, chunk_text, room_id),
-         # SINGLE call site for `parse_content`. Task 01a03f57 widened it
-         # to /3, threading `chunk_text` through so the evidence gate can
-         # check the model's citation against the chunk it classified.
-         # Task 01a05997 stage 5 widened it to /4 for the addressee gate.
-         # Task 01a0e58f folded the roster, participants and the
-         # utterance-gate seam into one `gate_ctx` map.
-         {:ok, parsed} <- parse_content(content, room_id, chunk_text, gate_ctx) do
-      {:ok,
-       parsed
-       |> Map.put_new(:evidence_quote, nil)
-       |> Map.put_new(:demoted_from, nil)
-       |> Map.put_new(:demotion_reason, nil)
-       |> Map.put_new(:addressee_nulled_from, nil)}
-    end
   end
 
   # ── Per-meeting queue write (task 019f70b8 stage 2) ───────────────────────
@@ -1892,90 +1965,15 @@ defmodule Platform.Meetings.IntentClassifier do
             confidence = confidence * 1.0
             quote_text = Map.get(decoded, "evidence_quote", "")
 
-            case gate_verdict(intent, target_role, quote_text, chunk_text, gate_ctx) do
-              :ok ->
-                # The quote is CARRIED, not just judged. `decide/1` already
-                # advertises an `:evidence_quote` key (put_new below), and it
-                # read nil on every accepted row because this clause dropped
-                # it — so "routable" and "routable WITH a citation" were the
-                # same observation from outside. The eval harness needs them
-                # apart: a fired row whose citation is empty is a row the
-                # dispatcher acts on with nothing to show a human.
-                {:ok,
-                 %{
-                   intent: intent,
-                   target_role: target_role,
-                   confidence: confidence,
-                   evidence_quote: quote_text
-                 }}
-
-              {:null_role, :off_roster_addressee} ->
-                emit_addressee_nulled(room_id, intent, target_role)
-
-                # RULING (task 01a08fde, 2026-09-11, Rowan: gate). An ask
-                # aimed at someone who is not on the roster is still that
-                # ask: migration 20260902140000 (body lines 128-135, 218)
-                # tells the model to KEEP the intent and answer
-                # `target_role: null`, and the gate now does the same
-                # thing to an answer the model got wrong. Intent, quote
-                # and confidence are the model's own; ONLY the role is
-                # rewritten, to the same `@no_target_role` string that
-                # `normalise_target_role/1` writes for the model's own
-                # JSON null, so the queue keeps one spelling of nobody.
-                # Nothing was demoted: `demoted_from` / `demotion_reason`
-                # stay nil so the eval harness's demotion counts do not
-                # absorb a row that was not downgraded.
-                #
-                # `addressee_nulled_from` is the ONE key that separates
-                # this row from a model that said null itself: non-nil
-                # iff the gate rewrote the role, carrying the role it
-                # overwrote. It is never "null": an answer whose role is
-                # already `@no_target_role` has nothing to rewrite, so
-                # `addressee_verdict/5` passes it down the `:ok` branch
-                # with no marker and no event (task 01a0919d). Persisting it to `meeting_candidates` /
-                # `IntentQueue.Server.@writable_fields` is out of scope
-                # here (no column exists; ticket 01a0910f-ab00 owns the
-                # "null"-string persistence question).
-                {:ok,
-                 %{
-                   intent: intent,
-                   target_role: @no_target_role,
-                   confidence: confidence,
-                   evidence_quote: quote_text,
-                   addressee_nulled_from: target_role
-                 }}
-
-              {:demote, reason} ->
-                emit_demotion(room_id, intent, reason)
-
-                # `demoted_from` carries the intent that WAS downgraded.
-                # Without it the returned map is byte-identical to a genuine
-                # decline, so a caller counting demotions has nothing to
-                # count — which is exactly how the eval harness reported a
-                # permanent zero while 93 demotions fired on one cassette
-                # (task 01a04379). Non-nil iff this decision was demoted.
-                {:ok,
-                 %{
-                   intent: "off_topic",
-                   target_role: @no_target_role,
-                   confidence: confidence,
-                   # A demoted row DECLINED: its prediction is off_topic, and
-                   # off_topic's contract is an empty citation. Carrying the
-                   # rejected quote here would make the demotion look like a
-                   # cited answer to anything reading the field.
-                   evidence_quote: "",
-                   demoted_from: intent,
-                   # WHICH gate turned this row down. `demoted_from`
-                   # alone says only "something demoted it", so an
-                   # addressee rejection and an uncited positive were
-                   # the same row from outside — and the whole point of
-                   # this gate is that a person measuring it afterwards
-                   # can tell it apart from the model's own off_topic.
-                   # See `emit_demotion/3` for the production-side
-                   # (telemetry + log) half of the same distinction.
-                   demotion_reason: reason
-                 }}
-            end
+            gated_decision(
+              intent,
+              target_role,
+              confidence,
+              quote_text,
+              chunk_text,
+              room_id,
+              gate_ctx
+            )
 
           :invalid ->
             emit_parse_error(room_id, content, {:missing_or_invalid_keys, decoded})
@@ -1989,6 +1987,96 @@ defmodule Platform.Meetings.IntentClassifier do
       {:error, reason} ->
         emit_parse_error(room_id, content, reason)
         {:error, :parse_error}
+    end
+  end
+
+  # The gate verdict turned into the decision map. Extracted verbatim from
+  # `parse_content/4` (task 01a0e8b5) so `gate_answer/2` reaches the same
+  # three outcomes through the same code; behaviour is unchanged.
+  defp gated_decision(intent, target_role, confidence, quote_text, chunk_text, room_id, gate_ctx) do
+    case gate_verdict(intent, target_role, quote_text, chunk_text, gate_ctx) do
+      :ok ->
+        # The quote is CARRIED, not just judged. `decide/1` already
+        # advertises an `:evidence_quote` key (put_new below), and it
+        # read nil on every accepted row because this clause dropped
+        # it — so "routable" and "routable WITH a citation" were the
+        # same observation from outside. The eval harness needs them
+        # apart: a fired row whose citation is empty is a row the
+        # dispatcher acts on with nothing to show a human.
+        {:ok,
+         %{
+           intent: intent,
+           target_role: target_role,
+           confidence: confidence,
+           evidence_quote: quote_text
+         }}
+
+      {:null_role, :off_roster_addressee} ->
+        emit_addressee_nulled(room_id, intent, target_role)
+
+        # RULING (task 01a08fde, 2026-09-11, Rowan: gate). An ask
+        # aimed at someone who is not on the roster is still that
+        # ask: migration 20260902140000 (body lines 128-135, 218)
+        # tells the model to KEEP the intent and answer
+        # `target_role: null`, and the gate now does the same
+        # thing to an answer the model got wrong. Intent, quote
+        # and confidence are the model's own; ONLY the role is
+        # rewritten, to the same `@no_target_role` string that
+        # `normalise_target_role/1` writes for the model's own
+        # JSON null, so the queue keeps one spelling of nobody.
+        # Nothing was demoted: `demoted_from` / `demotion_reason`
+        # stay nil so the eval harness's demotion counts do not
+        # absorb a row that was not downgraded.
+        #
+        # `addressee_nulled_from` is the ONE key that separates
+        # this row from a model that said null itself: non-nil
+        # iff the gate rewrote the role, carrying the role it
+        # overwrote. It is never "null": an answer whose role is
+        # already `@no_target_role` has nothing to rewrite, so
+        # `addressee_verdict/5` passes it down the `:ok` branch
+        # with no marker and no event (task 01a0919d). Persisting it to `meeting_candidates` /
+        # `IntentQueue.Server.@writable_fields` is out of scope
+        # here (no column exists; ticket 01a0910f-ab00 owns the
+        # "null"-string persistence question).
+        {:ok,
+         %{
+           intent: intent,
+           target_role: @no_target_role,
+           confidence: confidence,
+           evidence_quote: quote_text,
+           addressee_nulled_from: target_role
+         }}
+
+      {:demote, reason} ->
+        emit_demotion(room_id, intent, reason)
+
+        # `demoted_from` carries the intent that WAS downgraded.
+        # Without it the returned map is byte-identical to a genuine
+        # decline, so a caller counting demotions has nothing to
+        # count — which is exactly how the eval harness reported a
+        # permanent zero while 93 demotions fired on one cassette
+        # (task 01a04379). Non-nil iff this decision was demoted.
+        {:ok,
+         %{
+           intent: "off_topic",
+           target_role: @no_target_role,
+           confidence: confidence,
+           # A demoted row DECLINED: its prediction is off_topic, and
+           # off_topic's contract is an empty citation. Carrying the
+           # rejected quote here would make the demotion look like a
+           # cited answer to anything reading the field.
+           evidence_quote: "",
+           demoted_from: intent,
+           # WHICH gate turned this row down. `demoted_from`
+           # alone says only "something demoted it", so an
+           # addressee rejection and an uncited positive were
+           # the same row from outside — and the whole point of
+           # this gate is that a person measuring it afterwards
+           # can tell it apart from the model's own off_topic.
+           # See `emit_demotion/3` for the production-side
+           # (telemetry + log) half of the same distinction.
+           demotion_reason: reason
+         }}
     end
   end
 

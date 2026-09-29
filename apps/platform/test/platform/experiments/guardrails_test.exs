@@ -87,6 +87,7 @@ defmodule Platform.Experiments.GuardrailsTest do
                  "game_stream.encoder_preset",
                  "mail.draft.generator",
                  "mail.test.generator",
+                 "meetings.open_question_classifier",
                  "planner.stage_budget",
                  "test.budget"
                ]

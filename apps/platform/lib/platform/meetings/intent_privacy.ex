@@ -38,6 +38,24 @@ defmodule Platform.Meetings.IntentPrivacy do
       keeps undermining the build") such a phrase is ordinary process
       talk.
 
+    * `:personal_circumstances` (task 01a0e8b5 stage 5, ticket 01a0eb31) —
+      a request or absence explained by family, health or personal
+      circumstances: "for family reasons", "sick leave", "compassionate
+      leave", "childcare". Refused on the phrase alone: the circumstance is
+      the candid part, whoever it is about.
+    * `:personnel_outcome` (same task and ticket) — the outcome of a
+      named person's HR process: a promotion case or decision, a
+      performance review or rating, an appraisal, a written warning,
+      probation, a demotion. Like `:grievance`, ONLY in a sentence that
+      also names a person (the name rule below) or carries a possessive
+      `his/her/their` before the phrase. On its own ("the performance
+      review of the checkout service") it is process talk.
+
+  These two classes were ADDED after the pilot's synthesised TEST rows
+  showed the four original classes let a promotion-outcome question and a
+  family-reasons request through. They only add refusals; nothing that
+  was refused before is let through.
+
   ### What counts as a name
 
   A capitalised word (`[A-Z]` followed by lowercase letters) that is not
@@ -61,15 +79,28 @@ defmodule Platform.Meetings.IntentPrivacy do
   the utterance, the matched word or a name.
   """
 
-  @type class :: :compensation | :departure | :demands | :grievance
+  @type class ::
+          :compensation
+          | :departure
+          | :demands
+          | :personal_circumstances
+          | :grievance
+          | :personnel_outcome
 
   @lexicons [
     compensation:
       ~r/\bsalar(y|ies)\b|\bcompensation\b|\bpay\s+(rise|cut|review)s?\b|\bpayrises?\b|\bbonus(es)?\b|\bequity\b|\bstock options?\b|\bseverance\b|\bcounter-?offers?\b|\b(a|my|his|her|their|your) raise\b/iu,
     departure:
       ~r/\bresign(ation|ing|ed)?\b|\bhand(ing|ed|s)? in (my|his|her|their) notice\b|\bleaving the (company|team|org)\b|\bquitting\b|\b(his|her|their|my) last day\b/iu,
-    demands: ~r/\blist of demands\b|\bultimatum\b|\b(his|her|their) demands\b/iu
+    demands: ~r/\blist of demands\b|\bultimatum\b|\b(his|her|their) demands\b/iu,
+    personal_circumstances:
+      ~r/\b(for|due to|because of) (family|health|personal|medical) (reasons|issues|circumstances)\b|\bfamily (emergency|reasons|circumstances)\b|\b(sick|medical|compassionate|bereavement|parental|maternity|paternity|carer['’]?s?) leave\b|\bchildcare\b/iu
   ]
+
+  # Checked like `@grievance`: only in a sentence that names a person or
+  # carries a possessive pronoun before the phrase.
+  @personnel_outcome ~r/\bpromotion (case|outcome|decision|packet|committee|review)s?\b|\bpassed over for promotion\b|\b(his|her|their) promotion\b|\bdemot(ed|ion)\b|\bperformance (review|rating|appraisal)s?\b|\bappraisals?\b|\bwritten warning\b|\bon probation\b|\bprobation (review|period)\b/iu
+  @possessive ~r/\b(his|her|their)\b/iu
 
   @grievance ~r/\bcomplain(t|ed|ing)?\s+about\b|\bundermin\w*|\bcan['’]?t work with\b|\bfed up with\b|\bfrustrated with\b|\breport(ed)?\s+\w+\s+to\s+hr\b|\bhr complaint\b|\bbull(y|ying|ied)\b|\bharass\w*|\bperformance improvement plan\b|\bpip\b|\bdisciplinary\b|\b(fire|fired|let go|sack(ed)?)\b/iu
 
@@ -98,7 +129,7 @@ defmodule Platform.Meetings.IntentPrivacy do
     else
       case Enum.find(@lexicons, fn {_class, regex} -> Regex.match?(regex, text) end) do
         {class, _regex} -> {:candid, class}
-        nil -> grievance(text)
+        nil -> with :ok <- grievance(text), do: personnel_outcome(text)
       end
     end
   end
@@ -113,6 +144,21 @@ defmodule Platform.Meetings.IntentPrivacy do
     |> Enum.any?(&(Regex.match?(@grievance, &1) and names_in_sentence?(&1, names)))
     |> case do
       true -> {:candid, :grievance}
+      false -> :ok
+    end
+  end
+
+  defp personnel_outcome(text) do
+    names = names_in(text)
+
+    text
+    |> String.split(~r/[.!?\n]+/u)
+    |> Enum.any?(fn sentence ->
+      Regex.match?(@personnel_outcome, sentence) and
+        (names_in_sentence?(sentence, names) or Regex.match?(@possessive, sentence))
+    end)
+    |> case do
+      true -> {:candid, :personnel_outcome}
       false -> :ok
     end
   end

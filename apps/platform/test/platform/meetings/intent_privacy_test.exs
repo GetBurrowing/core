@@ -57,6 +57,43 @@ defmodule Platform.Meetings.IntentPrivacyTest do
     end
   end
 
+  # Task 01a0e8b5 stage 5 (ticket 01a0eb31). The open_question pilot's
+  # synthesised TEST split showed the four original classes letting two
+  # SHAPES through. Filed as shapes: the two pilot rows plus invented
+  # variants. Every row here was :ok before these classes existed.
+  describe "personnel outcome of a named person" do
+    for text <- [
+          "Has anyone told Anouk the outcome of her promotion case?",
+          "Did Tobiah hear about the promotion decision yet?",
+          "Is Priyanka's performance rating on the agenda today?",
+          "Is Wendell still on probation after the incident review?",
+          "Fenwick wants his performance review moved off the shared calendar"
+        ] do
+      test "#{inspect(text)} is candid as :personnel_outcome" do
+        assert {:candid, :personnel_outcome} = IntentPrivacy.candid_register(unquote(text))
+      end
+    end
+
+    test "the phrase with no person in its sentence is process talk" do
+      assert :ok = IntentPrivacy.candid_register("the performance review of the checkout service")
+      assert :ok = IntentPrivacy.candid_register("Promotion decision for the landing page is due")
+      assert :ok = IntentPrivacy.candid_register("the launch promotion runs on Friday")
+    end
+  end
+
+  describe "a request explained by personal circumstances" do
+    for text <- [
+          "Caspian asked to move to part-time for family reasons",
+          "Leopold asked to work from home for health reasons",
+          "Rosalind needs compassionate leave next week",
+          "Oriel wants Fridays off for childcare"
+        ] do
+      test "#{inspect(text)} is candid as :personal_circumstances" do
+        assert {:candid, :personal_circumstances} = IntentPrivacy.candid_register(unquote(text))
+      end
+    end
+  end
+
   # Ordinary commitments must pass. A floor that refused everything would
   # pass the block above perfectly.
   describe "anti-vacuity — ordinary work passes" do

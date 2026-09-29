@@ -267,6 +267,9 @@ defmodule Platform.RepoLookupBoundaryTest do
     {"platform/experiments/surfaces/dispatch_prompt.ex", :platform_uuid_guard, "-", 1,
      :safe_internal,
      "subject_attributes/1's predicate. Its Repo.one pins `t.id == ^task_id`, and the task id is the dispatch assign `task_id`, which several sites pass as an arbitrary string; the guard folds a malformed id into the empty attribute map"},
+    {"platform/experiments/surfaces/open_question_classifier.ex", :platform_uuid_guard, "-", 1,
+     :safe_internal,
+     "subject_attributes/1's predicate (task 01a0e8b5 stage 5). Its Repo.one pins `m.id == ^meeting_id`, and the meeting id is the transcript chunk payload's `meeting_id`, which arrives over PubSub; the guard folds a malformed id into the empty attribute map, so a scoped experiment answers :no_opinion instead of raising into the classifier's read point"},
     # ── Playable review builds (task 01a0db5f stage 2) ─────────────────
     {"platform/game_stream/review_build.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "fetch_task/1's predicate. `task_id` is the play_session_start MCP argument; the guard folds a malformed id into {:error, :task_not_found} before Tasks.get_task_record/1 runs"},
@@ -970,6 +973,10 @@ defmodule Platform.RepoLookupBoundaryTest do
     # pins `t.id == ^task_id` behind a `Platform.UUID.valid?/1` guard
     # (inventory entry above).
     "platform/experiments/surfaces/dispatch_prompt.ex" => 1,
+    # 0 → 1 for task 01a0e8b5 stage 5's `OpenQuestionClassifier.subject_attributes/1`:
+    # pins `m.id == ^meeting_id` behind a `Platform.UUID.valid?/1` guard
+    # (inventory entry above).
+    "platform/experiments/surfaces/open_question_classifier.ex" => 1,
     # 0 → 1 for task 01a0d415 stage 3's `MailSource.on_inbound/1`: pins
     # `m.id == ^inbound_id` behind a `Platform.UUID.valid?/1` guard (inventory
     # entry above).

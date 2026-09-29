@@ -184,7 +184,17 @@ defmodule Platform.MixProject do
       # Platform.Mail.Imap.WireClient over :gen_tcp/:ssl (stage 7 dropped
       # mailroom, which failed against a real server). Pure Elixir: no NIFs,
       # no system libraries.
-      {:mail, "~> 0.5"}
+      {:mail, "~> 0.5"},
+      # imp: Imp (DSPy for Elixir). PILOT dependency for task 01a0e8b5, used
+      # ONLY by the meeting open_question classifier pilot
+      # (lib/platform/meetings/open_question_pilot/**, the
+      # open_question_classifier experiment surface and the
+      # platform.open_question_pilot.* mix tasks). Do not adopt it anywhere
+      # else in core; test/platform/meetings/open_question_pilot/
+      # imp_scope_guard_test.exs enforces that. Pulls erlexec (C++ port) and
+      # jaxon (C NIF), and requires req ~> 0.6 / mint ~> 1.8, which bumped
+      # Req 0.5 -> 0.7 for all of core.
+      {:imp, "~> 0.6"}
     ]
   end
 
