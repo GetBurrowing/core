@@ -1,0 +1,971 @@
+{
+  "task": "01a0cf85-5bee-7001-844f-bcf4761591ae",
+  "measured_on": "2026-09-29",
+  "browser": "Chrome/154.0.8037.58",
+  "viewport": "800x900 @1x",
+  "git": {
+    "sha": "81c5a1e6be6592cab4e059f09cc0e7a15bf2c722",
+    "assets_dirty": false
+  },
+  "live_page": {
+    "path": "/chat/general",
+    "data_theme": "dark"
+  },
+  "mock_file": {
+    "basename": "Meeting_Desktop.html",
+    "bytes": 68807
+  },
+  "convention": "Every hex is a painted byte read from a screenshot. Every `painted` ratio is hex-to-hex (WcagContrast.contrast_painted/2). Token-space ratios live in the ExUnit fixture.",
+  "muted_recipe_counts_in_lib": {
+    "20": 9,
+    "25": 3,
+    "30": 39,
+    "40": 186,
+    "45": 2,
+    "50": 340,
+    "55": 32,
+    "60": 384,
+    "65": 4,
+    "70": 157,
+    "75": 1,
+    "80": 32,
+    "90": 2
+  },
+  "muted_recipe_rule": "muted = the most-used text-base-content/NN in lib/; faint = the most-used at or below 40%",
+  "controls": {
+    "live": {
+      "white": {
+        "status": "painted",
+        "hex": "#FFFFFF"
+      },
+      "black": {
+        "status": "painted",
+        "hex": "#000000"
+      },
+      "planted": {
+        "status": "painted",
+        "hex": "#7B3F1D"
+      },
+      "undefined-var": {
+        "status": "unresolved",
+        "reason": "reads #FF00FF over #FF00FF but #00FF00 over #00FF00: nothing opaque was painted"
+      },
+      "invalid-colour": {
+        "status": "unresolved",
+        "reason": "reads #FF00FF over #FF00FF but #00FF00 over #00FF00: nothing opaque was painted"
+      },
+      "offscreen": {
+        "status": "unresolved",
+        "reason": "swatch box outside the captured viewport (-3992,16)"
+      },
+      "unpainted": {
+        "status": "unresolved",
+        "reason": "reads #FF00FF over #FF00FF but #00FF00 over #00FF00: nothing opaque was painted"
+      },
+      "undefined-var-over-ground": {
+        "status": "unresolved",
+        "reason": "reads identical to its ground: nothing painted over it"
+      },
+      "canvas": {
+        "#FFFFFF": {
+          "status": "painted",
+          "hex": "#FFFFFF"
+        },
+        "#000000": {
+          "status": "painted",
+          "hex": "#000000"
+        },
+        "#7B3F1D": {
+          "status": "painted",
+          "hex": "#7B3F1D"
+        },
+        "not-a-colour": {
+          "status": "unresolved",
+          "reason": "readbacks #010203 / #FDFCFB follow the sentinel: assignment ignored"
+        },
+        "naive_trap": {
+          "reads": "#7B3F1D",
+          "note": "planted then 'not-a-colour' with no guard"
+        }
+      }
+    },
+    "mock": {
+      "white": {
+        "status": "painted",
+        "hex": "#FFFFFF"
+      },
+      "black": {
+        "status": "painted",
+        "hex": "#000000"
+      },
+      "planted": {
+        "status": "painted",
+        "hex": "#7B3F1D"
+      },
+      "undefined-var": {
+        "status": "unresolved",
+        "reason": "reads #FF00FF over #FF00FF but #00FF00 over #00FF00: nothing opaque was painted"
+      },
+      "invalid-colour": {
+        "status": "unresolved",
+        "reason": "reads #FF00FF over #FF00FF but #00FF00 over #00FF00: nothing opaque was painted"
+      },
+      "offscreen": {
+        "status": "unresolved",
+        "reason": "swatch box outside the captured viewport (-3992,16)"
+      },
+      "unpainted": {
+        "status": "unresolved",
+        "reason": "reads #FF00FF over #FF00FF but #00FF00 over #00FF00: nothing opaque was painted"
+      },
+      "undefined-var-over-ground": {
+        "status": "unresolved",
+        "reason": "reads identical to its ground: nothing painted over it"
+      },
+      "canvas": {
+        "#FFFFFF": {
+          "status": "painted",
+          "hex": "#FFFFFF"
+        },
+        "#000000": {
+          "status": "painted",
+          "hex": "#000000"
+        },
+        "#7B3F1D": {
+          "status": "painted",
+          "hex": "#7B3F1D"
+        },
+        "not-a-colour": {
+          "status": "unresolved",
+          "reason": "readbacks #010203 / #FDFCFB follow the sentinel: assignment ignored"
+        },
+        "naive_trap": {
+          "reads": "#7B3F1D",
+          "note": "planted then 'not-a-colour' with no guard"
+        }
+      }
+    }
+  },
+  "live": {
+    "rows": {
+      "base-100": {
+        "recipe": "background-color:var(--color-base-100)",
+        "status": "painted",
+        "hex": "#171B25",
+        "declaration": "--color-base-100: #171b25;"
+      },
+      "base-200": {
+        "recipe": "background-color:var(--color-base-200)",
+        "status": "painted",
+        "hex": "#000306",
+        "declaration": "--color-base-200: oklch(9% 0.018 240);"
+      },
+      "base-300": {
+        "recipe": "background-color:var(--color-base-300)",
+        "status": "painted",
+        "hex": "#091821",
+        "declaration": "--color-base-300: oklch(20% 0.028 240);"
+      },
+      "edge": {
+        "recipe": "background-color:var(--edge)",
+        "status": "painted",
+        "hex": "#232A38",
+        "declaration": "--edge: #232A38;"
+      },
+      "base-content": {
+        "recipe": "background-color:var(--color-base-content)",
+        "status": "painted",
+        "hex": "#EEEEEE",
+        "declaration": "--color-base-content: oklch(95% 0 0);"
+      },
+      "primary": {
+        "recipe": "background-color:var(--color-primary)",
+        "status": "painted",
+        "hex": "#06D5ED",
+        "declaration": "--color-primary: #06D5ED;"
+      },
+      "info": {
+        "recipe": "background-color:var(--color-info)",
+        "status": "painted",
+        "hex": "#6FA7EE",
+        "declaration": "--color-info: oklch(72% 0.12 255);"
+      },
+      "success": {
+        "recipe": "background-color:var(--color-success)",
+        "status": "painted",
+        "hex": "#15BA81",
+        "declaration": "--color-success: oklch(70% 0.15 162);"
+      },
+      "warning": {
+        "recipe": "background-color:var(--color-warning)",
+        "status": "painted",
+        "hex": "#F49A00",
+        "declaration": "--color-warning: oklch(76% 0.17 70);"
+      },
+      "error": {
+        "recipe": "background-color:var(--color-error)",
+        "status": "painted",
+        "hex": "#F1383E",
+        "declaration": "--color-error: oklch(63% 0.22 25);"
+      },
+      "muted": {
+        "recipe": "class=\"text-base-content/60\" + background-color:currentColor",
+        "status": "painted",
+        "over": {
+          "base-100": {
+            "status": "painted",
+            "hex": "#989A9E"
+          },
+          "base-200": {
+            "status": "painted",
+            "hex": "#8F9091"
+          }
+        },
+        "alpha_diagnostic": {
+          "over_black": "#8F8F8F",
+          "over_white": "#F5F5F5",
+          "alpha_per_channel": [
+            0.6,
+            0.6,
+            0.6
+          ]
+        },
+        "declaration": "--color-base-content: oklch(95% 0 0);"
+      },
+      "faint": {
+        "recipe": "class=\"text-base-content/40\" + background-color:currentColor",
+        "status": "painted",
+        "over": {
+          "base-100": {
+            "status": "painted",
+            "hex": "#6D7076"
+          },
+          "base-200": {
+            "status": "painted",
+            "hex": "#5F6163"
+          }
+        },
+        "alpha_diagnostic": {
+          "over_black": "#5F5F5F",
+          "over_white": "#F8F8F8",
+          "alpha_per_channel": [
+            0.4,
+            0.4,
+            0.4
+          ]
+        },
+        "declaration": "--color-base-content: oklch(95% 0 0);"
+      }
+    },
+    "grounds": {
+      "base-100": {
+        "status": "painted",
+        "hex": "#171B25"
+      },
+      "base-200": {
+        "status": "painted",
+        "hex": "#000306"
+      }
+    },
+    "extras": {
+      "primary-content": {
+        "recipe": "background-color:var(--color-primary-content)",
+        "status": "painted",
+        "hex": "#000000",
+        "declaration": "--color-primary-content: oklch(0% 0 0);"
+      },
+      "info-content": {
+        "recipe": "background-color:var(--color-info-content)",
+        "status": "painted",
+        "hex": "#000000",
+        "declaration": "--color-info-content: oklch(0% 0 0);"
+      },
+      "success-content": {
+        "recipe": "background-color:var(--color-success-content)",
+        "status": "painted",
+        "hex": "#FFFFFF",
+        "declaration": "--color-success-content: oklch(100% 0 0);"
+      },
+      "warning-content": {
+        "recipe": "background-color:var(--color-warning-content)",
+        "status": "painted",
+        "hex": "#000000",
+        "declaration": "--color-warning-content: oklch(0% 0 0);"
+      },
+      "error-content": {
+        "recipe": "background-color:var(--color-error-content)",
+        "status": "painted",
+        "hex": "#FFFFFF",
+        "declaration": "--color-error-content: oklch(100% 0 0);"
+      }
+    }
+  },
+  "mock": {
+    "rows": {
+      "base-100": {
+        "recipe": "background-color:var(--base-100)",
+        "status": "painted",
+        "hex": "#171B25",
+        "declaration": "--base-100: #171b25;"
+      },
+      "base-200": {
+        "recipe": "background-color:var(--base-200)",
+        "status": "painted",
+        "hex": "#0C1016",
+        "declaration": "--base-200: #0c1016;"
+      },
+      "base-300": {
+        "recipe": "background-color:var(--base-300)",
+        "status": "painted",
+        "hex": "#232A38",
+        "declaration": "--base-300: #232a38;"
+      },
+      "edge": {
+        "recipe": "background-color:var(--base-300)",
+        "status": "painted",
+        "hex": "#232A38",
+        "declaration": "--base-300: #232a38;"
+      },
+      "base-content": {
+        "recipe": "background-color:var(--content)",
+        "status": "painted",
+        "hex": "#F2F3F5",
+        "declaration": "--content: #f2f3f5;"
+      },
+      "primary": {
+        "recipe": "background-color:var(--primary)",
+        "status": "painted",
+        "hex": "#22C9E0",
+        "declaration": "--primary: #22c9e0;"
+      },
+      "info": {
+        "recipe": "background-color:var(--info)",
+        "status": "painted",
+        "hex": "#7AA2F7",
+        "declaration": "--info: #7aa2f7;"
+      },
+      "success": {
+        "recipe": "background-color:var(--success)",
+        "status": "painted",
+        "hex": "#10B981",
+        "declaration": "--success: #10b981;"
+      },
+      "warning": {
+        "recipe": "background-color:var(--warning)",
+        "status": "unresolved",
+        "reason": "reads #FF00FF over #FF00FF but #00FF00 over #00FF00: nothing opaque was painted",
+        "declaration": null
+      },
+      "error": {
+        "recipe": "background-color:var(--error)",
+        "status": "painted",
+        "hex": "#EF4444",
+        "declaration": "--error: #ef4444;"
+      },
+      "muted": {
+        "recipe": "background-color:var(--muted)",
+        "status": "painted",
+        "over": {
+          "base-100": {
+            "status": "painted",
+            "hex": "#8F9297"
+          },
+          "card": {
+            "status": "painted",
+            "hex": "#8D8F94"
+          }
+        },
+        "alpha_diagnostic": {
+          "over_black": "#858587",
+          "over_white": "#F8F8FA",
+          "alpha_per_channel": [
+            0.549,
+            0.549,
+            0.549
+          ]
+        },
+        "declaration": "--muted: rgba(242,243,245,.55);"
+      },
+      "faint": {
+        "recipe": "background-color:var(--faint)",
+        "status": "painted",
+        "over": {
+          "base-100": {
+            "status": "painted",
+            "hex": "#5D6068"
+          },
+          "card": {
+            "status": "painted",
+            "hex": "#5A5D64"
+          }
+        },
+        "alpha_diagnostic": {
+          "over_black": "#4E4E4F",
+          "over_white": "#FBFBFC",
+          "alpha_per_channel": [
+            0.322,
+            0.322,
+            0.322
+          ]
+        },
+        "declaration": "--faint: rgba(242,243,245,.32);"
+      }
+    },
+    "grounds": {
+      "base-100": {
+        "status": "painted",
+        "hex": "#171B25"
+      },
+      "base-200": {
+        "status": "painted",
+        "hex": "#0C1016"
+      },
+      "card": {
+        "status": "painted",
+        "hex": "#12161F"
+      }
+    },
+    "extras": {
+      "warning-fallback": {
+        "recipe": "background-color:var(--warning,#f59e0b)",
+        "status": "painted",
+        "hex": "#F59E0B"
+      },
+      "info-content": {
+        "recipe": "background-color:#0b1220",
+        "status": "painted",
+        "hex": "#0B1220"
+      }
+    }
+  },
+  "ratios": [
+    {
+      "side": "live",
+      "fg": "base-content",
+      "bg": "base-100",
+      "kind": "text",
+      "fg_hex": "#EEEEEE",
+      "bg_hex": "#171B25",
+      "painted": 14.8369
+    },
+    {
+      "side": "live",
+      "fg": "base-content",
+      "bg": "base-200",
+      "kind": "text",
+      "fg_hex": "#EEEEEE",
+      "bg_hex": "#000306",
+      "painted": 17.8209
+    },
+    {
+      "side": "live",
+      "fg": "primary",
+      "bg": "base-100",
+      "kind": "text",
+      "fg_hex": "#06D5ED",
+      "bg_hex": "#171B25",
+      "painted": 9.6304
+    },
+    {
+      "side": "live",
+      "fg": "primary",
+      "bg": "base-200",
+      "kind": "text",
+      "fg_hex": "#06D5ED",
+      "bg_hex": "#000306",
+      "painted": 11.5672
+    },
+    {
+      "side": "live",
+      "fg": "info",
+      "bg": "base-100",
+      "kind": "text",
+      "fg_hex": "#6FA7EE",
+      "bg_hex": "#171B25",
+      "painted": 6.9168
+    },
+    {
+      "side": "live",
+      "fg": "info",
+      "bg": "base-200",
+      "kind": "text",
+      "fg_hex": "#6FA7EE",
+      "bg_hex": "#000306",
+      "painted": 8.3079
+    },
+    {
+      "side": "live",
+      "fg": "success",
+      "bg": "base-100",
+      "kind": "text",
+      "fg_hex": "#15BA81",
+      "bg_hex": "#171B25",
+      "painted": 6.8631
+    },
+    {
+      "side": "live",
+      "fg": "success",
+      "bg": "base-200",
+      "kind": "text",
+      "fg_hex": "#15BA81",
+      "bg_hex": "#000306",
+      "painted": 8.2434
+    },
+    {
+      "side": "live",
+      "fg": "warning",
+      "bg": "base-100",
+      "kind": "text",
+      "fg_hex": "#F49A00",
+      "bg_hex": "#171B25",
+      "painted": 7.7619
+    },
+    {
+      "side": "live",
+      "fg": "warning",
+      "bg": "base-200",
+      "kind": "text",
+      "fg_hex": "#F49A00",
+      "bg_hex": "#000306",
+      "painted": 9.3229
+    },
+    {
+      "side": "live",
+      "fg": "error",
+      "bg": "base-100",
+      "kind": "text",
+      "fg_hex": "#F1383E",
+      "bg_hex": "#171B25",
+      "painted": 4.4063
+    },
+    {
+      "side": "live",
+      "fg": "error",
+      "bg": "base-200",
+      "kind": "text",
+      "fg_hex": "#F1383E",
+      "bg_hex": "#000306",
+      "painted": 5.2925
+    },
+    {
+      "side": "live",
+      "fg": "base-content",
+      "bg": "base-300",
+      "kind": "pair",
+      "fg_hex": "#EEEEEE",
+      "bg_hex": "#091821",
+      "painted": 15.5466
+    },
+    {
+      "side": "live",
+      "fg": "primary",
+      "bg": "base-300",
+      "kind": "pair",
+      "fg_hex": "#06D5ED",
+      "bg_hex": "#091821",
+      "painted": 10.0911
+    },
+    {
+      "side": "live",
+      "fg": "primary-content",
+      "bg": "primary",
+      "kind": "pair",
+      "fg_hex": "#000000",
+      "bg_hex": "#06D5ED",
+      "painted": 11.7483
+    },
+    {
+      "side": "live",
+      "fg": "info-content",
+      "bg": "info",
+      "kind": "pair",
+      "fg_hex": "#000000",
+      "bg_hex": "#6FA7EE",
+      "painted": 8.438
+    },
+    {
+      "side": "live",
+      "fg": "success-content",
+      "bg": "success",
+      "kind": "pair",
+      "fg_hex": "#FFFFFF",
+      "bg_hex": "#15BA81",
+      "painted": 2.5082
+    },
+    {
+      "side": "live",
+      "fg": "warning-content",
+      "bg": "warning",
+      "kind": "pair",
+      "fg_hex": "#000000",
+      "bg_hex": "#F49A00",
+      "painted": 9.4689
+    },
+    {
+      "side": "live",
+      "fg": "error-content",
+      "bg": "error",
+      "kind": "pair",
+      "fg_hex": "#FFFFFF",
+      "bg_hex": "#F1383E",
+      "painted": 3.9067
+    },
+    {
+      "side": "live",
+      "fg": "muted@base-100",
+      "bg": "base-100",
+      "kind": "text",
+      "fg_hex": "#989A9E",
+      "bg_hex": "#171B25",
+      "painted": 6.1078
+    },
+    {
+      "side": "live",
+      "fg": "muted@base-200",
+      "bg": "base-200",
+      "kind": "text",
+      "fg_hex": "#8F9091",
+      "bg_hex": "#000306",
+      "painted": 6.4649
+    },
+    {
+      "side": "live",
+      "fg": "faint@base-100",
+      "bg": "base-100",
+      "kind": "text",
+      "fg_hex": "#6D7076",
+      "bg_hex": "#171B25",
+      "painted": 3.467
+    },
+    {
+      "side": "live",
+      "fg": "faint@base-200",
+      "bg": "base-200",
+      "kind": "text",
+      "fg_hex": "#5F6163",
+      "bg_hex": "#000306",
+      "painted": 3.3246
+    },
+    {
+      "side": "live",
+      "fg": "base-100",
+      "bg": "base-200",
+      "kind": "separation",
+      "fg_hex": "#171B25",
+      "bg_hex": "#000306",
+      "painted": 1.2011
+    },
+    {
+      "side": "live",
+      "fg": "edge",
+      "bg": "base-100",
+      "kind": "separation",
+      "fg_hex": "#232A38",
+      "bg_hex": "#171B25",
+      "painted": 1.1966
+    },
+    {
+      "side": "live",
+      "fg": "base-300",
+      "bg": "base-100",
+      "kind": "separation",
+      "fg_hex": "#091821",
+      "bg_hex": "#171B25",
+      "painted": 1.0478
+    },
+    {
+      "side": "live",
+      "fg": "base-300",
+      "bg": "base-200",
+      "kind": "separation",
+      "fg_hex": "#091821",
+      "bg_hex": "#000306",
+      "painted": 1.1463
+    },
+    {
+      "side": "mock",
+      "fg": "base-content",
+      "bg": "base-100",
+      "kind": "text",
+      "fg_hex": "#F2F3F5",
+      "bg_hex": "#171B25",
+      "painted": 15.5045
+    },
+    {
+      "side": "mock",
+      "fg": "base-content",
+      "bg": "base-200",
+      "kind": "text",
+      "fg_hex": "#F2F3F5",
+      "bg_hex": "#0C1016",
+      "painted": 17.1739
+    },
+    {
+      "side": "mock",
+      "fg": "base-content",
+      "bg": "card",
+      "kind": "text",
+      "fg_hex": "#F2F3F5",
+      "bg_hex": "#12161F",
+      "painted": 16.3016
+    },
+    {
+      "side": "mock",
+      "fg": "primary",
+      "bg": "base-100",
+      "kind": "text",
+      "fg_hex": "#22C9E0",
+      "bg_hex": "#171B25",
+      "painted": 8.6063
+    },
+    {
+      "side": "mock",
+      "fg": "primary",
+      "bg": "base-200",
+      "kind": "text",
+      "fg_hex": "#22C9E0",
+      "bg_hex": "#0C1016",
+      "painted": 9.533
+    },
+    {
+      "side": "mock",
+      "fg": "primary",
+      "bg": "card",
+      "kind": "text",
+      "fg_hex": "#22C9E0",
+      "bg_hex": "#12161F",
+      "painted": 9.0488
+    },
+    {
+      "side": "mock",
+      "fg": "info",
+      "bg": "base-100",
+      "kind": "text",
+      "fg_hex": "#7AA2F7",
+      "bg_hex": "#171B25",
+      "painted": 6.8355
+    },
+    {
+      "side": "mock",
+      "fg": "info",
+      "bg": "base-200",
+      "kind": "text",
+      "fg_hex": "#7AA2F7",
+      "bg_hex": "#0C1016",
+      "painted": 7.5715
+    },
+    {
+      "side": "mock",
+      "fg": "info",
+      "bg": "card",
+      "kind": "text",
+      "fg_hex": "#7AA2F7",
+      "bg_hex": "#12161F",
+      "painted": 7.1869
+    },
+    {
+      "side": "mock",
+      "fg": "success",
+      "bg": "base-100",
+      "kind": "text",
+      "fg_hex": "#10B981",
+      "bg_hex": "#171B25",
+      "painted": 6.7862
+    },
+    {
+      "side": "mock",
+      "fg": "success",
+      "bg": "base-200",
+      "kind": "text",
+      "fg_hex": "#10B981",
+      "bg_hex": "#0C1016",
+      "painted": 7.5169
+    },
+    {
+      "side": "mock",
+      "fg": "success",
+      "bg": "card",
+      "kind": "text",
+      "fg_hex": "#10B981",
+      "bg_hex": "#12161F",
+      "painted": 7.1351
+    },
+    {
+      "side": "mock",
+      "fg": "warning",
+      "bg": "base-100",
+      "kind": "text",
+      "painted": null,
+      "reason": "an operand is unresolved"
+    },
+    {
+      "side": "mock",
+      "fg": "warning",
+      "bg": "base-200",
+      "kind": "text",
+      "painted": null,
+      "reason": "an operand is unresolved"
+    },
+    {
+      "side": "mock",
+      "fg": "warning",
+      "bg": "card",
+      "kind": "text",
+      "painted": null,
+      "reason": "an operand is unresolved"
+    },
+    {
+      "side": "mock",
+      "fg": "error",
+      "bg": "base-100",
+      "kind": "text",
+      "fg_hex": "#EF4444",
+      "bg_hex": "#171B25",
+      "painted": 4.5745
+    },
+    {
+      "side": "mock",
+      "fg": "error",
+      "bg": "base-200",
+      "kind": "text",
+      "fg_hex": "#EF4444",
+      "bg_hex": "#0C1016",
+      "painted": 5.067
+    },
+    {
+      "side": "mock",
+      "fg": "error",
+      "bg": "card",
+      "kind": "text",
+      "fg_hex": "#EF4444",
+      "bg_hex": "#12161F",
+      "painted": 4.8096
+    },
+    {
+      "side": "mock",
+      "fg": "warning-fallback",
+      "bg": "base-100",
+      "kind": "text",
+      "fg_hex": "#F59E0B",
+      "bg_hex": "#171B25",
+      "painted": 8.0153
+    },
+    {
+      "side": "mock",
+      "fg": "warning-fallback",
+      "bg": "base-200",
+      "kind": "text",
+      "fg_hex": "#F59E0B",
+      "bg_hex": "#0C1016",
+      "painted": 8.8784
+    },
+    {
+      "side": "mock",
+      "fg": "warning-fallback",
+      "bg": "card",
+      "kind": "text",
+      "fg_hex": "#F59E0B",
+      "bg_hex": "#12161F",
+      "painted": 8.4274
+    },
+    {
+      "side": "mock",
+      "fg": "base-content",
+      "bg": "base-300",
+      "kind": "pair",
+      "fg_hex": "#F2F3F5",
+      "bg_hex": "#232A38",
+      "painted": 12.9571
+    },
+    {
+      "side": "mock",
+      "fg": "primary",
+      "bg": "base-300",
+      "kind": "pair",
+      "fg_hex": "#22C9E0",
+      "bg_hex": "#232A38",
+      "painted": 7.1923
+    },
+    {
+      "side": "mock",
+      "fg": "info-content",
+      "bg": "info",
+      "kind": "pair",
+      "fg_hex": "#0B1220",
+      "bg_hex": "#7AA2F7",
+      "painted": 7.4346
+    },
+    {
+      "side": "mock",
+      "fg": "muted@base-100",
+      "bg": "base-100",
+      "kind": "text",
+      "fg_hex": "#8F9297",
+      "bg_hex": "#171B25",
+      "painted": 5.5138
+    },
+    {
+      "side": "mock",
+      "fg": "muted@card",
+      "bg": "card",
+      "kind": "text",
+      "fg_hex": "#8D8F94",
+      "bg_hex": "#12161F",
+      "painted": 5.5928
+    },
+    {
+      "side": "mock",
+      "fg": "faint@base-100",
+      "bg": "base-100",
+      "kind": "text",
+      "fg_hex": "#5D6068",
+      "bg_hex": "#171B25",
+      "painted": 2.7366
+    },
+    {
+      "side": "mock",
+      "fg": "faint@card",
+      "bg": "card",
+      "kind": "text",
+      "fg_hex": "#5A5D64",
+      "bg_hex": "#12161F",
+      "painted": 2.7446
+    },
+    {
+      "side": "mock",
+      "fg": "base-100",
+      "bg": "base-200",
+      "kind": "separation",
+      "fg_hex": "#171B25",
+      "bg_hex": "#0C1016",
+      "painted": 1.1077
+    },
+    {
+      "side": "mock",
+      "fg": "edge",
+      "bg": "base-100",
+      "kind": "separation",
+      "fg_hex": "#232A38",
+      "bg_hex": "#171B25",
+      "painted": 1.1966
+    },
+    {
+      "side": "mock",
+      "fg": "base-300",
+      "bg": "base-100",
+      "kind": "separation",
+      "fg_hex": "#232A38",
+      "bg_hex": "#171B25",
+      "painted": 1.1966
+    },
+    {
+      "side": "mock",
+      "fg": "base-300",
+      "bg": "base-200",
+      "kind": "separation",
+      "fg_hex": "#232A38",
+      "bg_hex": "#0C1016",
+      "painted": 1.3254
+    }
+  ]
+}
