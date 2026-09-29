@@ -497,6 +497,7 @@ defmodule PlatformWeb.Tasks.SteeringComponent do
                 inline={true}
                 show_header={false}
                 dom_id_base="tasks-output-inline"
+                open_target={@myself}
               />
             </div>
           </div>
@@ -566,9 +567,13 @@ defmodule PlatformWeb.Tasks.SteeringComponent do
   end
 
   def handle_event("gate_canvas_open", %{"canvas-id" => canvas_id}, socket) do
-    canvas = Enum.find(socket.assigns.output_canvases, &(&1.id == canvas_id))
-    if canvas, do: send(self(), {:steering_open_canvas, canvas})
-    {:noreply, socket}
+    open_output_canvas(socket, canvas_id)
+  end
+
+  # The inline canvas wrapper's own click (CanvasRenderer), targeted here via
+  # `open_target={@myself}`. Opens the same modal as the Open button.
+  def handle_event("canvas_open", %{"canvas-id" => canvas_id}, socket) do
+    open_output_canvas(socket, canvas_id)
   end
 
   def handle_event("send_steering_message", %{"steering" => %{"text" => content}}, socket) do
@@ -591,6 +596,12 @@ defmodule PlatformWeb.Tasks.SteeringComponent do
       true ->
         post_steering(socket, content, attachment_intended?)
     end
+  end
+
+  defp open_output_canvas(socket, canvas_id) do
+    canvas = Enum.find(socket.assigns.output_canvases, &(&1.id == canvas_id))
+    if canvas, do: send(self(), {:steering_open_canvas, canvas})
+    {:noreply, socket}
   end
 
   defp post_steering(socket, content, attachment_intended?) do

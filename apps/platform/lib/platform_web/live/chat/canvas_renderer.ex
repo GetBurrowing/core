@@ -21,6 +21,14 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
   attr(:show_header, :boolean, default: true)
   attr(:dom_id_base, :string, default: nil)
 
+  # Where the inline wrapper's `canvas_open` click is delivered. nil (the
+  # default) leaves it untargeted, so it goes to the parent LiveView —
+  # ChatLive and MeetingLive handle it there. A LiveComponent that renders an
+  # inline canvas under a LiveView WITHOUT a `canvas_open` clause (the Tasks
+  # page's SteeringComponent) passes `open_target={@myself}` and handles the
+  # event itself; untargeted, it crashed TasksLive with a FunctionClauseError.
+  attr(:open_target, :any, default: nil)
+
   def canvas_document(assigns) do
     canvas = assigns.canvas
     # Mode suffix distinguishes inline (in-chat) vs. expanded (panel/overlay)
@@ -73,6 +81,7 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
           class={["overflow-x-auto", @inline && "cursor-pointer"]}
           phx-click={if(@inline, do: "canvas_open")}
           phx-value-canvas-id={if(@inline, do: @canvas.id)}
+          phx-target={if(@inline, do: @open_target)}
         >
           <Renderer.render_node
             node={@root_node}

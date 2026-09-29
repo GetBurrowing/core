@@ -4078,6 +4078,73 @@ defmodule PlatformWeb.TasksLiveTest do
              "(pending_idx=#{pending_idx}, outputs_idx=#{outputs_idx})"
   end
 
+  # Hotfix (Fabrikam prod, 2026-09-29 18:52Z): the inline output canvas wrapper
+  # carried an UNTARGETED phx-click="canvas_open" (meant for ChatLive), so a
+  # click on an output canvas in the Tasks page reached TasksLive, which has
+  # no clause for it — FunctionClauseError, LiveView crash. The steering
+  # component now targets the wrapper at itself and opens the output modal.
+  test "clicking an inline output canvas opens it without crashing TasksLive",
+       %{conn: conn} do
+    project = create_project()
+    task = create_task(project, %{title: "Inline Output Task", status: "in_progress"})
+
+    {:ok, space} = ExecutionSpace.find_or_create(task.id)
+
+    {:ok, author} =
+      Chat.add_participant(space.id, %{
+        participant_type: "user",
+        participant_id: Ecto.UUID.generate(),
+        display_name: "Executor",
+        joined_at: DateTime.utc_now()
+      })
+
+    canvas =
+      Repo.insert!(%Canvas{
+        space_id: space.id,
+        created_by: author.id,
+        title: "Inline output canvas",
+        document: %{
+          "version" => 1,
+          "revision" => 1,
+          "root" => %{
+            "id" => "root",
+            "type" => "stack",
+            "props" => %{},
+            "children" => [
+              %{
+                "id" => "code-main",
+                "type" => "code",
+                "props" => %{"language" => "markdown", "source" => "# Output body"},
+                "children" => []
+              }
+            ]
+          },
+          "theme" => %{},
+          "bindings" => %{},
+          "meta" => %{}
+        }
+      })
+
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+    inline_wrapper = "#canvas-doc-#{canvas.id}-tasks-output-inline-inline"
+    modal_body = "#canvas-doc-#{canvas.id}-tasks-review-modal-expanded"
+
+    assert has_element?(view, inline_wrapper)
+    refute has_element?(view, modal_body)
+
+    view |> element(inline_wrapper) |> render_click()
+
+    # The click reaches the component, which sends {:steering_open_canvas, _}
+    # to the shell, which send_updates the gate panel. Drain both hops.
+    _ = :sys.get_state(view.pid)
+    _ = :sys.get_state(view.pid)
+
+    assert Process.alive?(view.pid)
+    assert has_element?(view, modal_body)
+  end
+
   test "task detail hides Pending Review pane when there are no review_requests",
        %{conn: conn} do
     # Companion to `task detail renders review canvas evidence`: the

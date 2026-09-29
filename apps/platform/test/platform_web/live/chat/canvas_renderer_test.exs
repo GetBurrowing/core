@@ -608,4 +608,64 @@ defmodule PlatformWeb.Chat.CanvasRendererTest do
       assert html =~ "Todo"
     end
   end
+
+  describe "canvas_document/1 open_target (Tasks canvas_open crash hotfix)" do
+    # The inline wrapper's click is untargeted by default, so it reaches the
+    # parent LiveView. ChatLive handles it; TasksLive does not, so the Tasks
+    # page's SteeringComponent passes `open_target={@myself}`.
+
+    defp inline_wrapper_tag(html) do
+      [tag] = Regex.run(~r/<div id="canvas-doc-[^"]*"[^>]*>/, html)
+      tag
+    end
+
+    defp render_with_target(canvas, target) do
+      assigns = %{canvas: canvas, target: target}
+
+      ~H"""
+      <CanvasRenderer.canvas_document canvas={@canvas} inline={true} open_target={@target} />
+      """
+      |> rendered_to_string()
+    end
+
+    test "without open_target the inline wrapper bytes are the pre-hotfix bytes" do
+      # Pinned literal: this is the wrapper exactly as main (ee4d1ee8e)
+      # renders it. Every caller that does not pass open_target — ChatLive's
+      # chat_message.ex among them — must keep emitting this.
+      html = render_canvas(build_canvas(CanvasDocument.new()), %{inline: true})
+
+      assert inline_wrapper_tag(html) ==
+               ~s|<div id="canvas-doc-test-canvas-inline" class="overflow-x-auto cursor-pointer" | <>
+                 ~s|phx-click="canvas_open" phx-value-canvas-id="test-canvas">|
+
+      refute html =~ "phx-target"
+    end
+
+    test "an explicit nil open_target renders the same bytes as omitting it" do
+      canvas = build_canvas(CanvasDocument.new())
+
+      assert render_with_target(canvas, nil) == render_canvas(canvas, %{inline: true})
+    end
+
+    test "open_target is emitted as phx-target on the inline wrapper" do
+      html = render_with_target(build_canvas(CanvasDocument.new()), "#some-component")
+
+      assert inline_wrapper_tag(html) =~ ~s|phx-click="canvas_open"|
+      assert inline_wrapper_tag(html) =~ ~s|phx-target="#some-component"|
+    end
+
+    test "open_target is ignored when the canvas is not inline" do
+      canvas = build_canvas(CanvasDocument.new())
+      assigns = %{canvas: canvas}
+
+      html =
+        ~H"""
+        <CanvasRenderer.canvas_document canvas={@canvas} open_target="#some-component" />
+        """
+        |> rendered_to_string()
+
+      refute html =~ "phx-target"
+      refute html =~ "canvas_open"
+    end
+  end
 end
