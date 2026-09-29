@@ -39,7 +39,8 @@ jobs:
     #
     # Pinning the container to `--user 1000:1000` fixes the ownership and
     # breaks apt. `Hand the workspace back` at the end of this job does
-    # neither: stay root, and chown on the way out.
+    # neither: stay root, and chown on the way out (and delete dependency
+    # `_build` dirs, whose SELinux labels chown cannot fix; see that step).
     #
     # None of this is visible on GitHub-hosted runners, where every job gets a
     # fresh machine and nothing is shared.
@@ -426,9 +427,24 @@ jobs:
       # to remove them. Guarding on success would mean a single red run
       # poisons the workspace until someone clears it by hand from a root
       # container — which is the state this repo was actually in.
+      #
+      # Ownership is not the only thing a root container leaves behind. moon
+      # runs SELinux enforcing, and rebar3 builds its plugins for erlexec
+      # (pulled in by `imp`, #1151) under `deps/erlexec/_build/`. Those files
+      # carry this container's private MCS categories
+      # (`container_file_t:s0:c260,c533`, measured on moon-runner-2), while
+      # the rest of the workspace is plain `s0`. `installer` runs
+      # actions/checkout inside ITS OWN container, whose categories differ,
+      # so the scandir fails with `EACCES` even though the files are owned by
+      # 1000 and mode 755. chown does not change a label. Deleting the
+      # directories from here, while still in the container that labelled
+      # them, is what works. checkout would wipe them on the next job anyway,
+      # so no cache is lost.
       - name: Hand the workspace back to the runner
         if: always()
-        run: chown -R 1000:1000 "$GITHUB_WORKSPACE" || true
+        run: |
+          rm -rf "$GITHUB_WORKSPACE"/apps/platform/deps/*/_build || true
+          chown -R 1000:1000 "$GITHUB_WORKSPACE" || true
 
   # Task 01a08d81. Branch protection can only require a NAMED check, and it is
   # satisfied by that job's conclusion. `Test` concludes `success` for both a
