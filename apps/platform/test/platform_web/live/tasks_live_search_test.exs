@@ -277,6 +277,97 @@ defmodule PlatformWeb.TasksLiveSearchTest do
       refute html =~ ~s(data-role="search-empty-state")
     end
 
+    # Task 01a08df0 stage 2: a "Clear search" control on the board's
+    # EXISTING zero-match empty states (design canvas 01a0ea77-4bef — no new
+    # empty-state design, no copy-link/share button anywhere in this UI).
+    test "the desktop empty state offers Clear search, wired through the same path as Escape",
+         %{conn: conn} do
+      project = create_project()
+      create_task(project, %{title: "Only Task"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      _ =
+        view
+        |> element("#task-search-form")
+        |> render_change(%{"q" => "zzz-no-such-task"})
+
+      html = after_filter(view)
+      refute html =~ "Only Task"
+      assert html =~ ~s(data-role="search-empty-state")
+
+      desktop_clear = ~s([data-role="search-empty-state"] [data-role="clear-search"])
+      assert has_element?(view, desktop_clear, "Clear search")
+
+      # The button's own attributes prove it is wired through
+      # FiltersComponent's `filter_search` handler — the SAME clause the
+      # search input's Escape keydown fires — and not a second, parallel
+      # clearing mechanism.
+      [button_attrs] = attrs(html, desktop_clear)
+      assert button_attrs["phx-click"] == "filter_search"
+      assert button_attrs["phx-value-key"] == "Escape"
+      assert button_attrs["phx-target"] == "#tasks-filters"
+
+      # No share/copy-link control anywhere near the empty state — the
+      # canvas explicitly cut one; the address bar is the whole mechanism.
+      refute html =~ "Copy link"
+      refute html =~ "copy_link"
+
+      # Firing the real DOM button reaches the exact same code path Escape
+      # does: the query clears and the board (and its ?q= URL param, proven
+      # separately by stage 1's own tests) resets.
+      _ = view |> element(desktop_clear) |> render_click()
+      html = after_filter(view)
+      assert html =~ "Only Task"
+      refute html =~ ~s(data-role="search-empty-state")
+    end
+
+    test "the mobile empty state offers Clear search, wired through the same path as Escape",
+         %{conn: conn} do
+      project = create_project()
+      create_task(project, %{title: "Only Task"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      _ =
+        view
+        |> element("#task-search-form")
+        |> render_change(%{"q" => "zzz-no-such-task"})
+
+      html = after_filter(view)
+      assert html =~ ~s(data-role="search-empty-state-mobile")
+
+      mobile_clear = ~s([data-role="search-empty-state-mobile"] [data-role="clear-search"])
+      assert has_element?(view, mobile_clear, "Clear search")
+
+      [button_attrs] = attrs(html, mobile_clear)
+      assert button_attrs["phx-click"] == "filter_search"
+      assert button_attrs["phx-value-key"] == "Escape"
+      assert button_attrs["phx-target"] == "#tasks-filters"
+
+      _ = view |> element(mobile_clear) |> render_click()
+      html = after_filter(view)
+      assert html =~ "Only Task"
+      refute html =~ ~s(data-role="search-empty-state-mobile")
+    end
+
+    # Task 01a08df0 stage 2 (confirm, don't re-derive): a fresh mount at a
+    # shared `/tasks?q=...` link must arrive with the search box already
+    # prefilled, via the existing `value={@task_search_query}` binding —
+    # this depends on stage 1's `handle_params/3` decode, not on anything
+    # this stage adds, so it is asserted directly rather than assumed.
+    test "mounting a shared search URL prefills the search input", %{conn: conn} do
+      project = create_project()
+      create_task(project, %{title: "Alpha Rocket"})
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks?q=alpha")
+
+      assert [%{"value" => "alpha"}] = attrs(html, "#task-search")
+    end
+
     test "an active search survives a board refresh (PubSub)", %{conn: conn} do
       project = create_project()
       create_task(project, %{title: "Kept Match"})
@@ -326,6 +417,170 @@ defmodule PlatformWeb.TasksLiveSearchTest do
     refute view |> element("#tasks-page-header") |> render() =~ ">1<"
   end
 
+  # Task 01a08df0 stage 3: anti-vacuity, blank-case and history coverage for
+  # the URL-backed search/scope stage 1 shipped. Every presence assertion
+  # below is paired with a no-param positive control, and every absence
+  # assertion is paired with a title that WOULD appear if the filter were a
+  # no-op — per the stage's own binding instruction.
+  describe "URL-backed search is linkable and shareable (stage 3)" do
+    test "?q= narrows a fresh mount; a no-op build that ignores it fails the absence half",
+         %{conn: conn} do
+      project = create_project()
+      matching = create_task(project, %{title: "Zephyr onboarding flow polish"})
+      other = create_task(project, %{title: "Unrelated billing export bug"})
+
+      conn = authenticated_conn(conn)
+
+      # POSITIVE CONTROL, no query param at all: both tasks render. Without
+      # this, the absence assertion below would be unattributable — a
+      # build that renders NOTHING regardless of `q` would also pass it.
+      {:ok, _view, html} = live(conn, ~p"/tasks")
+      assert html =~ ~s(data-task-id="#{matching.id}")
+      assert html =~ ~s(data-task-id="#{other.id}")
+
+      # Fresh, independent mount straight at the `?q=` URL — no prior
+      # interaction. A build that decodes `q` but never applies it (or
+      # ignores it outright) passes the line above and fails here.
+      {:ok, _view2, html2} = live(conn, ~p"/tasks?q=Zephyr")
+      assert html2 =~ ~s(data-task-id="#{matching.id}")
+      refute html2 =~ ~s(data-task-id="#{other.id}")
+    end
+
+    test "a blank-query patch does not stamp over manual stack expansion, and leaves no bare ?q=",
+         %{conn: conn} do
+      project = create_project()
+      stack = create_stack(project)
+
+      member =
+        create_task(project, %{
+          title: "Blank case stacked ticket",
+          status: "stack_pending",
+          stack_id: stack.id,
+          stack_position: 1
+        })
+
+      {:ok, _stack} = Stacks.recompute_stack_status(stack)
+      assert Repo.get!(Task, member.id).status == "stack_pending"
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      # A known NON-EMPTY expanded-stack state, set by a real user action
+      # (a manual click, not the filter under test) BEFORE the patch this
+      # test exercises.
+      _ =
+        view
+        |> Phoenix.LiveViewTest.with_target("#tasks-stacks")
+        |> render_click("stack_toggle_expand", %{"id" => stack.id})
+
+      _ = after_filter(view)
+      before_expanded = :sys.get_state(view.pid).socket.assigns.expanded_stacks
+      assert MapSet.member?(before_expanded, stack.id)
+
+      # Re-run `handle_params/3` at a bare `/tasks` — no `q`, no
+      # sponsor/sort change, exactly the "blank case" a naive URL-decode
+      # could stamp over by resetting `:expanded_stacks` unconditionally.
+      # `render_patch/2` drives ONLY `handle_params/3` (not `mount/3`), the
+      # same seam a browser back-navigation or re-visit to `/tasks` hits on
+      # an already-connected view.
+      html = render_patch(view, ~p"/tasks")
+
+      # (a) the rendered search box is empty / :task_search_query is "".
+      assert [%{"value" => ""}] = attrs(html, "#task-search")
+      assert :sys.get_state(view.pid).socket.assigns.task_search_query == ""
+
+      # (b) manual expansion survived the blank-query pass untouched.
+      # `MapSet.new()` here would be the regression.
+      assert :sys.get_state(view.pid).socket.assigns.expanded_stacks == before_expanded
+
+      # (c) no bare `?q=` fragment anywhere in the rendered self-links
+      # (the sort control's two options are built from `BoardData.tasks_path/1`
+      # and would carry a stray `?q=` if a blank query were ever treated as
+      # "active").
+      refute html =~ "?q="
+    end
+
+    test "typing a query then sharing the resulting URL reproduces the same filtered board",
+         %{conn: conn} do
+      project = create_project()
+      matching = create_task(project, %{title: "Lantern rollout notes"})
+      other = create_task(project, %{title: "Unrelated ticket"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      _ = view |> element("#task-search-form") |> render_change(%{"q" => "lantern"})
+      captured_path = assert_patch(view)
+      assert captured_path == "/tasks?q=lantern"
+
+      # SECOND, independent fresh mount at the captured URL — no prior
+      # interaction with this view at all. The URL alone must reproduce the
+      # filtered board the first view arrived at by typing.
+      {:ok, _view2, html2} = live(conn, captured_path)
+      assert html2 =~ ~s(data-task-id="#{matching.id}")
+      refute html2 =~ ~s(data-task-id="#{other.id}")
+    end
+
+    test "the first keystroke (blank -> non-blank) pushes; later keystrokes replace",
+         %{conn: conn} do
+      project = create_project()
+      create_task(project, %{title: "Zephyr onboarding flow"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      # Task 01a08df0 remediation (validation 01a0ea7b-afaa-7002): the query
+      # starts blank, so THIS keystroke must PUSH a new history entry —
+      # replacing here would overwrite the pre-search `/tasks` entry via
+      # `history.replaceState`, and that entry's content cannot be recovered
+      # by a later Back (HTML History API semantics). Without this fix, this
+      # assertion sees :replace instead.
+      _ = view |> element("#task-search-form") |> render_change(%{"q" => "Z"})
+      assert assert_patch_kind(view) == :push
+
+      # Subsequent keystrokes, all non-blank -> non-blank, collapse onto the
+      # entry the first keystroke just pushed — same "one entry, not three"
+      # behavior as before the fix.
+      for q <- ["Ze", "Zep"] do
+        _ = view |> element("#task-search-form") |> render_change(%{"q" => q})
+        assert assert_patch_kind(view) == :replace
+      end
+    end
+
+    test "toggling the scope chip push_patches WITHOUT replace: true (a new history entry)",
+         %{conn: conn} do
+      # `filter_scope` for a real sub-org slug only succeeds when the
+      # viewer belongs to that org (`parse_scope/2` checks `@active_scopes`)
+      # — `member_of_all_orgs!/1` is the same fixture
+      # `tasks_live_test.exs`'s scope-rail tests use for the "fabrikam" chip.
+      user =
+        Repo.insert!(%User{
+          email: "tasks_search_scope_#{System.unique_integer([:positive])}@example.com",
+          name: "Search Scope Test User",
+          oidc_sub: "oidc-tasks-search-scope-#{System.unique_integer([:positive])}"
+        })
+        |> Platform.TenancyFixtures.member_of_all_orgs!()
+
+      conn = init_test_session(conn, current_user_id: user.id)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      _ = render_click(filters(view), "filter_scope", %{"scope" => "fabrikam"})
+      assert assert_patch_kind(view) == :push
+
+      # Negative control: the search box's own patches, on the same view, DO
+      # replace — so this isn't "every patch on this page is :push". The
+      # query is still blank at this point (only the scope chip has been
+      # touched), so the FIRST search keystroke correctly pushes too (task
+      # 01a08df0 remediation) — the meaningful negative control is the
+      # SECOND keystroke, once the query is already non-blank.
+      _ = view |> element("#task-search-form") |> render_change(%{"q" => "a"})
+      assert assert_patch_kind(view) == :push
+
+      _ = view |> element("#task-search-form") |> render_change(%{"q" => "an"})
+      assert assert_patch_kind(view) == :replace
+    end
+  end
+
   # Task 01a008f6 stage 6: board filtering is a LiveComponent.
   defp filters(view), do: Phoenix.LiveViewTest.with_target(view, "#tasks-filters")
 
@@ -336,5 +591,35 @@ defmodule PlatformWeb.TasksLiveSearchTest do
   defp after_filter(view) do
     _ = :sys.get_state(view.pid)
     Phoenix.LiveViewTest.render(view)
+  end
+
+  # Task 01a08df0 stage 3: `assert_patch/1,2` (from `Phoenix.LiveViewTest`)
+  # exposes only the patched PATH, not whether it replaced history or
+  # pushed a new entry. The `kind` (`:push` | `:replace`) rides in the same
+  # `{ref, {:patch, topic, opts}}` message `assert_patch/2`'s own
+  # `assert_navigation/4` receives on (phoenix_live_view's
+  # `lib/phoenix_live_view/test/live_view_test.ex`) — receive it directly
+  # to read `opts.kind` instead of just `opts.to`.
+  defp assert_patch_kind(view, timeout \\ 200) do
+    %{proxy: {ref, topic, _}} = view
+
+    receive do
+      {^ref, {:patch, ^topic, %{kind: kind}}} -> kind
+    after
+      timeout -> flunk("expected a live patch, got none")
+    end
+  end
+
+  defp query(html, selector) do
+    html
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(selector)
+  end
+
+  defp attrs(html, selector) do
+    html
+    |> query(selector)
+    |> LazyHTML.attributes()
+    |> Enum.map(&Map.new/1)
   end
 end

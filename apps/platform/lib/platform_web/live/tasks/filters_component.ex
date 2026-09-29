@@ -16,19 +16,25 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
   for `:epics_collapsed`, and they become plain attrs on the board
   component in stage 7.
 
-  `:sponsor_filter` is the exception and is deliberately NOT owned here.
-  `?sponsor=mine` is the authoritative source (share-a-URL contract), which
-  makes `handle_params/3` the writer — and `handle_params/3` is a LiveView
-  callback that cannot exist in a LiveComponent. Owning the assign here
-  would mean two writers racing over one value. What this component owns is
-  the *control*: `filter_toggle_sponsor` push_patches the URL and the
-  shell's `handle_params/3` decodes it, which is what the shell handler did
-  before the move. The current value arrives as a read-only attr.
+  `:sponsor_filter` was, until task 01a08df0 stage 1, the one exception —
+  deliberately NOT owned here, because `?sponsor=mine` is the authoritative
+  source (share-a-URL contract) and `handle_params/3` — a LiveView callback
+  that cannot exist in a LiveComponent — is its writer. `:task_search_query`
+  and `:scope_filter` now have the SAME dual arrangement, for the SAME
+  reason (a filtered board must be linkable): this component still `assign`s
+  them locally via `announce/2` so the control re-renders immediately
+  without waiting for the patch round trip, but `filter_search`/
+  `filter_scope` now ALSO `push_patch` (`?q=`/`?scope=`), and
+  `handle_params/3` decodes them back on every mount/patch — the same
+  arrangement `filter_toggle_sponsor` already used for `:sponsor_filter`. So
+  all four board filters (`sponsor`, `sort`, `q`, `scope`) are URL-decoded by
+  the shell; this component's `announce/2` writes are now a local-echo
+  optimization on three of them, not the sole source of truth on any.
 
-  `:board_sort` (task 01a0cef1 stage 2) is the same shape, for the same
-  reason: `?sort=updated` is decoded by `handle_params/3`, the value arrives
+  `:board_sort` (task 01a0cef1 stage 2) is the one filter with no local echo
+  at all: `?sort=updated` is decoded by `handle_params/3`, the value arrives
   here read-only, and the control's two options are `patch` links built by
-  `BoardData.tasks_path/2`, so the sort needs no event at all.
+  `BoardData.tasks_path/1`, so the sort needs no event at all.
 
   Five events, and the plan's count of five is right for once:
   `filter_search`, `filter_by_status`, `filter_scope`,
@@ -285,6 +291,8 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
         role="board-sort-control"
         board_sort={@board_sort}
         sponsor_filter={@sponsor_filter}
+        task_search_query={@task_search_query}
+        scope_filter={@scope_filter}
         class="hidden lg:inline-flex shrink-0"
       />
     </div>
@@ -305,6 +313,11 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
   # (params carry "key" — treated as clear).
   @impl true
   def handle_event("filter_search", params, socket) do
+    # Read BEFORE announce/2 overwrites it — this is the pre-keystroke value,
+    # needed to tell "starting a new search from blank" apart from "typing
+    # another character into an already-active search" below.
+    previous_query = socket.assigns.task_search_query
+
     query =
       case params do
         # Defensive: only Escape clears — phx-key filters client-side today,
@@ -322,7 +335,36 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
           ""
       end
 
-    {:noreply, announce(socket, %{task_search_query: query})}
+    # `announce/2` updates this component's local mirror AND notifies the
+    # shell (unchanged); `push_patch` is new (task 01a08df0 stage 1) — it
+    # makes `?q=` the shareable, refreshable source of truth, matching
+    # `filter_toggle_sponsor`'s existing pattern below. Built from
+    # `socket.assigns` AFTER `announce/2` so the patch carries the query just
+    # written, not last render's value.
+    #
+    # `replace:` depends on the blank -> non-blank transition, not a bare
+    # `true` (task 01a08df0 remediation, validation 01a0ea7b-afaa-7002):
+    # the FIRST keystroke since the query was blank must PUSH a new history
+    # entry, because the current entry is the pre-search page (bare
+    # `/tasks`, or whatever the user was on) — replacing it would overwrite
+    # that entry via `history.replaceState`, which destroys its content
+    # irretrievably, so Back could never return to it. Every subsequent
+    # keystroke within an already-active search (non-blank -> non-blank)
+    # still replaces, collapsing 'Z'/'Ze'/'Zep' onto the one entry pushed by
+    # the first keystroke, exactly as before. Clearing the search
+    # (non-blank -> blank, via Escape/Clear-search) also keeps `replace:
+    # true`: the entry being replaced is itself an already-pushed search
+    # entry (not the original pre-search entry, which was preserved by the
+    # push above), so replacing it loses nothing.
+    starting_new_search? = previous_query == "" and query != ""
+
+    socket = announce(socket, %{task_search_query: query})
+
+    {:noreply,
+     push_patch(socket,
+       to: BoardData.tasks_path(socket.assigns),
+       replace: not starting_new_search?
+     )}
   end
 
   # Mobile-only: status-filter pill bar above the section-grouped task list.
@@ -351,15 +393,26 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
     resolved = TaskDisplay.real_org_slug(socket.assigns[:mask_labels] || %{}, scope)
 
     case parse_scope(socket, resolved) do
-      {:ok, parsed} -> {:noreply, announce(socket, %{scope_filter: parsed})}
-      :error -> {:noreply, socket}
+      # `push_patch` (task 01a08df0 stage 1), in addition to the existing
+      # `announce/2`: `?scope=` becomes shareable, matching `?q=` above and
+      # `?sponsor=mine` below. NO `replace: true` — a scope chip is a
+      # discrete, deliberate choice (not a keystroke stream), so it pushes
+      # its own history entry, same as `filter_toggle_sponsor`'s unchanged
+      # pattern.
+      {:ok, parsed} ->
+        socket = announce(socket, %{scope_filter: parsed})
+        {:noreply, push_patch(socket, to: BoardData.tasks_path(socket.assigns))}
+
+      :error ->
+        {:noreply, socket}
     end
   end
 
   # No-scope variant: the "All" chip dispatches without a phx-value-scope so
   # users can reset the filter from a single click.
   def handle_event("filter_scope", _params, socket) do
-    {:noreply, announce(socket, %{scope_filter: :all})}
+    socket = announce(socket, %{scope_filter: :all})
+    {:noreply, push_patch(socket, to: BoardData.tasks_path(socket.assigns))}
   end
 
   # Thin push_patch shim: `handle_params/3` in the shell owns the decode, so
@@ -367,12 +420,17 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
   # back to `:all` DROPS the `?sponsor` param entirely to preserve the
   # canonical URL (a `?sponsor=all` URL is never emitted).
   #
-  # The path comes from `BoardData.tasks_path/2` so the toggle PRESERVES the
-  # current `?sort=` (task 01a0cef1 stage 2); a fixed path here would drop it.
+  # The path comes from `BoardData.tasks_path/1` (the map form, task
+  # 01a08df0 stage 1 — was the 2-arg `tasks_path/2` before this stage) so
+  # the toggle PRESERVES `?sort=` (task 01a0cef1 stage 2) AND now `?q=`/
+  # `?scope=` too — the "no patch can drop a param" invariant `tasks_path/4`
+  # documents applies to every control, not just the two that existed when
+  # it was written.
   def handle_event("filter_toggle_sponsor", _params, socket) do
     next = if socket.assigns[:sponsor_filter] == :mine, do: :all, else: :mine
 
-    {:noreply, push_patch(socket, to: BoardData.tasks_path(next, socket.assigns[:board_sort]))}
+    {:noreply,
+     push_patch(socket, to: BoardData.tasks_path(%{socket.assigns | sponsor_filter: next}))}
   end
 
   # Clearing the project/epic breadcrumb is shell work (it re-queries epics

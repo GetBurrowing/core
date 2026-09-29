@@ -24,8 +24,12 @@ defmodule PlatformWeb.Tasks.SortControl do
 
   The URL is the source of truth (`?sort=updated`, decoded by
   `TasksLive.handle_params/3`, mirroring `?sponsor=mine`). Each option is a
-  `<.link patch>` whose href is `BoardData.tasks_path/2`, so it is a real,
-  shareable URL and the choice needs no `handle_event` anywhere.
+  `<.link patch>` whose href is `BoardData.tasks_path/1` (the map form —
+  task 01a08df0 stage 1 added `?q=`/`?scope=` to the same builder, and a
+  sort-mode click must carry the board's CURRENT search/scope forward
+  rather than dropping them, per that builder's "no patch can drop a param"
+  contract), so it is a real, shareable URL and the choice needs no
+  `handle_event` anywhere.
 
   Opening and closing is client-only (`Phoenix.LiveView.JS`). The inner
   wrapper's id carries the current mode, so choosing the other option
@@ -50,6 +54,11 @@ defmodule PlatformWeb.Tasks.SortControl do
   attr :role, :string, required: true, doc: "the control's data-role"
   attr :board_sort, :atom, default: :priority
   attr :sponsor_filter, :atom, default: :all
+  # Task 01a08df0 stage 1: threaded through so a sort-mode click's patch
+  # preserves the board's current search/scope instead of silently
+  # clearing them (see the moduledoc's "Why there is no event" section).
+  attr :task_search_query, :string, default: ""
+  attr :scope_filter, :any, default: :all
   attr :mobile?, :boolean, default: false, doc: "44px touch target"
   attr :class, :string, default: nil
 
@@ -109,7 +118,14 @@ defmodule PlatformWeb.Tasks.SortControl do
         >
           <.link
             :for={{mode, text} <- @options}
-            patch={BoardData.tasks_path(@sponsor_filter, mode)}
+            patch={
+              BoardData.tasks_path(%{
+                sponsor_filter: @sponsor_filter,
+                board_sort: mode,
+                task_search_query: @task_search_query,
+                scope_filter: @scope_filter
+              })
+            }
             role="menuitemradio"
             aria-checked={to_string(mode == @board_sort)}
             data-role="board-sort-option"

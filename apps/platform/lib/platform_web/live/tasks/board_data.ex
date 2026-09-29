@@ -108,25 +108,80 @@ defmodule PlatformWeb.Tasks.BoardData do
   def decode_sort("updated"), do: :updated
   def decode_sort(_other), do: :priority
 
+  # A pasted/forged URL is untrusted input (task 01a08df0 stage 1
+  # architecture note): a `?q=` with no practical bound could otherwise be
+  # copied into the search box and re-run against every board refresh
+  # forever. This is generous enough that no real title/id/name search
+  # would ever hit it, and truncating rather than rejecting means an
+  # over-long shared link still degrades to *some* board instead of an
+  # error page.
+  @max_search_param_length 200
+
   @doc """
-  The board URL for a sponsor filter and a sort mode — the ONE builder for
-  every patch back to `/tasks` (task 01a0cef1 stage 2), so no patch can drop
-  a param the other control set.
-
-  Defaults emit nothing (`:all`, `:priority`), exactly as `?sponsor=all` is
-  never emitted, so the canonical URL stays `/tasks`. Keys come out in a
-  fixed order, sponsor then sort:
-
-      iex> PlatformWeb.Tasks.BoardData.tasks_path(:all, :priority)
-      "/tasks"
-      iex> PlatformWeb.Tasks.BoardData.tasks_path(:mine, :updated)
-      "/tasks?sponsor=mine&sort=updated"
+  Decode a `?q=` value. Any binary is the raw search text, capped at
+  #{@max_search_param_length} characters — matching itself happens later via
+  `normalize_search/1`, so no trimming/downcasing here. Anything else
+  (missing, non-binary) is the default `""`.
   """
-  @spec tasks_path(:all | :mine | nil, :priority | :updated | nil) :: String.t()
-  def tasks_path(sponsor_filter, board_sort) do
+  @spec decode_search_param(term()) :: String.t()
+  def decode_search_param(q) when is_binary(q), do: String.slice(q, 0, @max_search_param_length)
+  def decode_search_param(_other), do: ""
+
+  @doc """
+  Decode a `?scope=` value against the viewer's active scopes (the same
+  `%{slug: ...}` list `FiltersComponent.parse_scope/2` validates a click
+  against, task 01a09287 stage 2). `"all"` is always valid. Anything else
+  that isn't a slug the viewer actually has — missing, garbage, or a
+  stale/forged org the viewer has since lost access to — falls back to
+  `:all`, mirroring `TasksLive`'s private `decode_sponsor_param/1`'s
+  malformed-input handling.
+
+  Deliberately more permissive than `parse_scope/2`: a live click on an
+  invalid scope is IGNORED there (the current filter is left exactly as it
+  was, because there's a real current value to fall back to). A URL round
+  trip has no "current value" to preserve — this runs before the board has
+  rendered anything — so an invalid `scope` here resolves to the default
+  instead of being dropped on the floor.
+  """
+  @spec decode_scope_param(term(), [%{slug: String.t()}] | nil) :: :all | String.t()
+  def decode_scope_param("all", _active_scopes), do: :all
+
+  def decode_scope_param(scope, active_scopes) when is_binary(scope) do
+    if Enum.any?(active_scopes || [], &(&1.slug == scope)), do: scope, else: :all
+  end
+
+  def decode_scope_param(_scope, _active_scopes), do: :all
+
+  @doc """
+  The board URL for a sponsor filter, a sort mode, a search query and a
+  status scope — the ONE builder for every patch back to `/tasks` (task
+  01a0cef1 stage 2, extended by task 01a08df0 stage 1), so no patch can drop
+  a param another control set.
+
+  Defaults emit nothing (`:all`, `:priority`, `""`, `:all`), exactly as
+  `?sponsor=all` is never emitted, so the canonical URL stays `/tasks`. Keys
+  come out in a fixed order — sponsor, sort, q, scope:
+
+      iex> PlatformWeb.Tasks.BoardData.tasks_path(:all, :priority, "", :all)
+      "/tasks"
+      iex> PlatformWeb.Tasks.BoardData.tasks_path(:mine, :updated, "zephyr", "fabrikam")
+      "/tasks?sponsor=mine&sort=updated&q=zephyr&scope=fabrikam"
+  """
+  @spec tasks_path(
+          :all | :mine | nil,
+          :priority | :updated | nil,
+          String.t() | nil,
+          :all | String.t() | nil
+        ) :: String.t()
+  def tasks_path(sponsor_filter, board_sort, task_search_query, scope_filter) do
     query =
       Enum.reject(
-        [sponsor: sponsor_filter == :mine && "mine", sort: board_sort == :updated && "updated"],
+        [
+          sponsor: sponsor_filter == :mine && "mine",
+          sort: board_sort == :updated && "updated",
+          q: search_active?(task_search_query) && task_search_query,
+          scope: scope_filter not in [:all, nil] && scope_filter
+        ],
         fn {_key, value} -> value == false end
       )
 
@@ -137,12 +192,37 @@ defmodule PlatformWeb.Tasks.BoardData do
   end
 
   @doc """
-  `tasks_path/2` read off a socket's assigns (`:sponsor_filter`,
-  `:board_sort`), so a shell call site stays one line. An absent assign is
-  the default.
+  The board URL for a sponsor filter and a sort mode only — kept exactly as
+  it was before task 01a08df0 (same 2-argument shape, same output for the
+  same inputs) so existing pinned callers/tests are untouched. Delegates to
+  `tasks_path/4` with the two new fields at their defaults (`""`, `:all`),
+  so this arity can never itself carry a `q` or `scope` — a call site that
+  has a live search or scope to preserve must use `tasks_path/4` (or the
+  `tasks_path/1` map form) instead.
+
+      iex> PlatformWeb.Tasks.BoardData.tasks_path(:all, :priority)
+      "/tasks"
+      iex> PlatformWeb.Tasks.BoardData.tasks_path(:mine, :updated)
+      "/tasks?sponsor=mine&sort=updated"
+  """
+  @spec tasks_path(:all | :mine | nil, :priority | :updated | nil) :: String.t()
+  def tasks_path(sponsor_filter, board_sort), do: tasks_path(sponsor_filter, board_sort, "", :all)
+
+  @doc """
+  `tasks_path/4` read off a socket's (or component's) assigns
+  (`:sponsor_filter`, `:board_sort`, `:task_search_query`, `:scope_filter`),
+  so a shell/component call site stays one line. An absent assign is the
+  default.
   """
   @spec tasks_path(map()) :: String.t()
-  def tasks_path(%{} = assigns), do: tasks_path(assigns[:sponsor_filter], assigns[:board_sort])
+  def tasks_path(%{} = assigns) do
+    tasks_path(
+      assigns[:sponsor_filter],
+      assigns[:board_sort],
+      assigns[:task_search_query],
+      assigns[:scope_filter]
+    )
+  end
 
   @doc """
   Order a board list of `%Task{}` and `%Stack{}` items. A TOTAL order: the id

@@ -116,6 +116,54 @@ defmodule PlatformWeb.Tasks.BoardHooks do
   end
 
   @doc """
+  Apply the four URL-decoded board filters (`:sponsor_filter`, `:board_sort`,
+  `:task_search_query`, `:scope_filter`) that `TasksLive.handle_params/3`
+  resolves on every mount/patch — task 01a08df0 stage 1 added the last two
+  to task 019f3f22/01a0cef1's original pair, so a shared link can carry a
+  search and a status scope, not just the sponsor toggle and sort order.
+
+  Sponsor/sort changes are a DB-level re-query (`refresh_board/1`); search is
+  an in-memory narrowing over already-loaded sources (`rebuild_board_shapes/1`
+  — no DB round trip, mirroring `TasksLive`'s `{:tasks_filters_changed, _}`
+  handler for the same assign); scope needs neither of those, because
+  `BoardComponent` reads `@scope_filter` directly at render, so assigning it
+  below is the whole job.
+
+  At most one of the two board functions runs per call: a sponsor/sort
+  change already re-derives the board with the (also newly assigned) search
+  query via `refresh_board/1`'s own `maybe_reapply_search/1`, so stacking a
+  search-only rebuild on top of that would be redundant work, not a
+  correctness fix.
+
+  No expanded-stack assign is touched BY THIS FUNCTION directly — a plain,
+  unchanged `refresh_board/1` still resets `:expanded_stacks` (pre-existing,
+  ADR 0041 acceptance criterion 3) and a plain `rebuild_board_shapes/1`
+  still unions in member-matched stacks on a non-blank query (pre-existing,
+  task 01a06df3 stage 2); neither behavior is new here, and a call where
+  NEITHER branch fires (no filter actually changed — e.g. a bare `/tasks`
+  mount) touches `:expanded_stacks` not at all.
+  """
+  def apply_url_filters(socket, new_sponsor, new_sort, new_query, new_scope) do
+    board_changed? =
+      {new_sponsor, new_sort} != {socket.assigns[:sponsor_filter], socket.assigns[:board_sort]}
+
+    search_changed? = new_query != socket.assigns[:task_search_query]
+
+    socket =
+      socket
+      |> assign(:sponsor_filter, new_sponsor)
+      |> assign(:board_sort, new_sort)
+      |> assign(:task_search_query, new_query)
+      |> assign(:scope_filter, new_scope)
+
+    cond do
+      board_changed? -> refresh_board(socket)
+      search_changed? -> rebuild_board_shapes(socket)
+      true -> socket
+    end
+  end
+
+  @doc """
   Re-query every board source with the current project / epic / sponsor
   filters applied, and re-derive the render maps.
 

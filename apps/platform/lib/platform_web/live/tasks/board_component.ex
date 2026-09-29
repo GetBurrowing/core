@@ -352,6 +352,8 @@ defmodule PlatformWeb.Tasks.BoardComponent do
             role="mobile-board-sort-control"
             board_sort={@board_sort}
             sponsor_filter={@sponsor_filter}
+            task_search_query={@task_search_query}
+            scope_filter={@scope_filter}
             mobile?={true}
             class="inline-flex shrink-0"
           />
@@ -764,13 +766,34 @@ defmodule PlatformWeb.Tasks.BoardComponent do
           </div>
 
           <%!-- With a search active, "no matching tasks" is the accurate
-             message — "tap + to create one" would mislead. --%>
-          <.empty_state
+             message — "tap + to create one" would mislead. "Clear search"
+             (task 01a08df0 stage 2) reuses the SAME `filter_search`
+             Escape-clear path the search input's own Escape keydown fires
+             (see filters_component.ex `filter_search` — a `%{"key" =>
+             "Escape"}` param clears `:task_search_query` AND push_patches
+             `?q=` out of the URL, per stage 1). No second clearing
+             mechanism, no new empty-state design — same body copy, same
+             `.empty_state` component, just a control added beside it. --%>
+          <div
             :if={search_active?(@task_search_query) && empty_board?(@board_items)}
-            variant={:minimal}
+            data-role="search-empty-state-mobile"
           >
-            <:body>No matching tasks for "{@task_search_query}".</:body>
-          </.empty_state>
+            <.empty_state variant={:minimal}>
+              <:body>No matching tasks for "{@task_search_query}".</:body>
+            </.empty_state>
+            <div class="flex justify-center pb-3">
+              <button
+                type="button"
+                phx-click="filter_search"
+                phx-value-key="Escape"
+                phx-target="#tasks-filters"
+                class="btn btn-ghost btn-xs"
+                data-role="clear-search"
+              >
+                Clear search
+              </button>
+            </div>
+          </div>
 
           <.empty_state
             :if={!search_active?(@task_search_query) && empty_board?(@board_items)}
@@ -842,11 +865,27 @@ defmodule PlatformWeb.Tasks.BoardComponent do
               )
           }
           data-role="search-empty-state"
-          class="flex flex-1 items-center justify-center py-16"
+          class="flex flex-1 flex-col items-center justify-center gap-3 py-16"
         >
           <.empty_state variant={:minimal}>
             <:body>No matching tasks for "{@task_search_query}".</:body>
           </.empty_state>
+          <%!-- "Clear search" (task 01a08df0 stage 2): same `filter_search`
+             Escape-clear path as the mobile empty state above and the
+             search input's own Escape keydown — see that comment for the
+             full reasoning. No copy-link/share control here, deliberately
+             (design canvas 01a0ea77-4bef cut one; the URL is the whole
+             sharing mechanism). --%>
+          <button
+            type="button"
+            phx-click="filter_search"
+            phx-value-key="Escape"
+            phx-target="#tasks-filters"
+            class="btn btn-ghost btn-sm"
+            data-role="clear-search"
+          >
+            Clear search
+          </button>
         </div>
         <div
           :if={

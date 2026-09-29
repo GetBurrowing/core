@@ -7,8 +7,8 @@ defmodule PlatformWeb.TasksLive do
 
     * `mount/3` — session-derived assigns, subscriptions, hook attachment
     * `handle_params/3` — the `/tasks/:task_id` deep link and the
-      `?sponsor=mine` filter, both of which are callbacks a LiveComponent
-      cannot have
+      `?sponsor=mine`/`?sort=`/`?q=`/`?scope=` filters, all of which decode
+      callbacks a LiveComponent cannot have
     * navigation events (`select_task`, `select_task_and_delete`) and the
       two header menus that span three components
     * the notify inbox — every component reports outcomes up here rather
@@ -100,9 +100,10 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:kanban_columns, BoardData.kanban_columns())
      |> assign(:mobile_columns, BoardData.mobile_columns())
      |> assign(:active_status_filter, "in_progress")
+     # `?scope=`, `?sponsor=mine` and `?q=` are all URL-authoritative;
+     # `handle_params/3` overwrites these defaults on the very next callback
+     # (see its comment and `FiltersComponent`'s moduledoc).
      |> assign(:scope_filter, :all)
-     # `?sponsor=mine` is authoritative and `handle_params/3` is its writer,
-     # which is why this one filter stays shell-owned (see FiltersComponent).
      |> assign(:sponsor_filter, :all)
      |> assign(:task_search_query, "")
      |> assign(:create_menu_open, false)
@@ -187,19 +188,17 @@ defmodule PlatformWeb.TasksLive do
   end
 
   def handle_params(params, _url, socket) do
-    # `?sponsor=mine` (task 019f3f22) and `?sort=updated` (task 01a0cef1) are
-    # the authoritative source for the sponsor filter and the board order —
-    # decoded here so patches and direct URL loads (share-a-URL, refresh) land
-    # in the same state. Any other value is the default (`:all`, `:priority`);
-    # every patch back here is built by `BoardData.tasks_path/2`.
-    new_filter = decode_sponsor_param(params)
+    # `?sponsor=mine`, `?sort=updated`, `?q=` and `?scope=` (tasks 019f3f22,
+    # 01a0cef1, 01a08df0 stage 1) are the authoritative source for the four
+    # board filters — decoded here so patches and direct URL loads
+    # (share-a-URL, refresh) land in the same state. `BoardHooks.apply_url_filters/5`
+    # has the assign + refresh/rebuild dispatch (its own doc has the "why").
+    new_sponsor = decode_sponsor_param(params)
     new_sort = BoardData.decode_sort(params["sort"])
+    new_query = BoardData.decode_search_param(params["q"])
+    new_scope = BoardData.decode_scope_param(params["scope"], socket.assigns[:active_scopes])
 
-    changed? =
-      {new_filter, new_sort} != {socket.assigns[:sponsor_filter], socket.assigns[:board_sort]}
-
-    socket = assign(socket, sponsor_filter: new_filter, board_sort: new_sort)
-    socket = if changed?, do: BoardHooks.refresh_board(socket), else: socket
+    socket = BoardHooks.apply_url_filters(socket, new_sponsor, new_sort, new_query, new_scope)
 
     {:noreply, socket |> assign(:selected_task, nil) |> assign(:show_detail, false)}
   end

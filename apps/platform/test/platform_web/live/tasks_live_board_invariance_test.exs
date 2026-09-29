@@ -949,7 +949,27 @@ defmodule PlatformWeb.TasksLiveShellNonAccretionTest do
   # assign lives in `PlatformWeb.GameStreamHooks`, and the explanation lives
   # here rather than as a comment in the shell. 653 is exactly the budget in
   # `scripts/surface-budgets.txt`, which is not raised.
-  @shell_line_count 653
+  #
+  # RATCHETED DOWN 653 -> 652 (-1), 2026-09-29, task 01a08df0 stage 1 (`?q=`
+  # and `?scope=` join the URL, alongside the existing `?sponsor=`/`?sort=`).
+  # ARITHMETIC: 653 + 1 (mount comment, 5 -> 6 lines: `?scope=`/`?sponsor=`/
+  # `?q=` now share one 3-line note instead of `?sponsor=`'s own 2-line one)
+  # - 2 (`handle_params/3`, 13 -> 11 lines: 4 decode lines in for `new_query`/
+  # `new_scope` beside the unchanged `new_sponsor`/`new_sort`, but the
+  # `changed?`-compute-then-conditionally-`refresh_board` body — 6 lines —
+  # collapsed to one dispatch call) + 0 (moduledoc bullet, 3 -> 3 lines) = 652.
+  #
+  # THE ASSIGN + REFRESH/REBUILD DISPATCH MOVED, NOT SHRANK: it is now
+  # `BoardHooks.apply_url_filters/5` (board_hooks.ex, not budgeted here),
+  # which also branches search into `rebuild_board_shapes/1` rather than
+  # always going through the heavier DB-backed `refresh_board/1` — per
+  # architecture review on this stage's plan, which asked for the URL<->filter
+  # mapping to live in a small helper alongside the board modules rather than
+  # as new clauses in the shell. No concern re-entered the shell: the four
+  # `decode_*` calls in `handle_params/3` read params into plain values and
+  # nothing else, exactly as `decode_sponsor_param/1` and
+  # `BoardData.decode_sort/1` already did before this stage.
+  @shell_line_count 652
 
   defp line_count(source), do: source |> :binary.matches("\n") |> length()
 
