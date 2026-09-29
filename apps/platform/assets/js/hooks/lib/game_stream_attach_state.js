@@ -49,6 +49,47 @@ export function panelFor({ serverState, pcId, lastFrame, now }) {
 }
 
 /**
+ * The panel a copy shows when a twin in the same page takes the stream from
+ * it (`suspend`), given the session's last status (task 01a0ee4f stage 2).
+ * `panelFor` rules only the ACTIVE copy; this rules the one that gave the
+ * stream up. A suspended copy has closed its pc, so for a running session
+ * it shows "elsewhere" (where the stream went, "Playing in the canvas panel"
+ * on the inline copy or "Playing in the chat" on the panel copy, with Play
+ * here), never Connecting: a copy that gave its pc up does not say it is
+ * connecting.
+ * Rowan saw the inline chat copy sit on "Connecting..." beside the canvas
+ * sidebar he had opened, which held the stream on its own pc. `ended` and
+ * `failed` (and `unavailable`) still win and show as themselves.
+ */
+export function suspendedPanel({ serverState }) {
+  const state = serverState || "unavailable"
+  return RUNNING.includes(state) ? "elsewhere" : state
+}
+
+/**
+ * The panel for a copy that is NOT the claimant while a twin in the same
+ * page holds the session (task 01a0ee4f stage 3), or null to leave the
+ * panel as it is. A copy that mounted hidden (the desktop canvas panel
+ * under `hidden lg:flex` at a phone width) starts suspended and on its
+ * mount-time panel, usually Connecting. When a breakpoint crossing renders
+ * it while a twin holds the stream (the inline chat copy took it back), it
+ * has no pc, so it must say where the stream is ("elsewhere", with Play
+ * here), never Connecting. It does not take the stream itself: a resize is
+ * not a deliberate open, and taking on every crossing would bounce the
+ * stream between copies.
+ *
+ * Only a suspended copy's RUNNING panel (building / connecting / live) is
+ * replaced: takeover (another WINDOW), ended, failed, unavailable and an
+ * existing elsewhere are left alone, and a copy with no twin holding the
+ * claim returns null so it attaches as before.
+ */
+export function twinHeldPanel({ active, suspended, twinHolds, serverState, panel }) {
+  if (active || !suspended || !twinHolds) return null
+  if (!RUNNING.includes(panel)) return null
+  return suspendedPanel({ serverState })
+}
+
+/**
  * When the stuck clock started: the current pc's LAST decoded frame when it
  * has one (frames stopped then), else `connectingSince` (the pc never
  * decoded a frame, so the clock runs from when Connecting showed), else

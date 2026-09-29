@@ -335,6 +335,45 @@ defmodule Platform.Chat.Canvas.KindsGameStreamTest do
       assert Floki.text(panel) =~ "Continued in another window"
     end
 
+    # Task 01a0ee4f stage 2: the copy a twin in the same page took the stream
+    # from. Its Play here is the twin button (a same-page reclaim), never the
+    # takeover panel's window-level data-gs-play-here. The line names where
+    # the stream went, from where this copy is: the inline chat copy points at
+    # the canvas panel, the panel / overlay copy points back at the chat.
+    test "the elsewhere panel carries the twin Play here, not the take-over one" do
+      html = render_state(status("live"))
+      [panel] = html |> doc() |> Floki.find(~s([data-gs-panel="elsewhere"]))
+      assert Floki.attribute(panel, "hidden") != []
+      [button] = Floki.find(panel, "button")
+      assert Floki.attribute(button, "data-gs-play-here-twin") != []
+      assert Floki.attribute(button, "data-gs-play-here") == []
+      assert Floki.text(button) =~ "Play here"
+      assert Floki.find(panel, "[data-gs-play-here]") == []
+      [takeover] = html |> doc() |> Floki.find(~s([data-gs-panel="takeover"]))
+      assert Floki.find(takeover, "[data-gs-play-here-twin]") == []
+      assert Floki.text(takeover) =~ "Continued in another window"
+    end
+
+    test "the inline copy says Playing in the canvas panel; the panel copy says Playing in the chat" do
+      line = fn scope ->
+        render_component(&GameStreamKind.render/1,
+          node: gs_node(%{"session_id" => @session, "review_sha" => @sha}),
+          dom_id_scope: scope,
+          canvas_id: "canvas-x",
+          status: status("live")
+        )
+        |> doc()
+        |> Floki.find(~s([data-gs-panel="elsewhere"] [data-gs-elsewhere-line]))
+        |> Floki.text()
+        |> String.trim()
+      end
+
+      assert line.("canvas-x-chat-message-inline") == "Playing in the canvas panel"
+      assert line.("canvas-x-chat-message-expanded") == "Playing in the chat"
+      assert line.("canvas-x-expanded") == "Playing in the chat"
+      assert line.(nil) == "Playing in the canvas panel"
+    end
+
     test "the stats readout is always rendered, in mono xs, with no toggle" do
       html = render_state(status("building"))
       [stats] = html |> doc() |> Floki.find("[data-gs-stats]")

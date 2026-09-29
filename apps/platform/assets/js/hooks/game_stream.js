@@ -100,7 +100,7 @@ import {
   watchingTitle,
 } from "./lib/game_stream_roster.js"
 import { SessionMemo, attachOutcome, signalMoved } from "./lib/game_stream_session.js"
-import { panelFor, reclaim, stuck, stuckAt } from "./lib/game_stream_attach_state.js"
+import { panelFor, reclaim, stuck, stuckAt, suspendedPanel, twinHeldPanel } from "./lib/game_stream_attach_state.js"
 
 const claims = new Map()
 // Every mounted copy per session id, so a copy can tell whether another
@@ -116,6 +116,13 @@ const GATHER_TIMEOUT_MS = 3000
 const BLINK_MS = 250
 
 const RUNNING = ["building", "connecting", "live"]
+
+// A copy whose stream plays somewhere else: another window ("takeover") or a
+// twin copy in this page ("elsewhere"). Neither shows End, Leave, the
+// overflow, the watching row or the controller line.
+function playingElsewhere(panel) {
+  return panel === "takeover" || panel === "elsewhere"
+}
 
 function rendered(el) {
   return el.getClientRects().length > 0
@@ -299,6 +306,28 @@ const GameStream = {
     }
   },
 
+  // A suspended copy while a twin in this page holds the session shows where
+  // the stream is ("elsewhere", with Play here), not its mount-time
+  // Connecting: it has no pc (task 01a0ee4f stage 3, `twinHeldPanel`). Runs
+  // when a copy mounts hidden (a twin already holds) and on every twin's
+  // attach (a twin holds from now on). In this hook those are the moments a
+  // suspended copy's running panel can meet a holder, so the panel is set
+  // BEFORE a breakpoint crossing renders the copy: it never shows Connecting
+  // first, and the resize itself changes nothing (maybeReclaim still takes
+  // the stream only from a holder that is off screen).
+  showTwinHeld() {
+    if (this.dead || !this.sessionId) return
+    const holder = claims.get(this.sessionId)
+    const panel = twinHeldPanel({
+      active: this.active(),
+      suspended: this.suspended,
+      twinHolds: !!holder && holder !== this && !holder.dead,
+      serverState: this.serverState,
+      panel: this.panel,
+    })
+    if (panel && panel !== this.panel) this.show(panel)
+  },
+
   // The wrapper is phx-update="ignore", but LiveView still patches ITS OWN
   // attributes on a re-render, so a status change on the server rewrote
   // data-state (e.g. back to "building" under a takeover panel). The hook
@@ -396,6 +425,11 @@ const GameStream = {
     })
     click("[data-gs-restart]", () => this.restart())
     click("[data-gs-play-here]", () => this.playHere())
+    // Play here on "elsewhere" (task 01a0ee4f stage 2): a twin in THIS page
+    // holds the stream, so take it back in the page. Never playHere(): that
+    // pushes game_stream_take_over for slot 0, a window-level take-over that
+    // on a multi host would take P1 from another person.
+    click("[data-gs-play-here-twin]", () => this.attach("take"))
     click("[data-gs-reload]", () => window.location.reload())
     click("[data-gs-fullscreen]", () => this.toggleFullscreen())
 
@@ -429,7 +463,10 @@ const GameStream = {
   // a twin that went off screen. `tick` re-checks once a second as well.
   whenRendered(fn) {
     if (rendered(this.el)) fn()
-    else this.suspended = true
+    else {
+      this.suspended = true
+      this.showTwinHeld()
+    }
     if (typeof ResizeObserver === "undefined") return
     this.observer = new ResizeObserver(() => this.maybeReclaim())
     this.observer.observe(this.el)
@@ -464,6 +501,9 @@ const GameStream = {
     const twin = claims.get(this.sessionId)
     if (twin && twin !== this) twin.suspend()
     claims.set(this.sessionId, this)
+    // Every other suspended copy (one that mounted hidden and never held the
+    // stream) now has a twin holding it: it shows elsewhere, not Connecting.
+    for (const c of copies.get(this.sessionId) || []) if (c !== this) c.showTwinHeld()
 
     const reply = await this.push("game_stream_attach", { ...this.ids(), mode: attachMode })
     if (this.dead || !this.active()) return
@@ -487,12 +527,17 @@ const GameStream = {
   },
 
   // A twin handing over to the copy that attached after it. This copy takes
-  // the stream back if it is on screen when the twin is not (maybeReclaim).
+  // the stream back if it is on screen when the twin is not (maybeReclaim),
+  // or when the person clicks its Play here ([data-gs-play-here-twin]).
+  // It has closed its pc, so a running session shows "elsewhere", never
+  // Connecting (task 01a0ee4f stage 2, `suspendedPanel`). The panel is
+  // sticky: renderAttach leaves a non-running panel alone and onServer
+  // ignores a copy that is not the claimant.
   suspend() {
     this.suspended = true
     this.dispatch({ type: "not_live" })
     this.closePeer()
-    this.show("connecting")
+    this.show(suspendedPanel({ serverState: this.serverState }))
   },
 
   onServer(msg) {
@@ -1063,7 +1108,7 @@ const GameStream = {
     this.dot.classList.toggle("bg-success", live)
     this.dot.classList.toggle("bg-base-content/20", !live)
     this.video.classList.toggle("opacity-40", panel === "ended")
-    if (this.endBtn) this.endBtn.hidden = !RUNNING.includes(this.serverState) || panel === "takeover" || this.multi
+    if (this.endBtn) this.endBtn.hidden = !RUNNING.includes(this.serverState) || playingElsewhere(panel) || this.multi
     if (panel === "building" && this.elapsedEl) {
       this.elapsedEl.textContent = formatElapsed(Date.now() - this.buildStartedAt)
     }
@@ -1089,7 +1134,7 @@ const GameStream = {
   renderRoster() {
     if (!this.rosterEl) return
     const multi = this.multi
-    const running = RUNNING.includes(this.serverState) && this.panel !== "takeover"
+    const running = RUNNING.includes(this.serverState) && !playingElsewhere(this.panel)
     const player = this.router.player
     this.rosterEl.hidden = !multi
     if (this.overflowEl) this.overflowEl.hidden = !(multi && running)
@@ -1186,7 +1231,7 @@ const GameStream = {
     if (!this.controllerEl) return
     const pads = navigator.getGamepads ? navigator.getGamepads() : []
     const pad = this.pad || pickGamepad(pads)
-    const playing = RUNNING.includes(this.serverState) && this.panel !== "takeover"
+    const playing = RUNNING.includes(this.serverState) && !playingElsewhere(this.panel)
     // On a multi host the pad rows name each pad's slot; a spectator has
     // nothing to play with, so neither line shows.
     const padRowsShown = this.multi && this.router.player && (this.pads || []).length > 0

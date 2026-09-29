@@ -7,6 +7,7 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
   use PlatformWeb, :html
 
   alias Platform.Chat.Canvas
+  alias Platform.Chat.Canvas.Kinds
   alias Platform.Chat.Canvas.Renderer
   alias Platform.Chat.CanvasDocument
 
@@ -59,7 +60,12 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
         render_removed(assigns)
 
       valid_document?(canvas.document) ->
-        assigns = assign(assigns, :root_node, canvas.document["root"])
+        root_node = canvas.document["root"]
+
+        assigns =
+          assigns
+          |> assign(:root_node, root_node)
+          |> assign(:opens_on_click, assigns.inline and opens_on_click?(root_node))
 
         # Bug A guard: LV's phx-click listener is bound at `window` in bubble
         # phase (phoenix_live_view.js:6523, capture arg = false). That means
@@ -75,13 +81,19 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
         # button click before LV's window listener fires (Bug A retested
         # 2026-07-18 during stage 1 verification). If a residual Bug A ever
         # reproduces, swap to a dedicated "open" affordance instead.
+        #
+        # A kind can opt its documents out of the click-to-open wrapper
+        # (task 01a0ee4f): `opens_on_click?/1` walks the tree, and when any
+        # node's kind says `inline_opens_canvas?/0 == false` the wrapper gets
+        # neither the binding nor the cursor-pointer affordance. Every other
+        # document opens exactly as before.
         ~H"""
         <div
           id={"canvas-doc-#{@canvas.id}-#{@id_suffix}"}
-          class={["overflow-x-auto", @inline && "cursor-pointer"]}
-          phx-click={if(@inline, do: "canvas_open")}
-          phx-value-canvas-id={if(@inline, do: @canvas.id)}
-          phx-target={if(@inline, do: @open_target)}
+          class={["overflow-x-auto", @opens_on_click && "cursor-pointer"]}
+          phx-click={if(@opens_on_click, do: "canvas_open")}
+          phx-value-canvas-id={if(@opens_on_click, do: @canvas.id)}
+          phx-target={if(@opens_on_click, do: @open_target)}
         >
           <Renderer.render_node
             node={@root_node}
@@ -113,4 +125,33 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
   end
 
   defp valid_document?(doc), do: CanvasDocument.canonical?(doc)
+
+  # True unless SOME node in the tree has a kind that opts out through the
+  # `inline_opens_canvas?/0` convention function (task 01a0ee4f). A Play
+  # document is a stack root holding one `game_stream` child, so reading only
+  # the root kind would miss it. This is a convention, not a `Kind` callback:
+  # `Kinds.behaviour_ok?/1` requires every callback, optional ones included,
+  # so a new callback would fail every kind that does not define it. A kind
+  # that does not export the function opens on click, as every kind did
+  # before. The registry is read per call and never cached, because a
+  # flag-gated kind can come and go at runtime (see `Kinds.all/0`).
+  defp opens_on_click?(root_node) do
+    by_name = Kinds.by_name()
+    not Enum.any?(nodes(root_node), &opts_out?(Map.get(by_name, &1["type"])))
+  end
+
+  defp nodes(%{} = node) do
+    children = if is_list(node["children"]), do: node["children"], else: []
+    [node | Enum.flat_map(children, &nodes/1)]
+  end
+
+  defp nodes(_), do: []
+
+  defp opts_out?(nil), do: false
+
+  defp opts_out?(mod) do
+    match?({:module, _}, :code.ensure_loaded(mod)) and
+      function_exported?(mod, :inline_opens_canvas?, 0) and
+      mod.inline_opens_canvas?() == false
+  end
 end

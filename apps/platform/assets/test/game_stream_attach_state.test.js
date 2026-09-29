@@ -1,5 +1,15 @@
 import { describe, it, expect } from "vitest"
-import { panelFor, stuck, stuckAt, stuckSince, reclaim, STUCK_MS, FRESH_MS } from "../js/hooks/lib/game_stream_attach_state.js"
+import {
+  panelFor,
+  stuck,
+  stuckAt,
+  stuckSince,
+  reclaim,
+  suspendedPanel,
+  twinHeldPanel,
+  STUCK_MS,
+  FRESH_MS,
+} from "../js/hooks/lib/game_stream_attach_state.js"
 
 /**
  * The attach state of a game_stream frame (task 01a0dbd6 stage 1).
@@ -164,5 +174,48 @@ describe("stuck: 10 s on Connecting with no frame on the current pc", () => {
     for (const serverState of ["ended", "failed", "building"]) {
       expect(stuck({ serverState, pcId: null, lastFrame: null, connectingSince: T - 60_000, now: T })).toBe(false)
     }
+  })
+})
+
+// Task 01a0ee4f stage 2: the copy a twin in the same page took the stream
+// from has closed its pc, so a running session must not show Connecting.
+describe("suspendedPanel: the copy that gave the stream to a twin", () => {
+  it.each(["building", "connecting", "live"])("a running session (%s) shows elsewhere, never connecting", state => {
+    expect(suspendedPanel({ serverState: state })).toBe("elsewhere")
+  })
+
+  it.each(["ended", "failed", "unavailable"])("%s still wins and shows as itself", state => {
+    expect(suspendedPanel({ serverState: state })).toBe(state)
+  })
+
+  it("no status yet reads as unavailable, like panelFor", () => {
+    expect(suspendedPanel({ serverState: undefined })).toBe("unavailable")
+    expect(suspendedPanel({})).toBe("unavailable")
+  })
+})
+
+describe("twinHeldPanel: a suspended copy while a twin holds the stream (task 01a0ee4f stage 3)", () => {
+  const base = { active: false, suspended: true, twinHolds: true, serverState: "live" }
+
+  it.each(["building", "connecting", "live"])("a suspended copy on %s shows elsewhere", panel => {
+    expect(twinHeldPanel({ ...base, panel })).toBe("elsewhere")
+  })
+
+  it.each(["takeover", "elsewhere", "ended", "failed", "unavailable"])("a %s panel is left alone", panel => {
+    expect(twinHeldPanel({ ...base, panel })).toBeNull()
+  })
+
+  it("no twin holding the claim: null, so the copy attaches as before", () => {
+    expect(twinHeldPanel({ ...base, twinHolds: false, panel: "connecting" })).toBeNull()
+  })
+
+  it("the claimant itself, or a copy that is not suspended (another window took over): null", () => {
+    expect(twinHeldPanel({ ...base, active: true, panel: "connecting" })).toBeNull()
+    expect(twinHeldPanel({ ...base, suspended: false, panel: "connecting" })).toBeNull()
+  })
+
+  it("an ended or failed session wins over elsewhere, as in suspendedPanel", () => {
+    expect(twinHeldPanel({ ...base, serverState: "ended", panel: "connecting" })).toBe("ended")
+    expect(twinHeldPanel({ ...base, serverState: "failed", panel: "live" })).toBe("failed")
   })
 })

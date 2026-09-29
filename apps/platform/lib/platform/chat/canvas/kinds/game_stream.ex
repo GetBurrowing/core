@@ -112,6 +112,19 @@ defmodule Platform.Chat.Canvas.Kinds.GameStream do
         "hover:bg-base-200"
   }
 
+  @doc """
+  A Play card in a chat message never opens the canvas sidebar on click
+  (task 01a0ee4f). `PlatformWeb.Chat.CanvasRenderer` reads this convention
+  function and drops the inline wrapper's `phx-click="canvas_open"` for any
+  document holding this node. Rowan, 2026-09-29: *"we need to ensure that it
+  never opens that sidebar, but also, if i were to engage the sidebar myself,
+  by going through the canvas selector in the chat shell ... that that is
+  where we connect."* The canvas selector's explorer row still sends
+  `canvas_open`, so the deliberate path is unchanged.
+  """
+  @spec inline_opens_canvas?() :: false
+  def inline_opens_canvas?, do: false
+
   @impl Platform.Chat.Canvas.Kind
   def children, do: :none
 
@@ -175,7 +188,7 @@ defmodule Platform.Chat.Canvas.Kinds.GameStream do
   defp check_warn(n) when is_integer(n) and n >= 1 and n <= 1000, do: nil
   defp check_warn(_), do: "latency_warn_ms must be an integer between 1 and 1000"
 
-  @panels ~w(unavailable building connecting live ended failed takeover)
+  @panels ~w(unavailable building connecting live ended failed takeover elsewhere)
 
   @doc "The panel names the render emits, one per frame state."
   @spec panels() :: [String.t()]
@@ -242,6 +255,7 @@ defmodule Platform.Chat.Canvas.Kinds.GameStream do
       |> assign(:view, view)
       |> assign(:chip_base, @chip_base)
       |> assign(:chip_classes, @chip_classes)
+      |> assign(:elsewhere_line, elsewhere_line(assigns[:dom_id_scope]))
 
     ~H"""
     <div
@@ -425,6 +439,14 @@ defmodule Platform.Chat.Canvas.Kinds.GameStream do
         <div data-gs-panel="takeover" hidden class={[panel_class(), "bg-black/60"]}>
           <p class="text-sm text-white">Continued in another window</p>
           <button type="button" data-gs-play-here class={restart_class()}>Play here</button>
+        </div>
+
+        <%!-- A twin copy in THIS page holds the stream (task 01a0ee4f stage 2).
+        Its Play here takes the stream back in the page and never takes a
+        slot from anyone. --%>
+        <div data-gs-panel="elsewhere" hidden class={[panel_class(), "bg-black/60"]}>
+          <p data-gs-elsewhere-line class="text-sm text-white">{@elsewhere_line}</p>
+          <button type="button" data-gs-play-here-twin class={restart_class()}>Play here</button>
         </div>
       </div>
 
@@ -763,6 +785,22 @@ defmodule Platform.Chat.Canvas.Kinds.GameStream do
   end
 
   defp format_elapsed(_), do: "0:00"
+
+  # Where the stream went, said from where this copy is (task 01a0ee4f
+  # stage 2). The inline chat copy (CanvasRenderer's scope ends "-inline")
+  # gave it to the canvas panel the person opened. The panel or mobile
+  # overlay copy ("-expanded") gave it back to the chat copy through that
+  # copy's Play here; telling the panel it is "Playing in the canvas panel"
+  # would name the very place the person is looking at.
+  @doc false
+  @spec elsewhere_line(String.t() | nil) :: String.t()
+  def elsewhere_line(scope) when is_binary(scope) do
+    if String.ends_with?(scope, "-expanded"),
+      do: "Playing in the chat",
+      else: "Playing in the canvas panel"
+  end
+
+  def elsewhere_line(_), do: "Playing in the canvas panel"
 
   defp panel_class,
     do: "absolute inset-0 flex flex-col items-center justify-center gap-3 p-4 text-center"
