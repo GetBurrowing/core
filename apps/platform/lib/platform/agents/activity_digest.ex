@@ -76,6 +76,9 @@ defmodule Platform.Agents.ActivityDigest do
   #     re-dispatch until the row changes again; the caller emits an
   #     `:item_skipped` audit row so the step is never silent. See
   #     `HistorianDispatcher.cursor_target/2`, case 3 (ticket 01a0978c).
+  #     A page-corpus skip (`:pages`, `:files`) names the page and where
+  #     its content is (task 01a0ee1d); a chat or meeting skip names
+  #     nothing (01a0a12e clause 10).
   #
   # Consumers act on the difference rather than merely observing it:
   # `HistorianDispatcher.cursor_target/2` reads `truncated?` to decide
@@ -307,12 +310,24 @@ defmodule Platform.Agents.ActivityDigest do
   `last_included_at + 1µs` — strictly forward, and provably not past
   anything undigested.
 
-  The byte weight per row is the same figure
-  `Platform.Agents.Historian.sum_corpus_bytes/3` sums in SQL — the currency
-  the oversize decision was made in. Every renderer compresses relative to
-  it (`preview/1` and `page_preview/1` cap at #{@message_content_preview}
-  characters; a transcript renders its summary but not its segments), so
-  bounding the raw prefix bounds the rendered body too.
+  What admission charges a row depends on the corpus.
+
+    * `:messages` and `:transcripts` are charged their RAW bytes, the same
+      figure `Platform.Agents.Historian.sum_corpus_bytes/3` sums in SQL. The
+      window budget is what keeps an oversized chat or meeting out of the
+      digest (task 01a0a12e, ticket clause 10), so it must keep weighing
+      what it withholds.
+    * The page-previewed corpora (`:pages`, `:files`, `:journal`) are charged
+      the bytes of the line the digest actually renders for the row: its
+      path, version and a #{@message_content_preview}-character
+      `page_preview/1`. That is the page-size policy (task 01a0ee1d): an
+      oversized page is admitted as a preview and never skipped, so it cannot
+      block the rows behind it in its corpus.
+
+  Either way, bounding the admitted weight bounds the rendered body. Slicing,
+  `meta.skipped.bytes` and `Platform.Agents.HistorianAudit` still use the raw
+  `:bytes` from `corpus_items/4`, so the audit row and the notice state a
+  row's true size.
 
   ## Options carried on `input`
 
@@ -438,7 +453,7 @@ defmodule Platform.Agents.ActivityDigest do
     cap_bytes = budget_bytes(input)
 
     items = corpus_items(corpus, ws, we, scope: scope)
-    {included, withheld, skipped} = take_within_budget(items, cap_bytes)
+    {included, withheld, skipped} = take_within_budget(items, cap_bytes, corpus)
 
     # AFTER the budget, BEFORE the render: the count then reflects what is
     # actually RENDERED rather than what was queried. Note `withheld` above
@@ -495,11 +510,11 @@ defmodule Platform.Agents.ActivityDigest do
         skipped_line(meta.skipped, meta.item_count, cap_bytes)
 
       withheld == [] ->
-        render_corpus(corpus, included)
+        render_corpus(corpus, included, cap_bytes)
 
       true ->
         partial_line(meta.included_count, meta.item_count) <>
-          "\n\n" <> render_corpus(corpus, included)
+          "\n\n" <> render_corpus(corpus, included, cap_bytes)
     end
   end
 
@@ -513,13 +528,26 @@ defmodule Platform.Agents.ActivityDigest do
   # another route to the skipped content: the window budget is what kept the
   # 2026-09-14 one-to-one out of the digest, and a notice that suggests
   # going around it defeats it.
+  #
+  # A page-corpus skip is the exception, and it is not the route-around
+  # clause 10 forbids: pages and file cards are org wiki the Historian
+  # curates, and naming the page is the only way it can act on one. With
+  # preview-weighted admission (task 01a0ee1d) a page skips only when its
+  # annotated preview line alone exceeds the budget.
+  defp skipped_line(%{path: path, bytes: bytes}, item_count, cap_bytes)
+       when is_binary(path) do
+    "_(skipped — page `#{path}` weighs #{bytes} bytes and exceeds the " <>
+      "#{cap_bytes}-byte window budget alone; 0 of #{item_count} items included. " <>
+      "Its content is on that page. Recorded as an `item_skipped` audit row.)_"
+  end
+
   defp skipped_line(%{bytes: bytes, count: count}, item_count, cap_bytes) do
     "_(skipped — the next #{count} item(s) weigh #{bytes} bytes and exceed the " <>
       "#{cap_bytes}-byte window budget alone; 0 of #{item_count} items included. " <>
       "Recorded as an `item_skipped` audit row.)_"
   end
 
-  defp render_corpus(:messages, included) do
+  defp render_corpus(:messages, included, _cap_bytes) do
     rows = Enum.map(included, & &1.row)
     # `:infinity` rather than `@per_space_message_cap`: the windowed path is
     # budgeted item-wise above, and a second silent count cap would drop rows
@@ -528,14 +556,14 @@ defmodule Platform.Agents.ActivityDigest do
     digest_messages(rows, fetch_space_names(rows, []), :infinity)
   end
 
-  defp render_corpus(:transcripts, included) do
+  defp render_corpus(:transcripts, included, _cap_bytes) do
     rows = Enum.map(included, & &1.row)
     digest_transcripts(rows, fetch_space_names([], rows))
   end
 
-  defp render_corpus(:pages, included), do: digest_pages(Enum.map(included, & &1.row))
-  defp render_corpus(:journal, included), do: digest_journal(Enum.map(included, & &1.row))
-  defp render_corpus(:files, included), do: digest_file_cards(Enum.map(included, & &1.row))
+  defp render_corpus(:pages, included, cap_bytes), do: digest_pages(included, cap_bytes)
+  defp render_corpus(:journal, included, _cap_bytes), do: digest_journal(included)
+  defp render_corpus(:files, included, cap_bytes), do: digest_file_cards(included, cap_bytes)
 
   # ── Credential withholding (task 01a09c9b) ───────────────────────────────
 
@@ -602,13 +630,13 @@ defmodule Platform.Agents.ActivityDigest do
   # instant would skip the second silently — the exact class of bug this
   # stage exists to remove. Groups are size 1 for every real corpus row
   # (microsecond timestamps), so this costs nothing in practice.
-  defp take_within_budget([], _cap_bytes), do: {[], [], nil}
+  defp take_within_budget([], _cap_bytes, _corpus), do: {[], [], nil}
 
-  defp take_within_budget(items, cap_bytes) do
+  defp take_within_budget(items, cap_bytes, corpus) do
     {included_groups, withheld_groups} =
       items
       |> Enum.chunk_by(& &1.at)
-      |> admit_groups(cap_bytes, 0, [])
+      |> admit_groups(cap_bytes, corpus, 0, [])
 
     included = Enum.concat(included_groups)
     withheld = Enum.concat(withheld_groups)
@@ -618,11 +646,14 @@ defmodule Platform.Agents.ActivityDigest do
         {[], [first_group | _]} ->
           first = hd(first_group)
 
+          # RAW bytes, not the admission weight: the notice and the
+          # `item_skipped` audit row state the row's true size.
           %{
             id: first.id,
             at: first.at,
             bytes: group_bytes(first_group),
-            count: length(first_group)
+            count: length(first_group),
+            path: skipped_path(corpus, first)
           }
 
         _ ->
@@ -632,19 +663,55 @@ defmodule Platform.Agents.ActivityDigest do
     {included, withheld, skipped}
   end
 
-  defp admit_groups([], _cap_bytes, _used, acc), do: {Enum.reverse(acc), []}
+  defp admit_groups([], _cap_bytes, _corpus, _used, acc), do: {Enum.reverse(acc), []}
 
-  defp admit_groups([group | rest], cap_bytes, used, acc) do
-    weight = group_bytes(group)
+  defp admit_groups([group | rest], cap_bytes, corpus, used, acc) do
+    weight = Enum.reduce(group, 0, &(admission_bytes(corpus, &1, cap_bytes) + &2))
 
     if used + weight <= cap_bytes do
-      admit_groups(rest, cap_bytes, used + weight, [group | acc])
+      admit_groups(rest, cap_bytes, corpus, used + weight, [group | acc])
     else
       {Enum.reverse(acc), [group | rest]}
     end
   end
 
   defp group_bytes(group), do: Enum.reduce(group, 0, &(&1.bytes + &2))
+
+  # What admission charges one item (task 01a0ee1d, the page-size policy).
+  #
+  # The page-previewed corpora render one line per row carrying a
+  # #{@message_content_preview}-char preview, so they are weighed by THAT
+  # line, computed with the same function that renders it: the weight cannot
+  # drift from the body. A 330 KB page then costs a few hundred bytes and is
+  # admitted as a preview instead of being skipped.
+  #
+  # `:messages` and `:transcripts` keep their raw `:bytes` on purpose. Task
+  # 01a0a12e ticket clause 10 records that the window budget is what kept
+  # the 2026-09-14 one-to-one out of the digest; charging chat or meetings
+  # their rendered preview would reopen that.
+  #
+  # The line is weighed exactly as it will render: with the over-budget
+  # annotation (hence `cap_bytes`) and AFTER credential withholding, which
+  # runs on the admitted rows between admission and render. Weighing the
+  # un-withheld line would let the body differ from what was charged.
+  #
+  # `item.bytes` itself is never rewritten: `HistorianAudit` sums it and it
+  # must mirror `Historian.sum_corpus_bytes/3` in SQL.
+  defp admission_bytes(corpus, item, cap_bytes) when corpus in [:pages, :files, :journal] do
+    {[rendered], _count} = withhold_credentialed_items([item], withheld_content_key(corpus))
+    byte_size(rendered_line(corpus, rendered, cap_bytes))
+  end
+
+  defp admission_bytes(_messages_or_transcripts, item, _cap_bytes), do: item.bytes
+
+  defp rendered_line(:pages, item, cap_bytes), do: page_line(item, cap_bytes)
+  defp rendered_line(:files, item, cap_bytes), do: card_line(item, cap_bytes)
+  defp rendered_line(:journal, item, _cap_bytes), do: journal_line(item)
+
+  # The page a skip names: the row's `file_key` for the wiki corpora, `nil`
+  # for chat and meetings, whose skip notice must name nothing.
+  defp skipped_path(corpus, item) when corpus in [:pages, :files], do: item.row.file_key
+  defp skipped_path(_corpus, _item), do: nil
 
   defp corpus_heading(:messages), do: "Chat"
   defp corpus_heading(:transcripts), do: "Meetings"
@@ -755,42 +822,52 @@ defmodule Platform.Agents.ActivityDigest do
 
   # ── Wiki pages (windowed only) ───────────────────────────────────────────
 
-  defp digest_pages([]), do: nil
+  defp digest_pages([], _cap_bytes), do: nil
 
-  defp digest_pages(pages) do
-    body =
-      pages
-      |> Enum.map(fn p ->
-        time = format_datetime(p.updated_at)
-        preview = page_preview(p.content)
-        "- #{time} [page] `#{p.file_key}` (v#{p.version}): #{preview}"
-      end)
-      |> Enum.join("\n")
-
-    "### Wiki\n\n" <> body
+  defp digest_pages(items, cap_bytes) do
+    "### Wiki\n\n" <> (items |> Enum.map(&page_line(&1, cap_bytes)) |> Enum.join("\n"))
   end
+
+  # One rendered row. Also the admission weight for `:pages`
+  # (`admission_bytes/3`), so the two cannot drift. Takes the corpus item,
+  # not the bare row: the annotation needs the RAW `:bytes`, which survive
+  # credential withholding where the row's content does not.
+  defp page_line(%{row: p, bytes: raw_bytes}, cap_bytes) do
+    "- #{format_datetime(p.updated_at)} [page] `#{p.file_key}` (v#{p.version}): " <>
+      page_preview(p.content) <> preview_only_note(p.file_key, raw_bytes, cap_bytes)
+  end
+
+  # Appended to a page or card line whose raw content exceeds the whole
+  # window budget: the line carries only a preview, so it says so and says
+  # where the content is (task 01a0ee1d). Naming an org-wiki path is not the
+  # route-around 01a0a12e clause 10 forbids; that clause concerns chat and
+  # transcripts, which never render this note.
+  defp preview_only_note(file_key, raw_bytes, cap_bytes) when raw_bytes > cap_bytes do
+    " _(preview only — page `#{file_key}` is #{raw_bytes} bytes, over the " <>
+      "#{cap_bytes}-byte window budget; its content is on that page)_"
+  end
+
+  defp preview_only_note(_file_key, _raw_bytes, _cap_bytes), do: ""
 
   # ── File cards (windowed only) ───────────────────────────────────────────
   #
   # Cards are wiki pages, so this renders the same shape as
-  # `digest_pages/1` under a heading that says which corpus it came from.
+  # `digest_pages/2` under a heading that says which corpus it came from.
   # `[card]` rather than `[page]` matters to the reader: a card is a
   # summary of a document the Historian will never be shown, so "go read
   # the source" is a different action than it is for a wiki page.
 
-  defp digest_file_cards([]), do: nil
+  defp digest_file_cards([], _cap_bytes), do: nil
 
-  defp digest_file_cards(cards) do
-    body =
-      cards
-      |> Enum.map(fn c ->
-        time = format_datetime(c.updated_at)
-        preview = page_preview(c.content)
-        "- #{time} [card] `#{c.file_key}` (v#{c.version}): #{preview}"
-      end)
-      |> Enum.join("\n")
+  defp digest_file_cards(items, cap_bytes) do
+    "### File cards\n\n" <>
+      (items |> Enum.map(&card_line(&1, cap_bytes)) |> Enum.join("\n"))
+  end
 
-    "### File cards\n\n" <> body
+  # One rendered row, and the `:files` admission weight.
+  defp card_line(%{row: c, bytes: raw_bytes}, cap_bytes) do
+    "- #{format_datetime(c.updated_at)} [card] `#{c.file_key}` (v#{c.version}): " <>
+      page_preview(c.content) <> preview_only_note(c.file_key, raw_bytes, cap_bytes)
   end
 
   defp page_preview(nil), do: ""
@@ -806,17 +883,15 @@ defmodule Platform.Agents.ActivityDigest do
 
   defp digest_journal([]), do: nil
 
-  defp digest_journal(entries) do
-    body =
-      entries
-      |> Enum.map(fn e ->
-        time = format_datetime(e.inserted_at)
-        preview = page_preview(e.content)
-        "- #{time} [journal] #{Date.to_iso8601(e.date)}: #{preview}"
-      end)
-      |> Enum.join("\n")
+  defp digest_journal(items) do
+    "### Journal\n\n" <> (items |> Enum.map(&journal_line/1) |> Enum.join("\n"))
+  end
 
-    "### Journal\n\n" <> body
+  # One rendered row, and the `:journal` admission weight. A journal entry
+  # has no page path, so it carries no preview-only note.
+  defp journal_line(%{row: e}) do
+    "- #{format_datetime(e.inserted_at)} [journal] #{Date.to_iso8601(e.date)}: " <>
+      page_preview(e.content)
   end
 
   # ── Helpers ──────────────────────────────────────────────────────────────

@@ -894,12 +894,15 @@ defmodule Platform.Agents.HistorianDispatcher do
           emit_telemetry(
             :item_skipped,
             %{bytes: skipped.bytes, item_count: skipped.count},
-            %{
-              corpus: corpus_string,
-              message_id: to_string(skipped.id),
-              window_start: DateTime.to_iso8601(window.window_start),
-              skipped_at: DateTime.to_iso8601(skipped.at)
-            },
+            put_skipped_path(
+              %{
+                corpus: corpus_string,
+                message_id: to_string(skipped.id),
+                window_start: DateTime.to_iso8601(window.window_start),
+                skipped_at: DateTime.to_iso8601(skipped.at)
+              },
+              Map.get(skipped, :path)
+            ),
             workspace_id
           )
         end
@@ -1358,6 +1361,14 @@ defmodule Platform.Agents.HistorianDispatcher do
   # readable. `action` metadata is derived from the same atom so callers
   # cannot forget to keep the two in sync.
   @spec emit_telemetry(atom(), map(), map(), binary() | nil) :: :ok
+  # The skipped page's file_key for the wiki corpora, so the `item_skipped`
+  # audit row names the page (task 01a0ee1d). For chat and meetings the key
+  # is OMITTED, not set to nil: `Platform.Audit.TelemetryHandler` stringifies
+  # atoms, so a nil would persist as the string "nil". `message_id` stays on
+  # every row for compatibility.
+  defp put_skipped_path(metadata, path) when is_binary(path), do: Map.put(metadata, :path, path)
+  defp put_skipped_path(metadata, _no_path), do: metadata
+
   defp emit_telemetry(event, measurements, extra_metadata, workspace_id)
        when is_atom(event) and is_map(measurements) and is_map(extra_metadata) do
     metadata =

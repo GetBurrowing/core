@@ -290,6 +290,196 @@ defmodule Platform.Agents.ActivityDigestTest do
     end
   end
 
+  describe "build_windowed_result/1 — preview-weighted admission (01a0ee1d)" do
+    # Anti-vacuity A. One org page bigger than the whole 120_000-byte default
+    # window budget. The digest renders it as a single 280-char preview line,
+    # so admission must charge that line, not the page's raw content. Before
+    # 01a0ee1d this window rendered `_(skipped —` with 0 of 1 items included.
+    test "a single page larger than the window budget is admitted as its preview line" do
+      content = "OVERSIZE-TAG " <> String.duplicate("a", 130_000 - 13)
+      assert byte_size(content) == 130_000
+
+      page = insert_org_page!("oversize/page", content)
+
+      {:ok, body, meta} =
+        ActivityDigest.build_windowed_result(%{
+          corpus: :pages,
+          window_start: @window_start,
+          window_end: @window_end,
+          oversize: true
+        })
+
+      assert meta.item_count == 1
+      assert meta.included_count == 1
+      assert meta.skipped == nil
+      assert meta.truncated? == false
+      assert meta.last_included_at == within_window()
+
+      assert body =~ page.file_key
+      assert body =~ "OVERSIZE-TAG"
+      refute body =~ "_(skipped —"
+    end
+
+    # Anti-vacuity B, the discrimination control. With an 800-byte budget and
+    # five pages whose preview lines each weigh more than 200 bytes, admission
+    # must still stop part-way. A test asserting only "included" would pass if
+    # admission were simply disabled; this one would not.
+    test "a tight budget still truncates page previews at a whole-line boundary" do
+      pages =
+        Enum.map(1..5, fn i ->
+          content = "P#{i}-TAG " <> String.duplicate("word ", 400)
+          at = DateTime.add(@window_start, i * 60, :second)
+          {insert_org_page!("tight/page-#{i}", content, at), at}
+        end)
+
+      {:ok, body, meta} =
+        ActivityDigest.build_windowed_result(%{
+          corpus: :pages,
+          window_start: @window_start,
+          window_end: @window_end,
+          oversize: true,
+          budget_tokens: 200
+        })
+
+      lines =
+        body
+        |> String.split("\n")
+        |> Enum.filter(&String.starts_with?(&1, "- "))
+
+      # Each rendered line weighs more than 200 bytes, so the fixture cannot
+      # fit wholesale under 800.
+      assert Enum.all?(lines, &(byte_size(&1) > 200))
+
+      assert meta.item_count == 5
+      assert meta.truncated? == true
+      assert meta.included_count >= 1
+      assert meta.included_count < 5
+      assert meta.skipped == nil
+      assert length(lines) == meta.included_count
+
+      {_last_page, last_at} = Enum.at(pages, meta.included_count - 1)
+      assert meta.last_included_at == last_at
+
+      # The section opens with the partial marker, directly under the header.
+      [_header, section] = String.split(body, "\n\n", parts: 2)
+      assert String.starts_with?(section, "_(partial —")
+
+      # Bound: the budget still bounds the rendered body.
+      assert byte_size(Enum.join(lines, "\n")) <= 800
+
+      # Admitted pages are rendered; the first withheld one is not.
+      {first_page, _} = hd(pages)
+      assert body =~ first_page.file_key
+      {withheld_page, _} = Enum.at(pages, meta.included_count)
+      refute body =~ withheld_page.file_key
+    end
+
+    test "an oversized page's preview row names the page and its raw size" do
+      content = "OVERSIZE-TAG " <> String.duplicate("a", 130_000 - 13)
+      raw_bytes = byte_size(content)
+      page = insert_org_page!("oversize/named", content)
+
+      {:ok, body, meta} =
+        ActivityDigest.build_windowed_result(%{
+          corpus: :pages,
+          window_start: @window_start,
+          window_end: @window_end,
+          oversize: true
+        })
+
+      assert meta.included_count == 1
+      assert body =~ page.file_key
+      assert body =~ "preview only"
+      assert body =~ "page `#{page.file_key}` is #{raw_bytes} bytes"
+      assert body =~ "120000-byte window budget"
+      refute body =~ "_(skipped —"
+      refute body =~ "_No activity in this window._"
+    end
+
+    test "an under-budget page's row carries no preview-only note" do
+      page = insert_org_page!("small/page", "SMALL-TAG a short page body")
+
+      {:ok, body, meta} =
+        ActivityDigest.build_windowed_result(%{
+          corpus: :pages,
+          window_start: @window_start,
+          window_end: @window_end,
+          oversize: false
+        })
+
+      # Positive control first: the row IS rendered.
+      assert meta.included_count == 1
+      assert body =~ page.file_key
+      assert body =~ "SMALL-TAG"
+      refute body =~ "preview only"
+    end
+
+    test "a page whose preview line alone exceeds the budget is skipped by name" do
+      content = "TINY-BUDGET-TAG " <> String.duplicate("b", 2_000)
+      raw_bytes = byte_size(content)
+      page = insert_org_page!("tiny/budget", content)
+
+      # 20 tokens = 80 bytes, smaller than any preview line.
+      {:ok, body, meta} =
+        ActivityDigest.build_windowed_result(%{
+          corpus: :pages,
+          window_start: @window_start,
+          window_end: @window_end,
+          oversize: true,
+          budget_tokens: 20
+        })
+
+      assert meta.item_count == 1
+      assert meta.included_count == 0
+      assert meta.skipped.path == page.file_key
+      assert meta.skipped.bytes == raw_bytes
+
+      assert body =~ "_(skipped — page `#{page.file_key}` weighs #{raw_bytes} bytes"
+      assert body =~ "80-byte window budget"
+      assert body =~ "item_skipped"
+      refute body =~ "TINY-BUDGET-TAG"
+    end
+
+    # Admission weighs the line as RENDERED, i.e. after credential
+    # withholding swaps the content for the marker. Weighed before it, each
+    # of these rows would be charged a full 280-char preview (~340 B) and
+    # only two would fit in 800 bytes; rendered, each is a short marker line
+    # and all five fit.
+    test "a credential-withheld page is weighed by its withheld line" do
+      pages =
+        Enum.map(1..5, fn i ->
+          content =
+            "export KEY=" <> synthetic_credential() <> " " <> String.duplicate("word ", 140)
+
+          at = DateTime.add(@window_start, i * 60, :second)
+          insert_org_page!("cred/page-#{i}", content, at)
+        end)
+
+      {:ok, body, meta} =
+        ActivityDigest.build_windowed_result(%{
+          corpus: :pages,
+          window_start: @window_start,
+          window_end: @window_end,
+          oversize: true,
+          budget_tokens: 200
+        })
+
+      lines =
+        body
+        |> String.split("\n")
+        |> Enum.filter(&String.starts_with?(&1, "- "))
+
+      assert meta.credential_withheld_count == 5
+      assert meta.included_count == 5
+      refute meta.truncated?
+      assert Enum.all?(pages, &(body =~ &1.file_key))
+      assert Enum.all?(lines, &(&1 =~ @withheld_marker))
+      assert byte_size(Enum.join(lines, "\n")) <= 800
+      # Every row is under the budget raw, so no preview-only note inflates it.
+      refute body =~ "preview only"
+    end
+  end
+
   # ── helpers ───────────────────────────────────────────────────────────────
 
   defp within_window, do: ~U[2026-04-22 06:00:00.000000Z]
@@ -1749,7 +1939,7 @@ defmodule Platform.Agents.ActivityDigestTest do
     "the kettle boiled at dawn marker #{System.unique_integer([:positive])}"
   end
 
-  defp insert_org_page!(file_key, content) do
+  defp insert_org_page!(file_key, content, ts \\ within_window()) do
     attrs = %{
       workspace_id: nil,
       file_key: "#{file_key}-#{System.unique_integer([:positive])}",
@@ -1760,8 +1950,6 @@ defmodule Platform.Agents.ActivityDigestTest do
       %Platform.Org.WikiPage{}
       |> Platform.Org.WikiPage.changeset(attrs)
       |> Repo.insert!()
-
-    ts = within_window()
 
     {1, _} =
       Repo.update_all(

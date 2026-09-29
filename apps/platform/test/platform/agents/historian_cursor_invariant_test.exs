@@ -416,6 +416,15 @@ defmodule Platform.Agents.HistorianCursorInvariantTest do
       assert_received {:item_skipped, %{bytes: bytes}, %{corpus: "messages"} = meta}
       assert bytes >= 3_000
       assert meta.message_id == to_string(giant.id)
+      # A chat skip names no page (01a0a12e clause 10; 01a0ee1d). The
+      # persisted audit row carries no "path" key at all: the audit handler
+      # stringifies atoms, so an emitted nil would persist as the string "nil".
+      audit_meta = item_skipped_audit_metadata!("messages", to_string(giant.id))
+      refute Map.has_key?(audit_meta, "path")
+      assert audit_meta["message_id"] == to_string(giant.id)
+
+      # The key is OMITTED at the emit, not set to nil.
+      refute Map.has_key?(meta, :path)
 
       # FORWARD PROGRESS. Under the rejected "retry with a smaller span"
       # option this assertion is the one that livelocks.
@@ -447,6 +456,212 @@ defmodule Platform.Agents.HistorianCursorInvariantTest do
 
       cursor_2 = messages_cursor()
       assert DateTime.compare(cursor_2.last_processed_at, follower.at) == :gt
+    end
+  end
+
+  # ── Oversized page (task 01a0ee1d) ───────────────────────────────────────
+
+  describe "oversized page does not block its corpus (01a0ee1d)" do
+    # DETONATION: charge `:pages` admission its raw content bytes again
+    # (`admission_bytes/3` returning `item.bytes` for every corpus) and test 1
+    # fails on `_(skipped —` plus the `:item_skipped` receipt; test 2 loses the
+    # oversized page's preview; test 3 is the control that stays meaningful
+    # either way, because a fitting first group must still truncate.
+    setup do
+      backdate_org_wiki!()
+      :ok
+    end
+
+    test "an oversized page alone is delivered as a named preview", %{agent: agent} do
+      Application.put_env(:platform, :historian_max_windows_per_pass, 20)
+
+      now = DateTime.utc_now()
+      park_all_except(now, ["pages"])
+      {:ok, _} = Historian.advance_cursor(@org_workspace, "pages", nil, hour_ago(now))
+
+      tag = "OVERSIZE-PAGE-#{System.unique_integer([:positive])}"
+      content = tagged(tag, 130_000)
+      page = insert_org_page_at!("oversize/alone", content, fraction(now, 1, 2))
+
+      attach_events([:item_skipped])
+
+      assert {:ok, %{dispatched: dispatched}} =
+               HistorianDispatcher.dispatch_windowed(
+                 "historian",
+                 "historian.threshold",
+                 %{trigger: "oversize-page-1"},
+                 @org_workspace
+               )
+
+      system_space = Chat.get_space_by_slug("system-#{agent.slug}")
+      pass_1 = corpus_messages(system_space, "pages")
+
+      # POSITIVE CONTROL FIRST.
+      assert dispatched >= 1
+      refute Enum.empty?(pass_1)
+
+      body = pass_1 |> Enum.map(& &1.content) |> Enum.join("\n")
+
+      assert body =~ page.file_key
+      assert body =~ tag
+      assert body =~ "preview only"
+      assert body =~ "#{byte_size(content)} bytes"
+      refute body =~ "_(skipped —"
+
+      refute_received {:item_skipped, _, %{corpus: "pages"}}
+
+      assert DateTime.compare(corpus_cursor("pages").last_processed_at, page.at) == :gt
+    end
+
+    test "rows placed behind an oversized page arrive, and its edit re-delivers",
+         %{agent: agent} do
+      Application.put_env(:platform, :historian_max_windows_per_pass, 20)
+
+      now = DateTime.utc_now()
+      park_all_except(now, ["pages", "journal"])
+      {:ok, _} = Historian.advance_cursor(@org_workspace, "pages", nil, hour_ago(now))
+      {:ok, _} = Historian.advance_cursor(@org_workspace, "journal", nil, hour_ago(now))
+
+      big_tag = "OVERSIZE-FIRST-#{System.unique_integer([:positive])}"
+      page_tag = "SIBLING-PAGE-#{System.unique_integer([:positive])}"
+      journal_tag = "SIBLING-JOURNAL-#{System.unique_integer([:positive])}"
+
+      big = insert_org_page_at!("oversize/first", tagged(big_tag, 130_000), fraction(now, 1, 3))
+      sibling = insert_org_page_at!("small/sibling", tagged(page_tag, 200), fraction(now, 2, 3))
+      _journal = insert_org_journal_at!(tagged(journal_tag, 200), fraction(now, 3, 3))
+
+      attach_events([:item_skipped])
+
+      # PASS 1 — everything behind the oversized page arrives on the SAME pass.
+      {:ok, _} = dispatch("sibling-pass-1")
+      system_space = Chat.get_space_by_slug("system-#{agent.slug}")
+
+      pages_1 = corpus_messages(system_space, "pages")
+      journal_1 = corpus_messages(system_space, "journal")
+      pages_body_1 = join_bodies(pages_1)
+
+      refute Enum.empty?(pages_1)
+      assert pages_body_1 =~ big_tag
+      assert pages_body_1 =~ big.file_key
+      assert pages_body_1 =~ page_tag
+      assert pages_body_1 =~ sibling.file_key
+      assert join_bodies(journal_1) =~ journal_tag
+      refute_received {:item_skipped, _, %{corpus: "pages"}}
+
+      # PASS 2 — the cursor passed the oversized page; it does not re-deliver.
+      {:ok, _} = dispatch("sibling-pass-2")
+      pages_2 = system_space |> corpus_messages("pages") |> Enum.drop(length(pages_1))
+      refute join_bodies(pages_2) =~ big_tag
+
+      # PASS 3 — an edit moves `updated_at`, and the next delivery carries the
+      # current text. Recovery, not loss.
+      new_tag = "NEW-EDIT-#{System.unique_integer([:positive])}"
+      edited_at = DateTime.utc_now()
+
+      {1, _} =
+        Repo.update_all(
+          from(p in Platform.Org.WikiPage, where: p.id == ^big.id),
+          set: [content: tagged(new_tag, 130_000), updated_at: edited_at],
+          inc: [version: 1]
+        )
+
+      {:ok, _} = dispatch("sibling-pass-3")
+
+      pages_3 =
+        system_space
+        |> corpus_messages("pages")
+        |> Enum.drop(length(pages_1) + length(pages_2))
+
+      body_3 = join_bodies(pages_3)
+      assert body_3 =~ new_tag
+      assert body_3 =~ big.file_key
+      refute body_3 =~ "_(skipped —"
+    end
+
+    test "a page whose preview line alone exceeds the budget is skipped by name, and audited",
+         %{agent: agent} do
+      # 20 tokens = 80 bytes: smaller than any rendered page line.
+      Application.put_env(:platform, :historian_window_token_budget, 20)
+      Application.put_env(:platform, :historian_max_windows_per_pass, 20)
+
+      now = DateTime.utc_now()
+      park_all_except(now, ["pages"])
+      {:ok, _} = Historian.advance_cursor(@org_workspace, "pages", nil, hour_ago(now))
+
+      tag = "TINY-BUDGET-PAGE-#{System.unique_integer([:positive])}"
+      page = insert_org_page_at!("tiny/budget", tagged(tag, 2_000), fraction(now, 1, 2))
+
+      attach_events([:item_skipped])
+
+      {:ok, _} = dispatch("tiny-budget-pass-1")
+      system_space = Chat.get_space_by_slug("system-#{agent.slug}")
+      body = system_space |> corpus_messages("pages") |> join_bodies()
+
+      assert body =~ "_(skipped — page `#{page.file_key}`"
+      assert_received {:item_skipped, _, %{corpus: "pages"} = meta}
+      assert meta.path == page.file_key
+
+      audit_meta = item_skipped_audit_metadata!("pages", page.id)
+      assert audit_meta["path"] == page.file_key
+    end
+
+    test "a fitting first group still takes the truncated branch", %{agent: agent} do
+      Application.put_env(:platform, :historian_window_token_budget, 200)
+      Application.put_env(:platform, :historian_max_windows_per_pass, 20)
+
+      now = DateTime.utc_now()
+      park_all_except(now, ["pages"])
+      {:ok, _} = Historian.advance_cursor(@org_workspace, "pages", nil, hour_ago(now))
+
+      # Each row is under the 800-byte budget raw, so it renders with no
+      # preview-only note, yet its 280-char preview line exceeds 200 bytes:
+      # two lines fit in 800 bytes and five do not.
+      pages =
+        Enum.map(1..5, fn i ->
+          tag = "P#{i}-TAG-#{System.unique_integer([:positive])}"
+          content = tag <> " " <> String.duplicate("word ", 140)
+          page = insert_org_page_at!("tight/page-#{i}", content, fraction(now, i, 5))
+          Map.put(page, :tag, tag)
+        end)
+
+      attach_events([:item_skipped, :window_truncated])
+
+      {:ok, _} = dispatch("tight-pass-1")
+      system_space = Chat.get_space_by_slug("system-#{agent.slug}")
+      pages_1 = corpus_messages(system_space, "pages")
+      body_1 = join_bodies(pages_1)
+
+      assert body_1 =~ "_(partial —"
+      assert_received {:window_truncated, _, %{corpus: "pages"}}
+      refute_received {:item_skipped, _, %{corpus: "pages"}}
+
+      admitted = Enum.filter(pages, &(body_1 =~ &1.tag))
+      assert length(admitted) >= 1
+      assert length(admitted) < 5
+
+      # The cursor sits exactly one microsecond past the last admitted page,
+      # short of the fifth.
+      last_admitted = List.last(admitted)
+      cursor_1 = corpus_cursor("pages").last_processed_at
+      assert cursor_1 == DateTime.add(last_admitted.at, 1, :microsecond)
+      assert DateTime.compare(cursor_1, List.last(pages).at) == :lt
+
+      # Later passes deliver the rest; every tag arrives, each exactly once.
+      Enum.reduce_while(2..6, nil, fn i, _ ->
+        {:ok, _} = dispatch("tight-pass-#{i}")
+
+        if DateTime.compare(corpus_cursor("pages").last_processed_at, List.last(pages).at) ==
+             :gt,
+           do: {:halt, :done},
+           else: {:cont, nil}
+      end)
+
+      all_bodies = system_space |> corpus_messages("pages") |> Enum.map(& &1.content)
+
+      for page <- pages do
+        hits = Enum.count(all_bodies, &(&1 =~ page.tag))
+        assert hits == 1, "#{page.tag} delivered #{hits} times"
+      end
     end
   end
 
@@ -732,6 +947,141 @@ defmodule Platform.Agents.HistorianCursorInvariantTest do
     )
     |> Repo.one()
     |> Kernel.||(0)
+  end
+
+  # ── Helpers for the oversized-page describe (01a0ee1d) ──────────────────
+
+  defp dispatch(trigger) do
+    HistorianDispatcher.dispatch_windowed(
+      "historian",
+      "historian.threshold",
+      %{trigger: trigger},
+      @org_workspace
+    )
+  end
+
+  defp join_bodies(messages), do: messages |> Enum.map(& &1.content) |> Enum.join("\n")
+
+  # Park every corpus except `keep` beyond `now`.
+  defp park_all_except(now, keep) do
+    future = DateTime.add(now, 3_600, :second)
+
+    for corpus <- ~w(pages journal messages transcripts files), corpus not in keep do
+      {:ok, _} = Historian.advance_cursor(@org_workspace, corpus, nil, future)
+    end
+  end
+
+  # Seeded org wiki rows would otherwise sit inside the window under test.
+  # Moved two days back inside the sandbox transaction, so nothing leaks.
+  defp backdate_org_wiki! do
+    old = DateTime.add(DateTime.utc_now(), -2 * 86_400, :second)
+
+    Repo.update_all(
+      from(p in Platform.Org.WikiPage, where: is_nil(p.workspace_id)),
+      set: [updated_at: old]
+    )
+
+    Repo.update_all(
+      from(e in Platform.Org.WikiJournalEntry, where: is_nil(e.workspace_id)),
+      set: [inserted_at: old]
+    )
+  end
+
+  defp insert_org_page_at!(file_key, content, %DateTime{} = at) do
+    page =
+      %Platform.Org.WikiPage{}
+      |> Platform.Org.WikiPage.changeset(%{
+        workspace_id: nil,
+        file_key: "#{file_key}-#{System.unique_integer([:positive])}",
+        content: content
+      })
+      |> Repo.insert!()
+
+    {1, _} =
+      Repo.update_all(
+        from(p in Platform.Org.WikiPage, where: p.id == ^page.id),
+        set: [updated_at: at, inserted_at: at]
+      )
+
+    %{id: page.id, file_key: page.file_key, at: at}
+  end
+
+  defp insert_org_journal_at!(content, %DateTime{} = at) do
+    entry =
+      %Platform.Org.WikiJournalEntry{}
+      |> Platform.Org.WikiJournalEntry.changeset(%{
+        workspace_id: nil,
+        content: content,
+        date: DateTime.to_date(at)
+      })
+      |> Repo.insert!()
+
+    {1, _} =
+      Repo.update_all(
+        from(e in Platform.Org.WikiJournalEntry, where: e.id == ^entry.id),
+        set: [inserted_at: at]
+      )
+
+    %{id: entry.id, at: at}
+  end
+
+  # Instruction messages the dispatcher posted for `corpus`, oldest first.
+  defp corpus_messages(%Chat.Space{id: space_id}, corpus) do
+    Repo.all(
+      from(m in Message,
+        where: m.space_id == ^space_id and m.content_type == "text",
+        order_by: [asc: m.inserted_at, asc: m.id]
+      )
+    )
+    |> Enum.filter(&(get_in(&1.metadata, ["cursor", "namespace"]) == corpus))
+  end
+
+  defp corpus_cursor(corpus) do
+    Repo.one!(
+      from(c in HistorianCursor,
+        where: is_nil(c.workspace_id) and c.corpus == ^corpus
+      )
+    )
+  end
+
+  # The persisted `platform.historian.item_skipped` audit row's metadata for
+  # the skipped row `id` in `corpus`. The handler persists historian events
+  # from a supervised Task, so wait for those writes first.
+  defp item_skipped_audit_metadata!(corpus, id) do
+    :ok = Platform.SandboxHelpers.await_supervised_writes()
+
+    rows =
+      Repo.all(
+        from(e in Platform.Audit.Event,
+          where: e.event_type == "platform.historian.item_skipped",
+          select: e.metadata
+        )
+      )
+      |> Enum.filter(&(&1["corpus"] == corpus and &1["message_id"] == id))
+
+    assert [metadata] = rows
+    metadata
+  end
+
+  # Forward each named `[:platform, :historian, event]` to the test process
+  # as `{event, measurements, metadata}`.
+  defp attach_events(events) do
+    test_pid = self()
+
+    for event <- events do
+      handler_id = "historian-01a0ee1d-#{event}-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        [:platform, :historian, event],
+        fn _event, measurements, metadata, _config ->
+          send(test_pid, {event, measurements, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+    end
   end
 
   defp restore_env(_key, nil), do: :ok
