@@ -202,6 +202,33 @@ defmodule PlatformWeb.MeetingLiveRemoveAgentTest do
   defp remove_button_selector(row),
     do: ~s([data-role="meeting-agent-remove"][phx-value-participant-id="#{row.id}"])
 
+  # `participant_rail/1` renders twice (the desktop left rail and the phone
+  # People tab); scoped to the desktop left rail's wrapper, same reasoning
+  # as `remove_button_selector`'s own real-DOM-click test above.
+  @leave_control_selector ~s([data-role="meeting-left-rail-agents"] [data-role="meeting-ask-agent-leave"])
+
+  # A second, bare agent (no chat membership/runtime) — enough to make
+  # `@agents` on the rail read 2, which is all the "hides at 2+" case needs.
+  defp second_agent_row!(room) do
+    n = System.unique_integer([:positive])
+
+    agent =
+      Repo.insert!(%Agent{
+        slug: "removable-lv-agent-2-#{n}",
+        name: "Second LV Agent #{n}",
+        status: "active"
+      })
+
+    {:ok, row} =
+      Meetings.participant_joined(room, %{
+        display_name: agent.name,
+        agent_id: agent.id,
+        metadata: %{"identity" => "agent:#{agent.slug}"}
+      })
+
+    row
+  end
+
   defp reload(row), do: Repo.get!(MeetingParticipant, row.id)
 
   defp open_agent_rows(space_id, agent_id) do
@@ -417,6 +444,90 @@ defmodule PlatformWeb.MeetingLiveRemoveAgentTest do
     end
   end
 
+  # ── Ask Burrow to leave (task 01a0f31d stage 4) ──────────────────────────
+  #
+  # A second, more discoverable entry point into the SAME remove-agent
+  # action exercised above (same event, same handler, same LiveKit request
+  # count) — not a second action. Visible only to the host, and only when
+  # exactly one agent is active.
+
+  describe "the lower-left 'Ask Burrow to leave' control" do
+    test "the host can use it: 1 LiveKit request, same path as the per-row icon",
+         %{
+           conn: conn,
+           space: space,
+           agent: agent,
+           host_user: host_user,
+           meeting: meeting,
+           agent_row: agent_row
+         } do
+      ok_stub()
+
+      {:ok, view, _html} = conn |> login(host_user) |> live(~p"/meetings/#{meeting.slug}")
+
+      assert view
+             |> element(@leave_control_selector)
+             |> render() =~ "Ask Burrow to leave"
+
+      view
+      |> element(~s(#{@leave_control_selector}[phx-value-participant-id="#{agent_row.id}"]))
+      |> render_click()
+
+      render_async(view)
+
+      assert remove_requests() == 1
+      assert reload(agent_row).left_at != nil
+      assert open_agent_rows(space.id, agent.id) == []
+      refute has_element?(view, agent_row_selector(agent_row))
+      refute has_element?(view, @leave_control_selector)
+    end
+
+    test "is absent for a non-host, even with exactly one active agent",
+         %{conn: conn, space: space, meeting: meeting} do
+      ok_stub()
+      member = user!("leave-control-non-host")
+      _membership = chat_user!(space, member)
+
+      {:ok, view, _html} = conn |> login(member) |> live(~p"/meetings/#{meeting.slug}")
+
+      refute has_element?(view, @leave_control_selector)
+      # Positive control: the per-row icon is also absent for a non-host,
+      # so this isn't just proving the rail failed to render at all.
+      refute has_element?(view, ~s([data-role="meeting-agent-remove"]))
+    end
+
+    test "is absent with zero active agents",
+         %{conn: conn, host_user: host_user, meeting: meeting, agent_row: agent_row, room: room} do
+      ok_stub()
+      {:ok, view, _html} = conn |> login(host_user) |> live(~p"/meetings/#{meeting.slug}")
+
+      assert has_element?(view, @leave_control_selector)
+
+      {:ok, _} = Meetings.participant_left(room, agent_row.display_name)
+      render_async(view)
+
+      refute has_element?(view, @leave_control_selector)
+    end
+
+    test "is absent with two-or-more active agents; the per-row icons remain on both",
+         %{
+           conn: conn,
+           host_user: host_user,
+           meeting: meeting,
+           agent_row: agent_row,
+           room: room
+         } do
+      ok_stub()
+      second_row = second_agent_row!(room)
+
+      {:ok, view, _html} = conn |> login(host_user) |> live(~p"/meetings/#{meeting.slug}")
+
+      refute has_element?(view, @leave_control_selector)
+      assert has_element?(view, remove_button_selector(agent_row))
+      assert has_element?(view, remove_button_selector(second_row))
+    end
+  end
+
   # ── A non-host member ────────────────────────────────────────────────────
 
   describe "a non-host member" do
@@ -565,6 +676,67 @@ defmodule PlatformWeb.MeetingLiveRemoveAgentTest do
       assert open_agent_rows(space.id, agent.id) == []
       refute_push("meeting_join", _payload, 300)
       assert is_pid(channel.channel_pid)
+    end
+  end
+
+  # ── An agent joining mid-meeting (task 01a0f31d e2e review, case 4) ──────
+  #
+  # Stage 2 proved the Agents section renders above Humans for whatever is
+  # present AT MOUNT. This proves the same re-sort holds for a row that
+  # arrives AFTER mount over the live room subscription, with no reload —
+  # the section is `:if={@agents != []}` (absent entirely at zero agents),
+  # so this also exercises it going from absent to present.
+  describe "an agent joining mid-meeting" do
+    test "lands in the Agents section, still rendered above Humans, without a reload",
+         %{
+           conn: conn,
+           host_user: host_user,
+           meeting: meeting,
+           agent_row: agent_row,
+           room: room
+         } do
+      ok_stub()
+
+      # Only the host is active at mount — the setup's agent has left
+      # before this test's point of view begins.
+      {:ok, _} = Meetings.participant_left(room, agent_row.display_name)
+
+      {:ok, view, html} = conn |> login(host_user) |> live(~p"/meetings/#{meeting.slug}")
+
+      {rail_start, _} = :binary.match(html, ~s(data-role="meeting-left-rail-agents"))
+
+      refute html
+             |> binary_part(rail_start, byte_size(html) - rail_start)
+             |> String.contains?(~s(data-section="agents")),
+             "expected no Agents section before any agent has joined"
+
+      # The real production sequence: a fresh agent lands in the room over
+      # the LiveKit webhook path, same helper the "two-or-more agents" case
+      # above uses, broadcasting on the room's own PubSub topic that the
+      # already-mounted view is subscribed to.
+      new_row = second_agent_row!(room)
+      html = render_async(view)
+
+      assert has_element?(view, ~s(li[data-participant-id="#{new_row.id}"]))
+
+      {rail_start, _} = :binary.match(html, ~s(data-role="meeting-left-rail-agents"))
+      slice = binary_part(html, rail_start, byte_size(html) - rail_start)
+
+      {agents_index, _} =
+        case :binary.match(slice, ~s(data-section="agents")) do
+          {index, len} -> {index, len}
+          :nomatch -> flunk("no Agents section after the mid-meeting join")
+        end
+
+      {humans_index, _} =
+        case :binary.match(slice, ~s(data-section="humans")) do
+          {index, len} -> {index, len}
+          :nomatch -> flunk("no Humans section after the mid-meeting join")
+        end
+
+      assert agents_index < humans_index,
+             "expected the Agents section to render before Humans after a mid-meeting join, " <>
+               "but Agents was at #{agents_index} and Humans at #{humans_index}"
     end
   end
 end

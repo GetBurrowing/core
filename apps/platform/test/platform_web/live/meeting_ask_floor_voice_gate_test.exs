@@ -99,7 +99,7 @@ defmodule PlatformWeb.MeetingAskFloorVoiceGateTest do
 
   # A voice-capable agent whose runtime declares the LiveKit Agent Dispatch
   # opt-in key — the shape `mix platform.seed_meeting_voice_agent` stamps
-  # on the real Meeting Assistant, and the ONLY shape `livekit_dispatch_target/1`
+  # on the real Burrow, and the ONLY shape `livekit_dispatch_target/1`
   # (and therefore `ask_floor_window_signal/3`) resolves.
   defp voice_gated_agent! do
     n = System.unique_integer([:positive])
@@ -109,7 +109,7 @@ defmodule PlatformWeb.MeetingAskFloorVoiceGateTest do
       %Agent{}
       |> Agent.changeset(%{
         slug: "meeting-assistant-#{n}",
-        name: "Meeting Assistant #{n}",
+        name: "Burrow #{n}",
         status: "active"
       })
       |> Repo.insert!()

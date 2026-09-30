@@ -89,7 +89,7 @@ defmodule Platform.Meetings.LivekitAgentDispatchTest do
 
   # A voice-capable row that declares the LiveKit Agent Dispatch opt-in key
   # — the shape `mix platform.seed_meeting_voice_agent` now stamps on the
-  # Meeting Assistant's runtime — but that never connects a `RuntimeChannel`
+  # Burrow's runtime — but that never connects a `RuntimeChannel`
   # socket, exactly like the real livekit-agents worker never does.
   defp dispatch_capable_agent! do
     owner = user!()

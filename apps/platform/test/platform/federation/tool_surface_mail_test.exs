@@ -8,7 +8,7 @@ defmodule Platform.Federation.ToolSurfaceMailTest do
 
   As of task 01a0d4a0 stage 4 round 2, these tools live in their OWN `mail`
   bundle, not folded into `messaging` — a runtime granted `messaging` alone
-  (e.g. the single-purpose Meeting Assistant voice persona) no longer gets
+  (e.g. the single-purpose Burrow voice persona) no longer gets
   mail-drafting for free. See `ToolSurface.messaging_tools/0`'s moduledoc
   comment and the `20260924180000_agent_runtime_mail_bundle.exs` migration
   that backfilled existing runtimes.

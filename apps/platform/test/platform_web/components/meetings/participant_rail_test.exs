@@ -1252,6 +1252,159 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       assert classes =~ "bg-base-300"
       assert classes =~ "text-neutral"
     end
+
+    # ── Item 3a (task 01a0f324 stage 3): fixed-frame button ────────────────
+    #
+    # The production bug: the waveform widened `w-0` -> `w-9` on press
+    # inside a button with no width of its own, so the whole control grew
+    # ~36px into neighbouring row content. The server only ever renders
+    # `data-pressed="false"` (the hook flips it client-side on a
+    # `phx-update="ignore"` node), so a LiveView test cannot literally
+    # press the button and diff a re-render. What it CAN prove statically
+    # is the invariant that makes the bug structurally impossible: the
+    # button's class list carries a FIXED width/height utility, and NO
+    # utility anywhere in that same list is conditioned on `pressed` or
+    # `rejected` and touches width or height — across every state this
+    # component renders a control in (idle, disabled, held-by-other).
+    test "the Ask button carries a fixed width/height class with no pressed- or rejected-conditional sizing" do
+      idle_html = hold_rail([agent("Octavius", "oct-1")], hold_to_talk?: true)
+      disabled_html = hold_rail([agent_with_unresolved_id("Ghost")], hold_to_talk?: true)
+
+      held_by_other_html =
+        hold_rail([agent("Octavius", "oct-1")],
+          hold_to_talk?: true,
+          pressed_agent_id: "someone-else",
+          ask_floor_holders: %{"oct-1" => "Dalton"}
+        )
+
+      for html <- [idle_html, disabled_html, held_by_other_html] do
+        [control] = hold_controls(html)
+        [classes] = Floki.attribute(control, "class")
+        class_list = String.split(classes, " ")
+
+        assert "w-[88px]" in class_list
+        assert "h-11" in class_list
+
+        refute Enum.any?(class_list, fn class ->
+                 (class =~ "pressed" or class =~ "rejected") and
+                   (class =~ ~r/:w-/ or class =~ ~r/:h-/)
+               end)
+      end
+    end
+
+    test "the Ask button's frame is identical (same width/height classes) across idle, disabled, and held-by-other" do
+      idle_html = hold_rail([agent("Octavius", "oct-1")], hold_to_talk?: true)
+      disabled_html = hold_rail([agent_with_unresolved_id("Ghost")], hold_to_talk?: true)
+
+      held_by_other_html =
+        hold_rail([agent("Octavius", "oct-1")],
+          hold_to_talk?: true,
+          pressed_agent_id: "someone-else",
+          ask_floor_holders: %{"oct-1" => "Dalton"}
+        )
+
+      frame_classes =
+        for html <- [idle_html, disabled_html, held_by_other_html] do
+          [control] = hold_controls(html)
+          [classes] = Floki.attribute(control, "class")
+
+          classes
+          |> String.split(" ")
+          |> Enum.filter(&(&1 == "w-[88px]" or &1 == "h-11" or &1 == "overflow-hidden"))
+          |> Enum.sort()
+        end
+
+      assert Enum.uniq(frame_classes) == [["h-11", "overflow-hidden", "w-[88px]"]]
+    end
+
+    # ── Item 3b (task 01a0f324 stage 3): the held row clears the veil ──────
+    #
+    # The veil is `fixed inset-0 z-50` and dims everything under it; the
+    # button being held carried no z-index at all, so the veil painted
+    # over the exact control the presser's finger was on. `z-[60]` only
+    # takes effect on a POSITIONED box, so `relative` has to travel with
+    # it or the z-index is a no-op — this checks both together, plus the
+    # 2px base-content ring the canvas specifies.
+    defp agent_row(html) do
+      [row] = Floki.parse_fragment!(html) |> Floki.find(~s(li[data-participant-type="agent"]))
+      row
+    end
+
+    test "an agent row is positioned and carries a pressed-state z-index above the veil's z-50, plus a ring" do
+      html = hold_rail([agent("Octavius", "oct-1")], hold_to_talk?: true)
+      row = agent_row(html)
+
+      assert Floki.attribute(row, "data-pressed") == ["false"]
+
+      [classes] = Floki.attribute(row, "class")
+      class_list = String.split(classes, " ")
+
+      assert "relative" in class_list
+      assert "data-[pressed=true]:z-[60]" in class_list
+      assert "data-[pressed=true]:ring-2" in class_list
+      assert "data-[pressed=true]:ring-base-content" in class_list
+    end
+
+    test "a row with no hold-to-talk control carries no pressed-state z-index class" do
+      html = hold_rail([agent("Octavius", "oct-1")], [])
+      row = agent_row(html)
+
+      [classes] = Floki.attribute(row, "class")
+      refute classes =~ "z-[60]"
+    end
+
+    # ── Item 4 (task 01a0f324 stage 3): the feedback line never truncates ──
+    #
+    # The old surface was a floating tooltip, `max-w-56` + no wrapping
+    # guarantee, which clipped copy longer than the early-release nudge
+    # ("Couldn't hear you. Check that your microphone is on, then hold
+    # Ask." and "Burrow went offline. It will rejoin when it reconnects."
+    # both overflow 56 Tailwind units of width). The replacement is a
+    # plain block under the row: no `fixed`, no `max-w-*`, no `truncate`,
+    # `break-words` so long copy wraps instead of clipping. The sentence
+    # itself stays `text-base-content` — the colour signal is only on the
+    # icon and the left rule (`data-tone`), never on the text run.
+    defp hold_feedback(html) do
+      [feedback] =
+        Floki.parse_fragment!(html) |> Floki.find(~s([data-role="meeting-agent-hold-feedback"]))
+
+      feedback
+    end
+
+    test "the feedback line carries no truncate or max-w clamp, wraps, and starts hidden" do
+      html = hold_rail([agent("Octavius", "oct-1")], hold_to_talk?: true)
+      feedback = hold_feedback(html)
+
+      [classes] = Floki.attribute(feedback, "class")
+      class_list = String.split(classes, " ")
+
+      refute "truncate" in class_list
+      refute Enum.any?(class_list, &(&1 =~ ~r/^max-w-/))
+      assert "w-full" in class_list
+      assert "text-base-content" in class_list
+      assert Floki.attribute(feedback, "data-open") == ["false"]
+
+      text_node =
+        Floki.find(feedback, ~s([data-role="meeting-agent-hold-feedback-text"]))
+
+      assert [text_classes] = Floki.attribute(text_node, "class")
+      text_class_list = String.split(text_classes, " ")
+      refute "truncate" in text_class_list
+      refute Enum.any?(text_class_list, &(&1 =~ ~r/^max-w-/))
+      assert "break-words" in text_class_list
+      # No colour token anywhere on the text run itself — the tone lives
+      # on the icon/rule only (canvas self-critique: small coloured text
+      # fails the AA floor on base-200).
+      refute Enum.any?(text_class_list, &(&1 =~ ~r/text-(error|warning|success|info)\b/))
+    end
+
+    test "the feedback line is absent when the row has no hold-to-talk control" do
+      html = hold_rail([agent("Octavius", "oct-1")], [])
+
+      assert Floki.parse_fragment!(html)
+             |> Floki.find(~s([data-role="meeting-agent-hold-feedback"])) ==
+               []
+    end
   end
 
   # Task 01a0e47c stage 3 (canvas 01a0e47d-3005 / Harper's mockup
@@ -1312,7 +1465,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
     [
       human("Marlowe", "u-1"),
       human("Rowan", "u-2"),
-      agent("Meeting Assistant", "ma-1"),
+      agent("Burrow", "ma-1"),
       agent("Saru", "saru-1")
     ]
   end
@@ -1341,7 +1494,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
     end
 
     test "is wired to the event with the row id, named for the agent, and neutral" do
-      html = remove_rail([agent("Meeting Assistant", "ma-1")], can_remove_agents?: true)
+      html = remove_rail([agent("Burrow", "ma-1")], can_remove_agents?: true)
       [button] = html |> Floki.parse_fragment!() |> remove_buttons()
 
       assert Floki.attribute(button, "type") == ["button"]
@@ -1350,7 +1503,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       assert Floki.attribute(button, "phx-value-participant-id") == ["p-ma-1"]
 
       assert Floki.attribute(button, "aria-label") == [
-               "Remove Meeting Assistant from the meeting"
+               "Remove Burrow from the meeting"
              ]
 
       assert Floki.attribute(button, "title") == ["Remove from meeting"]
@@ -1407,14 +1560,14 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       html =
         remove_rail(remove_roster(),
           can_remove_agents?: true,
-          removal_errors: %{"p-ma-1" => "Couldn't remove Meeting Assistant. Try again"}
+          removal_errors: %{"p-ma-1" => "Couldn't remove Burrow. Try again"}
         )
 
       doc = Floki.parse_fragment!(html)
       failed_row = Floki.find(doc, ~s(li[data-participant-id="p-ma-1"]))
 
       [line] = Floki.find(failed_row, ~s([data-role="meeting-agent-remove-error"]))
-      assert Floki.text(line) |> String.trim() == "Couldn't remove Meeting Assistant. Try again"
+      assert Floki.text(line) |> String.trim() == "Couldn't remove Burrow. Try again"
       [class] = Floki.attribute(line, "class")
       assert class =~ "text-error"
       assert class =~ "text-xs"
@@ -1424,6 +1577,168 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
 
       # Only that row.
       assert length(Floki.find(doc, ~s([data-role="meeting-agent-remove-error"]))) == 1
+    end
+  end
+
+  # ── Ask Burrow to leave (task 01a0f31d stage 4) ──────────────────────────
+  #
+  # A second, more discoverable entry point into the SAME remove-agent
+  # action the tests above already cover (same event, same handler). Visible
+  # only for the host, and only when exactly one agent is active — the
+  # ambiguous 0/2+ cases hide the control outright rather than building a
+  # picker, leaving the per-row icons (asserted above) as the only removal
+  # path in that case.
+
+  defp leave_control(nodes), do: Floki.find(nodes, ~s([data-role="meeting-ask-agent-leave"]))
+
+  describe "Ask Burrow to leave (lower-left control)" do
+    test "renders for the host with exactly one active agent" do
+      html =
+        remove_rail(
+          [human("Marlowe", "u-1"), agent("Burrow", "ma-1")],
+          can_remove_agents?: true
+        )
+
+      doc = Floki.parse_fragment!(html)
+      [button] = leave_control(doc)
+
+      assert Floki.text(button) |> String.trim() == "Ask Burrow to leave"
+      assert Floki.attribute(button, "type") == ["button"]
+      assert Floki.attribute(button, "phx-click") == ["remove_agent_from_call"]
+      assert Floki.attribute(button, "phx-value-participant-id") == ["p-ma-1"]
+      assert Floki.attribute(button, "disabled") == []
+
+      [class] = Floki.attribute(button, "class")
+      refute class =~ "error"
+      refute class =~ "btn-error"
+      refute html =~ "Kick"
+
+      # Joins the per-row icon rather than replacing it.
+      assert length(remove_buttons(doc)) == 1
+    end
+
+    test "is absent for a non-host, even with exactly one active agent" do
+      html = remove_rail([human("Marlowe", "u-1"), agent("Burrow", "ma-1")], [])
+      doc = Floki.parse_fragment!(html)
+
+      assert leave_control(doc) == []
+      # Positive control: the agent row itself rendered.
+      assert length(Floki.find(doc, ~s(li[data-participant-type="agent"]))) == 1
+    end
+
+    test "is absent with zero active agents" do
+      html = remove_rail([human("Marlowe", "u-1")], can_remove_agents?: true)
+      doc = Floki.parse_fragment!(html)
+
+      assert leave_control(doc) == []
+    end
+
+    test "is absent with two-or-more active agents, and the per-row icons remain" do
+      html =
+        remove_rail(
+          [human("Marlowe", "u-1"), agent("Burrow", "ma-1"), agent("Saru", "saru-1")],
+          can_remove_agents?: true
+        )
+
+      doc = Floki.parse_fragment!(html)
+
+      assert leave_control(doc) == []
+      assert length(remove_buttons(doc)) == 2
+    end
+
+    test "disables while the single agent's removal is in flight" do
+      html =
+        remove_rail(
+          [human("Marlowe", "u-1"), agent("Burrow", "ma-1")],
+          can_remove_agents?: true,
+          removing_ids: MapSet.new(["p-ma-1"])
+        )
+
+      doc = Floki.parse_fragment!(html)
+      [button] = leave_control(doc)
+      assert Floki.attribute(button, "disabled") != []
+    end
+  end
+
+  describe "section order (task 01a0f31d stage 2: Agents above People)" do
+    # Per the approved design canvas ("Burrow meeting controls: design
+    # direction", 01a0f31f-46e8), the Agents section must render FIRST,
+    # above the humans section, on both surfaces `participant_rail/1`
+    # backs (the desktop left rail and the phone People tab via
+    # `CallShell.call_rail/1` — both call this same component, so a
+    # template-level reorder covers both without a second fix).
+    #
+    # Asserted on BYTE OFFSET of the two `<section data-section="...">`
+    # tags rather than on `MeetingLive.partition_participants/1`'s
+    # returned tuple order, which stays `{humans, agents}` and is out of
+    # scope for this stage (other callers — the "N people · M agents" bar
+    # text — depend on that order).
+    test "the Agents section's DOM node precedes the Humans section's DOM node" do
+      html = rail([human("Harper", "u-1"), agent("Saru", "a-1")])
+
+      agents_index =
+        case :binary.match(html, ~s(data-section="agents")) do
+          {index, _len} -> index
+          :nomatch -> flunk("no <section data-section=\"agents\"> in the rendered rail")
+        end
+
+      humans_index =
+        case :binary.match(html, ~s(data-section="humans")) do
+          {index, _len} -> index
+          :nomatch -> flunk("no <section data-section=\"humans\"> in the rendered rail")
+        end
+
+      assert agents_index < humans_index,
+             "expected the Agents section to render before the Humans section, " <>
+               "but Agents was at byte #{agents_index} and Humans at byte #{humans_index}"
+    end
+
+    test "still holds when many humans and many agents are present" do
+      html =
+        rail([
+          human("Harper", "u-1"),
+          human("Priya", "u-2"),
+          agent("Saru", "a-1"),
+          agent("Burrow", "a-2")
+        ])
+
+      {agents_index, _} = :binary.match(html, ~s(data-section="agents"))
+      {humans_index, _} = :binary.match(html, ~s(data-section="humans"))
+
+      assert agents_index < humans_index
+    end
+
+    # Task 01a0f31d's e2e review (case 3): Burrow's resolved name must
+    # reach the row as plain text, a nameless/orphaned agent row must
+    # fall back to the literal word "Agent" (never blank, never the old
+    # "Unknown participant" copy, never a crash), and both must sit
+    # inside the Agents section, which still renders above Humans.
+    test "Burrow's name renders, a nameless agent falls back to 'Agent', and both sit above Humans" do
+      html =
+        rail([
+          human("Harper", "u-1"),
+          agent("Burrow", "a-1"),
+          agent(nil, "a-2")
+        ])
+
+      name_text = fn row_html ->
+        row_html
+        |> Floki.parse_fragment!()
+        |> Floki.find(~s([data-role="participant-name"]))
+        |> Floki.text()
+        |> String.trim()
+      end
+
+      assert agent_row(html, "a-1") |> name_text.() == "Burrow"
+
+      nameless_name = agent_row(html, "a-2") |> name_text.()
+      assert nameless_name == "Agent"
+      refute nameless_name == ""
+      refute nameless_name =~ "Unknown participant"
+
+      {agents_index, _} = :binary.match(html, ~s(data-section="agents"))
+      {humans_index, _} = :binary.match(html, ~s(data-section="humans"))
+      assert agents_index < humans_index
     end
   end
 end

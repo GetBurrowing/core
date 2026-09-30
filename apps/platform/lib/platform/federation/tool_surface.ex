@@ -953,7 +953,7 @@ defmodule Platform.Federation.ToolSurface do
   # before this split, ANY runtime holding `messaging` (which includes
   # `AgentRuntime.default_allowed_bundles/0`) implicitly got
   # `mail_draft_create`/`mail_draft_update` too, which is how the
-  # single-purpose "Meeting Assistant" persona (whose `allowed_bundles` was
+  # single-purpose "Burrow" persona (whose `allowed_bundles` was
   # at the time scoped to `space messaging context_read memory`, and is now
   # `messaging context_read` per stage 5's further narrowing, explicitly
   # EXCLUDING task/plan/review either way) could still call

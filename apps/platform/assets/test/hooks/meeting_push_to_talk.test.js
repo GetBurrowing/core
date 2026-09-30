@@ -681,64 +681,170 @@ describe("the hold-threshold events", () => {
   })
 })
 
-// ── The early-release coaching tooltip (task 01a0cf5c stage 2) ────────────
+// ── The feedback line (task 01a0f324 stage 3, item 4) ─────────────────────
 //
-// "Near the button, not centre stage" per the design canvas — positioned
-// off the button's own `getBoundingClientRect` because the wrapping
-// element it lives in is `display: contents` and gives CSS nothing to
-// anchor a `position: relative` against.
+// Replaces the old floating `[data-role="meeting-agent-hold-coach"]`
+// tooltip (positioned via `getBoundingClientRect` off the button, because
+// its `display: contents` wrapper gave CSS nothing to anchor a
+// `position: relative` against). The new element is a plain block
+// `ParticipantRail` renders as a full-width sibling of the row, so this
+// hook only ever sets its `data-open`/`data-tone` and text content — no
+// position math left to test.
 
-describe("the coaching tooltip", () => {
+function fakeFeedback() {
+  const textNode = { textContent: "" }
+  const feedback = {
+    dataset: {},
+    querySelector(sel) {
+      return sel === '[data-role="meeting-agent-hold-feedback-text"]' ? textNode : null
+    },
+  }
+  return { feedback, textNode }
+}
+
+function fakeRow(feedback) {
+  return {
+    dataset: {},
+    querySelector(sel) {
+      return sel === '[data-role="meeting-agent-hold-feedback"]' ? feedback : null
+    },
+  }
+}
+
+describe("the feedback line", () => {
   afterEach(() => {
     vi.useRealTimers()
   })
 
-  it("positions itself off the button's own bounding rect on an early release, and auto-hides", () => {
+  it("shows the early-release nudge under the row, full text, and auto-hides", () => {
     vi.useFakeTimers()
 
-    const tip = { dataset: {}, style: {} }
-    const wrap = {
-      querySelector(sel) {
-        return sel === '[data-role="meeting-agent-hold-coach"]' ? tip : null
-      },
-    }
+    const { feedback, textNode } = fakeFeedback()
+    const row = fakeRow(feedback)
 
     const { el } = mountHook(roomWith([micPublication()]))
     el.dataset.agentId = "agent-123"
-    el.closest = (sel) => (sel === '[data-role="meeting-agent-hold-wrap"]' ? wrap : null)
-    el.getBoundingClientRect = () => ({ left: 100, top: 40, width: 20, height: 20 })
+    el.closest = (sel) => (sel === '[data-participant-type="agent"]' ? row : null)
 
     el.fire("pointerdown", { button: 0 })
     el.fire("pointerup", {}) // released immediately — well under the threshold
 
-    expect(tip.dataset.open).toBe("true")
-    expect(tip.style.left).toBe("110px")
-    expect(tip.style.top).toBe("32px")
+    expect(feedback.dataset.open).toBe("true")
+    expect(feedback.dataset.tone).toBe("neutral")
+    expect(textNode.textContent).toBe("Hold it down and talk. Let go when you are done.")
 
-    vi.advanceTimersByTime(2600)
+    vi.advanceTimersByTime(4000)
 
-    expect(tip.dataset.open).toBe("false")
+    expect(feedback.dataset.open).toBe("false")
   })
 
   it("never opens on a hold that crosses the threshold", () => {
     vi.useFakeTimers()
 
-    const tip = { dataset: {}, style: {} }
-    const wrap = {
-      querySelector(sel) {
-        return sel === '[data-role="meeting-agent-hold-coach"]' ? tip : null
-      },
-    }
+    const { feedback } = fakeFeedback()
+    const row = fakeRow(feedback)
 
     const { el } = mountHook(roomWith([micPublication()]))
     el.dataset.agentId = "agent-123"
-    el.closest = () => wrap
+    el.closest = () => row
     el.getBoundingClientRect = () => ({ left: 0, top: 0, width: 0, height: 0 })
 
     el.fire("pointerdown", { button: 0 })
     vi.advanceTimersByTime(HOLD_THRESHOLD_MS + 20)
     el.fire("pointerup", {})
 
-    expect(tip.dataset.open).toBeUndefined()
+    // "false", not unset: `beginPress()` explicitly hides whatever the
+    // LAST press left showing (see its comment) — a hold that crosses
+    // the threshold never OPENS it in the first place.
+    expect(feedback.dataset.open).toBe("false")
+  })
+
+  // Item 4's whole reason to exist: the old tooltip was `max-w-56` and
+  // clipped copy this long. Nothing here asserts on CSS (that is
+  // `participant_rail_test.exs`'s job) — this only proves the FULL
+  // sentence, unabbreviated, is what the hook hands the text node for
+  // every client-side rejection reason.
+  it.each(["no-microphone", "microphone-muted", "no-audio-context", "pointer-lost"])(
+    "shows the full couldn't-hear copy for a %s rejection",
+    (reason) => {
+      const { feedback, textNode } = fakeFeedback()
+      const row = fakeRow(feedback)
+
+      const room =
+        reason === "no-microphone"
+          ? roomWith([])
+          : roomWith([micPublication({ isMuted: reason === "microphone-muted" })])
+
+      const { el, hook } = mountHook(room)
+      el.dataset.agentId = "agent-123"
+      el.closest = () => row
+
+      if (reason === "no-audio-context") {
+        delete globalThis.window.AudioContext
+        delete globalThis.window.webkitAudioContext
+      }
+
+      if (reason === "pointer-lost") {
+        capturingEl(el, { throws: true })
+        el.fire("pointerdown", { button: 0, pointerId: 1 })
+      } else {
+        hook.beginPress()
+      }
+
+      expect(feedback.dataset.tone).toBe("error")
+      expect(textNode.textContent).toBe(
+        "Couldn't hear you. Check that your microphone is on, then hold Ask."
+      )
+    }
+  )
+
+  // `held-by-other` is the one server-side rejection this hook renders —
+  // and it is deliberately left OUT of the feedback line (see
+  // `REJECTION_FEEDBACK`'s comment in the hook): `ParticipantRail` already
+  // shows a "Held by <name>" chip on the row, so this would be the same
+  // fact said twice.
+  it("does not open the feedback line for a held-by-other rejection", () => {
+    const { feedback } = fakeFeedback()
+    const row = fakeRow(feedback)
+
+    const { el, serverHandlers } = mountHook(roomWith([micPublication()]))
+    el.dataset.agentId = "agent-123"
+    el.closest = () => row
+
+    el.fire("pointerdown", { button: 0 })
+    serverHandlers["push_to_talk_rejected"]({ agent_id: "agent-123", reason: "held-by-other" })
+
+    // "false", not unset — see the previous test's comment.
+    expect(feedback.dataset.open).toBe("false")
+  })
+
+  // Task 01a0f324 stage 3: `disconnected()`/`reconnected()` are real
+  // Phoenix LiveView hook lifecycle callbacks (see `meeting_client.js`'s
+  // and `viewport_breakpoint.js`'s own `reconnected()`), not a new
+  // detection mechanism — LiveView calls `disconnected()` when the
+  // socket drops and `reconnected()` when it comes back, DOM intact.
+  it("shows the offline warning on disconnected(), with no auto-hide, and clears it on reconnected()", () => {
+    vi.useFakeTimers()
+
+    const { feedback, textNode } = fakeFeedback()
+    const row = fakeRow(feedback)
+
+    const { el, hook } = mountHook(roomWith([micPublication()]))
+    el.closest = () => row
+
+    hook.disconnected()
+
+    expect(feedback.dataset.open).toBe("true")
+    expect(feedback.dataset.tone).toBe("warning")
+    expect(textNode.textContent).toBe("Burrow went offline. It will rejoin when it reconnects.")
+
+    // Does NOT time out on its own — an offline notice that vanished
+    // while the socket was still down would be a worse lie than the
+    // truncation this stage fixes.
+    vi.advanceTimersByTime(60_000)
+    expect(feedback.dataset.open).toBe("true")
+
+    hook.reconnected()
+    expect(feedback.dataset.open).toBe("false")
   })
 })

@@ -3,7 +3,7 @@ defmodule PlatformWeb.MeetingAskFloorVoiceCardLinkTest do
   Task 01a0e47c stage 3 — the verify-and-close-gaps stage.
 
   Stage 2 built the missing coupling: `AskFloor.claim/5`/`release/3` now
-  signal the dedicated Meeting Assistant voice worker's LiveKit room over
+  signal the dedicated Burrow voice worker's LiveKit room over
   a data channel. This file proves what stage 2 did NOT need to touch
   and stage 3 is on the hook to confirm: the FRONT of the hold-to-ask
   pipe (the ask-veil, the live transcript feed, the resulting
@@ -89,7 +89,7 @@ defmodule PlatformWeb.MeetingAskFloorVoiceCardLinkTest do
       %Agent{}
       |> Agent.changeset(%{
         slug: "meeting-assistant-#{n}",
-        name: "Meeting Assistant",
+        name: "Burrow",
         status: "active"
       })
       |> Repo.insert!()
@@ -180,7 +180,7 @@ defmodule PlatformWeb.MeetingAskFloorVoiceCardLinkTest do
     %{alice_view: alice_view, meeting: meeting, agent: agent, room: room}
   end
 
-  test "holding Ask on the Meeting Assistant reads exactly like any other agent, and the landed card carries the ladder onward",
+  test "holding Ask on Burrow reads exactly like any other agent, and the landed card carries the ladder onward",
        %{alice_view: alice_view, meeting: meeting, agent: agent} do
     agent_id = agent.id
 

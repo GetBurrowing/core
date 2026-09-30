@@ -1,6 +1,6 @@
 defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgent do
   @moduledoc """
-  Seed the single, distinct "Meeting Assistant" persona (task 01a0d4a0-6570
+  Seed the single, distinct "Burrow" persona (task 01a0d4a0-6570
   stage 2) and wire it into Core using ONLY already-shipped mechanisms — no
   new Core plumbing, no migration.
 
@@ -104,12 +104,12 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgent do
   alias Platform.Federation
   alias Platform.Repo
 
-  @shortdoc "Seed the Meeting Assistant persona and its voice runtime"
+  @shortdoc "Seed the Burrow persona and its voice runtime"
 
   @usage "Usage: mix platform.seed_meeting_voice_agent --owner <email>"
 
   @agent_slug "meeting-assistant"
-  @agent_name "Meeting Assistant"
+  @agent_name "Burrow"
 
   # The LiveKit `agent_name` `services/meeting-voice-agent`'s worker
   # registers itself under (`WorkerOptions(agent_name: config.worker_agent_name)`
@@ -139,7 +139,7 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgent do
   }
 
   @soul_md """
-  You are the Meeting Assistant — a distinct, single-purpose persona whose \
+  You are Burrow — a distinct, single-purpose persona whose \
   only job is to be a helpful, real-time voice participant in Suite \
   meetings. You are not a task manager, a planner, or a reviewer: you have \
   no task, plan, or review tools, and you don't create or track work items. \
@@ -147,7 +147,7 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgent do
   """
 
   @identity_md """
-  Name: Meeting Assistant.
+  Name: Burrow.
 
   What you are: a dedicated voice participant, built on the \
   meeting-voice-agent livekit-agents runtime \
@@ -195,7 +195,7 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgent do
 
     Mix.shell().info(
       """
-      Meeting Assistant seeded
+      Burrow seeded
         agent_id:        #{agent.id}
         agent_slug:      #{agent.slug}
         runtime_id:      #{runtime.runtime_id}
@@ -251,7 +251,7 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgent do
         %Agent{}
         |> Agent.changeset(%{slug: @agent_slug, name: @agent_name, status: "active"})
         |> Repo.insert()
-        |> unwrap!("insert Meeting Assistant agent")
+        |> unwrap!("insert Burrow agent")
 
       {:ok, %Agent{} = agent} ->
         agent
@@ -278,7 +278,7 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgent do
       agent
       |> Agent.changeset(%{voice_config: @voice_config})
       |> Repo.update()
-      |> unwrap!("set Meeting Assistant voice_config")
+      |> unwrap!("set Burrow voice_config")
     end
   end
 

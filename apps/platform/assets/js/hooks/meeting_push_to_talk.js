@@ -58,6 +58,67 @@ const BAR_COUNT = 12
 // produces that event and the veil path simply never runs.
 const HOLD_THRESHOLD_MS = 380
 
+// Task 01a0f324 stage 3 (item 4) — the copy shown in the full-width
+// feedback line under the row, keyed by the SAME `reason` string
+// `_reject`/`_serverReject` already stamp onto `data-rejected`. Every
+// client-side rejection this hook can raise (`no-microphone`,
+// `microphone-muted`, `no-audio-context`, `pointer-lost`) reduces to one
+// honest sentence: none of them prove the agent heard anything, and a
+// presser cannot tell the four apart from the outside, so there is no
+// reason to make them read four different ways. `held-by-other` (the
+// one SERVER-side reason, `MeetingPushToTalk._serverReject`) already has
+// its own "Held by <name>" chip on the row (`ParticipantRail`), so it is
+// deliberately left OUT of this map — it stays a colour-only cue on the
+// button, not a second copy of the same fact in the feedback line.
+const REJECTION_FEEDBACK = {
+  "no-microphone": {
+    tone: "error",
+    text: "Couldn't hear you. Check that your microphone is on, then hold Ask.",
+  },
+  "microphone-muted": {
+    tone: "error",
+    text: "Couldn't hear you. Check that your microphone is on, then hold Ask.",
+  },
+  "no-audio-context": {
+    tone: "error",
+    text: "Couldn't hear you. Check that your microphone is on, then hold Ask.",
+  },
+  "pointer-lost": {
+    tone: "error",
+    text: "Couldn't hear you. Check that your microphone is on, then hold Ask.",
+  },
+}
+
+// The early-release nudge (task 01a0cf5c stage 2) is not a rejection —
+// nothing was refused, the press just never crossed `HOLD_THRESHOLD_MS`
+// — so it is not in `REJECTION_FEEDBACK` above and is shown directly
+// where `endPress()` decides that happened.
+const EARLY_RELEASE_FEEDBACK = {
+  tone: "neutral",
+  text: "Hold it down and talk. Let go when you are done.",
+}
+
+// Shown on `disconnected()` (a real Phoenix LiveView hook lifecycle
+// callback, same one `meeting_client.js` and `viewport_breakpoint.js`
+// already rely on for `reconnected()` — see their moduledocs). This is
+// the one member of the feedback vocabulary that is not about THIS
+// button's own press/reject cycle: the whole page's live connection
+// dropped, which for a voice agent whose every word crosses this socket
+// reads exactly like the agent itself going quiet.
+const OFFLINE_FEEDBACK = {
+  tone: "warning",
+  text: "Burrow went offline. It will rejoin when it reconnects.",
+}
+
+// How long a self-clearing feedback message (a rejection, the
+// early-release nudge) stays up before fading — longer than the old
+// coach tooltip's 2600ms because the copy it now has to carry
+// ("Couldn't hear you. Check that your microphone is on, then hold
+// Ask.") is longer than "Hold it down and talk. Let go when you are
+// done." was. `disconnected()`'s offline notice does not use this at
+// all — see `_showFeedback`'s `autoHide` option.
+const FEEDBACK_AUTO_HIDE_MS = 4000
+
 const MeetingPushToTalk = {
   mounted() {
     this._levels = []
@@ -132,7 +193,23 @@ const MeetingPushToTalk = {
     this._unbind()
     this._teardownAnalyser()
     this._clearHoldThresholdTimer()
-    this._clearCoachTimer()
+    this._clearFeedbackTimer()
+  },
+
+  // Task 01a0f324 stage 3 (item 4) — a real Phoenix LiveView hook
+  // lifecycle callback (`meeting_client.js` and `viewport_breakpoint.js`
+  // already use its `reconnected()` half), not a new detection mechanism:
+  // LiveView calls this on the hook when the socket drops, with the DOM
+  // left in place, and `reconnected()` when it comes back. Deliberately
+  // does not touch `_pressed`/`_rejection` or push any event — the
+  // hold-detection state machine is out of this stage's scope; this only
+  // says so in the feedback line.
+  disconnected() {
+    this._showFeedback(OFFLINE_FEEDBACK.tone, OFFLINE_FEEDBACK.text, { autoHide: false })
+  },
+
+  reconnected() {
+    this._hideFeedback()
   },
 
   // ── Public, for tests and for the rest of the page ──────────────────────
@@ -185,6 +262,11 @@ const MeetingPushToTalk = {
     this._levels = []
     this._heldLongEnough = false
     this.el.dataset.pressed = "true"
+    this._setRowPressed(true)
+    // A fresh press supersedes whatever the LAST one left showing (an
+    // old rejection, the early-release nudge) — it is either about to
+    // succeed or fail on its own terms, not carry forward stale copy.
+    this._hideFeedback()
     this.pushEvent("push_to_talk_press", this._pressPayload())
 
     // Task 01a0cf5c stage 2: announce the press immediately so
@@ -241,19 +323,20 @@ const MeetingPushToTalk = {
     this._pressed = false
     this._heldLongEnough = false
     this.el.dataset.pressed = "false"
+    this._setRowPressed(false)
     this._teardownAnalyser()
     this._paintBars(0)
     this.pushEvent("push_to_talk_release", {})
 
     // Task 01a0cf5c stage 2: an early release (never crossed
     // `HOLD_THRESHOLD_MS`, so `meeting:push-to-talk-held` never fired
-    // and the veil never opened) gets the coaching tooltip, near THIS
-    // button, instead of `MeetingAskFloorVeil`'s centred card closing —
+    // and the veil never opened) gets the feedback line's nudge, near
+    // THIS row, instead of `MeetingAskFloorVeil`'s centred card closing —
     // there is nothing for it to close.
     if (heldLongEnough) {
       this._dispatch("meeting:push-to-talk-ended", { agentId: this._agentId() })
     } else {
-      this._showCoachTooltip()
+      this._showFeedback(EARLY_RELEASE_FEEDBACK.tone, EARLY_RELEASE_FEEDBACK.text)
       this._dispatch("meeting:push-to-talk-early-release", {
         agentId: this._agentId(),
         agentName: this._agentName(),
@@ -318,8 +401,15 @@ const MeetingPushToTalk = {
     this._pressed = false
     this._levels = []
     this.el.dataset.pressed = "false"
+    this._setRowPressed(false)
     this.el.dataset.rejected = reason
     this._paintBars(0)
+    // Item 4 (task 01a0f324 stage 3): `held-by-other` is deliberately
+    // absent from `REJECTION_FEEDBACK` (see its moduledoc) — its own
+    // "Held by <name>" chip already carries the fact, so `_showFeedback`
+    // is simply never called for it and the line stays hidden.
+    const feedback = REJECTION_FEEDBACK[reason]
+    if (feedback) this._showFeedback(feedback.tone, feedback.text)
     this._dispatch("meeting:push-to-talk-rejected", { reason })
   },
 
@@ -482,7 +572,7 @@ const MeetingPushToTalk = {
     paintBars(this._bars, level)
   },
 
-  // ── Reporting who/what, for the veil and the coaching tooltip ────────────
+  // ── Reporting who/what, for the veil and the feedback line ───────────────
 
   _agentId() {
     return this.el && this.el.dataset ? this.el.dataset.agentId || null : null
@@ -498,57 +588,83 @@ const MeetingPushToTalk = {
     }
   },
 
-  // ── The early-release coaching tooltip (task 01a0cf5c stage 2) ───────────
+  // ── The row (task 01a0f324 stage 3, item 3b) ──────────────────────────────
   //
-  // Per the design-direction canvas (01a0cf5e-9cb0): rendered NEAR THE
-  // BUTTON, not centre stage, and the veil never runs for this case at
-  // all — it lives entirely inside THIS button's own row, as the
-  // sibling `[data-role="meeting-agent-hold-coach"]` element
-  // `ParticipantRail` renders next to the button, positioned here via
-  // `getBoundingClientRect` rather than CSS because the wrapping
-  // element is `display: contents` and establishes no containing block
-  // of its own.
-  _coachTooltip() {
-    if (this._coachEl !== undefined) return this._coachEl
+  // The closest `[data-participant-type="agent"]` — the `<li>`
+  // `ParticipantRail` renders one of per agent. A CSS selector can only
+  // read an ATTRIBUTE ON ITSELF OR AN ANCESTOR's own value via
+  // `data-[pressed=true]:…`; it cannot climb from a descendant's
+  // attribute up to a style rule on the ancestor. So the row needing to
+  // clear the hold veil's `z-50` while THIS button is held means the row
+  // needs its OWN `data-pressed`, mirrored here whenever the button's is
+  // set — the two are kept in lock-step, never a single source re-read
+  // twice.
+  _rowEl() {
+    if (this._rowNode !== undefined) return this._rowNode
 
-    const wrap =
+    this._rowNode =
       this.el && typeof this.el.closest === "function"
-        ? this.el.closest('[data-role="meeting-agent-hold-wrap"]')
+        ? this.el.closest('[data-participant-type="agent"]')
         : null
 
-    this._coachEl =
-      wrap && typeof wrap.querySelector === "function"
-        ? wrap.querySelector('[data-role="meeting-agent-hold-coach"]')
+    return this._rowNode
+  },
+
+  _setRowPressed(pressed) {
+    const row = this._rowEl()
+    if (row && row.dataset) row.dataset.pressed = pressed ? "true" : "false"
+  },
+
+  // ── The feedback line (task 01a0f324 stage 3, item 4) ─────────────────────
+  //
+  // Replaces the old floating `[data-role="meeting-agent-hold-coach"]`
+  // tooltip (positioned via `getBoundingClientRect` because its wrapper
+  // was `display: contents`). The new element is a plain block
+  // `ParticipantRail` renders as a SIBLING of the row's own flex line,
+  // full row width, so it needs no JS positioning at all — only its
+  // `data-open`/`data-tone` and text content are set here.
+  _feedbackEl() {
+    if (this._feedbackNode !== undefined) return this._feedbackNode
+
+    const row = this._rowEl()
+    this._feedbackNode =
+      row && typeof row.querySelector === "function"
+        ? row.querySelector('[data-role="meeting-agent-hold-feedback"]')
         : null
 
-    return this._coachEl
+    return this._feedbackNode
   },
 
-  _showCoachTooltip() {
-    const tip = this._coachTooltip()
-    if (!tip || !this.el || typeof this.el.getBoundingClientRect !== "function") return
+  // `opts.autoHide` defaults to true (the early-release nudge and every
+  // rejection clear themselves). `disconnected()` passes `false`: an
+  // offline notice that vanished on its own timer while the socket was
+  // still down would be a worse lie than the truncation this stage
+  // exists to fix — it is dismissed explicitly by `reconnected()`.
+  _showFeedback(tone, text, opts = {}) {
+    const el = this._feedbackEl()
+    if (!el) return
 
-    const rect = this.el.getBoundingClientRect()
-    tip.style.position = "fixed"
-    tip.style.left = `${rect.left + rect.width / 2}px`
-    tip.style.top = `${rect.top - 8}px`
-    tip.style.transform = "translate(-50%, -100%)"
-    tip.dataset.open = "true"
+    const textEl = el.querySelector('[data-role="meeting-agent-hold-feedback-text"]')
+    if (textEl) textEl.textContent = text
+    el.dataset.tone = tone
+    el.dataset.open = "true"
 
-    this._clearCoachTimer()
-    this._coachTimer = setTimeout(() => this._hideCoachTooltip(), 2600)
+    this._clearFeedbackTimer()
+    if (opts.autoHide !== false) {
+      this._feedbackTimer = setTimeout(() => this._hideFeedback(), FEEDBACK_AUTO_HIDE_MS)
+    }
   },
 
-  _hideCoachTooltip() {
-    this._clearCoachTimer()
-    const tip = this._coachTooltip()
-    if (tip) tip.dataset.open = "false"
+  _hideFeedback() {
+    this._clearFeedbackTimer()
+    const el = this._feedbackEl()
+    if (el) el.dataset.open = "false"
   },
 
-  _clearCoachTimer() {
-    if (this._coachTimer) {
-      clearTimeout(this._coachTimer)
-      this._coachTimer = null
+  _clearFeedbackTimer() {
+    if (this._feedbackTimer) {
+      clearTimeout(this._feedbackTimer)
+      this._feedbackTimer = null
     }
   },
 

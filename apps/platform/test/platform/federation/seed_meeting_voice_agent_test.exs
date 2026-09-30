@@ -1,6 +1,6 @@
 defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgentTest do
   @moduledoc """
-  Task 01a0d4a0-6570 stage 2 — the Meeting Assistant persona and its voice
+  Task 01a0d4a0-6570 stage 2 — the Burrow persona and its voice
   runtime are provisioned entirely through already-shipped mechanisms
   (`Federation.register_voice_runtime/3`,
   `MemoryContext.upsert_workspace_file/4`, `agents.voice_config`,

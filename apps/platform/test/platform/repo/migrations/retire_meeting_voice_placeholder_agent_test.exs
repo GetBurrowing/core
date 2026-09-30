@@ -220,7 +220,7 @@ defmodule Platform.Repo.Migrations.RetireMeetingVoicePlaceholderAgentTest do
         Repo.insert!(
           Agent.changeset(%Agent{}, %{
             slug: "meeting-assistant",
-            name: "Meeting Assistant",
+            name: "Burrow",
             status: "active"
           })
         )
