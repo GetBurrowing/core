@@ -40,3 +40,73 @@ def test_tools_default_still_works_alongside_space_id():
     agent = MeetingVoiceAgent(config, space_id="some-space-id")
 
     assert "some-space-id" in agent.instructions
+
+
+# ── Agent roster context (task 01a0f8f5 stage 2) ────────────────────────────
+
+
+def test_instructions_unchanged_when_roster_empty_or_missing():
+    config = AgentConfig.from_env()
+
+    assert MeetingVoiceAgent(config).instructions == config.instructions
+    assert MeetingVoiceAgent(config, agent_roster=None).instructions == config.instructions
+    assert MeetingVoiceAgent(config, agent_roster=[]).instructions == config.instructions
+
+
+def test_instructions_name_one_present_agent_with_capability():
+    config = AgentConfig.from_env()
+    roster = [{"name": "Dana", "slug": "dana", "capability": "Visual design, UI/UX, branding"}]
+
+    agent = MeetingVoiceAgent(config, agent_roster=roster)
+
+    assert config.instructions in agent.instructions
+    assert "Dana (Visual design, UI/UX, branding)" in agent.instructions
+    # Exactly one sentence appended -- base instructions end mid-sentence
+    # with no new paragraph/period-plus-newline structure introduced.
+    assert agent.instructions.count("Agents currently present in this meeting include") == 1
+
+
+def test_instructions_name_two_present_agents_joined_with_and():
+    config = AgentConfig.from_env()
+    roster = [
+        {"name": "Dana", "slug": "dana", "capability": "Visual design, UI/UX, branding"},
+        {"name": "Scout", "slug": "scout", "capability": None},
+    ]
+
+    agent = MeetingVoiceAgent(config, agent_roster=roster)
+
+    assert "Dana (Visual design, UI/UX, branding) and Scout" in agent.instructions
+
+
+def test_instructions_never_invent_a_capability():
+    config = AgentConfig.from_env()
+    roster = [{"name": "Scout", "slug": "scout", "capability": None}]
+
+    agent = MeetingVoiceAgent(config, agent_roster=roster)
+
+    assert "Scout" in agent.instructions
+    assert "Scout (" not in agent.instructions
+
+
+def test_instructions_skip_malformed_roster_entries_without_crashing():
+    config = AgentConfig.from_env()
+    roster = [
+        {"slug": "no-name", "capability": "Mystery"},  # missing name -- skipped
+        "not-even-a-dict",  # malformed entirely -- skipped
+        {"name": "Scout", "slug": "scout", "capability": None},
+    ]
+
+    agent = MeetingVoiceAgent(config, agent_roster=roster)
+
+    assert "Scout" in agent.instructions
+    assert "Mystery" not in agent.instructions
+    assert "no-name" not in agent.instructions
+
+
+def test_instructions_unchanged_when_every_roster_entry_is_malformed():
+    config = AgentConfig.from_env()
+    roster = [{"slug": "no-name"}, "not-a-dict", {}]
+
+    agent = MeetingVoiceAgent(config, agent_roster=roster)
+
+    assert agent.instructions == config.instructions

@@ -60,6 +60,7 @@ def test_entrypoint_connects_builds_session_and_starts():
     mock_persona_cls.assert_called_once()
     assert mock_persona_cls.call_args.kwargs["tools"] == fake_tools
     assert mock_persona_cls.call_args.kwargs["space_id"] is None
+    assert mock_persona_cls.call_args.kwargs["agent_roster"] == []
     mock_attach.assert_called_once_with(mock_session, ctx.room)
     mock_ask_floor.assert_called_once()
     assert mock_ask_floor.call_args.args[0] is mock_session
@@ -105,7 +106,7 @@ def test_entrypoint_tolerates_missing_or_malformed_job_metadata():
     # A worker started outside `Platform.Meetings` (a manual dev run, a live
     # test fixture) has empty/garbage job metadata -- entrypoint must not
     # raise, and must fall back to the old behavior (no space_id override,
-    # no participant pinning).
+    # no participant pinning, no agent roster).
     ctx = _ctx_with_job_metadata(None)
     ctx.job.metadata = "not valid json {{{"
 
@@ -115,13 +116,64 @@ def test_entrypoint_tolerates_missing_or_malformed_job_metadata():
     with (
         patch.object(agent_module, "build_agent_session", return_value=mock_session),
         patch.object(agent_module, "build_tool_surface", return_value=[]) as mock_tools,
-        patch.object(agent_module, "MeetingVoiceAgent"),
+        patch.object(agent_module, "MeetingVoiceAgent") as mock_persona_cls,
         patch.object(agent_module.tool_telemetry, "attach_tool_call_telemetry"),
     ):
         asyncio.run(agent_module.entrypoint(ctx))
 
     assert mock_tools.call_args.kwargs["space_id"] is None
+    assert mock_persona_cls.call_args.kwargs["agent_roster"] == []
     assert mock_session.start.await_args.kwargs["room_options"] is NOT_GIVEN
+
+
+def test_entrypoint_passes_agent_roster_from_job_metadata():
+    # Task 01a0f8f5 stage 1/2: `Platform.Meetings.dispatch_meeting_join_via_livekit/4`
+    # stamps `agent_roster` into the same job-metadata blob as `space_id`/
+    # `human_identity` -- it must reach the persona, not be silently dropped.
+    roster = [
+        {"name": "Dana", "slug": "dana", "capability": "Visual design, UI/UX, branding"},
+        {"name": "Scout", "slug": "scout", "capability": None},
+    ]
+    ctx = _ctx_with_job_metadata(
+        {
+            "space_id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
+            "meeting_id": "some-meeting-id",
+            "human_identity": "user:abc-123",
+            "agent_roster": roster,
+        }
+    )
+
+    mock_session = MagicMock()
+    mock_session.start = AsyncMock()
+
+    with (
+        patch.object(agent_module, "build_agent_session", return_value=mock_session),
+        patch.object(agent_module, "build_tool_surface", return_value=[]),
+        patch.object(agent_module, "MeetingVoiceAgent") as mock_persona_cls,
+        patch.object(agent_module.tool_telemetry, "attach_tool_call_telemetry"),
+    ):
+        asyncio.run(agent_module.entrypoint(ctx))
+
+    assert mock_persona_cls.call_args.kwargs["agent_roster"] == roster
+
+
+def test_entrypoint_defaults_agent_roster_to_empty_when_key_absent():
+    # A dispatch predating task 01a0f8f5 (no `agent_roster` key at all)
+    # must degrade to today's generic-only behavior, not crash.
+    ctx = _ctx_with_job_metadata({"space_id": "some-space-id", "meeting_id": "some-meeting-id"})
+
+    mock_session = MagicMock()
+    mock_session.start = AsyncMock()
+
+    with (
+        patch.object(agent_module, "build_agent_session", return_value=mock_session),
+        patch.object(agent_module, "build_tool_surface", return_value=[]),
+        patch.object(agent_module, "MeetingVoiceAgent") as mock_persona_cls,
+        patch.object(agent_module.tool_telemetry, "attach_tool_call_telemetry"),
+    ):
+        asyncio.run(agent_module.entrypoint(ctx))
+
+    assert mock_persona_cls.call_args.kwargs["agent_roster"] == []
 
 
 def test_build_tool_surface_wires_mcp_toolset_and_handoff_tool():

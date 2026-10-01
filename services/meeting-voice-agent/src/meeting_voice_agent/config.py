@@ -330,18 +330,25 @@ class AgentConfig:
             # space" -- as the trigger for calling space_get_context, rather
             # than answering from what it already believes it knows.
             #
-            # Task 01a0f842 stage 4 (round 2 of Harper's Burrow ticket, item
-            # 4): Burrow's `allowed_bundles` (`mix
-            # platform.seed_meeting_voice_agent`) already excludes `canvas`
+            # Task 01a0f8f5 stage 2, and independently task 01a0f842 stage 4
+            # (round 2 of Harper's Burrow ticket, item 4 / commit 43a14172):
+            # Burrow's `allowed_bundles` (`mix
+            # platform.seed_meeting_voice_agent`) already exclude `canvas`
             # (the write bundle), `task`, and `plan` server-side -- this is
             # not a tool-grant gap. The gap was this prompt giving her no
             # guidance for what to say when a participant asks her to build
             # one anyway, so she either hallucinated a tool call outside her
             # granted list or verbally committed to implementation work she
-            # structurally cannot do. Fixed below: name the specialized
-            # agent that actually does that work and route the ask through
-            # the existing post_to_meeting_chat hand-off, instead of
-            # attempting or offering to do it herself.
+            # structurally cannot do. Fixed below with a generic-category
+            # fallback: name the KIND of specialized agent that actually
+            # handles that work and route the ask through the existing
+            # post_to_meeting_chat hand-off, instead of attempting or
+            # offering to do it herself. Both tasks landed the identical
+            # fallback text here independently (neither had the other's
+            # commit merged yet when its stage ran); reconciled at the
+            # 01a0f8f5 deploy merge on 2026-10-01 -- the text itself never
+            # needed de-duplicating since the two additions were
+            # byte-identical, only this comment did.
             instructions=_env_str(
                 "MVA_INSTRUCTIONS",
                 "You are a concise meeting assistant. Answer briefly by voice. "

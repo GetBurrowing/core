@@ -32,10 +32,12 @@ def parse_job_metadata(raw: str | None) -> dict:
     Task 01a0d4a0 stage 5 item 3: `Platform.Meetings.create_livekit_agent_dispatch/3`
     (via `dispatch_meeting_join_via_livekit/4` in `apps/platform/lib/platform/meetings.ex`)
     JSON-encodes `space_id`, `meeting_id`, and `human_identity` into this
-    exact field when it dispatches the job. Never raises: a job started some
-    other way (a manually-launched dev worker, a test) or with malformed
-    metadata should degrade to the old room-name-derived behavior, not crash
-    worker startup.
+    exact field when it dispatches the job. Task 01a0f8f5 stage 1 adds
+    `agent_roster` to that same blob. Never raises: a job started some
+    other way (a manually-launched dev worker, a test), one dispatched
+    before `agent_roster` existed, or one with malformed metadata should
+    degrade to the old room-name-derived behavior, not crash worker
+    startup.
     """
     if not raw:
         return {}
@@ -98,10 +100,17 @@ async def entrypoint(ctx: JobContext) -> None:
     job_metadata = parse_job_metadata(ctx.job.metadata)
     space_id = job_metadata.get("space_id")
     human_identity = job_metadata.get("human_identity")
+    # Task 01a0f8f5 stage 1/2: the other agents present in this room at
+    # dispatch time, so Burrow can name a real present agent in her
+    # post_to_meeting_chat hand-off. `[]` default covers a dispatch that
+    # predates this key, or one with malformed metadata (parse_job_metadata
+    # already degrades that to `{}` above) -- either way, today's
+    # generic-category-only behavior, never a crash.
+    agent_roster = job_metadata.get("agent_roster", [])
 
     session: AgentSession = build_agent_session(config)
     tools = build_tool_surface(config, ctx.room.name, space_id=space_id)
-    agent = MeetingVoiceAgent(config, tools=tools, space_id=space_id)
+    agent = MeetingVoiceAgent(config, tools=tools, space_id=space_id, agent_roster=agent_roster)
 
     # Task 01a0d4a0 stage 4 round 2: publish tool-call telemetry so an
     # external observer (the live latency harness) can see a tool call

@@ -3304,6 +3304,78 @@ defmodule Platform.Meetings do
     |> Repo.all()
   end
 
+  @agent_roster_limit 8
+
+  @doc """
+  A bounded, human-readable roster of the OTHER agents currently active in
+  `room_id`, for a delegating agent (Burrow) to hand off to.
+
+  Built from `active_participants/1` — already excludes left participants
+  via `is_nil(p.left_at)` and already preloads `:agent` — filtered down to
+  rows whose `.agent` is a real `%Agent{}` (this drops human/user
+  participants AND the transcriber in one pass: both land as `agent_id:
+  nil` participant rows, same as `transcriber_participant?/1` relies on,
+  so no separate transcriber check is needed here).
+
+  `exclude_agent_id` drops the delegating agent's own participant row —
+  Burrow never lists herself as her own delegation target.
+
+  Each surviving row maps to `%{name:, slug:, capability:}`, where
+  `capability` comes from `role_template_capability/1` and is `nil` for
+  the common case of an agent not created from an onboarding template.
+  Capped at `#{@agent_roster_limit}` and sorted by name so the payload
+  stays bounded in a crowded room.
+  """
+  @spec agent_roster_for_room(binary(), binary() | nil) :: [
+          %{name: String.t(), slug: String.t() | nil, capability: String.t() | nil}
+        ]
+  def agent_roster_for_room(room_id, exclude_agent_id) do
+    room_id
+    |> active_participants()
+    |> Enum.filter(fn
+      %Participant{agent: %Agent{} = agent} -> agent.id != exclude_agent_id
+      _ -> false
+    end)
+    |> Enum.map(fn %Participant{agent: %Agent{} = agent} ->
+      %{
+        name: agent.name,
+        slug: agent.slug,
+        capability: role_template_capability(agent)
+      }
+    end)
+    |> Enum.sort_by(& &1.name)
+    |> Enum.take(@agent_roster_limit)
+  end
+
+  @doc """
+  Human-readable capability text for `agent`, sourced from the onboarding
+  role template it was created from (ADR-0015) — the only place in this
+  codebase today that carries per-agent, human-readable capability text.
+
+  Reads `agent.metadata["template_id"]` and looks it up against
+  `PlatformWeb.ControlCenter.OnboardingEvents.role_templates/0`, returning
+  the template's `description`. Returns `nil` when the agent has no
+  `template_id` or it doesn't match any known template — the common case,
+  since most agents are not created from a template.
+  """
+  @spec role_template_capability(Agent.t()) :: String.t() | nil
+  def role_template_capability(%Agent{metadata: metadata}) do
+    template_id = (is_map(metadata) && Map.get(metadata, "template_id")) || nil
+
+    case template_id do
+      nil ->
+        nil
+
+      template_id ->
+        PlatformWeb.ControlCenter.OnboardingEvents.role_templates()
+        |> Enum.find(&(&1.id == template_id))
+        |> case do
+          %{description: description} -> description
+          nil -> nil
+        end
+    end
+  end
+
   # ── Transcriber presence ─────────────────────────────────────────────────
 
   # Substrings matched against BOTH `display_name` and
@@ -5536,7 +5608,14 @@ defmodule Platform.Meetings do
         # (e.g. one agent inviting another), in which case the worker falls
         # back to its old default-participant behavior rather than crashing
         # on a missing key.
-        "human_identity" => Map.get(context, :human_identity)
+        "human_identity" => Map.get(context, :human_identity),
+        # Task 01a0f8f5: a bounded, human-readable roster of the OTHER
+        # agents active in this room at dispatch time — fetched once here,
+        # the same way `space_id`/`human_identity` are, not re-fetched per
+        # turn. See `agent_roster_for_room/2`. `[]` when the caller (e.g.
+        # the channel-runtime dispatch path, which never sets this key)
+        # didn't supply one.
+        "agent_roster" => Map.get(context, :agent_roster, [])
       })
 
     case create_livekit_agent_dispatch(room_name, target.livekit_agent_name, metadata) do
@@ -6715,7 +6794,8 @@ defmodule Platform.Meetings do
       # Dispatch to agent runtime
       dispatch_meeting_join(agent, room.livekit_room_name, %{
         space_id: room.space_id,
-        human_identity: human_identity_from_actor(inviting_user)
+        human_identity: human_identity_from_actor(inviting_user),
+        agent_roster: agent_roster_for_room(room.id, agent.id)
       })
 
       {:ok, participant}

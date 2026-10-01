@@ -6,6 +6,7 @@ defmodule Platform.Meetings.PresenceTest do
 
   use Platform.DataCase, async: false
 
+  alias Platform.Agents.Agent
   alias Platform.Chat
   alias Platform.Meetings
   alias Platform.Meetings.{Meeting, Recording, Room}
@@ -197,6 +198,152 @@ defmodule Platform.Meetings.PresenceTest do
       participant = hd(active)
       assert is_nil(participant.user) or is_struct(participant.user)
       assert is_nil(participant.agent) or is_struct(participant.agent)
+    end
+  end
+
+  # ── Agent Roster (task 01a0f8f5 stage 1) ────────────────────────────────────
+
+  describe "agent_roster_for_room/2" do
+    defp create_agent!(attrs) do
+      defaults = %{
+        slug: "roster-agent-#{System.unique_integer([:positive])}",
+        name: "Roster Agent",
+        status: "active"
+      }
+
+      {:ok, agent} =
+        %Agent{}
+        |> Agent.changeset(Map.merge(defaults, attrs))
+        |> Repo.insert()
+
+      agent
+    end
+
+    test "excludes the delegating agent's own participant row" do
+      space = create_space()
+      room = create_room(space.id) |> activate_room()
+
+      burrow =
+        create_agent!(%{name: "Burrow", slug: "burrow-#{System.unique_integer([:positive])}"})
+
+      other = create_agent!(%{name: "Scout", slug: "scout-#{System.unique_integer([:positive])}"})
+
+      join_participant(room, burrow.name, %{agent_id: burrow.id})
+      join_participant(room, other.name, %{agent_id: other.id})
+
+      roster = Meetings.agent_roster_for_room(room.id, burrow.id)
+
+      assert [%{name: "Scout", slug: _, capability: nil}] = roster
+    end
+
+    test "excludes human participants and the transcriber" do
+      space = create_space()
+      room = create_room(space.id) |> activate_room()
+
+      agent = create_agent!(%{name: "Scout", slug: "scout-#{System.unique_integer([:positive])}"})
+
+      # Human participant: has no agent_id.
+      join_participant(room, "user:alice")
+      # Transcriber: no user_id/agent_id either, matched by marker instead —
+      # same "no agent association" shape as the human row.
+      join_participant(room, "meeting-transcriber")
+      join_participant(room, agent.name, %{agent_id: agent.id})
+
+      roster = Meetings.agent_roster_for_room(room.id, Ecto.UUID.generate())
+
+      assert [%{name: "Scout"}] = roster
+    end
+
+    test "excludes participants who have left" do
+      space = create_space()
+      room = create_room(space.id) |> activate_room()
+
+      staying =
+        create_agent!(%{name: "Staying", slug: "staying-#{System.unique_integer([:positive])}"})
+
+      left =
+        create_agent!(%{name: "Leaving", slug: "leaving-#{System.unique_integer([:positive])}"})
+
+      join_participant(room, staying.name, %{agent_id: staying.id})
+      join_participant(room, left.name, %{agent_id: left.id})
+      Meetings.participant_left(room, left.name)
+
+      roster = Meetings.agent_roster_for_room(room.id, Ecto.UUID.generate())
+
+      assert [%{name: "Staying"}] = roster
+    end
+
+    test "caps the roster at a fixed small N and sorts by name" do
+      space = create_space()
+      room = create_room(space.id) |> activate_room()
+
+      names = for n <- 1..10, do: "Agent#{String.pad_leading(Integer.to_string(n), 2, "0")}"
+
+      for name <- names do
+        agent =
+          create_agent!(%{
+            name: name,
+            slug: "cap-#{String.downcase(name)}-#{System.unique_integer([:positive])}"
+          })
+
+        join_participant(room, agent.name, %{agent_id: agent.id})
+      end
+
+      roster = Meetings.agent_roster_for_room(room.id, Ecto.UUID.generate())
+
+      assert length(roster) == 8
+      assert Enum.map(roster, & &1.name) == Enum.sort(Enum.map(roster, & &1.name))
+      # The 8 lexicographically-first names win the cap.
+      assert Enum.map(roster, & &1.name) == Enum.take(Enum.sort(names), 8)
+    end
+
+    test "resolves role-template capability when the agent has a matching template_id" do
+      space = create_space()
+      room = create_room(space.id) |> activate_room()
+
+      designer =
+        create_agent!(%{
+          name: "Dana",
+          slug: "dana-#{System.unique_integer([:positive])}",
+          metadata: %{"template_id" => "designer"}
+        })
+
+      join_participant(room, designer.name, %{agent_id: designer.id})
+
+      roster = Meetings.agent_roster_for_room(room.id, Ecto.UUID.generate())
+
+      assert [%{name: "Dana", capability: "Visual design, UI/UX, branding"}] = roster
+    end
+
+    test "returns nil capability when the agent has no matching template_id" do
+      space = create_space()
+      room = create_room(space.id) |> activate_room()
+
+      plain =
+        create_agent!(%{
+          name: "Pat",
+          slug: "pat-#{System.unique_integer([:positive])}",
+          metadata: %{"template_id" => "not-a-real-template"}
+        })
+
+      join_participant(room, plain.name, %{agent_id: plain.id})
+
+      roster = Meetings.agent_roster_for_room(room.id, Ecto.UUID.generate())
+
+      assert [%{name: "Pat", capability: nil}] = roster
+    end
+
+    test "returns nil capability when the agent has no template_id at all" do
+      space = create_space()
+      room = create_room(space.id) |> activate_room()
+
+      plain = create_agent!(%{name: "Quinn", slug: "quinn-#{System.unique_integer([:positive])}"})
+
+      join_participant(room, plain.name, %{agent_id: plain.id})
+
+      roster = Meetings.agent_roster_for_room(room.id, Ecto.UUID.generate())
+
+      assert [%{name: "Quinn", capability: nil}] = roster
     end
   end
 
