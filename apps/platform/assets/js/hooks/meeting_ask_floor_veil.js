@@ -76,19 +76,58 @@ import { paintBars } from "./lib/ptt_waveform"
  * cannot safely be made here. `_outcomeTimer` is a safety net only: if
  * that event is ever lost, the veil still resolves (a plain fade)
  * rather than sitting open forever.
+ *
+ * ## Never closing while the key is still physically held (task 01a0f842
+ * stage 2, canvas 01a0f846-cfb1, item 2)
+ *
+ * Stage 2 of this canvas fixed the heard card flashing for a quarter
+ * second instead of staying up through the whole hold. The bug was two
+ * unconditional closes: `_onRejected` closed on ANY rejection, and the
+ * `meeting_ask_outcome` handler always called `_playOutcome` (which
+ * closes), neither checking whether the key was still down. `_isHeld`
+ * tracks that locally, off the SAME `meeting:push-to-talk-held`/`-ended`
+ * window events the rest of this hook already listens to — true from
+ * `held` until `ended` (an early release never sets it true at all,
+ * since the veil never opened for one).
+ *
+ * `meeting_ask_outcome` arriving while `_isHeld` is true (a race: the
+ * server resolved before this client's own release reached it) is
+ * parked in `_pendingOutcome` and played the moment `_onEnded` runs,
+ * rather than closing the card out from under a still-held press.
+ *
+ * A rejection is different: `held-by-other` (`_serverReject` in
+ * `meeting_push_to_talk.js`) never calls that hook's `endPress()`, so no
+ * `meeting:push-to-talk-ended` is coming for it — `_isHeld` could stay
+ * true forever if a close waited on that event. So `_onRejected` never
+ * closes instantly (the actual fix for the flash-then-vanish bug): it
+ * shows the failure INSIDE the still-open card via `_showError` and
+ * always resolves itself on its own `_errorTimer`, after
+ * `INTERRUPTED_CLOSE_MS` — this is the canvas's ":interrupted" state
+ * ("stays open for 2s with an inline error line, then closes... never
+ * vanishes without saying why"), not a second unconditional close.
  */
 const OUTCOME_SAFETY_NET_MS = 4_500
+const INTERRUPTED_CLOSE_MS = 2_000
 
 const MeetingAskFloorVeil = {
   mounted() {
     this._activeAgentId = null
     this._activeAgentName = ""
     this._outcomeTimer = null
+    this._errorTimer = null
+    // True from `meeting:push-to-talk-held` until `meeting:push-to-talk-
+    // ended` — see the moduledoc's "Never closing while the key is still
+    // physically held". An early release never sets this true at all,
+    // since the veil never opens for one.
+    this._isHeld = false
+    this._pendingOutcome = null
 
     this._label = this.el.querySelector('[data-role="meeting-ask-label"]')
     this._bars = Array.from(this.el.querySelectorAll("[data-ptt-bar]"))
     this._transcript = this.el.querySelector('[data-role="meeting-ask-transcript"]')
     this._card = this.el.querySelector('[data-role="meeting-ask-card"]')
+    this._error = this.el.querySelector('[data-role="meeting-ask-error"]')
+    this._errorText = this.el.querySelector('[data-role="meeting-ask-error-text"]')
 
     this._onArmed = (event) => {
       const detail = event && event.detail
@@ -103,6 +142,7 @@ const MeetingAskFloorVeil = {
     this._onHeld = (event) => {
       const detail = event && event.detail
       if (!detail || detail.agentId !== this._activeAgentId) return
+      this._isHeld = true
       this._open(detail.agentName || this._activeAgentName)
     }
 
@@ -121,6 +161,19 @@ const MeetingAskFloorVeil = {
     this._onEnded = (event) => {
       const detail = event && event.detail
       if (detail && detail.agentId !== this._activeAgentId) return
+      this._isHeld = false
+
+      // `meeting_ask_outcome` already arrived while the key was still
+      // held and was parked rather than closing the card out from under
+      // it (see moduledoc) — now that the physical release has actually
+      // happened, play it for real.
+      if (this._pendingOutcome) {
+        const outcome = this._pendingOutcome
+        this._pendingOutcome = null
+        this._playOutcome(outcome)
+        return
+      }
+
       this._awaitOutcome()
     }
 
@@ -130,6 +183,7 @@ const MeetingAskFloorVeil = {
     this._onEarlyRelease = (event) => {
       const detail = event && event.detail
       if (detail && detail.agentId !== this._activeAgentId) return
+      this._isHeld = false
       this._activeAgentId = null
     }
 
@@ -137,11 +191,20 @@ const MeetingAskFloorVeil = {
     // client-side `no-microphone` / `pointer-lost` / etc. that never
     // even reached `:armed` for a DIFFERENT press) carries no `agentId`
     // by contract — `meeting_push_to_talk.test.js` pins its shape to
-    // `{ reason }`. Unconditional close is correct here: whatever THIS
-    // viewer's press was doing, a rejection means it is over.
+    // `{ reason }`. Whatever THIS viewer's press was doing, a rejection
+    // means it is over — but (task 01a0f842 stage 2) it is no longer an
+    // UNCONDITIONAL, INSTANT close: if the card is not even open there
+    // is nothing to do, and if it is open the failure shows inline
+    // (`_showError`) and the card resolves on its own timer, never
+    // synchronously — see the moduledoc's ":interrupted" note for why
+    // this cannot wait on `_onEnded` instead.
     this._onRejected = () => {
       this._clearOutcomeTimer()
-      this._close()
+      this._pendingOutcome = null
+      if (!this.isOpen()) return
+      this._showError("Couldn't hear you. Hold Ask and try again.")
+      this._clearErrorTimer()
+      this._errorTimer = setTimeout(() => this._close(), INTERRUPTED_CLOSE_MS)
     }
 
     window.addEventListener("meeting:push-to-talk-armed", this._onArmed)
@@ -166,6 +229,16 @@ const MeetingAskFloorVeil = {
       if (!payload || payload.agent_id !== this._activeAgentId) return
       this._clearOutcomeTimer()
       this._resolvedCandidateId = payload.candidate_id || null
+
+      // Task 01a0f842 stage 2: the server can resolve this before the
+      // client's own release reaches it. Closing here anyway was the
+      // other half of the flash-then-vanish bug — park it instead and
+      // play it from `_onEnded` once the key is actually up.
+      if (this._isHeld) {
+        this._pendingOutcome = payload.outcome
+        return
+      }
+
       this._playOutcome(payload.outcome)
     })
   },
@@ -178,6 +251,7 @@ const MeetingAskFloorVeil = {
     window.removeEventListener("meeting:push-to-talk-early-release", this._onEarlyRelease)
     window.removeEventListener("meeting:push-to-talk-rejected", this._onRejected)
     this._clearOutcomeTimer()
+    this._clearErrorTimer()
   },
 
   /** Public, for tests: is the veil currently showing. */
@@ -193,6 +267,8 @@ const MeetingAskFloorVeil = {
       this._transcript.textContent = ""
     }
     this.el.dataset.open = "true"
+    this._pendingOutcome = null
+    this._hideError()
     paintBars(this._bars, 0)
   },
 
@@ -218,6 +294,27 @@ const MeetingAskFloorVeil = {
     if (this._outcomeTimer) {
       clearTimeout(this._outcomeTimer)
       this._outcomeTimer = null
+    }
+  },
+
+  // The inline failure line INSIDE the still-open card (task 01a0f842
+  // stage 2) — never a reason to close synchronously. `role="status"`
+  // on the element itself (markup) covers the announcement; this only
+  // sets the text and flips `data-open`.
+  _showError(text) {
+    if (this._errorText) this._errorText.textContent = text
+    if (this._error) this._error.dataset.open = "true"
+  },
+
+  _hideError() {
+    if (this._error) this._error.dataset.open = "false"
+    if (this._errorText) this._errorText.textContent = ""
+  },
+
+  _clearErrorTimer() {
+    if (this._errorTimer) {
+      clearTimeout(this._errorTimer)
+      this._errorTimer = null
     }
   },
 
@@ -291,6 +388,10 @@ const MeetingAskFloorVeil = {
     this.el.dataset.open = "false"
     this._activeAgentId = null
     this._resolvedCandidateId = null
+    this._isHeld = false
+    this._pendingOutcome = null
+    this._clearErrorTimer()
+    this._hideError()
     paintBars(this._bars, 0)
   },
 }

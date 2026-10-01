@@ -329,6 +329,19 @@ class AgentConfig:
             # exact phrasing -- "context of this space" / "going on in this
             # space" -- as the trigger for calling space_get_context, rather
             # than answering from what it already believes it knows.
+            #
+            # Task 01a0f842 stage 4 (round 2 of Harper's Burrow ticket, item
+            # 4): Burrow's `allowed_bundles` (`mix
+            # platform.seed_meeting_voice_agent`) already excludes `canvas`
+            # (the write bundle), `task`, and `plan` server-side -- this is
+            # not a tool-grant gap. The gap was this prompt giving her no
+            # guidance for what to say when a participant asks her to build
+            # one anyway, so she either hallucinated a tool call outside her
+            # granted list or verbally committed to implementation work she
+            # structurally cannot do. Fixed below: name the specialized
+            # agent that actually does that work and route the ask through
+            # the existing post_to_meeting_chat hand-off, instead of
+            # attempting or offering to do it herself.
             instructions=_env_str(
                 "MVA_INSTRUCTIONS",
                 "You are a concise meeting assistant. Answer briefly by voice. "
@@ -363,7 +376,21 @@ class AgentConfig:
                 "couldn't post it and stop there: do not call "
                 "post_to_meeting_chat again for the same answer, do not try "
                 "a different tool instead, and never use a mail or email "
-                "tool for any purpose in a meeting.",
+                "tool for any purpose in a meeting. "
+                "You are a PM/helper, not an implementer: if a participant "
+                "asks you to build or create a canvas, a task, a plan, or "
+                "any other structured artifact, you cannot do this "
+                "yourself -- you have no canvas, task, or plan tools, and "
+                "none are coming. Do not attempt it, do not pretend to do "
+                "it, and do not offer to do it yourself. Instead, name the "
+                "specific kind of specialized agent that actually handles "
+                "that kind of work out loud -- for example, a design or "
+                "canvas agent for a canvas request, a task-management "
+                "agent for a task or plan request -- and call "
+                "post_to_meeting_chat exactly once asking the room to loop "
+                "that agent in to build it. This is the same hand-off tool "
+                "and the same one-call rule as above: one call, succeed or "
+                "fail, is the complete action.",
             ),
             worker_agent_name=_env_str("MVA_WORKER_AGENT_NAME", "meeting-voice-agent"),
         )

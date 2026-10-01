@@ -262,12 +262,21 @@ const MeetingPushToTalk = {
     this._levels = []
     this._heldLongEnough = false
     this.el.dataset.pressed = "true"
+    // Item 1 (task 01a0f842 stage 1, canvas 01a0f846-cfb1): `data-held`
+    // is the separate, later signal the template's underline and
+    // glyph-to-waveform swap key off — it only flips true once
+    // `_scheduleHoldThreshold` below actually fires, not at press.
+    this.el.dataset.held = "false"
     this._setRowPressed(true)
     // A fresh press supersedes whatever the LAST one left showing (an
     // old rejection, the early-release nudge) — it is either about to
     // succeed or fail on its own terms, not carry forward stale copy.
     this._hideFeedback()
     this.pushEvent("push_to_talk_press", this._pressPayload())
+    // Progressive enhancement only — never required for correctness.
+    // Where the browser supports it, a 10ms vibration gives a phone the
+    // tactile half of the press the moment it registers.
+    this._vibrate()
 
     // Task 01a0cf5c stage 2: announce the press immediately so
     // `MeetingAskFloorVeil` knows WHO is being addressed, before it
@@ -286,11 +295,32 @@ const MeetingPushToTalk = {
       this._holdThresholdTimer = null
       if (!this._pressed) return
       this._heldLongEnough = true
+      // Item 1 (task 01a0f842 stage 1, canvas 01a0f846-cfb1): this is
+      // the exact moment the underline finishes drawing and the
+      // glyph-to-waveform swap happens — both are keyed off `data-held`
+      // in the template/CSS, not `data-pressed`, specifically so they
+      // land HERE (380ms) rather than at press (0ms).
+      this.el.dataset.held = "true"
+      this._vibrate()
       this._dispatch("meeting:push-to-talk-held", {
         agentId: this._agentId(),
         agentName: this._agentName(),
       })
     }, HOLD_THRESHOLD_MS)
+  },
+
+  // Progressive enhancement (item 1, task 01a0f842 stage 1, canvas
+  // 01a0f846-cfb1): a 10ms vibration at press and at the 380ms
+  // threshold, where the browser supports `navigator.vibrate` at all —
+  // never required for correctness, and silently a no-op everywhere
+  // else (most desktop browsers, Safari on iOS).
+  _vibrate() {
+    if (typeof navigator === "undefined" || typeof navigator.vibrate !== "function") return
+    try {
+      navigator.vibrate(10)
+    } catch (_err) {
+      // Best-effort only.
+    }
   },
 
   _clearHoldThresholdTimer() {
@@ -323,6 +353,7 @@ const MeetingPushToTalk = {
     this._pressed = false
     this._heldLongEnough = false
     this.el.dataset.pressed = "false"
+    this.el.dataset.held = "false"
     this._setRowPressed(false)
     this._teardownAnalyser()
     this._paintBars(0)
@@ -401,6 +432,7 @@ const MeetingPushToTalk = {
     this._pressed = false
     this._levels = []
     this.el.dataset.pressed = "false"
+    this.el.dataset.held = "false"
     this._setRowPressed(false)
     this.el.dataset.rejected = reason
     this._paintBars(0)

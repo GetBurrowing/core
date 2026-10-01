@@ -711,6 +711,13 @@ defmodule PlatformWeb.MeetingLive do
     |> assign(:removing_agent_ids, MapSet.new())
     |> assign(:agent_removal_errors, %{})
     |> assign(:agent_removal_undo, nil)
+    # Agent mute (task 01a0f842 stage 5, canvas 01a0f846-cfb1) — NET-NEW,
+    # mirroring the removal assigns' own shape immediately above.
+    # `muting_agent_ids` is a MAP (id => target mute state), not a MapSet,
+    # because the row's "Muting…"/"Unmuting…" word needs the DIRECTION.
+    |> assign(:muting_agent_ids, %{})
+    |> assign(:muted_agent_ids, MapSet.new())
+    |> assign(:agent_mute_errors, %{})
     |> assign(:transcriber_present?, transcriber_present?)
     |> assign(:room_live?, room_live?(meeting.chat_space_id))
     |> assign(:room_recording?, room_recording?(meeting.chat_space_id))
@@ -1148,6 +1155,11 @@ defmodule PlatformWeb.MeetingLive do
           # Task 01a0e906 stage 4: nil, or `%{agent_id, agent_name, ref}` for
           # the 8-second Undo toast after a removal.
           |> assign(:agent_removal_undo, nil)
+          # Task 01a0f842 stage 5: the host's mute state, same shape as the
+          # removal assigns immediately above.
+          |> assign(:muting_agent_ids, %{})
+          |> assign(:muted_agent_ids, MapSet.new())
+          |> assign(:agent_mute_errors, %{})
           |> assign(:transcriber_present?, transcriber_present?)
           |> assign(:room_live?, room_live?(meeting.chat_space_id))
           |> assign(:room_recording?, room_recording?(meeting.chat_space_id))
@@ -4042,6 +4054,46 @@ defmodule PlatformWeb.MeetingLive do
 
   def handle_event("remove_agent_from_call", _params, socket), do: {:noreply, socket}
 
+  # Mute or unmute an agent's published audio in the live call (task
+  # 01a0f842 stage 5, canvas 01a0f846-cfb1). NET-NEW — mirrors
+  # `remove_agent_from_call/2`'s handler immediately above almost
+  # verbatim, down to reading the actor off THIS socket rather than the
+  # click payload and running the LiveKit round trip off-process via
+  # `start_async/3`.
+  #
+  # ONE event name for both directions: the button toggles, so the
+  # TARGET state is derived here from whatever this socket currently
+  # believes about the row (`muted_agent_ids`), not sent by the client.
+  # A forged click cannot flip the direction a real press would not have
+  # produced, because `Meetings.mute_agent_in_call/4` re-resolves identity
+  # and host-ness from the database regardless of which direction is
+  # asked for.
+  def handle_event("toggle_agent_mute", %{"participant-id" => id}, socket)
+      when is_binary(id) do
+    actor = socket.assigns[:current_participant]
+    target_muted? = not MapSet.member?(muted_agent_ids(socket), id)
+
+    socket =
+      case socket.assigns[:meeting] do
+        %Meetings.Meeting{} = meeting ->
+          name = removal_display_name(socket, id)
+
+          socket
+          |> assign(:muting_agent_ids, Map.put(muting_agent_ids(socket), id, target_muted?))
+          |> clear_agent_mute_error(id)
+          |> start_async({:mute_agent, id, target_muted?}, fn ->
+            {name, Meetings.mute_agent_in_call(meeting, id, actor, target_muted?)}
+          end)
+
+        _ ->
+          socket
+      end
+
+    {:noreply, socket}
+  end
+
+  def handle_event("toggle_agent_mute", _params, socket), do: {:noreply, socket}
+
   # Undo a removal (task 01a0e906 stage 4). The payload is IGNORED: the
   # agent id is read from `:agent_removal_undo`, which only the host's own
   # successful removal on THIS socket sets. Host-ness is re-checked on the
@@ -4331,6 +4383,32 @@ defmodule PlatformWeb.MeetingLive do
     {:noreply, socket}
   end
 
+  # ── Mute an agent: the landing half (task 01a0f842 stage 5) ─────────────
+  #
+  # NET-NEW, mirroring `handle_async({:remove_agent, id}, ...)` immediately
+  # above: every branch takes the id out of `:muting_agent_ids`, and none
+  # raises — a refused or crashed mute toggle is a flash or a row error,
+  # never a dead LiveView. Unlike removal, nothing here calls
+  # `refresh_participants/1`: a mute toggle never changes WHO is in the
+  # roster, only this row's own mute state, so there is no participant
+  # list to re-fetch.
+  @impl true
+  def handle_async({:mute_agent, id, target_muted?}, result, socket) do
+    {name, result} =
+      case result do
+        {:ok, {name, inner}} -> {name, {:ok, inner}}
+        # The task died; the row is still on screen either way.
+        other -> {removal_display_name(socket, id), other}
+      end
+
+    socket =
+      socket
+      |> assign(:muting_agent_ids, Map.delete(muting_agent_ids(socket), id))
+      |> apply_agent_mute_result(id, name, target_muted?, result)
+
+    {:noreply, socket}
+  end
+
   # Task 01a0e906 stage 4: the 8-second Undo toast replaces the flash. The
   # agent id comes from the CLOSED ROW the context returned, never from the
   # click, and `undo_remove_agent` reads it back from this assign. Each
@@ -4386,7 +4464,12 @@ defmodule PlatformWeb.MeetingLive do
     assign(
       socket,
       :agent_removal_errors,
-      Map.put(agent_removal_errors(socket), id, "Couldn't remove #{name}. Try again")
+      # Task 01a0f842 stage 5: the sentence itself drops its own trailing
+      # "Try again" now that the shared feedback-line pattern renders a
+      # real retry BUTTON next to it (canvas 01a0f846-cfb1's own wording:
+      # "base-content words 'Couldn't remove Burrow.' and a ghost 'Try
+      # again' button").
+      Map.put(agent_removal_errors(socket), id, "Couldn't remove #{name}.")
     )
   end
 
@@ -4404,6 +4487,58 @@ defmodule PlatformWeb.MeetingLive do
       _ -> "the agent"
     end
   end
+
+  defp apply_agent_mute_result(socket, id, _name, _target?, {:ok, {:ok, %{outcome: :muted}}}) do
+    socket
+    |> clear_agent_mute_error(id)
+    |> assign(:muted_agent_ids, MapSet.put(muted_agent_ids(socket), id))
+  end
+
+  defp apply_agent_mute_result(socket, id, _name, _target?, {:ok, {:ok, %{outcome: :unmuted}}}) do
+    socket
+    |> clear_agent_mute_error(id)
+    |> assign(:muted_agent_ids, MapSet.delete(muted_agent_ids(socket), id))
+  end
+
+  defp apply_agent_mute_result(socket, id, _name, _target?, {:ok, {:error, :forbidden}}) do
+    socket
+    |> clear_agent_mute_error(id)
+    |> put_flash(:error, "Only the host can mute agents in this meeting.")
+  end
+
+  defp apply_agent_mute_result(socket, id, _name, _target?, {:ok, {:error, reason}})
+       when reason in [:not_an_agent, :not_found] do
+    socket
+    |> clear_agent_mute_error(id)
+    |> put_flash(:error, "That participant can't be muted.")
+  end
+
+  # Anything else — a LiveKit 5xx, `:livekit_not_configured`,
+  # `:no_audio_track` (nothing published to mute — see
+  # `Meetings.mute_livekit_published_track/3`'s @doc), a transport error,
+  # or the task exiting — leaves the row exactly as it was, so the button
+  # reverts (`target_muted?` names which direction failed, for the
+  # message) and stays tappable.
+  defp apply_agent_mute_result(socket, id, name, target_muted?, _other) do
+    verb = if target_muted?, do: "mute", else: "unmute"
+
+    # No trailing "Try again" — the shared feedback-line pattern (canvas
+    # 01a0f846-cfb1) renders a real retry BUTTON next to the sentence, the
+    # same reason `apply_agent_removal_result/4`'s own fallback clause
+    # drops it.
+    assign(
+      socket,
+      :agent_mute_errors,
+      Map.put(agent_mute_errors(socket), id, "Couldn't #{verb} #{name}.")
+    )
+  end
+
+  defp clear_agent_mute_error(socket, id),
+    do: assign(socket, :agent_mute_errors, Map.delete(agent_mute_errors(socket), id))
+
+  defp muting_agent_ids(socket), do: socket.assigns[:muting_agent_ids] || %{}
+  defp muted_agent_ids(socket), do: socket.assigns[:muted_agent_ids] || MapSet.new()
+  defp agent_mute_errors(socket), do: socket.assigns[:agent_mute_errors] || %{}
 
   # ── PubSub ───────────────────────────────────────────────────────────────
 

@@ -1213,6 +1213,68 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       refute classes =~ "btn-ghost"
     end
 
+    # ── Item 1 (task 01a0f842 stage 1, canvas 01a0f846-cfb1) ────────────────
+    #
+    # The round-2 regression: pressed used to repaint the SAME colours as
+    # rest (`bg-primary text-primary-content` both times) — "doesn't feel
+    # tactile" because nothing visibly changed. This checks the fix is a
+    # real inversion, not a second coat of the same paint: black fill,
+    # cyan label, and a cyan ring that moved onto the key itself (the row
+    # lost its own ring — see the agent-row test above).
+    test "pressed state inverts to black fill, cyan label, and a cyan ring on the key" do
+      html = hold_rail([agent("Octavius", "oct-1")], hold_to_talk?: true)
+      [control] = hold_controls(html)
+
+      [classes] = Floki.attribute(control, "class")
+      class_list = String.split(classes, " ")
+
+      assert "data-[pressed=true]:bg-primary-content" in class_list
+      assert "data-[pressed=true]:text-primary" in class_list
+      assert "data-[pressed=true]:ring-2" in class_list
+      assert "data-[pressed=true]:ring-primary" in class_list
+
+      # The old identical-repaint bug, named explicitly so a future edit
+      # that reintroduces it fails loudly here instead of only "feeling"
+      # wrong again.
+      refute "data-[pressed=true]:bg-primary" in class_list
+      refute "data-[pressed=true]:text-primary-content" in class_list
+    end
+
+    # `data-held` is the separate, LATER signal (flips true only once
+    # `MeetingPushToTalk`'s 380ms hold threshold fires) that the
+    # glyph-to-waveform swap and the hold-threshold underline key off —
+    # both must land at 380ms, not at press (0ms, where `data-pressed`
+    # already flips). The control starts with both false.
+    test "the control starts with data-pressed and data-held both false, and renders the hold-threshold underline" do
+      html = hold_rail([agent("Octavius", "oct-1")], hold_to_talk?: true)
+      [control] = hold_controls(html)
+
+      assert Floki.attribute(control, "data-pressed") == ["false"]
+      assert Floki.attribute(control, "data-held") == ["false"]
+
+      assert Floki.find(control, ~s([data-role="meeting-agent-hold-underline"])) != []
+    end
+
+    # The glyph-to-waveform swap (task 01a0f324 stage 3) used to key off
+    # `data-pressed`, which flips at 0ms — so the waveform replaced the
+    # glyph the instant the pointer went down, not at the 380ms hold
+    # threshold the canvas specifies. This checks both halves of the swap
+    # moved to `data-held`, and that neither still reads `data-pressed`.
+    test "the glyph-to-waveform swap keys off data-held, not data-pressed" do
+      html = hold_rail([agent("Octavius", "oct-1")], hold_to_talk?: true)
+      [control] = hold_controls(html)
+
+      [glyph] = Floki.find(control, ~s([data-role="meeting-agent-hold-indicator"] .hero-signal))
+      [glyph_classes] = Floki.attribute(glyph, "class")
+      assert glyph_classes =~ "group-data-[held=true]/ptt:opacity-0"
+      refute glyph_classes =~ "group-data-[pressed=true]/ptt:opacity-0"
+
+      [waveform] = Floki.find(control, ~s([data-role="meeting-agent-hold-waveform"]))
+      [waveform_classes] = Floki.attribute(waveform, "class")
+      assert waveform_classes =~ "group-data-[held=true]/ptt:opacity-100"
+      refute waveform_classes =~ "group-data-[pressed=true]/ptt:opacity-100"
+    end
+
     # Canvas palette table: disabled drops to `--color-base-300` fill /
     # `--color-neutral` label, and the "Ask" word never disappears — this is
     # the id-fallback disabled path from stage 1, now checked for colour too.
@@ -1323,14 +1385,18 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
     # button being held carried no z-index at all, so the veil painted
     # over the exact control the presser's finger was on. `z-[60]` only
     # takes effect on a POSITIONED box, so `relative` has to travel with
-    # it or the z-index is a no-op — this checks both together, plus the
-    # 2px base-content ring the canvas specifies.
+    # it or the z-index is a no-op — this checks both together.
+    #
+    # Item 1 (task 01a0f842 stage 1, canvas 01a0f846-cfb1) removed the
+    # row's OWN ring: "one ring only, on the key under the finger." See
+    # `hold_control_class_list/1`'s own test below for the ring that
+    # replaced it, on the Ask key itself.
     defp agent_row(html) do
       [row] = Floki.parse_fragment!(html) |> Floki.find(~s(li[data-participant-type="agent"]))
       row
     end
 
-    test "an agent row is positioned and carries a pressed-state z-index above the veil's z-50, plus a ring" do
+    test "an agent row is positioned and carries a pressed-state z-index above the veil's z-50, with no ring of its own" do
       html = hold_rail([agent("Octavius", "oct-1")], hold_to_talk?: true)
       row = agent_row(html)
 
@@ -1341,8 +1407,8 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
 
       assert "relative" in class_list
       assert "data-[pressed=true]:z-[60]" in class_list
-      assert "data-[pressed=true]:ring-2" in class_list
-      assert "data-[pressed=true]:ring-base-content" in class_list
+      refute "data-[pressed=true]:ring-2" in class_list
+      refute "data-[pressed=true]:ring-base-content" in class_list
     end
 
     test "a row with no hold-to-talk control carries no pressed-state z-index class" do
@@ -1556,27 +1622,180 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       assert Floki.attribute(other_button, "disabled") == []
     end
 
-    test "a row in removal_errors shows the failure line and keeps its button enabled" do
+    test "a row in removal_errors shows the shared feedback line with a Try again retry" do
       html =
         remove_rail(remove_roster(),
           can_remove_agents?: true,
-          removal_errors: %{"p-ma-1" => "Couldn't remove Burrow. Try again"}
+          removal_errors: %{"p-ma-1" => "Couldn't remove Burrow."}
         )
 
       doc = Floki.parse_fragment!(html)
       failed_row = Floki.find(doc, ~s(li[data-participant-id="p-ma-1"]))
 
       [line] = Floki.find(failed_row, ~s([data-role="meeting-agent-remove-error"]))
-      assert Floki.text(line) |> String.trim() == "Couldn't remove Burrow. Try again"
       [class] = Floki.attribute(line, "class")
-      assert class =~ "text-error"
-      assert class =~ "text-xs"
+      # Task 01a0f842 stage 5, canvas 01a0f846-cfb1: small red TEXT fails
+      # the 4.5:1 AA floor on this rail's light theme, so the colour
+      # signal now lives only on the rule and the icon — the sentence
+      # itself is `text-base-content`, never `text-error`.
+      assert class =~ "border-error"
+      refute class =~ "text-error"
+      assert class =~ "text-base-content"
+      assert Floki.text(line) =~ "Couldn't remove Burrow."
+
+      [retry] = Floki.find(failed_row, ~s([data-role="meeting-agent-remove-retry"]))
+      assert Floki.text(retry) |> String.trim() == "Try again"
+      assert Floki.attribute(retry, "phx-click") == ["remove_agent_from_call"]
+      assert Floki.attribute(retry, "phx-value-participant-id") == ["p-ma-1"]
 
       [button] = remove_buttons(failed_row)
       assert Floki.attribute(button, "disabled") == []
 
       # Only that row.
       assert length(Floki.find(doc, ~s([data-role="meeting-agent-remove-error"]))) == 1
+    end
+  end
+
+  # ── Mute an agent (task 01a0f842 stage 5, canvas 01a0f846-cfb1) ──────────
+  #
+  # NET-NEW: no agent mute control exists anywhere on main before this
+  # stage. Same host gate (`can_remove_agents?`) the remove button above
+  # uses, reusing `remove_rail/2` and `remove_roster/0` verbatim.
+
+  defp mute_buttons(nodes), do: Floki.find(nodes, ~s([data-role="meeting-agent-mute"]))
+
+  describe "mute-agent button" do
+    test "renders for the host, one per agent row, idle/unmuted by default" do
+      html = remove_rail(remove_roster(), can_remove_agents?: true)
+      doc = Floki.parse_fragment!(html)
+
+      agent_rows = Floki.find(doc, ~s(li[data-participant-type="agent"]))
+      human_rows = Floki.find(doc, ~s(li[data-participant-type="user"]))
+
+      for row <- agent_rows do
+        assert length(mute_buttons([row])) == 1
+      end
+
+      # Never on a human row — the host's own included.
+      assert mute_buttons(human_rows) == []
+
+      [button] = mute_buttons(Floki.find(doc, ~s(li[data-participant-id="p-ma-1"])))
+      assert Floki.attribute(button, "type") == ["button"]
+      assert Floki.attribute(button, "phx-click") == ["toggle_agent_mute"]
+      assert Floki.attribute(button, "phx-value-participant-id") == ["p-ma-1"]
+      assert Floki.attribute(button, "data-mute-state") == ["unmuted"]
+      assert Floki.attribute(button, "aria-pressed") == ["false"]
+      assert Floki.attribute(button, "aria-label") == ["Mute Burrow"]
+      assert Floki.attribute(button, "disabled") == []
+
+      assert Floki.find(button, ".hero-microphone") != []
+      assert Floki.find(button, ".hero-microphone-slash") == []
+    end
+
+    test "is absent for a non-host; the row keeps its read-only mic glyph" do
+      html = remove_rail(remove_roster(), [])
+      doc = Floki.parse_fragment!(html)
+
+      agent_row = Floki.find(doc, ~s(li[data-participant-id="p-ma-1"]))
+      assert mute_buttons(agent_row) == []
+      assert Floki.find(agent_row, ~s([data-role="mic-indicator"])) != []
+    end
+
+    test "a row with a true target in muting_ids reads Muting… with a disabled, spinning button" do
+      html =
+        remove_rail(remove_roster(),
+          can_remove_agents?: true,
+          muting_ids: %{"p-ma-1" => true}
+        )
+
+      doc = Floki.parse_fragment!(html)
+      row = Floki.find(doc, ~s(li[data-participant-id="p-ma-1"]))
+
+      [word] = Floki.find(row, ~s([data-role="meeting-agent-muting"]))
+      assert Floki.text(word) |> String.trim() == "Muting…"
+
+      [button] = mute_buttons(row)
+      assert Floki.attribute(button, "disabled") != []
+      assert Floki.attribute(button, "data-mute-state") == ["muting"]
+      assert Floki.attribute(button, "aria-label") == ["Muting Burrow…"]
+      assert Floki.find(button, ~s(.loading-spinner)) != []
+    end
+
+    test "a row with a false target in muting_ids reads Unmuting…" do
+      html =
+        remove_rail(remove_roster(),
+          can_remove_agents?: true,
+          muting_ids: %{"p-ma-1" => false}
+        )
+
+      doc = Floki.parse_fragment!(html)
+      row = Floki.find(doc, ~s(li[data-participant-id="p-ma-1"]))
+
+      [word] = Floki.find(row, ~s([data-role="meeting-agent-muting"]))
+      assert Floki.text(word) |> String.trim() == "Unmuting…"
+
+      [button] = mute_buttons(row)
+      assert Floki.attribute(button, "data-mute-state") == ["unmuting"]
+      assert Floki.attribute(button, "aria-label") == ["Unmuting Burrow…"]
+    end
+
+    test "a row in muted_agent_ids reads Muted with aria-pressed true and a slashed, uncoloured glyph" do
+      html =
+        remove_rail(remove_roster(),
+          can_remove_agents?: true,
+          muted_agent_ids: MapSet.new(["p-ma-1"])
+        )
+
+      doc = Floki.parse_fragment!(html)
+      row = Floki.find(doc, ~s(li[data-participant-id="p-ma-1"]))
+
+      [word] = Floki.find(row, ~s([data-role="meeting-agent-muted"]))
+      assert Floki.text(word) |> String.trim() == "Muted"
+      assert Floki.find(row, ~s([data-role="agent-activity-primary"])) == []
+
+      [button] = mute_buttons(row)
+      assert Floki.attribute(button, "data-mute-state") == ["muted"]
+      assert Floki.attribute(button, "aria-pressed") == ["true"]
+      assert Floki.attribute(button, "aria-label") == ["Unmute Burrow"]
+      assert Floki.attribute(button, "disabled") == []
+
+      [glyph] = Floki.find(button, ".hero-microphone-slash")
+      [class] = Floki.attribute(glyph, "class")
+      # "No colour: muted is a setting, not an error" (canvas states table).
+      refute class =~ "error"
+      assert class =~ "text-base-content"
+      refute class =~ "text-base-content/60"
+    end
+
+    test "a row in mute_errors shows the shared feedback line and reverts the button to unmuted" do
+      html =
+        remove_rail(remove_roster(),
+          can_remove_agents?: true,
+          mute_errors: %{"p-ma-1" => "Couldn't mute Burrow."}
+        )
+
+      doc = Floki.parse_fragment!(html)
+      row = Floki.find(doc, ~s(li[data-participant-id="p-ma-1"]))
+
+      [line] = Floki.find(row, ~s([data-role="meeting-agent-mute-error"]))
+      [class] = Floki.attribute(line, "class")
+      assert class =~ "border-error"
+      refute class =~ "text-error"
+      assert class =~ "text-base-content"
+      assert Floki.text(line) =~ "Couldn't mute Burrow."
+
+      [retry] = Floki.find(row, ~s([data-role="meeting-agent-mute-retry"]))
+      assert Floki.text(retry) |> String.trim() == "Try again"
+      assert Floki.attribute(retry, "phx-click") == ["toggle_agent_mute"]
+      assert Floki.attribute(retry, "phx-value-participant-id") == ["p-ma-1"]
+
+      # Reverted: same idle/unmuted look the default-state test asserts.
+      [button] = mute_buttons(row)
+      assert Floki.attribute(button, "data-mute-state") == ["unmuted"]
+      assert Floki.attribute(button, "disabled") == []
+
+      # Only that row.
+      assert length(Floki.find(doc, ~s([data-role="meeting-agent-mute-error"]))) == 1
     end
   end
 

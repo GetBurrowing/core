@@ -334,9 +334,45 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
   attr(:removal_errors, :map,
     default: %{},
     doc: """
-    Row id => failure message ("Couldn't remove <name>. Try again") for a
-    removal that did not land. Rendered under the row name in `text-error`;
-    the button stays enabled so the host can tap again.
+    Row id => failure message ("Couldn't remove <name>.") for a removal
+    that did not land. Rendered via the shared feedback-line
+    pattern (task 01a0f842 stage 5, canvas 01a0f846-cfb1) — an error icon,
+    a 2px `border-error` rule, `text-base-content` words, and a ghost "Try
+    again" button that re-sends the same `remove_agent_from_call` click.
+    The button stays enabled throughout so the host can tap again.
+    """
+  )
+
+  attr(:muting_ids, :any,
+    default: %{},
+    doc: """
+    NET-NEW (task 01a0f842 stage 5, canvas 01a0f846-cfb1): `meeting_participants`
+    row id => target mute state (`true` muting, `false` unmuting) for a
+    mute/unmute toggle currently in flight. A MAP, not a MapSet like
+    `removing_ids` — the row's "Muting…"/"Unmuting…" activity word and the
+    button's own label need to say WHICH DIRECTION is in flight, not just
+    that something is.
+    """
+  )
+
+  attr(:muted_agent_ids, :any,
+    default: MapSet.new(),
+    doc: """
+    `meeting_participants` row ids CONFIRMED muted by
+    `Meetings.mute_agent_in_call/4` — a real `MutePublishedTrack` round
+    trip, not a display flag. Drives the mute button's done state (slashed
+    glyph, `aria-pressed=true`, "Unmute <name>") and the row's "Muted"
+    activity word. Tolerant of any enumerable or `nil`, same as
+    `removing_ids`.
+    """
+  )
+
+  attr(:mute_errors, :map,
+    default: %{},
+    doc: """
+    Row id => failure message ("Couldn't mute <name>. Try again") for a
+    mute/unmute that did not land, mirroring `removal_errors` — same
+    shared feedback-line pattern, same "the button stays enabled" rule.
     """
   )
 
@@ -443,10 +479,16 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                 # can only read an ancestor's own attribute, never a
                 # descendant's, and this row needs to react to its button's
                 # state.
+                #
+                # Item 1 (task 01a0f842 stage 1, canvas 01a0f846-cfb1): the
+                # row no longer gets its OWN ring on press — only `z-[60]`
+                # survives here, to lift the row above the dim while held.
+                # The ring moved onto the Ask key itself (see its own
+                # `data-[pressed=true]:ring-*` below), per the canvas's
+                # "one ring only, on the key under the finger."
                 "group relative flex flex-col gap-1 rounded-lg px-2 py-1.5 text-xs min-h-11 hover:bg-base-300/40 transition-colors",
                 agent_row_align_class(info),
-                @hold_to_talk? &&
-                  "data-[pressed=true]:z-[60] data-[pressed=true]:ring-2 data-[pressed=true]:ring-base-content"
+                @hold_to_talk? && "data-[pressed=true]:z-[60]"
               ]
             }
           >
@@ -527,11 +569,25 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                    tone, replacing the activity reading, until
                    `{:participant_left, _}` drops the row. --%>
                 <% leaving? = removing?(@removing_ids, p.id) %>
+                <%!-- Mute (task 01a0f842 stage 5, canvas 01a0f846-cfb1,
+                   states table): pending and done each claim this SAME
+                   word slot wholesale, the same way `leaving?` already
+                   does above — the canvas gives mute its own single word
+                   per state ("Muting…"/"Unmuting…", "Muted"), not a
+                   suffix on whatever the agent happened to be doing when
+                   the host clicked. `mute_target` is `true`/`false` while
+                   in flight (the DIRECTION), `nil` once settled; `muting?`
+                   folds that into a plain boolean for the class/`:if`
+                   branches below. --%>
+                <% mute_target = mute_pending_target(@muting_ids, p.id) %>
+                <% muting? = not is_nil(mute_target) %>
+                <% muted_done? = !muting? and muted_by_host?(@muted_agent_ids, p.id) %>
+                <% override_word? = leaving? or muting? or muted_done? %>
                 <div
                   data-role="agent-activity-word"
                   class={[
                     "flex flex-wrap items-baseline gap-x-1 text-[11px] font-medium",
-                    if(leaving?, do: "text-base-content/60", else: info.text)
+                    if(override_word?, do: "text-base-content/60", else: info.text)
                   ]}
                 >
                   <span
@@ -541,10 +597,35 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                   >
                     Leaving…
                   </span>
-                  <span :if={!leaving?} data-role="agent-activity-primary" class="whitespace-nowrap">
+                  <span
+                    :if={!leaving? and muting?}
+                    data-role="meeting-agent-muting"
+                    class="whitespace-nowrap text-base-content/60"
+                  >
+                    {if mute_target, do: "Muting…", else: "Unmuting…"}
+                  </span>
+                  <%!-- `:if={!leaving? and !muting? and muted_done?}`, not an
+                     `else` branch of the clause above: `muting?` and
+                     `muted_done?` already exclude each other
+                     (`muted_done?` is computed `!muting? and ...`), but
+                     spelling both guards out here keeps this `<span>`
+                     correct even if a future edit reorders the ones above
+                     it. --%>
+                  <span
+                    :if={!leaving? and !muting? and muted_done?}
+                    data-role="meeting-agent-muted"
+                    class="whitespace-nowrap text-base-content/60"
+                  >
+                    Muted
+                  </span>
+                  <span
+                    :if={!override_word?}
+                    data-role="agent-activity-primary"
+                    class="whitespace-nowrap"
+                  >
                     {info.primary}
                   </span>
-                  <span :if={!leaving? and info.note} data-role="agent-activity-reason">
+                  <span :if={!override_word? and info.note} data-role="agent-activity-reason">
                     {"· " <> info.note}
                   </span>
                 </div>
@@ -572,15 +653,6 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                   class="break-words text-[11px] font-normal text-base-content/60"
                 >
                   {info.delay_reason}
-                </div>
-                <%!-- The one use of the `error` slot on this control (canvas
-                   01a0e99d-2af5): a removal that did not land. --%>
-                <div
-                  :if={removal_error(@removal_errors, p.id)}
-                  data-role="meeting-agent-remove-error"
-                  class="break-words text-xs text-error"
-                >
-                  {removal_error(@removal_errors, p.id)}
                 </div>
               </div>
 
@@ -645,6 +717,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                   data-agent-id={aid}
                   data-agent-name={p.display_name || "this agent"}
                   data-pressed="false"
+                  data-held="false"
                   aria-label={"Ask #{p.display_name || "this agent"}"}
                   title={"Ask #{p.display_name || "this agent"}"}
                   class={
@@ -671,8 +744,13 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                       # the moment the waveform (below) used to widen from
                       # `w-0` to `w-9`. `overflow-hidden` clips the 72px
                       # interior's own content swap to the frame so nothing
-                      # it does can leak back out into the row.
-                      "group/ptt btn btn-xs w-[88px] h-11 min-h-11 flex-shrink-0 justify-center gap-1 px-2 overflow-hidden",
+                      # it does can leak back out into the row. `relative`
+                      # anchors the hold-threshold underline (below) to
+                      # THIS frame rather than the row's own `relative` —
+                      # without it the underline's `absolute inset-x-0
+                      # bottom-0` would size itself against the row, not
+                      # the 88px key (item 1, task 01a0f842 stage 1).
+                      "group/ptt btn btn-xs w-[88px] h-11 min-h-11 flex-shrink-0 justify-center gap-1 px-2 overflow-hidden relative",
                       # The shared touch utility (`touch-action: none`, no callout,
                       # no selection) — the same class the old single button wore,
                       # so a long press on a phone holds instead of raising the OS
@@ -695,10 +773,23 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                         do: "bg-base-300 text-neutral",
                         else: "bg-primary text-primary-content hover:bg-primary/90"
                       ),
-                      # Held/pressed follows the EXISTING hold-to-talk ladder,
-                      # unchanged by this stage — only the rest/disabled base
-                      # above is new.
-                      "data-[pressed=true]:bg-primary data-[pressed=true]:text-primary-content",
+                      # Item 1 (task 01a0f842 stage 1, canvas 01a0f846-cfb1):
+                      # pressed INVERTS the rest fill instead of repainting
+                      # it unchanged — that identical repaint was the whole
+                      # regression Harper reported ("doesn't feel tactile").
+                      # Black fill (`primary-content`), cyan label/glyph
+                      # (`primary`), cyan ring — the largest colour change
+                      # available without moving the fixed frame. The
+                      # colour swap itself is forced instant (no fade) by
+                      # the plain-CSS override in app.css keyed off this
+                      # same `data-role` — DaisyUI's `.btn` ships its own
+                      # `transition-duration: 0.2s` for these properties in
+                      # the utilities layer (see `.meeting-hold-target`'s
+                      # comment for why `!important` is what beats that),
+                      # and this stage wants the inversion to land in the
+                      # SAME FRAME as the press, not fade into it.
+                      "data-[pressed=true]:bg-primary-content data-[pressed=true]:text-primary",
+                      "data-[pressed=true]:ring-2 data-[pressed=true]:ring-primary",
                       "data-[rejected=no-microphone]:text-error",
                       "data-[rejected=microphone-muted]:text-error",
                       "data-[rejected=pointer-lost]:text-error",
@@ -724,7 +815,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                      needs to stay put while its neighbour changes. --%>
                   <span class="relative h-3 w-9 shrink-0" data-role="meeting-agent-hold-indicator">
                     <span
-                      class="hero-signal absolute inset-y-0 left-0 size-3.5 transition-opacity duration-75 group-data-[pressed=true]/ptt:opacity-0"
+                      class="hero-signal absolute inset-y-0 left-0 size-3.5 transition-opacity duration-75 group-data-[held=true]/ptt:opacity-0"
                       aria-hidden="true"
                     >
                     </span>
@@ -749,9 +840,20 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                        moves nothing outside itself. The bars' own `scaleY`
                        transforms (`ptt_waveform.js`) never read the
                        container's width, so none of this costs the hook
-                       anything it depends on. --%>
+                       anything it depends on.
+
+                       Item 1 (task 01a0f842 stage 1, canvas 01a0f846-cfb1):
+                       this swap now keys off `data-held`, not
+                       `data-pressed` — `data-held` only flips true once
+                       `MeetingPushToTalk`'s hold-threshold timer actually
+                       fires (`HOLD_THRESHOLD_MS`, 380ms), where
+                       `data-pressed` flips the instant the pointer goes
+                       down. The canvas wants the waveform to replace the
+                       glyph exactly when the hold threshold is crossed —
+                       the same moment the underline below finishes
+                       drawing and the heard card opens — not at 0ms. --%>
                     <span
-                      class="absolute inset-0 flex items-center gap-px opacity-0 transition-opacity duration-75 group-data-[pressed=true]/ptt:opacity-100"
+                      class="absolute inset-0 flex items-center gap-px opacity-0 transition-opacity duration-75 group-data-[held=true]/ptt:opacity-100"
                       data-role="meeting-agent-hold-waveform"
                       aria-hidden="true"
                     >
@@ -776,6 +878,26 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                     data-role="meeting-agent-hold-label"
                   >
                     Ask
+                  </span>
+                  <%!-- Item 1 (task 01a0f842 stage 1, canvas 01a0f846-cfb1):
+                     the hold-threshold underline. Draws left-to-right
+                     across the key's bottom edge over exactly
+                     `HOLD_THRESHOLD_MS` (meeting_push_to_talk.js, 380ms)
+                     so it answers "has my press counted yet" — the one
+                     question the key could not answer before this stage.
+                     Positioned/sized/coloured and timed entirely in
+                     app.css, not Tailwind's `group-data` variant stack:
+                     the reduced-motion override needs to flip WHICH
+                     attribute drives the width (`data-pressed` vs
+                     `data-held`), and two same-specificity Tailwind
+                     utilities fighting over one property would depend on
+                     generator output order rather than a controlled
+                     cascade. --%>
+                  <span
+                    class="pointer-events-none absolute inset-x-0 bottom-0"
+                    data-role="meeting-agent-hold-underline"
+                    aria-hidden="true"
+                  >
                   </span>
                 </button>
               </div>
@@ -832,6 +954,10 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                 name={p.display_name || "Agent"}
                 mic_state={mic_state(@muted, p)}
                 camera_state={camera_state(@camera_off, p)}
+                can_mute?={@can_remove_agents? and is_binary(aid)}
+                participant_id={p.id}
+                mute_target={mute_target}
+                muted_by_host?={muted_done?}
               />
 
               <%!-- REMOVE FROM MEETING (task 01a0e906 stage 3, Saru's canvas
@@ -855,6 +981,68 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                 class="btn btn-ghost btn-xs btn-square flex-shrink-0 self-center text-base-content/60 hover:bg-base-300 hover:text-base-content focus-visible:bg-base-300 focus-visible:text-base-content max-sm:min-h-11 max-sm:min-w-11"
               >
                 <.icon name="hero-user-minus" class="size-4" />
+              </button>
+            </div>
+
+            <%!-- REMOVE / MUTE failure lines (task 01a0f842 stage 5, canvas
+                 01a0f846-cfb1, "Palette" row for `error`). Replaces the old
+                 `text-xs text-error` removal sentence outright: small red
+                 text on this rail's light `base-200` measured about
+                 3.4:1 — clears the 3:1 floor for an icon or a rule, FAILS
+                 the 4.5:1 floor small TEXT needs. The colour signal now
+                 lives only on the 2px `border-error` rule and the icon;
+                 the sentence itself is `text-base-content`, same token
+                 the Ask control's own feedback line below already uses
+                 for the identical reason. Each is a full-width SIBLING of
+                 the row (not nested in the name column, where the old
+                 removal sentence lived truncated at the column's width),
+                 with a ghost "Try again" that re-sends the EXACT same
+                 click (`remove_agent_from_call` / `toggle_agent_mute`) —
+                 a retry is indistinguishable, to either handler, from the
+                 host's first attempt. --%>
+            <div
+              :if={removal_error(@removal_errors, p.id)}
+              data-role="meeting-agent-remove-error"
+              class="flex w-full items-start gap-1.5 border-l-2 border-error pl-1.5 text-xs leading-[1.4] text-base-content"
+              role="status"
+            >
+              <span
+                class="hero-exclamation-circle mt-0.5 size-3.5 shrink-0 text-error"
+                aria-hidden="true"
+              >
+              </span>
+              <span class="min-w-0 flex-1 break-words">{removal_error(@removal_errors, p.id)}</span>
+              <button
+                type="button"
+                phx-click="remove_agent_from_call"
+                phx-value-participant-id={p.id}
+                data-role="meeting-agent-remove-retry"
+                class="btn btn-ghost btn-xs shrink-0 text-base-content/80 hover:bg-base-300 hover:text-base-content"
+              >
+                Try again
+              </button>
+            </div>
+
+            <div
+              :if={mute_error(@mute_errors, p.id)}
+              data-role="meeting-agent-mute-error"
+              class="flex w-full items-start gap-1.5 border-l-2 border-error pl-1.5 text-xs leading-[1.4] text-base-content"
+              role="status"
+            >
+              <span
+                class="hero-exclamation-circle mt-0.5 size-3.5 shrink-0 text-error"
+                aria-hidden="true"
+              >
+              </span>
+              <span class="min-w-0 flex-1 break-words">{mute_error(@mute_errors, p.id)}</span>
+              <button
+                type="button"
+                phx-click="toggle_agent_mute"
+                phx-value-participant-id={p.id}
+                data-role="meeting-agent-mute-retry"
+                class="btn btn-ghost btn-xs shrink-0 text-base-content/80 hover:bg-base-300 hover:text-base-content"
+              >
+                Try again
               </button>
             </div>
 
@@ -1191,6 +1379,37 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
               </span>
             </div>
           </div>
+
+          <%!-- Task 01a0f842 stage 2, canvas 01a0f846-cfb1, item 2 — the
+               INLINE failure line for a rejection/outcome that arrives
+               while this card is open. Per the direction's "Interrupted"
+               state, a refusal never closes the card silently: it shows
+               here, inside the still-open card, for a couple of seconds,
+               and only THEN does `MeetingAskFloorVeil._close()` run. A
+               sibling of the heard box (not inside it) so the dashed
+               border keeps meaning "this is what Burrow heard" with
+               nothing else drawn inside it.
+
+               Same icon-plus-rule pattern as the row's own
+               `meeting-agent-hold-feedback` line above (error only — this
+               card has nothing to say in the neutral/warning tones that
+               line uses), and `phx-update="ignore"`-equivalent by virtue
+               of living inside the veil's own `phx-update="ignore"` root:
+               `MeetingAskFloorVeil` owns `data-open` and the text node
+               directly, so a re-render mid-message cannot wipe it. --%>
+          <div
+            class="hidden items-start gap-1.5 border-l-2 border-error pl-1.5 text-xs leading-[1.4] text-base-content data-[open=true]:flex"
+            data-role="meeting-ask-error"
+            data-open="false"
+            role="status"
+          >
+            <span
+              class="hero-exclamation-circle mt-0.5 size-3.5 shrink-0 text-error"
+              aria-hidden="true"
+            >
+            </span>
+            <span data-role="meeting-ask-error-text" class="min-w-0 flex-1 break-words"></span>
+          </div>
         </div>
       </div>
     </div>
@@ -1200,6 +1419,47 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
   attr(:name, :string, required: true)
   attr(:mic_state, :atom, required: true)
   attr(:camera_state, :atom, required: true)
+
+  attr(:can_mute?, :boolean,
+    default: false,
+    doc: """
+    Render the mic slot as a real HOST MUTE BUTTON instead of the
+    read-only well (task 01a0f842 stage 5, canvas 01a0f846-cfb1). Passed
+    in by the caller as `@can_remove_agents? and is_binary(aid)` — the
+    SAME `can_remove_agents?`-style host gate the remove button uses —
+    never computed here, so this component stays ignorant of which row
+    shape (agent vs. human) called it. `false` (every human row, and an
+    agent row viewed by a non-host) renders the EXISTING read-only glyph
+    unchanged: per the canvas's own self-critique against a second icon,
+    "the existing glyph becomes the button for hosts," not a second
+    control beside it.
+    """
+  )
+
+  attr(:participant_id, :any,
+    default: nil,
+    doc: "The `meeting_participants` row id the mute button addresses, when `can_mute?`."
+  )
+
+  attr(:mute_target, :any,
+    default: nil,
+    doc: """
+    `true`/`false` while a mute/unmute toggle for this row is in flight
+    (the DIRECTION it is headed), `nil` when idle/settled. See
+    `agent_row_info`'s sibling assign of the same name in the template
+    above for where this is resolved.
+    """
+  )
+
+  attr(:muted_by_host?, :boolean,
+    default: false,
+    doc: """
+    This row's mute has been CONFIRMED by `Meetings.mute_agent_in_call/4`
+    — a real `MutePublishedTrack` round trip, not a display flag. Drives
+    the button's `aria-pressed`, its slashed glyph, and its "Unmute
+    <name>" label.
+    """
+  )
 
   # The trailing status cluster: an `sr-only` sentence, then the mic well,
   # then the camera well. Same order, same position, every row.
@@ -1215,13 +1475,26 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
   # `title` is omitted on an UNAVAILABLE camera rather than set to the
   # label: `pointer-events-none` means the tooltip could never appear, and
   # an attribute whose behaviour is suppressed reads as a working one.
+  #
+  # Task 01a0f842 stage 5: the mic cell is now EITHER the read-only well
+  # below OR `agent_mute_button/1`, gated on `@can_mute?` — never both, so
+  # a host and a non-host never see two different elements claiming the
+  # same cell at once.
   defp media_slots(assigns) do
     ~H"""
     <span class="sr-only" data-role="participant-state-summary">
       {state_sentence(@name, @mic_state, @camera_state)}
     </span>
     <span class="flex flex-shrink-0 items-center gap-1" data-role="media-slots">
+      <.agent_mute_button
+        :if={@can_mute?}
+        name={@name}
+        participant_id={@participant_id}
+        mute_target={@mute_target}
+        muted_by_host?={@muted_by_host?}
+      />
       <span
+        :if={!@can_mute?}
         class={["grid size-6 place-items-center rounded-full", well_class(@mic_state)]}
         role="img"
         aria-label={mic_label(@mic_state)}
@@ -1258,6 +1531,89 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
     """
   end
 
+  attr(:name, :string, required: true)
+  attr(:participant_id, :any, required: true)
+  attr(:mute_target, :any, default: nil)
+  attr(:muted_by_host?, :boolean, default: false)
+
+  # HOST MUTE BUTTON (task 01a0f842 stage 5, canvas 01a0f846-cfb1). NET-NEW:
+  # no agent mute control existed anywhere on main before this stage —
+  # `toggle_intent_mute` in `intents_collapse.ex` is an unrelated
+  # meeting-INTENT mute and shares nothing with this but the word "mute".
+  #
+  # Four states keyed off two assigns: `@mute_target` (in flight, with
+  # direction) and `@muted_by_host?` (confirmed by a real LiveKit round
+  # trip — see `Meetings.mute_agent_in_call/4`). Idle and Failed render
+  # IDENTICALLY — "glyph returns to unmuted" is the canvas's own words for
+  # Failed, and there is no fifth visual state to give it a look of its
+  # own; the feedback line under the row (the template above) is what
+  # tells a failed attempt apart from one that never happened.
+  #
+  # `size-6` well, `size-3.5` glyph — the SAME frame the read-only mic
+  # slot uses, per the canvas's "the existing glyph becomes the button for
+  # hosts" (not a second control — the canvas's own self-critique rejected
+  # a first draft that gave mute its own button beside remove, for exactly
+  # this reason). `rounded-full` overrides `btn-square`'s own
+  # sharp corners to keep that circular footprint while gaining real
+  # button semantics (focus ring, hover, keyboard activation, a real
+  # disabled state). `max-sm:min-h-11 max-sm:min-w-11` matches the remove
+  # button's own phone hit-area bump. No `--color-error` on any branch —
+  # "no colour: muted is a setting, not an error" is the canvas's own
+  # line for the done state, and idle/pending/failed have never used
+  # error here either.
+  defp agent_mute_button(assigns) do
+    ~H"""
+    <button
+      type="button"
+      phx-click="toggle_agent_mute"
+      phx-value-participant-id={@participant_id}
+      disabled={not is_nil(@mute_target)}
+      aria-pressed={to_string(is_nil(@mute_target) and @muted_by_host?)}
+      aria-label={mute_button_label(@mute_target, @muted_by_host?, @name)}
+      title={mute_button_label(@mute_target, @muted_by_host?, @name)}
+      data-role="meeting-agent-mute"
+      data-mute-state={mute_button_data_state(@mute_target, @muted_by_host?)}
+      class="btn btn-ghost btn-square btn-xs size-6 min-h-0 rounded-full p-0 text-base-content/60 hover:bg-base-300 hover:text-base-content focus-visible:bg-base-300 focus-visible:text-base-content max-sm:min-h-11 max-sm:min-w-11 disabled:opacity-100"
+    >
+      <span
+        :if={not is_nil(@mute_target)}
+        class="loading loading-spinner loading-xs size-3.5"
+        aria-hidden="true"
+      >
+      </span>
+      <span
+        :if={is_nil(@mute_target) and @muted_by_host?}
+        class="hero-microphone-slash size-3.5 text-base-content"
+        aria-hidden="true"
+      >
+      </span>
+      <span
+        :if={is_nil(@mute_target) and !@muted_by_host?}
+        class="hero-microphone size-3.5 text-base-content/60"
+        aria-hidden="true"
+      >
+      </span>
+    </button>
+    """
+  end
+
+  # The mute button's accessible label/tooltip across all four states.
+  # Pattern-matched on `mute_target` first (in flight always wins, same
+  # as the row's own "Muting…"/"Unmuting…" word above), then on
+  # `muted_by_host?` for the settled idle/done pair. Failed has no clause
+  # of its own: it resolves through the same `nil`/`false` path idle does,
+  # which is exactly "glyph returns to unmuted" from the canvas's states
+  # table.
+  defp mute_button_label(true, _muted?, name), do: "Muting #{name}…"
+  defp mute_button_label(false, _muted?, name), do: "Unmuting #{name}…"
+  defp mute_button_label(nil, true, name), do: "Unmute #{name}"
+  defp mute_button_label(nil, false, name), do: "Mute #{name}"
+
+  defp mute_button_data_state(true, _muted?), do: "muting"
+  defp mute_button_data_state(false, _muted?), do: "unmuting"
+  defp mute_button_data_state(nil, true), do: "muted"
+  defp mute_button_data_state(nil, false), do: "unmuted"
+
   # `:on` | `:off`. Agents are keyed the same way humans are: an agent
   # that has published no audio track at all is reported muted by
   # `meeting_client.js` (`_publicationMuted(null)` is `true`, "no
@@ -1279,6 +1635,28 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
   end
 
   defp removal_error(_errors, _id), do: nil
+
+  # Mute (task 01a0f842 stage 5). `muting_ids` is a MAP (id => target
+  # mute state), not a MapSet like `removing_ids` — see that attr's doc
+  # for why the direction matters here and didn't for removal.
+  defp mute_pending_target(pending, id) when is_map(pending), do: Map.get(pending, id)
+  defp mute_pending_target(_pending, _id), do: nil
+
+  # Tolerant of any enumerable (a `MapSet`, a list from a test) and of
+  # `nil`, same reasoning as `removing?/2` above.
+  defp muted_by_host?(nil, _id), do: false
+  defp muted_by_host?(%MapSet{} = ids, id), do: MapSet.member?(ids, id)
+  defp muted_by_host?(ids, id) when is_list(ids), do: id in ids
+  defp muted_by_host?(_ids, _id), do: false
+
+  defp mute_error(errors, id) when is_map(errors) do
+    case Map.get(errors, id) do
+      msg when is_binary(msg) and msg != "" -> msg
+      _ -> nil
+    end
+  end
+
+  defp mute_error(_errors, _id), do: nil
 
   defp mic_state(muted, participant) do
     if MapSet.member?(muted, MeetingLive.gallery_identity(participant)),

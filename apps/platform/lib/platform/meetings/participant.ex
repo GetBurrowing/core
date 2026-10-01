@@ -18,12 +18,26 @@ defmodule Platform.Meetings.Participant do
     field(:display_name, :string)
     field(:joined_at, :utc_datetime_usec)
     field(:left_at, :utc_datetime_usec)
+    # Task 01a0f842 stage 5: set by `Platform.Meetings.mute_agent_in_call/4`
+    # only after the real LiveKit `MutePublishedTrack` RPC confirms, cleared
+    # on unmute. See the `add_muted_at_to_meeting_participants` migration
+    # for why this is a timestamp (mirroring `left_at`) and not a boolean.
+    field(:muted_at, :utc_datetime_usec)
     field(:metadata, :map, default: %{})
   end
 
   def changeset(participant, attrs) do
     participant
-    |> cast(attrs, [:room_id, :user_id, :agent_id, :display_name, :joined_at, :left_at, :metadata])
+    |> cast(attrs, [
+      :room_id,
+      :user_id,
+      :agent_id,
+      :display_name,
+      :joined_at,
+      :left_at,
+      :muted_at,
+      :metadata
+    ])
     |> validate_required([:room_id, :display_name, :joined_at])
     |> foreign_key_constraint(:room_id)
     |> foreign_key_constraint(:user_id)

@@ -37,6 +37,8 @@ function mountHook({ barCount = 12 } = {}) {
   const transcript = { textContent: "" }
   const card = fakeCard()
   const bars = Array.from({ length: barCount }, fakeBar)
+  const error = { dataset: {} }
+  const errorText = { textContent: "" }
 
   const el = {
     dataset: {},
@@ -44,6 +46,8 @@ function mountHook({ barCount = 12 } = {}) {
       if (sel === '[data-role="meeting-ask-label"]') return label
       if (sel === '[data-role="meeting-ask-transcript"]') return transcript
       if (sel === '[data-role="meeting-ask-card"]') return card
+      if (sel === '[data-role="meeting-ask-error"]') return error
+      if (sel === '[data-role="meeting-ask-error-text"]') return errorText
       return null
     },
     querySelectorAll(sel) {
@@ -88,7 +92,7 @@ function mountHook({ barCount = 12 } = {}) {
   })
   hook.mounted()
 
-  return { hook, el, label, transcript, card, bars, fire, serverHandlers }
+  return { hook, el, label, transcript, card, bars, error, errorText, fire, serverHandlers }
 }
 
 beforeEach(() => {
@@ -172,18 +176,101 @@ describe("closing", () => {
     expect(hook.isOpen()).toBe(true)
   })
 
-  it("closes unconditionally on a rejection, even mid-hold (held-by-other, pointer-lost, etc.)", () => {
-    const { hook, fire } = mountHook()
+  // Task 01a0f842 stage 2, canvas 01a0f846-cfb1, item 2: the heard card
+  // used to close INSTANTLY on any rejection, even one arriving while
+  // the key was still physically held (`held-by-other` via
+  // `_serverReject` in `meeting_push_to_talk.js`, which never fires
+  // `meeting:push-to-talk-ended`) — that unconditional, synchronous
+  // close was the flash-then-vanish bug. It now always shows the
+  // failure inline and resolves on its own timer, never synchronously,
+  // whether or not the key is still down.
+  describe("a rejection mid-hold", () => {
+    it("does not close synchronously — it shows inline and resolves after the interrupted delay", () => {
+      vi.useFakeTimers()
+      try {
+        const { hook, error, errorText, fire } = mountHook()
 
-    fire("meeting:push-to-talk-armed", { agentId: "agent-123", agentName: "Atlas" })
-    fire("meeting:push-to-talk-held", { agentId: "agent-123", agentName: "Atlas" })
-    // The existing `meeting:push-to-talk-rejected` shape carries no
-    // `agentId` (pinned by `meeting_push_to_talk.test.js`), so this
-    // handler cannot filter by it — and does not need to: whatever this
-    // viewer's own press was doing, a rejection means it is over.
-    fire("meeting:push-to-talk-rejected", { reason: "held-by-other" })
+        fire("meeting:push-to-talk-armed", { agentId: "agent-123", agentName: "Atlas" })
+        fire("meeting:push-to-talk-held", { agentId: "agent-123", agentName: "Atlas" })
+        fire("meeting:push-to-talk-rejected", { reason: "held-by-other" })
 
-    expect(hook.isOpen()).toBe(false)
+        // Still open and still held immediately after the rejection —
+        // this is the exact "flashes and disappears" bug this stage
+        // fixes: no synchronous close.
+        expect(hook.isOpen()).toBe(true)
+        expect(error.dataset.open).toBe("true")
+        expect(errorText.textContent).not.toBe("")
+
+        // It does resolve eventually — "never vanishes without saying
+        // why", not "never vanishes at all".
+        vi.advanceTimersByTime(2_000)
+        expect(hook.isOpen()).toBe(false)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it("resolves the same way once the key is no longer held (e.g. pointer-lost, which ends the press first)", () => {
+      vi.useFakeTimers()
+      try {
+        const { hook, error, fire } = mountHook()
+
+        fire("meeting:push-to-talk-armed", { agentId: "agent-123", agentName: "Atlas" })
+        fire("meeting:push-to-talk-held", { agentId: "agent-123", agentName: "Atlas" })
+        // `pointer-lost` calls `endPress()` before `_reject`, so by the
+        // time the rejection reaches this hook the hold has already
+        // ended — simulate that ordering.
+        fire("meeting:push-to-talk-ended", { agentId: "agent-123" })
+        fire("meeting:push-to-talk-rejected", { reason: "pointer-lost" })
+
+        expect(hook.isOpen()).toBe(true)
+        expect(error.dataset.open).toBe("true")
+
+        vi.advanceTimersByTime(2_000)
+        expect(hook.isOpen()).toBe(false)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it("is a no-op if the veil was never open (an early-release-adjacent rejection with nothing to show)", () => {
+      const { hook, error, fire } = mountHook()
+
+      fire("meeting:push-to-talk-rejected", { reason: "no-microphone" })
+
+      expect(hook.isOpen()).toBe(false)
+      expect(error.dataset.open).not.toBe("true")
+    })
+  })
+
+  describe("an outcome arriving while still held", () => {
+    it("does not close the card until the key is actually released", () => {
+      vi.useFakeTimers()
+      try {
+        const { hook, fire, serverHandlers } = mountHook()
+
+        fire("meeting:push-to-talk-armed", { agentId: "agent-123", agentName: "Atlas" })
+        fire("meeting:push-to-talk-held", { agentId: "agent-123", agentName: "Atlas" })
+
+        // The server resolves before this client's own `ended` arrives.
+        serverHandlers["meeting_ask_outcome"]({
+          agent_id: "agent-123",
+          candidate_id: "candidate-1",
+          outcome: "fly",
+        })
+
+        expect(hook.isOpen()).toBe(true)
+
+        // Now the physical release reaches the client — the parked
+        // outcome plays for real.
+        fire("meeting:push-to-talk-ended", { agentId: "agent-123" })
+        vi.advanceTimersByTime(400)
+
+        expect(hook.isOpen()).toBe(false)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
   })
 
   it("an early release never opened the veil, so there is nothing for it to close", () => {

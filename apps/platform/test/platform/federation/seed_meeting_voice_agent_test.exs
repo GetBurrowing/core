@@ -22,6 +22,7 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgentTest do
   alias Platform.Federation.ToolAuthorization
   alias Platform.Meetings
   alias Platform.Repo
+  alias Platform.Roles
 
   defp owner! do
     n = System.unique_integer([:positive])
@@ -269,6 +270,37 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgentTest do
       refute "mail_draft_create" in ToolAuthorization.tool_names(runtime)
     end
 
+    # Task 01a0f842 stage 4 (round 2 of Harper's Burrow ticket, item 4): the
+    # fix for "Burrow attempts canvas/task work herself instead of routing
+    # it" is a prompt change in services/meeting-voice-agent's config.py,
+    # NOT a re-scope of allowed_bundles -- canvas (the write bundle), task,
+    # and plan were already excluded before this stage, deliberately. Pin
+    # that exclusion here so a future change to this list can't silently
+    # reopen the tool-grant gap this stage leaves untouched.
+    test "still excludes canvas, task, and plan (01a0f842 stage 4 — prompt fix, not a bundle re-scope)" do
+      owner = owner!()
+      assert {:ok, %{runtime: runtime}} = SeedMeetingVoiceAgent.seed!(owner)
+
+      refute "canvas" in runtime.allowed_bundles
+      refute "task" in runtime.allowed_bundles
+      refute "plan" in runtime.allowed_bundles
+
+      assert {:error, :forbidden} = ToolAuthorization.authorize("canvas.create", runtime)
+      assert {:error, :forbidden} = ToolAuthorization.authorize("canvas.patch", runtime)
+      assert {:error, :forbidden} = ToolAuthorization.authorize("task_create", runtime)
+      assert {:error, :forbidden} = ToolAuthorization.authorize("plan_create", runtime)
+
+      tool_names = ToolAuthorization.tool_names(runtime)
+      refute "canvas.create" in tool_names
+      refute "task_create" in tool_names
+      refute "plan_create" in tool_names
+
+      # context_read's read-only canvas tools stay granted -- only the write
+      # bundle is excluded.
+      assert :ok = ToolAuthorization.authorize("canvas_get", runtime)
+      assert "canvas_get" in tool_names
+    end
+
     test "does not touch any other agent's runtime row" do
       owner = owner!()
 
@@ -287,6 +319,56 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgentTest do
       assert {:ok, _} = SeedMeetingVoiceAgent.seed!(owner)
 
       assert Federation.get_runtime(other_runtime.id).allowed_bundles == before_bundles
+    end
+  end
+
+  # ── Burrow cannot be an meeting-intent-dispatch target (task 01a0f842 stage 3) ──
+  #
+  # Round 2 of Harper's Burrow ticket asked us to confirm
+  # `Platform.Meetings.IntentClassifier`/`IntentDispatcher` — the background
+  # pipeline that classifies EVERY live transcript chunk for the
+  # task-filing/candidate-rail feature, regardless of Ask-floor state — can
+  # never cause Burrow HERSELF to autonomously act. Two independent facts
+  # make that true today, and both are regression-worthy because either one
+  # drifting silently would reopen the gap:
+  #
+  #   1. Burrow is never assigned a `Platform.Roles` role, so
+  #      `Platform.Meetings.IntentClassifier`'s `{{agent_roster}}` block
+  #      (built from `Roles.assigned_agents/0`) never names her — a human
+  #      saying "Burrow" mid-meeting cannot produce a `target_role` that
+  #      resolves to her agent.
+  #   2. Even if she WERE addressed (a future role assignment, an operator
+  #      mistake, or a stray `target_role` from any other producer),
+  #      `IntentDispatcher.authorize_and_dispatch/6` asks
+  #      `Platform.Federation.ToolAuthorization.authorize("intent_ack", ...)`
+  #      before ever broadcasting to a runtime — and Burrow's `allowed_bundles`
+  #      (asserted above to be exactly `messaging` + `context_read`) does not
+  #      carry `meetings`, the bundle `intent_ack` lives in. The dispatch
+  #      fails closed as `:dispatch_failed{:cannot_ack}` before any subagent
+  #      spawns or writes anything.
+  #
+  # Together these close the entry point without touching the dispatcher
+  # itself: classification keeps running (by design, for every other
+  # staffed role), but it has no path to Burrow.
+  describe "Burrow cannot be a meeting-intent-dispatch target (01a0f842 stage 3)" do
+    test "the seeded voice runtime cannot call intent_ack, so a role-runtime dispatch addressed to it fails closed" do
+      owner = owner!()
+      assert {:ok, %{runtime: runtime}} = SeedMeetingVoiceAgent.seed!(owner)
+
+      refute "meetings" in runtime.allowed_bundles
+      assert {:error, :forbidden} = ToolAuthorization.authorize("intent_ack", runtime)
+      refute "intent_ack" in ToolAuthorization.tool_names(runtime)
+    end
+
+    test "the seeded agent is never assigned a role, so the intent classifier's roster never names it" do
+      owner = owner!()
+      assert {:ok, %{agent: agent}} = SeedMeetingVoiceAgent.seed!(owner)
+
+      roster = Roles.assigned_agents()
+
+      refute Enum.any?(roster, &(&1.agent_slug == agent.slug)),
+             "Burrow must never appear in the meeting-intent roster — a human naming her " <>
+               "mid-meeting must not be able to resolve a target_role onto her agent"
     end
   end
 

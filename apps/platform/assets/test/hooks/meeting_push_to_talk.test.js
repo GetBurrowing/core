@@ -621,6 +621,49 @@ describe("the hold-threshold events", () => {
     expect(held.detail).toEqual({ agentId: "agent-123", agentName: "Atlas" })
   })
 
+  // Item 1 (task 01a0f842 stage 1, canvas 01a0f846-cfb1): `data-held` is
+  // the signal the template/CSS key the hold-threshold underline and the
+  // glyph-to-waveform swap off, specifically so both land at 380ms, not
+  // at press (0ms, where `data-pressed` already flips). Asserted
+  // directly here — unlike `data-pressed` (see this file's moduledoc),
+  // this is the actual deliverable this stage adds, not a "looks
+  // pressed" proxy for a safety property measured elsewhere.
+  it("sets `data-held` only once the threshold elapses, not at press", () => {
+    vi.useFakeTimers()
+    const { el } = mountHook(roomWith([micPublication()]))
+
+    el.fire("pointerdown", { button: 0 })
+    expect(el.dataset.held).toBe("false")
+
+    vi.advanceTimersByTime(HOLD_THRESHOLD_MS)
+    expect(el.dataset.held).toBe("true")
+  })
+
+  it("clears `data-held` on release, early or otherwise", () => {
+    vi.useFakeTimers()
+    const { el } = mountHook(roomWith([micPublication()]))
+
+    el.fire("pointerdown", { button: 0 })
+    vi.advanceTimersByTime(HOLD_THRESHOLD_MS + 20)
+    expect(el.dataset.held).toBe("true")
+
+    el.fire("pointerup", {})
+    expect(el.dataset.held).toBe("false")
+  })
+
+  it("clears `data-held` on a server rejection that arrives after the threshold", () => {
+    vi.useFakeTimers()
+    const { el, serverHandlers } = mountHook(roomWith([micPublication()]))
+    el.dataset.agentId = "agent-123"
+
+    el.fire("pointerdown", { button: 0 })
+    vi.advanceTimersByTime(HOLD_THRESHOLD_MS + 20)
+    expect(el.dataset.held).toBe("true")
+
+    serverHandlers["push_to_talk_rejected"]({ agent_id: "agent-123", reason: "held-by-other" })
+    expect(el.dataset.held).toBe("false")
+  })
+
   it("an early release (<380ms) dispatches `early-release`, and `held` never fires even after the threshold would have elapsed", () => {
     vi.useFakeTimers()
     const { el } = mountHook(roomWith([micPublication()]))
@@ -678,6 +721,59 @@ describe("the hold-threshold events", () => {
     expect(levelEvents[0].detail.agentId).toBe("agent-123")
     expect(levelEvents[0].detail.level).toBe(hook.peakLevel())
     expect(levelEvents[0].detail.level).toBeGreaterThan(0)
+  })
+})
+
+// ── Vibration (item 1, task 01a0f842 stage 1, canvas 01a0f846-cfb1) ───────
+//
+// Progressive enhancement only: a 10ms pulse at press and again at the
+// 380ms hold threshold, where `navigator.vibrate` exists. Never required
+// for correctness — `with no live microphone`/`a server-side refusal`
+// above already prove a press can be fully handled (rejected, named)
+// with no vibration API in the picture at all, since those tests never
+// stub `navigator`.
+describe("vibration", () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  it("vibrates 10ms at press and again at the 380ms threshold, where the browser supports it", () => {
+    vi.useFakeTimers()
+    const vibrate = vi.fn()
+    vi.stubGlobal("navigator", { vibrate })
+    const { el } = mountHook(roomWith([micPublication()]))
+
+    el.fire("pointerdown", { button: 0 })
+    expect(vibrate).toHaveBeenCalledTimes(1)
+    expect(vibrate).toHaveBeenCalledWith(10)
+
+    vi.advanceTimersByTime(HOLD_THRESHOLD_MS)
+    expect(vibrate).toHaveBeenCalledTimes(2)
+    expect(vibrate).toHaveBeenNthCalledWith(2, 10)
+  })
+
+  it("does not vibrate at the threshold for a press that already released early", () => {
+    vi.useFakeTimers()
+    const vibrate = vi.fn()
+    vi.stubGlobal("navigator", { vibrate })
+    const { el } = mountHook(roomWith([micPublication()]))
+
+    el.fire("pointerdown", { button: 0 })
+    el.fire("pointerup", {})
+    vibrate.mockClear()
+
+    vi.advanceTimersByTime(HOLD_THRESHOLD_MS + 20)
+    expect(vibrate).not.toHaveBeenCalled()
+  })
+
+  it("is a no-op, never a throw, when the browser has no Vibration API", () => {
+    vi.useFakeTimers()
+    vi.stubGlobal("navigator", undefined)
+    const { el } = mountHook(roomWith([micPublication()]))
+
+    expect(() => el.fire("pointerdown", { button: 0 })).not.toThrow()
+    expect(() => vi.advanceTimersByTime(HOLD_THRESHOLD_MS)).not.toThrow()
   })
 })
 

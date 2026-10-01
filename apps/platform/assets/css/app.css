@@ -4729,6 +4729,94 @@ body, .font-fabrikam {
     user-select: none;
   }
 
+  /* Item 1 (task 01a0f842 stage 1, canvas 01a0f846-cfb1): the Ask key's
+     press feedback. Harper's round-2 report named the gap exactly —
+     pressed looked identical to rest, nothing but the interior glyph
+     swap moved. The fix is an inversion (black fill, cyan label/glyph/
+     ring) that lands in the SAME FRAME as the press, plus a scale and a
+     hold-threshold underline that answers "has my press counted yet".
+
+     The colour inversion itself is set with ordinary Tailwind
+     `data-[pressed=true]:bg-*`/`text-*`/`ring-*` classes on the button
+     in `participant_rail.ex` — those already win over daisyUI's own
+     `--btn-bg`/`--btn-fg` (the rest-state `bg-primary text-primary-
+     content` on the same button already proves it). What Tailwind
+     utilities can NOT be trusted to win on is the TRANSITION: daisyUI 5
+     emits `.btn { transition-property: color, background-color,
+     border-color, box-shadow; transition-duration: 0.2s }` in the
+     UTILITIES layer (see `.meeting-hold-target` above for why
+     `!important` is the only reliable way to beat a utilities-layer
+     rule from here), so a same-layer Tailwind `transition-*` utility on
+     this button would only win by generator output order, not by
+     intent. The canvas is explicit that the inversion is instant — "in
+     the same frame", "colour, not motion" — so this rule forces that
+     directly rather than gambling on it. */
+  [data-role="meeting-agent-hold-to-talk"] {
+    transition-duration: 0s !important;
+  }
+
+  /* The 0.96 press scale. Not a Tailwind `scale-*` + `transition-*` pair
+     on the button for the same reason as above: this needs its own
+     `--duration-fast`/`--ease-standard` timing independent of the
+     colour override, and a dedicated reduced-motion branch that removes
+     the scale ENTIRELY (not just its animation) — the canvas is explicit
+     that reduced motion drops the scale but keeps the inversion, since
+     one is colour and the other is motion. */
+  [data-role="meeting-agent-hold-to-talk"][data-pressed="true"] {
+    transform: scale(0.96);
+    transition: transform var(--duration-fast) var(--ease-standard);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    [data-role="meeting-agent-hold-to-talk"][data-pressed="true"] {
+      transform: none;
+    }
+  }
+
+  /* The hold-threshold underline (same item/task/canvas as above): a 2px
+     cyan line that draws left-to-right across the key's bottom edge over
+     exactly `HOLD_THRESHOLD_MS` (meeting_push_to_talk.js, 380ms) —
+     `transition: width 380ms linear` below is that same constant, named
+     here rather than imported, because CSS cannot read a JS constant and
+     the two are already coupled by the design (completion lines up with
+     `data-held` flipping true at the same 380ms mark). Plain CSS, not
+     Tailwind's `group-data` variant stack: the reduced-motion override
+     needs to flip WHICH attribute drives the width (`data-pressed` vs
+     `data-held`), and two same-specificity Tailwind utilities fighting
+     over one property would depend on generator output order rather
+     than this file's own, controlled cascade. */
+  [data-role="meeting-agent-hold-underline"] {
+    position: absolute;
+    inset-inline: 0;
+    bottom: 0;
+    height: 2px;
+    width: 0%;
+    background-color: var(--color-primary);
+    transition: width 380ms linear;
+  }
+
+  [data-role="meeting-agent-hold-to-talk"][data-pressed="true"]
+    [data-role="meeting-agent-hold-underline"] {
+    width: 100%;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    /* No draw animation: the line stays at 0 width through the press
+       and jumps to full the instant `data-held` flips true at 380ms,
+       rather than drawing (even quickly) from 0ms. */
+    [data-role="meeting-agent-hold-to-talk"][data-pressed="true"]
+      [data-role="meeting-agent-hold-underline"] {
+      width: 0%;
+      transition: none;
+    }
+
+    [data-role="meeting-agent-hold-to-talk"][data-held="true"]
+      [data-role="meeting-agent-hold-underline"] {
+      width: 100%;
+      transition: none;
+    }
+  }
+
   .sheet-handle {
     width: 36px;
     height: 4px;

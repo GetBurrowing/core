@@ -419,7 +419,20 @@ defmodule PlatformWeb.MeetingLiveRemoveAgentTest do
                agent_row_selector(agent_row) <> ~s( [data-role="meeting-agent-remove-error"])
              )
 
-      assert html =~ "Couldn&#39;t remove #{agent.name}. Try again"
+      # Task 01a0f842 stage 5: the sentence itself no longer carries "Try
+      # again" — the shared feedback-line pattern renders a real retry
+      # BUTTON for that now (asserted via `meeting-agent-remove-retry`
+      # below), the same way `PlatformWeb.MeetingLiveMuteAgentTest`
+      # asserts its own mute-failure line.
+      assert html =~ "Couldn&#39;t remove #{agent.name}."
+      refute html =~ "Couldn&#39;t remove #{agent.name}. Try again"
+
+      assert has_element?(
+               view,
+               agent_row_selector(agent_row) <>
+                 ~s( [data-role="meeting-agent-remove-retry"])
+             )
+
       refute has_element?(view, remove_button_selector(agent_row) <> "[disabled]")
       refute has_element?(view, ~s([data-role="meeting-agent-leaving"]))
     end

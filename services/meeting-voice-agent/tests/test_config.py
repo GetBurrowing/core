@@ -104,6 +104,28 @@ def test_default_instructions_call_space_get_context_for_space_context_questions
     assert "space_get_context" in config.instructions
 
 
+def test_default_instructions_delegate_canvas_and_task_requests():
+    """Task 01a0f842 stage 4 (round 2 of Harper's Burrow ticket, item 4):
+    Burrow ships with every instance as a default capability but her role
+    is PM/helper -- `allowed_bundles` already refuses her any canvas-write
+    or task/plan tool call server-side (see Core's
+    apps/platform/test/platform/federation/seed_meeting_voice_agent_test.exs,
+    "still excludes canvas, task, and plan"), so this is a prompt gap, not a
+    tool-grant gap. Without guidance, she
+    either hallucinated a tool call outside her granted list or verbally
+    committed to implementation work she structurally cannot do. The
+    default prompt must tell her to name a specialized agent and route the
+    request via the existing post_to_meeting_chat hand-off instead."""
+    config = AgentConfig.from_env()
+    instructions = config.instructions.lower()
+
+    assert "canvas" in instructions
+    assert "specialized agent" in instructions
+    assert "post_to_meeting_chat" in config.instructions
+    assert "do not attempt it" in instructions
+    assert "cannot do this" in instructions or "cannot do that" in instructions
+
+
 def test_instructions_env_override_wins(monkeypatch):
     monkeypatch.setenv("MVA_INSTRUCTIONS", "custom persona instructions")
     config = AgentConfig.from_env()

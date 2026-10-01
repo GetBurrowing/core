@@ -7234,6 +7234,136 @@ defmodule Platform.Meetings do
   defp twirp_not_found?(_), do: false
 
   @doc """
+  Mute or unmute AGENT's published audio track on the LiveKit media room
+  `room_name`, via LiveKit's own `RoomService/MutePublishedTrack` Twirp RPC
+  (task 01a0f842 stage 5, canvas 01a0f846-cfb1).
+
+  This is the LOW-LEVEL WIRE CALL and does NO authorization, mirroring
+  `remove_livekit_participant/2`'s own contract exactly. Its only sanctioned
+  caller is `mute_agent_in_call/4`, which enforces host-only and agent-only
+  before it gets here; do not call this from a LiveView, a tool, or
+  anything reachable by a client-supplied identity.
+
+  `MutePublishedTrack` addresses a TRACK, not a participant — unlike
+  `RemoveParticipant`, it needs the published track's `sid`. This function
+  resolves that first via the same `RoomService/ListParticipants` call
+  `list_livekit_participants/1` makes (walked one level deeper, into each
+  participant's `"tracks"`), then mutes it. `{:error, :no_audio_track}`
+  when `identity` has published no audio track at all — nothing to mute,
+  most often an agent whose runtime never opened a mic, or one that
+  unpublished instead of muting. `{:error, :not_found}` when the identity
+  itself is gone from the room. `{:error, :livekit_not_configured}` without
+  credentials; any other HTTP or transport failure is `{:error, reason}`.
+  Must never raise into its caller.
+  """
+  @spec mute_livekit_published_track(String.t(), String.t(), boolean()) ::
+          :ok | {:error, :livekit_not_configured | :not_found | :no_audio_track | term()}
+  def mute_livekit_published_track(room_name, identity, muted?)
+      when is_binary(room_name) and is_binary(identity) and is_boolean(muted?) do
+    config = livekit_config()
+    url = config[:url]
+    api_key = config[:api_key]
+    api_secret = config[:api_secret]
+
+    if is_nil(url) or is_nil(api_key) or is_nil(api_secret) do
+      {:error, :livekit_not_configured}
+    else
+      token = room_admin_token(api_key, api_secret, room_name)
+
+      twirp_url =
+        url
+        |> String.replace_prefix("wss://", "https://")
+        |> String.replace_prefix("ws://", "http://")
+
+      with {:ok, track_sid} <-
+             find_published_audio_track(twirp_url, token, room_name, identity) do
+        case Req.post(livekit_req_client(),
+               url: "#{twirp_url}/twirp/livekit.RoomService/MutePublishedTrack",
+               json: %{
+                 "room" => room_name,
+                 "identity" => identity,
+                 "track_sid" => track_sid,
+                 "muted" => muted?
+               },
+               headers: [{"authorization", "Bearer #{token}"}],
+               receive_timeout: 2_000,
+               retry: false
+             ) do
+          {:ok, %{status: 200}} ->
+            :ok
+
+          {:ok, %{status: status, body: body}} ->
+            if status == 404 or twirp_not_found?(body),
+              do: {:error, :not_found},
+              else: {:error, {:http_error, status, body}}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+      end
+    end
+  rescue
+    e -> {:error, {:exception, Exception.message(e)}}
+  end
+
+  # The `ListParticipants` round trip `mute_livekit_published_track/3` needs
+  # before it can call `MutePublishedTrack` — see that function's @doc for
+  # why a track sid, not just an identity, is required here.
+  defp find_published_audio_track(twirp_url, token, room_name, identity) do
+    case Req.post(livekit_req_client(),
+           url: "#{twirp_url}/twirp/livekit.RoomService/ListParticipants",
+           json: %{"room" => room_name},
+           headers: [{"authorization", "Bearer #{token}"}],
+           receive_timeout: 2_000,
+           retry: false
+         ) do
+      {:ok, %{status: 200, body: body}} ->
+        case audio_track_sid(body, identity) do
+          sid when is_binary(sid) -> {:ok, sid}
+          nil -> {:error, :no_audio_track}
+        end
+
+      {:ok, %{status: status, body: body}} ->
+        if status == 404 or twirp_not_found?(body),
+          do: {:error, :not_found},
+          else: {:error, {:http_error, status, body}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # LiveKit reports each participant's published tracks under "tracks",
+  # keyed by "type" ("AUDIO" | "VIDEO"). `participant_identities/1` only
+  # ever needed the bare identity string; this walks the same decoded body
+  # one level deeper to find ONE participant's audio track sid.
+  defp audio_track_sid(body, identity) when is_binary(body) do
+    case Jason.decode(body) do
+      {:ok, decoded} -> audio_track_sid(decoded, identity)
+      _ -> nil
+    end
+  end
+
+  defp audio_track_sid(%{"participants" => list}, identity) when is_list(list) do
+    list
+    |> Enum.find(fn p -> Map.get(p, "identity") == identity end)
+    |> case do
+      %{"tracks" => tracks} when is_list(tracks) ->
+        tracks
+        |> Enum.find(fn t -> Map.get(t, "type") == "AUDIO" end)
+        |> case do
+          %{"sid" => sid} when is_binary(sid) -> sid
+          _ -> nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp audio_track_sid(_body, _identity), do: nil
+
+  @doc """
   Kick an AGENT out of a live meeting (task 01a0e906 stage 2).
 
   `row_id` is a `meeting_participants` row id (the rail's row id, never a
@@ -7379,6 +7509,64 @@ defmodule Platform.Meetings do
       )
 
       :ok
+  end
+
+  @doc """
+  Mute or unmute an AGENT's published audio in a live meeting (task
+  01a0f842 stage 5, canvas 01a0f846-cfb1, item 5 mute half).
+
+  NET-NEW: mirrors `remove_agent_from_call/3`'s shape exactly — same
+  refusal order, same row resolution, same identity resolution — but ends
+  in `mute_livekit_published_track/3` (`MutePublishedTrack`) rather than
+  `remove_livekit_participant/2` (`RemoveParticipant`), and writes no
+  `left_at`: muting never removes the row, it only flips `muted_at`.
+
+  Every refusal happens before any LiveKit call, in the same order
+  `remove_agent_from_call/3` uses:
+
+    1. `{:error, :forbidden}` unless `actor` is a `"user"` chat participant
+       whose id is the meeting's `host_participant_id` (re-read from the DB).
+    2. `{:error, :not_found}` for a malformed id, a missing row, a row from
+       another room, or a row that has already left. `{:error, :not_an_agent}`
+       for a human, guest or nil-FK row.
+    3. The identity is the one LiveKit reported (`metadata["identity"]`),
+       falling back to `"agent:<slug>"`.
+
+  Then `mute_livekit_published_track/3` runs the real wire call. `muted?`
+  is the TARGET state: `true` mutes, `false` unmutes — one function for
+  both directions, the same way the row's own toggle button fires a single
+  event either way and the caller decides which way to ask. `:ok` outcome
+  is `:muted` or `:unmuted` to match.
+
+  `{:error, :no_audio_track}` (nothing published to mute) is NOT given an
+  "already gone" reading the way removal's LiveKit `:not_found` is — there
+  is no success state for a track that never existed, so this reaches the
+  caller as a real failure and the row's button reverts to unmuted. Any
+  other error is returned and `muted_at` is left exactly as it was, so the
+  host can retry.
+  """
+  @spec mute_agent_in_call(Meeting.t(), binary(), Platform.Chat.Participant.t() | nil, boolean()) ::
+          {:ok, %{participant: Participant.t(), outcome: :muted | :unmuted}}
+          | {:error,
+             :forbidden
+             | :not_an_agent
+             | :not_found
+             | :livekit_not_configured
+             | :no_audio_track
+             | term()}
+  def mute_agent_in_call(%Meeting{} = meeting, row_id, actor, muted?) when is_boolean(muted?) do
+    with {:ok, meeting} <- reload_meeting(meeting),
+         :ok <- authorize_meeting_host(meeting, actor),
+         {:ok, room, row} <- resolve_removable_agent_row(meeting, row_id),
+         {:ok, identity} <- removable_agent_identity(row),
+         :ok <- mute_livekit_published_track(room.livekit_room_name, identity, muted?) do
+      {:ok, updated} =
+        row
+        |> Participant.changeset(%{muted_at: if(muted?, do: DateTime.utc_now(), else: nil)})
+        |> Repo.update()
+
+      {:ok, %{participant: updated, outcome: if(muted?, do: :muted, else: :unmuted)}}
+    end
   end
 
   @doc """

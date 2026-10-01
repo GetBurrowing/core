@@ -494,6 +494,24 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
     doc: "Forwarded to the rail: row id => failed-removal message."
   )
 
+  attr(:muting_ids, :any,
+    default: %{},
+    doc: """
+    Forwarded to `ParticipantRail.participant_rail/1` (task 01a0f842 stage
+    5): row id => target mute state for a mute/unmute in flight.
+    """
+  )
+
+  attr(:muted_agent_ids, :any,
+    default: MapSet.new(),
+    doc: "Forwarded to the rail: row ids CONFIRMED muted by a host action."
+  )
+
+  attr(:mute_errors, :map,
+    default: %{},
+    doc: "Forwarded to the rail: row id => failed-mute message."
+  )
+
   attr(:hold_to_talk_id_prefix, :string,
     default: "meeting-people-ptt",
     doc: "Forwarded to the rail as `id_prefix` — distinct from the left rail's."
@@ -768,6 +786,9 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
               can_remove_agents?={@can_remove_agents?}
               removing_ids={@removing_ids}
               removal_errors={@removal_errors}
+              muting_ids={@muting_ids}
+              muted_agent_ids={@muted_agent_ids}
+              mute_errors={@mute_errors}
             />
             {render_slot(@people_extra)}
             <.invite_section
