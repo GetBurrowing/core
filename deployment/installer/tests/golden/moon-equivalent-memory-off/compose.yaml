@@ -22,7 +22,7 @@ services:
           - "suite-01a0d69d.test"
   core-platform:
     container_name: "core-platform"
-    image: "docker.io/example/suite-core:latest"
+    image: "docker.io/example/suite-core:core"
     pull_policy: "never"
     restart: "unless-stopped"
     env_file:

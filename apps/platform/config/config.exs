@@ -294,7 +294,7 @@ config :esbuild,
   version: "0.25.4",
   platform: [
     args:
-      ~w(js/app.js --bundle --target=es2022 --outdir=../priv/static/assets/js --external:/fonts/* --external:/images/* --alias:@=.),
+      ~w(js/app.js --bundle --target=es2022 --outdir=../priv/static/assets/js --external:/fonts/* --external:/images/* --alias:@=. --alias:@extensions=./js/extensions/none.js),
     cd: Path.expand("../assets", __DIR__),
     env: %{"NODE_PATH" => [Path.expand("../deps", __DIR__), Mix.Project.build_path()]}
   ],
@@ -451,6 +451,12 @@ config :platform, :root_org_slug, "fabrikam"
 # auto-admin entirely even when dev/test pins a default above. See the
 # accessor's @doc for why blank must not fall back to an environment
 # default.
+
+# Build-time modules (ADR 0055, task 01a0ee08). Core never sets
+# `config :platform, :extensions`: an unset key means no modules, which is
+# this project's own build (the without-modules build). A with-modules
+# release host, or a module's own config for its tests, sets it. Core reads
+# the list only through `Platform.Extensions`, per call.
 
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.

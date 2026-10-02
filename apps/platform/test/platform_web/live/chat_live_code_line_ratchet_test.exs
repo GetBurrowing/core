@@ -445,8 +445,10 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   #
   # ── 2026-09-26, task 01a0db5f stage 4: +2 (2,303 -> 2,305) ──────────────
   #
-  # The `game_stream` canvas: one `alias` of `PlatformWeb.GameStreamHooks`
-  # and its `attach()` in the mount pipeline, next to `CanvasHooks.attach()`.
+  # The `game_stream` canvas: one `alias` of Play's live-hooks module and
+  # its `attach()` in the mount pipeline, next to `CanvasHooks.attach()`.
+  # (Since task 01a0ee08 that module lives in Play's own project and the
+  # call is `PlatformWeb.Extensions.attach_live_hooks/1`; ADR 0055.)
   # Every event, info message and assign lives in the hook module, not here.
   #
   # RE-DERIVED from the guard's own measurement on this tree (measured: 2305).

@@ -118,24 +118,6 @@ defmodule Platform.Experiments.Metrics do
           "per plan, over the plans of a variant's subjects.",
       direction: :lower_is_better
     },
-    # Task 01a0db5f: the `game_stream.encoder_preset` surface's metric.
-    "game_stream_input_to_photon" => %{
-      module: Platform.Experiments.Metrics.GameStreamInputToPhoton,
-      label: "Game stream input-to-photon",
-      description:
-        "Mean per-session median input-to-photon round trip (ms), over a variant's " <>
-          "ended play sessions that reported stats.",
-      direction: :lower_is_better
-    },
-    # Task 01a0dbd6: the `game_stream.roster` surface's metric.
-    "game_stream_input_to_photon_worst_slot_p95" => %{
-      module: Platform.Experiments.Metrics.GameStreamInputToPhotonP95,
-      label: "Game stream worst-slot p95 input-to-photon",
-      description:
-        "Mean per-session worst-player-slot p95 input-to-photon round trip (ms), over a " <>
-          "variant's ended play sessions that reported stats.",
-      direction: :lower_is_better
-    },
     "time_in_phase" => %{
       module: Platform.Experiments.Metrics.TimeInPhase,
       label: "Time in phase",
@@ -173,14 +155,22 @@ defmodule Platform.Experiments.Metrics do
     if metric_module(slug), do: %{"kind" => "registered", "slug" => slug}, else: %{}
   end
 
+  @doc "Core's own metric slugs, without any extension's."
+  @spec core_metric_slugs() :: [String.t()]
+  def core_metric_slugs, do: @registry |> Map.keys() |> Enum.sort()
+
+  # Core's registry plus every extension's metrics (ADR 0055), read per call.
+  # Core's own entry wins a slug an extension also names.
+  defp registry, do: Map.merge(Platform.Extensions.experiment_metrics(), @registry)
+
   @doc "The metric slugs this platform can compute, sorted."
   @spec known_metrics() :: [String.t()]
-  def known_metrics, do: @registry |> Map.keys() |> Enum.sort()
+  def known_metrics, do: registry() |> Map.keys() |> Enum.sort()
 
   @doc "Resolves a `primary_metric` slug to a module, or nil when unrecognised."
   @spec metric_module(String.t() | nil) :: module() | nil
   def metric_module(slug) when is_binary(slug) do
-    case Map.get(@registry, slug) do
+    case Map.get(registry(), slug) do
       nil -> nil
       %{module: module} -> module
     end
@@ -202,7 +192,7 @@ defmodule Platform.Experiments.Metrics do
           }
         ]
   def catalog do
-    @registry
+    registry()
     |> Enum.map(fn {slug, entry} -> Map.put(entry, :slug, slug) |> Map.delete(:module) end)
     |> Enum.sort_by(& &1.slug)
   end

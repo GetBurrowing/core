@@ -12,7 +12,18 @@ env:
   # not reach the end. Raise it here when the suite grows well past it; it is
   # never a reason to delete tests. `Platform.CiCrashGuardTest` pins the
   # variable and its use.
+  #
+  # Since ADR 0055 the `Test` job is the WITHOUT-modules build: apps/platform
+  # alone. Measured on moon at the task 01a0ee08 stage 3 tip (426f9d30c),
+  # without Play: 20,083 tests (default run, no `--include slow`). That is
+  # 5,083 above this floor, so the floor still sits far below the suite and
+  # far above any partition, which is all a crash detector needs; it is not
+  # raised to the measured total, because a floor AT the total would turn
+  # every deleted or moved test into a red build.
   MIN_TEST_COUNT: 15000
+  # The same crash detector for the `Test (with Play)` job's module suite
+  # (apps/game_stream's own `mix test`): 196 tests at that tip.
+  MIN_PLAY_TEST_COUNT: 150
 
 on:
   push:
@@ -88,18 +99,33 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # Across EVERY migrations path: core's and each build-time module's
+      # (ADR 0055). schema_migrations keys on the version alone, so a version
+      # shared by two paths is one migration to every database and one of
+      # the two files silently never runs. Mirrors
+      # apps/platform/test/platform/migration_paths_test.exs.
       - name: Check for duplicate migration timestamps
         working-directory: ${{ github.workspace }}
         run: |
-          dupes=$(ls apps/platform/priv/repo/migrations/ | awk -F_ '{print $1}' | sort | uniq -d)
+          files=$(ls apps/*/priv/repo/migrations/*.exs)
+          dupes=$(for f in $files; do basename "$f"; done | awk -F_ '{print $1}' | sort | uniq -d)
           if [ -n "$dupes" ]; then
-            echo "::error::Duplicate migration timestamp(s) detected:"
+            echo "::error::Duplicate migration timestamp(s) detected across migrations paths:"
             for ts in $dupes; do
               echo "  $ts:"
-              ls apps/platform/priv/repo/migrations/ | grep "^${ts}_" | sed 's/^/    /'
+              ls apps/*/priv/repo/migrations/${ts}_* | sed 's/^/    /'
             done
             exit 1
           fi
+
+      # Every module and release host lockfile must lock core's entries
+      # exactly as apps/platform/mix.lock does (ADR 0055 § 1): Mix ignores a
+      # path dependency's lockfile, so nothing else keeps the with-modules
+      # build on the versions this job tests. Mirrors
+      # apps/platform/test/platform/module_lockfiles_test.exs.
+      - name: Check module lockfiles against core's
+        working-directory: ${{ github.workspace }}
+        run: elixir scripts/check-module-lockfiles.exs
 
       - name: Check surface line budgets
         working-directory: ${{ github.workspace }}
@@ -486,10 +512,199 @@ jobs:
               ;;
           esac
 
+  # The WITH-Play build (ADR 0055, task 01a0ee08 stage 4). `Test` above is the
+  # without-modules build and is unchanged; this job proves the other flavour:
+  #
+  #   * apps/game_stream (Play) compiles against core with
+  #     --warnings-as-errors in dev and test, is formatted, and its own ExUnit
+  #     suite passes (its `test` alias creates the database and migrates
+  #     core's path AND the module's, as Platform.Release.migrate/0 does);
+  #   * apps/suite_release (the with-modules image's host) compiles;
+  #   * the with-Play stylesheet keeps every rule core's has;
+  #   * the module's vitest suite passes;
+  #   * core's two bundle guards pass on the WITH-Play app.js (the generated
+  #     `@extensions` entry), which must stay under the cap and must contain
+  #     the module's hook literal (the positive control for the without-Play
+  #     absence check in `Test`).
+  #
+  # Both `Test` and `Test (with Play)` are meant to be required checks.
+  test-with-play:
+    name: Test (with Play)
+    runs-on: [self-hosted, linux, x64]
+    # Root container for apt, and the workspace handed back at the end: the
+    # same WORKSPACE OWNERSHIP reasoning as `test` above.
+    container:
+      image: elixir:1.19.5-otp-28-slim
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+        # No `ports:` mapping, for the reason given on `test`'s service.
+    env:
+      MIX_ENV: test
+      PGHOST: postgres
+      PGUSER: postgres
+      PGPASSWORD: postgres
+    defaults:
+      run:
+        working-directory: apps/game_stream
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install system packages (with Play)
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends build-essential ca-certificates git
+          update-ca-certificates
+
+      - name: Install Hex and Rebar (with Play)
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+
+      # One cache per project: Mix ignores a path dependency's lockfile, so
+      # each project resolves (and stores) its own deps.
+      - name: Cache module deps
+        uses: actions/cache@v5
+        with:
+          path: |
+            apps/game_stream/deps
+            apps/suite_release/deps
+            apps/platform/deps
+          key: deps-with-play-${{ hashFiles('apps/game_stream/mix.lock', 'apps/suite_release/mix.lock', 'apps/platform/mix.lock') }}
+          restore-keys: deps-with-play-
+
+      # Once per env: core is a path dependency compiled in the module's env
+      # (`env: Mix.env()`), so `deps.get` fetches only the deps core needs IN
+      # that env. Core's `only: :dev` deps (phoenix_live_reload) are absent
+      # after a test-env fetch, and the dev compile below then stops with
+      # "the dependency is not available" (ADR 0055 § Proof, spike S7).
+      - name: Install module dependencies
+        run: |
+          MIX_ENV=dev mix deps.get
+          MIX_ENV=test mix deps.get
+
+      - name: Compile the module with warnings as errors (dev + test)
+        run: |
+          if ! MIX_ENV=dev mix compile --force --warnings-as-errors; then
+            echo "::error::apps/game_stream: mix compile --warnings-as-errors failed in MIX_ENV=dev. Fix the warning; never suppress it."
+            exit 1
+          fi
+          if ! MIX_ENV=test mix compile --force --warnings-as-errors; then
+            echo "::error::apps/game_stream: mix compile --warnings-as-errors failed in MIX_ENV=test."
+            exit 1
+          fi
+
+      - name: Check module formatting
+        run: mix format --check-formatted
+
+      # Same crash-detector shape as `Run tests` in `test`: the step fails if
+      # the pass prints no ExUnit summary or runs fewer than
+      # MIN_PLAY_TEST_COUNT tests. No retry: the module's suite is small, and
+      # a first-pass failure here is the signal.
+      - name: Run module tests
+        run: |
+          set -o pipefail
+          log="${RUNNER_TEMP:-.}/mix-test-with-play.log"
+          mix test 2>&1 | tee "$log"
+          summary=$(grep -oE '[0-9]+ tests?, [0-9]+ failures?' "$log" | tail -n1 || true)
+          if [ -z "$summary" ]; then
+            echo
+            echo "::error::apps/game_stream mix test printed no ExUnit summary line (N tests, M failures) — the suite did not run to completion"
+            exit 1
+          fi
+          count=${summary%% *}
+          if [ "$count" -lt "$MIN_PLAY_TEST_COUNT" ]; then
+            echo
+            echo "::error::apps/game_stream mix test ran $count tests, below MIN_PLAY_TEST_COUNT=$MIN_PLAY_TEST_COUNT"
+            exit 1
+          fi
+          echo "apps/game_stream mix test ran $count tests (floor MIN_PLAY_TEST_COUNT=$MIN_PLAY_TEST_COUNT)"
+
+      # The release host is the with-modules image's Mix project. Generating
+      # the asset inputs here is also what the bundle guard below builds from.
+      - name: Compile the release host and generate its asset inputs
+        working-directory: apps/suite_release
+        env:
+          MIX_ENV: dev
+        run: |
+          mix deps.get
+          if ! mix compile --warnings-as-errors; then
+            echo "::error::apps/suite_release: mix compile --warnings-as-errors failed in MIX_ENV=dev."
+            exit 1
+          fi
+          mix format --check-formatted
+          mix platform.extensions.assets --out assets/generated
+          mix tailwind.install --if-missing
+          mix tailwind platform --minify
+
+      # Core's bundle guards esbuild-build js/app.js against apps/platform/deps
+      # (phoenix's JS), so core's deps are fetched too.
+      - name: Install core dependencies (bundle guard)
+        working-directory: apps/platform
+        run: mix deps.get
+
+      # A with-modules stylesheet may add rules, never lose one of core's. The
+      # first with-Play image lost every vendored `hero-*` icon this way
+      # (scripts/check-flavour-css.sh says how), with a green build.
+      - name: Compare the with-Play stylesheet against core's
+        working-directory: apps/platform
+        run: |
+          mix tailwind.install --if-missing
+          mix tailwind platform --minify
+          sh "$GITHUB_WORKSPACE/scripts/check-flavour-css.sh" \
+            priv/static/assets/css/app.css \
+            ../suite_release/priv/static/assets/css/app.css
+
+      - name: Set up Node (with Play)
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            apps/platform/assets/package-lock.json
+            apps/game_stream/assets/package-lock.json
+
+      - name: Run the module's JS tests
+        working-directory: apps/game_stream/assets
+        run: |
+          npm ci
+          if ! npx vitest run; then
+            echo "::error::vitest failed in apps/game_stream/assets."
+            exit 1
+          fi
+
+      - name: Run the bundle guards on the with-Play app.js
+        working-directory: apps/platform/assets
+        # $GITHUB_WORKSPACE at run time, not `${{ github.workspace }}`: in a
+        # container job the expression is the HOST path, which the container
+        # does not have.
+        run: |
+          export SUITE_EXTENSIONS_JS="$GITHUB_WORKSPACE/apps/suite_release/assets/generated/extensions.js"
+          npm ci
+          if ! node --test test/no_excalidraw_in_app_bundle_test.mjs test/no_emoji_data_in_app_bundle_test.mjs; then
+            echo "::error::a bundle guard failed on the WITH-Play app.js (SUITE_EXTENSIONS_JS=$SUITE_EXTENSIONS_JS)."
+            exit 1
+          fi
+
+      - name: Hand the workspace back to the runner (with Play)
+        if: always()
+        run: |
+          rm -rf "$GITHUB_WORKSPACE"/apps/*/deps/*/_build || true
+          chown -R 1000:1000 "$GITHUB_WORKSPACE" || true
+
   build-and-push:
     name: Build and push image
     if: github.event_name == 'push'
-    needs: test
+    needs: [test, test-with-play]
     runs-on: [self-hosted, linux, x64]
     permissions:
       contents: read
@@ -515,38 +730,98 @@ jobs:
 
       - uses: docker/setup-buildx-action@v4
 
-      - name: Build and push (main)
+      # TWO IMAGE FLAVOURS (ADR 0055 § 9, task 01a0ee08 stage 4), one repo.
+      #
+      #   core  apps/platform/Dockerfile      without modules
+      #   play  apps/suite_release/Dockerfile with Play (apps/game_stream)
+      #
+      # `latest`, `<sha>` and `<short_sha>` stay on the WITH-Play image. All
+      # three production installs on moon pull `suite-core:latest` (Fabrikam,
+      # Milhouse and Red Star, measured 2026-10-02), and each keeps its current
+      # behaviour on it: Play is still gated inside the module by
+      # GAME_STREAM_ENABLED, which Fabrikam sets and the other two leave unset. A
+      # without-Play `latest` would remove Play from Fabrikam on the webhook
+      # restart that follows this push. Repointing installs to the explicit
+      # flavour tags is core-ops' step 3 in ADR 0055 § 9.
+      #
+      # The `core` flavour is pushed FIRST, so `latest` (which moon's
+      # auto-update watches) is the last tag to move.
+      #
+      # deployment/installer/suite_install/registry.py IMAGE_FLAVOURS names the
+      # flavour tags a rendered install runs; deployment/installer/tests pins
+      # that every one of them is pushed here.
+      - name: Build and push core (main)
         if: github.ref == 'refs/heads/main'
         uses: docker/build-push-action@v7
         with:
           context: .
           file: apps/platform/Dockerfile
           push: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=core
+          cache-to: type=gha,mode=max,scope=core
           # Task 01a089d5: the Dockerfile writes GIT_SHA to priv/build_commit, which
           # /health reports. On a push event github.sha is the commit being built.
           build-args: |
             GIT_SHA=${{ github.sha }}
           tags: |
+            docker.io/example/suite-core:core
+            docker.io/example/suite-core:core-${{ github.sha }}
+            docker.io/example/suite-core:core-${{ steps.vars.outputs.short_sha }}
+
+      - name: Build and push play (main)
+        if: github.ref == 'refs/heads/main'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: apps/suite_release/Dockerfile
+          push: true
+          cache-from: type=gha,scope=play
+          cache-to: type=gha,mode=max,scope=play
+          # Same build identity as the core flavour (task 01a089d5).
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+          tags: |
+            docker.io/example/suite-core:play
+            docker.io/example/suite-core:play-${{ github.sha }}
+            docker.io/example/suite-core:play-${{ steps.vars.outputs.short_sha }}
             docker.io/example/suite-core:latest
             docker.io/example/suite-core:${{ github.sha }}
             docker.io/example/suite-core:${{ steps.vars.outputs.short_sha }}
 
-      - name: Build and push (feature branch)
+      - name: Build and push core (feature branch)
         if: github.ref != 'refs/heads/main'
         uses: docker/build-push-action@v7
         with:
           context: .
           file: apps/platform/Dockerfile
           push: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=core
+          cache-to: type=gha,mode=max,scope=core
           # Task 01a089d5: the Dockerfile writes GIT_SHA to priv/build_commit, which
           # /health reports. On a push event github.sha is the commit being built.
           build-args: |
             GIT_SHA=${{ github.sha }}
           tags: |
+            docker.io/example/suite-core:core-${{ steps.vars.outputs.branch_tag }}
+            docker.io/example/suite-core:core-${{ github.sha }}
+            docker.io/example/suite-core:core-${{ steps.vars.outputs.short_sha }}
+
+      - name: Build and push play (feature branch)
+        if: github.ref != 'refs/heads/main'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: apps/suite_release/Dockerfile
+          push: true
+          cache-from: type=gha,scope=play
+          cache-to: type=gha,mode=max,scope=play
+          # Same build identity as the core flavour (task 01a089d5).
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+          tags: |
+            docker.io/example/suite-core:play-${{ steps.vars.outputs.branch_tag }}
+            docker.io/example/suite-core:play-${{ github.sha }}
+            docker.io/example/suite-core:play-${{ steps.vars.outputs.short_sha }}
             docker.io/example/suite-core:${{ steps.vars.outputs.branch_tag }}
             docker.io/example/suite-core:${{ github.sha }}
             docker.io/example/suite-core:${{ steps.vars.outputs.short_sha }}

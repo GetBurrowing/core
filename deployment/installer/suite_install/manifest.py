@@ -14,7 +14,7 @@ class Field:
     """A leaf key: its TOML type, allowed values and default."""
 
     def __init__(self, kind, default=None, choices=None):
-        self.kind = kind  # "str" | "bool" | "int" | "enum"
+        self.kind = kind  # "str" | "bool" | "int" | "enum" | "set"
         self.default = default
         self.choices = choices
 
@@ -38,6 +38,11 @@ def _enum(choices, default=None):
     return Field("enum", default=default, choices=tuple(choices))
 
 
+def _set(choices):
+    """An array of distinct strings, each one of ``choices``; default empty."""
+    return Field("set", default=(), choices=tuple(choices))
+
+
 SIZE_TIERS = ("small", "medium", "large")
 TLS_MODES = ("acme", "internal")
 ACCELERATORS = ("cpu", "cuda")
@@ -56,6 +61,8 @@ SCHEMA = {
     "install": {
         "name": _str(),
         "size_tier": _enum(SIZE_TIERS, "small"),
+        # Build-time modules (ADR 0055): selects the core image flavour.
+        "modules": _set(registry.MODULES),
     },
     "domain": {
         "primary": _str(),

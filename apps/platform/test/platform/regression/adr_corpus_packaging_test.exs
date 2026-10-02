@@ -31,6 +31,11 @@ defmodule Platform.Regression.ADRCorpusPackagingTest do
   @repo_root Path.expand("../../../../..", __DIR__)
 
   @dockerfile Path.join(@repo_root, "apps/platform/Dockerfile")
+
+  # Every image Dockerfile under apps/ (ADR 0055 stage 4: the without-modules
+  # image above and each with-modules release host's). Globbed, never listed,
+  # so core names no module and a new image cannot skip these assertions.
+  @image_dockerfiles Path.wildcard(Path.join(@repo_root, "apps/*/Dockerfile"))
   @dockerignore Path.join(@repo_root, ".dockerignore")
   @ci_workflow Path.join(@repo_root, ".github/workflows/ci.yml")
 
@@ -150,6 +155,30 @@ defmodule Platform.Regression.ADRCorpusPackagingTest do
   end
 
   describe "the Dockerfile packages the ADR corpus" do
+    test "every image Dockerfile is found, core's among them" do
+      # Positive control for the two cases below, which iterate this list.
+      assert @dockerfile in @image_dockerfiles
+      assert length(@image_dockerfiles) >= 2
+    end
+
+    test "every image Dockerfile copies docs/decisions into priv/adr_decisions" do
+      for path <- @image_dockerfiles do
+        assert @copy_line in lines(File.read!(path)),
+               "#{Path.relative_to(path, @repo_root)} has no `#{@copy_line}` line."
+      end
+    end
+
+    test "every image Dockerfile copies the corpus before `mix release`" do
+      for path <- @image_dockerfiles do
+        text = File.read!(path)
+        rel = Path.relative_to(path, @repo_root)
+
+        assert line_number!(text, @copy_line) < line_number!(text, @release_line),
+               "#{rel}: `#{@copy_line}` is at or below `#{@release_line}`; the release " <>
+                 "snapshots priv/ before the corpus lands."
+      end
+    end
+
     test "copies docs/decisions into priv/adr_decisions", %{dockerfile: dockerfile} do
       assert @copy_line in lines(dockerfile),
              """
@@ -264,9 +293,23 @@ defmodule Platform.Regression.ADRCorpusPackagingTest do
              reach it.
              """
 
-      assert Enum.count(entries, &(&1 == "file: apps/platform/Dockerfile")) == build_steps,
+      files =
+        entries
+        |> Enum.filter(&String.starts_with?(&1, "file: "))
+        |> Enum.map(&String.replace_prefix(&1, "file: ", ""))
+
+      assert length(files) == build_steps,
              "a root context without an explicit `file:` makes Docker look for " <>
                "./Dockerfile, which does not exist"
+
+      assert "apps/platform/Dockerfile" in files,
+             "no build step builds the without-modules image from apps/platform/Dockerfile"
+
+      for file <- files do
+        assert Path.join(@repo_root, file) in @image_dockerfiles,
+               "`file: #{file}` is not an image Dockerfile under apps/*/, so the corpus " <>
+                 "assertions above never read it"
+      end
     end
   end
 
@@ -287,7 +330,7 @@ defmodule Platform.Regression.ADRCorpusPackagingTest do
       |> lines()
       |> Enum.find_index(&(&1 == needle))
 
-    assert index, "expected a `#{needle}` line in apps/platform/Dockerfile"
+    assert index, "expected a `#{needle}` line in the Dockerfile"
     index + 1
   end
 end

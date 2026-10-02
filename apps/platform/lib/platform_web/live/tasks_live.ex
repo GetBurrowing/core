@@ -141,7 +141,7 @@ defmodule PlatformWeb.TasksLive do
      |> PlatformWeb.Tasks.MaskHooks.attach()
      |> LifecycleHooks.refresh_containers()
      |> BoardHooks.attach()
-     |> PlatformWeb.GameStreamHooks.attach()
+     |> PlatformWeb.Extensions.attach_live_hooks()
      |> BoardHooks.refresh_board()}
   end
 

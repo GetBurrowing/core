@@ -32,6 +32,7 @@ validation instead of silently keeping its default.
 |---|---|---|---|
 | `name` | string | required | `[a-z][a-z0-9-]{0,62}`. Names the install; becomes `DEPLOY_TARGET`. |
 | `size_tier` | `small` \| `medium` \| `large` | `small` | Sizing hint for renderers (VM size, pool sizes). |
+| `modules` | array of strings | `[]` | Build-time modules ([ADR 0055](../../docs/decisions/0055-extension-contract-and-build-time-modules.md)). Each entry must be a known module (`unknown_module`), listed once (`invalid_value`). Known modules: `play`. The set picks the core image flavour: `[]` runs `suite-core:core`, `["play"]` runs `suite-core:play`. A module is compiled into the core image, so this changes nothing else in the render. See [`install-modules.md`](install-modules.md). |
 
 ## `[domain]`
 
@@ -116,7 +117,7 @@ A missing required field gives one `backup_incomplete` error. A field the target
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `source` | `registry` \| `preloaded` | `registry` | `preloaded`: images are loaded onto the host out of band, and nothing is pulled. |
-| `refs.<container>` | string | registry default | Per-container image override. The keys are container names: `caddy`, `core-platform`, `core-postgres`, `embeddings`, `files-service`, `memory-service`, `pocket-id`, `speaches`. |
+| `refs.<container>` | string | registry default | Per-container image override. The keys are container names: `caddy`, `core-platform`, `core-postgres`, `embeddings`, `files-service`, `memory-service`, `pocket-id`, `speaches`. The `core-platform` default is the flavour `install.modules` selects; an override replaces it, so a pinned ref must be a build of the same flavour (for example `suite-core:play-<sha>` with `modules = ["play"]`). |
 
 ## `[day2]` (reserved)
 
@@ -146,9 +147,10 @@ A valid manifest prints `ok` and exits `0`.
 | `unsupported_schema_version` | `schema_version` is missing or not `1` |
 | `unknown_key` | a key outside this schema, at any depth |
 | `unknown_service` | a `[services]` key other than `files`, `memory`, `voice` or `embeddings` |
+| `unknown_module` | an `install.modules` entry other than `play` |
 | `invalid_type` | a value of the wrong TOML type |
 | `invalid_enum` | an enum value outside its allowed set |
-| `invalid_value` | a malformed name, URL, email, path, secret ref or empty image ref |
+| `invalid_value` | a malformed name, URL, email, path, secret ref or empty image ref, or a module listed twice |
 | `missing_required` | `install.name` or an endpoint's `name`/`kind`/`base_url` is missing |
 | `missing_domain` | `domain.primary` is missing |
 | `invalid_domain` | `domain.primary` is not a DNS name |
@@ -183,7 +185,7 @@ does not raise a second error. So one wrong field produces exactly one error lin
 | `UPSTREAM_SERVICE` | Constant `core-platform` (registry). |
 | `UPSTREAM_PORT` | Constant `4000`. |
 | `HEALTHCHECK_URL` | `https://<domain.primary>/health` |
-| `PLATFORM_IMAGE` | `images.refs.core-platform`, else the registry default. |
+| `PLATFORM_IMAGE` | `images.refs.core-platform`, else the flavour of `install.modules` (`suite-core:core` or `suite-core:play`). |
 | `PROMOTION_CHANNEL` | `day2.upgrade_channel` (reserved; not yet acted on). |
 | `PROMOTION_REF` | Not produced: promotion state is private instance state (ADR 0003 §4). |
 

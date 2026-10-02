@@ -37,9 +37,14 @@ defmodule Platform.Application do
     # external login.
     Platform.Accounts.ExternalAdmissionNotifier.attach()
 
+    # ADR 0055: refuse to boot when a build-time module reuses a name core
+    # (or another module) already owns, rather than letting one silently
+    # shadow the other. Raises naming both owners.
+    Platform.Extensions.validate!()
+
     children =
       (maybe_chat_storage_boot_check() ++
-         [
+         List.flatten([
            Platform.Vault.Encryption,
            Platform.Repo,
            PlatformWeb.Telemetry,
@@ -59,10 +64,10 @@ defmodule Platform.Application do
            {Registry, keys: :unique, name: Platform.Meetings.Registry},
            Platform.Agents.RuntimeSupervisor,
            Platform.Chat.CanvasSupervisor,
-           # Live play sessions (task 01a0db5f). Always started and empty
-           # unless GAME_STREAM_ENABLED is set; before the Endpoint so a
-           # runtime channel's terminate/2 can always reach its Registry.
-           Platform.GameStream.Supervisor,
+           # No build-time module's processes start here: each module's own
+           # Application starts them, AFTER the Endpoint, and every extension
+           # callback tolerates them being absent. See
+           # 0055-extension-contract-and-build-time-modules.md § 3. Supervision is the module's own
            # ContextBroker — must start after the agent registry/runtime tree
            Platform.Agents.ContextBroker,
            # Context plane supervisor — must start after PubSub
@@ -187,7 +192,7 @@ defmodule Platform.Application do
            Platform.Chat.AdHocFreezeListener,
            # Start to serve requests, typically the last entry
            PlatformWeb.Endpoint
-         ])
+         ]))
       |> maybe_add_task_router_watcher()
       |> maybe_add_attention_router()
       |> maybe_add_node_client()

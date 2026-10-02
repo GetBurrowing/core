@@ -36,6 +36,7 @@ ERROR_CODES = (
     "unsupported_schema_version",
     "unknown_key",
     "unknown_service",
+    "unknown_module",
     "invalid_type",
     "invalid_enum",
     "invalid_value",
@@ -58,10 +59,17 @@ _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _SECRET_REF_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,127}$")
 _URL_RE = re.compile(r"^https?://[^/\s:]+(:[0-9]{1,5})?(/\S*)?$")
 
-_TYPE_NAMES = {"str": "a string", "bool": "a boolean", "int": "an integer"}
+_TYPE_NAMES = {
+    "str": "a string",
+    "bool": "a boolean",
+    "int": "an integer",
+    "set": "an array of strings",
+}
 
 
 def _type_ok(kind, value):
+    if kind == "set":
+        return isinstance(value, list) and all(isinstance(item, str) for item in value)
     if kind in ("str", "enum"):
         return isinstance(value, str)
     if kind == "bool":
@@ -111,6 +119,9 @@ def _structure(raw, spec, path, errors, bad):
                 )
                 bad.add(child_path)
                 continue
+            if child.kind == "set" and not _set_ok(child, value, child_path, errors):
+                bad.add(child_path)
+                continue
             clean[key] = value
         elif isinstance(child, ArrayOf):
             if not isinstance(value, list) or not all(isinstance(i, dict) for i in value):
@@ -130,6 +141,28 @@ def _structure(raw, spec, path, errors, bad):
                 continue
             clean[key] = _structure(value, child, child_path, errors, bad)
     return clean
+
+
+def _set_ok(field, value, path, errors):
+    """``install.modules``: every entry known, none repeated. One error per field."""
+    unknown = [item for item in value if item not in field.choices]
+    if unknown:
+        errors.append(
+            ValidationError(
+                "unknown_module",
+                path,
+                f"unknown module(s) {', '.join(map(repr, unknown))}; "
+                f"known modules: {', '.join(field.choices)}",
+            )
+        )
+        return False
+    repeated = sorted({item for item in value if value.count(item) > 1})
+    if repeated:
+        errors.append(
+            ValidationError("invalid_value", path, f"lists {', '.join(map(repr, repeated))} twice")
+        )
+        return False
+    return True
 
 
 def _is_bad(path, bad):

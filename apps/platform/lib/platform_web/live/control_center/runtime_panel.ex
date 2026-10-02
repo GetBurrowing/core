@@ -138,6 +138,19 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
               />
               <span class="font-mono">{bundle}</span>
             </label>
+            <%!-- A grant whose module is not in this build (ADR 0055 section 7):
+                 shown checked and read-only, and submitted unchanged, so a save
+                 here never strips it. --%>
+            <label
+              :for={bundle <- @fed_runtime.allowed_bundles -- AgentRuntime.valid_bundles()}
+              class="inline-flex items-center gap-2 text-xs text-base-content/55"
+              data-role="orphan-bundle"
+            >
+              <input type="hidden" name="bundles[]" value={bundle} />
+              <input type="checkbox" checked disabled class="checkbox checkbox-xs" />
+              <span class="font-mono">{bundle}</span>
+              <span class="text-[10px]">(module not installed)</span>
+            </label>
           </div>
           <div class="flex justify-end">
             <button type="submit" class="btn btn-primary btn-sm">Save bundles</button>

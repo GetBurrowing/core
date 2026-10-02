@@ -22,9 +22,12 @@ defmodule Platform.Agents.AgentRuntime do
   # Being GRANTABLE is not being GRANTED: adding a bundle here does not add it
   # to `@default_allowed_bundles` below, and must not.
   #
-  # `play` (task 01a0db5f) is grantable and deliberately NOT a default: it
-  # drives a physical GPU on a LAN machine.
-  @valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments play)
+  # Core's own grantable bundles. The full grantable list is these plus every
+  # build-time module's bundle (`Platform.Extensions.tool_bundle_names/0`,
+  # ADR 0055), read per call: never widen this attribute with a module's
+  # bundle. A module bundle (e.g. `play`, task 01a0db5f, which drives a
+  # physical GPU on a LAN machine) is grantable and NOT a default.
+  @core_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments)
 
   # `meetings` is a DEFAULT, not merely grantable (task 01a066af stage 4).
   # `meeting_say` is the only way an invited agent can speak in a room, and it
@@ -59,7 +62,8 @@ defmodule Platform.Agents.AgentRuntime do
     timestamps(type: :utc_datetime_usec)
   end
 
-  def valid_bundles, do: @valid_bundles
+  @doc "Every grantable bundle: core's, then every build-time module's, per call."
+  def valid_bundles, do: @core_valid_bundles ++ Platform.Extensions.tool_bundle_names()
   def default_allowed_bundles, do: @default_allowed_bundles
 
   def changeset(runtime, attrs) do
@@ -81,9 +85,36 @@ defmodule Platform.Agents.AgentRuntime do
     |> validate_inclusion(:status, @valid_statuses)
     |> validate_inclusion(:trust_level, @valid_trust_levels)
     |> validate_inclusion(:transport, @valid_transports)
-    |> validate_subset(:allowed_bundles, @valid_bundles)
+    |> validate_added_bundles(runtime)
     |> unique_constraint(:runtime_id)
   end
+
+  # Validates only the bundles a change ADDS (ADR 0055 section 7). A bundle
+  # already persisted on the row passes even when no loaded module provides
+  # it, so a build without that module cannot strip a grant it cannot see:
+  # the grant survives every save and works again once the module is back.
+  # A bundle the change adds must be grantable now. The error is the one
+  # `validate_subset/3` gives, so callers read it the same way.
+  defp validate_added_bundles(changeset, runtime) do
+    persisted = persisted_bundles(runtime)
+
+    validate_change(changeset, :allowed_bundles, fn :allowed_bundles, bundles ->
+      valid = valid_bundles()
+      added = Enum.reject(bundles, &(&1 in persisted))
+
+      if Enum.all?(added, &(&1 in valid)),
+        do: [],
+        else: [allowed_bundles: {"has an invalid entry", validation: :subset, enum: valid}]
+    end)
+  end
+
+  # Only a row that exists in the database has grants to keep; a new struct's
+  # default list is not a persisted grant.
+  defp persisted_bundles(%__MODULE__{__meta__: %{state: :loaded}, allowed_bundles: bundles})
+       when is_list(bundles),
+       do: bundles
+
+  defp persisted_bundles(_runtime), do: []
 
   @doc "Hash a raw token for storage."
   def hash_token(raw_token) when is_binary(raw_token) do

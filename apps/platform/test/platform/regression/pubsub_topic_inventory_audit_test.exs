@@ -83,6 +83,8 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
 
   @lib_root Path.expand("../../../lib", __DIR__)
 
+  alias Platform.Test.PubSubTopicScan
+
   # Scope classes. The first six are the vocabulary task 019ffca8 stage 2 was
   # asked to classify against. Two more were added because forcing a topic into
   # a class it does not have would make the inventory wrong in the direction
@@ -155,12 +157,6 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
     {"ctx:<id>", :task},
     {"execution:runs:<id>", :task},
     {"review_requests:<id>", :task},
-    # Task 01a0db5f: one play session's status and WebRTC signalling, keyed
-    # by the session id. A session builds exactly one task's review build and
-    # its canvas lives in that task's execution space; stage 4's hook
-    # subscribes only for a session_id carried by a canvas the viewer can
-    # read. Only published while GAME_STREAM_ENABLED is set.
-    {"game_stream:<id>", :task},
 
     # ── project ──
     {"files:project:<id>", :project},
@@ -337,7 +333,8 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
       almost certainly means the scanner is blind rather than that the tree
       shrank. While it is blind the set-equality test above proves nothing.
 
-      Look at @literal_regex, @anchor_regex and strip_prose/1 in this file
+      Look at @literal_regex, @anchor_regex and strip_prose/1 in
+      Platform.Test.PubSubTopicScan (test/support/pubsub_topic_scan.ex)
       before trusting any other assertion here.
       """
     end
@@ -509,44 +506,10 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
 
   # ── Scanners ─────────────────────────────────────────────────────────────
 
-  # A topic-shaped string literal: colon-separated lowercase segments, an
-  # interpolation, or a literal `*`. Either two-or-more segments, or one-or-more
-  # followed by a trailing colon (the prefix half of a `<>` concatenation).
-  @segment ~S/(?:[a-z][a-z0-9_]*|\*|\#\{[^"}]*\})/
-  @literal_regex Regex.compile!(
-                   ~s/"(#{@segment}(?::#{@segment})*:|#{@segment}(?::#{@segment})+)"/
-                 )
-
-  # Positions where a topic string can enter the system. A topic that reaches
-  # none of these is unreachable by definition, which is what makes scanning
-  # these five shapes complete rather than a sample.
-  @anchor_regex ~r/(?:def\s+\w*topic\w*|@\w*topic\w*\s|PubSub\.(?:un)?subscribe\(|PubSub\.(?:local_)?broadcast(?:_from)?!?\(|Endpoint\.broadcast!?\(|"topic"\s*=>|\btopic:\s)/
-
-  # Characters after an anchor to search for a literal. Wide enough for the
-  # multi-line `Phoenix.PubSub.broadcast(\n @pubsub,\n topic,\n event\n)` form.
-  @anchor_window 260
-
   # `trigger_config:` map, then the `"topic" =>` pair inside it.
   @trigger_config_regex ~r/trigger_config:/
   @trigger_config_window 400
   @topic_pair_regex ~r/"topic"\s*=>\s*(?:"([^"\n]+)"|(@\w+|[\w.]+))/
-
-  # Returns `[{shape, relative_path}]`, deduplicated on shape.
-  defp scan_topic_shapes do
-    lib_sources()
-    |> Enum.flat_map(fn {relative_path, source} ->
-      @anchor_regex
-      |> Regex.scan(source, return: :index, capture: :first)
-      |> Enum.flat_map(fn [{offset, length}] ->
-        source
-        |> window(offset + length, @anchor_window)
-        |> then(&Regex.scan(@literal_regex, &1, capture: :all_but_first))
-        |> Enum.map(fn [raw] -> {normalise(raw), relative_path} end)
-      end)
-    end)
-    |> Enum.uniq_by(&elem(&1, 0))
-    |> Enum.sort()
-  end
 
   # Returns the topic strings Responsibilities handlers declare. A `@attr`
   # reference is resolved against the same file's attribute definition;
@@ -584,44 +547,12 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
 
   # ── Helpers ──────────────────────────────────────────────────────────────
 
-  defp lib_sources do
-    Path.wildcard(Path.join(@lib_root, "**/*.ex"))
-    |> Enum.map(fn path ->
-      {Path.relative_to(path, @lib_root), path |> File.read!() |> strip_prose()}
-    end)
-  end
-
-  defp window(source, offset, size) do
-    binary_part(source, offset, min(size, byte_size(source) - offset))
-  end
-
-  defp normalise(raw) do
-    raw
-    |> String.replace(~r/\#\{[^}]*\}/, "<id>")
-    |> then(fn shape -> if String.ends_with?(shape, ":"), do: shape <> "<id>", else: shape end)
-  end
-
-  # Blanks out `#` comments and `"""` heredoc bodies, preserving line COUNT.
-  #
-  # Necessary because moduledocs across lib quote topic strings while
-  # explaining them, and a doc mentioning a topic is not a call site. Copied
-  # from board_topic_scope_audit_test.exs, which needs it for the same reason.
-  defp strip_prose(source) do
-    source
-    |> String.split("\n")
-    |> Enum.map_reduce(false, fn line, in_heredoc? ->
-      delimiters = length(String.split(line, ~s("""))) - 1
-      next? = if rem(delimiters, 2) == 1, do: not in_heredoc?, else: in_heredoc?
-
-      cond do
-        in_heredoc? or delimiters > 0 -> {"", next?}
-        String.starts_with?(String.trim_leading(line), "#") -> {"", next?}
-        true -> {line, next?}
-      end
-    end)
-    |> elem(0)
-    |> Enum.join("\n")
-  end
+  # The scanner and its helpers live in `Platform.Test.PubSubTopicScan`
+  # (test/support), shared with each build-time module's own inventory of the
+  # topics ITS lib constructs (ADR 0055, task 01a0ee08 stage 3).
+  defp scan_topic_shapes, do: PubSubTopicScan.topic_shapes(@lib_root)
+  defp lib_sources, do: PubSubTopicScan.lib_sources(@lib_root)
+  defp window(source, offset, size), do: PubSubTopicScan.window(source, offset, size)
 
   defp unclassified_message(unclassified) do
     sites = Map.new(scan_topic_shapes())

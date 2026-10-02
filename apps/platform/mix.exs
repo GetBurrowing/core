@@ -20,12 +20,34 @@ defmodule Platform.MixSupport do
   """
   def prepare_test_database(runner \\ &Mix.Task.run/2) do
     run_step(runner, "ecto.create")
-    run_step(runner, "ecto.migrate")
+    # Computed after `ecto.create`, which compiles and configures the app.
+    run_step(runner, "ecto.migrate", extension_migration_args())
     :ok
   end
 
-  defp run_step(runner, task) do
-    runner.(task, ["--quiet"])
+  @doc """
+  The `--migrations-path` flags that make `mix ecto.migrate` run core's
+  migrations AND every build-time module's (ADR 0055 section 6), core's
+  first. `[]` when no module has a migrations path, so the command is then
+  exactly `mix ecto.migrate` over core's default path.
+
+  Call it only after the app is compiled and configured (after
+  `ecto.create`): it reads `Platform.Extensions`, which lives under `lib/`.
+  """
+  def extension_migration_args do
+    paths =
+      if Code.ensure_loaded?(Platform.Extensions),
+        do: Platform.Extensions.migrations_paths(),
+        else: []
+
+    case paths do
+      [] -> []
+      paths -> Enum.flat_map(["priv/repo/migrations" | paths], &["--migrations-path", &1])
+    end
+  end
+
+  defp run_step(runner, task, extra_args \\ []) do
+    runner.(task, ["--quiet" | extra_args])
     :ok
   rescue
     error in [Mix.Error] ->
@@ -207,7 +229,12 @@ defmodule Platform.MixProject do
   defp aliases do
     [
       setup: ["deps.get", "ecto.setup", "assets.setup", "assets.build"],
-      "ecto.setup": ["ecto.create", "ecto.migrate"],
+      "ecto.setup": [
+        "ecto.create",
+        fn _args ->
+          Mix.Task.run("ecto.migrate", Platform.MixSupport.extension_migration_args())
+        end
+      ],
       "ecto.reset": ["ecto.drop", "ecto.setup"],
       "assets.setup": ["tailwind.install --if-missing", "esbuild.install --if-missing"],
       "assets.build": [

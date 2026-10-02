@@ -194,7 +194,7 @@ defmodule Platform.Federation do
   rather than `[]`: only a list that is actually present is evidence about
   what the client can do. One reader for every "does this runtime advertise
   feature X" question (task 01a0db5f; `Platform.Meetings` voice capability
-  and `Platform.GameStream` host discovery both call it), so the two cannot
+  and the play module's host discovery both call it), so the two cannot
   drift into reading different keys.
   """
   @spec declared_features(map() | nil) :: [String.t()] | :undeclared

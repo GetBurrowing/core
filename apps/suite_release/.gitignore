@@ -1,0 +1,5 @@
+/_build/
+/deps/
+/assets/generated/
+/priv/static/assets/
+erl_crash.dump

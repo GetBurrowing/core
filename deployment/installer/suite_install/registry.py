@@ -53,6 +53,57 @@ AUTH_CONTAINERS = {
     "external-oidc": None,
 }
 
+# ---------------------------------------------------------------------------
+# Build-time modules (ADR 0055, task 01a0ee08 stage 4).
+# ---------------------------------------------------------------------------
+
+# `install.modules` vocabulary -> the Mix project under apps/ that implements
+# it. A module is not a container: it is compiled into core-platform's image,
+# so selecting one changes WHICH core image the install runs, plus the env in
+# MODULE_CORE_ENV below, and nothing else in the render.
+MODULES = {
+    "play": "apps/game_stream",
+}
+
+# Env a selected module needs on core-platform. Play still gates itself on
+# GAME_STREAM_ENABLED inside the module until every install runs an explicit
+# flavour tag (ADR 0055 § 9, follow-up 1), so a with-Play install without it
+# would run the with-Play image with Play inert. Delete the entry with that
+# follow-up; selecting the module is then the image alone.
+MODULE_CORE_ENV = {
+    "play": {"GAME_STREAM_ENABLED": "true"},
+}
+
+CORE_IMAGE_REPO = "docker.io/example/suite-core"
+
+# Module set -> the image flavour tag CI publishes for it
+# (.github/workflows/ci.yml, `build-and-push`). One release host is built per
+# supported set, so every set an install may select must be listed here; the
+# assertion below makes adding a module without deciding its flavours an
+# import error rather than a render that names an image nobody builds.
+IMAGE_FLAVOURS = {
+    frozenset(): "core",
+    frozenset({"play"}): "play",
+}
+
+
+def _subsets(names):
+    names = sorted(names)
+    for mask in range(1 << len(names)):
+        yield frozenset(n for i, n in enumerate(names) if mask >> i & 1)
+
+
+assert set(MODULE_CORE_ENV) <= set(MODULES), "MODULE_CORE_ENV names an unknown module"
+assert set(IMAGE_FLAVOURS) == set(_subsets(MODULES)), (
+    "every subset of MODULES needs an image flavour"
+)
+
+
+def core_image(ctx):
+    """The core image for the install's module set, e.g. ``suite-core:play``."""
+    return f"{CORE_IMAGE_REPO}:{IMAGE_FLAVOURS[frozenset(ctx.m['install']['modules'])]}"
+
+
 ALL_CONTAINERS = tuple(
     sorted(
         set(IMPLICIT_CONTAINERS)
@@ -291,6 +342,8 @@ def _core_env(ctx):
         "MEETING_CALENDAR_SIGNING_KEY": "{secret:MEETING_CALENDAR_SIGNING_KEY}",
         "OIDC_PKCE_ENABLED": "true",
     }
+    for module in sorted(ctx.m["install"]["modules"]):
+        env.update(MODULE_CORE_ENV.get(module, {}))
     auth = ctx.m["auth"]
     if not ctx.bundled_auth:
         env["OIDC_ISSUER"] = auth["issuer"]
@@ -368,7 +421,11 @@ SERVICES = {
         ),
         Service(
             "core-platform",
-            "docker.io/example/suite-core:latest",
+            # The flavour of the install's `install.modules` (ADR 0055):
+            # `suite-core:core` with none, `suite-core:play` with Play. Never
+            # `latest`, which is a moving tag kept for the hand-maintained
+            # moon quadlets (deployment/schema/install-modules.md).
+            core_image,
             private_image=True,
             env=_core_env,
             secrets=[

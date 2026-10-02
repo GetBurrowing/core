@@ -70,7 +70,15 @@ defmodule Platform.Chat.Canvas.Kind do
   """
   @callback validate_props(props :: map()) :: :ok | {:error, String.t() | [String.t()]}
 
-  @optional_callbacks validate_props: 1
+  @doc """
+  Optional one-line description for `Platform.Chat.Canvas.Kinds.summaries/0`
+  (`canvas.list_kinds`). A kind a build-time module contributes answers it,
+  so core's registry names no kind it does not own (ADR 0055). Core's own
+  kinds are described in `Kinds`.
+  """
+  @callback describe() :: String.t()
+
+  @optional_callbacks validate_props: 1, describe: 0
 
   defmacro __using__(_opts) do
     quote do

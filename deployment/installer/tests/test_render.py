@@ -49,6 +49,8 @@ from suite_install.validate import validate
 MEMORY_OFF = os.path.join(RENDER_FIXTURES, "moon-equivalent-memory-off.toml")
 VOICE_CUDA = os.path.join(RENDER_FIXTURES, "voice-cuda-gpu.toml")
 BYO = os.path.join(RENDER_FIXTURES, "byo-endpoint.toml")
+PLAY = os.path.join(RENDER_FIXTURES, "moon-equivalent-play.toml")
+CI_WORKFLOW = os.path.join(REPO, ".github", "workflows", "ci.yml")
 
 GOLDEN_CASES = {
     "moon-equivalent": EXAMPLE,
@@ -657,3 +659,97 @@ class HealthcheckPortTest(unittest.TestCase):
         svc = registry.SERVICES["embeddings"]
         port = svc.command[svc.command.index("--port") + 1]
         self.assertEqual(svc.healthcheck, ["CMD", "curl", "-f", f"http://localhost:{port}/health"])
+
+
+# ---------------------------------------------------------------------------
+# (f) build-time modules choose the core image flavour (ADR 0055, task
+#     01a0ee08 stage 4)
+# ---------------------------------------------------------------------------
+
+
+def _ci_main_build_steps():
+    """The `Build and push (main...)` step bodies of ci.yml, as text."""
+    with open(CI_WORKFLOW, encoding="utf-8") as handle:
+        text = handle.read()
+    steps = re.split(r"^(?=      - name: )", text, flags=re.M)
+    return [s for s in steps if re.match(r"      - name: Build and push \S+ \(main\)", s)]
+
+
+class ModuleFlavourTest(PositiveControlMixin, unittest.TestCase):
+    def core_image(self, path_or_raw):
+        manifest = (
+            manifest_from(path_or_raw) if isinstance(path_or_raw, str) else valid(path_or_raw)
+        )
+        return plan(manifest).core_image
+
+    def test_no_modules_runs_the_core_flavour(self):
+        self.assertEqual(self.core_image(EXAMPLE), "docker.io/example/suite-core:core")
+
+    def test_play_runs_the_play_flavour(self):
+        self.assertEqual(self.core_image(PLAY), "docker.io/example/suite-core:play")
+
+    def test_play_fixture_differs_from_example_in_one_field(self):
+        example, play = load(EXAMPLE), load(PLAY)
+        self.assertEqual(play["install"].pop("modules"), ["play"])
+        self.assertEqual(example, play)
+
+    def test_selecting_play_changes_only_the_core_image_and_its_gate(self):
+        # The module is compiled into the image, so the WHOLE render diff of
+        # "add play" is the image tag plus Play's transitional in-module gate
+        # (registry.MODULE_CORE_ENV): no container, secret, volume or route.
+        core = build(manifest_from(EXAMPLE)).redacted()
+        play = build(manifest_from(PLAY)).redacted()
+        self.assertEqual(sorted(core), sorted(play))
+        changed = [rel for rel in sorted(core) if core[rel] != play[rel]]
+        self.assertTrue(changed, "positive control: selecting play must change the render")
+        for rel in changed:
+            with self.subTest(file=rel):
+                matcher = difflib.SequenceMatcher(
+                    a=core[rel].splitlines(), b=play[rel].splitlines(), autojunk=False
+                )
+                for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+                    if tag == "equal":
+                        continue
+                    removed = core[rel].splitlines()[i1:i2]
+                    added = play[rel].splitlines()[j1:j2]
+                    self.assertEqual(
+                        [line.replace("suite-core:core", "suite-core:play") for line in removed],
+                        [line for line in added if "GAME_STREAM_ENABLED" not in line],
+                        f"{rel}: selecting play changed more than the image and its gate",
+                    )
+
+    def test_play_sets_its_gate_on_core_platform_only(self):
+        plan_play = plan(manifest_from(PLAY))
+        self.assertEqual(plan_play.services["core-platform"].env.get("GAME_STREAM_ENABLED"), "true")
+        for name, svc in plan_play.services.items():
+            if name != "core-platform":
+                self.assertNotIn("GAME_STREAM_ENABLED", svc.env, name)
+        self.assertNotIn(
+            "GAME_STREAM_ENABLED", plan(manifest_from(EXAMPLE)).services["core-platform"].env
+        )
+
+    def test_an_explicit_core_image_ref_wins_over_the_flavour(self):
+        raw = load(PLAY)
+        raw["images"]["refs"] = {"core-platform": "registry.example/suite-core:play-pinned"}
+        self.assertEqual(self.core_image(raw), "registry.example/suite-core:play-pinned")
+
+    def test_every_module_set_has_a_flavour(self):
+        self.assertEqual(
+            set(registry.IMAGE_FLAVOURS),
+            {frozenset(), frozenset({"play"})},
+        )
+        self.assertEqual(sorted(registry.MODULES), ["play"])
+
+    def test_every_flavour_tag_is_published_by_ci_on_main(self):
+        steps = _ci_main_build_steps()
+        # Positive control: the slicer finds both main build steps.
+        self.assertEqual(len(steps), 2, "expected the core and play main build steps")
+        published = "\n".join(steps)
+        for module_set, tag in registry.IMAGE_FLAVOURS.items():
+            with self.subTest(modules=sorted(module_set)):
+                self.assertIn(f"{registry.CORE_IMAGE_REPO}:{tag}\n", published)
+
+    def test_every_module_names_a_project_with_its_own_mix_file(self):
+        for name, project in registry.MODULES.items():
+            with self.subTest(module=name):
+                self.assertTrue(os.path.isfile(os.path.join(REPO, project, "mix.exs")))

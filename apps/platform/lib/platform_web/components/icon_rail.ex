@@ -654,10 +654,16 @@ defmodule PlatformWeb.Components.IconRail do
 
   defp badge_spec(_key, _inbox_count, _chat_count), do: nil
 
-  # Canonical 11-entry destination list. Order within a cluster determines
-  # render order in the rail. Paths marked `# TODO` don't have routes yet
-  # — Stage 3 wires navigation and will reconcile.
+  # Canonical destination list: core's 12 entries, then every build-time
+  # module's (`Platform.Extensions.rail_items/0`, ADR 0055 section 5, read per
+  # call). Order within a cluster determines render order in the rail, and an
+  # extension's item goes through the same `fabrikam_only?` and `enabled?`
+  # filters as a core item.
   defp canonical_destinations do
+    core_destinations() ++ Platform.Extensions.rail_items()
+  end
+
+  defp core_destinations do
     [
       # Live cluster — high-frequency, real-time surfaces
       %{

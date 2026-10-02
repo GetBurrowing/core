@@ -138,6 +138,22 @@ defmodule Platform.Support.RepoLookupScan do
   end
 
   @doc """
+  `call_sites/0` over ANOTHER lib tree, keyed relative to `root`: a
+  build-time module's own inventory runs the same scanner over its own lib
+  (ADR 0055, task 01a0ee08 stage 3), since core's inventory lists core's
+  lib only.
+  """
+  @spec call_sites_under(String.t()) :: %{key() => pos_integer()}
+  def call_sites_under(root) do
+    root
+    |> Path.join("**/*.ex")
+    |> Path.wildcard()
+    |> Enum.sort()
+    |> Enum.map(&scan_source(File.read!(&1), Path.relative_to(&1, root)))
+    |> Enum.reduce(%{}, &Map.merge(&2, &1, fn _key, a, b -> a + b end))
+  end
+
+  @doc """
   `Repo.one/1` calls per relative path. Counted, not classified — see
   the moduledoc's "Known limits".
   """

@@ -436,7 +436,7 @@ defmodule PlatformWeb.MeetingLive do
       ) do
     socket =
       socket
-      |> PlatformWeb.GameStreamHooks.attach()
+      |> PlatformWeb.Extensions.attach_live_hooks()
       |> assign(:user_id, nil)
       |> assign(:chrome_mode, :none)
       |> assign(:shell?, false)
@@ -546,9 +546,9 @@ defmodule PlatformWeb.MeetingLive do
      # `hold/3` seeds internally too, but the explicit call keeps the assign
      # present for a render that reads it before any hold is taken.
      |> SpaceTopics.ensure_holders()
-     # Canvas tiles can hold a `game_stream` node, whose hook pushes events
-     # here (task 01a0db5f stage 4). Inert while GAME_STREAM_ENABLED is unset.
-     |> PlatformWeb.GameStreamHooks.attach()
+     # Canvas tiles can hold an extension's node (e.g. `game_stream`, task
+     # 01a0db5f stage 4), whose hook pushes events here (ADR 0055).
+     |> PlatformWeb.Extensions.attach_live_hooks()
      |> assign(:user_id, user_id)
      |> assign(:chrome_mode, chrome_mode)
      |> assign(:shell?, chrome_mode == :shell)

@@ -1,6 +1,7 @@
 defmodule PlatformWeb.ControlCenterLiveTest do
   use PlatformWeb.ConnCase, async: false
 
+  import Ecto.Query, only: [from: 2]
   import Phoenix.LiveViewTest
 
   alias Platform.Accounts.User
@@ -1232,6 +1233,57 @@ defmodule PlatformWeb.ControlCenterLiveTest do
 
     assert Enum.sort(Repo.get!(AgentRuntime, runtime.id).allowed_bundles) ==
              Enum.sort(new_bundles)
+  end
+
+  # ADR 0055 section 7 (task 01a0ee08 stage 2): a grant whose module is not
+  # in this build renders checked and read-only, and a save keeps it.
+  test "a bundle grant from an absent module renders read-only and survives a save",
+       %{conn: conn} do
+    user =
+      Repo.insert!(%User{
+        email: "fed_orphan_#{System.unique_integer([:positive])}@example.com",
+        name: "Fed Orphan User",
+        oidc_sub: "oidc-fed-orphan-#{System.unique_integer([:positive])}"
+      })
+
+    {:ok, runtime} =
+      Federation.register_runtime(user.id, %{
+        runtime_id: "orphan-runtime-#{System.unique_integer([:positive])}",
+        display_name: "Orphan Test"
+      })
+
+    {:ok, runtime, _token} = Federation.activate_runtime(runtime)
+
+    # Written by a build that had a module this build does not.
+    {1, _} =
+      Repo.update_all(
+        from(r in AgentRuntime, where: r.id == ^runtime.id),
+        set: [allowed_bundles: ["space", "gone_module"]]
+      )
+
+    agent =
+      create_agent(%{name: "Orphan Agent", runtime_type: "external", runtime_id: runtime.id})
+
+    conn = init_test_session(conn, current_user_id: user.id)
+    {:ok, view, html} = live(conn, ~p"/control/#{agent.slug}")
+
+    assert html =~ "gone_module"
+    assert html =~ "(module not installed)"
+
+    assert has_element?(
+             view,
+             ~s([data-role="orphan-bundle"] input[type="hidden"][value="gone_module"])
+           )
+
+    html =
+      view
+      |> form("form[phx-submit=\"update_runtime_bundles\"]")
+      |> render_submit()
+
+    assert html =~ "Allowed bundles updated"
+
+    assert Enum.sort(Repo.get!(AgentRuntime, runtime.id).allowed_bundles) ==
+             ["gone_module", "space"]
   end
 
   # ── Agent deletion ─────────────────────────────────────────────────

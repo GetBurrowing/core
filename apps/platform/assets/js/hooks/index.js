@@ -1,3 +1,9 @@
+// Build-time modules' hooks (ADR 0055, task 01a0ee08 stage 3). `@extensions`
+// is an esbuild alias: core's `platform` profile points it at
+// js/extensions/none.js (an empty map), and a with-modules release host points
+// it at the entry `mix platform.extensions.assets` generates from its
+// configured modules. Core never imports a module's hook by name.
+import extensionHooks from "@extensions"
 import AppBadge from "./app_badge"
 import ButtonLoading from "./button_loading"
 import CandidateClock, { SheetHandleClock } from "./candidate_clock"
@@ -14,7 +20,6 @@ import DrawerSearchFocus from "./drawer_search_focus"
 import EmbedCanvasScale from "./embed_canvas_scale"
 import ExecutionLogScroll from "./execution_log_scroll"
 import FilePreviewScale from "./file_preview_scale"
-import GameStream from "./game_stream"
 import HexField from "./hex_field"
 import InfiniteScroll from "./infinite_scroll"
 import InlineEdit from "./inline_edit"
@@ -61,6 +66,8 @@ import UploadButton from "./upload_button"
 import ViewportBreakpoint from "./viewport_breakpoint"
 
 export default {
+  // First, so a core hook of the same name wins over a module's.
+  ...extensionHooks,
   AppBadge,
   ButtonLoading,
   CandidateClock,
@@ -77,7 +84,6 @@ export default {
   EmbedCanvasScale,
   ExecutionLogScroll,
   FilePreviewScale,
-  GameStream,
   HexField,
   InfiniteScroll,
   InlineEdit,

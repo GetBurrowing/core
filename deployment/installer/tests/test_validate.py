@@ -428,3 +428,40 @@ class RuleTest(PositiveControlMixin, unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ModulesFieldTest(PositiveControlMixin, unittest.TestCase):
+    """`install.modules` (ADR 0055, task 01a0ee08 stage 4)."""
+
+    def errors_for(self, value):
+        raw = load(GOOD)
+        raw["install"]["modules"] = value
+        errors, _ = validate(raw)
+        return [(e.code, e.path) for e in errors]
+
+    def test_unknown_module_path(self):
+        errors, _ = validate(load(fixture("unknown_module.toml")))
+        self.assertEqual([(e.code, e.path) for e in errors], [("unknown_module", "install.modules")])
+        self.assertIn("'mail'", errors[0].message)
+        self.assertIn("known modules: play", errors[0].message)
+
+    def test_play_is_valid_and_normalizes_to_the_list(self):
+        raw = load(GOOD)
+        raw["install"]["modules"] = ["play"]
+        errors, normalized = validate(raw)
+        self.assertEqual(errors, [])
+        self.assertEqual(list(normalized["install"]["modules"]), ["play"])
+
+    def test_absent_and_empty_both_mean_no_modules(self):
+        _, normalized = validate(load(GOOD))
+        self.assertEqual(list(normalized["install"]["modules"]), [])
+        self.assertEqual(self.errors_for([]), [])
+
+    def test_a_repeated_module_is_one_invalid_value(self):
+        self.assertEqual(self.errors_for(["play", "play"]), [("invalid_value", "install.modules")])
+
+    def test_a_string_is_an_invalid_type(self):
+        self.assertEqual(self.errors_for("play"), [("invalid_type", "install.modules")])
+
+    def test_a_non_string_entry_is_an_invalid_type(self):
+        self.assertEqual(self.errors_for(["play", 1]), [("invalid_type", "install.modules")])

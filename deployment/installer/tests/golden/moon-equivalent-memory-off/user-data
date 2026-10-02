@@ -71,7 +71,7 @@ write_files:
       # core image + the install root, mounted read-only over the CAStore file.
       # Retired by ADR 0053 follow-up 10 (a core env var for extra CA certs).
       set -eu
-      image='docker.io/example/suite-core:latest'
+      image='docker.io/example/suite-core:core'
       castore='/app/lib/castore-1.0.17/priv/cacerts.pem'
       out=/opt/suite/tls/ca-bundle.pem
       if ! docker run --rm --pull never --entrypoint cat "$image" "$castore" > "$out.tmp"; then
@@ -145,7 +145,7 @@ write_files:
                 - "suite-01a0d69d.test"
         core-platform:
           container_name: "core-platform"
-          image: "docker.io/example/suite-core:latest"
+          image: "docker.io/example/suite-core:core"
           pull_policy: "never"
           restart: "unless-stopped"
           env_file:

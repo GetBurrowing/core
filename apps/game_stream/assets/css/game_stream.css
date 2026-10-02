@@ -1,0 +1,16 @@
+/* game_stream canvas in fullscreen (task 01a0db5f stage 4). The wrapper is
+   what goes fullscreen, so the header, the capture ring and the "Esc to
+   release" footer come with it; the video well takes the remaining height
+   instead of holding 16:9, and the letterbox stays black in both themes. */
+.game-stream-frame:fullscreen {
+  display: flex;
+  flex-direction: column;
+  border-radius: 0;
+  border: 0;
+}
+
+.game-stream-frame:fullscreen [data-gs-well] {
+  flex: 1 1 auto;
+  aspect-ratio: auto;
+  min-height: 0;
+}

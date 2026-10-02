@@ -270,13 +270,6 @@ defmodule Platform.RepoLookupBoundaryTest do
     {"platform/experiments/surfaces/open_question_classifier.ex", :platform_uuid_guard, "-", 1,
      :safe_internal,
      "subject_attributes/1's predicate (task 01a0e8b5 stage 5). Its Repo.one pins `m.id == ^meeting_id`, and the meeting id is the transcript chunk payload's `meeting_id`, which arrives over PubSub; the guard folds a malformed id into the empty attribute map, so a scoped experiment answers :no_opinion instead of raising into the classifier's read point"},
-    # ── Playable review builds (task 01a0db5f stage 2) ─────────────────
-    {"platform/game_stream/review_build.ex", :platform_uuid_guard, "-", 1, :safe_internal,
-     "fetch_task/1's predicate. `task_id` is the play_session_start MCP argument; the guard folds a malformed id into {:error, :task_not_found} before Tasks.get_task_record/1 runs"},
-    {"platform/game_stream/review_build.ex", :get, "Platform.Tasks.Project", 1, :safe_internal,
-     "project_repo/1 keys it by `task.project_id` off a `%Task{}` just loaded from the DB — an FK column Postgres typed as uuid, never caller input"},
-    {"platform/game_stream/seed.ex", :get_by, "User", 1, :safe_internal,
-     "keyed `email:`, a plain string column; a miss is {:error, :unknown_owner}. Called only from a Mix task or `bin/platform rpc`"},
     # ── Experiments over MCP (task 01a0d415 stage 2) ───────────────────
     {"platform/experiments/guardrails.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "org_row/1's predicate. `org_id` is `experiment.org_id` today, but for_org/1 is public and the stage-6 guardrails panel passes a selected org from LiveView params; the guard folds a malformed id into the nil a missing org row already returns, and the Repo.one's `g.org_id == ^org_id` never sees it"},

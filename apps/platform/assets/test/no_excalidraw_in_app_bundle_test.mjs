@@ -55,6 +55,24 @@ const MAX_BYTES = 896 * 1024;
 // .github/workflows/ci.yml, "Run JS asset test suites".
 const DEPS = resolve(ASSETS, "..", "deps");
 
+// Both build flavours (ADR 0055, task 01a0ee08 stage 3). The `platform`
+// profile aliases `@extensions` to js/extensions/none.js, the empty hook
+// registry of the WITHOUT-modules build. A with-modules release host aliases
+// it to the entry `mix platform.extensions.assets` generates; set
+// SUITE_EXTENSIONS_JS to that file to run every assertion below against the
+// WITH-modules bundle, and SUITE_EXTENSION_LITERAL to a string the module's
+// hook is known to ship (the positive control for the absence check below).
+// Unset, this is the without-modules build and nothing else changes.
+const EXTENSIONS_JS = process.env.SUITE_EXTENSIONS_JS
+  ? resolve(process.env.SUITE_EXTENSIONS_JS)
+  : null;
+
+// A string literal only Play's hook ships: the LiveView event its viewer
+// pushes to attach (apps/game_stream/assets/js/hooks/game_stream.js). It must
+// be absent from the without-modules bundle; SUITE_EXTENSION_LITERAL
+// overrides it for another module.
+const EXTENSION_LITERAL = process.env.SUITE_EXTENSION_LITERAL || "game_stream_attach";
+
 async function buildAppBundle() {
   const result = await build({
     absWorkingDir: ASSETS,
@@ -65,7 +83,7 @@ async function buildAppBundle() {
     write: false,
     outdir: "out",
     external: ["/fonts/*", "/images/*"],
-    alias: { "@": "." },
+    alias: { "@": ".", "@extensions": EXTENSIONS_JS || "./js/extensions/none.js" },
     nodePaths: [DEPS],
   });
 
@@ -116,9 +134,12 @@ test("js/app.js bundle does not contain excalidraw", async () => {
   );
 });
 
-test("js/app.js bundle stays under 896 KB minified", async () => {
+test("js/app.js bundle stays under 896 KB minified", async (t) => {
   const js = await buildAppBundle();
   const bytes = js.contents.byteLength;
+  const flavour = EXTENSIONS_JS ? `with modules (${EXTENSIONS_JS})` : "without modules";
+  t.diagnostic(`app.js ${flavour}: ${bytes} bytes`);
+  console.log(`[bundle-cap] app.js ${flavour}: ${bytes} bytes`);
 
   assert.ok(
     bytes < MAX_BYTES,
@@ -126,4 +147,26 @@ test("js/app.js bundle stays under 896 KB minified", async () => {
       `${MAX_BYTES} byte (896 KB) ceiling. Either something large was added to the ` +
       "application bundle, or a lazily-loaded island leaked into it."
   );
+});
+
+test("a module's hook is in app.js only when the build includes the module", async () => {
+  const js = await buildAppBundle();
+  const text = Buffer.from(js.contents).toString("utf8");
+
+  if (EXTENSIONS_JS) {
+    // Positive control: the literal survives minification, so its absence
+    // below is a measurement and not a blind spot.
+    assert.ok(
+      text.includes(EXTENSION_LITERAL),
+      `with-modules app.js lacks ${JSON.stringify(EXTENSION_LITERAL)}; the ` +
+        "generated @extensions entry did not bring the module's hook in"
+    );
+  } else {
+    assert.ok(
+      !text.includes(EXTENSION_LITERAL),
+      `without-modules app.js contains ${JSON.stringify(EXTENSION_LITERAL)}: a ` +
+        "module's hook reached core's bundle. js/hooks/index.js must reach " +
+        "module hooks only through the @extensions alias."
+    );
+  }
 });

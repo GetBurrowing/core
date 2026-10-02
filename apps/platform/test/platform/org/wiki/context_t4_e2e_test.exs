@@ -453,16 +453,33 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       doc
     end
 
+    # Every build-time module's migrations (ADR 0055, task 01a0ee08 stage 3),
+    # as `{path, display_name}`. A module's migrations run on every database
+    # that has the module, so they carry the same record core's do. They are
+    # all checked, whatever their version: a module has no historical interval.
+    defp t4_module_migrations do
+      t4_root()
+      |> Path.join("../*/priv/repo/migrations/*.exs")
+      |> Path.expand()
+      |> Path.wildcard()
+      |> Enum.reject(&String.starts_with?(&1, t4_root() <> "/"))
+      |> Enum.sort()
+      |> Enum.map(&{&1, Path.relative_to(&1, Path.expand("..", t4_root()))})
+    end
+
     test "every post-boundary migration documents itself and cites the work that admitted it" do
       %{admitted: admitted} = t4_migration_partition()
 
       migrations_dir = Path.join(t4_root(), "priv/repo/migrations")
 
+      files =
+        Enum.map(Enum.sort(admitted), &{Path.join(migrations_dir, &1), &1}) ++
+          t4_module_migrations()
+
       offenders =
-        admitted
-        |> Enum.sort()
-        |> Enum.map(fn name ->
-          source = File.read!(Path.join(migrations_dir, name))
+        files
+        |> Enum.map(fn {path, name} ->
+          source = File.read!(path)
           doc = t4_moduledoc(source)
 
           missing =

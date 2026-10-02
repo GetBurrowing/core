@@ -6952,7 +6952,7 @@ defmodule Platform.Meetings do
   # that is actually present is evidence about what the client can do.
   #
   # The read itself is `Federation.declared_features/1` (task 01a0db5f), the
-  # one reader `Platform.GameStream`'s host discovery shares.
+  # one reader the play module's host discovery shares.
   defp capability_from_metadata(metadata) do
     case Federation.declared_features(metadata) do
       features when is_list(features) ->

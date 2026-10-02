@@ -33,6 +33,13 @@ const ASSETS = resolve(HERE, "..");
 // means the JS suites run in the CI job that has already fetched deps.
 const DEPS = resolve(ASSETS, "..", "deps");
 
+// The `@extensions` alias the `platform` profile sets (ADR 0055): the empty
+// registry by default, or a with-modules host's generated entry when
+// SUITE_EXTENSIONS_JS names one (see no_excalidraw_in_app_bundle_test.mjs).
+const EXTENSIONS = process.env.SUITE_EXTENSIONS_JS
+  ? resolve(process.env.SUITE_EXTENSIONS_JS)
+  : "./js/extensions/none.js";
+
 // CLDR short names that exist in the dataset and nowhere else a human would
 // plausibly type. Checking for names rather than for glyphs on purpose: a
 // single emoji character can legitimately appear in application code (a label,
@@ -69,7 +76,7 @@ test("js/app.js bundle does not contain the emoji inventory", async () => {
     write: false,
     outdir: "out",
     external: ["/fonts/*", "/images/*"],
-    alias: { "@": "." },
+    alias: { "@": ".", "@extensions": EXTENSIONS },
     nodePaths: [DEPS],
   });
 

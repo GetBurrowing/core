@@ -59,13 +59,6 @@ defmodule Platform.Experiments.Surfaces do
     Platform.Experiments.Surfaces.MailDraftGenerator,
     Platform.Experiments.Surfaces.PlannerStageBudget,
     Platform.Experiments.Surfaces.ChatContextSummary,
-    # Task 01a0db5f: the play host's NVENC settings. Registered whether or
-    # not GAME_STREAM_ENABLED is set — a surface is a declaration, and its
-    # only read point (`GameStream.start_session/2`) is itself gated.
-    Platform.Experiments.Surfaces.GameStreamEncoder,
-    # Task 01a0dbd6: multiplayer play sessions: open as watch or join, and
-    # the player and spectator caps. Same gating note as the encoder.
-    Platform.Experiments.Surfaces.GameStreamRoster,
     # Task 01a0e8b5: which program decides a meeting open_question. The
     # control is today's intent prompt; nothing is seeded, so production
     # stays on it until an experiment row says otherwise.
@@ -80,13 +73,23 @@ defmodule Platform.Experiments.Surfaces do
   @doc """
   Every registered surface module.
 
-  The compile-time list, plus any modules in app env
-  `:experiments_extra_surfaces` (default `[]`). That key is a TEST SEAM, the
-  same shape as `:experiments_labeler_provider`: it lets a test exercise a
-  non-prompt surface before one ships. No config file sets it.
+  The compile-time list, then every extension's surfaces
+  (`Platform.Extensions.experiment_surfaces/0`, ADR 0055), then any modules
+  in app env `:experiments_extra_surfaces` (default `[]`). That last key is a
+  TEST SEAM, the same shape as `:experiments_labeler_provider`: it lets a
+  test exercise a non-prompt surface before one ships. No config file sets
+  it. All three are read per call.
   """
   @spec list() :: [module()]
-  def list, do: @surfaces ++ Application.get_env(:platform, :experiments_extra_surfaces, [])
+  def list,
+    do:
+      @surfaces ++
+        Platform.Extensions.experiment_surfaces() ++
+        Application.get_env(:platform, :experiments_extra_surfaces, [])
+
+  @doc "Core's own surface modules, without any extension's or the test seam's."
+  @spec core_surfaces() :: [module()]
+  def core_surfaces, do: @surfaces
 
   @doc "The surface module for a key, or nil."
   @spec get(String.t() | nil) :: module() | nil

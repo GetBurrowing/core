@@ -79,7 +79,10 @@ defmodule Platform.Federation.ToolSurface do
 
   import Ecto.Query, only: [from: 2]
 
-  @bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments play)
+  # Core's own bundles. The full list is these plus every extension bundle
+  # (`Platform.Extensions.tool_bundle_names/0`), read per call: never widen
+  # this attribute with an extension's name (ADR 0055).
+  @bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments)
 
   # Per-message content cap (graphemes) for space_get_messages /
   # space_search_messages. Anything longer is sliced and flagged via the
@@ -187,8 +190,11 @@ defmodule Platform.Federation.ToolSurface do
   @doc "Tool name => reason for list-returning tools exempt from the envelope contract."
   def list_envelope_exempt, do: @list_envelope_exempt
 
-  @doc "Known capability bundle names."
-  def all_bundles, do: @bundles
+  @doc "Known capability bundle names: core's, then every extension's, per call."
+  def all_bundles, do: @bundles ++ Platform.Extensions.tool_bundle_names()
+
+  @doc "Core's own capability bundle names, without any extension's."
+  def core_bundles, do: @bundles
 
   @doc """
   Returns the full tool surface.
@@ -197,7 +203,7 @@ defmodule Platform.Federation.ToolSurface do
   name, description, parameters, returns, limitations, when_to_use, plus a
   `:bundle` key identifying which capability bundle owns the tool.
   """
-  def tool_definitions, do: list_tools(@bundles)
+  def tool_definitions, do: list_tools(all_bundles())
 
   @doc """
   Returns tools scoped to the given capability bundles.
@@ -254,12 +260,14 @@ defmodule Platform.Federation.ToolSurface do
   defp tools_for_bundle("experiments"),
     do: tag(Platform.Federation.ExperimentTools.definitions(), "experiments")
 
-  # Task 01a0db5f stage 2: definitions in PlayTools, behaviour in GameStream.Tools.
-  # `[]` while GAME_STREAM_ENABLED is unset, so the catalogue is exactly main's.
-  defp tools_for_bundle("play"),
-    do: tag(Platform.Federation.PlayTools.definitions(), "play")
-
-  defp tools_for_bundle(_), do: []
+  # An extension's bundle (ADR 0055): its definitions as the extension lists
+  # them at call time. An unknown name is skipped, as it always was.
+  defp tools_for_bundle(name) do
+    case Platform.Extensions.tool_bundle(name) do
+      %{definitions: definitions} -> tag(definitions, name)
+      nil -> []
+    end
+  end
 
   defp tag(tools, bundle), do: Enum.map(tools, &Map.put(&1, :bundle, bundle))
 
@@ -7507,13 +7515,17 @@ defmodule Platform.Federation.ToolSurface do
   def execute("experiment_" <> _ = tool, args, context),
     do: Platform.Experiments.Tools.execute(tool, args, context)
 
-  # Every `play_session_*` tool (task 01a0db5f stage 2); no other tool name has
-  # this prefix. With GAME_STREAM_ENABLED unset it answers the structured
-  # `game_stream_disabled` refusal before anything else runs.
-  def execute("play_session_" <> _ = tool, args, context),
-    do: Platform.GameStream.Tools.execute(tool, args, context)
+  # A tool an extension bundle owns (ADR 0055), listed or not: the extension
+  # answers it, including any refusal it gives while switched off. Core's
+  # own clauses above always win a name.
+  def execute(tool, args, context) do
+    case Platform.Extensions.tool_owner(tool) do
+      %{execute: execute} -> execute.(tool, args, context)
+      nil -> unknown_tool_error(tool)
+    end
+  end
 
-  def execute(unknown_tool, _args, _context) do
+  defp unknown_tool_error(unknown_tool) do
     tool_names =
       tool_definitions()
       |> Enum.map(& &1.name)

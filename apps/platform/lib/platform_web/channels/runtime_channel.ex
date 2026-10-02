@@ -22,6 +22,19 @@ defmodule PlatformWeb.RuntimeChannel do
 
   @valid_client_products ~w(openclaw claude_channel hermes_channel)
 
+  # Every event core itself handles above. A frame for one of these that no
+  # clause matched is malformed, not unowned, so it is dropped silently rather
+  # than logged as an event no extension serves. Guarded against the
+  # `handle_in/3` clauses by `test/platform/extensions_test.exs`.
+  @core_events ~w(pong meeting_join_ack meeting_say_ack meeting_transcript_ack intent_delivered reply reply_chunk typing tool_call reply_with_media execution_event meeting_leave usage_event)
+
+  @doc false
+  # Read by `Platform.Extensions.validate/0` (an extension may not claim one).
+  def core_events, do: @core_events
+
+  @unowned_text "no installed extension owns this event; further unowned frames on this " <>
+                  "channel are dropped silently"
+
   # Bounds on the declared capability set in `client_info.features`.
   #
   # `features` arrives from a client-supplied join payload and lands in a
@@ -267,65 +280,6 @@ defmodule PlatformWeb.RuntimeChannel do
     Meetings.record_agent_join_ack(agent_id, room_name, status)
 
     {:noreply, socket}
-  end
-
-  # ── Play host frames (task 01a0db5f stage 2) ─────────────────────────
-  #
-  # The host → core half of `Platform.GameStream.Protocol`. Both are inert
-  # while GAME_STREAM_ENABLED is unset: the frame is logged ONCE per channel
-  # process (a host that keeps sending must not flood the log) and dropped.
-  # With the flag on, `Platform.GameStream` checks that the SENDING runtime
-  # is the session's host — a runtime can only speak for its own session.
-  @impl true
-  def handle_in("play_session_status", payload, socket) when is_map(payload) do
-    RuntimePresence.touch(socket.assigns.runtime_id)
-
-    if Platform.GameStream.enabled?() do
-      log_play_frame_result(
-        "play_session_status",
-        Platform.GameStream.handle_host_status(socket.assigns.runtime_id, payload)
-      )
-
-      {:noreply, socket}
-    else
-      {:noreply, log_play_frame_disabled(socket, "play_session_status")}
-    end
-  end
-
-  @impl true
-  def handle_in("play_signal", payload, socket) when is_map(payload) do
-    RuntimePresence.touch(socket.assigns.runtime_id)
-
-    if Platform.GameStream.enabled?() do
-      log_play_frame_result(
-        "play_signal",
-        Platform.GameStream.relay_to_viewer(socket.assigns.runtime_id, payload)
-      )
-
-      {:noreply, socket}
-    else
-      {:noreply, log_play_frame_disabled(socket, "play_signal")}
-    end
-  end
-
-  # Task 01a0dbd6 stage 2: which player slots saw input, for the roster's
-  # activity dots. Same gate and same sender check as the two frames above;
-  # a peer-tagged `play_signal` needs no clause of its own, since
-  # `Protocol.parse_signal/2` reads its `peer_id`.
-  @impl true
-  def handle_in("play_slot_activity", payload, socket) when is_map(payload) do
-    RuntimePresence.touch(socket.assigns.runtime_id)
-
-    if Platform.GameStream.enabled?() do
-      log_play_frame_result(
-        "play_slot_activity",
-        Platform.GameStream.handle_slot_activity(socket.assigns.runtime_id, payload)
-      )
-
-      {:noreply, socket}
-    else
-      {:noreply, log_play_frame_disabled(socket, "play_slot_activity")}
-    end
   end
 
   # The receipt for a `meeting_say` dispatch (task 01a06672 stage 2). Same
@@ -765,6 +719,37 @@ defmodule PlatformWeb.RuntimeChannel do
     {:noreply, socket}
   end
 
+  # ── Extension frames (ADR 0055; Play's since task 01a0db5f stage 2) ──
+  #
+  # Every event no clause above matched. One an extension owns
+  # (`Platform.Extensions.runtime_event_owner/1`) goes to that extension,
+  # which checks, e.g., that the SENDING runtime speaks only for its own
+  # session. One no extension owns, or one whose owner answers `{:inert,
+  # text}` (installed but switched off), is logged ONCE per channel process
+  # per owner (a runtime that keeps sending must not flood the log) and
+  # dropped; the channel stays joined. A malformed frame for one of core's
+  # own events (`@core_events`) is dropped silently, as it always was.
+  def handle_in(event, payload, socket) when is_map(payload) do
+    case Platform.Extensions.runtime_event_owner(event) do
+      nil ->
+        if event in @core_events,
+          do: {:noreply, socket},
+          else: {:noreply, log_dropped_event(socket, :unowned, event, @unowned_text)}
+
+      extension ->
+        RuntimePresence.touch(socket.assigns.runtime_id)
+
+        case extension.handle_runtime_event(event, socket.assigns.runtime_id, payload) do
+          {:inert, text} ->
+            {:noreply, log_dropped_event(socket, extension, event, text)}
+
+          result ->
+            log_runtime_event_result(event, result)
+            {:noreply, socket}
+        end
+    end
+  end
+
   def handle_in(_event, _payload, socket) do
     {:noreply, socket}
   end
@@ -788,9 +773,10 @@ defmodule PlatformWeb.RuntimeChannel do
     runtime_id = socket.assigns.runtime_id
     RuntimePresence.untrack(runtime_id)
 
-    # Task 01a0db5f: a play host that goes away fails its session. A no-op
-    # (and never raises) while GAME_STREAM_ENABLED is unset.
-    Platform.GameStream.host_disconnected(runtime_id)
+    # Every extension hears that this runtime went away (a play host that
+    # goes away fails its session). Always `:ok`, never raises, including
+    # when an extension's own processes have already stopped.
+    Platform.Extensions.runtime_disconnected(runtime_id)
 
     Logger.info("[RuntimeChannel] runtime disconnected: runtime_id=#{runtime_id}")
 
@@ -805,30 +791,28 @@ defmodule PlatformWeb.RuntimeChannel do
 
   # ── Helpers ─────────────────────────────────────────────────────────
 
-  defp log_play_frame_disabled(socket, event) do
-    if socket.assigns[:game_stream_disabled_logged] do
+  defp log_dropped_event(socket, owner, event, text) do
+    logged = socket.assigns[:dropped_events_logged] || MapSet.new()
+
+    if MapSet.member?(logged, owner) do
       socket
     else
-      # `warning`, not `info`: a play host talking to an install with the
-      # feature off is a misconfiguration an operator should see, and it is
-      # logged at most once per channel process.
+      # `warning`, not `info`: a runtime sending frames this install does not
+      # serve is a misconfiguration an operator should see, and it is logged
+      # at most once per channel process per owner.
       Logger.warning(
-        "[RuntimeChannel] #{event} from runtime_id=#{socket.assigns.runtime_id} dropped: " <>
-          "game_stream is disabled (GAME_STREAM_ENABLED is unset); further play frames " <>
-          "on this channel are dropped silently"
+        "[RuntimeChannel] #{event} from runtime_id=#{socket.assigns.runtime_id} dropped: #{text}"
       )
 
-      assign(socket, :game_stream_disabled_logged, true)
+      assign(socket, :dropped_events_logged, MapSet.put(logged, owner))
     end
   end
 
-  defp log_play_frame_result(_event, :ok), do: :ok
-
-  defp log_play_frame_result(event, {:error, reason}) do
+  defp log_runtime_event_result(event, {:error, reason}) do
     Logger.info("[RuntimeChannel] #{event} dropped: #{inspect(reason)}")
   end
 
-  defp log_play_frame_result(_event, _other), do: :ok
+  defp log_runtime_event_result(_event, _ok), do: :ok
 
   # `usage_event` payloads come from external runtimes we do not control, and
   # every `:binary_id` field on `UsageEvent` is OPTIONAL — only `model`,

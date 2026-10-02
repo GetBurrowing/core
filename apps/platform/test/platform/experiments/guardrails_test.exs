@@ -84,8 +84,6 @@ defmodule Platform.Experiments.GuardrailsTest do
                [
                  "chat.context_summary",
                  "dispatch.prompt",
-                 "game_stream.encoder_preset",
-                 "game_stream.roster",
                  "mail.draft.generator",
                  "mail.test.generator",
                  "meetings.open_question_classifier",

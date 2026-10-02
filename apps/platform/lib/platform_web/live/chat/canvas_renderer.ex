@@ -127,14 +127,12 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
   defp valid_document?(doc), do: CanvasDocument.canonical?(doc)
 
   # True unless SOME node in the tree has a kind that opts out through the
-  # `inline_opens_canvas?/0` convention function (task 01a0ee4f). A Play
-  # document is a stack root holding one `game_stream` child, so reading only
-  # the root kind would miss it. This is a convention, not a `Kind` callback:
-  # `Kinds.behaviour_ok?/1` requires every callback, optional ones included,
-  # so a new callback would fail every kind that does not define it. A kind
-  # that does not export the function opens on click, as every kind did
-  # before. The registry is read per call and never cached, because a
-  # flag-gated kind can come and go at runtime (see `Kinds.all/0`).
+  # `inline_opens_canvas?/0` convention function (task 01a0ee4f). An
+  # extension kind's node can sit below a stack root, so reading only the
+  # root kind would miss it. This is a convention function, not a `Kind`
+  # callback: a kind that does not export it opens on click, as every kind
+  # did before. The registry is read per call and never cached, because an
+  # extension's kinds can come and go at runtime (see `Kinds.all/0`).
   defp opens_on_click?(root_node) do
     by_name = Kinds.by_name()
     not Enum.any?(nodes(root_node), &opts_out?(Map.get(by_name, &1["type"])))

@@ -941,12 +941,13 @@ defmodule PlatformWeb.TasksLiveShellNonAccretionTest do
   # raised.
   #
   # RAISED 652 -> 653 (+1), 2026-09-26, task 01a0db5f stage 4. ARITHMETIC:
-  # 652 + 1 = 653, the single piped `|> PlatformWeb.GameStreamHooks.attach()`
+  # 652 + 1 = 653, the single piped attach of Play's live-hooks module (since
+  # task 01a0ee08, `|> PlatformWeb.Extensions.attach_live_hooks()`)
   # in `mount/3`. The task sheet renders canvases (gate panel, stacks,
   # steering), and a `game_stream` node's JS hook pushes `game_stream_*`
   # events to whichever LiveView holds it; without the attach, TasksLive has
   # no clause for them and the process crashes. Every event, message and
-  # assign lives in `PlatformWeb.GameStreamHooks`, and the explanation lives
+  # assign lives in Play's live-hooks module, and the explanation lives
   # here rather than as a comment in the shell. 653 is exactly the budget in
   # `scripts/surface-budgets.txt`, which is not raised.
   #

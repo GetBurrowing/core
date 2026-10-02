@@ -1,0 +1,12 @@
+{
+  "name": "game_stream-assets",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Play's LiveView hooks (ADR 0055): vitest for the hook family.",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^1.6.0"
+  }
+}

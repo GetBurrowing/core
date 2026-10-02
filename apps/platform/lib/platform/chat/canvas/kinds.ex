@@ -6,21 +6,24 @@ defmodule Platform.Chat.Canvas.Kinds do
   all read from here. Adding a new kind is a two-step operation: create the
   module under `Platform.Chat.Canvas.Kinds.*` and list it in `@modules`.
 
-  ## Flag-gated kinds (task 01a0db5f)
+  ## Extension kinds (task 01a0db5f, ADR 0055)
 
-  `@modules` is compile-time, so a kind that must exist only behind a
-  runtime flag cannot live in it. `all/0` is `@modules ++ gated_modules()`,
+  `@modules` is compile-time, so a kind a build-time module contributes
+  cannot live in it. `all/0` is `@modules ++ Platform.Extensions.canvas_kinds()`,
   evaluated on every call, and EVERY registry reader — `by_name/0`,
   `names/0`, `summaries/0`, `tool_schemas/0` — reads `all/0` rather than
-  `@modules`, so a gated kind is either wholly registered or wholly absent.
-  Today the only gated kind is `game_stream`
-  (`Platform.Chat.Canvas.Kinds.GameStream`), present exactly while
-  `Platform.GameStream.enabled?/0` is true. With it off, an existing
-  document holding a `game_stream` node renders that node through
-  `Platform.Chat.Canvas.Renderer`'s fallback.
+  `@modules`, so an extension kind is either wholly registered or wholly
+  absent. An extension may itself gate its kind on a runtime flag. With a
+  kind absent, an existing document holding its node renders that node
+  through `Platform.Chat.Canvas.Renderer`'s fallback.
+
+  A kind this module does not own describes itself: `summaries/0` uses the
+  kind module's optional `Kind.describe/0` callback when it implements one,
+  so core names no kind it does not own.
 
   No caller may capture `names/0` or `all/0` into a module attribute: that
-  would freeze the flag's value at compile time.
+  would freeze the extension list, and any flag an extension reads, at
+  compile time.
   """
 
   alias Platform.Chat.Canvas.Kind
@@ -63,16 +66,14 @@ defmodule Platform.Chat.Canvas.Kinds do
     Table
   ]
 
-  @doc "Returns all registered kind modules, including any flag-gated kind that is on."
+  @doc "Returns all registered kind modules, including every extension kind."
   @spec all() :: [module()]
-  def all, do: @modules ++ gated_modules()
-
   # Evaluated per call, never cached — see the moduledoc.
-  defp gated_modules do
-    if Platform.GameStream.enabled?(),
-      do: [Platform.Chat.Canvas.Kinds.GameStream],
-      else: []
-  end
+  def all, do: @modules ++ Platform.Extensions.canvas_kinds()
+
+  @doc "Core's own kind modules, without any extension's."
+  @spec core_modules() :: [module()]
+  def core_modules, do: @modules
 
   @doc "Returns a map from kind name to kind module."
   @spec by_name() :: %{String.t() => module()}
@@ -109,12 +110,21 @@ defmodule Platform.Chat.Canvas.Kinds do
 
       %{
         kind: name,
-        description: describe(name),
+        description: describe(mod, name),
         accepts_children: children_rule(mod.children()),
         props: props_summary(mod.schema(), mod.styling()),
         example: example_node(mod, name)
       }
     end)
+  end
+
+  # An extension kind carries its own description; core describes only its own.
+  defp describe(mod, name) do
+    # (:code, not Elixir's Code: this module has a local Code alias.)
+    if match?({:module, _}, :code.ensure_loaded(mod)) and
+         function_exported?(mod, :describe, 0),
+       do: mod.describe(),
+       else: describe(name)
   end
 
   defp describe("stack"), do: "Vertical flex container. Accepts any children."
@@ -140,11 +150,6 @@ defmodule Platform.Chat.Canvas.Kinds do
 
   defp describe("checklist"), do: "Titled checklist. Children must be `checklist_item` nodes."
   defp describe("checklist_item"), do: "Single checklist row."
-
-  defp describe("game_stream"),
-    do:
-      "Live, playable stream of a task's review build from the play host. " <>
-        "Props: session_id, task_id, review_sha (40-hex), branch, title, latency_warn_ms; no children."
 
   defp describe(_), do: ""
 
@@ -443,8 +448,11 @@ defmodule Platform.Chat.Canvas.Kinds do
     # function_exported?/3 does not load the module — under a fresh BEAM
     # (CI) the answer depends on test order unless we load it first.
     # (:code, not Elixir's Code — this module has a local Code alias.)
+    # Only the REQUIRED callbacks: an optional one (`describe/0`) a kind does
+    # not implement is not a conformance failure.
+    required = Kind.behaviour_info(:callbacks) -- Kind.behaviour_info(:optional_callbacks)
+
     match?({:module, _}, :code.ensure_loaded(mod)) and
-      Kind.behaviour_info(:callbacks)
-      |> Enum.all?(fn {fun, arity} -> function_exported?(mod, fun, arity) end)
+      Enum.all?(required, fn {fun, arity} -> function_exported?(mod, fun, arity) end)
   end
 end

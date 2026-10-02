@@ -99,7 +99,8 @@ defmodule PlatformWeb.CanvasLive do
   clauses; neither half forks `render_node/1`.
 
   The one exception is a `game_stream` node (task 01a0db5f), whose events
-  are handled by `PlatformWeb.GameStreamHooks`, attached in `mount/3`: a
+  are handled by the live hooks its extension registers, attached in
+  `mount/3` through `PlatformWeb.Extensions.attach_live_hooks/1`: a
   playable build has to be playable from its link. Those events drive a play
   session, and the only document write among them, "Start again" setting the
   node's new `session_id`, goes through `Platform.Chat.patch_canvas/3` and so
@@ -114,14 +115,14 @@ defmodule PlatformWeb.CanvasLive do
   alias Platform.Tenancy
   alias PlatformWeb.ChatLive
   alias PlatformWeb.Components.ChatHelpers
-  alias PlatformWeb.GameStreamHooks
+  alias PlatformWeb.Extensions
 
   @impl true
   def mount(%{"id" => canvas_id}, _session, socket) do
     viewer = viewer_actor(socket)
-    # The `game_stream` kind's events (task 01a0db5f stage 4). Inert while
-    # GAME_STREAM_ENABLED is unset; see the moduledoc's read-only section.
-    socket = GameStreamHooks.attach(socket)
+    # Extension kinds' events (e.g. a `game_stream` node's, task 01a0db5f
+    # stage 4; ADR 0055). See the moduledoc's read-only section.
+    socket = Extensions.attach_live_hooks(socket)
 
     # `audit: false` on the connected mount — see the moduledoc. The
     # disconnected render already recorded this arrival.

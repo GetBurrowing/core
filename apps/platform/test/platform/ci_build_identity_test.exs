@@ -10,7 +10,8 @@ defmodule Platform.CiBuildIdentityTest do
   The contract pinned here: `apps/platform/Dockerfile` takes `ARG GIT_SHA`
   and writes it to `priv/build_commit`, which `Platform.BuildInfo.commit/0`
   reads. That arg only has a value if every `docker/build-push-action` step
-  passes `GIT_SHA=${{ github.sha }}` under `build-args:`. The job is
+  passes `GIT_SHA=${{ github.sha }}` under `build-args:` (both image
+  flavours' Dockerfiles take it, ADR 0055). The job is
   push-only, so `github.sha` is the branch head being built, not a merge
   commit. The step count is pinned so a third build step cannot appear
   without this guard noticing.
@@ -71,11 +72,14 @@ defmodule Platform.CiBuildIdentityTest do
                "the baked build_commit would name a commit that exists on no branch."
     end
 
-    test "has exactly two build-push-action steps", %{build_steps: steps} do
-      assert length(steps) == 2,
-             "expected exactly 2 `docker/build-push-action` steps in `build-and-push` " <>
-               "(main and feature branch), found #{length(steps)}. A new build step " <>
-               "must carry the GIT_SHA build-arg too; extend this test when adding one."
+    test "has exactly four build-push-action steps", %{build_steps: steps} do
+      # Two image flavours (ADR 0055 stage 4: without modules and with Play),
+      # each built on main and on a feature branch.
+      assert length(steps) == 4,
+             "expected exactly 4 `docker/build-push-action` steps in `build-and-push` " <>
+               "(two image flavours x main and feature branch), found #{length(steps)}. " <>
+               "A new build step must carry the GIT_SHA build-arg too; extend this " <>
+               "test when adding one."
     end
 
     test "every build-push-action step passes GIT_SHA=github.sha as a build-arg",
