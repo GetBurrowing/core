@@ -30,6 +30,15 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
   # event itself; untargeted, it crashed TasksLive with a FunctionClauseError.
   attr(:open_target, :any, default: nil)
 
+  # Where the document's interactive nodes deliver their events: action_row's
+  # `canvas_action_click` and form's `canvas_form_submit`. nil (the default)
+  # leaves them untargeted, so they reach the parent LiveView — ChatLive and
+  # MeetingLive handle them there. The Tasks page's LiveComponents pass
+  # `event_target={@myself}`: TasksLive has no clause for either event, so
+  # untargeted they crashed it with a FunctionClauseError. A sibling of
+  # `open_target`, not a reuse of it, so a caller can send the two apart.
+  attr(:event_target, :any, default: nil)
+
   def canvas_document(assigns) do
     canvas = assigns.canvas
     # Mode suffix distinguishes inline (in-chat) vs. expanded (panel/overlay)
@@ -99,6 +108,7 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
             node={@root_node}
             dom_id_scope={"#{@canvas.id}-#{@id_suffix}"}
             canvas_id={@canvas.id}
+            event_target={@event_target}
           />
         </div>
         """

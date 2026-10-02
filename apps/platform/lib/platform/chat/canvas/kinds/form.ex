@@ -59,6 +59,11 @@ defmodule Platform.Chat.Canvas.Kinds.Form do
 
   attr :node, :map, required: true
 
+  # Where `canvas_form_submit` is delivered. nil (the default) renders no
+  # phx-target, so ChatLive / MeetingLive receive it as before; the Tasks
+  # page's LiveComponents pass their `@myself`.
+  attr :event_target, :any, default: nil
+
   def render(assigns) do
     props = assigns.node["props"] || %{}
     fields = List.wrap(props["fields"])
@@ -76,6 +81,7 @@ defmodule Platform.Chat.Canvas.Kinds.Form do
         @props["class_overrides"]
       ]}
       phx-submit="canvas_form_submit"
+      phx-target={@event_target}
       phx-value-node-id={@node_id}
     >
       <p

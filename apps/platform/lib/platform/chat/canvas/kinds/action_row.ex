@@ -56,6 +56,12 @@ defmodule Platform.Chat.Canvas.Kinds.ActionRow do
   attr :dom_id_scope, :string, default: nil
   attr :canvas_id, :string, default: nil
 
+  # Where the button's `canvas_action_click` is delivered. nil (the default)
+  # renders no phx-target, so the click goes to the parent LiveView, which is
+  # how ChatLive and MeetingLive handle it. The Tasks page's LiveComponents
+  # pass their `@myself`: TasksLive has no clause for this event.
+  attr :event_target, :any, default: nil
+
   # Bug B (task 019f70ff): LV's `extractMeta` (phoenix_live_view.js:5390-5394)
   # reads `element.value` on non-form elements AFTER walking phx-value-*
   # attributes, and unconditionally overwrites `meta.value` with the DOM
@@ -91,6 +97,7 @@ defmodule Platform.Chat.Canvas.Kinds.ActionRow do
         data-role="canvas-action-button"
         class={["btn btn-sm", button_class(action["variant"])]}
         phx-click="canvas_action_click"
+        phx-target={@event_target}
         phx-value-canvas-id={@canvas_id}
         phx-value-node-id={@node_id}
         phx-value-action={action["value"]}

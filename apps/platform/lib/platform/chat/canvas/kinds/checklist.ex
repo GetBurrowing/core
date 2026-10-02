@@ -21,6 +21,7 @@ defmodule Platform.Chat.Canvas.Kinds.Checklist do
   attr :node, :map, required: true
   attr :dom_id_scope, :string, default: nil
   attr :canvas_id, :string, default: nil
+  attr :event_target, :any, default: nil
 
   def render(assigns) do
     props = assigns.node["props"] || %{}
@@ -55,6 +56,7 @@ defmodule Platform.Chat.Canvas.Kinds.Checklist do
         node={child}
         dom_id_scope={@dom_id_scope}
         canvas_id={@canvas_id}
+        event_target={@event_target}
       />
     </div>
     """

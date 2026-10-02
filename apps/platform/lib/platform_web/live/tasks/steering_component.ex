@@ -67,6 +67,8 @@ defmodule PlatformWeb.Tasks.SteeringComponent do
   """
   use PlatformWeb, :live_component
 
+  require Logger
+
   alias Platform.Accounts
   alias Platform.Chat
   alias Platform.Chat.AttachmentStorage
@@ -498,6 +500,7 @@ defmodule PlatformWeb.Tasks.SteeringComponent do
                 show_header={false}
                 dom_id_base="tasks-output-inline"
                 open_target={@myself}
+                event_target={@myself}
               />
             </div>
           </div>
@@ -574,6 +577,29 @@ defmodule PlatformWeb.Tasks.SteeringComponent do
   # `open_target={@myself}`. Opens the same modal as the Open button.
   def handle_event("canvas_open", %{"canvas-id" => canvas_id}, socket) do
     open_output_canvas(socket, canvas_id)
+  end
+
+  # Interactive nodes in an inline output canvas (action_row buttons, forms)
+  # are targeted here via `event_target={@myself}`. Untargeted they reached
+  # TasksLive, which has no clause for either event: FunctionClauseError.
+  # Read-only no-op, like CanvasLive's: acting on the click (ChatLive's
+  # `CanvasServer.emit_event`) is an agent-visible signal that would need its
+  # own authorization decision on this page. Two literal heads, not a guarded
+  # clause, so TasksLiveEventWiringTest can see them.
+  def handle_event("canvas_action_click", params, socket) do
+    Logger.info(
+      "[SteeringComponent] canvas_action_click ignored (read-only) canvas_id=#{inspect(params["canvas-id"])} node_id=#{inspect(params["node-id"])} action=#{inspect(params["action"])}"
+    )
+
+    {:noreply, socket}
+  end
+
+  def handle_event("canvas_form_submit", params, socket) do
+    Logger.info(
+      "[SteeringComponent] canvas_form_submit ignored (read-only) canvas_id=#{inspect(params["canvas-id"])} node_id=#{inspect(params["node-id"])}"
+    )
+
+    {:noreply, socket}
   end
 
   def handle_event("send_steering_message", %{"steering" => %{"text" => content}}, socket) do

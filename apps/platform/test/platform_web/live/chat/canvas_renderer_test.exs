@@ -2,7 +2,7 @@ defmodule PlatformWeb.Chat.CanvasRendererTest do
   use ExUnit.Case, async: true
 
   import Phoenix.Component, only: [sigil_H: 2]
-  import Phoenix.LiveViewTest, only: [rendered_to_string: 1]
+  import Phoenix.LiveViewTest, only: [rendered_to_string: 1, render_component: 2]
 
   alias PlatformWeb.Chat.CanvasRenderer
   alias Platform.Chat.Canvas
@@ -666,6 +666,138 @@ defmodule PlatformWeb.Chat.CanvasRendererTest do
 
       refute html =~ "phx-target"
       refute html =~ "canvas_open"
+    end
+  end
+
+  describe "canvas_document/1 event_target (Tasks canvas_action_click / canvas_form_submit crash)" do
+    # Interactive nodes emit untargeted events by default, so they reach the
+    # parent LiveView. ChatLive / MeetingLive handle them; TasksLive does not,
+    # so the Tasks page's components pass `event_target={@myself}`. The
+    # interactive nodes sit below three container kinds here (stack > card >
+    # row) so the attr has to survive every hop of the recursion.
+
+    defp interactive_canvas do
+      doc =
+        CanvasDocument.new()
+        |> put_in(["root", "children"], [
+          %{
+            "id" => "card-1",
+            "type" => "card",
+            "props" => %{},
+            "children" => [
+              %{
+                "id" => "row-1",
+                "type" => "row",
+                "props" => %{},
+                "children" => [
+                  %{
+                    "id" => "ar-1",
+                    "type" => "action_row",
+                    "props" => %{
+                      "actions" => [%{"label" => "Approve", "value" => "approve"}]
+                    },
+                    "children" => []
+                  },
+                  %{
+                    "id" => "f-1",
+                    "type" => "form",
+                    "props" => %{"fields" => [%{"name" => "note", "type" => "text"}]},
+                    "children" => []
+                  }
+                ]
+              }
+            ]
+          }
+        ])
+
+      build_canvas(doc, %{id: "canvas-interactive"})
+    end
+
+    defp render_with_event_target(canvas, target, inline) do
+      assigns = %{canvas: canvas, target: target, inline: inline}
+
+      ~H"""
+      <CanvasRenderer.canvas_document canvas={@canvas} inline={@inline} event_target={@target} />
+      """
+      |> rendered_to_string()
+    end
+
+    defp action_button_tag(html) do
+      [tag] = Regex.run(~r/<button[^>]*data-role="canvas-action-button"[^>]*>/, html)
+      tag
+    end
+
+    defp form_tag(html) do
+      [tag] = Regex.run(~r/<form[^>]*>/, html)
+      tag
+    end
+
+    for inline <- [true, false] do
+      test "event_target is emitted as phx-target on the action button and form (inline: #{inline})" do
+        html = render_with_event_target(interactive_canvas(), "#some-component", unquote(inline))
+
+        assert action_button_tag(html) =~ ~s|phx-click="canvas_action_click"|
+        assert action_button_tag(html) =~ ~s|phx-target="#some-component"|
+        assert form_tag(html) =~ ~s|phx-submit="canvas_form_submit"|
+        assert form_tag(html) =~ ~s|phx-target="#some-component"|
+      end
+
+      test "without event_target the action button and form carry no phx-target (inline: #{inline})" do
+        html = render_canvas(interactive_canvas(), %{inline: unquote(inline)})
+
+        assert action_button_tag(html) =~ ~s|phx-click="canvas_action_click"|
+        refute action_button_tag(html) =~ "phx-target"
+        assert form_tag(html) =~ ~s|phx-submit="canvas_form_submit"|
+        refute form_tag(html) =~ "phx-target"
+        # The chat path: no node in the document carries a target at all.
+        refute html =~ "phx-target"
+      end
+    end
+
+    test "an explicit nil event_target renders the same bytes as omitting it" do
+      canvas = interactive_canvas()
+
+      assert render_with_event_target(canvas, nil, true) == render_canvas(canvas, %{inline: true})
+    end
+
+    test "event_target does not leak onto the inline wrapper's canvas_open" do
+      html = render_with_event_target(interactive_canvas(), "#some-component", true)
+      [wrapper] = Regex.run(~r/<div id="canvas-doc-[^"]*"[^>]*>/, html)
+
+      assert wrapper =~ ~s|phx-click="canvas_open"|
+      refute wrapper =~ "phx-target"
+    end
+
+    test "kinds rendered without an event_target assign still render" do
+      # Kinds are invoked as `mod.render(assigns)`. The declarative `attr`
+      # wrapper merges the `event_target: nil` default even on that call, so
+      # a caller that never heard of event_target must render, not KeyError.
+      html =
+        render_component(&Platform.Chat.Canvas.Kinds.Stack.render/1,
+          node: %{"id" => "s", "type" => "stack", "props" => %{}, "children" => []}
+        )
+
+      assert html =~ "flex flex-col"
+
+      html =
+        render_component(&Platform.Chat.Canvas.Kinds.ActionRow.render/1,
+          node: %{
+            "id" => "a",
+            "type" => "action_row",
+            "props" => %{"actions" => [%{"label" => "Go", "value" => "go"}]}
+          }
+        )
+
+      assert html =~ ~s|phx-click="canvas_action_click"|
+      refute html =~ "phx-target"
+
+      html =
+        render_component(&Platform.Chat.Canvas.Kinds.Form.render/1,
+          node: %{"id" => "f", "type" => "form", "props" => %{"fields" => []}}
+        )
+
+      assert html =~ ~s|phx-submit="canvas_form_submit"|
+      refute html =~ "phx-target"
     end
   end
 end

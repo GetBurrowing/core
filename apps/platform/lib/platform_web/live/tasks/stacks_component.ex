@@ -40,6 +40,8 @@ defmodule PlatformWeb.Tasks.StacksComponent do
   """
   use PlatformWeb, :live_component
 
+  require Logger
+
   alias Platform.Repo
   alias Platform.Tasks
   alias Platform.Tasks.{ReviewRequests, Stack, Stacks}
@@ -868,6 +870,7 @@ defmodule PlatformWeb.Tasks.StacksComponent do
                               canvas={canvas}
                               show_header={false}
                               dom_id_base={"stack-feedback-overlay-canvas-#{canvas.id}"}
+                              event_target={@myself}
                             />
                           </div>
                         <% is_binary(item.content) and item.content != "" -> %>
@@ -1243,6 +1246,29 @@ defmodule PlatformWeb.Tasks.StacksComponent do
   # regardless of trigger. The stack panel stays open behind it.
   def handle_event("stack_close_feedback_overlay", _params, socket) do
     {:noreply, reset_stack_feedback_overlay(socket)}
+  end
+
+  # Interactive nodes in the stack feedback overlay's canvas (action_row buttons, forms)
+  # are targeted here via `event_target={@myself}`. Untargeted they reached
+  # TasksLive, which has no clause for either event: FunctionClauseError.
+  # Read-only no-op, like CanvasLive's: acting on the click (ChatLive's
+  # `CanvasServer.emit_event`) is an agent-visible signal that would need its
+  # own authorization decision on this page. Two literal heads, not a guarded
+  # clause, so TasksLiveEventWiringTest can see them.
+  def handle_event("canvas_action_click", params, socket) do
+    Logger.info(
+      "[StacksComponent] canvas_action_click ignored (read-only) canvas_id=#{inspect(params["canvas-id"])} node_id=#{inspect(params["node-id"])} action=#{inspect(params["action"])}"
+    )
+
+    {:noreply, socket}
+  end
+
+  def handle_event("canvas_form_submit", params, socket) do
+    Logger.info(
+      "[StacksComponent] canvas_form_submit ignored (read-only) canvas_id=#{inspect(params["canvas-id"])} node_id=#{inspect(params["node-id"])}"
+    )
+
+    {:noreply, socket}
   end
 
   # Stage-4 of task 019e2c27: approve a single review item from the

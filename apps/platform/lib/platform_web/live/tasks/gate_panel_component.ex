@@ -88,6 +88,8 @@ defmodule PlatformWeb.Tasks.GatePanelComponent do
   """
   use PlatformWeb, :live_component
 
+  require Logger
+
   alias Platform.Chat.Canvas
   alias Platform.Tasks.ReviewRequests
 
@@ -295,6 +297,7 @@ defmodule PlatformWeb.Tasks.GatePanelComponent do
               canvas={@gate_canvas}
               show_header={false}
               dom_id_base="tasks-review-modal"
+              event_target={@myself}
             />
           </div>
         </div>
@@ -371,6 +374,29 @@ defmodule PlatformWeb.Tasks.GatePanelComponent do
 
   def handle_event("gate_canvas_close", _params, socket) do
     {:noreply, assign(socket, :gate_canvas, nil)}
+  end
+
+  # Interactive nodes in the review-canvas modal (action_row buttons, forms)
+  # are targeted here via `event_target={@myself}`. Untargeted they reached
+  # TasksLive, which has no clause for either event: FunctionClauseError.
+  # Read-only no-op, like CanvasLive's: acting on the click (ChatLive's
+  # `CanvasServer.emit_event`) is an agent-visible signal that would need its
+  # own authorization decision on this page. Two literal heads, not a guarded
+  # clause, so TasksLiveEventWiringTest can see them.
+  def handle_event("canvas_action_click", params, socket) do
+    Logger.info(
+      "[GatePanelComponent] canvas_action_click ignored (read-only) canvas_id=#{inspect(params["canvas-id"])} node_id=#{inspect(params["node-id"])} action=#{inspect(params["action"])}"
+    )
+
+    {:noreply, socket}
+  end
+
+  def handle_event("canvas_form_submit", params, socket) do
+    Logger.info(
+      "[GatePanelComponent] canvas_form_submit ignored (read-only) canvas_id=#{inspect(params["canvas-id"])} node_id=#{inspect(params["node-id"])}"
+    )
+
+    {:noreply, socket}
   end
 
   # Draft-preservation only. `phx-change` keeps the textarea populated across

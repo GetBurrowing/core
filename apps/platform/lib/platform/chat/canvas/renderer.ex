@@ -21,10 +21,16 @@ defmodule Platform.Chat.Canvas.Renderer do
   places at once (e.g. the chat-panel and mobile-overlay copies of the active
   canvas), so kinds that mint ids from the node id must namespace them by the
   outer render scope to avoid duplicate-id warnings and broken hook bindings.
+
+  `event_target` is an optional `phx-target` for the events interactive kinds
+  emit (`canvas_action_click`, `canvas_form_submit`). nil leaves them
+  untargeted, so they reach the parent LiveView. Container kinds pass it down
+  to their children.
   """
   attr :node, :map, required: true
   attr :dom_id_scope, :string, default: nil
   attr :canvas_id, :string, default: nil
+  attr :event_target, :any, default: nil
 
   def render_node(assigns) do
     node = assigns.node

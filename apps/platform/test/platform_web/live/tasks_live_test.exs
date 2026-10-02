@@ -4145,6 +4145,139 @@ defmodule PlatformWeb.TasksLiveTest do
     assert has_element?(view, modal_body)
   end
 
+  # Task 01a0eece: action_row buttons and forms inside a canvas on the Tasks
+  # page emitted UNTARGETED `canvas_action_click` / `canvas_form_submit`, which
+  # reached TasksLive (no clause, FunctionClauseError). The three Tasks
+  # components that render canvases now pass `event_target={@myself}` and
+  # handle both events as read-only no-ops.
+  defp insert_interactive_output_canvas(task) do
+    {:ok, space} = ExecutionSpace.find_or_create(task.id)
+
+    {:ok, author} =
+      Chat.add_participant(space.id, %{
+        participant_type: "user",
+        participant_id: Ecto.UUID.generate(),
+        display_name: "Executor",
+        joined_at: DateTime.utc_now()
+      })
+
+    Repo.insert!(%Canvas{
+      space_id: space.id,
+      created_by: author.id,
+      title: "Interactive output canvas",
+      document: %{
+        "version" => 1,
+        "revision" => 1,
+        "root" => %{
+          "id" => "root",
+          "type" => "stack",
+          "props" => %{},
+          "children" => [
+            %{
+              "id" => "ar-1",
+              "type" => "action_row",
+              "props" => %{
+                "actions" => [%{"label" => "Approve", "value" => "approve"}]
+              },
+              "children" => []
+            },
+            %{
+              "id" => "f-1",
+              "type" => "form",
+              "props" => %{"fields" => [%{"name" => "note", "type" => "text"}]},
+              "children" => []
+            }
+          ]
+        },
+        "theme" => %{},
+        "bindings" => %{},
+        "meta" => %{}
+      }
+    })
+  end
+
+  test "clicking an action_row button in an inline output canvas does not crash TasksLive",
+       %{conn: conn} do
+    project = create_project()
+    task = create_task(project, %{title: "Action Output Task", status: "in_progress"})
+    canvas = insert_interactive_output_canvas(task)
+
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+    inline_wrapper = "#canvas-doc-#{canvas.id}-tasks-output-inline-inline"
+    modal_body = "#canvas-doc-#{canvas.id}-tasks-review-modal-expanded"
+    button = "#{inline_wrapper} [data-role=canvas-action-button]"
+
+    assert has_element?(view, button)
+
+    view |> element(button) |> render_click()
+    _ = :sys.get_state(view.pid)
+    _ = :sys.get_state(view.pid)
+
+    assert Process.alive?(view.pid)
+    # The button's own event won, not the wrapper's canvas_open.
+    refute has_element?(view, modal_body)
+  end
+
+  test "submitting a form in an inline output canvas does not crash TasksLive",
+       %{conn: conn} do
+    project = create_project()
+    task = create_task(project, %{title: "Form Output Task", status: "in_progress"})
+    canvas = insert_interactive_output_canvas(task)
+
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+    inline_wrapper = "#canvas-doc-#{canvas.id}-tasks-output-inline-inline"
+    modal_body = "#canvas-doc-#{canvas.id}-tasks-review-modal-expanded"
+
+    view
+    |> element("#{inline_wrapper} form")
+    |> render_submit(%{"form" => %{"note" => "looks good"}})
+
+    _ = :sys.get_state(view.pid)
+    _ = :sys.get_state(view.pid)
+
+    assert Process.alive?(view.pid)
+    refute has_element?(view, modal_body)
+  end
+
+  test "clicking an action_row button inside the opened output-canvas modal does not crash TasksLive",
+       %{conn: conn} do
+    project = create_project()
+    task = create_task(project, %{title: "Modal Action Task", status: "in_progress"})
+    canvas = insert_interactive_output_canvas(task)
+
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+    modal_body = "#canvas-doc-#{canvas.id}-tasks-review-modal-expanded"
+
+    view
+    |> element("button[phx-click=gate_canvas_open][phx-value-canvas-id=\"#{canvas.id}\"]")
+    |> render_click()
+
+    _ = :sys.get_state(view.pid)
+    _ = :sys.get_state(view.pid)
+
+    assert has_element?(view, modal_body)
+
+    view |> element("#{modal_body} [data-role=canvas-action-button]") |> render_click()
+    _ = :sys.get_state(view.pid)
+
+    assert Process.alive?(view.pid)
+    assert has_element?(view, modal_body)
+
+    view
+    |> element("#{modal_body} form")
+    |> render_submit(%{"form" => %{"note" => "from the modal"}})
+
+    _ = :sys.get_state(view.pid)
+
+    assert Process.alive?(view.pid)
+  end
+
   test "task detail hides Pending Review pane when there are no review_requests",
        %{conn: conn} do
     # Companion to `task detail renders review canvas evidence`: the
