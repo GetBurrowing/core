@@ -54,12 +54,44 @@ defmodule PlatformWeb.ChatAttachmentUploadController do
 
   @read_chunk_bytes 64 * 1024
 
+  # Which conn a response goes out on (task 01a0fdf9).
+  #
+  # Every response sent AFTER the first `read_body` goes out on the conn
+  # RETURNED by the latest read, never on the conn `create/2` was called
+  # with. Bandit drains any unread request body from the adapter state of
+  # the conn the plug returns (`Bandit.Pipeline` -> `ensure_completed`). A
+  # pre-read conn still reports the whole Content-Length as unread, so
+  # Bandit would read that many more bytes off the wire, and on a keep-alive
+  # connection those bytes are the NEXT request. Same rule as
+  # `PlatformWeb.Plugs.VerifyPeerEnvelope.verify/1`.
+  #
+  # Refusals made before anything is read (token, reservation, content-type)
+  # correctly use the input conn: nothing was consumed, and Bandit drains
+  # the full Content-Length itself.
   def create(conn, %{"token" => token}) do
     with {:ok, %{key: key, max_bytes: max_bytes}} <- AttachmentPresigner.verify(token),
          {:ok, %{storage_key: ^key} = reservation} <- pending_reservation(key),
-         :ok <- validate_content_type(conn, reservation),
-         {:ok, tmp_path, byte_size} <- stream_body_to_tmp(conn, max_bytes),
-         {:ok, %{byte_size: ^byte_size, content_hash: _} = stat} <-
+         :ok <- validate_content_type(conn, reservation) do
+      receive_upload(conn, reservation, max_bytes)
+    else
+      {:error, reason} -> send_refusal(conn, reason)
+    end
+  end
+
+  # Post-read half: `conn` is rebound from the stream result, so every
+  # response below goes out on the conn the last `read_body` returned.
+  defp receive_upload(conn, reservation, max_bytes) do
+    case stream_body_to_tmp(conn, max_bytes) do
+      {:ok, conn, tmp_path, byte_size} ->
+        store_and_finalize(conn, reservation, tmp_path, byte_size)
+
+      {:error, reason, conn} ->
+        send_refusal(conn, reason)
+    end
+  end
+
+  defp store_and_finalize(conn, reservation, tmp_path, byte_size) do
+    with {:ok, %{byte_size: ^byte_size, content_hash: _} = stat} <-
            persist_bytes(reservation, tmp_path) do
       File.rm(tmp_path)
 
@@ -76,25 +108,31 @@ defmodule PlatformWeb.ChatAttachmentUploadController do
           send_error(conn, 500, "finalize failed: #{inspect(reason)}")
       end
     else
-      {:error, :invalid} ->
+      {:error, reason} -> send_refusal(conn, reason)
+    end
+  end
+
+  defp send_refusal(conn, reason) do
+    case reason do
+      :invalid ->
         send_error(conn, 401, "invalid upload token")
 
-      {:error, :expired} ->
+      :expired ->
         send_error(conn, 410, "upload token expired")
 
-      {:error, :too_large} ->
+      :too_large ->
         send_error(conn, 413, "body exceeds max_bytes")
 
-      {:error, :content_type_mismatch} ->
+      :content_type_mismatch ->
         send_error(conn, 400, "content-type does not match reserved row")
 
-      {:error, :not_found} ->
+      :not_found ->
         send_error(conn, 404, "no pending reservation for key")
 
-      {:error, :not_pending} ->
+      :not_pending ->
         send_error(conn, 409, "attachment already finalized")
 
-      {:error, reason} ->
+      reason ->
         send_error(conn, 500, "upload failed: #{inspect(reason)}")
     end
   end
@@ -176,22 +214,26 @@ defmodule PlatformWeb.ChatAttachmentUploadController do
           File.close(io)
         end
 
+      # Nothing has been read yet, so the input conn is the current one.
       {:error, reason} ->
-        {:error, {:open_failed, reason}}
+        {:error, {:open_failed, reason}, conn}
     end
   end
 
+  # Returns `{:ok, conn, tmp_path, size}` or `{:error, reason, conn}`, where
+  # `conn` is always the latest one a `read_body` returned (see the comment
+  # above `create/2`).
   defp do_stream(conn, io, max_bytes, acc, tmp_path) do
     case Plug.Conn.read_body(conn, length: @read_chunk_bytes, read_length: @read_chunk_bytes) do
-      {:ok, chunk, _conn} ->
+      {:ok, chunk, conn} ->
         new_size = acc + byte_size(chunk)
 
         if new_size > max_bytes do
           File.rm(tmp_path)
-          {:error, :too_large}
+          {:error, :too_large, conn}
         else
           :ok = IO.binwrite(io, chunk)
-          {:ok, tmp_path, new_size}
+          {:ok, conn, tmp_path, new_size}
         end
 
       {:more, chunk, conn} ->
@@ -199,15 +241,17 @@ defmodule PlatformWeb.ChatAttachmentUploadController do
 
         if new_size > max_bytes do
           File.rm(tmp_path)
-          {:error, :too_large}
+          {:error, :too_large, conn}
         else
           :ok = IO.binwrite(io, chunk)
           do_stream(conn, io, max_bytes, new_size, tmp_path)
         end
 
+      # Plug's `{:error, reason}` carries no conn; the one passed into this
+      # failing read is the latest the controller holds.
       {:error, reason} ->
         File.rm(tmp_path)
-        {:error, {:read_body_failed, reason}}
+        {:error, {:read_body_failed, reason}, conn}
     end
   end
 
