@@ -189,12 +189,15 @@ defmodule PlatformWeb.MeetingAskFloorVoiceCardLinkTest do
     candidate_id = card.id
     assert card.assigned_agent_id == agent_id
 
-    # SAME veil scaffold, SAME dashed HEARD box and numbered rung as any
-    # text-only agent — nothing here is voice-specific markup.
+    # SAME veil scaffold, SAME floating heard overlay as any text-only
+    # agent — nothing here is voice-specific markup. Round 3 (task
+    # 01a0fa7e-afd7) retired the dashed "HEARD box"/numbered-rung markup
+    # in favour of the out-of-flow overlay; the invariant this test
+    # guards — voice gets no special-cased markup — now checks for that
+    # overlay instead.
     assert has_element?(alice_view, "[data-role='meeting-ask-veil']")
     veil_html = render(alice_view)
-    assert veil_html =~ ~s(data-role="meeting-ask-heard-box")
-    assert veil_html =~ CandidateDisplay.stage_label(:heard)
+    assert veil_html =~ ~s(data-role="meeting-ask-heard-overlay")
 
     assert {:ok, %{identity: held_identity}} = AskFloor.holder(meeting.id, agent_id)
     room_id = Meetings.room_name_for_space(meeting.chat_space_id)

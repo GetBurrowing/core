@@ -19,7 +19,6 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
   import Phoenix.LiveViewTest
 
   alias Platform.Meetings.AgentActivity
-  alias PlatformWeb.Components.Meetings.CandidateDisplay
   alias PlatformWeb.Components.Meetings.ParticipantRail
 
   # `/60`, not `/50` — task 01a0cf5d stage 3 raised both headings' label
@@ -1213,15 +1212,20 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       refute classes =~ "btn-ghost"
     end
 
-    # ── Item 1 (task 01a0f842 stage 1, canvas 01a0f846-cfb1) ────────────────
+    # ── Item 1 (task 01a0f842 stage 1, canvas 01a0f846-cfb1), STRENGTHENED
+    # round 3 (task 01a0fa7e-afd7) ──────────────────────────────────────────
     #
     # The round-2 regression: pressed used to repaint the SAME colours as
     # rest (`bg-primary text-primary-content` both times) — "doesn't feel
     # tactile" because nothing visibly changed. This checks the fix is a
     # real inversion, not a second coat of the same paint: black fill,
     # cyan label, and a cyan ring that moved onto the key itself (the row
-    # lost its own ring — see the agent-row test above).
-    test "pressed state inverts to black fill, cyan label, and a cyan ring on the key" do
+    # lost its own ring — see the agent-row test above). Round 3 widened
+    # the ring to 3px with an offset (Harper's round-3 report that the
+    # round-2 fix "performs the same way" — see `app.css`'s own comment
+    # on the `transition-duration` cascade bug that silently zeroed the
+    # press-scale's animation).
+    test "pressed state inverts to black fill, cyan label, and an offset cyan ring on the key" do
       html = hold_rail([agent("Octavius", "oct-1")], hold_to_talk?: true)
       [control] = hold_controls(html)
 
@@ -1230,8 +1234,9 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
 
       assert "data-[pressed=true]:bg-primary-content" in class_list
       assert "data-[pressed=true]:text-primary" in class_list
-      assert "data-[pressed=true]:ring-2" in class_list
+      assert "data-[pressed=true]:ring-[3px]" in class_list
       assert "data-[pressed=true]:ring-primary" in class_list
+      assert "data-[pressed=true]:ring-offset-2" in class_list
 
       # The old identical-repaint bug, named explicitly so a future edit
       # that reintroduces it fails loudly here instead of only "feeling"
@@ -1473,37 +1478,94 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
     end
   end
 
-  # Task 01a0e47c stage 3 (canvas 01a0e47d-3005 / Harper's mockup
-  # 01a0e47c-a1b4): the ask-veil's HEARD box is dashed, not the flat
-  # solid card it used to be, and carries a numbered ladder-rung label —
-  # the SAME text `CandidateDisplay.stage_label(:heard)` produces, so a
-  # future rename of the rung's wording cannot drift between this box
-  # and the card it flies into (`CandidateRail.live_card/1`).
-  describe "the ask-veil's HEARD box" do
-    test "is dashed, carries the '1 · heard' rung, and still hosts the transcript and meter" do
+  # Task 01a0fa7e-afd7 (design canvas 01a0fa80-da74, "Burrow round 3:
+  # floating heard text and hittable rail"). Round 2's dashed "HEARD box"
+  # (canvas 01a0e47d-3005) is RETIRED as a heard-text holder: it grew
+  # with every transcript word, and because it sat inside the CENTRED
+  # veil card, that growth visibly reflowed the whole stage — the exact
+  # defect Harper's round-3 report named. The live text now lives in its
+  # own fixed-size, absolutely-positioned overlay, never a sibling in the
+  # veil card's layout flow.
+  describe "the ask-veil's card, post round-3" do
+    test "no longer hosts a heard box, step label, or transcript node" do
       html = hold_rail([agent("Octavius", "oct-1")], hold_to_talk?: true)
-
-      [heard_box] =
-        Floki.parse_fragment!(html) |> Floki.find(~s([data-role="meeting-ask-heard-box"]))
-
-      [classes] = Floki.attribute(heard_box, "class")
-      assert classes =~ "border-dashed"
-
-      [step] = Floki.find(heard_box, ~s([data-role="meeting-ask-step"]))
-      assert Floki.text(step) |> String.trim() == CandidateDisplay.stage_label(:heard)
-
-      # The transcript and meter still live INSIDE the dashed box, not
-      # beside it — the box is the whole "HEARD" unit the mockup draws,
-      # not a separate label floating above the existing card.
-      assert Floki.find(heard_box, ~s([data-role="meeting-ask-transcript"])) != []
-      assert Floki.find(heard_box, ~s([data-role="meeting-ask-meter"])) != []
-
-      # The overlay header ("Asking …") is a SIBLING of the dashed box,
-      # not inside it — the header names WHO is being asked, the box is
-      # the HEARD unit underneath it, matching the mockup's layout.
       parsed = Floki.parse_fragment!(html)
-      [label] = Floki.find(parsed, ~s([data-role="meeting-ask-label"]))
-      assert Floki.find([label], ~s([data-role="meeting-ask-heard-box"])) == []
+
+      assert Floki.find(parsed, ~s([data-role="meeting-ask-heard-box"])) == []
+      assert Floki.find(parsed, ~s([data-role="meeting-ask-step"])) == []
+      assert Floki.find(parsed, ~s([data-role="meeting-ask-transcript"])) == []
+    end
+
+    test "still carries the label and the live mic-level meter directly" do
+      html = hold_rail([agent("Octavius", "oct-1")], hold_to_talk?: true)
+      parsed = Floki.parse_fragment!(html)
+
+      assert Floki.find(parsed, ~s([data-role="meeting-ask-label"])) != []
+      assert Floki.find(parsed, ~s([data-role="meeting-ask-meter"])) != []
+    end
+  end
+
+  # The floating heard overlay itself — the new holder for the live
+  # transcript text, out of everyone's layout flow.
+  describe "the floating heard overlay" do
+    test "is absent when the row has no hold-to-talk producer, present when it does" do
+      without = hold_rail([agent("Octavius", "oct-1")], [])
+
+      assert Floki.parse_fragment!(without)
+             |> Floki.find(~s([data-role="meeting-ask-heard-overlay"])) == []
+
+      with_hold = hold_rail([agent("Octavius", "oct-1")], hold_to_talk?: true)
+
+      [overlay] =
+        Floki.parse_fragment!(with_hold)
+        |> Floki.find(~s([data-role="meeting-ask-heard-overlay"]))
+
+      [classes] = Floki.attribute(overlay, "class")
+      class_list = String.split(classes, " ")
+
+      # Out of flow, always: `fixed`, never a static/relative box that
+      # could push a sibling.
+      assert "fixed" in class_list
+      # Read-only, per the canvas ("pointer-events none on the whole
+      # overlay"): on the container itself, not just inherited.
+      assert "pointer-events-none" in class_list
+      assert Floki.attribute(overlay, "data-open") == ["false"]
+      assert Floki.attribute(overlay, "phx-update") == ["ignore"]
+      assert Floki.attribute(overlay, "aria-hidden") == ["true"]
+    end
+
+    test "carries the fixed-size status line and the 72px, overflow-hidden text window" do
+      html = hold_rail([agent("Octavius", "oct-1")], hold_to_talk?: true)
+      parsed = Floki.parse_fragment!(html)
+
+      [overlay] = Floki.find(parsed, ~s([data-role="meeting-ask-heard-overlay"]))
+
+      [status] = Floki.find([overlay], ~s([data-role="meeting-ask-heard-status"]))
+      assert Floki.text(status) |> String.trim() == "Listening while you hold"
+
+      [window] = Floki.find([overlay], ~s([data-role="meeting-ask-heard-window"]))
+      [window_classes] = Floki.attribute(window, "class")
+      window_class_list = String.split(window_classes, " ")
+      assert "h-[72px]" in window_class_list
+      assert "overflow-hidden" in window_class_list
+
+      # The text node that grows is INSIDE the fixed window, packed
+      # against the bottom (`justify-end`) — this is what makes new
+      # lines push old ones up and out the top without any JS scroll
+      # management, per the hook's own moduledoc.
+      [text_node] = Floki.find([window], ~s([data-role="meeting-ask-heard-text"]))
+      [text_classes] = Floki.attribute(text_node, "class")
+      text_class_list = String.split(text_classes, " ")
+      assert "justify-end" in text_class_list
+      assert Floki.text(text_node) |> String.trim() == ""
+    end
+
+    test "is a SIBLING of the veil, never nested inside its card — so it can never be pushed by the card's own content" do
+      html = hold_rail([agent("Octavius", "oct-1")], hold_to_talk?: true)
+      parsed = Floki.parse_fragment!(html)
+
+      [veil] = Floki.find(parsed, ~s([data-role="meeting-ask-veil"]))
+      assert Floki.find([veil], ~s([data-role="meeting-ask-heard-overlay"])) == []
     end
   end
 

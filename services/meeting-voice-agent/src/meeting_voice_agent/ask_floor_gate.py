@@ -161,9 +161,47 @@ def attach_ask_floor_gate(session: AgentSession, room: rtc.Room, grace_ms: int) 
     Detaches input SYNCHRONOUSLY before returning, so the window between
     "session built" and "first `data_received` arrives" is closed, not an
     unguarded gap defaulting to listening.
+
+    ## The attach-time banner (task 01a0fa7e stage 3)
+
+    Harper reported Burrow answering ordinary room conversation with nobody
+    holding Ask -- the EXACT symptom this module's own moduledoc describes
+    as the bug it fixes ("the worker's own `AgentSession` kept listening
+    and replying to EVERYTHING it heard, continuously, regardless of
+    whether anyone was holding the button at all"). A full trace of this
+    file, `agent.py`, and the Elixir `AskFloor`/`MeetingLive` wiring on
+    this branch found the gate correctly wired for a normal press/release
+    cycle, and confirmed (via `README.md`'s "Known gap" section) this
+    worker never opens a `RuntimeChannel` connection, so Core's
+    transcript-fanout/intent-dispatch paths cannot reach it either --
+    ruling out every in-repo bypass this stage could find.
+
+    What no in-repo check can rule out: `services/meeting-voice-agent` has
+    no Dockerfile and no CI workflow (confirmed: nothing under
+    `.github/workflows/` names it), unlike the Elixir platform image that
+    `moon` re-pulls hourly. Whatever process is actually answering voice in
+    a live meeting is started and restarted by hand, and nothing before
+    this line made it observable from the worker's OWN logs whether that
+    process is running code that includes this gate at all -- a worker
+    process started before this file existed would reproduce Harper's
+    symptom exactly, by construction, and no code review of THIS branch
+    could ever detect that from here.
+
+    So: log a banner the INSTANT the gate attaches, before any data event,
+    naming this exact behavior in a form `grep`-able from the worker's
+    stdout. Its ABSENCE from a live worker's logs is diagnostic on its own
+    -- a running process with no such line predates this gate and will
+    reproduce the reported symptom regardless of what this branch's source
+    says.
     """
     gate = AskFloorGate(grace_ms=grace_ms)
     session.input.set_audio_enabled(False)
+    logger.info(
+        "ask-floor gate: attached and enforcing -- input starts DETACHED, "
+        "grace_ms=%d (task 01a0e47c gate; absence of this line in a live "
+        "worker's logs means it predates the gate)",
+        grace_ms,
+    )
 
     pending_close: asyncio.Task[None] | None = None
 

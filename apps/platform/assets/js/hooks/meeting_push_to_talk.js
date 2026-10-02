@@ -124,6 +124,7 @@ const MeetingPushToTalk = {
     this._levels = []
     this._rejection = null
     this._pressed = false
+    this._heldLongEnough = false
     this._captured = null
     this._bars = this._buildBars()
 
@@ -210,6 +211,47 @@ const MeetingPushToTalk = {
 
   reconnected() {
     this._hideFeedback()
+  },
+
+  // Round 4 (task 01a0fa7e-afd7 stage 5) — THE actual cause of "the key
+  // flashes once then goes dead for the rest of the hold," confirmed by
+  // reading LiveView's own `dom.js`/`view.js` (`mergeAttrs`,
+  // `triggerBeforeUpdateHook`), not assumed: `phx-update="ignore"` on this
+  // `<button>` protects its CHILDREN from being patched, but NOT its own
+  // `data-*` attributes — `DOM.mergeAttrs(fromEl, toEl, {isIgnored: true})`
+  // still calls `target.setAttribute(name, sourceValue)` for every `data-`
+  // attribute the server's fresh render carries, which is `data-pressed=
+  // "false"`/`data-held="false"` on EVERY render (`participant_rail.ex`'s
+  // literal markup) — those are the two things this hook ever writes to
+  // the DOM, and the server's copy is always stale by the time it lands.
+  //
+  // `handle_event("push_to_talk_press", ...)` (`meeting_live.ex`) sets
+  // `:pressed_agent_id` and re-renders this agent's row almost immediately
+  // — ~15-35ms in practice, exactly the one "pressed" sample the task
+  // 01a0fa7e-afd7 review captured before the attribute reverted and never
+  // recovered, because nothing was watching for the server to stomp it a
+  // second time. Confirms the dispatch's own morphdom/LiveView-
+  // reconciliation hypothesis; `phx-update="ignore"`'s actual contract
+  // (children only, never this element's own attributes) is simply
+  // narrower than the comment at `participant_rail.ex`'s `ask_floor_holders`
+  // doc assumed.
+  //
+  // The fix leans on the OTHER half of the same mechanism rather than
+  // fighting it: LiveView detects that `fromEl.dataset` no longer equals
+  // `toEl.dataset` on an ignored node (`view.js#triggerBeforeUpdateHook`)
+  // and fires this hook's `updated()` specifically BECAUSE of that
+  // mismatch — so `updated()` runs every time, and ONLY when, the server
+  // has just overwritten one of these two attributes out from under a live
+  // press. Re-asserting them here from `this._pressed`/`this._heldLongEnough`
+  // — this hook's own JS state, never the DOM it writes to — closes the
+  // window back down to a single patch's duration instead of the rest of
+  // the hold. `_setRowPressed` mirrors the same correction onto the row
+  // (`<li>`), which has no `phx-update="ignore"` at all and is restomped by
+  // the ordinary (non-ignored) merge path on the same patch.
+  updated() {
+    this.el.dataset.pressed = this._pressed ? "true" : "false"
+    this.el.dataset.held = this._heldLongEnough ? "true" : "false"
+    this._setRowPressed(this._pressed)
   },
 
   // ── Public, for tests and for the rest of the page ──────────────────────

@@ -3334,20 +3334,37 @@
        "won't rejoin" promise: a worker still holding an unexpired LiveKit
        token can reconnect on its own. Positioned like the page's other
        bottom toasts so it clears both the iOS home indicator and the
-       mobile bottom nav. --%>
+       mobile bottom nav.
+
+       Task 01a0fa7e-afd7 stage 4 (round-3 canvas 01a0fa80-da74, "Likely
+       blocking layer on main" table, row "Undo toast"): this is `fixed`,
+       `z-40`, `inset-x-0` on every width (`max-sm:inset-x-4` only narrows
+       the gutter, it does not scope the toast to one viewport tier) — so
+       on a phone, where the People/call-rail panel is laid out BELOW the
+       (shrunk) gallery in normal flow rather than behind its own stacking
+       context, this toast's fixed box can paint directly over that
+       panel's bottom-most row for its whole 8s lifetime. The canvas's own
+       rule for this layer is explicit: "Takes clicks? Yes, its Undo
+       only; the toast box itself must not cover a rail control" — the
+       markup never enforced that half of the rule. `pointer-events-none`
+       on the container plus `pointer-events-auto` on the Undo button
+       alone (the SAME pattern this file already uses for the hold veil
+       and `MeetingAskHeardOverlay`) closes the gap: the toast's text and
+       padding become click-through, so a mute/remove button it happens
+       to sit over stays reachable, and Undo itself is unaffected. --%>
     <div
       :if={assigns[:agent_removal_undo]}
       data-role="meeting-agent-removed-toast"
       role="status"
       aria-live="polite"
-      class="fixed inset-x-0 max-sm:inset-x-4 bottom-[calc(env(safe-area-inset-bottom)+1.5rem+var(--bottom-nav-height,0px))] z-40 mx-auto flex w-fit max-w-sm items-center gap-3 rounded-box bg-base-300 px-4 py-2 text-sm text-base-content shadow-md"
+      class="pointer-events-none fixed inset-x-0 max-sm:inset-x-4 bottom-[calc(env(safe-area-inset-bottom)+1.5rem+var(--bottom-nav-height,0px))] z-40 mx-auto flex w-fit max-w-sm items-center gap-3 rounded-box bg-base-300 px-4 py-2 text-sm text-base-content shadow-md"
     >
       <span class="min-w-0">Removed {@agent_removal_undo.agent_name} from the meeting.</span>
       <button
         type="button"
         phx-click="undo_remove_agent"
         data-role="meeting-agent-removed-undo"
-        class="link link-primary shrink-0 font-medium max-sm:min-h-11"
+        class="pointer-events-auto link link-primary shrink-0 font-medium max-sm:min-h-11"
       >
         Undo
       </button>

@@ -368,13 +368,20 @@ defmodule PlatformWeb.Components.Meetings.CandidateRail do
 
              This is deliberately the SAME text
              `CandidateDisplay.stage_label/1` already produces (no
-             second copy of "3 · taking shape" invented here) and the
-             SAME classes the ask-veil's own `meeting-ask-step` node
-             wears (`ParticipantRail`) — a viewer who watched "1 · heard"
-             in the overlay and then sees "3 · taking shape" here, on the
-             card that flew out of it (`data-candidate-id` matches the
-             `meeting_ask_outcome` payload's `candidate_id`), reads both
-             as rungs of ONE ladder rather than two unrelated captions.
+             second copy of "3 · taking shape" invented here). It used to
+             also share classes with the ask-veil's own `meeting-ask-step`
+             node (`ParticipantRail`); task 01a0fa7e-afd7 retired that
+             node along with the rest of round 2's dashed "HEARD box"
+             (the live heard text now lives in its own floating overlay,
+             `meeting-ask-heard-overlay`, which carries no numbered rung
+             at all — just a status line and the text window) — a viewer
+             who watched "Listening while you hold" in that overlay and
+             then sees "3 · taking shape" here, on the card that flew out
+             of the hold (`data-candidate-id` matches the
+             `meeting_ask_outcome` payload's `candidate_id`), still reads
+             this label as the next rung of the SAME ladder the hold
+             started climbing, just without a matching "1 · heard" label
+             on the overlay side any more.
              Per the design canvas's self-critique this is NOT a running
              1-2-3 counter across the two surfaces — the numbers are
              fixed rungs (heard=1, thinking=2, shaping=3, acting=4) and

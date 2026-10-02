@@ -606,6 +606,37 @@ defmodule PlatformWeb.MeetingLiveRemoveAgentTest do
       assert agent_id == agent.id
     end
 
+    # Task 01a0fa7e-afd7 stage 4 (round-3 canvas 01a0fa80-da74, "Likely
+    # blocking layer on main" table): this toast is `fixed`/`inset-x-0` on
+    # every viewport, not scoped to desktop, so on a phone it paints in the
+    # same screen region as the People/call-rail panel's rows for its whole
+    # 8s lifetime. The canvas's own rule for every non-interactive overlay
+    # in this file is "pointer-events-none on the container and every
+    # child" with the single named exception of its own actionable control
+    # — this toast had a real control (Undo) but never had the guard. A
+    # markup-only regression: `render()` proves the classes landed without
+    # needing a real browser's computed style.
+    test "the toast is click-through everywhere except its own Undo button",
+         %{conn: conn, host_user: host_user, meeting: meeting, agent_row: agent_row} do
+      view = remove_as_host!(conn, host_user, meeting, agent_row)
+
+      toast_html =
+        view
+        |> element(~s([data-role="meeting-agent-removed-toast"]))
+        |> render()
+
+      assert toast_html =~ "pointer-events-none",
+             "the toast container must be pointer-events-none so it cannot swallow a click meant " <>
+               "for whatever rail/sheet control it happens to be painted over"
+
+      assert has_element?(
+               view,
+               ~s([data-role="meeting-agent-removed-undo"].pointer-events-auto)
+             ),
+             "the Undo button must re-enable pointer events on itself, or the toast's one real " <>
+               "control would be inert too"
+    end
+
     test "the host's Undo writes a fresh active row and dispatches meeting_join",
          %{
            conn: conn,

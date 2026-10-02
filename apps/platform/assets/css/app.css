@@ -4729,12 +4729,13 @@ body, .font-fabrikam {
     user-select: none;
   }
 
-  /* Item 1 (task 01a0f842 stage 1, canvas 01a0f846-cfb1): the Ask key's
-     press feedback. Harper's round-2 report named the gap exactly —
-     pressed looked identical to rest, nothing but the interior glyph
-     swap moved. The fix is an inversion (black fill, cyan label/glyph/
-     ring) that lands in the SAME FRAME as the press, plus a scale and a
-     hold-threshold underline that answers "has my press counted yet".
+  /* Item 1 (task 01a0f842 stage 1, canvas 01a0f846-cfb1), REVISITED round 3
+     (task 01a0fa7e-afd7, "fixes don't work live"). Harper reported the
+     round-2 fix "performs the same way" as before it shipped. It does —
+     not because the inversion/scale/underline were never built (they
+     were, and mostly still are below), but because a cascade bug silently
+     zeroed the one signal that was supposed to be felt as MOTION rather
+     than an instant swap.
 
      The colour inversion itself is set with ordinary Tailwind
      `data-[pressed=true]:bg-*`/`text-*`/`ring-*` classes on the button
@@ -4746,25 +4747,78 @@ body, .font-fabrikam {
      border-color, box-shadow; transition-duration: 0.2s }` in the
      UTILITIES layer (see `.meeting-hold-target` above for why
      `!important` is the only reliable way to beat a utilities-layer
-     rule from here), so a same-layer Tailwind `transition-*` utility on
-     this button would only win by generator output order, not by
-     intent. The canvas is explicit that the inversion is instant — "in
-     the same frame", "colour, not motion" — so this rule forces that
-     directly rather than gambling on it. */
+     rule from here).
+
+     THE BUG, found by actually pressing the key in a browser and reading
+     `getComputedStyle`, not by re-reading the class list: round 2's rule
+     was `transition-duration: 0s !important` with no `transition-
+     property` of its own — `transition-duration` is ONE property, so
+     setting it `!important` here beats ANY other rule's `transition-
+     duration` on this element, including the shorthand `transition:
+     transform var(--duration-fast) ...` the press-scale rule below
+     declares. `!important` beats specificity outright regardless of
+     which selector is "more specific" or which rule comes later in the
+     file, so the scale's own 100ms duration was discarded in favour of
+     0s on every press, in every build, since the round-2 commit. The
+     colour swap AND the 4% scale therefore both snapped in the exact
+     same frame — a transform with zero duration is not a squish, it is
+     a teleport four percent of the button's size, far too small to
+     register as motion. That is the whole gap between "shipped" and
+     "felt": a DOM/class-list check sees the `transition: transform ...`
+     text and passes; nothing short of a computed-style read in a real
+     browser catches that the cascade discarded it.
+
+     FIRST ATTEMPT AT THE FIX, ALSO WRONG, ALSO CAUGHT ONLY BY THE BROWSER:
+     naming just `color 0s, background-color 0s, border-color 0s, box-
+     shadow 0s !important` here and leaving `transform var(--duration-
+     fast) ...` on the press-scale rule below LOOKS like it separates the
+     two concerns. It does not, for a reason specific to the `transition`
+     shorthand: unlike `transition-duration` alone, the `transition`
+     shorthand also sets `transition-property` — and when ONE declaration
+     wins that longhand (by `!important`, as here), the computed
+     `transition-property` is EXACTLY the list that declaration named.
+     `getComputedStyle(btn).transitionProperty` on the pressed button
+     measured `"color, background-color, border-color, box-shadow"` —
+     four entries, "transform" nowhere in it — so the OTHER rule's
+     `transition: transform ...` had nothing to attach to: a property
+     that is not in `transition-property` is never animated, full stop,
+     regardless of what duration some other rule gave it. The transform
+     VALUE still applied (`scale(0.9)` computed correctly, since
+     `transform` itself is a separate, ordinary-specificity property) —
+     only its transition silently vanished again, by a different
+     mechanism than round 2's bug but with the identical symptom
+     (snap, not squish).
+
+     THE ACTUAL FIX: put `transform` INSIDE the same `!important`
+     shorthand, with its own duration in the same comma list, so this
+     ONE declaration's `transition-property` includes all five names at
+     once and nothing downstream needs to add to it. */
   [data-role="meeting-agent-hold-to-talk"] {
-    transition-duration: 0s !important;
+    transition:
+      color 0s,
+      background-color 0s,
+      border-color 0s,
+      box-shadow 0s,
+      transform var(--duration-fast) var(--ease-standard) !important;
   }
 
-  /* The 0.96 press scale. Not a Tailwind `scale-*` + `transition-*` pair
-     on the button for the same reason as above: this needs its own
-     `--duration-fast`/`--ease-standard` timing independent of the
-     colour override, and a dedicated reduced-motion branch that removes
-     the scale ENTIRELY (not just its animation) — the canvas is explicit
-     that reduced motion drops the scale but keeps the inversion, since
-     one is colour and the other is motion. */
+  /* The press scale — widened from round 2's 0.96 to 0.90 (Harper's "bigger
+     ... scale transition" ask, since the subtler value was never even
+     visible under either bug above) and now genuinely ANIMATES over
+     `--duration-fast` (100ms), per the consolidated `transition` above —
+     this rule sets only the VALUE, not a competing transition
+     declaration, so there is nothing left for a cascade fight to lose.
+     `will-change: transform` keeps the squish off the paint-blocking path
+     so it stays smooth in the same frame the colour inverts in — one
+     signal is instant, the other is now an actual, felt motion.
+
+     A dedicated reduced-motion branch below removes the scale ENTIRELY
+     (not just its animation) — the canvas is explicit that reduced
+     motion drops the scale but keeps the inversion, since one is colour
+     and the other is motion. */
   [data-role="meeting-agent-hold-to-talk"][data-pressed="true"] {
-    transform: scale(0.96);
-    transition: transform var(--duration-fast) var(--ease-standard);
+    transform: scale(0.9);
+    will-change: transform;
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -4813,6 +4867,65 @@ body, .font-fabrikam {
     [data-role="meeting-agent-hold-to-talk"][data-held="true"]
       [data-role="meeting-agent-hold-underline"] {
       width: 100%;
+      transition: none;
+    }
+  }
+
+  /* Task 01a0fa7e-afd7, design canvas 01a0fa80-da74 ("Burrow round 3:
+     floating heard text and hittable rail") — the floating "what Burrow
+     heard" overlay. Positioning (left/top/width) is set entirely by
+     `MeetingAskHeardOverlay` (`meeting_ask_heard_overlay.js`) as inline
+     styles, keyed to whichever row is actually held — no media query can
+     express "beside THIS row", so this file owns only what the canvas
+     specifies as fixed regardless of placement: the surface, the tether
+     rule, read-only enforcement, and the reduced-motion carve-out.
+
+     Read-only, belt and suspenders: the element itself is
+     `pointer-events-none` in its Tailwind classes already (inherited by
+     every plain child with no interactive role of its own), but the
+     canvas is explicit ("on the container AND every child") and nothing
+     here should depend on inheritance surviving a future edit that adds
+     an interactive node inside it. */
+  [data-role="meeting-ask-heard-overlay"],
+  [data-role="meeting-ask-heard-overlay"] * {
+    pointer-events: none;
+  }
+
+  /* The 2px primary tether rule, pointing at the key the overlay belongs
+     to. Desktop anchors it to the overlay's LEFT edge (the overlay sits
+     beside the row, to its right); the phone/fallback placement moves it
+     to the BOTTOM edge (the overlay sits above the sheet, tethering
+     downward toward the row it describes) — both ends of the same
+     `::before` pseudo-element, switched on `data-placement` rather than
+     a breakpoint, since the fallback can fire on a wide viewport too
+     (the overlap check in the hook). */
+  [data-role="meeting-ask-heard-overlay"]::before {
+    content: "";
+    position: absolute;
+    background-color: var(--color-primary);
+  }
+
+  [data-role="meeting-ask-heard-overlay"][data-placement="desktop"]::before {
+    inset-block: 0;
+    left: 0;
+    width: 2px;
+  }
+
+  [data-role="meeting-ask-heard-overlay"][data-placement="phone"]::before {
+    inset-inline: 0;
+    bottom: 0;
+    height: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    /* "No fade/slide transitions, lines replace in place instantly"
+       (canvas). The overlay's open/close is the only animated property
+       this file gives it (`transition-opacity` in the markup) — lines
+       themselves are never animated to begin with (plain text appended
+       into a `flex` `justify-end` window, see the hook's moduledoc), so
+       removing the opacity transition is the whole carve-out needed
+       here. */
+    [data-role="meeting-ask-heard-overlay"] {
       transition: none;
     }
   }

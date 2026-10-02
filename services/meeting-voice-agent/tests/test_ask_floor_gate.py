@@ -166,6 +166,27 @@ def test_attach_ask_floor_gate_detaches_input_immediately_before_any_signal():
     session.input.set_audio_enabled.assert_called_once_with(False)
 
 
+def test_attach_ask_floor_gate_logs_a_grep_able_banner_before_any_signal(caplog):
+    """Task 01a0fa7e stage 3: this line is the one thing that lets an
+    operator tell, from a live worker's own logs, whether the process
+    actually answering voice in a meeting is running code that includes
+    this gate at all -- `services/meeting-voice-agent` has no Dockerfile
+    and no CI workflow, so nothing else makes that observable. A worker
+    predating this gate cannot print this line because the line does not
+    exist in its build; this test pins that the CURRENT build always
+    does, synchronously, before any data-channel event could possibly
+    arrive."""
+    session = MagicMock()
+    room = _mock_room()
+
+    with caplog.at_level("INFO", logger="meeting_voice_agent.ask_floor_gate"):
+        ask_floor_gate.attach_ask_floor_gate(session, room, grace_ms=300)
+
+    assert any(
+        "ask-floor gate: attached and enforcing" in record.message for record in caplog.records
+    )
+
+
 def test_attach_ask_floor_gate_registers_data_received_handler():
     session = MagicMock()
     room = _mock_room()

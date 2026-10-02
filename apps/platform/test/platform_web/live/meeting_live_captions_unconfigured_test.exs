@@ -105,6 +105,13 @@ defmodule PlatformWeb.MeetingLiveCaptionsUnconfiguredTest do
   defp count(html, selector),
     do: html |> LazyHTML.from_fragment() |> LazyHTML.query(selector) |> Enum.count()
 
+  defp transcript_pane_text(html) do
+    html
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(~s([data-role="meeting-transcript-wrap"]))
+    |> LazyHTML.text()
+  end
+
   test "with no LiveKit triple the Transcript tab says captions are unavailable, outside the host",
        %{conn: conn, meeting: meeting} do
     # NAMED MUTATION: `captions_available={true}` in `meeting_live.html.heex`
@@ -116,7 +123,16 @@ defmodule PlatformWeb.MeetingLiveCaptionsUnconfiguredTest do
 
     assert html =~ "Captions are unavailable for this meeting"
     refute html =~ "No speech yet."
-    refute html =~ ~r/listening/i
+
+    # Scoped to the TRANSCRIPT PANE's own subtree, not the whole page —
+    # task 01a0fa7e-afd7 added a floating "Listening while you hold"
+    # status line to the left rail's Ask-floor overlay (an unrelated
+    # surface, canvas 01a0fa80-da74's own "Must keep" wording), and a
+    # whole-page regex here would false-positive on that unrelated copy.
+    # The negative control this guards — captions-unavailable copy must
+    # never imply active listening — is still enforced, just at the
+    # pane this test is actually about.
+    refute transcript_pane_text(html) =~ ~r/listening/i
 
     assert count(html, ~s([data-role="transcript-empty"])) == 1
 

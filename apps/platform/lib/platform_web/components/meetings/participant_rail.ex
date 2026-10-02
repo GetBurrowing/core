@@ -169,7 +169,6 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
   import PlatformWeb.Components.Meetings.AgentActivityBadge
 
   alias PlatformWeb.Components.Meetings.AgentActivityBadge
-  alias PlatformWeb.Components.Meetings.CandidateDisplay
 
   import PlatformWeb.AvatarComponents
   import PlatformWeb.CoreComponents, only: [icon: 1]
@@ -296,15 +295,25 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
     reads as held-by-other, however this map answers.
 
     The hold-to-talk `<button>` itself carries `phx-update=\"ignore\"`
-    (the hook owns its DOM), so it is patched from this assign only on
-    its FIRST render — correct for a viewer who joins mid-meeting, but a
-    press that lands on an ALREADY-mounted button cannot repaint the
-    button's own attributes. The wrapping element below is NOT ignored,
-    so `class`/`aria-disabled` on it stay live for the whole session;
-    the button's own `disabled` attribute is a same-render baseline, not
-    the mechanism this depends on for correctness — the real backstop is
+    (the hook owns its DOM), so `class`/`disabled` on it are patched from
+    this assign only on its FIRST render — correct for a viewer who joins
+    mid-meeting, but a press that lands on an ALREADY-mounted button
+    cannot repaint those. The wrapping element below is NOT ignored, so
+    `class`/`aria-disabled` on it stay live for the whole session; the
+    button's own `disabled` attribute is a same-render baseline, not the
+    mechanism this depends on for correctness — the real backstop is
     `AskFloor.claim/5` refusing the press server-side regardless of what
     the client shows.
+
+    CORRECTION (task 01a0fa7e-afd7 stage 5): `phx-update=\"ignore\"`'s
+    freeze above is narrower than it reads — it covers every attribute
+    EXCEPT `data-*` ones. LiveView's own `DOM.mergeAttrs(fromEl, toEl,
+    isIgnored: true)` still copies every `data-*` attribute from the
+    fresh server render onto the live button on each patch, which is
+    exactly why `data-pressed`/`data-held` below (the two attributes
+    `MeetingPushToTalk` owns and mutates) kept reverting to this
+    template's literal `\"false\"` moments after a real press — see that
+    hook's `updated()` for the fix and the full mechanism writeup.
     """
   )
 
@@ -788,8 +797,22 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                       # comment for why `!important` is what beats that),
                       # and this stage wants the inversion to land in the
                       # SAME FRAME as the press, not fade into it.
+                      #
+                      # Round 3 (task 01a0fa7e-afd7): `ring-2` -> `ring-[3px]`
+                      # and a dedicated `ring-offset-2` against the inverted
+                      # (black) fill — per the dispatch's own menu of
+                      # strengthenings ("a more obvious ring/glow"). The
+                      # offset matters more than the extra pixel here: at
+                      # `ring-2` with no offset the ring sits flush against
+                      # the button's own edge and partially reads as the
+                      # button's border, not a separate "something changed"
+                      # signal; the offset (rendered in the inverted
+                      # `primary-content` fill it now sits on, via
+                      # `ring-offset-primary-content`) puts a visible gap
+                      # between the button's edge and the ring.
                       "data-[pressed=true]:bg-primary-content data-[pressed=true]:text-primary",
-                      "data-[pressed=true]:ring-2 data-[pressed=true]:ring-primary",
+                      "data-[pressed=true]:ring-[3px] data-[pressed=true]:ring-primary",
+                      "data-[pressed=true]:ring-offset-2 data-[pressed=true]:ring-offset-primary-content",
                       "data-[rejected=no-microphone]:text-error",
                       "data-[rejected=microphone-muted]:text-error",
                       "data-[rejected=pointer-lost]:text-error",
@@ -1292,48 +1315,24 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
            level`), reusing `paintBars` from `./lib/ptt_waveform` rather
            than a second `AnalyserNode` or a duration-filling progress
            bar — the canvas is explicit that a bar which fills to 100%
-           and stops is the wrong reading here.
+           and stops is the wrong reading here. It stays on THIS card: it
+           is the OUTGOING mic level ("you are being captured"), a
+           different fact from what Burrow heard.
 
-           The transcript line is scaffolding for stage 3 (OUT OF SCOPE
-           here — "no live transcript text yet"): the empty node reserves
-           the card's shape so stage 3 can wire live text into it without
-           relayout, at the size/colour the canvas specifies for that
-           text ahead of time (`text-base text-base-content`, one step up
-           from the chat body's `text-sm`, no mono/display font — "it is
-           speech, not data").
-
-           Task 01a0e47c stage 3, design canvas 01a0e47d-3005: the
-           transcript/meter pair sits inside its own dashed "HEARD box"
-           (`meeting-ask-heard-box`), matching Harper's own mockup
-           (canvas 01a0e47c-a1b4) rather than the flat card this used to
-           be. `rounded-box border-dashed border-base-content/30
-           bg-base-100` is the direction's own palette row, not
-           `border-edge` (the dashed token `call_recap.ex`/`call_shell.ex`
-           use elsewhere): the direction did the contrast math for THIS
-           specific box on THIS specific fill and rejected the obvious
-           choices for it by name ("cyan on white is 1.79:1 and fails as
-           a visible border"). A screenshot render of `border-edge` here
-           measured the same failure — `--edge` is `oklch(88% 0 0)` on
-           `--color-base-100`'s `oklch(100% 0 0)` in the light theme, a
-           12-point gap that reads as barely-there on the same white
-           fill, where `base-content/30` (black at 30% opacity over
-           white) is the direction's actual answer and the one that
-           paints visibly. `base-content` at a fractional opacity is
-           still a semantic slot, not a hand-picked hex — the same
-           pattern `text-base-content/60` already uses throughout this
-           file — so this is not a new one-off token, just the specific
-           slot the direction names for this specific box. The step label inside it
-           (`meeting-ask-step`) reads `CandidateDisplay.stage_label(:heard)`
-           — the SAME "1 · heard" ladder rung `CandidateRail` now paints
-           on the card this box becomes (see that module's `live_card/1`),
-           so the number is not a running counter invented here: it is
-           the one MeetingCandidate rung both surfaces already agree on.
-           Per the direction's own self-critique, continuity is carried
-           by the SAME OBJECT flying into the card
-           (`MeetingAskFloorVeil._flyCard`), not by the numbers matching
-           a sequence — the shared "1 · heard" label is what lets a
-           viewer read that this box IS step 1 of the ladder the landed
-           card keeps climbing, nothing more. --%>
+           ROUND 3 (task 01a0fa7e-afd7, canvas 01a0fa80-da74): the dashed
+           "HEARD box" (`meeting-ask-heard-box`) that used to sit here,
+           carrying the live transcript text and growing with every word,
+           is RETIRED as a heard-text holder. That auto-growth inside a
+           CENTRED card was the reflow Harper's round-3 report named —
+           every word visibly moved the card, and the card sits over the
+           whole stage, so it moved everything under it too. The live
+           text now lives in its own fixed-size, absolutely-positioned
+           overlay (`MeetingAskHeardOverlay`, rendered as a sibling of
+           this veil below) that never grows and is never a sibling in
+           anyone's layout flow. This card keeps only the label and the
+           meter above, plus the interrupted-error line below — the
+           outcome choreography (`MeetingAskFloorVeil._flyCard`), not the
+           live heard text. --%>
       <div
         :if={@hold_to_talk?}
         id={"#{@id_prefix}-ask-veil"}
@@ -1354,30 +1353,14 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
           >
             Asking…
           </span>
-          <div
-            class="flex flex-col gap-2 rounded-box border border-dashed border-base-content/30 bg-base-100 p-3"
-            data-role="meeting-ask-heard-box"
-          >
+          <div class="flex h-6 items-center gap-1" data-role="meeting-ask-meter">
             <span
-              class="text-[10px] font-semibold uppercase tracking-wider text-base-content/60"
-              data-role="meeting-ask-step"
+              :for={_bar <- 1..12}
+              data-ptt-bar
+              class="h-full w-1 origin-center rounded-full bg-primary opacity-70 transition-transform duration-75"
+              style="transform: scaleY(0.08)"
             >
-              {CandidateDisplay.stage_label(:heard)}
             </span>
-            <p
-              class="min-h-10 text-base text-base-content"
-              data-role="meeting-ask-transcript"
-            >
-            </p>
-            <div class="flex h-6 items-center gap-1" data-role="meeting-ask-meter">
-              <span
-                :for={_bar <- 1..12}
-                data-ptt-bar
-                class="h-full w-1 origin-center rounded-full bg-primary opacity-70 transition-transform duration-75"
-                style="transform: scaleY(0.08)"
-              >
-              </span>
-            </div>
           </div>
 
           <%!-- Task 01a0f842 stage 2, canvas 01a0f846-cfb1, item 2 — the
@@ -1385,10 +1368,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                while this card is open. Per the direction's "Interrupted"
                state, a refusal never closes the card silently: it shows
                here, inside the still-open card, for a couple of seconds,
-               and only THEN does `MeetingAskFloorVeil._close()` run. A
-               sibling of the heard box (not inside it) so the dashed
-               border keeps meaning "this is what Burrow heard" with
-               nothing else drawn inside it.
+               and only THEN does `MeetingAskFloorVeil._close()` run.
 
                Same icon-plus-rule pattern as the row's own
                `meeting-agent-hold-feedback` line above (error only — this
@@ -1409,6 +1389,86 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
             >
             </span>
             <span data-role="meeting-ask-error-text" class="min-w-0 flex-1 break-words"></span>
+          </div>
+        </div>
+      </div>
+
+      <%!-- Task 01a0fa7e-afd7, design canvas 01a0fa80-da74 ("Burrow round
+           3: floating heard text and hittable rail"). The floating
+           "what Burrow heard" overlay — ONE per rendered rail, same
+           singleton reasoning as the veil above, and entirely client-
+           driven by `MeetingAskHeardOverlay` off the SAME
+           `meeting:push-to-talk-*` window events, so it opens/closes in
+           lockstep with the veil without either hook holding a reference
+           to the other.
+
+           OUT OF PAGE FLOW, ALWAYS. `fixed` positioning with `left`/
+           `top`/`width` set entirely by the hook's `_reposition` (there
+           is no Tailwind breakpoint variant here on purpose — the
+           desktop anchor depends on WHICH row is held, which no media
+           query can express) is what makes "nothing in the rail, the row
+           or the stage ever moves" true regardless of transcript length:
+           this element is never a sibling in anyone else's flex/grid
+           flow, so it has nothing to push.
+
+           FIXED SIZE FROM OPEN. The inner window below is a hard 72px
+           (3 lines at 16px/1.5) with `overflow-hidden`; the flex-col
+           `justify-end` wrapper inside it is what makes new text push
+           old text up and out the top for free, with no JS scroll
+           management — see the hook's moduledoc.
+
+           `pointer-events-none` on the container AND `[data-role=
+           "meeting-ask-heard-overlay"] *` in `app.css` on every
+           descendant (canvas: "nothing in it takes a click") — this is
+           read-only, and the hook's own overlap check
+           (`_wouldOverlapAControl`) is what keeps it off the Ask key,
+           mute/remove buttons and any "Try again" line in the first
+           place; `pointer-events-none` is the backstop for the case
+           that check cannot see coming (a control added later without
+           updating the selector list there).
+
+           `phx-update="ignore"`: the hook owns the inline position
+           styles and the status/text nodes' content directly — those are
+           never in this template's markup at all, so no patch can touch
+           them.
+
+           CORRECTION (task 01a0fa7e-afd7 stage 5/6, round 2 of this
+           task's review): `data-open`/`data-placement` are NOT actually
+           protected by `phx-update="ignore"`, despite this comment
+           previously claiming the hook "owns" them the same way it owns
+           the inline styles. `DOM.mergeAttrs(fromEl, toEl, isIgnored:
+           true)` still copies every `data-*` attribute the fresh server
+           render carries onto this ignored element on each patch — this
+           template's own literals above (`data-open="false"`,
+           `data-placement="desktop"`) are exactly what land back on the
+           live element when that happens, which is precisely why a real
+           transcript chunk could arrive while `data-open` had been
+           transiently stomped back to `"false"` mid-hold. Same mechanism
+           `MeetingPushToTalk`'s own `ask_floor_holders` doc above was
+           already corrected for; see `MeetingAskHeardOverlay.updated()`
+           for the fix. --%>
+      <div
+        :if={@hold_to_talk?}
+        id={"#{@id_prefix}-ask-heard-overlay"}
+        phx-hook="MeetingAskHeardOverlay"
+        phx-update="ignore"
+        class="pointer-events-none fixed z-50 flex flex-col gap-1 rounded-box bg-base-300 p-3 shadow-md opacity-0 transition-opacity duration-150 data-[open=true]:opacity-100"
+        data-role="meeting-ask-heard-overlay"
+        data-open="false"
+        data-placement="desktop"
+        aria-hidden="true"
+      >
+        <span
+          data-role="meeting-ask-heard-status"
+          class="text-[12px] font-medium text-base-content/60"
+        >
+          Listening while you hold
+        </span>
+        <div class="h-[72px] overflow-hidden" data-role="meeting-ask-heard-window">
+          <div
+            data-role="meeting-ask-heard-text"
+            class="flex min-h-full flex-col justify-end text-base leading-6 text-base-content [overflow-wrap:anywhere]"
+          >
           </div>
         </div>
       </div>

@@ -724,6 +724,132 @@ describe("the hold-threshold events", () => {
   })
 })
 
+// ── Surviving a LiveView patch mid-hold (task 01a0fa7e-afd7 stage 5) ─────
+//
+// This is the one place in this file that DOES assert on `data-pressed`/
+// `data-held` directly, and that is not a contradiction of this file's own
+// moduledoc: the earlier tests avoid asserting on "looks pressed" because
+// that would be a proxy for mic-capture correctness, which the attribute
+// cannot prove. Here the ATTRIBUTE ITSELF is the thing under test — the
+// live bug was that `phx-update="ignore"` on this button protects its
+// CHILDREN from a server patch but NOT its own `data-*` attributes
+// (confirmed by reading LiveView's `dom.js#mergeAttrs` / `view.js#
+// triggerBeforeUpdateHook`), so `participant_rail.ex`'s literal
+// `data-pressed="false"`/`data-held="false"` kept landing back on top of
+// a real, still-active press moments after it started. There is no real
+// morphdom in this harness, so the patch is simulated the same way
+// LiveView's own code does it: stomp the two attributes to the template's
+// literal default, THEN call `updated()` — the exact lifecycle callback
+// LiveView fires on this hook specifically because an ignored node's
+// `dataset` no longer matches the fresh render.
+function simulateLiveViewPatchStomp(el) {
+  el.dataset.pressed = "false"
+  el.dataset.held = "false"
+}
+
+describe("surviving a LiveView patch mid-hold", () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it("restores data-pressed after a patch stomps it moments into the press — not just once", () => {
+    vi.useFakeTimers()
+    const { hook, el } = mountHook(roomWith([micPublication()]))
+
+    el.fire("pointerdown", { button: 0 })
+    expect(el.dataset.pressed).toBe("true")
+
+    // The exact regression shape the review captured: a server round trip
+    // (here, `push_to_talk_press`'s own re-render of this row) lands
+    // ~15-35ms after press-start and reverts the attribute.
+    vi.advanceTimersByTime(25)
+    simulateLiveViewPatchStomp(el)
+    expect(el.dataset.pressed).toBe("false") // the bug, reproduced directly
+    hook.updated()
+    expect(el.dataset.pressed).toBe("true") // the fix: restored immediately
+
+    // Sampled across a FULL second of continued holding, at multiple
+    // points — not just the one moment right after press this task's own
+    // dispatch calls out as insufficient. Every patch that lands mid-hold
+    // must be corrected, not just the first.
+    for (const elapsed of [100, 300, 500, 700, 1000]) {
+      vi.advanceTimersByTime(100)
+      simulateLiveViewPatchStomp(el)
+      hook.updated()
+      expect(el.dataset.pressed).toBe("true")
+    }
+
+    el.fire("pointerup", {})
+    expect(el.dataset.pressed).toBe("false")
+  })
+
+  it("restores data-held the same way once the hold has crossed the 380ms threshold", () => {
+    vi.useFakeTimers()
+    const { hook, el } = mountHook(roomWith([micPublication()]))
+
+    el.fire("pointerdown", { button: 0 })
+    vi.advanceTimersByTime(HOLD_THRESHOLD_MS + 20)
+    expect(el.dataset.held).toBe("true")
+
+    simulateLiveViewPatchStomp(el)
+    expect(el.dataset.held).toBe("false")
+    hook.updated()
+    expect(el.dataset.held).toBe("true")
+    // A patch's stomp of `data-pressed` must not come back as `data-held`
+    // when the hold hasn't actually crossed the threshold at the time of
+    // the patch — `updated()` must read `_heldLongEnough`, not assume.
+    expect(el.dataset.pressed).toBe("true")
+  })
+
+  it("does NOT resurrect data-held if a patch lands before the 380ms threshold", () => {
+    vi.useFakeTimers()
+    const { hook, el } = mountHook(roomWith([micPublication()]))
+
+    el.fire("pointerdown", { button: 0 })
+    vi.advanceTimersByTime(100) // well under HOLD_THRESHOLD_MS
+    simulateLiveViewPatchStomp(el)
+    hook.updated()
+
+    // Correct in both directions: pressed is restored, held stays false
+    // because the hold genuinely has not crossed the threshold yet.
+    expect(el.dataset.pressed).toBe("true")
+    expect(el.dataset.held).toBe("false")
+  })
+
+  it("mirrors the correction onto the row — the OTHER element this same bug class hits", () => {
+    const row = { dataset: {} }
+    const { hook, el } = mountHook(roomWith([micPublication()]))
+    el.closest = (sel) => (sel === '[data-participant-type="agent"]' ? row : null)
+
+    el.fire("pointerdown", { button: 0 })
+    expect(row.dataset.pressed).toBe("true")
+
+    // The row has no `phx-update="ignore"` at all, so the ORDINARY
+    // (non-ignored) merge path re-stamps its own literal
+    // `data-pressed="false"` on any patch that touches it — same failure
+    // mode, different code path, same fix: `updated()` re-mirrors from
+    // this hook's own `_pressed`.
+    row.dataset.pressed = "false"
+    hook.updated()
+    expect(row.dataset.pressed).toBe("true")
+  })
+
+  it("after a real release, a late patch does not resurrect a stale pressed state", () => {
+    const { hook, el } = mountHook(roomWith([micPublication()]))
+
+    el.fire("pointerdown", { button: 0 })
+    el.fire("pointerup", {})
+    expect(el.dataset.pressed).toBe("false")
+
+    // A patch arriving after the press has genuinely ended must not
+    // repaint `true` from some stale closure — `updated()` always reads
+    // CURRENT hook state, never a value captured at press-time.
+    el.dataset.pressed = "true" // a hypothetical unrelated patch artifact
+    hook.updated()
+    expect(el.dataset.pressed).toBe("false")
+  })
+})
+
 // ── Vibration (item 1, task 01a0f842 stage 1, canvas 01a0f846-cfb1) ───────
 //
 // Progressive enhancement only: a 10ms pulse at press and again at the

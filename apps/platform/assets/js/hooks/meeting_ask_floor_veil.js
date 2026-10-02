@@ -77,6 +77,20 @@ import { paintBars } from "./lib/ptt_waveform"
  * that event is ever lost, the veil still resolves (a plain fade)
  * rather than sitting open forever.
  *
+ * ## The live heard text moved out — round 3 (task 01a0fa7e-afd7)
+ *
+ * This hook no longer owns the transcript text. Round 2 put it inside
+ * this card's dashed "heard box" (`meeting-ask-heard-box`), which grew
+ * with every word and visibly reflowed the centred card over the stage —
+ * exactly the defect Harper's round-3 report named. The design canvas for
+ * this round (`01a0fa80-da74`) moves that text into its own fixed-size,
+ * absolutely-positioned overlay owned by `MeetingAskHeardOverlay`
+ * (`meeting_ask_heard_overlay.js`), decoupled from this hook the same way
+ * this hook is decoupled from `MeetingPushToTalk` — window events, not a
+ * shared reference. This card keeps the label, the live mic-level meter,
+ * and the outcome choreography (fly/crumble/interrupted-error) below;
+ * `meeting_ask_transcript_chunk` is no longer subscribed here at all.
+ *
  * ## Never closing while the key is still physically held (task 01a0f842
  * stage 2, canvas 01a0f846-cfb1, item 2)
  *
@@ -124,7 +138,6 @@ const MeetingAskFloorVeil = {
 
     this._label = this.el.querySelector('[data-role="meeting-ask-label"]')
     this._bars = Array.from(this.el.querySelectorAll("[data-ptt-bar]"))
-    this._transcript = this.el.querySelector('[data-role="meeting-ask-transcript"]')
     this._card = this.el.querySelector('[data-role="meeting-ask-card"]')
     this._error = this.el.querySelector('[data-role="meeting-ask-error"]')
     this._errorText = this.el.querySelector('[data-role="meeting-ask-error-text"]')
@@ -214,17 +227,14 @@ const MeetingAskFloorVeil = {
     window.addEventListener("meeting:push-to-talk-early-release", this._onEarlyRelease)
     window.addEventListener("meeting:push-to-talk-rejected", this._onRejected)
 
-    // Task 01a0cf5c stage 3 — the live segment feed, and the release
-    // verdict. Both are filtered on `agent_id` for the same reason
-    // `push_to_talk_rejected` already is (`meeting_push_to_talk.js`):
-    // this is one hook instance reacting to a push meant for whichever
-    // agent is actually held, on a page that can render more than one
-    // hold control.
-    this.handleEvent("meeting_ask_transcript_chunk", (payload) => {
-      if (!payload || payload.agent_id !== this._activeAgentId) return
-      this._appendTranscript(payload.text)
-    })
-
+    // Task 01a0cf5c stage 3 — the release verdict. Filtered on `agent_id`
+    // for the same reason `push_to_talk_rejected` already is
+    // (`meeting_push_to_talk.js`): this is one hook instance reacting to
+    // a push meant for whichever agent is actually held, on a page that
+    // can render more than one hold control. The live transcript feed
+    // (`meeting_ask_transcript_chunk`) is no longer subscribed here —
+    // see the moduledoc's "the live heard text moved out" — it is owned
+    // by `MeetingAskHeardOverlay` now.
     this.handleEvent("meeting_ask_outcome", (payload) => {
       if (!payload || payload.agent_id !== this._activeAgentId) return
       this._clearOutcomeTimer()
@@ -263,20 +273,10 @@ const MeetingAskFloorVeil = {
     if (this._label) {
       this._label.textContent = name ? `Asking ${name}…` : "Asking…"
     }
-    if (this._transcript) {
-      this._transcript.textContent = ""
-    }
     this.el.dataset.open = "true"
     this._pendingOutcome = null
     this._hideError()
     paintBars(this._bars, 0)
-  },
-
-  _appendTranscript(text) {
-    if (!this._transcript || typeof text !== "string" || text === "") return
-
-    const existing = this._transcript.textContent || ""
-    this._transcript.textContent = existing ? `${existing} ${text}` : text
   },
 
   // The meter stops moving (nothing more will be sampled) but the card

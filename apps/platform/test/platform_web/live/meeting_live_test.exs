@@ -7893,7 +7893,20 @@ defmodule PlatformWeb.MeetingLiveTest do
       # green anyway, because the value came from `@livekit_url`, which the
       # signed-in path never assigns — the very defect 01a0693d fixed.
       assert count(html, ~s([data-role="transcript-empty"])) == 1
-      refute html =~ "Listening"
+
+      # Scoped to the TRANSCRIPT PANE's own subtree, not the whole page —
+      # task 01a0fa7e-afd7 added a floating "Listening while you hold"
+      # status line to the left rail's Ask-floor overlay (an unrelated
+      # surface, canvas 01a0fa80-da74's own "Must keep" wording), and a
+      # whole-page `refute html =~ "Listening"` here would false-positive
+      # on that unrelated copy.
+      transcript_pane_text =
+        html
+        |> frag()
+        |> LazyHTML.query(~s([data-role="meeting-transcript-wrap"]))
+        |> LazyHTML.text()
+
+      refute transcript_pane_text =~ "Listening"
     end
 
     # Task 01a06524 stage 1. This REPLACES the "toggling adds/removes

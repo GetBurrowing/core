@@ -34,7 +34,6 @@ function fakeCard() {
 
 function mountHook({ barCount = 12 } = {}) {
   const label = { textContent: "" }
-  const transcript = { textContent: "" }
   const card = fakeCard()
   const bars = Array.from({ length: barCount }, fakeBar)
   const error = { dataset: {} }
@@ -44,7 +43,6 @@ function mountHook({ barCount = 12 } = {}) {
     dataset: {},
     querySelector(sel) {
       if (sel === '[data-role="meeting-ask-label"]') return label
-      if (sel === '[data-role="meeting-ask-transcript"]') return transcript
       if (sel === '[data-role="meeting-ask-card"]') return card
       if (sel === '[data-role="meeting-ask-error"]') return error
       if (sel === '[data-role="meeting-ask-error-text"]') return errorText
@@ -92,7 +90,7 @@ function mountHook({ barCount = 12 } = {}) {
   })
   hook.mounted()
 
-  return { hook, el, label, transcript, card, bars, error, errorText, fire, serverHandlers }
+  return { hook, el, label, card, bars, error, errorText, fire, serverHandlers }
 }
 
 beforeEach(() => {
@@ -288,37 +286,20 @@ describe("closing", () => {
   })
 })
 
-// ── Task 01a0cf5c stage 3: the live transcript feed and the server-
-// decided release outcome (fly / crumble / the safety-net fade) ──────────
+// ── Task 01a0cf5c stage 3: the server-decided release outcome (fly /
+// crumble / the safety-net fade) ──────────────────────────────────────────
+//
+// Round 3 (task 01a0fa7e-afd7, canvas 01a0fa80-da74) moved the live
+// transcript feed OFF this hook entirely, onto `MeetingAskHeardOverlay`
+// (see `meeting_ask_heard_overlay.test.js`) — this hook no longer
+// subscribes to `meeting_ask_transcript_chunk` at all, which is itself
+// asserted below.
 
-describe("the live transcript feed", () => {
-  it("appends a chunk addressed to the held agent, and ignores one for a different agent", () => {
-    const { transcript, fire, serverHandlers } = mountHook()
+describe("the live transcript feed has moved off this hook", () => {
+  it("never registers a handler for meeting_ask_transcript_chunk", () => {
+    const { serverHandlers } = mountHook()
 
-    fire("meeting:push-to-talk-armed", { agentId: "agent-123", agentName: "Atlas" })
-    fire("meeting:push-to-talk-held", { agentId: "agent-123", agentName: "Atlas" })
-
-    serverHandlers["meeting_ask_transcript_chunk"]({ agent_id: "some-other-agent", text: "nope" })
-    expect(transcript.textContent).toBe("")
-
-    serverHandlers["meeting_ask_transcript_chunk"]({ agent_id: "agent-123", text: "hello" })
-    expect(transcript.textContent).toBe("hello")
-
-    serverHandlers["meeting_ask_transcript_chunk"]({ agent_id: "agent-123", text: "there" })
-    expect(transcript.textContent).toBe("hello there")
-  })
-
-  it("clears on the NEXT press, so a new ask never shows the previous one's words", () => {
-    const { transcript, fire, serverHandlers } = mountHook()
-
-    fire("meeting:push-to-talk-armed", { agentId: "agent-123", agentName: "Atlas" })
-    fire("meeting:push-to-talk-held", { agentId: "agent-123", agentName: "Atlas" })
-    serverHandlers["meeting_ask_transcript_chunk"]({ agent_id: "agent-123", text: "hello" })
-    expect(transcript.textContent).toBe("hello")
-
-    fire("meeting:push-to-talk-armed", { agentId: "agent-123", agentName: "Atlas" })
-    fire("meeting:push-to-talk-held", { agentId: "agent-123", agentName: "Atlas" })
-    expect(transcript.textContent).toBe("")
+    expect(serverHandlers["meeting_ask_transcript_chunk"]).toBeUndefined()
   })
 })
 
