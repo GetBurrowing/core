@@ -1142,6 +1142,111 @@ defmodule Platform.GameStreamTest do
     status.session_id
   end
 
+  # The plan's control, typed as a literal (task 01a0fe45 stage 1), not read
+  # back from the surface under test.
+  @touch_control %{slop_px: 8, move_hz: 60, variant: nil}
+
+  describe "the game_stream_touch capability gate (01a0fe45)" do
+    setup ctx do
+      task = task!(ctx.project, "in_review")
+      heads!(%{{"rowanellis/voltron", branch(task)} => @sha})
+      %{task: task}
+    end
+
+    # The touch map as each surface the browser reads carries it: the start
+    # status, a later status, the attach reply's status and roster, and the
+    # roster call. They must all agree.
+    defp touch_maps(status) do
+      id = status.session_id
+      {:ok, later} = GameStream.status(id)
+      {:ok, attached} = GameStream.attach_viewer(id, viewer!())
+      {:ok, roster} = GameStream.roster(id)
+      [status.touch, later.touch, attached.touch, attached.roster.touch, roster.touch]
+    end
+
+    test "a host declaring game_stream_touch gets touch enabled with the control tuning",
+         ctx do
+      host!(ctx.user, ["game_stream_host", "game_stream_touch"])
+      {:ok, status} = start!(ctx.task)
+
+      for touch <- touch_maps(status),
+          do: assert(touch == Map.put(@touch_control, :enabled, true))
+    end
+
+    test "a touch host that is also multi is enabled too", ctx do
+      host!(ctx.user, ["game_stream_host", "game_stream_multi", "game_stream_touch"])
+      {:ok, status} = start!(ctx.task)
+      assert status.multi
+      for touch <- touch_maps(status), do: assert(touch.enabled == true)
+    end
+
+    test "a host with only game_stream_host, or with game_stream_multi, is NOT enabled",
+         ctx do
+      for features <- [["game_stream_host"], ["game_stream_host", "game_stream_multi"]] do
+        task = task!(ctx.project, "in_review")
+        heads!(%{{"rowanellis/voltron", branch(task)} => @sha})
+        runtime = host!(ctx.user, features)
+        {:ok, status} = start!(task)
+        assert status.host_runtime_id == runtime.runtime_id
+
+        # Disabled, and the tuning is still reported so the arm stays visible.
+        for touch <- touch_maps(status),
+            do: assert(touch == Map.put(@touch_control, :enabled, false))
+
+        # Gone before the next pass, so discovery cannot pick this host again.
+        stop_all_sessions()
+        RuntimePresence.untrack(runtime.runtime_id)
+      end
+    end
+
+    test "nothing about touch is sent to the host: play_session_start is unchanged", ctx do
+      host!(ctx.user, ["game_stream_host", "game_stream_touch"])
+      {:ok, _status} = start!(ctx.task)
+      assert_receive %Broadcast{event: "play_session_start", payload: payload}
+
+      assert Map.keys(payload) |> Enum.sort() ==
+               ~w(branch encoder ice_servers idle_timeout_s repo_url session_id sha task_id)a
+    end
+
+    test "a promoted game_stream.touch default replaces the control", ctx do
+      Repo.insert!(
+        Platform.Experiments.SurfaceDefault.changeset(%Platform.Experiments.SurfaceDefault{}, %{
+          surface_key: "game_stream.touch",
+          surface_target: "play_session.start",
+          seq: 1,
+          kind: "promote",
+          payload: %{"slop_px" => 0, "move_hz" => 30}
+        })
+      )
+
+      host!(ctx.user, ["game_stream_host", "game_stream_touch"])
+      {:ok, status} = start!(ctx.task)
+
+      for touch <- touch_maps(status),
+          do: assert(touch == %{enabled: true, slop_px: 0, move_hz: 30, variant: nil})
+    end
+  end
+
+  describe "touch_host?/1 (01a0fe45)" do
+    test "true only when the declared features list game_stream_touch" do
+      features = fn list -> %{metadata: %{"client_info" => %{"features" => list}}} end
+
+      assert GameStream.touch_host?(features.(["game_stream_host", "game_stream_touch"]))
+      refute GameStream.touch_host?(features.(["game_stream_host"]))
+      refute GameStream.touch_host?(features.(["game_stream_host", "game_stream_multi"]))
+      refute GameStream.touch_host?(features.([]))
+    end
+
+    # Host discovery refuses an undeclared host before start_session/2 asks,
+    # so only a direct call reaches this arm.
+    test "undeclared features fail closed" do
+      refute GameStream.touch_host?(%{metadata: %{}})
+      refute GameStream.touch_host?(%{metadata: %{"client_info" => %{}}})
+      refute GameStream.touch_host?(%{metadata: %{"client_info" => %{"features" => "touch"}}})
+      refute GameStream.touch_host?(%{metadata: nil})
+    end
+  end
+
   describe "summarize_stats/1" do
     test "one slot's figures are the row's figures exactly (identical to v1)" do
       one = %{0 => %{rtt_p50_ms: 31.0, rtt_p95_ms: 48.5, fps_avg: 59.9, connection_path: "lan"}}

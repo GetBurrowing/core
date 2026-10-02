@@ -56,6 +56,15 @@
  * carries it back, and a signal refused as `moved` (another window is the
  * viewer now) shows "Continued in another window" instead of hanging on
  * Connecting.
+ *
+ * Touch (task 01a0fe45 stage 2, `lib/game_stream_touch.js`): when core says
+ * the host takes touch (`touch.enabled` on the status and roster), this copy
+ * holds the stream, the peer is a player and the frame is live, the well gets
+ * `data-gs-touch="on"` (`touch-action: none`) and a touch or pen on the
+ * frame goes to the game, through the same router as keys. A mouse never
+ * does. On a phone (coarse pointer) the Click to play panel is hidden so the
+ * first tap reaches the game. Every touch is cancelled when the window blurs
+ * or hides, the channel or peer closes, src 0's slot goes, or touch turns off.
  */
 
 import { AudioPlayback, routeInboundTrack } from "./lib/game_stream_audio.js"
@@ -101,6 +110,7 @@ import {
   watchingTitle,
 } from "./lib/game_stream_roster.js"
 import { SessionMemo, attachOutcome, signalMoved } from "./lib/game_stream_session.js"
+import { TouchForwarder, contentRect, normalizeTouch, tallAspect } from "./lib/game_stream_touch.js"
 import { panelFor, reclaim, stuck, stuckAt, suspendedPanel, twinHeldPanel } from "./lib/game_stream_attach_state.js"
 
 const claims = new Map()
@@ -115,6 +125,10 @@ const PROBE_IDLE_STOP_MS = 30000
 const STATS_PUSH_EVERY_MS = 5000
 const GATHER_TIMEOUT_MS = 3000
 const BLINK_MS = 250
+// The compat click a browser fires after a forwarded touch's pointerup lands
+// within this window; the well swallows it (no click-to-capture).
+const TOUCH_CLICK_SWALLOW_MS = 700
+const POINTER_EVENTS = ["pointerdown", "pointermove", "pointerup", "pointercancel", "lostpointercapture"]
 
 const RUNNING = ["building", "connecting", "live"]
 
@@ -178,6 +192,7 @@ const GameStream = {
 
     const q = sel => this.el.querySelector(sel)
     this.video = q("[data-gs-video]")
+    this.well = q("[data-gs-well]")
     this.audioEl = q("[data-gs-audio]")
     this.audioStateEl = q("[data-gs-audio-state]")
     this.muteBtn = q("[data-gs-mute]")
@@ -299,6 +314,91 @@ const GameStream = {
       onInput: () => (this.lastInputAt = Date.now()),
       doc,
     })
+    // Touch (task 01a0fe45): off until core's status or roster says the host
+    // takes it. The forwarder writes only through the router.
+    this.touchCfg = normalizeTouch(null)
+    this.touchOn = false
+    this.touchClickUntil = 0
+    this.touches = new TouchForwarder({
+      isEnabled: () => this.touchOn,
+      send: m => this.router.touch(m),
+      rect: () => this.touchRect(),
+      now: () => performance.now(),
+      slopPx: this.touchCfg.slopPx,
+      moveHz: this.touchCfg.moveHz,
+    })
+  },
+
+  // The displayed frame's box, recomputed per event from the element's rect
+  // and the decoded size, so rotation, resize, fullscreen and a resolution
+  // change mid-stream all map right. CSS px throughout: no devicePixelRatio.
+  touchRect() {
+    const v = this.video
+    if (!v || typeof v.getBoundingClientRect !== "function") return null
+    return contentRect(v.getBoundingClientRect(), v.videoWidth, v.videoHeight)
+  },
+
+  setTouch(raw) {
+    this.touchCfg = normalizeTouch(raw)
+    this.touches.configure({ slopPx: this.touchCfg.slopPx, moveHz: this.touchCfg.moveHz })
+    this.renderCapture()
+  },
+
+  // Touch goes to the game only from the copy holding the stream (not a
+  // hidden twin), for a player, on a live frame, on a host that takes it.
+  touchWanted() {
+    return (
+      !this.dead &&
+      this.touchCfg.enabled &&
+      this.active() &&
+      !this.suspended &&
+      this.router.player &&
+      this.panel === "live"
+    )
+  },
+
+  // A phone's taps go to the game, so its live frame has nothing to click.
+  touchHidesPanel() {
+    return this.coarse && this.touchWanted()
+  },
+
+  renderTouch() {
+    const on = this.touchWanted()
+    if (on !== this.touchOn) {
+      if (!on) this.touches.releaseAll()
+      this.touchOn = on
+    }
+    if (!this.well) return
+    if (on) this.well.setAttribute("data-gs-touch", "on")
+    else this.well.removeAttribute("data-gs-touch")
+  },
+
+  onPointer(e) {
+    // A control on the frame (a panel's button) stays a control.
+    if (e.type === "pointerdown" && e.target && e.target.closest && e.target.closest("button")) return
+    if (!this.touches[e.type].call(this.touches, e)) return
+    e.preventDefault()
+    this.touchClickUntil = Date.now() + TOUCH_CLICK_SWALLOW_MS
+    if (e.type !== "pointerdown") return
+    this.audio.gesture()
+    this.lastInputAt = Date.now()
+    try {
+      if (this.well && this.well.setPointerCapture) this.well.setPointerCapture(e.pointerId)
+    } catch (_) {}
+  },
+
+  // A portrait stream's well takes the frame's aspect ratio (capped in CSS at
+  // 80svh); a 16:9-or-wider one keeps aspect-video.
+  renderAspect() {
+    if (!this.well || !this.video || !this.well.style) return
+    const aspect = tallAspect(this.video.videoWidth, this.video.videoHeight)
+    if (aspect) {
+      this.well.style.setProperty("--gs-aspect", aspect)
+      this.well.setAttribute("data-gs-tall", "")
+    } else {
+      this.well.style.removeProperty("--gs-aspect")
+      this.well.removeAttribute("data-gs-tall")
+    }
   },
 
   // Takes the stream back when this copy is on screen and the twin holding
@@ -348,6 +448,7 @@ const GameStream = {
 
   destroyed() {
     this.dead = true
+    if (this.touches) this.touches.releaseAll()
     clearInterval(this.timer)
     clearTimeout(this.stuckTimer)
     for (const t of this.blinkTimers.values()) clearTimeout(t)
@@ -389,9 +490,19 @@ const GameStream = {
       this.dispatch({ type: "click", live: this.canCapture() })
     })
     add(this.el.querySelector("[data-gs-well]"), "click", () => {
+      // A forwarded touch's trailing compat click: the touch went to the game.
+      if (Date.now() < this.touchClickUntil) {
+        this.touchClickUntil = 0
+        return
+      }
       this.audio.gesture()
       if (this.canCapture()) this.dispatch({ type: "click", live: true })
     })
+    if (this.well) for (const type of POINTER_EVENTS) add(this.well, type, e => this.onPointer(e))
+    if (this.video) {
+      add(this.video, "loadedmetadata", () => this.renderAspect())
+      add(this.video, "resize", () => this.renderAspect())
+    }
     click("[data-gs-end]", () => this.end())
     click("[data-gs-leave]", () => this.leave())
     click("[data-gs-join]", () => {
@@ -461,9 +572,14 @@ const GameStream = {
 
     add(window, "keydown", e => this.keys.keydown(e), { capture: true })
     add(window, "keyup", e => this.keys.keyup(e), { capture: true })
-    add(window, "blur", () => this.dispatch({ type: "blur" }))
+    add(window, "blur", () => {
+      this.touches.releaseAll()
+      this.dispatch({ type: "blur" })
+    })
     add(document, "visibilitychange", () => {
-      if (document.visibilityState === "hidden") this.dispatch({ type: "hidden" })
+      if (document.visibilityState !== "hidden") return
+      this.touches.releaseAll()
+      this.dispatch({ type: "hidden" })
     })
     add(document, "focusin", e => {
       if (this.keys.focusMovedToEditable(e.target)) this.dispatch({ type: "focus_editable" })
@@ -592,6 +708,7 @@ const GameStream = {
   },
 
   setRoster(raw, { reconcile = true } = {}) {
+    if (raw && raw.touch) this.setTouch(raw.touch)
     this.roster = normalizeRoster(raw)
     this.multi = this.roster.multi
     this.rosterKnown = true
@@ -604,6 +721,8 @@ const GameStream = {
 
   setMine(mine) {
     const before = mySlotList(this.mine).join(",")
+    // Cancel touches while src 0 still holds its slot, so the cancel goes out.
+    if (this.mine.has(0) && !mine.has(0)) this.touches.releaseAll()
     this.mine = mine
     this.router.setSlots(mine)
     for (const [src, differ] of this.padDiffers) {
@@ -723,6 +842,7 @@ const GameStream = {
   applyStatus(status) {
     const state = status.state || "unavailable"
     this.serverState = state
+    if (status.touch) this.setTouch(status.touch)
     if (typeof status.elapsed_ms === "number") this.buildStartedAt = Date.now() - status.elapsed_ms
 
     if (state === "ended" || state === "failed") {
@@ -837,8 +957,14 @@ const GameStream = {
       })
     }
     pc.ondatachannel = e => {
-      if (e.channel.label === "input-events") this.events = e.channel
-      if (e.channel.label === "input-state") this.stateCh = e.channel
+      const ch = e.channel
+      if (ch.label === "input-events") this.events = ch
+      if (ch.label === "input-state") this.stateCh = ch
+      if (typeof ch.addEventListener === "function") {
+        ch.addEventListener("close", () => {
+          if (this.events === ch || this.stateCh === ch) this.touches.releaseAll()
+        })
+      }
     }
     // A failed or closed peer decodes nothing more: drop its frames now. A
     // disconnected one may recover (ICE, TURN); its frames simply stop
@@ -846,6 +972,7 @@ const GameStream = {
     pc.onconnectionstatechange = () => {
       if (this.pc !== pc) return
       if (["failed", "closed"].includes(pc.connectionState)) {
+        this.touches.releaseAll()
         this.hasFrames = false
         this.lastFrame = null
       }
@@ -892,6 +1019,8 @@ const GameStream = {
   },
 
   closePeer() {
+    // Before the channels go, so the cancels can still be sent.
+    if (this.touches) this.touches.releaseAll()
     const pc = this.pc
     this.pc = null
     this.pcId = null
@@ -918,7 +1047,11 @@ const GameStream = {
       if (this.dead || this.pcId !== pcId) return
       this.frames++
       this.frameSeen(pcId)
-      if (meta && meta.width) this.size = { width: meta.width, height: meta.height }
+      if (meta && meta.width) {
+        const changed = !this.size || this.size.width !== meta.width || this.size.height !== meta.height
+        this.size = { width: meta.width, height: meta.height }
+        if (changed) this.renderAspect()
+      }
       if (this.pending.size) this.decodeProbe(now)
       v.requestVideoFrameCallback(onFrame)
     }
@@ -1128,7 +1261,9 @@ const GameStream = {
     if (panel === "connecting" && this.panel !== "connecting") this.connectingSince = Date.now()
     this.panel = panel
     // A spectator's live frame is just the video: nothing to click to play.
-    const shown = panel === "live" && (this.capture.captured || !this.router.player) ? null : panel
+    // Nor is a phone's whose taps go to the game.
+    const shown =
+      panel === "live" && (this.capture.captured || !this.router.player || this.touchHidesPanel()) ? null : panel
     for (const p of this.panels) p.hidden = p.dataset.gsPanel !== shown
     this.el.dataset.state = panel
     const live = panel === "live"
@@ -1149,7 +1284,7 @@ const GameStream = {
     const captured = this.capture.captured
     if (this.ring) this.ring.hidden = !captured
     if (this.panel === "live") {
-      const hide = captured || !this.router.player
+      const hide = captured || !this.router.player || this.touchHidesPanel()
       for (const p of this.panels) p.hidden = hide || p.dataset.gsPanel !== "live"
     }
     this.renderFooter()
@@ -1255,6 +1390,7 @@ const GameStream = {
   },
 
   renderFooter() {
+    this.renderTouch()
     if (!this.controllerEl) return
     const pads = navigator.getGamepads ? navigator.getGamepads() : []
     const pad = this.pad || pickGamepad(pads)
@@ -1263,7 +1399,9 @@ const GameStream = {
     // nothing to play with, so neither line shows.
     const padRowsShown = this.multi && this.router.player && (this.pads || []).length > 0
     const spectating = this.multi && !this.router.player
-    const label = playing && !padRowsShown && !spectating ? controllerLabel({ pad, coarse: this.coarse }) : ""
+    const touchPlay = this.touchOn && this.coarse
+    const label =
+      playing && !padRowsShown && !spectating ? controllerLabel({ pad, coarse: this.coarse, touch: touchPlay }) : ""
     this.controllerEl.textContent = label
     // Hidden when empty, so an ended frame does not keep a blank row on a phone.
     this.controllerEl.hidden = label === ""
@@ -1271,6 +1409,7 @@ const GameStream = {
     this.hintEl.textContent = hintText({
       live: this.panel === "live" && this.router.player,
       captured: this.capture.captured,
+      touch: touchPlay,
     })
     const p50 = this.rtt.p50()
     this.statsEl.textContent = formatStats({

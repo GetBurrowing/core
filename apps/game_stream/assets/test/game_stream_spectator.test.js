@@ -144,6 +144,94 @@ describe("a spectator's hook writes nothing to the host's data channels", () => 
   })
 })
 
+// Touch (task 01a0fe45 stage 2): a 1600x900 well showing a 16:9 frame, a
+// touch-enabled host, and a pointer event shape the hook's onPointer takes.
+function withTouch(h) {
+  h.audio = { gesture() {} }
+  h.video = {
+    videoWidth: 1920,
+    videoHeight: 1080,
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 1600, height: 900 }),
+  }
+  h.well = { setPointerCapture() {}, setAttribute() {}, removeAttribute() {} }
+  h.setTouch({ enabled: true, slop_px: 0, move_hz: 1000 })
+  return h
+}
+
+function pointer(type, pointerId, clientX, clientY) {
+  const e = { type, pointerId, pointerType: "touch", clientX, clientY, target: null, prevented: false }
+  e.preventDefault = () => (e.prevented = true)
+  return e
+}
+
+// A tap, a two-finger drag, a cancel, a lost capture, and a release on blur.
+function driveTouch(h) {
+  const evs = [
+    pointer("pointerdown", 1, 800, 450),
+    pointer("pointerup", 1, 800, 450),
+    pointer("pointerdown", 2, 400, 300),
+    pointer("pointerdown", 3, 1200, 600),
+    pointer("pointermove", 2, 500, 350),
+    pointer("pointermove", 3, 1100, 500),
+    pointer("pointercancel", 2, 500, 350),
+    pointer("lostpointercapture", 3, 1100, 500),
+    pointer("pointerdown", 4, 800, 450),
+  ]
+  for (const e of evs) h.onPointer(e)
+  h.touches.releaseAll()
+  return evs
+}
+
+describe("a spectator's touches write nothing (task 01a0fe45)", () => {
+  it("ZERO channel writes, even with touch forced on so only the router stands in the way", () => {
+    const { h } = hook({ slots: {} })
+    withTouch(h)
+    expect(h.touchWanted()).toBe(false)
+    // Force it: the hook never enables touch for a spectator.
+    h.touchOn = true
+    driveTouch(h)
+    expect(h.events.sent).toEqual([])
+    expect(h.stateCh.sent).toEqual([])
+  })
+
+  it("positive control: the same drive as a player writes every phase on input-events", () => {
+    const { h } = hook({ slots: { 0: 1 } })
+    withTouch(h)
+    expect(h.touchWanted()).toBe(true)
+    h.renderTouch()
+    expect(h.touchOn).toBe(true)
+    const evs = driveTouch(h)
+    const sent = h.events.sent
+    expect(sent.every(m => m.t === "touch" && m.src === 0 && !("slot" in m))).toBe(true)
+    expect(sent.map(m => `${m.ph}:${m.id}`)).toEqual([
+      "down:0",
+      "up:0",
+      "down:0",
+      "down:1",
+      "move:0",
+      "move:1",
+      "cancel:0",
+      "cancel:1",
+      "down:0",
+      "cancel:0",
+    ])
+    expect(h.stateCh.sent).toEqual([])
+    // Handled pointer events, and only those, were preventDefaulted.
+    expect(evs.every(e => e.prevented)).toBe(true)
+  })
+
+  it("a mouse on a player's well is neither forwarded nor prevented", () => {
+    const { h } = hook({ slots: { 0: 0 } })
+    withTouch(h)
+    h.renderTouch()
+    const e = { ...pointer("pointerdown", 1, 800, 450), pointerType: "mouse" }
+    e.preventDefault = () => (e.prevented = true)
+    h.onPointer(e)
+    expect(e.prevented).toBe(false)
+    expect(h.events.sent).toEqual([])
+  })
+})
+
 describe("the hook writes the data channels in exactly one place", () => {
   it("both channel sends sit inside initInput's InputRouter", () => {
     const src = readFileSync(fileURLToPath(new URL("../js/hooks/game_stream.js", import.meta.url)), "utf8")

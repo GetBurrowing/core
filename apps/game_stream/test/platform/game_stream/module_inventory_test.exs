@@ -25,8 +25,8 @@ defmodule Platform.GameStream.ModuleInventoryTest do
 
   # Core's copy also lists `mail.test.generator` and `test.budget`, which
   # that file's own setup registers; this list is core's registered surfaces
-  # plus Play's two, and nothing else.
-  test "the default allowed surfaces include Play's two" do
+  # plus Play's three (task 01a0fe45 added game_stream.touch), and nothing else.
+  test "the default allowed surfaces include Play's three" do
     rails = Guardrails.for_org(nil)
 
     assert Enum.sort(rails.allowed_surfaces) ==
@@ -35,6 +35,7 @@ defmodule Platform.GameStream.ModuleInventoryTest do
                "dispatch.prompt",
                "game_stream.encoder_preset",
                "game_stream.roster",
+               "game_stream.touch",
                "mail.draft.generator",
                "meetings.open_question_classifier",
                "planner.stage_budget"
@@ -43,7 +44,7 @@ defmodule Platform.GameStream.ModuleInventoryTest do
     assert Guardrails.default_allowed_surfaces() == rails.allowed_surfaces
   end
 
-  test "the scientist's context carries Play's two surfaces" do
+  test "the scientist's context carries Play's three surfaces" do
     context = ExperimentsScientist.gather_context(%{})
 
     assert Enum.map(context.surfaces, & &1.key) |> Enum.sort() ==
@@ -52,6 +53,7 @@ defmodule Platform.GameStream.ModuleInventoryTest do
                "dispatch.prompt",
                "game_stream.encoder_preset",
                "game_stream.roster",
+               "game_stream.touch",
                "mail.draft.generator",
                "meetings.open_question_classifier",
                "planner.stage_budget"

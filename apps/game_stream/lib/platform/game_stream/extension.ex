@@ -120,7 +120,10 @@ defmodule Platform.GameStream.Extension do
       Platform.Experiments.Surfaces.GameStreamEncoder,
       # Task 01a0dbd6: multiplayer play sessions: open as watch or join, and
       # the player and spectator caps. Same gating note as the encoder.
-      Platform.Experiments.Surfaces.GameStreamRoster
+      Platform.Experiments.Surfaces.GameStreamRoster,
+      # Task 01a0fe45: touch forwarding's tap-vs-drag slop and move rate.
+      # Same gating note as the encoder. No metric judges it yet.
+      Platform.Experiments.Surfaces.GameStreamTouch
     ]
   end
 

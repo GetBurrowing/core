@@ -43,6 +43,7 @@ defmodule Platform.GameStream do
   alias Platform.Experiments.Surfaces
   alias Platform.Experiments.Surfaces.GameStreamEncoder
   alias Platform.Experiments.Surfaces.GameStreamRoster
+  alias Platform.Experiments.Surfaces.GameStreamTouch
   alias Platform.Federation
   alias Platform.GameStream.Protocol
   alias Platform.GameStream.ReviewBuild
@@ -54,6 +55,7 @@ defmodule Platform.GameStream do
   @encoder_surface "game_stream.encoder_preset"
   @encoder_target "play_session.start"
   @roster_surface "game_stream.roster"
+  @touch_surface "game_stream.touch"
   @default_idle_timeout_s 600
   @max_idle_timeout_s 3600
 
@@ -158,6 +160,7 @@ defmodule Platform.GameStream do
          {:ok, host} <- find_free_host() do
       {experiment_id, variant_slug, encoder} = resolve_encoder(build.task.id)
       {roster_experiment_id, roster_variant_slug, roster} = resolve_roster(build.task.id)
+      {touch_experiment_id, touch_variant_slug, touch_tuning} = resolve_touch(build.task.id)
       session_id = UUIDv7.generate()
 
       args = %{
@@ -175,6 +178,10 @@ defmodule Platform.GameStream do
         roster_variant_slug: roster_variant_slug,
         roster: roster,
         multi: multi_host?(host),
+        touch: touch_host?(host),
+        touch_tuning: touch_tuning,
+        touch_experiment_id: touch_experiment_id,
+        touch_variant_slug: touch_variant_slug,
         idle_timeout_s: idle_timeout(Keyword.get(opts, :idle_timeout_s)),
         ice_servers: ice_servers(),
         force_relay: Keyword.get(opts, :force_relay) == true
@@ -468,9 +475,36 @@ defmodule Platform.GameStream do
     end
   end
 
+  # The touch tuning (task 01a0fe45). Same never-raising resolution as the
+  # roster; a promoted default or a variant replaces the control whole.
+  defp resolve_touch(task_id) do
+    subject = Subject.new("task", task_id)
+
+    case Surfaces.resolve(@touch_surface, @encoder_target, subject) do
+      {:variant, experiment, variant_slug, payload} -> {experiment.id, variant_slug, payload}
+      {:default, payload} when map_size(payload) > 0 -> {nil, nil, payload}
+      _ -> {nil, nil, GameStreamTouch.control()}
+    end
+  end
+
   defp multi_host?(host) do
     case Federation.declared_features(host.metadata) do
       features when is_list(features) -> Protocol.multi_feature() in features
+      :undeclared -> false
+    end
+  end
+
+  @doc """
+  Does `host` (a runtime, or anything with `metadata`) accept touch input?
+  True only when its declared `client_info.features` list `game_stream_touch`
+  (`Protocol.touch_feature/0`). Undeclared features fail closed. Public so
+  the `:undeclared` arm is testable: `start_session/2` never reaches it,
+  because host discovery already refuses an undeclared host.
+  """
+  @spec touch_host?(%{metadata: map() | nil}) :: boolean()
+  def touch_host?(%{metadata: metadata}) do
+    case Federation.declared_features(metadata) do
+      features when is_list(features) -> Protocol.touch_feature() in features
       :undeclared -> false
     end
   end

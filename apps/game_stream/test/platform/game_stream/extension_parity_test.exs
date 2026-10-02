@@ -288,8 +288,11 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # meetings.open_question_classifier. The stage appends extension surfaces
     # after core's, so the two Play keys move behind the classifier: the SET
     # is main's, the order is not (recorded in the stage summary).
-    @main_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary game_stream.encoder_preset game_stream.roster meetings.open_question_classifier)
-    @branch_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.open_question_classifier game_stream.encoder_preset game_stream.roster)
+    # Task 01a0fe45 adds game_stream.touch, the third Play surface, appended
+    # after the roster in extension.ex. It is new, so it is in neither of
+    # main's pre-extraction lists; both pins gain it at the end.
+    @main_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary game_stream.encoder_preset game_stream.roster meetings.open_question_classifier game_stream.touch)
+    @branch_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.open_question_classifier game_stream.encoder_preset game_stream.roster game_stream.touch)
 
     defp canon(%_{} = s), do: canon(Map.from_struct(s))
 
@@ -355,7 +358,7 @@ defmodule Platform.GameStream.ExtensionParityTest do
       assert digest(Kinds.tool_schemas()) == @main_kinds_tool_schemas_digest_on
     end
 
-    test "surfaces: main's set; the two Play keys now follow core's" do
+    test "surfaces: main's set plus game_stream.touch; the Play keys follow core's" do
       keys = Enum.map(Surfaces.list(), & &1.key())
       assert Enum.sort(keys) == Enum.sort(@main_surfaces)
       assert keys == @branch_surfaces

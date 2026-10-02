@@ -181,6 +181,91 @@ defmodule Platform.GameStream.Protocol do
       out) is answered with `play_session_stop`, so the host stops streaming
       to nobody.
 
+  ## Touch (task 01a0fe45)
+
+  A phone player taps and drags on the video. Like keys and pads, touches go
+  browser to host on the peer's `input-events` data channel and never
+  through core. That channel is reliable and ordered, so a `move` never
+  overtakes its `up`. Core's part is the capability gate and the tuning
+  below. Play-host (`internal/input`) and the `suite_play` addon implement
+  the rest EXACTLY as written here. If this text is wrong, fix it here first
+  and the host follows.
+
+  ### Browser → host, on `input-events`
+
+      {"t":"touch","src":0,"id":0,"ph":"down","x":0.42,"y":0.77}
+
+    * `ph` — `down`, `move`, `up` or `cancel`.
+    * `id` — an integer in 0..9. A pointer takes the smallest free id at its
+      `down` and keeps it until its `up` or `cancel`. An 11th concurrent
+      pointer is ignored by the browser.
+    * `x`, `y` — finite numbers in [0, 1], normalised to the DISPLAYED VIDEO
+      CONTENT: the decoded frame as drawn inside the element with
+      object-fit: contain, NOT the element's box. (0, 0) is the frame's
+      top-left. A press inside a letterbox or pillarbox bar is not a touch.
+      A touch that starts inside and is dragged outside is clamped to the
+      edge. devicePixelRatio never enters: both the pointer position and the
+      element rect are CSS pixels.
+    * `src` — always 0, the peer's primary src. The message carries NO
+      slot. The host maps `(peer_id, 0)` to a slot through the `play_slots`
+      table, exactly as for `key`. A peer with no slot there (a spectator)
+      has its touch dropped and counted as `no_slot`. A spectator's browser
+      sends no touch at all.
+    * Only `pointerType` `touch` and `pen` are forwarded. A mouse is not:
+      desktop keeps click-to-capture keyboard.
+    * The browser forwards no `move` until the pointer has travelled more
+      than `slop_px` CSS pixels from its `down`, and then at most `move_hz`
+      moves per second per id, coalesced to the latest position. Both values
+      come from `touch` below.
+    * On a lost pointer (cancel, lost capture, window blur, the page going
+      hidden, a closed data channel or peer connection, losing src 0's slot,
+      touch turning off) the browser sends `cancel` for every id it holds.
+
+  The host validates every field. An id outside 0..9, an unknown `ph`, or
+  missing, non-finite or out-of-range coordinates are dropped and counted as
+  `bad_touch`. A `down` on an id the slot already holds is a move. A `move`,
+  `up` or `cancel` on an id it does not hold is ignored, like a key `up`
+  with no `down`. The host also drops a `move` for a (slot, id) that
+  arrives under 4 ms after the previous one (`touch_rate`). No input rate
+  limit existed before this. A touch counts as activity for the idle
+  timeout.
+
+  ### Host → addon (the line protocol on the Godot link)
+
+      {"t":"st","d":0,"i":0,"p":true,"c":false,"x":0.42,"y":0.77}
+      {"t":"sd","d":0,"i":0,"x":0.45,"y":0.70}
+
+    * `st` — a screen touch: `p` is pressed and `c` is canceled. A
+      canceled lift is `p:false, c:true`.
+    * `sd` — a drag to (`x`, `y`). The addon derives relative motion and
+      velocity from the touch's previous position.
+    * `d` is the slot. `i` is `slot * 10 + id`, so two players' id 0 never
+      collide in Godot's global touch index space.
+    * `x`, `y` stay normalised to the exported frame. The addon maps them to
+      window coordinates under the project's stretch mode.
+    * `release` (`d`) and `release_all` also lift every touch they cover: the
+      host emits `st p:false c:true` at the last position of each held
+      touch, and the addon does the same for any it still holds.
+    * The addon never builds a mouse event. A Control activates through
+      Godot's emulate-mouse-from-touch, which follows one touch at a time.
+
+  ### Capability gate and the session's `touch` map
+
+  A host declares `game_stream_touch` (`touch_feature/0`) in
+  `client_info.features`. A host without it, including one whose features
+  are undeclared, gets the browser exactly as before: no `touch-action:
+  none` and no touch sends. So core may deploy before play-host does.
+
+  The session holds the answer and the `game_stream.touch` surface's tuning
+  (`Platform.Experiments.Surfaces.GameStreamTouch`), resolved once at
+  start. Its public status and its roster (which the attach reply and every
+  roster push carry to the browser) both hold
+
+      touch: %{enabled: boolean, slop_px: integer, move_hz: integer, variant: slug | nil}
+
+  `enabled` is false whenever the host lacks the feature. `variant` is the
+  experiment arm's slug, nil for the control or a promoted default.
+
   ## Why a second media plane, stated so a later task does not build a third
 
   Meetings already carry media over LiveKit (ADR 0030), with an SFU, TURN and
@@ -202,6 +287,7 @@ defmodule Platform.GameStream.Protocol do
   @viewer_signal_kinds ~w(answer ice)
 
   @multi_feature "game_stream_multi"
+  @touch_feature "game_stream_touch"
   @max_peer_id_bytes 64
   # A host has at most a handful of slots; this bounds an abusive frame.
   @max_activity_slots 32
@@ -233,6 +319,10 @@ defmodule Platform.GameStream.Protocol do
   @doc "The `client_info.features` entry a host declares to speak the multi-peer frames."
   @spec multi_feature() :: String.t()
   def multi_feature, do: @multi_feature
+
+  @doc "The `client_info.features` entry a host declares to accept touch input (task 01a0fe45)."
+  @spec touch_feature() :: String.t()
+  def touch_feature, do: @touch_feature
 
   @doc "The channel topic a host joins."
   @spec host_topic(String.t()) :: String.t()

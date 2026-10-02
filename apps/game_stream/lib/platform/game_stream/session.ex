@@ -54,6 +54,11 @@ defmodule Platform.GameStream.Session do
       unanswered offer.
     * `max_players`, `max_spectators`, `open_as` — the resolved
       `game_stream.roster` surface payload.
+    * `touch` — whether the host declares `game_stream_touch`, and
+      `touch_tuning` — the resolved `game_stream.touch` surface payload
+      (task 01a0fe45). Both reach the browser as the `touch` map of the
+      public status and of the roster: `%{enabled, slop_px, move_hz,
+      variant}`. See `Platform.GameStream.Protocol`, "Touch".
 
   Each LiveView pid holds AT MOST ONE peer per session. The copies of one
   node in a page (chat inline, desktop panel, mobile overlay) all run in the
@@ -136,7 +141,7 @@ defmodule Platform.GameStream.Session do
 
   Everything every viewer renders is published on `game_stream:<session_id>`
   (`Platform.GameStream.topic/1`) as `{:game_stream, id, {:status, map}}`,
-  `{:game_stream, id, {:roster, %{slots, spectators, names, max_players, multi}}}`
+  `{:game_stream, id, {:roster, %{slots, spectators, names, max_players, multi, touch}}}`
   and `{:game_stream, id, {:slot_activity, [slot]}}`. Signals are NOT
   published there; they go to one peer's pid.
 
@@ -154,6 +159,7 @@ defmodule Platform.GameStream.Session do
 
   require Logger
 
+  alias Platform.Experiments.Surfaces.GameStreamTouch
   alias Platform.GameStream
   alias Platform.GameStream.Protocol
   alias Platform.GameStream.SessionRecord
@@ -243,7 +249,7 @@ defmodule Platform.GameStream.Session do
           |> Map.take(
             ~w(session_id task_id review_sha branch repo_url host_runtime_id started_by encoder
                experiment_id variant_slug roster_experiment_id roster_variant_slug
-               idle_timeout_s ice_servers force_relay)a
+               touch_experiment_id touch_variant_slug idle_timeout_s ice_servers force_relay)a
           )
           |> Map.merge(%{
             state: "building",
@@ -251,6 +257,8 @@ defmodule Platform.GameStream.Session do
             elapsed_ms: 0,
             started_at: now,
             multi: Map.get(args, :multi) == true,
+            touch: Map.get(args, :touch) == true,
+            touch_tuning: touch_tuning(Map.get(args, :touch_tuning, %{})),
             max_players: roster_int(roster, "max_players", @default_max_players, 1),
             max_spectators: roster_int(roster, "max_spectators", @default_max_spectators, 0),
             open_as: if(Map.get(roster, "open_as") == "join", do: "join", else: "watch"),
@@ -905,8 +913,37 @@ defmodule Platform.GameStream.Session do
       max_players: effective_max_players(state),
       # The canvas shows the roster strip, Join, Leave and the overflow only
       # for a multi host (task 01a0dbd6 stage 4); a v1 host keeps Play here.
-      multi: state.multi
+      multi: state.multi,
+      # The roster is what the attach reply and every roster push carry to the
+      # browser whole, so the touch gate and tuning ride here (01a0fe45).
+      touch: touch(state)
     }
+  end
+
+  # `enabled` is false whenever the host lacks `game_stream_touch`; the
+  # tuning is still reported, so the arm is visible either way.
+  defp touch(state) do
+    tuning = Map.get(state, :touch_tuning, touch_tuning(%{}))
+
+    %{
+      enabled: Map.get(state, :touch) == true,
+      slop_px: tuning.slop_px,
+      move_hz: tuning.move_hz,
+      variant: Map.get(state, :touch_variant_slug)
+    }
+  end
+
+  # A resolved payload is already validated by the surface. Re-validating
+  # keeps a malformed one (a hand-built arg) from reaching the browser: it
+  # falls back to the control whole, as `resolve_touch/1` does.
+  defp touch_tuning(payload) do
+    tuning =
+      case GameStreamTouch.validate_payload(payload) do
+        {:ok, valid} -> valid
+        {:error, _} -> GameStreamTouch.control()
+      end
+
+    %{slop_px: tuning["slop_px"], move_hz: tuning["move_hz"]}
   end
 
   defp attach_reply(state, peer_id) do
@@ -1103,7 +1140,8 @@ defmodule Platform.GameStream.Session do
       ice_servers: state.ice_servers,
       force_relay: Map.get(state, :force_relay) == true,
       multi: state.multi,
-      max_players: effective_max_players(state)
+      max_players: effective_max_players(state),
+      touch: touch(state)
     }
   end
 

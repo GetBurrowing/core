@@ -373,6 +373,10 @@ defmodule Platform.Chat.Canvas.Kinds.GameStream do
         </div>
       </div>
 
+      <%!-- The hook sets data-gs-touch="on" while taps go to the game, and
+      data-gs-tall with --gs-aspect for a portrait stream (task 01a0fe45; the
+      rules are in assets/css/game_stream.css). Neither is rendered here, so
+      a host without touch looks exactly as before. --%>
       <div data-gs-well class="relative aspect-video bg-black">
         <video
           data-gs-video

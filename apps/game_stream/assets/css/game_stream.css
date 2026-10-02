@@ -13,4 +13,34 @@
   flex: 1 1 auto;
   aspect-ratio: auto;
   min-height: 0;
+  /* Undo every property the portrait rule below sets. margin-inline: auto on
+     a column flex item shrinks it to its content, and the video is absolute,
+     so a tall well went 0 px wide in fullscreen (task 01a0fe45 stage 5,
+     measured: videoRect width 0 at 1280x800). */
+  margin-inline: 0;
+  max-height: none;
+}
+
+/* Touch (task 01a0fe45 stage 2). The hook sets data-gs-touch="on" on the
+   video well only while this page's taps go to the game: a touch-enabled
+   host, the copy holding the stream, a player, a live frame. Only the well
+   stops the page scrolling, so a swipe anywhere else in Suite, or on the well
+   of a spectator or of a host without touch, still scrolls. */
+[data-gs-well][data-gs-touch="on"] {
+  touch-action: none;
+  overscroll-behavior: contain;
+}
+
+/* A stream taller than 16:9 (portrait): the hook sets data-gs-tall and
+   --gs-aspect from the decoded size, and the well takes that ratio, capped at
+   80svh. The cap transfers through the ratio to the width, so a capped well
+   is narrower than the card and is centred. A portrait frame can still be
+   pillarboxed (fullscreen, or a cap the ratio cannot meet), which the touch
+   mapping handles. Landscape streams keep aspect-video. Fullscreen's rule
+   above is more specific and resets each property set here (the guard in
+   assets/test/game_stream_css.test.js fails if one is added without a reset). */
+[data-gs-well][data-gs-tall] {
+  aspect-ratio: var(--gs-aspect);
+  max-height: 80svh;
+  margin-inline: auto;
 }

@@ -10,6 +10,7 @@
  *     {t: "key", code, down, repeat, src, slot}   code is KeyboardEvent.code
  *     {t: "release_all"}
  *     {t: "probe", seq, src}
+ *     {t: "touch", src, id, ph, x, y}             task 01a0fe45, game_stream_touch.js
  *   input-state (unordered, no retransmits; each message a full snapshot)
  *     {t: "pad", src, slot, seq, connected, buttons: [17], axes: [4]}
  *
@@ -227,6 +228,17 @@ export class InputRouter {
     return true
   }
 
+  /**
+   * A touch (from `TouchForwarder`), always src 0, exactly like a key: sent
+   * only while src 0 holds a slot, so a spectator writes nothing. It carries
+   * no slot; the host maps (peer, src 0) itself (task 01a0fe45).
+   */
+  touch(message) {
+    if (!message || this.slotFor(0) == null) return false
+    this.sendEvent({ ...message, src: 0 })
+    return true
+  }
+
   /** A pad snapshot (from a `PadDiffer`), on its own src. */
   pad(message) {
     const slot = message ? this.slotFor(message.src) : null
@@ -324,18 +336,23 @@ export function padName(pad) {
 
 /**
  * The footer's controller line. The browser hides a pad until one of its
- * buttons is pressed, so "no pad" on a desktop is an instruction, and on a
- * touch-only device it says what v1 needs (there are no touch controls).
+ * buttons is pressed, so "no pad" on a desktop is an instruction. On a
+ * touch-only device it says what to do: touch the game when the host takes
+ * touch (`touch`, task 01a0fe45), else connect a controller.
  */
-export function controllerLabel({ pad, coarse }) {
+export function controllerLabel({ pad, coarse, touch = false }) {
   if (pad) return padName(pad)
+  if (coarse && touch) return "Touch the game to play"
   if (coarse) return "Connect a controller to play on this device"
   return "Press any button on your controller"
 }
 
-/** The footer hint: where the keys are going right now. */
-export function hintText({ live, captured }) {
+/**
+ * The footer hint: where the keys are going right now. A phone whose taps go
+ * to the game (`touch`) has nothing to click, so no hint.
+ */
+export function hintText({ live, captured, touch = false }) {
   if (captured) return "Esc to release"
-  if (live) return "Click to play"
+  if (live && !touch) return "Click to play"
   return ""
 }

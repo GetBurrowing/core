@@ -375,3 +375,52 @@ describe("InputRouter: the only writer to the data channels", () => {
     expect(events[0].slot).toBe(3)
   })
 })
+
+describe("InputRouter.touch: slot-gated exactly like key (task 01a0fe45)", () => {
+  const touch = { t: "touch", src: 0, id: 0, ph: "down", x: 0.5, y: 0.25 }
+
+  it("a spectator (no slots) sends no touch", () => {
+    const { r, events, states } = router({})
+    expect(r.touch(touch)).toBe(false)
+    expect(events).toEqual([])
+    expect(states).toEqual([])
+  })
+
+  it("a player whose src 0 holds a slot sends it on input-events, with no slot field", () => {
+    const { r, events, states } = router({ 0: 2 })
+    expect(r.touch(touch)).toBe(true)
+    expect(events).toEqual([{ t: "touch", src: 0, id: 0, ph: "down", x: 0.5, y: 0.25 }])
+    expect(events[0]).not.toHaveProperty("slot")
+    expect(states).toEqual([])
+  })
+
+  it("a player holding only a second pad's slot sends no touch (touch is src 0's, like keys)", () => {
+    const { r, events } = router({ 1: 1 })
+    expect(r.key(keyMessage(fakeEvent("KeyW"), true))).toBe(false)
+    expect(r.touch(touch)).toBe(false)
+    expect(events).toEqual([])
+  })
+
+  it("src is forced to 0 and a null message is refused", () => {
+    const { r, events } = router({ 0: 0 })
+    expect(r.touch(null)).toBe(false)
+    r.touch({ ...touch, src: 3 })
+    expect(events).toEqual([{ ...touch, src: 0 }])
+  })
+})
+
+describe("footer copy with touch (task 01a0fe45)", () => {
+  it("a phone whose taps go to the game says so, and has no Click to play hint", () => {
+    expect(controllerLabel({ pad: null, coarse: true, touch: true })).toBe("Touch the game to play")
+    expect(hintText({ live: true, captured: false, touch: true })).toBe("")
+    expect(hintText({ live: true, captured: true, touch: true })).toBe("Esc to release")
+  })
+
+  it("without touch the lines are unchanged", () => {
+    expect(controllerLabel({ pad: null, coarse: true, touch: false })).toBe(
+      "Connect a controller to play on this device",
+    )
+    expect(controllerLabel({ pad: null, coarse: false, touch: true })).toBe("Press any button on your controller")
+    expect(hintText({ live: true, captured: false, touch: false })).toBe("Click to play")
+  })
+})
