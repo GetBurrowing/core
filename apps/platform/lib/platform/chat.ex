@@ -60,6 +60,7 @@ defmodule Platform.Chat do
   alias Platform.Chat.CanvasSearchIndex
   alias Platform.Chat.ExternalScope
   alias Platform.Chat.Canvas.Versions, as: CanvasVersions
+  alias Platform.Chat.MentionIdentity
   alias Platform.Chat.MessageVersions
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Chat.SpaceAccess
@@ -4875,9 +4876,7 @@ defmodule Platform.Chat do
     space
     |> summonable_agents_query()
     |> Repo.all()
-    |> Enum.filter(fn agent ->
-      String.downcase(agent.slug || "") in tokens or String.downcase(agent.name || "") in tokens
-    end)
+    |> Enum.filter(&MentionIdentity.agent_named?(&1, tokens))
   end
 
   defp reject_present_agents(_space_id, []), do: []

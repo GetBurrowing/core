@@ -61,6 +61,7 @@ defmodule Platform.Chat.AttentionRouter do
 
   alias Platform.Chat
   alias Platform.Chat.{ActiveAgentStore, AgentResponder, Message, Participant, Presence, Space}
+  alias Platform.Chat.MentionIdentity
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Repo
   alias Platform.Roles
@@ -492,8 +493,12 @@ defmodule Platform.Chat.AttentionRouter do
     # Find which agents are @-mentioned in this message
     mentioned_agents =
       Enum.filter(agent_recipients, fn participant ->
-        mentioned?(participant, message) and
-          case Map.get(roster_by_agent_id, participant.participant_id) do
+        # The roster entry already carries the preloaded agent
+        # (`Chat.list_space_agents/1`), so slug matching adds no query here.
+        roster_entry = Map.get(roster_by_agent_id, participant.participant_id)
+
+        mentioned?(participant, message, agent: roster_entry && roster_entry.agent) and
+          case roster_entry do
             %{role: role} when role in ["principal", "member"] -> true
             # Agent is a participant but NOT on the space roster — never
             # mention-route it (ADR 0027). This clause previously read
@@ -760,8 +765,23 @@ defmodule Platform.Chat.AttentionRouter do
   notification scoping for the editable-messages contract).
   """
   @spec mentioned?(Participant.t(), Message.t()) :: boolean()
-  def mentioned?(%Participant{} = p, %Message{content: content} = message)
-      when is_binary(content) do
+  def mentioned?(participant, message), do: mentioned?(participant, message, [])
+
+  @doc """
+  `mentioned?/2` with options.
+
+    * `:agent` — the `%Platform.Agents.Agent{}` behind an agent participant
+      (or `nil` when there is none). When given, it is used as-is and no
+      query runs; when absent, an agent participant's agent is looked up.
+
+  An agent participant is additionally mentioned when a bracketed token names
+  its agent per `Platform.Chat.MentionIdentity.agent_named?/2` — the same rule
+  the summon path uses, so a token that summons an agent also routes to it.
+  User participants are matched on display name only.
+  """
+  @spec mentioned?(Participant.t(), Message.t(), keyword()) :: boolean()
+  def mentioned?(%Participant{} = p, %Message{content: content} = message, opts)
+      when is_binary(content) and is_list(opts) do
     if mention_scan_enabled?(message) do
       downcased = String.downcase(content)
       {bracketed_tokens, legacy_zone} = extract_bracketed_tokens(downcased)
@@ -769,7 +789,7 @@ defmodule Platform.Chat.AttentionRouter do
       name_match =
         Enum.any?(mention_names(p), fn name ->
           name_mention?(String.downcase(name), bracketed_tokens, legacy_zone)
-        end)
+        end) or agent_identity_mention?(p, bracketed_tokens, opts)
 
       id_match = id_mention?(String.downcase(p.id), bracketed_tokens, legacy_zone)
 
@@ -788,7 +808,26 @@ defmodule Platform.Chat.AttentionRouter do
     end
   end
 
-  def mentioned?(_participant, _message), do: false
+  def mentioned?(_participant, _message, _opts), do: false
+
+  # Bracketed tokens only: see `Platform.Chat.MentionIdentity` for why slugs
+  # are never offered to the legacy substring zone.
+  defp agent_identity_mention?(_participant, [], _opts), do: false
+
+  defp agent_identity_mention?(%Participant{participant_type: "agent"} = p, tokens, opts) do
+    agent =
+      case Keyword.fetch(opts, :agent) do
+        {:ok, agent} -> agent
+        :error -> lookup_agent(p.participant_id)
+      end
+
+    case agent do
+      %Platform.Agents.Agent{} -> MentionIdentity.agent_named?(agent, tokens)
+      _ -> false
+    end
+  end
+
+  defp agent_identity_mention?(_participant, _tokens, _opts), do: false
 
   @doc """
   True unless the message opts out of mention scanning via
@@ -958,6 +997,11 @@ defmodule Platform.Chat.AttentionRouter do
   # the NULL backfill migration make vanishingly rare. It exists so a future
   # write path that reintroduces the hole degrades to "slightly slower" rather
   # than "silently undeliverable".
+  #
+  # Slug matching for agents with a cached name is NOT done here: it lives in
+  # `agent_identity_mention?/3` via `Platform.Chat.MentionIdentity`, bracketed
+  # tokens only (task 01a0fdfe). This list also feeds the legacy substring
+  # zone, where a slug would make `x-agent` match inside `@x-agent-2`.
   @spec mention_names(Participant.t()) :: [String.t()]
   defp mention_names(%Participant{display_name: display_name})
        when is_binary(display_name) and display_name != "" do
@@ -968,24 +1012,27 @@ defmodule Platform.Chat.AttentionRouter do
   # the same `Ecto.Query.CastError` as `Repo.get/2` on a malformed id, and this
   # value reaches us from a participant row rather than from code. Degrading to
   # "no mention" is right; taking the routing pipeline down is not.
-  defp mention_names(%Participant{participant_type: "agent", participant_id: agent_id})
-       when is_binary(agent_id) do
-    if Platform.UUID.valid?(agent_id) do
-      from(a in Platform.Agents.Agent,
-        where: a.id == ^agent_id,
-        select: {a.name, a.slug}
-      )
-      |> Repo.one()
-      |> case do
-        {name, slug} -> Enum.filter([name, slug], &(is_binary(&1) and &1 != ""))
-        nil -> []
-      end
-    else
-      []
+  defp mention_names(%Participant{participant_type: "agent", participant_id: agent_id}) do
+    case lookup_agent(agent_id) do
+      %Platform.Agents.Agent{name: name, slug: slug} ->
+        Enum.filter([name, slug], &(is_binary(&1) and &1 != ""))
+
+      nil ->
+        []
     end
   end
 
   defp mention_names(_participant), do: []
+
+  defp lookup_agent(agent_id) when is_binary(agent_id) do
+    if Platform.UUID.valid?(agent_id) do
+      Repo.one(from(a in Platform.Agents.Agent, where: a.id == ^agent_id))
+    else
+      nil
+    end
+  end
+
+  defp lookup_agent(_agent_id), do: nil
 
   defp name_mention?(name, bracketed_tokens, legacy_zone) do
     name in bracketed_tokens or String.contains?(legacy_zone, "@#{name}")

@@ -436,6 +436,126 @@ defmodule Platform.Chat.AttentionRouterTest do
     end
   end
 
+  # Task 01a0fdfe: the summon path matched a bracketed token against the
+  # agent's slug OR name, the router only against the participant's cached
+  # display name, so a slug token summoned an agent that was then never sent
+  # the message. Slugs in these tests are literal strings, never derived from
+  # `agent.slug` or `MentionIdentity`, so a shared bug cannot make both sides
+  # of an assertion agree.
+  describe "slug mentions" do
+    test "a bracketed slug routes to the agent and dispatches the message" do
+      space = create_space(%{kind: "channel"})
+      user = create_participant(space.id)
+      agent = create_agent(%{name: "Zip", slug: "zip-slug-probe"})
+
+      {:ok, agent_participant} =
+        Chat.add_agent_participant(space.id, agent, display_name: "Zip")
+
+      Chat.add_space_agent(space.id, agent.id, role: "member")
+
+      message = create_message(space.id, user.id, %{content: "hi @[zip-slug-probe]"})
+      agent_participant_id = agent_participant.id
+
+      assert {:ok, [%{participant_id: ^agent_participant_id, reason: :mention}]} =
+               AttentionRouter.route(message)
+
+      assert_receive {:agent_chat_called, "hi @[zip-slug-probe]", _opts}, 500
+      drain()
+    end
+
+    test "a mixed-case bracketed slug routes" do
+      space = create_space(%{kind: "channel"})
+      user = create_participant(space.id)
+      agent = create_agent(%{name: "Zip", slug: "zip-slug-probe"})
+
+      {:ok, agent_participant} =
+        Chat.add_agent_participant(space.id, agent, display_name: "Zip")
+
+      Chat.add_space_agent(space.id, agent.id, role: "member")
+
+      message = create_message(space.id, user.id, %{content: "hi @[Zip-SLUG-Probe]"})
+      agent_participant_id = agent_participant.id
+
+      assert {:ok, [%{participant_id: ^agent_participant_id, reason: :mention}]} =
+               AttentionRouter.route(message)
+
+      drain()
+    end
+
+    test "an unbracketed slug does not route by slug when display_name is set" do
+      # The display name is NOT a prefix of the slug, so the legacy `@name`
+      # substring rule cannot match it either: a route here could only come
+      # from slug matching in the legacy zone, which is deliberately absent.
+      space = create_space(%{kind: "channel"})
+      user = create_participant(space.id)
+      agent = create_agent(%{name: "Nova", slug: "zip-slug-probe"})
+
+      {:ok, agent_participant} =
+        Chat.add_agent_participant(space.id, agent, display_name: "Nova")
+
+      Chat.add_space_agent(space.id, agent.id, role: "member")
+
+      message = create_message(space.id, user.id, %{content: "hi @zip-slug-probe"})
+
+      {:ok, decisions} = AttentionRouter.route(message)
+
+      refute Enum.any?(decisions, &(&1.participant_id == agent_participant.id))
+      refute AttentionRouter.mentioned?(agent_participant, message)
+
+      # Positive control: the bracketed form of the same slug does mention it.
+      bracketed = create_message(space.id, user.id, %{content: "hi @[zip-slug-probe]"})
+      assert AttentionRouter.mentioned?(agent_participant, bracketed)
+
+      drain()
+    end
+
+    test "a token that is one agent's slug and another's name routes to both" do
+      space = create_space(%{kind: "group"})
+      user = create_participant(space.id)
+
+      agent_a = create_agent(%{name: "Zip", slug: "nova"})
+      agent_b = create_agent(%{name: "Nova", slug: "nova-other-probe"})
+
+      {:ok, p_a} = Chat.add_agent_participant(space.id, agent_a, display_name: "Zip")
+      {:ok, p_b} = Chat.add_agent_participant(space.id, agent_b, display_name: "Nova")
+
+      Chat.add_space_agent(space.id, agent_a.id, role: "principal")
+      Chat.add_space_agent(space.id, agent_b.id, role: "member")
+
+      ActiveAgentStore.set_active(space.id, p_a.id)
+
+      message = create_message(space.id, user.id, %{content: "hey @[nova] look"})
+
+      {:ok, decisions} = AttentionRouter.route(message)
+
+      assert Enum.sort(Enum.map(decisions, & &1.participant_id)) == Enum.sort([p_a.id, p_b.id])
+      assert Enum.all?(decisions, &(&1.reason == :multi_mention))
+      assert ActiveAgentStore.get_active(space.id) == nil
+
+      drain()
+    end
+
+    test "skip_mention_scan silences a slug token" do
+      space = create_space(%{kind: "channel"})
+      user = create_participant(space.id)
+      agent = create_agent(%{name: "Zip", slug: "zip-slug-probe"})
+      {:ok, _p} = Chat.add_agent_participant(space.id, agent, display_name: "Zip")
+      Chat.add_space_agent(space.id, agent.id, role: "member")
+
+      message =
+        create_message(space.id, user.id, %{
+          content: "digest quotes @[zip-slug-probe]",
+          metadata: %{"skip_mention_scan" => true}
+        })
+
+      {:ok, decisions} = AttentionRouter.route(message)
+
+      refute Enum.any?(decisions, fn d -> d.reason in [:mention, :multi_mention] end)
+
+      drain()
+    end
+  end
+
   describe "skip_mention_scan metadata flag" do
     test "silences named-agent mention decisions on messages that opt out" do
       # System-event pipelines that embed raw chat activity (Historian digest
