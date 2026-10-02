@@ -527,7 +527,10 @@ defmodule Platform.ExtensionsTest do
       {"experiment_promote", "experiments"}
     ]
 
-    @main_tool_digest_off "18ef952fbe04994869027b2c3edb64cec48acc51dd942bbcaaf4a1b1de32d8b0"
+    # Re-pinned by task 01a0fcfa stage 1: attachment.get_inline's `returns`
+    # and `limitations` text now document the MCP image content block. That
+    # is the only tool-definition change; names and bundles are unchanged.
+    @main_tool_digest_off "aeed155fe1eddc517699538d9ec4a22f158c25fb87ac83672892de7adf56fb68"
     @main_kinds_summaries_digest_off "4c060fb7a6914985f94857aaac9effbb519dd2b2170c7a9c0013d4db15a73ea4"
     @main_kinds_tool_schemas_digest_off "e454cd9e2aeb1d821a70b74fe433e81ba98b94f7ae9f2d59c55f8cf5bf509af8"
     # main's lists minus exactly `play`.

@@ -331,9 +331,10 @@ defmodule Platform.Federation.ToolSurface do
               "Attachment UUID (from message.attachments[].url or another tool's payload)"
           }
         },
-        returns: "%{content_type, byte_size, data_base64, filename}",
+        returns:
+          "%{content_type, byte_size, data_base64, filename}. Over /mcp, a PNG, JPEG, GIF or WebP (sniffed from the bytes) up to mcp_image_block_max_bytes (default 3,750,000) arrives as an MCP image content block, and the JSON text block omits data_base64. Declared images that are not eligible carry image_block_skipped with the reason.",
         limitations:
-          "Capped at 25 MB. Caller agent must be a participant in the space the attachment belongs to. Attachments without a parent message space (legacy rows) are not retrievable here.",
+          "Capped at 25 MB. Caller agent must be a participant in the space the attachment belongs to. Attachments without a parent message space (legacy rows) are not retrievable here. Non-image types, and images over mcp_image_block_max_bytes or in other formats (SVG, HEIC, ...), are unchanged: base64 text in data_base64, with image_block_skipped on declared images.",
         when_to_use:
           "When you need to read attachment bytes — e.g. to OCR an image, summarize a document, or hand bytes to a tool that does not accept URLs."
       },

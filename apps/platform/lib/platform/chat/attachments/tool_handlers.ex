@@ -6,6 +6,8 @@ defmodule Platform.Chat.Attachments.ToolHandlers do
     * `upload_start/2` — reserves a pending row and returns a presigned URL
       the agent POSTs raw bytes to within `:pending_ttl_seconds`.
     * `get_inline/2` — reads the bytes back as base64 (capped at 25 MB).
+      PNG/JPEG/GIF/WebP results also carry a `Platform.Federation.McpContent`
+      marker so `/mcp` can deliver them as an MCP image content block.
 
   Both upload paths dedup on `(space_id, content_hash)` at finalize and
   return a `/chat/attachments/<id>` URL the agent can reference as a canvas
@@ -17,6 +19,7 @@ defmodule Platform.Chat.Attachments.ToolHandlers do
   alias Platform.Chat.AttachmentPresigner
   alias Platform.Chat.AttachmentStorage
   alias Platform.Chat.AttachmentStorage.Adapter
+  alias Platform.Federation.McpContent
   alias Platform.Repo
 
   import Ecto.Query, only: [from: 2]
@@ -116,6 +119,13 @@ defmodule Platform.Chat.Attachments.ToolHandlers do
   Read an attachment as base64 inline bytes. Caller must be a participant
   in the space the attachment belongs to. Capped at #{@inline_read_max_bytes}
   bytes (25 MB). Returns `%{content_type, byte_size, data_base64, filename}`.
+
+  When the declared `content_type` is `image/*`, the result is passed
+  through `Platform.Federation.McpContent.offer_image/3`: a PNG, JPEG, GIF
+  or WebP (sniffed from the bytes) within `mcp_image_block_max_bytes` gains
+  the bytes-free image marker, and any other declared image gains an
+  `image_block_skipped` reason. `data_base64` is always present for
+  in-process callers. Non-image results are unchanged.
   """
   @spec get_inline(map(), map()) :: {:ok, map()} | {:error, map()}
   def get_inline(args, context) do
@@ -124,13 +134,18 @@ defmodule Platform.Chat.Attachments.ToolHandlers do
          :ok <- require_member(attachment.space_id, context),
          :ok <- check_inline_read_size(attachment.byte_size),
          {:ok, bytes} <- read_bytes(attachment.storage_key) do
-      {:ok,
-       %{
-         content_type: attachment.content_type,
-         byte_size: byte_size(bytes),
-         data_base64: Base.encode64(bytes),
-         filename: attachment.filename
-       }}
+      result = %{
+        content_type: attachment.content_type,
+        byte_size: byte_size(bytes),
+        data_base64: Base.encode64(bytes),
+        filename: attachment.filename
+      }
+
+      if McpContent.image_content_type?(attachment.content_type) do
+        {:ok, McpContent.offer_image(result, :data_base64, bytes)}
+      else
+        {:ok, result}
+      end
     end
   end
 

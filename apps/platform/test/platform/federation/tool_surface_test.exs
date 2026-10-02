@@ -7707,6 +7707,63 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert result.byte_size == byte_size(bytes)
       assert result.filename == "blob.bin"
       assert {:ok, ^bytes} = Base.decode64(result.data_base64)
+      # Non-image declared type: no image-block marker (task 01a0fcfa).
+      refute Map.has_key?(result, :__mcp_image__)
+      refute Map.has_key?(result, :image_block_skipped)
+    end
+
+    test "attachment.get_inline marks a real PNG for an MCP image block and keeps data_base64",
+         ctx do
+      root =
+        Path.join(System.tmp_dir!(), "att-inline-png-test-#{Ecto.UUID.generate()}")
+
+      prev = Application.get_env(:platform, :chat_attachments_root)
+      Application.put_env(:platform, :chat_attachments_root, root)
+
+      on_exit(fn ->
+        File.rm_rf(root)
+
+        if prev do
+          Application.put_env(:platform, :chat_attachments_root, prev)
+        else
+          Application.delete_env(:platform, :chat_attachments_root)
+        end
+      end)
+
+      # A real 1x1 RGBA PNG (68 bytes).
+      bytes =
+        Base.decode64!(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII="
+        )
+
+      storage_key = "chat/test/inline-#{Ecto.UUID.generate()}.png"
+      target = Path.join(root, storage_key)
+      File.mkdir_p!(Path.dirname(target))
+      File.write!(target, bytes)
+
+      {:ok, attachment} =
+        Chat.create_attachment(%{
+          space_id: ctx.space.id,
+          filename: "dot.png",
+          content_type: "image/png",
+          byte_size: byte_size(bytes),
+          storage_key: storage_key,
+          state: "ready"
+        })
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "attachment.get_inline",
+          %{"attachment_id" => attachment.id},
+          ctx.context
+        )
+
+      assert result.content_type == "image/png"
+      assert result.byte_size == byte_size(bytes)
+      assert result.filename == "dot.png"
+      assert {:ok, ^bytes} = Base.decode64(result.data_base64)
+      assert result.__mcp_image__ == %{field: :data_base64, mime_type: "image/png"}
+      refute Map.has_key?(result, :image_block_skipped)
     end
 
     test "attachment.get_inline rejects payloads above the 25MB cap", ctx do

@@ -19,6 +19,7 @@ defmodule PlatformWeb.MCPController do
   use PlatformWeb, :controller
 
   alias Platform.Chat
+  alias Platform.Federation.McpContent
   alias Platform.Federation.ResultBound
   alias Platform.Federation.ToolArguments
   alias Platform.Federation.ToolAuthorization
@@ -234,7 +235,35 @@ defmodule PlatformWeb.MCPController do
   # no caller has to learn a new envelope to survive a truncation it may never
   # hit. `ResultBound.fit/2` shrinks the term and re-encodes, so block one
   # always parses.
-  defp success_content(data) do
+  #
+  # Image blocks (task 01a0fcfa). A handler that opted in via
+  # `McpContent.offer_image/3` carries a bytes-free marker naming the field
+  # that holds the base64. `McpContent.split/1` lifts that field out: the text
+  # block keeps the metadata plus `image_content_block: true` and NO base64,
+  # and the bytes go in an MCP `image` block appended LAST (text, then any
+  # truncation note, then the image). The image block deliberately sits
+  # OUTSIDE `ResultBound.fit/2`: that backstop bounds TEXT spent from a context
+  # window, while vision providers bill an image by pixels, not by base64
+  # length. Its own size bound is `McpContent.image_block_max_bytes/0`,
+  # enforced when the handler offers the image. Results with no marker (or a
+  # malformed one, which `split/1` logs and drops) take the text path, with
+  # the marker removed so it never reaches the wire.
+  defp success_content(data) when is_map(data) and not is_struct(data) do
+    case McpContent.split(data) do
+      {:image, rest, base64, mime_type} ->
+        rest
+        |> Map.put(:image_content_block, true)
+        |> text_content()
+        |> Map.update!(:content, &(&1 ++ [%{type: "image", data: base64, mimeType: mime_type}]))
+
+      {:none, data} ->
+        text_content(data)
+    end
+  end
+
+  defp success_content(data), do: text_content(data)
+
+  defp text_content(data) do
     case ResultBound.fit(data) do
       {:ok, json} ->
         %{content: [%{type: "text", text: json}], isError: false}

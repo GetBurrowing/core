@@ -13,6 +13,7 @@ defmodule PlatformWeb.RuntimeChannel do
   alias Platform.Chat
   alias Platform.Chat.ReplyContext
   alias Platform.Federation
+  alias Platform.Federation.McpContent
   alias Platform.Federation.RuntimePresence
   alias Platform.Federation.ToolArguments
   alias Platform.Federation.ToolAuthorization
@@ -899,7 +900,16 @@ defmodule PlatformWeb.RuntimeChannel do
           "[RuntimeChannel] tool_result ok: tool=#{tool} call_id=#{call_id} runtime=#{runtime_id} elapsed=#{elapsed}ms"
         )
 
-        push(socket, "tool_result", %{call_id: call_id, status: "ok", result: data})
+        # Drop the `/mcp`-only image-block marker (task 01a0fcfa). This
+        # transport has no image blocks: the openclaw plugin JSON-stringifies
+        # `result` into one text block, so the marker would only leak a
+        # reserved key. `data_base64` stays, so an eligible image's payload
+        # equals the handler's pre-marker map.
+        push(socket, "tool_result", %{
+          call_id: call_id,
+          status: "ok",
+          result: McpContent.strip(data)
+        })
 
       {:error, error} ->
         Logger.warning(

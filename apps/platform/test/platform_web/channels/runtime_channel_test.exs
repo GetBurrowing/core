@@ -2501,6 +2501,68 @@ defmodule PlatformWeb.RuntimeChannelTest do
       assert result.title == "Runtime Canvas"
     end
 
+    # Task 01a0fcfa. `attachment.get_inline` marks an eligible image for an
+    # MCP image block; that marker is `/mcp`-only. Over this socket the result
+    # must be the handler's map without it, `data_base64` intact.
+    test "attachment.get_inline on a PNG pushes data_base64 without the image marker", ctx do
+      png =
+        Base.decode64!(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII="
+        )
+
+      storage_key = "chat/test/rt-png-#{Ecto.UUID.generate()}.png"
+      target = Path.join(Application.fetch_env!(:platform, :chat_attachments_root), storage_key)
+      File.mkdir_p!(Path.dirname(target))
+      File.write!(target, png)
+
+      {:ok, attachment} =
+        Chat.create_attachment(%{
+          space_id: ctx.space.id,
+          filename: "dot.png",
+          content_type: "image/png",
+          byte_size: byte_size(png),
+          storage_key: storage_key,
+          state: "ready"
+        })
+
+      # Guard that the strip below has something to strip: the in-process
+      # handler result DOES carry the marker for these bytes.
+      {:ok, in_process} =
+        ToolSurface.execute(
+          "attachment.get_inline",
+          %{"attachment_id" => attachment.id},
+          %{agent_id: ctx.agent.id, agent_participant_id: ctx.agent_participant.id}
+        )
+
+      assert Map.has_key?(in_process, Platform.Federation.McpContent.marker_key())
+
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, socket} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      push(socket, "tool_call", %{
+        "call_id" => "call-png",
+        "tool" => "attachment.get_inline",
+        "args" => %{"attachment_id" => attachment.id}
+      })
+
+      assert_push "tool_result", %{call_id: "call-png", status: "ok", result: result}
+
+      assert result == %{
+               content_type: "image/png",
+               byte_size: byte_size(png),
+               data_base64: Base.encode64(png),
+               filename: "dot.png"
+             }
+
+      refute Map.has_key?(result, :__mcp_image__)
+    end
+
     # The vulnerability this task closes: before the gate, the channel
     # executed anything it was asked to, so `allowed_bundles` was advisory
     # over WebSocket and a default-grant runtime could create tasks.

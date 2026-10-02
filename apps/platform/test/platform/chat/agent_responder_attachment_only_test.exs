@@ -512,6 +512,11 @@ defmodule Platform.Chat.AgentResponderAttachmentOnlyTest do
       assert result.content_type == "image/png"
       assert result.byte_size == byte_size(bytes)
       assert {:ok, ^bytes} = Base.decode64(result.data_base64)
+
+      # The fixture bytes are not a real PNG, so no MCP image block is
+      # offered (task 01a0fcfa). Assert it rather than let it pass silently.
+      refute Map.has_key?(result, :__mcp_image__)
+      assert result.image_block_skipped =~ "not PNG, JPEG, GIF or WebP"
     end
   end
 end

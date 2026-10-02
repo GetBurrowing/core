@@ -253,6 +253,176 @@ defmodule PlatformWeb.MCPControllerTest do
     defp unique, do: System.unique_integer([:positive])
   end
 
+  describe "image content blocks (task 01a0fcfa)" do
+    # A real 1x1 RGBA PNG (68 bytes).
+    @png Base.decode64!(
+           "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII="
+         )
+
+    setup do
+      prev_root = Application.get_env(:platform, :chat_attachments_root)
+      root = Platform.TestTemp.mkdir!("mcp_controller_image_blocks")
+      Application.put_env(:platform, :chat_attachments_root, root)
+
+      on_exit(fn ->
+        File.rm_rf(root)
+
+        if prev_root do
+          Application.put_env(:platform, :chat_attachments_root, prev_root)
+        else
+          Application.delete_env(:platform, :chat_attachments_root)
+        end
+      end)
+
+      u = System.unique_integer([:positive])
+
+      {:ok, space} =
+        Platform.Chat.create_space(%{name: "MCP Images", slug: "mcp-img-#{u}", kind: "channel"})
+
+      {:ok, agent} =
+        %Platform.Agents.Agent{}
+        |> Platform.Agents.Agent.changeset(%{
+          slug: "mcp-img-agent-#{u}",
+          name: "MCP Image Agent",
+          status: "active"
+        })
+        |> Repo.insert()
+
+      {:ok, _participant} =
+        Platform.Chat.add_agent_participant(space.id, agent, display_name: agent.name)
+
+      # `build_context/2` resolves membership from the runtime's `agent_id`.
+      {_runtime, token} = create_runtime(%{agent_id: agent.id})
+
+      %{root: root, space: space, token: token}
+    end
+
+    defp store_attachment(ctx, bytes, content_type, filename) do
+      storage_key = "chat/test/mcp-img-#{Ecto.UUID.generate()}"
+      target = Path.join(ctx.root, storage_key)
+      File.mkdir_p!(Path.dirname(target))
+      File.write!(target, bytes)
+
+      {:ok, attachment} =
+        Platform.Chat.create_attachment(%{
+          space_id: ctx.space.id,
+          filename: filename,
+          content_type: content_type,
+          byte_size: byte_size(bytes),
+          storage_key: storage_key,
+          state: "ready"
+        })
+
+      attachment
+    end
+
+    defp get_inline(conn, token, attachment) do
+      conn
+      |> mcp_post(
+        token,
+        rpc("tools/call", %{
+          "name" => "attachment.get_inline",
+          "arguments" => %{"attachment_id" => attachment.id}
+        })
+      )
+      |> json_response(200)
+      |> Map.fetch!("result")
+    end
+
+    # The PNG test and the octet-stream control below store IDENTICAL bytes.
+    # If the controller ignored the marker, this test fails on block count
+    # (one text block, not text + image). If the controller lifted every
+    # base64-bearing result, the control fails (it would gain an image block).
+    test "a PNG arrives as a text metadata block followed by an image block",
+         %{conn: conn} = ctx do
+      attachment = store_attachment(ctx, @png, "image/png", "dot.png")
+
+      result = get_inline(conn, ctx.token, attachment)
+
+      assert result["isError"] == false
+
+      assert [%{"type" => "text", "text" => text}, image] = result["content"]
+      assert %{"type" => "image", "mimeType" => "image/png", "data" => data} = image
+      assert Map.keys(image) |> Enum.sort() == ["data", "mimeType", "type"]
+      assert Base.decode64!(data) == @png
+
+      assert Jason.decode!(text) == %{
+               "filename" => "dot.png",
+               "byte_size" => byte_size(@png),
+               "content_type" => "image/png",
+               "image_content_block" => true
+             }
+
+      # The bytes cross the wire once, in the image block only.
+      refute String.contains?(text, Base.encode64(@png))
+      refute String.contains?(text, "__mcp_image__")
+    end
+
+    test "POSITIVE CONTROL: the same bytes stored as application/octet-stream stay text only",
+         %{conn: conn} = ctx do
+      attachment = store_attachment(ctx, @png, "application/octet-stream", "dot.bin")
+
+      result = get_inline(conn, ctx.token, attachment)
+
+      assert result["isError"] == false
+      assert [%{"type" => "text", "text" => text}] = result["content"]
+
+      decoded = Jason.decode!(text)
+      assert Base.decode64!(decoded["data_base64"]) == @png
+      refute Map.has_key?(decoded, "image_content_block")
+    end
+
+    for {content_type, filename, bytes} <- [
+          {"text/plain", "notes.txt", "plain text body\n"},
+          {"application/pdf", "doc.pdf", "%PDF-1.4\n%fake pdf body\n"}
+        ] do
+      test "#{content_type} is one text block with exactly the pre-change keys",
+           %{conn: conn} = ctx do
+        bytes = unquote(bytes)
+        attachment = store_attachment(ctx, bytes, unquote(content_type), unquote(filename))
+
+        result = get_inline(conn, ctx.token, attachment)
+
+        assert result["isError"] == false
+        assert [%{"type" => "text", "text" => text}] = result["content"]
+
+        assert Jason.decode!(text) == %{
+                 "content_type" => unquote(content_type),
+                 "byte_size" => byte_size(bytes),
+                 "data_base64" => Base.encode64(bytes),
+                 "filename" => unquote(filename)
+               }
+      end
+    end
+
+    test "a PNG over mcp_image_block_max_bytes stays base64 text and says why",
+         %{conn: conn} = ctx do
+      prev = Application.get_env(:platform, :mcp_image_block_max_bytes)
+      Application.put_env(:platform, :mcp_image_block_max_bytes, 32)
+
+      on_exit(fn ->
+        if prev do
+          Application.put_env(:platform, :mcp_image_block_max_bytes, prev)
+        else
+          Application.delete_env(:platform, :mcp_image_block_max_bytes)
+        end
+      end)
+
+      attachment = store_attachment(ctx, @png, "image/png", "dot.png")
+
+      result = get_inline(conn, ctx.token, attachment)
+
+      assert result["isError"] == false
+      assert [%{"type" => "text", "text" => text}] = result["content"]
+
+      decoded = Jason.decode!(text)
+      assert Base.decode64!(decoded["data_base64"]) == @png
+      assert decoded["image_block_skipped"] =~ "32-byte"
+      refute Map.has_key?(decoded, "image_content_block")
+      refute Map.has_key?(decoded, "__mcp_image__")
+    end
+  end
+
   describe "tools/call" do
     test "runs a tool that is in scope", %{conn: conn} do
       {_runtime, token} = create_runtime(%{allowed_bundles: ["federation"]})
