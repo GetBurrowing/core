@@ -294,6 +294,28 @@ defmodule Platform.Chat.Canvas.KindsGameStreamTest do
       refute end_hidden?(html)
     end
 
+    test "audio uses a dedicated element and starts in an honest waiting state" do
+      html = render_state(status("live"))
+      parsed = doc(html)
+
+      [video] = Floki.find(parsed, "video[data-gs-video]")
+      assert Floki.attribute(video, "muted") != []
+
+      [audio] = Floki.find(parsed, "audio[data-gs-audio]")
+      assert Floki.attribute(audio, "autoplay") != []
+      assert Floki.attribute(audio, "playsinline") != []
+
+      [state] = Floki.find(parsed, "[data-gs-audio-state]")
+      assert Floki.attribute(state, "data-gs-audio-state") == ["waiting"]
+      assert String.trim(Floki.text(state)) == "Waiting for audio"
+      assert Floki.attribute(state, "aria-live") == ["polite"]
+
+      [mute] = Floki.find(parsed, "button[data-gs-mute]")
+      assert Floki.attribute(mute, "disabled") != []
+      assert Floki.attribute(mute, "aria-pressed") == ["false"]
+      assert String.trim(Floki.text(mute)) == "Mute"
+    end
+
     test "the capture ring is the only primary in a v1 node, and starts hidden" do
       html = render_state(status("live"))
       [ring] = html |> doc() |> Floki.find("[data-gs-ring]")

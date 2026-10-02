@@ -38,7 +38,7 @@ function fakeEvent(code, extra = {}) {
 
 function forwarder({ captured = true } = {}) {
   const sent = []
-  const state = { captured, escapes: 0, inputs: 0 }
+  const state = { captured, escapes: 0, mutes: 0, inputs: 0 }
   const composer = {
     nodeType: 1,
     tagName: "TEXTAREA",
@@ -53,6 +53,7 @@ function forwarder({ captured = true } = {}) {
     isCaptured: () => state.captured,
     send: m => sent.push(m),
     onEscape: () => state.escapes++,
+    onMute: () => state.mutes++,
     onInput: () => state.inputs++,
     doc,
   })
@@ -106,6 +107,23 @@ describe("KeyForwarder while captured", () => {
     expect(sent).toEqual([])
     expect(state.escapes).toBe(1)
     expect(e.prevented).toBe(1)
+  })
+
+  it("consumes M at the browser layer and toggles exactly once per press", () => {
+    const { f, sent, state } = forwarder()
+    const down = fakeEvent("KeyM")
+    const repeat = fakeEvent("KeyM", { repeat: true })
+    const up = fakeEvent("KeyM")
+
+    f.keydown(down)
+    f.keydown(repeat)
+    f.keyup(up)
+
+    expect(state.mutes).toBe(1)
+    expect(sent).toEqual([])
+    expect(down.prevented).toBe(1)
+    expect(repeat.prevented).toBe(1)
+    expect(up.prevented).toBe(1)
   })
 
   it("blurs the focused chat composer at capture", () => {

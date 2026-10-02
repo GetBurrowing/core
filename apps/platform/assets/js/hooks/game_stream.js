@@ -58,6 +58,7 @@
  * Connecting.
  */
 
+import { AudioPlayback, routeInboundTrack } from "./lib/game_stream_audio.js"
 import { captureReduce, initialCapture } from "./lib/game_stream_capture.js"
 import {
   InputRouter,
@@ -177,6 +178,9 @@ const GameStream = {
 
     const q = sel => this.el.querySelector(sel)
     this.video = q("[data-gs-video]")
+    this.audioEl = q("[data-gs-audio]")
+    this.audioStateEl = q("[data-gs-audio-state]")
+    this.muteBtn = q("[data-gs-mute]")
     this.ring = q("[data-gs-ring]")
     this.dot = q("[data-gs-live-dot]")
     this.endBtn = q("[data-gs-end]")
@@ -250,6 +254,11 @@ const GameStream = {
     this.corner.width = this.corner.height = CORNER_PX
     this.cornerCtx = this.corner.getContext("2d", { willReadFrequently: true })
 
+    this.audio = new AudioPlayback({
+      element: this.audioEl,
+      stateElement: this.audioStateEl,
+      button: this.muteBtn,
+    })
     this.initInput(document)
 
     this.track(this.sessionId)
@@ -286,6 +295,7 @@ const GameStream = {
       isCaptured: () => this.capture.captured && this.active(),
       send: m => this.router.key(m),
       onEscape: () => this.dispatch({ type: "key", code: "Escape" }),
+      onMute: () => this.audio.toggleMute(),
       onInput: () => (this.lastInputAt = Date.now()),
       doc,
     })
@@ -375,14 +385,17 @@ const GameStream = {
 
     click("[data-gs-capture]", e => {
       e.stopPropagation()
+      this.audio.gesture()
       this.dispatch({ type: "click", live: this.canCapture() })
     })
     add(this.el.querySelector("[data-gs-well]"), "click", () => {
+      this.audio.gesture()
       if (this.canCapture()) this.dispatch({ type: "click", live: true })
     })
     click("[data-gs-end]", () => this.end())
     click("[data-gs-leave]", () => this.leave())
     click("[data-gs-join]", () => {
+      this.audio.gesture()
       const slot = parseInt(this.joinBtn && this.joinBtn.dataset.gsJoinSlot, 10)
       this.join(Number.isInteger(slot) ? slot : null)
     })
@@ -423,13 +436,26 @@ const GameStream = {
     add(document, "click", e => {
       if (this.overflowMenu && !this.overflowMenu.hidden && !this.overflowEl.contains(e.target)) this.closeMenu()
     })
-    click("[data-gs-restart]", () => this.restart())
-    click("[data-gs-play-here]", () => this.playHere())
+    click("[data-gs-restart]", () => {
+      this.audio.gesture()
+      this.restart()
+    })
+    click("[data-gs-play-here]", () => {
+      this.audio.gesture()
+      this.playHere()
+    })
+    click("[data-gs-mute]", e => {
+      e.stopPropagation()
+      this.audio.action()
+    })
     // Play here on "elsewhere" (task 01a0ee4f stage 2): a twin in THIS page
     // holds the stream, so take it back in the page. Never playHere(): that
     // pushes game_stream_take_over for slot 0, a window-level take-over that
     // on a multi host would take P1 from another person.
-    click("[data-gs-play-here-twin]", () => this.attach("take"))
+    click("[data-gs-play-here-twin]", () => {
+      this.audio.gesture()
+      this.attach("take")
+    })
     click("[data-gs-reload]", () => window.location.reload())
     click("[data-gs-fullscreen]", () => this.toggleFullscreen())
 
@@ -801,14 +827,14 @@ const GameStream = {
     this.statFrames = null
 
     pc.ontrack = e => {
-      this.video.removeAttribute("poster")
       try {
         e.receiver.jitterBufferTarget = 0
       } catch (_) {}
-      this.video.muted = true
-      this.video.srcObject = e.streams[0] || new MediaStream([e.track])
-      this.video.play().catch(() => {})
-      this.watchFrames(pcId)
+      routeInboundTrack(e, {
+        video: this.video,
+        audio: this.audio,
+        onVideo: () => this.watchFrames(pcId),
+      })
     }
     pc.ondatachannel = e => {
       if (e.channel.label === "input-events") this.events = e.channel
@@ -873,6 +899,7 @@ const GameStream = {
     this.events = null
     this.stateCh = null
     this.hasFrames = false
+    if (this.audio) this.audio.detach()
     if (pc) {
       try {
         pc.close()

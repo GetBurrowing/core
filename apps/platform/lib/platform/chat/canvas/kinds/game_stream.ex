@@ -374,6 +374,8 @@ defmodule Platform.Chat.Canvas.Kinds.GameStream do
           class="absolute inset-0 size-full object-contain"
         >
         </video>
+        <%!-- Audio is separate from muted video so video autoplay cannot suppress it. --%>
+        <audio data-gs-audio autoplay playsinline class="hidden"></audio>
         <div
           data-gs-ring
           hidden
@@ -535,6 +537,24 @@ defmodule Platform.Chat.Canvas.Kinds.GameStream do
         >
         </span>
         <span data-gs-hint class="hidden shrink-0 text-xs text-base-content/60 @sm:inline"></span>
+        <span
+          data-gs-audio-state="waiting"
+          class="shrink-0 text-xs text-base-content/60"
+          aria-live="polite"
+        >
+          Waiting for audio
+        </span>
+        <button
+          type="button"
+          data-gs-mute
+          disabled
+          aria-pressed="false"
+          aria-label="Mute game audio"
+          title="Mute game audio (M)"
+          class="btn btn-ghost btn-xs shrink-0"
+        >
+          Mute
+        </button>
         <span
           data-gs-stats
           class="ml-auto shrink-0 font-mono text-xs text-base-content/60"

@@ -61,10 +61,11 @@ function editable(el) {
  * nothing at all and the page behaves as if the canvas were not there.
  */
 export class KeyForwarder {
-  constructor({ isCaptured, send, onEscape, onInput, doc }) {
+  constructor({ isCaptured, send, onEscape, onMute, onInput, doc }) {
     this.isCaptured = isCaptured
     this.send = send
     this.onEscape = onEscape || (() => {})
+    this.onMute = onMute || (() => {})
     this.onInput = onInput || (() => {})
     this.doc = doc
   }
@@ -83,6 +84,13 @@ export class KeyForwarder {
 
     if (event.code === ESCAPE || event.key === ESCAPE) {
       if (down) this.onEscape()
+      return true
+    }
+
+    // M is the browser playback control: consume both edges, toggle only on
+    // the first keydown, and never also forward it into the game.
+    if (event.code === "KeyM") {
+      if (down && !event.repeat) this.onMute()
       return true
     }
 
