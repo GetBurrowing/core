@@ -254,8 +254,14 @@ defmodule Platform.GameStream.ExtensionParityTest do
 
     # sha256 of the canonical term of `tool_definitions/0` on main (see
     # `digest/1`), flag unset and set.
-    @main_tool_digest_off "18ef952fbe04994869027b2c3edb64cec48acc51dd942bbcaaf4a1b1de32d8b0"
-    @main_tool_digest_on "eba8c515793d5bca41dbba406055eab2558c671516a3de0d0c3c28457d86bb05"
+    #
+    # Re-pinned by task 01a0fcfa: attachment.get_inline's `returns` and
+    # `limitations` text now document the MCP image content block. That is
+    # the only tool-definition change. The off digest equals the one
+    # apps/platform/test/platform/extensions_test.exs already pins for the
+    # same change; both values were measured by main CI at ccff9306b.
+    @main_tool_digest_off "aeed155fe1eddc517699538d9ec4a22f158c25fb87ac83672892de7adf56fb68"
+    @main_tool_digest_on "396ffdd2b405d9601d1245485c7fef9be1f59553af12ed483b4f2b0fad56c997"
     @main_kinds_summaries_digest_off "4c060fb7a6914985f94857aaac9effbb519dd2b2170c7a9c0013d4db15a73ea4"
     @main_kinds_summaries_digest_on "dbab62a1b3d154e23378f3a990b77deb17c5f50eb30adf0b055bc0df8ce6c1e3"
     @main_kinds_tool_schemas_digest_off "e454cd9e2aeb1d821a70b74fe433e81ba98b94f7ae9f2d59c55f8cf5bf509af8"
