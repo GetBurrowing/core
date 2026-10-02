@@ -12,7 +12,7 @@
 # images cannot drift apart in what they install, expose or run.
 
 # ── Stage 1: Build ────────────────────────────────────────────
-FROM elixir:1.20.2-otp-28-slim AS build
+FROM elixir:1.20.4-otp-28-slim AS build
 
 RUN apt-get update -y \
  && apt-get install -y build-essential git curl ca-certificates \
@@ -80,7 +80,7 @@ RUN mix compile
 RUN mix release
 
 # ── Stage 2: Runtime ──────────────────────────────────────────
-FROM elixir:1.20.2-otp-28-slim AS app
+FROM elixir:1.20.4-otp-28-slim AS app
 
 # Same build arg re-declared for this stage (ARGs do not cross stages) so the
 # image carries its commit as an OCI label:

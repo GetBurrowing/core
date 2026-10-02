@@ -88,6 +88,7 @@ defmodule Platform.MixProject do
       version: "0.1.0",
       elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
+      elixirc_options: module_definition_opts(),
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
       deps: deps(),
@@ -110,6 +111,46 @@ defmodule Platform.MixProject do
     [
       preferred_envs: [precommit: :test]
     ]
+  end
+
+  # Experiment surface for the Elixir 1.20 `module_definition` compiler option
+  # (task 01a0fd73). SUITE_MODULE_DEFINITION selects the variant:
+  #
+  #   * "compiled" (default) returns [], so the default build passes no
+  #     1.20-only option at all and stays identical to a build without this
+  #     hook. That keeps the `elixir: "~> 1.15"` requirement honest.
+  #   * "interpreted" returns [module_definition: :interpreted].
+  #
+  # Anything else raises: a typo must never silently measure the default.
+  #
+  # Upstream downsides of :interpreted: compile-error stacktraces from module
+  # bodies are less precise, and an anonymous function defined in a
+  # defmodule body (outside any def) is limited to 20 arguments.
+  #
+  # Flipping the variant on a WARM _build is not a stale-artifact hazard: Mix
+  # records elixirc_options in the compile manifest, so a flip in either
+  # direction recompiles every platform file (911 of 911 on 1.20.4), while
+  # re-running the same variant, or "compiled" against unset, is a no-op.
+  # Measured in task 01a0fd73 stage 2; see
+  # notes/2026-10-02-elixir-1.20.4-module-definition.md, which also records
+  # why the default stays "compiled".
+  #
+  # Only this project carries the hook. apps/game_stream and apps/suite_release
+  # compile platform as a path dep with this mix.exs, so it reaches platform
+  # code in all three builds.
+  defp module_definition_opts do
+    case System.get_env("SUITE_MODULE_DEFINITION", "compiled") do
+      "compiled" ->
+        []
+
+      "interpreted" ->
+        [module_definition: :interpreted]
+
+      other ->
+        Mix.raise(
+          "SUITE_MODULE_DEFINITION must be \"compiled\" or \"interpreted\", got: #{inspect(other)}"
+        )
+    end
   end
 
   # Specifies which paths to compile per environment.
