@@ -271,24 +271,9 @@ defmodule Platform.Chat.AgentResponder do
 
           author_participant = Chat.get_participant(context.message.participant_id)
 
-          author_name =
-            if author_participant, do: author_participant.display_name, else: "unknown"
-
           payload = %{
             signal: build_external_signal(signal, space_id, context.agent),
-            message: %{
-              # DELIBERATELY the literal trimmed body, NOT `agent_body/2`.
-              # A federated runtime is handed the attachments structurally
-              # under `message.attachments` and renders them itself; a
-              # server-side manifest here would put the same facts in two
-              # places and let a client read whichever it found first. The
-              # built-in path has no such second channel — the provider sees
-              # `content` and nothing else — which is why THAT path renders
-              # and this one does not (task 019ff107).
-              content: context.user_message,
-              author: author_name,
-              attachments: context.attachments
-            },
+            message: external_message(context, author_participant),
             history: Enum.map(context.history, &external_history_entry/1),
             context: bundle,
             tools: tools
@@ -338,6 +323,52 @@ defmodule Platform.Chat.AgentResponder do
         {:error, :runtime_not_found}
       end
     end
+  end
+
+  @doc """
+  The `message` map of a federated chat attention payload.
+
+  Besides the body, display name and attachments, it carries the author's
+  identity as the server knows it: `author_type` (the authoring participant's
+  `participant_type`: `"user"`, `"agent"`, or `"system"` for email and
+  peer-install authors), and `author_user_id` / `author_agent_id` (that
+  participant's `participant_id`, set only for the matching type, otherwise
+  `nil`). A runtime may key trust on these (e.g. a
+  per-agent list of owner user ids); a display name is not safe for that,
+  since anyone can choose one.
+
+  Read from the PARTICIPANT row, never from the message's ADR 0038 author
+  snapshot: `put_author_snapshot/3` lets caller-supplied `author_*` attrs win
+  over the derived ones, so the snapshot is caller-settable and the
+  participant row is not. With no participant every identity field is `nil`.
+  """
+  @spec external_message(map(), %Participant{} | nil) :: map()
+  def external_message(context, author_participant) do
+    {author_name, author_type, user_id, agent_id} =
+      case author_participant do
+        %Participant{participant_type: type, participant_id: pid, display_name: name} ->
+          {name, type, if(type == "user", do: pid), if(type == "agent", do: pid)}
+
+        _ ->
+          {"unknown", nil, nil, nil}
+      end
+
+    %{
+      # DELIBERATELY the literal trimmed body, NOT `agent_body/2`.
+      # A federated runtime is handed the attachments structurally
+      # under `message.attachments` and renders them itself; a
+      # server-side manifest here would put the same facts in two
+      # places and let a client read whichever it found first. The
+      # built-in path has no such second channel — the provider sees
+      # `content` and nothing else — which is why THAT path renders
+      # and this one does not (task 019ff107).
+      content: context.user_message,
+      author: author_name,
+      author_type: author_type,
+      author_user_id: user_id,
+      author_agent_id: agent_id,
+      attachments: context.attachments
+    }
   end
 
   @doc """
