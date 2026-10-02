@@ -4,7 +4,7 @@ defmodule PlatformWeb.UserAccessLive do
 
   Today's scope (task 019f671f Stage 6): soft-archive / unarchive of
   Suite users. Archived users are hidden from active pickers everywhere
-  (task assignee, DM new-conversation, add-participant sheet — see
+  (task assignee, DM new-conversation — see
   `Accounts.list_users/1` default of `include_archived: false`) but
   historical attribution (past-authored messages, memory-entry authors,
   task `reported_by`) still resolves because those callers opt in with

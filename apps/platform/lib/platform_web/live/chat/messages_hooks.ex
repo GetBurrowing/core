@@ -37,6 +37,10 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     * `:highlighted_message_id`
     * `:streaming_replies`
     * `:drafts` — space_id → compose text
+    * `:refused_summons` — msg_id → [agent name] for this session's own
+      messages whose `@[agent]` mention was refused (task 01a0fd62 stage 2).
+      Author-only and ephemeral: it is fed by a direct `send/2` from
+      `Platform.Chat` to the posting process, never by PubSub.
 
   ## Events
 
@@ -45,6 +49,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     * Reactions: `"react"`, `"open_reaction_picker"`, `"close_reaction_picker"`
     * Threads: `"open_thread"`, `"close_thread"`, `"send_thread_message"`,
       `"toggle_inline_thread"`, `"send_inline_thread_message"`
+    * Refused summons: `"dismiss_refused_summon"`
 
   ## Info handled
 
@@ -53,6 +58,8 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     * `{:message_updated, msg}`, `{:message_deleted, msg}`
     * `{:reaction_added, r}`, `{:reaction_removed, data}`
     * `{:agent_reply_chunk, %{...}}`
+    * `{:mention_summon_refused, msg_id, names}` — sent only to the author's
+      own process by `Platform.Chat` when a mention could not add an agent
 
   ## Public helpers for cross-feature coordinators
 
@@ -147,6 +154,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     |> assign(:evicted_tail_message_ids, MapSet.new())
     |> assign_compose("")
     |> assign_thread_compose("")
+    |> assign(:refused_summons, %{})
     |> stream(:messages, [])
     |> attach_hook(:messages_events, :handle_event, &handle_event/3)
     |> attach_hook(:messages_info, :handle_info, &handle_info/2)
@@ -337,6 +345,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     |> assign(:expanded_threads, MapSet.new())
     |> assign(:inline_thread_messages, %{})
     |> assign(:streaming_replies, %{})
+    |> assign(:refused_summons, %{})
     |> assign(:msg_day_labels, day_labels)
     |> assign(:last_msg_day, last_day)
     |> assign(:first_msg_day, first_day)
@@ -1005,6 +1014,16 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     end
   end
 
+  # Author-only refused-summon notice (task 01a0fd62 stage 2). Dropping the
+  # key and re-rendering the row is the whole of it: the notice was never
+  # persisted, so there is nothing else to undo.
+  defp handle_event("dismiss_refused_summon", %{"id" => msg_id}, socket) do
+    {:halt,
+     socket
+     |> update(:refused_summons, &Map.delete(&1, msg_id))
+     |> reinsert_refused_summon_row(msg_id)}
+  end
+
   defp handle_event(_event, _params, socket), do: {:cont, socket}
 
   # ── Info callbacks ────────────────────────────────────────────────────
@@ -1315,7 +1334,53 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     end
   end
 
+  # Sent by `Platform.Chat` straight to the posting process (`from_pid`), so
+  # only the author's own LiveView ever receives it. A message outside the
+  # space on screen is ignored: the notice is tied to a row the author can
+  # see, and switching space resets the map anyway.
+  defp handle_info({:mention_summon_refused, msg_id, names}, socket)
+       when is_binary(msg_id) and is_list(names) do
+    case socket.assigns[:active_space] do
+      %{id: space_id} ->
+        case Chat.get_message(msg_id, scope: socket.assigns[:external_scope]) do
+          %{space_id: ^space_id} ->
+            {:halt,
+             socket
+             |> update(:refused_summons, &Map.put(&1, msg_id, names))
+             |> reinsert_refused_summon_row(msg_id)}
+
+          _ ->
+            {:halt, socket}
+        end
+
+      _ ->
+        {:halt, socket}
+    end
+  end
+
   defp handle_info(_msg, socket), do: {:cont, socket}
+
+  # The notice for a top-level message renders inside its own stream row; the
+  # notice for an inline-thread reply renders inside the PARENT's row (the
+  # reply is not a stream item), so that is the row to re-render.
+  defp reinsert_refused_summon_row(socket, msg_id) do
+    case Chat.get_message(msg_id, scope: socket.assigns[:external_scope]) do
+      %{thread_id: thread_id} when is_binary(thread_id) ->
+        case Chat.get_thread(thread_id) do
+          %{parent_message_id: parent_id} when is_binary(parent_id) ->
+            reinsert_stream_message(socket, parent_id)
+
+          _ ->
+            socket
+        end
+
+      %{} ->
+        reinsert_stream_message(socket, msg_id)
+
+      nil ->
+        socket
+    end
+  end
 
   defp stream_insert_frozen(socket, %Platform.Chat.Message{} = msg) do
     enriched = msg |> enrich_versions_count() |> enrich_with_reactions(socket)

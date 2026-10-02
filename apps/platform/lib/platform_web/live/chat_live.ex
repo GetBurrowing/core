@@ -52,6 +52,7 @@ defmodule PlatformWeb.ChatLive do
   alias PlatformWeb.ChatLive.PinHooks
   alias PlatformWeb.ChatLive.PresenceHooks
   alias PlatformWeb.ChatLive.SearchHooks
+  alias PlatformWeb.ChatLive.MembersComponent
   alias PlatformWeb.ChatLive.SettingsComponent
   alias PlatformWeb.ChatLive.UploadHooks
   alias PlatformWeb.Extensions
@@ -679,6 +680,8 @@ defmodule PlatformWeb.ChatLive do
       # %{message_id, versions} when open. Filled by show_version_history.
       |> assign(:version_history, nil)
       |> assign(:show_settings, false)
+      # Channel members panel (task 01a0fd62 stage 3, MembersComponent).
+      |> assign(:show_members, false)
       |> assign(:quick_emojis, @quick_emojis)
       # `:push_permission` is seeded by `PlatformWeb.ShellLive`'s on_mount
       # (task 019ffb7b stage 3), which every live_session ChatLive is routed
@@ -991,7 +994,7 @@ defmodule PlatformWeb.ChatLive do
       Chat.get_space_by_slug(slug_or_id, org_id: active_org_id) ||
         (valid_uuid?(slug_or_id) && Chat.get_space(slug_or_id)) ||
         system_prefix_fallback(slug_or_id) ||
-        maybe_bootstrap_space(params, slug_or_id, active_org_id)
+        maybe_bootstrap_space(params, slug_or_id, active_org_id, socket.assigns.user_id)
 
     # EXTERNAL ADMISSION GATE (task 01a011ed). Folded into the SAME condition as
     # "did not resolve" on purpose: one branch and one outcome, so an off-limits
@@ -2829,6 +2832,15 @@ defmodule PlatformWeb.ChatLive do
     {:noreply, assign(socket, :show_settings, true)}
   end
 
+  # ── Members panel (see MembersComponent, task 01a0fd62 stage 3) ───────────
+  #
+  # Opened from the header "members" button and from the refused-summon
+  # notice's "View members". Opening is harmless for anyone: the panel's
+  # controls are affordance only and the Chat context re-authorizes writes.
+  def handle_event("members_open", _params, socket) do
+    {:noreply, assign(socket, :show_members, true)}
+  end
+
   defp confirm_junk_batch_actor_id(socket) do
     case socket.assigns do
       %{current_participant: %{user_id: id}} when is_binary(id) -> id
@@ -3672,6 +3684,14 @@ defmodule PlatformWeb.ChatLive do
     {:noreply, assign(socket, :show_settings, false)}
   end
 
+  def handle_info({:members_closed}, socket) do
+    {:noreply, assign(socket, :show_members, false)}
+  end
+
+  def handle_info({:members_flash, kind, msg}, socket) do
+    {:noreply, put_flash(socket, kind, msg)}
+  end
+
   def handle_info({:settings_navigate, path}, socket) do
     {:noreply,
      socket
@@ -4057,13 +4077,18 @@ defmodule PlatformWeb.ChatLive do
   # Gate on the deep-link param (task 019fabe8 stage 4). Present => refuse to
   # auto-create; the caller's `is_nil(space)` branch then clears the stale
   # route-resume entry and lands the reader on `/chat`.
-  defp maybe_bootstrap_space(%{"message" => msg} = _params, _slug, _org_id)
+  defp maybe_bootstrap_space(%{"message" => msg} = _params, _slug, _org_id, _user_id)
        when is_binary(msg) and msg != "",
        do: nil
 
-  defp maybe_bootstrap_space(_params, slug, org_id), do: bootstrap_space(slug, org_id)
+  defp maybe_bootstrap_space(_params, slug, org_id, user_id),
+    do: bootstrap_space(slug, org_id, user_id)
 
-  defp bootstrap_space(slug, org_id) when is_binary(slug) do
+  # `user_id` is the navigating user, who is this channel's creator by every
+  # definition we have (task 01a0fd62): stamping it as `created_by` makes
+  # `Chat.create_space/1` seat them as admin, and `ensure_participant/2` then
+  # finds that row and inserts nothing.
+  defp bootstrap_space(slug, org_id, user_id) when is_binary(slug) do
     cond do
       # Never bootstrap for UUIDs — those are fetched directly
       valid_uuid?(slug) ->
@@ -4104,6 +4129,7 @@ defmodule PlatformWeb.ChatLive do
         attrs =
           %{name: name, slug: slug, kind: "channel"}
           |> maybe_put_org_id(org_id)
+          |> maybe_put_created_by(user_id)
 
         case Chat.create_space(attrs) do
           {:ok, space} -> space
@@ -4112,7 +4138,12 @@ defmodule PlatformWeb.ChatLive do
     end
   end
 
-  defp bootstrap_space(_, _), do: nil
+  defp bootstrap_space(_, _, _), do: nil
+
+  defp maybe_put_created_by(attrs, user_id) when is_binary(user_id),
+    do: Map.put(attrs, :created_by, user_id)
+
+  defp maybe_put_created_by(attrs, _), do: attrs
 
   # Safety-net lookup for system-managed slug prefixes (exec, meeting, dm,
   # group). These spaces are minted by orchestration code paths and MAY

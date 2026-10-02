@@ -30,6 +30,7 @@ defmodule PlatformWeb.ChatLive.NewChannelComponent do
      socket
      |> assign_new(:org_options, fn -> [] end)
      |> assign_new(:active_org_id, fn -> nil end)
+     |> assign_new(:current_user_id, fn -> nil end)
      |> assign(assigns)}
   end
 
@@ -54,6 +55,7 @@ defmodule PlatformWeb.ChatLive.NewChannelComponent do
     attrs =
       %{name: name, slug: slug, description: desc}
       |> put_org_id(resolve_org_id(params, socket))
+      |> put_created_by(socket.assigns[:current_user_id])
 
     case Chat.create_channel(attrs) do
       {:ok, space} ->
@@ -89,6 +91,14 @@ defmodule PlatformWeb.ChatLive.NewChannelComponent do
 
   defp put_org_id(attrs, nil), do: attrs
   defp put_org_id(attrs, org_id), do: Map.put(attrs, :org_id, org_id)
+
+  # The submitting user is the channel's creator (task 01a0fd62). Stamping it
+  # is what makes `Chat.create_space/1` seat them as the channel's admin; before
+  # this every UI-created channel had `created_by = NULL` and no admin.
+  defp put_created_by(attrs, user_id) when is_binary(user_id),
+    do: Map.put(attrs, :created_by, user_id)
+
+  defp put_created_by(attrs, _), do: attrs
 
   defp format_error(%Ecto.Changeset{} = changeset) do
     case changeset.errors do

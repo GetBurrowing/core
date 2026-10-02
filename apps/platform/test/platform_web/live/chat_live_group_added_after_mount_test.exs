@@ -104,9 +104,8 @@ defmodule PlatformWeb.ChatLiveGroupAddedAfterMountTest do
 
       _ = render(view)
 
-      # THE ADD. `Chat.add_participant/2` is what the in-chat add-participant
-      # sheet calls (`add_participant_sheet.ex` -> `Chat.add_participant/2` ->
-      # `do_add_participant/2`), which emits
+      # THE ADD. `Chat.add_participant/2` (-> `do_add_participant/2`) is the
+      # in-chat add_participant path, which emits
       # `broadcast_sidebar_changed_from(p.participant_id, self())`. The
       # excluded pid is the TEST process here, so the viewer's LiveView gets it.
       join!(group, viewer)

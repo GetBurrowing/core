@@ -106,4 +106,57 @@ defmodule PlatformWeb.ChatLiveBootstrapDuplicateTest do
       assert Enum.any?(rows, &(&1.id == sxi_chan.id))
     end
   end
+
+  # Task 01a0fd62-a7ef-7001-8477-bd17e47bbaca stage 1.
+  describe "the user whose navigation bootstraps a channel" do
+    test "is stamped as created_by and seated once, as admin", %{conn: conn} do
+      slug = "bootstrap-creator-admin-chan"
+      assert rows_for(slug) == []
+
+      user = create_user!("fabrikam-creator")
+      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+      membership!(user, fabrikam)
+
+      conn = init_test_session(conn, current_user_id: user.id)
+      {:ok, _view, _html} = live(conn, ~p"/chat/#{slug}")
+
+      assert [%Space{id: space_id, created_by: created_by}] = rows_for(slug)
+      assert created_by == user.id
+
+      rows =
+        Repo.all(
+          from(p in Platform.Chat.Participant,
+            where:
+              p.space_id == ^space_id and p.participant_type == "user" and
+                p.participant_id == ^user.id
+          )
+        )
+
+      assert [%{role: "admin"}] = rows
+    end
+
+    test "adopting an existing org-less channel does not make the navigator its admin",
+         %{conn: conn} do
+      slug = "adopted-no-admin-chan"
+      {:ok, orgless} = Chat.create_channel(%{name: "Adopted", slug: slug})
+
+      user = create_user!("fabrikam-adopter")
+      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+      membership!(user, fabrikam)
+
+      conn = init_test_session(conn, current_user_id: user.id)
+      {:ok, _view, _html} = live(conn, ~p"/chat/#{slug}")
+
+      rows =
+        Repo.all(
+          from(p in Platform.Chat.Participant,
+            where:
+              p.space_id == ^orgless.id and p.participant_type == "user" and
+                p.participant_id == ^user.id
+          )
+        )
+
+      assert [%{role: "member"}] = rows
+    end
+  end
 end

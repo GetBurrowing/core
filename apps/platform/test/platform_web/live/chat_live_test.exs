@@ -3030,6 +3030,12 @@ defmodule PlatformWeb.ChatLiveTest do
 
   describe "settings modal" do
     test "opens settings modal for a channel with name/description/topic fields", %{conn: conn} do
+      # The channel must exist BEFORE this user navigates to it. Navigating to
+      # an unknown slug bootstraps the channel with the navigator as
+      # `created_by` (task 01a0fd62), which would make this user its creator
+      # and so allowed to archive it, defeating the premise below.
+      {:ok, _} = Chat.create_channel(%{name: "General", slug: "general"})
+
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/chat/general")
 

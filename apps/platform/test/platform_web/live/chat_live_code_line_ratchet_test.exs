@@ -512,7 +512,21 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   # `unread_counts_for_user/1` collapsed to the call itself, one line either
   # way. 2350 - 2 = 2348, re-derived from the guard's own measurement on
   # 1.20.2 (task 019f5931 stage 2).
-  @chat_live_code_line_count 2348
+  #
+  # Channel creator admin (task 01a0fd62 stage 1): +5. `bootstrap_space/2`
+  # became `bootstrap_space/3` so the navigating user is stamped as the new
+  # channel's `created_by`: the user_id threaded through
+  # `maybe_bootstrap_space/4` (+1, the one-line clause split across two), the
+  # `maybe_put_created_by/2` pipeline step (+1) and its two clauses (+3).
+  # 2348 + 5 = 2353, re-derived from the guard's own measurement.
+  #
+  # Channel members panel (task 01a0fd62 stage 3): +11. The
+  # `MembersComponent` alias (+1), the `:show_members` assign (+1), the
+  # `"members_open"` handle_event (+3) and the `{:members_closed}` and
+  # `{:members_flash, _, _}` handle_info clauses (+3 each), mirroring the
+  # settings modal's wiring. 2353 + 11 = 2364, re-derived from the guard's
+  # own measurement.
+  @chat_live_code_line_count 2364
 
   @doc """
   Count the CODE lines of a source file.

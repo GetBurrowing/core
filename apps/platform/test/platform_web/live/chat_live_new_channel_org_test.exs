@@ -109,4 +109,42 @@ defmodule PlatformWeb.ChatLiveNewChannelOrgTest do
       assert org_id == fabrikam.id
     end
   end
+
+  # Task 01a0fd62-a7ef-7001-8477-bd17e47bbaca stage 1. Before this the dialog
+  # never stamped `created_by`, so the creator's only row came from
+  # `ensure_participant/2` on first navigation, with the default `member` role.
+  describe "the dialog's creator" do
+    test "is seated once, as admin, and navigation adds no second row", %{conn: conn} do
+      user = create_user!("creator-admin")
+      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+      membership!(user, fabrikam)
+
+      conn = init_test_session(conn, current_user_id: user.id)
+      view = open_dialog(conn)
+
+      submit(view, %{"name" => "Creator Admin Chan", "description" => ""})
+
+      # The dialog asks the parent to navigate (`{:new_channel_navigate, path}`),
+      # so the redirect surfaces on the view, not out of `render_submit`.
+      {to, _flash} = assert_redirect(view)
+
+      assert [%Space{id: space_id, created_by: created_by}] = rows_for("creator-admin-chan")
+      assert created_by == user.id
+
+      # Follow the navigation the dialog requested: this is where
+      # `ensure_participant/2` would have inserted a second, member row.
+      {:ok, _view, _html} = live(conn, to)
+
+      rows =
+        Repo.all(
+          from(p in Platform.Chat.Participant,
+            where:
+              p.space_id == ^space_id and p.participant_type == "user" and
+                p.participant_id == ^user.id
+          )
+        )
+
+      assert [%{role: "admin"}] = rows
+    end
+  end
 end

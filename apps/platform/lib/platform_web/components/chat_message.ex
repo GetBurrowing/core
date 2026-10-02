@@ -44,6 +44,13 @@ defmodule PlatformWeb.Components.ChatMessage do
   # bar, hover toolbar, longpress sheet, reaction add, thread reply) in
   # one place — the context layer independently rejects the writes.
   attr(:read_only, :boolean, default: false)
+  # Task 01a0fd62 stage 2: msg_id → [agent name] for THIS viewer's own
+  # messages whose `@[agent]` mention was refused. Only the author's
+  # LiveView ever has an entry (see MessagesHooks), so a row rendered for
+  # anyone else finds nothing here and shows no notice.
+  attr(:refused_summons, :map, default: %{})
+  # The active space's kind, which picks who the notice says can act.
+  attr(:space_kind, :string, default: "channel")
 
   def chat_message(assigns) do
     ~H"""
@@ -544,6 +551,13 @@ defmodule PlatformWeb.Components.ChatMessage do
             </a>
           </div>
 
+          <.refused_summon_notice
+            :if={Map.has_key?(@refused_summons, @msg.id)}
+            msg_id={@msg.id}
+            names={Map.get(@refused_summons, @msg.id, [])}
+            space_kind={@space_kind}
+          />
+
           <%!-- Reaction pills, rendered only when there are reactions to show
                (task 01a000c0 stage 4).
 
@@ -701,6 +715,12 @@ defmodule PlatformWeb.Components.ChatMessage do
                   <div class="msg-text">
                     {Platform.Chat.ContentRenderer.render_message(tmsg.content)}
                   </div>
+                  <.refused_summon_notice
+                    :if={Map.has_key?(@refused_summons, tmsg.id)}
+                    msg_id={tmsg.id}
+                    names={Map.get(@refused_summons, tmsg.id, [])}
+                    space_kind={@space_kind}
+                  />
                 </div>
               </div>
 
@@ -856,6 +876,104 @@ defmodule PlatformWeb.Components.ChatMessage do
     </time>
     """
   end
+
+  # ── Refused agent summon notice (task 01a0fd62 stage 2) ──────────────
+  #
+  # Design: Saru's canvas "Refused agent mention: author notice", candidate
+  # (a). An inline, author-only, ephemeral notice under the author's own
+  # message: no fill (the row's ground shows through), a 2px info-blue left
+  # rule and icon as the only colour, the statement at full `text-base-content`
+  # and the meta line at `/60` (the measured AA floor). `role="status"` is
+  # polite on purpose; a permission explanation is not an alert.
+  attr(:msg_id, :string, required: true)
+  attr(:names, :list, required: true)
+  attr(:space_kind, :string, default: "channel")
+
+  defp refused_summon_notice(assigns) do
+    assigns =
+      assigns
+      |> assign(:verb, if(length(assigns.names) == 1, do: "was", else: "were"))
+      |> assign(:reason, refused_summon_reason(assigns.space_kind))
+
+    ~H"""
+    <div
+      role="status"
+      data-role="refused-summon-notice"
+      data-refused-for={@msg_id}
+      class="mt-1 flex items-start gap-1.5 border-l-2 border-info pl-2 text-xs text-base-content"
+    >
+      <span class="hero-information-circle size-3.5 shrink-0 text-info mt-px" aria-hidden="true">
+      </span>
+      <div class="min-w-0 flex-1">
+        <p class="break-words">
+          <.refused_names parts={refused_name_parts(@names)} /> {@verb} not added. {@reason}
+        </p>
+        <div class="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-base-content/60">
+          <span data-role="refused-summon-visibility" class="text-[11px]">Only you can see this</span>
+          <span aria-hidden="true">·</span>
+          <%!-- Task 01a0fd62 stage 3: the members panel is where admins are
+               identifiable, so it is the next step. Channels only; the panel
+               button exists only there. --%>
+          <button
+            :if={@space_kind == "channel"}
+            type="button"
+            phx-click="members_open"
+            data-role="refused-summon-view-members"
+            class="btn btn-ghost btn-xs rounded-field px-1 text-xs font-medium text-base-content/60 max-sm:min-h-11 max-sm:min-w-11 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+          >
+            View members
+          </button>
+          <span :if={@space_kind == "channel"} aria-hidden="true">·</span>
+          <button
+            type="button"
+            phx-click="dismiss_refused_summon"
+            phx-value-id={@msg_id}
+            data-role="refused-summon-dismiss"
+            class="btn btn-ghost btn-xs rounded-field px-1 text-xs font-medium text-base-content/60 max-sm:min-h-11 max-sm:min-w-11 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+          >
+            Dismiss
+          </button>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  # Kept on ONE short line at low indent on purpose: `mix format` breaks a long
+  # HEEx line between the tags, and the newline it inserts renders as a space
+  # BEFORE each separator ("@a , @b"). The three-agent LiveView test pins it.
+  attr(:parts, :list, required: true)
+
+  defp refused_names(assigns) do
+    ~H"""
+    <span :for={{sep, name} <- @parts}>{sep}<span class="font-medium">@{name}</span></span>
+    """
+  end
+
+  # "@a", "@a and @b", "@a, @b and @c": each name paired with the separator
+  # that precedes it.
+  defp refused_name_parts(names) do
+    count = length(names)
+
+    names
+    |> Enum.with_index()
+    |> Enum.map(fn
+      {name, 0} -> {"", name}
+      {name, idx} when idx == count - 1 -> {" and ", name}
+      {name, _idx} -> {", ", name}
+    end)
+  end
+
+  # Who can act, by space kind (canvas open question 5). Groups have no admin
+  # row on main (`create_group` seats members), so their copy is accurate but
+  # nobody can currently satisfy it; that is a follow-up, not this ticket.
+  defp refused_summon_reason("execution"),
+    do: "Only the task's sponsor can bring agents into this space."
+
+  defp refused_summon_reason("channel"),
+    do: "Only a channel admin can bring agents into this channel."
+
+  defp refused_summon_reason(_kind), do: "Only an admin of this conversation can bring agents in."
 
   defp format_timestamp(%DateTime{} = dt), do: Calendar.strftime(dt, "%I:%M %p")
 

@@ -96,6 +96,14 @@ defmodule Platform.Chat do
         # historian joined a beat later" UI flicker.
         maybe_add_historian(space)
 
+        # Seat a channel's recorded creator as its admin (task
+        # 01a0fd62-a7ef-7001-8477-bd17e47bbaca), BEFORE the broadcast for the
+        # same reason as the historian above: a subscriber rendering the roster
+        # on :space_created sees the admin already present. Without this no
+        # code path granted a user `role: "admin"` in a channel, so
+        # `mention_summon_authorized?/2` was false for every human author.
+        maybe_seat_creator_admin(space)
+
         # Broadcast on the global space-lifecycle topic so connected chat
         # sessions can surface the new channel without requiring a refresh.
         ChatPubSub.broadcast_space_event({:space_created, space})
@@ -137,6 +145,65 @@ defmodule Platform.Chat do
       )
 
       :ok
+  end
+
+  # Channels only. DM and group creation stamp `created_by` AND seat their own
+  # participants, so seating here would collide with their rows; the kind guard
+  # is what keeps those paths untouched. A channel created without a user
+  # creator (MCP `space_create`, where an agent is the creator) seats no one.
+  defp maybe_seat_creator_admin(%Space{kind: "channel", created_by: user_id} = space)
+       when is_binary(user_id) do
+    seat_creator_admin(space, user_id)
+  rescue
+    err ->
+      Logger.warning(
+        "[Chat.create_space] creator admin seat raised for space_id=#{space.id}: " <>
+          Exception.message(err)
+      )
+
+      :ok
+  end
+
+  defp maybe_seat_creator_admin(_space), do: :ok
+
+  # Mirrors `Platform.Federation.Peers.SharedSpaces.seat_admin/2`. If a row for
+  # the creator already exists (a race with `ChatLive.ensure_participant/2`),
+  # ONLY that row's role is promoted; nothing else on it is rewritten.
+  defp seat_creator_admin(space, user_id) do
+    attrs = %{
+      participant_type: "user",
+      participant_id: user_id,
+      role: "admin",
+      display_name: user_display_name(user_id),
+      joined_at: DateTime.utc_now()
+    }
+
+    case add_participant(space.id, attrs) do
+      {:ok, _participant} ->
+        :ok
+
+      {:error, reason} ->
+        case Repo.get_by(Participant,
+               space_id: space.id,
+               participant_type: "user",
+               participant_id: user_id
+             ) do
+          %Participant{role: "admin"} ->
+            :ok
+
+          %Participant{} = existing ->
+            {:ok, _} = update_participant(existing, %{role: "admin"})
+            :ok
+
+          nil ->
+            Logger.warning(
+              "[Chat.create_space] creator admin seat failed for space_id=#{space.id}: " <>
+                inspect(reason)
+            )
+
+            :ok
+        end
+    end
   end
 
   defp attach_historian(space, historian_id, slug) do
@@ -1887,7 +1954,7 @@ defmodule Platform.Chat do
 
     case result do
       {:ok, msg} ->
-        reinvite_and_pin_mentioned(msg)
+        msg |> reinvite_and_pin_mentioned() |> notify_refused_summons(msg, opts)
         emit_inbox_for_mentions(msg)
         publish_message_posted(msg, opts)
         {:ok, msg}
@@ -1955,7 +2022,7 @@ defmodule Platform.Chat do
           |> Enum.sort_by(fn {{:attachment, index}, _value} -> index end)
           |> Enum.map(fn {_key, attachment} -> attachment end)
 
-        reinvite_and_pin_mentioned(message)
+        message |> reinvite_and_pin_mentioned() |> notify_refused_summons(message, opts)
         emit_inbox_for_mentions(message)
         publish_message_posted(message, opts)
         {:ok, message, attachments}
@@ -4769,19 +4836,25 @@ defmodule Platform.Chat do
             # the task owning an execution space, may summon an agent into it.
             # An unauthorized author's mention is a silent no-op: no row, no
             # error, the message posts normally.
-            if mention_summon_authorized?(space, msg) do
-              from(a in Platform.Agents.Agent, where: a.status != "archived")
-              |> maybe_scope_to_workspace(space.workspace_id)
-              |> Repo.all()
-              |> Enum.each(fn agent ->
-                slug = String.downcase(agent.slug || "")
-                name = String.downcase(agent.name || "")
+            #
+            # Task 01a0fd62 stage 2: an unauthorized mention is no longer
+            # silent TO ITS AUTHOR. The agents it would have added (matched
+            # by token AND not already present) come back as
+            # `{:refused, agents}` so the post path can tell the author's own
+            # process. Already-present agents are not refused: the mention is
+            # honoured by the attention router as before.
+            matched = mentioned_summonable_agents(space, tokens)
 
-                if slug in tokens or name in tokens do
-                  reinstate_on_mention(space_id, agent)
+            result =
+              if mention_summon_authorized?(space, msg) do
+                Enum.each(matched, &reinstate_on_mention(space_id, &1))
+                :ok
+              else
+                case reject_present_agents(space_id, matched) do
+                  [] -> :ok
+                  refused -> {:refused, refused}
                 end
-              end)
-            end
+              end
 
             # Stage 3 pin-propagation pass. Only executes when the space is
             # a task's execution space AND the message author is that task's
@@ -4789,12 +4862,101 @@ defmodule Platform.Chat do
             # side-effect layered on top of the reinvite; it must never
             # crash the message-post transaction.
             maybe_propagate_task_pins(space, msg, tokens)
-            :ok
+            result
         end
     end
   end
 
   defp reinvite_and_pin_mentioned(_), do: :ok
+
+  # Agents a `@[…]` token in `tokens` names (slug OR display name,
+  # case-insensitive) among the space's summonable set.
+  defp mentioned_summonable_agents(%Space{} = space, tokens) do
+    space
+    |> summonable_agents_query()
+    |> Repo.all()
+    |> Enum.filter(fn agent ->
+      String.downcase(agent.slug || "") in tokens or String.downcase(agent.name || "") in tokens
+    end)
+  end
+
+  defp reject_present_agents(_space_id, []), do: []
+
+  defp reject_present_agents(space_id, agents) do
+    ids = Enum.map(agents, & &1.id)
+
+    present =
+      from(p in Participant,
+        where:
+          p.space_id == ^space_id and p.participant_type == "agent" and
+            p.participant_id in ^ids,
+        select: p.participant_id
+      )
+      |> Repo.all()
+      |> MapSet.new()
+
+    Enum.reject(agents, &MapSet.member?(present, &1.id))
+  end
+
+  @doc """
+  The agents eligible to be brought into `space` by name: every non-archived
+  agent, scoped to the space's workspace when it has one (agents with no
+  workspace stay eligible everywhere).
+
+  This is the set the mention-summon path matches `@[…]` tokens against, and
+  the one any member picker must offer, so the two cannot disagree about who
+  can be summoned (task 01a0fd62).
+  """
+  @spec summonable_agents_query(Space.t()) :: Ecto.Query.t()
+  def summonable_agents_query(%Space{} = space) do
+    from(a in Platform.Agents.Agent, where: a.status != "archived")
+    |> maybe_scope_to_workspace(space.workspace_id)
+  end
+
+  @doc """
+  The summonable agents (`summonable_agents_query/1`) that are NOT already
+  participants of `space`, ordered by name. This is the members panel's
+  "Add agent" picker (task 01a0fd62 stage 3).
+  """
+  @spec list_addable_agents(Space.t()) :: [Agent.t()]
+  def list_addable_agents(%Space{id: space_id} = space) do
+    present =
+      from(p in Participant,
+        where: p.space_id == ^space_id and p.participant_type == "agent",
+        select: p.participant_id
+      )
+
+    space
+    |> summonable_agents_query()
+    |> where([a], a.id not in subquery(present))
+    |> order_by([a], asc: a.name)
+    |> Repo.all()
+  end
+
+  # Tell the author's own process that its mention was refused (task 01a0fd62
+  # stage 2). `reinvite_and_pin_mentioned/1` runs synchronously inside the
+  # caller, and both UI send paths pass `from_pid: self()`, so `from_pid` IS
+  # the author's LiveView: a direct `send/2` reaches exactly that process and
+  # no other member's. Agent and MCP authors (no `author_user_id`, or no
+  # `from_pid`) get nothing. A post-commit side effect: it must never crash
+  # the post, so a failure here is logged and swallowed.
+  defp notify_refused_summons(result, %Message{} = msg, opts) do
+    with {:refused, [_ | _] = agents} <- result,
+         pid when is_pid(pid) <- Keyword.get(opts, :from_pid),
+         author when is_binary(author) <- msg.author_user_id do
+      send(pid, {:mention_summon_refused, msg.id, Enum.map(agents, &(&1.name || &1.slug))})
+    end
+
+    :ok
+  rescue
+    error ->
+      Logger.error(
+        "[Chat] notify_refused_summons failed for message #{inspect(msg.id)}: " <>
+          Exception.format(:error, error, __STACKTRACE__)
+      )
+
+      :ok
+  end
 
   # ── Inbox producer (task 019f904c-904d — M2) ───────────────────────────────
   #
@@ -4973,17 +5135,101 @@ defmodule Platform.Chat do
   # Two grounds, either sufficient:
   #   * the author is a `user` participant of THIS space with role "admin";
   #   * the space is an execution space whose task the author sponsors —
-  #     resolved with the same `sponsor_authored?/2` predicate
-  #     `maybe_propagate_task_pins/3` already uses, not a second lookup.
+  #     the same `sponsor_user_id == author` comparison `sponsor_authored?/2`
+  #     makes for `maybe_propagate_task_pins/3`, keyed on a user id since
+  #     task 01a0fd62 so `can_summon_agents?/2` can ask it without a message.
   #
   # Anything else (agent authors, ordinary members, observers, a message with
   # no snapshotted author user) is unauthorized.
-  defp mention_summon_authorized?(%Space{} = space, %Message{author_user_id: author_id} = msg)
-       when is_binary(author_id) do
-    admin_user_participant?(space.id, author_id) or sponsor_of_space_task?(space, msg)
-  end
+  defp mention_summon_authorized?(%Space{} = space, %Message{author_user_id: author_id}),
+    do: can_summon_agents?(space, author_id)
 
   defp mention_summon_authorized?(_space, _msg), do: false
+
+  @doc """
+  Whether `user_id` may bring agents into `space` (task 01a0ac64's rule,
+  extracted unchanged by task 01a0fd62 stage 2).
+
+  Two grounds, either sufficient: the user is a `user` participant of the
+  space with role `"admin"`, or the space is an execution space whose task the
+  user sponsors. Anything else, including a non-binary `user_id`, is false.
+  """
+  @spec can_summon_agents?(Space.t(), term()) :: boolean()
+  def can_summon_agents?(%Space{} = space, user_id) when is_binary(user_id) do
+    admin_user_participant?(space.id, user_id) or sponsor_of_space_task?(space, user_id)
+  end
+
+  def can_summon_agents?(_space, _user_id), do: false
+
+  @doc """
+  Add an agent to `space` on behalf of `actor_user_id` from the channel members
+  panel (task 01a0fd62 stage 3).
+
+  The server is the gate; the panel only offers the control. The actor must
+  satisfy `can_summon_agents?/2`, the same rule the `@[agent]` mention path
+  uses, and the agent must be in `summonable_agents_query/1`, the same set the
+  mention path matches against. The row is written with the opts
+  `reinstate_on_mention/2` uses, so a panel add and a mention add are
+  identical rows, including the bounded `history_visible_from` grant.
+
+  Returns `{:ok, participant}`, or `{:error, :dm | :unauthorized | :not_found}`.
+  """
+  @spec admin_add_agent(Space.t(), term(), term()) ::
+          {:ok, Participant.t()} | {:error, :dm | :unauthorized | :not_found | term()}
+  def admin_add_agent(%Space{kind: "dm"}, _actor_user_id, _agent_id), do: {:error, :dm}
+
+  def admin_add_agent(%Space{} = space, actor_user_id, agent_id) do
+    if can_summon_agents?(space, actor_user_id) do
+      # `resolve_agent/1` guards a malformed id itself (nil, never a cast
+      # error), and the eligibility read pins the LOADED row's id.
+      with %Agent{} = agent <- resolve_agent(agent_id),
+           true <- summonable_agent?(space, agent) do
+        add_agent_participant(space.id, agent,
+          attention_mode: "mention",
+          history_visible_from: DateTime.utc_now()
+        )
+      else
+        _ -> {:error, :not_found}
+      end
+    else
+      {:error, :unauthorized}
+    end
+  end
+
+  defp summonable_agent?(%Space{} = space, %Agent{id: agent_id}) do
+    space |> summonable_agents_query() |> where([a], a.id == ^agent_id) |> Repo.exists?()
+  end
+
+  @doc """
+  Remove an agent participant from `space` on behalf of `actor_user_id` from
+  the channel members panel (task 01a0fd62 stage 3).
+
+  Same authorization as `admin_add_agent/3`. Only an AGENT row of this space
+  can be removed here (`{:error, :not_an_agent}` for a user row). On success
+  the active-agent mutex is released if it pointed at the removed row, the
+  same cleanup MCP `space_leave` does.
+
+  Returns `{:ok, participant}`, or
+  `{:error, :dm | :unauthorized | :not_found | :not_an_agent}`.
+  """
+  @spec admin_remove_agent(Space.t(), term(), term()) ::
+          {:ok, Participant.t()}
+          | {:error, :dm | :unauthorized | :not_found | :not_an_agent | term()}
+  def admin_remove_agent(%Space{kind: "dm"}, _actor_user_id, _participant_id),
+    do: {:error, :dm}
+
+  def admin_remove_agent(%Space{} = space, actor_user_id, participant_id) do
+    with true <- can_summon_agents?(space, actor_user_id) || {:error, :unauthorized},
+         # `get_space_participant/2` guards both ids and scopes the row to
+         # THIS space, so a participant id from another space is not found.
+         %Participant{} = participant <-
+           get_space_participant(space.id, participant_id) || {:error, :not_found},
+         true <- participant.participant_type == "agent" || {:error, :not_an_agent},
+         {:ok, removed} <- remove_participant(participant) do
+      Platform.Chat.ActiveAgentStore.clear_if_match(space.id, removed.id)
+      {:ok, removed}
+    end
+  end
 
   defp admin_user_participant?(space_id, user_id) do
     Repo.exists?(
@@ -4995,16 +5241,19 @@ defmodule Platform.Chat do
     )
   end
 
-  defp sponsor_of_space_task?(%Space{kind: "execution"} = space, %Message{} = msg) do
+  defp sponsor_of_space_task?(%Space{kind: "execution"} = space, user_id) do
     with %{"task_id" => task_id} when is_binary(task_id) <- space.metadata || %{},
-         %Platform.Tasks.Task{} = task <- Repo.get(Platform.Tasks.Task, task_id) do
-      sponsor_authored?(task, msg)
+         %Platform.Tasks.Task{sponsor_user_id: sponsor_id} when is_binary(sponsor_id) <-
+           Repo.get(Platform.Tasks.Task, task_id) do
+      # The same comparison `sponsor_authored?/2` makes, keyed on a user id
+      # rather than a message so callers without a message can ask it.
+      sponsor_id == user_id
     else
       _ -> false
     end
   end
 
-  defp sponsor_of_space_task?(_space, _msg), do: false
+  defp sponsor_of_space_task?(_space, _user_id), do: false
 
   defp reinstate_on_mention(space_id, %Platform.Agents.Agent{} = agent) do
     case add_agent_participant(space_id, agent,

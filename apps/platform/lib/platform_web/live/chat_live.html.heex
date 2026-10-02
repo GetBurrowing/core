@@ -304,6 +304,7 @@
         mention_source={@mention_source}
         editing_message_id={@editing_message_id}
         rendered_message_ids={@rendered_message_ids}
+        refused_summons={@refused_summons}
         embedded={@embedded}
       />
 
@@ -496,6 +497,17 @@
   current_user_id={@user_id}
 />
 
+<%!-- Channel members panel (task 01a0fd62 stage 3). Opened by the header
+     "members" button (channels only) and the refused-summon notice. --%>
+<.live_component
+  :if={!@embedded}
+  module={MembersComponent}
+  id="chat-members"
+  open={@show_members}
+  space={@active_space}
+  current_user_id={@user_id}
+/>
+
 <%!-- New-channel creation is internal-only chrome — external users never see a
      new-channel affordance, so the modal is also gated off their surface. --%>
 <.live_component
@@ -505,6 +517,7 @@
   open={@show_new_channel_modal}
   org_options={@new_channel_org_options}
   active_org_id={@active_org_id}
+  current_user_id={@user_id}
 />
 
 <%!-- rbac-external-users M5 stage 3: the DM picker IS available to external

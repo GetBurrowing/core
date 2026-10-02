@@ -437,8 +437,7 @@ defmodule PlatformWeb.ChatLive.Partials do
   The bottom sheet `row_actions_control/1` opens (task 019fe998).
 
   Wraps the shared `PlatformWeb.Components.Sheet` primitive — the same one
-  `Components.MoreSheet` and `Components.Chat.AddParticipantSheet` wrap. No
-  second sheet, no bespoke popover.
+  `Components.MoreSheet` wraps. No second sheet, no bespoke popover.
 
   ## Placement and breakpoint
 

@@ -493,6 +493,20 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
           </span>
         </button>
 
+        <%!-- Channel members panel (task 01a0fd62 stage 3). Channels only:
+             a DM or group has no admin who could bring an agent in from it.
+             `min-h-11 min-w-11` is the agent-eye touch-target pattern above. --%>
+        <button
+          :if={@active_space.kind == "channel"}
+          phx-click="members_open"
+          data-role="members-open"
+          class="flex min-h-11 min-w-11 items-center justify-center gap-1 rounded px-2 py-0.5 text-xs text-base-content/50 hover:text-base-content transition-colors hover:bg-base-300 md:min-h-0 md:min-w-0"
+          title="Channel members"
+        >
+          <span class="hero-users size-4"></span>
+          <span class="hidden md:inline">members</span>
+        </button>
+
         <button
           phx-click="settings_open"
           class="flex items-center gap-1 rounded px-2 py-0.5 text-xs text-base-content/50 hover:text-base-content transition-colors hover:bg-base-300"

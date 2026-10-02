@@ -1086,7 +1086,7 @@ defmodule PlatformWeb.ChatLiveExternalRailTest do
                "double-delivery signature"
     end
 
-    test "the in-chat add-participant path subscribes the session too", ctx do
+    test "the in-chat add_participant path subscribes the session too", ctx do
       {:ok, view, _html} =
         ctx.conn |> with_chat_host() |> authed(ctx.ext) |> live("/chat/#{ctx.landing.slug}")
 
@@ -1094,8 +1094,8 @@ defmodule PlatformWeb.ChatLiveExternalRailTest do
       granted = channel!("Client Retainer", org_id: ctx.org.id)
       _ = render(view)
 
-      # `Chat.add_participant/2`, which is the add-participant sheet's path and
-      # a different choke point from the one the test above exercises.
+      # `Chat.add_participant/2`, the in-chat add_participant path and a
+      # different choke point from the one the test above exercises.
       join!(granted, ctx.ext)
       _ = render(view)
 
@@ -1115,7 +1115,7 @@ defmodule PlatformWeb.ChatLiveExternalRailTest do
 
       assert Map.get(assigns(view).unread_counts, granted.id, 0) >
                Map.get(before_unread, granted.id, 0),
-             "the add-participant-sheet path left the badge dead"
+             "the in-chat add_participant path left the badge dead"
 
       assert registrations(view, granted) == 1
     end

@@ -258,7 +258,8 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
      |> update(:participants_map, fn map ->
        Map.put(map, participant.id, participant_identity(participant, user, agent_avatars))
      end)
-     |> reinsert_rendered_messages(MessagesHooks.active_space_id(socket))}
+     |> reinsert_rendered_messages(MessagesHooks.active_space_id(socket))
+     |> refresh_members_panel()}
   end
 
   # The viewer's OWN removal continues down the chain; everybody else's stops
@@ -267,12 +268,15 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
   # but ChatLive owns the subscription lifecycle (task 01a0181f) and its
   # release clause cannot see an event this hook halts.
   defp handle_info({:participant_left, %{participant_type: "user"} = participant}, socket) do
+    socket = refresh_members_panel(socket)
+
     if participant.participant_id == socket.assigns[:user_id],
       do: {:cont, socket},
       else: {:halt, socket}
   end
 
-  defp handle_info({:participant_left, _participant}, socket), do: {:halt, socket}
+  defp handle_info({:participant_left, _participant}, socket),
+    do: {:halt, refresh_members_panel(socket)}
 
   defp handle_info(%Phoenix.Socket.Broadcast{event: "presence_diff"}, socket) do
     if external_active_out_of_scope?(socket) do
@@ -842,5 +846,19 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
     end
   rescue
     _ -> false
+  end
+
+  # The members panel (task 01a0fd62 stage 3) lists the roster from the DB, so
+  # a join or leave broadcast for the space on screen re-reads it while the
+  # panel is open. Another admin's add in a second window lands here too.
+  defp refresh_members_panel(socket) do
+    if socket.assigns[:show_members] do
+      Phoenix.LiveView.send_update(PlatformWeb.ChatLive.MembersComponent,
+        id: "chat-members",
+        refresh: true
+      )
+    end
+
+    socket
   end
 end

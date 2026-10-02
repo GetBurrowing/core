@@ -101,9 +101,15 @@ defmodule Platform.Design.FocusRingCensusTest do
   # chat_message.ex's header "Context" button and hover-row "Summarise what
   # led here" button (9 -> 11), and overlays.ex's actions-sheet row "What
   # this message is answering" (7 -> 8).
+  #
+  # Task 01a0fd62 stage 2 added the refused-summon notice's "Dismiss" button
+  # to chat_message.ex (11 -> 12).
+  #
+  # Task 01a0fd62 stage 3 added the notice's "View members" button
+  # to chat_message.ex (12 -> 13).
   @expected_required_sites %{
     "assets/css/app.css" => 5,
-    "lib/platform_web/components/chat_message.ex" => 11,
+    "lib/platform_web/components/chat_message.ex" => 13,
     "lib/platform_web/components/chat_message_editor.ex" => 3,
     "lib/platform_web/components/chat_version_history.ex" => 1,
     "lib/platform_web/components/empty_state.ex" => 1,

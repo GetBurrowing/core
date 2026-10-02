@@ -168,6 +168,12 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
   attr(:mention_source, :any, required: true)
   attr(:editing_message_id, :any, required: true)
 
+  attr(:refused_summons, :map,
+    default: %{},
+    doc:
+      "msg_id => [agent name] for this viewer's own messages whose agent mention was refused (task 01a0fd62). Author-only; see MessagesHooks."
+  )
+
   attr(:rendered_message_ids, :any,
     required: true,
     doc:
@@ -260,6 +266,8 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
           mention_source={@mention_source}
           editing_message_id={@editing_message_id}
           read_only={@active_space != nil && @active_space.archived_at != nil}
+          refused_summons={@refused_summons}
+          space_kind={@active_space && @active_space.kind}
         />
       </div>
 

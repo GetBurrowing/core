@@ -116,11 +116,12 @@ defmodule Platform.Regression.SpaceWriteHandleEventAuditTest do
   @chat_context Path.join(@app_root, "lib/platform/chat.ex")
 
   # SCAN ROOT is `lib/platform_web`, NOT `lib/platform_web/live`.
-  # `components/chat/add_participant_sheet.ex` has `handle_event` clauses that
-  # call `Chat.add_participant/2` and `Chat.add_agent_participant/2`, and it is
-  # the PREDICATE that should clear them (its space id is
-  # `socket.assigns[:space_id]`, never a param), not a directory boundary that
-  # never looked.
+  # Components outside `live/` carry `handle_event` clauses too (the deleted
+  # `components/chat/add_participant_sheet.ex` called `Chat.add_participant/2`
+  # and `Chat.add_agent_participant/2` from one, until task 01a0fd62 stage 3
+  # removed it), and it is the PREDICATE that should clear such a clause (a
+  # space id from `socket.assigns`, never a param), not a directory boundary
+  # that never looked.
 
   # ── Anti-vacuity floors ───────────────────────────────────────────────────
   #
