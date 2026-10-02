@@ -317,6 +317,13 @@ const MeetingAskHeardOverlay = {
     this._isHeld = false
     this._userScrolledAway = false
     this._clearCloseTimer()
+    // Defense in depth alongside app.css's `[data-open="true"]` pointer-events
+    // gate: clear the accumulated transcript so a stale "what Burrow heard"
+    // never leaks into the next hold's opening frame (`_open()` also clears
+    // this, but a reader of just THIS lifecycle method should not have to
+    // cross-reference `_open()` to know the box does not carry text across
+    // a close).
+    if (this._text) this._text.textContent = ""
   },
 
   _clearCloseTimer() {

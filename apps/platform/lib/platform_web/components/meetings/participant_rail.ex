@@ -910,15 +910,25 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                        glyph exactly when the hold threshold is crossed —
                        the same moment the underline below finishes
                        drawing and the heard card opens — not at 0ms. --%>
+                    <%!-- `gap-0.5` (2px): both reference canvases set
+                       `.bars { gap: 2px }`; this was `gap-px` (1px). --%>
                     <span
-                      class="absolute inset-0 flex items-center gap-px opacity-0 transition-opacity duration-75 group-data-[held=true]/ptt:opacity-100"
+                      class="absolute inset-0 flex items-center gap-0.5 opacity-0 transition-opacity duration-75 group-data-[held=true]/ptt:opacity-100"
                       data-role="meeting-agent-hold-waveform"
                       aria-hidden="true"
                     >
+                      <%!-- Fidelity fix: both reference canvases draw these
+                         bars at `width: 3px` and full-strength
+                         `currentColor` (no opacity reduction), with
+                         `transition: height .06s`. This span had drifted
+                         to `w-0.5` (2px — Tailwind has no bare 3px step,
+                         hence the arbitrary value), a flat `opacity-70`
+                         dimming never present in either mock, and
+                         `duration-75` (75ms) against the mock's 60ms. --%>
                       <span
                         :for={_bar <- 1..12}
                         data-ptt-bar
-                        class="h-full w-0.5 origin-center rounded-full bg-current opacity-70 transition-transform duration-75"
+                        class="h-full w-[3px] origin-center rounded-full bg-current transition-transform duration-[60ms]"
                         style="transform: scaleY(0.08)"
                       >
                       </span>
@@ -1578,17 +1588,34 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
              `overflow-hidden` trio relied on CLIPPING the top to fake
              "oldest falls off" — real scrolling needs normal top-to-
              bottom flow instead, so `justify-end` is gone too. The
-             top-fade mask lives in `app.css` (`::before` on this
-             data-role) rather than here, since it has to sit at a fixed
-             28px regardless of how tall the box has grown. --%>
-        <div
-          class="max-h-[168px] overflow-y-auto"
-          data-role="meeting-ask-heard-window"
-        >
+             top-fade mask lives in `app.css` (`::before` on the
+             `-window-wrap` data-role just below, NOT on this scrolling
+             div — see that wrapper's own comment for why) rather than
+             here, since it has to sit at a fixed height regardless of how
+             tall the box has grown. --%>
+        <%!-- The fade mask lives on THIS wrapper (`-window-wrap`), not on the
+             scrolling `-window` div it surrounds. `-window` is both the
+             positioning context the old `::before` anchored to AND the
+             `overflow-y-auto` box `_scrollToBottom`/`_onWindowScroll` drive
+             — an absolutely-positioned descendant of a scroll container is
+             part of that container's scrollable overflow region, so a mask
+             anchored to `-window` scrolled away WITH the text instead of
+             staying pinned to the top of the viewport: `top: 0` meant "top
+             of the content," which moves off-screen the moment `scrollTop`
+             advances, not "top of what's visible." The wrapper never
+             scrolls, so a mask anchored to it (see app.css) stays pinned to
+             the visible top edge regardless of how far `-window` has
+             scrolled. --%>
+        <div class="relative" data-role="meeting-ask-heard-window-wrap">
           <div
-            data-role="meeting-ask-heard-text"
-            class="text-base leading-6 text-base-content [overflow-wrap:anywhere]"
+            class="max-h-[168px] overflow-y-auto"
+            data-role="meeting-ask-heard-window"
           >
+            <div
+              data-role="meeting-ask-heard-text"
+              class="text-base leading-6 text-base-content [overflow-wrap:anywhere]"
+            >
+            </div>
           </div>
         </div>
       </div>
