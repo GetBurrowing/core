@@ -199,8 +199,15 @@ defmodule PlatformWeb.MeetingLiveRemoveAgentTest do
 
   defp agent_row_selector(row), do: ~s(li[data-participant-id="#{row.id}"])
 
+  # Round 4 (canvas 01a0fdf2-804d): the bare "Remove from meeting" button
+  # is now the Kick ✕ that OPENS an inline confirm — this selector keeps
+  # its name (every presence/gating assertion below still holds against
+  # it unchanged) but now finds `meeting-agent-kick`.
   defp remove_button_selector(row),
-    do: ~s([data-role="meeting-agent-remove"][phx-value-participant-id="#{row.id}"])
+    do: ~s([data-role="meeting-agent-kick"][phx-value-participant-id="#{row.id}"])
+
+  defp kick_remove_button_selector(row),
+    do: ~s([data-role="meeting-agent-kick-remove"][phx-value-participant-id="#{row.id}"])
 
   # `participant_rail/1` renders twice (the desktop left rail and the phone
   # People tab); scoped to the desktop left rail's wrapper, same reasoning
@@ -322,13 +329,21 @@ defmodule PlatformWeb.MeetingLiveRemoveAgentTest do
 
       refute has_element?(
                view,
-               ~s(li[data-participant-type="user"] [data-role="meeting-agent-remove"])
+               ~s(li[data-participant-type="user"] [data-role="meeting-agent-kick"])
              )
 
-      # A real DOM click on the desktop left rail's button (the People tab
-      # renders a second copy of the roster).
+      # A real DOM click on the desktop left rail's ✕ (the People tab
+      # renders a second copy of the roster) — round 4: this opens the
+      # inline confirm rather than removing directly, so the actual
+      # removal is a second click on the confirm's own "Remove".
       view
       |> element(~s([data-role="meeting-left-rail-agents"] ) <> remove_button_selector(agent_row))
+      |> render_click()
+
+      view
+      |> element(
+        ~s([data-role="meeting-left-rail-agents"] ) <> kick_remove_button_selector(agent_row)
+      )
       |> render_click()
 
       html = render_async(view)
@@ -506,7 +521,7 @@ defmodule PlatformWeb.MeetingLiveRemoveAgentTest do
       refute has_element?(view, @leave_control_selector)
       # Positive control: the per-row icon is also absent for a non-host,
       # so this isn't just proving the rail failed to render at all.
-      refute has_element?(view, ~s([data-role="meeting-agent-remove"]))
+      refute has_element?(view, ~s([data-role="meeting-agent-kick"]))
     end
 
     test "is absent with zero active agents",
@@ -555,7 +570,7 @@ defmodule PlatformWeb.MeetingLiveRemoveAgentTest do
 
       # The agent row renders (positive control) with no button on it.
       assert has_element?(view, agent_row_selector(agent_row))
-      refute has_element?(view, ~s([data-role="meeting-agent-remove"]))
+      refute has_element?(view, ~s([data-role="meeting-agent-kick"]))
 
       render_click(view, "remove_agent_from_call", %{"participant-id" => agent_row.id})
       html = render_async(view)

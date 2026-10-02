@@ -52,17 +52,25 @@
  * `ended` after a rejection could wait forever. The veil's own moduledoc
  * says this for its error line; the same fact applies here.
  *
- * ## Size is fixed from the moment it opens
+ * ## Size grows to ~7 lines, then scrolls (round 4, canvas 01a0fdf2-804d)
  *
- * The text window is a fixed 72px (3 lines at 16px/1.5) with
- * `overflow: hidden`. Appending text is the ONLY thing this hook does to
- * that window's content — no manual scrolling, no line-splitting. A
- * `flex flex-col justify-end` inner container (set in the markup) packs
- * accumulated text against the BOTTOM of the fixed-height window, so as
- * text grows taller than 72px the OLDEST content is what overflows out
- * the top, clipped by the window's own `overflow: hidden` — the "new
- * lines push old lines up and out the top" behaviour falls out of that
- * layout for free, with no JS line-management needed.
+ * Round 3's box was a hard 72px (3 lines) with `overflow: hidden`, which
+ * Dalton's round-4 report called out as too short once a hold outlasts a
+ * sentence or two. The window (`[data-role="meeting-ask-heard-window"]`)
+ * now grows up to `max-h-[168px]` (~7 lines) and then scrolls —
+ * `overflow-y: auto`, not `hidden`. `_appendText` pins newly-arrived text
+ * to the bottom by setting `scrollTop = scrollHeight` after every chunk,
+ * UNLESS `_onWindowScroll` has noticed the viewer scrolled away from the
+ * bottom on their own, in which case new text keeps landing in the DOM
+ * but the scroll position is left alone — "you can scroll back up inside
+ * the box while you talk" (canvas). The top-fade mask that makes the
+ * oldest visible line read as fading out, rather than clipping sharply,
+ * is a `::before` gradient in `app.css`, keyed off the same data-role.
+ * The window is carved out of the overlay's otherwise blanket
+ * `pointer-events: none` (also in `app.css`) specifically so a real
+ * scroll gesture can land on it — safe only because `_wouldOverlapAControl`
+ * below already guarantees this window is never positioned over a
+ * control a click could otherwise have hit.
  *
  * ## Placement: desktop anchors to the row, phone (or any overlap) goes
  * to the top of the viewport
@@ -111,6 +119,8 @@
  * has no sibling element carrying a parallel copy of its own state.
  */
 
+import { getHold, appendHoldText } from "./lib/ptt_hold_state"
+
 const INTERRUPTED_CLOSE_MS = 2_000
 const DESKTOP_MIN_WIDTH_PX = 1024 // Tailwind `lg`
 const DESKTOP_GAP_PX = 8
@@ -132,6 +142,21 @@ const MeetingAskHeardOverlay = {
 
     this._status = this.el.querySelector('[data-role="meeting-ask-heard-status"]')
     this._text = this.el.querySelector('[data-role="meeting-ask-heard-text"]')
+    this._window = this.el.querySelector('[data-role="meeting-ask-heard-window"]')
+
+    // Round 4: the window now scrolls instead of clipping. New text stays
+    // pinned to the bottom (`_appendText` below) UNLESS the viewer has
+    // deliberately scrolled up to read something earlier — this listener
+    // is the only thing that notices that and tells `_appendText` to stop
+    // yanking the scroll position out from under them.
+    this._userScrolledAway = false
+    this._onWindowScroll = () => {
+      if (!this._window) return
+      const distanceFromBottom =
+        this._window.scrollHeight - this._window.scrollTop - this._window.clientHeight
+      this._userScrolledAway = distanceFromBottom > 12
+    }
+    if (this._window) this._window.addEventListener("scroll", this._onWindowScroll)
 
     this._onArmed = (event) => {
       const detail = event && event.detail
@@ -142,6 +167,19 @@ const MeetingAskHeardOverlay = {
     this._onHeld = (event) => {
       const detail = event && event.detail
       if (!detail || detail.agentId !== this._activeAgentId) return
+      // `detail.resume` marks a RE-dispatch from `MeetingPushToTalk.
+      // _resumeHoldIfOurs` — the exact same `-armed`/`-held` pair a fresh
+      // press sends, fired again after a mid-hold remount so every
+      // listener (not just this one) learns the hold is still live. If
+      // THIS hook also just resumed (`_resumeFromWindowState` below,
+      // which runs from `mounted()` before any listener could have
+      // fired), it is already open with whatever text had streamed in
+      // before the previous node was destroyed — `_open()` would wipe
+      // that back to blank the instant the redispatch arrives. A GENUINE
+      // fresh press never carries `resume`, so it always reopens, even if
+      // `_isHeld` was left stale true by a caller that skipped `-ended`
+      // between two holds.
+      if (detail.resume && this._isHeld) return
       this._isHeld = true
       this._open()
     }
@@ -202,6 +240,33 @@ const MeetingAskHeardOverlay = {
       if (!payload || payload.agent_id !== this._activeAgentId) return
       this._appendText(payload.text)
     })
+
+    this._resumeFromWindowState()
+  },
+
+  // Mirrors `MeetingPushToTalk._resumeHoldIfOurs`: if `window`'s one
+  // hold-state record says a hold is already in progress when this node
+  // mounts, a previous overlay node was destroyed mid-hold by a server
+  // re-render, not by the finger coming up. Reopen immediately with
+  // whatever text had already streamed in, rather than starting blank and
+  // waiting for events that — for a hold already past the threshold —
+  // will never arrive again (the button only dispatches `-held` once per
+  // press; see its own resume path for the one case that re-dispatches).
+  _resumeFromWindowState() {
+    const hold = getHold()
+    if (!hold || !hold.agentId) return
+
+    this._activeAgentId = hold.agentId
+    if (!hold.heldLongEnough) return
+
+    this._isHeld = true
+    if (this._status) this._status.textContent = "Listening while you hold"
+    if (this._text) this._text.textContent = hold.text || ""
+    this._userScrolledAway = false
+    this._clearCloseTimer()
+    this._reposition()
+    this.el.dataset.open = "true"
+    this._scrollToBottom()
   },
 
   destroyed() {
@@ -213,6 +278,7 @@ const MeetingAskHeardOverlay = {
     window.removeEventListener("meeting:push-to-talk-rejected", this._onRejected)
     window.removeEventListener("resize", this._onResize)
     window.removeEventListener("scroll", this._onResize, true)
+    if (this._window) this._window.removeEventListener("scroll", this._onWindowScroll)
     this._clearCloseTimer()
   },
 
@@ -238,15 +304,18 @@ const MeetingAskHeardOverlay = {
   _open() {
     if (this._status) this._status.textContent = "Listening while you hold"
     if (this._text) this._text.textContent = ""
+    this._userScrolledAway = false
     this._clearCloseTimer()
     this._reposition()
     this.el.dataset.open = "true"
+    this._scrollToBottom()
   },
 
   _close() {
     this.el.dataset.open = "false"
     this._activeAgentId = null
     this._isHeld = false
+    this._userScrolledAway = false
     this._clearCloseTimer()
   },
 
@@ -255,6 +324,16 @@ const MeetingAskHeardOverlay = {
       clearTimeout(this._closeTimer)
       this._closeTimer = null
     }
+  },
+
+  // Round 4: newest word pinned to the bottom, unless the viewer has
+  // scrolled up to read something earlier (`_onWindowScroll` above) — in
+  // which case new text keeps arriving in the DOM but the scroll position
+  // itself is left alone, matching "you can scroll back up inside the box
+  // while you talk" (canvas 01a0fdf2-804d).
+  _scrollToBottom() {
+    if (!this._window) return
+    this._window.scrollTop = this._window.scrollHeight
   },
 
   // The fixed 72px window plus the flex-end inner container (markup) do
@@ -278,6 +357,11 @@ const MeetingAskHeardOverlay = {
     if (!this._isHeld || !this._text || typeof text !== "string" || text === "") return
     const existing = this._text.textContent || ""
     this._text.textContent = existing ? `${existing} ${text}` : text
+    // Mirrored onto `window` so a mid-hold remount of THIS element can
+    // restore the text instead of reopening blank — see
+    // `_resumeFromWindowState` and `./lib/ptt_hold_state`.
+    appendHoldText(text)
+    if (!this._userScrolledAway) this._scrollToBottom()
   },
 
   // ── Positioning ──────────────────────────────────────────────────────
@@ -387,7 +471,13 @@ const MeetingAskHeardOverlay = {
     const controls = document.querySelectorAll(
       [
         '[data-role="meeting-agent-hold-to-talk"]',
-        '[data-role="meeting-agent-remove"]',
+        // Round 4: the bare "Remove from meeting" button became the Kick
+        // ✕ (`meeting-agent-kick`), which can itself be replaced by the
+        // inline confirm (`meeting-agent-kick-confirm`, holding Cancel/
+        // Remove) — both need to stay reachable under the overlay, same
+        // as the old single button did.
+        '[data-role="meeting-agent-kick"]',
+        '[data-role="meeting-agent-kick-confirm"]',
         '[data-role="meeting-agent-remove-retry"]',
         '[data-role="meeting-agent-mute-retry"]',
         '[data-role="meeting-agent-mute"]',

@@ -512,6 +512,24 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
     doc: "Forwarded to the rail: row id => failed-mute message."
   )
 
+  attr(:kick_confirm_id, :any,
+    default: nil,
+    doc: """
+    Forwarded to `ParticipantRail.participant_rail/1` (round 4, canvas
+    01a0fdf2-804d): the row id currently showing the inline Kick
+    confirm (Cancel/Remove) in place of its ✕.
+    """
+  )
+
+  attr(:agent_removal_undo, :any,
+    default: nil,
+    doc: """
+    Forwarded to the rail: the SAME `%{agent_id:, agent_name:, ref:}` (or
+    nil) `MeetingLive` already carries for the removal Undo toast, now
+    also drawn inline in the Agents list as "<name> left the call" + Undo.
+    """
+  )
+
   attr(:hold_to_talk_id_prefix, :string,
     default: "meeting-people-ptt",
     doc: "Forwarded to the rail as `id_prefix` — distinct from the left rail's."
@@ -789,6 +807,8 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
               muting_ids={@muting_ids}
               muted_agent_ids={@muted_agent_ids}
               mute_errors={@mute_errors}
+              kick_confirm_id={@kick_confirm_id}
+              agent_removal_undo={@agent_removal_undo}
             />
             {render_slot(@people_extra)}
             <.invite_section

@@ -385,6 +385,37 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
     """
   )
 
+  attr(:kick_confirm_id, :any,
+    default: nil,
+    doc: """
+    Round 4 ("touch it" canvas 01a0fdf2-804d) — the `meeting_participants`
+    row id currently showing the inline "Remove <name>? Cancel / Remove"
+    confirm in place of its Kick (✕) control. UI-only state: confirming
+    does not call a different handler than today's bare remove button
+    did — `kick_confirm_open`/`kick_confirm_close` only toggle which of
+    the ✕ / confirm pair is on screen, and the Remove choice inside the
+    confirm fires the SAME `remove_agent_from_call` click `can_remove_
+    agents?`'s button always has, so there is exactly one path that ever
+    removes an agent from the call, same as before this stage.
+    """
+  )
+
+  attr(:agent_removal_undo, :any,
+    default: nil,
+    doc: """
+    `%{agent_id:, agent_name:, ref:}` or `nil` — the SAME assign
+    `MeetingLive` already sets on a successful removal and reads back in
+    `undo_remove_agent` (task 01a0e906 stage 4), now ALSO rendered here as
+    an inline "<name> left the call" + Undo row in the Agents list (round
+    4, canvas 01a0fdf2-804d's "gone" state), alongside its pre-existing
+    toast elsewhere on the page. The removed row itself is gone from
+    `@agents` by the time this is set (`refresh_participants/1` already
+    ran), so this draws as its OWN list item rather than literally the
+    departed row staying in place — same undo, same 8-second window,
+    different presentation of the same fact.
+    """
+  )
+
   def participant_rail(assigns) do
     {humans, agents} = MeetingLive.partition_participants(assigns.participants)
     now = assigns[:now] || DateTime.utc_now()
@@ -451,8 +482,12 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
         {pressed_agent_announcement(assigns)}
       </span>
       <%!-- ── Section 1: Agents ─────────────────────────────────────────── --%>
+      <%!-- Round 4: ALSO rendered with zero agents left when there is a
+           removal to undo — kicking the one agent in the room must not
+           make the Undo for that exact kick vanish along with the
+           section it lived in. --%>
       <section
-        :if={@agents != []}
+        :if={@agents != [] or @agent_removal_undo}
         data-section="agents"
         class="px-2 pb-2 pt-2"
       >
@@ -983,28 +1018,67 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                 muted_by_host?={muted_done?}
               />
 
-              <%!-- REMOVE FROM MEETING (task 01a0e906 stage 3, Saru's canvas
-                 01a0e99d-2af5). NEUTRAL, not red: removing an agent destroys
-                 nothing — it can be invited back, and stage 4's Undo is the
-                 guard, so there is no confirm dialog and no row menu. Always
-                 visible at every width (never hover-revealed: hover does not
-                 exist on touch, and the phone People sheet is where hosts
-                 look). The payload carries ONLY the row id; the actor is read
-                 off the LiveView socket and `Meetings.remove_agent_from_call/3`
-                 re-checks the host. --%>
-              <button
+              <%!-- KICK (round 4, canvas 01a0fdf2-804d — "a ✕ beside Ask.
+                 Inline Cancel/Remove confirm, then 'Burrow left the call'
+                 with an Undo action"). Replaces the old bare "Remove from
+                 meeting" icon button (task 01a0e906 stage 3) with the SAME
+                 permission gate and the SAME `remove_agent_from_call`
+                 click underneath a confirm step — `@kick_confirm_id` is
+                 the only new thing here, and it is pure client-visible
+                 state (`kick_confirm_open`/`kick_confirm_close`), never a
+                 second removal path. Always visible at every width, same
+                 reasoning as before: hover does not exist on touch, and
+                 the phone People sheet is where hosts look. --%>
+              <div
                 :if={@can_remove_agents?}
-                type="button"
-                phx-click="remove_agent_from_call"
-                phx-value-participant-id={p.id}
-                data-role="meeting-agent-remove"
-                disabled={leaving?}
-                aria-label={"Remove #{p.display_name || "this agent"} from the meeting"}
-                title="Remove from meeting"
-                class="btn btn-ghost btn-xs btn-square flex-shrink-0 self-center text-base-content/60 hover:bg-base-300 hover:text-base-content focus-visible:bg-base-300 focus-visible:text-base-content max-sm:min-h-11 max-sm:min-w-11"
+                class="relative flex-shrink-0 self-center"
+                data-role="meeting-agent-kick-wrap"
               >
-                <.icon name="hero-user-minus" class="size-4" />
-              </button>
+                <button
+                  :if={@kick_confirm_id != p.id}
+                  type="button"
+                  phx-click="kick_confirm_open"
+                  phx-value-participant-id={p.id}
+                  data-role="meeting-agent-kick"
+                  disabled={leaving?}
+                  aria-label={"Remove #{p.display_name || "this agent"} from the meeting"}
+                  title="Remove from meeting"
+                  class="btn btn-ghost btn-xs btn-square text-base-content/60 hover:border hover:border-error hover:bg-error/10 hover:text-error focus-visible:border focus-visible:border-error focus-visible:bg-error/10 focus-visible:text-error max-sm:min-h-11 max-sm:min-w-11"
+                >
+                  <.icon name="hero-x-mark" class="size-4" />
+                </button>
+
+                <%!-- The confirm. A small anchored popover rather than a
+                   modal — the canvas's own mockup keeps it INLINE on the
+                   row, not a dialog that steals focus from the call. --%>
+                <div
+                  :if={@kick_confirm_id == p.id}
+                  data-role="meeting-agent-kick-confirm"
+                  class="absolute right-0 top-full z-20 mt-1 flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-error bg-base-200 px-2 py-1.5 shadow-lg"
+                  role="status"
+                >
+                  <span class="text-xs text-base-content">
+                    Remove {p.display_name || "this agent"}?
+                  </span>
+                  <button
+                    type="button"
+                    phx-click="kick_confirm_close"
+                    data-role="meeting-agent-kick-cancel"
+                    class="btn btn-ghost btn-xs"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    phx-click="remove_agent_from_call"
+                    phx-value-participant-id={p.id}
+                    data-role="meeting-agent-kick-remove"
+                    class="btn btn-error btn-xs"
+                  >
+                    Remove
+                  </button>
+                </div>
+              </div>
             </div>
 
             <%!-- REMOVE / MUTE failure lines (task 01a0f842 stage 5, canvas
@@ -1128,13 +1202,43 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
               </span>
             </div>
           </li>
+
+          <%!-- Round 4 (canvas 01a0fdf2-804d) — the "gone" state: "Burrow
+               left the call" with Undo, reusing the SAME
+               `@agent_removal_undo` assign and the SAME `undo_remove_agent`
+               handler `MeetingLive`'s pre-existing toast already uses
+               (task 01a0e906 stage 4). The removed row itself is gone from
+               `@agents` by the time this assign is set — a successful
+               removal's `handle_async` clause runs `refresh_participants/1`
+               in the same breath it sets this — so this draws as its OWN
+               list item, appended after the real rows, rather than
+               literally the departed row staying in place. Same undo,
+               same 8-second window, honestly a different list position
+               than the mockup's single-row demo implied. --%>
+          <li
+            :if={@agent_removal_undo}
+            data-role="meeting-agent-left"
+            class="flex items-center gap-2 rounded-lg border border-dashed border-edge px-2 py-1.5 text-xs text-base-content/60"
+          >
+            <span class="min-w-0 flex-1 truncate">
+              {@agent_removal_undo.agent_name} left the call
+            </span>
+            <button
+              type="button"
+              phx-click="undo_remove_agent"
+              data-role="meeting-agent-left-undo"
+              class="btn btn-ghost btn-xs shrink-0 text-base-content hover:bg-base-300"
+            >
+              Undo
+            </button>
+          </li>
         </ul>
       </section>
 
       <%!-- ── Section 2: Hosts / humans ─────────────────────────────────── --%>
       <section
         data-section="humans"
-        class={["px-2 py-2", @agents != [] && "border-t border-edge"]}
+        class={["px-2 py-2", (@agents != [] or @agent_removal_undo) && "border-t border-edge"]}
       >
         <%!-- The Agents section above has carried a heading since it
              shipped; this one did not, so the People pane opened on an
@@ -1464,10 +1568,26 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
         >
           Listening while you hold
         </span>
-        <div class="h-[72px] overflow-hidden" data-role="meeting-ask-heard-window">
+        <%!-- Round 4 ("touch it" canvas 01a0fdf2-804d): grows from one
+             line up to ~7 (168px at the 24px/line `leading-6` below),
+             THEN scrolls — `overflow-y-auto`, not `overflow-hidden`, so
+             the viewer can scroll back up inside it while still holding
+             (the hook's own scroll listener is what keeps new text
+             pinned to the bottom unless they have scrolled away; see its
+             moduledoc). The old `flex-col justify-end`/hard-72px/
+             `overflow-hidden` trio relied on CLIPPING the top to fake
+             "oldest falls off" — real scrolling needs normal top-to-
+             bottom flow instead, so `justify-end` is gone too. The
+             top-fade mask lives in `app.css` (`::before` on this
+             data-role) rather than here, since it has to sit at a fixed
+             28px regardless of how tall the box has grown. --%>
+        <div
+          class="max-h-[168px] overflow-y-auto"
+          data-role="meeting-ask-heard-window"
+        >
           <div
             data-role="meeting-ask-heard-text"
-            class="flex min-h-full flex-col justify-end text-base leading-6 text-base-content [overflow-wrap:anywhere]"
+            class="text-base leading-6 text-base-content [overflow-wrap:anywhere]"
           >
           </div>
         </div>

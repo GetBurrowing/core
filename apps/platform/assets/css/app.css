@@ -4827,6 +4827,39 @@ body, .font-fabrikam {
     }
   }
 
+  /* Round 4 ("touch it" canvas 01a0fdf2-804d-7001): a pulsing glow ring
+     once the hold has actually crossed `HOLD_THRESHOLD_MS` — the same
+     moment the waveform swaps in and the underline finishes drawing.
+     Deliberately keyed off `data-held`, not `data-pressed`: a tap that
+     never reaches the threshold (the early-release case) gets the scale
+     and colour invert above but never this pulse, so "I'm being heard"
+     stays a signal earned only by an actual hold, not every touch. The
+     static `ring-[3px]` from the Tailwind utilities in
+     `participant_rail.ex` is the resting felt edge; this adds motion on
+     top of it rather than replacing it, matching the mock's "sink / glow
+     / pulse" triad rather than a static ring alone. */
+  [data-role="meeting-agent-hold-to-talk"][data-held="true"] {
+    animation: meeting-ask-glow-pulse 1.1s ease-out infinite;
+  }
+
+  @keyframes meeting-ask-glow-pulse {
+    0% {
+      box-shadow: 0 0 0 0 color-mix(in oklch, var(--color-primary) 55%, transparent);
+    }
+    70% {
+      box-shadow: 0 0 0 10px color-mix(in oklch, var(--color-primary) 0%, transparent);
+    }
+    100% {
+      box-shadow: 0 0 0 0 color-mix(in oklch, var(--color-primary) 0%, transparent);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    [data-role="meeting-agent-hold-to-talk"][data-held="true"] {
+      animation: none;
+    }
+  }
+
   /* The hold-threshold underline (same item/task/canvas as above): a 2px
      cyan line that draws left-to-right across the key's bottom edge over
      exactly `HOLD_THRESHOLD_MS` (meeting_push_to_talk.js, 380ms) —
@@ -4891,6 +4924,21 @@ body, .font-fabrikam {
     pointer-events: none;
   }
 
+  /* Round 4 carve-out: the transcript WINDOW itself needs real pointer
+     events once it is tall enough to scroll ("you can scroll back up
+     inside the box while you talk" — canvas 01a0fdf2-804d). This is safe
+     specifically because it is narrower than the blanket rule above, not
+     instead of it: `MeetingAskHeardOverlay._wouldOverlapAControl` already
+     refuses to place the overlay (window included) over the Ask key, any
+     mute/remove button, or a "Try again" line, so there is nowhere a
+     scroll gesture landing inside this window could also be a click on a
+     control underneath. `!important` beats the universal `*` rule above
+     on specificity grounds alone (an attribute-plus-role selector here is
+     no more specific than that one), so it is required, not a habit. */
+  [data-role="meeting-ask-heard-window"] {
+    pointer-events: auto !important;
+  }
+
   /* The 2px primary tether rule, pointing at the key the overlay belongs
      to. Desktop anchors it to the overlay's LEFT edge (the overlay sits
      beside the row, to its right); the phone/fallback placement moves it
@@ -4928,6 +4976,34 @@ body, .font-fabrikam {
     [data-role="meeting-ask-heard-overlay"] {
       transition: none;
     }
+  }
+
+  /* Round 4 ("touch it" canvas 01a0fdf2-804d): the window grows with the
+     transcript up to ~7 lines, then SCROLLS — newest word pinned to the
+     bottom via `MeetingAskHeardOverlay._appendText`'s auto-scroll, older
+     lines fading out at the top via this mask, and the viewer can still
+     scroll back up inside it while the hold continues (the hook's scroll
+     listener only suppresses the auto-scroll-to-bottom while the viewer
+     is reading further up — it never blocks the scroll itself). Replaces
+     the old hard 72px/`overflow-hidden` box, whose fixed 3-line clip is
+     what the canvas calls out as too short once a hold runs past a
+     sentence or two.
+
+     The gradient is `var(--color-base-300)` fading to transparent — the
+     overlay's own surface colour (`bg-base-300` in the markup) — not a
+     flat scrim, so it reads as the top of the text physically fading
+     into the card rather than a bar drawn over it. */
+  [data-role="meeting-ask-heard-window"] {
+    position: relative;
+  }
+
+  [data-role="meeting-ask-heard-window"]::before {
+    content: "";
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 28px;
+    background: linear-gradient(var(--color-base-300), transparent);
+    z-index: 1;
   }
 
   .sheet-handle {

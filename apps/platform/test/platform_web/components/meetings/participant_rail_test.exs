@@ -1534,7 +1534,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       assert Floki.attribute(overlay, "aria-hidden") == ["true"]
     end
 
-    test "carries the fixed-size status line and the 72px, overflow-hidden text window" do
+    test "carries the fixed-size status line and the ~7-line, scrollable text window (round 4)" do
       html = hold_rail([agent("Octavius", "oct-1")], hold_to_talk?: true)
       parsed = Floki.parse_fragment!(html)
 
@@ -1543,20 +1543,19 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       [status] = Floki.find([overlay], ~s([data-role="meeting-ask-heard-status"]))
       assert Floki.text(status) |> String.trim() == "Listening while you hold"
 
+      # Round 4 (canvas 01a0fdf2-804d): grows up to ~7 lines (168px at the
+      # 24px/line `leading-6` below), THEN scrolls — `overflow-y-auto`,
+      # not the old hard `h-[72px]`/`overflow-hidden` pair, so the viewer
+      # can scroll back up inside it while still holding (the hook owns
+      # the actual scroll-position management; see its moduledoc).
       [window] = Floki.find([overlay], ~s([data-role="meeting-ask-heard-window"]))
       [window_classes] = Floki.attribute(window, "class")
       window_class_list = String.split(window_classes, " ")
-      assert "h-[72px]" in window_class_list
-      assert "overflow-hidden" in window_class_list
+      assert "max-h-[168px]" in window_class_list
+      assert "overflow-y-auto" in window_class_list
+      refute "overflow-hidden" in window_class_list
 
-      # The text node that grows is INSIDE the fixed window, packed
-      # against the bottom (`justify-end`) — this is what makes new
-      # lines push old ones up and out the top without any JS scroll
-      # management, per the hook's own moduledoc.
       [text_node] = Floki.find([window], ~s([data-role="meeting-ask-heard-text"]))
-      [text_classes] = Floki.attribute(text_node, "class")
-      text_class_list = String.split(text_classes, " ")
-      assert "justify-end" in text_class_list
       assert Floki.text(text_node) |> String.trim() == ""
     end
 
@@ -1587,7 +1586,17 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
     )
   end
 
-  defp remove_buttons(nodes), do: Floki.find(nodes, ~s([data-role="meeting-agent-remove"]))
+  # Round 4 (canvas 01a0fdf2-804d): the bare "Remove from meeting" button
+  # is now the Kick ✕ that OPENS an inline confirm rather than removing
+  # directly — `remove_buttons/1` keeps its name (every existing presence/
+  # gating assertion below still holds unchanged against it) but now finds
+  # `meeting-agent-kick`.
+  defp remove_buttons(nodes), do: Floki.find(nodes, ~s([data-role="meeting-agent-kick"]))
+
+  defp kick_confirms(nodes), do: Floki.find(nodes, ~s([data-role="meeting-agent-kick-confirm"]))
+
+  defp kick_remove_buttons(nodes),
+    do: Floki.find(nodes, ~s([data-role="meeting-agent-kick-remove"]))
 
   defp remove_roster do
     [
@@ -1621,12 +1630,15 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       assert length(remove_buttons(doc)) == 2
     end
 
-    test "is wired to the event with the row id, named for the agent, and neutral" do
+    test "is wired to open the inline confirm, named for the agent, neutral at rest" do
       html = remove_rail([agent("Burrow", "ma-1")], can_remove_agents?: true)
       [button] = html |> Floki.parse_fragment!() |> remove_buttons()
 
       assert Floki.attribute(button, "type") == ["button"]
-      assert Floki.attribute(button, "phx-click") == ["remove_agent_from_call"]
+      # Round 4: the ✕ opens the inline confirm — it never calls
+      # `remove_agent_from_call` itself. That only ever fires from the
+      # confirm's own "Remove" choice, asserted below.
+      assert Floki.attribute(button, "phx-click") == ["kick_confirm_open"]
       # The meeting_participants ROW id (`p.id`), not the agent id.
       assert Floki.attribute(button, "phx-value-participant-id") == ["p-ma-1"]
 
@@ -1642,13 +1654,80 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       assert class =~ "text-base-content/60"
       assert class =~ "max-sm:min-h-11"
       assert class =~ "max-sm:min-w-11"
-      # Neutral, and always visible.
-      refute class =~ "error"
+      # Always visible, and neutral AT REST — the error tint is now a
+      # deliberate HOVER/FOCUS-only cue (canvas 01a0fdf2-804d's own
+      # mockup CSS: ".kick:hover{color:var(--bad)...}"), not a rest-state
+      # colour, so the broad round-3 "neutral" ruling narrows to "neutral
+      # at rest" rather than disappearing. Checked by SPLITTING the class
+      # list rather than a substring match: `"text-error"` is itself a
+      # substring of `"hover:text-error"`, so `=~` cannot tell "present at
+      # rest" apart from "present only behind a variant prefix".
+      class_list = String.split(class, " ")
+      refute "bg-error" in class_list
+      refute "text-error" in class_list
+      assert "hover:text-error" in class_list
+      assert "focus-visible:text-error" in class_list
       refute class =~ "opacity-0"
       refute class =~ "group-hover"
 
-      assert Floki.find(button, ".hero-user-minus") != []
-      refute html =~ "Kick"
+      assert Floki.find(button, ".hero-x-mark") != []
+    end
+
+    test "the confirm opens for the matching row, with Cancel and Remove wired to the existing handlers" do
+      html =
+        remove_rail([agent("Burrow", "ma-1"), agent("Saru", "saru-1")],
+          can_remove_agents?: true,
+          kick_confirm_id: "p-ma-1"
+        )
+
+      doc = Floki.parse_fragment!(html)
+      burrow_row = Floki.find(doc, ~s(li[data-participant-id="p-ma-1"]))
+      saru_row = Floki.find(doc, ~s(li[data-participant-id="p-saru-1"]))
+
+      # The ✕ is replaced by the confirm on ITS OWN row only.
+      assert remove_buttons(burrow_row) == []
+      [confirm] = kick_confirms(burrow_row)
+      assert Floki.text(confirm) =~ "Remove Burrow?"
+
+      [cancel] = Floki.find(confirm, ~s([data-role="meeting-agent-kick-cancel"]))
+      assert Floki.attribute(cancel, "phx-click") == ["kick_confirm_close"]
+
+      # The ONE call that ever actually removes anyone — same event, same
+      # row id, `can_remove_agents?`'s original bare button always posted
+      # to. No second, parallel removal path exists.
+      [confirm_remove] = kick_remove_buttons(confirm)
+      assert Floki.attribute(confirm_remove, "phx-click") == ["remove_agent_from_call"]
+      assert Floki.attribute(confirm_remove, "phx-value-participant-id") == ["p-ma-1"]
+
+      # The other row is untouched: still its ✕, no confirm.
+      assert kick_confirms(saru_row) == []
+      assert length(remove_buttons(saru_row)) == 1
+    end
+
+    test "renders '<name> left the call' with Undo wired to undo_remove_agent, only when set" do
+      html =
+        remove_rail(remove_roster(),
+          can_remove_agents?: true,
+          agent_removal_undo: %{
+            agent_id: "burrow-agent-id",
+            agent_name: "Burrow",
+            ref: make_ref()
+          }
+        )
+
+      doc = Floki.parse_fragment!(html)
+      [gone] = Floki.find(doc, ~s([data-role="meeting-agent-left"]))
+      assert Floki.text(gone) =~ "Burrow left the call"
+
+      [undo] = Floki.find(gone, ~s([data-role="meeting-agent-left-undo"]))
+      assert Floki.attribute(undo, "phx-click") == ["undo_remove_agent"]
+    end
+
+    test "renders nothing when there is no removal to undo" do
+      html = remove_rail(remove_roster(), can_remove_agents?: true, agent_removal_undo: nil)
+      doc = Floki.parse_fragment!(html)
+
+      assert Floki.find(doc, ~s([data-role="meeting-agent-left"])) == []
     end
 
     test "is absent by default, with the agent row still rendered" do

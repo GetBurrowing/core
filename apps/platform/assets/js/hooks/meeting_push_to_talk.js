@@ -1,5 +1,6 @@
 import { Track } from "livekit-client"
 import { paintBars } from "./lib/ptt_waveform"
+import { getHold, beginHold, patchHold, clearHold } from "./lib/ptt_hold_state"
 
 /**
  * MeetingPushToTalk — the press-to-address-an-agent control, and the
@@ -173,6 +174,7 @@ const MeetingPushToTalk = {
     }
 
     this._bind()
+    this._resumeHoldIfOurs()
 
     // A server-side refusal (task 01a0cf5c stage 1): another presser
     // already holds THIS agent's floor. Everything up to this point in
@@ -275,6 +277,100 @@ const MeetingPushToTalk = {
     return this._pressed
   },
 
+  // ── Resuming a hold that started on a DIFFERENT DOM node ────────────────
+
+  /**
+   * Called once, from `mounted()`. If `window`'s one hold-state record
+   * (`./lib/ptt_hold_state`) says THIS agent is currently being held, a
+   * press that started before this element existed is still in progress
+   * — the previous node was destroyed by a server re-render mid-hold, not
+   * released by the finger. Resume locally rather than wait for a
+   * `pointerup` that may now never reach any element that remembers it
+   * was pressed.
+   */
+  _resumeHoldIfOurs() {
+    const hold = getHold()
+    if (!hold || !hold.agentId || hold.agentId !== this._agentId()) return
+
+    const publication = this._localMicPublication()
+    if (!publication || this._micOff(publication)) {
+      clearHold()
+      return
+    }
+
+    if (!this._startAnalyser(publication)) {
+      clearHold()
+      return
+    }
+
+    this._rejection = null
+    this._pressed = true
+    this._levels = []
+    this._heldLongEnough = Boolean(hold.heldLongEnough)
+    this.el.dataset.pressed = "true"
+    this.el.dataset.held = this._heldLongEnough ? "true" : "false"
+    this._setRowPressed(true)
+
+    // Reacquire real OS-level pointer capture on THIS node for a pointer
+    // that is still active but was captured by a node that no longer
+    // exists — the spec does not require the capturing element to be the
+    // one `pointerdown` originally landed on, only that the pointerId is
+    // still live.
+    if (typeof hold.pointerId === "number" && typeof this.el.setPointerCapture === "function") {
+      try {
+        this.el.setPointerCapture(hold.pointerId)
+        this._captured = hold.pointerId
+      } catch (_err) {
+        // Pointer already ended while this node was gone. Nothing to
+        // reject here — this is a resume, not a fresh press; the next
+        // real pointer event (or the window `blur` cancel) resolves it.
+      }
+    }
+
+    // `resume: true` on every event dispatched from HERE (never from a
+    // genuine fresh press — `beginPress`/`_scheduleHoldThreshold` below
+    // never set it) is what tells a sibling singleton hook (the overlay,
+    // the veil) that this is the SAME hold continuing, not a new one — see
+    // `MeetingAskHeardOverlay._onHeld`'s own guard for why that distinction
+    // matters: a sibling that already restored its own state from
+    // `getHold()` must not have this redispatch stomp it back to blank.
+    this._dispatch("meeting:push-to-talk-armed", {
+      agentId: this._agentId(),
+      agentName: this._agentName(),
+      resume: true,
+    })
+
+    if (this._heldLongEnough) {
+      // Past the threshold before the remount — the timer that would
+      // have announced this belonged to the node that is gone, so
+      // announce it now instead of waiting for a timer that will never
+      // fire.
+      this._dispatch("meeting:push-to-talk-held", {
+        agentId: this._agentId(),
+        agentName: this._agentName(),
+        resume: true,
+      })
+    } else {
+      const elapsed = Date.now() - (hold.pressedAt || Date.now())
+      this._clearHoldThresholdTimer()
+      this._holdThresholdTimer = setTimeout(
+        () => {
+          this._holdThresholdTimer = null
+          if (!this._pressed) return
+          this._heldLongEnough = true
+          patchHold({ heldLongEnough: true })
+          this.el.dataset.held = "true"
+          this._dispatch("meeting:push-to-talk-held", {
+            agentId: this._agentId(),
+            agentName: this._agentName(),
+            resume: true,
+          })
+        },
+        Math.max(0, HOLD_THRESHOLD_MS - elapsed)
+      )
+    }
+  },
+
   // ── Press lifecycle ────────────────────────────────────────────────────
 
   beginPress() {
@@ -303,6 +399,11 @@ const MeetingPushToTalk = {
     this._pressed = true
     this._levels = []
     this._heldLongEnough = false
+    beginHold({
+      agentId: this._agentId(),
+      agentName: this._agentName(),
+      heldLongEnough: false,
+    })
     this.el.dataset.pressed = "true"
     // Item 1 (task 01a0f842 stage 1, canvas 01a0f846-cfb1): `data-held`
     // is the separate, later signal the template's underline and
@@ -337,6 +438,7 @@ const MeetingPushToTalk = {
       this._holdThresholdTimer = null
       if (!this._pressed) return
       this._heldLongEnough = true
+      patchHold({ heldLongEnough: true })
       // Item 1 (task 01a0f842 stage 1, canvas 01a0f846-cfb1): this is
       // the exact moment the underline finishes drawing and the
       // glyph-to-waveform swap happens — both are keyed off `data-held`
@@ -394,6 +496,7 @@ const MeetingPushToTalk = {
     this._clearHoldThresholdTimer()
     this._pressed = false
     this._heldLongEnough = false
+    clearHold()
     this.el.dataset.pressed = "false"
     this.el.dataset.held = "false"
     this._setRowPressed(false)
@@ -434,6 +537,7 @@ const MeetingPushToTalk = {
     try {
       el.setPointerCapture(event.pointerId)
       this._captured = event.pointerId
+      patchHold({ pointerId: event.pointerId })
     } catch (_err) {
       // Pointer no longer active — it ended before capture was taken and
       // no pointerup/cancel will ever arrive for it. Abort the phantom
@@ -473,6 +577,7 @@ const MeetingPushToTalk = {
     this._rejection = reason
     this._pressed = false
     this._levels = []
+    clearHold()
     this.el.dataset.pressed = "false"
     this.el.dataset.held = "false"
     this._setRowPressed(false)

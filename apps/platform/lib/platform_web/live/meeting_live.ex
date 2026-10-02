@@ -711,6 +711,10 @@ defmodule PlatformWeb.MeetingLive do
     |> assign(:removing_agent_ids, MapSet.new())
     |> assign(:agent_removal_errors, %{})
     |> assign(:agent_removal_undo, nil)
+    # Round 4 (canvas 01a0fdf2-804d) — the Kick ✕'s inline confirm. UI-only:
+    # the row id currently showing "Remove <name>? Cancel / Remove" in
+    # place of its ✕. Never read by `remove_agent_from_call` itself.
+    |> assign(:kick_confirm_id, nil)
     # Agent mute (task 01a0f842 stage 5, canvas 01a0f846-cfb1) — NET-NEW,
     # mirroring the removal assigns' own shape immediately above.
     # `muting_agent_ids` is a MAP (id => target mute state), not a MapSet,
@@ -1155,6 +1159,8 @@ defmodule PlatformWeb.MeetingLive do
           # Task 01a0e906 stage 4: nil, or `%{agent_id, agent_name, ref}` for
           # the 8-second Undo toast after a removal.
           |> assign(:agent_removal_undo, nil)
+          # Round 4 (canvas 01a0fdf2-804d): the Kick ✕'s inline confirm.
+          |> assign(:kick_confirm_id, nil)
           # Task 01a0f842 stage 5: the host's mute state, same shape as the
           # removal assigns immediately above.
           |> assign(:muting_agent_ids, %{})
@@ -4036,6 +4042,10 @@ defmodule PlatformWeb.MeetingLive do
           socket
           |> assign(:removing_agent_ids, MapSet.put(removing_agent_ids(socket), id))
           |> clear_agent_removal_error(id)
+          # Round 4: the Kick confirm (if this id's) closes the instant the
+          # real remove fires, same as a fresh press — there is nothing
+          # left to confirm once the row already reads "Leaving…".
+          |> clear_kick_confirm(id)
           # The name is captured NOW, while the row is on screen: the
           # context's `{:participant_left, _}` broadcast usually lands (and
           # refreshes the roster without it) before `handle_async/3` runs.
@@ -4053,6 +4063,24 @@ defmodule PlatformWeb.MeetingLive do
   end
 
   def handle_event("remove_agent_from_call", _params, socket), do: {:noreply, socket}
+
+  # Round 4 (canvas 01a0fdf2-804d) — the Kick ✕'s inline confirm. UI-only:
+  # swaps the ✕ for "Remove <name>? Cancel / Remove" on this one row.
+  # Deliberately does NOT call `Meetings.remove_agent_from_call/3` or
+  # touch `:removing_agent_ids` — opening the confirm removes nobody; only
+  # the "Remove" choice inside it (`remove_agent_from_call`, unchanged
+  # above) ever does that, so there remains exactly one path into the
+  # actual removal.
+  def handle_event("kick_confirm_open", %{"participant-id" => id}, socket)
+      when is_binary(id) do
+    {:noreply, assign(socket, :kick_confirm_id, id)}
+  end
+
+  def handle_event("kick_confirm_open", _params, socket), do: {:noreply, socket}
+
+  def handle_event("kick_confirm_close", _params, socket) do
+    {:noreply, assign(socket, :kick_confirm_id, nil)}
+  end
 
   # Mute or unmute an agent's published audio in the live call (task
   # 01a0f842 stage 5, canvas 01a0f846-cfb1). NET-NEW — mirrors
@@ -4478,6 +4506,19 @@ defmodule PlatformWeb.MeetingLive do
 
   defp removing_agent_ids(socket), do: socket.assigns[:removing_agent_ids] || MapSet.new()
   defp agent_removal_errors(socket), do: socket.assigns[:agent_removal_errors] || %{}
+
+  # Round 4: close the Kick confirm if it belongs to the row that just
+  # started actually removing — a no-op (and therefore safe to call
+  # unconditionally from `remove_agent_from_call`) when `:kick_confirm_id`
+  # was never this id, e.g. a retry from the "Try again" line below rather
+  # than the confirm itself.
+  defp clear_kick_confirm(socket, id) do
+    if socket.assigns[:kick_confirm_id] == id do
+      assign(socket, :kick_confirm_id, nil)
+    else
+      socket
+    end
+  end
 
   # The name the viewer saw on the row, read BEFORE `refresh_participants/1`
   # drops it.

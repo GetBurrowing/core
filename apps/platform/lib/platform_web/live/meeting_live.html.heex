@@ -1652,6 +1652,8 @@
                 muting_ids={assigns[:muting_agent_ids] || %{}}
                 muted_agent_ids={assigns[:muted_agent_ids] || MapSet.new()}
                 mute_errors={assigns[:agent_mute_errors] || %{}}
+                kick_confirm_id={assigns[:kick_confirm_id]}
+                agent_removal_undo={assigns[:agent_removal_undo]}
               />
             </div>
           </section>
@@ -2782,6 +2784,8 @@
               muting_ids={assigns[:muting_agent_ids] || %{}}
               muted_agent_ids={assigns[:muted_agent_ids] || MapSet.new()}
               mute_errors={assigns[:agent_mute_errors] || %{}}
+              kick_confirm_id={assigns[:kick_confirm_id]}
+              agent_removal_undo={assigns[:agent_removal_undo]}
               participants={assigns[:participants] || []}
               agents_by_id={assigns[:agents_by_id] || %{}}
               meeting={@meeting}
