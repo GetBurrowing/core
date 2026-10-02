@@ -139,14 +139,6 @@ defmodule Platform.Artifacts do
     end
   end
 
-  defp resolve_destination(module, _opts) when is_atom(module) do
-    if is_destination_module?(module) do
-      {:ok, module, module.id()}
-    else
-      {:error, :unknown_destination}
-    end
-  end
-
   defp is_destination_module?(module) when is_atom(module) and not is_nil(module) do
     Code.ensure_loaded?(module) and function_exported?(module, :id, 0) and
       function_exported?(module, :publish, 2)

@@ -638,8 +638,12 @@ defmodule Platform.Tasks.StackDeployer.GitShellRunner do
            ) do
       {:ok, %{status: :created, base_sha: base_sha}}
     else
-      false ->
-        {:error, {:base_branch_not_found, base_branch}}
+      # The `or` above yields `true` or this tuple, never `false`. The clause
+      # used to read `false ->`, so an empty rev-parse fell through every
+      # `else` clause and raised WithClauseError (found by the Elixir 1.20
+      # type checker).
+      {:error, {:base_branch_not_found, _base_branch}} = err ->
+        err
 
       {:error, {:git_failed, _args, _code, output}} = err ->
         # `git push` against an existing branch races us; treat the

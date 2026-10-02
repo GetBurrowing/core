@@ -547,9 +547,9 @@ defmodule PlatformWeb.ChatLive.Partials do
             type="button"
             class="flex min-h-11 w-full items-center gap-3 rounded-lg px-2 py-3 text-left text-base text-base-content transition-colors hover:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
             phx-click="close_dm"
-            phx-value-id={@target && @target.space_id}
+            phx-value-id={@target.space_id}
             data-role="row-actions-close-dm"
-            aria-label={@target && "Close #{@target.name}"}
+            aria-label={"Close #{@target.name}"}
           >
             <span class="hero-minus-circle size-5 flex-shrink-0" aria-hidden="true"></span>
             <span>Close</span>
@@ -1079,11 +1079,10 @@ defmodule PlatformWeb.ChatLive.Partials do
                 form="upload-send-form"
                 class="upload-btn-send"
                 disabled={
-                  @uploads.attachments.entries == [] or
-                    Enum.any?(
-                      @uploads.attachments.entries,
-                      &(&1.progress > 0 and &1.progress < 100)
-                    )
+                  Enum.any?(
+                    @uploads.attachments.entries,
+                    &(&1.progress > 0 and &1.progress < 100)
+                  )
                 }
               >
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">

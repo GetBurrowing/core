@@ -558,7 +558,7 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
       %{avatar_seed: avatar_seed} when not is_nil(avatar_seed) -> avatar_seed
       %{name: name} when is_binary(name) and name != "" -> name
       name when is_binary(name) and name != "" -> name
-      _ -> author_snapshot_name(msg) || pid || "user"
+      _ -> author_snapshot_name(msg)
     end
   end
 

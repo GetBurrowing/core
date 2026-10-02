@@ -1081,8 +1081,6 @@ defmodule Platform.Tasks.PlanEngine do
     is_binary(surface) and String.trim(surface) != ""
   end
 
-  defp names_ui_surface?(_), do: false
-
   defp e2e_behavior_validation?(v) when is_map(v) do
     (Map.get(v, "kind") || Map.get(v, :kind)) == "e2e_behavior"
   end
@@ -2353,8 +2351,6 @@ defmodule Platform.Tasks.PlanEngine do
       payload -> Map.put(attrs, :evaluation_payload, payload)
     end
   end
-
-  defp maybe_put_evaluation_payload(attrs, _), do: attrs
 
   defp max_position(stages) do
     stages

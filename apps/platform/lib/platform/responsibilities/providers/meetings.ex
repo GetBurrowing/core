@@ -331,8 +331,6 @@ defmodule Platform.Responsibilities.Providers.Meetings do
     end
   end
 
-  defp normalize_meta(meta), do: meta
-
   defp maybe_add(payload, meta, string_key, atom_key) do
     case Map.get(meta, string_key) do
       nil -> payload

@@ -412,7 +412,7 @@ defmodule Platform.Tenancy do
   def sort_by_tenant_priority(enum, slug_fn) do
     Enum.sort_by(enum, fn item ->
       slug = slug_fn.(item)
-      {tenant_priority_index(slug), String.downcase(slug || "")}
+      {tenant_priority_index(slug), String.downcase(slug)}
     end)
   end
 

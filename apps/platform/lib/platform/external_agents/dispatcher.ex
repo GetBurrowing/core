@@ -90,8 +90,6 @@ defmodule Platform.ExternalAgents.Dispatcher do
       plus `:reason`.
   """
 
-  require Logger
-
   alias Platform.Agents.Agent
   alias Platform.Agents.Kind, as: AgentKind
   alias Platform.ExternalAgents
@@ -553,8 +551,6 @@ defmodule Platform.ExternalAgents.Dispatcher do
       _ -> nil
     end
   end
-
-  defp metadata_max_tokens(_), do: nil
 
   # Convention: if the rendered prompt has a `<system>...</system>` block at the
   # head, that block becomes the system message and the rest is the user turn.

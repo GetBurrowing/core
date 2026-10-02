@@ -175,8 +175,8 @@ defmodule Platform.Meetings.OpenQuestionPilot.RunnerTest do
       }
 
       assert %{score: 1.0} = Runner.metric(ex(row), %{is_question: true})
-      assert %{score: 0.0} = Runner.metric(ex(row), %{is_question: false})
-      assert %{score: 0.0} = Runner.metric(ex(row), %{is_question: "maybe"})
+      assert %{score: +0.0} = Runner.metric(ex(row), %{is_question: false})
+      assert %{score: +0.0} = Runner.metric(ex(row), %{is_question: "maybe"})
     end
   end
 

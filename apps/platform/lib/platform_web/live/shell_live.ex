@@ -1289,8 +1289,6 @@ defmodule PlatformWeb.ShellLive do
     end
   end
 
-  defp seed_meeting_state_from_storage(socket, _), do: socket
-
   # Derive a human-readable module name from the LiveView module atom.
   defp derive_active_module(view) do
     case view do

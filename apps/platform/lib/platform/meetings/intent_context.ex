@@ -517,7 +517,6 @@ defmodule Platform.Meetings.IntentContext do
   defp payload_of(%{payload: payload}) when is_map(payload), do: payload
   defp payload_of(%{"payload" => payload}) when is_map(payload), do: payload
   defp payload_of(meta) when is_map(meta), do: meta
-  defp payload_of(_), do: %{}
 
   defp close_intent_row(key, meeting_id, intent_id, result)
        when is_binary(meeting_id) and is_binary(intent_id) do

@@ -178,8 +178,6 @@ defmodule Platform.Chat.CanvasAccess do
   than minting a row per socket. The default is `audit: true`.
   """
 
-  require Logger
-
   alias Platform.Chat
   alias Platform.Chat.Canvas
   alias Platform.Chat.Space

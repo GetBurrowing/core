@@ -37,7 +37,7 @@ defmodule Platform.Chat.AttachmentStorage.Adapter.LocalDisk do
     path = path_for(storage_key)
 
     if File.exists?(path) do
-      {:ok, File.stream!(path, [], @read_chunk_bytes)}
+      {:ok, File.stream!(path, @read_chunk_bytes)}
     else
       {:error, :enoent}
     end
@@ -175,7 +175,7 @@ defmodule Platform.Chat.AttachmentStorage.Adapter.LocalDisk do
   defp hash_and_size(path) do
     {ctx, size} =
       path
-      |> File.stream!([], @read_chunk_bytes)
+      |> File.stream!(@read_chunk_bytes)
       |> Enum.reduce({:crypto.hash_init(:sha256), 0}, fn chunk, {ctx, size} ->
         {:crypto.hash_update(ctx, chunk), size + byte_size(chunk)}
       end)

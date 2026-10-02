@@ -710,7 +710,7 @@ defmodule Platform.Push do
 
   # Convert DER-encoded ECDSA signature to raw r||s (64 bytes)
   defp der_to_raw_ecdsa(<<48, _, 2, r_len, rest::binary>>) do
-    <<r_bytes::binary-size(r_len), 2, s_len, s_bytes::binary-size(s_len), _::binary>> = rest
+    <<r_bytes::binary-size(^r_len), 2, s_len, s_bytes::binary-size(s_len), _::binary>> = rest
     pad_to_32(r_bytes) <> pad_to_32(s_bytes)
   end
 

@@ -345,8 +345,6 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
     |> Map.update("root", nil, &normalize_node(&1, "root"))
   end
 
-  defp normalize_document(other), do: other
-
   defp normalize_node(node, fallback_id) do
     case decode_if_string(node) do
       map when is_map(map) -> normalize_map_node(map, fallback_id)

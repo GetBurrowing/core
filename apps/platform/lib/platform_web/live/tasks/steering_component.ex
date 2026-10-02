@@ -644,9 +644,6 @@ defmodule PlatformWeb.Tasks.SteeringComponent do
   defp handle_post_result({:ok, _msg, _attachments}, socket, participant),
     do: {:noreply, sent_ok(socket, participant)}
 
-  defp handle_post_result({:ok, _msg}, socket, participant),
-    do: {:noreply, sent_ok(socket, participant)}
-
   defp handle_post_result({:error, :uploads_in_progress}, socket, _participant) do
     {:noreply,
      put_steering_feedback(

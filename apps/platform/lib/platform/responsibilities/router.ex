@@ -1648,8 +1648,7 @@ defmodule Platform.Responsibilities.Router do
     provider_module = provider_module_for(feature)
 
     cond do
-      is_atom(provider_module) and
-        Code.ensure_loaded?(provider_module) and
+      Code.ensure_loaded?(provider_module) and
           function_exported?(provider_module, :handle_output, 3) ->
         try do
           case provider_module.handle_output(responsibility, parsed, meta) do
@@ -1711,7 +1710,7 @@ defmodule Platform.Responsibilities.Router do
        when is_binary(feature) and is_map(meta) do
     provider_module = provider_module_for(feature)
 
-    if is_atom(provider_module) and Code.ensure_loaded?(provider_module) and
+    if Code.ensure_loaded?(provider_module) and
          function_exported?(provider_module, :handle_refusal, 3) do
       try do
         case provider_module.handle_refusal(responsibility, refusal, meta) do

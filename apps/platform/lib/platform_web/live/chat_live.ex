@@ -684,7 +684,7 @@ defmodule PlatformWeb.ChatLive do
       # (task 019ffb7b stage 3), which every live_session ChatLive is routed
       # under runs. Seeding it a second time here would overwrite a state the
       # hook may already have reported.
-      |> assign(:unread_counts, if(user_id, do: Chat.unread_counts_for_user(user_id), else: %{}))
+      |> assign(:unread_counts, Chat.unread_counts_for_user(user_id))
       |> assign(:lightbox_url, nil)
       # Jump-to-latest state (task 01a03c76 stage 1; `:jump_deep_in_history`
       # added by task 01a0419a stage 4). Both booleans are reported by the
@@ -3392,8 +3392,6 @@ defmodule PlatformWeb.ChatLive do
     end)
   end
 
-  defp section_summary(_sidebar_sections, _section_id), do: nil
-
   # The rail's own label for the org a channel is moving OUT of, falling back
   # to the org record's name when that org has no section in the rail. Both
   # readers here go through `Section.display_name/1` (task 01a08212): a
@@ -5204,8 +5202,6 @@ defmodule PlatformWeb.ChatLive do
   # `:org_memberships` for the LiveAuth on_mount hook so the record it
   # returns is already warm — no extra query. Nil on missing user, keeping
   # anonymous / deleted-user sessions from lighting up the pin flow.
-  defp fetch_user_email_for_pins(nil), do: nil
-
   defp fetch_user_email_for_pins(user_id) when is_binary(user_id) do
     case Accounts.get_user(user_id) do
       %{email: email} when is_binary(email) -> email

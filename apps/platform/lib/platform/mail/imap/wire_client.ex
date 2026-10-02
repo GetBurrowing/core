@@ -515,7 +515,7 @@ defmodule Platform.Mail.Imap.WireClient do
 
   defp lex(text) do
     [atom | _] = :binary.split(text, [" ", "(", ")", "\"", "\r", "\n", "\t"])
-    <<_::binary-size(byte_size(atom)), rest::binary>> = text
+    <<_::binary-size(byte_size(^atom)), rest::binary>> = text
     [{:atom, atom} | lex(rest)]
   end
 

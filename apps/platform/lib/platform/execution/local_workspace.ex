@@ -434,8 +434,7 @@ defmodule Platform.Execution.LocalWorkspace do
     git_pointer = Path.join(worktree_path, ".git")
 
     with {:ok, pointer} <- File.read(git_pointer),
-         gitdir when is_binary(gitdir) <- parse_gitdir(pointer),
-         true <- gitdir != nil do
+         gitdir when is_binary(gitdir) <- parse_gitdir(pointer) do
       common_gitdir = common_gitdir(gitdir)
 
       paths = [

@@ -42,8 +42,6 @@ defmodule PlatformWeb.TasksLive do
   """
   use PlatformWeb, :live_view
 
-  require Logger
-
   alias Platform.Chat
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Skills

@@ -679,12 +679,6 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                           >
                           </span>
                           <span class="text-sm font-medium leading-snug flex-1">{task.title}</span>
-                          <span
-                            :if={has_active_run?(task)}
-                            class="mt-1.5 inline-block size-2 shrink-0 rounded-full bg-success animate-pulse"
-                            title="Active run"
-                          >
-                          </span>
                         </div>
                         <div class="flex flex-wrap items-center gap-1.5 pl-4 text-xs text-base-content/60">
                           <%= if assignee do %>
@@ -1248,12 +1242,6 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                             {task.title}
                           </h3>
                           <div class="flex items-center gap-1 flex-shrink-0">
-                            <%!-- Active run indicator --%>
-                            <span
-                              :if={has_active_run?(task)}
-                              class="inline-block size-2 rounded-full bg-success animate-pulse"
-                              title="Active run"
-                            />
                             <%!-- Assignee --%>
                             <% assignee = assignee_identity(task, @users_by_id, @agents_by_id) %>
                             <%= if assignee do %>
@@ -1328,7 +1316,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                           <span
                             :if={task.reported_by}
                             class="truncate max-w-[100px]"
-                            title={"Reported by " <> (task.reported_by || "")}
+                            title={"Reported by " <> task.reported_by}
                           >
                             {task.reported_by}
                           </span>
@@ -1544,11 +1532,6 @@ defmodule PlatformWeb.Tasks.BoardComponent do
       {_key, label} -> label
       nil -> status
     end
-  end
-
-  defp has_active_run?(%Task{} = _task) do
-    # TODO: check active runs via Execution plane when wired up
-    false
   end
 
   defp plan_progress(%Task{plans: plans}) when is_list(plans) do

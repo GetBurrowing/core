@@ -410,7 +410,7 @@ defmodule Platform.Roles do
       {:soft_fail, reason} ->
         Logger.warning(
           "[Roles] runtime mismatch responsibility=#{inspect(responsibility_key)} " <>
-            "agent=#{inspect(agent && agent.slug)} reason=#{inspect(reason)} — " <>
+            "agent=#{inspect(agent.slug)} reason=#{inspect(reason)} — " <>
             "proceeding (soft-fail)"
         )
 
@@ -420,7 +420,7 @@ defmodule Platform.Roles do
           %{
             responsibility_key: responsibility_key,
             agent_id: agent_id,
-            agent_slug: agent && agent.slug,
+            agent_slug: agent.slug,
             reason: reason
           }
         )

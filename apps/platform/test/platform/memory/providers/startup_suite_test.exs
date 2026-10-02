@@ -5,6 +5,8 @@ defmodule Platform.Memory.Providers.StartupSuiteTest.SlowPlug do
   A `Req.Test` stub runs in-process and never touches Finch, so it does not
   enforce `receive_timeout`; a timeout assertion against a stub passes
   whether or not the option is applied (task 01a0d8c9).
+
+  `:sleep_ms` maps a request path to how long that path stalls.
   """
 
   @behaviour Plug
@@ -14,7 +16,7 @@ defmodule Platform.Memory.Providers.StartupSuiteTest.SlowPlug do
 
   @impl true
   def call(conn, opts) do
-    Process.sleep(Keyword.fetch!(opts, :sleep_ms))
+    Process.sleep(Map.fetch!(Keyword.fetch!(opts, :sleep_ms), conn.request_path))
 
     body =
       case conn.request_path do
@@ -322,8 +324,22 @@ defmodule Platform.Memory.Providers.StartupSuiteTest do
     test "over a real socket: ingest outlives :timeout, search does not" do
       # The adapter's default client, so the timeout reaches Finch.
       Application.delete_env(:platform, :memory_service_req_client)
-      base_url = start_slow_server(600)
-      config = [base_url: base_url, timeout: 200, ingest_timeout: 2_000]
+      #
+      # What this discriminates is the 200ms :timeout against each path's
+      # stall. An ingest bounded by :timeout gives up at 200ms, 800ms before
+      # /ingest answers at 1s. A search bounded by ingest_timeout waits out
+      # /search's 10s stall and gets a 200.
+      #
+      # The other margins only have to survive a loaded machine. Before
+      # task 019f5931 this was a 600ms stall on both paths against a 2_000ms
+      # ingest_timeout. CI run 37017583264 failed it with the ingest timing
+      # out, and on moon, under CPU contention, both halves failed: an
+      # ingest answered more than 1.4s late, and a search whose 200ms timer
+      # had not fired by the time the 600ms answer arrived. Now ingest has
+      # 29s of slack and search 9.8s. The exact value reaching Req is pinned
+      # by "an explicit :ingest_timeout governs ingest only" above.
+      base_url = start_slow_server(%{"/ingest" => 1_000, "/search" => 10_000})
+      config = [base_url: base_url, timeout: 200, ingest_timeout: 30_000]
 
       assert {:ok, 1} = StartupSuite.ingest([%{id: "a", content: "x"}], config)
 
@@ -332,16 +348,18 @@ defmodule Platform.Memory.Providers.StartupSuiteTest do
     end
   end
 
-  defp start_slow_server(sleep_ms) do
+  defp start_slow_server(sleep_ms_by_path) do
     port = free_port()
 
+    # shutdown_timeout 0: teardown does not wait out a stalled handler.
     start_supervised!(
       {Bandit,
-       plug: {Platform.Memory.Providers.StartupSuiteTest.SlowPlug, sleep_ms: sleep_ms},
+       plug: {Platform.Memory.Providers.StartupSuiteTest.SlowPlug, sleep_ms: sleep_ms_by_path},
        scheme: :http,
        ip: {127, 0, 0, 1},
        port: port,
-       startup_log: false}
+       startup_log: false,
+       thousand_island_options: [shutdown_timeout: 0]}
     )
 
     "http://127.0.0.1:#{port}"

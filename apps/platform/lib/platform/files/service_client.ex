@@ -41,8 +41,6 @@ defmodule Platform.Files.ServiceClient do
       metadata: `%{content_type, reason}`
   """
 
-  require Logger
-
   @default_timeout 30_000
 
   @type ok_result :: %{text: String.t(), pages: [String.t()] | nil}

@@ -38,8 +38,6 @@ defmodule Platform.Memory.Providers.StartupSuite do
 
   @behaviour Platform.Memory.Provider
 
-  require Logger
-
   @default_timeout 5_000
   @default_ingest_timeout 120_000
 

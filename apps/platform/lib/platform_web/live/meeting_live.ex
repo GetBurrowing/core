@@ -6917,13 +6917,9 @@ defmodule PlatformWeb.MeetingLive do
     Map.get(segment, "participant_identity") || Map.get(segment, :participant_identity)
   end
 
-  defp segment_participant_identity(_segment), do: nil
-
   defp segment_text(segment) when is_map(segment) do
     Map.get(segment, "text") || Map.get(segment, :text) || ""
   end
-
-  defp segment_text(_segment), do: ""
 
   defp apply_candidate_stop(socket, candidate) do
     result =

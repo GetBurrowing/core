@@ -483,7 +483,6 @@ defmodule Platform.Files.Cataloger do
     case adapter.chat(credentials, messages, opts) do
       {:ok, %{content: content}} when is_binary(content) -> {:ok, content}
       {:ok, %{content: [%{"text" => text} | _]}} -> {:ok, text}
-      {:ok, %{"content" => [%{"text" => text} | _]}} -> {:ok, text}
       {:ok, other} -> {:error, {:unrecognized_response, other}}
       {:error, reason} -> {:error, reason}
     end

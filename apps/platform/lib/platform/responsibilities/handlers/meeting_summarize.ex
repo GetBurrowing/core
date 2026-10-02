@@ -510,8 +510,6 @@ defmodule Platform.Responsibilities.Handlers.MeetingSummarize do
   defp transcript_id_from(meta) when is_map(meta),
     do: Map.get(meta, :transcript_id) || Map.get(meta, "transcript_id")
 
-  defp transcript_id_from(_), do: nil
-
   defp space_id_from(%{payload: payload}) when is_map(payload),
     do: Map.get(payload, :space_id) || Map.get(payload, "space_id")
 
@@ -520,8 +518,6 @@ defmodule Platform.Responsibilities.Handlers.MeetingSummarize do
 
   defp space_id_from(meta) when is_map(meta),
     do: Map.get(meta, :space_id) || Map.get(meta, "space_id")
-
-  defp space_id_from(_), do: nil
 
   # ── grounding block rendering ─────────────────────────────────────────────
 

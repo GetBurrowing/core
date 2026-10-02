@@ -14,8 +14,6 @@ defmodule Platform.Agents.Providers.Ollama do
 
   @behaviour Platform.Agents.Providers.Provider
 
-  require Logger
-
   @impl true
   def chat(credentials, messages, opts \\ []) do
     base_url = Keyword.get(opts, :base_url) || default_base_url()

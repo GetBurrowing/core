@@ -598,9 +598,6 @@ defmodule Platform.Meetings.Summarizer do
       {:ok, %{content: [%{"text" => text} | _]}} ->
         {:ok, text}
 
-      {:ok, %{"content" => [%{"text" => text} | _]}} ->
-        {:ok, text}
-
       {:ok, other} ->
         Logger.warning("[Summarizer] Unexpected LLM response shape: #{inspect(other)}")
         extract_text_from_response(other)

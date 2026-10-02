@@ -245,7 +245,6 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureCronSweep do
   # the LLM knows to say "PR walk unavailable" rather than hallucinate.
   defp gather_open_prs do
     with {:ok, path} when is_binary(path) <- {:ok, System.find_executable("gh")},
-         false <- is_nil(path),
          {output, 0} <-
            System.cmd(path, ~w(pr list --state open --limit 20 --json number,title,url,updatedAt),
              stderr_to_stdout: true
@@ -327,19 +326,15 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureCronSweep do
   # release images ship no `docs/`, so an unreachable index is the
   # steady state there. It comes back `available?: false` with a reason,
   # and the renderer turns that into an explicit instruction.
+  #
+  # The match is total: `{:ok, %{adr_index: _}}` is the slot's only return
+  # shape. A defensive `other ->` clause used to follow it; the Elixir 1.20
+  # type checker proves it unreachable, so it was removed. A contract change
+  # adding a second shape will NOT be flagged at compile time and raises
+  # `MatchError` here.
   defp adr_index do
-    case ContextProviders.gather_context(:adr_index, %{}) do
-      {:ok, %{adr_index: index}} ->
-        index
-
-      other ->
-        Logger.warning(
-          "[architecture.cron_sweep] adr_index slot returned an unexpected shape: " <>
-            "#{inspect(other)} — rendering the unavailable block"
-        )
-
-        @unavailable_adr_index
-    end
+    {:ok, %{adr_index: index}} = ContextProviders.gather_context(:adr_index, %{})
+    index
   end
 
   # Turn the structured context map into a template-assigns map. Each

@@ -858,7 +858,6 @@ defmodule PlatformWeb.Components.ChatMessage do
   end
 
   defp format_timestamp(%DateTime{} = dt), do: Calendar.strftime(dt, "%I:%M %p")
-  defp format_timestamp(_), do: ""
 
   # Render a `YYYY-MM-DD` day-bucket label as "Today" / "Yesterday" /
   # "Mon, Mar 16". Used by the in-row date separator (task 019e21c7).

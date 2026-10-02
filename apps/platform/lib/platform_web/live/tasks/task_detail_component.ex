@@ -1123,10 +1123,10 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
               {String.capitalize(@selected_task.priority)}
             </span>
             <span :if={@selected_task.project} class="text-xs text-base-content/50">
-              {(@selected_task.project && @selected_task.project.name) || "—"}
+              {@selected_task.project.name || "—"}
             </span>
             <span :if={@selected_task.epic} class="text-xs text-base-content/50">
-              / {(@selected_task.epic && @selected_task.epic.name) || "—"}
+              / {@selected_task.epic.name || "—"}
             </span>
           </div>
 
@@ -1211,7 +1211,6 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
                     </span>
                   </li>
                 </ul>
-              <% :none -> %>
             <% end %>
           </div>
 
@@ -2075,8 +2074,6 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
         Enum.map(ids, &Map.get(by_id, &1, %{id: &1, title: nil, status: nil}))
     end
   end
-
-  defp dependency_summary(_), do: []
 
   # Heroicon class + colour for a dependency's status icon.
   defp dependency_status_icon("done"), do: "hero-check-circle-solid text-success"

@@ -270,10 +270,8 @@ defmodule Platform.Execution.LocalProcessWrapper do
   defp maybe_signal(%__MODULE__{os_pid: nil}, _signal), do: :ok
 
   defp maybe_signal(%__MODULE__{os_pid: os_pid}, signal) do
-    case System.find_executable("sh") || "/bin/sh" do
-      nil -> {:error, :shell_not_found}
-      shell -> run_kill(shell, signal, os_pid)
-    end
+    shell = System.find_executable("sh") || "/bin/sh"
+    run_kill(shell, signal, os_pid)
   rescue
     error -> {:error, error}
   end

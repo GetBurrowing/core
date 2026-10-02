@@ -6335,21 +6335,6 @@ defmodule Platform.Federation.ToolSurface do
                to_task_id: to_id,
                suggestion: "Eject one endpoint or add both tasks to the same stack"
              }}
-
-          {:error, :stack_not_found} ->
-            {:error,
-             %{
-               error: "Stack not found: #{inspect(stack_id)}",
-               recoverable: false,
-               suggestion: "Use stack_list to find available stacks"
-             }}
-
-          {:error, other} ->
-            {:error,
-             %{
-               error: "Failed to start planning: #{inspect(other)}",
-               recoverable: true
-             }}
         end
     end
   end
@@ -8884,8 +8869,6 @@ defmodule Platform.Federation.ToolSurface do
   defp with_task_update_nothing_written(%{error: error} = envelope) when is_binary(error),
     do: %{envelope | error: error <> " " <> @task_update_nothing_written}
 
-  defp with_task_update_nothing_written(envelope), do: envelope
-
   # Derive an `actor` tuple for the plan-gate call from the MCP call
   # context. MCP callers are agents by default — the `:agent_id` key
   # is the standard shape (see e.g. `space_leave`, `space_list` above).
@@ -9617,6 +9600,15 @@ defmodule Platform.Federation.ToolSurface do
   # `prompt_templates.ex`, `heartbeat_scheduler.ex` and
   # `dispatch_planning_ack_test.exs`, and it differs per calling tool
   # ("cannot ack" vs "cannot silence"), so each call site keeps its own.
+  #
+  # The three heads below are EXACTLY the refusal reasons
+  # `resolve_ack_stage_id/2` returns. There used to be a catch-all head; the
+  # Elixir 1.20 type checker proves it unreachable and CI compiles with
+  # --warnings-as-errors, so it was removed. The compiler does NOT flag a
+  # NEW reason reaching this function: a fourth reason added to
+  # `resolve_ack_stage_id/2` must get its own head here, or it raises
+  # FunctionClauseError inside the `else` that exists to turn crashes into
+  # refusals.
   defp supplied_stage_id_envelope(:stage_not_found, stage_id, _task_id) do
     %{
       error: "stage_id=#{stage_id} does not exist.",
@@ -9642,20 +9634,6 @@ defmodule Platform.Federation.ToolSurface do
       recoverable: true,
       suggestion:
         "Only a running stage can be acked. Re-read the stage_id from your dispatch payload, or omit stage_id entirely to let the system derive the task's running stage."
-    }
-  end
-
-  # Catch-all. The three heads above are shape-complete only by
-  # coincidence of today's atom set in `resolve_ack_stage_id/2`: a fourth
-  # reason added later would raise FunctionClauseError from inside the
-  # `else` that exists to turn crashes into refusals. This head keeps the
-  # tool boundary refusal-only whatever reason arrives.
-  defp supplied_stage_id_envelope(reason, stage_id, task_id) do
-    %{
-      error: "stage_id=#{stage_id} was refused for task_id=#{task_id}: #{inspect(reason)}.",
-      recoverable: true,
-      suggestion:
-        "Re-read the stage_id from your dispatch payload, or omit stage_id entirely to let the system derive the task's running stage."
     }
   end
 
@@ -12024,7 +12002,7 @@ defmodule Platform.Federation.ToolSurface do
 
       %{kind: :journal, namespace: ns, journal_date: date} ->
         suggestion =
-          "memory_create at #{ns}/journal/#{Date.to_iso8601(date || Date.utc_today())}.md"
+          "memory_create at #{ns}/journal/#{Date.to_iso8601(date)}.md"
 
         {:error,
          %{
@@ -14525,8 +14503,6 @@ defmodule Platform.Federation.ToolSurface do
       payload -> Map.put(attrs, :evaluation_payload, payload)
     end
   end
-
-  defp maybe_put_evaluation_payload(attrs, _), do: attrs
 
   defp serialize_review_request(request) do
     items =

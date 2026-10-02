@@ -100,8 +100,7 @@ defmodule Platform.Execution.LocalRunner do
         LocalProcessWrapper.describe(wrapper)
 
       {:error, :wrapper_exited} ->
-        ref = if is_map(run.runner_ref), do: run.runner_ref, else: %{}
-        {:ok, Map.merge(ref, %{status: :exited, exit_code: run.exit_code})}
+        {:ok, Map.merge(run.runner_ref, %{status: :exited, exit_code: run.exit_code})}
 
       {:error, reason} ->
         {:error, reason}

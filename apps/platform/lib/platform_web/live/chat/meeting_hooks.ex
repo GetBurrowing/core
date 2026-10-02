@@ -1978,8 +1978,6 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     end
   end
 
-  defp hold_roster_topic(socket, _space_id), do: socket
-
   # Symmetric teardown, by owner rather than by id. `release_all_agents/2`
   # because the space this socket joined on is not reliably in scope on every
   # leave path (`:active_space` can have moved), and a targeted release that

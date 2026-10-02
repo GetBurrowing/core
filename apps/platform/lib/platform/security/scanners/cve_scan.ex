@@ -235,8 +235,6 @@ defmodule Platform.Security.Scanners.CveScan do
     is_nil(fixed_version) and stale?(modified_at)
   end
 
-  defp include_finding?(_sev, _, _), do: false
-
   defp stale?(nil), do: false
 
   defp stale?(%DateTime{} = modified_at) do

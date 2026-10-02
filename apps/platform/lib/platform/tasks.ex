@@ -200,7 +200,7 @@ defmodule Platform.Tasks do
       Map.has_key?(attrs, :org_id) or Map.has_key?(attrs, "org_id") ->
         attrs
 
-      is_map(attrs) and not is_struct(attrs) ->
+      not is_struct(attrs) ->
         case Platform.Tenancy.get_root_org() do
           %Platform.Tenancy.Org{id: id} -> Map.put(attrs, :org_id, id)
           nil -> attrs

@@ -503,7 +503,16 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   # `PlatformWeb.ChatLive.GoalCadenceForm` (moved there in stage 4, from +56).
   #
   # RE-DERIVED from the guard's own measurement on this tree (measured: 2350).
-  @chat_live_code_line_count 2350
+  #
+  # Elixir 1.20 upgrade (task 019f5931 stage 1, commit 5aa722491): -2. The
+  # 1.20 type checker reported two clauses as unreachable and they were
+  # deleted rather than suppressed: the catch-all
+  # `section_summary(_sidebar_sections, _section_id)` and
+  # `fetch_user_email_for_pins(nil)`. The `if(user_id, ..., else: %{})` around
+  # `unread_counts_for_user/1` collapsed to the call itself, one line either
+  # way. 2350 - 2 = 2348, re-derived from the guard's own measurement on
+  # 1.20.2 (task 019f5931 stage 2).
+  @chat_live_code_line_count 2348
 
   @doc """
   Count the CODE lines of a source file.

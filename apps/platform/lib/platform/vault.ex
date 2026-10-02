@@ -905,7 +905,6 @@ defmodule Platform.Vault do
     end
   end
 
-  defp normalize_uuid(nil), do: @system_accessor_id
   defp normalize_uuid(id), do: id
 
   # ── Private: Helpers ─────────────────────────────────────────────────────────

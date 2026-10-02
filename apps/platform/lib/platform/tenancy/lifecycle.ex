@@ -1258,8 +1258,10 @@ defmodule Platform.Tenancy.Lifecycle do
         from(p in Project, where: p.id == ^project_id, select: p.archived_at)
         |> Repo.one()
         |> case do
+          # nil is both "no such project" and "project not archived": the
+          # query selects `archived_at`, so either way the project is writable.
           nil -> true
-          archived_at -> is_nil(archived_at)
+          _archived_at -> false
         end
 
       :error ->

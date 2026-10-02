@@ -1,14 +1,13 @@
 defmodule PlatformWeb.ArtifactPreviewController do
   use PlatformWeb, :controller
 
-  @image_exts ~w(.png .jpg .jpeg .gif .webp .svg)
-
   def show(conn, %{"path" => path}) do
     expanded = Path.expand(path)
 
     if allowed_path?(expanded) and File.regular?(expanded) do
-      ext = expanded |> Path.extname() |> String.downcase()
-      mime = MIME.from_path(expanded) || content_type_for(ext)
+      # `MIME.from_path/1` always returns a binary, falling back to
+      # "application/octet-stream" for an unknown extension.
+      mime = MIME.from_path(expanded)
 
       conn
       |> put_resp_content_type(mime)
@@ -34,11 +33,4 @@ defmodule PlatformWeb.ArtifactPreviewController do
       Path.expand(Path.join(workspace_root, "tmp"))
     ]
   end
-
-  defp content_type_for(ext) when ext in @image_exts,
-    do: "image/#{String.trim_leading(ext, ".") |> String.replace("jpg", "jpeg")}"
-
-  defp content_type_for(".md"), do: "text/markdown"
-  defp content_type_for(".txt"), do: "text/plain"
-  defp content_type_for(_), do: "application/octet-stream"
 end

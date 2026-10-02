@@ -147,12 +147,7 @@ defmodule PlatformWeb.ControlCenter.AgentData do
 
   defp runtime_running?(%Agent{} = agent), do: is_pid(AgentServer.whereis(agent.id))
 
-  defp runtime_status(%Agent{} = agent) do
-    case runtime_snapshot(agent) do
-      %{status: status} -> status
-      _ -> :unknown
-    end
-  end
+  defp runtime_status(%Agent{} = agent), do: runtime_snapshot(agent).status
 
   # ── Agent selection ───────────────────────────────────────────────
 

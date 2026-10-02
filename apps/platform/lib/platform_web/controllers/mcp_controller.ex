@@ -330,8 +330,16 @@ defmodule PlatformWeb.MCPController do
   defp jsonable(value) when is_atom(value) or is_binary(value) or is_number(value), do: value
   defp jsonable(value) when is_list(value), do: Enum.map(value, &jsonable/1)
 
+  # `Jason.Encoder` sets `@fallback_to_any true`, so `impl_for/1` never
+  # returns nil for a struct: one with no encoder of its own resolves to
+  # `Jason.Encoder.Any`, whose `encode/2` raises. That module is the
+  # "not encodable" answer, not nil (the Elixir 1.20 type checker flagged
+  # the old `if impl_for(value)` test as always true).
   defp jsonable(%_{} = value) do
-    if Jason.Encoder.impl_for(value), do: value, else: inspect(value)
+    case Jason.Encoder.impl_for(value) do
+      Jason.Encoder.Any -> inspect(value)
+      _encoder -> value
+    end
   end
 
   defp jsonable(value) when is_map(value),

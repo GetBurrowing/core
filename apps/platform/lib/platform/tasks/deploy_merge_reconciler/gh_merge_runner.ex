@@ -38,8 +38,6 @@ defmodule Platform.Tasks.DeployMergeReconciler.GhMergeRunner do
 
   @behaviour Platform.Tasks.DeployMergeReconciler.MergeRunner
 
-  require Logger
-
   @gh_missing_message "`gh` (GitHub CLI) not found on PATH; cannot poll `gh pr list` for merged deploy PRs"
 
   @impl true

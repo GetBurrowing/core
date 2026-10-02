@@ -989,8 +989,6 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
     |> Enum.map_join(" ", &String.capitalize/1)
   end
 
-  defp humanize_string(_), do: "Canvas"
-
   @doc "Summarize a canvas creation changeset for a flash message."
   def changeset_error_summary(changeset) do
     changeset

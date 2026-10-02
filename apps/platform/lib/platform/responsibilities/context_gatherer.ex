@@ -104,14 +104,6 @@ defmodule Platform.Responsibilities.ContextGatherer do
 
       {:error, reason} ->
         acc |> Map.put(name, nil) |> record_slot_error(name, reason)
-
-      other ->
-        Logger.warning(
-          "[ContextGatherer] resolver returned an unexpected shape for name=#{inspect(name)} " <>
-            "result=#{inspect(other)} — returning nil"
-        )
-
-        acc |> Map.put(name, nil) |> record_slot_error(name, {:unexpected_shape, other})
     end
   end
 
@@ -122,9 +114,30 @@ defmodule Platform.Responsibilities.ContextGatherer do
   # The per-slot resolver is contracted to return `{:ok, map}` /
   # `{:error, term}`, but `gather/2` promises it never raises regardless
   # of what a future slot does. Belt and braces.
+  #
+  # The contract is enforced HERE, inside the rescue, rather than by an
+  # `other ->` clause in `put_slot/3`: the Elixir 1.20 type checker proves
+  # that clause unreachable for today's slots (and CI compiles with
+  # --warnings-as-errors), but a future slot returning another shape would
+  # make `put_slot/3` raise. Here an off-contract value raises
+  # CaseClauseError and the rescue below records it as
+  # `{:unexpected_shape, value}`, so the never-raises promise still holds.
+  # (A CaseClauseError raised deeper inside a resolver is recorded the same
+  # way, under its own unmatched term.)
   defp safe_gather(name, trigger_meta) do
-    ContextProviders.gather_context(name, trigger_meta)
+    case ContextProviders.gather_context(name, trigger_meta) do
+      {:ok, %{}} = ok -> ok
+      {:error, _reason} = error -> error
+    end
   rescue
+    error in CaseClauseError ->
+      Logger.warning(
+        "[ContextGatherer] resolver returned an unexpected shape for name=#{inspect(name)} " <>
+          "result=#{inspect(error.term)} — returning nil"
+      )
+
+      {:error, {:unexpected_shape, error.term}}
+
     error ->
       Logger.warning(
         "[ContextGatherer] lookup raised: #{Exception.message(error)} — returning nil"

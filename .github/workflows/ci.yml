@@ -56,7 +56,7 @@ jobs:
     # None of this is visible on GitHub-hosted runners, where every job gets a
     # fresh machine and nothing is shared.
     container:
-      image: elixir:1.19.5-otp-28-slim
+      image: elixir:1.20.2-otp-28-slim
     services:
       postgres:
         image: postgres:16-alpine
@@ -293,16 +293,23 @@ jobs:
             local summary count
             # `|| true`: under pipefail a no-match grep would otherwise abort
             # the `bash -e` step before the ::error:: below is printed.
-            summary=$(grep -oE '[0-9]+ tests?, [0-9]+ failures?' "$first_pass_log" | tail -n1 || true)
+            #
+            # ExUnit 1.20 summary shapes: `Result: 16958 passed`, with failures
+            # `Result: 16950/16958 passed`, and with no tests at all
+            # `Result: 0 tests`. Each may carry a `(... doctests, ... tests)`
+            # breakdown and `, N skipped` / `, N excluded` after it, which the
+            # `-o` match leaves off. The LAST number in the match is the total
+            # (doctests included). Before 1.20 the line was `N tests, M failures`.
+            summary=$(grep -oE 'Result: [0-9]+(/[0-9]+)? (passed|tests)' "$first_pass_log" | tail -n1 || true)
             # The bare `echo` first: a dead first pass leaves ExUnit's progress
             # dots mid-line, and GitHub only reads `::error::` at column 0
             # (measured on control run 34552027555: red step, no annotation).
             if [ -z "$summary" ]; then
               echo
-              echo "::error::main mix test pass printed no ExUnit summary line (N tests, M failures) — the suite did not run to completion"
+              echo "::error::main mix test pass printed no ExUnit summary line (Result: N passed) — the suite did not run to completion"
               exit 1
             fi
-            count=${summary%% *}
+            count=$(printf '%s' "$summary" | grep -oE '[0-9]+' | tail -n1)
             if [ "$count" -lt "$MIN_TEST_COUNT" ]; then
               echo
               echo "::error::main mix test pass ran $count tests, below MIN_TEST_COUNT=$MIN_TEST_COUNT — the suite did not run to completion (raise the floor in ci.yml env: if the suite legitimately shrank)"
@@ -534,7 +541,7 @@ jobs:
     # Root container for apt, and the workspace handed back at the end: the
     # same WORKSPACE OWNERSHIP reasoning as `test` above.
     container:
-      image: elixir:1.19.5-otp-28-slim
+      image: elixir:1.20.2-otp-28-slim
     services:
       postgres:
         image: postgres:16-alpine
@@ -615,13 +622,14 @@ jobs:
           set -o pipefail
           log="${RUNNER_TEMP:-.}/mix-test-with-play.log"
           mix test 2>&1 | tee "$log"
-          summary=$(grep -oE '[0-9]+ tests?, [0-9]+ failures?' "$log" | tail -n1 || true)
+          # ExUnit 1.20 summary shape; see assert_test_count_floor in `test`.
+          summary=$(grep -oE 'Result: [0-9]+(/[0-9]+)? (passed|tests)' "$log" | tail -n1 || true)
           if [ -z "$summary" ]; then
             echo
-            echo "::error::apps/game_stream mix test printed no ExUnit summary line (N tests, M failures) — the suite did not run to completion"
+            echo "::error::apps/game_stream mix test printed no ExUnit summary line (Result: N passed) — the suite did not run to completion"
             exit 1
           fi
-          count=${summary%% *}
+          count=$(printf '%s' "$summary" | grep -oE '[0-9]+' | tail -n1)
           if [ "$count" -lt "$MIN_PLAY_TEST_COUNT" ]; then
             echo
             echo "::error::apps/game_stream mix test ran $count tests, below MIN_PLAY_TEST_COUNT=$MIN_PLAY_TEST_COUNT"

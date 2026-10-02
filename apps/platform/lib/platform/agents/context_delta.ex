@@ -108,10 +108,14 @@ defmodule Platform.Agents.ContextDelta do
 
   defp normalize_map(_other), do: %{}
 
+  # `%Date{}` must precede the `is_map/1` head: a struct is a map, so the
+  # Date clause used to be unreachable and a Date value went through
+  # `normalize_map/1` and raised Protocol.UndefinedError (`Map.new/2` on a
+  # struct). Found by the Elixir 1.20 type checker's redundant-clause warning.
+  defp normalize_value(%Date{} = date), do: date
   defp normalize_value(map) when is_map(map), do: normalize_map(map)
   defp normalize_value(list) when is_list(list), do: Enum.map(list, &normalize_value/1)
   defp normalize_value(atom) when is_atom(atom), do: Atom.to_string(atom)
-  defp normalize_value(%Date{} = date), do: date
   defp normalize_value(value), do: value
 
   defp normalize_removals(nil), do: []

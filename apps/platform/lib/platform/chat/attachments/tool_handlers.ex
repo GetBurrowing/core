@@ -12,8 +12,6 @@ defmodule Platform.Chat.Attachments.ToolHandlers do
   image `src` (phase 6) or hand back to a user.
   """
 
-  require Logger
-
   alias Platform.Chat
   alias Platform.Chat.Attachment
   alias Platform.Chat.AttachmentPresigner

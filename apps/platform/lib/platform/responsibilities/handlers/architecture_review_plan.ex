@@ -706,8 +706,12 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
   # state — a standalone task in a fresh project genuinely has none —
   # so refusing on it would stop the architect dispatch for the most
   # common shape in the system. Only `:plan_payload` is load-bearing
-  # enough to refuse a dispatch over; the `case` below exists purely so
-  # a future contract change can't silently crash the gather.
+  # enough to refuse a dispatch over. The match below is total: the
+  # slot's only return shape is `{:ok, %{sibling_tasks: _}}`. A defensive
+  # `other ->` clause used to follow it; the Elixir 1.20 type checker
+  # proves it unreachable (CI compiles with --warnings-as-errors), so it
+  # was removed. A contract change that adds a second return shape will
+  # NOT be flagged at compile time and raises `MatchError` here.
   #
   # Named `fetch_*_slot` rather than after the slot itself: this
   # function FETCHES a slot, it does not materialise one, and the two
@@ -720,18 +724,8 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
   defp fetch_sibling_tasks_slot(payload) do
     anchor = %{task_id: is_map(payload) && Map.get(payload, :task_id)}
 
-    case ContextProviders.gather_context(:sibling_tasks, anchor) do
-      {:ok, %{sibling_tasks: siblings}} ->
-        siblings
-
-      other ->
-        Logger.warning(
-          "[architecture.review_plan] sibling_tasks slot returned an unexpected shape: " <>
-            "#{inspect(other)} — rendering an empty sibling block"
-        )
-
-        @empty_siblings
-    end
+    {:ok, %{sibling_tasks: siblings}} = ContextProviders.gather_context(:sibling_tasks, anchor)
+    siblings
   end
 
   # The ADR walk is no longer materialised here either — it is the
@@ -747,20 +741,11 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureReviewPlan do
   # steady state there — refusing on it would stop the architect
   # dispatching in production. It comes back `available?: false` with a
   # reason instead, and the renderer turns that into an explicit
-  # instruction not to cite ADRs rather than into silence.
+  # instruction not to cite ADRs rather than into silence. Total match,
+  # for the reason given on `fetch_sibling_tasks_slot/1`.
   defp fetch_adr_index_slot do
-    case ContextProviders.gather_context(:adr_index, %{}) do
-      {:ok, %{adr_index: index}} ->
-        index
-
-      other ->
-        Logger.warning(
-          "[architecture.review_plan] adr_index slot returned an unexpected shape: " <>
-            "#{inspect(other)} — rendering the unavailable block"
-        )
-
-        @unavailable_adr_index
-    end
+    {:ok, %{adr_index: index}} = ContextProviders.gather_context(:adr_index, %{})
+    index
   end
 
   # Turn the structured context map into a template-assigns map. Each

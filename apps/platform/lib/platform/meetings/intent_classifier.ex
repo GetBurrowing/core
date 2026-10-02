@@ -2418,8 +2418,6 @@ defmodule Platform.Meetings.IntentClassifier do
     end
   end
 
-  defp stamp_press_window_source(payload), do: payload
-
   # Fold a later fragment's verdict into the held turn's payload.
   # Promote-only: see `extend_hold/4`.
   defp promote_press_window_source(held_payload, %{press_window_source: :push_to_talk} = payload) do

@@ -4679,7 +4679,7 @@ defmodule Platform.Orchestration.TaskRouter do
       pending_kinds = open_validation_kinds(stage)
       strategy = Tasks.resolve_deploy_strategy(task)
 
-      if DispatchPhase.human_gated_pending?(pending_kinds, strategy || %{}) do
+      if DispatchPhase.human_gated_pending?(pending_kinds, strategy) do
         {:ok, pending_kinds}
       else
         nil
@@ -4989,8 +4989,6 @@ defmodule Platform.Orchestration.TaskRouter do
 
       :ok
   end
-
-  defp any_open_validation?(nil), do: false
 
   defp any_open_validation?(plan) do
     (plan.stages || [])
@@ -5366,19 +5364,14 @@ defmodule Platform.Orchestration.TaskRouter do
   defp revoke_deploy_lease(%State{deploy_lease: nil} = state), do: state
 
   defp revoke_deploy_lease(%State{deploy_lease: lease} = state) do
-    case CredentialLease.revoke(lease) do
-      {:ok, _revoked} ->
-        Logger.info("[TaskRouter] revoked deploy lease #{lease.id} for task #{state.task_id}")
+    {:ok, _revoked} = CredentialLease.revoke(lease)
+    Logger.info("[TaskRouter] revoked deploy lease #{lease.id} for task #{state.task_id}")
 
-        if state.execution_space_id do
-          ExecutionSpace.post_log(
-            state.execution_space_id,
-            "Deploy credentials revoked (lease #{lease.id})"
-          )
-        end
-
-      _ ->
-        :ok
+    if state.execution_space_id do
+      ExecutionSpace.post_log(
+        state.execution_space_id,
+        "Deploy credentials revoked (lease #{lease.id})"
+      )
     end
 
     %{state | deploy_lease: nil}

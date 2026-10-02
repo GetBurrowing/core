@@ -408,11 +408,9 @@ defmodule Platform.Meetings.Triage do
   # `{:tasks_batch_deleted, ids, meta}` on the `Tasks` board topic per
   # `junk_batch/2` invocation so open TasksLive sockets can drop N cards
   # in a single `refresh_board/1` (rather than N sequential broadcasts,
-  # one per soft-deleted row). Defensive: skip when the id list is empty
-  # so the always-idempotent contract of `junk_batch/2` doesn't leak a
-  # zero-count event to subscribers.
-  defp broadcast_batch_deleted(_canvas_id, [], _count, _now), do: :ok
-
+  # one per soft-deleted row). Only ever called with a non-empty id list:
+  # `junk_batch/2`'s `[] ->` branch returns before reaching it, which is
+  # what keeps a zero-count event from leaking to subscribers.
   defp broadcast_batch_deleted(canvas_id, ids, count, now) do
     Platform.Tasks.broadcast_board(
       {:tasks_batch_deleted, ids,

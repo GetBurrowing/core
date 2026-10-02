@@ -41,9 +41,6 @@ defmodule Platform.Tasks.Stacks.DepInference.AnthropicAdapter do
       {:ok, %{content: [%{"text" => text} | _]}} when is_binary(text) ->
         {:ok, text}
 
-      {:ok, %{"content" => [%{"text" => text} | _]}} when is_binary(text) ->
-        {:ok, text}
-
       {:ok, other} ->
         {:error, {:unrecognized_response, other}}
 

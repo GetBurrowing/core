@@ -8,7 +8,6 @@ defmodule Platform.Chat.ContextPlane do
   inclusion in attention signals to external runtimes.
   """
   use GenServer
-  require Logger
 
   @table :suite_context_plane
   @activity_limit 50

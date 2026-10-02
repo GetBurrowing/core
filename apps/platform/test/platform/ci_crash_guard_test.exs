@@ -15,8 +15,11 @@ defmodule Platform.CiCrashGuardTest do
 
     1. Nameless-retry refusal — a non-zero first pass with an EMPTY harvest is a
        crash, not a flake; the step exits 1 BEFORE the retry command runs.
-    2. Test-count floor — the first pass's own `N tests, M failures` summary must
-       be present and N must be at least `MIN_TEST_COUNT` (a workflow env value).
+    2. Test-count floor — the first pass's own ExUnit summary line must be
+       present and its total must be at least `MIN_TEST_COUNT` (a workflow env
+       value). Since Elixir 1.20 that line reads `Result: N passed` (or
+       `Result: P/N passed` with failures); before 1.20 it was
+       `N tests, M failures`.
 
   Each assertion is scoped to the `Run tests` step body, comment-stripped, so a
   `#` line that merely mentions a literal cannot satisfy it.
@@ -225,8 +228,9 @@ defmodule Platform.CiCrashGuardTest do
          %{step: step} do
       code = code_only(step)
 
-      assert code =~ ~r/grep -oE '\[0-9\]\+ tests\?, \[0-9\]\+ failures\?' "\$first_pass_log"/,
-             "the `Run tests` step no longer greps the ExUnit `N tests, M failures` " <>
+      assert code =~
+               ~r/grep -oE 'Result: \[0-9\]\+\(\/\[0-9\]\+\)\? \(passed\|tests\)' "\$first_pass_log"/,
+             "the `Run tests` step no longer greps the ExUnit 1.20 `Result: N passed` " <>
                "summary out of $first_pass_log. Without that parse the floor has " <>
                "nothing to compare."
 

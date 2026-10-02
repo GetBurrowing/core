@@ -149,9 +149,15 @@ defmodule Platform.Security.FindingFiler do
   defp file_group(_scanner_key, group, _threshold) do
     Enum.reduce(group, 0, fn finding, acc ->
       case file_finding(finding) do
-        {:ok, _} -> acc + 1
-        {:error, :duplicate_fingerprint} -> acc
-        {:error, other} -> log_error(finding, other) && acc
+        {:ok, _} ->
+          acc + 1
+
+        {:error, :duplicate_fingerprint} ->
+          acc
+
+        {:error, other} ->
+          log_error(finding, other)
+          acc
       end
     end)
   end
@@ -324,7 +330,5 @@ defmodule Platform.Security.FindingFiler do
     Logger.warning(
       "[FindingFiler] file_finding failed fingerprint=#{Map.get(finding, :fingerprint)} reason=#{inspect(reason)}"
     )
-
-    true
   end
 end

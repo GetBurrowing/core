@@ -970,7 +970,12 @@ defmodule PlatformWeb.TasksLiveShellNonAccretionTest do
   # `decode_*` calls in `handle_params/3` read params into plain values and
   # nothing else, exactly as `decode_sponsor_param/1` and
   # `BoardData.decode_sort/1` already did before this stage.
-  @shell_line_count 652
+  #
+  # Elixir 1.20 upgrade (task 019f5931 stage 1, commit 5aa722491): 652 - 2 =
+  # 650. `require Logger` and the blank line after it were removed: the shell
+  # calls no Logger macro, and 1.20 reports that as an unused require. The
+  # count went down, so the non-accretion promise above still holds.
+  @shell_line_count 650
 
   defp line_count(source), do: source |> :binary.matches("\n") |> length()
 

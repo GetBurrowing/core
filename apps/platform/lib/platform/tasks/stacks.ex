@@ -4624,7 +4624,6 @@ defmodule Platform.Tasks.Stacks do
 
   defp ensure_in_stack(%Stack{id: stack_id}, %Task{stack_id: stack_id}), do: :ok
   defp ensure_in_stack(_stack, %Task{id: task_id}), do: {:error, :not_in_stack, task_id}
-  defp ensure_in_stack(_stack, _task), do: {:error, :not_in_stack}
 
   defp ensure_no_in_stack_dependents(%Stack{id: stack_id}, %Task{id: task_id}) do
     member_ids =
