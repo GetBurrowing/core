@@ -48,7 +48,13 @@ import { getHold, beginHold, patchHold, clearHold } from "./lib/ptt_hold_state"
  */
 
 const SILENCE = 128 // getByteTimeDomainData's zero point
-const BAR_COUNT = 12
+// Round 5 (Dalton's PR #1178 re-check, item 6): both reference canvases
+// draw exactly FOUR bars. `_buildBars()` below reads whatever `[data-ptt-
+// bar]` elements the template actually rendered — `participant_rail.ex`
+// is the one place this count is really enforced — so this constant is
+// descriptive (tests and callers can read the agreed count off it), not
+// the thing that drives rendering.
+const BAR_COUNT = 4
 
 // Task 01a0cf5c stage 2, design canvas 01a0cf5e-9cb0: a release before
 // this many milliseconds have elapsed is coached ("Hold it down and

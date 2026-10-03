@@ -4799,37 +4799,70 @@ body, .font-fabrikam {
       background-color 0s,
       border-color 0s,
       box-shadow 0s,
-      transform var(--duration-fast) var(--ease-standard) !important;
+      transform 70ms var(--ease-standard) !important;
+  }
+
+  /* Fidelity fix (Dalton's PR #1178 re-check, item 7): the mockup's REST
+     keycap sits on a physical 3px "shelf" — `box-shadow: 0 3px 0
+     #0e7f90` — which this button drew with no shadow at all. Token-
+     derived rather than the mockup's literal hex: `color-mix` off
+     `--color-primary`, the same technique the glow-pulse keyframes below
+     already use, per this file's semantic-tokens-only rule (CallShell's
+     moduledoc — the mockup's CSS is hardcoded dark-mode, this rail
+     follows the theme). `:not(:disabled)` so the flat grey disabled fill
+     never grows a cyan-tinted shelf under it — the mockup has no
+     disabled state to match against.
+
+     Deliberately a PLAIN (non-`!important`) box-shadow, not folded into
+     the `!important` block above: Tailwind's `data-[pressed=true]:ring-*`
+     utility on this same element (in `participant_rail.ex`) is a
+     UTILITIES-layer box-shadow declaration, and utilities always win the
+     cascade over `@layer components` regardless of specificity — so the
+     instant the pressed ring activates it naturally REPLACES this shelf
+     shadow outright, with no explicit `[data-pressed="true"]` override
+     needed here. That mirrors the mockup's own `:active` rule, which
+     zeroes this exact shadow the moment its press ring takes over. No
+     transition is added for box-shadow here — the ring/colour
+     inversion's INSTANT swap is the already-documented, already-tested
+     design decision above; this fix only adds the missing rest-state
+     shadow, it does not reopen that decision. */
+  [data-role="meeting-agent-hold-to-talk"]:not(:disabled) {
+    box-shadow: 0 3px 0 color-mix(in oklch, var(--color-primary) 55%, black);
   }
 
   /* The press scale — widened from round 2's 0.96 to 0.90 (Harper's "bigger
      ... scale transition" ask, since the subtler value was never even
-     visible under either bug above) and now genuinely ANIMATES over
-     `--duration-fast` (100ms), per the consolidated `transition` above —
-     this rule sets only the VALUE, not a competing transition
-     declaration, so there is nothing left for a cascade fight to lose.
-     `will-change: transform` keeps the squish off the paint-blocking path
-     so it stays smooth in the same frame the colour inverts in — one
-     signal is instant, the other is now an actual, felt motion.
+     visible under either bug above) and now genuinely ANIMATES over a
+     literal 70ms (see the consolidated `transition` above) — this rule
+     sets only the VALUE, not a competing transition declaration, so
+     there is nothing left for a cascade fight to lose. `will-change:
+     transform` keeps the squish off the paint-blocking path so it stays
+     smooth in the same frame the colour inverts in — one signal is
+     instant, the other is now an actual, felt motion.
 
      A dedicated reduced-motion branch below removes the scale ENTIRELY
      (not just its animation) — the canvas is explicit that reduced
      motion drops the scale but keeps the inversion, since one is colour
      and the other is motion.
 
-     Fidelity fix: both of Dalton's reference canvases press with a sink
-     AND a scale together (`translateY(2px) scale(.97)` in the full
-     mockup, `translateY(3px) scale(.97)` in the touch-it canvas) — "the
-     button sinks (translate and scale)" per the first canvas's own
-     bug list. This rule had only the scale; the vertical sink was
-     dropped somewhere along the way and nothing else in this file
-     supplies it. `translateY(2px)` is added back (the full mockup's
-     value, since that file is the ground truth for press feel); the
-     0.9 scale factor is UNCHANGED — that is Harper's own explicit
-     "bigger ... scale transition" ask (see the comment above), not an
-     approximation, and this fix is not the place to relitigate it. */
+     Fidelity fix, REVISED round 5 (Dalton's PR #1178 re-check, item 7):
+     both of Dalton's reference canvases press with a sink AND a scale
+     together — the full mockup's `translateY(2px) scale(.97)`, the
+     touch-it canvas's `translateY(3px) scale(.97)` — "the button sinks
+     (translate and scale)" per the first canvas's own bug list. An
+     earlier pass here used the full mockup's 2px/100ms; the touch-it
+     canvas is the LATER, more-refined mock (it is also the one Dalton's
+     #1178 re-check measured against, and the one `box-shadow: 0 3px 0
+     #0e7f90` above is drawn from), so its `translateY(3px)` over its own
+     `transition: transform .07s` is what this round ports instead — one
+     canvas's shadow and one canvas's sink distance/timing would be two
+     different mockups' numbers stitched together, which is the exact
+     approximation this fidelity pass exists to stop doing. The 0.9 scale
+     factor is UNCHANGED — that is Harper's own explicit "bigger ...
+     scale transition" ask (see the comment above), not drawn from either
+     canvas, and this fix is not the place to relitigate it. */
   [data-role="meeting-agent-hold-to-talk"][data-pressed="true"] {
-    transform: translateY(2px) scale(0.9);
+    transform: translateY(3px) scale(0.9);
     will-change: transform;
   }
 
@@ -4971,17 +5004,29 @@ body, .font-fabrikam {
   }
 
   /* The 2px primary tether rule, pointing at the key the overlay belongs
-     to. Desktop anchors it to the overlay's LEFT edge (the overlay sits
-     beside the row, to its right); the phone/fallback placement moves it
-     to the BOTTOM edge (the overlay sits above the sheet, tethering
-     downward toward the row it describes) — both ends of the same
-     `::before` pseudo-element, switched on `data-placement` rather than
-     a breakpoint, since the fallback can fire on a wide viewport too
-     (the overlap check in the hook). */
+     to. The `"row"` placement (round 5, Dalton's PR #1178 re-check, item
+     5 — see `MeetingAskHeardOverlay._underRowRect`) anchors it to the
+     overlay's TOP edge, since the overlay now sits directly UNDER the
+     held row at every viewport, mirroring the mockup's own
+     `.tr{top:calc(100% + 6px)}`. `"phone"` (the fallback for when the
+     held row cannot be found, or would overlap a control) keeps the
+     BOTTOM-edge tether from the earlier desktop/phone split — the
+     overlay there sits above a sheet, tethering downward toward the row
+     it describes. `"desktop"` is kept only so an element caught mid-
+     transition from an older inline style does not render tether-less;
+     nothing in the hook assigns that placement any more. All three are
+     ends of the same `::before` pseudo-element, switched on
+     `data-placement` rather than a breakpoint. */
   [data-role="meeting-ask-heard-overlay"]::before {
     content: "";
     position: absolute;
     background-color: var(--color-primary);
+  }
+
+  [data-role="meeting-ask-heard-overlay"][data-placement="row"]::before {
+    inset-inline: 0;
+    top: 0;
+    height: 2px;
   }
 
   [data-role="meeting-ask-heard-overlay"][data-placement="desktop"]::before {
@@ -5058,6 +5103,32 @@ body, .font-fabrikam {
     background: linear-gradient(var(--color-base-300), transparent);
     pointer-events: none;
     z-index: 1;
+    /* Round 5 (Dalton's PR #1178 re-check, item 3): the mask used to be
+       opacity 1 unconditionally, visible from the very first line —
+       the touch-it canvas's own fade only appears at 60%/9s = 5.4s into
+       its SCRIPTED hold, once the box has actually grown tall (`@keyframes
+       fade{0%,60%{opacity:0}75%,100%{opacity:1}}`). That 5.4s/6.75s pair
+       is a property of the mockup's fixed, scripted 9-second growth
+       timeline — this app's transcript grows at whatever rate the
+       speaker actually talks, so a literal clock cannot be ported; the
+       INVARIANT the mockup's timing is standing in for is "only fade once
+       there's more content above the fold than the window can show",
+       which `MeetingAskHeardOverlay._updateOverflow` measures directly
+       (`scrollHeight > clientHeight`) and reflects here as
+       `data-overflowing`. Hidden by default; the hook only ever turns it
+       on. */
+    opacity: 0;
+    transition: opacity 200ms var(--ease-standard);
+  }
+
+  [data-role="meeting-ask-heard-window-wrap"][data-overflowing="true"]::before {
+    opacity: 1;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    [data-role="meeting-ask-heard-window-wrap"]::before {
+      transition: none;
+    }
   }
 
   .sheet-handle {

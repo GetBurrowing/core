@@ -1078,10 +1078,10 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
     html |> Floki.parse_fragment!() |> Floki.find(~s([data-role="meeting-agent-hold-to-talk"]))
   end
 
-  defp status_chip_slot(html) do
+  defp activity_word(html) do
     html
     |> Floki.parse_fragment!()
-    |> Floki.find(~s([data-role="meeting-agent-status-chip-slot"]))
+    |> Floki.find(~s([data-role="agent-activity-word"]))
   end
 
   describe "per-agent hold-to-talk control" do
@@ -1108,13 +1108,17 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       [label] = Floki.attribute(control, "aria-label")
       assert label =~ "Octavius"
 
-      # Twelve bars for the hook to paint, like the retired single button.
+      # Four bars for the hook to paint (round 5, Dalton's PR #1178
+      # re-check, item 6 — both reference canvases draw exactly four;
+      # twelve at 3px with a 2px gap need 58px into this 36px slot, which
+      # is what squeezed every bar down to ~1.2px regardless of the
+      # declared width).
       bars =
         html
         |> Floki.parse_fragment!()
         |> Floki.find(~s([data-role="meeting-agent-hold-to-talk"] [data-ptt-bar]))
 
-      assert Enum.count(bars) == 12
+      assert Enum.count(bars) == 4
 
       # The shared touch utility and the refused-press slot survive the move.
       [classes] = Floki.attribute(control, "class")
@@ -1156,24 +1160,24 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
 
     # Task 01a0febf stage 6 — Dalton's layout-shift bug (canvases
     # 01a0febf-652b-7001-83da-c15b1c4ea846 and 01a0ff1c-37ab-7001-a91c-
-    # b61e0b1e7499, "1c" in his test matrix): real headless-Chromium
-    # measurement on two separate builds (PR #1174, then its fix PR #1176,
-    # which deliberately left this ONE bug alone) found that pressing Ask
-    # inserted the "Talking…" cue as a bare extra flex item with no width
-    # reserved ahead of time. The name column collapsed to 0, and the
-    # overflow moved the kick button on desktop and the Ask button itself
-    # on phone — a horizontal scrollbar on desktop, text covering the
-    # name on phone.
+    # b61e0b1e7499, "1c" in his test matrix) FIRST shipped as a reserved
+    # extra flex column (an invisible sizer slot, present in every state so
+    # the row's width never changed when the cue did). PR #1178's own live
+    # re-check (Dalton, canvas 01a101c3-b10f) found THAT fix had its own
+    # bug: the reserved column was too wide for the rail, so the row
+    # OVERFLOWED permanently — a 370px row inside a 255px rail, the kick ✕
+    # pushed off the edge entirely. Round 5 removes the reserved column
+    # altogether, per the mockup's own structure: there never was a second
+    # box to reserve. `.st` in the mockup is ONE element, the same one that
+    # shows "Idle", with the pressed/held wording layered on top of it in
+    # place. This test proves THAT shape — the cue and the ordinary
+    # activity word share the exact same node, so there is no second
+    # column for a measurement to ever find too wide again.
     #
-    # This component test is a LOWER-CONFIDENCE check than Dalton's real
-    # browser measurement, not a replacement for it: this suite renders
-    # HEEx with no layout engine behind it, so it cannot measure a single
-    # pixel. What it CAN prove is the structural shape the fix depends
-    # on — a slot that exists, and is the same size, in BOTH states. That
-    # shape is necessary for the live measurement to come out flat; it is
-    # not sufficient on its own, which is why the PR this guards also
-    # carries a live CDP measurement where one was reachable.
-    test "the status-chip slot is reserved — present and the same size whether or not a cue is showing" do
+    # Lower-confidence than a real browser measurement, same caveat as
+    # before: this suite renders HEEx with no layout engine, so it proves
+    # the STRUCTURAL shape the fix depends on, not a pixel count.
+    test "the held/held-by cues render INSIDE the activity-word line, not as a separate slot" do
       idle_html = hold_rail([agent("Octavius", "oct-1")], hold_to_talk?: true)
 
       talking_html =
@@ -1186,40 +1190,29 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
           ask_floor_holders: %{"oct-1" => "Saru"}
         )
 
-      idle_slot = status_chip_slot(idle_html)
-      talking_slot = status_chip_slot(talking_html)
-      held_by_slot = status_chip_slot(held_by_other_html)
+      # The old reserved-column markup is gone outright in every state —
+      # not merely unused, ABSENT. A test that only checked "the cue shows
+      # the right text" could pass while a second, now-pointless slot still
+      # sat in the DOM claiming width.
+      refute idle_html =~ "meeting-agent-status-chip-slot"
+      refute talking_html =~ "meeting-agent-status-chip-slot"
+      refute held_by_other_html =~ "meeting-agent-status-chip-slot"
+      refute idle_html =~ "meeting-agent-status-chip-sizer"
 
-      # The slot exists in ALL THREE renders — idle, this viewer talking,
-      # and someone else holding the floor — not only when a cue happens
-      # to be active. Before this fix there was no slot at all: the cue
-      # was a bare `<span>` that only existed in the DOM while its `:if`
-      # was true, so the row's own content width changed with it.
-      assert idle_slot != []
-      assert talking_slot != []
-      assert held_by_slot != []
+      # Exactly ONE activity-word line per row in every state — the cue
+      # replaces its content, it is never a flex SIBLING of it.
+      [idle_word] = activity_word(idle_html)
+      [talking_word] = activity_word(talking_html)
+      [held_by_word] = activity_word(held_by_other_html)
 
-      # Its OWN classes — the ones that give it a footprint, not whatever
-      # cue is painted inside it — are identical across all three, so the
-      # row's total flex width is a function of this slot's markup alone,
-      # never of which cue (if any) is currently rendered inside it.
-      [idle_classes] = Floki.attribute(idle_slot, "class")
-      [talking_classes] = Floki.attribute(talking_slot, "class")
-      [held_by_classes] = Floki.attribute(held_by_slot, "class")
-      assert idle_classes == talking_classes
-      assert idle_classes == held_by_classes
+      # The "Talking" cue (now worded "Listening…", item 4) renders INSIDE
+      # that one word line, not beside it.
+      assert Floki.find(talking_word, ~s([data-role="meeting-agent-talking"])) != []
+      assert Floki.text(talking_word) =~ "Listening…"
+      assert Floki.find(idle_word, ~s([data-role="meeting-agent-talking"])) == []
 
-      # The invisible sizer — what actually establishes the slot's width
-      # — renders in every state too, and carries `invisible` (occupies
-      # layout space, paints nothing) rather than `hidden` (which would
-      # occupy none and defeat the whole reservation).
-      [sizer_classes] =
-        idle_html
-        |> Floki.parse_fragment!()
-        |> Floki.find(~s([data-role="meeting-agent-status-chip-sizer"]))
-        |> Floki.attribute("class")
-
-      assert sizer_classes =~ "invisible"
+      assert Floki.find(held_by_word, ~s([data-role="meeting-agent-held-by"])) != []
+      assert Floki.text(held_by_word) =~ "Held by Saru"
     end
 
     # Same regression — the defensive second layer. Even with the slot

@@ -122,10 +122,14 @@
 import { getHold, appendHoldText } from "./lib/ptt_hold_state"
 
 const INTERRUPTED_CLOSE_MS = 2_000
-const DESKTOP_MIN_WIDTH_PX = 1024 // Tailwind `lg`
-const DESKTOP_GAP_PX = 8
+// Round 5 (Dalton's PR #1178 re-check, item 2): "✓ Sent to <agent>" stays
+// up until 2.2s after release, matching the touch-it canvas's own
+// `@keyframes sent{0%,80%{opacity:1}100%{opacity:0}}` over its 2.2s
+// animation (full opacity through 80% of 2.2s, fading out by 2.2s).
+const SENT_DISPLAY_MS = 2_200
+const ROW_INSET_PX = 12 // mockup: `.tr{left:12px;right:12px}`, relative to the ROW
+const ROW_GAP_PX = 6 // mockup: `.tr{top:calc(100% + 6px)}`
 const DESKTOP_MAX_WIDTH_PX = 360
-const DESKTOP_SIDE_MARGIN_PX = 16 // "stage width minus 32" => 16 each side
 const PHONE_GUTTER_PX = 16
 const PHONE_TOP_GAP_PX = 8
 const DEFAULT_HEADER_HEIGHT_PX = 48 // `header` is a fixed `h-12`; measured as a fallback only
@@ -133,7 +137,13 @@ const DEFAULT_HEADER_HEIGHT_PX = 48 // `header` is a fixed `h-12`; measured as a
 const MeetingAskHeardOverlay = {
   mounted() {
     this._activeAgentId = null
+    this._activeAgentName = null
     this._isHeld = false
+    // Round 5 (item 2): true while the post-release "✓ Sent to <agent>"
+    // confirmation is up. `_isHeld` alone used to gate `data-open` in
+    // `updated()`; a release now opens a SECOND window after `_isHeld`
+    // goes false, so `data-open` needs a second thing keeping it true.
+    this._showingSent = false
     this._closeTimer = null
     // Mirrors the template's own literal default (`data-placement=
     // "desktop"`) — the source of truth `updated()` reasserts from, kept
@@ -162,6 +172,7 @@ const MeetingAskHeardOverlay = {
       const detail = event && event.detail
       if (!detail) return
       this._activeAgentId = detail.agentId || null
+      this._activeAgentName = detail.agentName || null
     }
 
     this._onHeld = (event) => {
@@ -194,11 +205,27 @@ const MeetingAskHeardOverlay = {
 
     // "Done" (canvas) — the physical release. See the moduledoc for why
     // this does not wait on `meeting_ask_outcome`.
+    //
+    // Round 5 (item 2): used to `_close()` immediately, which is why the
+    // app showed NOTHING on release where the mockup shows "✓ Sent to
+    // Burrow" — this hook had no "sent" state at all. Release now shows
+    // that confirmation for `SENT_DISPLAY_MS` before closing, same as the
+    // mockup's `.tr.sent`. Deliberately NOT gated on the server's real
+    // `meeting_ask_outcome` (fly/crumble) resolution — that event can
+    // arrive a little after physical release (there is a release-grace
+    // window server-side) and threading it through here would mean
+    // either delaying this confirmation past the release the viewer just
+    // felt, or reopening the whole close/resume state machine this
+    // singleton hook already carries a lot of care around (see the
+    // moduledoc's `updated()` section). This shows optimistically on
+    // every physical release, the same way the mockup's own CSS-only
+    // `:active` -> release transition does with no server round trip at
+    // all.
     this._onEnded = (event) => {
       const detail = event && event.detail
       if (detail && detail.agentId !== this._activeAgentId) return
       this._isHeld = false
-      this._close()
+      this._showSent()
     }
 
     this._onEarlyRelease = (event) => {
@@ -257,16 +284,19 @@ const MeetingAskHeardOverlay = {
     if (!hold || !hold.agentId) return
 
     this._activeAgentId = hold.agentId
+    this._activeAgentName = hold.agentName || null
     if (!hold.heldLongEnough) return
 
     this._isHeld = true
     if (this._status) this._status.textContent = "Listening while you hold"
     if (this._text) this._text.textContent = hold.text || ""
     this._userScrolledAway = false
+    this._showingSent = false
     this._clearCloseTimer()
     this._reposition()
     this.el.dataset.open = "true"
     this._scrollToBottom()
+    this._updateOverflow()
   },
 
   destroyed() {
@@ -292,7 +322,12 @@ const MeetingAskHeardOverlay = {
   // leaving the overlay stuck closed (or wrongly placed) for the rest of
   // a hold.
   updated() {
-    this.el.dataset.open = this._isHeld ? "true" : "false"
+    // Round 5 (item 2): `_isHeld` alone used to decide `data-open`. The
+    // post-release "sent" confirmation needs the box open for a couple
+    // of seconds AFTER `_isHeld` already went false, so a re-render
+    // landing during that window must not have this stomp it closed
+    // early — see `_showingSent`'s own doc above.
+    this.el.dataset.open = this._isHeld || this._showingSent ? "true" : "false"
     this.el.dataset.placement = this._placement
   },
 
@@ -305,16 +340,33 @@ const MeetingAskHeardOverlay = {
     if (this._status) this._status.textContent = "Listening while you hold"
     if (this._text) this._text.textContent = ""
     this._userScrolledAway = false
+    this._showingSent = false
     this._clearCloseTimer()
     this._reposition()
+    this._updateOverflow()
     this.el.dataset.open = "true"
     this._scrollToBottom()
+  },
+
+  // Round 5 (item 2) — the "✓ Sent to <agent>" confirmation shown on
+  // release. See `_onEnded`'s doc for why this fires on every physical
+  // release rather than waiting on the server's outcome event.
+  _showSent() {
+    this._showingSent = true
+    if (this._status) {
+      this._status.textContent = `✓ Sent to ${this._activeAgentName || "the agent"}`
+    }
+    this.el.dataset.open = "true"
+    this._clearCloseTimer()
+    this._closeTimer = setTimeout(() => this._close(), SENT_DISPLAY_MS)
   },
 
   _close() {
     this.el.dataset.open = "false"
     this._activeAgentId = null
+    this._activeAgentName = null
     this._isHeld = false
+    this._showingSent = false
     this._userScrolledAway = false
     this._clearCloseTimer()
     // Defense in depth alongside app.css's `[data-open="true"]` pointer-events
@@ -324,6 +376,7 @@ const MeetingAskHeardOverlay = {
     // cross-reference `_open()` to know the box does not carry text across
     // a close).
     if (this._text) this._text.textContent = ""
+    this._updateOverflow()
   },
 
   _clearCloseTimer() {
@@ -368,56 +421,89 @@ const MeetingAskHeardOverlay = {
     // restore the text instead of reopening blank — see
     // `_resumeFromWindowState` and `./lib/ptt_hold_state`.
     appendHoldText(text)
+    this._updateOverflow()
     if (!this._userScrolledAway) this._scrollToBottom()
+  },
+
+  // Round 5 (item 3): the top-fade mask (app.css, `-window-wrap::before`)
+  // used to be opacity 1 from the very first line. The touch-it canvas
+  // only fades its own mask in once the box has grown tall — "only once
+  // the transcript box has grown tall" is the actual rule its 5.4s/9s
+  // timing exists to approximate on a fixed, scripted demo; a real
+  // transcript grows at whatever rate the speaker talks, so the honest
+  // equivalent is "once there is content scrolled above the fold",
+  // measured directly rather than clocked.
+  _updateOverflow() {
+    if (!this._window) return
+    const wrap = this.el.querySelector('[data-role="meeting-ask-heard-window-wrap"]')
+    if (!wrap) return
+    const overflowing = this._window.scrollHeight > this._window.clientHeight + 1
+    wrap.dataset.overflowing = overflowing ? "true" : "false"
   },
 
   // ── Positioning ──────────────────────────────────────────────────────
 
+  // Round 5 (Dalton's PR #1178 re-check, item 5). The old implementation
+  // branched on viewport width and, on anything `lg` and up, anchored
+  // BESIDE `[data-role="meeting-left-rail"]` — the SEPARATE desktop
+  // card-board rail that only exists on `/meetings` desktop, and is
+  // absent from the quickmeet panel and from this component's own People
+  // pane entirely. `_desktopRect()` therefore returned `null` on every
+  // surface that actually renders the Ask control, and EVERY desktop
+  // press fell through to the phone placement — a full-width bar pinned
+  // near the top of the viewport, ~500px above the row it belongs to,
+  // which is exactly Dalton's measured regression.
+  //
+  // The mockup never had a desktop/phone branch to begin with: its own
+  // CSS is `position:absolute;left:12px;right:12px;top:calc(100% + 6px)`
+  // relative to the ROW, the same rule at every viewport. `_underRowRect`
+  // below ports that directly — anchor UNDER whichever row is held,
+  // computed fresh from ITS OWN `getBoundingClientRect()`, so it is
+  // correct at a 312px desktop rail, a 384px quickmeet panel, or a
+  // full-bleed phone sheet without a branch. The phone top-of-viewport
+  // placement survives only as the fallback for when the row genuinely
+  // cannot be found, or placing it there would cover a control.
   _reposition() {
     if (typeof document === "undefined") return
 
-    const isDesktop =
-      typeof window.matchMedia === "function" &&
-      window.matchMedia(`(min-width: ${DESKTOP_MIN_WIDTH_PX}px)`).matches
+    const rowRect = this._underRowRect()
 
-    const desktopRect = isDesktop ? this._desktopRect() : null
-
-    if (desktopRect && !this._wouldOverlapAControl(desktopRect)) {
-      this._applyRect(desktopRect, "desktop")
+    if (rowRect) {
+      this._applyRect(rowRect, "row")
       return
     }
 
     this._applyRect(this._phoneRect(), "phone")
   },
 
-  // Left edge 8px outside the rail's right border, top aligned with the
-  // held row, width `min(360, stage width - 32)` (canvas). Returns null
-  // when either the held row or the rail cannot be found (e.g. the row
-  // unmounted mid-hold) — the caller falls back to the phone placement,
-  // which needs neither.
-  _desktopRect() {
+  // `left:12px;right:12px` relative to the row, `top:calc(100% + 6px)` —
+  // the mockup's own values, read off the row's live rect rather than a
+  // fixed panel width (the mockup's "274px" is simply what those insets
+  // resolve to at ITS 300px-wide panel; a 312px rail resolves to ~288px,
+  // a narrower phone sheet to less still — the CSS RULE is what is
+  // ported, not a magic constant). Returns null when the held row cannot
+  // be found (unmounted mid-hold) or the computed placement would
+  // overlap a live control, so the caller can fall back to the phone
+  // placement either way.
+  _underRowRect() {
     const row = this._heldRowEl()
-    const rail = document.querySelector('[data-role="meeting-left-rail"]')
-    if (!row || !rail) return null
+    if (!row) return null
 
-    const rowRect = row.getBoundingClientRect()
-    const railRect = rail.getBoundingClientRect()
-    const stage = document.querySelector('[data-pane="center-stage"]')
-    const stageWidth =
-      stage && typeof stage.getBoundingClientRect === "function"
-        ? stage.getBoundingClientRect().width
-        : window.innerWidth - railRect.width
+    const rect = row.getBoundingClientRect()
+    const width = Math.min(DESKTOP_MAX_WIDTH_PX, rect.width - ROW_INSET_PX * 2)
+    if (width <= 0) return null
 
-    const width = Math.max(
-      0,
-      Math.min(DESKTOP_MAX_WIDTH_PX, stageWidth - DESKTOP_SIDE_MARGIN_PX * 2)
-    )
-
-    return {
-      left: railRect.right + DESKTOP_GAP_PX,
-      top: rowRect.top,
-      width,
+    let left = rect.left + ROW_INSET_PX
+    if (typeof window !== "undefined") {
+      // Clamp on-screen: a row flush against the viewport's right edge
+      // (a narrow rail, a resized window) must not push the overlay
+      // partly off-screen the way a bare `rect.left + inset` could.
+      left = Math.min(left, window.innerWidth - width - ROW_INSET_PX)
+      left = Math.max(left, ROW_INSET_PX)
     }
+
+    const candidate = { left, top: rect.bottom + ROW_GAP_PX, width }
+    return this._wouldOverlapAControl(candidate) ? null : candidate
   },
 
   // Fixed to the top of the viewport, 16px gutters, below the header bar

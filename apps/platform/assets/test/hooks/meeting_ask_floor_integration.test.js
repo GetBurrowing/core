@@ -164,7 +164,7 @@ describe("veil + heard overlay sharing one real window (task 01a0fa7e-afd7 stage
     }
   })
 
-  it("both stay open while held even after the server resolves the outcome early, and the overlay (which never waits on outcome) closes exactly at the physical release while the veil waits for its own fly/crumble animation", () => {
+  it("both stay open while held even after the server resolves the outcome early; the overlay (which never waits on outcome) shows its own release confirmation while the veil plays its fly/crumble animation", () => {
     vi.useFakeTimers()
     try {
       const { veil, overlay, fire, veilServerHandlers } = mountBoth()
@@ -186,14 +186,22 @@ describe("veil + heard overlay sharing one real window (task 01a0fa7e-afd7 stage
       // Physical release.
       fire("meeting:push-to-talk-ended", { agentId: "agent-123" })
 
-      // The overlay has nothing further to show once the key is up —
-      // closes immediately, regardless of outcome.
-      expect(overlay.isOpen()).toBe(false)
+      // Round 5 (item 2): the overlay no longer closes outright on
+      // release — it shows "✓ Sent to <agent>" for SENT_DISPLAY_MS first
+      // (matching the mockup's own `.tr.sent`), independent of the
+      // veil's own outcome-driven animation below.
+      expect(overlay.isOpen()).toBe(true)
       // The veil plays the parked outcome, which resolves on its own
       // animation timer rather than synchronously.
       expect(veil.isOpen()).toBe(true)
       vi.advanceTimersByTime(400)
       expect(veil.isOpen()).toBe(false)
+      // The overlay's own confirmation is still up — its timer (2.2s) is
+      // longer than the veil's animation and runs independently.
+      expect(overlay.isOpen()).toBe(true)
+
+      vi.advanceTimersByTime(1_800)
+      expect(overlay.isOpen()).toBe(false)
     } finally {
       vi.useRealTimers()
     }

@@ -163,16 +163,33 @@ describe("the heard text window", () => {
 })
 
 describe("closing", () => {
-  it("closes on `ended` once the key is released", () => {
-    const { hook, fire } = mountHook()
+  // Round 5 (Dalton's PR #1178 re-check, item 2): `ended` used to close
+  // the box immediately — which is why nothing showed on release where
+  // the mockup shows "✓ Sent to Burrow". It now shows that confirmation
+  // and stays open for `SENT_DISPLAY_MS` before actually closing.
+  it("shows the sent confirmation on `ended`, and closes only after the display window", () => {
+    vi.useFakeTimers()
+    try {
+      const { hook, status, fire } = mountHook()
 
-    fire("meeting:push-to-talk-armed", { agentId: "agent-123" })
-    fire("meeting:push-to-talk-held", { agentId: "agent-123" })
-    expect(hook.isOpen()).toBe(true)
+      fire("meeting:push-to-talk-armed", { agentId: "agent-123", agentName: "Burrow" })
+      fire("meeting:push-to-talk-held", { agentId: "agent-123" })
+      expect(hook.isOpen()).toBe(true)
 
-    fire("meeting:push-to-talk-ended", { agentId: "agent-123" })
+      fire("meeting:push-to-talk-ended", { agentId: "agent-123" })
 
-    expect(hook.isOpen()).toBe(false)
+      // Still open, now showing the confirmation rather than "Listening…".
+      expect(hook.isOpen()).toBe(true)
+      expect(status.textContent).toBe("✓ Sent to Burrow")
+
+      vi.advanceTimersByTime(2_199)
+      expect(hook.isOpen()).toBe(true)
+
+      vi.advanceTimersByTime(1)
+      expect(hook.isOpen()).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it("an early release never opened the overlay, so there is nothing for it to close", () => {
@@ -245,8 +262,10 @@ describe("surviving a LiveView patch mid-hold", () => {
       expect(hook.isOpen()).toBe(true)
     }
 
+    // Round 5: `ended` now opens the "sent" confirmation rather than
+    // closing outright — see the "closing" describe block above.
     fire("meeting:push-to-talk-ended", { agentId: "agent-123" })
-    expect(hook.isOpen()).toBe(false)
+    expect(hook.isOpen()).toBe(true)
   })
 
   it("restores data-placement the same way", () => {
@@ -284,16 +303,24 @@ describe("surviving a LiveView patch mid-hold", () => {
   })
 
   it("after a real close, a late patch does not resurrect a stale open state", () => {
-    const { hook, el, fire } = mountHook()
+    vi.useFakeTimers()
+    try {
+      const { hook, el, fire } = mountHook()
 
-    fire("meeting:push-to-talk-armed", { agentId: "agent-123" })
-    fire("meeting:push-to-talk-held", { agentId: "agent-123" })
-    fire("meeting:push-to-talk-ended", { agentId: "agent-123" })
-    expect(hook.isOpen()).toBe(false)
+      fire("meeting:push-to-talk-armed", { agentId: "agent-123" })
+      fire("meeting:push-to-talk-held", { agentId: "agent-123" })
+      fire("meeting:push-to-talk-ended", { agentId: "agent-123" })
+      // Round 5: `ended` opens the sent confirmation first; let that
+      // window elapse to reach an actual close.
+      vi.advanceTimersByTime(2_200)
+      expect(hook.isOpen()).toBe(false)
 
-    el.dataset.open = "true" // a hypothetical unrelated patch artifact
-    hook.updated()
-    expect(hook.isOpen()).toBe(false)
+      el.dataset.open = "true" // a hypothetical unrelated patch artifact
+      hook.updated()
+      expect(hook.isOpen()).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it("still appends a transcript chunk arriving in the same tick as a stomp, before updated() runs", () => {
@@ -326,9 +353,17 @@ describe("surviving a LiveView patch mid-hold", () => {
   })
 })
 
+// Round 5 (Dalton's PR #1178 re-check, item 5): the old implementation
+// anchored BESIDE `[data-role="meeting-left-rail"]` — a SEPARATE desktop
+// card-board rail absent from the surface that actually renders the Ask
+// control, so this always fell through to the phone placement, ~500px
+// above the row it belonged to. The mockup's own placement has no
+// desktop/phone branch at all: `position:absolute;left:12px;right:12px;
+// top:calc(100% + 6px)` relative to the ROW, the same rule everywhere.
+// These tests cover that directly — no rail lookup, no `matchMedia`.
 describe("positioning", () => {
-  it("falls back to the phone/top-of-viewport placement when the held row or rail cannot be found", () => {
-    const { hook, el, fire } = mountHook({ matches: true })
+  it("falls back to the phone/top-of-viewport placement when the held row cannot be found", () => {
+    const { hook, el, fire } = mountHook()
 
     fire("meeting:push-to-talk-armed", { agentId: "agent-123" })
     fire("meeting:push-to-talk-held", { agentId: "agent-123" })
@@ -338,14 +373,13 @@ describe("positioning", () => {
     expect(el.style.left).toBe("16px")
   })
 
-  it("anchors beside the held row on desktop when the row and rail are both found, and nothing overlaps", () => {
-    const { hook, el, fire } = mountHook({ matches: true })
+  it("anchors directly under the held row, at every viewport, when nothing overlaps", () => {
+    const { hook, el, fire } = mountHook()
 
     // Stubbed AFTER `mountHook` — `mounted()` does not touch `document`
     // until the first `_reposition` call below, so this survives.
-    const row = { getBoundingClientRect: () => ({ top: 120, left: 0, right: 0, bottom: 0 }) }
-    const rail = {
-      getBoundingClientRect: () => ({ right: 256, left: 0, top: 0, bottom: 0, width: 256 }),
+    const row = {
+      getBoundingClientRect: () => ({ top: 100, left: 20, right: 320, bottom: 140, width: 300 }),
     }
     const button = {
       dataset: { agentId: "agent-123" },
@@ -354,7 +388,6 @@ describe("positioning", () => {
 
     globalThis.document.querySelector = (sel) => {
       if (sel.includes("meeting-agent-hold-to-talk")) return button
-      if (sel.includes("meeting-left-rail")) return rail
       return null
     }
     globalThis.document.querySelectorAll = () => []
@@ -363,32 +396,31 @@ describe("positioning", () => {
     fire("meeting:push-to-talk-held", { agentId: "agent-123" })
 
     expect(hook.isOpen()).toBe(true)
-    expect(el.dataset.placement).toBe("desktop")
-    expect(el.style.left).toBe("264px") // rail.right (256) + 8px gap
-    expect(el.style.top).toBe("120px") // row's top
+    expect(el.dataset.placement).toBe("row")
+    expect(el.style.left).toBe("32px") // row.left (20) + 12px inset
+    expect(el.style.top).toBe("146px") // row.bottom (140) + 6px gap
+    expect(el.style.width).toBe("276px") // row.width (300) - 2*12px inset
   })
 
-  it("falls back to phone placement when the desktop anchor would overlap a rail control", () => {
-    const { hook, el, fire } = mountHook({ matches: true })
+  it("falls back to phone placement when the under-row anchor would overlap a rail control", () => {
+    const { hook, el, fire } = mountHook()
 
-    const row = { getBoundingClientRect: () => ({ top: 120, left: 0, right: 0, bottom: 0 }) }
-    const rail = {
-      getBoundingClientRect: () => ({ right: 256, left: 0, top: 0, bottom: 0, width: 256 }),
+    const row = {
+      getBoundingClientRect: () => ({ top: 100, left: 20, right: 320, bottom: 140, width: 300 }),
     }
     const button = {
       dataset: { agentId: "agent-123" },
       closest: () => row,
     }
-    // A control whose rect intersects the computed desktop overlay rect
-    // (left 264, top 120, width <=360, height budget 160) forces the
-    // fallback.
+    // A control whose rect intersects the computed under-row overlay rect
+    // (left 32, top 146, width 276, height budget 160) forces the
+    // fallback — e.g. the NEXT agent row's own Ask key or kick button.
     const overlappingControl = {
-      getBoundingClientRect: () => ({ left: 270, right: 330, top: 130, bottom: 160 }),
+      getBoundingClientRect: () => ({ left: 40, right: 100, top: 150, bottom: 200 }),
     }
 
     globalThis.document.querySelector = (sel) => {
       if (sel.includes("meeting-agent-hold-to-talk")) return button
-      if (sel.includes("meeting-left-rail")) return rail
       return null
     }
     globalThis.document.querySelectorAll = () => [overlappingControl]

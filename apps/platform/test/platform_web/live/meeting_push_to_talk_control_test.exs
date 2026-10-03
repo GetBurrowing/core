@@ -135,8 +135,10 @@ defmodule PlatformWeb.MeetingPushToTalkControlTest do
       |> LazyHTML.from_document()
       |> LazyHTML.query("[data-role='meeting-agent-hold-to-talk'] [data-ptt-bar]")
 
-    # Twelve per control, matching the hook's own expectation.
-    assert Enum.count(bars) >= 12
+    # Four per control (round 5, Dalton's PR #1178 re-check, item 6 — both
+    # reference canvases draw exactly four 3px bars; twelve squeezed into
+    # the 36px slot regardless of their declared width).
+    assert Enum.count(bars) >= 4
   end
 
   test "it is reachable by keyboard and named for the agent", %{html: html, agent: agent} do

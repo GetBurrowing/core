@@ -642,7 +642,29 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                 <% mute_target = mute_pending_target(@muting_ids, p.id) %>
                 <% muting? = not is_nil(mute_target) %>
                 <% muted_done? = !muting? and muted_by_host?(@muted_agent_ids, p.id) %>
-                <% override_word? = leaving? or muting? or muted_done? %>
+                <%!-- Round 5 (Dalton's PR #1178 re-check, item 1 AND item 4).
+                   `own_pressed?`/`held_by_other?` used to drive a SEPARATE
+                   flex sibling after the Ask button (the "RESERVED
+                   STATUS-CHIP SLOT" this comment used to sit above) — a
+                   column with its own reserved width that a live
+                   measurement found permanently overflowed the rail (370px
+                   of content into a 255px rail, the kick ✕ pushed clean
+                   off the edge). The mockup's own row never reserves a
+                   second column for this at all: its `.st` is a SINGLE
+                   box, the same one that already shows "Idle", with the
+                   pressed/held wording layered on top of it
+                   (`.row:has(.ask:active) .st .i{opacity:0} .l{opacity:1}`
+                   in the touch-it canvas's CSS) — width:0 impact, because
+                   there IS no second box. `own_pressed?`/`held_by_other?`
+                   now join `leaving?`/`muting?`/`muted_done?` as more
+                   candidates for THIS SAME word line below — one column,
+                   never a second one, whatever is happening on the row.
+                   `aid`/`held_by`/`held_by_other?` are already bound above
+                   (the `held_by = if is_binary(aid) ...` block near this
+                   row's avatar). --%>
+                <% own_pressed? = @hold_to_talk? and is_binary(aid) and aid == @pressed_agent_id %>
+                <% override_word? =
+                  leaving? or muting? or muted_done? or own_pressed? or held_by_other? %>
                 <div
                   data-role="agent-activity-word"
                   class={[
@@ -677,6 +699,30 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                     class="whitespace-nowrap text-base-content/60"
                   >
                     Muted
+                  </span>
+                  <%!-- "Listening…" (mockup's own word for a held key — item 4:
+                     "Idle → Listening…" — replacing this app's prior
+                     "Talking…" wording, which described the HUMAN's action
+                     rather than the AGENT's status and read oddly beside
+                     every other word in this same slot, all of which are
+                     agent states). `data-role="meeting-agent-talking"` is
+                     kept (existing tests and the sr-only live region both
+                     key off "talking" for the concept of this viewer's own
+                     held row) — only the VISIBLE word changes. --%>
+                  <span
+                    :if={!leaving? and !muting? and !muted_done? and own_pressed?}
+                    data-role="meeting-agent-talking"
+                    class="inline-flex items-center gap-1 whitespace-nowrap text-primary"
+                  >
+                    <span class="hero-signal size-3 animate-pulse" aria-hidden="true"></span>
+                    Listening…
+                  </span>
+                  <span
+                    :if={!leaving? and !muting? and !muted_done? and !own_pressed? and held_by_other?}
+                    data-role="meeting-agent-held-by"
+                    class="min-w-0 truncate whitespace-nowrap text-base-content/60"
+                  >
+                    Held by {held_by}
                   </span>
                   <span
                     :if={!override_word?}
@@ -940,9 +986,22 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                          to `w-0.5` (2px — Tailwind has no bare 3px step,
                          hence the arbitrary value), a flat `opacity-70`
                          dimming never present in either mock, and
-                         `duration-75` (75ms) against the mock's 60ms. --%>
+                         `duration-75` (75ms) against the mock's 60ms.
+
+                         Round 5 (Dalton's PR #1178 re-check, item 6):
+                         COUNT was also wrong — both canvases draw exactly
+                         FOUR bars (`<i></i><i></i><i></i><i></i>`), not
+                         twelve. Twelve bars at 3px with a 2px gap need
+                         12*3 + 11*2 = 58px, squeezed into this slot's
+                         36px (`w-9`) — the browser has no choice but to
+                         shrink every bar to ~1.2px regardless of the
+                         `w-[3px]` class, which is what made the earlier
+                         width fix above look like it never landed. Four
+                         bars at the same 3px/2px need only 4*3 + 3*2 =
+                         18px, well inside 36px, so they render at their
+                         declared width with room to spare. --%>
                       <span
-                        :for={_bar <- 1..12}
+                        :for={_bar <- 1..4}
                         data-ptt-bar
                         class="h-full w-[3px] origin-center rounded-full bg-current transition-transform duration-[60ms]"
                         style="transform: scaleY(0.08)"
@@ -956,12 +1015,38 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                      a status glyph, not a control — this is what makes it
                      legible as a button at all. Public Sans 13 medium,
                      `shrink-0 whitespace-nowrap` so "Ask" never truncates or
-                     wraps at any rail width, per the canvas's Type section. --%>
+                     wraps at any rail width, per the canvas's Type section.
+
+                     Round 5 (Dalton's PR #1178 re-check, item 4): the mockup
+                     crossfades this word to "Listen" the instant the key
+                     goes down (`.ask:active .lbl .off{opacity:0} .on{opacity:
+                     1}` — on `:active`, not gated on the 380ms hold
+                     threshold), and this control never did. Same stacking
+                     trick already used two spans up for the icon/waveform
+                     swap: both words sit in the SAME grid cell
+                     (`col-start-1 row-start-1`), an `invisible` sizer gives
+                     the cell the width of the WIDER word so the swap never
+                     resizes the button, and `data-pressed` (not `data-held`)
+                     drives the crossfade — matching the mock's immediate,
+                     un-thresholded swap. --%>
                   <span
-                    class="shrink-0 whitespace-nowrap text-[13px] font-medium"
-                    data-role="meeting-agent-hold-label"
+                    class="relative inline-grid shrink-0 whitespace-nowrap text-[13px] font-medium"
+                    data-role="meeting-agent-hold-label-wrap"
                   >
-                    Ask
+                    <span class="invisible col-start-1 row-start-1" aria-hidden="true">Listen</span>
+                    <span
+                      class="col-start-1 row-start-1 shrink-0 whitespace-nowrap transition-opacity duration-75 group-data-[pressed=true]/ptt:opacity-0"
+                      data-role="meeting-agent-hold-label"
+                    >
+                      Ask
+                    </span>
+                    <span
+                      class="col-start-1 row-start-1 shrink-0 whitespace-nowrap opacity-0 transition-opacity duration-75 group-data-[pressed=true]/ptt:opacity-100"
+                      data-role="meeting-agent-hold-label-listen"
+                      aria-hidden="true"
+                    >
+                      Listen
+                    </span>
                   </span>
                   <%!-- Item 1 (task 01a0f842 stage 1, canvas 01a0f846-cfb1):
                      the hold-threshold underline. Draws left-to-right
@@ -984,74 +1069,6 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                   >
                   </span>
                 </button>
-              </div>
-
-              <%!-- RESERVED STATUS-CHIP SLOT (task 01a0febf stage 6 —
-                 Dalton's layout-shift bug, canvases 01a0febf-652b-7001-83da-
-                 c15b1c4ea846 and 01a0ff1c-37ab-7001-a91c-b61e0b1e7499,
-                 "1c" in his test matrix). Two independent live-browser
-                 measurements on two separate builds (PR #1174, then its
-                 fix PR #1176 which deliberately left this ONE alone) found
-                 the same numbers: pressing Ask inserted the "Talking…"
-                 span below as a BARE EXTRA flex sibling with no width of
-                 its own reserved ahead of time, into a row that already
-                 had zero slack. The name column (the only item without a
-                 `flex-shrink-0` floor) absorbed the insertion by
-                 collapsing to 0, and what the name couldn't absorb spilled
-                 out as real overflow — a horizontal scrollbar on desktop,
-                 the Ask button itself drifting left on phone far enough to
-                 cover the name it displaced. This is NOT a static
-                 flexbox-read question; it only shows up as rendered pixel
-                 measurement, which is why a prior static read missed it.
-
-                 The fix is the standard reserve-space-for-a-toggle
-                 pattern: an INVISIBLE sizer, same markup/classes as the
-                 chip it is sizing, always rendered so this slot's width
-                 never depends on `@pressed_agent_id` / `held_by_other?`.
-                 The two real cues are absolutely positioned on top of it
-                 (`inset-0` against this slot's own `relative`), so
-                 whichever one is showing changes TEXT CONTENT in place —
-                 never the row's total width. "Held by <name>" can run
-                 longer than "Talking…"; it `truncate`s inside this same
-                 footprint rather than growing it, which is what the two
-                 cues sharing one reserved slot requires — they are
-                 mutually exclusive (`held_by_other?` is defined as
-                 `aid != @pressed_agent_id`), so only one ever paints. --%>
-              <div class="relative flex-shrink-0" data-role="meeting-agent-status-chip-slot">
-                <span
-                  aria-hidden="true"
-                  data-role="meeting-agent-status-chip-sizer"
-                  class="invisible inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold"
-                >
-                  <span class="size-3" aria-hidden="true"></span> Talking…
-                </span>
-                <%!-- The visible held cue, server-driven so it names WHICH
-                   agent is being addressed while the key is down (per the
-                   mock's "Asking <name>…"). The control's own highlight is
-                   client-side; this is the roster-level confirmation. --%>
-                <span
-                  :if={@pressed_agent_id == aid and is_binary(aid)}
-                  data-role="meeting-agent-talking"
-                  class="absolute inset-0 inline-flex items-center gap-1 rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold text-primary"
-                >
-                  <span class="hero-signal size-3 animate-pulse" aria-hidden="true"></span> Talking…
-                </span>
-
-                <%!-- The OTHER side of the same cue: someone ELSE holds this
-                   agent's floor (task 01a0cf5c stage 1, canvas 01a0cf5e-9cb0
-                   — "a visible owner when the floor is taken... the second
-                   person's button must say so before they start talking,
-                   not after"). Named from `@ask_floor_holders`, which every
-                   connected client updates off the SAME room-topic broadcast
-                   that landed the claim, so this appears everywhere at once,
-                   not only for whoever tries to press next. --%>
-                <span
-                  :if={held_by_other?}
-                  data-role="meeting-agent-held-by"
-                  class="absolute inset-0 inline-flex items-center gap-1 truncate rounded-full bg-base-300 px-1.5 py-0.5 text-[10px] font-medium text-base-content/60"
-                >
-                  Held by {held_by}
-                </span>
               </div>
 
               <%!-- REACHABILITY, a different fact from the activity above:
@@ -1097,7 +1114,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                  the phone People sheet is where hosts look. --%>
               <div
                 :if={@can_remove_agents?}
-                class="relative flex-shrink-0 self-center"
+                class="flex-shrink-0 self-center"
                 data-role="meeting-agent-kick-wrap"
               >
                 <button
@@ -1113,37 +1130,50 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                 >
                   <.icon name="hero-x-mark" class="size-4" />
                 </button>
+              </div>
 
-                <%!-- The confirm. A small anchored popover rather than a
-                   modal — the canvas's own mockup keeps it INLINE on the
-                   row, not a dialog that steals focus from the call. --%>
-                <div
-                  :if={@kick_confirm_id == p.id}
-                  data-role="meeting-agent-kick-confirm"
-                  class="absolute right-0 top-full z-20 mt-1 flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-error bg-base-200 px-2 py-1.5 shadow-lg"
-                  role="status"
+              <%!-- The confirm. Round 5 (Dalton's PR #1178 re-check, item
+                 8): previously `absolute right-0 top-full` off the small
+                 kick button's own wrapper — a strip hanging BELOW the row,
+                 which on desktop also spilled past the rail's edges on
+                 both sides. The mockup's own `.confirm{position:absolute;
+                 inset:4px 10px}` sits relative to the WHOLE ROW, not to
+                 the button, and paints INLINE over the row's own content
+                 rather than beside or below it. This `<li>` is already
+                 `relative` (see its own `class=` above, kept for the
+                 pressed z-index), so `absolute inset-2` here is relative
+                 to the ROW, covering its content box the same way. The
+                 row's HEIGHT never changes: an `absolute` element takes no
+                 part in the row's own flex sizing, it only paints over
+                 what is already there — same invariant the mockup's own
+                 `.row{min-height:56px}` holds for its `.confirm`/`.gone`
+                 overlays. --%>
+              <div
+                :if={@can_remove_agents? and @kick_confirm_id == p.id}
+                data-role="meeting-agent-kick-confirm"
+                class="absolute inset-2 z-20 flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-error bg-base-200 px-2 shadow-lg"
+                role="status"
+              >
+                <span class="min-w-0 flex-1 truncate text-xs text-base-content">
+                  Remove {p.display_name || "this agent"}?
+                </span>
+                <button
+                  type="button"
+                  phx-click="kick_confirm_close"
+                  data-role="meeting-agent-kick-cancel"
+                  class="btn btn-ghost btn-xs shrink-0"
                 >
-                  <span class="text-xs text-base-content">
-                    Remove {p.display_name || "this agent"}?
-                  </span>
-                  <button
-                    type="button"
-                    phx-click="kick_confirm_close"
-                    data-role="meeting-agent-kick-cancel"
-                    class="btn btn-ghost btn-xs"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    phx-click="remove_agent_from_call"
-                    phx-value-participant-id={p.id}
-                    data-role="meeting-agent-kick-remove"
-                    class="btn btn-error btn-xs"
-                  >
-                    Remove
-                  </button>
-                </div>
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  phx-click="remove_agent_from_call"
+                  phx-value-participant-id={p.id}
+                  data-role="meeting-agent-kick-remove"
+                  class="btn btn-error btn-xs shrink-0"
+                >
+                  Remove
+                </button>
               </div>
             </div>
 
@@ -1280,11 +1310,23 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                list item, appended after the real rows, rather than
                literally the departed row staying in place. Same undo,
                same 8-second window, honestly a different list position
-               than the mockup's single-row demo implied. --%>
+               than the mockup's single-row demo implied.
+
+               `min-h-11` added (round 5, Dalton's PR #1178 re-check, item
+               8): the mockup's `.gone` keeps the SAME 56px the live row
+               held, and this `<li>` was shrinking from the normal row's
+               `min-h-11` (44px) down to a bare 35px (`py-1.5` with no
+               floor) the instant it appeared — a visible jump even though
+               it is a different list item, not the same row persisting.
+               This does not solve the "different list position" gap noted
+               above (that would need `@agents` to keep the departed row in
+               place, a structural change out of scope here); it only stops
+               the row that DOES appear from being visibly shorter than
+               every row around it. --%>
           <li
             :if={@agent_removal_undo}
             data-role="meeting-agent-left"
-            class="flex items-center gap-2 rounded-lg border border-dashed border-edge px-2 py-1.5 text-xs text-base-content/60"
+            class="flex min-h-11 items-center gap-2 rounded-lg border border-dashed border-edge px-2 py-1.5 text-xs text-base-content/60"
           >
             <span class="min-w-0 flex-1 truncate">
               {@agent_removal_undo.agent_name} left the call
