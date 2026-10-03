@@ -536,7 +536,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
               ]
             }
           >
-            <div class="flex w-full items-center gap-2">
+            <div class="flex w-full flex-wrap items-center gap-2">
               <%!-- ONE construction for all four states.
 
                  Was: a bare `agent_avatar`, a role chip on line 2
@@ -1081,55 +1081,97 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                  (connected at all, not what it is doing), the same
                  pre-ceiling `for_agent/2` `MeetingLive.agent_status_dot_class/3`
                  always used, and out of this stage's scope. --%>
-              <span
-                class={[
-                  "size-[7px] flex-shrink-0 rounded-full",
-                  MeetingLive.agent_status_dot_class(p, @agents_by_id, @agent_activity)
-                ]}
-                aria-hidden="true"
-                data-role="agent-status-dot"
-              >
-              </span>
+              <%!-- TRAILING UTILITY CLUSTER (task — desktop LEFT rail kick
+                 overflow, 2026-10-03 re-check of #1181). The status dot,
+                 the mic/camera wells and the kick ✕ used to be three bare
+                 siblings of the Ask button on ONE flex line. That line
+                 fits at the right rail's 312px (no Ask button there on
+                 desktop — `hold_to_talk?` is false), but the desktop LEFT
+                 rail (`w-64`, 256px, `meeting_live.html.heex`'s
+                 `data-role="meeting-left-rail"`) renders this SAME
+                 component with `hold_to_talk?={true}` AND
+                 `can_remove_agents?={host?(...)}` together — the one
+                 combination that puts the fixed-width 88px Ask key on the
+                 same line as this cluster. Measured live (CDP,
+                 `getBoundingClientRect`): avatar 28 + Ask 88 + dot 7 +
+                 media-slots 52 + kick 21, five 8px gaps, and the name
+                 column pinned to its 32px floor, total 268px against a
+                 223px content box — the kick button's own rect landed 28px
+                 past the rail's right edge, and `elementFromPoint` at its
+                 centre resolved to the video stage behind it, not the
+                 button. This is a SMALLER, DIFFERENT shortfall from
+                 #1178/#1181's — that one was an extra reserved status-chip
+                 column (removed in #1181); this one is the Ask key itself,
+                 which the right rail never renders at the same time as the
+                 kick button.
 
-              <.media_slots
-                name={p.display_name || "Agent"}
-                mic_state={mic_state(@muted, p)}
-                camera_state={camera_state(@camera_off, p)}
-                can_mute?={@can_remove_agents? and is_binary(aid)}
-                participant_id={p.id}
-                mute_target={mute_target}
-                muted_by_host?={muted_done?}
-              />
-
-              <%!-- KICK (round 4, canvas 01a0fdf2-804d — "a ✕ beside Ask.
-                 Inline Cancel/Remove confirm, then 'Burrow left the call'
-                 with an Undo action"). Replaces the old bare "Remove from
-                 meeting" icon button (task 01a0e906 stage 3) with the SAME
-                 permission gate and the SAME `remove_agent_from_call`
-                 click underneath a confirm step — `@kick_confirm_id` is
-                 the only new thing here, and it is pure client-visible
-                 state (`kick_confirm_open`/`kick_confirm_close`), never a
-                 second removal path. Always visible at every width, same
-                 reasoning as before: hover does not exist on touch, and
-                 the phone People sheet is where hosts look. --%>
-              <div
-                :if={@can_remove_agents?}
-                class="flex-shrink-0 self-center"
-                data-role="meeting-agent-kick-wrap"
-              >
-                <button
-                  :if={@kick_confirm_id != p.id}
-                  type="button"
-                  phx-click="kick_confirm_open"
-                  phx-value-participant-id={p.id}
-                  data-role="meeting-agent-kick"
-                  disabled={leaving?}
-                  aria-label={"Remove #{p.display_name || "this agent"} from the meeting"}
-                  title="Remove from meeting"
-                  class="btn btn-ghost btn-xs btn-square text-base-content/60 hover:border hover:border-error hover:bg-error/10 hover:text-error focus-visible:border focus-visible:border-error focus-visible:bg-error/10 focus-visible:text-error max-sm:min-h-11 max-sm:min-w-11"
+                 THE FIX IS THE ROW'S OWN `flex-wrap` (added on this div's
+                 class above) plus grouping dot/media-slots/kick into ONE
+                 flex item, so a container too narrow for everything on one
+                 line wraps this WHOLE cluster to a second line rather than
+                 letting the kick button alone spill past the rail with
+                 nothing to catch it. `ml-auto` keeps the cluster hugging
+                 the trailing edge on BOTH lines: on one line it is a no-op
+                 (the name column's own `flex-1` already consumes the
+                 slack), and on a WRAPPED second line — where the name
+                 column is not present — it is what stops the cluster from
+                 sitting at the row's LEFT edge instead of under where it
+                 visually belongs. Nothing here depends on 256px, 88px or
+                 the mic/camera count by number: a row with more or less
+                 fixed-width content wraps the same cluster the same way,
+                 which is why this is a layout fix and not another magic
+                 width. --%>
+              <div class="ml-auto flex flex-shrink-0 items-center gap-2">
+                <span
+                  class={[
+                    "size-[7px] flex-shrink-0 rounded-full",
+                    MeetingLive.agent_status_dot_class(p, @agents_by_id, @agent_activity)
+                  ]}
+                  aria-hidden="true"
+                  data-role="agent-status-dot"
                 >
-                  <.icon name="hero-x-mark" class="size-4" />
-                </button>
+                </span>
+
+                <.media_slots
+                  name={p.display_name || "Agent"}
+                  mic_state={mic_state(@muted, p)}
+                  camera_state={camera_state(@camera_off, p)}
+                  can_mute?={@can_remove_agents? and is_binary(aid)}
+                  participant_id={p.id}
+                  mute_target={mute_target}
+                  muted_by_host?={muted_done?}
+                />
+
+                <%!-- KICK (round 4, canvas 01a0fdf2-804d — "a ✕ beside Ask.
+                   Inline Cancel/Remove confirm, then 'Burrow left the call'
+                   with an Undo action"). Replaces the old bare "Remove from
+                   meeting" icon button (task 01a0e906 stage 3) with the SAME
+                   permission gate and the SAME `remove_agent_from_call`
+                   click underneath a confirm step — `@kick_confirm_id` is
+                   the only new thing here, and it is pure client-visible
+                   state (`kick_confirm_open`/`kick_confirm_close`), never a
+                   second removal path. Always visible at every width, same
+                   reasoning as before: hover does not exist on touch, and
+                   the phone People sheet is where hosts look. --%>
+                <div
+                  :if={@can_remove_agents?}
+                  class="flex-shrink-0 self-center"
+                  data-role="meeting-agent-kick-wrap"
+                >
+                  <button
+                    :if={@kick_confirm_id != p.id}
+                    type="button"
+                    phx-click="kick_confirm_open"
+                    phx-value-participant-id={p.id}
+                    data-role="meeting-agent-kick"
+                    disabled={leaving?}
+                    aria-label={"Remove #{p.display_name || "this agent"} from the meeting"}
+                    title="Remove from meeting"
+                    class="btn btn-ghost btn-xs btn-square text-base-content/60 hover:border hover:border-error hover:bg-error/10 hover:text-error focus-visible:border focus-visible:border-error focus-visible:bg-error/10 focus-visible:text-error max-sm:min-h-11 max-sm:min-w-11"
+                  >
+                    <.icon name="hero-x-mark" class="size-4" />
+                  </button>
+                </div>
               </div>
 
               <%!-- The confirm. Round 5 (Dalton's PR #1178 re-check, item

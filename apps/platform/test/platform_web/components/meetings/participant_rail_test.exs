@@ -1893,6 +1893,126 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
     end
   end
 
+  # ── Desktop LEFT rail: Ask key + kick ✕ together ──────────────────────
+  #
+  # Found by CDP re-check of #1181 (2026-10-03): the right rail's People
+  # tab (312px, `hold_to_talk?` false on desktop) and the desktop LEFT
+  # rail (`meeting_live.html.heex`'s `w-64`/256px `data-role=
+  # "meeting-left-rail"`, `hold_to_talk?={true}`) both render this same
+  # component, but only the LEFT rail ever renders the 88px Ask key AND
+  # the kick ✕ on one row at once — the right rail never sets
+  # `hold_to_talk?` true on desktop, and the mobile People tab that DOES
+  # set both true has far more than 256px to work with. Live measurement
+  # (`getBoundingClientRect`) at that exact combination found the kick
+  # button's rect 28px past the rail's own right edge, with
+  # `elementFromPoint` at its centre resolving to the video stage behind
+  # it — a smaller, DIFFERENT shortfall from #1178/#1181's reserved
+  # status-chip column (removed in #1181): this one is the Ask key
+  # itself crowding the row.
+  #
+  # These are component-level structural guards, not a pixel measurement
+  # — `mix test` has no layout engine. The actual overflow is proven by
+  # CDP (see the PR description); what a unit test CAN hold in place is
+  # the markup shape the fix depends on: the row carries `flex-wrap`, and
+  # the status dot / media wells / kick button are ONE flex item (so a
+  # too-narrow line wraps them together, trailing-aligned) rather than
+  # three independent siblings the Ask key can push off the end.
+  describe "the Ask key and the kick button on the same row (desktop left rail)" do
+    test "the row is flex-wrap, and the dot/media/kick cluster is one flex-shrink-0 item" do
+      html =
+        remove_rail([agent("Burrow", "ma-1")],
+          can_remove_agents?: true,
+          hold_to_talk?: true
+        )
+
+      doc = Floki.parse_fragment!(html)
+      # The `<li>`'s direct `<div>` children also include the hold-to-talk
+      # feedback line (`data-role="meeting-agent-hold-feedback"`, always
+      # present when `hold_to_talk?` is true, hidden until a press). The
+      # ROW is the one carrying `w-full items-center gap-2` — picked out
+      # by class rather than assumed to be the only `> div`.
+      [row] =
+        doc
+        |> Floki.find(~s(li[data-participant-id="p-ma-1"] > div))
+        |> Enum.filter(fn node ->
+          case Floki.attribute(node, "class") do
+            [class] -> String.contains?(class, "items-center gap-2")
+            _ -> false
+          end
+        end)
+
+      [row_class] = Floki.attribute(row, "class")
+      assert row_class =~ "flex-wrap"
+
+      # The dot/media/kick cluster is ONE direct-child wrapper of the
+      # row (not three row-level siblings, which was the pre-fix shape
+      # where the Ask key could push the kick button past the end of
+      # the line with nothing to catch it) — found among the row's
+      # direct `<div>` children by its own `ml-auto` class below, and
+      # then asserted to actually contain all three.
+      direct_div_count = row |> Floki.find("> div") |> length()
+      assert direct_div_count >= 2, "expected the name column AND the trailing cluster"
+
+      # The wrapper IS a direct child of the row, holds all three, and
+      # cannot itself shrink below its content or collapse away — a
+      # `flex-wrap` row only protects a child that keeps its own size.
+      # (The row has other direct `<div>` children too — the name
+      # column, the Ask key's own wrapper — so the cluster is picked out
+      # by its `ml-auto` class rather than assumed to be the only one.)
+      cluster =
+        row
+        |> Floki.find("> div")
+        |> Enum.find(fn node ->
+          case Floki.attribute(node, "class") do
+            [class] -> String.contains?(class, "ml-auto")
+            _ -> false
+          end
+        end)
+
+      refute is_nil(cluster), "expected one direct-child wrapper carrying ml-auto"
+      [cluster_class] = Floki.attribute(cluster, "class")
+      assert cluster_class =~ "flex-shrink-0"
+
+      assert Floki.find(cluster, ~s([data-role="agent-status-dot"])) != []
+      assert Floki.find(cluster, ~s([data-role="media-slots"])) != []
+      assert Floki.find(cluster, ~s([data-role="meeting-agent-kick-wrap"])) != []
+    end
+
+    test "both the Ask key and the kick button still render together, Ask first in document order" do
+      html =
+        remove_rail([agent("Burrow", "ma-1")],
+          can_remove_agents?: true,
+          hold_to_talk?: true
+        )
+
+      doc = Floki.parse_fragment!(html)
+
+      [row] =
+        doc
+        |> Floki.find(~s(li[data-participant-id="p-ma-1"] > div))
+        |> Enum.filter(fn node ->
+          case Floki.attribute(node, "class") do
+            [class] -> String.contains?(class, "items-center gap-2")
+            _ -> false
+          end
+        end)
+
+      ask = Floki.find(row, ~s([data-role="meeting-agent-hold-to-talk"]))
+      kick = Floki.find(row, ~s([data-role="meeting-agent-kick"]))
+      assert length(ask) == 1
+      assert length(kick) == 1
+
+      # Document order within the rendered row markup — the Ask key's
+      # wrapper is still textually before the trailing cluster, which is
+      # what lets the cluster wrap to a second line while Ask stays on
+      # the first.
+      row_html = Floki.raw_html(row)
+      ask_at = :binary.match(row_html, "meeting-agent-hold-to-talk") |> elem(0)
+      kick_at = :binary.match(row_html, "meeting-agent-kick-wrap") |> elem(0)
+      assert ask_at < kick_at
+    end
+  end
+
   # ── Mute an agent (task 01a0f842 stage 5, canvas 01a0f846-cfb1) ──────────
   #
   # NET-NEW: no agent mute control exists anywhere on main before this
