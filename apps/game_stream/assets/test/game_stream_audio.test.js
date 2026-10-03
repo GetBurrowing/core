@@ -121,6 +121,48 @@ describe("AudioPlayback autoplay and truthful state", () => {
     expect(stateElement.dataset.gsAudioState).toBe("playing")
   })
 
+  // Every forwarded touch (and every tap on the well) calls gesture(). While
+  // audio is already playing, that must not re-enter "waiting": the label
+  // flipped to "Waiting for audio" and back on every tap, and its width
+  // change slid the Mute button (Rowan's playtest, 2026-10-02).
+  it("a gesture while already playing renders nothing new and does not replay", async () => {
+    const element = { srcObject: null, muted: false, paused: true, pause: vi.fn() }
+    element.play = vi.fn(() => {
+      element.paused = false
+      return Promise.resolve()
+    })
+    const seen = []
+    const dataset = {}
+    let current
+    Object.defineProperty(dataset, "gsAudioState", {
+      get: () => current,
+      set: v => {
+        current = v
+        seen.push(v)
+      },
+    })
+    const audio = new AudioPlayback({
+      element,
+      stateElement: { textContent: "", dataset },
+      button: null,
+      MediaStreamCtor: FakeMediaStream,
+    })
+    audio.attach(track("audio"))
+    await audio.gesture()
+    expect(current).toBe("playing")
+    seen.length = 0
+
+    for (let i = 0; i < 3; i++) await audio.gesture()
+    expect(seen).toEqual([])
+    expect(element.play).toHaveBeenCalledOnce()
+
+    // Paused underneath (an OS interruption): the next gesture plays again.
+    element.paused = true
+    await audio.gesture()
+    expect(element.play).toHaveBeenCalledTimes(2)
+    expect(current).toBe("playing")
+  })
+
   it("reports non-policy playback failures as errors, never playing", async () => {
     const { audio, stateElement } = fixture(vi.fn(() => Promise.reject(new Error("decoder"))))
     audio.attach(track("audio"))

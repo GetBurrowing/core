@@ -63,6 +63,10 @@ export class AudioPlayback {
 
   async play() {
     if (!this.element || !this.track || this.muted) return false
+    // Already playing: every tap calls gesture(), and re-entering "waiting"
+    // flipped the label and slid the Mute button on each one. A paused
+    // element (an OS interruption) still plays again.
+    if (this.state === "playing" && this.element.paused === false) return true
     const generation = this.generation
     this.setState("waiting")
     try {
