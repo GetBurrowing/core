@@ -84,6 +84,10 @@ defmodule PlatformWeb.GithubWebhookController do
 
   # workflow_run.completed → evaluate ci_passed validations.
   def handle(conn, %{"action" => "completed", "workflow_run" => workflow_run} = params) do
+    # Report a run the prod deploy hook will skip (task 01a0feff stage 2).
+    # Its result is ignored on purpose: it never changes this response.
+    _ = Platform.Deploy.SkipNotice.maybe_post(params)
+
     branch = workflow_run["head_branch"]
     conclusion = workflow_run["conclusion"]
     sha = get_in(workflow_run, ["head_sha"])

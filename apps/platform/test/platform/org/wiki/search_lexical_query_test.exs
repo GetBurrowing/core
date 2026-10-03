@@ -20,7 +20,9 @@ defmodule Platform.Org.Wiki.SearchLexicalQueryTest do
   depends on when CI runs. Everything asserted here is lexical.
   """
 
-  use Platform.DataCase, async: true
+  # async: false — writes the global :memory_service app env (task 01a0feff;
+  # guarded by Platform.Memory.MemoryServiceEnvAsyncGuardTest).
+  use Platform.DataCase, async: false
 
   alias Platform.Org.Wiki.Search
   alias Platform.Repo

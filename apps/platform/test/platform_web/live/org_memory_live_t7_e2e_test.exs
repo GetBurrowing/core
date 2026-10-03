@@ -347,6 +347,22 @@ defmodule PlatformWeb.OrgMemoryLiveT7E2ETest do
     # memory-service is configured (Memory provider is Noop), so
     # Wiki.Search degrades to its lexical (tsvector/ilike) channels —
     # which is exactly the graceful-degradation path the script allows.
+    #
+    # Install that Noop explicitly rather than inheriting whatever the
+    # global :memory_service env holds when this test runs (task 01a0feff:
+    # a leaked sleeping stub made the semantic channel time out, so
+    # memory_search answered degraded and no PAGE rendered).
+    previous_memory_service = Application.fetch_env(:platform, :memory_service)
+
+    Application.put_env(:platform, :memory_service, provider: Platform.Memory.Providers.Noop)
+
+    on_exit(fn ->
+      case previous_memory_service do
+        {:ok, value} -> Application.put_env(:platform, :memory_service, value)
+        :error -> Application.delete_env(:platform, :memory_service)
+      end
+    end)
+
     previous = Application.get_env(:platform, :org_memory_tool_surface)
     Application.put_env(:platform, :org_memory_tool_surface, RecordingToolSurface)
     Application.put_env(:platform, :t7_e2e_tool_surface_pid, self())

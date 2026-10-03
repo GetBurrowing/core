@@ -12,7 +12,9 @@ defmodule Platform.Org.Wiki.SearchTest do
   by `priv/repo/migrations/20260520020000_add_search_vector_to_org_wiki.exs`.
   """
 
-  use Platform.DataCase, async: true
+  # async: false — writes the global :memory_service app env (task 01a0feff;
+  # guarded by Platform.Memory.MemoryServiceEnvAsyncGuardTest).
+  use Platform.DataCase, async: false
 
   import ExUnit.CaptureLog
   import Platform.TenancyFixtures

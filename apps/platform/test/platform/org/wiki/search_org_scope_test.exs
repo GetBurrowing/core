@@ -12,7 +12,9 @@ defmodule Platform.Org.Wiki.SearchOrgScopeTest do
   Every scoping assertion carries a positive control in the same test body,
   because "zero rows" is also what an empty index returns.
   """
-  use Platform.DataCase, async: true
+  # async: false — writes the global :memory_service app env (task 01a0feff;
+  # guarded by Platform.Memory.MemoryServiceEnvAsyncGuardTest).
+  use Platform.DataCase, async: false
 
   import Platform.TenancyFixtures
 

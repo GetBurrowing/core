@@ -522,6 +522,25 @@ if github_webhook_secret = System.get_env("GITHUB_WEBHOOK_SECRET") do
   config :platform, :github_webhook_secret, github_webhook_secret
 end
 
+# ── Deploy skip notice (task 01a0feff) ────────────────────────────────────────
+# `Platform.Deploy.SkipNotice` posts one message to DEPLOY_SKIP_NOTICE_SPACE_ID
+# when a `workflow_run` for DEPLOY_SKIP_NOTICE_REPO (an `owner/name` string) on
+# DEPLOY_SKIP_NOTICE_BRANCH (default "main") from workflow
+# DEPLOY_SKIP_NOTICE_WORKFLOW (default "CI") completes with any conclusion other
+# than "success" — the runs the prod deploy hook skips. Both the space and the
+# repo are required; with either unset the notice is off. Guarded on presence,
+# like the secret above, so tests can configure it with Application.put_env.
+deploy_skip_notice_space_id = System.get_env("DEPLOY_SKIP_NOTICE_SPACE_ID")
+deploy_skip_notice_repo = System.get_env("DEPLOY_SKIP_NOTICE_REPO")
+
+if deploy_skip_notice_space_id && deploy_skip_notice_repo do
+  config :platform, :deploy_skip_notice,
+    space_id: deploy_skip_notice_space_id,
+    repo: deploy_skip_notice_repo,
+    branch: System.get_env("DEPLOY_SKIP_NOTICE_BRANCH", "main"),
+    workflow: System.get_env("DEPLOY_SKIP_NOTICE_WORKFLOW", "CI")
+end
+
 # ── Memory service ────────────────────────────────────────────────────────────
 # Wires Platform.Memory to an external vector-search service (the Startup Suite
 # memory-service by default). When MEMORY_SERVICE_URL is not set, the Noop
