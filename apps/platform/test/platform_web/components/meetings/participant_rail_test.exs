@@ -1078,6 +1078,12 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
     html |> Floki.parse_fragment!() |> Floki.find(~s([data-role="meeting-agent-hold-to-talk"]))
   end
 
+  defp status_chip_slot(html) do
+    html
+    |> Floki.parse_fragment!()
+    |> Floki.find(~s([data-role="meeting-agent-status-chip-slot"]))
+  end
+
   describe "per-agent hold-to-talk control" do
     test "is absent by default — a surface with no push-to-talk producer gets no control" do
       html = hold_rail([agent("Octavius", "oct-1")], [])
@@ -1146,6 +1152,103 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
 
       region = Floki.find(frag, ~s([data-role="meeting-ptt-live-region"]))
       assert Floki.text(region) |> String.trim() == ""
+    end
+
+    # Task 01a0febf stage 6 — Dalton's layout-shift bug (canvases
+    # 01a0febf-652b-7001-83da-c15b1c4ea846 and 01a0ff1c-37ab-7001-a91c-
+    # b61e0b1e7499, "1c" in his test matrix): real headless-Chromium
+    # measurement on two separate builds (PR #1174, then its fix PR #1176,
+    # which deliberately left this ONE bug alone) found that pressing Ask
+    # inserted the "Talking…" cue as a bare extra flex item with no width
+    # reserved ahead of time. The name column collapsed to 0, and the
+    # overflow moved the kick button on desktop and the Ask button itself
+    # on phone — a horizontal scrollbar on desktop, text covering the
+    # name on phone.
+    #
+    # This component test is a LOWER-CONFIDENCE check than Dalton's real
+    # browser measurement, not a replacement for it: this suite renders
+    # HEEx with no layout engine behind it, so it cannot measure a single
+    # pixel. What it CAN prove is the structural shape the fix depends
+    # on — a slot that exists, and is the same size, in BOTH states. That
+    # shape is necessary for the live measurement to come out flat; it is
+    # not sufficient on its own, which is why the PR this guards also
+    # carries a live CDP measurement where one was reachable.
+    test "the status-chip slot is reserved — present and the same size whether or not a cue is showing" do
+      idle_html = hold_rail([agent("Octavius", "oct-1")], hold_to_talk?: true)
+
+      talking_html =
+        hold_rail([agent("Octavius", "oct-1")], hold_to_talk?: true, pressed_agent_id: "oct-1")
+
+      held_by_other_html =
+        hold_rail([agent("Octavius", "oct-1")],
+          hold_to_talk?: true,
+          pressed_agent_id: "someone-else",
+          ask_floor_holders: %{"oct-1" => "Saru"}
+        )
+
+      idle_slot = status_chip_slot(idle_html)
+      talking_slot = status_chip_slot(talking_html)
+      held_by_slot = status_chip_slot(held_by_other_html)
+
+      # The slot exists in ALL THREE renders — idle, this viewer talking,
+      # and someone else holding the floor — not only when a cue happens
+      # to be active. Before this fix there was no slot at all: the cue
+      # was a bare `<span>` that only existed in the DOM while its `:if`
+      # was true, so the row's own content width changed with it.
+      assert idle_slot != []
+      assert talking_slot != []
+      assert held_by_slot != []
+
+      # Its OWN classes — the ones that give it a footprint, not whatever
+      # cue is painted inside it — are identical across all three, so the
+      # row's total flex width is a function of this slot's markup alone,
+      # never of which cue (if any) is currently rendered inside it.
+      [idle_classes] = Floki.attribute(idle_slot, "class")
+      [talking_classes] = Floki.attribute(talking_slot, "class")
+      [held_by_classes] = Floki.attribute(held_by_slot, "class")
+      assert idle_classes == talking_classes
+      assert idle_classes == held_by_classes
+
+      # The invisible sizer — what actually establishes the slot's width
+      # — renders in every state too, and carries `invisible` (occupies
+      # layout space, paints nothing) rather than `hidden` (which would
+      # occupy none and defeat the whole reservation).
+      [sizer_classes] =
+        idle_html
+        |> Floki.parse_fragment!()
+        |> Floki.find(~s([data-role="meeting-agent-status-chip-sizer"]))
+        |> Floki.attribute("class")
+
+      assert sizer_classes =~ "invisible"
+    end
+
+    # Same regression — the defensive second layer. Even with the slot
+    # above reserved, the name column's own `min-w-0` gave it no floor of
+    # its own, which is what let it collapse to literal 0px in Dalton's
+    # measurement rather than just truncating further. Asserted by class,
+    # not by rendered width, for the same reason as the slot test above.
+    test "the agent name column keeps a non-zero min-width floor" do
+      html =
+        hold_rail([agent("Octavius", "oct-1")], hold_to_talk?: true, pressed_agent_id: "oct-1")
+
+      # The immediate wrapper around `participant-name` — found by its
+      # position in the markup, not a bare substring search, since
+      # several OTHER feedback-text nodes in this same row legitimately
+      # carry `min-w-0 flex-1` for an unrelated reason (the hold-to-talk
+      # coach line, the remove/mute error sentences) and a loose `=~`
+      # would false-positive on those.
+      [[name_wrapper_class]] =
+        Regex.scan(
+          ~r/<div class="([^"]*)">\s*<div class="truncate text-xs font-medium text-base-content\/90" data-role="participant-name"/,
+          html,
+          capture: :all_but_first
+        )
+
+      # `min-w-[32px]`, not `min-w-0` — the regression this guards is the
+      # name column having NO floor at all, which is what let it collapse
+      # to literal 0px once the status-chip slot (tested above) claimed
+      # width it previously got for free.
+      assert name_wrapper_class == "min-w-[32px] flex-1"
     end
 
     # Task 01a0d3cd stage 1 — Harper's "I still don't see the ASK button"

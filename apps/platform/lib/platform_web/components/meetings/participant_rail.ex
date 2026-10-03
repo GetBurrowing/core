@@ -593,7 +593,23 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                 label={info.label}
                 held?={is_binary(aid) and aid == @pressed_agent_id}
               />
-              <div class="min-w-0 flex-1">
+              <%!-- `min-w-[32px]`, not `min-w-0` (task 01a0febf stage 6 —
+                 Dalton's layout-shift bug, canvases 01a0febf-652b and
+                 01a0ff1c). `min-w-0` gave this column NO floor, so once
+                 the status-chip slot below claimed its (previously
+                 unreserved) width out of an already-full row, this was
+                 the only item with anywhere left to go and collapsed all
+                 the way to 0 — confirmed by live DOM measurement on two
+                 separate builds (PR #1174, #1176), same numbers both
+                 times. `min-w-[32px]` keeps `truncate` working (a flex
+                 item still needs an explicit floor below its content
+                 size for `truncate` to engage at all) while guaranteeing
+                 the name never fully disappears even if something else
+                 in this row someday grows again. This is the SECOND
+                 layer of the fix — the reserved status-chip slot below
+                 is the one that actually stops the row's total width
+                 from changing; this floor is the backstop if it didn't. --%>
+              <div class="min-w-[32px] flex-1">
                 <div
                   class="truncate text-xs font-medium text-base-content/90"
                   data-role="participant-name"
@@ -970,33 +986,73 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                 </button>
               </div>
 
-              <%!-- The visible held cue, server-driven so it names WHICH agent
-                 is being addressed while the key is down (per the mock's
-                 "Asking <name>…"). The control's own highlight is
-                 client-side; this is the roster-level confirmation. --%>
-              <span
-                :if={@pressed_agent_id == aid and is_binary(aid)}
-                data-role="meeting-agent-talking"
-                class="inline-flex flex-shrink-0 items-center gap-1 rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold text-primary"
-              >
-                <span class="hero-signal size-3 animate-pulse" aria-hidden="true"></span> Talking…
-              </span>
+              <%!-- RESERVED STATUS-CHIP SLOT (task 01a0febf stage 6 —
+                 Dalton's layout-shift bug, canvases 01a0febf-652b-7001-83da-
+                 c15b1c4ea846 and 01a0ff1c-37ab-7001-a91c-b61e0b1e7499,
+                 "1c" in his test matrix). Two independent live-browser
+                 measurements on two separate builds (PR #1174, then its
+                 fix PR #1176 which deliberately left this ONE alone) found
+                 the same numbers: pressing Ask inserted the "Talking…"
+                 span below as a BARE EXTRA flex sibling with no width of
+                 its own reserved ahead of time, into a row that already
+                 had zero slack. The name column (the only item without a
+                 `flex-shrink-0` floor) absorbed the insertion by
+                 collapsing to 0, and what the name couldn't absorb spilled
+                 out as real overflow — a horizontal scrollbar on desktop,
+                 the Ask button itself drifting left on phone far enough to
+                 cover the name it displaced. This is NOT a static
+                 flexbox-read question; it only shows up as rendered pixel
+                 measurement, which is why a prior static read missed it.
 
-              <%!-- The OTHER side of the same cue: someone ELSE holds this
-                 agent's floor (task 01a0cf5c stage 1, canvas 01a0cf5e-9cb0
-                 — "a visible owner when the floor is taken... the second
-                 person's button must say so before they start talking,
-                 not after"). Named from `@ask_floor_holders`, which every
-                 connected client updates off the SAME room-topic broadcast
-                 that landed the claim, so this appears everywhere at once,
-                 not only for whoever tries to press next. --%>
-              <span
-                :if={held_by_other?}
-                data-role="meeting-agent-held-by"
-                class="inline-flex flex-shrink-0 items-center gap-1 truncate rounded-full bg-base-300 px-1.5 py-0.5 text-[10px] font-medium text-base-content/60"
-              >
-                Held by {held_by}
-              </span>
+                 The fix is the standard reserve-space-for-a-toggle
+                 pattern: an INVISIBLE sizer, same markup/classes as the
+                 chip it is sizing, always rendered so this slot's width
+                 never depends on `@pressed_agent_id` / `held_by_other?`.
+                 The two real cues are absolutely positioned on top of it
+                 (`inset-0` against this slot's own `relative`), so
+                 whichever one is showing changes TEXT CONTENT in place —
+                 never the row's total width. "Held by <name>" can run
+                 longer than "Talking…"; it `truncate`s inside this same
+                 footprint rather than growing it, which is what the two
+                 cues sharing one reserved slot requires — they are
+                 mutually exclusive (`held_by_other?` is defined as
+                 `aid != @pressed_agent_id`), so only one ever paints. --%>
+              <div class="relative flex-shrink-0" data-role="meeting-agent-status-chip-slot">
+                <span
+                  aria-hidden="true"
+                  data-role="meeting-agent-status-chip-sizer"
+                  class="invisible inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold"
+                >
+                  <span class="size-3" aria-hidden="true"></span> Talking…
+                </span>
+                <%!-- The visible held cue, server-driven so it names WHICH
+                   agent is being addressed while the key is down (per the
+                   mock's "Asking <name>…"). The control's own highlight is
+                   client-side; this is the roster-level confirmation. --%>
+                <span
+                  :if={@pressed_agent_id == aid and is_binary(aid)}
+                  data-role="meeting-agent-talking"
+                  class="absolute inset-0 inline-flex items-center gap-1 rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold text-primary"
+                >
+                  <span class="hero-signal size-3 animate-pulse" aria-hidden="true"></span> Talking…
+                </span>
+
+                <%!-- The OTHER side of the same cue: someone ELSE holds this
+                   agent's floor (task 01a0cf5c stage 1, canvas 01a0cf5e-9cb0
+                   — "a visible owner when the floor is taken... the second
+                   person's button must say so before they start talking,
+                   not after"). Named from `@ask_floor_holders`, which every
+                   connected client updates off the SAME room-topic broadcast
+                   that landed the claim, so this appears everywhere at once,
+                   not only for whoever tries to press next. --%>
+                <span
+                  :if={held_by_other?}
+                  data-role="meeting-agent-held-by"
+                  class="absolute inset-0 inline-flex items-center gap-1 truncate rounded-full bg-base-300 px-1.5 py-0.5 text-[10px] font-medium text-base-content/60"
+                >
+                  Held by {held_by}
+                </span>
+              </div>
 
               <%!-- REACHABILITY, a different fact from the activity above:
                  is this agent connected at all. It is a real signal, so
