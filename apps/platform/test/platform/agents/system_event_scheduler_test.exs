@@ -1346,4 +1346,167 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
       end
     end
   end
+
+  defmodule AnchorCursorTest do
+    @moduledoc """
+    The every-6h anchor fire must leave the Historian cursor stamped.
+
+    Before this fix `check_and_fire/2` called `dispatch_event/1` (the
+    un-windowed 24h digest): it never called `Historian.mark_run_started/1`
+    and never advanced a per-corpus cursor, so prod showed zero
+    `org_historian_cursors` rows after weeks of 4x/day anchor passes, and
+    every pass re-sent the same trailing 24h of activity. The anchor path
+    now mirrors `fire_threshold/2`: stamp `last_run_at`, then
+    `HistorianDispatcher.dispatch_windowed/4`.
+
+    Each fire starts a fresh scheduler (its `last_fired` debounce map is
+    in-memory) so two consecutive anchor passes can be driven with the same
+    single anchor.
+    """
+    use Platform.DataCase, async: false
+
+    alias Platform.Agents.Agent
+    alias Platform.Agents.Historian
+    alias Platform.Agents.HistorianCursor
+    alias Platform.Agents.SystemEventScheduler
+    alias Platform.Chat
+    alias Platform.Chat.Message
+    alias Platform.Chat.Space
+    alias Platform.Org.WikiJournalEntry, as: MemoryEntry
+    alias Platform.Tasks.Projects
+
+    @workspace_id Projects.org_scope_workspace_id()
+
+    defmodule NoopAgentChat do
+      def chat(_message, _opts), do: {:ok, %{content: "", model: "test", usage: %{}}}
+    end
+
+    setup do
+      previous_module = Application.get_env(:platform, :chat_agent_module)
+      previous_mode = Application.get_env(:platform, :chat_agent_dispatch_mode)
+
+      Application.put_env(:platform, :chat_agent_module, NoopAgentChat)
+      Application.put_env(:platform, :chat_agent_dispatch_mode, :sync)
+
+      # The test DB seeds a few org-scope pages; drop them so the only
+      # pending activity is the journal rows each test inserts.
+      Repo.delete_all(from(f in "org_wiki_pages", where: is_nil(f.workspace_id)))
+
+      on_exit(fn ->
+        restore_env(:chat_agent_module, previous_module)
+        restore_env(:chat_agent_dispatch_mode, previous_mode)
+      end)
+
+      agent =
+        %Agent{}
+        |> Agent.changeset(%{
+          slug: "anchor-historian-#{System.unique_integer([:positive])}",
+          name: "Anchor Historian",
+          status: "active"
+        })
+        |> Repo.insert!()
+
+      case Platform.Roles.assign_role("historian", agent.id) do
+        {:ok, _} ->
+          :ok
+
+        {:error, _} ->
+          Platform.Roles.unassign_role("historian") &&
+            Platform.Roles.assign_role("historian", agent.id)
+      end
+
+      {:ok, agent: agent}
+    end
+
+    defp restore_env(key, nil), do: Application.delete_env(:platform, key)
+    defp restore_env(key, value), do: Application.put_env(:platform, key, value)
+
+    defp insert_journal!(content) do
+      %MemoryEntry{}
+      |> MemoryEntry.changeset(%{workspace_id: nil, content: content, date: Date.utc_today()})
+      |> Repo.insert!()
+    end
+
+    # Late enough in the UTC day that anchor 0 plus any per-workspace offset
+    # (< 6h) is always due.
+    defp anchor_due_now, do: %{DateTime.utc_now() | hour: 23, minute: 59, second: 59}
+
+    defp fire_anchor! do
+      {:ok, _pid} =
+        start_supervised(
+          {SystemEventScheduler, check_interval_ms: :timer.hours(24), anchors: [0]}
+        )
+
+      fired = SystemEventScheduler.run_anchor_check_now(anchor_due_now())
+      :ok = stop_supervised(SystemEventScheduler)
+      fired
+    end
+
+    defp historian_messages(%Agent{slug: slug}) do
+      case Chat.get_space_by_slug("system-#{slug}") do
+        %Space{id: space_id} ->
+          Repo.all(
+            from(m in Message,
+              where: m.space_id == ^space_id and m.content_type == "text",
+              order_by: [asc: m.inserted_at]
+            )
+          )
+
+        nil ->
+          []
+      end
+    end
+
+    defp journal_cursor do
+      Repo.one(
+        from(c in HistorianCursor, where: is_nil(c.workspace_id) and c.corpus == "journal")
+      )
+    end
+
+    test "anchor fire stamps the cursor; the next anchor covers only activity since the first",
+         %{agent: agent} do
+      assert Historian.last_run_at(@workspace_id) == nil
+
+      insert_journal!("first-anchor-marker")
+      assert [{@workspace_id, 0}] = fire_anchor!()
+
+      first_run_at = Historian.last_run_at(@workspace_id)
+      assert %DateTime{} = first_run_at, "anchor fire must stamp last_run_at"
+
+      assert %HistorianCursor{last_processed_at: %DateTime{} = first_cursor_at} =
+               journal_cursor(),
+             "anchor fire must advance the journal cursor"
+
+      first_messages = historian_messages(agent)
+      assert Enum.any?(first_messages, &(&1.content =~ "first-anchor-marker"))
+      assert Enum.all?(first_messages, &(&1.metadata["trigger"] == "anchor"))
+
+      insert_journal!("second-anchor-marker")
+      assert [{@workspace_id, 0}] = fire_anchor!()
+
+      first_ids = MapSet.new(first_messages, & &1.id)
+      second_messages = Enum.reject(historian_messages(agent), &(&1.id in first_ids))
+
+      assert second_messages != [], "second anchor must dispatch the new activity"
+      assert Enum.any?(second_messages, &(&1.content =~ "second-anchor-marker"))
+
+      refute Enum.any?(second_messages, &(&1.content =~ "first-anchor-marker")),
+             "second anchor must not re-send activity the first anchor already covered"
+
+      assert DateTime.compare(Historian.last_run_at(@workspace_id), first_run_at) == :gt
+      assert DateTime.compare(journal_cursor().last_processed_at, first_cursor_at) == :gt
+    end
+
+    test "anchor fire with nothing new since the cursor posts no digest", %{agent: agent} do
+      insert_journal!("only-entry-marker")
+      assert [{@workspace_id, 0}] = fire_anchor!()
+      after_first = historian_messages(agent)
+      assert after_first != []
+
+      assert [{@workspace_id, 0}] = fire_anchor!()
+
+      assert length(historian_messages(agent)) == length(after_first),
+             "an anchor with no new activity must not post a digest"
+    end
+  end
 end

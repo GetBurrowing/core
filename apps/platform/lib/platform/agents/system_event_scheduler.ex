@@ -73,10 +73,36 @@ defmodule Platform.Agents.SystemEventScheduler do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
-  @doc "Force-fire the historian event now (for testing/admin)."
+  @doc """
+  Force-fire the historian event now (for testing/admin).
+
+  Deliberately NOT the anchor path: this renders the un-windowed trailing-24h
+  digest via `HistorianDispatcher.dispatch/3` and leaves the cursor and
+  `last_run_at` untouched, so an ad-hoc fire always produces a message and
+  never consumes backlog or shifts the debounce out from under the scheduled
+  cadence. Use `run_anchor_check_now/1` to exercise the real anchor path.
+  """
   @spec fire_now(String.t()) :: :ok | {:error, term()}
   def fire_now(event_type \\ @historian_event) do
     GenServer.call(__MODULE__, {:fire_now, event_type}, :timer.minutes(2))
+  end
+
+  @doc """
+  Synchronously run the every-6h anchor check as of `now`.
+
+  Fires every `(workspace_id, anchor_hour)` pair that is due at `now` and
+  not already fired in its window — exactly what the periodic `:check`
+  tick does for the anchor cadence, without the threshold sweep or the
+  weekly TENANTS_SUMMARY heartbeat that ride on the same tick. Returns the
+  `{workspace_id, anchor_hour}` pairs that fired on this call.
+
+  `now` only decides which anchors are due; the dispatch itself slices
+  windows up to the real `DateTime.utc_now/0`. Intended for tests and
+  operator-triggered checks.
+  """
+  @spec run_anchor_check_now(DateTime.t()) :: [{binary() | nil, non_neg_integer()}]
+  def run_anchor_check_now(%DateTime{} = now \\ DateTime.utc_now()) do
+    GenServer.call(__MODULE__, {:run_anchor_check_now, now}, :timer.minutes(2))
   end
 
   @doc """
@@ -243,6 +269,18 @@ defmodule Platform.Agents.SystemEventScheduler do
   end
 
   @impl GenServer
+  def handle_call({:run_anchor_check_now, now}, _from, state) do
+    new_last_fired = check_and_fire(now, state)
+
+    fired =
+      for {key, fired_at} <- new_last_fired,
+          Map.get(state.last_fired, key) != fired_at,
+          do: key
+
+    {:reply, fired, %{state | last_fired: new_last_fired}}
+  end
+
+  @impl GenServer
   def handle_call(:run_threshold_check_now, _from, state) do
     results = run_threshold_sweep(DateTime.utc_now())
     {:reply, results, state}
@@ -309,18 +347,74 @@ defmodule Platform.Agents.SystemEventScheduler do
     Enum.reduce(workspaces, state.last_fired, fn workspace_id, last_fired ->
       Enum.reduce(state.anchors, last_fired, fn anchor_hour, lf ->
         if anchor_due?(now, workspace_id, anchor_hour, lf) do
-          Logger.info(
-            "[SystemEventScheduler] firing historian event " <>
-              "workspace=#{inspect(workspace_id)} anchor=#{anchor_hour}"
-          )
-
-          dispatch_event(@historian_event)
+          fire_anchor(workspace_id, anchor_hour)
           Map.put(lf, {workspace_id, anchor_hour}, now)
         else
           lf
         end
       end)
     end)
+  end
+
+  # The every-6h anchor fire. Mirrors `fire_threshold/2`: stamp
+  # `last_run_at` BEFORE dispatch, then go through
+  # `HistorianDispatcher.dispatch_windowed/4` so each dispatched window
+  # advances its corpus cursor and the next anchor only sees activity since
+  # this one.
+  #
+  # This used to call `dispatch_event/1` — the un-windowed path that renders
+  # a fixed trailing-24h digest and touches no cursor. With anchors 6h apart
+  # every pass re-sent ~18h of the previous pass's activity, and because the
+  # anchor never stamped `last_run_at` the threshold debounce could not see
+  # anchor passes either (prod had zero `org_historian_cursors` rows after
+  # weeks of 4x/day passes). Task 019f4f55 windowed only the threshold path, to keep
+  # its change set off the anchor path; nothing documents the anchor as
+  # deliberately un-windowed, and both templates promise the cursor advances
+  # "via `Historian.mark_run_started/1` in the dispatch pipeline".
+  #
+  # A pass with nothing new since the cursor dispatches nothing (the
+  # dispatcher emits `:no_op_pass` instead of posting an empty digest).
+  defp fire_anchor(workspace_id, anchor_hour) do
+    pending_tokens = safe_pending_tokens(workspace_id)
+    :ok = mark_run_started_safe(workspace_id)
+
+    Logger.info(
+      "[SystemEventScheduler] firing historian event " <>
+        "workspace=#{inspect(workspace_id)} anchor=#{anchor_hour} pending=#{pending_tokens}"
+    )
+
+    metadata = %{
+      trigger: "anchor",
+      anchor_hour: anchor_hour,
+      pending_tokens: pending_tokens,
+      workspace_id: workspace_id
+    }
+
+    case HistorianDispatcher.dispatch_windowed(
+           @historian_event,
+           template_slug_for(@historian_event),
+           metadata,
+           workspace_id
+         ) do
+      {:ok, %{dispatched: dispatched, remaining: remaining}} ->
+        if remaining > 0 do
+          Logger.info(
+            "[SystemEventScheduler] anchor pass capped " <>
+              "workspace=#{inspect(workspace_id)} anchor=#{anchor_hour} " <>
+              "dispatched=#{dispatched} remaining=#{remaining}"
+          )
+        end
+
+        :ok
+
+      {:error, reason} ->
+        Logger.error(
+          "[SystemEventScheduler] windowed anchor dispatch failed " <>
+            "workspace=#{inspect(workspace_id)} anchor=#{anchor_hour}: #{inspect(reason)}"
+        )
+
+        {:error, reason}
+    end
   end
 
   # An anchor is "due" iff `now` is at or past today's `anchor_hour:offset_minute`

@@ -153,11 +153,13 @@ defmodule Platform.Agents.HistorianDispatcher do
   end
 
   @doc """
-  Windowed threshold dispatch — one digest message per bounded window
-  with per-window cursor advance.
+  Windowed dispatch — one digest message per bounded window with
+  per-window cursor advance.
 
-  Consumed by `SystemEventScheduler.fire_threshold/2` (stage 3) after
-  the every-6h and per-meeting fire paths already run through `dispatch/3`.
+  Consumed by both scheduler fire paths: `SystemEventScheduler.fire_threshold/2`
+  (task 019f4f55 stage 3) and the every-6h anchor fire (which previously
+  went through `dispatch/3` and never advanced a cursor). The per-meeting
+  fire and `SystemEventScheduler.fire_now/1` still use `dispatch/3`.
   The pipeline:
 
     1. Look up the historian agent (skip cleanly with `{:ok, %{dispatched:
