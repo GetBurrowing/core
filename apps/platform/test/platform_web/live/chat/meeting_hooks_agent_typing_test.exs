@@ -152,18 +152,18 @@ defmodule PlatformWeb.ChatLive.MeetingHooksAgentTypingTest do
     do: ~s(#quickmeet-call-rail [data-participant-id="#{presence_id}"])
 
   # Mirrors `MeetingLiveTest.rail_activity_word/2`: the badge WORD under
-  # the name, the same contract `/meetings` is held to.
+  # the name, the same contract `/meetings` is held to — the state half
+  # (`.i`) of the line, not the held-row "Listening…" crossfade (`.l`).
   defp rail_activity_word(html, presence_id) do
     html
     |> frag()
-    |> LazyHTML.query(~s(#{rail_row(html, presence_id)} [data-role="agent-activity-word"]))
+    |> LazyHTML.query(~s(#{rail_row(html, presence_id)} [data-role="agent-activity-word"] .i))
     |> LazyHTML.text()
     |> String.trim()
   end
 
-  # The `:delayed` second line (task 01a07400 stage 3) — a node of its own,
-  # because the reason is the protected line rather than a clause sharing
-  # the word's row.
+  # The `:delayed` reason (task 01a07400 stage 3) — a node of its own,
+  # following the word on the Ask mockup's one `.st` line.
   defp rail_delay_reason(html, presence_id) do
     html
     |> frag()

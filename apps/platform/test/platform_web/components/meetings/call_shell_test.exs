@@ -881,12 +881,22 @@ defmodule PlatformWeb.Components.Meetings.CallShellTest do
       assert rail(active_tab: "people", agent_activity: %{"a-1" => :failed}) =~ "Couldn&#39;t"
     end
 
-    # THE REFUSAL. `:listening` has no producer, and drawing it would
-    # put a caption on screen that nothing can ever make true.
-    test "no state, real or declared-but-unproducible, renders Listening" do
+    # THE REFUSAL. `:listening` has no producer, and drawing it as a STATE
+    # would put a caption on screen that nothing can ever make true. The
+    # Ask mockup's `.st .l` "Listening…" is the held-row crossfade, not a
+    # state, so the guard reads the state half of the line, `.st .i`.
+    test "no state, real or declared-but-unproducible, renders Listening as the state word" do
       for state <- [:computing, :typing, :failed, :idle, :listening] do
         html = rail(active_tab: "people", agent_activity: %{"a-1" => state})
-        refute html =~ "Listening"
+
+        state_text =
+          html
+          |> LazyHTML.from_fragment()
+          |> LazyHTML.query(~s([data-role="agent-activity-word"] .i))
+          |> LazyHTML.text()
+
+        assert state_text != "", "#{state}: no state word rendered"
+        refute state_text =~ "Listening"
       end
     end
   end
@@ -896,13 +906,15 @@ defmodule PlatformWeb.Components.Meetings.CallShellTest do
     # directly, so these assert what the SHELL actually puts on screen
     # on both surfaces — the quickmeet and /meetings render the same
     # shell, which is why one file can speak for both.
-    test "the state is drawn ON the avatar, ring plus corner glyph" do
+    # The Ask mockup's row: the state is data on the `.av` initial circle
+    # and the word under the name. The old ring/corner glyph is retired.
+    test "the state is carried on the avatar and in the word, with no ring or glyph" do
       html = rail(active_tab: "people", agent_activity: %{"a-1" => :computing})
 
-      assert html =~ ~s(data-role="agent-activity-avatar")
-      assert html =~ ~s(data-role="agent-activity-ring")
-      assert html =~ ~s(data-role="agent-activity-glyph")
-      assert html =~ "border-info"
+      assert html =~ ~s(data-role="agent-activity-avatar" data-activity-state="computing")
+      assert html =~ "Thinking"
+      refute html =~ ~s(data-role="agent-activity-ring")
+      refute html =~ ~s(data-role="agent-activity-glyph")
     end
 
     test "the role chip no longer occupies the line under the name" do
@@ -915,13 +927,11 @@ defmodule PlatformWeb.Components.Meetings.CallShellTest do
     # The state a quiet meeting spends nearly all of its time in, and
     # the one the old rail drew as a bare dot with the literal word
     # "agent" beside it.
-    test "idle is a drawn state: muted ring, dimmed face, the word Idle" do
+    test "idle is a drawn state: the avatar and the word Idle" do
       html = rail(active_tab: "people", agent_activity: %{"a-1" => :idle})
 
       assert html =~ "Idle"
-      assert html =~ ~s(data-role="agent-activity-avatar")
-      assert html =~ "border-base-content/25"
-      assert html =~ "opacity-45"
+      assert html =~ ~s(data-role="agent-activity-avatar" data-activity-state="idle")
       refute html =~ ~s(data-role="agent-activity-glyph")
     end
 
@@ -1107,16 +1117,18 @@ defmodule PlatformWeb.Components.Meetings.CallShellTest do
           agent_activity: %{"a-1" => :computing}
         )
 
-      names = class_of(html, ~s([data-role="participant-name"]))
-      assert length(names) == 2, "one name per row, human and agent alike"
+      # Human rows keep the utility scale. Agent rows are the Ask mockup's
+      # `.nm`, sized by `meeting_ask.css`, so they carry no size utility.
+      [human_name] =
+        class_of(html, ~s([data-participant-type="user"] [data-role="participant-name"]))
 
-      for class <- names do
-        assert class =~ "text-xs"
-        refute class =~ "text-sm"
+      refute human_name =~ "text-sm"
 
-        assert size_utilities(class) == [["text-xs"]],
-               "the name's size must be one bare utility, got: #{class}"
-      end
+      assert size_utilities(human_name) == [["text-xs"]],
+             "the name's size must be one bare utility, got: #{human_name}"
+
+      assert class_of(html, ~s([data-participant-type="agent"] [data-role="participant-name"])) ==
+               ["nm"]
     end
 
     test "the sub-line and the section headings are 11px, unconditionally" do
@@ -1127,17 +1139,14 @@ defmodule PlatformWeb.Components.Meetings.CallShellTest do
           agent_activity: %{"a-1" => :computing}
         )
 
-      [word] = class_of(html, ~s([data-role="agent-activity-word"]))
-      assert size_utilities(word) == [["text-[11px]"]]
+      # The agent state line and the Agents heading are the mockup's `.st`
+      # and `.sec` (sized in `meeting_ask.css`); the humans heading keeps
+      # its 11px utility.
+      assert class_of(html, ~s([data-role="agent-activity-word"])) == ["st"]
+      assert class_of(html, ~s([data-section="agents"] > div.sec)) == ["sec"]
 
-      headings =
-        class_of(html, ~s([data-section] > div > span.uppercase))
-
-      assert length(headings) == 2, "In this call + Agents"
-
-      for class <- headings do
-        assert size_utilities(class) == [["text-[11px]"]]
-      end
+      [heading] = class_of(html, ~s([data-section="humans"] > div > span.uppercase))
+      assert size_utilities(heading) == [["text-[11px]"]]
     end
 
     # The tab strip is the one place the rail leaves 11px, and it is a
@@ -1177,12 +1186,16 @@ defmodule PlatformWeb.Components.Meetings.CallShellTest do
 
     # The row itself carries the size too, so anything inside it that
     # forgets its own utility inherits 12px rather than the shell's 14px.
-    test "the rows themselves set text-xs rather than inheriting" do
+    test "the rows themselves set text-xs rather than inheriting (human rows)" do
       html = rail(active_tab: "people")
 
-      for class <- class_of(html, ~s([data-participant-id])) do
+      for class <- class_of(html, ~s([data-participant-type="user"][data-participant-id])) do
         assert size_utilities(class) == [["text-xs"]], class
       end
+
+      # Agent rows are the mockup's `.row`; their type comes from the
+      # `.meeting-ask` section's own font rule.
+      assert class_of(html, ~s([data-participant-type="agent"][data-participant-id])) == ["row"]
     end
   end
 end

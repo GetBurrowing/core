@@ -529,16 +529,26 @@ defmodule PlatformWeb.AgentFaceEverywhereTest do
       """)
     end
 
+    # This section was calling `human_avatar/1`, which is exactly what stage 3
+    # split the component apart to stop: it gave agents two initials over the
+    # seeded human palette under `data-avatar-kind="human"`.
+    #
+    # The Ask mockup port (`meeting_ask_mockup.html`) draws every agent as
+    # its `.av` circle with ONE initial, with or without a stored avatar, so
+    # this surface no longer goes through `assert_agent_face/3`.
     test "the agents section draws agents, not humans wearing agent names" do
-      # This section was calling `human_avatar/1`, which is exactly what stage 3
-      # split the component apart to stop: it gave agents two initials over the
-      # seeded human palette under `data-avatar-kind="human"`.
-      selector = ~s([data-participant-type="agent"] [data-avatar-kind="agent"])
+      for html <- [rail_html(@image), rail_html(nil)] do
+        [av] =
+          html
+          |> Floki.parse_fragment!()
+          |> Floki.find(~s([data-participant-type="agent"] div.av))
 
-      {_imaged, plain} = assert_agent_face(rail_html(@image), rail_html(nil), selector)
+        assert av |> Floki.find(~s(span[aria-hidden="true"])) |> Floki.text() |> String.trim() ==
+                 "H"
 
-      assert letters(plain) == "H"
-      refute rail_html(nil) =~ "avatar-fallback-"
+        refute html =~ ~s(data-avatar-kind="human")
+        refute html =~ "avatar-fallback-"
+      end
     end
   end
 

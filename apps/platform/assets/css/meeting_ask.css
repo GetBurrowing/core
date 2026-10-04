@@ -1,0 +1,136 @@
+/*
+ * Meeting Ask button / agent row: a VERBATIM port of the approved mockup,
+ * `test/support/fixtures/meeting_ask_mockup.html` (Harper's spec file
+ * `ask-embed2.html`). That file is the spec. When this stylesheet and that
+ * file disagree, this one is wrong.
+ *
+ * Every rule in PART 1 is copied from the mockup's <style> with the same
+ * values, keyframes, timings, shadows and hex colours. Only two kinds of
+ * edit were made:
+ *
+ *   (a) SCOPE. Every selector is prefixed with `.meeting-ask`, the root
+ *       class on ParticipantRail's Agents <section>, so nothing leaks. The
+ *       mockup's `:root` custom properties are declared on that root under
+ *       the same names and values. Its `html,body` rule (colour and font)
+ *       and the background and padding of its `.panel` are declared on the
+ *       root too, because that is what every mockup row inherits from.
+ *   (b) INTERACTION STATE. The mockup's pseudo-states become data
+ *       attributes driven by the MeetingPushToTalk hook (held, sent) and by
+ *       the server (kick):
+ *         .ask:active                    -> .ask[data-held="true"]
+ *         .row:has(.ask:active)          -> .row[data-held="true"]
+ *         .row:has(.ask:focus:not(:active)) -> .row[data-sent="true"]
+ *         #k1:checked ~ … .row .confirm  -> .row[data-kick="confirm"] .confirm
+ *         #k2:checked ~ … .row           -> .row[data-kick="gone"]
+ *
+ * The mockup's page chrome (.wrap, .hint, and the width, border and radius
+ * of .panel) is not ported: the rail is the panel. PART 2 holds the
+ * deviations. Each one is listed in the PR body with its reason.
+ */
+
+/* ── PART 1: the mockup, verbatim except for scope and state ─────────── */
+
+.meeting-ask{--bg:#0f1419;--s:#161d24;--s2:#1c252e;--b:#2a3540;--t:#e6edf3;--m:#8b98a5;--a:#22c3dc;--ai:#062a31;--live:#f59e0b;--ok:#34d399;--bad:#f87171}
+.meeting-ask,.meeting-ask *{box-sizing:border-box}
+.meeting-ask{color:var(--t);font:14px/1.4 system-ui,-apple-system,Segoe UI,sans-serif;background:var(--s);padding:12px 0 18px}
+.meeting-ask .sec{color:var(--m);font-size:12px;letter-spacing:.06em;text-transform:uppercase;padding:8px 16px}
+.meeting-ask .row{position:relative;display:grid;grid-template-columns:36px 1fr auto;align-items:center;gap:10px;padding:8px 16px;min-height:56px}
+.meeting-ask .av{width:36px;height:36px;border-radius:50%;border:2px solid var(--b);display:grid;place-items:center;font-weight:600;transition:border-color .15s,box-shadow .15s}
+.meeting-ask .who{min-width:0}.meeting-ask .nm{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.meeting-ask .st{color:var(--m);font-size:12px;position:relative;height:17px;overflow:hidden}.meeting-ask .st span{position:absolute;left:0;right:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:opacity .1s}
+.meeting-ask .st .l{opacity:0;color:var(--a)}
+.meeting-ask .tools{display:flex;gap:6px;align-items:center}
+.meeting-ask .ask{position:relative;width:96px;height:40px;border:0;border-radius:10px;background:var(--a);color:var(--ai);font:600 14px system-ui;
+ display:flex;align-items:center;justify-content:center;gap:6px;cursor:pointer;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;touch-action:none;
+ box-shadow:0 3px 0 #0e7f90,0 4px 12px rgba(34,195,220,.15);transition:transform .07s,box-shadow .07s,background .15s;outline:none;-webkit-tap-highlight-color:transparent}
+.meeting-ask .ask:hover{background:#3fd0e6}
+.meeting-ask .ask .ring{position:absolute;inset:-3px;border-radius:13px;border:2px solid var(--a);opacity:0;pointer-events:none}
+.meeting-ask .bars{display:flex;gap:2px;align-items:center;height:16px}.meeting-ask .bars i{width:3px;height:4px;background:currentColor;border-radius:2px}
+.meeting-ask .lbl{position:relative;width:52px;height:18px;font-size:13px}.meeting-ask .lbl span{position:absolute;left:0;top:0;transition:opacity .08s}.meeting-ask .lbl .on{opacity:0}
+.meeting-ask .ask[data-held="true"]{transform:translateY(3px) scale(.97);box-shadow:0 0 0 #0e7f90,0 0 0 4px rgba(34,195,220,.28),inset 0 2px 6px rgba(0,0,0,.28)}
+.meeting-ask .ask[data-held="true"] .ring{animation:ring 1.1s ease-out infinite}
+.meeting-ask .ask[data-held="true"] .bars i{animation:bar .5s ease-in-out infinite alternate}
+.meeting-ask .ask[data-held="true"] .bars i:nth-child(2){animation-delay:-.15s}.meeting-ask .ask[data-held="true"] .bars i:nth-child(3){animation-delay:-.3s}.meeting-ask .ask[data-held="true"] .bars i:nth-child(4){animation-delay:-.45s}
+.meeting-ask .ask[data-held="true"] .lbl .off{opacity:0}.meeting-ask .ask[data-held="true"] .lbl .on{opacity:1}
+@keyframes ring{0%{opacity:.75;transform:scale(1)}100%{opacity:0;transform:scale(1.28)}}
+@keyframes bar{from{height:4px}to{height:16px}}
+.meeting-ask .row[data-held="true"] .av{border-color:var(--a);box-shadow:0 0 0 3px rgba(34,195,220,.2)}
+.meeting-ask .row[data-held="true"] .st .i{opacity:0}.meeting-ask .row[data-held="true"] .st .l{opacity:1}
+/* Kick: a quiet icon button, confirm inline, then Undo */
+.meeting-ask .kick{width:32px;height:32px;border-radius:8px;border:1px solid var(--b);background:transparent;color:var(--m);display:grid;place-items:center;cursor:pointer;font-size:16px;line-height:1}
+.meeting-ask .kick:hover{color:var(--bad);border-color:var(--bad);background:rgba(248,113,113,.08)}
+.meeting-ask .confirm,.meeting-ask .gone{position:absolute;inset:4px 10px;border-radius:10px;display:none;align-items:center;gap:8px;padding:0 10px;font-size:13px;z-index:6}
+.meeting-ask .confirm{background:var(--s2);border:1px solid var(--bad)}
+.meeting-ask .confirm .q{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.meeting-ask .mbtn{height:30px;padding:0 10px;border-radius:7px;border:1px solid var(--b);background:transparent;color:var(--t);font:600 12px system-ui;cursor:pointer;display:grid;place-items:center}
+.meeting-ask .mbtn.danger{background:var(--bad);border-color:var(--bad);color:#2a0b0b}
+.meeting-ask .gone{background:transparent;border:1px dashed var(--b);color:var(--m)}
+.meeting-ask .gone .mbtn{margin-left:auto}
+.meeting-ask .row[data-kick="confirm"] .confirm{display:flex}
+.meeting-ask .row[data-kick="gone"] > :not(.gone){visibility:hidden}
+.meeting-ask .row[data-kick="gone"] .gone{display:flex}
+/* Transcript popover: overlay, grows to a cap, then scrolls with newest line at the bottom */
+.meeting-ask .tr{position:absolute;left:12px;right:12px;top:calc(100% + 6px);z-index:5;background:var(--s2);border:1px solid var(--a);border-radius:10px;padding:10px 12px 10px;
+ box-shadow:0 10px 30px rgba(0,0,0,.45);opacity:0;transform:translateY(-4px);pointer-events:none;transition:opacity .1s,transform .1s}
+.meeting-ask .hd{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--a);margin-bottom:6px}
+.meeting-ask .hd .wc{margin-left:auto;color:var(--m)}
+.meeting-ask .dot{width:8px;height:8px;border-radius:50%;background:var(--live);animation:blink 1s infinite}@keyframes blink{50%{opacity:.3}}
+.meeting-ask .vp{position:relative;height:20px;max-height:140px;overflow:hidden}
+.meeting-ask .vp::before{content:"";position:absolute;left:0;right:0;top:0;height:36px;background:linear-gradient(var(--s2),transparent);z-index:1;opacity:0;transition:opacity .3s}
+.meeting-ask .tx{position:absolute;left:0;right:0;bottom:0;overflow:hidden;height:20px}
+.meeting-ask .tx p{margin:0;position:absolute;left:0;right:0;top:0}
+.meeting-ask .row[data-held="true"] .tr.live{opacity:1;transform:none}
+/* The mockup's scripted growth (`.vp` 9s, `.tx` 14s, `::before` fade 9s)
+   cannot apply to live speech: see PART 2, "live growth". */
+.meeting-ask .tr.sent{border-color:var(--ok)}.meeting-ask .tr.sent .hd{color:var(--ok)}
+.meeting-ask .tr.sent .sum{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;color:var(--t)}
+.meeting-ask .row[data-sent="true"] .tr.sent{animation:sent 2.2s ease forwards}
+@keyframes sent{0%,80%{opacity:1;transform:none}100%{opacity:0}}
+
+/* ── PART 2: deviations (each listed in the PR body) ──────────────────── */
+
+/* Live growth. The mockup animates `.vp` 20→140px over 9s and `.tx`
+   20→260px over 14s against SCRIPTED text, and fades the top mask in at
+   60–75% of 9s. Live speech arrives at the speaker's pace, so the hook
+   sizes `.tx` to its real content height and `.vp` to that height capped
+   at the same 140px (inline style), and sets `data-overflowing` once the
+   text exceeds the cap. The mask's values are the mockup's. */
+.meeting-ask .vp[data-overflowing="true"]::before{opacity:1}
+
+/* Tailwind generates a `.ring` utility (a 1px box-shadow) because the word
+   `ring` appears in scanned sources. The mockup's `.ring` has no
+   box-shadow, so this resets the collision rather than renaming the class.
+   (DaisyUI's `.btn` collides the same way, with too many properties to
+   reset, so the mockup's `.btn` is spelled `.mbtn` here.) */
+.meeting-ask .ask .ring{box-shadow:none}
+
+/* User-agent parity. The mockup page has no CSS reset, so its <button>
+   carries Chromium's UA padding (1px 6px). Tailwind's preflight zeroes it
+   here. The mockup's `.kick` and `.btn` are <label>s (padding 0); here they
+   are <button>s for keyboard access, which preflight already zeroes. */
+.meeting-ask .ask{padding:1px 6px}
+/* Preflight gives every element `border: 0 solid`; the mockup's elements
+   have the UA default `none`. The error/coaching lines (.fb) keep preflight's
+   `solid` because their 2px left rule depends on it. */
+.meeting-ask :where(:not(.fb, .fb *)){border-style:none}
+/* <label> is text-align:start; a <button> is centre by UA default. */
+.meeting-ask .kick,.meeting-ask .mbtn{text-align:start}
+
+/* Kept controls the mockup does not have (decision 2, option A). */
+/* Status + mic badge: 8px, on the avatar's corner, mockup colours only. */
+.meeting-ask .av{position:relative}
+.meeting-ask .av .avs{position:absolute;right:-2px;bottom:-2px;width:8px;height:8px;border-radius:50%;background:var(--m)}
+.meeting-ask .av .avs[data-tone="ok"]{background:var(--ok)}
+/* Host mute uses the `.kick` look. Its muted state keeps the mockup's
+   colours: `--t` glyph, as the existing control did, never an error tone. */
+.meeting-ask .kick[aria-pressed="true"]{color:var(--t)}
+.meeting-ask .kick:disabled{cursor:default}
+/* "Ask <agent> to leave", below the list, as a mockup `.btn`. */
+.meeting-ask .leave{margin:8px 16px 0;width:calc(100% - 32px);height:30px}
+/* Ask while someone else holds the floor (no mockup state). */
+.meeting-ask .ask:disabled{cursor:default;opacity:.5}
+/* While held, the dimming veil (z-50, kept) covers the page, so the held row
+   is lifted above it. */
+.meeting-ask .row[data-held="true"]{z-index:60}
+/* Error and coaching lines under a row (no mockup state) span the grid. */
+.meeting-ask .row > .fb{grid-column:1 / -1}

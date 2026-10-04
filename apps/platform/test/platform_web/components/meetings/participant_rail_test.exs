@@ -10,9 +10,9 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
   that is absent leaves no row to assert against.
 
   So the guards below assert the heading TEXT, not just the section
-  element, and assert the humans heading and the agents heading are a
-  visible pair (same typography classes). Both were shown to detonate
-  by deleting the humans heading `<div>` from `participant_rail.ex`.
+  element, for both headings (the Agents one is now the Ask mockup's
+  `.sec`). They were shown to detonate by deleting the humans heading
+  `<div>` from `participant_rail.ex`.
   """
   use ExUnit.Case, async: true
 
@@ -165,6 +165,15 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
 
   defp attr(node, name), do: node |> Floki.attribute(name) |> List.first()
 
+  # The Agents section's stylesheet and the mockup it ports verbatim.
+  defp ask_css, do: File.read!(Path.join([File.cwd!(), "assets", "css", "meeting_ask.css"]))
+
+  defp ask_mockup,
+    do:
+      File.read!(
+        Path.join([File.cwd!(), "test", "support", "fixtures", "meeting_ask_mockup.html"])
+      )
+
   # One agent per state in ONE rail, which is also the shape the
   # manual-approval gate asks to see.
   @four_states %{
@@ -215,13 +224,17 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       assert humans_section =~ "In this call"
     end
 
-    test "is typographically the same kind of thing as the Agents heading" do
+    # Both sections are labelled. The humans heading keeps its utility
+    # type; the Agents heading is the mockup's `.sec` (12px uppercase from
+    # `meeting_ask.css`), so the two are no longer one class string.
+    test "both sections carry a heading: humans in utility type, agents as the mockup's .sec" do
       html = rail([human("Harper", "u-1"), agent("Saru", "a-1")])
+      doc = Floki.parse_fragment!(html)
 
-      # Two headings, same classes: they read as a pair rather than as
-      # one labelled section and one accidental line of text.
-      assert length(Regex.scan(~r/#{Regex.escape(@heading_type)}/, html)) == 2
-      assert html =~ "Agents"
+      assert length(Regex.scan(~r/#{Regex.escape(@heading_type)}/, html)) == 1
+
+      [sec] = Floki.find(doc, ~s(section[data-section="agents"] > div.sec))
+      assert Floki.text(sec) |> String.trim() == "Agents"
     end
 
     test "uses a people glyph, not the agents' cpu-chip" do
@@ -263,106 +276,50 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
   end
 
   describe "the agent row's three signals" do
-    # The defect this closes: the ring was a standalone EMPTY circle at
-    # the far end of the row, line 2 under the name was the role chip
-    # rendering the literal string "agent", and `:idle` rendered
-    # NEITHER — it was gated out and replaced by a bare dot. So on a
-    # quiet meeting the row showed a name, the word "agent", and a dot:
-    # three of the four cues absent exactly when a reader needs them.
+    # The defect this closed: line 2 under the name was the role chip
+    # rendering the literal string "agent", and `:idle` rendered nothing
+    # but a bare dot. The verbatim port of the Ask mockup
+    # (`test/support/fixtures/meeting_ask_mockup.html`) keeps the three
+    # signals as: the `.av` initial circle (carrying `data-activity-state`
+    # and the `.avs` reachability badge), the name, and the state word in
+    # `.st .i`. The old ring/corner glyph around the face is gone ON
+    # PURPOSE — the mockup draws neither.
     #
     # Every assertion below renders all four states in ONE rail and
     # checks per-row, so a guard cannot pass on another row's markup.
-    test "the state colour is on a ring AROUND the avatar, not a separate circle" do
+    test "the avatar is the mockup's initial circle, carrying the state as data, with no ring or glyph" do
       html = four_state_rail()
 
-      for {id, _state} <- @four_states do
-        row = agent_row(html, id)
-
-        assert row =~ ~s(data-role="agent-activity-avatar"),
-               "#{id}: the avatar is not wrapped in the activity construction"
-
-        assert row =~ ~s(data-role="agent-activity-ring")
-
-        refute row =~ ~s(data-role="agent-activity-badge"),
-               "#{id}: the standalone badge circle is still in the row"
-      end
-    end
-
-    # WHY A MARKER ON THE FACE (task 01a064fa stage 1). The geometric
-    # gate has to ask "does the ring wrap THE AVATAR", and the avatar
-    # itself had nothing to hang on — only the CSS class `agent-avatar`.
-    # A class-name lookup is the same species of check as the presence
-    # check that let three rejected rounds through, so the face gets a
-    # `data-role` and the browser assertion resolves through DOM
-    # ancestry instead.
-    #
-    # Asserted as ANCESTRY over the parsed subtree, not as `row =~`: a
-    # string containment check passes on a document where the face was
-    # moved out of the avatar wrapper to sit beside it, which is
-    # precisely the defect shape being guarded against.
-    test "the face carries a marker and sits INSIDE the activity avatar wrapper" do
-      html = four_state_rail()
-
-      for {id, _state} <- @four_states do
+      for {id, state} <- @four_states do
         row = Floki.parse_fragment!(agent_row(html, id))
 
-        wrappers = Floki.find(row, ~s([data-role="agent-activity-avatar"]))
+        [av] = Floki.find(row, ~s(div.av[data-role="agent-activity-avatar"]))
 
-        assert length(wrappers) == 1,
-               "#{id}: expected exactly one activity avatar wrapper, got #{length(wrappers)}"
+        assert Floki.attribute(av, "data-activity-state") == [to_string(state)]
 
-        assert Floki.find(row, ~s([data-role="agent-activity-face"])) != [],
-               "#{id}: the avatar has no data-role=\"agent-activity-face\" marker"
+        # One uppercase initial, drawn as the circle's text (aria-hidden:
+        # the activity sentence beside it is what a screen reader hears).
+        assert av |> Floki.find(~s(span[aria-hidden="true"])) |> Floki.text() |> String.trim() =~
+                 ~r/^[A-Z]$/
 
-        # The face found ANYWHERE in the row must be the same node as
-        # the face found under the wrapper — that equality is what
-        # fails when the face is hoisted out to be the wrapper's
-        # sibling while still rendering somewhere in the row.
-        assert Floki.find(wrappers, ~s([data-role="agent-activity-face"])) ==
-                 Floki.find(row, ~s([data-role="agent-activity-face"])),
-               "#{id}: the face is in the row but NOT inside the activity avatar wrapper"
-
-        # The ring is co-located with the face in the same wrapper, so
-        # ring and face are one object rather than two things a reader
-        # is asked to associate across a row.
-        assert Floki.find(wrappers, ~s([data-role="agent-activity-ring"])) != [],
-               "#{id}: the ring is not inside the wrapper the face lives in"
+        for gone <-
+              ~w(agent-activity-ring agent-activity-glyph agent-activity-face agent-activity-badge) do
+          assert Floki.find(row, ~s([data-role="#{gone}"])) == [],
+                 "#{id}: #{gone} is back in the rail row"
+        end
       end
     end
 
-    test "the ring colour differs per state rather than collapsing to one" do
+    test "each state reads its own word, and the four rows are different markup" do
       html = four_state_rail()
 
-      assert agent_row(html, "a-think") =~ "border-info"
-      # Writing shares `info` with Thinking BY DECISION (Saru, canvas
-      # 01a05b11-54ff card 6, 2026-09-02): both mean "working, nothing
-      # is asked of you", and `warning` is the invite banner's alone.
-      # What separates the two rows is the glyph and the motion, which
-      # the uniqueness assertion below still holds them to.
-      assert agent_row(html, "a-write") =~ "border-info"
-      refute agent_row(html, "a-write") =~ "warning"
-      assert agent_row(html, "a-write") =~ "animate-pulse"
-      refute agent_row(html, "a-think") =~ "animate-pulse"
-      assert agent_row(html, "a-fail") =~ "border-error"
-      assert agent_row(html, "a-idle") =~ "border-base-content/25"
+      assert primary_word(agent_row(html, "a-think")) =~ ~r/^Thinking( · \d+s)?$/
+      assert primary_word(agent_row(html, "a-write")) =~ ~r/^Writing( · \d+s)?$/
+      assert primary_word(agent_row(html, "a-fail")) =~ "Couldn"
+      assert primary_word(agent_row(html, "a-idle")) == "Idle"
 
-      # The old dot mapped every non-idle state to one class. Assert the
-      # four rows are actually DIFFERENT markup, not just that each
-      # contains a token some other row also contains.
       rows = for {id, _} <- @four_states, do: agent_row(html, id)
       assert length(Enum.uniq(rows)) == 4
-    end
-
-    test "the three non-idle states carry a corner glyph and idle carries none" do
-      html = four_state_rail()
-
-      assert agent_row(html, "a-think") =~ ~s(data-role="agent-activity-glyph")
-      assert agent_row(html, "a-think") =~ "◐"
-      assert agent_row(html, "a-write") =~ "✎"
-      assert agent_row(html, "a-fail") =~ ~s(data-role="agent-activity-glyph")
-
-      refute agent_row(html, "a-idle") =~ ~s(data-role="agent-activity-glyph"),
-             "idle drew a glyph — the mockup's idle row has a ring and a word and no badge"
     end
 
     test "the line under the name is the STATE WORD, not the 'agent' role chip" do
@@ -388,19 +345,17 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
     # the `Listening` case, which is asserted separately below.
     test "idle renders as a full row with the word Idle, not as a bare dot" do
       row = agent_row(four_state_rail(), "a-idle")
+      parsed = Floki.parse_fragment!(row)
 
-      assert row =~ "Idle"
-      assert row =~ ~s(data-role="agent-activity-avatar")
-      assert row =~ "opacity-45", "the idle face is not dimmed"
+      assert primary_word(row) == "Idle"
+      assert Floki.find(parsed, ~s(.who > .nm[data-role="participant-name"])) != []
+      assert Floki.find(parsed, ~s(div.av[data-role="agent-activity-avatar"])) != []
     end
 
-    # task 01a0cf5d stage 3: Idle is the state most agent rows sit in most
-    # of the time (the moduledoc calls it "the common case"), and its word
-    # was the one place `/50` sat on rendered TEXT rather than a ring or a
-    # glyph. Measured against the rail's actual painted background, `/50`
-    # is 3.89:1 in the light theme at 11px — under the 4.5:1 AA floor for
-    # text this size. `/60` clears both themes.
-    test "the idle word is /60, not the failing /50" do
+    # The word's colour now comes from the mockup's `.st{color:var(--m)}`
+    # (asserted in the stylesheet guard below), so the node carries no
+    # Tailwind colour of its own that could drift from it.
+    test "the state line is the mockup's .st, with no utility colour of its own" do
       row = agent_row(four_state_rail(), "a-idle")
 
       [word_node] =
@@ -408,36 +363,44 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
         |> Floki.parse_fragment!()
         |> Floki.find(~s([data-role="agent-activity-word"]))
 
-      class = word_node |> Floki.attribute("class") |> List.first()
-
-      assert class =~ "text-base-content/60"
-      refute class =~ "text-base-content/50"
+      assert Floki.attribute(word_node, "class") == ["st"]
     end
 
-    # A DIFFERENT fact from the activity: is this agent connected. It
-    # moved to the row's trailing edge when the ring took over the
-    # avatar, and must not have been dropped in the move.
+    # A DIFFERENT fact from the activity: is this agent connected. It is
+    # now the mockup-coloured `.avs` badge on the avatar's corner.
     test "the reachability dot survives, on every state and not only idle" do
       html = four_state_rail()
 
       for {id, _} <- @four_states do
-        assert agent_row(html, id) =~ ~s(data-role="agent-status-dot"),
-               "#{id}: the reachability dot was dropped"
+        [dot] =
+          html
+          |> agent_row(id)
+          |> Floki.parse_fragment!()
+          |> Floki.find(~s(.av > span.avs[data-role="agent-status-dot"]))
+
+        assert Floki.attribute(dot, "data-tone") in [["ok"], ["m"]],
+               "#{id}: the reachability badge has no tone"
       end
     end
 
     # The one state with no producer. Nothing in the system can set
-    # `:listening`, so drawing it would put a caption on screen that is
-    # always false. Asserted against a rail where every OTHER state is
-    # resolved, so this cannot pass merely because the rail is empty.
-    test "'Listening' appears nowhere, with every real state resolved" do
+    # `:listening`, so drawing it as a STATE would put a caption on screen
+    # that is always false. The mockup's `.st .l` "Listening…" is not a
+    # state: it is the held-row crossfade (opacity 0 until
+    # `.row[data-held="true"]`), so the guard reads the state half, `.i`.
+    test "'Listening' is never the state word, with every real state resolved" do
       html = four_state_rail()
 
-      refute html =~ "Listening"
+      state_text = fn h ->
+        h |> Floki.parse_fragment!() |> Floki.find(".st .i") |> Floki.text()
+      end
+
+      assert length(Floki.find(Floki.parse_fragment!(html), ".st .i")) == 4
+      refute state_text.(html) =~ "Listening"
 
       listening = rail([agent("Saru", "a-1")], %{"a-1" => :listening})
-      refute listening =~ "Listening"
-      assert listening =~ "Idle", "an unsettable state must present as idle, not as itself"
+      refute state_text.(listening) =~ "Listening"
+      assert primary_word(listening) == "Idle", "an unsettable state must present as idle"
     end
   end
 
@@ -523,9 +486,9 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       just_heard = rail([agent("Listener", "a-1")], heard_only, DateTime.add(t0, 1, :second))
       row = agent_row(just_heard, "a-1")
 
-      # The RING is the heard reading...
+      # The AVATAR carries the heard reading (as data; the mockup draws no
+      # ring for it)...
       assert row =~ ~s(data-activity-state="heard")
-      assert row =~ "○"
 
       # ...and the WORD is the state underneath it, which for an agent with
       # no other signal is idle. Not "Heard".
@@ -554,25 +517,6 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       assert decayed_row =~ ~s(data-activity-state="computing")
       assert primary_word(decayed_row) == "Thinking · 3s"
       refute decayed_row =~ "Heard"
-    end
-
-    # `AgentActivityBadge`'s ONE table, extended rather than duplicated —
-    # the stage's own constraint ("add rows to that ONE table"). `:heard`
-    # sits on the same `--color-info` slot Thinking/Writing use (working
-    # FOR you, nothing asked OF you), and its ring pulses — the shipped
-    # motion vocabulary has no "single pulse" utility, and the stamp only
-    # lives 2s regardless.
-    test "Heard sits on the info slot and pulses, matching Thinking/Writing's colour family" do
-      t0 = ~U[2026-01-01 00:00:00Z]
-      activity = AgentActivity.put_at(AgentActivity.new(), :heard, "a-1", true, t0)
-
-      row =
-        agent_row(rail([agent("Listener", "a-1")], activity, DateTime.add(t0, 1, :second)), "a-1")
-
-      assert row =~ "border-info"
-      assert row =~ "text-info"
-      assert row =~ "animate-pulse"
-      refute row =~ "warning"
     end
 
     # TRUNCATION (the stage spec): "the word never truncates and the age
@@ -626,7 +570,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       )
     end
 
-    test "a live :speaking row reads Speaking, on success, with the amplitude ring" do
+    test "a live :speaking row reads Speaking, with the state on the avatar" do
       meeting_id = "m-speaking-#{System.unique_integer([:positive])}"
       {:ok, _entry} = AgentActivity.mark_speaking(meeting_id, "a-1", "utt-1")
 
@@ -637,8 +581,6 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
 
       assert row =~ ~s(data-activity-state="speaking")
       assert primary_word(row) == "Speaking"
-      assert row =~ "border-success"
-      assert row =~ "agent-activity-ring-speaking"
       refute row =~ "warning"
     end
 
@@ -658,12 +600,13 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       assert primary_word(row) == "Idle"
     end
 
-    # ── The two-line row ────────────────────────────────────────────────
+    # ── The delayed reason ──────────────────────────────────────────────
     #
-    # "The row never changes shape as an agent works, EXCEPT for `delayed`,
-    # which earns a second line because it is the only state carrying
-    # information the first line cannot hold."
-    test ":delayed puts its reason on its own second line, below the word" do
+    # The mockup's `.st` is ONE 17px line, so `:delayed` no longer earns a
+    # second line: its reason is its own node AFTER the word inside `.st
+    # .i`, and the full text also rides on `.st`'s `title`, so an
+    # ellipsised line still exposes it.
+    test ":delayed puts its reason in its own node after the word, and on the line's title" do
       t0 = ~U[2026-01-01 00:00:00Z]
       activity = AgentActivity.put_at(AgentActivity.new(), :computing, "a-1", true, t0)
 
@@ -686,26 +629,23 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       refute primary_word(row) =~ "waiting on GitHub"
       refute primary_word(row) =~ "12s"
 
-      # Line two: its own node, carrying the reason.
-      [reason_node] = Floki.find(parsed, ~s([data-role="agent-activity-delay-reason"]))
-      assert Floki.text([reason_node]) |> String.trim() == "waiting on GitHub"
+      # Its own node, inside the state half of the one `.st` line.
+      [reason_node] = Floki.find(parsed, ~s(.st .i [data-role="agent-activity-delay-reason"]))
+      assert Floki.text([reason_node]) |> String.trim() == "· waiting on GitHub"
+
+      [st] = Floki.find(parsed, ~s([data-role="agent-activity-word"]))
+      assert Floki.attribute(st, "title") == ["waiting on GitHub"]
     end
 
-    # ── Avatar stays pinned to the name, however tall the row grows ──────
-    #
-    # task 01a0cf5d stage 3: a CDP capture with a realistic long `:delayed`
-    # reason (the kind `AgentDelayReason` actually produces) showed the
-    # row's `items-center` centering the 28px avatar in the whole grown
-    # row — 45px away from the name at 312px, not beside it. `:delayed` is
-    # the only state whose reason line is unbounded (it deliberately never
-    # truncates), so it is the only row whose opening `<li>` tag now
-    # carries `items-start`; every other state's row is short enough that
-    # centering never mattered and stays as it was.
-    test ":delayed opens its <li> with items-start, not items-center" do
+    # The row is the mockup's grid (`36px 1fr auto`, `align-items:center`)
+    # in EVERY state: with one-line `.st` no state can grow the row, so
+    # the old per-state `items-start`/`items-center` switch is gone and the
+    # `<li>` carries no layout utilities at all.
+    test "every agent row is the mockup's bare .row, delayed or not" do
       t0 = ~U[2026-01-01 00:00:00Z]
       activity = AgentActivity.put_at(AgentActivity.new(), :computing, "a-1", true, t0)
 
-      row =
+      delayed =
         [agent("Octavius", "a-1")]
         |> rail_for_meeting("m-delayed-align-#{System.unique_integer([:positive])}",
           agent_activity: activity,
@@ -714,28 +654,16 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
         )
         |> agent_row("a-1")
 
-      [opening_tag] = Regex.run(~r/<li\b[^>]*>/, row)
-
-      assert opening_tag =~ "items-start"
-      refute opening_tag =~ "items-center"
+      for row <- [delayed, agent_row(four_state_rail(), "a-think")] do
+        [opening_tag] = Regex.run(~r/<li\b[^>]*>/, row)
+        assert opening_tag =~ ~s(class="row")
+        refute opening_tag =~ "items-"
+      end
     end
 
-    test "an ordinary (non-delayed) row keeps items-center" do
-      row = four_state_rail() |> agent_row("a-think")
-
-      [opening_tag] = Regex.run(~r/<li\b[^>]*>/, row)
-
-      assert opening_tag =~ "items-center"
-      refute opening_tag =~ "items-start"
-    end
-
-    # TRUNCATION ORDER — "the reason is the point, so it truncates LAST".
-    # Implemented as the reason not truncating at all while the NAME keeps
-    # its `truncate`, which is that ordering in its strongest form. Asserted
-    # as a comparison between the two nodes, because asserting only that the
-    # reason lacks `truncate` would pass on a row whose name lacked it too —
-    # i.e. on a layout with no ordering at all.
-    test "the reason line never truncates, and the name is what yields first" do
+    # "The reason is the point." It can no longer wrap (one-line `.st`), so
+    # what is held is that none of it is lost.
+    test "a long reason survives in full, in its node and in the line's title" do
       t0 = ~U[2026-01-01 00:00:00Z]
       activity = AgentActivity.put_at(AgentActivity.new(), :computing, "a-1", true, t0)
 
@@ -752,28 +680,16 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
         |> agent_row("a-1")
         |> Floki.parse_fragment!()
 
-      reason_class =
-        parsed
-        |> Floki.find(~s([data-role="agent-activity-delay-reason"]))
-        |> Floki.attribute("class")
-        |> List.first()
-
-      name_class =
-        parsed
-        |> Floki.find(~s([data-role="participant-name"]))
-        |> Floki.attribute("class")
-        |> List.first()
-
-      refute reason_class =~ "truncate",
-             "the reason must not clip — it is the most meaningful thing on the row"
-
-      assert reason_class =~ "break-words", "a long reason has to wrap rather than overflow"
-
-      assert name_class =~ "truncate",
-             "the name must yield before the reason does, or there is no ordering at all"
-
-      # And the reason survives intact, in full.
+      # The mockup's `.st` line ellipsises (one 17px line, by design), so
+      # the full reason must survive somewhere a reader can reach: the node
+      # itself (screen readers read past the clip) and `.st`'s `title`.
       assert Floki.text(Floki.find(parsed, ~s([data-role="agent-activity-delay-reason"]))) =~ long
+
+      [st] = Floki.find(parsed, ~s([data-role="agent-activity-word"]))
+      assert Floki.attribute(st, "title") == [long]
+
+      [name] = Floki.find(parsed, ~s(.who > .nm[data-role="participant-name"]))
+      assert Floki.text(name) =~ "Octavius Bartholomew Winterbourne III"
     end
 
     # "The `sr-only` line already present must carry the reason too:
@@ -800,12 +716,19 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       # their text. Reject the tagged one so this stays an equality on a
       # single node; the `[sr_node] =` match also asserts there is exactly
       # one activity sentence, which a substring match would not.
-      [sr_node] =
-        row
-        |> Floki.parse_fragment!()
-        |> Floki.find("span.sr-only")
-        |> Enum.reject(&(Floki.attribute([&1], "data-role") == ["participant-state-summary"]))
+      assert [sr_node] =
+               row
+               |> Floki.parse_fragment!()
+               |> Floki.find(".sr-only")
+               |> Enum.reject(
+                 &(Floki.attribute([&1], "data-role") in [
+                     ["participant-state-summary"],
+                     ["mic-indicator"]
+                   ])
+               )
 
+      # The verbatim port must still render this sentence (it was carried
+      # by `agent_activity_avatar`'s label, which the rail no longer uses).
       sr = [sr_node] |> Floki.text() |> String.trim()
 
       assert sr == "Octavius is Delayed, waiting on GitHub"
@@ -894,7 +817,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       assert attr(slot(row, "camera-indicator"), "data-camera-state") == "on"
     end
 
-    test "both slots are present on every row in every state" do
+    test "both slots are present on every human row in every state; agent rows keep the mic" do
       html =
         media_rail(
           [human("Mariah", "u-1"), human("Harper", "u-2"), agent("Saru", "a-1")],
@@ -904,12 +827,19 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
 
       parsed = Floki.parse_fragment!(html)
 
-      # THREE rows, THREE mic slots, THREE camera slots. An indicator that
-      # vanishes in one of its states is indistinguishable from one that
-      # failed to render, which is the whole reason the slots are fixed.
+      # An indicator that vanishes in one of its states is
+      # indistinguishable from one that failed to render, which is the
+      # whole reason the slots are fixed. Agent rows (the Ask mockup) have
+      # no camera well by design; their mic state is the sr-only
+      # indicator plus the `.avs` badge.
       assert length(Floki.find(parsed, "li[data-participant-identity]")) == 3
       assert length(Floki.find(parsed, ~s([data-role="mic-indicator"]))) == 3
-      assert length(Floki.find(parsed, ~s([data-role="camera-indicator"]))) == 3
+      assert length(Floki.find(parsed, ~s([data-role="camera-indicator"]))) == 2
+
+      assert Floki.find(
+               parsed,
+               ~s(li[data-participant-type="agent"] [data-role="camera-indicator"])
+             ) == []
     end
 
     test "off is carried by the well and the accessible label, not by the glyph alone" do
@@ -949,41 +879,24 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       assert row =~ "Mariah, unmuted, camera off"
     end
 
-    test "an agent's camera slot is UNAVAILABLE, not off" do
+    # The agent row has no camera well (the mockup draws none), but its
+    # state still never claims "camera off": the summary says "no camera".
+    test "an agent's camera reads as UNAVAILABLE, not off" do
       html = media_rail([human("Mariah", "u-1"), agent("Saru", "a-1")], camera_off: ["user:u-1"])
 
-      agent_cam = slot(row_for(html, "agent:a-1"), "camera-indicator")
+      agent_row = row_for(html, "agent:a-1")
+
+      assert Floki.find(Floki.parse_fragment!(agent_row), ~s([data-role="camera-indicator"])) ==
+               []
+
+      assert Floki.text(slot(agent_row, "participant-state-summary")) =~
+               "Saru, unmuted, no camera"
+
+      refute agent_row =~ "camera off"
+
       human_cam = slot(row_for(html, "user:u-1"), "camera-indicator")
-
-      # DIFFERENT ACCESSIBLE TEXT. "Off" implies it could be on; a roster
-      # that said "camera off" on every agent row would read as every
-      # agent having disabled their video.
-      assert attr(agent_cam, "aria-label") == "No camera"
       assert attr(human_cam, "aria-label") == "Camera off"
-
-      # DIFFERENT CLASS, on both the well and the glyph — greyed and
-      # neutral against red and tinted — so the two are not separable only
-      # by their labels.
-      assert attr(agent_cam, "data-camera-state") == "unavailable"
-      assert attr(agent_cam, "class") =~ "bg-base-300"
-      refute attr(agent_cam, "class") =~ "bg-error"
       assert attr(human_cam, "class") =~ "bg-error/15"
-
-      # DIFFERENT GLYPH: `hero-minus` reads as not-applicable and is not a
-      # camera at all, so the distinction survives a viewer who cannot
-      # separate the two hues.
-      assert row_for(html, "agent:a-1") =~ "hero-minus"
-      refute row_for(html, "agent:a-1") =~ "hero-video-camera"
-    end
-
-    test "an agent's camera slot is non-interactive" do
-      cam = slot(row_for(media_rail([agent("Saru", "a-1")]), "agent:a-1"), "camera-indicator")
-
-      assert attr(cam, "class") =~ "pointer-events-none"
-      # No `title`: `pointer-events-none` means a tooltip could never
-      # appear, and an attribute whose behaviour is suppressed reads as a
-      # working one.
-      assert attr(cam, "title") == nil
     end
 
     test "an agent's MIC slot is live, keyed the same way a human's is" do
@@ -1108,23 +1021,29 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       [label] = Floki.attribute(control, "aria-label")
       assert label =~ "Octavius"
 
-      # Four bars for the hook to paint (round 5, Dalton's PR #1178
-      # re-check, item 6 — both reference canvases draw exactly four;
-      # twelve at 3px with a 2px gap need 58px into this 36px slot, which
-      # is what squeezed every bar down to ~1.2px regardless of the
-      # declared width).
-      bars =
-        html
-        |> Floki.parse_fragment!()
-        |> Floki.find(~s([data-role="meeting-agent-hold-to-talk"] [data-ptt-bar]))
+      # The mockup's key: exactly `class="ask"`, every look in
+      # `meeting_ask.css` (structure asserted in its own test below).
+      assert Floki.attribute(control, "class") == ["ask"]
+    end
 
-      assert Enum.count(bars) == 4
+    # The mockup's Ask key, verbatim: `.ring`, four `.bars i` (animated by
+    # CSS while `data-held`), and `.lbl` with `.off` "Ask" / `.on` "Listen".
+    test "the Ask key carries the mockup's structure: .ring, four .bars i, .lbl .off/.on" do
+      html = hold_rail([agent("Octavius", "oct-1")], hold_to_talk?: true)
+      [control] = hold_controls(html)
 
-      # The shared touch utility and the refused-press slot survive the move.
-      [classes] = Floki.attribute(control, "class")
-      assert classes =~ "meeting-hold-target"
-      assert classes =~ "min-h-11"
-      assert classes =~ "data-[rejected=pointer-lost]:text-error"
+      assert length(Floki.find(control, "span.ring")) == 1
+      assert length(Floki.find(control, "span.bars > i")) == 4
+
+      [off] = Floki.find(control, ".lbl > span.off")
+      [on] = Floki.find(control, ".lbl > span.on")
+      assert Floki.text(off) |> String.trim() == "Ask"
+      assert Floki.text(on) |> String.trim() == "Listen"
+      assert Floki.attribute(on, "aria-hidden") == ["true"]
+
+      # The retired affordances stay retired.
+      assert Floki.find(control, "[data-ptt-bar]") == []
+      assert Floki.find(control, ~s([data-role="meeting-agent-hold-underline"])) == []
     end
 
     test "the control id carries the caller's prefix, so two rosters never collide" do
@@ -1220,28 +1139,33 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
     # its own, which is what let it collapse to literal 0px in Dalton's
     # measurement rather than just truncating further. Asserted by class,
     # not by rendered width, for the same reason as the slot test above.
-    test "the agent name column keeps a non-zero min-width floor" do
+    # The row is the mockup's three-column grid (`36px 1fr auto`): the
+    # avatar, the name/state column, the tools. The name column is the
+    # `1fr` track, so it is the one that yields, and the tools never leave
+    # the row (the grid has no wrap).
+    test "the row's children are the mockup's .av, .who, .tools, in that order" do
       html =
-        hold_rail([agent("Octavius", "oct-1")], hold_to_talk?: true, pressed_agent_id: "oct-1")
-
-      # The immediate wrapper around `participant-name` — found by its
-      # position in the markup, not a bare substring search, since
-      # several OTHER feedback-text nodes in this same row legitimately
-      # carry `min-w-0 flex-1` for an unrelated reason (the hold-to-talk
-      # coach line, the remove/mute error sentences) and a loose `=~`
-      # would false-positive on those.
-      [[name_wrapper_class]] =
-        Regex.scan(
-          ~r/<div class="([^"]*)">\s*<div class="truncate text-xs font-medium text-base-content\/90" data-role="participant-name"/,
-          html,
-          capture: :all_but_first
+        hold_rail([agent("Octavius", "oct-1")],
+          hold_to_talk?: true,
+          pressed_agent_id: "oct-1",
+          can_remove_agents?: true
         )
 
-      # `min-w-[32px]`, not `min-w-0` — the regression this guards is the
-      # name column having NO floor at all, which is what let it collapse
-      # to literal 0px once the status-chip slot (tested above) claimed
-      # width it previously got for free.
-      assert name_wrapper_class == "min-w-[32px] flex-1"
+      [row] = Floki.find(Floki.parse_fragment!(html), ~s(li.row[data-participant-type="agent"]))
+      {"li", _attrs, children} = row
+
+      grid_cells =
+        for {_tag, attrs, _} <- children,
+            class = :proplists.get_value("class", attrs, ""),
+            class in ["av", "who", "tools"],
+            do: class
+
+      assert grid_cells == ["av", "who", "tools"]
+
+      [who] = Floki.find(row, ".who")
+      assert Floki.find(who, ~s(.nm[data-role="participant-name"])) != []
+      assert Floki.find(who, ~s(.st[data-role="agent-activity-word"] > span.i)) != []
+      assert Floki.find(who, ~s(.st[data-role="agent-activity-word"] > span.l)) != []
     end
 
     # Task 01a0d3cd stage 1 — Harper's "I still don't see the ASK button"
@@ -1288,118 +1212,51 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
 
       [label_node] = Floki.find(control, ~s([data-role="meeting-agent-hold-label"]))
       assert Floki.text(label_node) |> String.trim() == "Ask"
-
-      [label_classes] = Floki.attribute(label_node, "class")
-      assert label_classes =~ "whitespace-nowrap"
-      assert label_classes =~ "shrink-0"
+      assert Floki.attribute(label_node, "class") == ["off"]
     end
 
-    # Canvas palette table: rest state is `--color-primary` fill with a
-    # BLACK label (`text-primary-content`, pinned black in both themes —
-    # never `text-base-content`, which flips to near-white in dark and
-    # would be exactly the white-on-cyan the canvas rules out).
-    test "an enabled control's rest state is filled primary, black label, no ghost" do
-      html = hold_rail([agent("Octavius", "oct-1")], hold_to_talk?: true)
-      [control] = hold_controls(html)
-
-      [classes] = Floki.attribute(control, "class")
-      assert classes =~ "bg-primary"
-      assert classes =~ "text-primary-content"
-      refute classes =~ "btn-ghost"
-    end
-
-    # ── Item 1 (task 01a0f842 stage 1, canvas 01a0f846-cfb1), STRENGTHENED
-    # round 3 (task 01a0fa7e-afd7) ──────────────────────────────────────────
-    #
-    # The round-2 regression: pressed used to repaint the SAME colours as
-    # rest (`bg-primary text-primary-content` both times) — "doesn't feel
-    # tactile" because nothing visibly changed. This checks the fix is a
-    # real inversion, not a second coat of the same paint: black fill,
-    # cyan label, and a cyan ring that moved onto the key itself (the row
-    # lost its own ring — see the agent-row test above). Round 3 widened
-    # the ring to 3px with an offset (Harper's round-3 report that the
-    # round-2 fix "performs the same way" — see `app.css`'s own comment
-    # on the `transition-duration` cascade bug that silently zeroed the
-    # press-scale's animation).
-    test "pressed state inverts to black fill, cyan label, and an offset cyan ring on the key" do
-      html = hold_rail([agent("Octavius", "oct-1")], hold_to_talk?: true)
-      [control] = hold_controls(html)
-
-      [classes] = Floki.attribute(control, "class")
-      class_list = String.split(classes, " ")
-
-      assert "data-[pressed=true]:bg-primary-content" in class_list
-      assert "data-[pressed=true]:text-primary" in class_list
-      assert "data-[pressed=true]:ring-[3px]" in class_list
-      assert "data-[pressed=true]:ring-primary" in class_list
-      assert "data-[pressed=true]:ring-offset-2" in class_list
-
-      # The old identical-repaint bug, named explicitly so a future edit
-      # that reintroduces it fails loudly here instead of only "feeling"
-      # wrong again.
-      refute "data-[pressed=true]:bg-primary" in class_list
-      refute "data-[pressed=true]:text-primary-content" in class_list
-    end
-
-    # `data-held` is the separate, LATER signal (flips true only once
-    # `MeetingPushToTalk`'s 380ms hold threshold fires) that the
-    # glyph-to-waveform swap and the hold-threshold underline key off —
-    # both must land at 380ms, not at press (0ms, where `data-pressed`
-    # already flips). The control starts with both false.
-    test "the control starts with data-pressed and data-held both false, and renders the hold-threshold underline" do
+    # `MeetingPushToTalk` flips both client-side (`data-held` at PRESS for
+    # the visual; the 380ms threshold still gates the send). The server
+    # always renders them false.
+    test "the control starts with data-pressed and data-held both false" do
       html = hold_rail([agent("Octavius", "oct-1")], hold_to_talk?: true)
       [control] = hold_controls(html)
 
       assert Floki.attribute(control, "data-pressed") == ["false"]
       assert Floki.attribute(control, "data-held") == ["false"]
-
-      assert Floki.find(control, ~s([data-role="meeting-agent-hold-underline"])) != []
     end
 
-    # The glyph-to-waveform swap (task 01a0f324 stage 3) used to key off
-    # `data-pressed`, which flips at 0ms — so the waveform replaced the
-    # glyph the instant the pointer went down, not at the 380ms hold
-    # threshold the canvas specifies. This checks both halves of the swap
-    # moved to `data-held`, and that neither still reads `data-pressed`.
-    test "the glyph-to-waveform swap keys off data-held, not data-pressed" do
-      html = hold_rail([agent("Octavius", "oct-1")], hold_to_talk?: true)
-      [control] = hold_controls(html)
+    # Every held-state look keys off `data-held` (the mockup's `:active`),
+    # never `data-pressed`: the label swap, the bars and the ring all live
+    # under `.ask[data-held="true"]` in the stylesheet.
+    test "the held look keys off data-held, not data-pressed" do
+      css = ask_css()
 
-      [glyph] = Floki.find(control, ~s([data-role="meeting-agent-hold-indicator"] .hero-signal))
-      [glyph_classes] = Floki.attribute(glyph, "class")
-      assert glyph_classes =~ "group-data-[held=true]/ptt:opacity-0"
-      refute glyph_classes =~ "group-data-[pressed=true]/ptt:opacity-0"
-
-      [waveform] = Floki.find(control, ~s([data-role="meeting-agent-hold-waveform"]))
-      [waveform_classes] = Floki.attribute(waveform, "class")
-      assert waveform_classes =~ "group-data-[held=true]/ptt:opacity-100"
-      refute waveform_classes =~ "group-data-[pressed=true]/ptt:opacity-100"
+      assert css =~ ~s(.meeting-ask .ask[data-held="true"] .lbl .off{opacity:0})
+      assert css =~ ~s(.meeting-ask .ask[data-held="true"] .lbl .on{opacity:1})
+      assert css =~ ~s(.meeting-ask .ask[data-held="true"] .bars i{animation:bar)
+      assert css =~ ~s(.meeting-ask .ask[data-held="true"] .ring{animation:ring)
+      refute css =~ "data-pressed"
     end
 
-    # Canvas palette table: disabled drops to `--color-base-300` fill /
-    # `--color-neutral` label, and the "Ask" word never disappears — this is
-    # the id-fallback disabled path from stage 1, now checked for colour too.
-    test "a disabled control drops to base-300/neutral fill and keeps its label" do
+    # Disabled (the id-fallback path from stage 1): dimmed by the
+    # stylesheet's `.ask:disabled`, and the "Ask" word never disappears.
+    test "a disabled control keeps its label and is dimmed by the stylesheet" do
       html = hold_rail([agent_with_unresolved_id("Ghost")], hold_to_talk?: true)
       [control] = hold_controls(html)
 
-      [classes] = Floki.attribute(control, "class")
-      class_list = String.split(classes, " ")
-      assert "bg-base-300" in class_list
-      assert "text-neutral" in class_list
-      # The base fill is base-300, not primary — the only `bg-primary` on
-      # the disabled control is the pressed-state variant, which never
-      # fires because the button is `disabled`.
-      refute "bg-primary" in class_list
+      assert Floki.attribute(control, "disabled") == ["disabled"]
 
       [label_node] = Floki.find(control, ~s([data-role="meeting-agent-hold-label"]))
       assert Floki.text(label_node) |> String.trim() == "Ask"
+
+      assert ask_css() =~ ".meeting-ask .ask:disabled{cursor:default;opacity:.5}"
     end
 
     # Same disabled treatment on the OTHER boundary that disables the
     # control — another viewer already holds this agent's floor — so the
     # colour rule is not accidentally coupled to the id-fallback path alone.
-    test "a control held by another viewer also drops to the disabled fill" do
+    test "a control held by another viewer is disabled, unpressable, and says who holds it" do
       html =
         hold_rail([agent("Octavius", "oct-1")],
           hold_to_talk?: true,
@@ -1411,25 +1268,26 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
 
       assert Floki.attribute(control, "disabled") == ["disabled"]
 
-      [classes] = Floki.attribute(control, "class")
-      assert classes =~ "bg-base-300"
-      assert classes =~ "text-neutral"
+      # The wrapper (not phx-update="ignore") blocks the press; the state
+      # line names who holds it.
+      [wrap] = Floki.find(Floki.parse_fragment!(html), ~s([data-role="meeting-agent-hold-wrap"]))
+      assert Floki.attribute(wrap, "class") |> hd() =~ "pointer-events-none"
+
+      [held_by] =
+        Floki.find(Floki.parse_fragment!(html), ~s(.st .i [data-role="meeting-agent-held-by"]))
+
+      assert Floki.text(held_by) |> String.trim() == "Held by Dalton"
     end
 
     # ── Item 3a (task 01a0f324 stage 3): fixed-frame button ────────────────
     #
-    # The production bug: the waveform widened `w-0` -> `w-9` on press
-    # inside a button with no width of its own, so the whole control grew
-    # ~36px into neighbouring row content. The server only ever renders
-    # `data-pressed="false"` (the hook flips it client-side on a
-    # `phx-update="ignore"` node), so a LiveView test cannot literally
-    # press the button and diff a re-render. What it CAN prove statically
-    # is the invariant that makes the bug structurally impossible: the
-    # button's class list carries a FIXED width/height utility, and NO
-    # utility anywhere in that same list is conditioned on `pressed` or
-    # `rejected` and touches width or height — across every state this
-    # component renders a control in (idle, disabled, held-by-other).
-    test "the Ask button carries a fixed width/height class with no pressed- or rejected-conditional sizing" do
+    # The production bug: the waveform widened the key on press and pushed
+    # into neighbouring row content. The invariant that makes it impossible
+    # now: the key's class list is exactly `ask` in every state the server
+    # renders (so no state-conditional utility can size it), its size is
+    # the mockup's fixed `width:96px;height:40px`, and no state rule in the
+    # stylesheet touches width or height.
+    test "the Ask key is one fixed 96x40 frame in every state" do
       idle_html = hold_rail([agent("Octavius", "oct-1")], hold_to_talk?: true)
       disabled_html = hold_rail([agent_with_unresolved_id("Ghost")], hold_to_talk?: true)
 
@@ -1442,42 +1300,21 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
 
       for html <- [idle_html, disabled_html, held_by_other_html] do
         [control] = hold_controls(html)
-        [classes] = Floki.attribute(control, "class")
-        class_list = String.split(classes, " ")
-
-        assert "w-[88px]" in class_list
-        assert "h-11" in class_list
-
-        refute Enum.any?(class_list, fn class ->
-                 (class =~ "pressed" or class =~ "rejected") and
-                   (class =~ ~r/:w-/ or class =~ ~r/:h-/)
-               end)
+        assert Floki.attribute(control, "class") == ["ask"]
       end
-    end
 
-    test "the Ask button's frame is identical (same width/height classes) across idle, disabled, and held-by-other" do
-      idle_html = hold_rail([agent("Octavius", "oct-1")], hold_to_talk?: true)
-      disabled_html = hold_rail([agent_with_unresolved_id("Ghost")], hold_to_talk?: true)
+      css = ask_css()
+      assert css =~ ".meeting-ask .ask{position:relative;width:96px;height:40px;"
 
-      held_by_other_html =
-        hold_rail([agent("Octavius", "oct-1")],
-          hold_to_talk?: true,
-          pressed_agent_id: "someone-else",
-          ask_floor_holders: %{"oct-1" => "Dalton"}
-        )
+      state_rules =
+        Regex.scan(~r/\.meeting-ask \.ask(?:\[data-held="true"\]|:disabled|:hover)\{[^}]*\}/, css)
+        |> List.flatten()
 
-      frame_classes =
-        for html <- [idle_html, disabled_html, held_by_other_html] do
-          [control] = hold_controls(html)
-          [classes] = Floki.attribute(control, "class")
+      assert state_rules != []
 
-          classes
-          |> String.split(" ")
-          |> Enum.filter(&(&1 == "w-[88px]" or &1 == "h-11" or &1 == "overflow-hidden"))
-          |> Enum.sort()
-        end
-
-      assert Enum.uniq(frame_classes) == [["h-11", "overflow-hidden", "w-[88px]"]]
+      for rule <- state_rules do
+        refute rule =~ ~r/(?<![-\w])(width|height):/, "a state rule resizes the key: #{rule}"
+      end
     end
 
     # ── Item 3b (task 01a0f324 stage 3): the held row clears the veil ──────
@@ -1497,19 +1334,17 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       row
     end
 
-    test "an agent row is positioned and carries a pressed-state z-index above the veil's z-50, with no ring of its own" do
+    # Positioned by the mockup's `.row{position:relative}`, lifted by the
+    # held-row rule the hook's `data-held` switches on.
+    test "an agent row is positioned and its held state sits above the veil's z-50" do
       html = hold_rail([agent("Octavius", "oct-1")], hold_to_talk?: true)
       row = agent_row(html)
 
-      assert Floki.attribute(row, "data-pressed") == ["false"]
+      assert Floki.attribute(row, "class") == ["row"]
 
-      [classes] = Floki.attribute(row, "class")
-      class_list = String.split(classes, " ")
-
-      assert "relative" in class_list
-      assert "data-[pressed=true]:z-[60]" in class_list
-      refute "data-[pressed=true]:ring-2" in class_list
-      refute "data-[pressed=true]:ring-base-content" in class_list
+      css = ask_css()
+      assert css =~ ".meeting-ask .row{position:relative;"
+      assert css =~ ~s(.meeting-ask .row[data-held="true"]{z-index:60})
     end
 
     test "a row with no hold-to-talk control carries no pressed-state z-index class" do
@@ -1548,7 +1383,9 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       refute "truncate" in class_list
       refute Enum.any?(class_list, &(&1 =~ ~r/^max-w-/))
       assert "w-full" in class_list
-      assert "text-base-content" in class_list
+      # `.fb` spans the row's grid; its text colour is the section's own.
+      assert "fb" in class_list
+      refute Enum.any?(class_list, &(&1 =~ ~r/^text-(error|warning|success|info)$/))
       assert Floki.attribute(feedback, "data-open") == ["false"]
 
       text_node =
@@ -1601,66 +1438,35 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
     end
   end
 
-  # The floating heard overlay itself — the new holder for the live
-  # transcript text, out of everyone's layout flow.
-  describe "the floating heard overlay" do
-    test "is absent when the row has no hold-to-talk producer, present when it does" do
-      without = hold_rail([agent("Octavius", "oct-1")], [])
+  # The floating heard overlay (`meeting-ask-heard-*`) is RETIRED: the
+  # mockup's per-row `.tr.live` / `.tr.sent` popovers replace it.
+  describe "the per-row transcript popovers" do
+    test "are present iff the row has a hold-to-talk producer, and the old overlay is gone" do
+      without = Floki.parse_fragment!(hold_rail([agent("Octavius", "oct-1")], []))
+      assert Floki.find(without, ".tr") == []
 
-      assert Floki.parse_fragment!(without)
-             |> Floki.find(~s([data-role="meeting-ask-heard-overlay"])) == []
+      with_hold =
+        Floki.parse_fragment!(
+          hold_rail([agent("Octavius", "oct-1")], hold_to_talk?: true, id_prefix: "left")
+        )
 
-      with_hold = hold_rail([agent("Octavius", "oct-1")], hold_to_talk?: true)
+      [live] = Floki.find(with_hold, ~s(li.row div.tr.live[data-role="meeting-ask-live"]))
+      [sent] = Floki.find(with_hold, ~s(li.row div.tr.sent[data-role="meeting-ask-sent"]))
 
-      [overlay] =
-        Floki.parse_fragment!(with_hold)
-        |> Floki.find(~s([data-role="meeting-ask-heard-overlay"]))
+      # The hook owns both (it writes the transcript and sizes `.vp`/`.tx`),
+      # so a re-render must not wipe them; ids carry the caller's prefix.
+      assert Floki.attribute(live, "phx-update") == ["ignore"]
+      assert Floki.attribute(sent, "phx-update") == ["ignore"]
+      assert Floki.attribute(live, "id") == ["left-oct-1-live"]
+      assert Floki.attribute(sent, "id") == ["left-oct-1-sent"]
 
-      [classes] = Floki.attribute(overlay, "class")
-      class_list = String.split(classes, " ")
+      assert Floki.find(live, ~s(.vp > .tx > p[data-role="meeting-ask-live-text"])) != []
+      assert Floki.find(live, ".hd > span.dot") != []
+      assert Floki.text(Floki.find(sent, ".hd")) |> String.trim() == "✓ Sent to Octavius"
+      assert Floki.find(sent, ~s(.sum[data-role="meeting-ask-sent-summary"])) != []
 
-      # Out of flow, always: `fixed`, never a static/relative box that
-      # could push a sibling.
-      assert "fixed" in class_list
-      # Read-only, per the canvas ("pointer-events none on the whole
-      # overlay"): on the container itself, not just inherited.
-      assert "pointer-events-none" in class_list
-      assert Floki.attribute(overlay, "data-open") == ["false"]
-      assert Floki.attribute(overlay, "phx-update") == ["ignore"]
-      assert Floki.attribute(overlay, "aria-hidden") == ["true"]
-    end
-
-    test "carries the fixed-size status line and the ~7-line, scrollable text window (round 4)" do
-      html = hold_rail([agent("Octavius", "oct-1")], hold_to_talk?: true)
-      parsed = Floki.parse_fragment!(html)
-
-      [overlay] = Floki.find(parsed, ~s([data-role="meeting-ask-heard-overlay"]))
-
-      [status] = Floki.find([overlay], ~s([data-role="meeting-ask-heard-status"]))
-      assert Floki.text(status) |> String.trim() == "Listening while you hold"
-
-      # Round 4 (canvas 01a0fdf2-804d): grows up to ~7 lines (168px at the
-      # 24px/line `leading-6` below), THEN scrolls — `overflow-y-auto`,
-      # not the old hard `h-[72px]`/`overflow-hidden` pair, so the viewer
-      # can scroll back up inside it while still holding (the hook owns
-      # the actual scroll-position management; see its moduledoc).
-      [window] = Floki.find([overlay], ~s([data-role="meeting-ask-heard-window"]))
-      [window_classes] = Floki.attribute(window, "class")
-      window_class_list = String.split(window_classes, " ")
-      assert "max-h-[168px]" in window_class_list
-      assert "overflow-y-auto" in window_class_list
-      refute "overflow-hidden" in window_class_list
-
-      [text_node] = Floki.find([window], ~s([data-role="meeting-ask-heard-text"]))
-      assert Floki.text(text_node) |> String.trim() == ""
-    end
-
-    test "is a SIBLING of the veil, never nested inside its card — so it can never be pushed by the card's own content" do
-      html = hold_rail([agent("Octavius", "oct-1")], hold_to_talk?: true)
-      parsed = Floki.parse_fragment!(html)
-
-      [veil] = Floki.find(parsed, ~s([data-role="meeting-ask-veil"]))
-      assert Floki.find([veil], ~s([data-role="meeting-ask-heard-overlay"])) == []
+      html = Floki.raw_html(with_hold)
+      refute html =~ "meeting-ask-heard-"
     end
   end
 
@@ -1742,31 +1548,21 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
                "Remove Burrow from the meeting"
              ]
 
-      assert Floki.attribute(button, "title") == ["Remove from meeting"]
+      assert Floki.attribute(button, "title") == ["Remove Burrow from this call"]
       assert Floki.attribute(button, "disabled") == []
 
-      [class] = Floki.attribute(button, "class")
-      assert class =~ "btn-ghost"
-      assert class =~ "text-base-content/60"
-      assert class =~ "max-sm:min-h-11"
-      assert class =~ "max-sm:min-w-11"
-      # Always visible, and neutral AT REST — the error tint is now a
-      # deliberate HOVER/FOCUS-only cue (canvas 01a0fdf2-804d's own
-      # mockup CSS: ".kick:hover{color:var(--bad)...}"), not a rest-state
-      # colour, so the broad round-3 "neutral" ruling narrows to "neutral
-      # at rest" rather than disappearing. Checked by SPLITTING the class
-      # list rather than a substring match: `"text-error"` is itself a
-      # substring of `"hover:text-error"`, so `=~` cannot tell "present at
-      # rest" apart from "present only behind a variant prefix".
-      class_list = String.split(class, " ")
-      refute "bg-error" in class_list
-      refute "text-error" in class_list
-      assert "hover:text-error" in class_list
-      assert "focus-visible:text-error" in class_list
-      refute class =~ "opacity-0"
-      refute class =~ "group-hover"
+      # The mockup's `.kick`: always visible, neutral at rest (`--m`), the
+      # `--bad` tint only on hover — both from the stylesheet, so the
+      # markup carries no colour or visibility utility at all.
+      assert Floki.attribute(button, "class") == ["kick"]
+      assert Floki.text(button) |> String.trim() == "✕"
 
-      assert Floki.find(button, ".hero-x-mark") != []
+      css = ask_css()
+
+      assert css =~
+               ".meeting-ask .kick{width:32px;height:32px;border-radius:8px;border:1px solid var(--b);background:transparent;color:var(--m);"
+
+      assert css =~ ".meeting-ask .kick:hover{color:var(--bad);"
     end
 
     test "the confirm opens for the matching row, with Cancel and Remove wired to the existing handlers" do
@@ -1780,18 +1576,25 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       burrow_row = Floki.find(doc, ~s(li[data-participant-id="p-ma-1"]))
       saru_row = Floki.find(doc, ~s(li[data-participant-id="p-saru-1"]))
 
-      # The ✕ is replaced by the confirm on ITS OWN row only.
-      assert remove_buttons(burrow_row) == []
+      # `data-kick="confirm"` on ITS OWN row only — the stylesheet shows
+      # `.confirm` (absolutely positioned over the row) off that attribute.
+      assert Floki.attribute(burrow_row, "data-kick") == ["confirm"]
+      assert Floki.attribute(saru_row, "data-kick") == ["none"]
+      assert ask_css() =~ ~s(.meeting-ask .row[data-kick="confirm"] .confirm{display:flex})
+
       [confirm] = kick_confirms(burrow_row)
+      assert Floki.attribute(confirm, "class") == ["confirm"]
       assert Floki.text(confirm) =~ "Remove Burrow?"
 
       [cancel] = Floki.find(confirm, ~s([data-role="meeting-agent-kick-cancel"]))
       assert Floki.attribute(cancel, "phx-click") == ["kick_confirm_close"]
+      assert Floki.attribute(cancel, "class") == ["mbtn"]
 
       # The ONE call that ever actually removes anyone — same event, same
       # row id, `can_remove_agents?`'s original bare button always posted
       # to. No second, parallel removal path exists.
       [confirm_remove] = kick_remove_buttons(confirm)
+      assert Floki.attribute(confirm_remove, "class") == ["mbtn danger"]
       assert Floki.attribute(confirm_remove, "phx-click") == ["remove_agent_from_call"]
       assert Floki.attribute(confirm_remove, "phx-value-participant-id") == ["p-ma-1"]
 
@@ -1812,11 +1615,27 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
         )
 
       doc = Floki.parse_fragment!(html)
-      [gone] = Floki.find(doc, ~s([data-role="meeting-agent-left"]))
-      assert Floki.text(gone) =~ "Burrow left the call"
 
-      [undo] = Floki.find(gone, ~s([data-role="meeting-agent-left-undo"]))
+      # The mockup's gone state: its own `.row[data-kick="gone"]` in the
+      # agents list, whose visible content is `.gone`.
+      [gone] =
+        Floki.find(
+          doc,
+          ~s(section[data-section="agents"] li.row[data-kick="gone"][data-role="meeting-agent-left"])
+        )
+
+      [gone_line] = Floki.find(gone, "div.gone")
+      assert Floki.text(gone_line) =~ "Burrow left the call"
+
+      [undo] = Floki.find(gone_line, ~s(button.mbtn[data-role="meeting-agent-left-undo"]))
       assert Floki.attribute(undo, "phx-click") == ["undo_remove_agent"]
+
+      # The hidden replicas keep the row's geometry but are inert.
+      for cell <- Floki.find(gone, ".av, .who, .tools") do
+        assert Floki.attribute(cell, "aria-hidden") == ["true"]
+      end
+
+      assert Floki.find(gone, "[phx-click]") == [undo]
     end
 
     test "renders nothing when there is no removal to undo" do
@@ -1845,9 +1664,8 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       leaving_row = Floki.find(doc, ~s(li[data-participant-id="p-ma-1"]))
       other_row = Floki.find(doc, ~s(li[data-participant-id="p-saru-1"]))
 
-      [word] = Floki.find(leaving_row, ~s([data-role="meeting-agent-leaving"]))
+      [word] = Floki.find(leaving_row, ~s(.st .i [data-role="meeting-agent-leaving"]))
       assert Floki.text(word) |> String.trim() == "Leaving…"
-      assert Floki.attribute(word, "class") |> hd() =~ "text-base-content/60"
       assert Floki.find(leaving_row, ~s([data-role="agent-activity-primary"])) == []
 
       [button] = remove_buttons(leaving_row)
@@ -1872,12 +1690,13 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       [line] = Floki.find(failed_row, ~s([data-role="meeting-agent-remove-error"]))
       [class] = Floki.attribute(line, "class")
       # Task 01a0f842 stage 5, canvas 01a0f846-cfb1: small red TEXT fails
-      # the 4.5:1 AA floor on this rail's light theme, so the colour
-      # signal now lives only on the rule and the icon — the sentence
-      # itself is `text-base-content`, never `text-error`.
-      assert class =~ "border-error"
-      refute class =~ "text-error"
-      assert class =~ "text-base-content"
+      # the AA floor, so the colour signal lives only on the rule and the
+      # icon — the sentence is the section's own text colour, never
+      # `text-error`. `fb` spans the row's grid.
+      class_list = String.split(class, " ")
+      assert "fb" in class_list
+      assert "border-error" in class_list
+      refute "text-error" in class_list
       assert Floki.text(line) =~ "Couldn't remove Burrow."
 
       [retry] = Floki.find(failed_row, ~s([data-role="meeting-agent-remove-retry"]))
@@ -1895,121 +1714,36 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
 
   # ── Desktop LEFT rail: Ask key + kick ✕ together ──────────────────────
   #
-  # Found by CDP re-check of #1181 (2026-10-03): the right rail's People
-  # tab (312px, `hold_to_talk?` false on desktop) and the desktop LEFT
-  # rail (`meeting_live.html.heex`'s `w-64`/256px `data-role=
-  # "meeting-left-rail"`, `hold_to_talk?={true}`) both render this same
-  # component, but only the LEFT rail ever renders the 88px Ask key AND
-  # the kick ✕ on one row at once — the right rail never sets
-  # `hold_to_talk?` true on desktop, and the mobile People tab that DOES
-  # set both true has far more than 256px to work with. Live measurement
-  # (`getBoundingClientRect`) at that exact combination found the kick
-  # button's rect 28px past the rail's own right edge, with
-  # `elementFromPoint` at its centre resolving to the video stage behind
-  # it — a smaller, DIFFERENT shortfall from #1178/#1181's reserved
-  # status-chip column (removed in #1181): this one is the Ask key
-  # itself crowding the row.
-  #
-  # These are component-level structural guards, not a pixel measurement
-  # — `mix test` has no layout engine. The actual overflow is proven by
-  # CDP (see the PR description); what a unit test CAN hold in place is
-  # the markup shape the fix depends on: the row carries `flex-wrap`, and
-  # the status dot / media wells / kick button are ONE flex item (so a
-  # too-narrow line wraps them together, trailing-aligned) rather than
-  # three independent siblings the Ask key can push off the end.
+  # Found by CDP re-check of #1181: on the desktop LEFT rail the Ask key
+  # and the kick ✕ render on one row, and the old flex row pushed the ✕
+  # past the rail's edge. The verbatim port puts every control in the
+  # mockup's `.tools` cell (the grid's `auto` column), so the controls are
+  # one unit the name column yields to. `mix test` has no layout engine;
+  # this holds the markup shape, the 340px rail is checked in a browser.
   describe "the Ask key and the kick button on the same row (desktop left rail)" do
-    test "the row is flex-wrap, and the dot/media/kick cluster is one flex-shrink-0 item" do
+    test ".tools holds Ask, mute, then kick, in document order; status lives on the avatar" do
       html =
         remove_rail([agent("Burrow", "ma-1")],
           can_remove_agents?: true,
           hold_to_talk?: true
         )
 
-      doc = Floki.parse_fragment!(html)
-      # The `<li>`'s direct `<div>` children also include the hold-to-talk
-      # feedback line (`data-role="meeting-agent-hold-feedback"`, always
-      # present when `hold_to_talk?` is true, hidden until a press). The
-      # ROW is the one carrying `w-full items-center gap-2` — picked out
-      # by class rather than assumed to be the only `> div`.
-      [row] =
-        doc
-        |> Floki.find(~s(li[data-participant-id="p-ma-1"] > div))
-        |> Enum.filter(fn node ->
-          case Floki.attribute(node, "class") do
-            [class] -> String.contains?(class, "items-center gap-2")
-            _ -> false
-          end
-        end)
+      [row] = Floki.find(Floki.parse_fragment!(html), ~s(li[data-participant-id="p-ma-1"]))
+      [tools] = Floki.find(row, "div.tools")
 
-      [row_class] = Floki.attribute(row, "class")
-      assert row_class =~ "flex-wrap"
+      roles =
+        tools
+        |> Floki.find("button")
+        |> Enum.map(&(Floki.attribute(&1, "data-role") |> List.first()))
 
-      # The dot/media/kick cluster is ONE direct-child wrapper of the
-      # row (not three row-level siblings, which was the pre-fix shape
-      # where the Ask key could push the kick button past the end of
-      # the line with nothing to catch it) — found among the row's
-      # direct `<div>` children by its own `ml-auto` class below, and
-      # then asserted to actually contain all three.
-      direct_div_count = row |> Floki.find("> div") |> length()
-      assert direct_div_count >= 2, "expected the name column AND the trailing cluster"
+      assert roles == ["meeting-agent-hold-to-talk", "meeting-agent-mute", "meeting-agent-kick"]
 
-      # The wrapper IS a direct child of the row, holds all three, and
-      # cannot itself shrink below its content or collapse away — a
-      # `flex-wrap` row only protects a child that keeps its own size.
-      # (The row has other direct `<div>` children too — the name
-      # column, the Ask key's own wrapper — so the cluster is picked out
-      # by its `ml-auto` class rather than assumed to be the only one.)
-      cluster =
-        row
-        |> Floki.find("> div")
-        |> Enum.find(fn node ->
-          case Floki.attribute(node, "class") do
-            [class] -> String.contains?(class, "ml-auto")
-            _ -> false
-          end
-        end)
-
-      refute is_nil(cluster), "expected one direct-child wrapper carrying ml-auto"
-      [cluster_class] = Floki.attribute(cluster, "class")
-      assert cluster_class =~ "flex-shrink-0"
-
-      assert Floki.find(cluster, ~s([data-role="agent-status-dot"])) != []
-      assert Floki.find(cluster, ~s([data-role="media-slots"])) != []
-      assert Floki.find(cluster, ~s([data-role="meeting-agent-kick-wrap"])) != []
-    end
-
-    test "both the Ask key and the kick button still render together, Ask first in document order" do
-      html =
-        remove_rail([agent("Burrow", "ma-1")],
-          can_remove_agents?: true,
-          hold_to_talk?: true
-        )
-
-      doc = Floki.parse_fragment!(html)
-
-      [row] =
-        doc
-        |> Floki.find(~s(li[data-participant-id="p-ma-1"] > div))
-        |> Enum.filter(fn node ->
-          case Floki.attribute(node, "class") do
-            [class] -> String.contains?(class, "items-center gap-2")
-            _ -> false
-          end
-        end)
-
-      ask = Floki.find(row, ~s([data-role="meeting-agent-hold-to-talk"]))
-      kick = Floki.find(row, ~s([data-role="meeting-agent-kick"]))
-      assert length(ask) == 1
-      assert length(kick) == 1
-
-      # Document order within the rendered row markup — the Ask key's
-      # wrapper is still textually before the trailing cluster, which is
-      # what lets the cluster wrap to a second line while Ask stays on
-      # the first.
-      row_html = Floki.raw_html(row)
-      ask_at = :binary.match(row_html, "meeting-agent-hold-to-talk") |> elem(0)
-      kick_at = :binary.match(row_html, "meeting-agent-kick-wrap") |> elem(0)
-      assert ask_at < kick_at
+      # The reachability badge moved from the trailing cluster onto `.av`.
+      assert Floki.find(tools, ~s([data-role="agent-status-dot"])) == []
+      assert Floki.find(row, ~s(.av [data-role="agent-status-dot"])) != []
+      # The old flex-wrap cluster and media wells are gone from agent rows.
+      assert Floki.find(row, ~s([data-role="meeting-agent-kick-wrap"])) == []
+      assert Floki.find(row, ~s([data-role="media-slots"])) == []
     end
   end
 
@@ -2038,6 +1772,8 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
 
       [button] = mute_buttons(Floki.find(doc, ~s(li[data-participant-id="p-ma-1"])))
       assert Floki.attribute(button, "type") == ["button"]
+      # The host mute wears the mockup's `.kick` look, in `.tools`.
+      assert Floki.attribute(button, "class") == ["kick"]
       assert Floki.attribute(button, "phx-click") == ["toggle_agent_mute"]
       assert Floki.attribute(button, "phx-value-participant-id") == ["p-ma-1"]
       assert Floki.attribute(button, "data-mute-state") == ["unmuted"]
@@ -2119,9 +1855,10 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       [glyph] = Floki.find(button, ".hero-microphone-slash")
       [class] = Floki.attribute(glyph, "class")
       # "No colour: muted is a setting, not an error" (canvas states table).
+      # The pressed colour is the mockup's `--t`, from the stylesheet.
       refute class =~ "error"
-      assert class =~ "text-base-content"
-      refute class =~ "text-base-content/60"
+      refute class =~ "text-"
+      assert ask_css() =~ ~s|.meeting-ask .kick[aria-pressed="true"]{color:var(--t)}|
     end
 
     test "a row in mute_errors shows the shared feedback line and reverts the button to unmuted" do
@@ -2136,9 +1873,10 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
 
       [line] = Floki.find(row, ~s([data-role="meeting-agent-mute-error"]))
       [class] = Floki.attribute(line, "class")
-      assert class =~ "border-error"
-      refute class =~ "text-error"
-      assert class =~ "text-base-content"
+      class_list = String.split(class, " ")
+      assert "fb" in class_list
+      assert "border-error" in class_list
+      refute "text-error" in class_list
       assert Floki.text(line) =~ "Couldn't mute Burrow."
 
       [retry] = Floki.find(row, ~s([data-role="meeting-agent-mute-retry"]))
@@ -2184,10 +1922,18 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       assert Floki.attribute(button, "phx-value-participant-id") == ["p-ma-1"]
       assert Floki.attribute(button, "disabled") == []
 
-      [class] = Floki.attribute(button, "class")
-      refute class =~ "error"
-      refute class =~ "btn-error"
+      # The mockup's quiet `.btn` (spelled `.mbtn`), inside the Agents
+      # section, after the list.
+      assert Floki.attribute(button, "class") == ["mbtn leave"]
       refute html =~ "Kick"
+
+      [section] = Floki.find(doc, ~s(section[data-section="agents"]))
+      assert Floki.find(section, ~s([data-role="meeting-ask-agent-leave"])) == [button]
+
+      section_html = Floki.raw_html(section)
+      {list_end, _} = :binary.match(section_html, "</ul>")
+      {leave_at, _} = :binary.match(section_html, "meeting-ask-agent-leave")
+      assert leave_at > list_end
 
       # Joins the per-row icon rather than replacing it.
       assert length(remove_buttons(doc)) == 1
@@ -2315,6 +2061,107 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
       {agents_index, _} = :binary.match(html, ~s(data-section="agents"))
       {humans_index, _} = :binary.match(html, ~s(data-section="humans"))
       assert agents_index < humans_index
+    end
+  end
+
+  # ── The stylesheet IS the mockup (verbatim port) ──────────────────────
+  #
+  # `meeting_ask.css` claims to copy the mockup's rules with only the
+  # `.meeting-ask` scope and the pseudo-state -> data-attribute mapping
+  # changed. These hold the values a "tidy-up" would most likely drift.
+  describe "meeting_ask.css against the mockup fixture" do
+    test "every :root custom property in the mockup is declared identically" do
+      [root] = Regex.run(~r/:root\{([^}]*)\}/, ask_mockup(), capture: :all_but_first)
+
+      props =
+        root
+        |> String.split(";", trim: true)
+        |> Enum.map(&String.trim/1)
+
+      # Positive control: the fixture really has the palette.
+      assert length(props) == 11
+      assert "--a:#22c3dc" in props
+
+      css = ask_css()
+
+      for prop <- props do
+        assert css =~ prop, "meeting_ask.css lost or changed the mockup's #{prop}"
+      end
+    end
+
+    test "the key layout, shadow and keyframe values are copied verbatim" do
+      css = ask_css()
+      mockup = ask_mockup()
+
+      for value <- [
+            "grid-template-columns:36px 1fr auto",
+            "width:96px;height:40px",
+            "box-shadow:0 3px 0 #0e7f90,0 4px 12px rgba(34,195,220,.15)",
+            "@keyframes sent{0%,80%{opacity:1;transform:none}100%{opacity:0}}",
+            "@keyframes ring{0%{opacity:.75;transform:scale(1)}100%{opacity:0;transform:scale(1.28)}}",
+            "@keyframes bar{from{height:4px}to{height:16px}}"
+          ] do
+        assert mockup =~ value, "the fixture no longer contains #{value}; update this guard"
+        assert css =~ value, "meeting_ask.css drifted from the mockup at #{value}"
+      end
+
+      # The mockup's `.row:has(.ask:active)` becomes the hook-driven
+      # `data-held` on the row.
+      assert css =~ ~s(.meeting-ask .row[data-held="true"] .st .i{opacity:0})
+      assert css =~ ~s(.meeting-ask .row[data-held="true"] .st .l{opacity:1})
+    end
+
+    # `a, b` splits; `:not(.x, .y)` does not.
+    defp split_top_level_commas(selector_list) do
+      {parts, current, _depth} =
+        selector_list
+        |> String.graphemes()
+        |> Enum.reduce({[], "", 0}, fn
+          "(", {acc, cur, d} -> {acc, cur <> "(", d + 1}
+          ")", {acc, cur, d} -> {acc, cur <> ")", d - 1}
+          ",", {acc, cur, 0} -> {[cur | acc], "", 0}
+          ch, {acc, cur, d} -> {acc, cur <> ch, d}
+        end)
+
+      Enum.reverse([current | parts])
+    end
+
+    test "every rule is scoped under .meeting-ask" do
+      css = Regex.replace(~r|/\*.*?\*/|s, ask_css(), "")
+
+      selectors =
+        Regex.scan(~r/(?:^|\})\s*([^{}@]+?)\{/, css, capture: :all_but_first)
+        |> List.flatten()
+        |> Enum.reject(&(&1 =~ ~r/^\s*(from|to|\d+%)/))
+        |> Enum.flat_map(&split_top_level_commas/1)
+        |> Enum.map(&String.trim/1)
+        |> Enum.reject(&(&1 == "" or &1 =~ ~r/^(from|to|\d+%)$/))
+
+      assert selectors != []
+
+      for sel <- selectors do
+        assert String.starts_with?(sel, ".meeting-ask"), "unscoped selector leaks: #{sel}"
+      end
+    end
+  end
+
+  # ── Text the eye never sees must not reach a screen reader either ──────
+  #
+  # `.st .l` ("Listening…"), `.tr.live` and `.tr.sent` ("✓ Sent to …") are
+  # ALWAYS in the DOM and shown only by CSS opacity while held / just sent.
+  # Opacity does not remove text from the accessibility tree, so unless
+  # these are aria-hidden a screen reader hears "Listening…" as every
+  # agent's state and "Sent to <name>" for a message never sent. (The held
+  # state is already announced by `meeting-ptt-live-region`.)
+  test "the opacity-hidden held/sent text is hidden from assistive tech" do
+    doc =
+      Floki.parse_fragment!(hold_rail([agent("Octavius", "oct-1")], hold_to_talk?: true))
+
+    for sel <- [".st .l", ".tr.live", ".tr.sent"] do
+      assert [node] = Floki.find(doc, ~s(li[data-participant-type="agent"] #{sel}))
+
+      assert Floki.attribute(node, "aria-hidden") == ["true"],
+             "#{sel} is exposed to assistive tech while visually hidden"
     end
   end
 end

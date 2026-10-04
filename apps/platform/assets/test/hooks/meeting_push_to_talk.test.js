@@ -621,22 +621,21 @@ describe("the hold-threshold events", () => {
     expect(held.detail).toEqual({ agentId: "agent-123", agentName: "Atlas" })
   })
 
-  // Item 1 (task 01a0f842 stage 1, canvas 01a0f846-cfb1): `data-held` is
-  // the signal the template/CSS key the hold-threshold underline and the
-  // glyph-to-waveform swap off, specifically so both land at 380ms, not
-  // at press (0ms, where `data-pressed` already flips). Asserted
-  // directly here — unlike `data-pressed` (see this file's moduledoc),
-  // this is the actual deliverable this stage adds, not a "looks
-  // pressed" proxy for a safety property measured elsewhere.
-  it("sets `data-held` only once the threshold elapses, not at press", () => {
+  // Ask-row verbatim port: `data-held` is the mockup's `:active`, so it is
+  // the VISUAL press state and flips at press. The 380ms send threshold is
+  // separate and unchanged: it still gates the `held` event (above) and
+  // whether a release counts as a send (see "the sent confirmation").
+  it("sets `data-held` at press, the mockup's `:active`, not at the threshold", () => {
     vi.useFakeTimers()
     const { el } = mountHook(roomWith([micPublication()]))
 
     el.fire("pointerdown", { button: 0 })
-    expect(el.dataset.held).toBe("false")
+    expect(el.dataset.held).toBe("true")
+    expect(dispatched.map((e) => e.type)).not.toContain("meeting:push-to-talk-held")
 
     vi.advanceTimersByTime(HOLD_THRESHOLD_MS)
     expect(el.dataset.held).toBe("true")
+    expect(dispatched.map((e) => e.type)).toContain("meeting:push-to-talk-held")
   })
 
   it("clears `data-held` on release, early or otherwise", () => {
@@ -795,13 +794,10 @@ describe("surviving a LiveView patch mid-hold", () => {
     expect(el.dataset.held).toBe("false")
     hook.updated()
     expect(el.dataset.held).toBe("true")
-    // A patch's stomp of `data-pressed` must not come back as `data-held`
-    // when the hold hasn't actually crossed the threshold at the time of
-    // the patch — `updated()` must read `_heldLongEnough`, not assume.
     expect(el.dataset.pressed).toBe("true")
   })
 
-  it("does NOT resurrect data-held if a patch lands before the 380ms threshold", () => {
+  it("restores data-held before the 380ms threshold too — it is the visual press state", () => {
     vi.useFakeTimers()
     const { hook, el } = mountHook(roomWith([micPublication()]))
 
@@ -810,10 +806,8 @@ describe("surviving a LiveView patch mid-hold", () => {
     simulateLiveViewPatchStomp(el)
     hook.updated()
 
-    // Correct in both directions: pressed is restored, held stays false
-    // because the hold genuinely has not crossed the threshold yet.
     expect(el.dataset.pressed).toBe("true")
-    expect(el.dataset.held).toBe("false")
+    expect(el.dataset.held).toBe("true")
   })
 
   it("mirrors the correction onto the row — the OTHER element this same bug class hits", () => {
@@ -823,6 +817,7 @@ describe("surviving a LiveView patch mid-hold", () => {
 
     el.fire("pointerdown", { button: 0 })
     expect(row.dataset.pressed).toBe("true")
+    expect(row.dataset.held).toBe("true")
 
     // The row has no `phx-update="ignore"` at all, so the ORDINARY
     // (non-ignored) merge path re-stamps its own literal
@@ -1068,5 +1063,133 @@ describe("the feedback line", () => {
 
     hook.reconnected()
     expect(feedback.dataset.open).toBe("false")
+  })
+})
+
+// ── The live transcript and the sent confirmation (Ask-row verbatim port) ─
+//
+// The row carries the mockup's `.tr.live .vp > .tx > p` and `.tr.sent .sum`.
+// These fakes stand in for that subtree: `p.scrollHeight` is the measured
+// height of the text, which the hook copies onto `.tx` and (capped at the
+// mockup's 140px) onto `.vp`.
+
+function fakeRowWithTranscript() {
+  const vp = { style: {}, dataset: {} }
+  const tx = { style: {}, parentElement: vp }
+  const p = { textContent: "", scrollHeight: 20, parentElement: tx }
+  const sum = { textContent: "" }
+  const row = {
+    dataset: {},
+    querySelector(sel) {
+      if (sel === ".tr.live .tx p") return p
+      if (sel === ".tr.sent .sum") return sum
+      return null
+    },
+  }
+  return { row, vp, tx, p, sum }
+}
+
+function mountWithRow() {
+  const parts = fakeRowWithTranscript()
+  const mounted = mountHook(roomWith([micPublication()]))
+  mounted.el.dataset.agentId = "agent-123"
+  mounted.el.closest = (sel) => (sel === '[data-participant-type="agent"]' ? parts.row : null)
+  return { ...mounted, ...parts }
+}
+
+describe("the live transcript (.tr.live)", () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it("writes this agent's transcript chunks into `.tx p` while held, growing `.vp` to the 140px cap", () => {
+    const { el, serverHandlers, p, tx, vp, row } = mountWithRow()
+
+    el.fire("pointerdown", { button: 0 })
+    expect(row.dataset.held).toBe("true")
+
+    serverHandlers["meeting_ask_transcript_chunk"]({ agent_id: "agent-123", text: "Burrow, can you" })
+    expect(p.textContent).toBe("Burrow, can you")
+    expect(vp.style.height).toBe("20px")
+    expect(vp.dataset.overflowing).toBe("false")
+
+    p.scrollHeight = 60
+    serverHandlers["meeting_ask_transcript_chunk"]({ agent_id: "agent-123", text: "pull it together" })
+    expect(p.textContent).toBe("Burrow, can you pull it together")
+    expect(tx.style.height).toBe("60px")
+    expect(vp.style.height).toBe("60px")
+
+    p.scrollHeight = 300
+    serverHandlers["meeting_ask_transcript_chunk"]({ agent_id: "agent-123", text: "and more" })
+    expect(tx.style.height).toBe("300px")
+    expect(vp.style.height).toBe("140px")
+    expect(vp.dataset.overflowing).toBe("true")
+  })
+
+  it("ignores another agent's chunks and chunks with no press in progress", () => {
+    const { el, serverHandlers, p } = mountWithRow()
+
+    serverHandlers["meeting_ask_transcript_chunk"]({ agent_id: "agent-123", text: "not pressed" })
+    expect(p.textContent).toBe("")
+
+    el.fire("pointerdown", { button: 0 })
+    serverHandlers["meeting_ask_transcript_chunk"]({ agent_id: "someone-else", text: "nope" })
+    expect(p.textContent).toBe("")
+  })
+
+  it("starts each press with an empty box", () => {
+    const { el, serverHandlers, p } = mountWithRow()
+
+    el.fire("pointerdown", { button: 0 })
+    serverHandlers["meeting_ask_transcript_chunk"]({ agent_id: "agent-123", text: "first" })
+    el.fire("pointerup", {})
+    el.fire("pointerdown", { button: 0 })
+    expect(p.textContent).toBe("")
+  })
+})
+
+describe("the sent confirmation (.tr.sent)", () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it("shows after a release that crossed the send threshold, with the heard text, for 2.2s", () => {
+    vi.useFakeTimers()
+    const { el, serverHandlers, row, sum } = mountWithRow()
+
+    el.fire("pointerdown", { button: 0 })
+    vi.advanceTimersByTime(HOLD_THRESHOLD_MS + 20)
+    serverHandlers["meeting_ask_transcript_chunk"]({ agent_id: "agent-123", text: "where did we land" })
+    el.fire("pointerup", {})
+
+    expect(row.dataset.sent).toBe("true")
+    expect(row.dataset.held).toBe("false")
+    expect(sum.textContent).toBe("where did we land")
+
+    vi.advanceTimersByTime(2_199)
+    expect(row.dataset.sent).toBe("true")
+    vi.advanceTimersByTime(1)
+    expect(row.dataset.sent).toBe("false")
+  })
+
+  it("does NOT show after an early release: nothing was sent", () => {
+    vi.useFakeTimers()
+    const { el, row } = mountWithRow()
+
+    el.fire("pointerdown", { button: 0 })
+    vi.advanceTimersByTime(HOLD_THRESHOLD_MS - 100)
+    el.fire("pointerup", {})
+
+    expect(row.dataset.sent).toBeUndefined()
+  })
+
+  it("does NOT show after a refused press", () => {
+    const { el, serverHandlers, row } = mountWithRow()
+
+    el.fire("pointerdown", { button: 0 })
+    serverHandlers["push_to_talk_rejected"]({ agent_id: "agent-123", reason: "held-by-other" })
+
+    expect(row.dataset.sent).toBeUndefined()
+    expect(row.dataset.held).toBe("false")
   })
 })

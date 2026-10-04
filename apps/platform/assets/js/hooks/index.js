@@ -31,7 +31,6 @@ import LongpressMenu from "./longpress_menu"
 import MarkdownEditor from "./markdown_editor"
 import LocalTime from "./local_time"
 import MeetingAskFloorVeil from "./meeting_ask_floor_veil"
-import MeetingAskHeardOverlay from "./meeting_ask_heard_overlay"
 import MeetingBar from "./meeting_bar"
 import MessageLift from "./message_lift"
 import MeetingCaptions, { MeetingCaptionsPersist } from "./meeting_captions"
@@ -95,7 +94,6 @@ export default {
   LongpressMenu,
   MarkdownEditor,
   MeetingAskFloorVeil,
-  MeetingAskHeardOverlay,
   MeetingBar,
   MeetingCaptions,
   MeetingCaptionsPersist,

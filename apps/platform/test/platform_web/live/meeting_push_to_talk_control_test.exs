@@ -21,8 +21,8 @@ defmodule PlatformWeb.MeetingPushToTalkControlTest do
 
   What is asserted here is the server's half: that the control renders on
   the agent's row for a participant, that it names the agent it addresses,
-  that the waveform the hook paints into exists, and that its colour comes
-  from semantic token slots. The component-level markup is exercised more
+  that the mockup's bars exist, and that its colour comes from the Ask
+  section's custom properties rather than from markup. The component-level markup is exercised more
   finely in `participant_rail_test.exs`; this file proves it reaches the
   page through the real mount.
   """
@@ -129,15 +129,14 @@ defmodule PlatformWeb.MeetingPushToTalkControlTest do
     assert agent.id in LazyHTML.attribute(nodes, "data-agent-id")
   end
 
-  test "the waveform has bars for the hook to paint", %{html: html} do
+  test "the key carries the mockup's four bars", %{html: html} do
     bars =
       html
       |> LazyHTML.from_document()
-      |> LazyHTML.query("[data-role='meeting-agent-hold-to-talk'] [data-ptt-bar]")
+      |> LazyHTML.query("[data-role='meeting-agent-hold-to-talk'] .bars > i")
 
-    # Four per control (round 5, Dalton's PR #1178 re-check, item 6 — both
-    # reference canvases draw exactly four 3px bars; twelve squeezed into
-    # the 36px slot regardless of their declared width).
+    # Four per control, as the Ask mockup draws them; `meeting_ask.css`
+    # animates them while the key is `data-held`.
     assert Enum.count(bars) >= 4
   end
 
@@ -153,40 +152,34 @@ defmodule PlatformWeb.MeetingPushToTalkControlTest do
 
   # On a phone a long press on the bare button raises the OS text-selection
   # / callout menu instead of holding, and the browser claims the touch for
-  # scrolling before the hook can capture it. The fix is one named utility
-  # in app.css (`touch-action: none`, `-webkit-touch-callout: none`,
-  # `user-select: none`); the control must wear it, or the hook's pointer
-  # capture is arming a control the OS has already taken.
-  test "the hold control carries the touch utility and a 44px short axis", %{html: html} do
-    nodes = controls(html)
-    classes = nodes |> LazyHTML.attribute("class") |> List.first() |> String.split()
+  # scrolling before the hook can capture it. The Ask mockup's `.ask` rule
+  # carries the three declarations itself; the control must wear that
+  # class inside the `.meeting-ask` section, or the hook's pointer capture
+  # is arming a control the OS has already taken.
+  test "the hold control is the mockup's .ask inside the .meeting-ask section", %{html: html} do
+    keys =
+      html
+      |> LazyHTML.from_document()
+      |> LazyHTML.query(".meeting-ask [data-role='meeting-agent-hold-to-talk']")
 
-    assert "meeting-hold-target" in classes,
-           "hold control is missing the meeting-hold-target utility; classes: " <>
-             inspect(classes)
-
-    # 44px minimum on the short axis (min-h-11 = 2.75rem = 44px).
-    assert "min-h-11" in classes
-
-    # The refused state the hook surfaces when pointer capture throws must
-    # have a slot to render into, on the error token like every other refusal.
-    assert "data-[rejected=pointer-lost]:text-error" in classes
+    assert Enum.count(keys) >= 1
+    assert keys |> LazyHTML.attribute("class") |> Enum.uniq() == ["ask"]
   end
 
-  # The utility must exist in the stylesheet, not just be named in the
-  # markup — a class with no rule behind it is the silent version of the
+  # The declarations must exist in the stylesheet, not just be implied by
+  # the class — a class with no rule behind it is the silent version of the
   # bug this test exists to catch.
-  test "the touch-action utility is defined in app.css with all three declarations" do
-    css = File.read!(Path.join([File.cwd!(), "assets", "css", "app.css"]))
+  test "the .ask rule in meeting_ask.css carries all three touch declarations" do
+    css = File.read!(Path.join([File.cwd!(), "assets", "css", "meeting_ask.css"]))
 
-    [rule] = Regex.run(~r/\.meeting-hold-target\s*\{[^}]*\}/, css)
+    [rule] = Regex.run(~r/\.meeting-ask \.ask\{[^}]*\}/, css)
 
     assert rule =~ ~r/touch-action:\s*none/
     assert rule =~ ~r/-webkit-touch-callout:\s*none/
     assert rule =~ ~r/(?<!-webkit-)user-select:\s*none/
   end
 
-  test "its colour comes from semantic token slots, not raw hex or fixed palette",
+  test "its colour comes from the section's custom properties, not raw hex or palette utilities",
        %{html: html} do
     markup = controls(html) |> LazyHTML.to_html()
 
@@ -202,16 +195,11 @@ defmodule PlatformWeb.MeetingPushToTalkControlTest do
     assert Regex.match?(@raw_hex, ~s(<span class="text-[#ff0000]">))
     assert Regex.match?(@fixed_palette, ~s(<span class="bg-red-500">))
 
-    # And it does use tokens, so "no hex" is not simply "no colour".
-    # Task 01a0d3cd stage 2 (canvas 01a0d3cf-a424): the rest-state fill is
-    # `--color-primary` with a `--color-primary-content` label — not
-    # `--color-base-content`, which flips to near-white in the dark theme
-    # and would be the white-on-cyan the canvas rules out. This fixture is
-    # a resolvable, un-held agent, so it renders in that rest state; the
-    # disabled fill's `--color-base-300` / `--color-neutral` pair is
-    # covered in `participant_rail_test.exs`, which reaches both boundaries
-    # that disable the control.
-    assert markup =~ "primary"
-    assert markup =~ "primary-content"
+    # And it does have a colour, so "no hex in the markup" is not simply
+    # "no colour": the Ask mockup's fill and label are the section's
+    # `--a` / `--ai` custom properties, declared once in `meeting_ask.css`.
+    css = File.read!(Path.join([File.cwd!(), "assets", "css", "meeting_ask.css"]))
+    [rule] = Regex.run(~r/\.meeting-ask \.ask\{[^}]*\}/, css)
+    assert rule =~ "background:var(--a);color:var(--ai);"
   end
 end

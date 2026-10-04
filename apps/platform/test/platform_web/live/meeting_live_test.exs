@@ -12555,20 +12555,34 @@ defmodule PlatformWeb.MeetingLiveTest do
     |> LazyHTML.attribute("data-activity-state")
   end
 
+  # The STATE half (`.i`) of the Ask mockup's one-line `.st`; its `.l`
+  # half is the held-row "Listening…" crossfade, not the state.
   defp rail_activity_word(html, participant_row_id) do
     html
     |> frag()
     |> LazyHTML.query(
       @left_rail_participant <>
-        ~s([data-participant-id="#{participant_row_id}"] [data-role="agent-activity-word"])
+        ~s([data-participant-id="#{participant_row_id}"] [data-role="agent-activity-word"] .i)
     )
     |> LazyHTML.text()
     |> String.trim()
   end
 
-  # The `:delayed` second line (task 01a07400 stage 3). A separate node
-  # from the word, deliberately: the reason is the protected line and it
-  # wraps rather than sharing the word's row.
+  # The bare state word, without the clauses that share its line.
+  defp rail_primary_word(html, participant_row_id) do
+    html
+    |> frag()
+    |> LazyHTML.query(
+      @left_rail_participant <>
+        ~s([data-participant-id="#{participant_row_id}"] [data-role="agent-activity-primary"])
+    )
+    |> LazyHTML.text()
+    |> String.trim()
+  end
+
+  # The `:delayed` reason (task 01a07400 stage 3). A separate node from
+  # the word, deliberately; on the Ask mockup's one `.st` line it follows
+  # the word as "· <reason>".
   defp rail_delay_reason(html, participant_row_id) do
     html
     |> frag()
@@ -12854,11 +12868,10 @@ defmodule PlatformWeb.MeetingLiveTest do
       # not reset is not merely slow, it is blocked, and the direction
       # (canvas 01a07402-99e3) gives that its own word and its own line.
       #
-      # The clause therefore moves OFF the word node and onto the protected
-      # second line — the one that "truncates last" — rather than being
-      # appended to the counter it used to share a row with.
-      assert rail_activity_word(html, presence.id) =~ "Delayed"
-      refute rail_activity_word(html, presence.id) =~ "reply budget resets in"
+      # The clause therefore moves OFF the word node into its own
+      # delay-reason node (on the Ask mockup's one `.st` line, after the
+      # word) rather than being appended to the counter.
+      assert rail_primary_word(html, presence.id) == "Delayed"
       assert rail_delay_reason(html, presence.id) =~ "reply budget resets in"
       assert rail_activity_state(html, presence.id) == ["delayed"]
 

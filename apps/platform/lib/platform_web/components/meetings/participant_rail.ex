@@ -166,12 +166,9 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
   """
   use Phoenix.Component
 
-  import PlatformWeb.Components.Meetings.AgentActivityBadge
-
   alias PlatformWeb.Components.Meetings.AgentActivityBadge
 
   import PlatformWeb.AvatarComponents
-  import PlatformWeb.CoreComponents, only: [icon: 1]
 
   alias Platform.Agents.Agent
   alias Platform.Meetings
@@ -482,334 +479,160 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
         {pressed_agent_announcement(assigns)}
       </span>
       <%!-- ── Section 1: Agents ─────────────────────────────────────────── --%>
-      <%!-- Round 4: ALSO rendered with zero agents left when there is a
-           removal to undo — kicking the one agent in the room must not
-           make the Undo for that exact kick vanish along with the
-           section it lived in. --%>
+      <%!-- VERBATIM PORT of the approved mockup
+           (`test/support/fixtures/meeting_ask_mockup.html`). The DOM and
+           class names below are the mockup's own: `.row > .av, .who > .nm +
+           .st(.i/.l), .tools > .ask(.ring, .bars i×4, .lbl .off/.on) +
+           .kick, .tr.live(.hd .dot, .vp > .tx > p), .tr.sent(.hd, .sum),
+           .confirm, .gone`. Its CSS is `assets/css/meeting_ask.css`, scoped
+           under `.meeting-ask` (this section). Do not restyle these elements
+           with utilities: every value lives in that file, and every
+           deviation from the mockup is listed there and in the PR that
+           introduced it.
+
+           Interaction state is data attributes, not pseudo-classes:
+           `data-held`/`data-sent` on the row and `data-held` on `.ask` are
+           set by `MeetingPushToTalk` (sticky across patches), and
+           `data-kick` is rendered here from `@kick_confirm_id` /
+           `@agent_removal_undo`.
+
+           ALSO rendered with zero agents left when there is a removal to
+           undo, so the Undo for the last agent's kick does not vanish with
+           the section it lived in. --%>
       <section
         :if={@agents != [] or @agent_removal_undo}
         data-section="agents"
-        class="px-2 pb-2 pt-2"
+        class="meeting-ask"
       >
-        <%!-- Same pairing and the same `/60` reasoning as the humans
-             heading below: the icon stays `/50` (a non-text glyph, 3:1
-             floor), the label is `/60` (rendered text, 4.5:1 floor). --%>
-        <div class="flex items-center gap-1.5 px-2 pb-1.5">
-          <span class="hero-cpu-chip size-3.5 text-base-content/50"></span>
-          <span class="text-[11px] font-semibold uppercase tracking-widest text-base-content/60">
-            Agents
-          </span>
-        </div>
+        <div class="sec">Agents</div>
 
-        <ul class="flex flex-col gap-0.5" role="list">
+        <ul role="list">
           <li
             :for={{p, info, aid} <- @agents_with_info}
+            class="row"
             data-participant-id={p.id}
             data-participant-identity={MeetingLive.gallery_identity(p)}
             data-participant-type="agent"
-            data-pressed="false"
-            class={
-              [
-                # Task 01a0f324 stage 3 (item 3b, canvas "signature element"):
-                # `flex-col` so the feedback line below can be a genuine
-                # SECOND line under the existing row, full row width, rather
-                # than squeezed onto the same flex line as the avatar/name/
-                # button. `relative` gives the pressed-state `z-[60]` below
-                # somewhere to take effect — z-index has no effect on a
-                # statically positioned box. `MeetingPushToTalk` mirrors its
-                # own `data-pressed` onto THIS element (closest
-                # `[data-participant-type="agent"]`) whenever the row's Ask
-                # button is pressed/released/rejected, since a CSS selector
-                # can only read an ancestor's own attribute, never a
-                # descendant's, and this row needs to react to its button's
-                # state.
-                #
-                # Item 1 (task 01a0f842 stage 1, canvas 01a0f846-cfb1): the
-                # row no longer gets its OWN ring on press — only `z-[60]`
-                # survives here, to lift the row above the dim while held.
-                # The ring moved onto the Ask key itself (see its own
-                # `data-[pressed=true]:ring-*` below), per the canvas's
-                # "one ring only, on the key under the finger."
-                "group relative flex flex-col gap-1 rounded-lg px-2 py-1.5 text-xs min-h-11 hover:bg-base-300/40 transition-colors",
-                agent_row_align_class(info),
-                @hold_to_talk? && "data-[pressed=true]:z-[60]"
-              ]
+            data-kick={
+              if @can_remove_agents? and @kick_confirm_id == p.id, do: "confirm", else: "none"
             }
           >
-            <div class="flex w-full flex-wrap items-center gap-2">
-              <%!-- ONE construction for all four states.
+            <% name = p.display_name || "Agent" %>
+            <% held_by = if is_binary(aid), do: Map.get(@ask_floor_holders, aid) %>
+            <% held_by_other? = is_binary(held_by) and aid != @pressed_agent_id %>
+            <% agent_key = aid || "unresolved" %>
+            <% leaving? = removing?(@removing_ids, p.id) %>
+            <% mute_target = mute_pending_target(@muting_ids, p.id) %>
+            <% muting? = not is_nil(mute_target) %>
+            <% muted_done? = !muting? and muted_by_host?(@muted_agent_ids, p.id) %>
+            <% own_pressed? = @hold_to_talk? and is_binary(aid) and aid == @pressed_agent_id %>
+            <% can_mute? = @can_remove_agents? and is_binary(aid) %>
+            <% mic = mic_state(@muted, p) %>
+            <% ask_disabled? = held_by_other? or not is_binary(aid) %>
 
-                 Was: a bare `agent_avatar`, a role chip on line 2
-                 rendering the literal string "agent", and a badge
-                 gated on `!= :idle` with a substitute status dot on
-                 the other branch. Three of Saru's four visual cues
-                 were absent exactly when a viewer most needs to read
-                 the row, and a state was representable by whichever
-                 of two mutually-exclusive branches happened to fire.
-                 The state now lives ON the face — ring around it,
-                 glyph in its corner — with the WORD directly under
-                 the name, and `:idle` is drawn like any other state.
+            <%!-- `.av`: the mockup's initials circle. The 8px `.avs` badge
+                 (deviation, decision 2 option A) carries the old trailing
+                 status dot and, for a non-host, the read-only mic state —
+                 `--ok` when the agent is connected and its mic is on,
+                 `--m` otherwise. The sr-only nodes keep both facts for a
+                 screen reader. --%>
+            <div class="av" data-role="agent-activity-avatar" data-activity-state={info.ring_state}>
+              <span aria-hidden="true">{initials(name)}</span>
+              <%!-- The activity sentence ("Octavius is Delayed, waiting on
+                   GitHub") for assistive tech; the visible word is `.st`. --%>
+              <span class="sr-only">{info.label}</span>
+              <span
+                class="avs"
+                data-role="agent-status-dot"
+                data-tone={badge_tone(p, @agents_by_id, @agent_activity, mic, muted_done?)}
+                aria-hidden="true"
+              >
+              </span>
+              <span
+                :if={!can_mute?}
+                class="sr-only"
+                role="img"
+                aria-label={mic_label(mic)}
+                data-role="mic-indicator"
+                data-mic-state={to_string(mic)}
+              >
+              </span>
+              <span class="sr-only" data-role="participant-state-summary">
+                {state_sentence(name, mic, :unavailable)}
+              </span>
+            </div>
 
-                 `agent_avatar/1`, not `human_avatar/1`: this section
-                 is agents by construction, and the human component
-                 would give them two initials over the seeded human
-                 palette and stamp them `data-avatar-kind="human"`.
-                 `agent_activity_avatar/1` renders it internally. --%>
-              <%!-- Task 01a0cf5c stage 1. `aid != @pressed_agent_id` is
-                 what tells THIS viewer's own hold apart from someone
-                 else's: `@ask_floor_holders` carries every held agent
-                 meeting-wide, including the one THIS viewer is
-                 currently holding, and that row must keep showing
-                 "Talking…" below rather than being disabled out from
-                 under the person actually pressing it.
-
-                 `info`/`aid` are already bound above via the
-                 `agents_with_info` destructure (task 01a0cf5d stage 3) —
-                 not re-derived here — because the row's own class
-                 attribute needs `info.delay_reason` before any `<% %>`
-                 block in the body would run. --%>
-              <% held_by = if is_binary(aid), do: Map.get(@ask_floor_holders, aid) %>
-              <% held_by_other? = is_binary(held_by) and aid != @pressed_agent_id %>
-              <%!-- Task 01a0d3cd stage 1 (Saru's canvas 01a0d3cf-a424, finding
-                 2: "render it disabled, never absent"). `aid` is `nil` only
-                 for a participant `agent_id_of/1` could not resolve to a
-                 binary id — unreachable today for a real agent row (every
-                 branch of `MeetingLive.meeting_participant_view_model/1`
-                 that sets `participant_type: "agent"` also sets a binary
-                 `participant_id`, so `aid` is always binary here in
-                 production; a bare test fixture is the only way to reach
-                 this), but the control used to vanish with zero trace on
-                 that branch instead of degrading. `agent_key` gives the
-                 DOM ids something stable to interpolate either way. --%>
-              <% agent_key = aid || "unresolved" %>
-              <%!-- Task 01a0cf5c stage 2, canvas 01a0cf5e-9cb0: `--color-primary`
-                 is reserved for the veil's meter and this ring, nowhere
-                 else in the held state — so it fires only for the agent
-                 THIS viewer is holding, never for `held_by_other?`. --%>
-              <.agent_activity_avatar
-                state={info.ring_state}
-                name={p.display_name || "Agent"}
-                avatar_url={p.avatar_url}
-                label={info.label}
-                held?={is_binary(aid) and aid == @pressed_agent_id}
-              />
-              <%!-- `min-w-[32px]`, not `min-w-0` (task 01a0febf stage 6 —
-                 Dalton's layout-shift bug, canvases 01a0febf-652b and
-                 01a0ff1c). `min-w-0` gave this column NO floor, so once
-                 the status-chip slot below claimed its (previously
-                 unreserved) width out of an already-full row, this was
-                 the only item with anywhere left to go and collapsed all
-                 the way to 0 — confirmed by live DOM measurement on two
-                 separate builds (PR #1174, #1176), same numbers both
-                 times. `min-w-[32px]` keeps `truncate` working (a flex
-                 item still needs an explicit floor below its content
-                 size for `truncate` to engage at all) while guaranteeing
-                 the name never fully disappears even if something else
-                 in this row someday grows again. This is the SECOND
-                 layer of the fix — the reserved status-chip slot below
-                 is the one that actually stops the row's total width
-                 from changing; this floor is the backstop if it didn't. --%>
-              <div class="min-w-[32px] flex-1">
-                <div
-                  class="truncate text-xs font-medium text-base-content/90"
-                  data-role="participant-name"
-                >
-                  {p.display_name || "Agent"}
-                </div>
-                <%!-- Task 01a06e07 stage 3: the age and the delay/failure
-                   reason live HERE, in the same slot and colour the word
-                   already had — no new token, no new node kind. The word
-                   + age pairing is kept on one line (`whitespace-nowrap`);
-                   the trailing reason is its own span in the same
-                   `flex-wrap` row so it drops to a second line rather than
-                   being clipped — the node used to carry `truncate`, which
-                   is exactly the clip this stage removes. --%>
-                <%!-- Task 01a0e906 stage 3: while this row's removal is in
-                   flight the WORD is "Leaving…" at the canvas's `/60` rest
-                   tone, replacing the activity reading, until
-                   `{:participant_left, _}` drops the row. --%>
-                <% leaving? = removing?(@removing_ids, p.id) %>
-                <%!-- Mute (task 01a0f842 stage 5, canvas 01a0f846-cfb1,
-                   states table): pending and done each claim this SAME
-                   word slot wholesale, the same way `leaving?` already
-                   does above — the canvas gives mute its own single word
-                   per state ("Muting…"/"Unmuting…", "Muted"), not a
-                   suffix on whatever the agent happened to be doing when
-                   the host clicked. `mute_target` is `true`/`false` while
-                   in flight (the DIRECTION), `nil` once settled; `muting?`
-                   folds that into a plain boolean for the class/`:if`
-                   branches below. --%>
-                <% mute_target = mute_pending_target(@muting_ids, p.id) %>
-                <% muting? = not is_nil(mute_target) %>
-                <% muted_done? = !muting? and muted_by_host?(@muted_agent_ids, p.id) %>
-                <%!-- Round 5 (Dalton's PR #1178 re-check, item 1 AND item 4).
-                   `own_pressed?`/`held_by_other?` used to drive a SEPARATE
-                   flex sibling after the Ask button (the "RESERVED
-                   STATUS-CHIP SLOT" this comment used to sit above) — a
-                   column with its own reserved width that a live
-                   measurement found permanently overflowed the rail (370px
-                   of content into a 255px rail, the kick ✕ pushed clean
-                   off the edge). The mockup's own row never reserves a
-                   second column for this at all: its `.st` is a SINGLE
-                   box, the same one that already shows "Idle", with the
-                   pressed/held wording layered on top of it
-                   (`.row:has(.ask:active) .st .i{opacity:0} .l{opacity:1}`
-                   in the touch-it canvas's CSS) — width:0 impact, because
-                   there IS no second box. `own_pressed?`/`held_by_other?`
-                   now join `leaving?`/`muting?`/`muted_done?` as more
-                   candidates for THIS SAME word line below — one column,
-                   never a second one, whatever is happening on the row.
-                   `aid`/`held_by`/`held_by_other?` are already bound above
-                   (the `held_by = if is_binary(aid) ...` block near this
-                   row's avatar). --%>
-                <% own_pressed? = @hold_to_talk? and is_binary(aid) and aid == @pressed_agent_id %>
-                <% override_word? =
-                  leaving? or muting? or muted_done? or own_pressed? or held_by_other? %>
-                <div
-                  data-role="agent-activity-word"
-                  class={[
-                    "flex flex-wrap items-baseline gap-x-1 text-[11px] font-medium",
-                    if(override_word?, do: "text-base-content/60", else: info.text)
-                  ]}
-                >
-                  <span
-                    :if={leaving?}
-                    data-role="meeting-agent-leaving"
-                    class="whitespace-nowrap text-base-content/60"
-                  >
-                    Leaving…
-                  </span>
-                  <span
-                    :if={!leaving? and muting?}
-                    data-role="meeting-agent-muting"
-                    class="whitespace-nowrap text-base-content/60"
-                  >
+            <div class="who">
+              <div class="nm" data-role="participant-name">{name}</div>
+              <%!-- `.st`: ONE 17px line. `.i` is the agent's state word;
+                   `.l` ("Listening…") crossfades over it while the row is
+                   held. The state word's parts are `<bdi>`s, not spans,
+                   because the mockup's `.st span` rule absolutely
+                   positions every span inside `.st`. --%>
+              <div
+                class="st"
+                data-role="agent-activity-word"
+                title={info.delay_reason}
+              >
+                <span class="i">
+                  <bdi :if={leaving?} data-role="meeting-agent-leaving">Leaving…</bdi>
+                  <bdi :if={!leaving? and muting?} data-role="meeting-agent-muting">
                     {if mute_target, do: "Muting…", else: "Unmuting…"}
-                  </span>
-                  <%!-- `:if={!leaving? and !muting? and muted_done?}`, not an
-                     `else` branch of the clause above: `muting?` and
-                     `muted_done?` already exclude each other
-                     (`muted_done?` is computed `!muting? and ...`), but
-                     spelling both guards out here keeps this `<span>`
-                     correct even if a future edit reorders the ones above
-                     it. --%>
-                  <span
-                    :if={!leaving? and !muting? and muted_done?}
-                    data-role="meeting-agent-muted"
-                    class="whitespace-nowrap text-base-content/60"
-                  >
+                  </bdi>
+                  <bdi :if={!leaving? and !muting? and muted_done?} data-role="meeting-agent-muted">
                     Muted
-                  </span>
-                  <%!-- "Listening…" (mockup's own word for a held key — item 4:
-                     "Idle → Listening…" — replacing this app's prior
-                     "Talking…" wording, which described the HUMAN's action
-                     rather than the AGENT's status and read oddly beside
-                     every other word in this same slot, all of which are
-                     agent states). `data-role="meeting-agent-talking"` is
-                     kept (existing tests and the sr-only live region both
-                     key off "talking" for the concept of this viewer's own
-                     held row) — only the VISIBLE word changes. --%>
-                  <span
-                    :if={!leaving? and !muting? and !muted_done? and own_pressed?}
-                    data-role="meeting-agent-talking"
-                    class="inline-flex items-center gap-1 whitespace-nowrap text-primary"
-                  >
-                    <span class="hero-signal size-3 animate-pulse" aria-hidden="true"></span>
-                    Listening…
-                  </span>
-                  <span
-                    :if={!leaving? and !muting? and !muted_done? and !own_pressed? and held_by_other?}
+                  </bdi>
+                  <bdi
+                    :if={!leaving? and !muting? and !muted_done? and held_by_other?}
                     data-role="meeting-agent-held-by"
-                    class="min-w-0 truncate whitespace-nowrap text-base-content/60"
                   >
                     Held by {held_by}
-                  </span>
-                  <span
-                    :if={!override_word?}
+                  </bdi>
+                  <bdi
+                    :if={!leaving? and !muting? and !muted_done? and !held_by_other?}
                     data-role="agent-activity-primary"
-                    class="whitespace-nowrap"
                   >
                     {info.primary}
-                  </span>
-                  <span :if={!override_word? and info.note} data-role="agent-activity-reason">
+                  </bdi>
+                  <bdi
+                    :if={!leaving? and !muting? and !muted_done? and !held_by_other? and info.note}
+                    data-role="agent-activity-reason"
+                  >
                     {"· " <> info.note}
-                  </span>
-                </div>
-                <%!-- `:delayed` is the ONLY state that changes the row's shape,
-                   and Saru's direction (canvas 01a07402-99e3) says why it
-                   earns that: it is the one state carrying information the
-                   first line cannot hold. The reason gets the whole second
-                   line at the rail's ~224px rather than competing with the
-                   name for the first.
-
-                   TRUNCATION ORDER — "the reason truncates LAST" — is
-                   implemented by the reason not truncating AT ALL: no
-                   `truncate` here, and `break-words` so a long clause wraps
-                   instead of clipping or overflowing. The NAME above keeps
-                   its `truncate`, so the name is what yields first, which is
-                   the ordering the direction asks for in its strongest form.
-
-                   Colour is `base-content` at reduced opacity, NOT the
-                   state's own `info`: the direction calls this line "prose,
-                   subordinate to the name it explains", and it is the reason
-                   for a state whose word is already carrying the colour. --%>
-                <div
-                  :if={info.delay_reason}
-                  data-role="agent-activity-delay-reason"
-                  class="break-words text-[11px] font-normal text-base-content/60"
+                  </bdi>
+                  <bdi
+                    :if={
+                      !leaving? and !muting? and !muted_done? and !held_by_other? and
+                        info.delay_reason
+                    }
+                    data-role="agent-activity-delay-reason"
+                  >
+                    {"· " <> info.delay_reason}
+                  </bdi>
+                </span>
+                <%!-- aria-hidden: shown only by CSS opacity while held; the
+                     held state is announced by `meeting-ptt-live-region`. --%>
+                <span
+                  class="l"
+                  aria-hidden="true"
+                  data-role={
+                    if own_pressed?, do: "meeting-agent-talking", else: "meeting-agent-listening"
+                  }
                 >
-                  {info.delay_reason}
-                </div>
+                  Listening…
+                </span>
               </div>
+            </div>
 
-              <%!-- PER-AGENT HOLD-TO-TALK (per the prototype). Press and hold
-                 this agent's row to speak directed at it; the card that
-                 forms comes back bylined to this agent. The `data-agent-id`
-                 is what the `MeetingPushToTalk` hook sends with
-                 `push_to_talk_press`, so the server knows WHO up front
-                 instead of working it out from the words afterwards.
-
-                 A real <button>, so it is keyboard-reachable (the hook
-                 binds Space/Enter to press/release), with an `aria-label`
-                 naming the agent. `phx-update="ignore"`: the hook owns the
-                 waveform bars' inline transforms and this row re-renders on
-                 every activity tick. The id carries `@id_prefix` so the
-                 desktop left rail and the People tab never collide.
-
-                 WRAPPED in a plain `<div>` that does NOT carry
-                 `phx-update="ignore"` (task 01a0cf5c stage 1): the button
-                 itself is frozen after its first mount, so a press that
-                 claims this agent's floor from ANOTHER already-connected
-                 client can never repaint the button's own `class` or
-                 `disabled`. The wrapper can, and `pointer-events-none`
-                 there is what actually stops a mouse/touch press on an
-                 already-mounted button once someone else holds the floor —
-                 the button's own `disabled=` below is a same-render
-                 baseline for a viewer who joins AFTER the floor is already
-                 held (see `seed_ask_floor_holders/2` in `MeetingLive`), not
-                 the live mechanism. Either way `AskFloor.claim/5` is the
-                 real backstop: a keyboard Space/Enter reaching the server
-                 anyway (pointer-events does not block a keydown) is
-                 refused there and answered through
-                 `push_to_talk_rejected`, same as any other refusal.
-
-                 GATED ON `@hold_to_talk?` ALONE (task 01a0d3cd stage 1) —
-                 NOT `@hold_to_talk? and is_binary(aid)` as before. Harper's
-                 "I still don't see the ASK button" report (01a0d3cd) sent
-                 this rail's whole gating shape under review; Saru's
-                 direction (canvas 01a0d3cf-a424, finding 2) is explicit
-                 that a persistent control must render disabled at a
-                 boundary rather than disappear, because a control that
-                 vanishes silently is indistinguishable from one that was
-                 never built. `is_binary(aid)` is still live evidence — a
-                 real agent row always has one, per
-                 `MeetingLive.meeting_participant_view_model/1` — so it now
-                 only disables the button (`agent_key` covers the DOM ids)
-                 instead of removing the whole wrapper from the DOM. --%>
-              <% ask_disabled? = held_by_other? or not is_binary(aid) %>
+            <div class="tools">
+              <%!-- The Ask key. `phx-update="ignore"`: the hook owns its
+                   `data-held`/`data-pressed`. The wrapper is NOT ignored, so
+                   `pointer-events-none` there blocks a press once someone
+                   else holds this agent's floor; `AskFloor.claim/5` is the
+                   server-side backstop. --%>
               <div
                 :if={@hold_to_talk?}
-                class={["contents", held_by_other? && "opacity-50 pointer-events-none"]}
+                class={["contents", held_by_other? && "pointer-events-none"]}
                 data-role="meeting-agent-hold-wrap"
                 aria-disabled={ask_disabled?}
               >
@@ -818,6 +641,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                   phx-hook="MeetingPushToTalk"
                   phx-update="ignore"
                   type="button"
+                  class="ask"
                   disabled={ask_disabled?}
                   data-role="meeting-agent-hold-to-talk"
                   data-agent-id={aid}
@@ -826,419 +650,130 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                   data-held="false"
                   aria-label={"Ask #{p.display_name || "this agent"}"}
                   title={"Ask #{p.display_name || "this agent"}"}
-                  class={
-                    [
-                      # `btn` alone, no `btn-ghost`: Saru's direction (canvas
-                      # 01a0d3cf-a424) makes this the ONE filled, labelled
-                      # control in the rail — everything else stays quiet text
-                      # on `--color-base-200` so the Ask column is the thing a
-                      # viewer's eye catches without reading. No radius utility
-                      # here on purpose: `.btn`'s own `border-radius` already
-                      # resolves to `--radius-field` (10px), which is Marlowe's
-                      # no-pill rule and a DELIBERATE departure from the mock's
-                      # pill geometry — the mock's prominence and wording are
-                      # kept, its corner radius is not (canvas, "Signature
-                      # element" section).
-                      #
-                      # Item 3a (task 01a0f324 stage 3) — FIXED FRAME, per the
-                      # canvas's "signature element": `w-[88px] h-11` is
-                      # constant across every state (idle, holding, refused,
-                      # disabled/held-by-other) and appears nowhere else in
-                      # this class list keyed to `data-pressed` or
-                      # `data-rejected` — that invariant is what stops the
-                      # control growing ~36px into neighbouring row content
-                      # the moment the waveform (below) used to widen from
-                      # `w-0` to `w-9`. `overflow-hidden` clips the 72px
-                      # interior's own content swap to the frame so nothing
-                      # it does can leak back out into the row. `relative`
-                      # anchors the hold-threshold underline (below) to
-                      # THIS frame rather than the row's own `relative` —
-                      # without it the underline's `absolute inset-x-0
-                      # bottom-0` would size itself against the row, not
-                      # the 88px key (item 1, task 01a0f842 stage 1).
-                      "group/ptt btn btn-xs w-[88px] h-11 min-h-11 flex-shrink-0 justify-center gap-1 px-2 overflow-hidden relative",
-                      # The shared touch utility (`touch-action: none`, no callout,
-                      # no selection) — the same class the old single button wore,
-                      # so a long press on a phone holds instead of raising the OS
-                      # text-selection menu and the hook's pointer capture is not
-                      # arming a control the browser has already claimed for
-                      # scrolling.
-                      "meeting-hold-target",
-                      # Rest vs. disabled fill (canvas palette table). Rest is
-                      # `--color-primary` (cyan) with a BLACK label — deliberately
-                      # `text-primary-content`, not `text-base-content`: this app's
-                      # own brand rule pairs `--color-primary` with
-                      # `--color-primary-content` specifically because the latter
-                      # is pinned black in BOTH themes (see `--color-primary-content`
-                      # doc in app.css), while `--color-base-content` flips to
-                      # near-white in the dark theme — which is exactly the
-                      # white-on-cyan the canvas rules out. Disabled drops to
-                      # `--color-base-300` fill / `--color-neutral` label, per the
-                      # same table, and never loses the "Ask" word.
-                      if(ask_disabled?,
-                        do: "bg-base-300 text-neutral",
-                        else: "bg-primary text-primary-content hover:bg-primary/90"
-                      ),
-                      # Item 1 (task 01a0f842 stage 1, canvas 01a0f846-cfb1):
-                      # pressed INVERTS the rest fill instead of repainting
-                      # it unchanged — that identical repaint was the whole
-                      # regression Harper reported ("doesn't feel tactile").
-                      # Black fill (`primary-content`), cyan label/glyph
-                      # (`primary`), cyan ring — the largest colour change
-                      # available without moving the fixed frame. The
-                      # colour swap itself is forced instant (no fade) by
-                      # the plain-CSS override in app.css keyed off this
-                      # same `data-role` — DaisyUI's `.btn` ships its own
-                      # `transition-duration: 0.2s` for these properties in
-                      # the utilities layer (see `.meeting-hold-target`'s
-                      # comment for why `!important` is what beats that),
-                      # and this stage wants the inversion to land in the
-                      # SAME FRAME as the press, not fade into it.
-                      #
-                      # Round 3 (task 01a0fa7e-afd7): `ring-2` -> `ring-[3px]`
-                      # and a dedicated `ring-offset-2` against the inverted
-                      # (black) fill — per the dispatch's own menu of
-                      # strengthenings ("a more obvious ring/glow"). The
-                      # offset matters more than the extra pixel here: at
-                      # `ring-2` with no offset the ring sits flush against
-                      # the button's own edge and partially reads as the
-                      # button's border, not a separate "something changed"
-                      # signal; the offset (rendered in the inverted
-                      # `primary-content` fill it now sits on, via
-                      # `ring-offset-primary-content`) puts a visible gap
-                      # between the button's edge and the ring.
-                      "data-[pressed=true]:bg-primary-content data-[pressed=true]:text-primary",
-                      "data-[pressed=true]:ring-[3px] data-[pressed=true]:ring-primary",
-                      "data-[pressed=true]:ring-offset-2 data-[pressed=true]:ring-offset-primary-content",
-                      "data-[rejected=no-microphone]:text-error",
-                      "data-[rejected=microphone-muted]:text-error",
-                      "data-[rejected=pointer-lost]:text-error",
-                      # `held-by-other` (task 01a0cf5c stage 1): the SERVER
-                      # refused because another presser already has this
-                      # agent's floor — see `MeetingPushToTalk._serverReject`.
-                      "data-[rejected=held-by-other]:text-error"
-                    ]
-                  }
                 >
-                  <%!-- Item 3a interior (task 01a0f324 stage 3): the 72px
-                     interior slot that swaps content while the OUTER frame
-                     above stays fixed. Idle/disabled/refused shows the
-                     16px `hero-signal` glyph; holding shows the 36px
-                     waveform instead — the two are absolutely positioned
-                     over the SAME `w-9 h-3` box so swapping between them
-                     never nudges the label that follows. `relative` on the
-                     slot plus `absolute inset-0`/`inset-y-0 left-0` on its
-                     two children is what makes that overlap possible; a
-                     plain `hidden`/`flex` toggle would have removed the
-                     icon from flow and let the label creep left to fill
-                     the gap, moving the ONE thing (the label) the canvas
-                     needs to stay put while its neighbour changes. --%>
-                  <span class="relative h-3 w-9 shrink-0" data-role="meeting-agent-hold-indicator">
-                    <span
-                      class="hero-signal absolute inset-y-0 left-0 size-3.5 transition-opacity duration-75 group-data-[held=true]/ptt:opacity-0"
-                      aria-hidden="true"
-                    >
-                    </span>
-                    <%!-- The waveform, hidden until the key is down. Twelve
-                       bars, scaled on the Y axis by the hook; `currentColor`
-                       keeps them on whatever token the button is wearing so
-                       the armed and refused states carry through without JS
-                       naming a colour.
-
-                       Task 01a0d3cd stage 4 gave this a fixed `w-9`, fading
-                       it in with `opacity` alone rather than the FULL width
-                       (`~35px`) it used to occupy unconditionally. Task
-                       01a0f324 stage 3 finishes that job: `w-9` used to be
-                       the WAVEFORM's own final width sitting inside a
-                       button with no width of its own, so growing from `w-0`
-                       to `w-9` still grew the whole control by the same
-                       36px into neighbouring row content — the button just
-                       had nothing to clip it against. Now the OUTER button
-                       is a fixed 88px frame (see its `class=` above) and
-                       this span is `absolute inset-0` inside the shared
-                       `w-9` slot next to the icon, so its opacity fade
-                       moves nothing outside itself. The bars' own `scaleY`
-                       transforms (`ptt_waveform.js`) never read the
-                       container's width, so none of this costs the hook
-                       anything it depends on.
-
-                       Item 1 (task 01a0f842 stage 1, canvas 01a0f846-cfb1):
-                       this swap now keys off `data-held`, not
-                       `data-pressed` — `data-held` only flips true once
-                       `MeetingPushToTalk`'s hold-threshold timer actually
-                       fires (`HOLD_THRESHOLD_MS`, 380ms), where
-                       `data-pressed` flips the instant the pointer goes
-                       down. The canvas wants the waveform to replace the
-                       glyph exactly when the hold threshold is crossed —
-                       the same moment the underline below finishes
-                       drawing and the heard card opens — not at 0ms. --%>
-                    <%!-- `gap-0.5` (2px): both reference canvases set
-                       `.bars { gap: 2px }`; this was `gap-px` (1px). --%>
-                    <span
-                      class="absolute inset-0 flex items-center gap-0.5 opacity-0 transition-opacity duration-75 group-data-[held=true]/ptt:opacity-100"
-                      data-role="meeting-agent-hold-waveform"
-                      aria-hidden="true"
-                    >
-                      <%!-- Fidelity fix: both reference canvases draw these
-                         bars at `width: 3px` and full-strength
-                         `currentColor` (no opacity reduction), with
-                         `transition: height .06s`. This span had drifted
-                         to `w-0.5` (2px — Tailwind has no bare 3px step,
-                         hence the arbitrary value), a flat `opacity-70`
-                         dimming never present in either mock, and
-                         `duration-75` (75ms) against the mock's 60ms.
-
-                         Round 5 (Dalton's PR #1178 re-check, item 6):
-                         COUNT was also wrong — both canvases draw exactly
-                         FOUR bars (`<i></i><i></i><i></i><i></i>`), not
-                         twelve. Twelve bars at 3px with a 2px gap need
-                         12*3 + 11*2 = 58px, squeezed into this slot's
-                         36px (`w-9`) — the browser has no choice but to
-                         shrink every bar to ~1.2px regardless of the
-                         `w-[3px]` class, which is what made the earlier
-                         width fix above look like it never landed. Four
-                         bars at the same 3px/2px need only 4*3 + 3*2 =
-                         18px, well inside 36px, so they render at their
-                         declared width with room to spare. --%>
-                      <span
-                        :for={_bar <- 1..4}
-                        data-ptt-bar
-                        class="h-full w-[3px] origin-center rounded-full bg-current transition-transform duration-[60ms]"
-                        style="transform: scaleY(0.08)"
-                      >
-                      </span>
-                    </span>
-                  </span>
-                  <%!-- The label (task 01a0d3cd stage 2, canvas 01a0d3cf-a424
-                     finding 1: "Label the button... the word is the fix").
-                     An icon-only ghost button in a column of avatars reads as
-                     a status glyph, not a control — this is what makes it
-                     legible as a button at all. Public Sans 13 medium,
-                     `shrink-0 whitespace-nowrap` so "Ask" never truncates or
-                     wraps at any rail width, per the canvas's Type section.
-
-                     Round 5 (Dalton's PR #1178 re-check, item 4): the mockup
-                     crossfades this word to "Listen" the instant the key
-                     goes down (`.ask:active .lbl .off{opacity:0} .on{opacity:
-                     1}` — on `:active`, not gated on the 380ms hold
-                     threshold), and this control never did. Same stacking
-                     trick already used two spans up for the icon/waveform
-                     swap: both words sit in the SAME grid cell
-                     (`col-start-1 row-start-1`), an `invisible` sizer gives
-                     the cell the width of the WIDER word so the swap never
-                     resizes the button, and `data-pressed` (not `data-held`)
-                     drives the crossfade — matching the mock's immediate,
-                     un-thresholded swap. --%>
-                  <span
-                    class="relative inline-grid shrink-0 whitespace-nowrap text-[13px] font-medium"
-                    data-role="meeting-agent-hold-label-wrap"
-                  >
-                    <span class="invisible col-start-1 row-start-1" aria-hidden="true">Listen</span>
-                    <span
-                      class="col-start-1 row-start-1 shrink-0 whitespace-nowrap transition-opacity duration-75 group-data-[pressed=true]/ptt:opacity-0"
-                      data-role="meeting-agent-hold-label"
-                    >
-                      Ask
-                    </span>
-                    <span
-                      class="col-start-1 row-start-1 shrink-0 whitespace-nowrap opacity-0 transition-opacity duration-75 group-data-[pressed=true]/ptt:opacity-100"
-                      data-role="meeting-agent-hold-label-listen"
-                      aria-hidden="true"
-                    >
-                      Listen
-                    </span>
-                  </span>
-                  <%!-- Item 1 (task 01a0f842 stage 1, canvas 01a0f846-cfb1):
-                     the hold-threshold underline. Draws left-to-right
-                     across the key's bottom edge over exactly
-                     `HOLD_THRESHOLD_MS` (meeting_push_to_talk.js, 380ms)
-                     so it answers "has my press counted yet" — the one
-                     question the key could not answer before this stage.
-                     Positioned/sized/coloured and timed entirely in
-                     app.css, not Tailwind's `group-data` variant stack:
-                     the reduced-motion override needs to flip WHICH
-                     attribute drives the width (`data-pressed` vs
-                     `data-held`), and two same-specificity Tailwind
-                     utilities fighting over one property would depend on
-                     generator output order rather than a controlled
-                     cascade. --%>
-                  <span
-                    class="pointer-events-none absolute inset-x-0 bottom-0"
-                    data-role="meeting-agent-hold-underline"
+                  <span class="ring"></span>
+                  <span class="bars"><i></i><i></i><i></i><i></i></span><span class="lbl"><span
+                    class="off"
+                    data-role="meeting-agent-hold-label"
+                  >Ask</span><span
+                    class="on"
+                    data-role="meeting-agent-hold-label-listen"
                     aria-hidden="true"
-                  >
-                  </span>
+                  >Listen</span></span>
                 </button>
               </div>
 
-              <%!-- REACHABILITY, a different fact from the activity above:
-                 is this agent connected at all. It is a real signal, so
-                 it moves to the row's trailing edge rather than being
-                 dropped when the activity ring took over the avatar —
-                 matching the trailing dot on the human rows. Deliberately
-                 still reads `@agent_activity` (the pre-ceiling struct/map),
-                 not `@resolved_activity`: this is a DIFFERENT fact
-                 (connected at all, not what it is doing), the same
-                 pre-ceiling `for_agent/2` `MeetingLive.agent_status_dot_class/3`
-                 always used, and out of this stage's scope. --%>
-              <%!-- TRAILING UTILITY CLUSTER (task — desktop LEFT rail kick
-                 overflow, 2026-10-03 re-check of #1181). The status dot,
-                 the mic/camera wells and the kick ✕ used to be three bare
-                 siblings of the Ask button on ONE flex line. That line
-                 fits at the right rail's 312px (no Ask button there on
-                 desktop — `hold_to_talk?` is false), but the desktop LEFT
-                 rail (`w-64`, 256px, `meeting_live.html.heex`'s
-                 `data-role="meeting-left-rail"`) renders this SAME
-                 component with `hold_to_talk?={true}` AND
-                 `can_remove_agents?={host?(...)}` together — the one
-                 combination that puts the fixed-width 88px Ask key on the
-                 same line as this cluster. Measured live (CDP,
-                 `getBoundingClientRect`): avatar 28 + Ask 88 + dot 7 +
-                 media-slots 52 + kick 21, five 8px gaps, and the name
-                 column pinned to its 32px floor, total 268px against a
-                 223px content box — the kick button's own rect landed 28px
-                 past the rail's right edge, and `elementFromPoint` at its
-                 centre resolved to the video stage behind it, not the
-                 button. This is a SMALLER, DIFFERENT shortfall from
-                 #1178/#1181's — that one was an extra reserved status-chip
-                 column (removed in #1181); this one is the Ask key itself,
-                 which the right rail never renders at the same time as the
-                 kick button.
-
-                 THE FIX IS THE ROW'S OWN `flex-wrap` (added on this div's
-                 class above) plus grouping dot/media-slots/kick into ONE
-                 flex item, so a container too narrow for everything on one
-                 line wraps this WHOLE cluster to a second line rather than
-                 letting the kick button alone spill past the rail with
-                 nothing to catch it. `ml-auto` keeps the cluster hugging
-                 the trailing edge on BOTH lines: on one line it is a no-op
-                 (the name column's own `flex-1` already consumes the
-                 slack), and on a WRAPPED second line — where the name
-                 column is not present — it is what stops the cluster from
-                 sitting at the row's LEFT edge instead of under where it
-                 visually belongs. Nothing here depends on 256px, 88px or
-                 the mic/camera count by number: a row with more or less
-                 fixed-width content wraps the same cluster the same way,
-                 which is why this is a layout fix and not another magic
-                 width. --%>
-              <div class="ml-auto flex flex-shrink-0 items-center gap-2">
-                <span
-                  class={[
-                    "size-[7px] flex-shrink-0 rounded-full",
-                    MeetingLive.agent_status_dot_class(p, @agents_by_id, @agent_activity)
-                  ]}
-                  aria-hidden="true"
-                  data-role="agent-status-dot"
-                >
-                </span>
-
-                <.media_slots
-                  name={p.display_name || "Agent"}
-                  mic_state={mic_state(@muted, p)}
-                  camera_state={camera_state(@camera_off, p)}
-                  can_mute?={@can_remove_agents? and is_binary(aid)}
-                  participant_id={p.id}
-                  mute_target={mute_target}
-                  muted_by_host?={muted_done?}
-                />
-
-                <%!-- KICK (round 4, canvas 01a0fdf2-804d — "a ✕ beside Ask.
-                   Inline Cancel/Remove confirm, then 'Burrow left the call'
-                   with an Undo action"). Replaces the old bare "Remove from
-                   meeting" icon button (task 01a0e906 stage 3) with the SAME
-                   permission gate and the SAME `remove_agent_from_call`
-                   click underneath a confirm step — `@kick_confirm_id` is
-                   the only new thing here, and it is pure client-visible
-                   state (`kick_confirm_open`/`kick_confirm_close`), never a
-                   second removal path. Always visible at every width, same
-                   reasoning as before: hover does not exist on touch, and
-                   the phone People sheet is where hosts look. --%>
-                <div
-                  :if={@can_remove_agents?}
-                  class="flex-shrink-0 self-center"
-                  data-role="meeting-agent-kick-wrap"
-                >
-                  <button
-                    :if={@kick_confirm_id != p.id}
-                    type="button"
-                    phx-click="kick_confirm_open"
-                    phx-value-participant-id={p.id}
-                    data-role="meeting-agent-kick"
-                    disabled={leaving?}
-                    aria-label={"Remove #{p.display_name || "this agent"} from the meeting"}
-                    title="Remove from meeting"
-                    class="btn btn-ghost btn-xs btn-square text-base-content/60 hover:border hover:border-error hover:bg-error/10 hover:text-error focus-visible:border focus-visible:border-error focus-visible:bg-error/10 focus-visible:text-error max-sm:min-h-11 max-sm:min-w-11"
-                  >
-                    <.icon name="hero-x-mark" class="size-4" />
-                  </button>
-                </div>
-              </div>
-
-              <%!-- The confirm. Round 5 (Dalton's PR #1178 re-check, item
-                 8): previously `absolute right-0 top-full` off the small
-                 kick button's own wrapper — a strip hanging BELOW the row,
-                 which on desktop also spilled past the rail's edges on
-                 both sides. The mockup's own `.confirm{position:absolute;
-                 inset:4px 10px}` sits relative to the WHOLE ROW, not to
-                 the button, and paints INLINE over the row's own content
-                 rather than beside or below it. This `<li>` is already
-                 `relative` (see its own `class=` above, kept for the
-                 pressed z-index), so `absolute inset-2` here is relative
-                 to the ROW, covering its content box the same way. The
-                 row's HEIGHT never changes: an `absolute` element takes no
-                 part in the row's own flex sizing, it only paints over
-                 what is already there — same invariant the mockup's own
-                 `.row{min-height:56px}` holds for its `.confirm`/`.gone`
-                 overlays. --%>
-              <div
-                :if={@can_remove_agents? and @kick_confirm_id == p.id}
-                data-role="meeting-agent-kick-confirm"
-                class="absolute inset-2 z-20 flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-error bg-base-200 px-2 shadow-lg"
-                role="status"
+              <%!-- Host mute (deviation, decision 2 option A): the old mic
+                   well's button, in the mockup's `.kick` look. --%>
+              <button
+                :if={can_mute?}
+                type="button"
+                class="kick"
+                phx-click="toggle_agent_mute"
+                phx-value-participant-id={p.id}
+                disabled={muting?}
+                aria-pressed={to_string(!muting? and muted_done?)}
+                aria-label={mute_button_label(mute_target, muted_done?, name)}
+                title={mute_button_label(mute_target, muted_done?, name)}
+                data-role="meeting-agent-mute"
+                data-mute-state={mute_button_data_state(mute_target, muted_done?)}
               >
-                <span class="min-w-0 flex-1 truncate text-xs text-base-content">
-                  Remove {p.display_name || "this agent"}?
+                <span :if={muting?} class="loading loading-spinner loading-xs" aria-hidden="true">
                 </span>
-                <button
-                  type="button"
-                  phx-click="kick_confirm_close"
-                  data-role="meeting-agent-kick-cancel"
-                  class="btn btn-ghost btn-xs shrink-0"
+                <span
+                  :if={!muting? and muted_done?}
+                  class="hero-microphone-slash size-4"
+                  aria-hidden="true"
                 >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  phx-click="remove_agent_from_call"
-                  phx-value-participant-id={p.id}
-                  data-role="meeting-agent-kick-remove"
-                  class="btn btn-error btn-xs shrink-0"
+                </span>
+                <span
+                  :if={!muting? and !muted_done?}
+                  class="hero-microphone size-4"
+                  aria-hidden="true"
                 >
-                  Remove
-                </button>
-              </div>
+                </span>
+              </button>
+
+              <button
+                :if={@can_remove_agents?}
+                type="button"
+                class="kick"
+                phx-click="kick_confirm_open"
+                phx-value-participant-id={p.id}
+                disabled={leaving?}
+                data-role="meeting-agent-kick"
+                title={"Remove #{p.display_name || "this agent"} from this call"}
+                aria-label={"Remove #{p.display_name || "this agent"} from the meeting"}
+              >
+                ✕
+              </button>
             </div>
 
-            <%!-- REMOVE / MUTE failure lines (task 01a0f842 stage 5, canvas
-                 01a0f846-cfb1, "Palette" row for `error`). Replaces the old
-                 `text-xs text-error` removal sentence outright: small red
-                 text on this rail's light `base-200` measured about
-                 3.4:1 — clears the 3:1 floor for an icon or a rule, FAILS
-                 the 4.5:1 floor small TEXT needs. The colour signal now
-                 lives only on the 2px `border-error` rule and the icon;
-                 the sentence itself is `text-base-content`, same token
-                 the Ask control's own feedback line below already uses
-                 for the identical reason. Each is a full-width SIBLING of
-                 the row (not nested in the name column, where the old
-                 removal sentence lived truncated at the column's width),
-                 with a ghost "Try again" that re-sends the EXACT same
-                 click (`remove_agent_from_call` / `toggle_agent_mute`) —
-                 a retry is indistinguishable, to either handler, from the
-                 host's first attempt. --%>
+            <%!-- `.tr.live`: what the agent is hearing, while held. The hook
+                 writes the live transcript into `.tx p` and sizes `.vp`/`.tx`
+                 to it (cap 140px, newest line at the bottom). --%>
+            <div
+              :if={@hold_to_talk?}
+              id={"#{@id_prefix}-#{agent_key}-live"}
+              phx-update="ignore"
+              class="tr live"
+              data-role="meeting-ask-live"
+              aria-hidden="true"
+            >
+              <div class="hd"><span class="dot"></span>Listening… release to send</div>
+              <div class="vp">
+                <div class="tx">
+                  <p data-role="meeting-ask-live-text"></p>
+                </div>
+              </div>
+            </div>
+            <%!-- `.tr.sent`: shown for 2.2s after a release that actually
+                 sent (held past the 380ms threshold), with the first lines. --%>
+            <div
+              :if={@hold_to_talk?}
+              id={"#{@id_prefix}-#{agent_key}-sent"}
+              phx-update="ignore"
+              class="tr sent"
+              data-role="meeting-ask-sent"
+              aria-hidden="true"
+            >
+              <div class="hd">✓ Sent to {name}</div>
+              <div class="sum" data-role="meeting-ask-sent-summary"></div>
+            </div>
+
+            <div
+              :if={@can_remove_agents? and @kick_confirm_id == p.id}
+              class="confirm"
+              data-role="meeting-agent-kick-confirm"
+              role="status"
+            >
+              <span class="q">Remove {name}?</span>
+              <button
+                type="button"
+                class="mbtn"
+                phx-click="kick_confirm_close"
+                data-role="meeting-agent-kick-cancel"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                class="mbtn danger"
+                phx-click="remove_agent_from_call"
+                phx-value-participant-id={p.id}
+                data-role="meeting-agent-kick-remove"
+              >
+                Remove
+              </button>
+            </div>
+
+            <%!-- Failure and coaching lines (no mockup state): full-width
+                 grid rows under the row, hidden unless there is something
+                 to say. --%>
             <div
               :if={removal_error(@removal_errors, p.id)}
               data-role="meeting-agent-remove-error"
-              class="flex w-full items-start gap-1.5 border-l-2 border-error pl-1.5 text-xs leading-[1.4] text-base-content"
+              class="fb flex w-full items-start gap-1.5 border-l-2 border-error pl-1.5 text-xs leading-[1.4]"
               role="status"
             >
               <span
@@ -1252,7 +787,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                 phx-click="remove_agent_from_call"
                 phx-value-participant-id={p.id}
                 data-role="meeting-agent-remove-retry"
-                class="btn btn-ghost btn-xs shrink-0 text-base-content/80 hover:bg-base-300 hover:text-base-content"
+                class="mbtn shrink-0"
               >
                 Try again
               </button>
@@ -1261,7 +796,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
             <div
               :if={mute_error(@mute_errors, p.id)}
               data-role="meeting-agent-mute-error"
-              class="flex w-full items-start gap-1.5 border-l-2 border-error pl-1.5 text-xs leading-[1.4] text-base-content"
+              class="fb flex w-full items-start gap-1.5 border-l-2 border-error pl-1.5 text-xs leading-[1.4]"
               role="status"
             >
               <span
@@ -1275,42 +810,14 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                 phx-click="toggle_agent_mute"
                 phx-value-participant-id={p.id}
                 data-role="meeting-agent-mute-retry"
-                class="btn btn-ghost btn-xs shrink-0 text-base-content/80 hover:bg-base-300 hover:text-base-content"
+                class="mbtn shrink-0"
               >
                 Try again
               </button>
             </div>
 
-            <%!-- Item 4 (task 01a0f324 stage 3) — the Ask control's feedback
-                 line. Replaces the old floating `[data-role="meeting-agent-
-                 hold-coach"]` tooltip, which was `max-w-56` + `fixed`, so
-                 any copy longer than the early-release nudge clipped. This
-                 is a plain block, a SIBLING of the row above (not inside
-                 it, not `position: fixed`), so it renders directly under
-                 Burrow's row at the row's own full width and grows
-                 downward with the text — no `truncate`, no `max-w-*`.
-
-                 Per the canvas's self-critique, the SENTENCE stays
-                 `text-base-content` always (small coloured text fails the
-                 AA floor on `base-200`); the colour signal lives only on
-                 the leading icon and the 2px left rule, switched by
-                 `data-tone` (`error` for "couldn't hear", `warning` for
-                 "went offline"/disconnect, `neutral` for the early-release
-                 nudge). Three icon spans rather than one swapped glyph:
-                 heroicons are CSS masks keyed to a fixed class name (see
-                 task 01a07486 — `hero-microphone-slash` silently generated
-                 no CSS because Heroicons never shipped that file), so the
-                 glyph itself cannot be swapped by a data-attribute
-                 selector; only which of three fixed, real icons
-                 (`hero-information-circle` / `hero-exclamation-circle` /
-                 `hero-exclamation-triangle`, all confirmed present under
-                 `deps/heroicons`) is shown can.
-
-                 `phx-update="ignore"`: `MeetingPushToTalk` owns this
-                 element's `data-open`/`data-tone` and its text node
-                 directly (`_showFeedback`/`_hideFeedback`), same reasoning
-                 as the button and the veil — a re-render on the next
-                 activity tick must not wipe it mid-message. --%>
+            <%!-- `phx-update="ignore"`: `MeetingPushToTalk` owns this line's
+                 `data-open`/`data-tone` and text. --%>
             <div
               :if={@hold_to_talk?}
               id={"#{@id_prefix}-#{agent_key}-feedback"}
@@ -1318,11 +825,11 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
               data-role="meeting-agent-hold-feedback"
               data-open="false"
               data-tone="neutral"
-              class="group/feedback hidden w-full items-start gap-1.5 border-l-2 border-transparent pl-1.5 text-xs leading-[1.4] text-base-content data-[open=true]:flex data-[tone=error]:border-error data-[tone=warning]:border-warning"
+              class="fb group/feedback hidden w-full items-start gap-1.5 border-l-2 border-transparent pl-1.5 text-xs leading-[1.4] data-[open=true]:flex data-[tone=error]:border-error data-[tone=warning]:border-warning"
               role="status"
             >
               <span
-                class="hero-information-circle mt-0.5 hidden size-3.5 shrink-0 text-base-content/60 group-data-[tone=neutral]/feedback:block"
+                class="hero-information-circle mt-0.5 hidden size-3.5 shrink-0 group-data-[tone=neutral]/feedback:block"
                 aria-hidden="true"
               >
               </span>
@@ -1341,48 +848,76 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
             </div>
           </li>
 
-          <%!-- Round 4 (canvas 01a0fdf2-804d) — the "gone" state: "Burrow
-               left the call" with Undo, reusing the SAME
-               `@agent_removal_undo` assign and the SAME `undo_remove_agent`
-               handler `MeetingLive`'s pre-existing toast already uses
-               (task 01a0e906 stage 4). The removed row itself is gone from
-               `@agents` by the time this assign is set — a successful
-               removal's `handle_async` clause runs `refresh_participants/1`
-               in the same breath it sets this — so this draws as its OWN
-               list item, appended after the real rows, rather than
-               literally the departed row staying in place. Same undo,
-               same 8-second window, honestly a different list position
-               than the mockup's single-row demo implied.
-
-               `min-h-11` added (round 5, Dalton's PR #1178 re-check, item
-               8): the mockup's `.gone` keeps the SAME 56px the live row
-               held, and this `<li>` was shrinking from the normal row's
-               `min-h-11` (44px) down to a bare 35px (`py-1.5` with no
-               floor) the instant it appeared — a visible jump even though
-               it is a different list item, not the same row persisting.
-               This does not solve the "different list position" gap noted
-               above (that would need `@agents` to keep the departed row in
-               place, a structural change out of scope here); it only stops
-               the row that DOES appear from being visibly shorter than
-               every row around it. --%>
+          <%!-- The mockup's "gone" state. The removed agent has already left
+               `@agents`, so this is its own `.row` with the same three
+               columns (hidden by `[data-kick="gone"] > :not(.gone)`) so it
+               keeps the row's exact geometry. Same `undo_remove_agent`
+               handler and 8-second window as the page toast. --%>
           <li
             :if={@agent_removal_undo}
+            class="row"
+            data-kick="gone"
             data-role="meeting-agent-left"
-            class="flex min-h-11 items-center gap-2 rounded-lg border border-dashed border-edge px-2 py-1.5 text-xs text-base-content/60"
           >
-            <span class="min-w-0 flex-1 truncate">
-              {@agent_removal_undo.agent_name} left the call
-            </span>
-            <button
-              type="button"
-              phx-click="undo_remove_agent"
-              data-role="meeting-agent-left-undo"
-              class="btn btn-ghost btn-xs shrink-0 text-base-content hover:bg-base-300"
-            >
-              Undo
-            </button>
+            <%!-- Inert, `visibility:hidden` copies of the row's own
+                 children (the mockup hides them in place), so the gone row
+                 keeps the live row's exact grid. --%>
+            <div class="av" aria-hidden="true">{initials(@agent_removal_undo.agent_name)}</div>
+            <div class="who" aria-hidden="true">
+              <div class="nm">{@agent_removal_undo.agent_name}</div>
+              <div class="st"><span class="i">Idle</span><span class="l">Listening…</span></div>
+            </div>
+            <div class="tools" aria-hidden="true">
+              <button :if={@hold_to_talk?} type="button" class="ask" tabindex="-1">
+                <span class="ring"></span>
+                <span class="bars"><i></i><i></i><i></i><i></i></span><span class="lbl"><span class="off">Ask</span><span class="on">Listen</span></span>
+              </button>
+              <span :if={@can_remove_agents?} class="kick"></span>
+              <span :if={@can_remove_agents?} class="kick">✕</span>
+            </div>
+            <div :if={@hold_to_talk?} class="tr live" aria-hidden="true">
+              <div class="hd"><span class="dot"></span>Listening… release to send</div>
+              <div class="vp">
+                <div class="tx">
+                  <p></p>
+                </div>
+              </div>
+            </div>
+            <div :if={@hold_to_talk?} class="tr sent" aria-hidden="true">
+              <div class="hd">✓ Sent to {@agent_removal_undo.agent_name}</div>
+              <div class="sum"></div>
+            </div>
+            <div class="gone">
+              {@agent_removal_undo.agent_name} left the call<button
+                type="button"
+                class="mbtn"
+                phx-click="undo_remove_agent"
+                data-role="meeting-agent-left-undo"
+              >Undo</button>
+            </div>
           </li>
         </ul>
+
+        <%!-- "Ask Burrow to leave" (task 01a0f31d stage 4): a second entry
+             point into the SAME `remove_agent_from_call` action, shown only
+             with exactly one agent present. Kept (decision 2), below the
+             list, in the mockup's `.btn` look. --%>
+        <div
+          :if={@can_remove_agents? and length(@agents) == 1}
+          data-role="meeting-ask-agent-leave-wrapper"
+        >
+          <% [only_active_agent] = @agents %>
+          <button
+            type="button"
+            phx-click="remove_agent_from_call"
+            phx-value-participant-id={only_active_agent.id}
+            data-role="meeting-ask-agent-leave"
+            disabled={removing?(@removing_ids, only_active_agent.id)}
+            class="mbtn leave"
+          >
+            Ask Burrow to leave
+          </button>
+        </div>
       </section>
 
       <%!-- ── Section 2: Hosts / humans ─────────────────────────────────── --%>
@@ -1485,53 +1020,6 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
         </ul>
       </section>
 
-      <%!-- ── Ask Burrow to leave (task 01a0f31d stage 4) ───────────────────
-           A second, more discoverable UI ENTRY POINT into the SAME
-           remove-agent action task 01a0e906 already shipped (the per-row
-           "Remove from meeting" icon button above, `remove_agent_from_call`
-           / `Meetings.remove_agent_from_call/3`, the 8-second Undo toast) —
-           not a second action. Reuses `@can_remove_agents?` verbatim: the
-           identical `MeetingLive.host?/2` display gate the per-row icon
-           already reads, re-checked host-side the same way on click.
-
-           Rendered ONLY when exactly one agent is active in the call.
-           `@agents` is the SAME list `partition_participants/1` produced
-           above for the Agents section — a row leaves it the moment
-           `Meetings.remove_agent_from_call/3` closes it (see the per-row
-           "Leaving…" doc above), so this reads "active" for free, with no
-           second query. Burrow is the singleton default assistant this
-           control is named for; at 0 or 2+ active agents it is not clear
-           which agent "Ask Burrow to leave" would target, so the control
-           hides outright rather than becoming a picker — the per-row icons
-           remain the only removal path with more than one agent present.
-
-           Neutral ghost styling, `text-base-content` on the rail's own
-           `base-200`, never red/error tokens and never "Kick" — removing
-           an agent destroys nothing, it can be re-invited, and the
-           existing Undo toast is the guard, same reasoning as the per-row
-           icon's own comment. No confirm dialog, no row menu.
-
-           `disabled` mirrors the per-row button's own `leaving?` gate so
-           this control cannot fire a second request while the single
-           agent's removal is already in flight. --%>
-      <div
-        :if={@can_remove_agents? and length(@agents) == 1}
-        class="px-2 pb-2 pt-1"
-        data-role="meeting-ask-agent-leave-wrapper"
-      >
-        <% [only_active_agent] = @agents %>
-        <button
-          type="button"
-          phx-click="remove_agent_from_call"
-          phx-value-participant-id={only_active_agent.id}
-          data-role="meeting-ask-agent-leave"
-          disabled={removing?(@removing_ids, only_active_agent.id)}
-          class="btn btn-ghost btn-sm w-full justify-start gap-2 text-base-content/80 hover:bg-base-300 hover:text-base-content focus-visible:bg-base-300 focus-visible:text-base-content"
-        >
-          <.icon name="hero-arrow-right-on-rectangle" class="size-4" /> Ask Burrow to leave
-        </button>
-      </div>
-
       <%!-- Task 01a0cf5c stage 2, canvas 01a0cf5e-9cb0 ("Design direction:
            hold to ask"). The dimmed veil and centred "Asking <agent>…"
            card, ONE per rendered rail (not one per agent row — a viewer
@@ -1580,10 +1068,10 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
            CENTRED card was the reflow Harper's round-3 report named —
            every word visibly moved the card, and the card sits over the
            whole stage, so it moved everything under it too. The live
-           text now lives in its own fixed-size, absolutely-positioned
-           overlay (`MeetingAskHeardOverlay`, rendered as a sibling of
-           this veil below) that never grows and is never a sibling in
-           anyone's layout flow. This card keeps only the label and the
+           text now lives in the held row's own `.tr.live` popover (the
+           mockup's, see the Agents section above; the round-3 floating
+           `MeetingAskHeardOverlay` was retired by the verbatim port). This
+           card keeps only the label and the
            meter above, plus the interrupted-error line below — the
            outcome choreography (`MeetingAskFloorVeil._flyCard`), not the
            live heard text. --%>
@@ -1643,119 +1131,6 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
             >
             </span>
             <span data-role="meeting-ask-error-text" class="min-w-0 flex-1 break-words"></span>
-          </div>
-        </div>
-      </div>
-
-      <%!-- Task 01a0fa7e-afd7, design canvas 01a0fa80-da74 ("Burrow round
-           3: floating heard text and hittable rail"). The floating
-           "what Burrow heard" overlay — ONE per rendered rail, same
-           singleton reasoning as the veil above, and entirely client-
-           driven by `MeetingAskHeardOverlay` off the SAME
-           `meeting:push-to-talk-*` window events, so it opens/closes in
-           lockstep with the veil without either hook holding a reference
-           to the other.
-
-           OUT OF PAGE FLOW, ALWAYS. `fixed` positioning with `left`/
-           `top`/`width` set entirely by the hook's `_reposition` (there
-           is no Tailwind breakpoint variant here on purpose — the
-           desktop anchor depends on WHICH row is held, which no media
-           query can express) is what makes "nothing in the rail, the row
-           or the stage ever moves" true regardless of transcript length:
-           this element is never a sibling in anyone else's flex/grid
-           flow, so it has nothing to push.
-
-           FIXED SIZE FROM OPEN. The inner window below is a hard 72px
-           (3 lines at 16px/1.5) with `overflow-hidden`; the flex-col
-           `justify-end` wrapper inside it is what makes new text push
-           old text up and out the top for free, with no JS scroll
-           management — see the hook's moduledoc.
-
-           `pointer-events-none` on the container AND `[data-role=
-           "meeting-ask-heard-overlay"] *` in `app.css` on every
-           descendant (canvas: "nothing in it takes a click") — this is
-           read-only, and the hook's own overlap check
-           (`_wouldOverlapAControl`) is what keeps it off the Ask key,
-           mute/remove buttons and any "Try again" line in the first
-           place; `pointer-events-none` is the backstop for the case
-           that check cannot see coming (a control added later without
-           updating the selector list there).
-
-           `phx-update="ignore"`: the hook owns the inline position
-           styles and the status/text nodes' content directly — those are
-           never in this template's markup at all, so no patch can touch
-           them.
-
-           CORRECTION (task 01a0fa7e-afd7 stage 5/6, round 2 of this
-           task's review): `data-open`/`data-placement` are NOT actually
-           protected by `phx-update="ignore"`, despite this comment
-           previously claiming the hook "owns" them the same way it owns
-           the inline styles. `DOM.mergeAttrs(fromEl, toEl, isIgnored:
-           true)` still copies every `data-*` attribute the fresh server
-           render carries onto this ignored element on each patch — this
-           template's own literals above (`data-open="false"`,
-           `data-placement="desktop"`) are exactly what land back on the
-           live element when that happens, which is precisely why a real
-           transcript chunk could arrive while `data-open` had been
-           transiently stomped back to `"false"` mid-hold. Same mechanism
-           `MeetingPushToTalk`'s own `ask_floor_holders` doc above was
-           already corrected for; see `MeetingAskHeardOverlay.updated()`
-           for the fix. --%>
-      <div
-        :if={@hold_to_talk?}
-        id={"#{@id_prefix}-ask-heard-overlay"}
-        phx-hook="MeetingAskHeardOverlay"
-        phx-update="ignore"
-        class="pointer-events-none fixed z-50 flex flex-col gap-1 rounded-box bg-base-300 p-3 shadow-md opacity-0 transition-opacity duration-150 data-[open=true]:opacity-100"
-        data-role="meeting-ask-heard-overlay"
-        data-open="false"
-        data-placement="desktop"
-        aria-hidden="true"
-      >
-        <span
-          data-role="meeting-ask-heard-status"
-          class="text-[12px] font-medium text-base-content/60"
-        >
-          Listening while you hold
-        </span>
-        <%!-- Round 4 ("touch it" canvas 01a0fdf2-804d): grows from one
-             line up to ~7 (168px at the 24px/line `leading-6` below),
-             THEN scrolls — `overflow-y-auto`, not `overflow-hidden`, so
-             the viewer can scroll back up inside it while still holding
-             (the hook's own scroll listener is what keeps new text
-             pinned to the bottom unless they have scrolled away; see its
-             moduledoc). The old `flex-col justify-end`/hard-72px/
-             `overflow-hidden` trio relied on CLIPPING the top to fake
-             "oldest falls off" — real scrolling needs normal top-to-
-             bottom flow instead, so `justify-end` is gone too. The
-             top-fade mask lives in `app.css` (`::before` on the
-             `-window-wrap` data-role just below, NOT on this scrolling
-             div — see that wrapper's own comment for why) rather than
-             here, since it has to sit at a fixed height regardless of how
-             tall the box has grown. --%>
-        <%!-- The fade mask lives on THIS wrapper (`-window-wrap`), not on the
-             scrolling `-window` div it surrounds. `-window` is both the
-             positioning context the old `::before` anchored to AND the
-             `overflow-y-auto` box `_scrollToBottom`/`_onWindowScroll` drive
-             — an absolutely-positioned descendant of a scroll container is
-             part of that container's scrollable overflow region, so a mask
-             anchored to `-window` scrolled away WITH the text instead of
-             staying pinned to the top of the viewport: `top: 0` meant "top
-             of the content," which moves off-screen the moment `scrollTop`
-             advances, not "top of what's visible." The wrapper never
-             scrolls, so a mask anchored to it (see app.css) stays pinned to
-             the visible top edge regardless of how far `-window` has
-             scrolled. --%>
-        <div class="relative" data-role="meeting-ask-heard-window-wrap">
-          <div
-            class="max-h-[168px] overflow-y-auto"
-            data-role="meeting-ask-heard-window"
-          >
-            <div
-              data-role="meeting-ask-heard-text"
-              class="text-base leading-6 text-base-content [overflow-wrap:anywhere]"
-            >
-            </div>
           </div>
         </div>
       </div>
@@ -2083,6 +1458,32 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
   defp camera_word(:unavailable), do: "no camera"
   defp camera_word(_state), do: "camera on"
 
+  # ── Verbatim-port helpers (meeting Ask row) ─────────────────────────────
+
+  # The mockup's `.av` shows ONE uppercase initial ("B" for Burrow, and
+  # "J" even for "Harper Parker").
+  defp initials(name) when is_binary(name) do
+    case name |> String.trim() |> String.first() do
+      nil -> "?"
+      letter -> String.upcase(letter)
+    end
+  end
+
+  defp initials(_name), do: "?"
+
+  # The `.avs` badge's tone, in the mockup's two colours: `ok` (`--ok`) when
+  # the agent is connected (`agent_status_dot_class/3` answers success or
+  # warning) and its mic is on, `m` (`--m`) otherwise.
+  defp badge_tone(p, agents_by_id, activity, mic, muted_by_host?) do
+    connected? =
+      MeetingLive.agent_status_dot_class(p, agents_by_id, activity) in [
+        "bg-success",
+        "bg-warning"
+      ]
+
+    if connected? and mic != :off and not muted_by_host?, do: "ok", else: "m"
+  end
+
   # The agent id an activity signal is addressed to.
   #
   # `AgentActivity` keys on `agents.id`, which for an agent participant
@@ -2172,36 +1573,6 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
       end
     end)
   end
-
-  # ── Row alignment (task 01a0cf5d stage 3) ────────────────────────────────
-  #
-  # The rail is 312px, wider than the mock's 224px, and the row's own type
-  # sizes already meet or exceed the mock's — so "too small to read" is not
-  # a width or font problem. Rendering the rail with REAL roster data (a
-  # long agent name, a long `:delayed` reason) surfaced the actual defect:
-  # `items-center` on a row whose two fixed-size ends (the 28px avatar, the
-  # media-slot cluster) sit either side of a text column that can grow well
-  # past them.
-  #
-  # `:delayed` is the ONLY state with an unbounded second line — the reason
-  # clause deliberately never truncates (see the template's TRUNCATION
-  # ORDER note) — so it is the only row that can balloon. Captured via CDP
-  # at 312px with `Delayed.new!/1`'s realistic long-form text ("waiting on
-  # GitHub for a workflow run that has been queued for several minutes
-  # now"): the row grew to 130.6px, and `items-center` placed the avatar's
-  # top edge 51.3px into it — dead centre of a paragraph, 45px away from
-  # the name it identifies. The state lives ON the face precisely so a
-  # viewer can read who-is-doing-what at a glance; centred alignment on a
-  # tall row breaks that exact pairing, which reads as illegible even
-  # though every character is full-size and full-contrast.
-  #
-  # Scoped to the one state that can grow: an ordinary row (name + one
-  # working line) is at or near `min-h-11` regardless of alignment, so
-  # `items-start` vs `items-center` there is a few px, not a defect.
-  defp agent_row_align_class(%{delay_reason: reason}) when is_binary(reason),
-    do: "items-start"
-
-  defp agent_row_align_class(_info), do: "items-center"
 
   # ── One composed row ────────────────────────────────────────────────────
   #

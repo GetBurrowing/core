@@ -207,17 +207,16 @@ defmodule PlatformWeb.Components.Meetings.NoVoiceWorkerIsANoteNotAStateTest do
 
   defp primary_word(html), do: text_at(html, ~s([data-role="agent-activity-primary"]))
   defp trailing_note(html), do: text_at(html, ~s([data-role="agent-activity-reason"]))
-  defp sr_label(html), do: text_at(html, ~s([data-role="agent-activity-avatar"] .sr-only))
+  # The accessible activity sentence: the avatar's sr-only text other than
+  # the mic indicator and the mic/camera summary.
+  defp sr_label(html),
+    do:
+      text_at(
+        html,
+        ~s|[data-role="agent-activity-avatar"] .sr-only:not([data-role="participant-state-summary"]):not([data-role="mic-indicator"])|
+      )
 
   defp nodes(html, selector), do: html |> frag() |> LazyHTML.query(selector) |> Enum.to_list()
-
-  defp ring_class(html) do
-    html
-    |> frag()
-    |> LazyHTML.query(~s([data-role="agent-activity-ring"]))
-    |> LazyHTML.attribute("class")
-    |> List.first()
-  end
 
   defp activity_state(html) do
     html
@@ -227,12 +226,10 @@ defmodule PlatformWeb.Components.Meetings.NoVoiceWorkerIsANoteNotAStateTest do
     |> List.first()
   end
 
-  defp glyph(html), do: text_at(html, ~s([data-role="agent-activity-glyph"]))
-
-  # The BLOCK lines of the row's text column — the three `<div>`s that can
-  # occupy a line of their own. The trailing note is deliberately NOT
-  # counted: it is an inline `<span>` inside the word row, which is why it
-  # can be present without changing the row's line count.
+  # The row's text column: the name, the state line, and (before the Ask
+  # mockup port) a separate delay-reason line. On the mockup's one-line
+  # `.st` a delay reason is inline in `.st .i`, so a count of 3 now means
+  # only "a delay-reason node exists"; the trailing note is never counted.
   @block_line_roles ~s([data-role="participant-name"], ) <>
                       ~s([data-role="agent-activity-word"], ) <>
                       ~s([data-role="agent-activity-delay-reason"])
@@ -252,7 +249,7 @@ defmodule PlatformWeb.Components.Meetings.NoVoiceWorkerIsANoteNotAStateTest do
   # ── The fix, against the exact failing configuration ──────────────────
 
   describe "an agent working with a registered-but-offline voice worker" do
-    test ":composing renders Writing, keeps its ring and pulse, and does not grow a line" do
+    test ":composing renders Writing, keeps its working state, and does not grow a line" do
       agent = failing_config!()
       mid = meeting_id()
       t0 = ~U[2026-01-01 00:00:00Z]
@@ -264,18 +261,9 @@ defmodule PlatformWeb.Components.Meetings.NoVoiceWorkerIsANoteNotAStateTest do
       # The word is the working one, with its age in the same slot.
       assert primary_word(html) == "Writing · 5s"
       refute primary_word(html) =~ "Delayed"
+      # The working state on the avatar (the Ask mockup draws no ring or
+      # glyph; Writing vs Thinking is the word).
       assert activity_state(html) == "composing"
-      assert glyph(html) == "✎"
-
-      # The working colour, and the pulse that is the ONLY thing
-      # distinguishing :composing from :thinking on this row.
-      assert ring_class(html) =~ "border-info"
-      assert ring_class(html) =~ "text-info"
-
-      assert ring_class(html) =~ "animate-pulse",
-             ":composing without animate-pulse is indistinguishable from :thinking"
-
-      refute ring_class(html) =~ "border-base-content/25"
 
       # The row does not change height: no second block line.
       assert block_line_count(html) == 2
@@ -285,7 +273,7 @@ defmodule PlatformWeb.Components.Meetings.NoVoiceWorkerIsANoteNotAStateTest do
       assert sr_label(html) == "Vox is Writing"
     end
 
-    test ":thinking renders Thinking with the static ring, not Delayed" do
+    test ":thinking renders Thinking, not Delayed" do
       agent = failing_config!()
       mid = meeting_id()
       t0 = ~U[2026-01-01 00:00:00Z]
@@ -296,9 +284,7 @@ defmodule PlatformWeb.Components.Meetings.NoVoiceWorkerIsANoteNotAStateTest do
 
       assert primary_word(html) == "Thinking · 3s"
       assert activity_state(html) == "thinking"
-      assert glyph(html) == "◐"
-      assert ring_class(html) =~ "border-info"
-      refute ring_class(html) =~ "animate-pulse"
+      refute primary_word(html) =~ "Delayed"
       assert block_line_count(html) == 2
       assert sr_label(html) == "Vox is Thinking"
     end
@@ -427,9 +413,9 @@ defmodule PlatformWeb.Components.Meetings.NoVoiceWorkerIsANoteNotAStateTest do
 
   # The fix narrows the promotion set; it does not empty it. An agent whose
   # BRAIN is offline is genuinely stuck, and must still read Delayed with
-  # its reason on the protected second line. Without this, a change that
+  # its reason in its own node. Without this, a change that
   # simply stopped promoting anything at all would pass every test above.
-  test "an offline BRAIN still promotes to Delayed, with the second line" do
+  test "an offline BRAIN still promotes to Delayed, with its reason node" do
     owner = user!()
     agent = agent!()
 
@@ -454,7 +440,10 @@ defmodule PlatformWeb.Components.Meetings.NoVoiceWorkerIsANoteNotAStateTest do
 
     assert primary_word(html) == "Delayed"
     assert activity_state(html) == "delayed"
-    assert text_at(html, ~s([data-role="agent-activity-delay-reason"])) == "agent went offline"
+
+    assert text_at(html, ~s(.st .i [data-role="agent-activity-delay-reason"])) ==
+             "· agent went offline"
+
     assert block_line_count(html) == 3
     assert sr_label(html) == "Vox is Delayed, agent went offline"
   end

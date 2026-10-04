@@ -1,6 +1,6 @@
 import { Track } from "livekit-client"
 import { paintBars } from "./lib/ptt_waveform"
-import { getHold, beginHold, patchHold, clearHold } from "./lib/ptt_hold_state"
+import { getHold, beginHold, patchHold, clearHold, appendHoldText } from "./lib/ptt_hold_state"
 
 /**
  * MeetingPushToTalk — the press-to-address-an-agent control, and the
@@ -126,6 +126,14 @@ const OFFLINE_FEEDBACK = {
 // all — see `_showFeedback`'s `autoHide` option.
 const FEEDBACK_AUTO_HIDE_MS = 4000
 
+// Ask-row verbatim port: the mockup's `.tr.sent` runs `sent 2.2s`
+// (`@keyframes sent{0%,80%{opacity:1}100%{opacity:0}}`), so `data-sent`
+// comes off the row once that animation has finished.
+const SENT_MS = 2_200
+// The mockup's `.vp{max-height:140px}` and its 20px single-line floor.
+const VP_CAP_PX = 140
+const LINE_PX = 20
+
 const MeetingPushToTalk = {
   mounted() {
     this._levels = []
@@ -196,9 +204,27 @@ const MeetingPushToTalk = {
       if (!payload || payload.agent_id !== agentId) return
       this._serverReject(payload.reason)
     })
+
+    // Live transcript for THIS agent's press, into the row's `.tx p`.
+    // Final segments only (the server filters). The text buffer lives on
+    // `window` (`ptt_hold_state`) so a remount mid-hold restores it.
+    this.handleEvent("meeting_ask_transcript_chunk", (payload) => {
+      if (!payload || payload.agent_id !== this._agentId()) return
+      if (typeof payload.text !== "string" || payload.text === "") return
+      if (this._pressed) {
+        appendHoldText(payload.text)
+        const hold = getHold()
+        this._setLiveText(hold && hold.text ? hold.text : payload.text)
+      } else if (this._sentShowing) {
+        // A late final segment inside the server's release grace window.
+        this._sentText = this._sentText ? `${this._sentText} ${payload.text}` : payload.text
+        this._setSentText(this._sentText)
+      }
+    })
   },
 
   destroyed() {
+    if (this._sentTimer) clearTimeout(this._sentTimer)
     this._unbind()
     this._teardownAnalyser()
     this._clearHoldThresholdTimer()
@@ -258,7 +284,7 @@ const MeetingPushToTalk = {
   // the ordinary (non-ignored) merge path on the same patch.
   updated() {
     this.el.dataset.pressed = this._pressed ? "true" : "false"
-    this.el.dataset.held = this._heldLongEnough ? "true" : "false"
+    this.el.dataset.held = this._pressed ? "true" : "false"
     this._setRowPressed(this._pressed)
   },
 
@@ -314,8 +340,9 @@ const MeetingPushToTalk = {
     this._levels = []
     this._heldLongEnough = Boolean(hold.heldLongEnough)
     this.el.dataset.pressed = "true"
-    this.el.dataset.held = this._heldLongEnough ? "true" : "false"
+    this.el.dataset.held = "true"
     this._setRowPressed(true)
+    this._setLiveText(hold.text || "")
 
     // Reacquire real OS-level pointer capture on THIS node for a pointer
     // that is still active but was captured by a node that no longer
@@ -365,7 +392,6 @@ const MeetingPushToTalk = {
           if (!this._pressed) return
           this._heldLongEnough = true
           patchHold({ heldLongEnough: true })
-          this.el.dataset.held = "true"
           this._dispatch("meeting:push-to-talk-held", {
             agentId: this._agentId(),
             agentName: this._agentName(),
@@ -411,12 +437,13 @@ const MeetingPushToTalk = {
       heldLongEnough: false,
     })
     this.el.dataset.pressed = "true"
-    // Item 1 (task 01a0f842 stage 1, canvas 01a0f846-cfb1): `data-held`
-    // is the separate, later signal the template's underline and
-    // glyph-to-waveform swap key off — it only flips true once
-    // `_scheduleHoldThreshold` below actually fires, not at press.
-    this.el.dataset.held = "false"
+    // Verbatim port: `data-held` is the mockup's `:active`, so it flips
+    // at press. The 380ms send threshold (`_heldLongEnough`) is unchanged
+    // and is still what decides whether a release counts as a send.
+    this.el.dataset.held = "true"
     this._setRowPressed(true)
+    this._clearSent()
+    this._setLiveText("")
     // A fresh press supersedes whatever the LAST one left showing (an
     // old rejection, the early-release nudge) — it is either about to
     // succeed or fail on its own terms, not carry forward stale copy.
@@ -445,12 +472,6 @@ const MeetingPushToTalk = {
       if (!this._pressed) return
       this._heldLongEnough = true
       patchHold({ heldLongEnough: true })
-      // Item 1 (task 01a0f842 stage 1, canvas 01a0f846-cfb1): this is
-      // the exact moment the underline finishes drawing and the
-      // glyph-to-waveform swap happens — both are keyed off `data-held`
-      // in the template/CSS, not `data-pressed`, specifically so they
-      // land HERE (380ms) rather than at press (0ms).
-      this.el.dataset.held = "true"
       this._vibrate()
       this._dispatch("meeting:push-to-talk-held", {
         agentId: this._agentId(),
@@ -498,6 +519,8 @@ const MeetingPushToTalk = {
     // the pending `:held` timeout, but does not tell us whether it had
     // already fired.
     const heldLongEnough = this._heldLongEnough
+    const hold = getHold()
+    const heardText = hold && typeof hold.text === "string" ? hold.text : ""
 
     this._clearHoldThresholdTimer()
     this._pressed = false
@@ -506,6 +529,7 @@ const MeetingPushToTalk = {
     this.el.dataset.pressed = "false"
     this.el.dataset.held = "false"
     this._setRowPressed(false)
+    this._resetLiveSize()
     this._teardownAnalyser()
     this._paintBars(0)
     this.pushEvent("push_to_talk_release", {})
@@ -516,6 +540,7 @@ const MeetingPushToTalk = {
     // THIS row, instead of `MeetingAskFloorVeil`'s centred card closing —
     // there is nothing for it to close.
     if (heldLongEnough) {
+      this._showSent(heardText)
       this._dispatch("meeting:push-to-talk-ended", { agentId: this._agentId() })
     } else {
       this._showFeedback(EARLY_RELEASE_FEEDBACK.tone, EARLY_RELEASE_FEEDBACK.text)
@@ -587,6 +612,7 @@ const MeetingPushToTalk = {
     this.el.dataset.pressed = "false"
     this.el.dataset.held = "false"
     this._setRowPressed(false)
+    this._resetLiveSize()
     this.el.dataset.rejected = reason
     this._paintBars(0)
     // Item 4 (task 01a0f324 stage 3): `held-by-other` is deliberately
@@ -795,9 +821,97 @@ const MeetingPushToTalk = {
     return this._rowNode
   },
 
-  _setRowPressed(pressed) {
+  // The row's `data-pressed` and `data-held` (the mockup's
+  // `.row:has(.ask:active)`), set at press. The row is NOT
+  // `phx-update="ignore"`, so a plain write would be stripped by the next
+  // LiveView patch of the row; `this.js().setAttribute` is sticky and is
+  // re-applied after every patch. The direct write keeps the change in the
+  // same frame (and is all a unit-test harness has).
+  _setRowAttr(name, value) {
     const row = this._rowEl()
-    if (row && row.dataset) row.dataset.pressed = pressed ? "true" : "false"
+    if (!row) return
+    const js = typeof this.js === "function" ? this.js() : null
+    if (js && typeof js.setAttribute === "function") {
+      try {
+        js.setAttribute(row, name, value)
+      } catch (_err) {
+        // fall through to the direct write
+      }
+    }
+    const key = name.replace(/^data-/, "").replace(/-([a-z])/g, (_m, c) => c.toUpperCase())
+    if (row.dataset) row.dataset[key] = value
+    else if (typeof row.setAttribute === "function") row.setAttribute(name, value)
+  },
+
+  _setRowPressed(pressed) {
+    const value = pressed ? "true" : "false"
+    this._setRowAttr("data-pressed", value)
+    this._setRowAttr("data-held", value)
+  },
+
+  // ── Live transcript and the sent confirmation (verbatim port) ──────────
+  //
+  // `.tr.live .vp > .tx > p` and `.tr.sent .sum` are `phx-update="ignore"`
+  // children of this row. The mockup grows `.vp` 20→140px over 9s and `.tx`
+  // 20→260px over 14s against scripted text; live speech cannot follow a
+  // clock, so `.tx` takes the text's real height (floor 20px) and `.vp`
+  // takes that height capped at 140px. `.tx` is bottom-anchored inside
+  // `.vp`, so past the cap the oldest lines clip at the top and the newest
+  // line stays at the bottom, as in the mockup. `data-overflowing` turns on
+  // the mockup's top fade at that point.
+  _rowQuery(selector) {
+    const row = this._rowEl()
+    return row && typeof row.querySelector === "function" ? row.querySelector(selector) : null
+  },
+
+  _setLiveText(text) {
+    const p = this._rowQuery(".tr.live .tx p")
+    if (!p) return
+    p.textContent = text || ""
+    const tx = p.parentElement
+    const vp = tx ? tx.parentElement : null
+    if (!tx || !vp || !tx.style || !vp.style) return
+    const h = Math.max(LINE_PX, Math.ceil(p.scrollHeight || p.offsetHeight || 0))
+    tx.style.height = `${h}px`
+    vp.style.height = `${Math.min(h, VP_CAP_PX)}px`
+    vp.dataset.overflowing = h > VP_CAP_PX ? "true" : "false"
+  },
+
+  // On release the mockup's `.vp`/`.tx`/`::before` animations stop (they
+  // only run under `:active`), so the box drops back to its 20px rest size
+  // with no top fade. The text stays until the next press clears it.
+  _resetLiveSize() {
+    const p = this._rowQuery(".tr.live .tx p")
+    const tx = p ? p.parentElement : null
+    const vp = tx ? tx.parentElement : null
+    if (tx && tx.style) tx.style.height = ""
+    if (vp && vp.style) vp.style.height = ""
+    if (vp && vp.dataset) vp.dataset.overflowing = "false"
+  },
+
+  _setSentText(text) {
+    const sum = this._rowQuery(".tr.sent .sum")
+    if (sum) sum.textContent = text || ""
+  },
+
+  // Only a release that actually sent (held past HOLD_THRESHOLD_MS) gets
+  // "✓ Sent to <agent>"; an early release gets the coaching line instead.
+  _showSent(text) {
+    this._clearSent()
+    this._sentText = text || ""
+    this._setSentText(this._sentText)
+    this._sentShowing = true
+    this._setRowAttr("data-sent", "true")
+    this._sentTimer = setTimeout(() => this._clearSent(), SENT_MS)
+  },
+
+  _clearSent() {
+    if (this._sentTimer) {
+      clearTimeout(this._sentTimer)
+      this._sentTimer = null
+    }
+    if (this._sentShowing) this._setRowAttr("data-sent", "false")
+    this._sentShowing = false
   },
 
   // ── The feedback line (task 01a0f324 stage 3, item 4) ─────────────────────

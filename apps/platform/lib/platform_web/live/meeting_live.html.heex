@@ -1531,11 +1531,78 @@
            and a hold hint, not the invite control. --%>
         <aside
           :if={not @mobile_viewport?}
-          class="hidden w-64 flex-shrink-0 flex-col border-r border-edge bg-base-100 lg:flex"
+          class="hidden w-[340px] flex-shrink-0 flex-col border-r border-edge bg-base-100 lg:flex"
           data-role="meeting-left-rail"
         >
-          <%!-- Cards on top — flex-1 so the board takes the leftover height and
-             the agents section keeps its natural size below, per the mock. --%>
+          <%!-- "In the room" agents ON TOP, outside any scroller (Ask-row
+             verbatim port, decision 1): the mockup's transcript popover
+             (`.tr`, `position:absolute; top:calc(100% + 6px)`) opens BELOW
+             the held row and over whatever follows. Below the cards, inside
+             an `overflow-y-auto` box, it opened off-screen and its hidden
+             boxes forced a permanent scrollbar. The rail is 340px (the
+             mockup panel is 300) so the host-mute button fits in `.tools`
+             with the name column at about the mockup's width.
+
+             Previously: "In the room" agents below the cards, per the mock. Same
+             `participant_rail` the right rail's People tab renders; the roster
+             is drawn from the same assigns, so the two stay in step.
+
+             THIS HEADER ONLY (task 01a0d3cd stage 2, canvas 01a0d3cf-a424,
+             Type section) breaks from every other rail header's uppercase
+             `/50` treatment: Public Sans 12 medium, sentence case, not
+             tracked out. The canvas is explicit this is a deliberate
+             difference from "Cards" above it and from `participant_rail`'s
+             own internal section headings, not an inconsistency to fix
+             later — so those stay `text-[11px] uppercase tracking-[0.09em]`
+             untouched. --%>
+          <section
+            class="flex flex-shrink-0 flex-col border-b border-edge"
+            data-role="meeting-left-rail-agents"
+          >
+            <div class="flex flex-shrink-0 items-center border-b border-edge px-3 py-2.5">
+              <span class="text-xs font-medium text-base-content/50">
+                In the room
+              </span>
+            </div>
+            <div>
+              <ParticipantRail.participant_rail
+                participants={assigns[:participants] || []}
+                agents_by_id={assigns[:agents_by_id] || %{}}
+                meeting={@meeting}
+                agent_activity={assigns[:agent_activity]}
+                muted_identities={
+                  roster_off_set(
+                    @muted_identities,
+                    viewer_gallery_identity(assigns),
+                    @mic_enabled
+                  )
+                }
+                camera_off_identities={
+                  roster_off_set(
+                    @camera_off_identities,
+                    viewer_gallery_identity(assigns),
+                    @camera_enabled
+                  )
+                }
+                now={assigns[:agent_activity_now]}
+                hold_to_talk?={true}
+                id_prefix="meeting-left-ptt"
+                pressed_agent_id={assigns[:pressed_agent_id]}
+                ask_floor_holders={assigns[:ask_floor_holders] || %{}}
+                can_remove_agents?={host?(assigns[:current_participant], @meeting)}
+                removing_ids={assigns[:removing_agent_ids] || MapSet.new()}
+                removal_errors={assigns[:agent_removal_errors] || %{}}
+                muting_ids={assigns[:muting_agent_ids] || %{}}
+                muted_agent_ids={assigns[:muted_agent_ids] || MapSet.new()}
+                mute_errors={assigns[:agent_mute_errors] || %{}}
+                kick_confirm_id={assigns[:kick_confirm_id]}
+                agent_removal_undo={assigns[:agent_removal_undo]}
+              />
+            </div>
+          </section>
+
+          <%!-- Cards below the agents — flex-1 so the board takes the
+             leftover height. --%>
           <section
             class="flex min-h-0 flex-1 flex-col overflow-hidden"
             data-role="meeting-left-rail-cards"
@@ -1597,64 +1664,6 @@
                  Dalton's to fix separately. Do not re-add a render call
                  here without re-confirming this is still what "Intents
                  area" means. --%>
-            </div>
-          </section>
-
-          <%!-- "In the room" agents below the cards, per the mock. Same
-             `participant_rail` the right rail's People tab renders; the roster
-             is drawn from the same assigns, so the two stay in step.
-
-             THIS HEADER ONLY (task 01a0d3cd stage 2, canvas 01a0d3cf-a424,
-             Type section) breaks from every other rail header's uppercase
-             `/50` treatment: Public Sans 12 medium, sentence case, not
-             tracked out. The canvas is explicit this is a deliberate
-             difference from "Cards" above it and from `participant_rail`'s
-             own internal section headings, not an inconsistency to fix
-             later — so those stay `text-[11px] uppercase tracking-[0.09em]`
-             untouched. --%>
-          <section
-            class="flex max-h-[45%] flex-shrink-0 flex-col border-t border-edge"
-            data-role="meeting-left-rail-agents"
-          >
-            <div class="flex flex-shrink-0 items-center border-b border-edge px-3 py-2.5">
-              <span class="text-xs font-medium text-base-content/50">
-                In the room
-              </span>
-            </div>
-            <div class="min-h-0 flex-1 overflow-y-auto">
-              <ParticipantRail.participant_rail
-                participants={assigns[:participants] || []}
-                agents_by_id={assigns[:agents_by_id] || %{}}
-                meeting={@meeting}
-                agent_activity={assigns[:agent_activity]}
-                muted_identities={
-                  roster_off_set(
-                    @muted_identities,
-                    viewer_gallery_identity(assigns),
-                    @mic_enabled
-                  )
-                }
-                camera_off_identities={
-                  roster_off_set(
-                    @camera_off_identities,
-                    viewer_gallery_identity(assigns),
-                    @camera_enabled
-                  )
-                }
-                now={assigns[:agent_activity_now]}
-                hold_to_talk?={true}
-                id_prefix="meeting-left-ptt"
-                pressed_agent_id={assigns[:pressed_agent_id]}
-                ask_floor_holders={assigns[:ask_floor_holders] || %{}}
-                can_remove_agents?={host?(assigns[:current_participant], @meeting)}
-                removing_ids={assigns[:removing_agent_ids] || MapSet.new()}
-                removal_errors={assigns[:agent_removal_errors] || %{}}
-                muting_ids={assigns[:muting_agent_ids] || %{}}
-                muted_agent_ids={assigns[:muted_agent_ids] || MapSet.new()}
-                mute_errors={assigns[:agent_mute_errors] || %{}}
-                kick_confirm_id={assigns[:kick_confirm_id]}
-                agent_removal_undo={assigns[:agent_removal_undo]}
-              />
             </div>
           </section>
         </aside>
