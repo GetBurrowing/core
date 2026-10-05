@@ -33,7 +33,7 @@ JS name `SuiteNative`). A v2 meetings plugin registers beside it in
 | `ios/App/AppTests` | XCTest unit tests (the App scheme) |
 | `ios/App/EvidenceUITests` | Screenshot driver (the Evidence scheme), not an assertion suite |
 | `ios/App/ExtensionRenderTests` | Renders the share sheet and widgets to PNGs (the Render scheme, `TEST_RUNNER_SUITE_RENDER_DIR=<dir>`), not an assertion suite |
-| `scripts/generate_assets.py` | Regenerates colour sets, placeholder icon and launch mark |
+| `scripts/generate_assets.py` | Regenerates colour sets and the launch mark (from the committed icons) |
 | `scripts/testflight.sh`, `scripts/set_testflight_notes.py`, `ExportOptions.plist`, `WHATSNEW.md` | TestFlight build, see TestFlight below |
 
 ## Build and test (rock only)
@@ -114,9 +114,10 @@ Note: on `origin/main` the light theme's `--color-primary` is the literal
 specification (oklch(82% 0.12 207)); align it if the web token is meant to win.
 Contrast ratios are WCAG 2.x relative luminance, computed from the sRGB values.
 
-The launch screen is the `surface` colour with the placeholder mark tinted
-`onSurface` (no cyan). The icon is a placeholder (canvas Q1): primary field, black "Suite"
-wordmark. Type is Public Sans (OFL, bundled), scaled with Dynamic Type via
+The icon is the Burrow arch: cream on an orange gradient (Any), orange on
+charcoal (Dark), white on black (Tinted), committed as finished art. The launch
+screen is the `surface` colour with the arch in its orange gradient, cut from
+those icons by `generate_assets.py` (no cyan). Type is Public Sans (OFL, bundled), scaled with Dynamic Type via
 `relativeTo:`. Appearance follows the system (canvas Q8).
 
 ## Login
