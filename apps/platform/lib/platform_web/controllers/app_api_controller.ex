@@ -124,19 +124,53 @@ defmodule PlatformWeb.AppApiController do
       |> Repo.all()
 
     agents_by_space = agents_by_space(Enum.map(spaces, & &1.id))
+    participants_by_space = participants_for_naming(spaces)
 
     json(conn, %{
       spaces:
         Enum.map(spaces, fn space ->
           %{
             id: space.id,
-            name: space.name,
+            name: app_space_name(space, participants_by_space, user.id),
             slug: space.slug,
+            path_segment: Chat.space_path_segment(space),
             kind: space.kind,
             agents: Map.get(agents_by_space, space.id, [])
           }
         end)
     })
+  end
+
+  # `name` is never null in this response. Burrow iOS decodes it as a
+  # non-optional `String`, so ONE DM or unnamed group (whose `chat_spaces.name`
+  # is NULL) failed the whole list decode and the share sheet showed "Couldn't
+  # load your spaces". DMs and unnamed groups take the same label the web chat
+  # sidebar shows (`Chat.display_name_for_space/3`); anything else unnamed
+  # reads "Untitled".
+  defp app_space_name(%Space{kind: "dm"} = space, participants_by_space, user_id),
+    do: Chat.display_name_for_space(space, Map.get(participants_by_space, space.id, []), user_id)
+
+  defp app_space_name(%Space{name: name}, _participants_by_space, _user_id)
+       when is_binary(name) and name != "",
+       do: name
+
+  defp app_space_name(%Space{kind: "group"} = space, participants_by_space, user_id),
+    do: Chat.display_name_for_space(space, Map.get(participants_by_space, space.id, []), user_id)
+
+  defp app_space_name(_space, _participants_by_space, _user_id), do: "Untitled"
+
+  # One query for the participants of every DM and group being listed, rather
+  # than a `Chat.list_participants/1` per space. Same ordering as that helper.
+  defp participants_for_naming(spaces) do
+    case for(%Space{kind: kind, id: id} <- spaces, kind in ["dm", "group"], do: id) do
+      [] ->
+        %{}
+
+      space_ids ->
+        from(p in Participant, where: p.space_id in ^space_ids, order_by: [asc: p.joined_at])
+        |> Repo.all()
+        |> Enum.group_by(& &1.space_id)
+    end
   end
 
   defp agents_by_space([]), do: %{}
