@@ -50,6 +50,15 @@ defmodule PlatformWeb.OrgMemoryLive do
   when `current_user` is shaped like a `Platform.Agents.Agent` — UI
   editing is for humans; agents propose changes via `memory_create`.
 
+  Burrow Docs (task 01a10a44 stage 5): `burrow/` rows are product-owned
+  docs, written only by `Platform.Org.BurrowDocs`. They render as their own
+  section above Pages (see `PlatformWeb.OrgMemoryLive.ProductDocs`), never
+  in the Pages tree, and the edit and delete events (`start_edit`,
+  `save_page`, `confirm_delete`, `delete_file`) are refused for a `burrow/`
+  key HERE, on the server, before the domain is reached. The absent buttons
+  are presentation; this is the check. `Platform.Org.Wiki` refuses the
+  write again as `{:error, :product_owned}` (the stage-2 backstop).
+
   Routes: `/org_memory` (`:index`), `/org_memory/:file_key` (`:show`),
   and `/memory/proposals` (`:proposals`, direct entry to the proposals
   tab). Legacy `/org-context*` paths 301-redirect in `PageController`.
@@ -69,6 +78,7 @@ defmodule PlatformWeb.OrgMemoryLive do
   alias PlatformWeb.OrgMemoryLive.MobileShell
   alias PlatformWeb.OrgMemoryLive.NamespaceTree
   alias PlatformWeb.OrgMemoryLive.PageViewer
+  alias PlatformWeb.OrgMemoryLive.ProductDocs
   alias PlatformWeb.OrgMemoryLive.ProposalsPane
   alias PlatformWeb.OrgMemoryLive.RightPane
   alias PlatformWeb.OrgMemoryLive.SearchPane
@@ -80,14 +90,15 @@ defmodule PlatformWeb.OrgMemoryLive do
   @impl true
   def mount(_params, _session, socket) do
     pages = Wiki.list_pages()
-    tree = NamespaceTree.build(pages)
+    {tree, burrow_docs} = build_trees(pages)
 
     {:ok,
      socket
      |> assign(:page_title, "Org Memory")
      |> assign(:pages, pages)
      |> assign(:namespace_tree, tree)
-     |> assign(:expanded_prefixes, NamespaceTree.default_expanded(tree))
+     |> assign(:burrow_docs, burrow_docs)
+     |> assign(:expanded_prefixes, default_expanded(tree, burrow_docs))
      |> assign(:selected_page, nil)
      |> assign(:backlinks, [])
      |> assign(:view_mode, :pages)
@@ -149,7 +160,7 @@ defmodule PlatformWeb.OrgMemoryLive do
          |> assign(:selected_page, page)
          |> assign(:backlinks, Wiki.backlinks(page.file_key))
          |> assign(:editor_content, page.content)
-         |> assign(:preview_html, render_markdown(page.content, socket.assigns.pages))
+         |> assign(:preview_html, render_page(page, socket.assigns))
          |> assign(:editing, false)
          |> assign(:creating, false)
          |> assign(:save_error, nil)
@@ -498,43 +509,15 @@ defmodule PlatformWeb.OrgMemoryLive do
 
   @impl true
   def handle_event("start_edit", _params, socket) do
-    page = socket.assigns.selected_page
-    {frontmatter, body} = Wiki.parse_frontmatter(page.content)
+    case socket.assigns.selected_page do
+      %{file_key: file_key} = page ->
+        if ProductDocs.product_owned?(file_key),
+          do: refuse_product_owned(socket, file_key),
+          else: start_edit(page, socket)
 
-    socket =
-      cond do
-        frontmatter == %{} ->
-          # No frontmatter — the textarea edits the full content.
-          socket
-          |> assign(:fm_form, nil)
-          |> assign(:fm_complex, nil)
-          |> assign(:editor_content, page.content)
-
-        flat_frontmatter?(frontmatter) ->
-          # Flat string-keyed scalars: one form row per key; the
-          # textarea edits the body only (frontmatter is rebuilt from
-          # the form on save).
-          socket
-          |> assign(:fm_form, to_form(frontmatter, as: :frontmatter))
-          |> assign(:fm_complex, nil)
-          |> assign(:editor_content, body)
-
-        true ->
-          # Nested / non-scalar frontmatter: read-only display, edit
-          # the YAML directly in the body textarea.
-          socket
-          |> assign(:fm_form, nil)
-          |> assign(:fm_complex, leading_frontmatter_block(page.content, body))
-          |> assign(:editor_content, page.content)
-      end
-
-    {:noreply,
-     socket
-     |> assign(:editing, true)
-     |> assign(
-       :preview_html,
-       render_markdown(socket.assigns.editor_content, socket.assigns.pages)
-     )}
+      nil ->
+        {:noreply, socket}
+    end
   end
 
   @impl true
@@ -569,15 +552,20 @@ defmodule PlatformWeb.OrgMemoryLive do
     # Design lock §6: agents must propose changes via memory_create —
     # the UI save path fails closed for Agent-shaped users without
     # touching the domain layer.
-    if agent_actor?(socket.assigns) do
-      {:noreply,
-       put_flash(
-         socket,
-         :error,
-         "Agents must propose changes via memory_create. UI editing is for humans only."
-       )}
-    else
-      save_page(params, socket)
+    cond do
+      agent_actor?(socket.assigns) ->
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           "Agents must propose changes via memory_create. UI editing is for humans only."
+         )}
+
+      product_owned_selection?(socket.assigns) ->
+        refuse_product_owned(socket, socket.assigns.selected_page.file_key)
+
+      true ->
+        save_page(params, socket)
     end
   end
 
@@ -643,6 +631,10 @@ defmodule PlatformWeb.OrgMemoryLive do
 
       {:error, :stale} ->
         {:noreply, put_flash(socket, :error, "Conflicting update for #{file_key} — try again")}
+
+      # The product-owned `burrow/` backstop in `Platform.Org.Wiki`.
+      {:error, :product_owned} ->
+        {:noreply, put_flash(socket, :error, product_owned_message(file_key))}
     end
   end
 
@@ -650,7 +642,9 @@ defmodule PlatformWeb.OrgMemoryLive do
 
   @impl true
   def handle_event("confirm_delete", %{"key" => file_key}, socket) do
-    {:noreply, assign(socket, :confirm_delete, file_key)}
+    if ProductDocs.product_owned?(file_key),
+      do: refuse_product_owned(socket, file_key),
+      else: {:noreply, assign(socket, :confirm_delete, file_key)}
   end
 
   @impl true
@@ -660,6 +654,63 @@ defmodule PlatformWeb.OrgMemoryLive do
 
   @impl true
   def handle_event("delete_file", %{"key" => file_key}, socket) do
+    if ProductDocs.product_owned?(file_key),
+      do: refuse_product_owned(socket, file_key),
+      else: delete_file(file_key, socket)
+  end
+
+  # ── Events: seeding ─────────────────────────────────────────────────────
+
+  @impl true
+  def handle_event("seed_defaults", _params, socket) do
+    Context.seed_defaults(updated_by: socket.assigns.current_user_id)
+
+    {:noreply,
+     socket
+     |> refresh_pages()
+     |> put_flash(:info, "Default org memory pages created")}
+  end
+
+  defp start_edit(page, socket) do
+    {frontmatter, body} = Wiki.parse_frontmatter(page.content)
+
+    socket =
+      cond do
+        frontmatter == %{} ->
+          # No frontmatter — the textarea edits the full content.
+          socket
+          |> assign(:fm_form, nil)
+          |> assign(:fm_complex, nil)
+          |> assign(:editor_content, page.content)
+
+        flat_frontmatter?(frontmatter) ->
+          # Flat string-keyed scalars: one form row per key; the
+          # textarea edits the body only (frontmatter is rebuilt from
+          # the form on save).
+          socket
+          |> assign(:fm_form, to_form(frontmatter, as: :frontmatter))
+          |> assign(:fm_complex, nil)
+          |> assign(:editor_content, body)
+
+        true ->
+          # Nested / non-scalar frontmatter: read-only display, edit
+          # the YAML directly in the body textarea.
+          socket
+          |> assign(:fm_form, nil)
+          |> assign(:fm_complex, leading_frontmatter_block(page.content, body))
+          |> assign(:editor_content, page.content)
+      end
+
+    {:noreply,
+     socket
+     |> assign(:editing, true)
+     |> assign(
+       :preview_html,
+       render_markdown(socket.assigns.editor_content, socket.assigns.pages)
+     )}
+  end
+
+  defp delete_file(file_key, socket) do
     # Route through `Platform.Org.Context.delete_file/2` (not
     # `Wiki.delete_page/2`) so the memory-feedback ledger captures the
     # delete — Context.delete_file wraps the Repo.delete + capture in a
@@ -674,21 +725,14 @@ defmodule PlatformWeb.OrgMemoryLive do
          |> push_patch(to: ~p"/org_memory")
          |> put_flash(:info, "Deleted #{file_key}")}
 
+      # The product-owned `burrow/` backstop in `Platform.Org.Context`
+      # (an alias can resolve a non-burrow key onto a product row).
+      {:error, :product_owned} ->
+        refuse_product_owned(socket, file_key)
+
       {:error, _} ->
         {:noreply, put_flash(socket, :error, "Failed to delete #{file_key}")}
     end
-  end
-
-  # ── Events: seeding ─────────────────────────────────────────────────────
-
-  @impl true
-  def handle_event("seed_defaults", _params, socket) do
-    Context.seed_defaults(updated_by: socket.assigns.current_user_id)
-
-    {:noreply,
-     socket
-     |> refresh_pages()
-     |> put_flash(:info, "Default org memory pages created")}
   end
 
   # ── Rendering ───────────────────────────────────────────────────────────
@@ -714,6 +758,7 @@ defmodule PlatformWeb.OrgMemoryLive do
           tree={@namespace_tree}
           expanded_prefixes={@expanded_prefixes}
           selected_file_key={@selected_page && @selected_page.file_key}
+          burrow_docs={@burrow_docs}
         />
 
         <div class="flex min-h-0 flex-col overflow-hidden">
@@ -732,7 +777,7 @@ defmodule PlatformWeb.OrgMemoryLive do
                 query={@search_query}
                 corpus={@search_corpus}
                 namespace={@search_namespace}
-                namespaces={top_level_namespaces(@namespace_tree)}
+                namespaces={top_level_namespaces(@namespace_tree, @burrow_docs)}
                 results={@search_results}
                 performed={@search_performed}
                 truncated={@search_truncated}
@@ -740,6 +785,7 @@ defmodule PlatformWeb.OrgMemoryLive do
                 degraded={@search_degraded}
                 dead_channels={@search_dead_channels}
                 results_revealed={@search_results_revealed}
+                burrow_docs={@burrow_docs}
               />
             <% :proposals -> %>
               <ProposalsPane.proposals_pane
@@ -763,6 +809,8 @@ defmodule PlatformWeb.OrgMemoryLive do
                   confirm_delete={@confirm_delete}
                   fm_form={@fm_form}
                   fm_complex={@fm_complex}
+                  doc={ProductDocs.find(@burrow_docs, @selected_page)}
+                  burrow_docs={@burrow_docs}
                 />
               <% end %>
           <% end %>
@@ -777,6 +825,7 @@ defmodule PlatformWeb.OrgMemoryLive do
           page={@selected_page}
           backlinks={@backlinks}
           updated_by_display={@updated_by_display}
+          doc={ProductDocs.find(@burrow_docs, @selected_page)}
         />
       </div>
 
@@ -787,6 +836,7 @@ defmodule PlatformWeb.OrgMemoryLive do
         tree_drawer_open={@tree_drawer_open}
         namespace_tree={@namespace_tree}
         expanded_prefixes={@expanded_prefixes}
+        burrow_docs={@burrow_docs}
         creating={@creating}
         page={@selected_page}
         preview_html={@preview_html}
@@ -803,7 +853,7 @@ defmodule PlatformWeb.OrgMemoryLive do
         search_query={@search_query}
         search_corpus={@search_corpus}
         search_namespace={@search_namespace}
-        namespaces={top_level_namespaces(@namespace_tree)}
+        namespaces={top_level_namespaces(@namespace_tree, @burrow_docs)}
         search_results={@search_results}
         search_performed={@search_performed}
         search_truncated={@search_truncated}
@@ -901,7 +951,8 @@ defmodule PlatformWeb.OrgMemoryLive do
           Templates
         </h2>
         <div class="grid grid-cols-2 gap-3 mb-8">
-          <%= for {key, _template} <- Context.default_templates() do %>
+          <%= for {key, _template} <- Context.default_templates(),
+                  not ProductDocs.product_owned?(key) do %>
             <% existing = Enum.any?(@pages, &(&1.file_key == key)) %>
             <button
               phx-click="select_template"
@@ -1042,7 +1093,15 @@ defmodule PlatformWeb.OrgMemoryLive do
 
       {:error, %Ecto.Changeset{} = changeset} ->
         {:noreply, assign(socket, :save_error, changeset_error_message(changeset))}
+
+      # The product-owned `burrow/` backstop in `Platform.Org.Wiki`.
+      {:error, :product_owned} ->
+        {:noreply, put_flash(socket, :error, product_owned_message(page.file_key))}
     end
+  end
+
+  defp product_owned_message(file_key) do
+    "#{file_key} is Burrow product documentation and is read-only. It is updated on deploy."
   end
 
   # ── Stage 6 helpers: tabs / journal / search ────────────────────────────
@@ -1121,22 +1180,78 @@ defmodule PlatformWeb.OrgMemoryLive do
   end
 
   # Top-level namespace prefixes from the built tree ("org/" → "org"),
-  # feeding the search pane's namespace dropdown.
-  defp top_level_namespaces(%{folders: folders}) do
-    folders
-    |> Map.values()
-    |> Enum.map(&String.trim_trailing(&1.prefix, "/"))
+  # feeding the search pane's namespace dropdown. The Pages tree no longer
+  # carries `burrow/`, so `burrow` is added back when Burrow Docs exist
+  # (the pane labels it "Burrow Docs").
+  defp top_level_namespaces(%{folders: folders}, burrow_docs) do
+    org =
+      folders
+      |> Map.values()
+      |> Enum.map(&String.trim_trailing(&1.prefix, "/"))
+
+    (if(burrow_docs == [], do: [], else: ["burrow"]) ++ org)
+    |> Enum.uniq()
     |> Enum.sort()
   end
 
   defp refresh_pages(socket) do
     pages = Wiki.list_pages()
-    tree = NamespaceTree.build(pages)
+    {tree, burrow_docs} = build_trees(pages)
 
     socket
     |> assign(:pages, pages)
     |> assign(:namespace_tree, tree)
-    |> update(:expanded_prefixes, &MapSet.union(&1, NamespaceTree.default_expanded(tree)))
+    |> assign(:burrow_docs, burrow_docs)
+    |> update(:expanded_prefixes, &MapSet.union(&1, default_expanded(tree, burrow_docs)))
+  end
+
+  # ── Burrow Docs (task 01a10a44 stage 5) ─────────────────────────────────
+
+  # The Pages tree is built from org pages only; `burrow/` rows become the
+  # Burrow Docs section's entries instead.
+  defp build_trees(pages) do
+    {product_pages, org_pages} = ProductDocs.split(pages)
+    {NamespaceTree.build(org_pages), ProductDocs.entries(product_pages)}
+  end
+
+  # Burrow Docs start collapsed. They open by default only when the install
+  # has no org pages yet, so the docs are the first thing a new install
+  # sees. (Selecting a Burrow page opens them too, via `ancestor_prefixes/1`
+  # in `handle_params/3`.)
+  defp default_expanded(tree, burrow_docs) do
+    expanded = NamespaceTree.default_expanded(tree)
+
+    if burrow_docs != [] and tree.folders == %{} and tree.pages == [],
+      do: MapSet.put(expanded, NamespaceTree.burrow_prefix()),
+      else: expanded
+  end
+
+  # The selected page's HTML. A Burrow page drops a first heading that
+  # repeats its title, since the page header already shows the title.
+  defp render_page(page, assigns) do
+    content =
+      case ProductDocs.find(assigns[:burrow_docs] || [], page) do
+        %{title: title} -> ProductDocs.display_content(page.content, title)
+        nil -> page.content
+      end
+
+    render_markdown(content, assigns.pages)
+  end
+
+  defp product_owned_selection?(%{selected_page: %{file_key: file_key}}),
+    do: ProductDocs.product_owned?(file_key)
+
+  defp product_owned_selection?(_assigns), do: false
+
+  # The server-side refusal for every edit / delete event on a `burrow/`
+  # key. It resets any edit or delete-confirm state, so a forged event
+  # cannot leave the page in an editing sub-state either.
+  defp refuse_product_owned(socket, file_key) do
+    {:noreply,
+     socket
+     |> assign(:editing, false)
+     |> assign(:confirm_delete, nil)
+     |> put_flash(:error, product_owned_message(file_key))}
   end
 
   defp changeset_error_message(changeset) do

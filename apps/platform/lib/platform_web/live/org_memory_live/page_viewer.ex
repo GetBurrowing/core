@@ -20,6 +20,15 @@ defmodule PlatformWeb.OrgMemoryLive.PageViewer do
   `"start_edit"`, `"cancel_edit"`, `"save_page"`, `"update_frontmatter"`,
   `"confirm_delete"`, `"cancel_delete"`, and `"delete_file"` events
   handled by the parent LiveView.
+
+  Burrow Docs pages (task 01a10a44 stage 5) render through
+  `product_viewer/1` instead: the frontmatter title as the h1, the base-200
+  provenance strip and the cyan spine, and NO Edit or Delete control (absent,
+  not disabled: the page never becomes editable, and a disabled control
+  explains itself only on hover). The bytes/lines footer is dropped too. The
+  Overview (`burrow/page/index.md`) renders as `ProductDocs.overview/1`. The
+  parent LiveView refuses the edit and delete events for these keys on the
+  server, so a forged event changes nothing either.
   """
 
   use Phoenix.Component
@@ -28,6 +37,7 @@ defmodule PlatformWeb.OrgMemoryLive.PageViewer do
   import PlatformWeb.OrgMemoryLive.NamespaceTree, only: [file_icon: 1]
 
   alias Phoenix.LiveView.JS
+  alias PlatformWeb.OrgMemoryLive.ProductDocs
 
   attr(:page, :any, default: nil, doc: "selected Platform.Org.WikiPage or nil")
   attr(:editing, :boolean, default: false)
@@ -37,10 +47,14 @@ defmodule PlatformWeb.OrgMemoryLive.PageViewer do
   attr(:confirm_delete, :string, default: nil)
   attr(:fm_form, :any, default: nil, doc: "to_form/2 over flat frontmatter, or nil")
   attr(:fm_complex, :string, default: nil, doc: "raw YAML block when frontmatter is non-flat")
+  attr(:doc, :map, default: nil, doc: "ProductDocs entry when @page is a Burrow Docs page")
+  attr(:burrow_docs, :list, default: [], doc: "all ProductDocs entries, for the Overview")
 
   def page_viewer(assigns) do
     ~H"""
     <%= cond do %>
+      <% @page && @doc -> %>
+        <.product_viewer doc={@doc} burrow_docs={@burrow_docs} preview_html={@preview_html} />
       <% @page && @editing -> %>
         <.editor
           page={@page}
@@ -132,6 +146,42 @@ defmodule PlatformWeb.OrgMemoryLive.PageViewer do
           <span class="hero-hashtag size-3.5"></span>
           {line_count(@page.content)} lines
         </span>
+      </div>
+    </div>
+    """
+  end
+
+  # ── Sub-state: Burrow Docs page (read-only, product-owned) ─────────────
+
+  attr(:doc, :map, required: true)
+  attr(:burrow_docs, :list, default: [])
+  attr(:preview_html, :string, required: true)
+
+  defp product_viewer(%{doc: %{index?: true}} = assigns) do
+    ~H"""
+    <div class="flex flex-1 flex-col overflow-y-auto" data-role="burrow-page">
+      <ProductDocs.overview entries={@burrow_docs} />
+    </div>
+    """
+  end
+
+  defp product_viewer(assigns) do
+    ~H"""
+    <div class="flex flex-1 flex-col overflow-hidden" data-role="burrow-page">
+      <div class="flex border-b border-edge" data-role="burrow-page-header">
+        <ProductDocs.spine />
+        <div class="min-w-0 flex-1">
+          <div class="px-6 py-3">
+            <h1 class="text-lg font-bold" data-role="burrow-page-title">{@doc.title}</h1>
+          </div>
+          <ProductDocs.provenance_strip sha={@doc.verified_at} />
+        </div>
+      </div>
+
+      <div class="flex-1 overflow-y-auto px-8 py-6">
+        <article class="prose prose-sm max-w-none text-base-content">
+          {Phoenix.HTML.raw(@preview_html)}
+        </article>
       </div>
     </div>
     """

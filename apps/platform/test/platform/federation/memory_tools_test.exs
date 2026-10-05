@@ -20,6 +20,7 @@ defmodule Platform.Federation.MemoryToolsTest do
   use Platform.DataCase, async: false
 
   alias Platform.Agents.Agent
+  alias Platform.Chat
   alias Platform.Federation.ToolSurface
   alias Platform.Memory.MemoryProposal
   alias Platform.Org.Wiki
@@ -749,6 +750,148 @@ defmodule Platform.Federation.MemoryToolsTest do
         assert is_binary(env.suggestion)
         assert is_boolean(env.recoverable)
       end
+    end
+  end
+
+  ## ─────────────────────────────────────────────────────────────────────
+  ## burrow/page — product-owned docs (task 01a10a44 stage 2)
+  ## ─────────────────────────────────────────────────────────────────────
+
+  describe "burrow/page — read-only through every memory_* write tool" do
+    @burrow "burrow/page/tasks.md"
+    @burrow_body "# Tasks\n\nalpha foo beta\n"
+
+    setup do
+      # Seeded the way BurrowDocs seeds it; the only writer of burrow/page.
+      page = seed_page(@burrow, @burrow_body, product_docs: true)
+      %{burrow: page}
+    end
+
+    defp assert_unchanged(%WikiPage{} = before) do
+      after_row = Wiki.get_page(before.file_key)
+      assert after_row.content == before.content
+      assert after_row.version == before.version
+      assert after_row.updated_at == before.updated_at
+    end
+
+    for {label, agent_key} <- [{"plain agent", :plain}, {"Historian", :historian}] do
+      @agent_key agent_key
+
+      test "#{label}: memory_str_replace returns :product_owned and the row is unchanged",
+           ctx do
+        assert {:error, %{code: :product_owned}} =
+                 ToolSurface.execute(
+                   "memory_str_replace",
+                   %{"path" => @burrow, "old_str" => "foo", "new_str" => "bar"},
+                   context(ctx[@agent_key])
+                 )
+
+        assert_unchanged(ctx.burrow)
+      end
+
+      test "#{label}: memory_insert returns :product_owned and the row is unchanged", ctx do
+        assert {:error, %{code: :product_owned}} =
+                 ToolSurface.execute(
+                   "memory_insert",
+                   %{"path" => @burrow, "insert_line" => 1, "insert_text" => "x"},
+                   context(ctx[@agent_key])
+                 )
+
+        assert_unchanged(ctx.burrow)
+      end
+
+      test "#{label}: memory_delete returns :product_owned and the row survives", ctx do
+        assert {:error, %{code: :product_owned}} =
+                 ToolSurface.execute(
+                   "memory_delete",
+                   %{"path" => @burrow},
+                   context(ctx[@agent_key])
+                 )
+
+        assert_unchanged(ctx.burrow)
+      end
+
+      test "#{label}: memory_create over a burrow page returns :product_owned", ctx do
+        assert {:error, %{code: :product_owned}} =
+                 ToolSurface.execute(
+                   "memory_create",
+                   %{"path" => @burrow, "file_text" => "overwritten"},
+                   context(ctx[@agent_key])
+                 )
+
+        assert_unchanged(ctx.burrow)
+      end
+
+      test "#{label}: memory_rename burrow -> org returns :product_owned", ctx do
+        assert {:error, %{code: :product_owned}} =
+                 ToolSurface.execute(
+                   "memory_rename",
+                   %{"old_path" => @burrow, "new_path" => "org/page/tasks.md"},
+                   context(ctx[@agent_key])
+                 )
+
+        assert_unchanged(ctx.burrow)
+        refute Wiki.get_page("org/page/tasks.md")
+      end
+
+      test "#{label}: memory_rename org -> burrow returns :product_owned", ctx do
+        org_page = seed_page("org/page/x.md", "org body")
+
+        assert {:error, %{code: :product_owned}} =
+                 ToolSurface.execute(
+                   "memory_rename",
+                   %{"old_path" => "org/page/x.md", "new_path" => "burrow/page/x.md"},
+                   context(ctx[@agent_key])
+                 )
+
+        assert_unchanged(org_page)
+        refute Wiki.get_page("burrow/page/x.md")
+      end
+
+      test "#{label}: memory_view returns the burrow page content", ctx do
+        assert {:ok, %{content: @burrow_body, kind: "page", path: @burrow}} =
+                 ToolSurface.execute(
+                   "memory_view",
+                   %{"path" => @burrow},
+                   context(ctx[@agent_key])
+                 )
+      end
+    end
+
+    test "CONTROL: the Historian's memory_str_replace on an org page succeeds", %{historian: h} do
+      seed_page("org/page/x.md", "alpha foo beta")
+
+      assert {:ok, %{version: 2}} =
+               ToolSurface.execute(
+                 "memory_str_replace",
+                 %{"path" => "org/page/x.md", "old_str" => "foo", "new_str" => "bar"},
+                 context(h)
+               )
+
+      assert Wiki.get_page("org/page/x.md").content == "alpha bar beta"
+    end
+
+    test "CONTROL: memory_str_replace on the caller's own private path succeeds",
+         %{plain: plain} do
+      {:ok, space} =
+        Chat.create_space(%{
+          name: "Burrow private control",
+          slug: "burrow-private-#{System.unique_integer([:positive])}",
+          kind: "channel"
+        })
+
+      {:ok, _} = Chat.add_agent_participant(space.id, plain, display_name: "Plain")
+      path = "space/#{space.id}/private/#{plain.id}/x.md"
+      seed_page(path, "alpha foo beta")
+
+      assert {:ok, _} =
+               ToolSurface.execute(
+                 "memory_str_replace",
+                 %{"path" => path, "old_str" => "foo", "new_str" => "bar"},
+                 context(plain)
+               )
+
+      assert Wiki.get_page(path).content == "alpha bar beta"
     end
   end
 end

@@ -158,7 +158,19 @@ defmodule PlatformWeb.OrgMemoryLiveScopeTest do
   # else. The pin is re-taken rather than the sentence left stale because a
   # comment that names a deleted literal is the drift this guard exists to
   # stop, one level up.
-  @wiki_ex_sha256_2026_09_08 "d1029e4a09c77539b1cedbf6c8d354130032389477616c98d510b5d335118f65"
+  #
+  # Re-pinned 2026-10-05 (task 01a10a44 stage 2, Burrow Docs): the domain
+  # backstop for the product-owned `burrow/` namespace. `upsert_page/3`,
+  # `delete_page/2` and `rename_page/3` refuse a `burrow/` key with
+  # `{:error, :product_owned}` unless the caller passes the `:product_docs`
+  # opt (only `Platform.Org.BurrowDocs` does; a guard test pins that), and
+  # re-check the row an alias resolves to. New public helpers:
+  # `product_owned_key?/1`, `product_owned_prefix/0`,
+  # `product_docs_page_prefix/0`, and `exclude_product_docs/1`, which
+  # `list_pages_updated_since/2` now composes so the Historian's pages
+  # corpus skips product docs. The attribute keeps its historical name so
+  # the assertion message below stays greppable.
+  @wiki_ex_sha256_2026_09_08 "e81440f932b7cff52dfbfb2e36d4402ea11e38af8da0382285b74e061e5482f5"
 
   test "wiki.ex matches the 2026-09-08 authorized domain surface (sha256 pin)" do
     rel_path = "lib/platform/org/wiki.ex"

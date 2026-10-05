@@ -15,6 +15,11 @@ defmodule PlatformWeb.OrgMemoryLive.RightPane do
       into `@updated_by_display`), inserted_at, updated_at — both
       relative.
 
+  Burrow Docs pages (task 01a10a44 stage 5): Version and Updated by are
+  replaced by "Source: Product docs" and "Verified at <sha>". The version
+  number moves on every deploy that edits a doc and the rows carry no
+  author, so neither means anything to a reader. Backlinks stay.
+
   Stateless — selection and backlink loading live on
   `PlatformWeb.OrgMemoryLive`. When no page is selected the pane keeps
   the stage-3 empty-state placeholder.
@@ -27,6 +32,7 @@ defmodule PlatformWeb.OrgMemoryLive.RightPane do
   attr(:page, :any, default: nil, doc: "selected Platform.Org.WikiPage or nil")
   attr(:backlinks, :list, default: [], doc: "WikiPages linking to @page (Wiki.backlinks/2)")
   attr(:updated_by_display, :string, default: nil)
+  attr(:doc, :map, default: nil, doc: "ProductDocs entry when @page is a Burrow Docs page")
 
   def right_pane(assigns) do
     ~H"""
@@ -74,12 +80,27 @@ defmodule PlatformWeb.OrgMemoryLive.RightPane do
             Metadata
           </h3>
           <dl class="flex flex-col gap-1.5 text-xs">
-            <div class="flex items-center justify-between gap-2">
-              <dt class="text-base-content/40">Version</dt>
-              <dd class="font-mono">v{@page.version}</dd>
-            </div>
+            <%= if @doc do %>
+              <div class="flex items-center justify-between gap-2" data-role="burrow-meta-source">
+                <dt class="text-base-content/60">Source</dt>
+                <dd>Product docs</dd>
+              </div>
+              <div
+                :if={@doc.verified_at}
+                class="flex items-center justify-between gap-2"
+                data-role="burrow-meta-verified"
+              >
+                <dt class="text-base-content/60">Verified at</dt>
+                <dd class="whitespace-nowrap font-mono">{@doc.verified_at}</dd>
+              </div>
+            <% else %>
+              <div class="flex items-center justify-between gap-2">
+                <dt class="text-base-content/40">Version</dt>
+                <dd class="font-mono">v{@page.version}</dd>
+              </div>
+            <% end %>
             <div
-              :if={@page.updated_by && @updated_by_display}
+              :if={is_nil(@doc) && @page.updated_by && @updated_by_display}
               class="flex items-center justify-between gap-2"
             >
               <dt class="text-base-content/40">Updated by</dt>

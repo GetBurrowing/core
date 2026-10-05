@@ -114,6 +114,67 @@ defmodule Platform.Org.Wiki.SearchOrgScopeTest do
     end
   end
 
+  # Task 01a10a44 stage 2. Burrow product docs are root-org rows that every
+  # tenant reads (Wiki.Routing gives them read_role :anyone), so a page
+  # query scoped to an org list also admits `burrow/page/%`.
+  describe "burrow/page product docs under tenant scoping" do
+    defp seed_burrow_page do
+      {:ok, page} =
+        Platform.Org.Wiki.upsert_page(
+          "burrow/page/scope_#{System.unique_integer([:positive])}.md",
+          %{content: "a #{@query} product doc", org_id: Platform.Tenancy.get_root_org().id},
+          product_docs: true
+        )
+
+      page
+    end
+
+    test "a tenant org_id still returns a lexical hit on a burrow page" do
+      burrow = seed_burrow_page()
+      tenant = tenant_org_id("sxi")
+
+      # The row is NOT the tenant's: without the burrow clause the tenant
+      # filter alone would drop it.
+      refute burrow.org_id == tenant
+
+      assert burrow.id in hit_ids(source: :page, org_id: tenant)
+      assert burrow.id in hit_ids(source: :page, org_id: [tenant])
+    end
+
+    test "CONTROL: a sibling org's org page is still filtered out" do
+      burrow = seed_burrow_page()
+      tenant = tenant_org_id("sxi")
+      own = seed_page(tenant)
+      sibling = seed_page(tenant_org_id("soylent"))
+
+      ids = hit_ids(source: :page, org_id: tenant)
+
+      assert own.id in ids
+      assert burrow.id in ids
+      refute sibling.id in ids
+    end
+
+    test "the burrow namespace filter returns the burrow page and nothing else" do
+      burrow = seed_burrow_page()
+      org_page = seed_page(tenant_org_id("sxi"))
+
+      ids = hit_ids(source: :page, namespace: "burrow", org_id: tenant_org_id("sxi"))
+
+      assert burrow.id in ids
+      refute org_page.id in ids
+    end
+
+    test "a burrow hit keeps source \"page\"" do
+      burrow = seed_burrow_page()
+
+      {:ok, %{results: results}} =
+        Search.search(@query, source: :page, org_id: tenant_org_id("sxi"))
+
+      assert %{source: "page", path: path} = Enum.find(results, &(&1.id == burrow.id))
+      assert path == burrow.file_key
+    end
+  end
+
   describe "task scoping via the projects join" do
     test "org_id: [] returns zero tasks from a fixture proven to hold matching tasks" do
       task = seed_task(tenant_org_id("sxi"))

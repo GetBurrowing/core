@@ -291,8 +291,11 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # Task 01a0fe45 adds game_stream.touch, the third Play surface, appended
     # after the roster in extension.ex. It is new, so it is in neither of
     # main's pre-extraction lists; both pins gain it at the end.
-    @main_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary game_stream.encoder_preset game_stream.roster meetings.open_question_classifier game_stream.touch)
-    @branch_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.open_question_classifier game_stream.encoder_preset game_stream.roster game_stream.touch)
+    # Task 01a10a44 adds dispatch.product_docs_preamble, a core surface appended
+    # after the classifier in core's list, so it precedes the Play keys. It is
+    # new, so both pins gain it the same way game_stream.touch was added.
+    @main_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary game_stream.encoder_preset game_stream.roster meetings.open_question_classifier game_stream.touch dispatch.product_docs_preamble)
+    @branch_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.open_question_classifier dispatch.product_docs_preamble game_stream.encoder_preset game_stream.roster game_stream.touch)
 
     defp canon(%_{} = s), do: canon(Map.from_struct(s))
 

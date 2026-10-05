@@ -552,7 +552,7 @@ defmodule Platform.ExtensionsTest do
     # main's lists minus exactly Play's two metric slugs and two surface keys,
     # in main's order.
     @core_metrics ~w(cycle_time manual_gate_rejection_rate overscoped_gate_count plan_revision_count stages_per_plan time_in_phase validation_failure_rate)
-    @core_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.open_question_classifier)
+    @core_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.open_question_classifier dispatch.product_docs_preamble)
 
     defp canon(%_{} = s), do: canon(Map.from_struct(s))
 

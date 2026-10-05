@@ -32,6 +32,7 @@ defmodule Platform.GameStream.ModuleInventoryTest do
     assert Enum.sort(rails.allowed_surfaces) ==
              [
                "chat.context_summary",
+               "dispatch.product_docs_preamble",
                "dispatch.prompt",
                "game_stream.encoder_preset",
                "game_stream.roster",
@@ -50,6 +51,7 @@ defmodule Platform.GameStream.ModuleInventoryTest do
     assert Enum.map(context.surfaces, & &1.key) |> Enum.sort() ==
              [
                "chat.context_summary",
+               "dispatch.product_docs_preamble",
                "dispatch.prompt",
                "game_stream.encoder_preset",
                "game_stream.roster",

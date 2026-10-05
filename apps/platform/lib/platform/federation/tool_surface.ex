@@ -7197,9 +7197,7 @@ defmodule Platform.Federation.ToolSurface do
          existing_old = Wiki.get_page(old_path, workspace_id: workspace_id),
          existing_new = Wiki.get_page(new_path, workspace_id: workspace_id),
          :ok <-
-           gate_to_envelope(Routing.gate_write(agent, old_path, existing_page: existing_old)),
-         :ok <-
-           gate_to_envelope(Routing.gate_write(agent, new_path, existing_page: existing_new)) do
+           gate_rename_paths(agent, [{old_path, existing_old}, {new_path, existing_new}]) do
       do_memory_rename(old_path, new_path, agent, workspace_id)
     end
   end
@@ -11547,6 +11545,21 @@ defmodule Platform.Federation.ToolSurface do
   end
 
   # ── Memory tool helpers (ADR-0041 T5) ───────────────────────────────────
+
+  # Gates both rename paths. A product-owned `burrow/` path is gated FIRST
+  # (task 01a10a44 stage 2): its refusal (`:product_owned`) holds for every
+  # agent, so it is the answer whichever side of the rename it is on, rather
+  # than the old path's `:historian_required` masking it for a plain agent.
+  defp gate_rename_paths(agent, paths) do
+    paths
+    |> Enum.sort_by(fn {path, _existing} -> not Wiki.product_owned_key?(path) end)
+    |> Enum.reduce_while(:ok, fn {path, existing}, :ok ->
+      case gate_to_envelope(Routing.gate_write(agent, path, existing_page: existing)) do
+        :ok -> {:cont, :ok}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+  end
 
   # Boundary-safe `Repo.get/2` for the MCP tool surface. Every id reaching a
   # tool here is a raw tool ARGUMENT — literally whatever string the agent

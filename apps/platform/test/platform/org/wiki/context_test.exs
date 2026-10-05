@@ -319,4 +319,55 @@ defmodule Platform.Org.Wiki.ContextTest do
     assert ws_meta.pages |> Map.values() |> Enum.join("") |> String.contains?("content-B")
     refute ws_meta.pages |> Map.values() |> Enum.join("") |> String.contains?("content-A")
   end
+
+  # ── Product docs: burrow/ in band -1 (task 01a10a44 stage 2) ──────────
+
+  describe "burrow/ product docs" do
+    @index "burrow/page/index.md"
+    @marker ~s(<!-- BEGIN org-preamble page="burrow/page/index.md")
+
+    defp seed_burrow!(file_key, body), do: seed!(file_key, body, product_docs: true)
+
+    test "a tenant-project task preamble carries the index" do
+      seed_burrow!(@index, preamble_body("# Burrow Docs\n"))
+
+      project_id = Ecto.UUID.generate()
+      pages = WikiContext.build_preamble(task: %{project_id: project_id})
+
+      assert pages[@index] =~ @marker
+    end
+
+    test "a space (chat) preamble and an org-only preamble carry it too" do
+      seed_burrow!(@index, preamble_body("# Burrow Docs\n"))
+
+      assert WikiContext.build_preamble(space_id: Ecto.UUID.generate())[@index] =~ @marker
+      assert WikiContext.build_preamble([])[@index] =~ @marker
+    end
+
+    test "CONTROL: with the index row deleted, the marker is absent" do
+      seed_burrow!(@index, preamble_body("# Burrow Docs\n"))
+      assert WikiContext.build_preamble([])[@index] =~ @marker
+
+      {:ok, _} = Wiki.delete_page(@index, product_docs: true)
+
+      pages = WikiContext.build_preamble([])
+      refute Map.has_key?(pages, @index)
+      refute Enum.any?(Map.values(pages), &String.contains?(&1, @marker))
+    end
+
+    test "under a budget that forces eviction, org pages drop before the index" do
+      big = String.duplicate("x", 400)
+      # Without band -1 a burrow key falls to the catch-all band 3 and sorts
+      # LAST, so the org page would be walked first and the index dropped.
+      seed!("org/a.md", preamble_body(big))
+      seed_burrow!(@index, preamble_body(big))
+
+      # CONTROL: both ride under the default budget.
+      assert map_size(WikiContext.build_preamble([])) == 2
+
+      assert {:ok, meta} = WikiContext.build_preamble_with_metadata(budget: 150)
+      assert Map.keys(meta.pages) == [@index]
+      assert %{path: "org/a.md", reason: :budget_overrun} in meta.dropped
+    end
+  end
 end

@@ -62,7 +62,10 @@ defmodule Platform.Experiments.Surfaces do
     # Task 01a0e8b5: which program decides a meeting open_question. The
     # control is today's intent prompt; nothing is seeded, so production
     # stays on it until an experiment row says otherwise.
-    Platform.Experiments.Surfaces.OpenQuestionClassifier
+    Platform.Experiments.Surfaces.OpenQuestionClassifier,
+    # Task 01a10a44: which Burrow product doc pages ride in a task
+    # dispatch's org preamble. The control is the index page alone.
+    Platform.Experiments.Surfaces.ProductDocsPreamble
   ]
 
   @prompt_surface "dispatch.prompt"

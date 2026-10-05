@@ -29,6 +29,15 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
   mobile-specific composer / cards / search-facet renders (each with
   mobile-scoped ids).
 
+  Burrow Docs (task 01a10a44 stage 5): the drawer carries the Burrow Docs
+  section with its spine (44px rows); a Burrow page's path chip reads
+  `Burrow Docs > <Title>` in Public Sans; its toolbar shows the title
+  (wrapping to two lines before truncating) with NO Edit or Delete icon,
+  over the stacked provenance strip, with the spine down the left of both;
+  the Overview renders as `ProductDocs.overview/1`; and a Burrow search hit
+  reads `DOCS`, the title, then `Burrow Docs · <sha>`. The last path-chip
+  segment uses `--color-interactive` (cyan is fill only) for every page.
+
   Design source of truth: mockup canvas rev 6 "Org Memory — mobile
   mockup v3 · Suite tokens". Tokens only (base-100/200/300, primary,
   warning-yellow for unread/pending only); Hero icons, no emojis.
@@ -43,6 +52,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
   alias Phoenix.LiveView.JS
   alias Platform.Memory.Proposals
   alias PlatformWeb.OrgMemoryLive.NamespaceTree
+  alias PlatformWeb.OrgMemoryLive.ProductDocs
   alias PlatformWeb.OrgMemoryLive.SearchPane
 
   @tabs [
@@ -60,6 +70,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
   # ── Namespace tree (drawer + path chip) ─────────────────────────────────
   attr(:namespace_tree, :map, default: %{folders: %{}, pages: []})
   attr(:expanded_prefixes, :any, default: nil)
+  attr(:burrow_docs, :list, default: [], doc: "ProductDocs entries, in product order")
 
   # ── Pages tab ─────────────────────────────────────────────────────────
   attr(:creating, :boolean, default: false)
@@ -160,19 +171,29 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
            horizontal-scroll; tapping any segment (or the chip) opens the
            tree drawer. Present on Pages / Journal / Proposals; ABSENT on
            Search (which swaps in the search input + facets in stage 5). --%>
+      <% chip_doc = ProductDocs.find(@burrow_docs, @page) %>
+      <% segments = chip_segments(@page, @journal_namespace, chip_doc) %>
       <div
         :if={@view_mode in [:pages, :journal, :proposals]}
-        class="flex shrink-0 items-stretch overflow-x-auto border-b border-edge bg-base-100 px-2 font-mono text-sm"
+        class={[
+          "flex shrink-0 items-stretch overflow-x-auto border-b border-edge bg-base-100 px-2 text-sm",
+          if(chip_doc, do: "font-sans", else: "font-mono")
+        ]}
         data-role="mobile-path-chip"
       >
         <button
-          :for={{seg, idx} <- Enum.with_index(path_segments(@page, @journal_namespace))}
+          :for={{seg, idx} <- Enum.with_index(segments)}
           phx-click="open_tree_drawer"
           data-chip-segment={seg}
           class="flex min-h-11 shrink-0 items-center gap-1 whitespace-nowrap px-1.5 text-base-content/60 transition-colors hover:text-base-content"
         >
           <span :if={idx > 0} class="hero-chevron-right size-3 shrink-0 text-base-content/30"></span>
-          <span class={idx == last_index(@page, @journal_namespace) && "text-primary"}>{seg}</span>
+          <span
+            class={idx == length(segments) - 1 && "text-[var(--color-interactive)]"}
+            data-chip-last={idx == length(segments) - 1 && "true"}
+          >
+            {seg}
+          </span>
         </button>
       </div>
 
@@ -188,6 +209,8 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
             <% else %>
               <.mobile_pages_viewer
                 page={@page}
+                doc={ProductDocs.find(@burrow_docs, @page)}
+                burrow_docs={@burrow_docs}
                 preview_html={@preview_html}
                 editing={@editing}
                 editor_content={@editor_content}
@@ -217,6 +240,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
               degraded={@search_degraded}
               dead_channels={@search_dead_channels}
               results_revealed={@search_results_revealed}
+              burrow_docs={@burrow_docs}
             />
           <% :proposals -> %>
             <.mobile_proposals
@@ -244,6 +268,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
           tree={@namespace_tree}
           expanded_prefixes={@expanded_prefixes}
           selected_file_key={@page && @page.file_key}
+          burrow_docs={@burrow_docs}
         />
       </.sheet>
     </div>
@@ -260,10 +285,44 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
   attr(:confirm_delete, :string, default: nil)
   attr(:backlinks, :list, default: [])
   attr(:updated_by_display, :string, default: nil)
+  attr(:doc, :map, default: nil)
+  attr(:burrow_docs, :list, default: [])
 
   defp mobile_pages_viewer(assigns) do
     ~H"""
     <%= cond do %>
+      <% @page && @doc && @doc.index? -> %>
+        <div class="flex flex-col" data-role="mobile-page-viewer">
+          <ProductDocs.overview entries={@burrow_docs} />
+        </div>
+      <% @page && @doc -> %>
+        <div class="flex flex-col" data-role="mobile-page-viewer">
+          <%!-- Toolbar + strip, spine down the left of both. No Edit or
+               Delete icon: a Burrow page is never editable. --%>
+          <div class="flex border-b border-edge" data-role="mobile-burrow-header">
+            <ProductDocs.spine />
+            <div class="min-w-0 flex-1">
+              <h1
+                class="line-clamp-2 break-words px-4 py-2 text-lg font-bold"
+                data-role="burrow-page-title"
+              >
+                {@doc.title}
+              </h1>
+              <ProductDocs.provenance_strip sha={@doc.verified_at} />
+            </div>
+          </div>
+
+          <article class="prose prose-sm max-w-none px-4 py-4 text-base-content">
+            {Phoenix.HTML.raw(@preview_html)}
+          </article>
+
+          <.mobile_details
+            page={@page}
+            doc={@doc}
+            backlinks={@backlinks}
+            updated_by_display={@updated_by_display}
+          />
+        </div>
       <% @page && @editing -> %>
         <.mobile_editor page={@page} editor_content={@editor_content} save_error={@save_error} />
       <% @page -> %>
@@ -390,6 +449,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
   # ── Details accordion (mobile — folds the desktop right pane) ────────────
 
   attr(:page, :any, required: true)
+  attr(:doc, :map, default: nil)
   attr(:backlinks, :list, default: [])
   attr(:updated_by_display, :string, default: nil)
 
@@ -431,12 +491,23 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
 
         <%!-- Version metadata (mono) --%>
         <dl class="flex flex-col gap-1.5 text-xs" data-role="mobile-page-meta">
-          <div class="flex items-center justify-between gap-2">
-            <dt class="text-base-content/40">Version</dt>
-            <dd class="font-mono">v{@page.version}</dd>
-          </div>
+          <%= if @doc do %>
+            <div class="flex items-center justify-between gap-2">
+              <dt class="text-base-content/60">Source</dt>
+              <dd>Product docs</dd>
+            </div>
+            <div :if={@doc.verified_at} class="flex items-center justify-between gap-2">
+              <dt class="text-base-content/60">Verified at</dt>
+              <dd class="whitespace-nowrap font-mono">{@doc.verified_at}</dd>
+            </div>
+          <% else %>
+            <div class="flex items-center justify-between gap-2">
+              <dt class="text-base-content/40">Version</dt>
+              <dd class="font-mono">v{@page.version}</dd>
+            </div>
+          <% end %>
           <div
-            :if={@page.updated_by && @updated_by_display}
+            :if={is_nil(@doc) && @page.updated_by && @updated_by_display}
             class="flex items-center justify-between gap-2"
           >
             <dt class="text-base-content/40">Updated by</dt>
@@ -779,6 +850,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
   attr(:degraded, :boolean, default: false)
   attr(:dead_channels, :list, default: [])
   attr(:results_revealed, :boolean, default: false)
+  attr(:burrow_docs, :list, default: [])
 
   defp mobile_search(assigns) do
     ~H"""
@@ -844,7 +916,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
               if(@namespace == ns, do: "btn-primary", else: "btn-ghost")
             ]}
           >
-            {ns}
+            {SearchPane.namespace_label(ns)}
           </button>
         </div>
       </form>
@@ -871,7 +943,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
             <SearchPane.degraded_notice results={@results} results_revealed={@results_revealed} />
             <ul :if={@results_revealed and @results != []} class="mt-4 space-y-2">
               <li :for={hit <- @results} data-role="mobile-search-result">
-                <.mobile_result_hit hit={hit} />
+                <.mobile_result_hit hit={hit} burrow_docs={@burrow_docs} />
               </li>
             </ul>
           <% @results == [] -> %>
@@ -885,7 +957,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
             </p>
             <ul class="space-y-2">
               <li :for={hit <- @results} data-role="mobile-search-result">
-                <.mobile_result_hit hit={hit} />
+                <.mobile_result_hit hit={hit} burrow_docs={@burrow_docs} />
               </li>
             </ul>
         <% end %>
@@ -895,6 +967,36 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
   end
 
   attr(:hit, :map, required: true)
+  attr(:burrow_docs, :list, default: [])
+
+  defp mobile_result_hit(%{hit: %{source: "page", path: "burrow/" <> _}} = assigns) do
+    assigns = assign(assigns, :doc, SearchPane.burrow_doc(assigns.hit, assigns.burrow_docs))
+
+    ~H"""
+    <button
+      phx-click="open_result_page"
+      phx-value-file_key={@hit.path}
+      data-role="burrow-search-hit"
+      class="flex w-full gap-3 rounded-lg border border-edge bg-base-100 p-3 text-left transition-colors hover:border-primary"
+    >
+      <ProductDocs.spine />
+      <span class="block min-w-0 flex-1">
+        <span class="block break-words font-sans text-sm font-medium">{@doc.title}</span>
+        <span class="mt-0.5 flex items-center gap-1.5 text-xs text-base-content/60">
+          <span class={["badge badge-sm font-semibold", source_badge_class(@hit.source)]}>
+            {SearchPane.badge_label(@hit)}
+          </span>
+          <span data-role="burrow-hit-source">
+            Burrow Docs<span :if={@doc.verified_at}> · <span class="whitespace-nowrap font-mono">{@doc.verified_at}</span></span>
+          </span>
+        </span>
+        <span class="mt-1 line-clamp-3 break-words text-xs text-base-content/60">
+          {snippet(ProductDocs.snippet_text(@hit.content, @doc.title))}
+        </span>
+      </span>
+    </button>
+    """
+  end
 
   defp mobile_result_hit(%{hit: %{source: "page"}} = assigns) do
     ~H"""
@@ -959,7 +1061,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
     ~H"""
     <div class="flex items-center gap-2 text-xs">
       <span class={["badge badge-sm font-semibold", source_badge_class(@hit.source)]}>
-        {String.upcase(@hit.source)}
+        {SearchPane.badge_label(@hit)}
       </span>
       <span class="ml-auto font-mono text-base-content/30">{@hit.date_or_inserted_at}</span>
     </div>
@@ -994,7 +1096,10 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
     |> List.update_at(-1, &String.replace_suffix(&1, ".md", ""))
   end
 
-  defp last_index(page, namespace), do: length(path_segments(page, namespace)) - 1
+  # A Burrow Docs page reads `Burrow Docs > <Title>` (the Overview's title
+  # is "Overview") instead of `burrow > index`.
+  defp chip_segments(_page, _namespace, %{} = doc), do: ["Burrow Docs", ProductDocs.label(doc)]
+  defp chip_segments(page, namespace, _doc), do: path_segments(page, namespace)
 
   # ── Small helpers ────────────────────────────────────────────────────────
 

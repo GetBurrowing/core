@@ -30,7 +30,7 @@ defmodule Platform.Org.Wiki.Routing do
   alias Platform.Agents.Agent
   alias Platform.Chat
 
-  @type role :: :anyone | :historian | :owner | :rejected
+  @type role :: :anyone | :historian | :owner | :product | :rejected
   @type kind :: :page | :journal | :private | :unknown
 
   @type classification :: %{
@@ -56,6 +56,11 @@ defmodule Platform.Org.Wiki.Routing do
 
   # Journal path: <ns>/journal/<YYYY-MM-DD>.md
   @journal_re ~r/\A(?<ns>org|project\/[^\/]+|space\/[^\/]+)\/journal\/(?<date>\d{4}-\d{2}-\d{2})\.md\z/
+
+  # Product documentation page: burrow/page/<rest...>. Seeded from the repo
+  # by `Platform.Org.BurrowDocs` on every boot; read-only to every agent.
+  # Any other `burrow/` path (journal, private, bare prefix) stays unknown.
+  @burrow_page_re ~r/\Aburrow\/page\/(?<rest>.+)\z/
 
   # Private path: space/<space_uuid>/private/<agent_uuid>/<rest...>
   @private_re ~r/\A(?<ns>space\/(?<space>[^\/]+))\/private\/(?<agent>[^\/]+)\/.+\z/
@@ -83,6 +88,9 @@ defmodule Platform.Org.Wiki.Routing do
 
       match = Regex.named_captures(@page_re, path) ->
         classify_page(match)
+
+      Regex.match?(@burrow_page_re, path) ->
+        classify_product_page()
 
       true ->
         unknown()
@@ -141,6 +149,16 @@ defmodule Platform.Org.Wiki.Routing do
       :error ->
         unknown()
     end
+  end
+
+  defp classify_product_page do
+    %{
+      kind: :page,
+      write_role: :product,
+      read_role: :anyone,
+      namespace: "burrow",
+      journal_date: nil
+    }
   end
 
   defp unknown do
@@ -252,7 +270,10 @@ defmodule Platform.Org.Wiki.Routing do
   Returns `:ok` or `{:error, error_map()}`. Error map fields per
   design lock §3/§5:
 
-  - `:code` — `:historian_required | :not_owner | :rejected_namespace | :invalid_agent`
+  - `:code` — `:historian_required | :product_owned | :not_owner | :rejected_namespace | :invalid_agent`.
+    `:product_owned` is returned for `burrow/page/...` to EVERY agent, the
+    Historian included: those pages are written only by
+    `Platform.Org.BurrowDocs` at boot.
   - `:message` — user-facing prose; for `:historian_required` against a
     page path the literal verbatim string from §3
   - `:suggestion` — actionable next step. For `:historian_required` this is
@@ -274,6 +295,7 @@ defmodule Platform.Org.Wiki.Routing do
     case classify(path) do
       %{kind: :unknown} -> {:error, rejected_namespace_error(path)}
       %{kind: :journal} -> :ok
+      %{kind: :page, write_role: :product} -> {:error, product_owned_error(opts)}
       %{kind: :page, namespace: ns} -> page_write_gate(agent, ns, opts)
       %{kind: :private} -> private_gate(agent, path, opts)
     end
@@ -335,6 +357,19 @@ defmodule Platform.Org.Wiki.Routing do
     }
   end
 
+  defp product_owned_error(opts) do
+    today = Keyword.get(opts, :today, Date.utc_today())
+
+    %{
+      code: :product_owned,
+      message:
+        "burrow/page/... is Burrow product documentation, maintained in the product repo and updated on deploy. It is read-only to every agent, including the Historian.",
+      suggestion:
+        "memory_create at org/journal/#{Date.to_iso8601(today)}.md to note a correction",
+      recoverable: true
+    }
+  end
+
   defp not_owner_error do
     %{
       code: :not_owner,
@@ -358,7 +393,7 @@ defmodule Platform.Org.Wiki.Routing do
     %{
       code: :rejected_namespace,
       message:
-        "Path #{inspect(path)} does not match any recognised memory namespace. Allowed prefixes: org/page, org/journal, project/<uuid>/page, project/<uuid>/journal, space/<uuid>/page, space/<uuid>/journal, space/<uuid>/private/<agent_uuid>.",
+        "Path #{inspect(path)} does not match any recognised memory namespace. Allowed prefixes: org/page, org/journal, project/<uuid>/page, project/<uuid>/journal, space/<uuid>/page, space/<uuid>/journal, space/<uuid>/private/<agent_uuid>, burrow/page (read-only).",
       suggestion: "Use a recognised path prefix.",
       recoverable: false
     }

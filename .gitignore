@@ -54,6 +54,9 @@ apps/platform/priv/meetings.yml
 # commit a second copy of docs/decisions/ here, two copies drift.
 apps/platform/priv/adr_decisions/
 
+# Burrow Docs are copied the same way, from docs/burrow/, for the same reason.
+apps/platform/priv/burrow_docs/
+
 # Python (deployment/installer)
 __pycache__/
 *.pyc

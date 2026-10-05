@@ -429,6 +429,7 @@ defmodule Platform.Agents.HistorianAudit do
       "org_wiki_pages"
       |> count_between_query(:updated_at, window_start, window_end)
       |> Wiki.exclude_card_pages()
+      |> Wiki.exclude_product_docs()
       |> Repo.one()
       |> Kernel.||(0)
 

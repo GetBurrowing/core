@@ -19,7 +19,10 @@ defmodule Platform.Org.PreambleBuilderTest do
 
   use Platform.DataCase, async: false
 
+  alias Platform.Experiments.Surfaces.ProductDocsPreamble
+  alias Platform.Org.BurrowDocs
   alias Platform.Org.PreambleBuilder
+  alias Platform.Org.Wiki
   alias Platform.Org.WikiPage
   alias Platform.Repo
   alias Platform.Tasks
@@ -295,5 +298,191 @@ defmodule Platform.Org.PreambleBuilderTest do
 
     assert metadata.scope == :tenant
     assert "space/#{space_id}/notes.md" in metadata.evicted_keys
+  end
+
+  # ── (e) product docs band: burrow/page, priority 4 (task 01a10a44 s2) ──
+
+  describe "product docs band" do
+    @index "burrow/page/index.md"
+    @marker ~s(<!-- BEGIN org-preamble page="burrow/page/index.md")
+
+    # Seeded the way BurrowDocs seeds them: root org, nil workspace, via
+    # upsert_page so the frontmatter is parsed exactly as in production.
+    defp seed_burrow!(file_key, body) do
+      root = Tenancy.get_root_org()
+
+      {:ok, page} =
+        Wiki.upsert_page(file_key, %{content: body, org_id: root.id}, product_docs: true)
+
+      page
+    end
+
+    defp tenant_task! do
+      sxi = Tenancy.get_org_by_slug!("sxi")
+      project = seed_project!(sxi.id, "burrow-#{System.unique_integer([:positive])}")
+      build_task!(project.id)
+    end
+
+    setup do
+      on_exit(fn ->
+        Application.delete_env(:platform, :experiments_surface_resolver)
+        :persistent_term.erase({__MODULE__, :resolution})
+      end)
+
+      :ok
+    end
+
+    test "a TENANT-org task preamble carries the index, though the row is the root org's" do
+      index = seed_burrow!(@index, preamble_body("# Burrow Docs\n"))
+      task = tenant_task!()
+
+      # The row really belongs to the root org, not the task's tenant.
+      refute index.org_id == task.project.org_id
+
+      result = PreambleBuilder.build(task, nil)
+      assert result[@index] =~ @marker
+    end
+
+    test "a root no-task build carries the index too" do
+      seed_burrow!(@index, preamble_body("# Burrow Docs\n"))
+      assert PreambleBuilder.build(nil, nil)[@index] =~ @marker
+    end
+
+    test "CONTROL: with the index row deleted, the marker is absent" do
+      seed_burrow!(@index, preamble_body("# Burrow Docs\n"))
+      task = tenant_task!()
+      assert PreambleBuilder.build(task, nil)[@index] =~ @marker
+
+      {:ok, _} = Wiki.delete_page(@index, product_docs: true)
+
+      result = PreambleBuilder.build(task, nil)
+      refute Map.has_key?(result, @index)
+      refute Enum.any?(Map.values(result), &String.contains?(&1, @marker))
+    end
+
+    test "an index without preamble: true does not ride, whatever the surface names" do
+      seed_burrow!(@index, "# Burrow Docs\n")
+      refute Map.has_key?(PreambleBuilder.build(tenant_task!(), nil), @index)
+    end
+
+    test "under a budget that forces eviction, org and project pages evict before the index" do
+      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+      sxi = Tenancy.get_org_by_slug!("sxi")
+      project = seed_project!(sxi.id, "burrow-evict-#{System.unique_integer([:positive])}")
+      big = String.duplicate("x", 400)
+
+      seed_burrow!(@index, preamble_body(big))
+      seed_page!("org/fabrikam/IDENTITY.md", preamble_body(big), fabrikam.id)
+      seed_page!("org/sxi/IDENTITY.md", preamble_body(big), sxi.id)
+
+      seed_page!("project/#{project.id}/decisions.md", preamble_body(big), sxi.id,
+        project_id: project.id
+      )
+
+      task = build_task!(project.id)
+
+      # CONTROL: under the default budget all four ride, so the eviction
+      # below is the budget's doing.
+      assert map_size(PreambleBuilder.build(task, nil)) == 4
+
+      # ~120 tokens per entry: 150 fits exactly one.
+      result = PreambleBuilder.build(task, nil, budget: 150)
+
+      assert Map.keys(result) == [@index]
+    end
+
+    test "the surface's control arm reproduces the no-experiment default" do
+      seed_burrow!(@index, preamble_body("# Burrow Docs\n"))
+      seed_burrow!("burrow/page/tasks.md", preamble_body("# Tasks\n"))
+      task = tenant_task!()
+
+      default = PreambleBuilder.build(task, nil)
+      assert {:ok, control} = ProductDocsPreamble.control_payload("dispatch.preamble", [])
+      assert control == %{"keys" => ProductDocsPreamble.default_keys()}
+
+      put_resolver({:variant, nil, "control", control})
+      assert PreambleBuilder.build(task, nil) == default
+
+      # The default carries the index and NOT the topic, though the topic is
+      # preamble-flagged: the surface picks the pages.
+      assert Map.has_key?(default, @index)
+      refute Map.has_key?(default, "burrow/page/tasks.md")
+    end
+
+    test "an arm with no keys carries no product page" do
+      seed_burrow!(@index, preamble_body("# Burrow Docs\n"))
+      task = tenant_task!()
+
+      put_resolver({:variant, nil, "none", %{"keys" => []}})
+      refute Map.has_key?(PreambleBuilder.build(task, nil), @index)
+    end
+
+    test "an arm naming the index plus a topic carries both" do
+      seed_burrow!(@index, preamble_body("# Burrow Docs\n"))
+      seed_burrow!("burrow/page/tasks.md", preamble_body("# Tasks\n"))
+      task = tenant_task!()
+
+      put_resolver({:variant, nil, "plus", %{"keys" => [@index, "burrow/page/tasks.md"]}})
+      result = PreambleBuilder.build(task, nil)
+
+      assert Map.has_key?(result, @index)
+      assert Map.has_key?(result, "burrow/page/tasks.md")
+    end
+
+    test "a promoted default payload is honoured" do
+      seed_burrow!(@index, preamble_body("# Burrow Docs\n"))
+      put_resolver({:default, %{"keys" => []}})
+      refute Map.has_key?(PreambleBuilder.build(tenant_task!(), nil), @index)
+    end
+
+    test "a raising resolver falls back to the control" do
+      seed_burrow!(@index, preamble_body("# Burrow Docs\n"))
+      Application.put_env(:platform, :experiments_surface_resolver, __MODULE__.RaisingResolver)
+      assert PreambleBuilder.build(tenant_task!(), nil)[@index] =~ @marker
+    end
+
+    defp put_resolver(resolution) do
+      :persistent_term.put({__MODULE__, :resolution}, resolution)
+      Application.put_env(:platform, :experiments_surface_resolver, __MODULE__.StubResolver)
+    end
+  end
+
+  defmodule StubResolver do
+    def resolve("dispatch.product_docs_preamble", "dispatch.preamble", _subject, _opts),
+      do: :persistent_term.get({Platform.Org.PreambleBuilderTest, :resolution})
+
+    def resolve(_key, _target, _subject, _opts), do: :none
+  end
+
+  defmodule RaisingResolver do
+    def resolve(_key, _target, _subject, _opts), do: raise("resolver exploded")
+  end
+
+  # ── (f) the index fits its budget: at most 600 tokens annotated ────────
+
+  describe "the Burrow Docs index budget" do
+    @max_index_bytes 600 * 4
+
+    defp within_index_budget?(annotated), do: byte_size(annotated) <= @max_index_bytes
+
+    test "the real docs/burrow/index.md, annotated in the preamble, is at most 600 tokens" do
+      assert {:ok, _} = BurrowDocs.sync()
+
+      annotated = PreambleBuilder.build(nil, nil)["burrow/page/index.md"]
+      assert is_binary(annotated), "the seeded index did not reach the preamble"
+
+      assert within_index_budget?(annotated),
+             "index entry is #{byte_size(annotated)} bytes (~#{div(byte_size(annotated), 4)} tokens); cap is 600 tokens"
+    end
+
+    test "POSITIVE CONTROL: an index over the cap fails the same check" do
+      seed_burrow!(
+        "burrow/page/index.md",
+        preamble_body(String.duplicate("y", @max_index_bytes))
+      )
+
+      annotated = PreambleBuilder.build(nil, nil)["burrow/page/index.md"]
+      refute within_index_budget?(annotated)
+    end
   end
 end

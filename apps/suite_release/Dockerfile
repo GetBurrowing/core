@@ -59,6 +59,9 @@ COPY apps/suite_release/config suite_release/config
 # Platform.Regression.ADRCorpusPackagingTest).
 WORKDIR /app/apps/platform
 COPY docs/decisions priv/adr_decisions
+# Burrow Docs, compiled into Platform.Org.BurrowDocs, which fails the build
+# when it resolves no docs (Platform.Regression.BurrowDocsPackagingTest).
+COPY docs/burrow priv/burrow_docs
 RUN printf '%s' "${GIT_SHA:-unknown}" > priv/build_commit
 
 RUN cd assets && npm ci

@@ -241,6 +241,11 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
     # in the tests that assert an index row is ABSENT. Tests call `run/1`
     # directly inside the DataCase sandbox.
     :start_canvas_search_backfill,
+    # Task 01a10a44 stage 1 — the Burrow Docs seed's boot-time one-shot.
+    # Same hazard as the canvas backfill: left on it would write
+    # `burrow/page/*` rows from its own process at suite boot, outside every
+    # sandbox. Tests call `Platform.Org.BurrowDocs.sync/0` directly.
+    :start_burrow_docs_seed,
     # Task 019f4eaa — container retention purger. Sibling of
     # :start_space_purger (which is channel-specific by contract); this one
     # hard-deletes deletion-scheduled projects and the cascade-hidden

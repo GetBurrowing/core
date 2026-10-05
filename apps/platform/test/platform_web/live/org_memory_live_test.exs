@@ -361,7 +361,11 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
       # tree leaf picks up the selected styling.
       assert has_element?(view, "h1", "org/page/identity.md")
       assert render(view) =~ "Identity Alpha"
-      assert has_element?(view, ~s(button[data-file-key="org/page/identity.md"].text-primary))
+
+      assert has_element?(
+               view,
+               ~s(button[data-file-key="org/page/identity.md"][aria-current="page"])
+             )
     end
 
     test "expanding a collapsed deeper folder reveals its leaf, which selects via patch",
@@ -753,7 +757,11 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
       # heading and the tree's selected styling are intact.
       assert has_element?(view, "h1", "org/page/identity.md")
       assert render(view) =~ "Identity Alpha"
-      assert has_element?(view, ~s(button[data-file-key="org/page/identity.md"].text-primary))
+
+      assert has_element?(
+               view,
+               ~s(button[data-file-key="org/page/identity.md"][aria-current="page"])
+             )
     end
 
     test "right pane renders on :pages only — hidden on :journal and :search", %{conn: conn} do

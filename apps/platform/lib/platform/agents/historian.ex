@@ -46,7 +46,8 @@ defmodule Platform.Agents.Historian do
   A catalog card is a wiki page, so `pages` and `files` read the same
   table and are told apart by `Platform.Files.card_page_keys_query/0`
   through `Wiki.exclude_card_pages/1` / `Wiki.only_card_pages/1`. Every
-  wiki page in a span belongs to exactly one of the two corpora.
+  wiki page in a span belongs to exactly one of the two corpora, except
+  product-owned `burrow/` pages, which belong to neither (below).
 
   The `files` byte weight is the CARD's bytes, never the source
   document's (`platform_file_texts.text`). A `files` window renders
@@ -64,6 +65,15 @@ defmodule Platform.Agents.Historian do
   `Wiki.list_pages_updated_since/2`, and
   `HistorianAudit.raw_row_count/3`. An exclusion applied at some of them
   double-charges the ones that forgot.
+
+  ## Product docs are not in any corpus (task 01a10a44 stage 2)
+
+  `burrow/page/*` rows are Burrow product documentation, rewritten from
+  the repo when a release changes a doc. They are not install knowledge
+  for the Historian to digest, and each deploy that touches one bumps its
+  `updated_at`. `Wiki.exclude_product_docs/1` is composed next to
+  `Wiki.exclude_card_pages/1` at every `pages` site listed above. Cards
+  never sit under `burrow/`, so the `files` sites need no change.
 
   ## Digest eligibility — one seam, not two predicates
 
@@ -401,6 +411,7 @@ defmodule Platform.Agents.Historian do
     query =
       from(f in "org_wiki_pages", where: is_nil(f.workspace_id))
       |> Wiki.exclude_card_pages()
+      |> Wiki.exclude_product_docs()
 
     query = apply_cursor_filter(query, :updated_at, last_at)
 
@@ -416,6 +427,7 @@ defmodule Platform.Agents.Historian do
         where: f.workspace_id == type(^workspace_id, :binary_id)
       )
       |> Wiki.exclude_card_pages()
+      |> Wiki.exclude_product_docs()
 
     query = apply_cursor_filter(query, :updated_at, last_at)
 
@@ -586,6 +598,7 @@ defmodule Platform.Agents.Historian do
       }
     )
     |> Wiki.exclude_card_pages()
+    |> Wiki.exclude_product_docs()
   end
 
   defp per_day_bytes_query("pages", workspace_id, start_at, end_at) do
@@ -600,6 +613,7 @@ defmodule Platform.Agents.Historian do
       }
     )
     |> Wiki.exclude_card_pages()
+    |> Wiki.exclude_product_docs()
   end
 
   # Files corpus → org_wiki_pages, catalog cards ONLY. Complement of the

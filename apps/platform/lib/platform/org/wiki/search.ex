@@ -129,6 +129,7 @@ defmodule Platform.Org.Wiki.Search do
   alias Platform.Agents.Agent
   alias Platform.Chat
   alias Platform.Memory
+  alias Platform.Org.Wiki
   alias Platform.Org.Wiki.{Journal, Routing}
   alias Platform.Org.{WikiJournalEntry, WikiPage}
   alias Platform.Repo
@@ -242,7 +243,7 @@ defmodule Platform.Org.Wiki.Search do
     * `:source` — restrict to `"page"`, `"journal"`, `"message"`, or
       `"task"`. Omit for all four.
     * `:namespace` — prefix filter for page/journal `file_key`
-      (e.g. `"org"`, `"project/<uuid>"`).
+      (e.g. `"org"`, `"project/<uuid>"`, `"burrow"` for Burrow product docs).
     * `:since` — `Date.t()` or ISO-8601 string. Lower bound for
       `inserted_at` (pages, messages) or `date` (journal).
     * `:limit` — max results (default `#{20}`, max `#{100}`).
@@ -547,7 +548,7 @@ defmodule Platform.Org.Wiki.Search do
       page_ids =
         WikiPage
         |> filter_workspace(opts.workspace_id)
-        |> scope_org(opts.org_id)
+        |> scope_page_org(opts.org_id)
         |> filter_project(opts.project_id)
         |> where([r], r.id in ^ids)
         |> select([r], r.id)
@@ -726,7 +727,7 @@ defmodule Platform.Org.Wiki.Search do
     tsvector_hits =
       WikiPage
       |> filter_workspace(opts.workspace_id)
-      |> scope_org(opts.org_id)
+      |> scope_page_org(opts.org_id)
       |> filter_project(opts.project_id)
       |> maybe_filter_namespace(opts.namespace)
       |> maybe_filter_since_inserted(opts.since)
@@ -760,7 +761,7 @@ defmodule Platform.Org.Wiki.Search do
     rows =
       WikiPage
       |> filter_workspace(opts.workspace_id)
-      |> scope_org(opts.org_id)
+      |> scope_page_org(opts.org_id)
       |> filter_project(opts.project_id)
       |> maybe_filter_namespace(opts.namespace)
       |> maybe_filter_since_inserted(opts.since)
@@ -1229,7 +1230,7 @@ defmodule Platform.Org.Wiki.Search do
     else
       WikiPage
       |> filter_workspace(opts.workspace_id)
-      |> scope_org(opts.org_id)
+      |> scope_page_org(opts.org_id)
       |> filter_project(opts.project_id)
       |> where([p], p.id in ^ids)
       |> Repo.all()
@@ -1342,6 +1343,30 @@ defmodule Platform.Org.Wiki.Search do
 
   defp scope_org(queryable, org_opt),
     do: Tenancy.scope(queryable, org_visibility(org_opt))
+
+  # Page variant of `scope_org/2` (task 01a10a44 stage 2). Burrow product
+  # docs (`burrow/page/*`) are global: their rows belong to the root org,
+  # but every tenant agent reads them, the same audience `Wiki.Routing`
+  # grants (`read_role: :anyone`). So a page query scoped to any org list,
+  # the empty one included, also admits that one prefix. The prefix comes
+  # from `Wiki.product_docs_page_prefix/0`, the single name for this
+  # exception, which the dispatch preamble reads too. Journal and task
+  # queries keep the plain `scope_org/2`.
+  defp scope_page_org(queryable, nil), do: queryable
+
+  defp scope_page_org(queryable, org_opt) do
+    # The org half is the choke point itself, `Tenancy.scope/2` over the
+    # same table, so this adds exactly one OR arm and no second copy of
+    # the org predicate.
+    in_scope =
+      WikiPage
+      |> Tenancy.scope(org_visibility(org_opt))
+      |> select([s], s.id)
+
+    product_docs = Wiki.product_docs_page_prefix() <> "%"
+
+    where(queryable, [p], p.id in subquery(in_scope) or like(p.file_key, ^product_docs))
+  end
 
   defp filter_project(queryable, nil), do: queryable
 

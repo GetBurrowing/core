@@ -33,6 +33,7 @@ defmodule Platform.Org.Context do
   alias Platform.Memory
   alias Platform.Memory.Proposals
   alias Platform.MemoryFeedback
+  alias Platform.Org.Wiki
   alias Platform.Org.WikiJournalEntry
   alias Platform.Org.WikiPage
   alias Platform.Repo
@@ -208,8 +209,15 @@ defmodule Platform.Org.Context do
   returns `{:error, :stale}`.
   """
   @spec upsert_context_file(String.t(), map(), keyword()) ::
-          {:ok, WikiPage.t()} | {:error, Ecto.Changeset.t() | :stale}
+          {:ok, WikiPage.t()} | {:error, Ecto.Changeset.t() | :stale | :product_owned}
   def upsert_context_file(file_key, attrs, opts \\ []) do
+    case check_product_owned(file_key, opts) do
+      :ok -> do_upsert_context_file(file_key, attrs, opts)
+      {:error, _} = err -> err
+    end
+  end
+
+  defp do_upsert_context_file(file_key, attrs, opts) do
     workspace_id = Keyword.get(opts, :workspace_id)
     expected_version = Keyword.get(opts, :expected_version)
 
@@ -237,41 +245,47 @@ defmodule Platform.Org.Context do
           |> unwrap_or_rollback()
 
         %WikiPage{} = file ->
-          if not is_nil(expected_version) and file.version != expected_version do
-            Repo.rollback(:stale)
-          else
-            new_content = Map.get(attrs, :content, Map.get(attrs, "content"))
-            editor_id = Map.get(attrs, :updated_by, Map.get(attrs, "updated_by"))
+          cond do
+            # An alias can resolve a non-product key onto a product row.
+            check_product_owned(file.file_key, opts) != :ok ->
+              Repo.rollback(:product_owned)
 
-            updated =
-              file
-              |> WikiPage.changeset(%{
-                content: new_content,
-                updated_by: editor_id,
-                version: file.version + 1
-              })
-              |> Repo.update()
-              |> unwrap_or_rollback()
+            not is_nil(expected_version) and file.version != expected_version ->
+              Repo.rollback(:stale)
 
-            # Capture the edit signal *inside* the same transaction: if
-            # the feedback insert fails we roll the file update back too.
-            # That way a mutation and its training-corpus row land (or
-            # don't) atomically — no silent mutations, no orphan rows.
-            feedback_attrs = %{
-              original_content: file.content,
-              edited_content: new_content,
-              original_author_id: file.updated_by,
-              editor_id: editor_id,
-              path: file_key,
-              namespace: "org_context",
-              workspace_id: workspace_id,
-              reason_text: Keyword.get(opts, :reason)
-            }
+            true ->
+              new_content = Map.get(attrs, :content, Map.get(attrs, "content"))
+              editor_id = Map.get(attrs, :updated_by, Map.get(attrs, "updated_by"))
 
-            case MemoryFeedback.record_edit(feedback_attrs) do
-              {:ok, _entry} -> updated
-              {:error, changeset} -> Repo.rollback(changeset)
-            end
+              updated =
+                file
+                |> WikiPage.changeset(%{
+                  content: new_content,
+                  updated_by: editor_id,
+                  version: file.version + 1
+                })
+                |> Repo.update()
+                |> unwrap_or_rollback()
+
+              # Capture the edit signal *inside* the same transaction: if
+              # the feedback insert fails we roll the file update back too.
+              # That way a mutation and its training-corpus row land (or
+              # don't) atomically — no silent mutations, no orphan rows.
+              feedback_attrs = %{
+                original_content: file.content,
+                edited_content: new_content,
+                original_author_id: file.updated_by,
+                editor_id: editor_id,
+                path: file_key,
+                namespace: "org_context",
+                workspace_id: workspace_id,
+                reason_text: Keyword.get(opts, :reason)
+              }
+
+              case MemoryFeedback.record_edit(feedback_attrs) do
+                {:ok, _entry} -> updated
+                {:error, changeset} -> Repo.rollback(changeset)
+              end
           end
       end
     end)
@@ -328,12 +342,12 @@ defmodule Platform.Org.Context do
   Creates or updates an org context file (simple interface).
   On update, the version is incremented.
   """
-  def upsert_file(attrs) do
+  def upsert_file(attrs, opts \\ []) do
     file_key = Map.get(attrs, :file_key) || Map.get(attrs, "file_key")
     content = Map.get(attrs, :content) || Map.get(attrs, "content")
     updated_by = Map.get(attrs, :updated_by) || Map.get(attrs, "updated_by")
 
-    upsert_context_file(file_key, %{content: content, updated_by: updated_by})
+    upsert_context_file(file_key, %{content: content, updated_by: updated_by}, opts)
   end
 
   @doc """
@@ -353,6 +367,13 @@ defmodule Platform.Org.Context do
   exist, or `{:error, changeset}` if the feedback insert failed.
   """
   def delete_file(file_key, opts \\ []) do
+    case check_product_owned(file_key, opts) do
+      :ok -> do_delete_file(file_key, opts)
+      {:error, _} = err -> err
+    end
+  end
+
+  defp do_delete_file(file_key, opts) do
     editor_id = Keyword.get(opts, :editor_id)
     reason = Keyword.get(opts, :reason)
 
@@ -361,7 +382,10 @@ defmodule Platform.Org.Context do
         nil ->
           Repo.rollback(:not_found)
 
-        file ->
+        %WikiPage{file_key: resolved_key} = file ->
+          if check_product_owned(resolved_key, opts) != :ok,
+            do: Repo.rollback(:product_owned)
+
           feedback_attrs = %{
             original_content: file.content,
             path: file_key,
@@ -694,6 +718,16 @@ defmodule Platform.Org.Context do
   end
 
   # ── Private helpers ──────────────────────────────────────────────────
+
+  # Domain backstop for the product-owned `burrow/` namespace (task 01a10a44
+  # stage 2). Same rule as `Platform.Org.Wiki`: refused with
+  # `{:error, :product_owned}` unless the caller passes the `:product_docs`
+  # opt set to `true`, which only `Platform.Org.BurrowDocs` does.
+  defp check_product_owned(file_key, opts) do
+    if Keyword.get(opts, :product_docs) == true or not Wiki.product_owned_key?(file_key),
+      do: :ok,
+      else: {:error, :product_owned}
+  end
 
   defp filter_workspace(queryable, nil) do
     where(queryable, [r], is_nil(r.workspace_id))

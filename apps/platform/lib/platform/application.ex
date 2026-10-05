@@ -226,6 +226,7 @@ defmodule Platform.Application do
       |> maybe_add_catalog_emitter()
       |> maybe_add_deploy_merge_reconciler()
       |> maybe_add_canvas_search_backfill()
+      |> maybe_add_burrow_docs_seed()
       |> ensure_task_router_watcher_after_endpoint()
 
     # See https://hexdocs.pm/elixir/Supervisor.html
@@ -378,6 +379,39 @@ defmodule Platform.Application do
           Supervisor.child_spec(
             {Task, fn -> Platform.Chat.CanvasSearchBackfill.run_at_boot() end},
             id: :canvas_search_backfill,
+            restart: :transient
+          )
+        ]
+    else
+      children
+    end
+  end
+
+  # Burrow Docs seed (task 01a10a44 stage 1). Modelled on
+  # `maybe_add_canvas_search_backfill/1` above: a one-shot `Task`, appended so
+  # it runs after `Platform.Repo`, `restart: :transient` so a normal exit
+  # does not restart it. It runs on EVERY boot, not only the first: the docs
+  # are product-owned, so each release must converge the `burrow/page/*` rows
+  # onto the corpus it was built with.
+  #
+  # The entry point is `run_at_boot/0`, NOT `sync/0`, and that difference is
+  # load-bearing. `:transient` restarts on *abnormal* exit, so a sync that
+  # raised on production data would be restarted, raise again, and trip
+  # this supervisor's max-restart intensity — taking the whole application
+  # down over a docs page. `run_at_boot/0` catches everything and returns
+  # `:ok`, so this child either finishes or logs and exits normally; it can
+  # never crash-loop the tree. Per-row failures never get that far — `sync/0`
+  # collects them in `:failed`.
+  #
+  # Disabled in config/test.exs — tests call `sync/0` directly inside the
+  # DataCase sandbox.
+  defp maybe_add_burrow_docs_seed(children) do
+    if Application.get_env(:platform, :start_burrow_docs_seed, true) do
+      children ++
+        [
+          Supervisor.child_spec(
+            {Task, fn -> Platform.Org.BurrowDocs.run_at_boot() end},
+            id: :burrow_docs_seed,
             restart: :transient
           )
         ]

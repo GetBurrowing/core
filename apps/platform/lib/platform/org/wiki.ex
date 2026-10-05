@@ -175,6 +175,71 @@ defmodule Platform.Org.Wiki do
     where(query, [p], p.file_key in subquery(Files.card_page_keys_query()))
   end
 
+  # ── Product-owned docs: the `burrow/` namespace (task 01a10a44 stage 2) ──
+  #
+  # `burrow/page/*` rows are Burrow product documentation, seeded from the
+  # repo by `Platform.Org.BurrowDocs` on every boot. They are read-only to
+  # every agent and member. `Wiki.Routing` refuses them on the memory_*
+  # tool surface; the checks below are the DOMAIN backstop for the writers
+  # that never pass through Routing (the org-memory LiveView, memory
+  # proposals, the maintenance subagent, file supersession, the cataloger).
+  #
+  # A write to any `burrow/` key is refused with `{:error, :product_owned}`
+  # unless the caller passes the `:product_docs` opt set to `true`, and only
+  # `Platform.Org.BurrowDocs` does (a guard test pins that).
+
+  @product_owned_prefix "burrow/"
+
+  @doc """
+  True when `file_key` sits in the product-owned `burrow/` namespace.
+  """
+  @spec product_owned_key?(term()) :: boolean()
+  def product_owned_key?(file_key) when is_binary(file_key),
+    do: String.starts_with?(file_key, @product_owned_prefix)
+
+  def product_owned_key?(_), do: false
+
+  @doc """
+  The `file_key` prefix of the product-owned namespace (`"burrow/"`).
+  """
+  @spec product_owned_prefix() :: String.t()
+  def product_owned_prefix, do: @product_owned_prefix
+
+  @doc """
+  The `file_key` prefix of product-owned PAGES (`"burrow/page/"`).
+
+  The one name for the global, cross-tenant pages exception: search's
+  org scoping and the dispatch preamble's org-independent product band
+  both read it, so a later global namespace changes one place.
+  """
+  @spec product_docs_page_prefix() :: String.t()
+  def product_docs_page_prefix, do: @product_owned_prefix <> "page/"
+
+  @doc """
+  Narrows a wiki-page query to rows OUTSIDE the product-owned `burrow/`
+  namespace.
+
+  Composed at every Historian `pages` site next to `exclude_card_pages/1`:
+  a deploy that rewrites a doc bumps its `updated_at`, and without this
+  each release would feed product docs into a digest window.
+
+  Composes on `file_key`, so it works against `WikiPage` and the
+  schemaless `"org_wiki_pages"` sources alike.
+  """
+  @spec exclude_product_docs(Ecto.Queryable.t()) :: Ecto.Query.t()
+  def exclude_product_docs(query) do
+    pattern = @product_owned_prefix <> "%"
+    where(query, [p], not like(p.file_key, ^pattern))
+  end
+
+  # The backstop. `:ok` unless a product-owned key is written without the
+  # BurrowDocs opt.
+  defp check_product_owned(keys, opts) do
+    if Keyword.get(opts, :product_docs) == true or not Enum.any?(keys, &product_owned_key?/1),
+      do: :ok,
+      else: {:error, :product_owned}
+  end
+
   @doc """
   List wiki pages updated in `[window_start, window_end)`, ordered by
   `updated_at asc`.
@@ -203,6 +268,7 @@ defmodule Platform.Org.Wiki do
     window_start
     |> pages_updated_since_query(opts)
     |> exclude_card_pages()
+    |> exclude_product_docs()
     |> Repo.all()
   end
 
@@ -323,8 +389,15 @@ defmodule Platform.Org.Wiki do
     * `:expected_version` — when set, a mismatch returns `{:error, :stale}`
   """
   @spec upsert_page(String.t(), page_attrs(), keyword()) ::
-          {:ok, WikiPage.t()} | {:error, Ecto.Changeset.t() | :stale}
+          {:ok, WikiPage.t()} | {:error, Ecto.Changeset.t() | :stale | :product_owned}
   def upsert_page(file_key, attrs, opts \\ []) when is_binary(file_key) and is_map(attrs) do
+    case check_product_owned([file_key], opts) do
+      :ok -> do_upsert_page(file_key, attrs, opts)
+      {:error, _} = err -> err
+    end
+  end
+
+  defp do_upsert_page(file_key, attrs, opts) do
     workspace_id = Keyword.get(opts, :workspace_id)
     expected_version = Keyword.get(opts, :expected_version)
 
@@ -365,6 +438,11 @@ defmodule Platform.Org.Wiki do
               |> unwrap_or_rollback()
 
             %WikiPage{} = row ->
+              # An alias can resolve a non-product key onto a product row.
+              if check_product_owned([row.file_key], opts) != :ok do
+                Repo.rollback(:product_owned)
+              end
+
               if not is_nil(expected_version) and row.version != expected_version do
                 Repo.rollback(:stale)
               end
@@ -445,28 +523,31 @@ defmodule Platform.Org.Wiki do
     * `:workspace_id` (default `nil`)
   """
   @spec delete_page(String.t(), keyword()) ::
-          {:ok, WikiPage.t()} | {:error, :not_found | Ecto.Changeset.t()}
+          {:ok, WikiPage.t()} | {:error, :not_found | :product_owned | Ecto.Changeset.t()}
   def delete_page(file_key, opts \\ []) when is_binary(file_key) do
     workspace_id = Keyword.get(opts, :workspace_id)
 
-    case get_page(file_key, workspace_id: workspace_id) do
-      nil ->
-        {:error, :not_found}
+    with :ok <- check_product_owned([file_key], opts),
+         %WikiPage{} = page <-
+           get_page(file_key, workspace_id: workspace_id) || {:error, :not_found},
+         :ok <- check_product_owned([page.file_key], opts) do
+      do_delete_page(page)
+    end
+  end
 
-      %WikiPage{} = page ->
-        case Repo.delete(page) do
-          {:ok, deleted} ->
-            broadcast_index_event(:wiki_page_deleted, %{
-              page_id: deleted.id,
-              file_key: deleted.file_key,
-              workspace_id: deleted.workspace_id
-            })
+  defp do_delete_page(%WikiPage{} = page) do
+    case Repo.delete(page) do
+      {:ok, deleted} ->
+        broadcast_index_event(:wiki_page_deleted, %{
+          page_id: deleted.id,
+          file_key: deleted.file_key,
+          workspace_id: deleted.workspace_id
+        })
 
-            {:ok, deleted}
+        {:ok, deleted}
 
-          {:error, _} = err ->
-            err
-        end
+      {:error, _} = err ->
+        err
     end
   end
 
@@ -592,12 +673,16 @@ defmodule Platform.Org.Wiki do
       column. Defaults to the source row's existing `updated_by`.
   """
   @spec rename_page(String.t(), String.t(), keyword()) ::
-          {:ok, WikiPage.t()} | {:error, :not_found | :stale | Ecto.Changeset.t() | term()}
+          {:ok, WikiPage.t()}
+          | {:error, :not_found | :stale | :product_owned | Ecto.Changeset.t() | term()}
   def rename_page(old_file_key, new_file_key, opts \\ [])
       when is_binary(old_file_key) and is_binary(new_file_key) do
     workspace_id = Keyword.get(opts, :workspace_id)
 
     cond do
+      check_product_owned([old_file_key, new_file_key], opts) != :ok ->
+        {:error, :product_owned}
+
       old_file_key == new_file_key ->
         {:error, :same_path}
 
@@ -626,6 +711,11 @@ defmodule Platform.Org.Wiki do
                Repo.rollback(:not_found)
 
              %WikiPage{} = page ->
+               # An alias can resolve the old key onto a product row.
+               if check_product_owned([page.file_key], opts) != :ok do
+                 Repo.rollback(:product_owned)
+               end
+
                updated_by = Keyword.get(opts, :updated_by, page.updated_by)
 
                # Upsert the new path inside the outer transaction.

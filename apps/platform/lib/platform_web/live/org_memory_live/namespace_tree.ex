@@ -30,6 +30,8 @@ defmodule PlatformWeb.OrgMemoryLive.NamespaceTree do
 
   use Phoenix.Component
 
+  alias PlatformWeb.OrgMemoryLive.ProductDocs
+
   # ── Tree building (pure) ───────────────────────────────────────────────
 
   @doc """
@@ -109,16 +111,56 @@ defmodule PlatformWeb.OrgMemoryLive.NamespaceTree do
   def file_icon("ORG_DIRECTORY" <> _), do: "hero-users size-4"
   def file_icon(_), do: "hero-document-text size-4"
 
+  # ── Selected-leaf styling (task 01a10a44 stage 6) ─────────────────────
+  #
+  # One pair of class lists for BOTH leaf kinds (Burrow Docs and the Pages
+  # tree), so the two cannot drift apart again. The selected leaf keeps the
+  # canvas's `--color-interactive` text and sits on `base-100`, the lightest
+  # ground each theme ships. `base-300` failed AA in light: #087f93 on
+  # #D7D7D7 is 3.27:1; on base-100 it is 4.70:1 light and 10.00:1 dark
+  # (pinned in selected_leaf_contrast_test.exs, computed from app.css). The
+  # global `--color-interactive` token is untouched; it colours every link
+  # in the product.
+  #
+  # `base-100` is close to the Pages tree's own ground in light (base-200 at
+  # 40% over base-100), so the row also takes an inset `--edge` hairline,
+  # the same "selected sits raised on base-100 inside an edge" idiom as the
+  # selected tab in view.ex. The hover ground lives on the UNSELECTED list
+  # only: hovering the selected row must not repaint it base-300 and bring
+  # the 3.27:1 pair back.
+  @selected_leaf_class "bg-base-100 font-medium text-[var(--color-interactive)] ring-1 ring-inset ring-edge"
+  @unselected_leaf_class "text-base-content/70 hover:bg-base-300"
+
+  @doc false
+  @spec selected_leaf_class() :: String.t()
+  def selected_leaf_class, do: @selected_leaf_class
+
+  @doc false
+  @spec unselected_leaf_class() :: String.t()
+  def unselected_leaf_class, do: @unselected_leaf_class
+
   # ── Components ─────────────────────────────────────────────────────────
 
   attr(:tree, :map, required: true, doc: "root node from build/1")
   attr(:expanded_prefixes, :any, required: true, doc: "MapSet of expanded folder prefixes")
   attr(:selected_file_key, :string, default: nil)
 
+  attr(:burrow_docs, :list,
+    default: [],
+    doc: "ProductDocs entries, in product order; the section is hidden when empty"
+  )
+
   def namespace_tree(assigns) do
     ~H"""
     <aside class="flex min-h-0 flex-col overflow-hidden border-r border-edge bg-base-200/40">
-      <div class="flex items-center justify-between px-4 py-3">
+      <.burrow_docs_section
+        :if={@burrow_docs != []}
+        entries={@burrow_docs}
+        open={MapSet.member?(@expanded_prefixes || MapSet.new(), burrow_prefix())}
+        selected_file_key={@selected_file_key}
+      />
+
+      <div class="flex items-center justify-between px-4 py-3" data-role="pages-tree-header">
         <h2 class="text-sm font-semibold uppercase tracking-wider text-base-content/50">
           Pages
         </h2>
@@ -234,14 +276,86 @@ defmodule PlatformWeb.OrgMemoryLive.NamespaceTree do
       data-file-key={@page.file_key}
       style={indent(@depth)}
       class={[
-        "flex w-full items-center gap-2 py-1.5 pr-4 text-left text-sm transition-colors hover:bg-base-300",
-        if(@selected?, do: "bg-base-300 text-primary font-medium", else: "text-base-content/70")
+        "flex w-full items-center gap-2 py-1.5 pr-4 text-left text-sm transition-colors",
+        if(@selected?, do: selected_leaf_class(), else: unselected_leaf_class())
       ]}
+      aria-current={@selected? && "page"}
     >
       <span class={[file_icon(@page.file_key), "shrink-0"]}></span>
       <span class="truncate">{leaf_label(@page.file_key)}</span>
       <span class="ml-auto text-xs text-base-content/30">v{@page.version}</span>
     </button>
+    """
+  end
+
+  # ── Burrow Docs section (task 01a10a44 stage 5) ──────────────────────
+  #
+  # Product docs sit in their own section ABOVE the Pages header, on a
+  # base-200 ground with the cyan spine down its full height. Topics show
+  # by frontmatter title in product `order`: no filename, no `vN` (the
+  # version moves on every deploy that edits a doc and means nothing to a
+  # reader) and no `+` (nothing can be created here). Collapsed by default;
+  # the parent opens it (`"burrow/"` in `@expanded_prefixes`) when a Burrow
+  # page is selected or the install has no org pages. Rows are 44px under
+  # `lg` because the mobile drawer renders this same component.
+
+  @burrow_prefix "burrow/"
+
+  @doc "The expansion key of the Burrow Docs section in `expanded_prefixes`."
+  @spec burrow_prefix() :: String.t()
+  def burrow_prefix, do: @burrow_prefix
+
+  attr(:entries, :list, required: true)
+  attr(:open, :boolean, default: false)
+  attr(:selected_file_key, :string, default: nil)
+
+  defp burrow_docs_section(assigns) do
+    assigns = assign(assigns, :prefix, @burrow_prefix)
+
+    ~H"""
+    <section
+      class="mx-2 mt-2 flex max-h-[60%] shrink-0 overflow-y-auto rounded-lg bg-base-200"
+      data-role="burrow-docs-section"
+    >
+      <ProductDocs.spine />
+      <div class="min-w-0 flex-1 py-1">
+        <button
+          type="button"
+          phx-click="toggle_namespace"
+          phx-value-prefix={@prefix}
+          data-role="burrow-docs-toggle"
+          aria-expanded={to_string(@open)}
+          class="flex min-h-11 w-full items-center justify-between gap-2 px-3 text-left text-sm font-semibold text-base-content transition-colors hover:bg-base-300 lg:min-h-9"
+        >
+          <span>Burrow Docs</span>
+          <span class={[
+            if(@open, do: "hero-chevron-down", else: "hero-chevron-right"),
+            "size-3.5 shrink-0 text-base-content/60"
+          ]}>
+          </span>
+        </button>
+        <div :if={@open} data-role="burrow-docs-leaves">
+          <button
+            :for={entry <- @entries}
+            type="button"
+            phx-click="select_page"
+            phx-value-file_key={entry.file_key}
+            data-file-key={entry.file_key}
+            data-burrow-leaf={entry.file_key}
+            aria-current={@selected_file_key == entry.file_key && "page"}
+            class={[
+              "flex min-h-11 w-full items-center px-3 pl-6 text-left text-sm transition-colors lg:min-h-8",
+              if(@selected_file_key == entry.file_key,
+                do: selected_leaf_class(),
+                else: unselected_leaf_class()
+              )
+            ]}
+          >
+            <span class="truncate">{ProductDocs.label(entry)}</span>
+          </button>
+        </div>
+      </div>
+    </section>
     """
   end
 

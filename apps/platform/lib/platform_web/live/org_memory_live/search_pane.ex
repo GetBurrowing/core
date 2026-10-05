@@ -16,11 +16,19 @@ defmodule PlatformWeb.OrgMemoryLive.SearchPane do
     * message → plain href to `/chat/<space_id>` (`ChatLive` resolves
       slug-or-UUID)
 
+  A Burrow Docs hit (a page hit on a `burrow/` key, task 01a10a44 stage 5)
+  keeps the same badge component with the text `DOCS`, shows the topic
+  title in Public Sans instead of the mono path, adds a
+  "Burrow Docs · <sha>" line and carries the cyan spine on its left edge.
+  Ranking stays mixed. The namespace select labels `burrow` "Burrow Docs".
+
   Stateless — query, filters, and results live on
   `PlatformWeb.OrgMemoryLive`.
   """
 
   use Phoenix.Component
+
+  alias PlatformWeb.OrgMemoryLive.ProductDocs
 
   @corpora ["all", "page", "journal", "message"]
 
@@ -43,6 +51,8 @@ defmodule PlatformWeb.OrgMemoryLive.SearchPane do
     default: false,
     doc: "server-side reveal state for a degraded search's partial hits"
   )
+
+  attr(:burrow_docs, :list, default: [], doc: "ProductDocs entries, for Burrow hit titles")
 
   def search_pane(assigns) do
     assigns = assign(assigns, :corpora, @corpora)
@@ -84,7 +94,9 @@ defmodule PlatformWeb.OrgMemoryLive.SearchPane do
           <label class="mb-1 block text-xs text-base-content/50">Namespace</label>
           <select name="namespace" class="select select-bordered select-sm">
             <option value="all" selected={@namespace == "all"}>all</option>
-            <option :for={ns <- @namespaces} value={ns} selected={@namespace == ns}>{ns}</option>
+            <option :for={ns <- @namespaces} value={ns} selected={@namespace == ns}>
+              {namespace_label(ns)}
+            </option>
           </select>
         </div>
         <button type="submit" class="btn btn-primary btn-sm gap-1">
@@ -116,7 +128,7 @@ defmodule PlatformWeb.OrgMemoryLive.SearchPane do
             <.degraded_notice results={@results} results_revealed={@results_revealed} />
             <ul :if={@results_revealed and @results != []} class="mt-4 space-y-3">
               <li :for={hit <- @results} data-search-result data-source-tag={hit.source}>
-                <.result_hit hit={hit} />
+                <.result_hit hit={hit} burrow_docs={@burrow_docs} />
               </li>
             </ul>
           <% @results == [] -> %>
@@ -130,7 +142,7 @@ defmodule PlatformWeb.OrgMemoryLive.SearchPane do
             </p>
             <ul class="space-y-3">
               <li :for={hit <- @results} data-search-result data-source-tag={hit.source}>
-                <.result_hit hit={hit} />
+                <.result_hit hit={hit} burrow_docs={@burrow_docs} />
               </li>
             </ul>
         <% end %>
@@ -329,6 +341,32 @@ defmodule PlatformWeb.OrgMemoryLive.SearchPane do
   # ── Per-source result rows ──────────────────────────────────────────────
 
   attr(:hit, :map, required: true)
+  attr(:burrow_docs, :list, default: [])
+
+  defp result_hit(%{hit: %{source: "page", path: "burrow/" <> _}} = assigns) do
+    assigns = assign(assigns, :doc, burrow_doc(assigns.hit, assigns.burrow_docs))
+
+    ~H"""
+    <button
+      phx-click="open_result_page"
+      phx-value-file_key={@hit.path}
+      data-role="burrow-search-hit"
+      class="flex w-full gap-3 rounded-lg border border-edge bg-base-100 p-4 text-left transition-colors hover:border-primary hover:bg-primary/5"
+    >
+      <ProductDocs.spine />
+      <span class="block min-w-0 flex-1">
+        <.result_meta hit={@hit} />
+        <span class="mt-1 block truncate font-sans text-sm font-medium">{@doc.title}</span>
+        <span class="mt-0.5 block text-xs text-base-content/60" data-role="burrow-hit-source">
+          Burrow Docs<span :if={@doc.verified_at}> · <span class="whitespace-nowrap font-mono">{@doc.verified_at}</span></span>
+        </span>
+        <span class="mt-1 line-clamp-3 text-xs text-base-content/60">
+          {snippet(ProductDocs.snippet_text(@hit.content, @doc.title))}
+        </span>
+      </span>
+    </button>
+    """
+  end
 
   defp result_hit(%{hit: %{source: "page"}} = assigns) do
     ~H"""
@@ -386,7 +424,7 @@ defmodule PlatformWeb.OrgMemoryLive.SearchPane do
     ~H"""
     <div class="flex items-center gap-2 text-xs">
       <span class={["badge badge-sm font-semibold", source_badge_class(@hit.source)]}>
-        {String.upcase(@hit.source)}
+        {badge_label(@hit)}
       </span>
       <span class="font-mono text-base-content/40">score {format_score(@hit.score)}</span>
       <span :if={@hit.semantic_rank} class="text-base-content/30">sem #{@hit.semantic_rank}</span>
@@ -397,6 +435,31 @@ defmodule PlatformWeb.OrgMemoryLive.SearchPane do
   end
 
   # ── Helpers ─────────────────────────────────────────────────────────────
+
+  @doc """
+  The source badge text. A page hit on a Burrow Docs key reads `DOCS`; every
+  other hit reads its upper-cased source (`PAGE`, `JOURNAL`, `MESSAGE`).
+  """
+  @spec badge_label(map()) :: String.t()
+  def badge_label(%{source: "page", path: "burrow/" <> _}), do: "DOCS"
+  def badge_label(%{source: source}) when is_binary(source), do: String.upcase(source)
+  def badge_label(_), do: ""
+
+  @doc "The namespace filter label: `burrow` reads \"Burrow Docs\"; others read as-is."
+  @spec namespace_label(String.t()) :: String.t()
+  def namespace_label("burrow"), do: "Burrow Docs"
+  def namespace_label(ns), do: ns
+
+  @doc """
+  The ProductDocs entry for a Burrow hit. A hit whose row is not in the
+  loaded list (it changed after mount) falls back to an entry built from
+  its path, so the hit still renders a title.
+  """
+  @spec burrow_doc(map(), list()) :: map()
+  def burrow_doc(%{path: path}, burrow_docs) do
+    ProductDocs.find(burrow_docs, path) ||
+      ProductDocs.entry(%{file_key: path, frontmatter: %{}, content: ""})
+  end
 
   defp source_badge_class("page"), do: "badge-primary badge-outline"
   defp source_badge_class("journal"), do: "badge-info badge-outline"

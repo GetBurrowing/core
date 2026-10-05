@@ -31,12 +31,25 @@ defmodule Platform.Org.PreambleBuilder do
   When the assembled set exceeds the budget, entries are evicted in
   priority order — **lower** priority evicts **first**:
 
-      space (0) > org-ancestors (1) > org-direct (2) > project (3)
+      space (0) > org-ancestors (1) > org-direct (2) > project (3) > product (4)
 
   This matches the documented order from the ADR (project survives
-  longest, space goes first). Eviction fires a
+  longest among install pages, space goes first). The product band
+  (task 01a10a44 stage 2) evicts LAST of all. Eviction fires a
   `[:platform, :org, :preamble_evicted]` telemetry event with the list
   of evicted file_keys and the operating-org scope kind.
+
+  ## Product docs band (task 01a10a44 stage 2)
+
+  Burrow product documentation (`burrow/page/*`, seeded by
+  `Platform.Org.BurrowDocs`) joins every dispatch preamble at priority 4,
+  for root and tenant operating orgs alike: the rows belong to the root
+  org, but they describe the product every org runs on, so they are loaded
+  regardless of org. WHICH pages ride is the experiment surface
+  `dispatch.product_docs_preamble`
+  (`Platform.Experiments.Surfaces.ProductDocsPreamble`), resolved per task;
+  its control is the index page alone. Only pages whose frontmatter carries
+  `preamble: true` are loaded, whatever the surface names.
 
   ## Budget
 
@@ -60,6 +73,11 @@ defmodule Platform.Org.PreambleBuilder do
 
   import Ecto.Query, only: [from: 2]
 
+  require Logger
+
+  alias Platform.Experiments.Subject, as: ExperimentSubject
+  alias Platform.Experiments.Surfaces, as: ExperimentSurfaces
+  alias Platform.Experiments.Surfaces.ProductDocsPreamble
   alias Platform.Org.TenantsSummary
   alias Platform.Org.WikiPage
   alias Platform.Repo
@@ -92,8 +110,9 @@ defmodule Platform.Org.PreambleBuilder do
     * `1` — `org/*` from an ancestor of the operating org
     * `2` — `org/*` directly on the operating org
     * `3` — `project/*`
+    * `4` — `burrow/page/*` product docs (evicts last)
   """
-  @type priority :: 0..3
+  @type priority :: 0..4
 
   @doc """
   Build the org preamble.
@@ -217,6 +236,7 @@ defmodule Platform.Org.PreambleBuilder do
     # validation. The tenant branch already does this; the root branch
     # also needs it.
     root_pages = preamble_pages_for_org(root.id) |> Enum.map(&new_entry(&1, 2))
+    product = product_entries(task)
 
     descendant_identity =
       Tenancy.list_tenants()
@@ -227,7 +247,8 @@ defmodule Platform.Org.PreambleBuilder do
     project = project_entries(task, root.id)
     space_pages = space_entries(space)
 
-    project ++ root_pages ++ descendant_identity ++ List.wrap(summary) ++ space_pages
+    product ++
+      project ++ root_pages ++ descendant_identity ++ List.wrap(summary) ++ space_pages
   end
 
   defp collect_entries(%Org{} = tenant, ancestors, task, space) do
@@ -243,8 +264,9 @@ defmodule Platform.Org.PreambleBuilder do
 
     project = project_entries(task, tenant.id)
     space_pages = space_entries(space)
+    product = product_entries(task)
 
-    project ++ direct ++ inherited ++ space_pages
+    product ++ project ++ direct ++ inherited ++ space_pages
   end
 
   # Pages flagged `preamble: true` belonging to `org_id` AND living
@@ -317,6 +339,95 @@ defmodule Platform.Org.PreambleBuilder do
   end
 
   defp project_entries(_task, _tenant_id), do: []
+
+  # Product docs: the surface-resolved `burrow/page/*` keys whose page has
+  # `preamble: true`, regardless of org (the rows belong to the root org and
+  # every org reads them). Priority 4, so they evict last.
+  defp product_entries(task) do
+    case product_doc_keys(task) do
+      [] ->
+        []
+
+      keys ->
+        from(p in WikiPage,
+          where: p.file_key in ^keys and is_nil(p.workspace_id),
+          order_by: [asc: p.file_key]
+        )
+        |> Repo.all()
+        |> Enum.filter(&preamble?/1)
+        |> Enum.map(&new_entry(&1, 4))
+    end
+  end
+
+  @doc """
+  The `burrow/page/*` keys the `dispatch.product_docs_preamble` surface
+  resolves for `task`: an experiment arm's or a promoted default's
+  `"keys"`, else the control (`ProductDocsPreamble.default_keys/0`). A nil
+  task, or any failure in resolution, gets the control. Never raises.
+  """
+  @spec product_doc_keys(struct() | nil) :: [String.t()]
+  def product_doc_keys(task) do
+    with %ExperimentSubject{} = subject <- experiment_subject(task),
+         resolver =
+           Application.get_env(:platform, :experiments_surface_resolver, ExperimentSurfaces),
+         {:ok, %{"keys" => keys}} when is_list(keys) <-
+           resolution_payload(
+             resolver.resolve(
+               ProductDocsPreamble.key(),
+               ProductDocsPreamble.target(),
+               subject,
+               org_id: task_org_id(task)
+             )
+           ) do
+      keys
+    else
+      _ -> ProductDocsPreamble.default_keys()
+    end
+  rescue
+    error ->
+      Logger.error(
+        "[PreambleBuilder] product docs surface resolution failed, using the control: " <>
+          inspect(error)
+      )
+
+      ProductDocsPreamble.default_keys()
+  catch
+    kind, reason ->
+      Logger.error(
+        "[PreambleBuilder] product docs surface resolution exited (#{inspect(kind)}), " <>
+          "using the control: " <> inspect(reason)
+      )
+
+      ProductDocsPreamble.default_keys()
+  end
+
+  defp resolution_payload({:variant, _experiment, _slug, %{} = payload}), do: {:ok, payload}
+  defp resolution_payload({:default, %{} = payload}), do: {:ok, payload}
+  defp resolution_payload(_resolution), do: :none
+
+  # Built from the task in hand, like the dispatch read point in
+  # `HeartbeatScheduler.experiment_subject/1`. A nil attribute is left out
+  # so the resolver can fill it.
+  defp experiment_subject(%{id: id} = task) when is_binary(id) do
+    if Platform.UUID.valid?(id) do
+      attributes =
+        [
+          project_id: Map.get(task, :project_id),
+          epic_id: Map.get(task, :epic_id),
+          inserted_at: Map.get(task, :inserted_at),
+          org_id: task_org_id(task)
+        ]
+        |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+        |> Map.new()
+
+      ExperimentSubject.new("task", id, attributes)
+    end
+  end
+
+  defp experiment_subject(_task), do: nil
+
+  defp task_org_id(%{project: %{org_id: org_id}}) when is_binary(org_id), do: org_id
+  defp task_org_id(_task), do: nil
 
   defp space_entries(nil), do: []
 

@@ -455,4 +455,72 @@ defmodule Platform.Org.Wiki.RoutingTest do
       refute Routing.classify("project/#{id}/page/notes.md").kind == :unknown
     end
   end
+
+  ## ─────────────────────────────────────────────────────────────────────
+  ## burrow/page — product-owned docs (task 01a10a44 stage 2)
+  ## ─────────────────────────────────────────────────────────────────────
+
+  describe "burrow/page — product-owned, read-only to every agent" do
+    @burrow "burrow/page/tasks.md"
+
+    test "classifies as :page, namespace burrow, :product write, :anyone read" do
+      assert %{
+               kind: :page,
+               write_role: :product,
+               read_role: :anyone,
+               namespace: "burrow",
+               journal_date: nil
+             } = Routing.classify(@burrow)
+    end
+
+    test "every other burrow/ path stays :unknown" do
+      for path <- [
+            "burrow/journal/2026-05-20.md",
+            "burrow/private/x.md",
+            "burrow/page/",
+            "burrow/tasks.md",
+            "burrow"
+          ] do
+        assert %{kind: :unknown} = Routing.classify(path), path
+      end
+    end
+
+    # On origin/main this path was ALREADY refused, as :rejected_namespace.
+    # The code is what discriminates the new gate, so assert on it, not on
+    # the refusal.
+    test "a plain agent's gate_write returns :product_owned, NOT :rejected_namespace" do
+      assert {:error, %{code: :product_owned} = err} =
+               Routing.gate_write(plain_agent(), @burrow, today: @today)
+
+      assert err.message =~ "read-only to every agent, including the Historian"
+      assert err.suggestion == "memory_create at org/journal/2026-05-20.md to note a correction"
+      assert err.recoverable == true
+    end
+
+    test "the Historian's gate_write returns :product_owned too" do
+      historian = insert_agent!() |> pin_historian!()
+
+      assert {:error, %{code: :product_owned}} = Routing.gate_write(historian, @burrow)
+
+      # CONTROL: the same Historian passes the page gate on an org page, so
+      # the refusal above is the burrow rule, not a broken Historian.
+      assert :ok = Routing.gate_write(historian, "org/page/x.md")
+    end
+
+    test "a nil agent's gate_write returns :product_owned" do
+      assert {:error, %{code: :product_owned}} = Routing.gate_write(nil, @burrow)
+    end
+
+    test "gate_read is :ok for any agent (CONTROL: the path is readable)" do
+      assert :ok = Routing.gate_read(plain_agent(), @burrow)
+      assert :ok = Routing.gate_read(nil, @burrow)
+    end
+
+    test "the rejected_namespace message lists burrow/page as read-only" do
+      assert {:error, %{code: :rejected_namespace, message: msg}} =
+               Routing.gate_write(plain_agent(), "nowhere/x.md")
+
+      assert msg =~ "burrow/page (read-only)"
+    end
+  end
 end

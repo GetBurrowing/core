@@ -40,6 +40,10 @@ COPY apps/platform/lib lib
 # reads and `/health` reports, and it has to be in `priv/` before the release
 # snapshots it. `Platform.BuildInfoTest` guards the ordering.
 COPY docs/decisions priv/adr_decisions
+# The Burrow Docs corpus, same reason and same ordering rule: compiled into
+# Platform.Org.BurrowDocs, which fails the build when it resolves no docs.
+# `Platform.Regression.BurrowDocsPackagingTest` guards it.
+COPY docs/burrow priv/burrow_docs
 RUN printf '%s' "${GIT_SHA:-unknown}" > priv/build_commit
 
 RUN cd assets && npm ci

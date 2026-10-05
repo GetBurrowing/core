@@ -24,6 +24,8 @@ defmodule Platform.Org.Wiki.Context do
   frontmatter declares `preamble: true` AND whose `file_key` starts with
   one of the accessible namespace prefixes:
 
+    * `"burrow/"`     — always accessible: Burrow product docs
+      (`burrow/page/*`, seeded by `Platform.Org.BurrowDocs`)
     * `"org/"`        — always accessible
     * `"project/<task.project_id>/"` — when `:task` opt with `project_id`
     * `"space/<space_id>/"`          — when `:space_id` opt is set
@@ -33,8 +35,10 @@ defmodule Platform.Org.Wiki.Context do
 
   ## Ordering
 
-  Stable sort by `{band(file_key), file_key}` where band assigns 0 to
-  `org/*`, 1 to `project/*`, and 2 to `space/*`. Within a band, lex `asc`
+  Stable sort by `{band(file_key), file_key}` where band assigns -1 to
+  `burrow/*` product docs, 0 to `org/*`, 1 to `project/*`, and 2 to
+  `space/*`. Product docs sort first, so the budget walk includes them
+  before any install page and they survive an overrun. Within a band, lex `asc`
   on `file_key`. Deterministic; no recency weighting (preamble pages are
   curated, not stream-y).
 
@@ -189,7 +193,7 @@ defmodule Platform.Org.Wiki.Context do
         _ -> []
       end
 
-    ["org/"] ++ project_prefix ++ space_prefix
+    [Wiki.product_owned_prefix(), "org/"] ++ project_prefix ++ space_prefix
   end
 
   @spec caller_kind(opts()) :: :task | :space | :org
@@ -240,7 +244,8 @@ defmodule Platform.Org.Wiki.Context do
     Enum.sort_by(pages, &{band(&1.file_key), &1.file_key})
   end
 
-  @spec band(String.t()) :: 0 | 1 | 2 | 3
+  @spec band(String.t()) :: -1 | 0 | 1 | 2 | 3
+  defp band("burrow/" <> _), do: -1
   defp band("org/" <> _), do: 0
   defp band("project/" <> _), do: 1
   defp band("space/" <> _), do: 2

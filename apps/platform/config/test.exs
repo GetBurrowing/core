@@ -204,6 +204,11 @@ config :platform, :start_experiments_mail_subscriber, false
 # is about to roll back and racing the tests that assert on absent index rows.
 config :platform, :start_canvas_search_backfill, false
 
+# Burrow Docs seed (task 01a10a44 stage 1): tests call `sync/0` directly
+# inside the DataCase sandbox. Left on at boot it would write burrow/page rows
+# into the real test database from outside every sandbox.
+config :platform, :start_burrow_docs_seed, false
+
 # ContainerPurger (task 019f4eaa stage 4): tests call `sweep/0` directly
 # inside the DataCase sandbox instead of racing a global daily ticker.
 config :platform, :start_container_purger, false
@@ -457,7 +462,16 @@ config :platform,
        # unchanged on purpose — it is the absence of a question, not a
        # resolved "no orgs" answer. Net deletion; T5 still retires this
        # module.
-       "e5074d4cf86bd52a9a517af9c2a247d841cb1f2bdf324b0033111d6cc25f9298"
+       #
+       # Bumped again by task 01a10a44 stage 2 (Burrow Docs): the domain
+       # backstop for the product-owned `burrow/` namespace.
+       # `upsert_context_file/3`, `upsert_file/1,2` and `delete_file/2`
+       # refuse a `burrow/` key (and a row an alias resolves to one) with
+       # `{:error, :product_owned}` unless the caller passes the
+       # `:product_docs` opt, which only `Platform.Org.BurrowDocs` does.
+       # `upsert_file` gains an optional opts arg so the opt can reach the
+       # guard. Every non-burrow write behaves exactly as before.
+       "a926871b1756230f72ac1ca399b58bc914edb238f92bd770349a6cf2fd2d9238"
 
 # Stack v2 (task 019f487d, ADR 0045) — Platform.Tasks.Stacks.DepInference
 # resolves its LLM adapter from application env at call time. Tests

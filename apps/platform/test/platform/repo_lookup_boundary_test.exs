@@ -742,6 +742,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "get_template/1's conservative guard — no in-repo caller pins this id's provenance"},
     {"platform/org/context.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "get_file_by_id/1's guard on a page id supplied by a caller of the memory MCP tools"},
+    {"platform/org/preamble_builder.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "experiment_subject/1 (task 01a10a44 stage 2) reads `task.id` off the `%Task{}` ContextAssembler loaded by primary key; the guard only keeps a hand-built map out of the experiments resolver, and a failing id falls back to the surface's control keys"},
     {"platform/skills.ex", :platform_uuid_guard, "-", 2, :safe_internal,
      "get_skill/1 and resolve_skills/1. get_skill/1's nil is what routes a slug to the get_by(Skill, slug:) branch, which is designed traffic for skill_get"},
     {"platform/tasks/canvas_attachments.ex", :platform_uuid_guard, "-", 2, :safe_internal,
