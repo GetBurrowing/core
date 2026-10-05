@@ -110,11 +110,24 @@ const PushSubscribe = {
           this.enableNativePush();
         } else if (state === "denied") {
           this.pushEvent("push_permission_state", { state: "denied" });
+        } else if (state === "prompt") {
+          // iOS has never asked on this device: ask now, without waiting for
+          // the banner. The browser branch waits for a click, but the
+          // banner's dismissal is stored per USER, not per device, so a
+          // person who dismissed it on a desktop never sees it in the app.
+          // Waiting for that click would lock a new device out of push for
+          // good: iOS never prompts, and the app never appears in iOS
+          // Settings > Notifications. iOS shows its system prompt at most
+          // once per install, so this cannot nag. enableNativePush keeps the
+          // honesty rule: "granted" only on registered: true.
+          this.enableNativePush();
         } else {
           this.pushEvent("push_permission_state", { state: "prompt" });
         }
       })
       .catch(() => {
+        // pushState itself failed, so we don't know iOS's state. Report
+        // "prompt" and let the banner's click drive enablePush.
         this.pushEvent("push_permission_state", { state: "prompt" });
       });
 

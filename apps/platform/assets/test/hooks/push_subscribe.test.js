@@ -71,18 +71,36 @@ describe("nativePushPlugin", () => {
 })
 
 describe("native branch", () => {
-  it("reports prompt on mount when iOS has not been asked yet", async () => {
-    stubNative({ pushState: async () => ({ state: "prompt" }), enablePush: vi.fn() })
-    const { events } = mountHook()
-    await flush()
-    expect(events).toEqual([["push_permission_state", { state: "prompt" }]])
-  })
-
-  it("reports granted only after the registration POST succeeded", async () => {
+  // The banner's dismissal is per USER, so a person who dismissed it on a
+  // desktop never sees it in the app. Waiting for its click would mean iOS
+  // never prompts on a new device and push can never be enabled there.
+  it("asks iOS on mount when it has not been asked yet, without a click", async () => {
     const enablePush = vi.fn(async () => ({ registered: true }))
     stubNative({ pushState: async () => ({ state: "prompt" }), enablePush })
+    const { events } = mountHook()
+    await flush()
+    await flush()
+    expect(enablePush).toHaveBeenCalledTimes(1)
+    expect(events).toEqual([["push_permission_state", { state: "granted" }]])
+  })
+
+  it("does not ask iOS on mount when the person already declined", async () => {
+    const enablePush = vi.fn(async () => ({ registered: true }))
+    stubNative({ pushState: async () => ({ state: "denied" }), enablePush })
+    const { events } = mountHook()
+    await flush()
+    await flush()
+    expect(enablePush).not.toHaveBeenCalled()
+    expect(events).toEqual([["push_permission_state", { state: "denied" }]])
+  })
+
+  it("reports prompt and waits for the click when pushState fails", async () => {
+    const enablePush = vi.fn(async () => ({ registered: true }))
+    stubNative({ pushState: async () => { throw new Error("bridge down") }, enablePush })
     const { events, handlers } = mountHook()
     await flush()
+    expect(enablePush).not.toHaveBeenCalled()
+    expect(events).toEqual([["push_permission_state", { state: "prompt" }]])
     handlers.request_push_permission()
     await flush()
     expect(enablePush).toHaveBeenCalledTimes(1)
@@ -96,9 +114,8 @@ describe("native branch", () => {
       throw err
     })
     stubNative({ pushState: async () => ({ state: "prompt" }), enablePush })
-    const { events, handlers } = mountHook()
+    const { events } = mountHook()
     await flush()
-    handlers.request_push_permission()
     await flush()
     expect(events.some(([, p]) => p?.state === "granted")).toBe(false)
     expect(events.at(-1)).toEqual([
@@ -112,9 +129,8 @@ describe("native branch", () => {
       pushState: async () => ({ state: "prompt" }),
       enablePush: async () => ({ registered: false, state: "granted", error: "no session" })
     })
-    const { events, handlers } = mountHook()
+    const { events } = mountHook()
     await flush()
-    handlers.request_push_permission()
     await flush()
     expect(events.some(([, p]) => p?.state === "granted")).toBe(false)
     expect(events.at(-1)[0]).toBe("push_subscribe_failed")
@@ -125,9 +141,8 @@ describe("native branch", () => {
       pushState: async () => ({ state: "prompt" }),
       enablePush: async () => ({ registered: false, state: "denied" })
     })
-    const { events, handlers } = mountHook()
+    const { events } = mountHook()
     await flush()
-    handlers.request_push_permission()
     await flush()
     expect(events.at(-1)).toEqual(["push_permission_state", { state: "denied" }])
   })
