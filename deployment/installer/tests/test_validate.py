@@ -441,7 +441,9 @@ class ModulesFieldTest(PositiveControlMixin, unittest.TestCase):
 
     def test_unknown_module_path(self):
         errors, _ = validate(load(fixture("unknown_module.toml")))
-        self.assertEqual([(e.code, e.path) for e in errors], [("unknown_module", "install.modules")])
+        self.assertEqual(
+            [(e.code, e.path) for e in errors], [("unknown_module", "install.modules")]
+        )
         self.assertIn("'mail'", errors[0].message)
         self.assertIn("known modules: play", errors[0].message)
 

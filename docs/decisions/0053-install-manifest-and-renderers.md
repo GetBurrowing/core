@@ -394,3 +394,268 @@ files-service embeddings` on moon, read `active active active active active` at 
 before the run, and at 04:57:31Z, after teardown. The run started, stopped and removed no unit,
 container, volume or network without `01a0d69d` in its name. The only image pulled onto moon
 was the `feat-01a0d69d-oidc-ca` tag, and it was removed again.
+
+## Proof (Mac)
+
+Task 01a0d6ab stage 5. The proof ran on **2026-10-05 between 04:50Z and 05:23Z**, on **rock**,
+from branch `task/01a0d6ab-6ea3-7001-8976-86dd066069ca`. The installer code on rock was the
+branch at `ef321ef0` plus three fixes this run found. Those fixes are committed in the same
+commit as this section (see "Found by the proof and fixed").
+
+The core image was pinned to `docker.io/example/suite-core:feat-01a0d6ab-multiarch`: index
+`sha256:7b39215b...`, revision `17a3df5d`. `/health` reported exactly that commit.
+
+### Where it ran, and why rock
+
+- **The machine.** rock is the team's own Apple Silicon Mac mini: arm64, 8 GB RAM, macOS 26.3,
+  OrbStack 29.4.0, and a 4 GiB VM limit. hive reaches it as `ssh rock`.
+- **Why not Harper's Mac mini.** The plan targeted Harper's Mac mini through Octavius, because
+  hive has no route there (measured 2026-09-25 and recorded in this section's first draft). On
+  2026-10-05 Rowan moved the proof to rock: *"run it on rock yes, but please tear it down once
+  its up"*. That meant the executor could run every step over ssh, so no relay to Harper or
+  Octavius was needed.
+- **Rock is shared and live.** Brosnan's agent runtime runs there, working the iOS app
+  (Xcode/TestFlight). The run therefore waited for a quiet window. The first check, at 04:02Z,
+  measured memory-pressure level 2 (warn): 4.2 of 5.1 GB swap used and 133 MB unused. The
+  executor polled every 10 minutes. It started only after two consecutive level-1 (normal)
+  readings, at 04:40Z and 04:50Z, with no booted simulator and no Xcode build. During the run a
+  30-second monitor took 65 samples: 42 at level 1, 23 at level 2, none critical. The lowest
+  `memory_pressure` free reading was 31%. The run touched none of Brosnan's processes, tmux
+  sessions, `~/.claude.json`, ports, Xcode state or `~/private_keys`.
+- **OrbStack was already running**, and was left running. Its licence line, as preflight printed
+  it: "OrbStack is free for personal non-commercial use; commercial use needs a paid licence."
+
+### Deviations from the customer path (and why)
+
+- **No OpenAI key.** At Rowan's request, embeddings used moon's LAN llama-server (model
+  `embeddings`, Qwen3, **1024-dim**), and speech-to-text used moon's LAN speaches (model
+  `Systran/faster-distil-whisper-large-v3`). The width the proof expects is therefore 1024, not
+  1536. `api_key_ref` pointed at a 0600 dummy key file, because neither server checks a bearer.
+  A customer Mac uses the hosted endpoints, which is the default of `proof.sh init`. The
+  `--embed-url/--embed-model/--stt-url/--stt-model` flags exist for runs like this one.
+- **OrbStack containers could not reach the LAN.** From inside the VM, `192.0.2.200:8188`
+  and `:8000` timed out, while rock itself reached both. The likely cause is macOS's Local
+  Network privacy permission for OrbStack; it was not checked, because that is a System
+  Settings change on a shared desktop. The run worked around it with a throwaway loopback TCP
+  forwarder on rock (`lanfwd-01a0d6ab`, 127.0.0.1:18188 and :18001). Containers reached it
+  through `host.docker.internal`. The hosted-endpoint customer path does not hit this.
+- **The installer was driven by the executor over ssh,** not by a headless `claude -p` with
+  SKILL.md loaded. Every CLI command and its full output went to a transcript (113 JSONL lines).
+  Its first line is the planted marker. That is the file the hygiene grep read.
+- **The agent-connect session ran on hive, not rock.** A fresh `CLAUDE_CONFIG_DIR` on rock reports
+  "Not logged in". Logging it in would have meant copying Brosnan's credentials, which the run
+  must not touch. The session was a separate `claude -p` on hive with `--strict-mcp-config` and
+  its own MCP config: a 0600 file holding the new instance's `/mcp` URL and a throwaway runtime
+  token.
+- **The passkey was enrolled from hive's headless Chrome over CDP,** in an isolated browser
+  context with a WebAuthn virtual authenticator. The `open location` call was shimmed on rock,
+  so no browser window opened on the shared desktop. On pocket-id's `/login/alternative/code`
+  page the **Submit button stayed disabled** with the code prefilled (pocket-id 2.18.0, which the
+  `:v2` tag now resolves to; stage 4 measured 2.16.0). The page made no request. The script
+  therefore made the same call the page makes,
+  `POST /api/one-time-access-token/<code>` from the page's origin, which returned 200. This
+  was not re-tested in a real desktop browser. It is follow-up 9.
+
+### Measurements
+
+| # | Check | Expected | Measured |
+|---|---|---|---|
+| 2 | Preflight | 7881/tcp and 7882/udp free; no container-name clash | PASS. 21 TCP and 11 UDP listeners recorded; both media ports free; no name collision; 47 GiB free disk (29 GiB needed); runtime OrbStack, VM 3.9 GiB (advisory: give it 4 GiB) |
+| 3 | `setup status` after `verify` | `complete: true` | `complete: true`; only `keepalive` (advisory) not done. Its human steps: `sudo pmset`, OrbStack start-at-login. FileVault and automatic login were already off. |
+| 4 | From hive: `/health` | 200, `commit` = `17a3df5d...` | 200, `status ok`, commit `17a3df5d020b91c88bf8ccd92a72f0d111b4e51b`. Public TLS with no `-k` (`ssl_verify_result` 0); the edge certificate is issued by Google Trust Services WE1. |
+| 4 | From hive: `/auth/login` | 302 to `https://auth-01a0d6ab.<zone>/`, and that page 200 text/html | 302 to `https://auth-01a0d6ab.example.com/authorize?client_id=suite-core&...` (PKCE S256). Following it gives 200 text/html at `/interaction`; the auth host root is 200 text/html. |
+| 4b | First user signs in | Lands in Suite | Passkey (virtual authenticator) at pocket-id, then `https://suite-01a0d6ab.example.com/chat`, title "Chat" |
+| 5 | `proof.sh memory --expect-dim 1024` | width 1024; opposite orderings | PASS. `atttypmod` 1024. Cat query: canary rank 1 (fused and semantic), control rank 2. VAT query: control rank 1 (semantic 1, lexical 1), canary rank 2. Ingest wait 6 s. memory-service logged `Dimension: 1024`, `api_key=set`, with no mismatch. |
+| 5 | `proof.sh files` | sha256 equal, `cmp` identical, unauthenticated GET denied, runtime revoked, token 401, file deleted | PASS. 1 MiB up and down, sha256 `8e190dfe...` on both sides and the server's content hash; `cmp` identical; unauthenticated GET 302; runtime revoked (token hash cleared); the same token then got 401; token file deleted |
+| 6 | `proof.sh arch` | every image arm64; `uname -m` aarch64 | PASS. All 7 running images arm64; `uname -m` aarch64 in core-platform, files-service and memory-service |
+| 8 | Meetings on (`media_reach = "lan"`, transcription on) | 2 publishers with tracks; livekit host 200 from hive | Both media ports re-checked free. `lk room participants list proof-01a0d6ab` showed `pub_0 (ACTIVE) tracks: 1` and `pub_1 (JOINED) tracks: 1`; LiveKit logged connectionType udp twice. From hive, `https://livekit-01a0d6ab.example.com/` returned 200 after fix (b) below; before it, 404. meeting-transcriber registered as a worker; RestartCount 0 for both. core carried 4 `LIVEKIT_*` names. |
+| 8 | Meetings back off | livekit absent; `LIVEKIT_*` count 0; health 200 | PASS. Running services: caddy, cloudflared, core-platform, core-postgres, files-service, memory-service, pocket-id. `LIVEKIT_*` count 0. `/health` 200 from hive. The 18 shared `secrets.env` names had equal sha256 prefixes across the flip. The only core `[error]` was the known `prompt_template_missing meetings.summarize`. |
+| 9 | A separate agent session | one message posted; one memory search | Runtime `agent-01a0d6ab` (bundles memory and messaging, in its own channel). The `claude -p` session's `memory_search` returned the canary (`01a10a78-ca6b...`, source journal). `send_media` posted message `01a10a7b-abe0...` into the agent's channel; rpc confirmed its space. `send_media` reads `file_path` on the server, so the file was placed in the core-platform container. It is the only messaging tool reachable over MCP; plain text posts go through the channel socket. Afterwards the runtime was revoked, and `tools/list` with its token returned 401. |
+| 10 | `setup run backup` | a dump passes `pg_restore --list` | LaunchAgent installed (daily 03:15). Entry counts: core_platform 694, memory 13, pocketid 179. A re-run of `pg_restore --list` on the newest core dump exited 0. |
+| 11 | Transcript hygiene | every secret 0; marker 1 | PASS. 30 secret values checked, 0 found: every `secrets.env` name, the Cloudflare token, the dummy key, the registry auth and its tokens, and the agent token. Marker count 1. The hive-side `claude -p` output and the CDP log also had 0 occurrences of the agent token; the positive control, the MCP config file, had 1. |
+
+RAM. Readings are `docker stats --no-stream`; "VM" is OrbStack's VM limit; "free" is
+`memory_pressure` free percentage. Total host RAM is 8 GiB.
+
+| Reading | before install | idle after install | after data plane |
+|---|---|---|---|
+| OrbStack VM limit | 3.89 GiB | 3.89 GiB | 3.89 GiB |
+| `memory_pressure` free | 44% | 46% | 46% |
+| core-platform | n/a | 345 MiB | 347 MiB |
+| core-postgres | n/a | 92 MiB | 99 MiB |
+| memory-service (http backend) | n/a | 101 MiB | 108 MiB |
+| files-service | n/a | 42 MiB | 75 MiB |
+| pocket-id | n/a | 62 MiB | 67 MiB |
+| caddy + cloudflared | n/a | 62 MiB | 89 MiB |
+| **Suite total** | n/a | **703 MiB** | **785 MiB** |
+| Pre-existing (nexus-neo4j, suite-dev-postgres) | 1038 MiB | 688 MiB | 691 MiB |
+
+### Found by the proof and fixed
+
+- **(a) `up` lost `docker compose` on OrbStack.** The install's own `DOCKER_CONFIG`, which holds
+  the registry credential, also moves Docker's per-user plugin dir. OrbStack installs
+  `docker-compose` only in `~/.docker/cli-plugins`, so `up` failed with "unknown flag:
+  --project-directory". The install's `config.json` now carries `cliPluginsExtraDirs`: the
+  user's plugin dir plus Docker Desktop's and Homebrew's.
+- **(b) A re-render did not reach running containers.** A single-file bind mount pins the
+  replaced inode, and `docker compose up -d` leaves an unchanged service running. After the
+  meetings flip, caddy still served its first Caddyfile; the in-container path read "No such
+  file". The livekit host therefore returned 404 through the tunnel. `up` now compares each
+  mounted config (Caddyfile, livekit.yaml) with what the container reads, and force-recreates a
+  service whose copy differs.
+- **(c) First boot of postgres was marked unhealthy.** initdb, the init scripts and the restart
+  checkpoint took longer than 5 x 10 s of healthchecks on a loaded 8 GB Mac; the checkpoint's
+  fsync alone took 22 s. `up` failed with "dependency failed to start". The mac render now gives
+  the bundled postgres a 180 s `start_period`.
+- **(d) The livekit DNS record outlived the meetings flip and teardown.** Both only looked at
+  the hostnames the current knobs route. The `tunnel` step now deletes its own CNAME for a
+  configured host that is no longer routed, and teardown covers every configured host. On rock,
+  the stale `livekit-01a0d6ab` CNAME was deleted by hand during teardown, through the API with a
+  name-plus-target match.
+
+### Teardown (Rowan: "please tear it down once its up")
+
+Each item was listed before teardown, using the same filter or path, and shown gone after it.
+Every filter was shown matching the live resources first.
+
+- `setup teardown --confirm suite-01a0d6ab`:
+  - it ran `docker compose down -v`. Before: 7 containers, 5 volumes and 1 network under compose
+    project `suite-01a0d6ab`. After: none.
+  - it deleted the tunnel `suite-suite-01a0d6ab` and the `suite-` and `auth-01a0d6ab` CNAMEs.
+    The `livekit-01a0d6ab` CNAME was deleted by hand (fix (d)).
+  - it removed the backup LaunchAgent: 1 plist and 1 loaded before, 0 and 0 after.
+- **Cloudflare, from the account:**
+  - tunnels matching 01a0d6ab: 1, then 0 (account total back to 2);
+  - DNS records matching 01a0d6ab: 3, then 0 (zone total back to 33);
+  - API token `suite-proof-01a0d6ab`: present and active (id `f0dfce2d...`), then deleted. The
+    account's token total is back to 1.
+- **Directories:** `~/suite/suite-01a0d6ab`, `~/SuiteBackups/suite-01a0d6ab`, the inputs dir and
+  the source dir were present, then gone. The empty `~/suite` and `~/SuiteBackups` were removed.
+- **The copied registry credential:** all three copies were present, then gone. They were the
+  0600 input file, the install's `.docker/config.json` and its `registry-auth.json`.
+- **The throwaway agent runtime** on the new instance was revoked (token then 401), and then
+  removed with the instance's volumes.
+- **The forwarder:** `lanfwd-01a0d6ab` was killed; listeners on 18188/18001 went from 2 to 0.
+- **The pulled images were removed:** suite-core feat tag, files-service, memory-service,
+  meeting-transcriber, pocket-id, livekit-server and cloudflared.
+  `pgvector/pgvector:pg16` was on rock before the run and was kept. `caddy:2` was kept because
+  whether it pre-dated the run is unknown.
+- **OrbStack:** it was running before and was left running.
+
+### Human prerequisites (not the CLI's to solve), as found on rock
+
+- **(a) A container runtime.** OrbStack was already installed and running.
+- **(b) A Docker Hub read credential for the private `example` images.** moon's
+  `auth.json` was copied as a 0600 file. **The open decision is still Rowan's:** make the
+  images public, or build a pull-token flow.
+- **(c) A Cloudflare zone and a scoped token.** This run minted a 24-hour token from the
+  account's legacy global key, scoped to the zone (Zone:Read, DNS:Edit) and the account
+  (Cloudflare Tunnel:Edit). It was deleted at teardown.
+- **(d) The core repository is private.** The run avoided cloning it on rock: it copied only
+  `deployment/` with `git archive`, because the installer needs nothing else.
+
+### Day-2 note: embedding width varies per install
+
+memory-service creates `embeddings.embedding` at whatever width the configured model returns
+on its first boot. That is 1536 for `text-embedding-3-small`, and 1024 for moon's Qwen3 (and
+for this proof). Since memory-service `2ef3312f` it refuses to start if a table already exists
+at a different width. So changing `[embeddings] model` on a live install is a migration, not a
+knob: re-embed, or drop and re-create the tables. The width is part of an install's state and
+must be read from the install (`atttypmod`), never assumed.
+
+### Follow-ups named by this proof
+
+1. An arm64 build of `suite-voice-worker`, for agent voice in meetings. It is amd64-only today.
+2. TURN/TLS for remote meeting participants without a router port-forward.
+3. LiveKit Cloud as an alternative to running LiveKit on the Mac.
+4. A slim memory-service image without torch for the `http` embedding backend, if the measured
+   arm64 image size warrants it.
+5. files-service speech-to-text through the same hosted OpenAI endpoint.
+6. Public images or a pull-token flow, to remove prerequisite (b). This is Rowan's decision.
+7. Per-install container names, so that two installs, or an install and an unrelated
+   `caddy`, can share a host.
+8. An arm64 build of the `play` flavour. Since the main merge, CI builds `core` for amd64 and
+   arm64, and `play` for amd64 only. A Mac install with `modules = ["play"]` would run under
+   emulation.
+9. ~~Re-check pocket-id's one-time-code page.~~ Root-caused and fixed in stage 6: it was the
+   code length, not a browser quirk (see "Stage 6" below). pocket-id is now pinned to v2.18.0.
+10. OrbStack's LAN reach from containers (likely macOS Local Network permission). This matters
+    only for a Mac that uses LAN-hosted model endpoints.
+11. A text-message tool on the MCP surface for remote agents. `send_media` needs a file on the
+    server.
+
+### Stage 6: the sign-in code length, and the skill-driven transcript clause
+
+**What the behavioural gate found.** A real person following the installer's sign-in link
+reached pocket-id's code page with the code prefilled and **Submit disabled**. pocket-id v2.18.0
+`backend/internal/onetimeaccess/service.go:271-274` mints a 6-character code when
+`ttl <= 15m` and a 12-character one otherwise. Its frontend
+(`routes/login/alternative/code/+page.svelte:24-29`) expects 12 characters whenever
+`emailOneTimeAccessAsUnauthenticatedEnabled` is false, which is the default. The installer
+asked for `ttl = "15m"`, exactly on the boundary. The earlier proof reached `/chat` only
+because its script made the page's POST itself.
+
+**Fix.**
+
+- `LOGIN_TTL` is now `"30m"` (`setup/pocketid.py`). It is the smallest round value clearly
+  above the boundary, and it keeps the link, which is a credential until used, short-lived.
+  `EMAIL_ONE_TIME_ACCESS_AS_UNAUTHENTICATED_ENABLED` is left off.
+- `LoginTtlTest` parses the TTL the way Go does and requires 15 min < TTL <= 60 min. The
+  pocket-id fake now follows the same length rule, so the shared real/fake case asserts a
+  12-character code. With `"15m"` (and with `"900s"` and `"0.25h"`), the TTL test and the
+  12-character assertion fail against the fake and against a real v2.18.0 container.
+- pocket-id is pinned to `ghcr.io/pocket-id/pocket-id:v2.18.0`. On 2026-10-05 that was the same
+  image digest as `:v2`, so the pin changes nothing today. It does stop the boundary, or the
+  frontend's expectation, from moving under an install without a deliberate change.
+- **Found while re-proving against v2.18.0:** pocket-id 2.17.0 and later
+  (`AUTO_CREATE_OIDC_CLIENT_SECRET`, default true) generate an active secret along with the
+  client. That left `suite-core` with two live secrets, one of which nobody holds. `oidc-client`
+  now deletes that secret, using the id from the create response (`createdSecret.id`), so a
+  secret an admin added later is never touched. Against v2.16.0, no `createdSecret` is
+  returned, so nothing is deleted.
+
+**Live re-proof (hive, docker, throwaway `pocketid-01a0d6ab-<pid>` at v2.18.0).** The link was
+minted with the installer's own `ensure_admin` + `login_link` and opened in an isolated
+headless-Chrome context. Nothing was injected; only network events were observed.
+
+| TTL | Code length | `POST /api/one-time-access-token` from the page | Final page |
+|---|---|---|---|
+| `30m` (installer) | 12 | 1 request, 200 | `/signup/add-passkey`, title "Add Passkey", heading "Set up your passkey" |
+| `15m` (control) | 6 | none | `/login/alternative/code?code=<redacted>&redirect=...`, title "Login Code", Submit `disabled: true` |
+
+The container was removed afterwards. `docker ps -a --filter name=pocket` then listed only
+hive's production `pocket-id`, which shows the filter matches.
+
+**The skill-driven transcript clause is still UNMEASURED.** The clause says the only human
+inputs are the domain, the Cloudflare token path, the OpenAI key path and the passkey. Measuring
+it needs Claude logged in on the Mac. rock's fresh config is not logged in, and Brosnan's
+credentials are off limits. Procedure for a human on a logged-in Mac:
+
+1. Copy `deployment/` onto the Mac (`git archive HEAD deployment | tar -x -C ~/suite-src`) and
+   put `deployment/installer/mac` on `PATH`. Have the domain, a 0600 Cloudflare token file and
+   a 0600 OpenAI key file ready.
+2. Make an empty directory and install the skill there as a project skill:
+   `mkdir -p .claude/skills/suite-install-mac && cp ~/suite-src/deployment/installer/skill/SKILL.md .claude/skills/suite-install-mac/`.
+   Start `claude` in that directory. Type `MARKER-01a0d6ab-transcript` as the first message,
+   then `Install Suite on this Mac.` Answer only what the agent asks. Add the passkey in the
+   browser window it opens, then say so.
+3. When `verify` passes, exit. The transcript is the session file
+   `~/.claude/projects/<cwd with / replaced by ->/<session-id>.jsonl` (newest file there).
+   A scripted alternative records the same shape:
+   `claude -p --input-format stream-json --output-format stream-json --verbose --replay-user-messages`,
+   with each human message fed as one `{"type":"user","message":{"role":"user","content":"..."}}`
+   line on stdin, and stdout teed to a file.
+4. Run `proof.sh --grep-transcript --transcript <file> --marker MARKER-01a0d6ab-transcript
+   --key-file <cf token file> --key-file <openai key file> --human-turns`. Every secret count
+   must be 0. Each `transcript.human_turn <n> "<text>"` line is one turn a human typed. The
+   clause holds when, apart from the marker and the opening request, those lines carry only
+   the domain, the two paths and the passkey confirmation. Re-run with
+   `--expect-human-turns <n>` to record the count as a PASS/FAIL.
+
+`human_turns()` counts user records with text content. It drops tool results, subagent prompts
+(`parent_tool_use_id`, `isSidechain`), `isMeta`/`isCompactSummary`/`isSynthetic` records,
+records whose `origin.kind` is not `human`, and harness text (`<task-notification`,
+`<local-command-`, `<system-reminder`). It is tested on synthetic fixtures of both shapes that
+plant exactly four inputs among every excluded kind, with a negative control that adds a fifth.
+On a real `claude -p` stream-json run on hive, it listed exactly the one message fed in and
+dropped the tool result.

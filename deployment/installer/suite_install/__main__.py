@@ -5,10 +5,16 @@ Commands:
                         line per problem and exit 2.
   services <manifest>   print the enabled container set, one name per line, sorted
                         (exit 2 with the same error lines if the manifest is invalid).
-  render <manifest> --out <dir> [--target single-host] [--reuse-secrets <secrets.env>]
+  render <manifest> --out <dir> [--target <install.target>] [--reuse-secrets <secrets.env>]
          [--customer-secrets <file>] [--registry-auth <config.json>]
                         write the install files; print the file list and the secret
                         NAMES (never a value).
+  setup <command> ...   the agent-driven setup CLI (init, status, run, secret,
+                        teardown); see suite_install/setup/cli.py and
+                        deployment/installer/mac/README.md.
+  proof <command> ...   data-plane proof of a Mac install (init, ports, ram, arch,
+                        memory, files, meetings, livekit, grep-transcript); see
+                        suite_install/proof_mac.py and deployment/installer/mac/proof.sh.
   redact <render-dir> --out <dir>
                         copy a render with every secret value replaced by
                         ``<secret:NAME>``, so two renders can be diffed safely.
@@ -51,7 +57,12 @@ def _parser():
     cmd = sub.add_parser("render", help="write the install files for one target")
     cmd.add_argument("manifest")
     cmd.add_argument("--out", required=True, help="new or empty directory outside any git tree")
-    cmd.add_argument("--target", choices=sorted(TARGETS), default=DEFAULT_TARGET)
+    cmd.add_argument(
+        "--target",
+        choices=sorted(TARGETS),
+        default=None,
+        help=f"optional check: must equal the manifest's install.target (default {DEFAULT_TARGET})",
+    )
     cmd.add_argument("--reuse-secrets", metavar="SECRETS_ENV")
     cmd.add_argument("--customer-secrets", metavar="FILE")
     cmd.add_argument("--registry-auth", metavar="CONFIG_JSON")
@@ -63,6 +74,15 @@ def _parser():
 
 
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv and argv[0] == "setup":
+        from .setup.cli import main as setup_main
+
+        return setup_main(argv[1:])
+    if argv and argv[0] == "proof":
+        from .proof_mac import main as proof_main
+
+        return proof_main(argv[1:])
     args = _parser().parse_args(argv)
 
     if args.command == "redact":
@@ -95,7 +115,7 @@ def main(argv=None):
         except RenderError as exc:
             print(exc.line())
             return EXIT_INVALID
-        print(f"rendered target {args.target} into {args.out}")
+        print(f"rendered target {manifest['install']['target']} into {args.out}")
         for rel, (_text, mode) in sorted(rendered.files.items()):
             print(f"file {rel} {mode:04o}")
         for name in sorted(rendered.generated):

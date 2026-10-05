@@ -271,7 +271,7 @@ write_files:
               condition: "service_started"
         pocket-id:
           container_name: "pocket-id"
-          image: "ghcr.io/pocket-id/pocket-id:v2"
+          image: "ghcr.io/pocket-id/pocket-id:v2.18.0"
           pull_policy: "never"
           restart: "unless-stopped"
           env_file:

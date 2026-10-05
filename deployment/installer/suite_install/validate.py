@@ -53,11 +53,27 @@ ERROR_CODES = (
     "duplicate_endpoint_name",
 )
 
+# Rules of install.target = "mac" (task 01a0d6ab). Kept apart from
+# ERROR_CODES because their one-field fixtures differ from the MAC example
+# (tests/fixtures/mac/), not from the single-host good.toml.
+MAC_ERROR_CODES = (
+    "mac_voice_unsupported",
+    "mac_local_embeddings_unsupported",
+    "hosted_embeddings_required",
+    "tunnel_token_ref_missing",
+    "tailscale_authkey_ref_missing",
+    "meetings_media_reach_required",
+    "stt_endpoint_unknown",
+)
+
 _NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
 _LABEL_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _SECRET_REF_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,127}$")
 _URL_RE = re.compile(r"^https?://[^/\s:]+(:[0-9]{1,5})?(/\S*)?$")
+_IPV4_RE = re.compile(
+    r"^(25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])){3}$"
+)
 
 _TYPE_NAMES = {
     "str": "a string",
@@ -143,6 +159,18 @@ def _structure(raw, spec, path, errors, bad):
     return clean
 
 
+def _present(clean, prefix=""):
+    """Every dotted leaf path the manifest SET explicitly (after pass 1)."""
+    out = set()
+    for key, value in clean.items():
+        path = _join(prefix, key)
+        if isinstance(value, dict):
+            out |= _present(value, path)
+        else:
+            out.add(path)
+    return out
+
+
 def _set_ok(field, value, path, errors):
     """``install.modules``: every entry known, none repeated. One error per field."""
     unknown = [item for item in value if item not in field.choices]
@@ -179,7 +207,7 @@ def valid_domain(value):
     return not labels[-1].isdigit()
 
 
-def _rules(m, bad, errors):
+def _rules(m, bad, errors, present=frozenset()):
     def add(code, path, message):
         errors.append(ValidationError(code, path, message))
 
@@ -210,6 +238,10 @@ def _rules(m, bad, errors):
     elif not _NAME_RE.match(name):
         add("invalid_value", "install.name", "must match [a-z][a-z0-9-]{0,62}")
 
+    if _is_bad("install.target", bad):
+        # Every rule below depends on the target; an unknown one is its one line.
+        return
+
     # [domain]
     domain = m["domain"]
     if domain["primary"] is None:
@@ -217,7 +249,24 @@ def _rules(m, bad, errors):
             add("missing_domain", "domain.primary", "the install's public FQDN is required")
     elif not valid_domain(domain["primary"]):
         add("invalid_domain", "domain.primary", f"{domain['primary']!r} is not a DNS name")
-    if domain["tls"] == "acme":
+    mac = m["install"]["target"] == "mac"
+    for key in ("auth_host", "livekit_host"):
+        value = domain[key]
+        if value is not None:
+            if not valid_domain(value):
+                add("invalid_domain", f"domain.{key}", f"{value!r} is not a DNS name")
+            elif value == domain["primary"]:
+                add("invalid_value", f"domain.{key}", "must differ from domain.primary")
+    if mac:
+        # TLS ends at the tunnel's or the tailnet's edge; nothing here issues a cert.
+        for key in ("tls", "acme_email"):
+            if f"domain.{key}" in present:
+                add(
+                    "field_not_applicable",
+                    f"domain.{key}",
+                    'target = "mac" terminates TLS at the edge (cloudflared or tailscale)',
+                )
+    elif domain["tls"] == "acme":
         if domain["acme_email"] is None:
             if not _is_bad("domain.acme_email", bad) and not _is_bad("domain.tls", bad):
                 add("acme_email_required", "domain.acme_email", 'tls = "acme" needs acme_email')
@@ -227,6 +276,19 @@ def _rules(m, bad, errors):
         not_applicable("domain", "tls", ["acme_email"], 'only used with tls = "acme"')
 
     services = m["services"]
+
+    if mac:
+        _mac_rules(m, bad, present, add, check_url, check_ref)
+    elif services["meetings"] and not _is_bad("services.meetings", bad):
+        add(
+            "field_not_applicable",
+            "services.meetings",
+            'meetings are rendered by target = "mac" only in v1',
+        )
+    if not mac:
+        for key in ("mode", "tunnel_token_ref", "tailscale_authkey_ref"):
+            if f"access.{key}" in present:
+                add("field_not_applicable", f"access.{key}", 'only used with target = "mac"')
 
     # [voice] vs [host]
     if (
@@ -243,7 +305,10 @@ def _rules(m, bad, errors):
 
     # [embeddings]
     emb = m["embeddings"]
-    if emb["mode"] == "endpoint":
+    mac_local = mac and _mac_local_embeddings(m, present)
+    if mac_local:
+        pass  # one line: mac_local_embeddings_unsupported, from _mac_rules
+    elif emb["mode"] == "endpoint":
         if emb["base_url"] is None and not _is_bad("embeddings.base_url", bad):
             add(
                 "embeddings_endpoint_required",
@@ -254,12 +319,16 @@ def _rules(m, bad, errors):
         check_ref("embeddings.api_key_ref", emb["api_key_ref"])
     else:
         not_applicable(
-            "embeddings", "mode", ["base_url", "api_key_ref"], 'only used with mode = "endpoint"'
+            "embeddings",
+            "mode",
+            ["base_url", "api_key_ref", "model", "query_prefix"],
+            'only used with mode = "endpoint"',
         )
 
-    # memory vs embeddings
+    # memory vs embeddings (single-host; mac has hosted_embeddings_required)
     if (
-        services["memory"]
+        not mac
+        and services["memory"]
         and not services["embeddings"]
         and not _is_bad("services.embeddings", bad)
     ):
@@ -348,6 +417,117 @@ def _rules(m, bad, errors):
             add("invalid_value", f"images.refs.{container}", "an image ref cannot be empty")
 
 
+def _mac_local_embeddings(m, present):
+    """Would this mac manifest run embeddings locally?
+
+    ``services.embeddings`` is not a mac knob at all, and an EXPLICIT
+    ``embeddings.mode = "local"`` asks for a local model. The schema default
+    (mode = "local" with no [embeddings] table) is not an ask; memory on without
+    a hosted endpoint is ``hosted_embeddings_required`` instead.
+    """
+    return m["services"]["embeddings"] or (
+        m["embeddings"]["mode"] == "local" and "embeddings.mode" in present
+    )
+
+
+def _mac_rules(m, bad, present, add, check_url, check_ref):
+    services = m["services"]
+    if services["voice"]:
+        add(
+            "mac_voice_unsupported",
+            "services.voice",
+            'local speech (speaches) is not supported on target = "mac"; '
+            "use a hosted STT endpoint via [meetings] stt_endpoint",
+        )
+    if _mac_local_embeddings(m, present):
+        path = "services.embeddings" if services["embeddings"] else "embeddings.mode"
+        add(
+            "mac_local_embeddings_unsupported",
+            path,
+            'target = "mac" runs no local model: set [embeddings] mode = "endpoint" '
+            "with a hosted base_url and api_key_ref, and leave services.embeddings off",
+        )
+    elif services["memory"]:
+        emb = m["embeddings"]
+        # A missing base_url in mode "endpoint" is embeddings_endpoint_required.
+        missing = [
+            k
+            for k in ("model", "api_key_ref")
+            if emb[k] is None and not _is_bad(f"embeddings.{k}", bad)
+        ]
+        if emb["mode"] != "endpoint" or missing:
+            add(
+                "hosted_embeddings_required",
+                "embeddings",
+                'memory on target = "mac" needs [embeddings] mode = "endpoint" with '
+                "base_url, model and api_key_ref",
+            )
+
+    _mac_access_and_meetings(m, bad, present, add, check_ref)
+
+
+def _mac_access_and_meetings(m, bad, present, add, check_ref):
+    services = m["services"]
+    access = m["access"]
+    if not _is_bad("access.mode", bad):
+        tunnel = access["mode"] == "cloudflare-tunnel"
+        need, other = (
+            ("tunnel_token_ref", "tailscale_authkey_ref")
+            if tunnel
+            else ("tailscale_authkey_ref", "tunnel_token_ref")
+        )
+        if access[need] is None and not _is_bad(f"access.{need}", bad):
+            add(
+                "tunnel_token_ref_missing" if tunnel else "tailscale_authkey_ref_missing",
+                f"access.{need}",
+                f'access mode = "{access["mode"]}" needs {need} (the secret\'s NAME)',
+            )
+        elif access[other] is not None:
+            # One line per [access] mistake: a mode switched without its ref
+            # reports the missing ref, not also the leftover one.
+            add(
+                "field_not_applicable",
+                f"access.{other}",
+                f'not used with mode = "{access["mode"]}"',
+            )
+        check_ref(f"access.{need}", access[need])
+
+    if not services["meetings"]:
+        return  # [meetings] is ignored while the knob is off (one-field flip back)
+    meetings = m["meetings"]
+    reach = meetings["media_reach"]
+    if reach is None:
+        if not _is_bad("meetings.media_reach", bad):
+            add(
+                "meetings_media_reach_required",
+                "meetings.media_reach",
+                'meetings need media_reach = "lan", "tailnet" or "public" '
+                "(where LiveKit's 7881/tcp + 7882/udp are reachable from)",
+            )
+    elif reach == "public" and meetings["node_ip"] is not None:
+        add(
+            "field_not_applicable",
+            "meetings.node_ip",
+            'media_reach = "public" discovers it by STUN',
+        )
+    if reach in ("lan", "tailnet") and meetings["media_host"] is not None:
+        add(
+            "field_not_applicable",
+            "meetings.media_host",
+            'only used with media_reach = "public" (the ddns job keeps it current)',
+        )
+    if meetings["node_ip"] is not None and not _IPV4_RE.match(meetings["node_ip"]):
+        add("invalid_value", "meetings.node_ip", "must be an IPv4 address")
+    if meetings["transcription"]:
+        names = {e["name"] for e in m["models"]["endpoints"]}
+        if meetings["stt_endpoint"] not in names and not _is_bad("meetings.stt_endpoint", bad):
+            add(
+                "stt_endpoint_unknown",
+                "meetings.stt_endpoint",
+                f"{meetings['stt_endpoint']!r} names no [[models.endpoints]] entry",
+            )
+
+
 def validate(raw):
     """Return ``(errors, normalized)``; ``normalized`` is None when invalid."""
     if not isinstance(raw, dict):
@@ -367,5 +547,5 @@ def validate(raw):
     bad = set()
     clean = _structure(raw, SCHEMA, "", errors, bad)
     normalized = normalize(clean)
-    _rules(normalized, bad, errors)
+    _rules(normalized, bad, errors, _present(clean))
     return errors, (None if errors else normalized)

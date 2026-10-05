@@ -1,0 +1,7 @@
+caddy
+cloudflared
+core-platform
+core-postgres
+files-service
+memory-service
+pocket-id

@@ -52,6 +52,12 @@ BYO = os.path.join(RENDER_FIXTURES, "byo-endpoint.toml")
 PLAY = os.path.join(RENDER_FIXTURES, "moon-equivalent-play.toml")
 CI_WORKFLOW = os.path.join(REPO, ".github", "workflows", "ci.yml")
 
+# The knobs the single-host target runs. `meetings` is a mac-only knob in v1
+# (task 01a0d6ab); its on/off semantics are tested in test_mac_render.py.
+SINGLE_HOST_SERVICES = {
+    knob: registry.OPTIONAL_SERVICES[knob] for knob in registry.TARGET_KNOBS["single-host"]
+}
+
 GOLDEN_CASES = {
     "moon-equivalent": EXAMPLE,
     "moon-equivalent-memory-off": MEMORY_OFF,
@@ -194,7 +200,7 @@ def all_on_raw():
     """The example with every optional service on (GPU host so voice can run)."""
     raw = load(EXAMPLE)
     raw["host"]["gpu"] = True
-    for knob in registry.OPTIONAL_SERVICES:
+    for knob in SINGLE_HOST_SERVICES:
         raw["services"][knob] = True
     return raw
 
@@ -211,7 +217,7 @@ class KnobTest(PositiveControlMixin, unittest.TestCase):
         return valid(base), valid(off)
 
     def test_every_optional_service_owns_all_of_its_identifiers(self):
-        for knob, container in registry.OPTIONAL_SERVICES.items():
+        for knob, container in SINGLE_HOST_SERVICES.items():
             with self.subTest(service=container):
                 on, off = self.pair(knob)
                 ids = registry.identifiers(container, registry.Ctx(on))
@@ -253,7 +259,7 @@ class KnobTest(PositiveControlMixin, unittest.TestCase):
                     )
 
     def test_no_dangling_reference_for_any_single_service_off(self):
-        for knob in registry.OPTIONAL_SERVICES:
+        for knob in SINGLE_HOST_SERVICES:
             with self.subTest(off=knob):
                 _on, off = self.pair(knob)
                 p = plan(off)
@@ -577,14 +583,23 @@ class GpuTest(PositiveControlMixin, unittest.TestCase):
 
 
 class TargetAndTlsTest(PositiveControlMixin, unittest.TestCase):
-    def test_single_host_is_the_default_and_only_target(self):
-        self.assertEqual(sorted(TARGETS), ["single-host"])
+    def test_single_host_is_the_default_target(self):
+        # Task 01a0d6ab added `mac`; a manifest names its target in
+        # install.target, and the example (which sets none) is single-host.
+        self.assertEqual(sorted(TARGETS), ["mac", "single-host"])
+        self.assertEqual(manifest_from(EXAMPLE)["install"]["target"], "single-host")
         err = io.StringIO()
         with contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as ctx:
-            main(["render", EXAMPLE, "--out", "/nonexistent-01a0d69d", "--target", "mac"])
+            main(["render", EXAMPLE, "--out", "/nonexistent-01a0d69d", "--target", "quadlet"])
         self.assertEqual(ctx.exception.code, 2)
-        self.assertIn("invalid choice: 'mac'", err.getvalue())
+        self.assertIn("invalid choice: 'quadlet'", err.getvalue())
         self.assertFalse(os.path.exists("/nonexistent-01a0d69d"))
+
+    def test_target_flag_must_match_the_manifest(self):
+        code, out = run_cli("render", EXAMPLE, "--out", "/nonexistent-01a0d6ab", "--target", "mac")
+        self.assertEqual(code, 2)
+        self.assertTrue(out.startswith("error target_mismatch at --target: "), out)
+        self.assertFalse(os.path.exists("/nonexistent-01a0d6ab"))
 
     def test_internal_tls_mounts_the_bundle_over_the_measured_castore_path(self):
         rendered = build(manifest_from(EXAMPLE))
@@ -668,11 +683,27 @@ class HealthcheckPortTest(unittest.TestCase):
 
 
 def _ci_main_build_steps():
-    """The `Build and push (main...)` step bodies of ci.yml, as text."""
+    """The steps of ci.yml that publish tags on main, as text.
+
+    Since task 01a0d6ab the `core` flavour is built per arch by digest and
+    tagged by publish-manifest's `Create manifest list (main)` step
+    (`docker buildx imagetools create -t ...`); the `play` flavour is still
+    tagged by its `Build and push play (main)` step.
+    """
     with open(CI_WORKFLOW, encoding="utf-8") as handle:
         text = handle.read()
-    steps = re.split(r"^(?=      - name: )", text, flags=re.M)
-    return [s for s in steps if re.match(r"      - name: Build and push \S+ \(main\)", s)]
+    steps = re.split(r"^(?=      - name: )", text, flags=re.MULTILINE)
+    return [
+        s
+        for s in steps
+        if re.match(r"      - name: (Build and push \S+|Create manifest list) \(main\)", s)
+    ]
+
+
+def _published_tags(step):
+    """Image refs a step tags: `tags:` list lines and `-t <ref> \\` arguments."""
+    refs = re.findall(r"^\s+(?:-t )?(docker\.io/\S+?)(?: \\)?$", step, flags=re.MULTILINE)
+    return set(refs)
 
 
 class ModuleFlavourTest(PositiveControlMixin, unittest.TestCase):
@@ -742,12 +773,15 @@ class ModuleFlavourTest(PositiveControlMixin, unittest.TestCase):
 
     def test_every_flavour_tag_is_published_by_ci_on_main(self):
         steps = _ci_main_build_steps()
-        # Positive control: the slicer finds both main build steps.
-        self.assertEqual(len(steps), 2, "expected the core and play main build steps")
-        published = "\n".join(steps)
+        # Positive control: the slicer finds the core manifest step and the
+        # play build step, and each of them yields at least one tag.
+        self.assertEqual(len(steps), 2, "expected the core manifest and play main build steps")
+        for step in steps:
+            self.assertTrue(_published_tags(step), step.splitlines()[0])
+        published = set().union(*map(_published_tags, steps))
         for module_set, tag in registry.IMAGE_FLAVOURS.items():
             with self.subTest(modules=sorted(module_set)):
-                self.assertIn(f"{registry.CORE_IMAGE_REPO}:{tag}\n", published)
+                self.assertIn(f"{registry.CORE_IMAGE_REPO}:{tag}", published)
 
     def test_every_module_names_a_project_with_its_own_mix_file(self):
         for name, project in registry.MODULES.items():

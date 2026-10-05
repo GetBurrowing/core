@@ -1,0 +1,9 @@
+caddy
+cloudflared
+core-platform
+core-postgres
+files-service
+livekit
+meeting-transcriber
+memory-service
+pocket-id

@@ -52,6 +52,11 @@ AUTH_MODES = tuple(registry.AUTH_CONTAINERS)
 BACKUP_TARGETS = ("none", "local-path", "s3-compatible")
 IMAGE_SOURCES = ("registry", "preloaded")
 UPGRADE_CHANNELS = ("stable", "edge", "pinned")
+# Render targets (task 01a0d6ab). ``single-host`` is ADR 0053's VM target and
+# the default, so a manifest without ``install.target`` renders unchanged.
+TARGETS = ("single-host", "mac")
+ACCESS_MODES = ("cloudflare-tunnel", "tailscale")
+MEDIA_REACH = ("lan", "tailnet", "public")
 
 # Every key the manifest may contain, at every depth. A key outside this tree
 # is `unknown_key` (or `unknown_service` under [services]), so a typo can never
@@ -61,6 +66,7 @@ SCHEMA = {
     "install": {
         "name": _str(),
         "size_tier": _enum(SIZE_TIERS, "small"),
+        "target": _enum(TARGETS, "single-host"),
         # Build-time modules (ADR 0055): selects the core image flavour.
         "modules": _set(registry.MODULES),
     },
@@ -68,6 +74,10 @@ SCHEMA = {
         "primary": _str(),
         "tls": _enum(TLS_MODES, "acme"),
         "acme_email": _str(),
+        # Defaults: auth.<primary> and livekit.<primary>. Overridable so a
+        # non-apex primary can use flat names (one label below the zone).
+        "auth_host": _str(),
+        "livekit_host": _str(),
     },
     "host": {
         "gpu": _bool(False),
@@ -80,6 +90,11 @@ SCHEMA = {
         "mode": _enum(EMBEDDINGS_MODES, "local"),
         "base_url": _str(),
         "api_key_ref": _str(),
+        # mode = "endpoint" only. Unset model keeps the literal "embeddings"
+        # (the llama.cpp alias); unset query_prefix keeps memory-service's
+        # BGE prefix, and "" sends queries unprefixed (hosted OpenAI).
+        "model": _str(),
+        "query_prefix": _str(),
     },
     "models": {
         "endpoints": ArrayOf(
@@ -109,6 +124,24 @@ SCHEMA = {
     "images": {
         "source": _enum(IMAGE_SOURCES, "registry"),
         "refs": {container: _str() for container in registry.ALL_CONTAINERS},
+    },
+    # target = "mac" only: how the public hostnames reach this machine.
+    "access": {
+        "mode": _enum(ACCESS_MODES, "cloudflare-tunnel"),
+        "tunnel_token_ref": _str(),
+        "tailscale_authkey_ref": _str(),
+    },
+    # services.meetings = true only; ignored while it is off, so flipping the
+    # knob back is a one-field change.
+    "meetings": {
+        "media_reach": _enum(MEDIA_REACH),
+        "node_ip": _str(),
+        # media_reach = "public" only: an optional DNS-only (grey-cloud) A
+        # record the setup CLI's ddns job keeps pointed at the public IP.
+        "media_host": _str(),
+        "transcription": _bool(False),
+        "stt_endpoint": _str(),
+        "stt_model": _str(),
     },
     # Reserved for day-2 operations (ADR 0053). Validated, not yet acted on.
     "day2": {

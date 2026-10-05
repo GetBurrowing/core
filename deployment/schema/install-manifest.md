@@ -12,7 +12,9 @@ behaviour (orgs, agents, prompts, feature settings) stays in the admin panel.
 - Format: TOML. `tomllib` parses it with the Python standard library, so no pip step is needed.
 - Validator: `PYTHONPATH=deployment/installer python3 -m suite_install validate <manifest>`
 - Service set: `PYTHONPATH=deployment/installer python3 -m suite_install services <manifest>`
-- Example: [`deployment/examples/moon-equivalent.install.toml`](../examples/moon-equivalent.install.toml)
+- Examples: [`moon-equivalent.install.toml`](../examples/moon-equivalent.install.toml)
+  (target `single-host`), [`mac.install.toml`](../examples/mac.install.toml) and
+  [`mac-lite.install.toml`](../examples/mac-lite.install.toml) (target `mac`, meetings on and off)
 
 Every key the manifest may contain is listed below. Any other key, at any depth, is an error
 (`unknown_key`, or `unknown_service` under `[services]`). This means a misspelled knob fails
@@ -32,6 +34,7 @@ validation instead of silently keeping its default.
 |---|---|---|---|
 | `name` | string | required | `[a-z][a-z0-9-]{0,62}`. Names the install; becomes `DEPLOY_TARGET`. |
 | `size_tier` | `small` \| `medium` \| `large` | `small` | Sizing hint for renderers (VM size, pool sizes). |
+| `target` | `single-host` \| `mac` | `single-host` | Which renderer the manifest is for (task 01a0d6ab). The validator applies that target's rules; `render --target`, if given, must match (`target_mismatch`). |
 | `modules` | array of strings | `[]` | Build-time modules ([ADR 0055](../../docs/decisions/0055-extension-contract-and-build-time-modules.md)). Each entry must be a known module (`unknown_module`), listed once (`invalid_value`). Known modules: `play`. The set picks the core image flavour: `[]` runs `suite-core:core`, `["play"]` runs `suite-core:play`. A module is compiled into the core image, so this changes nothing else in the render. See [`install-modules.md`](install-modules.md). |
 
 ## `[domain]`
@@ -41,6 +44,11 @@ validation instead of silently keeping its default.
 | `primary` | string | required | Public FQDN of the install. Missing gives `missing_domain`. A value that is not a DNS name (IP literal, single label, trailing dot, bad label) gives `invalid_domain`. Auth is served at `auth.<primary>`. |
 | `tls` | `acme` \| `internal` | `acme` | `acme` uses a public CA. `internal` uses a private root generated on the host, for throwaway or LAN installs. |
 | `acme_email` | string | none | Required iff `tls = "acme"` (`acme_email_required`). Rejected with `tls = "internal"` (`field_not_applicable`). |
+| `auth_host` | string | `auth.<primary>` | Where pocket-id is served. Must be a DNS name other than `primary`. Lets a non-apex primary use a flat name (Cloudflare Universal SSL covers one label below the zone). |
+| `livekit_host` | string | `livekit.<primary>` | LiveKit signalling (meetings only). Same rules as `auth_host`. |
+
+On `target = "mac"` TLS ends at the tunnel's or the tailnet's edge, so `tls` and `acme_email`
+are `field_not_applicable` there and no `acme_email` is needed.
 
 ## `[host]`
 
@@ -50,15 +58,21 @@ validation instead of silently keeping its default.
 
 ## `[services]`
 
-core-platform, postgres and the Caddy edge are implicit and cannot be turned off. The four keys
-below are the whole vocabulary. Any other key gives `unknown_service`.
+core-platform, postgres and the Caddy edge are implicit and cannot be turned off. The five keys
+below are the whole vocabulary. Any other key gives `unknown_service`. Each target runs a subset:
+`single-host` runs `files`, `memory`, `voice`, `embeddings`; `mac` runs `files`, `memory`,
+`meetings`.
 
 | Key | Type | Default | Container | Notes |
 |---|---|---|---|---|
 | `files` | bool | `false` | `files-service` | File storage and extraction. |
 | `memory` | bool | `false` | `memory-service` | Needs `embeddings = true` (`memory_requires_embeddings`). |
 | `voice` | bool | `false` | `speaches` | Speech-to-text and text-to-speech. See `[voice]`. |
-| `embeddings` | bool | `false` | `embeddings` (only in `mode = "local"`) | The embeddings capability. See `[embeddings]`. |
+| `embeddings` | bool | `false` | `embeddings` (only in `mode = "local"`) | The embeddings capability. See `[embeddings]`. On `mac`: `mac_local_embeddings_unsupported`. |
+| `meetings` | bool | `false` | `livekit` (+ `meeting-transcriber` with `[meetings] transcription`) | `mac` only in v1 (`field_not_applicable` on `single-host`). See `[meetings]`. |
+
+On `mac`, `voice = true` is `mac_voice_unsupported` (no local speech model), and memory needs a
+hosted embeddings endpoint (`hosted_embeddings_required`) instead of `services.embeddings`.
 
 A table for a service that is off (`[voice]` while `voice = false`) is allowed and ignored. Its
 internal consistency is still checked, so turning the service on later is a one-field change.
@@ -75,7 +89,11 @@ internal consistency is still checked, so turning the service on later is a one-
 |---|---|---|---|
 | `mode` | `local` \| `endpoint` | `local` | `local` runs the embeddings container. `endpoint` uses a remote OpenAI-compatible embeddings API and runs no container. |
 | `base_url` | string | none | http(s) URL. Required iff `mode = "endpoint"` (`embeddings_endpoint_required`). Otherwise `field_not_applicable`. |
-| `api_key_ref` | string | none | Secret ref (see below). Only with `mode = "endpoint"`. |
+| `api_key_ref` | string | none | Secret ref (see below). Only with `mode = "endpoint"`. Rendered as a 0600 file `secrets/<REF>` mounted into memory-service alone (`MEMORY_EMBEDDING_API_KEY_FILE`, memory-service 2ef3312f). |
+| `model` | string | none | Only with `mode = "endpoint"`. `MEMORY_EMBEDDING_MODEL`; unset keeps the literal `embeddings`. Required on `mac`. |
+| `query_prefix` | string | none | Only with `mode = "endpoint"`. Unset keeps memory-service's BGE query prefix; `""` sends queries unprefixed (hosted OpenAI). |
+
+`base_url` for memory-service has no `/v1` suffix: memory-service appends `/v1/embeddings`.
 
 ## `[[models.endpoints]]`
 
@@ -117,7 +135,33 @@ A missing required field gives one `backup_incomplete` error. A field the target
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `source` | `registry` \| `preloaded` | `registry` | `preloaded`: images are loaded onto the host out of band, and nothing is pulled. |
-| `refs.<container>` | string | registry default | Per-container image override. The keys are container names: `caddy`, `core-platform`, `core-postgres`, `embeddings`, `files-service`, `memory-service`, `pocket-id`, `speaches`. The `core-platform` default is the flavour `install.modules` selects; an override replaces it, so a pinned ref must be a build of the same flavour (for example `suite-core:play-<sha>` with `modules = ["play"]`). |
+| `refs.<container>` | string | registry default | Per-container image override. The keys are container names: `caddy`, `cloudflared`, `core-platform`, `core-postgres`, `embeddings`, `files-service`, `livekit`, `meeting-transcriber`, `memory-service`, `pocket-id`, `speaches`, `tailscale-auth`, `tailscale-livekit`, `tailscale-primary`. The `core-platform` default is the flavour `install.modules` selects; an override replaces it, so a pinned ref must be a build of the same flavour (for example `suite-core:play-<sha>` with `modules = ["play"]`). |
+
+## `[access]` (target `mac` only)
+
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `mode` | `cloudflare-tunnel` \| `tailscale` | `cloudflare-tunnel` | How the public hostnames reach the Mac. TLS ends at that edge, whose certificate chains to a public root. |
+| `tunnel_token_ref` | string | none | Secret ref of the remotely-managed tunnel's token (`TUNNEL_TOKEN` for `cloudflared`). Required with `cloudflare-tunnel` (`tunnel_token_ref_missing`). |
+| `tailscale_authkey_ref` | string | none | Secret ref of a reusable Tailscale auth key, shared by the per-hostname sidecars. Required with `tailscale` (`tailscale_authkey_ref_missing`). With tailscale, `primary`, `auth_host` and `livekit_host` are ts.net names; each sidecar's `TS_HOSTNAME` is the first label. |
+
+On `single-host` any `[access]` key is `field_not_applicable`.
+
+## `[meetings]` (`services.meetings = true` only)
+
+Ignored while `services.meetings` is off, so flipping meetings back off is a one-field change.
+
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `media_reach` | `lan` \| `tailnet` \| `public` | none | Required (`meetings_media_reach_required`). Where LiveKit's single-port media listeners (7881/tcp, 7882/udp, the only host ports the `mac` target publishes) are reachable from. `lan`: `rtc.node_ip` is the machine's LAN address. `tailnet`: the host's Tailscale address. `public`: `use_external_ip` (STUN at boot; needs a router forward of both ports). |
+| `node_ip` | string | detected | IPv4. Pins `rtc.node_ip` for `lan`/`tailnet`; detected at render time when unset (a failed detection is `media_ip_undetected`, never a silent fall-back to public). `field_not_applicable` with `public`. |
+| `media_host` | string | none | `public` only, optional. A DNS-only (grey-cloud) A record, e.g. `media.example.com`, that the setup CLI's `ddns` job (task 01a0d6ab stage 4) keeps pointed at this machine's public IP. LiveKit itself needs no hostname for media (ICE uses the STUN-learned IP). |
+| `transcription` | bool | `false` | Adds `meeting-transcriber`. |
+| `stt_endpoint` | string | none | With `transcription`: the `name` of a `[[models.endpoints]]` entry speaking OpenAI-compatible `/audio/transcriptions` (`stt_endpoint_unknown` otherwise). Its `base_url` ends at `/v1`. |
+| `stt_model` | string | `whisper-1` | The transcriber's `STT_MODEL`. |
+
+TURN/TLS on 443 is not rendered (it needs its own hostname, certificate and a direct inbound 443).
+Agent voice in meetings (suite-voice-worker) is not part of the `mac` target in v1.
 
 ## `[day2]` (reserved)
 
@@ -146,14 +190,14 @@ A valid manifest prints `ok` and exits `0`.
 |---|---|
 | `unsupported_schema_version` | `schema_version` is missing or not `1` |
 | `unknown_key` | a key outside this schema, at any depth |
-| `unknown_service` | a `[services]` key other than `files`, `memory`, `voice` or `embeddings` |
+| `unknown_service` | a `[services]` key other than `files`, `memory`, `voice`, `embeddings` or `meetings` |
 | `unknown_module` | an `install.modules` entry other than `play` |
 | `invalid_type` | a value of the wrong TOML type |
 | `invalid_enum` | an enum value outside its allowed set |
 | `invalid_value` | a malformed name, URL, email, path, secret ref or empty image ref, or a module listed twice |
 | `missing_required` | `install.name` or an endpoint's `name`/`kind`/`base_url` is missing |
 | `missing_domain` | `domain.primary` is missing |
-| `invalid_domain` | `domain.primary` is not a DNS name |
+| `invalid_domain` | `domain.primary`, `auth_host` or `livekit_host` is not a DNS name |
 | `acme_email_required` | `tls = "acme"` without `acme_email` |
 | `field_not_applicable` | a field that the selected mode or target does not use |
 | `gpu_required` | voice on with `accelerator = "cuda"` and `host.gpu = false` |
@@ -162,6 +206,13 @@ A valid manifest prints `ok` and exits `0`.
 | `external_oidc_incomplete` | `auth.mode = "external-oidc"` missing issuer, client_id or client_secret_ref |
 | `backup_incomplete` | the backup target is missing a field it requires |
 | `duplicate_endpoint_name` | two `[[models.endpoints]]` entries share a `name` |
+| `mac_voice_unsupported` | `target = "mac"` with `services.voice = true` |
+| `mac_local_embeddings_unsupported` | `target = "mac"` with `services.embeddings = true`, or an explicit `embeddings.mode = "local"` |
+| `hosted_embeddings_required` | `target = "mac"`, memory on, without `[embeddings] mode = "endpoint"` carrying `model` and `api_key_ref` |
+| `tunnel_token_ref_missing` | `target = "mac"`, `access.mode = "cloudflare-tunnel"` without `tunnel_token_ref` |
+| `tailscale_authkey_ref_missing` | `target = "mac"`, `access.mode = "tailscale"` without `tailscale_authkey_ref` |
+| `meetings_media_reach_required` | meetings on without `meetings.media_reach` |
+| `stt_endpoint_unknown` | transcription on and `meetings.stt_endpoint` names no `[[models.endpoints]]` entry |
 | `invalid_toml` | the file does not parse as TOML (loader) |
 | `unreadable_manifest` | the file cannot be read (loader) |
 
@@ -200,9 +251,10 @@ The manifest also produces values that ADR 0003 predates, and that the renderer 
 ## Rendering
 
 `python3 -m suite_install render <manifest> --out <dir>` writes one install. Run it with
-`PYTHONPATH=deployment/installer`. `--target` defaults to `single-host`, which is the only target
-today. The service semantics live in `suite_install/registry.py`, and each target adds its own
-output layer.
+`PYTHONPATH=deployment/installer`. The target is the manifest's `install.target`; `--target`, if
+given, must match it (`target_mismatch`). The service semantics live in
+`suite_install/registry.py`, and each target adds its own output layer (`templates.py` for
+`single-host`, `mac.py` for `mac`).
 
 `single-host` writes these files to `--out`:
 
@@ -227,12 +279,27 @@ Options:
 - `--registry-auth <config.json>` is required when `images.source = "registry"` pulls a private
   default image.
 
-The renderer refuses in three cases:
+`mac` writes `compose.yaml`, `Caddyfile` (`auto_https off`, one `http://<host>` site per
+route, `trusted_proxies static private_ranges`, a 404 for any other Host, and with meetings an
+internal-only `:4080` listener that sets `X-Forwarded-Proto: https`, because core's `force_ssl`
+redirects a plain internal POST from LiveKit's webhook or the transcriber), `secrets.env`, `customer-secrets.env`,
+`services.txt`, `postgres-init/*.sql`, `models.json` and `registry-auth.json` as above, plus
+`livekit.yaml` (meetings; no secret, the key pair arrives as `LIVEKIT_KEYS`), `tailscale/*.json`
+(tailscale serve configs) and `secrets/<REF>` (0600 key files mounted into one container). It
+writes no `user-data`/`meta-data`, publishes no port on Caddy, and renders no auth-host alias and
+no CA-bundle mount: core reaches `https://<auth_host>` through public DNS and the edge. pocket-id
+runs on the bundled postgres (`20-pocket-id.sql`, `DB_CONNECTION_STRING`) with a generated
+`STATIC_API_KEY` for first-run bootstrap.
+
+The renderer refuses in these cases:
 
 - `--out` is inside a git work tree (`output_inside_git_worktree`);
 - `--out` is not empty (`output_not_empty`);
 - a customer secret is missing (`customer_secret_missing`) or shadows a generated name
-  (`customer_secret_conflict`).
+  (`customer_secret_conflict`);
+- `--target` differs from `install.target` (`target_mismatch`);
+- `media_reach` `lan`/`tailnet` without `node_ip` and the address cannot be detected
+  (`media_ip_undetected`).
 
 To compare two renders without printing a secret, run `suite_install redact <dir> --out <dir>` on
 each and diff the copies. Do not diff the raw directories: `user-data` carries `secrets.env`.

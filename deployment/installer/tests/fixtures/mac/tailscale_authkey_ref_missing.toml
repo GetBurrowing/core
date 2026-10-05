@@ -1,0 +1,69 @@
+# Example install manifest, schema v1: target mac, meetings ON.
+# (ADR 0053, deployment/schema/install-manifest.md; task 01a0d6ab.)
+#
+# A safe, non-personal example for Docker Desktop or OrbStack on a Mac:
+# core + postgres + files + memory, bundled pocket-id for sign-in, reached
+# through a Cloudflare tunnel (TLS ends at Cloudflare's edge; no port-forward).
+#
+# A Mac runs no local model. Memory embeds through a hosted OpenAI-compatible
+# API: the key is supplied by NAME (api_key_ref) in --customer-secrets, and
+# memory-service reads it from a file mounted into it alone. base_url has no
+# /v1 suffix because memory-service appends /v1/embeddings itself.
+#
+# Meetings: LiveKit signalling goes through the tunnel (wss://livekit.<primary>);
+# media does not. It uses LiveKit's single-port listeners 7881/tcp + 7882/udp,
+# the only host ports this target publishes. media_reach = "lan" advertises the
+# Mac's LAN address (detected at render; pin it with node_ip), so browsers on
+# the same network can join. "tailnet" uses the Mac's Tailscale address and
+# "public" needs a router forward of both ports. Transcription runs the
+# meeting-transcriber against the hosted OpenAI speech-to-text endpoint below.
+#
+# mac-lite.install.toml is this file with services.meetings = true (its
+# [meetings] table and endpoint are then unused, so it omits them).
+
+schema_version = 1
+
+[install]
+name = "suite-mac"
+size_tier = "small"
+target = "mac"
+
+[domain]
+primary = "suite.example.test"
+
+[services]
+files = true
+memory = true
+meetings = true
+
+[embeddings]
+mode = "endpoint"
+base_url = "https://api.openai.com"
+model = "text-embedding-3-small"
+query_prefix = ""
+api_key_ref = "OPENAI_API_KEY"
+
+[[models.endpoints]]
+name = "openai"
+kind = "hosted"
+base_url = "https://api.openai.com/v1"
+api_key_ref = "OPENAI_API_KEY"
+
+[meetings]
+media_reach = "lan"
+transcription = true
+stt_endpoint = "openai"
+stt_model = "whisper-1"
+
+[access]
+mode = "tailscale"
+tunnel_token_ref = "TUNNEL_TOKEN"
+
+[auth]
+mode = "bundled-pocket-id"
+
+[backup]
+target = "none"
+
+[images]
+source = "registry"

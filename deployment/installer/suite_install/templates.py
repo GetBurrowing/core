@@ -435,6 +435,11 @@ class SingleHost:
             )
         for name, sql in sorted(plan.init_sql.items()):
             install[f"postgres-init/{name}"] = (sql, FILE_MODE)
+        for rel, text in sorted(plan.config_files.items()):
+            install[rel] = (text, FILE_MODE)
+        for rel, value in sorted(plan.secret_file_values.items()):
+            # A customer key mounted into ONE container (*_FILE), not secrets.env.
+            install[rel] = (value, SECRET_MODE)
         if plan.endpoints:
             # Declared endpoints only. Nothing in core reads this yet; first-run
             # bootstrap (ADR 0053 follow-up 6) registers them.

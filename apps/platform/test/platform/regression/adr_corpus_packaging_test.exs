@@ -280,8 +280,13 @@ defmodule Platform.Regression.ADRCorpusPackagingTest do
 
       build_steps = Enum.count(entries, &(&1 == "uses: docker/build-push-action@v7"))
 
-      assert build_steps >= 2,
-             "expected at least the main and feature-branch build steps, found #{build_steps}; " <>
+      # Three since tasks 01a0d6ab and 01a0ee08: `build-and-push` is a per-arch
+      # matrix whose single core build step runs once per leg, and
+      # `build-and-push-play` has a main and a feature-branch step
+      # (Platform.CiBuildIdentityTest pins both counts exactly). Zero would
+      # make the equalities below vacuous.
+      assert build_steps >= 1,
+             "expected at least the per-arch matrix build step, found #{build_steps}; " <>
                "if a step was renamed, update this test rather than weakening it"
 
       assert Enum.count(entries, &(&1 == "context: .")) == build_steps,

@@ -9,10 +9,12 @@ Two layers:
    generated and customer secrets the install needs. Nothing it returns says
    how the install is started.
 2. A TARGET turns a plan plus secret values into files. ``TARGETS`` maps a
-   target name to its output layer; ``single-host`` (``templates.py``) is the
-   only one today and emits docker compose + Caddy + cloud-init. A new target
-   (for example a Mac or quadlet renderer) is a new module registered here; a
-   new service is a new registry entry. Neither edits the other.
+   target name to its output layer: ``single-host`` (``templates.py``) emits
+   docker compose + Caddy + cloud-init; ``mac`` (``mac.py``, task 01a0d6ab)
+   emits docker compose + Caddy behind a tunnel or tailnet and no cloud-init.
+   A manifest names its target in ``install.target``. A new target is a new
+   module registered here; a new service is a new registry entry. Neither
+   edits the other.
 
 The renderer refuses an output directory inside a git work tree
 (``output_inside_git_worktree``) so rendered secrets cannot be ``git add``-ed
@@ -23,7 +25,7 @@ an earlier render with more services on cannot survive into this one.
 import json
 import os
 
-from . import registry, templates
+from . import mac, registry, templates
 from .secrets import (
     SecretsError,
     markers,
@@ -48,6 +50,7 @@ class RenderError(Exception):
 
 TARGETS = {
     "single-host": templates.SingleHost,
+    "mac": mac.Mac,
 }
 DEFAULT_TARGET = "single-host"
 
@@ -63,6 +66,8 @@ class ResolvedService:
         self.host_mounts = []
         self.routes = {}
         self.depends_on = {}
+        self.config_files = {}
+        self.secret_files = {}
         self.ports = ()
         self.gpu = False
         self.healthcheck = None
@@ -80,6 +85,7 @@ class Plan:
     def __init__(self, manifest):
         self.manifest = manifest
         self.name = manifest["install"]["name"]
+        self.target = manifest["install"]["target"]
         self.primary = manifest["domain"]["primary"]
         self.tls = manifest["domain"]["tls"]
         self.acme_email = manifest["domain"]["acme_email"]
@@ -88,6 +94,9 @@ class Plan:
         self.services = {}
         self.init_sql = {}
         self.host_files = []
+        self.config_files = {}
+        self.secret_files = {}
+        self.secret_file_values = {}  # filled by build(): {path: substituted value}
         self.generated_secrets = []
         self.customer_refs = {}
         self.endpoints = manifest["models"]["endpoints"]
@@ -112,13 +121,9 @@ class Plan:
 
     def consumed_customer_refs(self):
         """Customer refs some running container reads (e.g. OIDC_CLIENT_SECRET)."""
-        return {
-            ref
-            for svc in self.services.values()
-            for template in svc.env.values()
-            for kind, ref in markers(template)
-            if kind == "customer"
-        }
+        templates_ = [t for svc in self.services.values() for t in svc.env.values()]
+        templates_ += list(self.secret_files.values())
+        return {ref for t in templates_ for kind, ref in markers(t) if kind == "customer"}
 
 
 def _customer_refs(m):
@@ -126,8 +131,19 @@ def _customer_refs(m):
     for index, endpoint in enumerate(m["models"]["endpoints"]):
         if endpoint["api_key_ref"]:
             refs[endpoint["api_key_ref"]] = f"models.endpoints[{index}].api_key_ref"
-    if m["services"]["embeddings"] and m["embeddings"]["api_key_ref"]:
-        refs[m["embeddings"]["api_key_ref"]] = "embeddings.api_key_ref"
+    emb = m["embeddings"]
+    if (
+        (m["services"]["embeddings"] or m["services"]["memory"])
+        and emb["mode"] == "endpoint"
+        and emb["api_key_ref"]
+    ):
+        refs[emb["api_key_ref"]] = "embeddings.api_key_ref"
+    if m["install"]["target"] == "mac":
+        access = m["access"]
+        key = (
+            "tunnel_token_ref" if access["mode"] == "cloudflare-tunnel" else "tailscale_authkey_ref"
+        )
+        refs[access[key]] = f"access.{key}"
     if m["auth"]["client_secret_ref"]:
         refs[m["auth"]["client_secret_ref"]] = "auth.client_secret_ref"
     for key in ("access_key_ref", "secret_key_ref"):
@@ -153,8 +169,10 @@ def plan(manifest):
         svc.volumes = dict(entry.volumes)
         svc.host_mounts = list(entry.host_mounts(ctx))
         svc.routes = dict(entry.routes(ctx))
-        svc.depends_on = {d: c for d, c in entry.depends_on.items() if d in enabled}
-        svc.ports = entry.ports
+        svc.depends_on = {d: c for d, c in entry.depends_on_for(ctx).items() if d in enabled}
+        svc.config_files = dict(entry.config_files(ctx))
+        svc.secret_files = dict(entry.secret_files(ctx))
+        svc.ports = entry.ports_for(ctx)
         svc.gpu = entry.gpu(ctx)
         svc.healthcheck = entry.healthcheck
         result.services[container] = svc
@@ -171,7 +189,9 @@ def plan(manifest):
                 )
         result.init_sql.update(entry.init_sql(ctx))
         result.host_files.extend(entry.host_files(ctx))
-        result.generated_secrets.extend(entry.secrets)
+        result.config_files.update(result.services[container].config_files)
+        result.secret_files.update(result.services[container].secret_files)
+        result.generated_secrets.extend(entry.secrets_for(ctx))
 
     for svc in result.services.values():
         svc.env = dict(sorted(svc.env.items()))
@@ -186,8 +206,11 @@ def plan(manifest):
 def _check_references(p):
     """Every secret marker has an owner in this plan; every edge a target."""
     owned = {s.name for s in p.generated_secrets}
+    for rel, text in p.config_files.items():
+        if markers(text):
+            raise ValueError(f"config file {rel} carries a secret marker")
     for svc in p.services.values():
-        for name, template in svc.env.items():
+        for name, template in list(svc.env.items()) + list(svc.secret_files.items()):
             for kind, ref in markers(template):
                 if kind == "secret" and ref not in owned:
                     raise ValueError(
@@ -260,16 +283,35 @@ class Rendered:
 
 def build(
     manifest,
-    target=DEFAULT_TARGET,
+    target=None,
     reuse_secrets=None,
     customer_secrets=None,
     registry_auth=None,
 ):
     """Return a ``Rendered`` for a valid manifest without touching the disk.
 
-    ``reuse_secrets`` / ``customer_secrets`` / ``registry_auth`` are paths.
+    ``target`` defaults to the manifest's ``install.target``; naming a different
+    one is ``target_mismatch`` (the validator's per-target rules ran against
+    the manifest's). ``reuse_secrets`` / ``customer_secrets`` /
+    ``registry_auth`` are paths.
     """
-    p = plan(manifest)
+    declared = manifest["install"]["target"]
+    if target is not None and target != declared:
+        raise RenderError(
+            "target_mismatch",
+            "--target",
+            f"the manifest declares install.target = {declared!r}; set it there instead",
+        )
+    target = declared
+    try:
+        p = plan(manifest)
+    except registry.MediaIpUndetected as exc:
+        raise RenderError(
+            "media_ip_undetected",
+            "meetings.node_ip",
+            f"media_reach = {exc.reach!r} could not detect this machine's address; "
+            "set [meetings] node_ip",
+        ) from exc
 
     private_defaults = [
         c
@@ -305,6 +347,10 @@ def build(
     secret_lines = {
         name: substitute(template, generated, customer)
         for name, template in p.secret_env_lines().items()
+    }
+    p.secret_file_values = {
+        rel: substitute(template, generated, customer)
+        for rel, template in sorted(p.secret_files.items())
     }
     # A customer secret no container reads (a model API key, a backup key) is
     # kept apart from secrets.env: every container that reads secrets.env sees
@@ -362,6 +408,12 @@ def redact_dir(src, out):
             continue
         canonical[name] = value
     canonical.update(customer)
+    # Customer keys mounted into one container (*_FILE) live only in secrets/.
+    secret_dir = os.path.join(src, "secrets")
+    if os.path.isdir(secret_dir):
+        for name in sorted(os.listdir(secret_dir)):
+            value = _read(os.path.join(secret_dir, name), f"secrets/{name}").strip()
+            canonical.setdefault(name, value)
     auth_path = os.path.join(src, "registry-auth.json")
     if os.path.exists(auth_path):
         canonical["registry-auth"] = _read(auth_path, auth_path)
