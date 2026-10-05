@@ -1,8 +1,8 @@
 /*
  * Meeting Ask button / agent row: a VERBATIM port of the approved mockup,
- * `test/support/fixtures/meeting_ask_mockup.html` (Harper's spec file
- * `ask-embed2.html`). That file is the spec. When this stylesheet and that
- * file disagree, this one is wrong.
+ * Harper's spec file `ask-embed2.html`, shared in Suite's Meeting System
+ * space (not checked in: mocks do not live in this repo). That file is the
+ * spec. When this stylesheet and that file disagree, this one is wrong.
  *
  * Every rule in PART 1 is copied from the mockup's <style> with the same
  * values, keyframes, timings, shadows and hex colours. Only two kinds of

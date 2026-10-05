@@ -165,14 +165,8 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
 
   defp attr(node, name), do: node |> Floki.attribute(name) |> List.first()
 
-  # The Agents section's stylesheet and the mockup it ports verbatim.
+  # The Agents section's stylesheet (a verbatim port of Harper's Ask mockup).
   defp ask_css, do: File.read!(Path.join([File.cwd!(), "assets", "css", "meeting_ask.css"]))
-
-  defp ask_mockup,
-    do:
-      File.read!(
-        Path.join([File.cwd!(), "test", "support", "fixtures", "meeting_ask_mockup.html"])
-      )
 
   # One agent per state in ONE rail, which is also the shape the
   # manual-approval gate asks to see.
@@ -278,8 +272,8 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
   describe "the agent row's three signals" do
     # The defect this closed: line 2 under the name was the role chip
     # rendering the literal string "agent", and `:idle` rendered nothing
-    # but a bare dot. The verbatim port of the Ask mockup
-    # (`test/support/fixtures/meeting_ask_mockup.html`) keeps the three
+    # but a bare dot. The verbatim port of Harper's Ask mockup (shared in
+    # Suite's Meeting System space, not checked in) keeps the three
     # signals as: the `.av` initial circle (carrying `data-activity-state`
     # and the `.avs` reachability badge), the name, and the state word in
     # `.st .i`. The old ring/corner glyph around the face is gone ON
@@ -2069,39 +2063,61 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
   # `meeting_ask.css` claims to copy the mockup's rules with only the
   # `.meeting-ask` scope and the pseudo-state -> data-attribute mapping
   # changed. These hold the values a "tidy-up" would most likely drift.
-  describe "meeting_ask.css against the mockup fixture" do
+  #
+  # Every literal below is a value ported from Harper's Ask mockup (shared
+  # in the Meeting System space), not checked in per repo policy. They are
+  # written out here on purpose: if one changes in the stylesheet, the
+  # change has to be made here too, against the mockup, by someone looking
+  # at it.
+  @mockup_root_props [
+    "--bg:#0f1419",
+    "--s:#161d24",
+    "--s2:#1c252e",
+    "--b:#2a3540",
+    "--t:#e6edf3",
+    "--m:#8b98a5",
+    "--a:#22c3dc",
+    "--ai:#062a31",
+    "--live:#f59e0b",
+    "--ok:#34d399",
+    "--bad:#f87171"
+  ]
+
+  @mockup_values [
+    # row grid and Ask key size
+    "grid-template-columns:36px 1fr auto",
+    "width:96px;height:40px",
+    "box-shadow:0 3px 0 #0e7f90,0 4px 12px rgba(34,195,220,.15)",
+    # the held "sink": the key drops 3px and shrinks
+    ~s|.meeting-ask .ask[data-held="true"]{transform:translateY(3px) scale(.97);| <>
+      "box-shadow:0 0 0 #0e7f90,0 0 0 4px rgba(34,195,220,.28),inset 0 2px 6px rgba(0,0,0,.28)}",
+    # level bars: 3px wide, 4px -> 16px
+    ".meeting-ask .bars i{width:3px;height:4px;background:currentColor;border-radius:2px}",
+    "@keyframes bar{from{height:4px}to{height:16px}}",
+    "@keyframes ring{0%{opacity:.75;transform:scale(1)}100%{opacity:0;transform:scale(1.28)}}",
+    # transcript viewport cap
+    ".meeting-ask .vp{position:relative;height:20px;max-height:140px;overflow:hidden}",
+    # the sent confirmation holds, then fades over 2.2s
+    ~s|.meeting-ask .row[data-sent="true"] .tr.sent{animation:sent 2.2s ease forwards}|,
+    "@keyframes sent{0%,80%{opacity:1;transform:none}100%{opacity:0}}"
+  ]
+
+  describe "meeting_ask.css against the mockup's ported values" do
     test "every :root custom property in the mockup is declared identically" do
-      [root] = Regex.run(~r/:root\{([^}]*)\}/, ask_mockup(), capture: :all_but_first)
+      [root] =
+        Regex.run(~r/\.meeting-ask\{(--[^}]*)\}/, ask_css(), capture: :all_but_first)
 
-      props =
-        root
-        |> String.split(";", trim: true)
-        |> Enum.map(&String.trim/1)
+      props = root |> String.split(";", trim: true) |> Enum.map(&String.trim/1)
 
-      # Positive control: the fixture really has the palette.
-      assert length(props) == 11
-      assert "--a:#22c3dc" in props
-
-      css = ask_css()
-
-      for prop <- props do
-        assert css =~ prop, "meeting_ask.css lost or changed the mockup's #{prop}"
-      end
+      # Exact, both ways: a changed, dropped or added token fails.
+      assert props == @mockup_root_props,
+             "meeting_ask.css's palette drifted from the mockup's :root"
     end
 
     test "the key layout, shadow and keyframe values are copied verbatim" do
       css = ask_css()
-      mockup = ask_mockup()
 
-      for value <- [
-            "grid-template-columns:36px 1fr auto",
-            "width:96px;height:40px",
-            "box-shadow:0 3px 0 #0e7f90,0 4px 12px rgba(34,195,220,.15)",
-            "@keyframes sent{0%,80%{opacity:1;transform:none}100%{opacity:0}}",
-            "@keyframes ring{0%{opacity:.75;transform:scale(1)}100%{opacity:0;transform:scale(1.28)}}",
-            "@keyframes bar{from{height:4px}to{height:16px}}"
-          ] do
-        assert mockup =~ value, "the fixture no longer contains #{value}; update this guard"
+      for value <- @mockup_values do
         assert css =~ value, "meeting_ask.css drifted from the mockup at #{value}"
       end
 

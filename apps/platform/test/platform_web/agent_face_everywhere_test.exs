@@ -533,9 +533,10 @@ defmodule PlatformWeb.AgentFaceEverywhereTest do
     # split the component apart to stop: it gave agents two initials over the
     # seeded human palette under `data-avatar-kind="human"`.
     #
-    # The Ask mockup port (`meeting_ask_mockup.html`) draws every agent as
-    # its `.av` circle with ONE initial, with or without a stored avatar, so
-    # this surface no longer goes through `assert_agent_face/3`.
+    # The port of Harper's Ask mockup (shared in Suite's Meeting System
+    # space) draws every agent as its `.av` circle with ONE initial, with or
+    # without a stored avatar, so this surface no longer goes through
+    # `assert_agent_face/3`.
     test "the agents section draws agents, not humans wearing agent names" do
       for html <- [rail_html(@image), rail_html(nil)] do
         [av] =

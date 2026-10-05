@@ -479,8 +479,8 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
         {pressed_agent_announcement(assigns)}
       </span>
       <%!-- ── Section 1: Agents ─────────────────────────────────────────── --%>
-      <%!-- VERBATIM PORT of the approved mockup
-           (`test/support/fixtures/meeting_ask_mockup.html`). The DOM and
+      <%!-- VERBATIM PORT of Harper's approved Ask mockup (shared in
+           Suite's Meeting System space, not checked in). The DOM and
            class names below are the mockup's own: `.row > .av, .who > .nm +
            .st(.i/.l), .tools > .ask(.ring, .bars i×4, .lbl .off/.on) +
            .kick, .tr.live(.hd .dot, .vp > .tx > p), .tr.sent(.hd, .sum),
