@@ -29,11 +29,27 @@ function urlBase64ToUint8Array(base64String) {
 // window is only one of the two causes anyway.
 const AUTO_DENY_THRESHOLD_MS = 100;
 
+// The Suite iOS app (task 01a10882) runs this page inside a Capacitor web
+// view. WKWebView has no usable Push API there, and the app delivers through
+// APNs instead, so on the native platform the hook hands the whole job to
+// the app's one native plugin, SuiteNative, and never touches pushManager.
+export function nativePushPlugin(win = globalThis.window) {
+  const cap = win?.Capacitor;
+  if (!cap?.isNativePlatform?.()) return null;
+  return cap.Plugins?.SuiteNative || null;
+}
+
 const PushSubscribe = {
   mounted() {
     // Every exit path below reports a state. Returning silently leaves the
     // server's :push_permission assign at "unknown" forever, which renders
     // neither the opt-in banner nor an unsupported notice.
+    const nativePush = nativePushPlugin();
+    if (nativePush) {
+      this.mountNative(nativePush);
+      return;
+    }
+
     const vapidMeta = document.querySelector("meta[name='vapid-public-key']");
     if (!vapidMeta) {
       this.pushEvent("push_unsupported", {});
@@ -74,6 +90,62 @@ const PushSubscribe = {
     this.handleEvent("request_push_permission", () => {
       this.requestPermission();
     });
+  },
+
+  // Native branch. The honesty rule from task 019ffe52 applies unchanged:
+  // "granted" is reported ONLY when the app's device registration POST to
+  // /api/app/devices succeeded. enablePush() resolves {registered: true}
+  // only in that case; an OS-level grant whose POST failed comes back as a
+  // rejection (or registered: false) and is reported as a failed
+  // registration, which leaves the server's :push_permission alone.
+  mountNative(plugin) {
+    this.nativePush = plugin;
+
+    Promise.resolve(plugin.pushState?.())
+      .then(result => {
+        const state = result?.state;
+        if (state === "granted") {
+          // Already allowed in iOS Settings: re-register silently so a
+          // rotated APNs token reaches the server. No prompt is shown.
+          this.enableNativePush();
+        } else if (state === "denied") {
+          this.pushEvent("push_permission_state", { state: "denied" });
+        } else {
+          this.pushEvent("push_permission_state", { state: "prompt" });
+        }
+      })
+      .catch(() => {
+        this.pushEvent("push_permission_state", { state: "prompt" });
+      });
+
+    this.handleEvent("request_push_permission", () => {
+      this.enableNativePush();
+    });
+  },
+
+  enableNativePush() {
+    return Promise.resolve()
+      .then(() => this.nativePush.enablePush())
+      .then(result => {
+        if (result?.registered === true) {
+          this.pushEvent("push_permission_state", { state: "granted" });
+        } else if (result?.state === "denied") {
+          this.pushEvent("push_permission_state", { state: "denied" });
+        } else if (result?.state === "prompt") {
+          this.pushEvent("push_permission_state", { state: "prompt" });
+        } else {
+          this.pushEvent("push_subscribe_failed", {
+            name: "NativeRegistrationFailed",
+            message: result?.error || "device registration was not stored"
+          });
+        }
+      })
+      .catch(err => {
+        this.pushEvent("push_subscribe_failed", {
+          name: err?.code || err?.name || "NativeRegistrationFailed",
+          message: err?.message || String(err)
+        });
+      });
   },
 
   requestPermission() {

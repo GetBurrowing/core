@@ -92,6 +92,14 @@ defmodule PlatformWeb.ChatLive do
   # the real timer instead of asserting on a hand-sent message.
   @anchor_highlight_ms 6_000
 
+  @doc """
+  The per-file chat attachment cap, in bytes. Public so the native app's
+  share endpoint (`PlatformWeb.AppApiController`) enforces the same number
+  as the composer instead of a second copy of it (task 01a10882).
+  """
+  @spec max_upload_size() :: pos_integer()
+  def max_upload_size, do: @max_upload_size
+
   # How long the move confirmation stays at the foot of the rail (task 019ffcad
   # stage 4). The same 4s the hide toast uses, because it is the same element in
   # the same place and the stage asks for the same dismissal.

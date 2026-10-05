@@ -1,0 +1,337 @@
+defmodule Platform.Push.APNs do
+  @moduledoc """
+  Apple Push Notification service transport (task 01a10882 stage 2).
+
+  Delivers a `%Platform.Push.Notification{}` to every `apns_devices` row of a
+  user. It is reached only from `Platform.Push`, AFTER the archived-user check
+  and the external redaction ran on the notification, so it never decides
+  what a notification says, only where it goes.
+
+  ## Configuration (all-or-nothing, mirroring `Platform.Push.vapid_details/0`)
+
+  `apns_config/0` returns the four credentials or `nil`, never a part. Per
+  key the order is: env var, then `Application.get_env(:platform, :apns)`,
+  then Vault by slug, read with `accessor: {:system, nil}`:
+
+  | key        | env              | app env      | Vault slug     |
+  |------------|------------------|--------------|----------------|
+  | `:key_id`  | `APNS_KEY_ID`    | `:key_id`    | `apns-key-id`  |
+  | `:team_id` | `APNS_TEAM_ID`   | `:team_id`   | `apns-team-id` |
+  | `:topic`   | `APNS_TOPIC`     | `:topic`     | `apns-topic`   |
+  | `:auth_key`| `APNS_AUTH_KEY`  | `:auth_key`  | `apns-auth-key`|
+
+  `:topic` is the iOS app's bundle id, `com.kobo-ai.burrow` (Burrow).
+  `:auth_key` is the `.p8` PEM. A partial configuration logs WHICH keys are
+  missing and never a value.
+
+  ## Secrets
+
+  The device token, the `.p8` key, and the provider JWT are never logged,
+  inspected, put in telemetry or returned. A log line names the
+  `apns_devices.id` row and the APNs `reason` string only. The token appears
+  in exactly one place: the request path Apple requires.
+
+  ## Transport
+
+  HTTP/2 through Req on the dedicated Finch pool `Platform.Push.APNsFinch`
+  (started in `Platform.Application`). The host follows each device row's
+  `environment`: `api.push.apple.com` for production,
+  `api.sandbox.push.apple.com` for sandbox. `config :platform, :apns,
+  base_url: ...` overrides both (a local stub), and
+  `config :platform, :apns_req_options` is merged into every request (tests
+  route it to `Req.Test`).
+
+  ## Responses
+
+    * 200 -> ok;
+    * 410, or 400 with `BadDeviceToken` / `DeviceTokenNotForTopic` -> the
+      device row is deleted;
+    * 403 `ExpiredProviderToken` / `InvalidProviderToken` -> the cached JWT
+      is dropped so the next send signs a fresh one;
+    * anything else -> a warning with the row id and reason only.
+  """
+
+  import Ecto.Query
+
+  require Logger
+
+  alias Platform.Mobile.ApnsDevice
+  alias Platform.Push.Notification
+  alias Platform.Repo
+
+  @finch Platform.Push.APNsFinch
+
+  @production_url "https://api.push.apple.com"
+  @sandbox_url "https://api.sandbox.push.apple.com"
+
+  # Apple refuses a provider token older than 60 minutes and throttles one
+  # refreshed more often than every 20. Reuse a token for 40 minutes, which
+  # sits inside that window with room on both sides.
+  @jwt_max_age_seconds 40 * 60
+  @jwt_cache_key {__MODULE__, :provider_jwt}
+
+  @keys [
+    key_id: {"APNS_KEY_ID", "apns-key-id"},
+    team_id: {"APNS_TEAM_ID", "apns-team-id"},
+    topic: {"APNS_TOPIC", "apns-topic"},
+    auth_key: {"APNS_AUTH_KEY", "apns-auth-key"}
+  ]
+
+  @prune_reasons ~w(BadDeviceToken DeviceTokenNotForTopic)
+  @stale_jwt_reasons ~w(ExpiredProviderToken InvalidProviderToken)
+
+  @doc "Name of the dedicated HTTP/2 Finch pool, started in `Platform.Application`."
+  @spec finch_name() :: atom()
+  def finch_name, do: @finch
+
+  @doc """
+  Resolve the complete APNs credential set, or `nil` when ANY key is missing.
+  """
+  @spec apns_config() :: keyword() | nil
+  def apns_config do
+    resolved = resolve_all()
+
+    if Enum.all?(resolved, fn {_k, v} -> v end), do: resolved
+  end
+
+  @doc "Whether APNs is usable for sending: exactly `apns_config() != nil`."
+  @spec configured?() :: boolean()
+  def configured?, do: apns_config() != nil
+
+  @doc """
+  Deliver `notification` to every APNs device of `user_id`.
+
+  Returns `:ok`, or `{:error, :not_configured}` when the user has devices and
+  the configuration is incomplete. A user with no devices costs one query and
+  no configuration lookup.
+  """
+  @spec deliver_to_user(binary(), Notification.t()) :: :ok | {:error, :not_configured}
+  def deliver_to_user(user_id, %Notification{} = notification) when is_binary(user_id) do
+    case devices_for_user(user_id) do
+      [] ->
+        :ok
+
+      devices ->
+        case apns_config() do
+          nil ->
+            log_unconfigured()
+            {:error, :not_configured}
+
+          config ->
+            body = Notification.to_apns_payload(notification)
+            Enum.each(devices, &deliver(&1, notification, body, config))
+            :ok
+        end
+    end
+  end
+
+  # ── Private ────────────────────────────────────────────────────────────────
+
+  defp devices_for_user(user_id) do
+    if Platform.UUID.valid?(user_id) do
+      Repo.all(from(d in ApnsDevice, where: d.user_id == ^user_id))
+    else
+      []
+    end
+  end
+
+  defp deliver(%ApnsDevice{} = device, %Notification{} = n, body, config) do
+    case provider_jwt(config) do
+      {:ok, jwt} ->
+        device
+        |> request(n, body, config, jwt)
+        |> retry_transport_error(fn -> request(device, n, body, config, jwt) end)
+        |> handle_response(device)
+
+      :error ->
+        Logger.error("[APNs] provider key could not be used to sign; device #{device.id} skipped")
+    end
+  end
+
+  defp request(device, n, body, config, jwt) do
+    headers =
+      [
+        {"authorization", "bearer " <> jwt},
+        {"apns-topic", config[:topic]},
+        {"apns-push-type", "alert"},
+        {"apns-priority", "10"}
+      ] ++ collapse_header(n)
+
+    options =
+      [
+        method: :post,
+        base_url: base_url(device),
+        url: "/3/device/" <> device.token,
+        headers: headers,
+        json: body,
+        retry: false,
+        finch: [name: @finch]
+      ]
+      |> Keyword.merge(Application.get_env(:platform, :apns_req_options, []))
+
+    Req.request(options)
+  rescue
+    _ -> {:error, :request_failed}
+  end
+
+  # One retry on a transport or connection error, never on an HTTP status.
+  # The pooled HTTP/2 connection to APNs goes stale after a few idle
+  # minutes; the first request on it then fails before APNs sees it, and
+  # Finch opens a fresh connection for the retry. Any answer from APNs (a
+  # 4xx included) is final.
+  defp retry_transport_error({:error, _}, again), do: again.()
+  defp retry_transport_error(response, _again), do: response
+
+  defp collapse_header(%Notification{collapse_id: id}) when is_binary(id) and id != "",
+    do: [{"apns-collapse-id", String.slice(id, 0, 64)}]
+
+  defp collapse_header(_), do: []
+
+  defp base_url(%ApnsDevice{environment: env}) do
+    case Application.get_env(:platform, :apns, [])[:base_url] do
+      url when is_binary(url) and url != "" -> url
+      _ -> if env == "sandbox", do: @sandbox_url, else: @production_url
+    end
+  end
+
+  defp handle_response({:ok, %{status: 200}}, _device), do: :ok
+
+  defp handle_response({:ok, %{status: 410} = resp}, device) do
+    prune(device, reason(resp) || "Unregistered")
+  end
+
+  defp handle_response({:ok, %{status: 400} = resp}, device) do
+    case reason(resp) do
+      r when r in @prune_reasons -> prune(device, r)
+      r -> warn(device, 400, r)
+    end
+  end
+
+  defp handle_response({:ok, %{status: 403} = resp}, device) do
+    r = reason(resp)
+    if r in @stale_jwt_reasons, do: :persistent_term.erase(@jwt_cache_key)
+    warn(device, 403, r)
+  end
+
+  defp handle_response({:ok, %{status: status} = resp}, device),
+    do: warn(device, status, reason(resp))
+
+  # Transport failures are reported by kind only: an exception struct or a
+  # Mint error can carry the request it failed on, which holds the token.
+  defp handle_response({:error, _}, device) do
+    Logger.warning("[APNs] request for device #{device.id} failed: transport_error")
+    {:error, :transport_error}
+  end
+
+  defp prune(device, reason) do
+    from(d in ApnsDevice, where: d.id == ^device.id) |> Repo.delete_all()
+    Logger.info("[APNs] device #{device.id} removed: #{reason}")
+    {:error, :device_removed}
+  end
+
+  defp warn(device, status, reason) do
+    Logger.warning("[APNs] device #{device.id} push returned #{status}: #{reason || "unknown"}")
+    {:error, {:http_error, status}}
+  end
+
+  # APNs answers errors as `{"reason": "..."}`. Only a short identifier-shaped
+  # string is ever echoed into a log.
+  defp reason(%{body: %{"reason" => r}}), do: safe_reason(r)
+
+  defp reason(%{body: body}) when is_binary(body) and body != "" do
+    case Jason.decode(body) do
+      {:ok, %{"reason" => r}} -> safe_reason(r)
+      _ -> nil
+    end
+  end
+
+  defp reason(_), do: nil
+
+  defp safe_reason(r) when is_binary(r) do
+    if Regex.match?(~r/\A[A-Za-z]{1,64}\z/, r), do: r
+  end
+
+  defp safe_reason(_), do: nil
+
+  # ── Provider token ─────────────────────────────────────────────────────────
+
+  # Cached per credential set: the fingerprint is a hash of the key id, team
+  # id and key, so rotating any of them signs a new token at once.
+  defp provider_jwt(config) do
+    fingerprint = :crypto.hash(:sha256, [config[:key_id], config[:team_id], config[:auth_key]])
+    now = System.system_time(:second)
+
+    case :persistent_term.get(@jwt_cache_key, nil) do
+      {^fingerprint, jwt, issued_at} when now - issued_at < @jwt_max_age_seconds ->
+        {:ok, jwt}
+
+      _ ->
+        case sign(config, now) do
+          {:ok, jwt} ->
+            :persistent_term.put(@jwt_cache_key, {fingerprint, jwt, now})
+            {:ok, jwt}
+
+          :error ->
+            :error
+        end
+    end
+  end
+
+  defp sign(config, now) do
+    jwk = JOSE.JWK.from_pem(config[:auth_key])
+
+    {_meta, jwt} =
+      JOSE.JWT.sign(
+        jwk,
+        %{"alg" => "ES256", "kid" => config[:key_id]},
+        %{"iss" => config[:team_id], "iat" => now}
+      )
+      |> JOSE.JWS.compact()
+
+    {:ok, jwt}
+  rescue
+    _ -> :error
+  catch
+    _, _ -> :error
+  end
+
+  # ── Configuration ──────────────────────────────────────────────────────────
+
+  defp resolve_all do
+    app_env = Application.get_env(:platform, :apns, [])
+
+    Enum.map(@keys, fn {key, {env_var, slug}} ->
+      {key, presence(System.get_env(env_var)) || presence(app_env[key]) || vault_get(slug)}
+    end)
+  end
+
+  # Neither key present is an unconfigured install: one quiet line. Some but
+  # not all present is a misconfiguration: an error naming the missing keys.
+  defp log_unconfigured do
+    resolved = resolve_all()
+    missing = for {k, nil} <- resolved, do: k
+
+    if length(missing) == length(resolved) do
+      Logger.info("[APNs] not configured, skipping native push")
+    else
+      Logger.error(
+        "[APNs] half-configured: missing #{Enum.map_join(missing, ", ", &Atom.to_string/1)}; " <>
+          "refusing to send"
+      )
+    end
+  end
+
+  defp vault_get(slug) do
+    case Platform.Vault.get(slug, accessor: {:system, nil}) do
+      {:ok, value} -> presence(value)
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp presence(nil), do: nil
+  defp presence(""), do: nil
+  defp presence(value) when is_binary(value), do: value
+  defp presence(_), do: nil
+end

@@ -508,12 +508,22 @@ defmodule Platform.RepoLookupBoundaryTest do
     {"platform/org/wiki/search.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "task 01a08a6e stage 1: `classify_untagged_ids/2` filters semantic-provider `entry_id`s through Platform.UUID.valid?/1 before `where([r], r.id in ^ids)` on three UUID-typed PKs. The ids come from memory-service's /search response, not from a loaded row, and a non-UUID value previously raised Ecto.Query.CastError in bulk_load_pages/2. Covered by `untagged hits with an unknown UUID or a non-UUID id are dropped without crashing` in search_test.exs"},
     # ── Push ───────────────────────────────────────────────────────────
-    {"platform/push.ex", :get, "Participant", 3, :safe_internal,
-     "`participant_id` comes off the recipient list `Chat.list_participants/2` returned for the space being notified. The third call (task 019ffd19) is `subscriptions_for_recipient/1` reading `participant_type` to decide between user-scoped and per-membership device resolution; same provenance as the other two, and the router passes the already-loaded `%Participant{}` so its own path never reaches this clause"},
+    {"platform/push.ex", :get, "Participant", 4, :safe_internal,
+     "`participant_id` comes off the recipient list `Chat.list_participants/2` returned for the space being notified. The third call (task 019ffd19) is `subscriptions_for_recipient/1` reading `participant_type` to decide between user-scoped and per-membership device resolution; same provenance as the other two, and the router passes the already-loaded `%Participant{}` so its own path never reaches this clause. Count 3 -> 4 at task 01a10882 stage 2: `apns_user_id/1` reads the same recipient id to decide whether the row is USER-typed (APNs) or not; same provenance, and it is additionally behind its own Platform.UUID.valid?/1 guard (this file's :platform_uuid_guard 1 -> 2)"},
     {"platform/push.ex", :get, "User", 2, :safe_internal,
      "`user_id` is `participant.participant_id` off the `%Participant{}` loaded on the line above, or a recipient id from the same list"},
-    {"platform/push.ex", :platform_uuid_guard, "-", 1, :safe_internal,
-     "task 019ffe52: `anchor_participant_id/1` pins `p.participant_id == ^user_id` on a `:binary_id` column, which raises Ecto.Query.CastError on a malformed binary exactly as Repo.get/2 does. `subscribe_for_user/2` is public API and the id is not derived from a loaded row, so the guard belongs at the query. Today's only caller is ShellLive's `push_subscribed` clause reading `:current_user_id`, which is unvalidated (assigned from `session[\"current_user_id\"]` behind an is_binary/1 check) but unreachable with a malformed value in practice: the shell mount raises earlier on the same id in `Tenancy.visibility/1`. Covered by `subscribe_for_user/2 a malformed user id is refused, not raised on` in push_test.exs"},
+    {"platform/push.ex", :platform_uuid_guard, "-", 2, :safe_internal,
+     "task 01a10882 stage 2 (1 -> 2): `apns_user_id/1` guards the participant id before `Repo.get(Participant, _)` so `send_notification/2`, which is public, cannot raise on a malformed recipient id on the APNs leg. task 019ffe52: `anchor_participant_id/1` pins `p.participant_id == ^user_id` on a `:binary_id` column, which raises Ecto.Query.CastError on a malformed binary exactly as Repo.get/2 does. `subscribe_for_user/2` is public API and the id is not derived from a loaded row, so the guard belongs at the query. Today's only caller is ShellLive's `push_subscribed` clause reading `:current_user_id`, which is unvalidated (assigned from `session[\"current_user_id\"]` behind an is_binary/1 check) but unreachable with a malformed value in practice: the shell mount raises earlier on the same id in `Tenancy.visibility/1`. Covered by `subscribe_for_user/2 a malformed user id is refused, not raised on` in push_test.exs"},
+    {"platform/push/apns.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "task 01a10882 stage 2: `devices_for_user/1` guards `user_id` with Platform.UUID.valid?/1 before `where: d.user_id == ^user_id` on the `apns_devices.user_id` binary_id column. `deliver_to_user/2` is public; today's callers in `Platform.Push` pass a user id read off a loaded `%User{}`/`%Participant{}` row, so the guard is for the next caller"},
+    {"platform/push/notification.ex", :get, "Platform.Tasks.Task", 1, :safe_internal,
+     "task 01a10882 stage 2: `task_title/2` reads `item.source_id` off an `%Inbox.Item{}` that `Inbox.emit/1` just inserted. `source_id` is an `Ecto.UUID` field cast by `Item.changeset/2`, so it is a canonical UUID by construction. The call also sits inside a rescue that falls back to the inbox title, so an unpersisted item with a bad id degrades to copy, never a raise"},
+    # ── Mobile app (task 01a10882) ─────────────────────────────────────
+    {"platform/mobile.ex", :get_by, "AppSession", 1, :safe_internal,
+     "task 01a10882 stage 1: `verify_bearer/1` looks the session up by `token_hash`, a :binary column holding the SHA-256 of the presented bearer token. No UUID column is pinned, so no client-supplied value can raise Ecto.Query.CastError here"},
+    {"platform_web/controllers/app_api_controller.ex", :platform_uuid_guard, "-", 1,
+     :safe_internal,
+     "task 01a10882 stage 1: `agent_mention/2` guards the share request's `agent_id` (a JSON body value, so boundary-reachable) with Platform.UUID.valid?/1 before pinning `p.participant_id == ^agent_id`; a malformed id answers 422 `unknown_agent` instead of raising"},
     # ── Responsibilities (sibling-owned) ───────────────────────────────
     {"platform/responsibilities.ex", :get, "Responsibility", 1, :flagged_sibling_owned,
      "`Responsibilities.get/1` public getter; sibling-owned by the ADR-0046 stack — RECORD, DO NOT EDIT"},
@@ -1174,6 +1184,13 @@ defmodule Platform.RepoLookupBoundaryTest do
     # the same value inside `Tenancy.visibility/1`, so the crash is reached
     # before push ever runs. The guard is for the next caller.
     "platform/push.ex" => 1,
+    # Task 01a10882 stage 1: 0 -> 2, triaged by hand. `user_participant/2`
+    # pins `p.space_id` and `p.participant_id` to ids read off the `%Space{}`
+    # `Chat.get_space/1` returned and the bearer's loaded `%User{}`, so
+    # neither is a raw client value. `agent_mention/2` pins the request's
+    # `agent_id`, a JSON body value, behind Platform.UUID.valid?/1 (recorded
+    # in @inventory).
+    "platform_web/controllers/app_api_controller.ex" => 2,
     # ADR-0046 merge: `latest_live_plan/1`, whose `where: p.task_id == ^task_id`
     # pins a UUID column and so raises Ecto.Query.CastError on a malformed id
     # exactly as Repo.get/2 would — the case this map exists to make someone

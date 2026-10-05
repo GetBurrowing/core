@@ -1013,3 +1013,122 @@ defmodule Platform.InboxTest do
     end
   end
 end
+
+defmodule Platform.InboxPushTest do
+  @moduledoc """
+  Task 01a10882 stage 2: `Inbox.emit/1` pushes the approval kinds.
+
+  A `task_plan_review` or `review_request_pending` row fires exactly ONE
+  `fan_out_to_user/2` with the one notification model. A `chat_mention` row
+  fires NONE: `AttentionRouter` already pushes every mention, so a push from
+  its inbox row would double-notify. Push is observed through a Recorder
+  double injected via `:notifications_module` (the real `fan_out_to_user/3`
+  short-circuits in :test env); `async: false` because that is app env.
+  """
+  use Platform.DataCase, async: false
+
+  alias Platform.Inbox
+  alias Platform.Push.Notification
+  alias Platform.Repo
+
+  defmodule Recorder do
+    @moduledoc "Records `fan_out_to_user/3` as `{:notif, user_id, payload}`."
+    def install(pid), do: :persistent_term.put({__MODULE__, :owner}, pid)
+
+    def fan_out_to_user(user_id, payload, _opts \\ []) do
+      case :persistent_term.get({__MODULE__, :owner}, nil) do
+        nil -> :ok
+        owner -> send(owner, {:notif, user_id, payload})
+      end
+
+      :ok
+    end
+  end
+
+  setup do
+    Application.put_env(:platform, :notifications_module, Recorder)
+    Recorder.install(self())
+
+    on_exit(fn ->
+      Application.delete_env(:platform, :notifications_module)
+      :persistent_term.erase({Recorder, :owner})
+    end)
+
+    :ok
+  end
+
+  defp insert_user do
+    n = System.unique_integer([:positive])
+
+    Repo.insert!(%Platform.Accounts.User{
+      name: "Push User #{n}",
+      email: "inbox-push-#{n}@example.com",
+      oidc_sub: "sub-inbox-push-#{n}"
+    })
+  end
+
+  defp emit!(user, kind, source_type \\ "task") do
+    {:ok, item} =
+      Inbox.emit(%{
+        user_id: user.id,
+        kind: kind,
+        source_type: source_type,
+        source_id: Ecto.UUID.generate(),
+        title: "Label: Ship the iOS app",
+        body: "body",
+        url: "/tasks/x"
+      })
+
+    item
+  end
+
+  test "a task_plan_review emit fires exactly one fan_out with the plan notification" do
+    user = insert_user()
+    item = emit!(user, "task_plan_review")
+
+    assert_received {:notif, user_id, %Notification{} = n}
+    assert user_id == user.id
+    assert n.kind == "task_plan_review"
+    assert n.title == "Plan ready to approve"
+    assert n.inbox_item_id == item.id
+    refute_received {:notif, _, _}
+  end
+
+  test "a review_request_pending emit fires exactly one fan_out" do
+    user = insert_user()
+    emit!(user, "review_request_pending", "task_review")
+
+    assert_received {:notif, _,
+                     %Notification{kind: "review_request_pending", title: "Review requested"}}
+
+    refute_received {:notif, _, _}
+  end
+
+  test "a chat_mention emit fires no fan_out (the attention router already pushes it)" do
+    user = insert_user()
+    emit!(user, "chat_mention", "chat_message")
+
+    refute_received {:notif, _, _}
+  end
+
+  test "other kinds fire no fan_out from emit" do
+    user = insert_user()
+    emit!(user, "meeting_invited", "meeting")
+    emit!(user, "task_sponsor_assigned")
+
+    refute_received {:notif, _, _}
+  end
+
+  test "a failed emit fires no fan_out" do
+    user = insert_user()
+
+    assert {:error, _} =
+             Inbox.emit(%{user_id: user.id, kind: "task_plan_review", source_type: "task"})
+
+    refute_received {:notif, _, _}
+  end
+
+  test "push_kinds excludes chat_mention" do
+    assert Inbox.push_kinds() == ~w(task_plan_review review_request_pending)
+  end
+end

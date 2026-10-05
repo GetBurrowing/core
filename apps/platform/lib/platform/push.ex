@@ -2,7 +2,18 @@ defmodule Platform.Push do
   @moduledoc """
   Web Push notification context.
 
-  Manages push subscriptions and sends notifications via the Web Push protocol.
+  Manages push subscriptions and sends notifications via the Web Push protocol
+  and, for users with the native app, via APNs (`Platform.Push.APNs`).
+
+  ## One notification model, two transports (task 01a10882)
+
+  `send_to_user/2` and `send_notification/2` accept a legacy
+  `%{title, body, url}` map or a `%Platform.Push.Notification{}`. Either way
+  they normalise to the struct ONCE, run the archived-user check and the
+  external redaction ONCE on it, and only then split: web push encodes
+  `Notification.to_web_payload/1`, APNs encodes `Notification.to_apns_payload/1`.
+  Redaction never runs per transport, so the two cannot disagree about what a
+  notification says. Only USER recipients get APNs; agent rows have no app.
 
   ## The VAPID resolution invariant
 
@@ -50,6 +61,8 @@ defmodule Platform.Push do
 
   alias Platform.Accounts.User
   alias Platform.Chat.Participant
+  alias Platform.Push.APNs
+  alias Platform.Push.Notification
   alias Platform.Push.Subscription
   alias Platform.Repo
   alias Platform.Tenancy
@@ -165,8 +178,10 @@ defmodule Platform.Push do
   was registered in (task 019ffd19). Agent-typed and unknown recipients keep
   the per-membership device set.
   """
-  @spec send_notification(binary(), map()) :: :ok
+  @spec send_notification(binary(), Notification.t() | map()) :: :ok
   def send_notification(participant_id, %{title: _, body: _} = payload) do
+    notification = Notification.from_map(payload)
+
     if archived_user_participant?(participant_id) do
       # Defense-in-depth (task 019f671f Stage 4). `AttentionRouter.route/1`
       # (Stage 3) is the primary chokepoint that keeps `maybe_send_push/3`
@@ -182,23 +197,62 @@ defmodule Platform.Push do
     else
       subscriptions = subscriptions_for_recipient(participant_id)
 
-      # Redact the payload for external recipients before it leaves the box.
-      # The archived guard above still wins — an archived external user is
-      # suppressed entirely and never reaches this swap. Internal recipients
-      # get the byte-identical payload they get today.
-      payload = preview_for_recipient(participant_id, payload)
+      # Redact the notification for external recipients before it leaves the
+      # box, ONCE, before the transport split: web push and APNs serialise the
+      # same redacted struct. The archived guard above still wins — an
+      # archived external user is suppressed entirely and never reaches this
+      # swap.
+      notification = preview_for_recipient(participant_id, notification)
 
-      json = Jason.encode!(payload)
+      send_web_push(subscriptions, notification)
 
-      Enum.each(subscriptions, fn sub ->
-        case do_send_push(sub, json) do
-          {:ok, _} ->
-            :ok
+      # Native push only for a USER-typed recipient. An agent row's
+      # `participant_id` is an agent id and has no app devices.
+      case apns_user_id(participant_id) do
+        nil -> :ok
+        user_id -> deliver_apns(user_id, notification)
+      end
 
-          {:error, reason} ->
-            Logger.warning("[Push] failed to send to #{sub.endpoint}: #{inspect(reason)}")
-        end
-      end)
+      :ok
+    end
+  end
+
+  defp send_web_push([], _notification), do: :ok
+
+  defp send_web_push(subscriptions, %Notification{} = notification) do
+    json = Jason.encode!(Notification.to_web_payload(notification))
+
+    Enum.each(subscriptions, fn sub ->
+      case do_send_push(sub, json) do
+        {:ok, _} ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning("[Push] failed to send to subscription #{sub.id}: #{inspect(reason)}")
+      end
+    end)
+  end
+
+  # APNs is a second transport for the SAME notification. Its failure must
+  # never take web push down with it, and it never logs the notification.
+  defp deliver_apns(user_id, %Notification{} = notification) do
+    APNs.deliver_to_user(user_id, notification)
+    :ok
+  rescue
+    e ->
+      Logger.warning("[Push] APNs delivery raised: #{inspect(e.__struct__)}")
+      :ok
+  end
+
+  defp apns_user_id(participant_id) when is_binary(participant_id) do
+    if Platform.UUID.valid?(participant_id) do
+      case Repo.get(Participant, participant_id) do
+        %Participant{participant_type: "user", participant_id: user_id} when is_binary(user_id) ->
+          user_id
+
+        _ ->
+          nil
+      end
     end
   end
 
@@ -272,8 +326,10 @@ defmodule Platform.Push do
   the redacted `external_safe_preview/1`. 410-expired subscriptions are pruned
   by `do_send_push/2` exactly as in the per-participant path.
   """
-  @spec send_to_user(binary(), map()) :: :ok
+  @spec send_to_user(binary(), Notification.t() | map()) :: :ok
   def send_to_user(user_id, %{title: _, body: _} = payload) when is_binary(user_id) do
+    notification = Notification.from_map(payload)
+
     if archived_user?(user_id) do
       :telemetry.execute(
         [:platform, :push, :suppressed_archived_user],
@@ -285,21 +341,16 @@ defmodule Platform.Push do
     else
       subscriptions = distinct_endpoint_subscriptions(user_id)
 
-      # Redact once at the user level before the payload leaves the box (all
-      # resolved rows belong to `user_id`, so external-ness is uniform).
-      payload = preview_for_user(user_id, payload)
+      # Redact once at the user level before the notification leaves the box
+      # (all resolved rows belong to `user_id`, so external-ness is uniform),
+      # and BEFORE the transport split: web push and APNs both serialise this
+      # one redacted struct, so they cannot disagree about content.
+      notification = preview_for_user(user_id, notification)
 
-      json = Jason.encode!(payload)
+      send_web_push(subscriptions, notification)
+      deliver_apns(user_id, notification)
 
-      Enum.each(subscriptions, fn sub ->
-        case do_send_push(sub, json) do
-          {:ok, _} ->
-            :ok
-
-          {:error, reason} ->
-            Logger.warning("[Push] failed to send to #{sub.endpoint}: #{inspect(reason)}")
-        end
-      end)
+      :ok
     end
   end
 
@@ -424,7 +475,11 @@ defmodule Platform.Push do
   `/meetings/<slug>` deep-link both leaks an internal slug and 403s for an
   external user.
   """
-  @spec external_safe_preview(map()) :: map()
+  @spec external_safe_preview(Notification.t() | map()) :: Notification.t() | map()
+  def external_safe_preview(%Notification{} = notification) do
+    Notification.redact(notification, external_safe_preview(%{}))
+  end
+
   def external_safe_preview(_payload) do
     %{
       title: @external_safe_title,
@@ -662,7 +717,7 @@ defmodule Platform.Push do
             {:ok, %{status: status}}
 
           {:ok, %{status: 410}} ->
-            Logger.info("[Push] subscription gone (410): #{sub.endpoint}")
+            Logger.info("[Push] subscription gone (410): #{sub.id}")
             unsubscribe(sub.participant_id, sub.endpoint)
             {:error, :subscription_expired}
 

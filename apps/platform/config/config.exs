@@ -387,7 +387,10 @@ config :phoenix, :json_library, Jason
 # Keys are matched as substrings, so this also covers `_csrf_token`,
 # `id_token`, `auth_token`, and string values containing `token=`.
 # Setting this key REPLACES Phoenix's default `["password"]`, so keep it here.
-config :phoenix, :filter_parameters, ["password", "token", "secret", "api_key"]
+# "code" (task 01a10882): app login exchange and handoff codes, and the
+# PKCE `code_verifier`, arrive as request params. Phoenix matches by
+# substring, so this also filters the OIDC callback's authorization code.
+config :phoenix, :filter_parameters, ["password", "token", "secret", "api_key", "code"]
 
 # Timezone database — Tzdata (IANA rules) backs `DateTime.shift_zone!/2`
 # for timezone-aware cron triggers (task 019f70e9 stage 6). Without this

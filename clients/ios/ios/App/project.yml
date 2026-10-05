@@ -1,0 +1,215 @@
+# Suite iOS shell (task 01a10882). The xcodeproj is GENERATED from this
+# file: run `xcodegen generate` in clients/ios/ios/App after adding or
+# moving a Swift file, then commit both. Capacitor's SPM glue lives in the
+# local package CapApp-SPM, which `npx cap sync ios` rewrites.
+name: App
+options:
+  bundleIdPrefix: com.kobo-ai
+  deploymentTarget:
+    iOS: "16.0"
+  developmentLanguage: en
+  createIntermediateGroups: true
+
+packages:
+  CapApp-SPM:
+    path: CapApp-SPM
+
+settings:
+  base:
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+    TARGETED_DEVICE_FAMILY: "1"
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: XJ2GLJ9ST2
+    ENABLE_USER_SCRIPT_SANDBOXING: "NO"
+    ALWAYS_SEARCH_USER_PATHS: "NO"
+    # This rock's xcodegen ships without its setting presets ("No iOS
+    # settings found"), so the defaults a preset would supply are explicit.
+    PRODUCT_NAME: "$(TARGET_NAME)"
+    SDKROOT: iphoneos
+    SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
+    CLANG_ENABLE_MODULES: "YES"
+    CLANG_ENABLE_OBJC_ARC: "YES"
+    ENABLE_STRICT_OBJC_MSGSEND: "YES"
+    LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/Frameworks @loader_path/Frameworks"
+  configs:
+    Debug:
+      ONLY_ACTIVE_ARCH: "YES"
+      ENABLE_TESTABILITY: "YES"
+      DEBUG_INFORMATION_FORMAT: dwarf
+      SWIFT_OPTIMIZATION_LEVEL: "-Onone"
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+      GCC_PREPROCESSOR_DEFINITIONS: "DEBUG=1 $(inherited)"
+    Release:
+      DEBUG_INFORMATION_FORMAT: dwarf-with-dsym
+      SWIFT_OPTIMIZATION_LEVEL: "-O"
+      SWIFT_COMPILATION_MODE: wholemodule
+      VALIDATE_PRODUCT: "YES"
+
+targets:
+  App:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+        excludes:
+          - "Info.plist"
+          - "public"
+          - "capacitor.config.json"
+          - "config.xml"
+          - "App.entitlements"
+      - path: App/public
+        type: folder
+        buildPhase: resources
+      - path: App/capacitor.config.json
+        buildPhase: resources
+      - path: App/config.xml
+        buildPhase: resources
+      # InstallStore, KeychainTokenStore, SuiteAPIClient, SlabState and the
+      # colour slots: compiled into the app AND both extensions.
+      - path: ../Shared
+    dependencies:
+      - package: CapApp-SPM
+        product: CapApp-SPM
+      - target: ShareExtension
+      - target: SuiteWidgets
+    configFiles:
+      Debug: ../debug.xcconfig
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kobo-ai.burrow
+        INFOPLIST_FILE: App/Info.plist
+        CODE_SIGN_ENTITLEMENTS: App/App.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: primary
+      configs:
+        Debug:
+          SUITE_APS_ENVIRONMENT: development
+          SUITE_PUSH_ENVIRONMENT: sandbox
+        Release:
+          SUITE_APS_ENVIRONMENT: production
+          SUITE_PUSH_ENVIRONMENT: production
+  # Share to Suite (task 01a10882 stage 4). Bearer from the shared
+  # Keychain access group; never web-view cookies.
+  ShareExtension:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: ../ShareExtension
+        excludes:
+          - "Info.plist"
+          - "ShareExtension.entitlements"
+      - path: ../Shared
+      - path: App/Fonts/PublicSans-Variable.ttf
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kobo-ai.burrow.share
+        INFOPLIST_FILE: ../ShareExtension/Info.plist
+        CODE_SIGN_ENTITLEMENTS: ../ShareExtension/ShareExtension.entitlements
+        APPLICATION_EXTENSION_API_ONLY: "YES"
+        SKIP_INSTALL: "YES"
+  # My approvals / My tasks widgets. StaticConfiguration only (no App
+  # Intents). iOS 17+ for containerBackground and content margins; the app
+  # itself still runs on 16, where the widgets are simply not offered.
+  SuiteWidgets:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: ../SuiteWidgets
+        excludes:
+          - "Info.plist"
+          - "SuiteWidgets.entitlements"
+      - path: ../Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kobo-ai.burrow.widgets
+        INFOPLIST_FILE: ../SuiteWidgets/Info.plist
+        CODE_SIGN_ENTITLEMENTS: ../SuiteWidgets/SuiteWidgets.entitlements
+        APPLICATION_EXTENSION_API_ONLY: "YES"
+        SKIP_INSTALL: "YES"
+        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+  AppTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: AppTests
+    dependencies:
+      - target: App
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kobo-ai.burrow.tests
+        GENERATE_INFOPLIST_FILE: "YES"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/App.app/App"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+  # Renders the share sheet and widget views to PNGs (stage 4 evidence).
+  # Compiles the extension views itself; run with the Render scheme.
+  ExtensionRenderTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: ExtensionRenderTests
+      - path: ../Shared
+      - path: ../ShareExtension/ShareSheetView.swift
+      - path: ../SuiteWidgets/SuiteWidgets.swift
+      - path: ../SuiteWidgets/CountsProvider.swift
+    dependencies:
+      - target: App
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kobo-ai.burrow.render
+        GENERATE_INFOPLIST_FILE: "YES"
+        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/App.app/App"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+  # Screenshot driver for the stage evidence canvas. Not part of the App
+  # scheme's test action; run with the Evidence scheme.
+  EvidenceUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: EvidenceUITests
+    dependencies:
+      - target: App
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kobo-ai.burrow.evidence
+        GENERATE_INFOPLIST_FILE: "YES"
+        TEST_TARGET_NAME: App
+
+schemes:
+  App:
+    build:
+      targets:
+        App: all
+        AppTests: [test]
+    test:
+      targets:
+        - AppTests
+      gatherCoverageData: false
+    run:
+      config: Debug
+    archive:
+      config: Release
+  Evidence:
+    build:
+      targets:
+        App: all
+        EvidenceUITests: [test]
+    test:
+      config: Debug
+      targets:
+        - EvidenceUITests
+  Render:
+    build:
+      targets:
+        App: all
+        ExtensionRenderTests: [test]
+    test:
+      config: Debug
+      targets:
+        - ExtensionRenderTests

@@ -362,7 +362,7 @@ defmodule Platform.Chat.AttentionRouter do
           user_id = if participant, do: participant.participant_id, else: pid
 
           if send_push?(reason, MapSet.member?(online_user_ids, user_id)) do
-            maybe_send_push(participant || pid, sender_name, message, reason)
+            maybe_send_push(participant || pid, sender_name, message, reason, space)
           end
       end
 
@@ -643,30 +643,68 @@ defmodule Platform.Chat.AttentionRouter do
   # `recipient` is the `%Participant{}` row when the caller resolved one (it
   # already holds `participant_by_id`, so this costs no query), otherwise the
   # bare `chat_participants.id`.
-  defp maybe_send_push(recipient, sender_name, %Message{content: content}, reason) do
+  defp maybe_send_push(recipient, sender_name, %Message{} = message, reason, %Space{} = space) do
     # Skip in test env. The spawned Task races with Ecto sandbox teardown:
     # when a test finishes, its Repo connection owner exits, and an
     # in-flight `Repo.all(Subscription)` inside this Task raises a
     # `DBConnection.ConnectionError` — loud, and sometimes cascades into
     # failures on other tests sharing the pool. Tests don't exercise push
     # (no subscriptions, no VAPID keys), so short-circuiting here costs
-    # nothing and eliminates the flake.
+    # nothing and eliminates the flake. The notification itself is built by
+    # the pure `push_notification/5`, which tests call directly.
     if Application.get_env(:platform, :env) != :test do
-      body = if is_binary(content), do: String.slice(content, 0, 200), else: ""
+      Task.start(fn ->
+        attachments = if blank?(message.content), do: message_attachments(message.id), else: []
 
-      payload = %{
-        title: notification_title(sender_name, reason),
-        body: body,
-        url: "/chat"
-      }
+        notification = push_notification(sender_name, message, reason, space, attachments)
 
-      Task.start(fn -> deliver_push(recipient, payload) end)
+        deliver_push(recipient, notification)
+      end)
     end
 
     :ok
   rescue
     _ -> :ok
   end
+
+  @doc """
+  Build the push notification for one routing decision (task 01a10882): kind
+  `chat_mention` for `:mention`, `chat_message` otherwise, titled
+  `{Author} in {Space}`, deep-linked to `/chat/<space slug>`, carrying the
+  space and message ids both transports route on. `attachments` are
+  `%{content_type, filename}` maps, read only when the message has no text.
+
+  Pure (no queries), so tests can assert the exact notification without the
+  push `Task`, which short-circuits under `:test`.
+  """
+  @spec push_notification(String.t(), Message.t(), atom(), Space.t(), [map()]) ::
+          Platform.Push.Notification.t()
+  def push_notification(sender_name, %Message{} = message, reason, %Space{} = space, attachments) do
+    Platform.Push.Notification.chat(%{
+      reason: reason,
+      author: sender_name,
+      space_name: space.name,
+      space_slug: space.slug,
+      space_id: space.id,
+      message_id: message.id,
+      content: message.content,
+      attachments: attachments
+    })
+  end
+
+  defp blank?(content) when is_binary(content), do: String.trim(content) == ""
+  defp blank?(_), do: true
+
+  defp message_attachments(message_id) when is_binary(message_id) do
+    from(a in Platform.Chat.Attachment,
+      where: a.message_id == ^message_id,
+      order_by: [asc: a.inserted_at],
+      select: %{content_type: a.content_type, filename: a.filename}
+    )
+    |> Repo.all()
+  end
+
+  defp message_attachments(_), do: []
 
   # A user-typed recipient is addressed as a USER: `Push.send_to_user/2`
   # resolves their devices across every conversation they're in and delivers
@@ -718,6 +756,9 @@ defmodule Platform.Chat.AttentionRouter do
   @doc """
   Build the push-notification title for a given sender + routing reason.
 
+  The push itself now names the space (`push_notification/5`, task 01a10882);
+  this is that title with no space, which reads `in Suite`.
+
   For `:here` broadcasts, surface the `@here` context so the recipient knows
   they were pinged as part of a channel-wide blast (not a direct mention or
   ambient activity). All other reasons reuse the default
@@ -729,8 +770,8 @@ defmodule Platform.Chat.AttentionRouter do
   `:test` env anyway).
   """
   @spec notification_title(String.t(), atom()) :: String.t()
-  def notification_title(sender_name, :here), do: "#{sender_name} @here in Suite"
-  def notification_title(sender_name, _reason), do: "#{sender_name} in Suite"
+  def notification_title(sender_name, reason),
+    do: Platform.Push.Notification.chat_title(sender_name, nil, reason)
 
   # ── Human participant decision (unchanged) ─────────────────────────────────
 

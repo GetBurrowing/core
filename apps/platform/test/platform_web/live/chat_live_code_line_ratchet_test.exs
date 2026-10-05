@@ -526,7 +526,14 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   # `{:members_flash, _, _}` handle_info clauses (+3 each), mirroring the
   # settings modal's wiring. 2353 + 11 = 2364, re-derived from the guard's
   # own measurement.
-  @chat_live_code_line_count 2364
+  #
+  # Native app share endpoint (task 01a10882 stage 1, pin bumped in stage 2):
+  # +2. `@spec max_upload_size()` and `def max_upload_size, do:
+  # @max_upload_size`, so `PlatformWeb.AppApiController` enforces the
+  # composer's attachment cap instead of a second copy of the number. Stage 1
+  # landed the code without the bump; stage 2's full-suite run caught it.
+  # 2364 + 2 = 2366, re-derived from the guard's own measurement.
+  @chat_live_code_line_count 2366
 
   @doc """
   Count the CODE lines of a source file.

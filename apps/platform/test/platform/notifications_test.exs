@@ -73,4 +73,21 @@ defmodule Platform.NotificationsTest do
       assert :ok = Notifications.fan_out_to_humans(["p-1", "p-2"], @payload)
     end
   end
+
+  describe "the one notification model (task 01a10882)" do
+    @notification %Platform.Push.Notification{
+      kind: "task_plan_review",
+      title: "Plan ready to approve",
+      body: "Ship it",
+      url: "/tasks/t"
+    }
+
+    test "fan_out_to_user accepts a %Notification{}" do
+      assert :ok = Notifications.fan_out_to_user(Ecto.UUID.generate(), @notification)
+    end
+
+    test "fan_out_to_humans accepts a %Notification{}" do
+      assert :ok = Notifications.fan_out_to_humans(["p-1"], @notification)
+    end
+  end
 end

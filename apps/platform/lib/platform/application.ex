@@ -117,6 +117,12 @@ defmodule Platform.Application do
            Platform.Federation.Peers.Boot,
            # Task supervisor for parallel agent dispatch (ADR 0027)
            {Task.Supervisor, name: Platform.TaskSupervisor},
+           # Dedicated HTTP/2 pool for APNs (task 01a10882 stage 2). Apple
+           # requires HTTP/2 and multiplexes every push for one provider
+           # over a connection, so the pool is its own and HTTP/2 only.
+           {Finch,
+            name: Platform.Push.APNs.finch_name(),
+            pools: %{default: [protocols: [:http2], count: 1]}},
            # Context plane — shared ETS context for federation (after Repo, before AttentionRouter)
            Platform.Chat.ContextPlane,
            # On-demand agent-message context summaries (task 01a0d8de) —

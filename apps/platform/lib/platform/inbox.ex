@@ -21,7 +21,10 @@ defmodule Platform.Inbox do
   """
   import Ecto.Query
 
+  require Logger
+
   alias Platform.Inbox.Item
+  alias Platform.Push.Notification
   alias Platform.Repo
   alias Platform.Tenancy
 
@@ -54,11 +57,42 @@ defmodule Platform.Inbox do
     case %Item{} |> Item.changeset(attrs) |> Repo.insert() do
       {:ok, item} ->
         Phoenix.PubSub.broadcast(Platform.PubSub, topic(item.user_id), {:inbox_item_added, item})
+        maybe_push(item)
         {:ok, item}
 
       {:error, changeset} ->
         {:error, changeset}
     end
+  end
+
+  # Kinds whose row is ALSO a push (task 01a10882). Approvals had no push
+  # before: the row was the only signal. `chat_mention` is deliberately NOT
+  # here: `Platform.Chat.AttentionRouter` already pushes every mention, so
+  # pushing it again from its inbox row would double-notify.
+  @push_kinds ~w(task_plan_review review_request_pending)
+
+  @doc "The inbox kinds `emit/1` also pushes (both transports, one notification)."
+  @spec push_kinds() :: [String.t()]
+  def push_kinds, do: @push_kinds
+
+  # A push failure never fails the emit: the row is the durable record and is
+  # already written and broadcast.
+  defp maybe_push(%Item{kind: kind, user_id: user_id} = item) when kind in @push_kinds do
+    notifications_module().fan_out_to_user(user_id, Notification.from_inbox_item(item))
+    :ok
+  rescue
+    e ->
+      Logger.warning("[Inbox] push for item #{item.id} raised: #{inspect(e.__struct__)}")
+      :ok
+  end
+
+  defp maybe_push(_item), do: :ok
+
+  # Same indirection as `Platform.Tasks` and `MeetingNotifier`, so tests can
+  # swap in a Recorder double (the real `fan_out_to_user/3` short-circuits in
+  # :test env).
+  defp notifications_module do
+    Application.get_env(:platform, :notifications_module, Platform.Notifications)
   end
 
   @doc """

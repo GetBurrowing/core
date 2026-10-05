@@ -2,12 +2,40 @@ defmodule PlatformWeb.AuthController do
   use PlatformWeb, :controller
 
   alias Platform.Accounts.ExternalAdmission
+  alias Platform.Mobile
   alias Platform.OIDC
   alias PlatformWeb.ExternalRedirect
   alias PlatformWeb.ExternalSurface
   alias PlatformWeb.LoginOrigin
 
+  # Native app login (task 01a10882). The app opens this route in an
+  # `ASWebAuthenticationSession` with `app_challenge=<PKCE S256 challenge>`;
+  # it rides the signed session to the callback, which then hands the app an
+  # exchange code instead of landing a web page. A malformed challenge is
+  # refused up front. Without the param this is today's login, except that a
+  # challenge left behind by an abandoned app login is cleared so it cannot
+  # turn a later web login into an app redirect.
+  def login(conn, %{"app_challenge" => challenge}) do
+    case Mobile.begin_app_login(challenge) do
+      {:ok, challenge} ->
+        conn
+        |> put_session(:app_challenge, challenge)
+        |> start_login()
+
+      {:error, :invalid_challenge} ->
+        conn
+        |> put_status(:bad_request)
+        |> text("Invalid app_challenge")
+    end
+  end
+
   def login(conn, _params) do
+    conn
+    |> delete_session(:app_challenge)
+    |> start_login()
+  end
+
+  defp start_login(conn) do
     :telemetry.execute(
       [:platform, :auth, :login],
       %{system_time: System.system_time()},
@@ -82,7 +110,7 @@ defmodule PlatformWeb.AuthController do
       |> put_session(:current_user_id, user.id)
       |> maybe_put_id_token(auth)
       |> maybe_put_end_session_endpoint(session_params)
-      |> land_admission(result, ~p"/")
+      |> land_callback(result)
     else
       false ->
         emit_callback_failure(conn, :invalid_state)
@@ -104,6 +132,54 @@ defmodule PlatformWeb.AuthController do
   def callback(conn, _params) do
     emit_callback_failure(conn, :missing_params)
     invalid_state(conn)
+  end
+
+  # Task 01a10882: an app login (an `:app_challenge` in the session, put there
+  # by `login/2`) by a FULL user lands in the app, not on a web page: mint a
+  # single-use exchange code bound to the challenge and redirect to the app's
+  # custom scheme. The scheme and path are fixed here, never taken from a
+  # parameter, so this is not an open redirect. Anything else, including a
+  # holding user, lands exactly as before.
+  @app_callback_url "burrow://auth/callback"
+
+  defp land_callback(conn, %ExternalAdmission.Result{state: :full, user: user} = result) do
+    with challenge when is_binary(challenge) <- get_session(conn, :app_challenge),
+         {:ok, code} <- Mobile.issue_exchange_code(user, challenge) do
+      conn
+      |> delete_session(:app_challenge)
+      |> LoginOrigin.clear()
+      |> redirect(external: @app_callback_url <> "?" <> URI.encode_query(%{code: code}))
+    else
+      _ -> land_admission(conn, result, ~p"/")
+    end
+  end
+
+  defp land_callback(conn, result), do: land_admission(conn, result, ~p"/")
+
+  @doc """
+  Redeem a one-time app handoff code (task 01a10882) and sign this browser
+  in as its user, writing the same `:current_user_id` session key
+  `callback/2` writes. The app's WKWebView calls this right after
+  `POST /api/app/session`, so it gets an ordinary browser session without
+  any cookie crossing from the system browser, and again after
+  `POST /api/app/handoff` on a cold start. An optional `to` lands on that
+  local path (`Mobile.safe_return_path/1`; anything else lands on `/`). The
+  code is never echoed.
+  """
+  def app_handoff(conn, params) do
+    case Mobile.consume_handoff_code(params["code"]) do
+      {:ok, user} ->
+        conn
+        |> configure_session(renew: true)
+        |> delete_session(:app_challenge)
+        |> put_session(:current_user_id, user.id)
+        |> redirect(to: Mobile.safe_return_path(params["to"]))
+
+      {:error, :invalid_code} ->
+        conn
+        |> put_status(:unauthorized)
+        |> text("Sign-in link is invalid or has expired")
+    end
   end
 
   # Wrap `ExternalAdmission.admit/2` so the archived-user rejection carries

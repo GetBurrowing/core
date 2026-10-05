@@ -306,6 +306,10 @@ config :platform, :peer_federation_req_options, plug: {Req.Test, Platform.Federa
 
 config :platform, :peer_federation_resolver, %{}
 
+# APNs never reaches Apple in tests (task 01a10882 stage 2): every
+# `Platform.Push.APNs` request goes to the `Req.Test` stub of that name.
+config :platform, :apns_req_options, plug: {Req.Test, Platform.Push.APNs}
+
 # Email send path (task 01a0cf21 stage 2): tests never reach SMTP. The
 # recording adapter sends `{:mail_test_adapter, email, config}` to the calling
 # process so a test can assert WHICH relay and username a send used;

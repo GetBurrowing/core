@@ -137,6 +137,17 @@ defmodule PlatformWeb.Router do
     plug(PlatformWeb.Plugs.RuntimeBearerAuth)
   end
 
+  # Native app API (task 01a10882). Bearer-authenticated per request against
+  # `app_sessions` (`AppBearerAuth`, the user-side mirror of the runtime
+  # bearer above); no session cookie, no CSRF. External users are scoped in
+  # the controller with the same predicates `:enforce_external_scope` uses
+  # (`Platform.Chat.ExternalScope`), because that plug's allowlist is keyed
+  # on browser paths and would 403 every `/api/app` route outright.
+  pipeline :app_api do
+    plug(:accepts, ["json"])
+    plug(PlatformWeb.Plugs.AppBearerAuth)
+  end
+
   pipeline :require_auth do
     plug(PlatformWeb.Plugs.RequireAuth)
   end
@@ -343,6 +354,17 @@ defmodule PlatformWeb.Router do
     get("/auth/login", AuthController, :login)
     get("/auth/oidc/callback", AuthController, :callback)
     get("/auth/logout", AuthController, :logout)
+
+    # Native app (task 01a10882): redeems a one-time handoff code minted by
+    # `POST /api/app/session` and writes the same session key the callback
+    # writes, signing the app's web view in without sharing cookies across
+    # processes. Unfenced for the same reason as the rest of `/auth/*`.
+    #
+    # The code rides the QUERY STRING, not a path segment: Phoenix logs every
+    # request path at :info, while params are logged only through
+    # `:filter_parameters`, which filters "code". A path segment would put a
+    # live login code in the production log.
+    get("/auth/app/handoff", AuthController, :app_handoff)
 
     # T7 stage 2 (task 019e41da-3610-7972-8573-54121ea1f3f5): retired
     # `/org-context[/:file_key]` paths 301-redirect to the new
@@ -892,6 +914,27 @@ defmodule PlatformWeb.Router do
 
     patch("/:id", MessageController, :update)
     get("/:id/versions", MessageController, :versions)
+  end
+
+  # Native app API (task 01a10882). HOST-AGNOSTIC like every other `/api/*`
+  # machine caller. `POST /session` is the one unauthenticated route: it
+  # redeems a PKCE-bound exchange code for a bearer token.
+  scope "/api/app", PlatformWeb do
+    pipe_through(:api)
+
+    post("/session", AppApiController, :create_session)
+  end
+
+  scope "/api/app", PlatformWeb do
+    pipe_through(:app_api)
+
+    delete("/session", AppApiController, :delete_session)
+    post("/handoff", AppApiController, :create_handoff)
+    post("/devices", AppApiController, :register_device)
+    delete("/devices/:app_install_id", AppApiController, :unregister_device)
+    get("/spaces", AppApiController, :spaces)
+    post("/spaces/:space_id/messages", AppApiController, :create_message)
+    get("/counts", AppApiController, :counts)
   end
 
   scope "/api/meetings", PlatformWeb do

@@ -17,6 +17,8 @@ defmodule Platform.Notifications do
 
   require Logger
 
+  alias Platform.Push.Notification
+
   # ── Public API ──────────────────────────────────────────────────────────────
 
   @doc """
@@ -26,8 +28,9 @@ defmodule Platform.Notifications do
   must pre-filter to human participants — this helper does not introspect
   participant type.
 
-  `payload` is a map shaped like `%{title: _, body: _, url: _}` (matching
-  the shape `Platform.Push.send_notification/2` expects on the wire).
+  `payload` is a `%Platform.Push.Notification{}` or a legacy map shaped like
+  `%{title: _, body: _, url: _}`; `Platform.Push` normalises either to the
+  struct before the web push / APNs split (task 01a10882).
 
   Options:
     * `:exclude_participant_id` — a single participant_id to filter out of
@@ -37,9 +40,11 @@ defmodule Platform.Notifications do
   `Task.start/1` so callers (LiveViews, controllers) never block on VAPID
   roundtrips.
   """
-  @spec fan_out_to_humans([binary()], map(), keyword()) :: :ok
+  @spec fan_out_to_humans([binary()], Notification.t() | map(), keyword()) :: :ok
   def fan_out_to_humans(participant_ids, payload, opts \\ [])
 
+  # A `%Notification{}` carries `title`, `body` and `url`, so it matches the
+  # same map pattern a legacy payload does.
   def fan_out_to_humans(participant_ids, %{title: _, body: _, url: _} = payload, opts)
       when is_list(participant_ids) do
     recipients = recipients(participant_ids, opts)
@@ -87,8 +92,11 @@ defmodule Platform.Notifications do
   delivery in a single background `Task`, short-circuited in `:test` env (the
   spawned Task would otherwise race Ecto sandbox teardown). `opts` is accepted
   for signature symmetry and future use; there are currently no options.
+
+  `payload` is a `%Platform.Push.Notification{}` or a legacy
+  `%{title, body, url}` map, exactly as for `fan_out_to_humans/3`.
   """
-  @spec fan_out_to_user(binary(), map(), keyword()) :: :ok
+  @spec fan_out_to_user(binary(), Notification.t() | map(), keyword()) :: :ok
   def fan_out_to_user(user_id, payload, opts \\ [])
 
   def fan_out_to_user(user_id, %{title: _, body: _, url: _} = payload, _opts)
