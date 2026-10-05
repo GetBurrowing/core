@@ -41,6 +41,11 @@ defmodule Platform.Push.APNs do
   `config :platform, :apns_req_options` is merged into every request (tests
   route it to `Req.Test`).
 
+  A transport error (no HTTP status: `pool_not_available` on a cold or
+  reconnecting pool, `closed`, `timeout`, ...) is retried after ~150, 500
+  and 1500 ms (`config :platform, :apns_retry_backoff_ms`), then logged with
+  its `reason` atom only. An HTTP status from APNs is never retried.
+
   ## Responses
 
     * 200 -> ok;
@@ -77,12 +82,23 @@ defmodule Platform.Push.APNs do
     auth_key: {"APNS_AUTH_KEY", "apns-auth-key"}
   ]
 
+  # Delays before each retry of a transport error. A cold or reconnecting
+  # HTTP/2 pool answers `pool_not_available` at once while the connection to
+  # APNs is still being set up, so an immediate retry fails the same way;
+  # spacing the retries gives the handshake time. Overridable through
+  # `config :platform, :apns_retry_backoff_ms` (tests use zeros).
+  @default_retry_backoff_ms [150, 500, 1500]
+
   @prune_reasons ~w(BadDeviceToken DeviceTokenNotForTopic)
   @stale_jwt_reasons ~w(ExpiredProviderToken InvalidProviderToken)
 
   @doc "Name of the dedicated HTTP/2 Finch pool, started in `Platform.Application`."
   @spec finch_name() :: atom()
   def finch_name, do: @finch
+
+  @doc "Default delays (ms) before each transport-error retry; the list length is the retry budget."
+  @spec default_retry_backoff_ms() :: [non_neg_integer()]
+  def default_retry_backoff_ms, do: @default_retry_backoff_ms
 
   @doc """
   Resolve the complete APNs credential set, or `nil` when ANY key is missing.
@@ -138,9 +154,10 @@ defmodule Platform.Push.APNs do
   defp deliver(%ApnsDevice{} = device, %Notification{} = n, body, config) do
     case provider_jwt(config) do
       {:ok, jwt} ->
-        device
-        |> request(n, body, config, jwt)
-        |> retry_transport_error(fn -> request(device, n, body, config, jwt) end)
+        attempt = fn -> request(device, n, body, config, jwt) end
+
+        attempt.()
+        |> retry_transport_error(attempt, retry_backoff_ms())
         |> handle_response(device)
 
       :error ->
@@ -165,7 +182,7 @@ defmodule Platform.Push.APNs do
         headers: headers,
         json: body,
         retry: false,
-        finch: [name: @finch]
+        finch: @finch
       ]
       |> Keyword.merge(Application.get_env(:platform, :apns_req_options, []))
 
@@ -174,13 +191,26 @@ defmodule Platform.Push.APNs do
     _ -> {:error, :request_failed}
   end
 
-  # One retry on a transport or connection error, never on an HTTP status.
-  # The pooled HTTP/2 connection to APNs goes stale after a few idle
-  # minutes; the first request on it then fails before APNs sees it, and
-  # Finch opens a fresh connection for the retry. Any answer from APNs (a
-  # 4xx included) is final.
-  defp retry_transport_error({:error, _}, again), do: again.()
-  defp retry_transport_error(response, _again), do: response
+  # Bounded retries on a transport or connection error, never on an HTTP
+  # status. Two cases reach here: the pool has no live connection yet (first
+  # push after boot, or the HTTP/2 connection dropped while idle), which Req
+  # reports as `pool_not_available` before APNs sees anything; and a stale
+  # connection that fails mid-request. Finch (re)connects meanwhile, so each
+  # retry waits the next delay of the backoff schedule first. Any answer from
+  # APNs (a 4xx included) is final.
+  defp retry_transport_error({:error, _}, again, [delay | rest]) do
+    if delay > 0, do: Process.sleep(delay)
+    retry_transport_error(again.(), again, rest)
+  end
+
+  defp retry_transport_error(response, _again, _schedule), do: response
+
+  defp retry_backoff_ms do
+    case Application.get_env(:platform, :apns_retry_backoff_ms) do
+      list when is_list(list) -> Enum.filter(list, &(is_integer(&1) and &1 >= 0))
+      _ -> @default_retry_backoff_ms
+    end
+  end
 
   defp collapse_header(%Notification{collapse_id: id}) when is_binary(id) and id != "",
     do: [{"apns-collapse-id", String.slice(id, 0, 64)}]
@@ -217,11 +247,22 @@ defmodule Platform.Push.APNs do
     do: warn(device, status, reason(resp))
 
   # Transport failures are reported by kind only: an exception struct or a
-  # Mint error can carry the request it failed on, which holds the token.
-  defp handle_response({:error, _}, device) do
-    Logger.warning("[APNs] request for device #{device.id} failed: transport_error")
+  # Mint error can carry the request it failed on, which holds the token, so
+  # the struct is never inspected. Only the `reason` atom is printed.
+  defp handle_response({:error, error}, device) do
+    Logger.warning(
+      "[APNs] request for device #{device.id} failed: transport_error (#{error_kind(error)})"
+    )
+
     {:error, :transport_error}
   end
+
+  defp error_kind(%Req.HTTPError{reason: r}) when is_atom(r), do: Atom.to_string(r)
+  defp error_kind(%Req.TransportError{reason: r}) when is_atom(r), do: Atom.to_string(r)
+  defp error_kind(%Req.HTTPError{}), do: "http_error"
+  defp error_kind(%Req.TransportError{}), do: "transport_error"
+  defp error_kind(:request_failed), do: "request_failed"
+  defp error_kind(_), do: "unknown"
 
   defp prune(device, reason) do
     from(d in ApnsDevice, where: d.id == ^device.id) |> Repo.delete_all()

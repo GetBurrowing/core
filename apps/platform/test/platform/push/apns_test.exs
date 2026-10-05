@@ -321,10 +321,10 @@ defmodule Platform.Push.APNsTest do
       refute_secrets(log)
     end
 
-    test "a transport error is retried at most once" do
+    test "a transport error is retried at most the backoff budget, then logs its kind" do
       configure!()
       user = insert_user()
-      insert_device(user)
+      device = insert_device(user)
       test_pid = self()
 
       Req.Test.stub(APNs, fn conn ->
@@ -334,10 +334,95 @@ defmodule Platform.Push.APNsTest do
 
       log = capture_log(fn -> APNs.deliver_to_user(user.id, notification()) end)
 
-      assert_received :apns_attempt
-      assert_received :apns_attempt
+      # 1 attempt + 3 retries (config/test.exs: three zero-delay backoffs).
+      for _ <- 1..4, do: assert_received(:apns_attempt)
       refute_received :apns_attempt
       assert log =~ "transport_error"
+      assert log =~ "econnrefused", "the error KIND must be logged"
+      assert log =~ device.id
+      refute_secrets(log)
+    end
+
+    # The production failure of 2026-10-05: the HTTP/2 pool had no live
+    # connection (first push after boot, or after an idle drop), Req answered
+    # `%Req.HTTPError{protocol: :http2, reason: :pool_not_available}` at once,
+    # the single immediate retry failed the same way, and the push was lost.
+    # `Req.Test.transport_error/2` only builds `Req.TransportError`s, so the
+    # stub puts the exact `Req.HTTPError` where `Req.Test` puts its own.
+    defp pool_not_available(conn) do
+      Plug.Conn.put_private(
+        conn,
+        :req_test_exception,
+        %Req.HTTPError{protocol: :http2, reason: :pool_not_available}
+      )
+    end
+
+    # A stub whose first `failures` calls find a cold pool, then 200.
+    defp stub_cold_pool(failures) do
+      test_pid = self()
+      calls = :counters.new(1, [])
+
+      Req.Test.stub(APNs, fn conn ->
+        :counters.add(calls, 1, 1)
+        send(test_pid, :apns_attempt)
+
+        if :counters.get(calls, 1) <= failures do
+          pool_not_available(conn)
+        else
+          conn |> Plug.Conn.put_status(200) |> Req.Test.json(%{})
+        end
+      end)
+    end
+
+    test "a cold pool (pool_not_available x3) is retried with backoff and the push is delivered" do
+      configure!()
+      user = insert_user()
+      device = insert_device(user)
+      stub_cold_pool(3)
+
+      log = capture_log(fn -> assert :ok = APNs.deliver_to_user(user.id, notification()) end)
+
+      for _ <- 1..4, do: assert_received(:apns_attempt)
+      refute_received :apns_attempt
+      refute log =~ "failed", "the 4th attempt delivered, so nothing failed"
+      assert device_exists?(device)
+      refute_secrets(log)
+    end
+
+    test "a cold pool that outlasts the retry budget drops the push and logs pool_not_available" do
+      configure!()
+      user = insert_user()
+      device = insert_device(user)
+      stub_cold_pool(4)
+
+      log = capture_log(fn -> APNs.deliver_to_user(user.id, notification()) end)
+
+      for _ <- 1..4, do: assert_received(:apns_attempt)
+      refute_received :apns_attempt, "the retry budget is bounded"
+      assert log =~ "[APNs] request for device #{device.id} failed: transport_error"
+      assert log =~ "pool_not_available"
+      refute log =~ "Req.HTTPError", "the error struct is never inspected"
+      assert device_exists?(device)
+      refute_secrets(log)
+    end
+
+    test "the backoff schedule is the retry budget" do
+      configure!()
+      user = insert_user()
+      insert_device(user)
+      stub_cold_pool(1)
+      Application.put_env(:platform, :apns_retry_backoff_ms, [])
+      on_exit(fn -> Application.put_env(:platform, :apns_retry_backoff_ms, [0, 0, 0]) end)
+
+      log = capture_log(fn -> APNs.deliver_to_user(user.id, notification()) end)
+
+      assert_received :apns_attempt
+      refute_received :apns_attempt, "an empty schedule means no retry"
+      assert log =~ "pool_not_available"
+    end
+
+    test "the default backoff is ~150/500/1500 ms" do
+      assert APNs.default_retry_backoff_ms() == [150, 500, 1500]
     end
 
     test "an HTTP error from APNs is never retried" do
