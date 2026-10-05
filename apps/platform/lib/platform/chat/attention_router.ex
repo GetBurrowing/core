@@ -670,7 +670,9 @@ defmodule Platform.Chat.AttentionRouter do
   @doc """
   Build the push notification for one routing decision (task 01a10882): kind
   `chat_mention` for `:mention`, `chat_message` otherwise, titled
-  `{Author} in {Space}`, deep-linked to `/chat/<space slug>`, carrying the
+  `{Author} in {Space}`, deep-linked to
+  `/chat/<Chat.space_path_segment/1>?message=<id>` (a DM has no slug, so a
+  raw `space.slug` linked to `/chat`, the first channel), carrying the
   space and message ids both transports route on. `attachments` are
   `%{content_type, filename}` maps, read only when the message has no text.
 
@@ -684,7 +686,7 @@ defmodule Platform.Chat.AttentionRouter do
       reason: reason,
       author: sender_name,
       space_name: space.name,
-      space_slug: space.slug,
+      space_path: Platform.Chat.space_path_segment(space),
       space_id: space.id,
       message_id: message.id,
       content: message.content,

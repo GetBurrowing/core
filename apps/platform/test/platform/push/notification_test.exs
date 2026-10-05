@@ -177,8 +177,28 @@ defmodule Platform.Push.NotificationTest do
 
       assert n.category == "SUITE_MENTION"
       assert n.thread_id == s.id
-      assert n.url == "/chat/internal-fabrikam-sxi"
+      assert n.url == "/chat/internal-fabrikam-sxi?message=#{n.message_id}"
       assert n.space_id == s.id
+    end
+
+    # A DM has no slug (prod: kind=dm, slug NULL). A slug-only url collapsed
+    # to "/chat", and Open landed on the first channel, not the DM.
+    test "a mention in a slug-less DM links to that DM and its message, never bare /chat" do
+      dm = %Space{id: Ecto.UUID.generate(), name: nil, kind: "dm", slug: nil}
+      msg = message("ping")
+      n = AttentionRouter.push_notification("Harper", msg, :mention, dm, [])
+
+      assert n.url == "/chat/#{dm.id}?message=#{msg.id}"
+      assert Notification.to_apns_payload(n)["url"] == n.url
+    end
+
+    test "an org-scoped space links by id, matching the web app's space_path_segment" do
+      s = %Space{space() | org_id: Ecto.UUID.generate()}
+      msg = message("x")
+      n = AttentionRouter.push_notification("Harper", msg, :mention, s, [])
+
+      assert n.url == "/chat/#{Platform.Chat.space_path_segment(s)}?message=#{msg.id}"
+      assert n.url == "/chat/#{s.id}?message=#{msg.id}"
     end
 
     test "plan and review requests share one Approvals group with SUITE_OPEN" do

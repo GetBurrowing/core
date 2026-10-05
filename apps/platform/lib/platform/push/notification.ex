@@ -155,6 +155,12 @@ defmodule Platform.Push.Notification do
   Build a chat notification. `reason` `:mention` is kind `chat_mention`,
   everything else `chat_message`. `attachments` (used only when the message
   has no text) are `%{content_type, filename}` maps.
+
+  `space_path` is the `/chat/:space_slug` segment from
+  `Platform.Chat.space_path_segment/1`, never a raw `space.slug`: a DM or
+  group has no slug, and a slug-only url collapsed to `/chat`, which opened
+  the reader's first channel instead of the conversation. With a
+  `message_id` the url carries the `?message=` anchor `ChatLive` resolves.
   """
   @spec chat(map()) :: t()
   def chat(%{} = attrs) do
@@ -164,7 +170,7 @@ defmodule Platform.Push.Notification do
       kind: kind,
       title: chat_title(attrs[:author], attrs[:space_name], attrs[:reason]),
       body: body_text(attrs[:content], attrs[:attachments] || []),
-      url: chat_url(attrs[:space_slug]),
+      url: chat_url(attrs[:space_path], attrs[:message_id]),
       space_id: attrs[:space_id],
       message_id: attrs[:message_id],
       thread_id: attrs[:space_id]
@@ -310,8 +316,13 @@ defmodule Platform.Push.Notification do
   defp default_thread_id(kind, _n) when kind in @approval_kinds, do: @approvals_thread
   defp default_thread_id(_kind, %__MODULE__{space_id: space_id}), do: space_id
 
-  defp chat_url(slug) when is_binary(slug) and slug != "", do: "/chat/#{slug}"
-  defp chat_url(_), do: "/chat"
+  defp chat_url(path, message_id) when is_binary(path) and path != "" do
+    if is_binary(message_id) and message_id != "",
+      do: "/chat/#{path}?message=#{URI.encode_www_form(message_id)}",
+      else: "/chat/#{path}"
+  end
+
+  defp chat_url(_path, _message_id), do: "/chat"
 
   defp attachment_text([]), do: ""
 

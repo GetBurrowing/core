@@ -394,7 +394,10 @@ defmodule PlatformWeb.AppApiControllerTest do
       assert json_response(conn, 422) == %{"error" => "unknown_agent"}
     end
 
-    test "reply_to threads the message under its parent", %{
+    # Slack semantics (Lock Screen Reply, 2026-10-05): the reply to a
+    # top-level message is itself top-level, so it shows in the timeline;
+    # it must NOT open a thread under the message it answers.
+    test "reply_to a top-level message posts top-level, opening no thread", %{
       conn: conn,
       token: token,
       space: space,
@@ -411,8 +414,64 @@ defmodule PlatformWeb.AppApiControllerTest do
           "reply_to" => parent.id
         })
 
-      %{"message" => %{"thread_id" => thread_id}} = json_response(conn, 201)
-      assert thread_id == Chat.get_thread_for_message(parent.id).id
+      %{"message" => %{"id" => id, "thread_id" => thread_id}} = json_response(conn, 201)
+      assert thread_id == nil
+      assert %Message{thread_id: nil, space_id: space_id} = Repo.get!(Message, id)
+      assert space_id == space.id
+      assert Chat.get_thread_for_message(parent.id) == nil
+    end
+
+    test "reply_to a message inside a thread posts into that thread", %{
+      conn: conn,
+      token: token,
+      space: space,
+      user: user
+    } do
+      participant = participant_pk!(space.id, user.id)
+      root = post!(space.id, participant, "root")
+      {:ok, thread} = Chat.create_thread_for_message(space.id, root.id)
+
+      {:ok, in_thread} =
+        Chat.post_message(%{
+          space_id: space.id,
+          thread_id: thread.id,
+          participant_id: participant,
+          content_type: "text",
+          content: "in thread"
+        })
+
+      conn =
+        conn
+        |> bearer(token)
+        |> post("/api/app/spaces/#{space.id}/messages", %{
+          "text" => "reply",
+          "reply_to" => in_thread.id
+        })
+
+      %{"message" => %{"id" => id, "thread_id" => thread_id}} = json_response(conn, 201)
+      assert thread_id == thread.id
+      assert Repo.get!(Message, id).thread_id == thread.id
+    end
+
+    test "reply_to a message in another space is refused", %{
+      conn: conn,
+      token: token,
+      space: space
+    } do
+      other = channel!()
+      stranger = create_user!()
+      add_user!(other.id, stranger.id)
+      foreign = post!(other.id, participant_pk!(other.id, stranger.id), "elsewhere")
+
+      conn =
+        conn
+        |> bearer(token)
+        |> post("/api/app/spaces/#{space.id}/messages", %{
+          "text" => "reply",
+          "reply_to" => foreign.id
+        })
+
+      assert json_response(conn, 422) == %{"error" => "invalid_reply_to"}
     end
 
     test "a single file is attached", %{conn: conn, token: token, space: space} do

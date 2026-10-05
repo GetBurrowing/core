@@ -246,22 +246,17 @@ defmodule PlatformWeb.AppApiController do
 
   defp agent_mention(_space_id, _agent_id), do: {:error, :unprocessable_entity, "unknown_agent"}
 
+  # `reply_to` resolves the way Slack's Reply does: answering a TOP-LEVEL
+  # message posts top-level in the same space; answering a message that is
+  # itself inside a thread posts into that thread. The Lock Screen Reply sends
+  # the notified message's id, and opening a new thread under it hid the
+  # answer from the conversation timeline (Rowan's DM, 2026-10-05).
   defp resolve_thread(_space_id, reply_to) when reply_to in [nil, ""], do: {:ok, nil}
 
   defp resolve_thread(space_id, reply_to) when is_binary(reply_to) do
     case Chat.get_message(reply_to) do
-      %{space_id: ^space_id, thread_id: nil, id: parent_id} ->
-        case Chat.create_thread_for_message(space_id, parent_id) do
-          {:ok, thread} -> {:ok, thread.id}
-          {:error, _} -> {:error, :unprocessable_entity, "invalid_reply_to"}
-        end
-
-      # Replying to a reply lands in the same thread.
-      %{space_id: ^space_id, thread_id: thread_id} ->
-        {:ok, thread_id}
-
-      _ ->
-        {:error, :unprocessable_entity, "invalid_reply_to"}
+      %{space_id: ^space_id, thread_id: thread_id} -> {:ok, thread_id}
+      _ -> {:error, :unprocessable_entity, "invalid_reply_to"}
     end
   end
 
