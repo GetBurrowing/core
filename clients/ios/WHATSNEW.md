@@ -16,6 +16,8 @@ Please try:
 6. Siri and Shortcuts. "Start a meeting in Burrow" now starts the call natively.
 
 Known gaps in this build:
+- Native calls are audio only. There is no video, no screen share and no live captions in the native call, and Open full meeting does not add them (it keeps chat and canvases). Native video, screen-share viewing, camera and captions are a follow-up.
+- iPad: Burrow asks for Local Network access only to reach a server on your own network (LAN); for suite.example.com and other internet servers you can decline it.
 - PushToTalk (walkie-talkie style talk) is not built; it is a separate follow-up.
 - No custom ringtone or call-screen icon yet; the system defaults are used.
 - Not built: native game streaming, Apple Watch.
