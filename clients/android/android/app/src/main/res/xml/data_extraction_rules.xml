@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12+. The bearer ciphertext is useless without its AndroidKeyStore
+     key, which is never backed up, and the app install id must not move to a
+     second phone (it keys the server's device row). -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="burrow_bearer_tokens.xml" />
+        <exclude domain="sharedpref" path="burrow_device.xml" />
+        <exclude domain="sharedpref" path="burrow_push.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="burrow_bearer_tokens.xml" />
+        <exclude domain="sharedpref" path="burrow_device.xml" />
+        <exclude domain="sharedpref" path="burrow_push.xml" />
+    </device-transfer>
+</data-extraction-rules>

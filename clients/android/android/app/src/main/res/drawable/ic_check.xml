@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Heroicons "check" (outline, MIT), stroke widened for 14dp use. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:pathData="M4.5,12.75l6,6 9,-13.5"
+        android:strokeWidth="3"
+        android:strokeColor="@color/burrow_on_primary"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

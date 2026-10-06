@@ -750,6 +750,102 @@ defmodule Platform.PushTest do
     end
   end
 
+  describe "FCM is a third transport for the same notification (task 01a10d8e)" do
+    setup do
+      saved = Application.get_env(:platform, :fcm)
+      :persistent_term.erase({Platform.Push.FCM, :access_token})
+
+      on_exit(fn ->
+        if saved,
+          do: Application.put_env(:platform, :fcm, saved),
+          else: Application.delete_env(:platform, :fcm)
+
+        :persistent_term.erase({Platform.Push.FCM, :access_token})
+      end)
+
+      Platform.FCMFixtures.configure!(Platform.FCMFixtures.generated_rsa_pem())
+      Platform.FCMFixtures.stub_fcm(self(), {200, %{"name" => "projects/p/messages/1"}})
+      :ok
+    end
+
+    defp fcm_notification do
+      Platform.Push.Notification.new(%{
+        kind: "chat_mention",
+        title: "Harper in Design",
+        body: "secret plans",
+        url: "/chat/design",
+        space_id: Ecto.UUID.generate(),
+        message_id: Ecto.UUID.generate(),
+        author_name: "Harper",
+        space_name: "Design"
+      })
+    end
+
+    test "send_to_user reaches FCM for a user with an fcm_devices row" do
+      user = insert_user(name: "Android User")
+      Platform.FCMFixtures.insert_fcm_device(user)
+      n = fcm_notification()
+
+      log = capture_log(fn -> assert :ok = Push.send_to_user(user.id, n) end)
+
+      assert_received {:fcm_send, req}
+      assert req.body["message"]["token"] == Platform.FCMFixtures.sentinel_token()
+
+      assert Map.delete(req.body["message"], "token") ==
+               Platform.Push.Notification.to_fcm_payload(n)
+
+      Platform.FCMFixtures.refute_secrets(log)
+    end
+
+    test "an external user's FCM push carries the redacted copy" do
+      user = insert_user(name: "Xavier External") |> mark_external()
+      Platform.FCMFixtures.insert_fcm_device(user)
+
+      capture_log(fn -> Push.send_to_user(user.id, fcm_notification()) end)
+
+      assert_received {:fcm_send, req}
+      data = req.body["message"]["data"]
+      assert data["title"] == "New message"
+      refute Jason.encode!(data) =~ "secret plans"
+      refute Map.has_key?(data, "author_name")
+      refute Map.has_key?(data, "space_name")
+    end
+
+    test "an archived user gets no FCM push" do
+      user = insert_user(name: "Archived Android")
+      Platform.FCMFixtures.insert_fcm_device(user)
+      {:ok, _} = Accounts.archive_user(user)
+
+      capture_log(fn -> Push.send_to_user(user.id, fcm_notification()) end)
+
+      refute_received {:fcm_send, _}
+    end
+
+    test "send_notification: a user row reaches FCM, an agent row never does" do
+      user = insert_user(name: "Android Member")
+      Platform.FCMFixtures.insert_fcm_device(user)
+      space = create_space()
+      user_row = add_user_participant(space.id, user)
+
+      # An AGENT-typed row whose participant_id equals the user's id: only the
+      # row TYPE may decide, never the id.
+      agent_row =
+        Repo.insert!(%Platform.Chat.Participant{
+          space_id: space.id,
+          participant_type: "agent",
+          participant_id: user.id,
+          display_name: "Agent",
+          joined_at: DateTime.utc_now()
+        })
+
+      capture_log(fn -> Push.send_notification(agent_row.id, fcm_notification()) end)
+      refute_received {:fcm_send, _}
+
+      capture_log(fn -> Push.send_notification(user_row.id, fcm_notification()) end)
+      assert_received {:fcm_send, _}
+    end
+  end
+
   describe "VAPID key resolution vs the send path's configuration probe" do
     # HISTORY, kept deliberately. Task 01a01041 stage 2 added this block as a
     # CHARACTERISATION test of a real defect: `vapid_public_key/0` resolved env

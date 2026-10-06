@@ -7,7 +7,12 @@ defmodule Platform.Push.Notification do
   both transports serialise this same struct:
 
     * web push: `to_web_payload/1`, the JSON `priv/static/sw.js` reads;
-    * APNs: `to_apns_payload/1`, the JSON body `Platform.Push.APNs` posts.
+    * APNs: `to_apns_payload/1`, the JSON body `Platform.Push.APNs` posts;
+    * FCM: `to_fcm_payload/1`, the v1 `message` `Platform.Push.FCM` posts
+      (task 01a10d8e). Data-only, so the Android app always builds the
+      notification itself (MessagingStyle with `author_name` and
+      `space_name`, RemoteInput reply, channels, grouping), whether it is in
+      the foreground or not.
 
   Redaction (`Platform.Push.preview_for_user/2`) and the archived-user
   suppression run ONCE on the struct, BEFORE the transport split, so web push
@@ -59,7 +64,9 @@ defmodule Platform.Push.Notification do
             message_id: nil,
             task_id: nil,
             inbox_item_id: nil,
-            install_host: nil
+            install_host: nil,
+            author_name: nil,
+            space_name: nil
 
   @type t :: %__MODULE__{
           kind: String.t(),
@@ -73,7 +80,9 @@ defmodule Platform.Push.Notification do
           message_id: String.t() | nil,
           task_id: String.t() | nil,
           inbox_item_id: String.t() | nil,
-          install_host: String.t() | nil
+          install_host: String.t() | nil,
+          author_name: String.t() | nil,
+          space_name: String.t() | nil
         }
 
   @doc "The iOS category for a kind, or nil (tap opens)."
@@ -122,7 +131,9 @@ defmodule Platform.Push.Notification do
       :message_id,
       :task_id,
       :inbox_item_id,
-      :install_host
+      :install_host,
+      :author_name,
+      :space_name
     ])
     |> Map.put_new(:kind, "generic")
     |> new()
@@ -173,7 +184,15 @@ defmodule Platform.Push.Notification do
       url: chat_url(attrs[:space_path], attrs[:message_id]),
       space_id: attrs[:space_id],
       message_id: attrs[:message_id],
-      thread_id: attrs[:space_id]
+      thread_id: attrs[:space_id],
+      # Separate from the title so Android's MessagingStyle can show the
+      # author and the conversation apart (task 01a10d8e).
+      author_name: presence(attrs[:author]),
+      # `conversation_name` is the recipient's label for the space (a DM or
+      # unnamed group has a NULL `chat_spaces.name`; the web sidebar shows the
+      # other participant). It falls back to the space's own name. The TITLE
+      # keeps `space_name` so APNs and web push read exactly as before.
+      space_name: presence(attrs[:conversation_name]) || presence(attrs[:space_name])
     })
   end
 
@@ -188,7 +207,8 @@ defmodule Platform.Push.Notification do
   @doc """
   The redacted copy an external recipient gets on EVERY transport. Every
   identifying field (space, message, task, inbox ids and the grouping and
-  category derived from them) is cleared; only the kind and install survive.
+  category derived from them) is cleared, and so are `author_name` and
+  `space_name`; only the kind and install survive.
   """
   @spec redact(t(), %{title: String.t(), body: String.t(), url: String.t()}) :: t()
   def redact(%__MODULE__{} = n, %{title: title, body: body, url: url}) do
@@ -247,6 +267,49 @@ defmodule Platform.Push.Notification do
       "install_host" => n.install_host
     }
     |> drop_nils()
+  end
+
+  @doc """
+  The FCM HTTP v1 `message` map, without `token` (the transport adds it per
+  device).
+
+  DATA-ONLY: there is no `notification` block, so FCM never displays
+  anything itself and the app builds every notification. `android.priority`
+  is `high` so a data message wakes the app from Doze. `collapse_id` becomes
+  `android.collapse_key` (cut to 64 characters). FCM rejects non-string data
+  values, so every value is a string, and a nil or empty value is dropped.
+  """
+  @spec to_fcm_payload(t()) :: map()
+  def to_fcm_payload(%__MODULE__{} = n) do
+    data =
+      %{
+        "kind" => n.kind,
+        "title" => n.title,
+        "body" => n.body,
+        "url" => n.url,
+        "category" => n.category,
+        "thread_id" => n.thread_id,
+        "space_id" => n.space_id,
+        "message_id" => n.message_id,
+        "task_id" => n.task_id,
+        "inbox_item_id" => n.inbox_item_id,
+        "install_host" => n.install_host,
+        "author_name" => n.author_name,
+        "space_name" => n.space_name
+      }
+      |> Enum.reject(fn {_k, v} -> is_nil(v) or v == "" end)
+      |> Map.new(fn {k, v} -> {k, to_string(v)} end)
+
+    android =
+      case n.collapse_id do
+        id when is_binary(id) and id != "" ->
+          %{"priority" => "high", "collapse_key" => String.slice(id, 0, 64)}
+
+        _ ->
+          %{"priority" => "high"}
+      end
+
+    %{"data" => data, "android" => android}
   end
 
   @doc """
@@ -366,6 +429,7 @@ defmodule Platform.Push.Notification do
   defp presence(nil), do: nil
   defp presence(""), do: nil
   defp presence(value) when is_binary(value), do: value
+  defp presence(_), do: nil
 
   defp drop_nils(map), do: map |> Enum.reject(fn {_k, v} -> is_nil(v) end) |> Map.new()
 end

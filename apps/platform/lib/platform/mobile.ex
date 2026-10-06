@@ -1,8 +1,9 @@
 defmodule Platform.Mobile do
   @moduledoc """
-  The server half of the native iOS app (task 01a10882): app bearer sessions,
-  the app login codes that mint them, APNs device registration, and the
-  badge counts the app shows.
+  The server half of the native apps (iOS task 01a10882, Android task
+  01a10d8e): app bearer sessions, the app login codes that mint them, push
+  device registration (APNs for iOS in `apns_devices`, FCM for Android in
+  `fcm_devices`), and the badge counts the app shows.
 
   ## Login flow
 
@@ -19,9 +20,9 @@ defmodule Platform.Mobile do
 
   ## Secrets
 
-  Bearer tokens and login codes are stored only as SHA-256 hashes. APNs
-  device tokens are stored raw (APNs needs them) under `redact: true`. None of
-  the three is ever logged, put in telemetry, or echoed in an error. Every
+  Bearer tokens and login codes are stored only as SHA-256 hashes. APNs and
+  FCM device tokens are stored raw (the push services need them) under
+  `redact: true`. None of them is ever logged, put in telemetry, or echoed in an error. Every
   failure of `exchange_code/3` returns the same `{:error, :invalid_code}`, so
   the API is not an oracle for which check failed.
   """
@@ -35,6 +36,7 @@ defmodule Platform.Mobile do
   alias Platform.Mobile.ApnsDevice
   alias Platform.Mobile.AppLoginCode
   alias Platform.Mobile.AppSession
+  alias Platform.Mobile.FcmDevice
   alias Platform.Repo
   alias Platform.Tasks.Task
 
@@ -184,11 +186,12 @@ defmodule Platform.Mobile do
     :ok
   end
 
-  @doc "Revoke a session and delete every APNs device it registered."
+  @doc "Revoke a session and delete every APNs and FCM device it registered."
   @spec revoke_session(AppSession.t()) :: {:ok, AppSession.t()} | {:error, term()}
   def revoke_session(%AppSession{id: id} = session) do
     Multi.new()
     |> Multi.delete_all(:devices, from(d in ApnsDevice, where: d.app_session_id == ^id))
+    |> Multi.delete_all(:fcm_devices, from(d in FcmDevice, where: d.app_session_id == ^id))
     |> Multi.update(:session, Ecto.Changeset.change(session, revoked_at: DateTime.utc_now()))
     |> Repo.transaction()
     |> case do
@@ -198,15 +201,36 @@ defmodule Platform.Mobile do
   end
 
   @doc """
-  Register (or refresh) the APNs device token for the session's install.
+  Register (or refresh) the push device token for the session's install.
 
-  Upserts on `token`: a token already registered (to this user or another)
-  is reassigned to this user and session rather than duplicated. A previous
-  token for the same `(user, app_install_id)` is replaced.
+  `attrs["platform"]` picks the table: `"android"` registers an FCM token in
+  `fcm_devices` (with `package_name`); absent or `"ios"` registers an APNs
+  token in `apns_devices` (with `environment` and `bundle_id`). Absent MUST
+  stay iOS: the shipped iOS TestFlight build 1 sends no platform field. Any
+  other platform is refused with a `:platform` changeset error.
+
+  Both upsert on `token`: a token already registered (to this user or
+  another) is reassigned to this user and session rather than duplicated. A
+  previous token for the same `(user, app_install_id)` is replaced.
   """
   @spec register_device(AppSession.t(), map()) ::
-          {:ok, ApnsDevice.t()} | {:error, Ecto.Changeset.t()}
+          {:ok, ApnsDevice.t() | FcmDevice.t()} | {:error, Ecto.Changeset.t()}
   def register_device(%AppSession{} = session, attrs) when is_map(attrs) do
+    case Map.get(attrs, :platform, Map.get(attrs, "platform")) do
+      nil -> register_apns_device(session, attrs)
+      "ios" -> register_apns_device(session, attrs)
+      "android" -> register_fcm_device(session, attrs)
+      _other -> {:error, invalid_platform()}
+    end
+  end
+
+  defp invalid_platform do
+    {%{}, %{platform: :string}}
+    |> Ecto.Changeset.change()
+    |> Ecto.Changeset.add_error(:platform, "is not supported")
+  end
+
+  defp register_apns_device(%AppSession{} = session, attrs) do
     now = DateTime.utc_now()
 
     changeset =
@@ -259,14 +283,75 @@ defmodule Platform.Mobile do
     end
   end
 
-  @doc "Remove the user's device row for one app install. Idempotent."
+  # The FCM twin of the APNs branch above, same reassignment semantics:
+  # inside one transaction, the install's previous token is deleted, then the
+  # insert upserts on `token`, so a token held by another user's row moves to
+  # this user and session instead of being duplicated.
+  defp register_fcm_device(%AppSession{} = session, attrs) do
+    changeset =
+      FcmDevice.changeset(%FcmDevice{}, %{
+        user_id: session.user_id,
+        app_session_id: session.id,
+        app_install_id: fetch(attrs, :app_install_id) || session.app_install_id,
+        token: fetch(attrs, :token),
+        package_name: fetch(attrs, :package_name),
+        last_registered_at: DateTime.utc_now()
+      })
+
+    if changeset.valid? do
+      token = Ecto.Changeset.get_field(changeset, :token)
+      install_id = Ecto.Changeset.get_field(changeset, :app_install_id)
+
+      Repo.transaction(fn ->
+        # `log: false` on both statements: the registration token is a query
+        # parameter here, and Ecto's debug query log prints parameters.
+        from(d in FcmDevice,
+          where:
+            d.user_id == ^session.user_id and d.app_install_id == ^install_id and
+              d.token != ^token
+        )
+        |> Repo.delete_all(log: false)
+
+        case Repo.insert(changeset,
+               log: false,
+               on_conflict:
+                 {:replace,
+                  [
+                    :user_id,
+                    :app_session_id,
+                    :app_install_id,
+                    :package_name,
+                    :last_registered_at,
+                    :updated_at
+                  ]},
+               conflict_target: :token,
+               returning: true
+             ) do
+          {:ok, device} -> device
+          {:error, changeset} -> Repo.rollback(changeset)
+        end
+      end)
+    else
+      {:error, changeset}
+    end
+  end
+
+  @doc """
+  Remove the user's device rows (APNs and FCM) for one app install.
+  Idempotent.
+  """
   @spec unregister_device(User.t() | AppSession.t(), String.t()) :: :ok
   def unregister_device(%AppSession{user_id: user_id}, install_id),
     do: unregister_device(%User{id: user_id}, install_id)
 
   def unregister_device(%User{id: user_id}, install_id) when is_binary(install_id) do
-    from(d in ApnsDevice, where: d.user_id == ^user_id and d.app_install_id == ^install_id)
-    |> Repo.delete_all()
+    Repo.transaction(fn ->
+      from(d in ApnsDevice, where: d.user_id == ^user_id and d.app_install_id == ^install_id)
+      |> Repo.delete_all()
+
+      from(d in FcmDevice, where: d.user_id == ^user_id and d.app_install_id == ^install_id)
+      |> Repo.delete_all()
+    end)
 
     :ok
   end
@@ -275,6 +360,12 @@ defmodule Platform.Mobile do
   @spec list_devices(User.t()) :: [ApnsDevice.t()]
   def list_devices(%User{id: user_id}) do
     Repo.all(from(d in ApnsDevice, where: d.user_id == ^user_id, order_by: d.inserted_at))
+  end
+
+  @doc "The user's registered FCM (Android) devices."
+  @spec list_fcm_devices(User.t()) :: [FcmDevice.t()]
+  def list_fcm_devices(%User{id: user_id}) do
+    Repo.all(from(d in FcmDevice, where: d.user_id == ^user_id, order_by: d.inserted_at))
   end
 
   @doc """

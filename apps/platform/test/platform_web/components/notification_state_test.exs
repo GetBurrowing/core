@@ -43,7 +43,8 @@ defmodule PlatformWeb.Components.NotificationStateTest do
       push_permission: permission,
       user_agent: Keyword.get(opts, :user_agent),
       auto_denied: Keyword.get(opts, :auto_denied, false),
-      registration_failed: Keyword.get(opts, :registration_failed)
+      registration_failed: Keyword.get(opts, :registration_failed),
+      native_platform: Keyword.get(opts, :native_platform)
     }
 
     rendered_to_string(~H"""
@@ -52,6 +53,7 @@ defmodule PlatformWeb.Components.NotificationStateTest do
       user_agent={@user_agent}
       auto_denied={@auto_denied}
       registration_failed={@registration_failed}
+      native_platform={@native_platform}
     />
     """)
     |> LazyHTML.from_fragment()
@@ -647,6 +649,63 @@ defmodule PlatformWeb.Components.NotificationStateTest do
       refute classes =~ "error", "expected no error slot for #{label}"
       refute classes =~ ~r/#[0-9a-fA-F]{3,6}/, "raw hex found for #{label}"
       refute classes =~ "group-hover:", "hover-gated class found for #{label}"
+    end
+  end
+
+  # --- inside Burrow Android (task 01a10d8e stage 6) --------------------
+
+  # The Android WebView's user agent says Chrome, which is what put "click the
+  # icon at the left of the address bar" in front of an app with no address bar.
+  @android_webview_ua "Mozilla/5.0 (Linux; Android 15; sdk_gphone64_x86_64 Build/AE3A.240806.043; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/124.0.6367.219 Mobile Safari/537.36"
+
+  describe "inside Burrow Android" do
+    test "denied offers the re-ask: one row, one enable button, no browser steps" do
+      for auto_denied <- [false, true] do
+        doc =
+          row_doc("denied",
+            native_platform: "android",
+            user_agent: @android_webview_ua,
+            auto_denied: auto_denied
+          )
+
+        assert count(doc, ~s([data-role="notification-state"])) == 1
+        assert count(doc, ~s([phx-click="enable_notifications"])) == 1
+        assert count(doc, "button") == 1
+
+        row = LazyHTML.query(doc, ~s([data-role="notification-state"]))
+        assert LazyHTML.attribute(row, "data-permission") == ["denied"]
+        assert LazyHTML.attribute(row, "data-native") == ["android"]
+
+        text = row_text(doc)
+        assert text =~ "Notifications are off for Burrow on this phone."
+        refute text =~ "address bar"
+        refute text =~ "Chrome"
+        refute text =~ "browser"
+      end
+    end
+
+    test "prompt renders the same native row, never the browser one" do
+      doc = row_doc("prompt", native_platform: "android", user_agent: @android_webview_ua)
+
+      assert count(doc, ~s([data-role="notification-state"])) == 1
+      assert count(doc, ~s([phx-click="enable_notifications"])) == 1
+      refute row_text(doc) =~ "this browser"
+    end
+
+    test "granted, unknown and unsupported still render nothing" do
+      for state <- ["granted", "unknown", "unsupported"] do
+        doc = row_doc(state, native_platform: "android")
+        assert count(doc, ~s([data-role="notification-state"])) == 0, state
+      end
+    end
+
+    test "iOS and the browser keep the button-less denied row" do
+      for platform <- ["ios", nil] do
+        doc = row_doc("denied", native_platform: platform, user_agent: @chrome_ua)
+        assert count(doc, ~s([data-role="notification-state"])) == 1
+        assert count(doc, "button") == 0, inspect(platform)
+        assert row_text(doc) =~ "Your browser is blocking notifications from Suite."
+      end
     end
   end
 end

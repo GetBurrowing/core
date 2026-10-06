@@ -1,0 +1,11 @@
+node_modules/
+# Never commit Firebase config or signing material (README, "Firebase" and
+# "Signing"); they live outside the repo.
+google-services.json
+*.p12
+*.jks
+*.keystore
+keystore-password.txt
+*service-account*.json
+burrow-e7850-*.json
+keystore.properties

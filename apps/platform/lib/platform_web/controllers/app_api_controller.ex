@@ -87,7 +87,7 @@ defmodule PlatformWeb.AppApiController do
   # ── devices ──────────────────────────────────────────────────────────
 
   def register_device(conn, params) do
-    attrs = Map.take(params, ~w(token environment bundle_id app_install_id))
+    attrs = Map.take(params, ~w(token environment bundle_id app_install_id platform package_name))
 
     case Mobile.register_device(conn.assigns.app_session, attrs) do
       {:ok, _device} ->

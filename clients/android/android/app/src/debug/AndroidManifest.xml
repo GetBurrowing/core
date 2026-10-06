@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DEBUG BUILDS ONLY. Merged into the debug manifest and absent from the
+     release one (ReleaseManifestTest parses both). -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- The Android analogue of `xcrun simctl push`: replays an FCM v1
+             payload (base64 JSON extra "payload") through the same
+             NotificationPresenter as a real push. Protected by DUMP, which
+             only the adb shell holds, so no other app can post through it.
+             Usage (am broadcast with the string extra "payload"): README,
+             "Push". -->
+        <receiver
+            android:name="com.koboai.burrow.push.DebugPushReceiver"
+            android:exported="true"
+            android:permission="android.permission.DUMP">
+            <intent-filter>
+                <action android:name="com.koboai.burrow.debug.PUSH" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Puts the count widgets in a given state (DebugWidgetReceiver). -->
+        <receiver
+            android:name="com.koboai.burrow.push.DebugWidgetReceiver"
+            android:exported="true"
+            android:permission="android.permission.DUMP">
+            <intent-filter>
+                <action android:name="com.koboai.burrow.debug.WIDGET" />
+            </intent-filter>
+        </receiver>
+
+        <!-- The permission explainer, startable from the adb shell (DUMP
+             again) so each variant can be shown without a signed-in page:
+             am start -n com.koboai.burrow.debug/com.koboai.burrow.push.DebugExplainer
+             with the string extra com.koboai.burrow.push.VARIANT set to ask
+             or denied_permanently. -->
+        <activity-alias
+            android:name="com.koboai.burrow.push.DebugExplainer"
+            android:exported="true"
+            android:permission="android.permission.DUMP"
+            android:targetActivity="com.koboai.burrow.push.PermissionExplainerActivity" />
+    </application>
+</manifest>

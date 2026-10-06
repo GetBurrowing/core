@@ -1,0 +1,17 @@
+{
+  "name": "burrow-android",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Burrow Android shell: Capacitor around the Burrow web app (task 01a10d8e)",
+  "scripts": {
+    "sync": "cap sync android"
+  },
+  "dependencies": {
+    "@capacitor/android": "8.5.2",
+    "@capacitor/core": "8.5.2"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.5.2",
+    "typescript": "^5.6.0"
+  }
+}

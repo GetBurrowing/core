@@ -63,6 +63,13 @@ defmodule PlatformWeb.Components.NotificationState do
         "assets/js/hooks/push_subscribe.js). Rides ALONGSIDE :push_permission; it " <>
         "is not a sixth permission value."
 
+  attr :native_platform, :string,
+    default: nil,
+    doc:
+      "the native shell the PushSubscribe hook reported (\"android\" | \"ios\"), or " <>
+        "nil in a browser. Rides ALONGSIDE :push_permission. Only \"android\" changes " <>
+        "anything: see `notification_state_row/1`'s \"Inside Burrow Android\" section."
+
   attr :registration_failed, :atom,
     default: nil,
     values: [nil, :no_participant, :subscribe_failed],
@@ -93,6 +100,22 @@ defmodule PlatformWeb.Components.NotificationState do
       ways to get here need opposite instructions. Neither has a button, for a
       close cousin of the reason above: the permission is already granted, so
       nothing this row could offer re-runs anything usefully.
+
+  ## Inside Burrow Android (task 01a10d8e)
+
+  `@native_platform == "android"` replaces BOTH the `prompt` and the `denied`
+  rows with one row that carries the button. The browser premise behind the
+  button-less `denied` row is false there: "denied" means the person tapped
+  "Not now" on the app's explainer or denied Android's prompt, and the app can
+  still ask. `enable_notifications` reaches the app's `enablePush`, which shows
+  the explainer again; after one denial, Android's own prompt; and once Android
+  will no longer prompt, the explainer's "Notifications are off for Burrow"
+  variant, whose Open settings goes to Burrow's Android notification settings.
+  So the button always does something, and the copy names no address bar the
+  app does not have. Nothing re-asks on its own: the app reports "denied"
+  after the first ask, so the hook never auto-calls `enablePush` again; this
+  row's click is the only re-ask. iOS (`"ios"`) renders exactly as a browser
+  did before.
 
   ## Why the failure carries a reason and not a boolean
 
@@ -234,7 +257,32 @@ defmodule PlatformWeb.Components.NotificationState do
 
     ~H"""
     <div
-      :if={@push_permission == "prompt"}
+      :if={@native_platform == "android" and @push_permission in ["prompt", "denied"]}
+      class="mb-6 flex items-start gap-3 rounded-box border border-edge bg-base-200 p-3"
+      role="status"
+      data-role="notification-state"
+      data-permission={@push_permission}
+      data-native="android"
+    >
+      <.icon name="hero-bell-slash" class="mt-0.5 size-4 flex-shrink-0 text-base-content/70" />
+      <div class="min-w-0 flex-1">
+        <p class="text-sm">Notifications are off for Burrow on this phone.</p>
+        <p class="mt-1 text-xs text-base-content/60">
+          Turn them on to hear about mentions and approvals when Burrow is closed.
+        </p>
+      </div>
+      <button
+        type="button"
+        phx-click="enable_notifications"
+        class="btn btn-primary btn-sm flex-shrink-0"
+        data-role="notification-enable"
+      >
+        Turn on notifications
+      </button>
+    </div>
+
+    <div
+      :if={@native_platform != "android" and @push_permission == "prompt"}
       class="mb-6 flex items-start gap-3 rounded-box border border-edge bg-base-200 p-3"
       role="status"
       data-role="notification-state"
@@ -258,7 +306,7 @@ defmodule PlatformWeb.Components.NotificationState do
     </div>
 
     <div
-      :if={@push_permission == "denied"}
+      :if={@native_platform != "android" and @push_permission == "denied"}
       class="mb-6 flex items-start gap-3 rounded-box border border-edge border-l-[3px] border-l-warning bg-base-200 p-3"
       role="status"
       data-role="notification-state"

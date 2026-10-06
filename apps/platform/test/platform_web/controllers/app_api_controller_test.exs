@@ -18,6 +18,7 @@ defmodule PlatformWeb.AppApiControllerTest do
   alias Platform.Repo
 
   @device_token String.duplicate("d1ce", 16)
+  @fcm_token "fcmCtrl00001:APA91b" <> String.duplicate("Ctr1_T0k-", 12)
 
   # Every bearer-authenticated route, with a request that would otherwise be
   # well-formed. `POST /session` is deliberately absent: it is the one
@@ -302,6 +303,66 @@ defmodule PlatformWeb.AppApiControllerTest do
       body = response(conn, 422)
       assert %{"error" => "invalid_device", "fields" => ["environment"]} = Jason.decode!(body)
       refute body =~ @device_token
+    end
+  end
+
+  describe "android devices (task 01a10d8e)" do
+    test "platform=android registers an FCM device; unregister removes it",
+         %{conn: conn, token: token, user: user} do
+      conn1 =
+        conn
+        |> bearer(token)
+        |> post("/api/app/devices", %{
+          "platform" => "android",
+          "token" => @fcm_token,
+          "package_name" => "com.koboai.burrow",
+          "app_install_id" => "install-1"
+        })
+
+      assert json_response(conn1, 200) == %{"registered" => true}
+      refute response(conn1, 200) =~ @fcm_token
+      assert [%{token: @fcm_token}] = Mobile.list_fcm_devices(user)
+      assert Mobile.list_devices(user) == []
+
+      conn2 = conn |> bearer(token) |> delete("/api/app/devices/install-1")
+      assert response(conn2, 204)
+      assert Mobile.list_fcm_devices(user) == []
+    end
+
+    test "a refused android device answers 422 with field names only, never the token",
+         %{conn: conn, token: token} do
+      conn =
+        conn
+        |> bearer(token)
+        |> post("/api/app/devices", %{
+          "platform" => "android",
+          "token" => @fcm_token,
+          "package_name" => "com.kobo-ai.burrow",
+          "app_install_id" => "install-1"
+        })
+
+      body = response(conn, 422)
+      assert %{"error" => "invalid_device", "fields" => ["package_name"]} = Jason.decode!(body)
+      refute body =~ @fcm_token
+    end
+
+    test "a malformed android token answers 422 without echoing it",
+         %{conn: conn, token: token} do
+      bad = "fcm token with spaces " <> String.duplicate("z", 30)
+
+      conn =
+        conn
+        |> bearer(token)
+        |> post("/api/app/devices", %{
+          "platform" => "android",
+          "token" => bad,
+          "package_name" => "com.koboai.burrow",
+          "app_install_id" => "install-1"
+        })
+
+      body = response(conn, 422)
+      assert %{"fields" => ["token"]} = Jason.decode!(body)
+      refute body =~ "spaces"
     end
   end
 

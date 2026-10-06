@@ -14,9 +14,11 @@ defmodule Platform.MobileTest do
   alias Platform.Mobile.ApnsDevice
   alias Platform.Mobile.AppLoginCode
   alias Platform.Mobile.AppSession
+  alias Platform.Mobile.FcmDevice
   alias Platform.Tasks.Task
 
   @device_token String.duplicate("5e17", 16)
+  @fcm_token "fcmInstance01:APA91b" <> String.duplicate("Fcm_T0ken-", 12)
 
   defp pkce do
     verifier = :crypto.strong_rand_bytes(32) |> Base.url_encode64(padding: false)
@@ -313,6 +315,182 @@ defmodule Platform.MobileTest do
       {:ok, revoked} = Mobile.revoke_session(session)
       assert revoked.revoked_at
       assert Mobile.list_devices(user) == []
+    end
+  end
+
+  describe "android (FCM) devices" do
+    defp fcm_attrs(overrides \\ %{}) do
+      Map.merge(
+        %{
+          "platform" => "android",
+          "token" => @fcm_token,
+          "package_name" => "com.koboai.burrow",
+          "app_install_id" => "install-1"
+        },
+        overrides
+      )
+    end
+
+    test "platform android registers an fcm_devices row, not an apns_devices row" do
+      {user, %{session: session}} = signed_in()
+
+      assert {:ok, %FcmDevice{} = device} = Mobile.register_device(session, fcm_attrs())
+      assert device.token == @fcm_token
+      assert device.package_name == "com.koboai.burrow"
+      assert device.app_session_id == session.id
+
+      assert [%FcmDevice{}] = Mobile.list_fcm_devices(user)
+      assert Mobile.list_devices(user) == []
+    end
+
+    test "inspect of an FCM device never shows the token" do
+      refute inspect(%FcmDevice{token: "tok-SENTINEL"}) =~ "tok-SENTINEL"
+
+      refute inspect(FcmDevice.changeset(%FcmDevice{}, %{token: "tok-SENTINEL"})) =~
+               "tok-SENTINEL"
+    end
+
+    test "re-registering upserts on token and never duplicates it" do
+      {user, %{session: session}} = signed_in()
+
+      {:ok, d1} = Mobile.register_device(session, fcm_attrs())
+      {:ok, d2} = Mobile.register_device(session, fcm_attrs())
+
+      assert d1.id == d2.id
+      assert [_] = Mobile.list_fcm_devices(user)
+    end
+
+    test "a token that moves to another user is reassigned, not duplicated" do
+      {user_a, %{session: session_a}} = signed_in()
+      {user_b, %{session: session_b}} = signed_in()
+
+      {:ok, _} = Mobile.register_device(session_a, fcm_attrs())
+      {:ok, _} = Mobile.register_device(session_b, fcm_attrs())
+
+      assert Mobile.list_fcm_devices(user_a) == []
+      assert [%FcmDevice{app_session_id: sid}] = Mobile.list_fcm_devices(user_b)
+      assert sid == session_b.id
+      assert Repo.aggregate(FcmDevice, :count) == 1
+    end
+
+    test "a new token for the same install replaces the old one" do
+      {user, %{session: session}} = signed_in()
+      {:ok, _} = Mobile.register_device(session, fcm_attrs())
+
+      new_token = "fcmInstance02:APA91b" <> String.duplicate("N3w", 30)
+      {:ok, _} = Mobile.register_device(session, fcm_attrs(%{"token" => new_token}))
+
+      assert [%FcmDevice{token: ^new_token}] = Mobile.list_fcm_devices(user)
+    end
+
+    test "the package name is required and must be allowed" do
+      {_user, %{session: session}} = signed_in()
+
+      for bad <- [nil, "com.kobo-ai.burrow", "com.example.evil", "com.koboai.burrow.debug"] do
+        assert {:error, %Ecto.Changeset{} = cs} =
+                 Mobile.register_device(session, fcm_attrs(%{"package_name" => bad}))
+
+        assert Keyword.has_key?(cs.errors, :package_name), "#{inspect(bad)} must be refused"
+      end
+    end
+
+    test "allowed_packages config admits a debug applicationId" do
+      saved = Application.get_env(:platform, :fcm)
+
+      on_exit(fn ->
+        if saved,
+          do: Application.put_env(:platform, :fcm, saved),
+          else: Application.delete_env(:platform, :fcm)
+      end)
+
+      Application.put_env(:platform, :fcm, allowed_packages: ["com.koboai.burrow.debug"])
+      {_user, %{session: session}} = signed_in()
+
+      assert {:ok, %FcmDevice{package_name: "com.koboai.burrow.debug"}} =
+               Mobile.register_device(
+                 session,
+                 fcm_attrs(%{"package_name" => "com.koboai.burrow.debug"})
+               )
+    end
+
+    test "a malformed token is refused" do
+      {_user, %{session: session}} = signed_in()
+
+      for bad <- ["short", "has spaces in it which are not allowed here", nil] do
+        assert {:error, %Ecto.Changeset{}} =
+                 Mobile.register_device(session, fcm_attrs(%{"token" => bad}))
+      end
+    end
+
+    test "unregister deletes the install's FCM row too" do
+      {user, %{session: session}} = signed_in()
+      {:ok, _} = Mobile.register_device(session, fcm_attrs())
+
+      :ok = Mobile.unregister_device(user, "install-1")
+      assert Mobile.list_fcm_devices(user) == []
+    end
+
+    test "revoke_session deletes the session's FCM rows" do
+      {user, %{session: session}} = signed_in()
+      {:ok, _} = Mobile.register_device(session, fcm_attrs())
+
+      {:ok, revoked} = Mobile.revoke_session(session)
+      assert revoked.revoked_at
+      assert Mobile.list_fcm_devices(user) == []
+    end
+
+    test "unregister and revoke leave another user's FCM row alone" do
+      {_user_a, %{session: session_a}} = signed_in()
+      {user_b, %{session: session_b}} = signed_in()
+      other = "fcmInstance03:APA91b" <> String.duplicate("B0b", 30)
+      {:ok, _} = Mobile.register_device(session_b, fcm_attrs(%{"token" => other}))
+      {:ok, _} = Mobile.register_device(session_a, fcm_attrs())
+
+      {:ok, _} = Mobile.revoke_session(session_a)
+      assert [%FcmDevice{token: ^other}] = Mobile.list_fcm_devices(user_b)
+    end
+
+    test "an iOS registration with NO platform field is unchanged (TestFlight build 1)" do
+      {user, %{session: session}} = signed_in()
+
+      assert {:ok, %ApnsDevice{}} = Mobile.register_device(session, device_attrs())
+      assert [%ApnsDevice{token: @device_token}] = Mobile.list_devices(user)
+      assert Mobile.list_fcm_devices(user) == []
+    end
+
+    test "platform ios takes the APNs branch" do
+      {user, %{session: session}} = signed_in()
+
+      assert {:ok, %ApnsDevice{}} =
+               Mobile.register_device(session, device_attrs(%{"platform" => "ios"}))
+
+      assert [_] = Mobile.list_devices(user)
+    end
+
+    test "an unknown platform is refused" do
+      {_user, %{session: session}} = signed_in()
+
+      assert {:error, %Ecto.Changeset{} = cs} =
+               Mobile.register_device(session, fcm_attrs(%{"platform" => "windows"}))
+
+      assert Keyword.has_key?(cs.errors, :platform)
+    end
+
+    test "registering logs neither the FCM token nor its query parameters" do
+      previous = Logger.level()
+      Logger.configure(level: :debug)
+      on_exit(fn -> Logger.configure(level: previous) end)
+
+      {user, %{session: session}} = signed_in()
+
+      log =
+        capture_log([level: :debug], fn ->
+          {:ok, _} = Mobile.register_device(session, fcm_attrs())
+          {:ok, _} = Mobile.register_device(session, fcm_attrs())
+          :ok = Mobile.unregister_device(user, "install-1")
+        end)
+
+      refute log =~ @fcm_token
     end
   end
 

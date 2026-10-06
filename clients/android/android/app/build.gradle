@@ -1,0 +1,161 @@
+apply plugin: 'com.android.application'
+apply plugin: 'org.jetbrains.kotlin.android'
+apply plugin: 'org.jetbrains.kotlin.plugin.compose'
+apply plugin: 'org.jlleitschuh.gradle.ktlint'
+
+// The merged manifests ReleaseManifestTest reads: the debug-only push
+// receiver must be in the debug one and absent from the release one.
+def releaseManifest = layout.buildDirectory.file("intermediates/merged_manifest/release/processReleaseMainManifest/AndroidManifest.xml")
+def debugManifest = layout.buildDirectory.file("intermediates/merged_manifest/debug/processDebugMainManifest/AndroidManifest.xml")
+
+// Release signing (scripts/release.sh, README "Release"). The UPLOAD key
+// only, read from two PATHS in the environment, never from a value in a
+// file in the repo or on a command line. Without both, a release build is
+// unsigned (or debug-signed for --local) and release.sh refuses to upload.
+def uploadKeystore = System.getenv("BURROW_UPLOAD_KEYSTORE")
+def uploadPasswordFile = System.getenv("BURROW_UPLOAD_PASSWORD_FILE")
+def signWithUploadKey = uploadKeystore && uploadPasswordFile
+// --local: a debug-signed release bundle, for an install test without secrets.
+def localDebugSigned = project.findProperty("burrowLocalDebugSigned") == "true"
+
+android {
+    namespace = "com.koboai.burrow"
+    compileSdk = rootProject.ext.compileSdkVersion
+    defaultConfig {
+        // Permanent once uploaded to Play. Android package names cannot
+        // contain a hyphen, so this is NOT iOS's com.kobo-ai.burrow.
+        applicationId "com.koboai.burrow"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        // release.sh passes the next value of the counter on moon; 1 for dev builds.
+        versionCode((project.findProperty("burrowVersionCode") ?: "1") as Integer)
+        versionName "1.0"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+    signingConfigs {
+        if (signWithUploadKey) {
+            upload {
+                storeFile file(uploadKeystore)
+                storeType "PKCS12"
+                // The file's one line; only a trailing newline is dropped.
+                def password = new File(uploadPasswordFile).getText("UTF-8").replaceAll(/\r?\n\z/, "")
+                storePassword password
+                keyAlias "upload"
+                keyPassword password
+            }
+        }
+    }
+    buildTypes {
+        debug {
+            // Installs beside a release build; release is exactly com.koboai.burrow.
+            applicationIdSuffix ".debug"
+        }
+        release {
+            if (signWithUploadKey) {
+                signingConfig signingConfigs.upload
+            } else if (localDebugSigned) {
+                signingConfig signingConfigs.debug
+            }
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+    buildFeatures {
+        buildConfig true
+        // Jetpack Glance widgets are written in Compose.
+        compose true
+    }
+    kotlinOptions {
+        jvmTarget = '21'
+    }
+    lint {
+        // Every warning fails the build (security and correctness included);
+        // app/lint.xml lowers only version-currency and cosmetic checks.
+        warningsAsErrors true
+        abortOnError true
+        checkDependencies false
+        lintConfig file('lint.xml')
+    }
+    testOptions {
+        unitTests.returnDefaultValues = false
+        // Robolectric (notification, receiver and plugin tests) reads the
+        // merged resources.
+        unitTests.includeAndroidResources = true
+        unitTests.all {
+            // ReleaseManifestTest parses the merged RELEASE manifest.
+            systemProperty "burrow.releaseManifest", releaseManifest.get().asFile.absolutePath
+            systemProperty "burrow.debugManifest", debugManifest.get().asFile.absolutePath
+        }
+    }
+}
+
+ktlint {
+    android = true
+    ignoreFailures = false
+}
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-ktx:$androidxCoreVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation "androidx.activity:activity-ktx:$androidxActivityVersion"
+    implementation "androidx.browser:browser:$androidxBrowserVersion"
+    implementation "androidx.webkit:webkit:$androidxWebkitVersion"
+    // FCM. Only the token and onMessageReceived are used: every push is
+    // data-only and the app builds the notification itself.
+    implementation platform("com.google.firebase:firebase-bom:$firebaseBomVersion")
+    implementation "com.google.firebase:firebase-messaging"
+    // Home-screen count widgets (stage 4).
+    implementation "androidx.glance:glance-appwidget:$glanceVersion"
+    implementation "androidx.work:work-runtime-ktx:$workVersion"
+    implementation "androidx.datastore:datastore-preferences:$datastoreVersion"
+    implementation project(':capacitor-android')
+    // MessageHandler's constructor names Cordova's PluginManager
+    // (NativeBridgeExposure); Capacitor already ships it at runtime.
+    compileOnly "org.apache.cordova:framework:$cordovaAndroidVersion"
+    testImplementation "junit:junit:$junitVersion"
+    // The real org.json on the JVM: android.jar's copy is a stub in unit tests.
+    testImplementation "org.json:json:$orgJsonVersion"
+    testImplementation "org.robolectric:robolectric:$robolectricVersion"
+    testImplementation "com.squareup.okhttp3:mockwebserver:$okhttpVersion"
+    testImplementation "com.squareup.okhttp3:okhttp-tls:$okhttpVersion"
+    testImplementation "androidx.glance:glance-appwidget-testing:$glanceVersion"
+    testImplementation "androidx.work:work-testing:$workVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'
+
+tasks.matching { it.name == "testDebugUnitTest" || it.name == "testReleaseUnitTest" }.configureEach {
+    dependsOn "processReleaseMainManifest", "processDebugMainManifest"
+}
+
+// Firebase config is never committed (README, "Firebase"). The plugin is
+// applied ONLY when app/google-services.json exists; without it there is no
+// default FirebaseApp, and a debug build registers with DebugTokenSource.
+// The file lists only com.koboai.burrow, so the debug variant
+// (com.koboai.burrow.debug) skips the plugin's task unless the file names it
+// too: the debug build then has no Firebase config and uses DebugTokenSource.
+def servicesJSON = file('google-services.json')
+if (servicesJSON.exists()) {
+    apply plugin: 'com.google.gms.google-services'
+    def packages = new groovy.json.JsonSlurper().parse(servicesJSON).client*.client_info*.android_client_info*.package_name
+    if (!packages.contains("com.koboai.burrow.debug")) {
+        tasks.matching { it.name == "processDebugGoogleServices" }.configureEach { enabled = false }
+    }
+}

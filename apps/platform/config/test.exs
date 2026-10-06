@@ -319,6 +319,12 @@ config :platform, :apns_req_options, plug: {Req.Test, Platform.Push.APNs}
 # real in tests: same number of retries, zero delay.
 config :platform, :apns_retry_backoff_ms, [0, 0, 0]
 
+# FCM never reaches Google in tests (task 01a10d8e stage 1): both the OAuth
+# token exchange and `messages:send` go to the `Req.Test` stub named
+# `Platform.Push.FCM`, and the transport-error retry schedule does not sleep.
+config :platform, :fcm_req_options, plug: {Req.Test, Platform.Push.FCM}
+config :platform, :fcm_retry_backoff_ms, [0, 0, 0]
+
 # Email send path (task 01a0cf21 stage 2): tests never reach SMTP. The
 # recording adapter sends `{:mail_test_adapter, email, config}` to the calling
 # process so a test can assert WHICH relay and username a send used;

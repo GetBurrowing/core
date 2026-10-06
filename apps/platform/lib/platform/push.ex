@@ -3,17 +3,19 @@ defmodule Platform.Push do
   Web Push notification context.
 
   Manages push subscriptions and sends notifications via the Web Push protocol
-  and, for users with the native app, via APNs (`Platform.Push.APNs`).
+  and, for users with the native apps, via APNs (`Platform.Push.APNs`, iOS)
+  and FCM (`Platform.Push.FCM`, Android).
 
-  ## One notification model, two transports (task 01a10882)
+  ## One notification model, three transports (tasks 01a10882, 01a10d8e)
 
   `send_to_user/2` and `send_notification/2` accept a legacy
   `%{title, body, url}` map or a `%Platform.Push.Notification{}`. Either way
   they normalise to the struct ONCE, run the archived-user check and the
   external redaction ONCE on it, and only then split: web push encodes
-  `Notification.to_web_payload/1`, APNs encodes `Notification.to_apns_payload/1`.
-  Redaction never runs per transport, so the two cannot disagree about what a
-  notification says. Only USER recipients get APNs; agent rows have no app.
+  `Notification.to_web_payload/1`, APNs encodes `Notification.to_apns_payload/1`,
+  FCM encodes `Notification.to_fcm_payload/1`. Redaction never runs per
+  transport, so they cannot disagree about what a notification says. Only
+  USER recipients get APNs or FCM; agent rows have no app.
 
   ## The VAPID resolution invariant
 
@@ -62,6 +64,7 @@ defmodule Platform.Push do
   alias Platform.Accounts.User
   alias Platform.Chat.Participant
   alias Platform.Push.APNs
+  alias Platform.Push.FCM
   alias Platform.Push.Notification
   alias Platform.Push.Subscription
   alias Platform.Repo
@@ -209,8 +212,12 @@ defmodule Platform.Push do
       # Native push only for a USER-typed recipient. An agent row's
       # `participant_id` is an agent id and has no app devices.
       case apns_user_id(participant_id) do
-        nil -> :ok
-        user_id -> deliver_apns(user_id, notification)
+        nil ->
+          :ok
+
+        user_id ->
+          deliver_apns(user_id, notification)
+          deliver_fcm(user_id, notification)
       end
 
       :ok
@@ -241,6 +248,17 @@ defmodule Platform.Push do
   rescue
     e ->
       Logger.warning("[Push] APNs delivery raised: #{inspect(e.__struct__)}")
+      :ok
+  end
+
+  # FCM is the Android twin of `deliver_apns/2`: the same redacted struct,
+  # and its failure never takes web push or APNs down with it.
+  defp deliver_fcm(user_id, %Notification{} = notification) do
+    FCM.deliver_to_user(user_id, notification)
+    :ok
+  rescue
+    e ->
+      Logger.warning("[Push] FCM delivery raised: #{inspect(e.__struct__)}")
       :ok
   end
 
@@ -349,6 +367,7 @@ defmodule Platform.Push do
 
       send_web_push(subscriptions, notification)
       deliver_apns(user_id, notification)
+      deliver_fcm(user_id, notification)
 
       :ok
     end

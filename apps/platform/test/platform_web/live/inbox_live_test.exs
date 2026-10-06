@@ -1265,6 +1265,37 @@ defmodule PlatformWeb.InboxLiveTest do
       assert render(lv) =~ "Your browser is blocking notifications from Suite."
     end
 
+    # Task 01a10d8e stage 6: the wiring the component tests cannot see. The
+    # hook names the native shell beside the state, the shell keeps it, and
+    # `/inbox` hands it to the row, whose button reaches the same handler.
+    test "inside Burrow Android, denied offers the re-ask and it reaches the hook", %{lv: lv} do
+      render_hook(lv, "push_permission_state", %{
+        "state" => "denied",
+        "native_platform" => "android"
+      })
+
+      assert has_element?(
+               lv,
+               ~s([data-role="notification-state"][data-permission="denied"][data-native="android"])
+             )
+
+      refute render(lv) =~ "address bar"
+
+      lv |> element(~s([data-role="notification-enable"])) |> render_click()
+      assert_push_event(lv, "request_push_permission", %{})
+
+      # A browser report afterwards (no shell named) goes back to the browser row.
+      render_hook(lv, "push_permission_state", %{"state" => "denied"})
+      refute has_element?(lv, ~s([data-role="notification-enable"]))
+    end
+
+    test "an unknown native_platform is treated as a browser", %{lv: lv} do
+      render_hook(lv, "push_permission_state", %{"state" => "denied", "native_platform" => "x"})
+
+      assert has_element?(lv, ~s([data-role="notification-state"][data-permission="denied"]))
+      refute has_element?(lv, ~s([data-role="notification-enable"]))
+    end
+
     test "granted and unsupported leave the page unchanged", %{lv: lv} do
       for state <- ["granted", "unsupported"] do
         render_hook(lv, "push_permission_state", %{"state" => state})

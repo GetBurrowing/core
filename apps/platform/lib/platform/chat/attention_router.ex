@@ -656,7 +656,15 @@ defmodule Platform.Chat.AttentionRouter do
       Task.start(fn ->
         attachments = if blank?(message.content), do: message_attachments(message.id), else: []
 
-        notification = push_notification(sender_name, message, reason, space, attachments)
+        notification =
+          push_notification(
+            sender_name,
+            message,
+            reason,
+            space,
+            attachments,
+            push_conversation_name(space, recipient)
+          )
 
         deliver_push(recipient, notification)
       end)
@@ -679,13 +687,21 @@ defmodule Platform.Chat.AttentionRouter do
   Pure (no queries), so tests can assert the exact notification without the
   push `Task`, which short-circuits under `:test`.
   """
-  @spec push_notification(String.t(), Message.t(), atom(), Space.t(), [map()]) ::
+  @spec push_notification(String.t(), Message.t(), atom(), Space.t(), [map()], String.t() | nil) ::
           Platform.Push.Notification.t()
-  def push_notification(sender_name, %Message{} = message, reason, %Space{} = space, attachments) do
+  def push_notification(
+        sender_name,
+        %Message{} = message,
+        reason,
+        %Space{} = space,
+        attachments,
+        conversation_name \\ nil
+      ) do
     Platform.Push.Notification.chat(%{
       reason: reason,
       author: sender_name,
       space_name: space.name,
+      conversation_name: conversation_name,
       space_path: Platform.Chat.space_path_segment(space),
       space_id: space.id,
       message_id: message.id,
@@ -693,6 +709,35 @@ defmodule Platform.Chat.AttentionRouter do
       attachments: attachments
     })
   end
+
+  @doc """
+  The recipient's label for `space`, carried as the notification's
+  `space_name` (Android's MessagingStyle conversation title, task 01a10d8e).
+
+  A DM or an unnamed group has a NULL `chat_spaces.name`, so `space.name`
+  alone left the conversation untitled. Those take the label the web chat
+  sidebar shows the recipient (`Chat.display_name_for_space/3`, the same
+  helper `GET /api/app/spaces` uses). A named space, or a recipient that is
+  not a resolved user participant, keeps `space.name`. Queries participants
+  only for DMs and groups.
+  """
+  @spec push_conversation_name(Space.t(), Participant.t() | String.t() | nil) :: String.t() | nil
+  def push_conversation_name(
+        %Space{kind: kind} = space,
+        %Participant{participant_type: "user", participant_id: user_id}
+      )
+      when kind in ["dm", "group"] and is_binary(user_id) do
+    if kind == "group" and is_binary(space.name) and space.name != "" do
+      space.name
+    else
+      Chat.display_name_for_space(space, Chat.list_participants(space.id), user_id)
+    end
+  rescue
+    # A naming failure must never cost the push itself.
+    _ -> space.name
+  end
+
+  def push_conversation_name(%Space{name: name}, _recipient), do: name
 
   defp blank?(content) when is_binary(content), do: String.trim(content) == ""
   defp blank?(_), do: true

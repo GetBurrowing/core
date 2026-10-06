@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Burrow</string>
+    <string name="title_activity_main">Burrow</string>
+
+    <!-- Install picker: the iOS copy (canvas 01a10887), verbatim. -->
+    <string name="picker_title">Choose a Burrow install</string>
+    <string name="picker_subtitle">Each install has its own spaces and sign-in.</string>
+    <string name="picker_add">Add an install</string>
+    <string name="picker_continue">Continue</string>
+    <string name="add_title">Add an install</string>
+    <string name="add_subtitle">Enter the address your team uses for Burrow.</string>
+    <string name="add_address_label">Address</string>
+    <string name="add_address_hint">suite.example.com</string>
+    <string name="add_check">Check and add</string>
+    <string name="add_checking">Checking</string>
+    <string name="add_not_burrow">Couldn\'t find Burrow at this address. Check the spelling, or ask your admin for the link.</string>
+    <string name="row_unreachable">Can\'t reach. Tap to retry.</string>
+    <string name="cant_reach">Can\'t reach %1$s</string>
+    <string name="try_again">Try again</string>
+    <string name="choose_another">Choose another install</string>
+    <string name="remove">Remove</string>
+    <string name="remove_confirm">Remove %1$s from this phone?</string>
+    <string name="cancel">Cancel</string>
+    <string name="selected">Selected</string>
+    <string name="sign_in_failed">Sign-in didn\'t finish. Try again.</string>
+
+    <!-- Notifications (canvas 01a10d91, "Notifications" and "Channels"), verbatim. -->
+    <string name="channel_mentions">Mentions</string>
+    <string name="channel_mentions_description">When someone @mentions you in a space</string>
+    <string name="channel_approvals">Approvals</string>
+    <string name="channel_approvals_description">Plans and work waiting for your review</string>
+    <string name="action_reply">Reply</string>
+    <string name="action_open">Open</string>
+    <string name="reply_hint">Message %1$s</string>
+    <string name="reply_you_name">You</string>
+    <string name="reply_you">You: %1$s</string>
+    <string name="reply_failed">Couldn\'t send. Tap to open.</string>
+    <string name="someone">Someone</string>
+
+    <!-- Permission explainer (canvas 01a10d91, wireframe and States), verbatim. -->
+    <string name="explainer_title">Know when someone needs you</string>
+    <string name="explainer_body">Burrow can notify you when you\'re mentioned or when an approval is waiting on you. You choose which kinds in Android settings.</string>
+    <string name="explainer_denied_body">Notifications are off for Burrow. To get mentions and approvals, turn them on in Android settings.</string>
+    <string name="explainer_turn_on">Turn on notifications</string>
+    <string name="explainer_open_settings">Open settings</string>
+    <string name="explainer_not_now">Not now</string>
+
+    <!-- Share target (canvas 01a10d91, "Share target"; iOS canvas 01a10887). -->
+    <string name="share_title">Share to Burrow</string>
+    <string name="share_send">Send</string>
+    <string name="share_close">Close</string>
+    <string name="share_space">Space</string>
+    <string name="share_choose_space">Choose a space</string>
+    <string name="share_message_hint">Add a message</string>
+    <string name="share_sent_to">Sent to %1$s</string>
+    <string name="share_discard_title">Discard this share?</string>
+    <string name="share_discard">Discard</string>
+    <string name="share_keep_editing">Keep editing</string>
+    <string name="share_open_burrow">Open Burrow</string>
+
+    <!-- Widgets (iOS SlabState.swift / SuiteWidgets copy). -->
+    <string name="widget_approvals_title">My approvals</string>
+    <string name="widget_tasks_title">My tasks</string>
+    <string name="widget_approvals_description">Approvals waiting on you</string>
+    <string name="widget_tasks_description">Your open tasks, beside your approvals</string>
+</resources>

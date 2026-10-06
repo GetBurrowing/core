@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Dark values of the slots in values/colors.xml (Burrow palette, dark). -->
+<resources>
+    <color name="burrow_primary">#FFF47721</color>        <!-- orange -->
+    <color name="burrow_on_primary">#FF202124</color>
+    <color name="burrow_surface">#FF191B20</color>        <!-- charcoal base-100 -->
+    <color name="burrow_surface_muted">#FF111214</color>  <!-- base-200 / ground -->
+    <color name="burrow_on_surface">#FFEEEFF1</color>
+    <color name="burrow_muted">#FFA9ABB2</color>
+    <color name="burrow_border">#FF383B42</color>
+    <color name="burrow_error">#FFF1383E</color>          <!-- oklch(63% 0.22 25) -->
+    <color name="burrow_info">#FF22D3EE</color>           <!-- teal-cyan: live slab only -->
+    <color name="burrow_on_info">#FF202124</color>
+</resources>

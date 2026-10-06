@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Colour slots, named by ROLE, never by hue. Values are the Burrow palette
+     (project page design/burrow-redesign.md, decided 2026-10-03; light step
+     2026-10-05), the tokens the web theme is moving to. They are copied, not
+     picked; the slot -> token table is in clients/android/README.md.
+     Dark values: values-night/colors.xml.
+
+     burrow_primary is orange: primary actions only. burrow_info is the
+     teal-cyan and is RESERVED for the live widget slab (stage 4): cyan
+     means live, so no button is ever cyan. Only widgets/SlabColors.kt may
+     name it (WidgetColourGuardTest). -->
+<resources>
+    <color name="burrow_primary">#FFAD4B07</color>        <!-- orange (light) -->
+    <color name="burrow_on_primary">#FFFBFAF9</color>
+    <color name="burrow_surface">#FFFBFAF9</color>        <!-- base-100 / surface -->
+    <color name="burrow_surface_muted">#FFF6F4F1</color>  <!-- base-200 / ground -->
+    <color name="burrow_on_surface">#FF221F1B</color>     <!-- base-content / ink -->
+    <color name="burrow_muted">#FF635B53</color>          <!-- secondary text -->
+    <color name="burrow_border">#FFD9D3C9</color>         <!-- edge -->
+    <color name="burrow_error">#FFF1383E</color>          <!-- oklch(63% 0.22 25), both themes -->
+    <color name="burrow_info">#FF0E7382</color>           <!-- info: live slab only -->
+    <color name="burrow_on_info">#FFFBFAF9</color>
+</resources>

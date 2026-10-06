@@ -39,6 +39,24 @@ export function nativePushPlugin(win = globalThis.window) {
   return cap.Plugins?.SuiteNative || null;
 }
 
+// Which native shell is running ("android" / "ios"), or null. It rides
+// ALONGSIDE the state on every native `push_permission_state` (like
+// `auto_denied` does in the browser), never as a sixth state value. The
+// server needs it for one reason: inside the Android app "denied" is not a
+// browser block. Burrow Android can still show its explainer (and, after one
+// denial, Android's prompt; after two, its notification settings), so the
+// /inbox row offers the re-ask there instead of browser address-bar steps
+// (task 01a10d8e). iOS renders exactly as before.
+export function nativePlatform(win = globalThis.window) {
+  const platform = win?.Capacitor?.getPlatform?.();
+  return typeof platform === "string" && platform !== "web" ? platform : null;
+}
+
+function nativeStatePayload(state) {
+  const platform = nativePlatform();
+  return platform ? { state, native_platform: platform } : { state };
+}
+
 const PushSubscribe = {
   mounted() {
     // Every exit path below reports a state. Returning silently leaves the
@@ -109,7 +127,7 @@ const PushSubscribe = {
           // rotated APNs token reaches the server. No prompt is shown.
           this.enableNativePush();
         } else if (state === "denied") {
-          this.pushEvent("push_permission_state", { state: "denied" });
+          this.pushEvent("push_permission_state", nativeStatePayload("denied"));
         } else if (state === "prompt") {
           // iOS has never asked on this device: ask now, without waiting for
           // the banner. The browser branch waits for a click, but the
@@ -122,13 +140,13 @@ const PushSubscribe = {
           // honesty rule: "granted" only on registered: true.
           this.enableNativePush();
         } else {
-          this.pushEvent("push_permission_state", { state: "prompt" });
+          this.pushEvent("push_permission_state", nativeStatePayload("prompt"));
         }
       })
       .catch(() => {
         // pushState itself failed, so we don't know iOS's state. Report
         // "prompt" and let the banner's click drive enablePush.
-        this.pushEvent("push_permission_state", { state: "prompt" });
+        this.pushEvent("push_permission_state", nativeStatePayload("prompt"));
       });
 
     this.handleEvent("request_push_permission", () => {
@@ -141,11 +159,11 @@ const PushSubscribe = {
       .then(() => this.nativePush.enablePush())
       .then(result => {
         if (result?.registered === true) {
-          this.pushEvent("push_permission_state", { state: "granted" });
+          this.pushEvent("push_permission_state", nativeStatePayload("granted"));
         } else if (result?.state === "denied") {
-          this.pushEvent("push_permission_state", { state: "denied" });
+          this.pushEvent("push_permission_state", nativeStatePayload("denied"));
         } else if (result?.state === "prompt") {
-          this.pushEvent("push_permission_state", { state: "prompt" });
+          this.pushEvent("push_permission_state", nativeStatePayload("prompt"));
         } else {
           this.pushEvent("push_subscribe_failed", {
             name: "NativeRegistrationFailed",

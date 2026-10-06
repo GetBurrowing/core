@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest"
-import PushSubscribe, { nativePushPlugin } from "../../js/hooks/push_subscribe.js"
+import PushSubscribe, { nativePlatform, nativePushPlugin } from "../../js/hooks/push_subscribe.js"
 
 /**
  * The `PushSubscribe` hook (task 01a10882 stage 3).
@@ -207,6 +207,73 @@ describe("browser branch (unchanged)", () => {
     expect(events).toContainEqual([
       "push_subscribed",
       { endpoint: "https://push.example/e", keys: { p256dh: "p", auth: "a" } }
+    ])
+  })
+})
+
+// Task 01a10d8e stage 6: inside Burrow Android, "denied" after the explainer's
+// "Not now" (or one system denial) is NOT a browser block: the app can still
+// ask. The hook names the shell beside the state so the /inbox row can offer
+// the re-ask; it must not re-ask on its own.
+describe("android shell", () => {
+  function stubAndroid(plugin) {
+    vi.stubGlobal("window", {
+      Capacitor: {
+        isNativePlatform: () => true,
+        getPlatform: () => "android",
+        Plugins: { SuiteNative: plugin }
+      }
+    })
+    vi.stubGlobal("document", { querySelector: () => null })
+  }
+
+  it("nativePlatform names the shell, and is null in a browser", () => {
+    expect(nativePlatform({ Capacitor: { getPlatform: () => "android" } })).toBe("android")
+    expect(nativePlatform({ Capacitor: { getPlatform: () => "ios" } })).toBe("ios")
+    expect(nativePlatform({ Capacitor: { getPlatform: () => "web" } })).toBe(null)
+    expect(nativePlatform({})).toBe(null)
+  })
+
+  it("after Not now, a relaunch reports denied with the shell and asks nothing", async () => {
+    const enablePush = vi.fn(async () => ({ registered: true }))
+    stubAndroid({ pushState: async () => ({ state: "denied" }), enablePush })
+    const { events } = mountHook()
+    await flush()
+    await flush()
+    expect(enablePush).not.toHaveBeenCalled()
+    expect(events).toEqual([
+      ["push_permission_state", { state: "denied", native_platform: "android" }]
+    ])
+  })
+
+  it("the settings row's click re-asks through enablePush, exactly once", async () => {
+    const enablePush = vi.fn(async () => ({ registered: false, state: "denied" }))
+    stubAndroid({ pushState: async () => ({ state: "denied" }), enablePush })
+    const { events, handlers } = mountHook()
+    await flush()
+    handlers.request_push_permission()
+    await flush()
+    await flush()
+    expect(enablePush).toHaveBeenCalledTimes(1)
+    expect(events.at(-1)).toEqual([
+      "push_permission_state",
+      { state: "denied", native_platform: "android" }
+    ])
+  })
+
+  it("a re-ask that registers reports granted with the shell", async () => {
+    stubAndroid({
+      pushState: async () => ({ state: "denied" }),
+      enablePush: async () => ({ registered: true, state: "granted" })
+    })
+    const { events, handlers } = mountHook()
+    await flush()
+    handlers.request_push_permission()
+    await flush()
+    await flush()
+    expect(events.at(-1)).toEqual([
+      "push_permission_state",
+      { state: "granted", native_platform: "android" }
     ])
   })
 })

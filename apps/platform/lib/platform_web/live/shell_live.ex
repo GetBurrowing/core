@@ -213,6 +213,11 @@ defmodule PlatformWeb.ShellLive do
       # sites). Deliberately a flag beside `:push_permission` and not a value
       # of it. See the `push_permission_state` clause below.
       |> assign(:push_auto_denied, false)
+      # Task 01a10d8e: the native shell the PushSubscribe hook runs in
+      # ("android" | "ios"), or nil in a browser. Another fact beside
+      # `:push_permission`, never a value of it. Inside Burrow Android
+      # "denied" is not a browser block, so the /inbox row offers the re-ask.
+      |> assign(:push_native_platform, nil)
       # Task 019ffe52 fix B: the browser granted permission and the device
       # still did not get registered. Deliberately a fact beside
       # `:push_permission` rather than a sixth value of it, exactly as
@@ -817,7 +822,8 @@ defmodule PlatformWeb.ShellLive do
           {:halt,
            socket
            |> assign(:push_permission, state)
-           |> assign(:push_auto_denied, params["auto_denied"] == true)}
+           |> assign(:push_auto_denied, params["auto_denied"] == true)
+           |> assign(:push_native_platform, native_platform(params["native_platform"]))}
 
         "push_unsupported", _params, socket ->
           {:halt, assign(socket, :push_permission, "unsupported")}
@@ -858,6 +864,10 @@ defmodule PlatformWeb.ShellLive do
 
     {:cont, socket}
   end
+
+  # Only the two shells that exist; anything else a client sends is a browser.
+  defp native_platform(platform) when platform in ["android", "ios"], do: platform
+  defp native_platform(_), do: nil
 
   # Raw user-agent header for the surfaces that vary copy by browser (today:
   # the `/inbox` blocked-notifications row). Requires `:user_agent` in the

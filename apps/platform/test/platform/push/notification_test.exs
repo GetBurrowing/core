@@ -289,4 +289,135 @@ defmodule Platform.Push.NotificationTest do
       refute body =~ "wor…"
     end
   end
+
+  describe "FCM payload (task 01a10d8e stage 1)" do
+    test "a chat notification carries the author and the space separately" do
+      n = AttentionRouter.push_notification("Harper", message("hi"), :mention, space(), [])
+
+      assert n.author_name == "Harper"
+      assert n.space_name == "Internal Fabrikam SXI"
+      assert n.title == "Harper in Internal Fabrikam SXI", "the title is unchanged"
+    end
+
+    test "to_fcm_payload is data-only, high priority, with string values only" do
+      for n <- every_kind() do
+        message = Notification.to_fcm_payload(n)
+
+        refute Map.has_key?(message, "notification"), "#{n.kind} must be data-only"
+        refute Map.has_key?(message, "token"), "the transport adds the token, not the model"
+        assert message["android"]["priority"] == "high"
+
+        data = message["data"]
+        assert is_map(data)
+
+        assert Enum.all?(data, fn {k, v} -> is_binary(k) and is_binary(v) end),
+               "FCM rejects non-string data values (#{n.kind})"
+
+        refute Enum.any?(data, fn {_k, v} -> v == "" end), "nils are dropped, never blanked"
+
+        assert data["kind"] == n.kind
+        assert data["title"] == n.title
+        assert data["url"] == n.url
+        assert data["install_host"] == n.install_host
+      end
+    end
+
+    test "every field the app reads is in data, and agrees with the web payload" do
+      [_, mention | _] = every_kind()
+      data = Notification.to_fcm_payload(mention)["data"]
+      web = Notification.to_web_payload(mention)
+
+      for key <- ~w(title body url kind category thread_id space_id message_id install_host)a do
+        assert data[Atom.to_string(key)] == web[key], "#{key} differs"
+      end
+
+      assert data["author_name"] == "Harper"
+      assert data["space_name"] == "Internal Fabrikam SXI"
+      refute Map.has_key?(data, "task_id")
+    end
+
+    test "collapse_id becomes android.collapse_key, cut to 64 characters" do
+      long =
+        Notification.new(%{kind: "generic", title: "t", collapse_id: String.duplicate("x", 90)})
+
+      assert Notification.to_fcm_payload(long)["android"]["collapse_key"] ==
+               String.duplicate("x", 64)
+
+      item = inbox_item("task_plan_review")
+      n = Notification.from_inbox_item(item)
+      assert Notification.to_fcm_payload(n)["android"]["collapse_key"] == item.id
+
+      none = Notification.from_map(%{title: "a", body: "b", url: "/"})
+      refute Map.has_key?(Notification.to_fcm_payload(none)["android"], "collapse_key")
+    end
+
+    test "redaction clears author_name and space_name on every transport" do
+      user = external_user()
+      [_, mention | _] = every_kind()
+      assert mention.author_name == "Harper"
+
+      redacted = Push.preview_for_user(user.id, mention)
+
+      assert redacted.author_name == nil
+      assert redacted.space_name == nil
+
+      data = Notification.to_fcm_payload(redacted)["data"]
+      refute Map.has_key?(data, "author_name")
+      refute Map.has_key?(data, "space_name")
+      refute Map.has_key?(data, "space_id")
+      refute Jason.encode!(data) =~ "Harper"
+      refute Jason.encode!(data) =~ "Internal Fabrikam SXI"
+      assert data["title"] == "New message"
+    end
+  end
+
+  # Task 01a10d8e stage 6 (behavioural gate, finding 1): a DM mention reached
+  # Android with url "/chat" and no space_name, so Open landed in a channel and
+  # MessagingStyle had no conversation title.
+  describe "a DM mention on the FCM path" do
+    test "carries /chat/<dm id>?message=<id> and the recipient's name for the DM" do
+      alice = insert_user("Alice Recipient")
+      bob = insert_user("Bob Sender")
+      {:ok, dm} = Platform.Chat.find_or_create_dm(bob.id, "user", alice.id)
+      assert is_nil(dm.name) and is_nil(dm.slug), "the prod DM shape"
+
+      alice_row =
+        Enum.find(Platform.Chat.list_participants(dm.id), &(&1.participant_id == alice.id))
+
+      bob_row = Enum.find(Platform.Chat.list_participants(dm.id), &(&1.participant_id == bob.id))
+
+      # Each side names the DM after the OTHER person, as the web sidebar does.
+      assert AttentionRouter.push_conversation_name(dm, alice_row) == "Bob Sender"
+      assert AttentionRouter.push_conversation_name(dm, bob_row) == "Alice Recipient"
+
+      msg = message("@[Alice Recipient] ping")
+
+      n =
+        AttentionRouter.push_notification(
+          "Bob Sender",
+          msg,
+          :mention,
+          dm,
+          [],
+          AttentionRouter.push_conversation_name(dm, alice_row)
+        )
+
+      data = Notification.to_fcm_payload(n)["data"]
+      assert data["url"] == "/chat/#{dm.id}?message=#{msg.id}"
+      assert data["space_name"] == "Bob Sender"
+      assert data["author_name"] == "Bob Sender"
+      assert data["space_id"] == dm.id
+      assert data["message_id"] == msg.id
+      # The title is what APNs and web push show; it is unchanged.
+      assert n.title == "Bob Sender in Suite"
+    end
+
+    test "a named space keeps its own name; an unresolved recipient falls back to it" do
+      s = space()
+      assert AttentionRouter.push_conversation_name(s, Ecto.UUID.generate()) == s.name
+
+      dm = %Space{id: Ecto.UUID.generate(), kind: "dm", name: nil, slug: nil}
+      assert AttentionRouter.push_conversation_name(dm, Ecto.UUID.generate()) == nil
+    end
+  end
 end
