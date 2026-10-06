@@ -3,11 +3,12 @@ import Foundation
 /// What a widget's count slab shows (canvas 01a10887, "Signature element").
 ///
 /// The rule that makes the slab worth having: **cyan means live and
-/// non-zero.** Only `.live` gets the `primary` fill. A zero count and a
-/// stale count both drop to `surfaceMuted`, so a cyan slab on the home
-/// screen is never an out-of-date number.
+/// non-zero.** Only `.live` gets the `info` (teal-cyan) fill. A zero count
+/// and a stale count both drop to `surfaceMuted`, so a cyan slab on the
+/// home screen is never an out-of-date number. (Burrow palette: `primary`
+/// is orange and belongs to actions; the live fill moved to `info`.)
 enum SlabState: Equatable {
-    /// Fresh and above zero: primary fill, the numeral, `waiting on you` / `open`.
+    /// Fresh and above zero: info fill, the numeral, `waiting on you` / `open`.
     case live
     /// Fresh and zero: surfaceMuted, `Nothing waiting` / `Nothing open`.
     case zero
@@ -23,7 +24,7 @@ enum SlabState: Equatable {
     /// does, and must stop looking live.
     static let staleAfter: TimeInterval = 30 * 60
 
-    var usesPrimaryFill: Bool { self == .live }
+    var usesLiveFill: Bool { self == .live }
 }
 
 /// The one place the slab rule is decided. `fetchedAt` is when this device

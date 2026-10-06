@@ -523,6 +523,10 @@ defmodule Platform.RepoLookupBoundaryTest do
     # ── Mobile app (task 01a10882) ─────────────────────────────────────
     {"platform/mobile.ex", :get_by, "AppSession", 1, :safe_internal,
      "task 01a10882 stage 1: `verify_bearer/1` looks the session up by `token_hash`, a :binary column holding the SHA-256 of the presented bearer token. No UUID column is pinned, so no client-supplied value can raise Ecto.Query.CastError here"},
+    {"platform/mobile/app_entities.ex", :platform_uuid_guard, "-", 5, :safe_internal,
+     "task 01a10db6: the iOS App Intents API's entity layer. `fetch_own_approval/2` guards the approve/reject `item_id`, `actor_name/1` guards a generic actor string (user id, agent id, or a label such as \"system:auto\"), `authorize_space/2` guards the space id from a URL path / JSON body, `open_agent_dm/2` guards the `agent_id` from the request body, and `cursor/1` guards the `after` message cursor. Each is used as a BOOLEAN; a malformed id folds into the site's existing {:error, :not_found} / {:error, :forbidden} / {:error, :invalid_cursor} / nil instead of raising Ecto.Query.CastError"},
+    {"platform/mobile/app_entities.ex", :get, "Agent", 2, :safe_internal,
+     "task 01a10db6: (1) `actor_name/1` calls Repo.get(Agent, actor) inside `if Platform.UUID.valid?(actor)`; (2) `open_agent_dm/2` calls Repo.get(Agent, agent_id) after `is_binary(agent_id) and Platform.UUID.valid?(agent_id)` at the head of the same with-chain, so a malformed request-body id answers {:error, :not_found}"},
     {"platform_web/controllers/app_api_controller.ex", :platform_uuid_guard, "-", 1,
      :safe_internal,
      "task 01a10882 stage 1: `agent_mention/2` guards the share request's `agent_id` (a JSON body value, so boundary-reachable) with Platform.UUID.valid?/1 before pinning `p.participant_id == ^agent_id`; a malformed id answers 422 `unknown_agent` instead of raising"},
@@ -1118,6 +1122,15 @@ defmodule Platform.RepoLookupBoundaryTest do
     # whenever `MEETINGS_ENABLED` is unset.
     "platform/meetings/sender_seed.ex" => 1,
     "platform/memory_feedback.ex" => 1,
+    # Task 01a10db6: 0 -> 5 in the iOS App Intents entity layer. Triaged by
+    # hand: `fetch_own_approval/2` pins `i.id == ^item_id` behind
+    # `Platform.UUID.valid?/1`; `user_participant/2` pins `space.id` off a
+    # loaded %Space{} row after `authorize_space/2`'s guard; `pending_plan/1`,
+    # `settled_plan_by/1` and `settled_review_by/1` pin a `task_id` read from
+    # an `%Inbox.Item{}` whose `source_id` is an `Ecto.UUID` field, or from
+    # `review_requests.task_id` via `ReviewRequests.task_id_for_request/1`, so
+    # no boundary value reaches those `where:` clauses uncast.
+    "platform/mobile/app_entities.ex" => 5,
     "platform/orchestration/context_assembler.ex" => 1,
     # 3 → 4 for task 01a03ed3's `latest_engagement/1`, the durable read of the
     # last engagement the TaskRouter posted into an execution space. Triaged by

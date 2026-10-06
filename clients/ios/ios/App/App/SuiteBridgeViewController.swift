@@ -1,8 +1,8 @@
 import AuthenticationServices
 import Capacitor
 import SwiftUI
-import UserNotifications
 import UIKit
+import UserNotifications
 import WebKit
 
 /// The shell: Capacitor's bridge around the selected install's web UI.
@@ -47,9 +47,9 @@ final class SuiteBridgeViewController: CAPBridgeViewController {
     /// pocket-id login (README, Login).
     private var loginProbeHost: String? {
         #if DEBUG
-        return UserDefaults.standard.string(forKey: "SuiteLoginProbe")
+            return UserDefaults.standard.string(forKey: "SuiteLoginProbe")
         #else
-        return nil
+            return nil
         #endif
     }
 
@@ -99,6 +99,17 @@ final class SuiteBridgeViewController: CAPBridgeViewController {
         NotificationRouter.shared.openHandler = { [weak self] install, url in
             self?.open(install, at: url)
         }
+
+        // An App Intent opening a space, task or meeting. Before the shell
+        // has started, the link waits for viewDidAppear.
+        IntentNavigator.handler = { [weak self] link in
+            guard let self else { return }
+            if self.didStart {
+                self.open(link)
+            } else {
+                self.pendingDeepLink = link
+            }
+        }
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -110,7 +121,7 @@ final class SuiteBridgeViewController: CAPBridgeViewController {
             webView?.load(URLRequest(url: URL(string: "https://\(host)/auth/login")!))
             return
         }
-        if let link = pendingDeepLink {
+        if let link = pendingDeepLink ?? IntentNavigator.takePending() {
             pendingDeepLink = nil
             open(link)
         } else if let (install, url) = NotificationRouter.shared.takePendingOpen() {
@@ -169,6 +180,7 @@ final class SuiteBridgeViewController: CAPBridgeViewController {
     func signOut(of install: Install) {
         signingOutHost = install.host
         cover.isHidden = false
+        IntentAppHooks.forget(host: install.host)
         NativeSignOut().run(host: install.host) { [weak self] in
             DispatchQueue.main.async {
                 guard let self, self.signingOutHost == install.host else { return }
@@ -277,6 +289,7 @@ final class SuiteBridgeViewController: CAPBridgeViewController {
     // MARK: Pull to refresh, status bar
 
     private func webViewURLChanged(_ url: URL?) {
+        annotateEntity(url)
         guard let scrollView = webView?.scrollView else { return }
         let allowed = url.map { NavigationPolicy.allowsPullToRefresh(path: $0.path) } ?? false
         if allowed, scrollView.refreshControl == nil {
@@ -285,6 +298,19 @@ final class SuiteBridgeViewController: CAPBridgeViewController {
             refresh.endRefreshing()
             scrollView.refreshControl = nil
         }
+    }
+
+    /// On `/chat/<segment>` or `/tasks/<id>`, the current activity names
+    /// that entity (iOS 18.2+), for Apple Intelligence's onscreen
+    /// understanding. Anywhere else the activity is cleared.
+    private func annotateEntity(_ url: URL?) {
+        guard let host = currentInstall?.host, let activity = EntityActivity.activity(for: url, host: host) else {
+            userActivity?.resignCurrent()
+            userActivity = nil
+            return
+        }
+        userActivity = activity
+        activity.becomeCurrent()
     }
 
     @objc private func pullToRefresh() {

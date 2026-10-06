@@ -9,30 +9,51 @@
 /* Begin PBXBuildFile section */
 		018A3FC1935EB4967674B4A1 /* SuiteNativePlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = 152AACD85538342C084D74C8 /* SuiteNativePlugin.swift */; };
 		04F8E890893E2E303D9B6E9D /* InstallStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E69F987B892561A06F26BE1 /* InstallStore.swift */; };
+		0568CB3EFF2AE60776ABA6D5 /* IntentCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 061669E0BB04D24A1853F001 /* IntentCopy.swift */; };
+		05D6BB78D638DD41BA497D53 /* WidgetApprovalIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FF8E4E0D1FFE8E18A9853D1 /* WidgetApprovalIntents.swift */; };
+		09A379DCDD2D04F6B1123B6A /* IntentSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = AEA2B3BC253F91FAD530FA0A /* IntentSupport.swift */; };
+		0CC2DF31303C6D8DB7763F87 /* ApprovalsWidgetModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0538A292E8627337FC97DC57 /* ApprovalsWidgetModel.swift */; };
 		0D6C3A0BD5911B4402309D30 /* SuiteAPIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7E0806D82BAD00F729000FD /* SuiteAPIClient.swift */; };
 		0E6CE73A2B2DC006506F588B /* CountsCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D27347C121D5A67129627D1 /* CountsCache.swift */; };
 		0FDF3209E9CF7A987F5247AC /* ShareSheetModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02587FC2025F6C12C4038D77 /* ShareSheetModel.swift */; };
+		103357A92E2A32901E04F4D4 /* ApprovalsWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA34F7BCD1785FB63C540ECE /* ApprovalsWidget.swift */; };
+		106EB925985680D362F34AAE /* Intents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95476033D891E158ED21FA8F /* Intents.swift */; };
 		1146BE2FF7FB0F5F3A4BE239 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48421D60D2C81BD6F37E64D2 /* Theme.swift */; };
 		1263CD52F9690E5CAA14A00F /* NavigationPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = F46DFC793311833A64DEB882 /* NavigationPolicy.swift */; };
 		145D83A59ED9D39BA75147FB /* Colors.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F20AEF676C004D2C37F1D06C /* Colors.xcassets */; };
 		1596045A38506257AE1037AB /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48421D60D2C81BD6F37E64D2 /* Theme.swift */; };
+		19A3C80DCCEF7246668ECEF9 /* BurrowShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E28F3CFC25B7856E87ACF6E /* BurrowShortcuts.swift */; };
 		1CA998C627766237F2232BEB /* CapApp-SPM in Frameworks */ = {isa = PBXBuildFile; productRef = FD127B870EFB46EFAC91834E /* CapApp-SPM */; };
 		1D3DC52ECF765DB425185D38 /* SuiteWidgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00A0AFA69293E349FB44575 /* SuiteWidgets.swift */; };
+		1E129C13E452E034E1E3D529 /* IntentAppHooks.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3105A037DC16B7EB85FA7C98 /* IntentAppHooks.swift */; };
 		1E48C872DEB85431E418F709 /* ShareSheetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 724BFD2B3188FEBA62B4EA35 /* ShareSheetView.swift */; };
+		218C5A240C726C349DE7CE99 /* WidgetApprovalIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FF8E4E0D1FFE8E18A9853D1 /* WidgetApprovalIntents.swift */; };
 		2265D173C2042787131BDDD5 /* InstallStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E69F987B892561A06F26BE1 /* InstallStore.swift */; };
+		23C671C8DC768F8022DC8747 /* Intents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95476033D891E158ED21FA8F /* Intents.swift */; };
 		26E51AC20D9FE4119F144870 /* public in Resources */ = {isa = PBXBuildFile; fileRef = 7E5BBB12596EE01767A6151A /* public */; };
 		2A393AD5EE919DFDA2B619FB /* SuiteWidgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = E00A0AFA69293E349FB44575 /* SuiteWidgets.swift */; };
+		2D60F239C8AA08DDCDB65E83 /* ApprovalsWidgetModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0538A292E8627337FC97DC57 /* ApprovalsWidgetModel.swift */; };
+		3209D4488514555280EAA484 /* Controls.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0CFBCAFD26B9ABA5F4922C4 /* Controls.swift */; };
 		36E0F2F01D16AA7C0B49F07A /* OFL.txt in Resources */ = {isa = PBXBuildFile; fileRef = 3739EAA3595CCC14CACD4183 /* OFL.txt */; };
 		391B97A1B20A9B5853267828 /* ThemeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F65F0C4F9A353203122D818 /* ThemeTests.swift */; };
+		3DF6FC35FB9D33D19022D9AB /* IntentSnippets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32798D99CA9F9644F3696A57 /* IntentSnippets.swift */; };
+		3EDF9E8869059EFA42347341 /* IntentSourceScanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9DC08ECFA84095D28184D7E /* IntentSourceScanTests.swift */; };
 		3FB3C8C0634A765EE81D042E /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 76989E05CECAD7B8B3C424A7 /* Assets.xcassets */; };
 		4384041C4305C495576A344F /* SuiteWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 7F6E162328EC61C128356BC1 /* SuiteWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		4477267F5890DCD183087CBB /* Colors.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F20AEF676C004D2C37F1D06C /* Colors.xcassets */; };
 		45D48C96A52AE8CE339A50D4 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48421D60D2C81BD6F37E64D2 /* Theme.swift */; };
+		4829CC8F69E82835ECD597E7 /* IntentCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 061669E0BB04D24A1853F001 /* IntentCopy.swift */; };
+		4A2192EF2CF9CED5EE5EE03A /* Intents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95476033D891E158ED21FA8F /* Intents.swift */; };
 		4D69D1DB4C9F4073E8B27F1A /* SlabStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37C9E327224C059F2EF3BDFA /* SlabStateTests.swift */; };
 		4FB34C264C0E482A4F3BA9EA /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 23F8D68E28D07D16EB72E4AA /* LaunchScreen.storyboard */; };
+		51D21EDB4B597F7F137D12BC /* IntentActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50E3C6960995294AC8D0D25F /* IntentActions.swift */; };
+		520EBC5F2DD14D3D07FC1701 /* Entities.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FD909F861CBD9239A49DB52 /* Entities.swift */; };
+		52587DE54E0AD3D712213B34 /* ShortcutParameterRefreshTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 019DD0FC774F2201544F8C56 /* ShortcutParameterRefreshTests.swift */; };
+		5298D6CB3D0935D2576F2E03 /* ApprovalsProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3255B0B0C1D2387DCCB568FD /* ApprovalsProvider.swift */; };
 		5BAF3BAD4811588AFF876CD9 /* CountsEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3CE35968982C56B6596BF2D /* CountsEntry.swift */; };
 		5DE01760B6873F25DCED83E7 /* ShareExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 84AD5BD5C2783C3C5B5230A4 /* ShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		5E04533C01261A377D816DB8 /* config.xml in Resources */ = {isa = PBXBuildFile; fileRef = 8776CD2CC1249496A6F18C86 /* config.xml */; };
+		5E32B2E26CA396F9DF1C6B85 /* ShortcutParameterRefresh.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE185BEDD232F08332626453 /* ShortcutParameterRefresh.swift */; };
 		641897D3AF57D7EC2D4FDCF0 /* CountsEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3CE35968982C56B6596BF2D /* CountsEntry.swift */; };
 		6426394B1249C80136E61F4F /* ShareSheetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 724BFD2B3188FEBA62B4EA35 /* ShareSheetView.swift */; };
 		67740B5377F807ABF1532F55 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED2016878D44EAA9692D059F /* SceneDelegate.swift */; };
@@ -40,14 +61,20 @@
 		6A5B81534AE9C9DFFD70A896 /* MultipartFormTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8BCDC22DDFAA9ECFB5ADCB9 /* MultipartFormTests.swift */; };
 		6E10B17CE0395C27D3882D82 /* CountsCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D27347C121D5A67129627D1 /* CountsCache.swift */; };
 		7022E2E1D5D1BC14E84EF64E /* InstallPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CAF730251520CCFD80696C8 /* InstallPickerView.swift */; };
+		72FCB6A6EAFDF33BAF86128D /* InstallPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CAF730251520CCFD80696C8 /* InstallPickerView.swift */; };
 		734D66D391EF3B0FF9075628 /* SlabState.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCEC8A0CD2D3DB02BB85718E /* SlabState.swift */; };
 		77EA1202CE361931617C37B4 /* NavigationPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34783DF2CF8177A50A2AF0BA /* NavigationPolicyTests.swift */; };
 		7999524BD61C37FBB86C10DB /* CountsProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = C39EBB7593D52A541A08EEEF /* CountsProvider.swift */; };
+		7A696AF3972556AD8DB67311 /* Controls.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0CFBCAFD26B9ABA5F4922C4 /* Controls.swift */; };
+		7AE80293566B0E44C7A14B57 /* IntentSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = AEA2B3BC253F91FAD530FA0A /* IntentSupport.swift */; };
+		7D233016C71DBB15B8D18CFD /* IntentActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50E3C6960995294AC8D0D25F /* IntentActions.swift */; };
 		81138B00431411BE1EF97D97 /* capacitor.config.json in Resources */ = {isa = PBXBuildFile; fileRef = 68ED4E8FE0185474B6E8E85B /* capacitor.config.json */; };
 		8170B1DAA90E82CB990B3D44 /* EvidenceUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F2FFE4489BC31338AC8C9EC /* EvidenceUITests.swift */; };
+		89F75410C256DDEB74D32277 /* WaitingSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = F002A7B532553DD366E09F0F /* WaitingSummary.swift */; };
 		8A53910772C243D9F91960BC /* ShareSheetModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02587FC2025F6C12C4038D77 /* ShareSheetModel.swift */; };
 		8F27559256B885AC349A394D /* SlabState.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCEC8A0CD2D3DB02BB85718E /* SlabState.swift */; };
 		90E1263F84EE6BF085F62B39 /* SuiteBridgeViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74B1AB897F54593C6291A1C2 /* SuiteBridgeViewController.swift */; };
+		938D78AF3C30A0EE92DE723B /* ApprovalsWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA34F7BCD1785FB63C540ECE /* ApprovalsWidget.swift */; };
 		9629C49742AAB86E84A34806 /* PublicSans-Variable.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 39697D42725EF18B41A8339A /* PublicSans-Variable.ttf */; };
 		9746794DCAD03A86C6F9B107 /* TestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BCA4F7949BCEADF89CA73DD /* TestSupport.swift */; };
 		98C474DC77F7657C40E7A5F5 /* KeychainTokenStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFB6A384F7FA204052DB6C2D /* KeychainTokenStoreTests.swift */; };
@@ -60,29 +87,50 @@
 		A065BD050329A7F29629ACB1 /* SuiteWidgetBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = C37D7AC24B0CAE74724A40C5 /* SuiteWidgetBundle.swift */; };
 		A1EEE9E647F7D5E2C1AC2768 /* ShareSheetModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02587FC2025F6C12C4038D77 /* ShareSheetModel.swift */; };
 		A2C4A85BDEC03A1DE6DBC45C /* CountsEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3CE35968982C56B6596BF2D /* CountsEntry.swift */; };
+		A5EF9785C4E26545C2A1E0F3 /* WidgetPendingApprovals.swift in Sources */ = {isa = PBXBuildFile; fileRef = 945DADE27ADE0DECFD3B9EEF /* WidgetPendingApprovals.swift */; };
+		A6F116D35EC70933E092FF25 /* ApprovalsWidgetModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0538A292E8627337FC97DC57 /* ApprovalsWidgetModel.swift */; };
 		A83CF1ADDB568356498DAB39 /* NotificationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC96500C251272FC26DC89DB /* NotificationTests.swift */; };
 		AB243F91B2655A50E4E40BF9 /* Colors.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F20AEF676C004D2C37F1D06C /* Colors.xcassets */; };
 		AFE976B0084C2E2137AD5B8D /* SlabState.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCEC8A0CD2D3DB02BB85718E /* SlabState.swift */; };
 		B0F935EDBEC2125E6BE74998 /* CountsCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D27347C121D5A67129627D1 /* CountsCache.swift */; };
+		B17F1545A743D2C2D5C6B0D9 /* WidgetApprovalIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FF8E4E0D1FFE8E18A9853D1 /* WidgetApprovalIntents.swift */; };
 		B44C8DE014B8C9DB4A85C3BE /* SlabState.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCEC8A0CD2D3DB02BB85718E /* SlabState.swift */; };
 		B479D67459AFBEC15159CB91 /* WidgetCountsRefresher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 032C94FDF2044C01B4E9FC63 /* WidgetCountsRefresher.swift */; };
+		B4A45E556F1D9EC0014C3BDC /* ShortcutParameterRefresh.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE185BEDD232F08332626453 /* ShortcutParameterRefresh.swift */; };
+		B54A431C6B25FFD28691B6A5 /* IntentSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = AEA2B3BC253F91FAD530FA0A /* IntentSupport.swift */; };
+		B728051823B0627161077A44 /* WidgetPendingApprovals.swift in Sources */ = {isa = PBXBuildFile; fileRef = 945DADE27ADE0DECFD3B9EEF /* WidgetPendingApprovals.swift */; };
 		BA93AB83809DB2A8F0018AB1 /* CountsProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = C39EBB7593D52A541A08EEEF /* CountsProvider.swift */; };
+		C263DC4140062DB53091FB3D /* Entities.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FD909F861CBD9239A49DB52 /* Entities.swift */; };
 		C35F1C4173E39FB2C4B8DE1F /* PublicSans-Variable.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 39697D42725EF18B41A8339A /* PublicSans-Variable.ttf */; };
 		C3DEFDF9E78B362F9835C23E /* CountsCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D27347C121D5A67129627D1 /* CountsCache.swift */; };
+		C444F6AD625727E7A9EBD770 /* Entities.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FD909F861CBD9239A49DB52 /* Entities.swift */; };
+		C500660B132B5CD786DCD7F8 /* WaitingSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = F002A7B532553DD366E09F0F /* WaitingSummary.swift */; };
+		CCE83DD1660681BEEC2FEC80 /* WidgetPendingApprovals.swift in Sources */ = {isa = PBXBuildFile; fileRef = 945DADE27ADE0DECFD3B9EEF /* WidgetPendingApprovals.swift */; };
 		CE60DE7885DA376880CF1CCB /* InstallSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 327C4E8A4A48B9A1F4205C52 /* InstallSession.swift */; };
+		CFE248A6AD737F92FF7D6723 /* WaitingSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = F002A7B532553DD366E09F0F /* WaitingSummary.swift */; };
+		D0217C731C8DCE14CAE1539E /* IntentSnippets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32798D99CA9F9644F3696A57 /* IntentSnippets.swift */; };
 		D4C7EC7B0B1C07AA1CE111EC /* SuiteAPIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7E0806D82BAD00F729000FD /* SuiteAPIClient.swift */; };
+		D66E2A44656956844ACDCDE8 /* EntityActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E8ECDCE72A6F27840F39692 /* EntityActivity.swift */; };
 		D7FF0F390D42D200D34A9F3A /* SuiteAPIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7E0806D82BAD00F729000FD /* SuiteAPIClient.swift */; };
+		D811D6D8851C97B667406CC9 /* DeepLinkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AB72D587D4F0F2BF4D98D9D /* DeepLinkTests.swift */; };
 		D945CB8F4F75FE12293DA1BB /* Colors.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F20AEF676C004D2C37F1D06C /* Colors.xcassets */; };
 		DDBA16A62D69BDBF390B65C3 /* InstallStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E69F987B892561A06F26BE1 /* InstallStore.swift */; };
+		DE6827C0F5689CD0BFD29161 /* IntentSnippets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32798D99CA9F9644F3696A57 /* IntentSnippets.swift */; };
+		DF7A4214CA5E54AE4C653589 /* IntentCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 061669E0BB04D24A1853F001 /* IntentCopy.swift */; };
 		DFC8F0A5B598C047321C36F7 /* AuthSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = C502C80B1C599EA47F7B501E /* AuthSession.swift */; };
 		E06A3A001D6B5BA9967414CC /* PKCETests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E146E1C002664F63C25DB344 /* PKCETests.swift */; };
+		E0A339B2F5C1A28E55C5BF31 /* ApprovalsProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3255B0B0C1D2387DCCB568FD /* ApprovalsProvider.swift */; };
 		E34A91D774083A754D0871D2 /* InstallStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06E3B6079D4C49F493B272A2 /* InstallStoreTests.swift */; };
 		E5EF3CD7AD29A6DF59110A1A /* CountsEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3CE35968982C56B6596BF2D /* CountsEntry.swift */; };
 		E8E03F4FB1BE61A377693A7C /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9420949282AB92AA28A975D3 /* AppDelegate.swift */; };
+		E98515C04A30C462639A791C /* WidgetApprovalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C4AA74020F1E1EC630A56D4 /* WidgetApprovalTests.swift */; };
 		EE5943C7FDD95D952E4C61F3 /* KeychainTokenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70196345FD59A4C9806BE4E5 /* KeychainTokenStore.swift */; };
 		EE9EE519D1EA21C92F0EF46A /* KeychainTokenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70196345FD59A4C9806BE4E5 /* KeychainTokenStore.swift */; };
+		EFE620C0625DDE50365FDD31 /* IntentActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50E3C6960995294AC8D0D25F /* IntentActions.swift */; };
+		F410DACF893D296718155247 /* IntentsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6F6FCE55A638A1302FC2263 /* IntentsTests.swift */; };
 		F621662430D0939656F7600A /* SuiteAPIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7E0806D82BAD00F729000FD /* SuiteAPIClient.swift */; };
 		F94D63D4DF140526381BF998 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48421D60D2C81BD6F37E64D2 /* Theme.swift */; };
+		FBACA29AB5F22CCA7EB41071 /* ShortcutParameterRefresh.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE185BEDD232F08332626453 /* ShortcutParameterRefresh.swift */; };
 		FD1A379571F098B0CADBDDF3 /* KeychainTokenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70196345FD59A4C9806BE4E5 /* KeychainTokenStore.swift */; };
 /* End PBXBuildFile section */
 
@@ -141,19 +189,31 @@
 
 /* Begin PBXFileReference section */
 		00974E067C806B76249CC31E /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
+		019DD0FC774F2201544F8C56 /* ShortcutParameterRefreshTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutParameterRefreshTests.swift; sourceTree = "<group>"; };
 		02587FC2025F6C12C4038D77 /* ShareSheetModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareSheetModel.swift; sourceTree = "<group>"; };
 		032C94FDF2044C01B4E9FC63 /* WidgetCountsRefresher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetCountsRefresher.swift; sourceTree = "<group>"; };
+		0538A292E8627337FC97DC57 /* ApprovalsWidgetModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApprovalsWidgetModel.swift; sourceTree = "<group>"; };
+		061669E0BB04D24A1853F001 /* IntentCopy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntentCopy.swift; sourceTree = "<group>"; };
 		06E3B6079D4C49F493B272A2 /* InstallStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstallStoreTests.swift; sourceTree = "<group>"; };
+		0FD909F861CBD9239A49DB52 /* Entities.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Entities.swift; sourceTree = "<group>"; };
 		152AACD85538342C084D74C8 /* SuiteNativePlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SuiteNativePlugin.swift; sourceTree = "<group>"; };
 		1BCA4F7949BCEADF89CA73DD /* TestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestSupport.swift; sourceTree = "<group>"; };
+		1C4AA74020F1E1EC630A56D4 /* WidgetApprovalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetApprovalTests.swift; sourceTree = "<group>"; };
+		3105A037DC16B7EB85FA7C98 /* IntentAppHooks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntentAppHooks.swift; sourceTree = "<group>"; };
+		3255B0B0C1D2387DCCB568FD /* ApprovalsProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApprovalsProvider.swift; sourceTree = "<group>"; };
+		32798D99CA9F9644F3696A57 /* IntentSnippets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntentSnippets.swift; sourceTree = "<group>"; };
 		327C4E8A4A48B9A1F4205C52 /* InstallSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstallSession.swift; sourceTree = "<group>"; };
 		34783DF2CF8177A50A2AF0BA /* NavigationPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavigationPolicyTests.swift; sourceTree = "<group>"; };
 		3739EAA3595CCC14CACD4183 /* OFL.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = OFL.txt; sourceTree = "<group>"; };
 		37C9E327224C059F2EF3BDFA /* SlabStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SlabStateTests.swift; sourceTree = "<group>"; };
 		39697D42725EF18B41A8339A /* PublicSans-Variable.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "PublicSans-Variable.ttf"; sourceTree = "<group>"; };
+		3E28F3CFC25B7856E87ACF6E /* BurrowShortcuts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BurrowShortcuts.swift; sourceTree = "<group>"; };
 		3E69F987B892561A06F26BE1 /* InstallStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstallStore.swift; sourceTree = "<group>"; };
 		48421D60D2C81BD6F37E64D2 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		49D88A349FD70A9153DD2C03 /* App.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = App.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		50E3C6960995294AC8D0D25F /* IntentActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntentActions.swift; sourceTree = "<group>"; };
+		5AB72D587D4F0F2BF4D98D9D /* DeepLinkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeepLinkTests.swift; sourceTree = "<group>"; };
+		5E8ECDCE72A6F27840F39692 /* EntityActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EntityActivity.swift; sourceTree = "<group>"; };
 		68ED4E8FE0185474B6E8E85B /* capacitor.config.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = capacitor.config.json; sourceTree = "<group>"; };
 		6B04ADF7B81E144C4949AE51 /* CapApp-SPM */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "CapApp-SPM"; path = "CapApp-SPM"; sourceTree = SOURCE_ROOT; };
 		6CAF730251520CCFD80696C8 /* InstallPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstallPickerView.swift; sourceTree = "<group>"; };
@@ -172,10 +232,17 @@
 		84AD5BD5C2783C3C5B5230A4 /* ShareExtension.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = ShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		8776CD2CC1249496A6F18C86 /* config.xml */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = config.xml; sourceTree = "<group>"; };
 		9420949282AB92AA28A975D3 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		945DADE27ADE0DECFD3B9EEF /* WidgetPendingApprovals.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetPendingApprovals.swift; sourceTree = "<group>"; };
+		95476033D891E158ED21FA8F /* Intents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Intents.swift; sourceTree = "<group>"; };
 		99D777995D613E8F37752203 /* ExtensionRenderTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = ExtensionRenderTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		9D27347C121D5A67129627D1 /* CountsCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CountsCache.swift; sourceTree = "<group>"; };
+		9FF8E4E0D1FFE8E18A9853D1 /* WidgetApprovalIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetApprovalIntents.swift; sourceTree = "<group>"; };
+		A0CFBCAFD26B9ABA5F4922C4 /* Controls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Controls.swift; sourceTree = "<group>"; };
+		A9DC08ECFA84095D28184D7E /* IntentSourceScanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntentSourceScanTests.swift; sourceTree = "<group>"; };
 		AC96500C251272FC26DC89DB /* NotificationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationTests.swift; sourceTree = "<group>"; };
+		AEA2B3BC253F91FAD530FA0A /* IntentSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntentSupport.swift; sourceTree = "<group>"; };
 		B7E0806D82BAD00F729000FD /* SuiteAPIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SuiteAPIClient.swift; sourceTree = "<group>"; };
+		BA34F7BCD1785FB63C540ECE /* ApprovalsWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApprovalsWidget.swift; sourceTree = "<group>"; };
 		BFB6A384F7FA204052DB6C2D /* KeychainTokenStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainTokenStoreTests.swift; sourceTree = "<group>"; };
 		C1B412D64B3F0BB4C9DE56AD /* SuiteAPIClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SuiteAPIClientTests.swift; sourceTree = "<group>"; };
 		C37D7AC24B0CAE74724A40C5 /* SuiteWidgetBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SuiteWidgetBundle.swift; sourceTree = "<group>"; };
@@ -188,8 +255,11 @@
 		E146E1C002664F63C25DB344 /* PKCETests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PKCETests.swift; sourceTree = "<group>"; };
 		E403DEF8CD6D9A80946DB96B /* InstallSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstallSessionTests.swift; sourceTree = "<group>"; };
 		ED2016878D44EAA9692D059F /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
+		EE185BEDD232F08332626453 /* ShortcutParameterRefresh.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutParameterRefresh.swift; sourceTree = "<group>"; };
+		F002A7B532553DD366E09F0F /* WaitingSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WaitingSummary.swift; sourceTree = "<group>"; };
 		F20AEF676C004D2C37F1D06C /* Colors.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Colors.xcassets; sourceTree = "<group>"; };
 		F46DFC793311833A64DEB882 /* NavigationPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavigationPolicy.swift; sourceTree = "<group>"; };
+		F6F6FCE55A638A1302FC2263 /* IntentsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntentsTests.swift; sourceTree = "<group>"; };
 		FCEC8A0CD2D3DB02BB85718E /* SlabState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SlabState.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -217,17 +287,22 @@
 		3758C7D38467770096A83ED5 /* AppTests */ = {
 			isa = PBXGroup;
 			children = (
+				5AB72D587D4F0F2BF4D98D9D /* DeepLinkTests.swift */,
 				E403DEF8CD6D9A80946DB96B /* InstallSessionTests.swift */,
 				06E3B6079D4C49F493B272A2 /* InstallStoreTests.swift */,
+				A9DC08ECFA84095D28184D7E /* IntentSourceScanTests.swift */,
+				F6F6FCE55A638A1302FC2263 /* IntentsTests.swift */,
 				BFB6A384F7FA204052DB6C2D /* KeychainTokenStoreTests.swift */,
 				D8BCDC22DDFAA9ECFB5ADCB9 /* MultipartFormTests.swift */,
 				34783DF2CF8177A50A2AF0BA /* NavigationPolicyTests.swift */,
 				AC96500C251272FC26DC89DB /* NotificationTests.swift */,
 				E146E1C002664F63C25DB344 /* PKCETests.swift */,
+				019DD0FC774F2201544F8C56 /* ShortcutParameterRefreshTests.swift */,
 				37C9E327224C059F2EF3BDFA /* SlabStateTests.swift */,
 				C1B412D64B3F0BB4C9DE56AD /* SuiteAPIClientTests.swift */,
 				1BCA4F7949BCEADF89CA73DD /* TestSupport.swift */,
 				7F65F0C4F9A353203122D818 /* ThemeTests.swift */,
+				1C4AA74020F1E1EC630A56D4 /* WidgetApprovalTests.swift */,
 			);
 			path = AppTests;
 			sourceTree = "<group>";
@@ -269,6 +344,7 @@
 				74B1AB897F54593C6291A1C2 /* SuiteBridgeViewController.swift */,
 				032C94FDF2044C01B4E9FC63 /* WidgetCountsRefresher.swift */,
 				00B4D6834FA4167A8B595CE6 /* Fonts */,
+				DFC5D85F5D11AF2D0848E9EB /* Intents */,
 				23F8D68E28D07D16EB72E4AA /* LaunchScreen.storyboard */,
 				77DC4614F7D5E4C3289AA3F8 /* Plugins */,
 			);
@@ -304,6 +380,7 @@
 			isa = PBXGroup;
 			children = (
 				7D2AEC5B428FFE44C9BA1261 /* debug.xcconfig */,
+				E1F0D8407480BED6A3B02762 /* Intents */,
 				EF239EC89C21EEC652622465 /* Shared */,
 				4AD16332C5636BD8957279D3 /* ShareExtension */,
 				FAB307599C3A04F5FDA660F4 /* SuiteWidgets */,
@@ -318,6 +395,34 @@
 				6B04ADF7B81E144C4949AE51 /* CapApp-SPM */,
 			);
 			name = Packages;
+			sourceTree = "<group>";
+		};
+		DFC5D85F5D11AF2D0848E9EB /* Intents */ = {
+			isa = PBXGroup;
+			children = (
+				3E28F3CFC25B7856E87ACF6E /* BurrowShortcuts.swift */,
+				5E8ECDCE72A6F27840F39692 /* EntityActivity.swift */,
+				3105A037DC16B7EB85FA7C98 /* IntentAppHooks.swift */,
+			);
+			path = Intents;
+			sourceTree = "<group>";
+		};
+		E1F0D8407480BED6A3B02762 /* Intents */ = {
+			isa = PBXGroup;
+			children = (
+				0538A292E8627337FC97DC57 /* ApprovalsWidgetModel.swift */,
+				0FD909F861CBD9239A49DB52 /* Entities.swift */,
+				50E3C6960995294AC8D0D25F /* IntentActions.swift */,
+				061669E0BB04D24A1853F001 /* IntentCopy.swift */,
+				95476033D891E158ED21FA8F /* Intents.swift */,
+				32798D99CA9F9644F3696A57 /* IntentSnippets.swift */,
+				AEA2B3BC253F91FAD530FA0A /* IntentSupport.swift */,
+				EE185BEDD232F08332626453 /* ShortcutParameterRefresh.swift */,
+				F002A7B532553DD366E09F0F /* WaitingSummary.swift */,
+				9FF8E4E0D1FFE8E18A9853D1 /* WidgetApprovalIntents.swift */,
+				945DADE27ADE0DECFD3B9EEF /* WidgetPendingApprovals.swift */,
+			);
+			path = Intents;
 			sourceTree = "<group>";
 		};
 		E9C3DB3EC6D7655028A9C0D3 /* Products */ = {
@@ -352,6 +457,9 @@
 		FAB307599C3A04F5FDA660F4 /* SuiteWidgets */ = {
 			isa = PBXGroup;
 			children = (
+				3255B0B0C1D2387DCCB568FD /* ApprovalsProvider.swift */,
+				BA34F7BCD1785FB63C540ECE /* ApprovalsWidget.swift */,
+				A0CFBCAFD26B9ABA5F4922C4 /* Controls.swift */,
 				C39EBB7593D52A541A08EEEF /* CountsProvider.swift */,
 				C37D7AC24B0CAE74724A40C5 /* SuiteWidgetBundle.swift */,
 				E00A0AFA69293E349FB44575 /* SuiteWidgets.swift */,
@@ -595,18 +703,33 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				E0A339B2F5C1A28E55C5BF31 /* ApprovalsProvider.swift in Sources */,
+				103357A92E2A32901E04F4D4 /* ApprovalsWidget.swift in Sources */,
+				A6F116D35EC70933E092FF25 /* ApprovalsWidgetModel.swift in Sources */,
+				3209D4488514555280EAA484 /* Controls.swift in Sources */,
 				B0F935EDBEC2125E6BE74998 /* CountsCache.swift in Sources */,
 				A2C4A85BDEC03A1DE6DBC45C /* CountsEntry.swift in Sources */,
 				7999524BD61C37FBB86C10DB /* CountsProvider.swift in Sources */,
+				C444F6AD625727E7A9EBD770 /* Entities.swift in Sources */,
 				9FC504B1C06ADCAAC822DBC7 /* ExtensionRenderTests.swift in Sources */,
+				72FCB6A6EAFDF33BAF86128D /* InstallPickerView.swift in Sources */,
 				04F8E890893E2E303D9B6E9D /* InstallStore.swift in Sources */,
+				7D233016C71DBB15B8D18CFD /* IntentActions.swift in Sources */,
+				DF7A4214CA5E54AE4C653589 /* IntentCopy.swift in Sources */,
+				D0217C731C8DCE14CAE1539E /* IntentSnippets.swift in Sources */,
+				09A379DCDD2D04F6B1123B6A /* IntentSupport.swift in Sources */,
+				106EB925985680D362F34AAE /* Intents.swift in Sources */,
 				EE9EE519D1EA21C92F0EF46A /* KeychainTokenStore.swift in Sources */,
 				8A53910772C243D9F91960BC /* ShareSheetModel.swift in Sources */,
 				1E48C872DEB85431E418F709 /* ShareSheetView.swift in Sources */,
+				FBACA29AB5F22CCA7EB41071 /* ShortcutParameterRefresh.swift in Sources */,
 				8F27559256B885AC349A394D /* SlabState.swift in Sources */,
 				D4C7EC7B0B1C07AA1CE111EC /* SuiteAPIClient.swift in Sources */,
 				1D3DC52ECF765DB425185D38 /* SuiteWidgets.swift in Sources */,
 				45D48C96A52AE8CE339A50D4 /* Theme.swift in Sources */,
+				C500660B132B5CD786DCD7F8 /* WaitingSummary.swift in Sources */,
+				218C5A240C726C349DE7CE99 /* WidgetApprovalIntents.swift in Sources */,
+				A5EF9785C4E26545C2A1E0F3 /* WidgetPendingApprovals.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -632,22 +755,36 @@
 			buildActionMask = 2147483647;
 			files = (
 				E8E03F4FB1BE61A377693A7C /* AppDelegate.swift in Sources */,
+				0CC2DF31303C6D8DB7763F87 /* ApprovalsWidgetModel.swift in Sources */,
 				DFC8F0A5B598C047321C36F7 /* AuthSession.swift in Sources */,
+				19A3C80DCCEF7246668ECEF9 /* BurrowShortcuts.swift in Sources */,
 				6E10B17CE0395C27D3882D82 /* CountsCache.swift in Sources */,
 				641897D3AF57D7EC2D4FDCF0 /* CountsEntry.swift in Sources */,
+				520EBC5F2DD14D3D07FC1701 /* Entities.swift in Sources */,
+				D66E2A44656956844ACDCDE8 /* EntityActivity.swift in Sources */,
 				7022E2E1D5D1BC14E84EF64E /* InstallPickerView.swift in Sources */,
 				CE60DE7885DA376880CF1CCB /* InstallSession.swift in Sources */,
 				DDBA16A62D69BDBF390B65C3 /* InstallStore.swift in Sources */,
+				EFE620C0625DDE50365FDD31 /* IntentActions.swift in Sources */,
+				1E129C13E452E034E1E3D529 /* IntentAppHooks.swift in Sources */,
+				0568CB3EFF2AE60776ABA6D5 /* IntentCopy.swift in Sources */,
+				3DF6FC35FB9D33D19022D9AB /* IntentSnippets.swift in Sources */,
+				B54A431C6B25FFD28691B6A5 /* IntentSupport.swift in Sources */,
+				4A2192EF2CF9CED5EE5EE03A /* Intents.swift in Sources */,
 				FD1A379571F098B0CADBDDF3 /* KeychainTokenStore.swift in Sources */,
 				1263CD52F9690E5CAA14A00F /* NavigationPolicy.swift in Sources */,
 				67740B5377F807ABF1532F55 /* SceneDelegate.swift in Sources */,
 				0FDF3209E9CF7A987F5247AC /* ShareSheetModel.swift in Sources */,
+				5E32B2E26CA396F9DF1C6B85 /* ShortcutParameterRefresh.swift in Sources */,
 				AFE976B0084C2E2137AD5B8D /* SlabState.swift in Sources */,
 				D7FF0F390D42D200D34A9F3A /* SuiteAPIClient.swift in Sources */,
 				90E1263F84EE6BF085F62B39 /* SuiteBridgeViewController.swift in Sources */,
 				018A3FC1935EB4967674B4A1 /* SuiteNativePlugin.swift in Sources */,
 				1596045A38506257AE1037AB /* Theme.swift in Sources */,
+				89F75410C256DDEB74D32277 /* WaitingSummary.swift in Sources */,
+				B17F1545A743D2C2D5C6B0D9 /* WidgetApprovalIntents.swift in Sources */,
 				B479D67459AFBEC15159CB91 /* WidgetCountsRefresher.swift in Sources */,
+				CCE83DD1660681BEEC2FEC80 /* WidgetPendingApprovals.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -655,17 +792,22 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D811D6D8851C97B667406CC9 /* DeepLinkTests.swift in Sources */,
 				9ABD003A8FC8171D875452AD /* InstallSessionTests.swift in Sources */,
 				E34A91D774083A754D0871D2 /* InstallStoreTests.swift in Sources */,
+				3EDF9E8869059EFA42347341 /* IntentSourceScanTests.swift in Sources */,
+				F410DACF893D296718155247 /* IntentsTests.swift in Sources */,
 				98C474DC77F7657C40E7A5F5 /* KeychainTokenStoreTests.swift in Sources */,
 				6A5B81534AE9C9DFFD70A896 /* MultipartFormTests.swift in Sources */,
 				77EA1202CE361931617C37B4 /* NavigationPolicyTests.swift in Sources */,
 				A83CF1ADDB568356498DAB39 /* NotificationTests.swift in Sources */,
 				E06A3A001D6B5BA9967414CC /* PKCETests.swift in Sources */,
+				52587DE54E0AD3D712213B34 /* ShortcutParameterRefreshTests.swift in Sources */,
 				4D69D1DB4C9F4073E8B27F1A /* SlabStateTests.swift in Sources */,
 				9DE73310945788259E2D167E /* SuiteAPIClientTests.swift in Sources */,
 				9746794DCAD03A86C6F9B107 /* TestSupport.swift in Sources */,
 				391B97A1B20A9B5853267828 /* ThemeTests.swift in Sources */,
+				E98515C04A30C462639A791C /* WidgetApprovalTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -673,17 +815,31 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				5298D6CB3D0935D2576F2E03 /* ApprovalsProvider.swift in Sources */,
+				938D78AF3C30A0EE92DE723B /* ApprovalsWidget.swift in Sources */,
+				2D60F239C8AA08DDCDB65E83 /* ApprovalsWidgetModel.swift in Sources */,
+				7A696AF3972556AD8DB67311 /* Controls.swift in Sources */,
 				C3DEFDF9E78B362F9835C23E /* CountsCache.swift in Sources */,
 				5BAF3BAD4811588AFF876CD9 /* CountsEntry.swift in Sources */,
 				BA93AB83809DB2A8F0018AB1 /* CountsProvider.swift in Sources */,
+				C263DC4140062DB53091FB3D /* Entities.swift in Sources */,
 				9B0A8F444306A11704825D5D /* InstallStore.swift in Sources */,
+				51D21EDB4B597F7F137D12BC /* IntentActions.swift in Sources */,
+				4829CC8F69E82835ECD597E7 /* IntentCopy.swift in Sources */,
+				DE6827C0F5689CD0BFD29161 /* IntentSnippets.swift in Sources */,
+				7AE80293566B0E44C7A14B57 /* IntentSupport.swift in Sources */,
+				23C671C8DC768F8022DC8747 /* Intents.swift in Sources */,
 				EE5943C7FDD95D952E4C61F3 /* KeychainTokenStore.swift in Sources */,
 				9E7E2CB95A035D2C87E10DFA /* ShareSheetModel.swift in Sources */,
+				B4A45E556F1D9EC0014C3BDC /* ShortcutParameterRefresh.swift in Sources */,
 				B44C8DE014B8C9DB4A85C3BE /* SlabState.swift in Sources */,
 				F621662430D0939656F7600A /* SuiteAPIClient.swift in Sources */,
 				A065BD050329A7F29629ACB1 /* SuiteWidgetBundle.swift in Sources */,
 				2A393AD5EE919DFDA2B619FB /* SuiteWidgets.swift in Sources */,
 				1146BE2FF7FB0F5F3A4BE239 /* Theme.swift in Sources */,
+				CFE248A6AD737F92FF7D6723 /* WaitingSummary.swift in Sources */,
+				05D6BB78D638DD41BA497D53 /* WidgetApprovalIntents.swift in Sources */,
+				B728051823B0627161077A44 /* WidgetPendingApprovals.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -840,16 +996,16 @@
 				DEVELOPMENT_TEAM = XJ2GLJ9ST2;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
-				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @loader_path/Frameworks";
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 1;
+				TARGETED_DEVICE_FAMILY = "1,2";
 				VALIDATE_PRODUCT = YES;
 			};
 			name = Release;
@@ -902,9 +1058,9 @@
 				ENABLE_TESTABILITY = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_PREPROCESSOR_DEFINITIONS = "DEBUG=1 $(inherited)";
-				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @loader_path/Frameworks";
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
@@ -912,7 +1068,7 @@
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 1;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
 		};

@@ -935,6 +935,17 @@ defmodule PlatformWeb.Router do
     get("/spaces", AppApiController, :spaces)
     post("/spaces/:space_id/messages", AppApiController, :create_message)
     get("/counts", AppApiController, :counts)
+
+    # App Intents (task 01a10db6): Siri, Shortcuts, widgets, controls.
+    get("/approvals", AppIntentsController, :approvals)
+    post("/approvals/:id/approve", AppIntentsController, :approve)
+    post("/approvals/:id/reject", AppIntentsController, :reject)
+    get("/tasks", AppIntentsController, :tasks)
+    get("/meetings", AppIntentsController, :meetings)
+    post("/meetings", AppIntentsController, :create_meeting)
+    get("/agents", AppIntentsController, :agents)
+    post("/agents/:agent_id/dm", AppIntentsController, :agent_dm)
+    get("/spaces/:space_id/messages", AppIntentsController, :messages)
   end
 
   scope "/api/meetings", PlatformWeb do

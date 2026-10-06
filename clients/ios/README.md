@@ -53,6 +53,12 @@ them in the background. Never run `xcodebuild -runFirstLaunch`. No CocoaPods.
 
 After adding or moving a Swift file: `cd ios/App && xcodegen generate`.
 
+The app is universal (iPhone and iPad, iOS 17+). Run the App scheme on both
+`name=iPhone 17` and `name=iPad Pro 13-inch (M5)`. Lint a Swift file you
+create or edit with `xcrun swift-format lint --strict <file>` from
+`clients/ios` (config: `.swift-format`, 4-space indent, 160 columns); do not
+reformat files you did not touch.
+
 ## TestFlight (rock only)
 
 ```bash
@@ -94,24 +100,29 @@ App Groups capability` (and Push Notifications on App). The ASC API returns 403
 ## Colour slots
 
 Named colour assets only (Any + Dark); no hex or RGB literal in Swift.
-Source tokens: `apps/platform/assets/css/app.css` on `origin/main`, read
-2026-10-04. `scripts/generate_assets.py` holds the sRGB values.
+Values are the Burrow palette (project page `design/burrow-redesign.md`: dark
+decided 2026-10-03, light step 2026-10-05), the same values Android uses.
+`scripts/generate_assets.py` holds the sRGB values.
 
-| Slot | Web token | Light | Dark |
+| Slot | Burrow token | Light | Dark |
 | --- | --- | --- | --- |
-| `primary` | `primary` | oklch(82% 0.12 207) = #4EDAEB | #06D5ED |
-| `onPrimary` | `primary-content` | black | black |
-| `accent` | `accent` | #06D5ED | #06D5ED |
-| `surface` | `base-100` | #FFFFFF | #171b25 |
-| `surfaceMuted` | `base-200` | #F2F2F2 | #000306 |
-| `onSurface` | `base-content` | black | #EEEEEE |
-| `muted` | neutral secondary text | oklch(45% 0.01 0) = #5A5355 (7.49:1 on #FFFFFF) | #958D8F, measured 5.32:1 on #171b25 (at least 4.5:1 required) |
-| `border` | `edge` | oklch(88% 0 0) = #D7D7D7 | #232A38 |
-| `destructive` | `error` | oklch(63% 0.22 25) = #F1383E | #F1383E |
+| `primary` | orange (primary actions only) | #AD4B07 | #F47721 |
+| `onPrimary` | label on a filled accent | #FBFAF9 | #202124 |
+| `accent` | follows primary | #AD4B07 | #F47721 |
+| `info` | info (teal-cyan): the live widget count ONLY | #0E7382 | #22D3EE |
+| `onInfo` | label on info | #FBFAF9 | #202124 |
+| `surface` | surface / base-100 | #FBFAF9 | #191B20 |
+| `surfaceMuted` | ground / base-200 | #F6F4F1 | #111214 |
+| `onSurface` | ink / base-content | #221F1B | #EEEFF1 |
+| `muted` | muted text | #635B53 | #A9ABB2 |
+| `border` | edge | #D9D3C9 | #383B42 |
+| `destructive` | error, unchanged | #F1383E | #F1383E |
 
-Note: on `origin/main` the light theme's `--color-primary` is the literal
-#06D5ED, not oklch(82% 0.12 207). The light `primary` slot follows the stage
-specification (oklch(82% 0.12 207)); align it if the web token is meant to win.
+Cyan still means live: the count slab and the approvals widget's header
+count fill with `info` only when `slabState` is `.live`. Approve is the only
+`primary` colour in a widget row. The web app's `app.css` on `origin/main`
+is still cyan primary; the native slots follow the Burrow palette, as
+Android's do.
 Contrast ratios are WCAG 2.x relative luminance, computed from the sRGB values.
 
 The icon is the Burrow arch: cream on an orange gradient (Any), orange on
@@ -209,7 +220,7 @@ re-encoded as JPEG. States and copy follow canvas 01a10887.
 
 `GET /api/app/counts`, 15-minute timeline, plus the app refreshing the App
 Group counts and calling `WidgetCenter.shared.reloadAllTimelines()` on every
-foreground. `slabState(count:fetchedAt:now:signedIn:)`: primary fill ONLY for
+foreground. `slabState(count:fetchedAt:now:signedIn:)`: info fill ONLY for
 `.live`; zero and stale (older than 30 minutes, measured on the device clock)
 use `surfaceMuted`. Each timeline carries a second entry at the stale
 boundary, so a widget that cannot refresh still loses its cyan on time. Deep

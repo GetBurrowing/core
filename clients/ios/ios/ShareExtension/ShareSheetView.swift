@@ -4,6 +4,11 @@ import SwiftUI
 /// Cancel, title, and Send as a small FILLED primary button at field radius
 /// (cyan text on white would be 1.8:1). Below: preview card, Space row,
 /// optional agent row, message field.
+///
+/// iPad: the system presents the extension as a form sheet; the content is
+/// the iPhone layout in a column no wider than `SuiteLayout.sheetWidth`.
+/// Send sits in the top bar, so the keyboard never covers it. Hardware
+/// keyboard: Return sends (once a space is chosen), Escape cancels.
 struct ShareSheetView: View {
     @ObservedObject var model: ShareSheetModel
     let onCancel: () -> Void
@@ -24,6 +29,8 @@ struct ShareSheetView: View {
                 }
             }
         }
+        .frame(maxWidth: SuiteLayout.sheetWidth)
+        .frame(maxWidth: .infinity)
         .background(SuiteColor.surface.color.ignoresSafeArea())
         .foregroundColor(SuiteColor.onSurface.color)
     }
@@ -37,6 +44,8 @@ struct ShareSheetView: View {
                 Button("Cancel", action: onCancel)
                     .font(SuiteFont.body())
                     .foregroundColor(SuiteColor.onSurface.color)
+                    .keyboardShortcut(.cancelAction)
+                    .hoverEffect()
                     .disabled(model.fieldsLocked)
                 Spacer()
                 if model.phase != .notSignedIn {
@@ -65,6 +74,10 @@ struct ShareSheetView: View {
             .background(RoundedRectangle(cornerRadius: SuiteRadius.field).fill(SuiteColor.primary.color))
             .opacity(model.canSend || model.phase == .sending ? 1 : 0.4)
         }
+        // Return sends only while Send is enabled (a space chosen, not
+        // already sending): a disabled button's shortcut does nothing.
+        .keyboardShortcut(.defaultAction)
+        .hoverEffect()
         .disabled(!model.canSend)
         .accessibilityLabel("Send")
     }

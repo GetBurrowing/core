@@ -58,14 +58,23 @@ struct CountsCache {
     }()
 }
 
-/// `burrow://open?host=<host>&path=<path>`: the widgets' deep link. The
-/// app opens `https://<host><path>` in that install. The path is an
-/// allow-list, so a link cannot steer the shell anywhere but the two pages
-/// the widgets point at.
+/// `burrow://open?host=<host>&path=<path>`: a deep link into one install.
+/// The app opens `https://<host><path>` in that install, with that
+/// install's own bearer and handoff (the host travels in the link, so a
+/// link never borrows another install's sign-in).
+///
+/// The path is validated against a fixed set of shapes, so a link cannot
+/// steer the shell anywhere else:
+/// `/`, `/inbox`, `/tasks`, `/tasks/<uuid>`, `/chat/<segment>`, `/meetings`,
+/// `/meetings/<segment>`, where a segment is `[A-Za-z0-9_-]{1,128}`. That
+/// alphabet has no `.`, `/`, `%`, `?` or `#`, so `..`, `//`, a
+/// percent-encoded slash and a smuggled query or fragment all fail.
+/// Spaces use the server's `path_segment` (`Chat.space_path_segment/1`),
+/// never a slug: a DM has no slug and its segment is a bare UUID.
 struct DeepLink: Equatable {
     static let scheme = "burrow"
     static let action = "open"
-    static let allowedPaths: Set<String> = ["/", "/inbox", "/tasks"]
+    static let maxSegmentLength = 128
 
     let host: String
     let path: String
@@ -88,11 +97,73 @@ struct DeepLink: Equatable {
 
     init?(url: URL) {
         guard url.scheme?.lowercased() == Self.scheme, url.host?.lowercased() == Self.action,
-              let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
-              let rawHost = items.first(where: { $0.name == "host" })?.value,
-              let host = InstallStore.normalizeHost(rawHost) else { return nil }
+            let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
+            let rawHost = items.first(where: { $0.name == "host" })?.value,
+            let host = InstallStore.normalizeHost(rawHost)
+        else { return nil }
         let path = items.first(where: { $0.name == "path" })?.value ?? "/"
-        guard Self.allowedPaths.contains(path) else { return nil }
+        guard Self.isAllowed(path: path) else { return nil }
         self.init(host: host, path: path)
+    }
+
+    // MARK: Constructors (App Intents, stage 3)
+
+    /// A space or DM, by the server's `path_segment`.
+    static func space(host: String, pathSegment: String) -> DeepLink? {
+        validated(host: host, path: "/chat/\(pathSegment)")
+    }
+
+    /// One task, by its UUID.
+    static func task(host: String, id: String) -> DeepLink? {
+        validated(host: host, path: "/tasks/\(id)")
+    }
+
+    /// One meeting, by its slug.
+    static func meeting(host: String, slug: String) -> DeepLink? {
+        validated(host: host, path: "/meetings/\(slug)")
+    }
+
+    private static func validated(host: String, path: String) -> DeepLink? {
+        guard let host = InstallStore.normalizeHost(host), isAllowed(path: path) else { return nil }
+        return DeepLink(host: host, path: path)
+    }
+
+    // MARK: Validation
+
+    static func isAllowed(path: String) -> Bool {
+        switch path {
+        case "/", "/inbox", "/tasks", "/meetings": return true
+        default: break
+        }
+        // Exactly "/<section>/<one segment>": split keeps empty pieces, so
+        // "//x", "/chat/" and "/chat/a/b" all come out the wrong shape.
+        let parts = path.split(separator: "/", omittingEmptySubsequences: false)
+        guard parts.count == 3, parts[0].isEmpty else { return false }
+        let segment = parts[2]
+        switch parts[1] {
+        case "chat", "meetings": return isSegment(segment)
+        case "tasks": return isUUID(segment)
+        default: return false
+        }
+    }
+
+    static func isSegment<S: StringProtocol>(_ segment: S) -> Bool {
+        guard (1...maxSegmentLength).contains(segment.utf8.count) else { return false }
+        return segment.utf8.allSatisfy { byte in
+            switch byte {
+            case UInt8(ascii: "A")...UInt8(ascii: "Z"), UInt8(ascii: "a")...UInt8(ascii: "z"),
+                UInt8(ascii: "0")...UInt8(ascii: "9"), UInt8(ascii: "_"), UInt8(ascii: "-"):
+                return true
+            default:
+                return false
+            }
+        }
+    }
+
+    /// 8-4-4-4-12 hex digits, either case.
+    static func isUUID<S: StringProtocol>(_ segment: S) -> Bool {
+        let groups = segment.split(separator: "-", omittingEmptySubsequences: false)
+        guard groups.map(\.utf8.count) == [8, 4, 4, 4, 12] else { return false }
+        return groups.allSatisfy { $0.allSatisfy(\.isHexDigit) } && segment.allSatisfy(\.isASCII)
     }
 }

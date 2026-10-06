@@ -1,21 +1,10 @@
 import SwiftUI
 import WidgetKit
 
-// Home and lock screen widgets (canvas 01a10887, "Widgets"). Static
-// configuration only: no App Intents. The numeral is SF Pro Heavy; the
-// widget target bundles no font (canvas Q5).
-
-struct ApprovalsWidget: Widget {
-    var body: some WidgetConfiguration {
-        StaticConfiguration(kind: "com.kobo-ai.burrow.widgets.approvals", provider: CountsProvider()) { entry in
-            SingleCountView(kind: .approvals, entry: entry)
-        }
-        .configurationDisplayName("My approvals")
-        .description("Approvals waiting on you in the selected Burrow install.")
-        .supportedFamilies([.systemSmall, .accessoryCircular, .accessoryInline])
-        .contentMarginsDisabled()
-    }
-}
+// Home and lock screen widgets (canvas 01a10887, "Widgets"). My tasks and
+// the overview are static; My approvals (ApprovalsWidget.swift) is
+// interactive. The numeral is SF Pro Heavy; the widget target bundles no
+// font (canvas Q5).
 
 struct TasksWidget: Widget {
     var body: some WidgetConfiguration {
@@ -96,8 +85,8 @@ struct OverviewView: View {
 }
 
 /// The signature count slab: label top-left, then a slab filling the rest
-/// with the numeral bottom-left and a one-line caption. Primary fill ONLY
-/// when `slabState` is `.live`.
+/// with the numeral bottom-left and a one-line caption. Info (cyan) fill
+/// ONLY when `slabState` is `.live`.
 struct SlabView: View {
     let kind: SlabKind
     let entry: CountsEntry
@@ -126,13 +115,13 @@ struct SlabView: View {
                     .lineLimit(2)
                     .minimumScaleFactor(0.8)
             }
-            .foregroundColor(state.usesPrimaryFill ? SuiteColor.onPrimary.color : SuiteColor.onSurface.color)
+            .foregroundColor(state.usesLiveFill ? SuiteColor.onInfo.color : SuiteColor.onSurface.color)
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
             .background(
                 ContainerRelativeShape()
-                    .fill(state.usesPrimaryFill ? SuiteColor.primary.color : SuiteColor.surfaceMuted.color)
+                    .fill(state.usesLiveFill ? SuiteColor.info.color : SuiteColor.surfaceMuted.color)
             )
         }
         .accessibilityElement(children: .combine)

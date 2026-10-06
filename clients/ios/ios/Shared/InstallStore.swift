@@ -46,7 +46,8 @@ final class InstallStore {
 
     var installs: [Install] {
         guard let data = defaults.data(forKey: Key.installs),
-              let saved = try? JSONDecoder().decode([Install].self, from: data) else {
+            let saved = try? JSONDecoder().decode([Install].self, from: data)
+        else {
             return Self.defaultHosts.map { Install(host: $0, name: nil) }
         }
         return saved
@@ -111,7 +112,12 @@ final class InstallStore {
         save(list)
     }
 
+    /// Called after an install is removed. The app sets it to forget the
+    /// install's Spotlight entries; extensions leave it nil.
+    static var didRemove: ((String) -> Void)?
+
     func remove(host: String) {
+        defer { Self.didRemove?(host) }
         var list = installs
         list.removeAll { $0.host == host }
         save(list)
@@ -141,8 +147,9 @@ final class InstallStore {
         let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789-")
         for label in labels {
             guard !label.isEmpty, label.count <= 63,
-                  !label.hasPrefix("-"), !label.hasSuffix("-"),
-                  label.unicodeScalars.allSatisfy({ allowed.contains($0) }) else { return nil }
+                !label.hasPrefix("-"), !label.hasSuffix("-"),
+                label.unicodeScalars.allSatisfy({ allowed.contains($0) })
+            else { return nil }
         }
         return text
     }

@@ -32,9 +32,10 @@ enum InstallProbe {
     static func probe(host: String, session: URLSession = .shared) async -> Result? {
         let install = Install(host: host)
         guard let health = try? await fetchJSON(install.healthURL, session: session),
-              (health["status"] as? String) == "ok",
-              let manifest = try? await fetchJSON(install.manifestURL, session: session),
-              manifest["name"] != nil || manifest["short_name"] != nil else { return nil }
+            (health["status"] as? String) == "ok",
+            let manifest = try? await fetchJSON(install.manifestURL, session: session),
+            manifest["name"] != nil || manifest["short_name"] != nil
+        else { return nil }
         return Result(name: (manifest["name"] as? String) ?? (manifest["short_name"] as? String))
     }
 
@@ -49,7 +50,8 @@ enum InstallProbe {
         // (measured on suite.example.com, 2026-10-04).
         let (data, response) = try await session.data(for: request)
         guard (response as? HTTPURLResponse)?.statusCode == 200,
-              let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
             throw URLError(.badServerResponse)
         }
         return json
@@ -91,7 +93,7 @@ final class InstallPickerModel: ObservableObject {
     }
 
     func refreshAll() {
-        installs.forEach { refresh($0.host) }
+        for install in installs { refresh(install.host) }
     }
 
     func refresh(_ host: String) {
@@ -113,7 +115,8 @@ final class InstallPickerModel: ObservableObject {
     /// filled when the address is not a Suite install.
     func add(_ typed: String) async -> Bool {
         guard let host = InstallStore.normalizeHost(typed),
-              let result = await InstallProbe.probe(host: host) else { return false }
+            let result = await InstallProbe.probe(host: host)
+        else { return false }
         store.add(host: host, name: result.name)
         reload()
         reachability[host] = .reachable
@@ -140,7 +143,8 @@ final class InstallPickerModel: ObservableObject {
 
     private static func fetchIcon(_ install: Install) async -> UIImage? {
         guard let (data, response) = try? await URLSession.shared.data(from: install.iconURL),
-              (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+            (response as? HTTPURLResponse)?.statusCode == 200
+        else { return nil }
         return UIImage(data: data)
     }
 }
@@ -149,8 +153,10 @@ struct InstallPickerView: View {
     @StateObject var model: InstallPickerModel
     let onContinue: (Install) -> Void
     @State private var showingAdd = false
+    @Environment(\.horizontalSizeClass) private var sizeClass
 
     var body: some View {
+        // Regular width: a centred form sheet; compact: the iPhone layout.
         ZStack {
             SuiteColor.surface.color.ignoresSafeArea()
             if let host = model.cantReachHost {
@@ -163,6 +169,7 @@ struct InstallPickerView: View {
                 list
             }
         }
+        .suiteFormSheet(regular: sizeClass == .regular)
         .onAppear { model.refreshAll() }
         .sheet(isPresented: $showingAdd) {
             AddInstallView(model: model) { showingAdd = false }
@@ -209,13 +216,16 @@ struct InstallPickerView: View {
                     unreachable: model.reachability[install.host] == .unreachable
                 )
                 .contentShape(Rectangle())
+                .hoverEffect()
                 .onTapGesture { model.select(install.host) }
                 .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
                 .listRowBackground(SuiteColor.surface.color)
                 .listRowSeparatorTint(SuiteColor.border.color)
                 .listRowSeparator(install.host == model.installs.last?.host ? .hidden : .visible, edges: .bottom)
                 .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                    Button(role: .destructive) { model.remove(install.host) } label: {
+                    Button(role: .destructive) {
+                        model.remove(install.host)
+                    } label: {
                         Text(InstallCopy.remove)
                     }
                 }
@@ -349,6 +359,8 @@ struct SuiteButton: View {
             )
         }
         .buttonStyle(.plain)
+        .contentShape(.hoverEffect, RoundedRectangle(cornerRadius: SuiteRadius.field, style: .continuous))
+        .hoverEffect()
         .disabled(busy)
     }
 
@@ -364,6 +376,7 @@ struct AddInstallView: View {
     @State private var checking = false
     @State private var failed = false
     @FocusState private var focused: Bool
+    @Environment(\.horizontalSizeClass) private var sizeClass
 
     var body: some View {
         ZStack {
@@ -425,6 +438,9 @@ struct AddInstallView: View {
                     .padding(.bottom, 16)
             }
             .padding(.horizontal, 16)
+            // The system already presents this as a sheet; in regular width
+            // keep its column to form-sheet width.
+            .frame(maxWidth: sizeClass == .regular ? SuiteLayout.sheetWidth : .infinity)
         }
         .onAppear { focused = true }
     }

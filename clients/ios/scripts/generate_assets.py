@@ -19,18 +19,23 @@ ASSETS = ROOT / "ios" / "App" / "App" / "Assets.xcassets"
 # Colour slots are shared by the app, the share extension and the widgets.
 COLOURS = ROOT / "ios" / "Shared" / "Colors.xcassets"
 
-# slot: (light, dark), sRGB hex. oklch tokens converted with the CSS Color 4
-# OKLab matrices; see README for the source token of each.
+# slot: (light, dark), sRGB hex. The Burrow palette (project page
+# design/burrow-redesign.md: dark decided 2026-10-03, light step 2026-10-05),
+# the same values as Android's res/values{,-night}/colors.xml. Primary is
+# orange and marks primary actions only; `info` (teal-cyan) is reserved for
+# the live widget count, so cyan still means live and no button is cyan.
 SLOTS = {
-    "primary": ("#4EDAEB", "#06D5ED"),       # primary: oklch(82% 0.12 207) / #06D5ED
-    "onPrimary": ("#000000", "#000000"),     # primary-content
-    "accent": ("#06D5ED", "#06D5ED"),        # accent (app.css, both themes)
-    "surface": ("#FFFFFF", "#171B25"),       # base-100
-    "surfaceMuted": ("#F2F2F2", "#000306"),  # base-200
-    "onSurface": ("#000000", "#EEEEEE"),     # base-content
-    "muted": ("#5A5355", "#958D8F"),         # neutral text: oklch(45% .01 0) / oklch(65% .01 0)
-    "border": ("#D7D7D7", "#232A38"),        # edge
-    "destructive": ("#F1383E", "#F1383E"),   # error: oklch(63% 0.22 25)
+    "primary": ("#AD4B07", "#F47721"),       # orange: primary actions
+    "onPrimary": ("#FBFAF9", "#202124"),     # label on a primary fill
+    "accent": ("#AD4B07", "#F47721"),        # accent follows primary (web recolor)
+    "info": ("#0E7382", "#22D3EE"),          # info: the live widget count only
+    "onInfo": ("#FBFAF9", "#202124"),        # label on an info fill
+    "surface": ("#FBFAF9", "#191B20"),       # base-100 / surface
+    "surfaceMuted": ("#F6F4F1", "#111214"),  # base-200 / ground
+    "onSurface": ("#221F1B", "#EEEFF1"),     # base-content / ink
+    "muted": ("#635B53", "#A9ABB2"),         # secondary text
+    "border": ("#D9D3C9", "#383B42"),        # edge
+    "destructive": ("#F1383E", "#F1383E"),   # error: oklch(63% 0.22 25), unchanged
 }
 
 INFO = {"author": "xcode", "version": 1}

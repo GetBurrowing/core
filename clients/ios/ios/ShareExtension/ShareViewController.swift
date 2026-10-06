@@ -15,6 +15,9 @@ final class ShareViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = SuiteColor.surface.uiColor
+        // iPad presents a share extension as a form sheet; ask for the
+        // standard form-sheet size. iPhone ignores it.
+        preferredContentSize = CGSize(width: SuiteLayout.sheetWidth, height: 620)
 
         model = ShareSheetModel(install: InstallStore.shared.selectedInstall)
         let sheet = ShareSheetView(
@@ -31,7 +34,7 @@ final class ShareViewController: UIViewController {
             host.view.topAnchor.constraint(equalTo: view.topAnchor),
             host.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             host.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            host.view.trailingAnchor.constraint(equalTo: view.trailingAnchor)
+            host.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
         ])
         host.didMove(toParent: self)
 
@@ -102,15 +105,21 @@ enum ShareItemLoader {
 
     /// The system's file is deleted when this callback returns, so it is
     /// copied (on disk, not into memory) into the extension's own temp dir.
-    private static func loadFile(_ provider: NSItemProvider, type: UTType,
-                                 completion: @escaping (MultipartForm.FilePart?) -> Void) {
+    private static func loadFile(
+        _ provider: NSItemProvider, type: UTType,
+        completion: @escaping (MultipartForm.FilePart?) -> Void
+    ) {
         let identifier = provider.registeredTypeIdentifiers.first { UTType($0)?.conforms(to: type) == true } ?? type.identifier
         provider.loadFileRepresentation(forTypeIdentifier: identifier) { url, _ in
-            if let url, let part = copyIn(url, suggestedName: provider.suggestedName.map { name in
-                URL(fileURLWithPath: name).pathExtension.isEmpty
-                    ? name + "." + (UTType(identifier)?.preferredFilenameExtension ?? url.pathExtension)
-                    : name
-            } ?? url.lastPathComponent) {
+            if let url,
+                let part = copyIn(
+                    url,
+                    suggestedName: provider.suggestedName.map { name in
+                        URL(fileURLWithPath: name).pathExtension.isEmpty
+                            ? name + "." + (UTType(identifier)?.preferredFilenameExtension ?? url.pathExtension)
+                            : name
+                    } ?? url.lastPathComponent)
+            {
                 return completion(part)
             }
             // Some sources (a screenshot's markup editor) only offer an
@@ -121,8 +130,10 @@ enum ShareItemLoader {
                 let data = (item as? Data) ?? (item as? UIImage)?.jpegData(compressionQuality: 0.9)
                 guard let data else { return completion(nil) }
                 let target = uniqueURL(named: "Image.jpg")
-                completion((try? data.write(to: target)) == nil ? nil
-                    : MultipartForm.FilePart(filename: "Image.jpg", mimeType: "image/jpeg", url: target))
+                completion(
+                    (try? data.write(to: target)) == nil
+                        ? nil
+                        : MultipartForm.FilePart(filename: "Image.jpg", mimeType: "image/jpeg", url: target))
             }
         }
     }
@@ -149,7 +160,8 @@ enum ShareItemLoader {
     /// the full decoded bitmap is the only large allocation.
     static func convertHEICIfNeeded(_ part: MultipartForm.FilePart) -> MultipartForm.FilePart {
         guard let type = UTType(filenameExtension: part.url.pathExtension), type.conforms(to: .heic) || type.conforms(to: .heif),
-              let source = CGImageSourceCreateWithURL(part.url as CFURL, nil) else { return part }
+            let source = CGImageSourceCreateWithURL(part.url as CFURL, nil)
+        else { return part }
         let name = URL(fileURLWithPath: part.filename).deletingPathExtension().lastPathComponent + ".jpg"
         let target = uniqueURL(named: name)
         guard let destination = CGImageDestinationCreateWithURL(target as CFURL, UTType.jpeg.identifier as CFString, 1, nil) else {

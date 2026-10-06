@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import App
 
 final class SlabStateTests: XCTestCase {
@@ -23,19 +24,20 @@ final class SlabStateTests: XCTestCase {
             (0, 31, true, .stale, "an old zero is stale, not zero"),
             (3, 600, true, .stale, "hours old"),
             (3, 0, false, .signedOut, "no bearer wins over a fresh count"),
-            (0, 31, false, .signedOut, "no bearer wins over stale")
+            (0, 31, false, .signedOut, "no bearer wins over stale"),
         ]
         for c in cases {
-            XCTAssertEqual(slabState(count: c.count, fetchedAt: ago(minutes: c.age), now: now, signedIn: c.signedIn),
-                           c.expected, c.why)
+            XCTAssertEqual(
+                slabState(count: c.count, fetchedAt: ago(minutes: c.age), now: now, signedIn: c.signedIn),
+                c.expected, c.why)
         }
     }
 
-    func testOnlyLiveUsesThePrimaryFill() {
-        XCTAssertTrue(SlabState.live.usesPrimaryFill)
-        XCTAssertFalse(SlabState.zero.usesPrimaryFill)
-        XCTAssertFalse(SlabState.stale.usesPrimaryFill)
-        XCTAssertFalse(SlabState.signedOut.usesPrimaryFill)
+    func testOnlyLiveUsesTheLiveFill() {
+        XCTAssertTrue(SlabState.live.usesLiveFill)
+        XCTAssertFalse(SlabState.zero.usesLiveFill)
+        XCTAssertFalse(SlabState.stale.usesLiveFill)
+        XCTAssertFalse(SlabState.signedOut.usesLiveFill)
     }
 
     func testCaptionsUseTheCanvasCopy() {
@@ -65,8 +67,9 @@ final class SlabStateTests: XCTestCase {
     }
 
     func testSignedOutEntryHasNoCountState() {
-        let entry = CountsEntry(date: now, host: "suite.example.com", signedIn: false,
-                                counts: SuiteCounts(approvals: 3, tasks: 1, fetchedAt: now))
+        let entry = CountsEntry(
+            date: now, host: "suite.example.com", signedIn: false,
+            counts: SuiteCounts(approvals: 3, tasks: 1, fetchedAt: now))
         XCTAssertEqual(entry.state(.approvals), .signedOut)
         XCTAssertEqual(CountsEntry.timeline(from: entry, now: now).entries.first?.state(.tasks), .signedOut)
     }
@@ -87,8 +90,9 @@ final class SlabStateTests: XCTestCase {
         XCTAssertEqual(approvals.url.absoluteString, "burrow://open?host=suite.example.com&path=/inbox")
         XCTAssertEqual(DeepLink(url: approvals.url), approvals)
         XCTAssertEqual(approvals.destination.absoluteString, "https://suite.example.com/inbox")
-        XCTAssertEqual(DeepLink(host: "suite.example.com", path: SlabKind.tasks.path).destination.absoluteString,
-                       "https://suite.example.com/tasks")
+        XCTAssertEqual(
+            DeepLink(host: "suite.example.com", path: SlabKind.tasks.path).destination.absoluteString,
+            "https://suite.example.com/tasks")
 
         XCTAssertNil(DeepLink(url: URL(string: "burrow://open?host=suite.example.com&path=/admin")!))
         XCTAssertNil(DeepLink(url: URL(string: "burrow://open?host=evil.example.com%2Fx&path=//evil.example.com")!))
