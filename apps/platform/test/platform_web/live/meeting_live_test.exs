@@ -5780,6 +5780,68 @@ defmodule PlatformWeb.MeetingLiveTest do
     end
 
     defp in_panel(selector), do: ~s([data-role="meeting-detail-panel"] #{selector})
+
+    # Task 01a10db7 stage 2: a declined ring is reported to the INVITER on
+    # the meeting's shell topic. The inviter gets a toast and a Declined tag
+    # on that invitee's row; a viewer who did not invite gets neither.
+    test "a declined ring toasts the inviter and tags the row; another viewer sees nothing",
+         %{conn: conn, user: inviter, project: project} do
+      meeting = seed_detail_meeting(project)
+
+      invitee =
+        Repo.insert!(%User{
+          email: "ring-invitee-#{System.unique_integer([:positive])}@example.com",
+          name: "Rhea Ringer",
+          oidc_sub: "oidc-ring-invitee-#{System.unique_integer([:positive])}"
+        })
+
+      invite =
+        %Invite{}
+        |> Invite.changeset(%{meeting_id: meeting.id, user_id: invitee.id})
+        |> Repo.insert!()
+
+      {:ok, view, _html} = live(grid_conn(conn), ~p"/meetings")
+      _ = select_meeting(view, meeting)
+
+      {bystander_conn, _bystander} = authenticated_conn(Phoenix.ConnTest.build_conn())
+      {:ok, bystander_view, _html} = live(grid_conn(bystander_conn), ~p"/meetings")
+      _ = select_meeting(bystander_view, meeting)
+
+      ring_tag =
+        ~s([data-role="meeting-invite-row"][data-entry-id="#{invite.id}"] [data-role="invite-ring-state"])
+
+      assert attrs_of(render(view), ring_tag, "data-role") == []
+
+      Phoenix.PubSub.broadcast(
+        Platform.PubSub,
+        MeetingsPubSub.meeting_topic(meeting.id),
+        {:ring_declined,
+         %{
+           ring_id: Ecto.UUID.generate(),
+           meeting_id: meeting.id,
+           user_id: invitee.id,
+           display_name: "Rhea Ringer",
+           inviter_user_id: inviter.id
+         }}
+      )
+
+      html = render(view)
+      assert html =~ "Rhea Ringer declined"
+
+      # Panel and mobile sheet both draw the row, so both carry the tag.
+      tags =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(ring_tag)
+        |> Enum.map(&(&1 |> LazyHTML.text() |> String.trim()))
+
+      assert tags != []
+      assert Enum.all?(tags, &(&1 == "Declined"))
+
+      bystander_html = render(bystander_view)
+      refute bystander_html =~ "Rhea Ringer declined"
+      assert attrs_of(bystander_html, ring_tag, "data-role") == []
+    end
   end
 
   describe "MeetingLive.guest_expiry_label/1" do

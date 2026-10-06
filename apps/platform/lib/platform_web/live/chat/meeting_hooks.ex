@@ -88,11 +88,9 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   alias Platform.Chat.SpaceAccess
   alias Platform.Meetings
   alias Platform.Meetings.AgentActivity
-  alias Platform.Meetings.Membership, as: MeetingsMembership
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
   alias Platform.Meetings.Room
   alias Platform.Meetings.State, as: MeetingState
-  alias Platform.Tenancy
   alias PlatformWeb.Components.Meetings.CallShell
   alias PlatformWeb.Components.Meetings.CandidateRail
   alias PlatformWeb.ChatLive.TranscriberMarkersHook
@@ -1199,28 +1197,6 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
 
   # ── Internals ────────────────────────────────────────────────────────
 
-  # Room lifecycle (task 019e4b3e v4 stage 1): `Meetings.activate_room/1`
-  # previously had ZERO callers, so `ensure_room/1` left rooms at the
-  # schema default `status="idle"`. `get_active_room/1` filters
-  # `status=="active"`, so `active_participants_for_space/1` (and the
-  # presence rail on BOTH the /meetings and /chat surfaces) always saw an
-  # empty list. A room must become "active" exactly when the first real
-  # participant joins — and `do_join/1` is the single shared join
-  # entrypoint (ChatLive `meeting_join` + MeetingLive `:auto_join` both
-  # route here), so activating here fixes presence sourcing on both
-  # surfaces in one place and keeps room-active + has-participant atomic.
-  #
-  # We gate on `status != "active"` so an already-active room skips the
-  # redundant write and the spurious `:room_activated`/presence broadcast.
-  #
-  # Deactivation symmetry lives in the LiveKit `room_finished` webhook
-  # (livekit_webhook_controller.ex), which calls `finish_room/1` when
-  # LiveKit reports the room emptied — so rooms don't leak as "active"
-  # forever. Explicit per-user leaves still flow through
-  # `meeting_leave`/`meeting_left` + the `participant_left` webhook.
-  defp activate_room_on_join(%{status: "active"} = room), do: {:ok, room}
-  defp activate_room_on_join(room), do: Meetings.activate_room(room)
-
   # v4 case-2 fix: an EXPLICIT user-initiated leave (`meeting_leave` button
   # OR `meeting_left` from RoomEvent.Disconnected) must STAMP the durable
   # `meeting_participants` row's `left_at` server-side — not merely broadcast
@@ -1588,38 +1564,27 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     # `:current_participant` assign for the rest of the lifecycle.
     # Only after that do we mint the LiveKit token and push to the JS
     # hook.
+    #
+    # The sequence itself (gate, participant row, room, activation, live
+    # participant row, token) is `Meetings.join_for_user/3`, shared with the
+    # native app's join (task 01a10db7). This function keeps only what is
+    # LiveView-specific: assigns, the `join-meeting` push, the call shell
+    # and the `MeetingState` broadcasts.
     with space when not is_nil(space) <- socket.assigns[:active_space],
          user_id when is_binary(user_id) <- socket.assigns[:user_id],
-         :ok <- authorize_join(space.id, user_id),
          display_name = resolve_display_name(socket),
-         {:ok, participant} <-
-           MeetingsMembership.ensure_chat_space_participant(space.id, user_id, display_name),
-         {:ok, room} <- Meetings.ensure_room(space.id),
-         {:ok, room} <- activate_room_on_join(room),
-         identity = "user:#{user_id}",
-         # Prefer the hardened resolved name over a stale/blank participant
-         # row name (legacy rows may carry the literal "User") so the
-         # LiveKit-published tile shows the real name immediately.
-         name = grant_name(participant.display_name, display_name),
-         # v4 fix: insert the joiner's `meeting_participants` row HERE, on the
-         # real join — not only via the LiveKit `participant_joined` webhook.
-         # `upsert_live_participant/2` is the ONLY writer of that table, and
-         # the webhook (livekit_webhook_controller) can't reach the ephemeral
-         # dev container, so the server-presence roster
-         # (`active_participants_for_space/1`, shared by /chat quick-meet AND
-         # /meetings) was always empty for a genuine local join. Dual-path,
-         # safe by design: this insert is deterministic + dev-testable, and
-         # the webhook stays as the idempotent backup for SFU-reported and
-         # remote participants. `upsert_live_participant/2` is
-         # find-or-reactivate keyed on (room_id, user_id), so when the prod
-         # `participant_joined` webhook later fires for the same `user:<id>`
-         # identity it returns the SAME row — no duplicate. The insert path
-         # broadcasts `{:participant_joined, p}` + presence_change internally,
-         # so the roster live-updates for this joiner and other subscribers
-         # without a second broadcast here.
-         {:ok, _live_participant} <-
-           Meetings.upsert_live_participant(room, %{identity: identity, name: name}),
-         {:ok, token} <- Meetings.generate_token(room, %{identity: identity, name: name}) do
+         {:ok, %{token: token, room: room, participant: participant}} <-
+           Meetings.join_for_user(space.id, user_id, display_name) do
+      # ONE lookup, three consumers. The mini-bar's Return-to-call deep
+      # link needs the slug; the call shell needs the whole row (its id
+      # is the PubSub topic and the key to every rail-facing query); and
+      # the native app's hand-off needs the id (task 01a10db7 stage 3).
+      # Two `get_live_meeting_for_space/1` calls a few lines apart could
+      # also return two DIFFERENT rows if a meeting flipped live between
+      # them, which is how a rail ends up hydrated for a meeting the
+      # slug does not point at.
+      live_meeting = Meetings.get_live_meeting_for_space(space.id)
+
       socket =
         socket
         |> assign(:current_participant, participant)
@@ -1635,17 +1600,15 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
           # same assigns the top-bar toggles flip, read at push time, so a
           # mic muted before Join stays muted through the connect.
           mic_enabled: socket.assigns.mic_enabled,
-          camera_enabled: socket.assigns.camera_enabled
+          camera_enabled: socket.assigns.camera_enabled,
+          # The live meeting this space is holding, or nil for a chat
+          # quick-meet with no meeting row. Inside the Burrow iOS app,
+          # `meeting_client.js` hands a non-nil id to the native call
+          # (`SuiteMeetings.join`) instead of opening its own Room; nil keeps
+          # the web path. Only a LIVE meeting is offered: the native join
+          # refuses an ended one.
+          meeting_id: live_meeting && live_meeting.id
         })
-
-      # ONE lookup, two consumers. The mini-bar's Return-to-call deep
-      # link needs the slug; the call shell needs the whole row (its id
-      # is the PubSub topic and the key to every rail-facing query).
-      # Two `get_live_meeting_for_space/1` calls a few lines apart could
-      # also return two DIFFERENT rows if a meeting flipped live between
-      # them, which is how a rail ends up hydrated for a meeting the
-      # slug does not point at.
-      live_meeting = Meetings.get_live_meeting_for_space(space.id)
 
       meeting_slug =
         case live_meeting do
@@ -1672,7 +1635,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
 
       socket
     else
-      # Refusal, not failure. `authorize_join/2` already emitted the
+      # Refusal, not failure. `Meetings.join_for_user/3`'s gate already emitted the
       # access_blocked telemetry; this arm exists so the refusal does not
       # land in the "meeting_join failed" warning stream below, and so the
       # socket comes back byte-identical to the one that went in — no
@@ -1692,65 +1655,6 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
       _ ->
         socket
     end
-  end
-
-  # ── The join gate ────────────────────────────────────────────────────────
-  #
-  # Loading a meeting page and joining its call are DIFFERENT gates, and
-  # until task 019fb955-f8b1 stage 4 only the first one existed.
-  # `Meetings.generate_token/2` performs no membership check of its own, and
-  # this seam is reached from more than the meeting page: `chat_live.html.heex`
-  # renders a "Meet" button gated on `@meetings_enabled && !@in_meeting` — NOT
-  # on `!@external?` — and `ChatLive` attaches these same hooks. The LiveKit
-  # room is keyed off the space (`room_name_for_space/1`), so both surfaces
-  # land in the SAME room. An external user seated in a meeting's bound chat
-  # space could therefore join the call from the chat host without ever
-  # touching the meet host.
-  #
-  # So the gate lives HERE, once, where every surface passes through it,
-  # rather than being duplicated per caller. Hiding the button (stage 5) is
-  # cosmetics; this is the fence.
-  defp authorize_join(space_id, user_id) do
-    if join_permitted?(space_id, user_id) do
-      :ok
-    else
-      emit_join_blocked(space_id, user_id)
-      {:error, :join_not_permitted}
-    end
-  end
-
-  # An external user may join only a call whose space they hold a live invite
-  # to. Internal users are unaffected — and pay no query for the privilege:
-  # the account is loaded only inside the external branch, so the internal
-  # path is behaviourally identical to the one before this gate existed.
-  #
-  # `Tenancy.external_user?/1` is the same predicate the request-path plug and
-  # `Chat.ExternalScope` already use. Do not grow a second one.
-  defp join_permitted?(space_id, user_id) do
-    if Tenancy.external_user?(%{id: user_id}) do
-      Meetings.invited_to_space?(space_id, Accounts.get_user(user_id))
-    else
-      true
-    end
-  end
-
-  # The refusal is silent to the user by design — no distinguishing flash, so
-  # the socket cannot be used to probe which spaces back a meeting. It is not
-  # silent to the operator: this feeds `Platform.Audit` through the same
-  # `[:platform, :auth, :access_blocked]` event the request-path denials use.
-  defp emit_join_blocked(space_id, user_id) do
-    :telemetry.execute(
-      [:platform, :auth, :access_blocked],
-      %{system_time: System.system_time()},
-      %{
-        action: "blocked",
-        actor_id: user_id,
-        actor_type: "user",
-        resource_type: "chat_space",
-        resource_id: space_id,
-        reason: "external_meeting_join_denied"
-      }
-    )
   end
 
   # Pick the best available display name without depending on a
@@ -1786,15 +1690,6 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
 
   defp participant_display_name(%{display_name: name}), do: name
   defp participant_display_name(_), do: nil
-
-  # Choose the LiveKit `name` grant. The participant row's display_name
-  # wins only when it is a real, non-"User" name; otherwise fall back to
-  # the hardened resolved name.
-  defp grant_name(participant_name, _resolved)
-       when is_binary(participant_name) and participant_name != "" and participant_name != "User",
-       do: participant_name
-
-  defp grant_name(_participant_name, resolved), do: resolved
 
   defp user_name_or_email(user_id) when is_binary(user_id) do
     case Accounts.get_user(user_id) do
@@ -1948,8 +1843,8 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   # would NOT have closed it either: it intersects only for EXTERNAL users and
   # returns its input unchanged for internal staff (`chat_live.ex:138-147`).
   #
-  # `do_join/1` has already run `authorize_join/2` and
-  # `ensure_chat_space_participant/3` by the time this is called, so
+  # `do_join/1` has already run `Meetings.join_for_user/3` (its join gate
+  # and `ensure_chat_space_participant/3`) by the time this is called, so
   # participation in this one space is proven rather than assumed — and one
   # space is all the fold can use: `maybe_refresh_roster/2` acts only on the
   # space the viewer is in a call on.

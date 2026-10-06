@@ -1,4 +1,5 @@
 import Capacitor
+import Intents
 import UIKit
 
 class SceneDelegate: UIResponder, UIWindowSceneDelegate {
@@ -28,6 +29,7 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 
     func sceneDidBecomeActive(_ scene: UIScene) {
         WidgetCountsRefresher.refresh()
+        VoIPRegistrar.shared.registerWithSignedInInstalls()
     }
 
     /// The only place App Shortcut phrases are refreshed: as the person
@@ -49,6 +51,10 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     func scene(_ scene: UIScene, openURLContexts urlContexts: Set<UIOpenURLContext>) {
+        #if DEBUG
+            // `burrow://debug/voip?payload=`: the ring injection seam.
+            if urlContexts.contains(where: { DebugVoIPSeam.handle(url: $0.url) }) { return }
+        #endif
         // `burrow://open?...` is a widget deep link (SuiteBridgeViewController
         // opens it); anything else is Capacitor's.
         if let link = urlContexts.lazy.compactMap({ DeepLink(url: $0.url) }).first {
@@ -59,6 +65,13 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     func scene(_ scene: UIScene, continue userActivity: NSUserActivity) {
+        // A tap on a Burrow call in the phone app's Recents.
+        if let intent = userActivity.interaction?.intent as? INStartCallIntent,
+            let handle = intent.contacts?.first?.personHandle?.value
+        {
+            CallController.shared.rejoinFromRecents(handle: handle)
+            return
+        }
         SceneDelegateProxy.shared.scene(scene, continue: userActivity)
     }
 }

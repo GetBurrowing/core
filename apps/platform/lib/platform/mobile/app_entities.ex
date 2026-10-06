@@ -425,7 +425,13 @@ defmodule Platform.Mobile.AppEntities do
              scheduled_start_at: nil,
              scheduled_end_at: nil
            }) do
-      {:ok, %{id: meeting.id, slug: meeting.slug, path: "/meetings/#{meeting.slug}"}}
+      {:ok,
+       %{
+         id: meeting.id,
+         slug: meeting.slug,
+         path: "/meetings/#{meeting.slug}",
+         chat_space_id: meeting.chat_space_id
+       }}
     end
   end
 

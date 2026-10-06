@@ -7,6 +7,12 @@ defmodule Platform.Push.APNs do
   and the external redaction ran on the notification, so it never decides
   what a notification says, only where it goes.
 
+  `deliver_voip_to_user/2` (task 01a10db7) is the second entry point: a
+  PushKit `voip` push to every live `apns_voip_devices` row of a user, used to
+  ring a meeting through CallKit. It shares this module's key, JWT cache,
+  pool, retries and response handling; only the headers, body and device
+  table differ.
+
   ## Configuration (all-or-nothing, mirroring `Platform.Push.vapid_details/0`)
 
   `apns_config/0` returns the four credentials or `nil`, never a part. Per
@@ -61,6 +67,8 @@ defmodule Platform.Push.APNs do
   require Logger
 
   alias Platform.Mobile.ApnsDevice
+  alias Platform.Mobile.ApnsVoipDevice
+  alias Platform.Mobile.AppSession
   alias Platform.Push.Notification
   alias Platform.Repo
 
@@ -135,7 +143,51 @@ defmodule Platform.Push.APNs do
 
           config ->
             body = Notification.to_apns_payload(notification)
-            Enum.each(devices, &deliver(&1, notification, body, config))
+            headers = alert_headers(config, notification)
+            Enum.each(devices, &deliver(&1, headers, body, config))
+            :ok
+        end
+    end
+  end
+
+  @doc """
+  Ring every PushKit VoIP device of `user_id` (task 01a10db7): one `voip`
+  push per `apns_voip_devices` row whose app session is not revoked.
+
+  `payload` is the routing data the app's PushKit handler needs to report the
+  CallKit call (atom or string keys; values must be JSON-encodable). The body
+  sent is `{"aps": {}, ...payload, "install_host": ...}`; `install_host`
+  defaults to this install's host exactly as `Platform.Push.Notification`
+  does, and a value in `payload` wins. Its `ring_id`, when present, is the
+  `apns-collapse-id`.
+
+  Headers differ from an alert push in exactly the ways Apple requires of a
+  VoIP push: topic `<configured topic>.voip`, push type `voip`, priority 10,
+  and expiration 0 (a ring that cannot be delivered now is worthless later).
+  Same provider key and cached JWT, same Finch pool, retry schedule and
+  response handling as `deliver_to_user/2`; a 410 / `BadDeviceToken` /
+  `DeviceTokenNotForTopic` deletes the VoIP row, never the install's alert
+  row.
+
+  Returns `:ok`, or `{:error, :not_configured}` when the user has devices and
+  the configuration is incomplete.
+  """
+  @spec deliver_voip_to_user(binary(), map()) :: :ok | {:error, :not_configured}
+  def deliver_voip_to_user(user_id, payload) when is_binary(user_id) and is_map(payload) do
+    case voip_devices_for_user(user_id) do
+      [] ->
+        :ok
+
+      devices ->
+        case apns_config() do
+          nil ->
+            log_unconfigured()
+            {:error, :not_configured}
+
+          config ->
+            body = voip_body(payload)
+            headers = voip_headers(config, body["ring_id"])
+            Enum.each(devices, &deliver(&1, headers, body, config))
             :ok
         end
     end
@@ -151,10 +203,56 @@ defmodule Platform.Push.APNs do
     end
   end
 
-  defp deliver(%ApnsDevice{} = device, %Notification{} = n, body, config) do
+  # Only devices whose app session is live. Revoking a session deletes its
+  # devices in the same transaction, so this is the belt to that pair of
+  # braces: a ring must never reach a signed-out install.
+  defp voip_devices_for_user(user_id) do
+    if Platform.UUID.valid?(user_id) do
+      Repo.all(
+        from(d in ApnsVoipDevice,
+          join: s in AppSession,
+          on: s.id == d.app_session_id,
+          where: d.user_id == ^user_id and is_nil(s.revoked_at)
+        )
+      )
+    else
+      []
+    end
+  end
+
+  defp voip_body(payload) do
+    routing = Map.new(payload, fn {k, v} -> {to_string(k), v} end)
+
+    routing
+    |> Map.put("aps", %{})
+    |> Map.put_new_lazy("install_host", &Notification.install_host/0)
+    |> then(fn
+      %{"install_host" => nil} = body -> Map.delete(body, "install_host")
+      body -> body
+    end)
+  end
+
+  defp alert_headers(config, %Notification{} = n) do
+    [
+      {"apns-topic", config[:topic]},
+      {"apns-push-type", "alert"},
+      {"apns-priority", "10"}
+    ] ++ collapse_header(n.collapse_id)
+  end
+
+  defp voip_headers(config, ring_id) do
+    [
+      {"apns-topic", config[:topic] <> ".voip"},
+      {"apns-push-type", "voip"},
+      {"apns-priority", "10"},
+      {"apns-expiration", "0"}
+    ] ++ collapse_header(ring_id)
+  end
+
+  defp deliver(device, headers, body, config) do
     case provider_jwt(config) do
       {:ok, jwt} ->
-        attempt = fn -> request(device, n, body, config, jwt) end
+        attempt = fn -> request(device, headers, body, jwt) end
 
         attempt.()
         |> retry_transport_error(attempt, retry_backoff_ms())
@@ -165,14 +263,8 @@ defmodule Platform.Push.APNs do
     end
   end
 
-  defp request(device, n, body, config, jwt) do
-    headers =
-      [
-        {"authorization", "bearer " <> jwt},
-        {"apns-topic", config[:topic]},
-        {"apns-push-type", "alert"},
-        {"apns-priority", "10"}
-      ] ++ collapse_header(n)
+  defp request(device, headers, body, jwt) do
+    headers = [{"authorization", "bearer " <> jwt} | headers]
 
     options =
       [
@@ -212,12 +304,12 @@ defmodule Platform.Push.APNs do
     end
   end
 
-  defp collapse_header(%Notification{collapse_id: id}) when is_binary(id) and id != "",
+  defp collapse_header(id) when is_binary(id) and id != "",
     do: [{"apns-collapse-id", String.slice(id, 0, 64)}]
 
   defp collapse_header(_), do: []
 
-  defp base_url(%ApnsDevice{environment: env}) do
+  defp base_url(%{environment: env}) do
     case Application.get_env(:platform, :apns, [])[:base_url] do
       url when is_binary(url) and url != "" -> url
       _ -> if env == "sandbox", do: @sandbox_url, else: @production_url
@@ -264,8 +356,10 @@ defmodule Platform.Push.APNs do
   defp error_kind(:request_failed), do: "request_failed"
   defp error_kind(_), do: "unknown"
 
-  defp prune(device, reason) do
-    from(d in ApnsDevice, where: d.id == ^device.id) |> Repo.delete_all()
+  # Deletes from the table the failing row came from: a dead VoIP token says
+  # nothing about the install's alert token, and vice versa.
+  defp prune(%schema{} = device, reason) when schema in [ApnsDevice, ApnsVoipDevice] do
+    from(d in schema, where: d.id == ^device.id) |> Repo.delete_all()
     Logger.info("[APNs] device #{device.id} removed: #{reason}")
     {:error, :device_removed}
   end

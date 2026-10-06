@@ -1404,6 +1404,8 @@ defmodule PlatformWeb.MeetingLive do
      |> assign_new(:meeting_create_invite_candidates, fn -> [] end)
      |> assign_new(:meeting_create_invite_email, fn -> nil end)
      |> assign_new(:selected_meeting_id, fn -> nil end)
+     |> assign_new(:invite_ring_states, fn -> %{} end)
+     |> assign_new(:ring_topic_meeting_ids, fn -> MapSet.new() end)
      |> assign_new(:meeting_invite_open, fn -> false end)
      |> assign_new(:meeting_invite_query, fn -> "" end)
      |> assign_new(:meeting_invite_candidates, fn -> [] end)
@@ -2074,8 +2076,24 @@ defmodule PlatformWeb.MeetingLive do
   `meeting-<uuid>`, which is a different agent doing a different job and
   is deliberately not drawn here.
   """
-  @spec detail_invite_rows(Meeting.t()) :: [map()]
-  def detail_invite_rows(%Meeting{} = meeting) do
+  @spec detail_invite_rows(Meeting.t(), map()) :: [map()]
+  def detail_invite_rows(meeting, ring_states \\ %{})
+
+  # Ring reports (task 01a10db7 stage 2) tag an invitee's row Declined or
+  # Missed; `ring_states` is the `:invite_ring_states` assign, keyed
+  # `{meeting_id, user_id}`.
+  def detail_invite_rows(%Meeting{} = meeting, ring_states) when map_size(ring_states) > 0 do
+    meeting
+    |> detail_invite_rows(%{})
+    |> Enum.map(fn row ->
+      case Map.get(ring_states, {meeting.id, row.user_id}) do
+        nil -> row
+        label -> Map.put(row, :ring_state, label)
+      end
+    end)
+  end
+
+  def detail_invite_rows(%Meeting{} = meeting, _ring_states) do
     invites = Repo.preload(Meetings.list_invites(meeting.id), :user)
 
     external_ids =
@@ -3501,6 +3519,7 @@ defmodule PlatformWeb.MeetingLive do
     {:noreply,
      socket
      |> assign(:selected_meeting_id, meeting_id)
+     |> subscribe_ring_reports(meeting_id)
      |> seed_live_invite_assigns()}
   end
 
@@ -5046,6 +5065,35 @@ defmodule PlatformWeb.MeetingLive do
     end
   end
 
+  # ── Ring reports (task 01a10db7 stage 2) ─────────────────────────────────
+  #
+  # `Platform.Meetings.Ringing` broadcasts a declined or missed ring on the
+  # meeting's shell topic. Only the INVITER is told: a toast, and a
+  # Declined / Missed tag on that invitee's row in the live invite list. Any
+  # other viewer of the same meeting ignores it.
+  def handle_info({event, %{meeting_id: meeting_id, user_id: user_id} = report}, socket)
+      when event in [:ring_declined, :ring_missed] and is_binary(user_id) do
+    inviter = Map.get(report, :inviter_user_id)
+
+    if is_binary(inviter) and inviter == socket.assigns[:user_id] do
+      label = if event == :ring_declined, do: "Declined", else: "Missed"
+      name = Map.get(report, :display_name) || "Someone"
+
+      toast =
+        if event == :ring_declined, do: "#{name} declined", else: "#{name} missed the call"
+
+      {:noreply,
+       socket
+       |> assign(
+         :invite_ring_states,
+         Map.put(socket.assigns[:invite_ring_states] || %{}, {meeting_id, user_id}, label)
+       )
+       |> put_flash(:info, toast)}
+    else
+      {:noreply, socket}
+    end
+  end
+
   # Mid-meeting role change. Re-resolves the gate and, when the bar has
   # just become visible, seeds it from the live queue — a producer
   # appointed at minute 20 needs the intents from minutes 0-20, not only
@@ -5439,7 +5487,9 @@ defmodule PlatformWeb.MeetingLive do
   # no-op. On success the updated meeting is re-assigned so the render path
   # sees the live status.
   defp maybe_start_meeting(%{assigns: %{meeting: %{status: "scheduled"} = m}} = socket) do
-    case Meetings.start_meeting(m) do
+    # The joining user is recorded as the starter (task 01a10db7); a guest
+    # surface has no `:user_id`, and the stamp is then simply absent.
+    case Meetings.start_meeting(m, started_by_user_id: socket.assigns[:user_id]) do
       {:ok, started} -> assign(socket, :meeting, started)
       {:error, _} -> socket
     end
@@ -8033,6 +8083,22 @@ defmodule PlatformWeb.MeetingLive do
 
   # Closed, empty, and no candidates. Called on open as well as on close so
   # the control never re-appears carrying the previous meeting's query.
+  # The index page learns of a declined or missed ring through the selected
+  # meeting's shell topic. Subscribed once per meeting per process: PubSub
+  # does not dedup a second subscribe from the same pid.
+  defp subscribe_ring_reports(socket, meeting_id) when is_binary(meeting_id) do
+    subscribed = socket.assigns[:ring_topic_meeting_ids] || MapSet.new()
+
+    if connected?(socket) and not MapSet.member?(subscribed, meeting_id) do
+      Phoenix.PubSub.subscribe(Platform.PubSub, meeting_topic(meeting_id))
+      assign(socket, :ring_topic_meeting_ids, MapSet.put(subscribed, meeting_id))
+    else
+      socket
+    end
+  end
+
+  defp subscribe_ring_reports(socket, _meeting_id), do: socket
+
   defp seed_live_invite_assigns(socket) do
     socket
     |> assign(:meeting_invite_open, false)
@@ -8094,7 +8160,13 @@ defmodule PlatformWeb.MeetingLive do
               "cannot invite: no candidate is currently offered for that id"
 
       user ->
-        Meetings.invite_user(meeting, user.id, display_name: user.name || user.email)
+        # The inviter is named so a meeting that is LIVE right now rings
+        # the invitee (task 01a10db7 stage 2, rule R3); for a scheduled
+        # meeting this is the same alert-push invite as before.
+        Meetings.invite_user(meeting, user.id,
+          display_name: user.name || user.email,
+          inviter_user_id: socket.assigns[:user_id]
+        )
     end
   end
 

@@ -38,6 +38,13 @@ defmodule Platform.Meetings.Meeting do
     # cascaded if the participant row goes: the cancellation is the durable
     # fact, the attribution is the nice-to-have.
     belongs_to(:cancelled_by_participant, Platform.Chat.Participant)
+    # Who started the meeting (task 01a10db7 stage 1): stamped by
+    # `Platform.Meetings.start_meeting/2` from `:started_by_user_id`, so the
+    # native ringing path can tell who to ring and whom not to. Nilified, not
+    # cascaded, when the user goes: `started_at` stays the durable fact.
+    # Nil for meetings started before this column existed, and for a start
+    # with no authenticated user behind it.
+    belongs_to(:started_by_user, Platform.Accounts.User)
 
     field(:slug, :string)
     field(:name, :string)
@@ -166,11 +173,18 @@ defmodule Platform.Meetings.Meeting do
   """
   def status_changeset(%__MODULE__{status: from} = meeting, to, attrs \\ %{}) do
     meeting
-    |> cast(attrs, [:started_at, :ended_at, :cancelled_at, :cancelled_by_participant_id])
+    |> cast(attrs, [
+      :started_at,
+      :ended_at,
+      :cancelled_at,
+      :cancelled_by_participant_id,
+      :started_by_user_id
+    ])
     |> put_change(:status, to)
     |> validate_inclusion(:status, @statuses)
     |> validate_transition(from, to)
     |> foreign_key_constraint(:cancelled_by_participant_id)
+    |> foreign_key_constraint(:started_by_user_id)
   end
 
   @doc """

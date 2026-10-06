@@ -41,7 +41,11 @@ defmodule Platform.Push.Notification do
       Approvals group);
     * everything else -> no category; a tap opens the url.
 
-  Alert pushes only. There is no VoIP type and no meeting-ringing category.
+  Alert pushes only; the VoIP ring itself is
+  `Platform.Push.APNs.deliver_voip_to_user/2`. Task 01a10db7 added the ring
+  follow-ups as alert kinds (`meeting_ring_waiting` with category
+  `SUITE_RING_WAITING`, `meeting_ring_missed`), which carry `meeting_id` and
+  `ring_id` so the app can show its in-app banner or open the meeting.
   """
 
   alias Platform.Inbox.Item
@@ -50,6 +54,7 @@ defmodule Platform.Push.Notification do
 
   @mention_category "SUITE_MENTION"
   @open_category "SUITE_OPEN"
+  @ring_waiting_category "SUITE_RING_WAITING"
   @approvals_thread "approvals"
   @approval_kinds ~w(task_plan_review review_request_pending)
 
@@ -66,7 +71,9 @@ defmodule Platform.Push.Notification do
             inbox_item_id: nil,
             install_host: nil,
             author_name: nil,
-            space_name: nil
+            space_name: nil,
+            meeting_id: nil,
+            ring_id: nil
 
   @type t :: %__MODULE__{
           kind: String.t(),
@@ -82,12 +89,15 @@ defmodule Platform.Push.Notification do
           inbox_item_id: String.t() | nil,
           install_host: String.t() | nil,
           author_name: String.t() | nil,
-          space_name: String.t() | nil
+          space_name: String.t() | nil,
+          meeting_id: String.t() | nil,
+          ring_id: String.t() | nil
         }
 
   @doc "The iOS category for a kind, or nil (tap opens)."
   @spec category_for(String.t()) :: String.t() | nil
   def category_for("chat_mention"), do: @mention_category
+  def category_for("meeting_ring_waiting"), do: @ring_waiting_category
   def category_for(kind) when kind in @approval_kinds, do: @open_category
   def category_for(_kind), do: nil
 
@@ -133,7 +143,9 @@ defmodule Platform.Push.Notification do
       :inbox_item_id,
       :install_host,
       :author_name,
-      :space_name
+      :space_name,
+      :meeting_id,
+      :ring_id
     ])
     |> Map.put_new(:kind, "generic")
     |> new()
@@ -238,6 +250,8 @@ defmodule Platform.Push.Notification do
       message_id: n.message_id,
       task_id: n.task_id,
       inbox_item_id: n.inbox_item_id,
+      meeting_id: n.meeting_id,
+      ring_id: n.ring_id,
       install_host: n.install_host
     }
     |> drop_nils()
@@ -264,6 +278,8 @@ defmodule Platform.Push.Notification do
       "message_id" => n.message_id,
       "task_id" => n.task_id,
       "inbox_item_id" => n.inbox_item_id,
+      "meeting_id" => n.meeting_id,
+      "ring_id" => n.ring_id,
       "install_host" => n.install_host
     }
     |> drop_nils()
@@ -293,6 +309,8 @@ defmodule Platform.Push.Notification do
         "message_id" => n.message_id,
         "task_id" => n.task_id,
         "inbox_item_id" => n.inbox_item_id,
+        "meeting_id" => n.meeting_id,
+        "ring_id" => n.ring_id,
         "install_host" => n.install_host,
         "author_name" => n.author_name,
         "space_name" => n.space_name
@@ -417,7 +435,14 @@ defmodule Platform.Push.Notification do
     |> String.trim()
   end
 
-  defp install_host do
+  @doc """
+  This install's host (from `Platform.OIDC.app_url/0`), or nil. The default
+  for every notification's `install_host`, which the app uses to route a push
+  to the right signed-in install; `Platform.Push.APNs.deliver_voip_to_user/2`
+  stamps VoIP payloads with the same value.
+  """
+  @spec install_host() :: String.t() | nil
+  def install_host do
     case Platform.OIDC.app_url() do
       url when is_binary(url) -> URI.parse(url).host
       _ -> nil

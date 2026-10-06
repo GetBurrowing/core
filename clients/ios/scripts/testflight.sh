@@ -21,8 +21,8 @@
 #
 # Build number: ~/.config/suite-ios-build/buildnumber, incremented on every
 # archive (Apple rejects a duplicate CFBundleVersion). The marketing version
-# stays at project.yml's MARKETING_VERSION ("1.1"), so WHATSNEW.md's top
-# section is "## v1.1" until a semantic bump.
+# stays at project.yml's MARKETING_VERSION ("1.2"), so WHATSNEW.md's top
+# section is "## v1.2" until a semantic bump.
 #
 # After the upload, scripts/set_testflight_notes.py sets "What to Test" from
 # WHATSNEW.md and adds the build to the internal group "Suite internal".

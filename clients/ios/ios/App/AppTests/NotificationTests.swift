@@ -5,9 +5,12 @@ import XCTest
 final class NotificationTests: XCTestCase {
     func testCategoryIdentifiersMatchTheServerPayload() {
         let categories = Dictionary(uniqueKeysWithValues: SuiteNotificationCategory.all().map { ($0.identifier, $0) })
-        // Platform.Push.Notification maps chat_mention -> SUITE_MENTION and
-        // approvals -> SUITE_OPEN.
-        XCTAssertEqual(Set(categories.keys), ["SUITE_MENTION", "SUITE_OPEN"])
+        // Platform.Push.Notification maps chat_mention -> SUITE_MENTION,
+        // approvals -> SUITE_OPEN and meeting_ring_waiting ->
+        // SUITE_RING_WAITING (task 01a10db7 stage 5; no actions: it becomes
+        // the in-call banner).
+        XCTAssertEqual(Set(categories.keys), ["SUITE_MENTION", "SUITE_OPEN", "SUITE_RING_WAITING"])
+        XCTAssertEqual(categories["SUITE_RING_WAITING"]!.actions, [])
 
         let mention = categories["SUITE_MENTION"]!
         XCTAssertEqual(mention.actions.map(\.identifier), ["SUITE_REPLY", "SUITE_OPEN_ACTION"])

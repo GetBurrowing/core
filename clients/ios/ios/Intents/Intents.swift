@@ -68,7 +68,8 @@ struct OpenTaskIntent: OpenIntent {
     }
 }
 
-/// Opening a meeting is joining it: the web view's meeting page.
+/// Opening a meeting is joining it: a native call in the app
+/// (MeetingLauncher), or the meeting's web page where no launcher exists.
 struct OpenMeetingIntent: OpenIntent {
     static var title: LocalizedStringResource = "Join Meeting"
     static var description = IntentDescription("Opens a meeting in Burrow to join it.")
@@ -85,7 +86,7 @@ struct OpenMeetingIntent: OpenIntent {
     func perform() async throws -> some IntentResult {
         let ref = try IntentActions().ref(target.id)
         guard let link = DeepLink.meeting(host: ref.host, slug: target.slug) else { throw IntentFailure.notFound }
-        IntentNavigator.open(link)
+        MeetingLauncher.open(host: ref.host, meetingID: ref.uuid, fallback: link)
         IntentHooks.didSucceed?(self)
         return .result()
     }
@@ -308,8 +309,8 @@ struct StartMeetingIntent: AppIntent {
                 chosen = picked
             }
         }
-        let link = try await actions.startMeeting(host: host, spaceID: spaceID, spaceName: chosen?.name)
-        IntentNavigator.open(link)
+        let started = try await actions.startMeetingDetails(host: host, spaceID: spaceID, spaceName: chosen?.name)
+        MeetingLauncher.open(host: host, meetingID: started.meetingID, fallback: started.link)
         IntentHooks.didSucceed?(self)
         return .result(dialog: dialog(IntentCopy.meetingStarted(space: chosen?.name)))
     }

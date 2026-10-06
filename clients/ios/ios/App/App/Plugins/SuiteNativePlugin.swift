@@ -16,6 +16,9 @@ enum SuiteNotificationCategory {
     static let open = "SUITE_OPEN"
     static let replyAction = "SUITE_REPLY"
     static let openAction = "SUITE_OPEN_ACTION"
+    /// `meeting_ring_waiting`: a ring that arrived during a call. Shown as
+    /// the in-call invite banner, never as a system banner.
+    static let ringWaiting = "SUITE_RING_WAITING"
 
     /// Categories the server's APNs payload names in `aps.category`
     /// (Platform.Push.Notification: chat_mention -> SUITE_MENTION,
@@ -37,7 +40,8 @@ enum SuiteNotificationCategory {
             // A stack of approvals reads "3 approvals", not "3 more notifications".
             UNNotificationCategory(identifier: Self.open, actions: [open], intentIdentifiers: [],
                                    hiddenPreviewsBodyPlaceholder: nil,
-                                   categorySummaryFormat: "%u approvals", options: [])
+                                   categorySummaryFormat: "%u approvals", options: []),
+            UNNotificationCategory(identifier: ringWaiting, actions: [], intentIdentifiers: [], options: [])
         ]
     }
 
@@ -162,7 +166,26 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
     func userNotificationCenter(_ center: UNUserNotificationCenter,
                                 willPresent notification: UNNotification,
                                 withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
-        completionHandler([.banner, .list, .sound])
+        let content = notification.request.content
+        completionHandler(Self.presentation(forCategory: content.categoryIdentifier))
+        if content.categoryIdentifier == SuiteNotificationCategory.ringWaiting {
+            showRingWaiting(content.userInfo)
+        }
+    }
+
+    /// Foreground presentation by category. A busy callee's ring
+    /// (`SUITE_RING_WAITING`, stage 5) gets NO system banner and no sound:
+    /// it becomes the in-call invite banner and the call is never interrupted.
+    static func presentation(forCategory category: String) -> UNNotificationPresentationOptions {
+        category == SuiteNotificationCategory.ringWaiting ? [] : [.banner, .list, .sound]
+    }
+
+    /// Hands a `SUITE_RING_WAITING` payload to the in-call banner.
+    func showRingWaiting(_ userInfo: [AnyHashable: Any]) {
+        guard let invite = RingInvite(userInfo: userInfo) else { return }
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated { RingWaiting.shared.show(invite) }
+        }
     }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter,
@@ -189,6 +212,12 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
             completionHandler()
 
         default:
+            // A tap on a ring-waiting notification shown while the app was
+            // in the background: the banner, not a page.
+            if response.notification.request.content.categoryIdentifier == SuiteNotificationCategory.ringWaiting {
+                showRingWaiting(response.notification.request.content.userInfo)
+                return completionHandler()
+            }
             // Open, or a tap on the notification itself.
             DispatchQueue.main.async {
                 self.open(payload)

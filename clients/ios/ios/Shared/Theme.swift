@@ -7,8 +7,10 @@ import UIKit
 /// clients/ios/README.md.
 enum SuiteColor: String, CaseIterable {
     /// `primary` (orange) marks primary actions only. `info` (teal-cyan) is
-    /// reserved for the live widget count: cyan means live, and no button
-    /// is ever cyan.
+    /// reserved for live state: the live widget count, and on the in-call
+    /// screen (App/Meetings/InCallView.swift) the speaking ring and the one
+    /// recovery action of the moment (Resume, Try again), which the design
+    /// canvas draws in its cyan. Outside the call no button is ever cyan.
     case primary, onPrimary, accent, info, onInfo, surface, surfaceMuted, onSurface, muted, border, destructive
 
     var color: Color { Color(rawValue) }

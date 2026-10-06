@@ -1,5 +1,6 @@
 import AuthenticationServices
 import Capacitor
+import Combine
 import SwiftUI
 import UIKit
 import UserNotifications
@@ -18,6 +19,12 @@ import WebKit
 final class SuiteBridgeViewController: CAPBridgeViewController {
     private let store = InstallStore.shared
     private let plugin = SuiteNativePlugin()
+    private let meetingsPlugin = SuiteMeetingsPlugin()
+    private var callScreen: UIViewController?
+    private var callObservation: AnyCancellable?
+    private var activeObservation: NSObjectProtocol?
+    private var incomingObservation: AnyCancellable?
+    private var incomingPrompt: UIViewController?
     private(set) var currentInstall: Install?
     private var policy: NavigationPolicy?
     private var auth: AuthSession?
@@ -58,6 +65,9 @@ final class SuiteBridgeViewController: CAPBridgeViewController {
     override func capacitorDidLoad() {
         plugin.shell = self
         bridge?.registerPluginInstance(plugin)
+        // Native meetings (task 01a10db7 stage 3), beside SuiteNative.
+        meetingsPlugin.shell = self
+        bridge?.registerPluginInstance(meetingsPlugin)
         // CapacitorBridge.init makes its own CAPNotificationRouter the
         // notification delegate unless `ios.handleApplicationNotifications`
         // is false. That config line is the first guard; this is the second,
@@ -96,6 +106,28 @@ final class SuiteBridgeViewController: CAPBridgeViewController {
             }
         }
 
+        // The in-call screen (stage 4): full screen while the call wants it
+        // presented, through the ended screen until Done.
+        callObservation = CallController.shared.$presented
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] presented in self?.syncCallScreen(presented) }
+        // The simulator's in-app incoming ring (RingCenter.systemEndsIncomingCalls).
+        incomingObservation = RingWaiting.shared.$incoming
+            .map { $0?.invite }
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] invite in self?.syncIncomingPrompt(invite) }
+        CallController.shared.openWeb = { [weak self] host, path in
+            self?.openCallPage(host: host, path: path)
+        }
+        // Back in the app (the Lock Screen Burrow button, Recents) with a
+        // call up: show the call again.
+        activeObservation = NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main
+        ) { _ in
+            Task { @MainActor in CallController.shared.reopen() }
+        }
+
         NotificationRouter.shared.openHandler = { [weak self] install, url in
             self?.open(install, at: url)
         }
@@ -116,6 +148,10 @@ final class SuiteBridgeViewController: CAPBridgeViewController {
         super.viewDidAppear(animated)
         guard !didStart else { return }
         didStart = true
+        #if DEBUG
+            DebugVoIPSeam.applyLaunchArgument()
+            if startMeetingProbe() { return }
+        #endif
 
         if let host = loginProbeHost {
             webView?.load(URLRequest(url: URL(string: "https://\(host)/auth/login")!))
@@ -132,6 +168,68 @@ final class SuiteBridgeViewController: CAPBridgeViewController {
             presentPicker()
         }
     }
+
+    // MARK: Native in-call screen (stage 4)
+
+    private func syncCallScreen(_ presented: Bool) {
+        if presented, callScreen == nil {
+            let host = InCallHostingController(rootView: InCallScreen(controller: CallController.shared))
+            host.modalPresentationStyle = .fullScreen
+            callScreen = host
+            // Not on a sheet that is on its way out (the in-app ring prompt
+            // dismissing as its Answer joins).
+            let presenter = presentedViewController.flatMap { $0.isBeingDismissed ? nil : $0 } ?? self
+            presenter.present(host, animated: true)
+        } else if !presented, let screen = callScreen {
+            callScreen = nil
+            screen.dismiss(animated: true)
+        }
+    }
+
+    private func syncIncomingPrompt(_ invite: RingInvite?) {
+        if let invite, incomingPrompt == nil {
+            let waiting = RingWaiting.shared
+            let host = InCallHostingController(
+                rootView: IncomingRingPrompt(
+                    invite: invite, decline: { waiting.declineIncoming() }, answer: { waiting.answerIncoming() }))
+            host.modalPresentationStyle = .overFullScreen
+            incomingPrompt = host
+            var top: UIViewController = self
+            while let next = top.presentedViewController { top = next }
+            top.present(host, animated: true)
+        } else if invite == nil, let prompt = incomingPrompt {
+            incomingPrompt = nil
+            prompt.dismiss(animated: true)
+        }
+    }
+
+    /// "Open full meeting" and "Open the space": the page on the call's
+    /// install, switching installs only when the call's is not loaded.
+    private func openCallPage(host: String, path: String) {
+        guard let url = URL(string: "https://\(host)\(path)") else { return }
+        if currentInstall?.host.lowercased() == host.lowercased() {
+            webView?.load(URLRequest(url: url))
+        } else if let install = store.add(host: host) {
+            open(install, at: url)
+        }
+    }
+
+    #if DEBUG
+        /// DEBUG measurement (stage 3): `SUITE_MEETING_PROBE_URL` /
+        /// `_TOKEN` / `_ROOM` in the launch environment connect a native call
+        /// straight to a LiveKit server, skipping sign-in. Never logged.
+        private func startMeetingProbe() -> Bool {
+            let env = ProcessInfo.processInfo.environment
+            guard let url = env["SUITE_MEETING_PROBE_URL"], let credential = env["SUITE_MEETING_PROBE_TOKEN"] else {
+                return false
+            }
+            CallController.shared.startProbe(
+                url: url, token: credential, roomName: env["SUITE_MEETING_PROBE_ROOM"] ?? "probe",
+                meetingName: env["SUITE_MEETING_PROBE_NAME"] ?? "Design review",
+                useCallKit: env["SUITE_MEETING_PROBE_CALLKIT"] != "0")
+            return true
+        }
+    #endif
 
     // MARK: Install lifecycle
 
@@ -215,6 +313,8 @@ final class SuiteBridgeViewController: CAPBridgeViewController {
             switch result {
             case .success(let handoff):
                 self.webView?.load(URLRequest(url: handoff))
+                // A fresh bearer: tell this install where to ring.
+                VoIPRegistrar.shared.registerWithSignedInInstalls()
             case .failure:
                 self.presentPicker()
             }

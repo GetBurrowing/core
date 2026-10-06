@@ -3409,7 +3409,8 @@
        issue the invite queries twice per render and let the two surfaces
        disagree if one call ever picked up different options. --%>
     <% detail_meeting = selected_meeting(assigns) %>
-    <% detail_invites = (detail_meeting && detail_invite_rows(detail_meeting)) || [] %>
+    <% detail_invites =
+      (detail_meeting && detail_invite_rows(detail_meeting, @invite_ring_states)) || [] %>
     <div
       class="flex h-full min-h-0 flex-col bg-base-100 text-base-content"
       data-page="meetings-index"

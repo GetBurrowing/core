@@ -16,6 +16,11 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         center.delegate = NotificationRouter.shared
         SuiteNotificationCategory.register(center: center)
         IntentAppHooks.install()
+        // Rings (stage 5): the CallKit provider exists, then PushKit starts,
+        // both before launch returns, so a VoIP push that launched the app
+        // is reported to CallKit.
+        _ = CallController.shared
+        VoIPRegistrar.shared.start()
         #if DEBUG
             EvidenceHooks.apply()
         #endif
@@ -56,6 +61,15 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
                 let selected = store.selectedHost
                 store.add(host: host)
                 if let selected { store.select(selected) }
+            }
+            // Ring review (stage 5): an install "signed in" with a
+            // placeholder bearer, so an injected ring for that host keeps
+            // ringing. Use an unresolvable host (`*.invalid`) so the
+            // placeholder never reaches a server.
+            if let host = args.string(forKey: "SuiteEvidenceSignInHost"), host.hasSuffix(".invalid") {
+                let store = InstallStore.shared
+                store.add(host: host)
+                _ = KeychainTokenStore.shared.store("evidence-placeholder", for: host)
             }
             if args.bool(forKey: "SuiteRequestPush") {
                 UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }

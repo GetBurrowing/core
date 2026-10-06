@@ -417,6 +417,8 @@ defmodule PlatformWeb.AppIntentsControllerTest do
 
       assert %{"id" => id, "slug" => slug, "path" => path} = json_response(conn1, 201)
       assert path == "/meetings/#{slug}"
+      # Task 01a10db7: the meeting's chat space, for the native call UI.
+      assert json_response(conn1, 201)["chat_space_id"] == Repo.get!(Meeting, id).chat_space_id
       # The space's org picks the project. Seeded projects can share the
       # org, so assert the org rather than one project id.
       assert %Meeting{project_id: project_id} = Repo.get!(Meeting, id)

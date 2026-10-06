@@ -1472,6 +1472,65 @@ defmodule PlatformWeb.ChatLive.MeetingHooksTest do
     end
   end
 
+  # ── Native hand-off id (task 01a10db7 stage 3) ──────────────────────────
+  #
+  # Inside the Burrow iOS app, `meeting_client.js` hands the call to the
+  # native `SuiteMeetings` plugin when the join payload names a meeting, and
+  # builds its own LiveKit Room otherwise. Both sides pinned: a live meeting
+  # sends its id, a space with no meeting row sends nil.
+  describe "join-meeting payload carries meeting_id (task 01a10db7 stage 3)" do
+    setup [:put_livekit_env]
+
+    defp join_payload(socket) do
+      push_events = socket.private[:live_temp][:push_events] || []
+      [payload] = for(["join-meeting", payload] <- push_events, do: payload)
+      payload
+    end
+
+    defp hand_off_socket(space, user) do
+      build_socket(%{
+        user_id: user.id,
+        active_space: space,
+        current_participant: nil,
+        in_meeting: false,
+        mic_enabled: true,
+        camera_enabled: false,
+        screen_share_enabled: false
+      })
+    end
+
+    test "a live meeting's space sends that meeting's id" do
+      n = System.unique_integer([:positive])
+      {:ok, project} = Platform.Tasks.create_project(%{name: "Hand-off #{n}"})
+
+      {:ok, meeting} =
+        Meetings.create_meeting(%{
+          project_id: project.id,
+          name: "Hand-off #{n}",
+          slug: "hand-off-#{n}"
+        })
+
+      {:ok, live} = Meetings.start_meeting(meeting)
+      space = Chat.get_space(live.chat_space_id)
+
+      payload =
+        space |> hand_off_socket(create_user("Ada")) |> MeetingHooks.join() |> join_payload()
+
+      assert payload.meeting_id == live.id
+      assert is_binary(payload.token)
+    end
+
+    test "a chat quick-meet with no meeting row sends nil" do
+      space = create_space()
+
+      payload =
+        space |> hand_off_socket(create_user("Grace")) |> MeetingHooks.join() |> join_payload()
+
+      assert Map.has_key?(payload, :meeting_id)
+      assert payload.meeting_id == nil
+    end
+  end
+
   describe "attach_guest/1" do
     test "seeds the same media-state assigns attach/2 seeds" do
       # Build a socket with the `:lifecycle` slot the `attach_hook/4` call

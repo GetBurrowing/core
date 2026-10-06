@@ -25,6 +25,7 @@
 	<key>NSUserActivityTypes</key>
 	<array>
 		<string>com.kobo-ai.burrow.viewing</string>
+		<string>INStartCallIntent</string>
 	</array>
 	<key>CFBundleURLTypes</key>
 	<array>
@@ -85,7 +86,9 @@
 	</array>
 	<key>UIBackgroundModes</key>
 	<array>
+		<string>audio</string>
 		<string>remote-notification</string>
+		<string>voip</string>
 	</array>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>

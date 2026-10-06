@@ -159,6 +159,7 @@ defmodule Platform.Meetings.MeetingNotifier do
     case Meetings.mark_notified(meeting) do
       {:ok, claimed} ->
         fan_out(claimed)
+        ring(claimed)
 
       {:already_notified, _} ->
         Logger.debug(
@@ -219,6 +220,28 @@ defmodule Platform.Meetings.MeetingNotifier do
   end
 
   # ── Internal ──────────────────────────────────────────────────────────────
+
+  # Ringing (task 01a10db7 stage 2) runs on START only, after the alert and
+  # inbox fan-out above, which it leaves exactly as it was. It is NOT handed
+  # `recipients_for_meeting/1`'s answer: that answer falls back to every
+  # human of the chat space when nobody was invited, and a ring must never
+  # reach that audience. `Ringing.ring_for_start/1` reads the invite rows
+  # itself. A raise here must not take the notifier down with it.
+  defp ring(%Meeting{} = meeting) do
+    ringing_module().ring_for_start(meeting)
+  rescue
+    error ->
+      Logger.warning(
+        "[MeetingNotifier] ringing raised — meeting=#{meeting.id}: " <>
+          Exception.message(error)
+      )
+
+      :error
+  end
+
+  defp ringing_module do
+    Application.get_env(:platform, :ringing_module, Platform.Meetings.Ringing)
+  end
 
   defp fan_out(%Meeting{} = meeting) do
     meeting = Repo.preload(meeting, :host_participant)

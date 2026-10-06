@@ -512,6 +512,15 @@ defmodule PlatformWeb.Components.Meetings.InviteControl do
       </span>
 
       <.chip
+        :if={Map.get(@entry, :ring_state)}
+        tone="warning"
+        class="shrink-0 text-[10px]"
+        data-role="invite-ring-state"
+      >
+        {Map.get(@entry, :ring_state)}
+      </.chip>
+
+      <.chip
         tone={tag_tone(@tag)}
         class="shrink-0 font-mono text-[10px]"
         data-role="meeting-invite-tag"

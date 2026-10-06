@@ -396,4 +396,90 @@ final class ExtensionRenderTests: XCTestCase {
                 "control-\(name)", controlTile(copy).padding(12).background(Color(white: 0.3)), size: CGSize(width: 244, height: 100), dark: true)
         }
     }
+
+    // MARK: In-call screen (task 01a10db7 stage 4)
+
+    /// Snapshots through the app's own `InCallHostingController` in a
+    /// LIGHT window: the PNG is dark only because the host forces it.
+    private func callSnapshot<V: View>(_ name: String, _ view: V, size: CGSize) throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(origin: .zero, size: size)
+        window.overrideUserInterfaceStyle = .light
+        let host = InCallHostingController(rootView: view)
+        window.rootViewController = host
+        window.isHidden = false
+        host.view.frame = window.bounds
+        host.view.layoutIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.8))
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 3
+        let image = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { _ in
+            window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+        }
+        window.isHidden = true
+        try XCTUnwrap(image.pngData()).write(to: outDir.appendingPathComponent("\(name).png"))
+    }
+
+    private func call(
+        _ phase: CallPhase, _ people: [CallParticipant], muted: Bool = false, hostMuted: Bool = false,
+        elapsed: TimeInterval? = 754, note: String? = nil, ended: EndedModel? = nil,
+        sizeClass: UserInterfaceSizeClass = .compact, typeSize: DynamicTypeSize = .large
+    ) -> some View {
+        var s = CallState()
+        s.phase = phase
+        s.meetingName = "Design review: Burrow v2 native meetings"
+        s.participants = people
+        s.isMuted = muted || hostMuted
+        s.mutedByHost = hostMuted
+        s.route = "iPhone"
+        s.hasConnected = elapsed != nil
+        return InCallView(
+            model: InCallModel.make(state: s, elapsed: elapsed), ended: ended, note: note, showsRoutePicker: false
+        )
+        .environment(\.horizontalSizeClass, sizeClass)
+        .environment(\.dynamicTypeSize, typeSize)
+    }
+
+    private func person(_ id: String, _ name: String, agent: Bool = false, speaking: Bool = false) -> CallParticipant {
+        CallParticipant(id: id, name: name, isAgent: agent, isSpeaking: speaking)
+    }
+
+    func testInCallScreenStates() throws {
+        let saru = person("agent:saru", "Saru", agent: true, speaking: true)
+        let quiet = person("agent:saru", "Saru", agent: true)
+        let room = [person("user:ada", "Ada Okafor"), person("user:bo", "Bo Lindqvist")]
+        try callSnapshot("call-connected-agent-speaking", call(.connected, [saru] + room), size: phone)
+        try callSnapshot(
+            "call-person-speaking",
+            call(.connected, [quiet, person("user:ada", "Ada Okafor"), person("user:bo", "Bo Lindqvist", speaking: true)]), size: phone)
+        try callSnapshot("call-muted", call(.connected, [quiet] + room, muted: true), size: phone)
+        try callSnapshot("call-muted-by-host", call(.connected, [quiet] + room, hostMuted: true), size: phone)
+        try callSnapshot("call-connecting", call(.connecting, [], elapsed: nil), size: phone)
+        try callSnapshot("call-reconnecting", call(.reconnecting, [quiet] + room), size: phone)
+        try callSnapshot("call-could-not-reconnect", call(.couldNotReconnect, [quiet] + room), size: phone)
+        try callSnapshot("call-on-hold", call(.onHold, [quiet] + room, muted: true), size: phone)
+        try callSnapshot("call-poor-connection", call(.poorConnection, [quiet] + room), size: phone)
+        try callSnapshot("call-alone", call(.alone, [], elapsed: 41), size: phone)
+        try callSnapshot("call-route-moved", call(.connected, [quiet] + room, note: InCallCopy.routeMoved("AirPods Pro")), size: phone)
+        try callSnapshot(
+            "call-ended", call(.ended(.remoteEnded), [], ended: EndedModel.make(reason: .remoteEnded, elapsed: 1_234)), size: phone)
+        try callSnapshot(
+            "call-removed", call(.ended(.removed), [], ended: EndedModel.make(reason: .removed, elapsed: 312)), size: phone)
+        try callSnapshot(
+            "ipad-call-two-column", call(.connected, [saru, person("agent:kit", "Kit", agent: true)] + room, sizeClass: .regular),
+            size: padLandscape)
+        try callSnapshot(
+            "ipad-call-portrait", call(.connected, [saru] + room, sizeClass: .regular), size: padPortrait)
+    }
+
+    /// Dynamic Type AX5 with a long agent name: the name wraps and the mic
+    /// glyph keeps its own column (stage 4 check, read off the PNG).
+    func testInCallScreenAtAX5WithALongAgentName() throws {
+        let long = person(
+            "agent:long", "Saru the Quarterly Planning and Research Assistant", agent: true, speaking: true)
+        try callSnapshot(
+            "call-ax5-long-agent-name", call(.connected, [long, person("user:ada", "Ada Okafor")], typeSize: .accessibility5),
+            size: phone)
+    }
 }

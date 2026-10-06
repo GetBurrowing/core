@@ -73,11 +73,17 @@ struct IntentActions {
 
     /// Starts a meeting on `host`; remembers the space for next time.
     func startMeeting(host: String, spaceID: String?, spaceName: String? = nil) async throws -> DeepLink {
+        try await startMeetingDetails(host: host, spaceID: spaceID, spaceName: spaceName).link
+    }
+
+    /// `startMeeting`, also returning the new meeting's id so the app can
+    /// join it natively (MeetingLauncher).
+    func startMeetingDetails(host: String, spaceID: String?, spaceName: String? = nil) async throws -> (link: DeepLink, meetingID: String) {
         guard env.install(host) != nil else { throw IntentFailure.notFound }
         let meeting = try await call("create_meeting", host) { try await env.client.createMeeting(host: host, spaceID: spaceID) }
         if let spaceID { env.lastMeetingSpaces.set(spaceID, name: spaceName, for: host) }
         guard let link = DeepLink.meeting(host: host, slug: meeting.slug) else { throw IntentFailure.notFound }
-        return link
+        return (link, meeting.id)
     }
 
     /// Opens the person's DM with the agent, posts the question, then polls

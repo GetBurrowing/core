@@ -18,6 +18,12 @@ enum IntentAppHooks {
             ShortcutParameterRefresh.shared.record(route: route, host: host, keys: keys)
         }
         InstallStore.didRemove = { host in forget(host: host) }
+        // Joining a meeting from Siri, Shortcuts or Spotlight starts a native
+        // call in this process (task 01a10db7 stage 3). The widget process
+        // never sets this, so a widget keeps opening the web page.
+        MeetingLauncher.start = { host, meetingID in
+            Task { @MainActor in CallController.shared.start(host: host, meetingID: meetingID) }
+        }
     }
 
     private static func donate(_ intent: some AppIntent) {

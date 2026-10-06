@@ -4,6 +4,23 @@ The top `## v<version>` section is sent as the build's "What to Test" by
 `scripts/set_testflight_notes.py`. It must match project.yml's
 MARKETING_VERSION, and it is capped at 4000 characters.
 
+## v1.2
+Meetings are now native. Joining a meeting from Burrow runs it as a real phone call: audio keeps going when you leave the app or lock the phone, the Lock Screen and AirPods control it, and a call shows in the phone app's Recents. If someone invites you while their meeting is live, or a meeting you were invited to starts, your phone rings like a call.
+
+Please try:
+1. Join natively. Open a meeting in Burrow and join. You get Burrow's own call screen (dark): agents first, then people; a cyan ring shows who is speaking. Mute, Audio and Leave are at the bottom.
+2. Background and lock. During a call, go to the Home Screen, then lock the phone. You should keep hearing everyone, and the Lock Screen shows the call controls. Tap the Burrow button there to come back.
+3. Open full meeting. On the call screen, tap Open full meeting: the web meeting page opens and the call keeps its audio (you should not hear anyone twice).
+4. Ringing. Ask someone to invite you to a meeting that is live right now (meeting page, Invite). Your phone rings with "{Name} in {Meeting}". Answer joins you; Decline tells them you declined; leaving it 30 seconds counts as missed. A scheduled meeting you are invited to rings everyone invited when it starts, except whoever started it. A meeting nobody was invited to rings nobody (members still get the usual notification).
+5. A second invite during a call. While you are in a call, have someone invite you to another live meeting: instead of ringing, a banner says "Invites you to join" with Not now and Switch. Switch leaves this call and joins the other.
+6. Siri and Shortcuts. "Start a meeting in Burrow" now starts the call natively.
+
+Known gaps in this build:
+- PushToTalk (walkie-talkie style talk) is not built; it is a separate follow-up.
+- No custom ringtone or call-screen icon yet; the system defaults are used.
+- Not built: native game streaming, Apple Watch.
+- Share uploads are capped at 8 MB per file; larger files fail.
+
 ## v1.1
 Burrow now works with Siri, Shortcuts, Spotlight and Control Center, the My approvals widget can approve, and Burrow runs natively on iPad. The app is recoloured to the Burrow palette: orange for actions, cyan only for a live count.
 

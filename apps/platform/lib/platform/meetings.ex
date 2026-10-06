@@ -32,6 +32,7 @@ defmodule Platform.Meetings do
   alias Platform.Meetings.GuestInvite
   alias Platform.Meetings.IntentRuntimeAdapter
   alias Platform.Meetings.Invite
+  alias Platform.Meetings.Membership
   alias Platform.Meetings.InviteDelivery
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
   alias Platform.Meetings.SayRegistry
@@ -180,6 +181,35 @@ defmodule Platform.Meetings do
   end
 
   def fetch_meeting_for_user(_user, _slug), do: {:error, :not_found}
+
+  @doc """
+  Fetch a meeting BY ID that `user` may see, under the same viewer rule as
+  `list_meetings_for_user/1` (`viewer_listing_query/1`): Fabrikam root admins see
+  everything, an external user sees the meetings they hold a live invite for,
+  and an internal user sees the meetings of their orgs' projects.
+
+  The native app addresses meetings by id (the ids `GET /api/app/meetings`
+  lists), so its reads use the listing rule, and a meeting it was shown is a
+  meeting it can open. A malformed id, a meeting in another org and a missing
+  row all answer `{:error, :not_found}`, so ids are not probeable.
+  """
+  @spec get_meeting_for_user(map() | nil, term()) :: {:ok, Meeting.t()} | {:error, :not_found}
+  def get_meeting_for_user(%{id: user_id} = user, meeting_id) when is_binary(user_id) do
+    if Platform.UUID.valid?(meeting_id) do
+      user
+      |> viewer_listing_query()
+      |> where([m], m.id == ^meeting_id)
+      |> Repo.one()
+      |> case do
+        %Meeting{} = meeting -> {:ok, meeting}
+        nil -> {:error, :not_found}
+      end
+    else
+      {:error, :not_found}
+    end
+  end
+
+  def get_meeting_for_user(_user, _meeting_id), do: {:error, :not_found}
 
   # NOT YET on `Tenancy.scope/3`, and deliberately so — see the "Why this is
   # still hand-rolled" section of the moduledoc. The bypass predicate here is
@@ -829,15 +859,29 @@ defmodule Platform.Meetings do
   @doc """
   Transition a meeting from `scheduled` to `live`, stamping `started_at`.
 
+  `opts[:started_by_user_id]`, when given, is stamped on
+  `meetings.started_by_user_id` (task 01a10db7): the user whose join started
+  the meeting. Omitted, the column is left as it is.
+
   Returns `{:error, changeset}` (with an `:status` error) on any illegal
   transition — e.g. starting an already-ended meeting. On success broadcasts
   `{:meeting_started, meeting}` on the project's PubSub topic so the
   meetings index can re-group without a poll.
   """
-  @spec start_meeting(Meeting.t()) :: {:ok, Meeting.t()} | {:error, Ecto.Changeset.t()}
-  def start_meeting(%Meeting{} = meeting) do
+  @spec start_meeting(Meeting.t(), keyword()) ::
+          {:ok, Meeting.t()} | {:error, Ecto.Changeset.t()}
+  def start_meeting(%Meeting{} = meeting, opts \\ []) do
+    attrs =
+      case Keyword.get(opts, :started_by_user_id) do
+        user_id when is_binary(user_id) ->
+          %{started_at: DateTime.utc_now(), started_by_user_id: user_id}
+
+        _ ->
+          %{started_at: DateTime.utc_now()}
+      end
+
     case meeting
-         |> Meeting.status_changeset("live", %{started_at: DateTime.utc_now()})
+         |> Meeting.status_changeset("live", attrs)
          |> Repo.update() do
       {:ok, updated} = ok ->
         Phoenix.PubSub.broadcast(
@@ -1817,6 +1861,12 @@ defmodule Platform.Meetings do
   user's own record is authoritative for their name, so these are only useful
   when the host wants to record what they typed.
 
+  `:inviter_user_id` (task 01a10db7 stage 2) names the user doing the
+  inviting. When given, the invitee is also offered to
+  `Platform.Meetings.Ringing.ring_for_live_invite/3`, which rings them only if
+  the meeting is live per the database and they are not the inviter. Without
+  it (draft invites from the create sheet, the external path), nothing rings.
+
   A `user_id` that is not a well-formed UUID answers `{:error, changeset}` with
   the error on `:user_id`. It is checked with `Platform.UUID.valid?/1` before
   any query: `Repo.get_by/2` RAISES `Ecto.Query.CastError` on a malformed id
@@ -1839,6 +1889,7 @@ defmodule Platform.Meetings do
       case upsert_user_invite(meeting, user_id, attrs) do
         {:ok, %Invite{} = invite} ->
           deliver_invite(invite, meeting)
+          maybe_ring_live_invite(meeting, user_id, Keyword.get(opts, :inviter_user_id))
           {:ok, invite}
 
         {:error, _changeset} = error ->
@@ -1851,6 +1902,26 @@ defmodule Platform.Meetings do
        |> Ecto.Changeset.add_error(:user_id, "is invalid")}
     end
   end
+
+  defp maybe_ring_live_invite(_meeting, _invitee, nil), do: :ok
+  defp maybe_ring_live_invite(_meeting, invitee, invitee), do: :ok
+
+  defp maybe_ring_live_invite(%Meeting{} = meeting, invitee, inviter) when is_binary(inviter) do
+    Application.get_env(:platform, :ringing_module, Platform.Meetings.Ringing)
+    |> apply(:ring_for_live_invite, [meeting, invitee, inviter])
+
+    :ok
+  rescue
+    error ->
+      Logger.warning(
+        "[Meetings] live-invite ringing raised — meeting=#{meeting.id}: " <>
+          Exception.message(error)
+      )
+
+      :ok
+  end
+
+  defp maybe_ring_live_invite(_meeting, _invitee, _inviter), do: :ok
 
   defp upsert_user_invite(%Meeting{} = meeting, user_id, attrs) do
     case Repo.get_by(Invite, meeting_id: meeting.id, user_id: user_id) do
@@ -2665,9 +2736,14 @@ defmodule Platform.Meetings do
   # Resolved by query rather than off a preload: callers hand us whatever
   # `%Meeting{}` they are holding, and a `%Ecto.Association.NotLoaded{}` here
   # would silently read as "no host" — which quietly re-invites the host.
-  defp host_user_id(%Meeting{host_participant_id: nil}), do: nil
+  @doc """
+  The `users.id` of `meeting`'s host, read from its `host_participant_id`
+  chat row, or nil when the meeting has no host or the host is not a user.
+  """
+  @spec host_user_id(Meeting.t()) :: binary() | nil
+  def host_user_id(%Meeting{host_participant_id: nil}), do: nil
 
-  defp host_user_id(%Meeting{host_participant_id: participant_id}) do
+  def host_user_id(%Meeting{host_participant_id: participant_id}) do
     case Chat.get_participant(participant_id) do
       %Chat.Participant{participant_type: "user", participant_id: user_id} -> user_id
       _ -> nil
@@ -3263,6 +3339,179 @@ defmodule Platform.Meetings do
         {:ok, updated}
     end
   end
+
+  # ── The authenticated join (task 01a10db7 stage 1) ─────────────────────────
+
+  @doc """
+  Join `user_id` to the LiveKit call of chat space `space_id` and mint the
+  token for it. The ONE join sequence: the web join
+  (`PlatformWeb.ChatLive.MeetingHooks.join/1`, reached from ChatLive's
+  `meeting_join` and MeetingLive's `:auto_join`) and the native app's join
+  (`Platform.Mobile.NativeCall.join/2`) both call this, so the order below and
+  the two bug fixes it carries exist exactly once.
+
+  In order:
+
+    1. `authorize_join/2` — an external user needs a live invite to the space
+       (refusal emits `[:platform, :auth, :access_blocked]` and writes
+       nothing);
+    2. `Membership.ensure_chat_space_participant/3` — FIRST, before any room
+       or token work (task 019e2d1a stage 4: gating on a pre-existing
+       participant row silently no-op'd a fresh user's join);
+    3. `ensure_room/1`, then `activate_room_on_join/1`;
+    4. `upsert_live_participant/2` with identity `user:<id>` (the v4 fix: the
+       `participant_joined` webhook alone left the roster empty);
+    5. `generate_token/2`.
+
+  `display_name` is the caller's best name for the user; the participant
+  row's own name wins when it is a real one (`grant_name/2`).
+
+  Returns `{:ok, %{token, room, participant, identity, name}}`,
+  `{:error, :join_not_permitted}` on refusal, or the first failing step's
+  error. The token is a bearer credential for the room: never log it.
+  """
+  @spec join_for_user(binary(), binary(), String.t() | nil) ::
+          {:ok,
+           %{
+             token: String.t(),
+             room: %Room{},
+             participant: %Platform.Chat.Participant{},
+             identity: String.t(),
+             name: String.t()
+           }}
+          | {:error, :join_not_permitted | term()}
+  def join_for_user(space_id, user_id, display_name)
+      when is_binary(space_id) and is_binary(user_id) do
+    with :ok <- authorize_join(space_id, user_id),
+         {:ok, participant} <-
+           Membership.ensure_chat_space_participant(space_id, user_id, display_name),
+         {:ok, room} <- ensure_room(space_id),
+         {:ok, room} <- activate_room_on_join(room),
+         identity = "user:#{user_id}",
+         # Prefer the caller's resolved name over a stale/blank participant
+         # row name (legacy rows may carry the literal "User") so the
+         # LiveKit-published tile shows the real name immediately.
+         name = grant_name(participant.display_name, display_name),
+         # v4 fix: insert the joiner's `meeting_participants` row HERE, on the
+         # real join — not only via the LiveKit `participant_joined` webhook.
+         # `upsert_live_participant/2` is the ONLY writer of that table, and
+         # the webhook (livekit_webhook_controller) can't reach the ephemeral
+         # dev container, so the server-presence roster
+         # (`active_participants_for_space/1`, shared by /chat quick-meet AND
+         # /meetings) was always empty for a genuine local join. Dual-path,
+         # safe by design: this insert is deterministic + dev-testable, and
+         # the webhook stays as the idempotent backup for SFU-reported and
+         # remote participants. `upsert_live_participant/2` is
+         # find-or-reactivate keyed on (room_id, user_id), so when the prod
+         # `participant_joined` webhook later fires for the same `user:<id>`
+         # identity it returns the SAME row — no duplicate. The insert path
+         # broadcasts `{:participant_joined, p}` + presence_change internally.
+         {:ok, _live_participant} <-
+           upsert_live_participant(room, %{identity: identity, name: name}),
+         {:ok, token} <- generate_token(room, %{identity: identity, name: name}) do
+      {:ok, %{token: token, room: room, participant: participant, identity: identity, name: name}}
+    end
+  end
+
+  def join_for_user(_space_id, _user_id, _display_name), do: {:error, :invalid_join}
+
+  # ── The join gate ────────────────────────────────────────────────────────
+  #
+  # Loading a meeting page and joining its call are DIFFERENT gates, and
+  # until task 019fb955-f8b1 stage 4 only the first one existed.
+  # `generate_token/2` performs no membership check of its own, and the join
+  # is reached from more than the meeting page: `chat_live.html.heex` renders
+  # a "Meet" button gated on `@meetings_enabled && !@in_meeting` — NOT on
+  # `!@external?` — and the native app joins by meeting id. The LiveKit room
+  # is keyed off the space (`room_name_for_space/1`), so every surface lands
+  # in the SAME room. An external user seated in a meeting's bound chat space
+  # could therefore join the call from the chat host without ever touching
+  # the meet host.
+  #
+  # So the gate lives HERE, once, inside `join_for_user/3`, where every
+  # surface passes through it, rather than being duplicated per caller.
+  # Hiding the button is cosmetics; this is the fence.
+  defp authorize_join(space_id, user_id) do
+    if join_permitted?(space_id, user_id) do
+      :ok
+    else
+      emit_join_blocked(space_id, user_id)
+      {:error, :join_not_permitted}
+    end
+  end
+
+  # An external user may join only a call whose space they hold a live invite
+  # to. Internal users are unaffected — and pay no query for the privilege:
+  # the account is loaded only inside the external branch, so the internal
+  # path is behaviourally identical to the one before this gate existed.
+  #
+  # `Tenancy.external_user?/1` is the same predicate the request-path plug and
+  # `Chat.ExternalScope` already use. Do not grow a second one.
+  @doc """
+  Whether `user_id` may join the call of chat space `space_id`: always for an
+  internal user, and for an external user only with a live invite to it.
+
+  The predicate behind `join_for_user/3`'s gate, without the gate's
+  `access_blocked` telemetry: `Platform.Meetings.Ringing` asks it of every
+  invitee before ringing, and a ring that is merely not sent is not an access
+  attempt.
+  """
+  @spec join_permitted?(binary(), binary()) :: boolean()
+  def join_permitted?(space_id, user_id) do
+    if Platform.Tenancy.external_user?(%{id: user_id}) do
+      invited_to_space?(space_id, Accounts.get_user(user_id))
+    else
+      true
+    end
+  end
+
+  # The refusal is silent to the user by design — no distinguishing flash or
+  # body, so a caller cannot probe which spaces back a meeting. It is not
+  # silent to the operator: this feeds `Platform.Audit` through the same
+  # `[:platform, :auth, :access_blocked]` event the request-path denials use.
+  defp emit_join_blocked(space_id, user_id) do
+    :telemetry.execute(
+      [:platform, :auth, :access_blocked],
+      %{system_time: System.system_time()},
+      %{
+        action: "blocked",
+        actor_id: user_id,
+        actor_type: "user",
+        resource_type: "chat_space",
+        resource_id: space_id,
+        reason: "external_meeting_join_denied"
+      }
+    )
+  end
+
+  # Room lifecycle (task 019e4b3e v4 stage 1): `activate_room/1` previously
+  # had ZERO callers, so `ensure_room/1` left rooms at the schema default
+  # `status="idle"`. `get_active_room/1` filters `status=="active"`, so
+  # `active_participants_for_space/1` (and the presence rail on BOTH the
+  # /meetings and /chat surfaces) always saw an empty list. A room must become
+  # "active" exactly when the first real participant joins — and
+  # `join_for_user/3` is the single shared join entrypoint, so activating here
+  # fixes presence sourcing on every surface in one place and keeps
+  # room-active + has-participant atomic.
+  #
+  # Gated on `status != "active"` so an already-active room skips the
+  # redundant write and the spurious `:room_activated`/presence broadcast.
+  #
+  # Deactivation symmetry lives in the LiveKit `room_finished` webhook
+  # (livekit_webhook_controller.ex), which calls `finish_room/1` when LiveKit
+  # reports the room emptied. Explicit per-user leaves flow through
+  # `leave_for_user/2` + the `participant_left` webhook.
+  defp activate_room_on_join(%Room{status: "active"} = room), do: {:ok, room}
+  defp activate_room_on_join(%Room{} = room), do: activate_room(room)
+
+  # Choose the LiveKit `name` grant. The participant row's display_name wins
+  # only when it is a real, non-"User" name; otherwise fall back to the
+  # caller's resolved name.
+  defp grant_name(participant_name, _resolved)
+       when is_binary(participant_name) and participant_name != "" and participant_name != "User",
+       do: participant_name
+
+  defp grant_name(_participant_name, resolved), do: resolved
 
   # True when the leave names a LiveKit session other than the one the row
   # last joined as. Both sids must be known; see `mark_live_participant_left/2`.

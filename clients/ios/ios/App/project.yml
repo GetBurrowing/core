@@ -13,10 +13,19 @@ options:
 packages:
   CapApp-SPM:
     path: CapApp-SPM
+  # Native meetings (task 01a10db7 stage 3). Pinned EXACTLY: the SDK's
+  # audio-session and CallKit seams move between minors, and a resolver
+  # picking up a new minor on a fresh clone would change call behaviour
+  # without a diff. 2.17.0 was the newest 2.x release on 2026-10-06.
+  # App target ONLY: ../Intents is compiled into SuiteWidgets too, so
+  # nothing shared may import LiveKit.
+  LiveKit:
+    url: https://github.com/livekit/client-sdk-swift
+    exactVersion: 2.17.0
 
 settings:
   base:
-    MARKETING_VERSION: "1.1"
+    MARKETING_VERSION: "1.2"
     CURRENT_PROJECT_VERSION: "1"
     SWIFT_VERSION: "5.0"
     # iOS 17: App Intents (interactive widgets, AppIntentConfiguration);
@@ -79,6 +88,8 @@ targets:
     dependencies:
       - package: CapApp-SPM
         product: CapApp-SPM
+      - package: LiveKit
+        product: LiveKit
       - target: ShareExtension
       - target: SuiteWidgets
     configFiles:
@@ -167,6 +178,10 @@ targets:
       - path: ../SuiteWidgets/ApprovalsProvider.swift
       - path: ../SuiteWidgets/Controls.swift
       - path: App/InstallPickerView.swift
+      # The in-call screen (no LiveKit: the view, its model, the state).
+      - path: App/Meetings/InCallView.swift
+      - path: App/Meetings/InCallModel.swift
+      - path: App/Meetings/CallState.swift
       # The snippets, the widget buttons' intents and the widget model.
       - path: ../Intents
     dependencies:

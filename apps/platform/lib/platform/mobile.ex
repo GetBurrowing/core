@@ -3,7 +3,8 @@ defmodule Platform.Mobile do
   The server half of the native apps (iOS task 01a10882, Android task
   01a10d8e): app bearer sessions, the app login codes that mint them, push
   device registration (APNs for iOS in `apns_devices`, FCM for Android in
-  `fcm_devices`), and the badge counts the app shows.
+  `fcm_devices`, PushKit VoIP for iOS call ringing in `apns_voip_devices`),
+  and the badge counts the app shows.
 
   ## Login flow
 
@@ -20,8 +21,8 @@ defmodule Platform.Mobile do
 
   ## Secrets
 
-  Bearer tokens and login codes are stored only as SHA-256 hashes. APNs and
-  FCM device tokens are stored raw (the push services need them) under
+  Bearer tokens and login codes are stored only as SHA-256 hashes. APNs,
+  FCM and VoIP device tokens are stored raw (the push services need them) under
   `redact: true`. None of them is ever logged, put in telemetry, or echoed in an error. Every
   failure of `exchange_code/3` returns the same `{:error, :invalid_code}`, so
   the API is not an oracle for which check failed.
@@ -34,6 +35,7 @@ defmodule Platform.Mobile do
   alias Platform.Accounts.User
   alias Platform.Inbox
   alias Platform.Mobile.ApnsDevice
+  alias Platform.Mobile.ApnsVoipDevice
   alias Platform.Mobile.AppLoginCode
   alias Platform.Mobile.AppSession
   alias Platform.Mobile.FcmDevice
@@ -186,12 +188,19 @@ defmodule Platform.Mobile do
     :ok
   end
 
-  @doc "Revoke a session and delete every APNs and FCM device it registered."
+  @doc """
+  Revoke a session and delete every push device it registered: APNs alert
+  (`apns_devices`), FCM (`fcm_devices`) and PushKit VoIP
+  (`apns_voip_devices`). Revocation stamps `revoked_at` and keeps the session
+  row, so the tables' `ON DELETE CASCADE` never fires here: each table is
+  deleted from explicitly.
+  """
   @spec revoke_session(AppSession.t()) :: {:ok, AppSession.t()} | {:error, term()}
   def revoke_session(%AppSession{id: id} = session) do
     Multi.new()
     |> Multi.delete_all(:devices, from(d in ApnsDevice, where: d.app_session_id == ^id))
     |> Multi.delete_all(:fcm_devices, from(d in FcmDevice, where: d.app_session_id == ^id))
+    |> Multi.delete_all(:voip_devices, from(d in ApnsVoipDevice, where: d.app_session_id == ^id))
     |> Multi.update(:session, Ecto.Changeset.change(session, revoked_at: DateTime.utc_now()))
     |> Repo.transaction()
     |> case do
@@ -337,8 +346,8 @@ defmodule Platform.Mobile do
   end
 
   @doc """
-  Remove the user's device rows (APNs and FCM) for one app install.
-  Idempotent.
+  Remove the user's device rows (APNs alert, FCM and PushKit VoIP) for one
+  app install. Idempotent.
   """
   @spec unregister_device(User.t() | AppSession.t(), String.t()) :: :ok
   def unregister_device(%AppSession{user_id: user_id}, install_id),
@@ -351,6 +360,11 @@ defmodule Platform.Mobile do
 
       from(d in FcmDevice, where: d.user_id == ^user_id and d.app_install_id == ^install_id)
       |> Repo.delete_all()
+
+      from(d in ApnsVoipDevice,
+        where: d.user_id == ^user_id and d.app_install_id == ^install_id
+      )
+      |> Repo.delete_all()
     end)
 
     :ok
@@ -360,6 +374,76 @@ defmodule Platform.Mobile do
   @spec list_devices(User.t()) :: [ApnsDevice.t()]
   def list_devices(%User{id: user_id}) do
     Repo.all(from(d in ApnsDevice, where: d.user_id == ^user_id, order_by: d.inserted_at))
+  end
+
+  @doc """
+  Register (or refresh) the PushKit VoIP token for the session's install
+  (task 01a10db7), in `apns_voip_devices`. The VoIP twin of the APNs alert
+  registration in `register_device/2`, with the same semantics: inside one
+  transaction the install's previous VoIP token is deleted, then the insert
+  upserts on `token`, so a token held by another user's row moves to this
+  user and session instead of being duplicated.
+
+  `attrs`: `token` (hex), `environment` (`sandbox` | `production`),
+  `bundle_id`, and optionally `app_install_id` (defaults to the session's).
+  """
+  @spec register_voip_device(AppSession.t(), map()) ::
+          {:ok, ApnsVoipDevice.t()} | {:error, Ecto.Changeset.t()}
+  def register_voip_device(%AppSession{} = session, attrs) when is_map(attrs) do
+    changeset =
+      ApnsVoipDevice.changeset(%ApnsVoipDevice{}, %{
+        user_id: session.user_id,
+        app_session_id: session.id,
+        app_install_id: fetch(attrs, :app_install_id) || session.app_install_id,
+        token: fetch(attrs, :token),
+        environment: fetch(attrs, :environment),
+        bundle_id: fetch(attrs, :bundle_id),
+        last_registered_at: DateTime.utc_now()
+      })
+
+    if changeset.valid? do
+      token = Ecto.Changeset.get_field(changeset, :token)
+      install_id = Ecto.Changeset.get_field(changeset, :app_install_id)
+
+      Repo.transaction(fn ->
+        # `log: false` on both statements: the VoIP token is a query
+        # parameter here, and Ecto's debug query log prints parameters.
+        from(d in ApnsVoipDevice,
+          where:
+            d.user_id == ^session.user_id and d.app_install_id == ^install_id and
+              d.token != ^token
+        )
+        |> Repo.delete_all(log: false)
+
+        case Repo.insert(changeset,
+               log: false,
+               on_conflict:
+                 {:replace,
+                  [
+                    :user_id,
+                    :app_session_id,
+                    :app_install_id,
+                    :environment,
+                    :bundle_id,
+                    :last_registered_at,
+                    :updated_at
+                  ]},
+               conflict_target: :token,
+               returning: true
+             ) do
+          {:ok, device} -> device
+          {:error, changeset} -> Repo.rollback(changeset)
+        end
+      end)
+    else
+      {:error, changeset}
+    end
+  end
+
+  @doc "The user's registered PushKit VoIP devices."
+  @spec list_voip_devices(User.t()) :: [ApnsVoipDevice.t()]
+  def list_voip_devices(%User{id: user_id}) do
+    Repo.all(from(d in ApnsVoipDevice, where: d.user_id == ^user_id, order_by: d.inserted_at))
   end
 
   @doc "The user's registered FCM (Android) devices."

@@ -51,7 +51,10 @@ const MeetingClient = {
     this._localVideoTrack = null
 
     this.handleEvent("join-meeting", (payload) => this._join(payload))
-    this.handleEvent("leave-meeting", () => this._leave())
+    this.handleEvent("leave-meeting", () => {
+      this._leaveNative()
+      this._leave()
+    })
     this.handleEvent("toggle-mic", () => this._toggleMic())
     this.handleEvent("toggle-camera", () => this._toggleCamera())
     this.handleEvent("toggle-screen-share", () => this._toggleScreenShare())
@@ -107,6 +110,8 @@ const MeetingClient = {
     // `livekit:state` events firing per RoomEvent. (task 019ee06b stage 2
     // v2 fix.)
     this._releaseRoomListeners()
+    // The native call (if any) outlives this element; only our listener goes.
+    this._releaseNativeListener()
 
     // Clear the MAP, never the DOM elements. The remote <audio> nodes live in
     // the body-level `#meeting-audio-sink` and must outlive this hook — that
@@ -705,7 +710,65 @@ const MeetingClient = {
     this._roomListeners = []
   },
 
-  async _join({ token, url, room_name, mic_enabled, camera_enabled }) {
+  // ── Native hand-off (task 01a10db7 stage 3) ─────────────────────────────
+  //
+  // Inside the Burrow iOS app the `SuiteMeetings` Capacitor plugin runs the
+  // call natively (CallKit + the LiveKit Swift SDK). The page must then NOT
+  // build its own Room: both connections would be the same `user:<id>`
+  // identity, LiveKit would kick one out for the other, and the person would
+  // hear the call twice. A payload without `meeting_id` (a chat quick-meet
+  // whose space has no meeting row), or a browser without the plugin, keeps
+  // the web path exactly as before.
+  _nativeMeetings() {
+    const plugins = window.Capacitor && window.Capacitor.Plugins
+    return (plugins && plugins.SuiteMeetings) || null
+  },
+
+  async _joinNative(native, meetingId) {
+    this._nativeMeetingId = meetingId
+    if (!this._nativeEndedHandle && typeof native.addListener === "function") {
+      // The same `meeting_left` the Disconnected handler pushes, so the
+      // server's roster and the mini-bar behave as for a web leave.
+      this._nativeEndedHandle = native.addListener("callEnded", ({ meetingId: ended } = {}) => {
+        if (!this._nativeMeetingId || ended !== this._nativeMeetingId) return
+        this._nativeMeetingId = null
+        this.pushEvent("meeting_left", {})
+      })
+    }
+    try {
+      // A call already up for this meeting ("Open full meeting") resolves
+      // `already_in_call` natively: a no-op.
+      await native.join({ meetingId })
+    } catch (error) {
+      console.error("[MeetingClient] native join failed", error && error.message)
+      this._nativeMeetingId = null
+      this.pushEvent("meeting_left", {})
+    }
+  },
+
+  _leaveNative() {
+    if (!this._nativeMeetingId) return
+    const native = this._nativeMeetings()
+    this._nativeMeetingId = null
+    if (native && typeof native.leave === "function") native.leave().catch(() => {})
+  },
+
+  _releaseNativeListener() {
+    const handle = this._nativeEndedHandle
+    this._nativeEndedHandle = null
+    if (!handle) return
+    Promise.resolve(handle)
+      .then((h) => h && typeof h.remove === "function" && h.remove())
+      .catch(() => {})
+  },
+
+  async _join({ token, url, room_name, mic_enabled, camera_enabled, meeting_id }) {
+    const native = this._nativeMeetings()
+    if (native && meeting_id) {
+      await this._joinNative(native, meeting_id)
+      return
+    }
+
     // The lobby's choice (task 01a07410 / FE-17 stage 4). `mic_enabled` /
     // `camera_enabled` are the server's `:mic_enabled` / `:camera_enabled`
     // assigns at the moment of the join push — the same pair the in-call
