@@ -3063,9 +3063,35 @@ defmodule Platform.Chat do
     prefix <> fragment_text <> suffix
   end
 
-  @doc "Edit a message's content. Sets `edited_at` to now."
+  @doc """
+  The one author rule for editing or unsending a message (task 01a111bb):
+  only the participant who wrote it may. A nil participant (not in the
+  space) is forbidden.
+
+  Shared by ChatLive's inline editor, the HTTP `PATCH /api/messages/:id`
+  and the native app's `PlatformWeb.AppMessagesController`.
+  """
+  @spec authorize_author(Message.t(), Participant.t() | map() | nil) ::
+          :ok | {:error, :forbidden}
+  def authorize_author(_message, nil), do: {:error, :forbidden}
+  def authorize_author(%Message{participant_id: pid}, %{id: pid}) when is_binary(pid), do: :ok
+  def authorize_author(_message, _participant), do: {:error, :forbidden}
+
+  @doc """
+  Edit a message's content. Sets `edited_at` to now.
+
+  Refuses a frozen message (an agent began work on it) with
+  `{:error, :frozen, freezing_action}`, the same answer
+  `Platform.Chat.Messages.Edit.apply_edit/3` gives, so no caller can edit
+  past the freeze (task 01a111bb).
+  """
   @spec edit_message(Message.t(), String.t()) ::
-          {:ok, Message.t()} | {:error, Ecto.Changeset.t()}
+          {:ok, Message.t()}
+          | {:error, Ecto.Changeset.t() | :space_archived}
+          | {:error, :frozen, map()}
+  def edit_message(%Message{frozen_at: %DateTime{}} = message, _content),
+    do: {:error, :frozen, Platform.Chat.Messages.Edit.freezing_action(message)}
+
   def edit_message(%Message{} = message, content) do
     with :ok <- ensure_message_space_writable(message) do
       do_edit_message(message, content)

@@ -420,4 +420,74 @@ defmodule Platform.Push.NotificationTest do
       assert AttentionRouter.push_conversation_name(dm, Ecto.UUID.generate()) == nil
     end
   end
+
+  # Task 01a111bb stage 2: the sender's identity, for the iOS Notification
+  # Service Extension's communication notification.
+  defp agent_sender do
+    %Platform.Chat.Participant{
+      id: Ecto.UUID.generate(),
+      participant_type: "agent",
+      participant_id: Ecto.UUID.generate(),
+      display_name: "Burrow Helper"
+    }
+  end
+
+  describe "author fields and mutable-content (task 01a111bb)" do
+    test "a chat notification from a participant carries author_id and author_type everywhere" do
+      sender = agent_sender()
+      n = AttentionRouter.push_notification(sender, message("done"), :all, space(), [])
+
+      assert n.author_id == sender.participant_id
+      assert n.author_type == "agent"
+      assert n.author_name == "Burrow Helper"
+
+      apns = Notification.to_apns_payload(n)
+      assert apns["author_id"] == sender.participant_id
+      assert apns["author_type"] == "agent"
+
+      data = Notification.to_fcm_payload(n)["data"]
+      assert data["author_id"] == sender.participant_id
+      assert data["author_type"] == "agent"
+    end
+
+    test "a bare sender name carries no author identity" do
+      n = AttentionRouter.push_notification("Harper", message("hi"), :all, space(), [])
+      assert n.author_id == nil
+      refute Map.has_key?(Notification.to_apns_payload(n), "author_id")
+    end
+
+    test "mutable-content is set for chat_message and chat_mention only" do
+      for n <- every_kind() do
+        aps = Notification.to_apns_payload(n)["aps"]
+
+        if n.kind in ~w(chat_message chat_mention) do
+          assert aps["mutable-content"] == 1, "missing for #{n.kind}"
+        else
+          refute Map.has_key?(aps, "mutable-content"), "set for #{n.kind}"
+        end
+      end
+
+      kinds = Enum.map(every_kind(), & &1.kind)
+      assert "chat_message" in kinds and "chat_mention" in kinds
+    end
+
+    test "redact/2 drops the author fields on every transport" do
+      sender = agent_sender()
+      n = AttentionRouter.push_notification(sender, message("secret"), :mention, space(), [])
+      assert n.author_id
+
+      redacted = Notification.redact(n, %{title: "New message", body: "", url: "/"})
+
+      assert redacted.author_id == nil
+      assert redacted.author_type == nil
+      refute Map.has_key?(Notification.to_apns_payload(redacted), "author_id")
+      refute Map.has_key?(Notification.to_apns_payload(redacted), "author_type")
+      refute Map.has_key?(Notification.to_fcm_payload(redacted)["data"], "author_id")
+
+      # The same through the real external-recipient path.
+      external = Push.preview_for_user(external_user().id, n)
+      assert external.author_id == nil
+      assert external.author_type == nil
+    end
+  end
 end

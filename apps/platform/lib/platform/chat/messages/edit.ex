@@ -68,7 +68,7 @@ defmodule Platform.Chat.Messages.Edit do
   def apply_edit(%Message{} = message, %Participant{} = participant, content)
       when is_binary(content) do
     if message.frozen_at do
-      {:error, :frozen, build_freezing_action(message)}
+      {:error, :frozen, freezing_action(message)}
     else
       do_apply(message, participant, content)
     end
@@ -156,7 +156,13 @@ defmodule Platform.Chat.Messages.Edit do
     )
   end
 
-  defp build_freezing_action(message) do
+  @doc """
+  Who froze `message` and when: `participant_id`, `frozen_at`, and the
+  freezing participant's `participant_display_name` when it resolves. Also
+  `Platform.Chat.edit_message/2`'s refusal payload.
+  """
+  @spec freezing_action(Message.t()) :: freezing_action()
+  def freezing_action(message) do
     base = %{
       participant_id: message.frozen_by_participant_id,
       frozen_at: message.frozen_at

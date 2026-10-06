@@ -959,6 +959,10 @@ defmodule PlatformWeb.Router do
     post("/people/:user_id/dm", AppIntentsController, :person_dm)
     get("/projects", AppIntentsController, :projects)
     post("/tasks", AppIntentsController, :create_task)
+    # Siri AI messages domain (task 01a111bb stage 2): edit, unsend, read.
+    patch("/messages/:id", AppMessagesController, :update)
+    delete("/messages/:id", AppMessagesController, :delete)
+    post("/spaces/:space_id/read", AppMessagesController, :read)
   end
 
   scope "/api/meetings", PlatformWeb do

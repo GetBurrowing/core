@@ -57,6 +57,8 @@ defmodule Platform.Push.Notification do
   @ring_waiting_category "SUITE_RING_WAITING"
   @approvals_thread "approvals"
   @approval_kinds ~w(task_plan_review review_request_pending)
+  # Kinds the iOS Notification Service Extension rewrites (task 01a111bb).
+  @mutable_kinds ~w(chat_message chat_mention)
 
   defstruct kind: "generic",
             title: nil,
@@ -71,6 +73,8 @@ defmodule Platform.Push.Notification do
             inbox_item_id: nil,
             install_host: nil,
             author_name: nil,
+            author_id: nil,
+            author_type: nil,
             space_name: nil,
             meeting_id: nil,
             ring_id: nil
@@ -89,6 +93,8 @@ defmodule Platform.Push.Notification do
           inbox_item_id: String.t() | nil,
           install_host: String.t() | nil,
           author_name: String.t() | nil,
+          author_id: String.t() | nil,
+          author_type: String.t() | nil,
           space_name: String.t() | nil,
           meeting_id: String.t() | nil,
           ring_id: String.t() | nil
@@ -143,6 +149,8 @@ defmodule Platform.Push.Notification do
       :inbox_item_id,
       :install_host,
       :author_name,
+      :author_id,
+      :author_type,
       :space_name,
       :meeting_id,
       :ring_id
@@ -200,6 +208,12 @@ defmodule Platform.Push.Notification do
       # Separate from the title so Android's MessagingStyle can show the
       # author and the conversation apart (task 01a10d8e).
       author_name: presence(attrs[:author]),
+      # Who wrote it (task 01a111bb): the author participant's
+      # `participant_id` and `participant_type` ("user" | "agent"), so the iOS
+      # Notification Service Extension can build the sender `INPerson` for a
+      # communication notification.
+      author_id: presence(attrs[:author_id]),
+      author_type: presence(attrs[:author_type]),
       # `conversation_name` is the recipient's label for the space (a DM or
       # unnamed group has a NULL `chat_spaces.name`; the web sidebar shows the
       # other participant). It falls back to the space's own name. The TITLE
@@ -219,8 +233,10 @@ defmodule Platform.Push.Notification do
   @doc """
   The redacted copy an external recipient gets on EVERY transport. Every
   identifying field (space, message, task, inbox ids and the grouping and
-  category derived from them) is cleared, and so are `author_name` and
-  `space_name`; only the kind and install survive.
+  category derived from them) is cleared, and so are `author_name`,
+  `author_id`, `author_type` and `space_name`; only the kind and install
+  survive. It builds a FRESH struct, so a field added later is dropped unless
+  it is copied here on purpose.
   """
   @spec redact(t(), %{title: String.t(), body: String.t(), url: String.t()}) :: t()
   def redact(%__MODULE__{} = n, %{title: title, body: body, url: url}) do
@@ -257,7 +273,14 @@ defmodule Platform.Push.Notification do
     |> drop_nils()
   end
 
-  @doc "The APNs JSON body: the `aps` dictionary plus top-level routing keys."
+  @doc """
+  The APNs JSON body: the `aps` dictionary plus top-level routing keys.
+
+  Chat kinds (`chat_message`, `chat_mention`) also set
+  `"mutable-content" => 1` so the iOS Notification Service Extension runs on
+  them and can make them communication notifications (task 01a111bb). No
+  other kind sets it.
+  """
   @spec to_apns_payload(t()) :: map()
   def to_apns_payload(%__MODULE__{} = n) do
     aps =
@@ -266,7 +289,8 @@ defmodule Platform.Push.Notification do
         "alert" => drop_nils(%{"title" => n.title, "body" => n.body}),
         "sound" => "default",
         "category" => n.category,
-        "thread-id" => n.thread_id
+        "thread-id" => n.thread_id,
+        "mutable-content" => if(n.kind in @mutable_kinds, do: 1)
       }
       |> drop_nils()
 
@@ -280,7 +304,9 @@ defmodule Platform.Push.Notification do
       "inbox_item_id" => n.inbox_item_id,
       "meeting_id" => n.meeting_id,
       "ring_id" => n.ring_id,
-      "install_host" => n.install_host
+      "install_host" => n.install_host,
+      "author_id" => n.author_id,
+      "author_type" => n.author_type
     }
     |> drop_nils()
   end
@@ -313,6 +339,8 @@ defmodule Platform.Push.Notification do
         "ring_id" => n.ring_id,
         "install_host" => n.install_host,
         "author_name" => n.author_name,
+        "author_id" => n.author_id,
+        "author_type" => n.author_type,
         "space_name" => n.space_name
       }
       |> Enum.reject(fn {_k, v} -> is_nil(v) or v == "" end)

@@ -146,8 +146,15 @@ defmodule PlatformWeb.MessageController do
   # a user, so the participant we just looked up is always a human
   # participant. If the message was authored by an agent, the agent's
   # participant.id != this user's participant.id and we 403.
-  defp check_author(%Message{participant_id: pid}, %Participant{id: pid}), do: :ok
-  defp check_author(_message, _participant), do: {:error, :forbidden, "forbidden_not_author", %{}}
+  #
+  # The rule itself is `Platform.Chat.authorize_author/2` (task 01a111bb), the
+  # one ChatLive and the native app's controller use.
+  defp check_author(%Message{} = message, %Participant{} = participant) do
+    case Platform.Chat.authorize_author(message, participant) do
+      :ok -> :ok
+      {:error, :forbidden} -> {:error, :forbidden, "forbidden_not_author", %{}}
+    end
+  end
 
   # Policy 2 of the contract: a frozen message returns 409 with a
   # freezing_action payload so the UI can render the disabled-pencil

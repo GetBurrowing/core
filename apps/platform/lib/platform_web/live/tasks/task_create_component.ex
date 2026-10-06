@@ -818,6 +818,13 @@ defmodule PlatformWeb.Tasks.TaskCreateComponent do
 
         Tasks.broadcast_board({:task_created, task})
 
+        # Burrow personal context (task 01a111bb): ids only.
+        socket =
+          PlatformWeb.NativeDonation.push(socket, "task_created", %{
+            task_id: task.id,
+            project_id: task.project_id
+          })
+
         flash_message =
           if status == "planning",
             do: "Task created and planning requested.",
