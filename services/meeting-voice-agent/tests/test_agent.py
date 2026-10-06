@@ -239,3 +239,101 @@ def test_parse_job_metadata_returns_empty_dict_for_malformed_json():
 def test_parse_job_metadata_returns_empty_dict_for_non_object_json():
     assert agent_module.parse_job_metadata("[1, 2, 3]") == {}
     assert agent_module.parse_job_metadata('"just a string"') == {}
+
+
+# ── Join identity (task 01a1117f stage 2) ──────────────────────────────────
+
+BURROW_ID = "01a0db75-037c-7001-96ff-d2a14fdb707f"
+
+FULL_METADATA = {
+    "space_id": "01a11174-c5b0-7002-9800-9145a91c7455",
+    "human_identity": "user:00000000-0000-4000-8000-000000000001",
+    "agent_id": BURROW_ID,
+    "agent_identity": f"agent:{BURROW_ID}",
+    "agent_name": "Burrow",
+}
+
+
+def test_accept_arguments_joins_under_the_agent_identity_core_sent():
+    assert agent_module.accept_arguments(FULL_METADATA) == {
+        "identity": f"agent:{BURROW_ID}",
+        "name": "Burrow",
+        "attributes": {"suite.agent_id": BURROW_ID},
+    }
+
+
+def test_accept_arguments_falls_back_to_the_sdk_default_without_metadata():
+    # `{}` means `req.accept()` with no arguments: the SDK mints
+    # `"agent-" + job.id`, which is what the worker did before this stage, so
+    # a new worker under an old Core joins exactly as it always has.
+    assert agent_module.accept_arguments({}) == {}
+    assert agent_module.accept_arguments(agent_module.parse_job_metadata(None)) == {}
+    assert agent_module.accept_arguments(agent_module.parse_job_metadata("{not json")) == {}
+    assert agent_module.accept_arguments(agent_module.parse_job_metadata('["a"]')) == {}
+
+
+def test_accept_arguments_falls_back_when_agent_identity_is_not_agent_prefixed():
+    for bad in (
+        "burrow",
+        f"user:{BURROW_ID}",
+        f"agent-{BURROW_ID}",
+        "agent:",
+        "",
+        None,
+        42,
+        ["agent:x"],
+    ):
+        metadata = {**FULL_METADATA, "agent_identity": bad}
+        assert agent_module.accept_arguments(metadata) == {}, bad
+
+
+def test_accept_arguments_never_derives_the_identity_from_the_worker_name(monkeypatch):
+    # Several Suite agents can share one worker name, so only the dispatch
+    # metadata may name the agent.
+    monkeypatch.setenv("MVA_WORKER_AGENT_NAME", "meeting-voice-agent")
+    metadata = {k: v for k, v in FULL_METADATA.items() if k != "agent_identity"}
+    assert agent_module.accept_arguments(metadata) == {}
+
+
+def test_accept_arguments_omits_blank_name_and_agent_id():
+    metadata = {"agent_identity": f"agent:{BURROW_ID}", "agent_name": "", "agent_id": None}
+    assert agent_module.accept_arguments(metadata) == {"identity": f"agent:{BURROW_ID}"}
+
+
+def _job_request(metadata_json: str):
+    req = MagicMock()
+    req.id = "AJ_testJob1"
+    req.job = MagicMock()
+    req.job.metadata = metadata_json
+    req.accept = AsyncMock()
+    req.reject = AsyncMock()
+    return req
+
+
+def test_request_fnc_accepts_with_the_agent_identity_from_job_metadata():
+    req = _job_request(json.dumps(FULL_METADATA))
+
+    asyncio.run(agent_module.request_fnc(req))
+
+    req.accept.assert_awaited_once_with(
+        identity=f"agent:{BURROW_ID}",
+        name="Burrow",
+        attributes={"suite.agent_id": BURROW_ID},
+    )
+    req.reject.assert_not_called()
+
+
+def test_request_fnc_accepts_with_sdk_defaults_and_never_rejects_on_bad_metadata():
+    for raw in ("", "{not json", json.dumps({"space_id": "s"})):
+        req = _job_request(raw)
+
+        asyncio.run(agent_module.request_fnc(req))
+
+        req.accept.assert_awaited_once_with()
+        req.reject.assert_not_called()
+
+
+def test_build_worker_options_wires_request_fnc():
+    options = agent_module.build_worker_options(AgentConfig.from_env())
+
+    assert options.request_fnc is agent_module.request_fnc

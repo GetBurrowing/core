@@ -281,8 +281,27 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
     #
     # Every assertion below renders all four states in ONE rail and
     # checks per-row, so a guard cannot pass on another row's markup.
+    # Task 01a1117f stage 4: the initial circle is the face of an agent NOT
+    # in the call by voice. A voice-present agent (an `agent:` identity on
+    # its row, as `agent/2` gives every fixture) shows the voice waveform
+    # instead — pinned in "the voice waveform at an agent row's avatar
+    # position" below — so this test renders the same four states with no
+    # LiveKit identity on the rows.
     test "the avatar is the mockup's initial circle, carrying the state as data, with no ring or glyph" do
-      html = four_state_rail()
+      html =
+        rail(
+          [human("Harper", "u-1")] ++
+            for(
+              {name, id} <- [
+                {"Thinker", "a-think"},
+                {"Writer", "a-write"},
+                {"Failer", "a-fail"},
+                {"Idler", "a-idle"}
+              ],
+              do: %{agent(name, id) | identity: nil}
+            ),
+          @four_states
+        )
 
       for {id, state} <- @four_states do
         row = Floki.parse_fragment!(agent_row(html, id))
@@ -2178,6 +2197,114 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRailTest do
 
       assert Floki.attribute(node, "aria-hidden") == ["true"],
              "#{sel} is exposed to assistive tech while visually hidden"
+    end
+  end
+
+  # Task 01a1117f stage 4: an agent in the call by VOICE shows the voice
+  # waveform glyph (Saru's canvas 01a11183-8861, "the four-bar listening
+  # glyph") at the avatar position; a pending or text-only agent keeps its
+  # initials, because a waveform there would claim a voice that is not in
+  # the room.
+  describe "the voice waveform at an agent row's avatar position" do
+    defp avatar_node(row), do: slot(row, "agent-activity-avatar")
+
+    defp pending_agent(name, id), do: %{agent(name, id) | identity: nil}
+
+    test "a voice-present agent (agent:<id> identity) renders a 4-bar rail glyph and no initials" do
+      html = rail([human("Harper", "u-1"), agent("Burrow", "a-burrow")])
+      av = html |> agent_row("a-burrow") |> avatar_node()
+
+      assert attr(av, "data-voice") == "true"
+      assert [wave] = Floki.find(av, "[data-voice-waveform]")
+      assert attr(wave, "data-size") == "rail"
+      assert attr(wave, "data-identity") == "agent:a-burrow"
+      assert length(Floki.find(wave, "[data-wave-bar]")) == 4
+
+      assert [root] = Floki.find(av, "[data-voice-waveform-root]")
+      assert attr(root, "phx-hook") == "MeetingVoiceWaveform"
+      assert attr(root, "phx-update") == "ignore"
+      assert attr(root, "id") == "meeting-agent-ptt-wave-p-a-burrow"
+      assert attr(root, "data-identity") == "agent:a-burrow"
+
+      # The initials circle is gone: the avatar node's only visible text
+      # would have been the "B".
+      visible =
+        av
+        |> Floki.filter_out(".sr-only")
+        |> Floki.text()
+        |> String.trim()
+
+      assert visible == ""
+    end
+
+    test "the rail glyph is the canvas's geometry and inherits the section colour, never a hex or primary" do
+      html = rail([agent("Burrow", "a-burrow")])
+
+      [wave] =
+        html |> agent_row("a-burrow") |> avatar_node() |> Floki.find("[data-voice-waveform]")
+
+      class = attr(wave, "class")
+
+      # 32px square, 8px radius, square at base-content-equivalent /8.
+      for token <- ~w(size-8 rounded-[8px] bg-current/8 gap-[2px]), do: assert(class =~ token)
+
+      for bar <- Floki.find(wave, "[data-wave-bar]") do
+        bar_class = attr(bar, "class")
+
+        for token <- ~w(w-[3px] h-5 rounded-full bg-current/60 transition-transform duration-75),
+            do: assert(bar_class =~ token)
+      end
+
+      glyph = Floki.raw_html(wave)
+      refute glyph =~ "primary"
+      refute Regex.match?(~r/#[0-9a-fA-F]{3,6}\b/, glyph)
+    end
+
+    test "a folded legacy worker (agent-AJ_ identity on the agent's row) is voice-present too" do
+      folded = %{agent("Burrow", "a-burrow") | identity: "agent-AJ_testJob1"}
+      av = rail([folded]) |> agent_row("a-burrow") |> avatar_node()
+
+      assert attr(av, "data-voice") == "true"
+      assert [wave] = Floki.find(av, "[data-voice-waveform]")
+      assert attr(wave, "data-identity") == "agent-AJ_testJob1"
+    end
+
+    test "a pending agent (no LiveKit identity yet) keeps its initials and renders no glyph" do
+      av = rail([pending_agent("Burrow", "a-burrow")]) |> agent_row("a-burrow") |> avatar_node()
+
+      assert attr(av, "data-voice") == nil
+      assert Floki.find(av, "[data-voice-waveform]") == []
+
+      visible =
+        av
+        |> Floki.filter_out(".sr-only")
+        |> Floki.text()
+        |> String.trim()
+
+      assert visible == "B"
+    end
+
+    test "meeting_ask.css reshapes .av for a voice row into the canvas's 32px, 8px-radius square" do
+      assert ask_css() =~
+               ~s(.meeting-ask .av[data-voice="true"]{width:32px;height:32px;border:0;border-radius:8px;justify-self:center})
+    end
+
+    test "app.css carries the idle keyframe and names animation:none under reduced motion" do
+      css = File.read!(Path.join([File.cwd!(), "assets", "css", "app.css"]))
+
+      assert css =~ ~s([data-voice-waveform][data-wave-state="idle"] [data-wave-bar] {)
+      assert css =~ "@keyframes voice-wave-idle"
+      assert css =~ ~r/@keyframes voice-wave-idle \{\s*from \{\s*transform: scaleY\(0\.15\);/
+      assert css =~ ~r/to \{\s*transform: scaleY\(0\.3\);/
+
+      [_, reduce] =
+        Regex.run(
+          ~r/@media \(prefers-reduced-motion: reduce\) \{\s*\[data-voice-waveform\] \[data-wave-bar\] \{(.*?)\}/s,
+          css
+        )
+
+      assert reduce =~ "animation: none !important"
+      assert reduce =~ "transform: scaleY(var(--wave-mid, 0.5)) !important"
     end
   end
 end

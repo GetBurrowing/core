@@ -54,6 +54,7 @@ defmodule PlatformWeb.Components.Meeting.AgentTile do
 
   import PlatformWeb.AvatarComponents, only: [agent_avatar: 1]
   import PlatformWeb.Components.Meetings.AgentActivityBadge, only: [agent_activity_badge: 1]
+  import PlatformWeb.Components.Meeting.VoiceWaveform, only: [voice_waveform: 1]
 
   # `:failed` belongs here because `MeetingLive.agent_activity_state/2`
   # can return it and the strip's call site passes that straight through;
@@ -92,6 +93,14 @@ defmodule PlatformWeb.Components.Meeting.AgentTile do
     doc: "draws the same ring-2 ring-primary VideoTile uses for an active speaker"
   )
 
+  attr(:voice?, :boolean,
+    default: false,
+    doc:
+      "the agent is in the call by VOICE (its row carries an agent LiveKit identity): " <>
+        "the centre shows the voice waveform instead of the avatar, on bg-base-200 " <>
+        "whatever the accent colour (task 01a1117f stage 4)"
+  )
+
   attr(:id_prefix, :string,
     default: "agent-tile",
     doc:
@@ -106,7 +115,13 @@ defmodule PlatformWeb.Components.Meeting.AgentTile do
     identity = agent_identity(assigns.agent_participant)
     name = agent_name(assigns.agent_participant)
     role_label = normalize_role(assigns.role)
-    accent_style = accent_background_style(assigns.accent_color)
+    # A voice tile keeps the `bg-base-200` ground even when the agent has an
+    # accent colour (stage spec, deviation 3): the waveform bars are
+    # `base-content /60`, whose contrast is measured on base-200 in both
+    # themes and unmeasured on an arbitrary accent hex.
+    accent_style =
+      if assigns.voice?, do: nil, else: accent_background_style(assigns.accent_color)
+
     accent_active? = !is_nil(accent_style)
 
     assigns =
@@ -141,12 +156,24 @@ defmodule PlatformWeb.Components.Meeting.AgentTile do
       style={@accent_style}
       {@rest}
     >
-      <%!-- Avatar centered on the accent background. --%>
+      <%!-- Avatar centered on the accent background, or — for an agent in
+           the call by voice — the voice waveform (task 01a1117f stage 4). A
+           voice agent has no camera and is not a person, so a face does not
+           fit; a pending or text-only agent keeps its avatar, because a
+           waveform there would claim a voice that is not in the room. --%>
       <div class="absolute inset-0 flex items-center justify-center">
+        <.voice_waveform
+          :if={@voice?}
+          id={"#{@id_prefix}-wave-#{@identity}"}
+          identity={@identity}
+          bars={8}
+          size={:tile}
+        />
         <%!-- `agent_avatar/1`, not `human_avatar/1` — a tile is an agent by
              definition, and the human component would draw two initials over
              the seeded human palette under `data-avatar-kind="human"`. --%>
         <.agent_avatar
+          :if={!@voice?}
           name={@name}
           avatar_url={@avatar_url}
           size="lg"

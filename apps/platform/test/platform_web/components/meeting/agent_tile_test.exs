@@ -277,4 +277,79 @@ defmodule PlatformWeb.Components.Meeting.AgentTileTest do
       assert html =~ ~s(data-testid="strip-agent")
     end
   end
+
+  # Task 01a1117f stage 4: a voice agent has no camera and is not a person,
+  # so the promoted tile shows the voice waveform where the avatar sat.
+  describe "agent_tile/1 — voice waveform" do
+    defp voice_tile(voice?, overrides \\ %{}) do
+      assigns = %{
+        a: agent(Map.merge(%{identity: "agent:0000-burrow", name: "Burrow"}, overrides)),
+        voice?: voice?
+      }
+
+      rendered_to_string(~H"""
+      <.agent_tile
+        id_prefix="gallery-agent-tile"
+        agent_participant={@a}
+        accent_color="#7c3aed"
+        voice?={@voice?}
+      />
+      """)
+    end
+
+    defp waveforms(html),
+      do: html |> Floki.parse_fragment!() |> Floki.find("[data-voice-waveform]")
+
+    test "a voice-present agent renders the 8-bar tile waveform and no avatar" do
+      html = voice_tile(true)
+
+      assert [wave] = waveforms(html)
+      assert Floki.attribute(wave, "data-size") == ["tile"]
+      assert Floki.attribute(wave, "data-identity") == ["agent:0000-burrow"]
+      assert length(Floki.find(wave, "[data-wave-bar]")) == 8
+
+      # The hook lives on the outer, ignored element; the glyph inside it
+      # carries the JS-owned state (see VoiceWaveform's moduledoc).
+      assert [root] = html |> Floki.parse_fragment!() |> Floki.find("[data-voice-waveform-root]")
+      assert Floki.attribute(root, "phx-hook") == ["MeetingVoiceWaveform"]
+      assert Floki.attribute(root, "phx-update") == ["ignore"]
+      assert Floki.attribute(root, "id") == ["gallery-agent-tile-wave-agent:0000-burrow"]
+      assert Floki.attribute(root, "data-identity") == ["agent:0000-burrow"]
+      # Never server-render the state: LiveView would strip the hook's value
+      # off the ignored root on every patch.
+      refute html =~ "data-wave-state"
+
+      refute html =~ ~s(data-avatar-kind)
+      refute html =~ "<img"
+    end
+
+    test "the voice tile keeps bg-base-200 even with an accent colour, and carries no raw hex" do
+      html = voice_tile(true)
+
+      assert html =~ "bg-base-200"
+      refute html =~ "background-color:"
+      # No raw `#` hex in any rendered class or style (the accent passed in
+      # is `#7c3aed`; it must not reach the voice tile at all).
+      refute Regex.match?(~r/(class|style)="[^"]*#[0-9a-fA-F]{3,6}/, html)
+    end
+
+    test "never primary on the glyph: the only primary is the speaking ring" do
+      html =
+        voice_tile(true)
+        |> Floki.parse_fragment!()
+        |> Floki.find("[data-voice-waveform]")
+        |> Floki.raw_html()
+
+      refute html =~ "primary"
+    end
+
+    test "a pending (non-voice) agent keeps its avatar and renders no waveform" do
+      html = voice_tile(false)
+
+      assert waveforms(html) == []
+      assert html =~ ~s(data-avatar-kind="agent")
+      # And the non-voice tile still honours the accent colour, as before.
+      assert html =~ "background-color: #7c3aed;"
+    end
+  end
 end

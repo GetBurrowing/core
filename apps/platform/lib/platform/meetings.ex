@@ -3072,7 +3072,8 @@ defmodule Platform.Meetings do
   """
   @spec upsert_live_participant(Room.t(), %{
           required(:identity) => String.t() | nil,
-          required(:name) => String.t() | nil
+          required(:name) => String.t() | nil,
+          optional(:sid) => String.t() | nil
         }) :: {:ok, Participant.t()} | {:error, Ecto.Changeset.t()}
   def upsert_live_participant(%Room{} = room, %{identity: identity} = attrs) do
     name = Map.get(attrs, :name)
@@ -3092,7 +3093,25 @@ defmodule Platform.Meetings do
         do: %{"identity" => identity},
         else: %{}
 
-    case find_active_participant(room.id, fk, display_name) do
+    # Task 01a1117f stage 2: also remember WHICH LiveKit session this row is,
+    # so `mark_live_participant_left/2` can tell a stale session's leave from
+    # the live one's. See `superseded_leave?/2`.
+    metadata =
+      case Map.get(attrs, :sid) do
+        sid when is_binary(sid) and sid != "" and map_size(metadata) > 0 ->
+          Map.put(metadata, "sid", sid)
+
+        _ ->
+          metadata
+      end
+
+    existing =
+      case voice_worker_row(room, parsed, identity, name) do
+        %Participant{} = row -> row
+        nil -> find_active_participant(room.id, fk, display_name)
+      end
+
+    case existing do
       %Participant{} = existing ->
         maybe_backfill_identity(room, existing, metadata)
 
@@ -3159,12 +3178,17 @@ defmodule Platform.Meetings do
   # is the per-space topic the quickmeet's presence path folds. Neither is new
   # machinery — this is the same pair `participant_joined/2` already fires on
   # the branch next door.
+  #
+  # A changed `"sid"` alone also writes (task 01a1117f stage 2): the same
+  # identity joining again as a new LiveKit session must move the row to that
+  # session, or the old session's late leave would close it.
   defp maybe_backfill_identity(%Room{} = room, %Participant{} = existing, metadata) do
     current = existing.metadata || %{}
+    merged = Map.merge(current, metadata)
 
-    if map_size(metadata) > 0 and Map.get(current, "identity") != Map.get(metadata, "identity") do
+    if map_size(metadata) > 0 and merged != current do
       case existing
-           |> Participant.changeset(%{metadata: Map.merge(current, metadata)})
+           |> Participant.changeset(%{metadata: merged})
            |> Repo.update() do
         {:ok, updated} ->
           MeetingsPubSub.broadcast_room(room.id, {:participant_updated, updated})
@@ -3188,19 +3212,47 @@ defmodule Platform.Meetings do
 
   Returns `{:error, :not_found}` when no active row matches (e.g. a leave
   for a participant we never recorded) — callers should tolerate this.
+
+  Returns `{:error, :superseded}`, and leaves the row open, when the leave
+  carries a LiveKit participant `:sid` and the row records a DIFFERENT one
+  (task 01a1117f stage 2). That is an older session of the same identity
+  being disconnected after a newer one took its place: LiveKit allows one
+  participant per identity per room and drops the older one
+  (`DUPLICATE_IDENTITY`). The voice worker joins as `agent:<uuid>`, and a
+  pending invite can be clicked again (`invite_agent/3` always re-dispatches),
+  so two jobs can join under one identity. Without this check, the first
+  session's leave would close the row of the agent that is still in the call.
+  A leave with no `:sid`, or a row with none recorded, is never superseded.
   """
   @spec mark_live_participant_left(Room.t(), %{
           required(:identity) => String.t() | nil,
-          required(:name) => String.t() | nil
-        }) :: {:ok, Participant.t()} | {:error, :not_found}
+          required(:name) => String.t() | nil,
+          optional(:sid) => String.t() | nil
+        }) :: {:ok, Participant.t()} | {:error, :not_found | :superseded}
   def mark_live_participant_left(%Room{} = room, %{identity: identity} = attrs) do
     name = Map.get(attrs, :name)
     parsed = parse_identity(identity)
     fk = identity_fk(parsed)
     display_name = name || display_name_from_identity(parsed)
 
-    case find_active_participant(room.id, fk, display_name) do
-      %Participant{} = participant ->
+    # Identity first (task 01a1117f stage 1): a row whose stored LiveKit
+    # identity is exactly this one is the row this participant joined as,
+    # whatever its FK or name. This is what closes a voice-worker row that
+    # `voice_worker_row/4` folded onto an agent's invite row: that row is
+    # named after the agent and keyed by `agent_id`, neither of which a
+    # `agent-AJ_…` leave with no name can reach.
+    participant =
+      find_active_participant_by_identity(room.id, identity) ||
+        find_active_participant(room.id, fk, display_name)
+
+    cond do
+      is_nil(participant) ->
+        {:error, :not_found}
+
+      superseded_leave?(participant, Map.get(attrs, :sid)) ->
+        {:error, :superseded}
+
+      true ->
         {:ok, updated} =
           participant
           |> Participant.changeset(%{left_at: DateTime.utc_now()})
@@ -3209,11 +3261,16 @@ defmodule Platform.Meetings do
         MeetingsPubSub.broadcast_room(room.id, {:participant_left, updated})
         broadcast_presence_change(room.id, room.space_id)
         {:ok, updated}
-
-      nil ->
-        {:error, :not_found}
     end
   end
+
+  # True when the leave names a LiveKit session other than the one the row
+  # last joined as. Both sids must be known; see `mark_live_participant_left/2`.
+  defp superseded_leave?(%Participant{metadata: %{"sid" => row_sid}}, leave_sid)
+       when is_binary(row_sid) and row_sid != "" and is_binary(leave_sid) and leave_sid != "",
+       do: row_sid != leave_sid
+
+  defp superseded_leave?(_participant, _leave_sid), do: false
 
   @doc """
   Fire-and-forget durable cleanup for an explicit user-initiated leave,
@@ -3253,6 +3310,92 @@ defmodule Platform.Meetings do
   defp identity_fk(:unknown), do: %{}
 
   defp display_name_from_identity(_), do: nil
+
+  # ── Voice worker identity (task 01a1117f stage 1) ─────────────────────
+  #
+  # A livekit-agents worker joins under the SDK's default identity
+  # `"agent-" <> job.id` (livekit-agents `JobRequest.accept`), and LiveKit job
+  # ids are `AJ_…`. That shape does not parse (`parse_identity/1` answers
+  # `:unknown`), so before this the worker became a SECOND, nil-FK row named
+  # "User" next to the agent's own invite row, and rendered as "Unknown
+  # participant". The worker is told to join as `agent:<agent_uuid>` through
+  # the dispatch metadata (see `dispatch_meeting_join_via_livekit/4`), which
+  # `parse_identity/1` already resolves; this fold covers the deployed worker
+  # until it reads that key, and any worker that ignores it.
+  #
+  # It folds only when the answer is unambiguous: the joiner is not a
+  # transcriber, and EXACTLY ONE active row in the room is an agent's
+  # invite row (agent FK, no identity stamped yet) whose agent is dispatched
+  # through LiveKit Agent Dispatch (`livekit_dispatch_target/1`). With none,
+  # or with two such agents invited, it returns nil and the caller inserts
+  # the nil-FK row exactly as before.
+  #
+  # A row already carrying this identity wins first, so a reconnect (LiveKit
+  # re-fires `participant_joined`) lands on the folded row rather than
+  # inserting a "User" row next to it.
+  @voice_worker_identity_prefix "agent-AJ_"
+
+  defp voice_worker_row(%Room{} = room, :unknown, identity, name)
+       when is_binary(identity) do
+    if voice_worker_identity?(identity) and
+         not transcriber_participant?(%{identity: identity, name: name}) do
+      find_active_participant_by_identity(room.id, identity) ||
+        single_voice_worker_candidate(room.id)
+    end
+  end
+
+  defp voice_worker_row(_room, _parsed, _identity, _name), do: nil
+
+  @doc """
+  Whether `identity` is in LiveKit's agent-job shape (`agent-AJ_…`), the
+  identity a livekit-agents worker joins under when it is not told one
+  (`"agent-" <> job.id`, job ids are `AJ_…`).
+
+  Core mints only `user:`, `agent:`, `guest:` and `transcriber:` identities,
+  so this shape always names a LiveKit worker, never a person. Non-binaries
+  answer `false`.
+  """
+  @spec voice_worker_identity?(term()) :: boolean()
+  def voice_worker_identity?(identity) when is_binary(identity),
+    do: String.starts_with?(identity, @voice_worker_identity_prefix)
+
+  def voice_worker_identity?(_), do: false
+
+  defp single_voice_worker_candidate(room_id) do
+    from(p in Participant,
+      where:
+        p.room_id == ^room_id and is_nil(p.left_at) and not is_nil(p.agent_id) and
+          fragment("(?->>'identity') IS NULL", p.metadata),
+      preload: [:agent]
+    )
+    |> Repo.all()
+    |> Enum.filter(fn
+      %Participant{agent: %Agent{} = agent} ->
+        match?({:ok, _target}, livekit_dispatch_target(agent))
+
+      _ ->
+        false
+    end)
+    |> case do
+      [%Participant{} = only] -> only
+      _none_or_several -> nil
+    end
+  end
+
+  # The active row whose stored LiveKit identity is exactly `identity`.
+  defp find_active_participant_by_identity(room_id, identity) when is_binary(identity) do
+    Repo.one(
+      from(p in Participant,
+        where:
+          p.room_id == ^room_id and is_nil(p.left_at) and
+            fragment("(?->>'identity') = ?", p.metadata, ^identity),
+        order_by: [desc: p.joined_at],
+        limit: 1
+      )
+    )
+  end
+
+  defp find_active_participant_by_identity(_room_id, _identity), do: nil
 
   # Find an active (not-yet-left) participant by the strongest available
   # key: user_id, then agent_id, then display_name.
@@ -3507,6 +3650,32 @@ defmodule Platform.Meetings do
   end
 
   def transcriber_participant?(_), do: false
+
+  @doc """
+  Whether a `meeting_participants` row is a LiveKit voice worker that could
+  not be resolved to its agent (task 01a1117f stage 3).
+
+  True only for a row with NEITHER FK whose `metadata["identity"]` is in
+  LiveKit's agent-job shape (`voice_worker_identity?/1`, `agent-AJ_…`).
+  `upsert_live_participant/2` folds such a join onto the one
+  LiveKit-dispatched agent invited to the room; a row that still matches
+  here is one that fold could not place (zero or several candidates).
+
+  Such a row is a worker, never a person, so `MeetingLive.meeting_presence/1`
+  drops it from the participant list, as it does the transcriber. It is a
+  separate predicate on purpose: it does not light the transcribing pill,
+  and it is keyed on the identity shape alone, never on a display name.
+  Every other unresolvable identity is NOT matched and keeps rendering as
+  "Unknown participant", because hiding a possible human is worse than an
+  ugly label.
+  """
+  @spec unresolved_agent_worker_participant?(Participant.t() | term()) :: boolean()
+  def unresolved_agent_worker_participant?(
+        %Participant{user_id: nil, agent_id: nil} = participant
+      ),
+      do: voice_worker_identity?(participant_identity(participant))
+
+  def unresolved_agent_worker_participant?(_), do: false
 
   defp transcriber_marker?(%Participant{} = participant),
     do: marker_match?([participant.display_name, participant_identity(participant)])
@@ -4739,6 +4908,7 @@ defmodule Platform.Meetings do
           segment
           |> Map.put_new("id", Platform.Types.UUIDv7.generate())
           |> Map.put_new("spoken_at", DateTime.to_iso8601(DateTime.utc_now()))
+          |> enrich_speaker_name(transcript)
 
         updated_segments = (transcript.segments || []) ++ [segment]
 
@@ -4789,6 +4959,75 @@ defmodule Platform.Meetings do
         end)
     end
   end
+
+  # Task 01a1117f stage 1: resolve an agent speaker's display name at the one
+  # persist point, so the transcript pane, captions and the summary
+  # (`SummaryPrompt.format/1` reads `speaker_name || participant_identity`)
+  # all say "Burrow" rather than `agent-AJ_…` or `agent:<uuid>`.
+  #
+  # Only when the transcriber gave no real name: `speaker_name` blank, or
+  # equal to the identity string (the transcriber falls back to the LiveKit
+  # participant name, and a worker that joins with no name has its identity
+  # there). A real name is never overwritten.
+  #
+  # Two resolutions, in order: an `agent:<uuid>` identity names the agent
+  # directly; otherwise the room's participant row stamped with this exact
+  # identity and carrying an agent FK (an `agent-AJ_…` worker folded onto
+  # its invite row by `voice_worker_row/4`, or an `agent:<slug>` joiner).
+  defp enrich_speaker_name(segment, %Transcript{} = transcript) do
+    identity = segment["participant_identity"]
+    speaker_name = segment["speaker_name"]
+
+    if is_binary(identity) and identity != "" and speaker_name_missing?(speaker_name, identity) do
+      case agent_name_for_identity(identity, transcript.room_id) do
+        name when is_binary(name) and name != "" -> Map.put(segment, "speaker_name", name)
+        _ -> segment
+      end
+    else
+      segment
+    end
+  end
+
+  defp speaker_name_missing?(nil, _identity), do: true
+
+  defp speaker_name_missing?(name, identity) when is_binary(name),
+    do: String.trim(name) == "" or name == identity
+
+  defp speaker_name_missing?(_name, _identity), do: false
+
+  defp agent_name_for_identity(identity, room_name) do
+    case parse_identity(identity) do
+      {:agent, agent_id} ->
+        case resolve_agent(agent_id) do
+          %Agent{} = agent -> agent.name || agent.slug
+          nil -> nil
+        end
+
+      _other ->
+        agent_name_from_participant_row(identity, room_name)
+    end
+  end
+
+  defp agent_name_from_participant_row(identity, room_name) when is_binary(room_name) do
+    with %Room{id: room_id} <- get_room_by_name(room_name),
+         %Participant{agent: %Agent{} = agent} <-
+           Repo.one(
+             from(p in Participant,
+               where:
+                 p.room_id == ^room_id and not is_nil(p.agent_id) and
+                   fragment("(?->>'identity') = ?", p.metadata, ^identity),
+               order_by: [desc: p.joined_at],
+               limit: 1,
+               preload: [:agent]
+             )
+           ) do
+      agent.name || agent.slug
+    else
+      _ -> nil
+    end
+  end
+
+  defp agent_name_from_participant_row(_identity, _room_name), do: nil
 
   # ── Transcript Status Transitions ─────────────────────────────────────────
 
@@ -5615,7 +5854,18 @@ defmodule Platform.Meetings do
         # turn. See `agent_roster_for_room/2`. `[]` when the caller (e.g.
         # the channel-runtime dispatch path, which never sets this key)
         # didn't supply one.
-        "agent_roster" => Map.get(context, :agent_roster, [])
+        "agent_roster" => Map.get(context, :agent_roster, []),
+        # Task 01a1117f stage 1: who the worker IS. Without these the worker
+        # joins under the livekit-agents default identity `agent-<job id>`,
+        # which no Suite surface resolves, so Burrow rendered as "Unknown
+        # participant" and its speech was attributed to `agent-AJ_…`.
+        # `agent_identity` is the `agent:<uuid>` shape `parse_identity/1`
+        # already casts to an agent FK and that MeetingLive keys agent tiles
+        # by (`agent_gallery_identity/1`); joining under it lands on the
+        # invite row by `agent_id` with no new resolver.
+        "agent_id" => agent.id,
+        "agent_identity" => "agent:" <> agent.id,
+        "agent_name" => agent.name || agent.slug
       })
 
     case create_livekit_agent_dispatch(room_name, target.livekit_agent_name, metadata) do
@@ -6560,9 +6810,13 @@ defmodule Platform.Meetings do
   ## Who is excluded
 
     * The speaker itself: a segment whose `participant_identity` is
-      `"agent:<slug>"` for the agent in question (the identity the voice
-      worker publishes under). String compare on purpose — `parse_identity/1`
-      casts the suffix as a UUID and answers `:unknown` for a slug.
+      `"agent:<slug>"` (the identity `generate_agent_token/3` mints) or
+      `"agent:<uuid>"` (the identity a LiveKit-dispatched worker is told to
+      join under, task 01a1117f) for the agent in question, or equals the
+      LiveKit identity stamped on that agent's own participant row (a
+      legacy `agent-AJ_…` worker folded onto it). String compare on
+      purpose — `parse_identity/1` casts the suffix as a UUID and answers
+      `:unknown` for a slug.
     * Participants with `left_at` set (`active_participants/1`).
     * Human participants — only rows with an `agent_id` are recipients.
 
@@ -6607,6 +6861,17 @@ defmodule Platform.Meetings do
       {:ok, %{delivered: [], skipped: []}}
   end
 
+  # Every identity an agent's own speech can arrive under. See the
+  # "Who is excluded" section of `deliver_transcript_segment/2`'s @doc.
+  defp own_speech?(speaker_identity, %Agent{} = agent, %Participant{} = participant)
+       when is_binary(speaker_identity) do
+    speaker_identity == "agent:#{agent.slug}" or
+      speaker_identity == "agent:#{agent.id}" or
+      speaker_identity == participant_identity(participant)
+  end
+
+  defp own_speech?(_speaker_identity, _agent, _participant), do: false
+
   defp do_deliver_transcript_segment(%Transcript{} = transcript, segment) do
     # `Transcript.room_id` is the LiveKit room NAME; `Participant.room_id`
     # is the Room UUID. Resolve the row first, then read its roster.
@@ -6623,10 +6888,11 @@ defmodule Platform.Meetings do
           |> active_participants()
           |> Enum.filter(&(not is_nil(&1.agent_id) and match?(%Agent{}, &1.agent)))
           |> Enum.uniq_by(& &1.agent_id)
-          |> Enum.reduce({[], []}, fn %Participant{agent: %Agent{} = agent}, {ok, skip} ->
+          |> Enum.reduce({[], []}, fn %Participant{agent: %Agent{} = agent} = participant,
+                                      {ok, skip} ->
             cond do
               # Self-exclusion (string compare, see the @doc).
-              speaker_identity == "agent:#{agent.slug}" ->
+              own_speech?(speaker_identity, agent, participant) ->
                 {ok, [{agent.id, :own_speech} | skip]}
 
               true ->

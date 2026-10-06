@@ -169,6 +169,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
   alias PlatformWeb.Components.Meetings.AgentActivityBadge
 
   import PlatformWeb.AvatarComponents
+  import PlatformWeb.Components.Meeting.VoiceWaveform, only: [voice_waveform: 1]
 
   alias Platform.Agents.Agent
   alias Platform.Meetings
@@ -206,6 +207,20 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
     `MapSet` of LiveKit identities whose camera is off. Same source,
     same keying, same nil handling as `:muted_identities`. Ignored for
     agent rows, whose camera slot is UNAVAILABLE by construction.
+    """
+  )
+
+  attr(:speaking_identities, :any,
+    default: nil,
+    doc: """
+    `MapSet` of raw LiveKit identities the room reports as speaking
+    (MeetingLive's `@speaking_identities`, from `activeSpeakersChanged`).
+    A voice-present agent row (`MeetingLive.voice_present_agent?/1`) whose
+    `MeetingLive.agent_gallery_identity/1` is in it, and whose activity
+    word would otherwise read Idle, reads "Speaking" instead (task 01a1117f
+    stage 5): a LiveKit voice worker's audio never passes through core, so
+    core's own `:speaking` store state never fires for it. `nil` means
+    nobody is speaking.
     """
   )
 
@@ -452,6 +467,7 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
       |> assign(:current_room, room)
       |> assign(:muted, assigns[:muted_identities] || MapSet.new())
       |> assign(:camera_off, assigns[:camera_off_identities] || MapSet.new())
+      |> assign(:speaking, assigns[:speaking_identities] || MapSet.new())
 
     # Precomputed HERE, not with a `<% info = agent_row_info(assigns, p) %>`
     # inside the `<li>` as before, because the row's OWN class attribute
@@ -536,8 +552,24 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
                  `--ok` when the agent is connected and its mic is on,
                  `--m` otherwise. The sr-only nodes keep both facts for a
                  screen reader. --%>
-            <div class="av" data-role="agent-activity-avatar" data-activity-state={info.ring_state}>
-              <span aria-hidden="true">{initials(name)}</span>
+            <%!-- `data-voice` (task 01a1117f stage 4): an agent in the call
+                 by voice shows the voice waveform glyph, a 32px rounded
+                 square, in place of the initials circle. The square is what
+                 says not-a-person; meeting_ask.css PART 2 reshapes `.av` for
+                 it. A pending or text-only agent keeps its initials. --%>
+            <% voice? = MeetingLive.voice_present_agent?(p) %>
+            <div
+              class="av"
+              data-role="agent-activity-avatar"
+              data-activity-state={info.ring_state}
+              data-voice={voice? && "true"}
+            >
+              <.agent_row_face
+                voice?={voice?}
+                id={"#{@id_prefix}-wave-#{p.id}"}
+                identity={MeetingLive.agent_gallery_identity(p)}
+                name={name}
+              />
               <%!-- The activity sentence ("Octavius is Delayed, waiting on
                    GitHub") for assistive tech; the visible word is `.st`. --%>
               <span class="sr-only">{info.label}</span>
@@ -1138,6 +1170,23 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
     """
   end
 
+  # The face at an agent row's avatar position: the voice waveform for an
+  # agent in the call by voice, the mockup's initials otherwise (task
+  # 01a1117f stage 4). The glyph inherits this section's text colour (`--t`
+  # on the fixed-dark `.meeting-ask` surface); see `VoiceWaveform`'s
+  # moduledoc for why that, and not `base-content`.
+  attr(:voice?, :boolean, required: true)
+  attr(:id, :string, required: true)
+  attr(:identity, :string, required: true)
+  attr(:name, :string, required: true)
+
+  defp agent_row_face(assigns) do
+    ~H"""
+    <.voice_waveform :if={@voice?} id={@id} identity={@identity} bars={4} size={:rail} />
+    <span :if={!@voice?} aria-hidden="true">{initials(@name)}</span>
+    """
+  end
+
   attr(:name, :string, required: true)
   attr(:mic_state, :atom, required: true)
   attr(:camera_state, :atom, required: true)
@@ -1584,7 +1633,11 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
     absent = %{state: :idle, entered_at: nil, age_s: 0}
 
     ring_entry = Map.get(assigns.ring_activity, agent_id, absent)
-    word_entry = Map.get(assigns.word_activity, agent_id, absent)
+
+    word_entry =
+      assigns.word_activity
+      |> Map.get(agent_id, absent)
+      |> voice_speaking_word(participant, assigns.speaking)
 
     meta = AgentActivityBadge.activity_meta(word_entry.state)
     agent = Map.get(assigns.agents_by_id, agent_id)
@@ -1611,6 +1664,23 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
       label: sr_label(participant, meta, delay_reason)
     }
   end
+
+  # A voice worker's speech reaches the room straight from LiveKit, never
+  # through core's audio dispatch, so core's `:speaking` store state cannot
+  # see it and the word stayed "Idle" while the glyph beside it moved (task
+  # 01a1117f stage 5). The room's own active-speaker set is the fact here.
+  # It replaces ONLY `:idle`: a working or delayed word is the more useful
+  # thing to read, and is left as it is.
+  defp voice_speaking_word(%{state: :idle} = entry, participant, speaking) do
+    if MeetingLive.voice_present_agent?(participant) and
+         MapSet.member?(speaking, MeetingLive.agent_gallery_identity(participant)) do
+      %{entry | state: :speaking}
+    else
+      entry
+    end
+  end
+
+  defp voice_speaking_word(entry, _participant, _speaking), do: entry
 
   # The accessible sentence, composed HERE because this is the only place
   # that holds the name, the word and the reason at once.

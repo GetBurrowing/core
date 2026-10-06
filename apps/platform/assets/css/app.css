@@ -8215,3 +8215,50 @@ body, .font-fabrikam {
     color: color-mix(in oklch, var(--color-base-content) 55%, transparent);
   }
 }
+
+/* Voice waveform (task 01a1117f stage 4, `VoiceWaveform` component, hook
+   `MeetingVoiceWaveform`). Bars move by `transform: scaleY` only.
+
+   * At rest (before the hook mounts) a bar sits at 0.15 of its height: the
+     canvas's flat "Quiet" dot, 3px of the rail's 20px bar.
+   * Speaking: the hook sets `data-wave-state="active"` and paints an inline
+     `scaleY` per bar every 80ms. No keyframe runs, so `animation-name` is
+     `none` in that state.
+   * Silent: `data-wave-state="idle"`, inline transforms dropped, and this
+     slow low-amplitude breath runs (0.15 to 0.3, 2.4s each way). Deviation 1
+     of the stage spec: Saru's canvas has a static idle; the ticket, Rowan's
+     ask, wants "a subtle idle animation when silent".
+   * Reduced motion: no animation in any state and a static mid-height
+     profile (`--wave-mid`, set per bar by the component). The universal
+     rule above would only shorten the keyframe to 0.01ms and leave its name
+     set, so this rule names `none` outright, and its `!important` beats the
+     hook's inline transform too (the hook does not paint under reduced
+     motion, but a preference flipped mid-call must not leave a frozen
+     frame). */
+[data-voice-waveform] [data-wave-bar] {
+  transform: scaleY(0.15);
+}
+
+[data-voice-waveform][data-wave-state="idle"] [data-wave-bar] {
+  animation: voice-wave-idle 2.4s ease-in-out infinite alternate;
+}
+
+[data-voice-waveform][data-wave-state="idle"] [data-wave-bar]:nth-child(even) {
+  animation-delay: -1.2s;
+}
+
+@keyframes voice-wave-idle {
+  from {
+    transform: scaleY(0.15);
+  }
+  to {
+    transform: scaleY(0.3);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-voice-waveform] [data-wave-bar] {
+    animation: none !important;
+    transform: scaleY(var(--wave-mid, 0.5)) !important;
+  }
+}

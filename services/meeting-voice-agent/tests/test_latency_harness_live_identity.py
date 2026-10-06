@@ -12,7 +12,9 @@ real dispatched worker identity (`"agent-AJ_..."`), so the harness's first
 whole batch. These tests pin the fixed default without needing a live room.
 """
 
-from meeting_voice_agent import latency_harness_live
+import json
+
+from meeting_voice_agent import latency_harness_live, tool_telemetry
 from meeting_voice_agent.config import AgentConfig
 
 
@@ -39,3 +41,36 @@ def test_default_prefix_does_not_match_the_harness_own_synthetic_human_identity(
     assert not "latency-harness-1758758400".startswith(
         latency_harness_live.DEFAULT_AGENT_IDENTITY_PREFIX
     )
+
+
+# Task 01a1117f stage 2: a Core-dispatched worker joins as `agent:<uuid>`
+# (`agent.accept_arguments`), so the default must match that shape as well as
+# the SDK's `agent-<job id>`, while still refusing the harness's own identity.
+
+
+def test_default_prefix_matches_a_core_dispatched_agent_identity():
+    assert "agent:01a0db75-037c-7001-96ff-d2a14fdb707f".startswith(
+        latency_harness_live.DEFAULT_AGENT_IDENTITY_PREFIX
+    )
+
+
+def test_default_prefix_still_matches_the_sdk_default_identity():
+    assert "agent-AJ_dtGKmMrmvBKx".startswith(latency_harness_live.DEFAULT_AGENT_IDENTITY_PREFIX)
+
+
+def test_default_prefix_refuses_identities_that_only_look_agent_like():
+    for identity in ("latency-harness-1758758400", "agentx", "user:agent-1", "Agent:x"):
+        assert not identity.startswith(latency_harness_live.DEFAULT_AGENT_IDENTITY_PREFIX)
+
+
+def test_tool_call_telemetry_from_a_core_dispatched_worker_is_collected():
+    payload = json.dumps([{"name": "space_list", "call_id": "c", "is_error": False}]).encode()
+
+    names = tool_telemetry.parse_tool_call_names(
+        tool_telemetry.TOOL_CALL_TOPIC,
+        "agent:01a0db75-037c-7001-96ff-d2a14fdb707f",
+        payload,
+        latency_harness_live.DEFAULT_AGENT_IDENTITY_PREFIX,
+    )
+
+    assert names == ["space_list"]

@@ -31,9 +31,23 @@
   data-camera-enabled={to_string(@camera_enabled)}
   data-mic-enabled={to_string(@mic_enabled)}
   data-transcriber-markers={@transcriber_markers_json}
+  data-participant-names={
+    PlatformWeb.MeetingLive.participant_names_json(assigns[:meeting_participants] || [])
+  }
 >
 </div>
-<div :if={!@embedded} id="meeting-room" phx-hook="MeetingRoom" class="hidden"></div>
+<%!-- data-participant-names (task 01a1117f stage 5): see
+     `MeetingLive.participant_names_json/1`. --%>
+<div
+  :if={!@embedded}
+  id="meeting-room"
+  phx-hook="MeetingRoom"
+  class="hidden"
+  data-participant-names={
+    PlatformWeb.MeetingLive.participant_names_json(assigns[:meeting_participants] || [])
+  }
+>
+</div>
 <div :if={!@embedded} id="meeting-soundboard" phx-hook="MeetingSoundboard" class="hidden"></div>
 
 <.notification_banner

@@ -445,6 +445,11 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
     doc: "MapSet of LiveKit identities whose camera is off; passed through to the rail."
   )
 
+  attr(:speaking_identities, :any,
+    default: nil,
+    doc: "MapSet of LiveKit identities speaking now; passed through to the rail (01a1117f)."
+  )
+
   attr(:now, :any,
     default: nil,
     doc: """
@@ -796,6 +801,7 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
               agent_activity={@agent_activity}
               muted_identities={@muted_identities}
               camera_off_identities={@camera_off_identities}
+              speaking_identities={@speaking_identities}
               now={@now}
               hold_to_talk?={@hold_to_talk?}
               id_prefix={@hold_to_talk_id_prefix}

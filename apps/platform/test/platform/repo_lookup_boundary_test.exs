@@ -1075,7 +1075,17 @@ defmodule Platform.RepoLookupBoundaryTest do
     # `:platform_uuid_guard` entry for meetings.ex, 18 -> 19 by the same
     # change). A malformed id degrades to "nothing is recording" instead of
     # raising out of the call header's render.
-    "platform/meetings.ex" => 15,
+    #
+    # 15 -> 17 with task 01a1117f stage 1: `find_active_participant_by_identity/2`
+    # and `agent_name_from_participant_row/2`. Triaged by hand: both pin
+    # `p.room_id` (a uuid FK) to the `id` of a `%Room{}` already loaded from
+    # the database (the caller's room struct, or `get_room_by_name/1`'s
+    # result), never to a boundary value. The boundary value they DO take,
+    # a LiveKit `identity` string, is compared against
+    # `metadata->>'identity'`, a TEXT expression, so a malformed identity
+    # matches no row instead of raising Ecto.Query.CastError. No
+    # `Platform.UUID.valid?/1` guard applies.
+    "platform/meetings.ex" => 17,
     # Task 019fb954-c848 stage 2 — `Archive.counts/3`, the single aggregate
     # pass behind `search/2`. Triaged by hand as this map asks: its `where:`
     # clauses come from `scoped_query/2`, and TWO of them pin ids that arrive

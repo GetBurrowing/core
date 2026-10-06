@@ -52,7 +52,9 @@
  *             final pairing key. An interim and its final SHARE an id when
  *             LiveKit says so; a final with a NEW id still replaces the one
  *             pending interim (this hook keeps at most one interim line).
- *   speaker   participant.name || participant.identity || "Unknown"
+ *   speaker   participant.name, then the server map on #meeting-room
+ *             (data-participant-names), then participant.identity, then
+ *             "Unknown" (meeting_room.js, task 01a1117f stage 5)
  *   identity  participant.identity || "" — `user:<uuid>`, `agent:<slug>`
  *             or `guest:<uuid>`; the guest suffix and agent chip key on the
  *             prefix (see AGENT_IDENTITY_PREFIX / GUEST_IDENTITY_PREFIX)

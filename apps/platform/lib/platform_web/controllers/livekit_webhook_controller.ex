@@ -307,7 +307,8 @@ defmodule PlatformWeb.LivekitWebhookController do
       room ->
         case Meetings.upsert_live_participant(room, %{
                identity: participant["identity"],
-               name: participant["name"]
+               name: participant["name"],
+               sid: participant["sid"]
              }) do
           {:ok, p} ->
             Logger.info(
@@ -340,10 +341,18 @@ defmodule PlatformWeb.LivekitWebhookController do
       room ->
         case Meetings.mark_live_participant_left(room, %{
                identity: participant["identity"],
-               name: participant["name"]
+               name: participant["name"],
+               sid: participant["sid"]
              }) do
           {:ok, p} ->
             conn |> put_status(:ok) |> json(%{status: "ok", participant_id: p.id})
+
+          # An older LiveKit session of an identity that has since rejoined
+          # (DUPLICATE_IDENTITY); the row belongs to the newer session.
+          {:error, :superseded} ->
+            conn
+            |> put_status(:ok)
+            |> json(%{status: "ignored", reason: "superseded participant session"})
 
           {:error, :not_found} ->
             conn |> put_status(:ok) |> json(%{status: "ignored", reason: "participant not found"})

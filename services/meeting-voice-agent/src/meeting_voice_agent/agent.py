@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import logging
 
-from livekit.agents import AgentSession, JobContext, WorkerOptions, cli
+from livekit.agents import AgentSession, JobContext, JobRequest, WorkerOptions, cli
 from livekit.agents.types import NOT_GIVEN, NotGivenOr
 from livekit.agents.voice.room_io import RoomOptions
 
@@ -53,6 +53,60 @@ def parse_job_metadata(raw: str | None) -> dict:
         return {}
 
     return parsed
+
+
+#: The identity prefix Core's dispatch metadata uses for an agent participant.
+#: `Platform.Meetings.parse_identity/1` casts `agent:<uuid>` to the agent FK,
+#: and MeetingLive keys agent tiles by the same string.
+AGENT_IDENTITY_PREFIX = "agent:"
+
+
+def accept_arguments(metadata: dict) -> dict:
+    """Keyword arguments for `JobRequest.accept` from the parsed job metadata.
+
+    Task 01a1117f stage 2: Core's `dispatch_meeting_join_via_livekit/4` puts
+    `agent_id`, `agent_identity` (`"agent:" <> agent.id`) and `agent_name` in
+    the job metadata. Joining under that identity makes the worker the SAME
+    participant as the agent's invite row in Core. Under the SDK default
+    (`"agent-" + job.id`) it showed up as an extra "Unknown participant".
+
+    When `agent_identity` is missing, not a string, or not `agent:`-prefixed
+    (an older Core, a manually started job, malformed metadata), this returns
+    `{}`. `req.accept()` then keeps the SDK default identity, which is exactly
+    what the worker did before. A job is never rejected over its metadata.
+
+    The agent is never derived from `config.worker_agent_name`: several Suite
+    agents can share one worker name, so only the dispatch metadata says which
+    agent this job is for.
+    """
+    identity = metadata.get("agent_identity")
+    if not isinstance(identity, str) or not identity.startswith(AGENT_IDENTITY_PREFIX):
+        return {}
+    if identity == AGENT_IDENTITY_PREFIX:
+        return {}
+
+    args: dict = {"identity": identity}
+
+    name = metadata.get("agent_name")
+    if isinstance(name, str) and name:
+        args["name"] = name
+
+    agent_id = metadata.get("agent_id")
+    if isinstance(agent_id, str) and agent_id:
+        args["attributes"] = {"suite.agent_id": agent_id}
+
+    return args
+
+
+async def request_fnc(req: JobRequest) -> None:
+    """Accept every job, under the agent identity Core asked for when it sent one."""
+    args = accept_arguments(parse_job_metadata(req.job.metadata))
+    logger.info(
+        "accepting job %s as %s",
+        req.id,
+        args.get("identity", "the SDK default identity"),
+    )
+    await req.accept(**args)
 
 
 def build_tool_surface(config: AgentConfig, room_name: str, *, space_id: str | None = None) -> list:
@@ -133,6 +187,7 @@ def build_worker_options(config: AgentConfig | None = None) -> WorkerOptions:
     config = config or AgentConfig.from_env()
     return WorkerOptions(
         entrypoint_fnc=entrypoint,
+        request_fnc=request_fnc,
         agent_name=config.worker_agent_name,
     )
 

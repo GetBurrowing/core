@@ -400,9 +400,20 @@
         data-camera-enabled={to_string(@camera_enabled)}
         data-mic-enabled={to_string(@mic_enabled)}
         data-transcriber-markers={@transcriber_markers_json}
+        data-participant-names={participant_names_json(assigns[:participants] || [])}
       >
       </div>
-      <div id="meeting-room" phx-hook="MeetingRoom" class="hidden"></div>
+      <%!-- data-participant-names (task 01a1117f stage 5): LiveKit identity
+         to display name for resolved agents, so the transcript pane labels a
+         legacy unnamed `agent-AJ_…` voice worker by its agent's name. See
+         `MeetingLive.participant_names_json/1`. --%>
+      <div
+        id="meeting-room"
+        phx-hook="MeetingRoom"
+        class="hidden"
+        data-participant-names={participant_names_json(assigns[:participants] || [])}
+      >
+      </div>
       <%!-- Media sink (task 019e420f stage 1): MeetingClient.attachTrack
          routes incoming `<audio>` elements to `#meeting-media`. Without
          this anchor it falls back to `document.body` — works but
@@ -1584,6 +1595,7 @@
                     @camera_enabled
                   )
                 }
+                speaking_identities={assigns[:speaking_identities]}
                 now={assigns[:agent_activity_now]}
                 hold_to_talk?={true}
                 id_prefix="meeting-left-ptt"
@@ -2092,6 +2104,7 @@
                             activity_state={agent_activity_state(p, assigns[:agent_activity])}
                             avatar_url={Map.get(p, :avatar_url)}
                             speaking?={true}
+                            voice?={voice_present_agent?(p)}
                           />
                         <% else %>
                           <%!-- v2 (task 019e42f6): for the LOCAL participant the
@@ -2813,6 +2826,7 @@
                   @camera_enabled
                 )
               }
+              speaking_identities={assigns[:speaking_identities]}
               now={assigns[:agent_activity_now]}
               invite_rows={assigns[:invite_rows] || []}
               invite_event={if is_binary(assigns[:user_id]), do: "meeting_invite_agent"}

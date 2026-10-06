@@ -6297,6 +6297,14 @@ defmodule PlatformWeb.MeetingLive do
             (Map.get(participant, :participant_type) == "agent" and
                Map.get(participant, :participant_id) == agent.id)
 
+        identity when is_binary(identity) ->
+          # A legacy voice worker folded onto THIS agent's row (task
+          # 01a1117f): the identity is LiveKit's `agent-AJ_…` job shape and
+          # carries no agent id of its own, so only the FK says whose it is.
+          Meetings.voice_worker_identity?(identity) and
+            Map.get(participant, :participant_type) == "agent" and
+            Map.get(participant, :participant_id) == agent.id
+
         _ ->
           false
       end
@@ -6313,6 +6321,9 @@ defmodule PlatformWeb.MeetingLive do
     for %{participant_type: "agent", participant_id: id} = participant <- participants,
         is_binary(id),
         not Meetings.agent_identity?(Map.get(participant, :identity)),
+        # A folded legacy voice worker (`agent-AJ_…` on the agent's own row,
+        # task 01a1117f) is proof of arrival too, not an unanswered invite.
+        not Meetings.voice_worker_identity?(Map.get(participant, :identity)),
         into: MapSet.new(),
         do: id
   end
@@ -6404,6 +6415,13 @@ defmodule PlatformWeb.MeetingLive do
   on the `%Meetings.Participant{}` row, before the view model, because the
   view model has already dropped the nil-FK row's display name.
 
+  Rows matching `Meetings.unresolved_agent_worker_participant?/1` (a LiveKit
+  voice worker, identity `agent-AJ_…`, that the join fold could not place on
+  its agent) are dropped from `participants` too (task 01a1117f stage 3).
+  They are a worker, never a person, so they are not drawn as an "Unknown
+  participant" beside the agent they probably are. They do NOT count toward
+  `transcriber_present?`; the two predicates stay separate.
+
   A non-binary `space_id` returns `{[], false}`.
   """
   @spec meeting_presence(term()) :: {[map()], boolean()}
@@ -6413,7 +6431,9 @@ defmodule PlatformWeb.MeetingLive do
       |> Meetings.active_participants_for_space()
       |> Enum.split_with(&Meetings.transcriber_participant?/1)
 
-    {Enum.map(participants, &meeting_participant_view_model/1), transcribers != []}
+    visible = Enum.reject(participants, &Meetings.unresolved_agent_worker_participant?/1)
+
+    {Enum.map(visible, &meeting_participant_view_model/1), transcribers != []}
   end
 
   def meeting_presence(_), do: {[], false}
@@ -8631,7 +8651,7 @@ defmodule PlatformWeb.MeetingLive do
   Gallery roster, widened by the viewer's ACTIVE SPEAKER set.
 
   Humans are always in the grid. An agent is in the grid only while its
-  identity (`"agent:" <> participant_id`) is in `speaking_identities` —
+  identity (`agent_gallery_identity/1`) is in `speaking_identities` —
   the target design's commitment that "an agent grows into a tile only
   while speaking". When it stops speaking it falls out of this list and
   is rendered by the bottom agent dock again.
@@ -8658,12 +8678,34 @@ defmodule PlatformWeb.MeetingLive do
   def gallery_participants(_, _), do: []
 
   @doc """
-  LiveKit identity for an agent participant: `"agent:" <> participant_id`.
+  LiveKit identity for an agent participant.
+
+  Prefers the identity stamped on the row (`:identity`) when it is an agent
+  LiveKit identity: `agent:<anything>` (a channel agent publishes
+  `agent:<slug>`, a dispatched voice worker `agent:<uuid>`) or the
+  agent-job shape `agent-AJ_…` of a legacy worker folded onto its agent
+  (`Meetings.voice_worker_identity?/1`). Falls back to
+  `"agent:" <> participant_id` for a row with no such identity.
+
+  Why the row's identity wins (task 01a1117f stage 3): `@speaking_identities`
+  holds the RAW LiveKit identities from the active-speaker event. A channel
+  agent speaking as `agent:<slug>`, or a folded worker as `agent-AJ_…`,
+  never equals `"agent:" <> agent_uuid`, so with the fallback alone it could
+  never be promoted to a gallery tile or light a speaking ring.
 
   Deliberately a named function rather than an inline string concat at the
-  three call sites (gallery filter, dock tile, promoted grid tile) — the
-  promotion only works if all three spell the identity identically.
+  call sites (gallery filter and promoted grid tile) — the promotion only
+  works if both spell the identity identically.
   """
+  def agent_gallery_identity(%{identity: "agent:" <> suffix = identity}) when suffix != "",
+    do: identity
+
+  def agent_gallery_identity(%{identity: identity} = participant) when is_binary(identity) do
+    if Meetings.voice_worker_identity?(identity),
+      do: identity,
+      else: agent_gallery_identity(Map.delete(participant, :identity))
+  end
+
   def agent_gallery_identity(%{participant_id: pid}) when is_binary(pid) and pid != "",
     do: "agent:" <> pid
 
@@ -8677,6 +8719,66 @@ defmodule PlatformWeb.MeetingLive do
   """
   def agent_participant?(%{participant_type: "agent"}), do: true
   def agent_participant?(_), do: false
+
+  @doc """
+  True when an AGENT roster row is in the call by voice: its `:identity` is
+  an agent LiveKit identity — `agent:<anything>` (a dispatched voice worker
+  `agent:<uuid>`, a channel agent `agent:<slug>`) or the agent-job shape
+  `agent-AJ_…` of a legacy worker folded onto the agent's row
+  (`Meetings.voice_worker_identity?/1`).
+
+  Such an agent shows the voice waveform where its avatar would sit, on the
+  promoted gallery tile and in the participant rail (task 01a1117f stage 4).
+  An invited agent that has not joined, or a text-only agent, has no such
+  identity and keeps its avatar: a waveform there would claim a voice that
+  is not in the room. This is the same proof of arrival
+  `pending_invite_agent_ids/1` uses, read the other way round.
+  """
+  def voice_present_agent?(%{participant_type: "agent"} = participant) do
+    identity = Map.get(participant, :identity)
+    Meetings.agent_identity?(identity) or Meetings.voice_worker_identity?(identity)
+  end
+
+  def voice_present_agent?(_), do: false
+
+  @doc """
+  JSON object from LiveKit identity to display name for the resolved agents
+  in `participants` (the `meeting_participant_view_model/1` maps), rendered
+  as `data-participant-names` on `#meeting-room` and `#meeting-client`
+  (task 01a1117f stage 5).
+
+  The transcript pane (`meeting_room.js` `_onTranscription`) and the
+  quick-meet tiles (`meeting_client.js` `_ensureTile`) label a speaker from
+  the LiveKit participant alone. A legacy voice worker joins as
+  `agent-AJ_…` with no LiveKit name, so they printed that identity even
+  after `Meetings.upsert_live_participant/2` folded the row onto its agent.
+  The JS labels a participant by its LiveKit name, then this map, then the
+  identity.
+
+  Covers agent rows whose identity is a voice identity
+  (`voice_present_agent?/1`: `agent:…` or a folded `agent-AJ_…`) and that
+  have a display name. Human rows are left out on purpose: their LiveKit
+  name comes from their own token, and this map must not relabel them.
+  Transcriber and unfolded worker rows never reach `participants`
+  (`meeting_presence/1`), so they are never named here.
+  """
+  @spec participant_names_json(term()) :: String.t()
+  def participant_names_json(participants) when is_list(participants) do
+    participants
+    |> Enum.flat_map(fn participant ->
+      name = Map.get(participant, :display_name)
+
+      if voice_present_agent?(participant) and is_binary(name) and String.trim(name) != "" do
+        [{participant.identity, name}]
+      else
+        []
+      end
+    end)
+    |> Map.new()
+    |> Jason.encode!()
+  end
+
+  def participant_names_json(_), do: "{}"
 
   @doc """
   The canvas the meeting's canvas TILE displays, or `nil` when the

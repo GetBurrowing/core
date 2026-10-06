@@ -1,4 +1,5 @@
 import { Room, RoomEvent, Track } from "livekit-client"
+import { participantLabel, readParticipantNames } from "./lib/participant_label"
 
 /**
  * True when the LiveKit track / publication is a screen-share video
@@ -1094,7 +1095,10 @@ const MeetingClient = {
     const { identity } = participant
     if (this._tiles.has(identity)) return
 
-    const displayName = participant.name || identity
+    // Name, then the server's map for resolved agents (a legacy
+    // `agent-AJ_…` voice worker has no LiveKit name; task 01a1117f stage 5),
+    // then the identity.
+    const displayName = participantLabel(participant, readParticipantNames(this.el))
     const initial = (displayName.trim()[0] || "?").toUpperCase()
 
     const tile = document.createElement("div")

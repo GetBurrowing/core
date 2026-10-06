@@ -47,6 +47,20 @@ that registration — see "MCP tool surface" below.
   `src/meeting_voice_agent/preemptive.py` (`should_start_preemptive_generation`)
   — a pure function over turn-detector probability, silence duration, and
   interim transcript length, driven by the same config the session uses.
+- **Join identity** (task 01a1117f): `request_fnc` in `agent.py` accepts
+  every job. When Core's dispatch metadata carries `agent_identity`, the
+  worker joins under it. That value is `agent:<agent uuid>`, and the worker
+  also sets the participant name from `agent_name` and the
+  `suite.agent_id` attribute from `agent_id`. The shape matters:
+  `agent:<uuid>` is what Core's `Platform.Meetings.parse_identity/1` casts to
+  an agent foreign key, so the worker lands on the agent's own invite row
+  instead of becoming an extra "Unknown participant". It is also the key
+  MeetingLive uses for agent tiles. `agent:<slug>` would match neither. The
+  agent is never inferred from `MVA_WORKER_AGENT_NAME`, because several Suite
+  agents can share one worker name. When `agent_identity` is missing (an
+  older Core, or a manually started job), `accept_arguments` returns `{}`
+  and the SDK default identity `agent-<job id>` is kept. That is the
+  pre-change behaviour, and Core folds it onto the invite row.
 
 ## Backends — all config, nothing hard-coded
 

@@ -18,6 +18,8 @@
  * legacy `window.__livekitRoom`). The hook gracefully no-ops when no room
  * is available, and binds once a `livekit:room-connected` event fires.
  */
+import { participantLabel, readParticipantNames } from "./lib/participant_label"
+
 // Trailing-debounce window for `activeSpeakersChanged` pushes, in ms.
 const ACTIVE_SPEAKER_DEBOUNCE_MS = 250
 
@@ -93,7 +95,12 @@ const MeetingRoom = {
   _onTranscription(segments, participant) {
     if (!segments || segments.length === 0) return
 
-    const speakerName = participant?.name || participant?.identity || "Unknown"
+    // `participant.name`, then the server's identity-to-name map for
+    // resolved agents (`data-participant-names`, task 01a1117f stage 5: a
+    // legacy `agent-AJ_…` voice worker has no LiveKit name), then the
+    // identity.
+    const speakerName =
+      participantLabel(participant, readParticipantNames(this.el)) || "Unknown"
 
     // `identity` is threaded through so downstream consumers
     // (MeetingCaptions' guest-suffix render, per-tile overlay slots

@@ -85,7 +85,14 @@ logger = logging.getLogger("meeting_voice_agent.latency_harness")
 #: additional exclusion is needed. Still overridable via
 #: --agent-identity-prefix for a deployment that dispatches under a
 #: different convention.
-DEFAULT_AGENT_IDENTITY_PREFIX = "agent-"
+#:
+#: Task 01a1117f stage 2: a Core-dispatched worker now joins as
+#: `agent:<agent uuid>` (`agent.accept_arguments`), and only a job started
+#: without Core's metadata keeps the SDK's `agent-<job id>`. So the default is
+#: BOTH prefixes; `str.startswith` takes the tuple as-is, here and in
+#: `tool_telemetry.parse_tool_call_names`. Neither matches the harness's own
+#: `latency-harness-<timestamp>` identity.
+DEFAULT_AGENT_IDENTITY_PREFIX: tuple[str, ...] = ("agent-", "agent:")
 
 
 def build_access_token(api_key: str, api_secret: str, room_name: str, identity: str) -> str:
@@ -157,7 +164,7 @@ async def _publish_question(
 
 async def _wait_for_first_agent_audio_frame(
     room: rtc.Room,
-    agent_identity_prefix: str,
+    agent_identity_prefix: str | tuple[str, ...],
     after_ts: float,
     timeout_s: float,
     energy_gate_dbfs: float = DEFAULT_ENERGY_GATE_DBFS,
@@ -245,7 +252,7 @@ class ToolCallCollector:
     harness's own clock when it observes them.
     """
 
-    def __init__(self, agent_identity_prefix: str) -> None:
+    def __init__(self, agent_identity_prefix: str | tuple[str, ...]) -> None:
         self._agent_identity_prefix = agent_identity_prefix
         self._observed: list[tuple[str, float]] = []
         self._room: rtc.Room | None = None
@@ -290,7 +297,7 @@ async def _run_measurement(
     *,
     audio_fixture: Path,
     question_text: str,
-    agent_identity_prefix: str,
+    agent_identity_prefix: str | tuple[str, ...],
     timeout_s: float,
     energy_gate_dbfs: float,
     case: str,
@@ -352,7 +359,7 @@ async def measure_once(
     room_name: str,
     audio_fixture: Path,
     question_text: str,
-    agent_identity_prefix: str = DEFAULT_AGENT_IDENTITY_PREFIX,
+    agent_identity_prefix: str | tuple[str, ...] = DEFAULT_AGENT_IDENTITY_PREFIX,
     timeout_s: float = 15.0,
     energy_gate_dbfs: float = DEFAULT_ENERGY_GATE_DBFS,
     case: str = "simple_latency",
