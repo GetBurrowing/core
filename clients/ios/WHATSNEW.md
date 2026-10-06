@@ -7,6 +7,8 @@ MARKETING_VERSION, and it is capped at 4000 characters.
 ## v1.1
 Burrow now works with Siri, Shortcuts, Spotlight and Control Center, the My approvals widget can approve, and Burrow runs natively on iPad. The app is recoloured to the Burrow palette: orange for actions, cyan only for a live count.
 
+Fixed: the app crashed when joining a meeting. Burrow now asks for the microphone the first time you join one.
+
 Please try:
 1. Siri. Say "What's waiting for me in Burrow". Siri reads your approvals and tasks and shows up to three. "Approve a plan in Burrow" always asks you to confirm and needs the phone unlocked; saying no sends nothing.
 2. Ask an agent. "Ask an agent in Burrow", pick an agent and ask a question. If the agent answers within about 20 seconds Siri reads the reply; otherwise Burrow tells you it will notify you.

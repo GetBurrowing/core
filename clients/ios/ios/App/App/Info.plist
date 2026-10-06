@@ -42,7 +42,9 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>Burrow uses the camera when you take a photo to attach to a message.</string>
+	<string>Burrow uses the camera when you take a photo to attach to a message or turn on video in a meeting.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Burrow uses the microphone when you join a meeting.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Burrow opens your photo library when you choose a photo to attach to a message.</string>
 	<key>SuiteKeychainAccessGroup</key>
