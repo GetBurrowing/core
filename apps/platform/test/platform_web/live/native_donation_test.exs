@@ -133,7 +133,11 @@ defmodule PlatformWeb.NativeDonationTest do
       {:ok, project} = Tasks.create_project(%{name: "Donate Approvals #{u()}"})
 
       {:ok, task} =
-        Tasks.create_task(%{project_id: project.id, title: "Approve me #{u()}", status: "planning"})
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Approve me #{u()}",
+          status: "planning"
+        })
 
       {:ok, plan} = Tasks.create_plan(%{task_id: task.id, version: 1})
       {:ok, _stage} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "S1"})
@@ -162,7 +166,9 @@ defmodule PlatformWeb.NativeDonationTest do
       sentinel = "zq-feedback-#{u()}"
 
       view
-      |> element(~s{button[phx-click="plan_toggle_reject_feedback"][phx-value-plan-id="#{plan.id}"]})
+      |> element(
+        ~s{button[phx-click="plan_toggle_reject_feedback"][phx-value-plan-id="#{plan.id}"]}
+      )
       |> render_click()
 
       view

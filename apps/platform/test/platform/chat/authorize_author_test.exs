@@ -39,6 +39,7 @@ defmodule Platform.Chat.AuthorizeAuthorTest do
     setup do
       user = create_user!(%{name: "Freeze Author"})
       space = channel!()
+
       {:ok, participant} =
         Chat.add_participant(space.id, %{
           participant_type: "user",
