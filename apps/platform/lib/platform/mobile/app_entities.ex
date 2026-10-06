@@ -416,23 +416,39 @@ defmodule Platform.Mobile.AppEntities do
   @spec start_meeting(User.t(), keyword()) ::
           {:ok, map()} | {:error, :forbidden | :no_project | term()}
   def start_meeting(%User{} = user, opts \\ []) do
-    with {:ok, space} <- maybe_authorize_space(user, Keyword.get(opts, :space_id)),
-         {:ok, project_id} <- meeting_project_id(user, space, Keyword.get(opts, :project_id)),
-         {:ok, meeting} <-
-           Meetings.create_meeting(%{
-             project_id: project_id,
-             name: meet_now_name(DateTime.utc_now()),
-             scheduled_start_at: nil,
-             scheduled_end_at: nil
-           }) do
-      {:ok,
-       %{
-         id: meeting.id,
-         slug: meeting.slug,
-         path: "/meetings/#{meeting.slug}",
-         chat_space_id: meeting.chat_space_id
-       }}
+    with {:ok, meeting} <- create_meeting(user, opts) do
+      {:ok, meeting_json(meeting)}
     end
+  end
+
+  @doc """
+  `start_meeting/2` without the JSON shaping: the created `%Meeting{}`, so a
+  caller can act on it (task 01a111bb: `Platform.Meetings.CallInvites.invite/2`)
+  before answering with `meeting_json/1`.
+  """
+  @spec create_meeting(User.t(), keyword()) ::
+          {:ok, Meetings.Meeting.t()} | {:error, :forbidden | :no_project | term()}
+  def create_meeting(%User{} = user, opts \\ []) do
+    with {:ok, space} <- maybe_authorize_space(user, Keyword.get(opts, :space_id)),
+         {:ok, project_id} <- meeting_project_id(user, space, Keyword.get(opts, :project_id)) do
+      Meetings.create_meeting(%{
+        project_id: project_id,
+        name: meet_now_name(DateTime.utc_now()),
+        scheduled_start_at: nil,
+        scheduled_end_at: nil
+      })
+    end
+  end
+
+  @doc "The JSON `POST /api/app/meetings` answers with for a created meeting."
+  @spec meeting_json(Meetings.Meeting.t()) :: map()
+  def meeting_json(meeting) do
+    %{
+      id: meeting.id,
+      slug: meeting.slug,
+      path: "/meetings/#{meeting.slug}",
+      chat_space_id: meeting.chat_space_id
+    }
   end
 
   defp maybe_authorize_space(_user, space_id) when space_id in [nil, ""], do: {:ok, nil}
@@ -457,10 +473,7 @@ defmodule Platform.Mobile.AppEntities do
           nil
       end
 
-    recent =
-      user
-      |> Meetings.list_meetings_for_user()
-      |> Enum.find_value(fn m -> if MapSet.member?(ids, m.project_id), do: m.project_id end)
+    recent = last_meeting_project_id(user, ids)
 
     chosen =
       cond do
@@ -472,6 +485,43 @@ defmodule Platform.Mobile.AppEntities do
 
     if chosen, do: {:ok, chosen}, else: {:error, :no_project}
   end
+
+  @doc """
+  The project of the newest meeting `user` can see whose project is one of
+  `project_ids`, or nil when there is none. It never falls back to another
+  project: the app reads nil as "no prior meeting, ask which project".
+
+  Shared by `start_meeting/2`'s fallback and `list_projects/1` (task
+  01a111bb), so the project the app predicts is the one the server picks.
+  """
+  @spec last_meeting_project_id(User.t(), Enumerable.t()) :: binary() | nil
+  def last_meeting_project_id(%User{} = user, project_ids) do
+    ids = MapSet.new(project_ids)
+
+    user
+    |> Meetings.list_meetings_for_user()
+    |> Enum.find_value(fn m -> if MapSet.member?(ids, m.project_id), do: m.project_id end)
+  end
+
+  @doc """
+  The projects the user can see, each with its org, plus
+  `last_meeting_project_id/2` over them (`GET /api/app/projects`).
+  """
+  @spec list_projects(User.t()) :: %{projects: [map()], last_meeting_project_id: binary() | nil}
+  def list_projects(%User{} = user) do
+    projects = Tasks.list_projects_for_user(user, preload: [:org])
+
+    %{
+      projects:
+        Enum.map(projects, fn p ->
+          %{id: p.id, name: p.name, org: project_org(p.org)}
+        end),
+      last_meeting_project_id: last_meeting_project_id(user, Enum.map(projects, & &1.id))
+    }
+  end
+
+  defp project_org(%{id: id, name: name}), do: %{id: id, name: name}
+  defp project_org(_), do: nil
 
   defp meet_now_name(%DateTime{} = at),
     do: "Meeting · " <> Calendar.strftime(at, "%-d %b %Y, %-I:%M %p UTC")

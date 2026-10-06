@@ -28,6 +28,7 @@ defmodule PlatformWeb.AppApiController do
   alias Platform.Chat.Space
   alias Platform.Mobile
   alias Platform.Repo
+  alias Platform.Tenancy.Org
 
   # ── session ──────────────────────────────────────────────────────────
 
@@ -110,36 +111,50 @@ defmodule PlatformWeb.AppApiController do
   def spaces(conn, _params) do
     user = conn.assigns.current_user
 
-    spaces =
+    # The space's own org (`chat_spaces.org_id`) rides the same query as a
+    # left join (task 01a111bb), so two "general" channels in two orgs can be
+    # told apart without a query per space.
+    rows =
       from(s in Space,
         join: p in Participant,
         on: p.space_id == s.id,
+        left_join: o in Org,
+        on: o.id == s.org_id,
         where:
           p.participant_type == "user" and p.participant_id == ^user.id and
             is_nil(s.archived_at) and s.kind != "execution",
         order_by: [asc: s.name, asc: s.inserted_at],
-        distinct: true
+        distinct: true,
+        select: {s, o.id, o.name}
       )
       |> ExternalScope.scope_spaces(ExternalScope.for_user(user))
       |> Repo.all()
 
+    spaces = Enum.map(rows, &elem(&1, 0))
     agents_by_space = agents_by_space(Enum.map(spaces, & &1.id))
     participants_by_space = participants_for_naming(spaces)
 
     json(conn, %{
       spaces:
-        Enum.map(spaces, fn space ->
+        Enum.map(rows, fn {space, org_id, org_name} ->
           %{
             id: space.id,
             name: app_space_name(space, participants_by_space, user.id),
             slug: space.slug,
             path_segment: Chat.space_path_segment(space),
             kind: space.kind,
+            org: space_org(space, org_id, org_name),
             agents: Map.get(agents_by_space, space.id, [])
           }
         end)
     })
   end
+
+  # `org: null` for a DM (it belongs to its two people, not to an org) and
+  # for a space with no org.
+  defp space_org(%Space{kind: "dm"}, _org_id, _org_name), do: nil
+  defp space_org(_space, nil, _org_name), do: nil
+  defp space_org(_space, org_id, org_name), do: %{id: org_id, name: org_name}
 
   # `name` is never null in this response. Burrow iOS decodes it as a
   # non-optional `String`, so ONE DM or unnamed group (whose `chat_spaces.name`

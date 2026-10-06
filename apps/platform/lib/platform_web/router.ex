@@ -954,6 +954,11 @@ defmodule PlatformWeb.Router do
     get("/agents", AppIntentsController, :agents)
     post("/agents/:agent_id/dm", AppIntentsController, :agent_dm)
     get("/spaces/:space_id/messages", AppIntentsController, :messages)
+    # Siri AI (task 01a111bb): people directory, projects, Create Task.
+    get("/people", AppIntentsController, :people)
+    post("/people/:user_id/dm", AppIntentsController, :person_dm)
+    get("/projects", AppIntentsController, :projects)
+    post("/tasks", AppIntentsController, :create_task)
   end
 
   scope "/api/meetings", PlatformWeb do

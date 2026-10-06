@@ -479,6 +479,17 @@ defmodule Platform.Tasks do
 
   # ── Tasks (persistent) ──────────────────────────────────────────────────
 
+  @doc """
+  Create a task filed by a person, from a raw string-keyed request map: the
+  ONE path the web New Task sheet and the native app's `POST /api/app/tasks`
+  share (task 01a111bb). It routes a flat assignee into
+  `phase_assignees["planning"]` (task 019f42fd bug 1). See
+  `Platform.Tasks.Create`.
+  """
+  defdelegate create_from_request(raw_attrs, opts \\ []),
+    to: Platform.Tasks.Create,
+    as: :from_request
+
   def create_task(attrs, opts \\ []) do
     with :ok <- Lifecycle.ensure_project_writable(project_id_from(attrs)) do
       do_create_task(attrs, opts)

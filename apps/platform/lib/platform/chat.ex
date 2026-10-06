@@ -1425,6 +1425,77 @@ defmodule Platform.Chat do
     |> Repo.all()
   end
 
+  @doc """
+  The people `user` may open a DM with, matching `query` (name or email,
+  as `Platform.Accounts.list_users/1` searches; `""` lists everyone).
+
+  ONE candidate predicate (task 01a111bb). The New Conversation picker and
+  the native app's people directory (`Platform.Mobile.AppPeople`) both call
+  this, and so do the app's recent-collaborator list and call invitees
+  (`Platform.Meetings.CallInvites`), through `opts[:ids]`. Moved here from
+  the picker's private `picker_users/3` so the four cannot drift.
+
+  For an external user every candidate goes through
+  `external_dm_permitted?/3`, the same gate `find_or_create_dm/4` enforces,
+  so nothing is offered that the create would refuse. Internal users get the
+  unfiltered list.
+
+  ## Options
+
+    * `:external?` - overrides the external test. The picker passes the
+      surface it renders on (the chrome-less external chat surface), which
+      is how it behaved before the extraction. Defaults to
+      `Platform.Tenancy.external_user?/1` on `user`.
+    * `:ids` - only these user ids (already-valid UUIDs).
+
+  The caller is NOT removed; callers that list people drop themselves.
+  """
+  @spec dm_candidates(%{id: binary()}, String.t() | nil, keyword()) :: [
+          Platform.Accounts.User.t()
+        ]
+  def dm_candidates(%{id: user_id} = user, query, opts \\ []) do
+    external? = Keyword.get_lazy(opts, :external?, fn -> Tenancy.external_user?(user) end)
+    users = Platform.Accounts.list_users(query: query || "", ids: Keyword.get(opts, :ids))
+
+    if external? do
+      Enum.filter(users, &external_dm_permitted?(user_id, "user", &1.id))
+    else
+      users
+    end
+  end
+
+  @doc """
+  The agents `user` may open a DM with, matching `query` by name (a
+  case-insensitive substring). The agent half of `dm_candidates/3`, with
+  the same options.
+
+  External users get none: `external_dm_permitted?/3` denies every agent
+  target for them, and the external surface shows no agents.
+  """
+  @spec dm_agent_candidates(%{id: binary()}, String.t() | nil, keyword()) :: [Agent.t()]
+  def dm_agent_candidates(user, query, opts \\ []) do
+    external? = Keyword.get_lazy(opts, :external?, fn -> Tenancy.external_user?(user) end)
+
+    if external? do
+      []
+    else
+      pattern = String.downcase(query || "")
+
+      list_agents_for_picker()
+      |> filter_agent_ids(Keyword.get(opts, :ids))
+      |> Enum.filter(fn a ->
+        pattern == "" or String.contains?(String.downcase(a.name || ""), pattern)
+      end)
+    end
+  end
+
+  defp filter_agent_ids(agents, ids) when is_list(ids) do
+    wanted = MapSet.new(ids)
+    Enum.filter(agents, &MapSet.member?(wanted, &1.id))
+  end
+
+  defp filter_agent_ids(agents, _ids), do: agents
+
   defp user_display_name(user_id) do
     case Platform.Accounts.get_user(user_id) do
       %{name: name} when is_binary(name) and name != "" -> name
