@@ -182,6 +182,41 @@ defmodule Platform.Accounts do
   end
 
   @doc """
+  Give an ARCHIVED user a new OIDC identity and unarchive them, in one row
+  write: `oidc_sub` becomes `new_sub` and all three archive columns are
+  cleared.
+
+  Why it exists: re-inviting a person who was removed from the sign-in
+  service (task 01a113ea, `Platform.SignInAdmin`) creates a NEW identity at
+  the identity provider, with a new `sub`. Sign-in links a login to a user by
+  `oidc_sub` only (`find_or_create_from_oidc/1`), so without this the
+  returning person would land on a fresh row and lose the attribution of
+  everything they authored. Relinking keeps their Suite user id, so their
+  messages, tasks and files stay theirs.
+
+  Refuses a user that is not archived with `{:error, :not_archived}` and
+  writes nothing: moving a live identity is not what this is for. A `new_sub`
+  already held by another user returns `{:error, changeset}` (the unique
+  `oidc_sub` constraint) and leaves the row unchanged.
+  """
+  @spec relink_oidc_identity(User.t(), String.t()) ::
+          {:ok, User.t()} | {:error, :not_archived} | {:error, Ecto.Changeset.t()}
+  def relink_oidc_identity(%User{archived_at: %DateTime{}} = user, new_sub)
+      when is_binary(new_sub) do
+    user
+    |> User.changeset(%{
+      oidc_sub: new_sub,
+      archived_at: nil,
+      archived_by_user_id: nil,
+      archived_reason: nil
+    })
+    |> Repo.update()
+  end
+
+  def relink_oidc_identity(%User{}, new_sub) when is_binary(new_sub),
+    do: {:error, :not_archived}
+
+  @doc """
   Find a user by OIDC `sub`, creating one if missing, or refreshing
   email/name/avatar from the OIDC payload.
 

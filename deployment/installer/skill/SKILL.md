@@ -134,6 +134,14 @@ kept.
   passes, tell the user to open `https://<domain>/` and sign in with their
   passkey.
 
+## Managing users after the install
+
+Suite admins add, disable and remove the people who can sign in at
+`https://<domain>/admin/sign-in-users`. Each new person gets a one-time
+sign-in link (valid 30 minutes) that the admin passes on to them. Only Suite
+admins see that page. If it cannot reach pocket-id, pocket-id's own admin
+screen at `https://<auth host>/settings/admin` is the fallback.
+
 ## Other commands
 
 - `suite-install setup status --json`: where things stand; safe at any time.

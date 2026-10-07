@@ -1,0 +1,475 @@
+<div class="flex h-full min-h-0 flex-col" data-role="admin-sign-in-users">
+  <.breadcrumb segments={[
+    %{label: "Admin", navigate: ~p"/admin"},
+    %{label: "Users", navigate: nil}
+  ]} />
+  <%!-- Header: the shipped admin header (`admin_orgs_live.html.heex:2-26`).
+       Semantic tokens only: base-content/60 eyebrow, primary for the one CTA,
+       interactive for the text link (on base-100 only; it fails AA on
+       base-200). --%>
+  <div class="border-b border-edge px-4 py-3">
+    <div class="flex items-center justify-between gap-3">
+      <div class="flex items-center gap-3">
+        <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content/60">
+          Admin · Users
+        </h1>
+        <span class="badge badge-ghost badge-sm" data-role="user-count">{length(@rows)}</span>
+      </div>
+      <div class="flex items-center gap-4">
+        <a
+          :if={@pocket_id_admin_url && actionable?(@service)}
+          href={@pocket_id_admin_url}
+          target="_blank"
+          rel="noopener"
+          class="hidden sm:inline-flex items-center gap-1 text-sm text-interactive hover:underline"
+          data-role="pocket-id-admin-link"
+        >
+          Manage sign-in in pocket-id
+          <span class="hero-arrow-up-right size-3.5" aria-hidden="true"></span>
+          <span class="sr-only">(opens in a new tab)</span>
+        </a>
+        <button
+          :if={@service != :unreachable}
+          type="button"
+          phx-click="open_invite"
+          class="btn btn-sm btn-primary gap-2 max-sm:min-h-11"
+          data-role="open-invite"
+        >
+          <span class="hero-plus size-4" aria-hidden="true"></span>
+          <span class="hidden sm:inline">Invite user</span>
+          <span class="sm:hidden">Invite</span>
+        </button>
+      </div>
+    </div>
+    <a
+      :if={@pocket_id_admin_url && actionable?(@service)}
+      href={@pocket_id_admin_url}
+      target="_blank"
+      rel="noopener"
+      class="mt-2 inline-flex items-center gap-1 text-sm text-interactive hover:underline sm:hidden"
+      data-role="pocket-id-admin-link-mobile"
+    >
+      Manage sign-in in pocket-id
+      <span class="hero-arrow-up-right size-3.5" aria-hidden="true"></span>
+      <span class="sr-only">(opens in a new tab)</span>
+    </a>
+  </div>
+
+  <div class="flex-1 min-h-0 overflow-y-auto p-4">
+    <div class="mx-auto max-w-4xl space-y-4">
+      <div
+        :if={@service == :unreachable}
+        role="alert"
+        class="alert alert-error"
+        data-role="service-unreachable"
+      >
+        <span class="hero-exclamation-circle size-5" aria-hidden="true"></span>
+        <div class="flex-1 text-sm">
+          <strong>Can't reach the sign-in service.</strong>
+          The list shows Suite users only. Sign-in status and actions come back when it does.
+        </div>
+        <button type="button" class="btn btn-sm" phx-click="retry" data-role="retry">
+          Try again
+        </button>
+      </div>
+
+      <form phx-change="search" phx-submit="search" data-role="search-form" role="search">
+        <label for="sign-in-users-search" class="sr-only">Search name or email</label>
+        <input
+          id="sign-in-users-search"
+          type="search"
+          name="q"
+          value={@query}
+          placeholder="Search name or email"
+          phx-debounce="150"
+          autocomplete="off"
+          class="input input-bordered input-sm w-full sm:max-w-sm"
+        />
+      </form>
+
+      <div
+        :if={@visible == [] && String.trim(@query) != ""}
+        class="text-sm text-base-content/70"
+        data-role="no-results"
+      >
+        No one matches '{@query}'.
+        <button
+          type="button"
+          class="text-interactive hover:underline"
+          phx-click="clear_search"
+          data-role="clear-search"
+        >
+          Clear search
+        </button>
+      </div>
+
+      <%!-- Desktop / tablet: the table (`user_access_live.html.heex:41-92`).
+           Email folds under the name below `md`; there is no Last sign-in
+           column because pocket-id v2.18.0 exposes none. --%>
+      <div :if={@visible != []} class="hidden sm:block overflow-x-auto">
+        <table class="table table-sm w-full" id="sign-in-users-table">
+          <thead>
+            <tr>
+              <th class="text-xs uppercase tracking-wider text-base-content/70">Name</th>
+              <th class="text-xs uppercase tracking-wider text-base-content/70 hidden md:table-cell">
+                Email
+              </th>
+              <th class="text-xs uppercase tracking-wider text-base-content/70">Role</th>
+              <th class="text-xs uppercase tracking-wider text-base-content/70">Status</th>
+              <th class="text-xs uppercase tracking-wider text-base-content/70 text-right">
+                Actions
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              :for={row <- @visible}
+              id={"table-" <> row.dom_id}
+              data-user-id={row.id}
+              data-status={row.status}
+              class="align-middle"
+            >
+              <td class="min-w-0">
+                <div class="flex items-center gap-3">
+                  <img
+                    :if={row.avatar_url}
+                    src={row.avatar_url}
+                    alt=""
+                    class="w-8 h-8 rounded-full object-cover"
+                    loading="lazy"
+                  />
+                  <div
+                    :if={!row.avatar_url}
+                    class="w-8 h-8 shrink-0 rounded-full bg-base-300 flex items-center justify-center text-xs font-semibold text-base-content/70"
+                    aria-hidden="true"
+                  >
+                    {initials(row.name)}
+                  </div>
+                  <div class="min-w-0">
+                    <div class={[
+                      "text-sm font-medium truncate",
+                      if(row.status == :disabled,
+                        do: "text-base-content/70",
+                        else: "text-base-content"
+                      )
+                    ]}>
+                      {row.name}
+                    </div>
+                    <div class="text-xs text-base-content/70 md:hidden truncate">{row.email}</div>
+                  </div>
+                </div>
+              </td>
+              <td class="text-sm text-base-content/70 hidden md:table-cell">{row.email}</td>
+              <td class="text-sm text-base-content/70">{role_label(row.role)}</td>
+              <td class="whitespace-nowrap">
+                <.status_pill row={row} />
+                <.expiry_note
+                  expiries={@link_expiries}
+                  row={row}
+                  time_zone={@time_zone}
+                  class="mt-1"
+                />
+              </td>
+              <td class="text-right whitespace-nowrap">
+                <.row_actions :if={actionable?(@service)} row={row} />
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <%!-- 375px: stacked rows, actions always visible (no tap-to-reveal),
+           44px tap height. --%>
+      <ul
+        :if={@visible != []}
+        class="sm:hidden divide-y divide-edge border-y border-edge"
+        id="sign-in-users-list"
+      >
+        <li
+          :for={row <- @visible}
+          id={"list-" <> row.dom_id}
+          data-user-id={row.id}
+          data-status={row.status}
+          class="py-3"
+        >
+          <div class="flex items-start gap-3">
+            <img
+              :if={row.avatar_url}
+              src={row.avatar_url}
+              alt=""
+              class="w-8 h-8 rounded-full object-cover"
+              loading="lazy"
+            />
+            <div
+              :if={!row.avatar_url}
+              class="w-8 h-8 shrink-0 rounded-full bg-base-300 flex items-center justify-center text-xs font-semibold text-base-content/70"
+              aria-hidden="true"
+            >
+              {initials(row.name)}
+            </div>
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center justify-between gap-2">
+                <div class={[
+                  "text-sm font-medium truncate",
+                  if(row.status == :disabled,
+                    do: "text-base-content/70",
+                    else: "text-base-content"
+                  )
+                ]}>
+                  {row.name}
+                </div>
+                <.status_pill row={row} />
+              </div>
+              <div class="text-xs text-base-content/70 truncate">
+                {row.email}<span :if={role_label(row.role)}> · {role_label(row.role)}</span>
+              </div>
+              <.expiry_note expiries={@link_expiries} row={row} time_zone={@time_zone} />
+              <div :if={actionable?(@service)} class="mt-2 -ml-3">
+                <.row_actions row={row} mobile={true} />
+              </div>
+            </div>
+          </div>
+        </li>
+      </ul>
+
+      <div
+        :if={length(@rows) <= 1 && String.trim(@query) == "" && @service != :unreachable}
+        class="flex flex-wrap items-center gap-3 text-sm text-base-content/70"
+        data-role="empty-hint"
+      >
+        Invite people to give them access to Suite.
+        <button type="button" class="btn btn-sm btn-primary" phx-click="open_invite">
+          Invite user
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <%!-- Undo toast for Disable. Clears the iOS home indicator and the shell's
+       bottom nav. --%>
+  <div
+    :if={@undo}
+    class="toast toast-end z-50"
+    style="bottom: calc(env(safe-area-inset-bottom) + var(--bottom-nav-height, 0px) + 1rem);"
+    data-role="undo-toast"
+  >
+    <div role="status" class="alert bg-base-100 border border-edge text-base-content shadow-lg">
+      <span class="text-sm">{@undo.name} is disabled and can't sign in.</span>
+      <button
+        type="button"
+        class="btn btn-sm btn-ghost"
+        phx-click="undo_disable"
+        phx-value-id={@undo.user_id}
+        data-role="undo-disable"
+      >
+        Undo
+      </button>
+    </div>
+  </div>
+
+  <%!-- Invite sheet (`admin_orgs_live.html.heex:127-134`). --%>
+  <.sheet
+    :if={@invite_open?}
+    id="invite-user-sheet"
+    open={true}
+    placement={:bottom}
+    on_close="close_invite"
+  >
+    <:title>Invite user</:title>
+
+    <div
+      :if={@invite_error}
+      role="alert"
+      class="alert alert-error mb-4 text-sm"
+      data-role="invite-error"
+    >
+      {@invite_error}
+    </div>
+
+    <form id="invite-user-form" phx-submit="invite" class="form-fields space-y-4">
+      <div>
+        <label class="label label-text text-xs font-medium" for="invite_email">Email *</label>
+        <input
+          type="email"
+          id="invite_email"
+          name="invite[email]"
+          value={@invite_values["email"]}
+          required
+          autocomplete="off"
+          class="input input-bordered w-full"
+        />
+        <p
+          :if={is_binary(@invite_email_error)}
+          class="mt-1 text-xs text-error"
+          data-role="invite-email-error"
+        >
+          {@invite_email_error}
+        </p>
+        <p
+          :if={match?({:duplicate, _}, @invite_email_error)}
+          class="mt-1 text-xs text-base-content"
+          data-role="invite-duplicate"
+        >
+          {elem(@invite_email_error, 1)} already has access with this email.
+          <button
+            type="button"
+            class="text-interactive hover:underline"
+            phx-click="show_in_list"
+            phx-value-email={@invite_values["email"]}
+          >
+            Show in list
+          </button>
+        </p>
+      </div>
+      <div>
+        <label class="label label-text text-xs font-medium" for="invite_name">
+          Display name
+        </label>
+        <input
+          type="text"
+          id="invite_name"
+          name="invite[name]"
+          value={@invite_values["name"]}
+          autocomplete="off"
+          class="input input-bordered w-full"
+        />
+      </div>
+      <div>
+        <label class="label label-text text-xs font-medium" for="invite_role">Suite role</label>
+        <select id="invite_role" name="invite[role]" class="select select-bordered w-full">
+          <option value="member" selected={@invite_values["role"] != "admin"}>Member</option>
+          <option value="admin" selected={@invite_values["role"] == "admin"}>Admin</option>
+        </select>
+      </div>
+    </form>
+
+    <:actions>
+      <button type="button" class="btn btn-ghost" phx-click="close_invite">Cancel</button>
+      <button
+        type="submit"
+        form="invite-user-form"
+        class="btn btn-primary"
+        phx-disable-with="Sending"
+        data-role="send-invite"
+      >
+        Send invite
+      </button>
+    </:actions>
+  </.sheet>
+
+  <%!-- Credential slip, shown once (extends `control_center/onboarding.ex:284-329`).
+       The link lives in `@slip` only while this sheet is open. --%>
+  <.sheet
+    :if={@slip}
+    id="sign-in-slip-sheet"
+    open={true}
+    placement={:bottom}
+    on_close="close_slip"
+  >
+    <:title>{if @slip.origin == :invite, do: "Invite user", else: "Send link"}</:title>
+
+    <div
+      class="overflow-hidden rounded-box border border-edge bg-base-100"
+      data-role="credential-slip"
+    >
+      <div class="bg-primary px-4 py-3 text-primary-content">
+        <p class="text-lg font-semibold">Sign-in link for {@slip.name}</p>
+      </div>
+
+      <div class="space-y-4 p-4">
+        <%= if @slip.link do %>
+          <div class="flex gap-2 rounded-field bg-warning/20 px-3 py-2 text-sm text-base-content">
+            <span class="hero-exclamation-triangle size-4 mt-0.5 shrink-0" aria-hidden="true">
+            </span>
+            <p>
+              <strong>Shown once.</strong>
+              This link signs in as {@slip.name}. Treat it like a password and send it only to them.
+            </p>
+          </div>
+
+          <div>
+            <p class="text-xs font-medium text-base-content/70">Link</p>
+            <code
+              class="mt-1 block break-all rounded-field bg-base-200 px-3 py-2 font-mono text-sm text-base-content"
+              data-role="slip-link"
+            >
+              {@slip.link.url}
+            </code>
+          </div>
+
+          <div class="flex flex-wrap items-baseline gap-x-6 gap-y-1 text-sm">
+            <p>
+              <span class="text-xs font-medium text-base-content/70">Code</span>
+              <code
+                class="ml-2 rounded-field bg-base-200 px-2 py-1 font-mono text-sm text-base-content"
+                data-role="slip-code"
+              >
+                {group_code(@slip.link.code)}
+              </code>
+            </p>
+            <p class="text-base-content/70" data-role="slip-expiry">
+              Expires at {clock(@slip.expires_at, @time_zone)}
+            </p>
+          </div>
+        <% else %>
+          <p class="text-sm text-base-content" data-role="slip-expired">
+            This link expired at {clock(@slip.expires_at, @time_zone)}.
+          </p>
+          <button
+            :if={@slip.user_id}
+            type="button"
+            class="btn btn-sm btn-ghost"
+            phx-click="resend_link"
+            phx-value-id={@slip.user_id}
+          >
+            Send a new link
+          </button>
+        <% end %>
+      </div>
+    </div>
+
+    <:actions>
+      <button
+        :if={@slip.link}
+        type="button"
+        id="copy-sign-in-link"
+        phx-hook="CopyToClipboard"
+        data-clipboard-text={@slip.link.url}
+        class="btn btn-primary"
+        data-role="copy-link"
+      >
+        Copy link
+      </button>
+      <button type="button" class="btn btn-ghost" phx-click="close_slip" data-role="slip-done">
+        Done
+      </button>
+    </:actions>
+  </.sheet>
+
+  <%!-- Remove confirmation, soft variant: Suite data stays. No typed-name
+       field. Error fill on the confirm button only. --%>
+  <.sheet
+    :if={@remove_target}
+    id="remove-user-sheet"
+    open={true}
+    placement={:bottom}
+    on_close="close_remove"
+  >
+    <:title>Remove {@remove_target.name}?</:title>
+    <p class="text-sm text-base-content" data-role="remove-copy">
+      {@remove_target.name} will lose access to Suite and their passkeys will be deleted. Their messages, tasks and files stay in Suite under their name. You can invite them again later with the same email.
+    </p>
+    <:actions>
+      <button type="button" class="btn btn-ghost" phx-click="close_remove">Cancel</button>
+      <button
+        type="button"
+        class="btn btn-error"
+        phx-click="remove"
+        phx-value-id={@remove_target.id}
+        data-role="confirm-remove"
+      >
+        Remove {@remove_target.name}
+      </button>
+    </:actions>
+  </.sheet>
+</div>

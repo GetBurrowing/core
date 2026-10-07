@@ -325,6 +325,15 @@ config :platform, :apns_retry_backoff_ms, [0, 0, 0]
 config :platform, :fcm_req_options, plug: {Req.Test, Platform.Push.FCM}
 config :platform, :fcm_retry_backoff_ms, [0, 0, 0]
 
+# Sign-in users page (task 01a113ea stage 1). Same reasoning as :mail_enabled
+# above: without the injected key `SignInAdmin.Config.enabled?/0` reads
+# `POCKET_ID_ADMIN_ENABLED` from the host. And pocket-id is never reached in
+# tests: every `SignInAdmin.PocketId` request goes to the `Req.Test` stub of
+# that name. Tests that need the page on flip the switch (and inject
+# :sign_in_admin_url / :sign_in_admin_api_key) and restore them on exit.
+config :platform, :sign_in_admin_enabled, false
+config :platform, :pocket_id_req_options, plug: {Req.Test, Platform.SignInAdmin.PocketId}
+
 # Email send path (task 01a0cf21 stage 2): tests never reach SMTP. The
 # recording adapter sends `{:mail_test_adapter, email, config}` to the calling
 # process so a test can assert WHICH relay and username a send used;

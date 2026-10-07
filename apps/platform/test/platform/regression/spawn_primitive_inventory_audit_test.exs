@@ -266,6 +266,17 @@ defmodule Platform.Regression.SpawnPrimitiveInventoryAuditTest do
           "which would convert even a raised OwnershipError into a dead-channel result rather " <>
           "than crashing the test — but the empirical run shows that catch clause never fires " <>
           "for sandbox reasons, because $callers propagation already works."
+    },
+    %{
+      path: "lib/platform/sign_in_admin.ex",
+      primitive: :task_async_stream,
+      justification:
+        "passkey_counts/1 (task 01a113ea stage 2): Task.async_stream over " <>
+          "PocketId.passkey_count/1, an HTTP GET to pocket-id and nothing else — no Repo call " <>
+          "inside the spawned task (the Suite users are read by the caller before the stream). " <>
+          "In test env the request goes to the Req.Test stub, which resolves the owner through " <>
+          "$callers, set by Task.async_stream; exercised by test/platform/sign_in_admin_test.exs " <>
+          "\"list_users/1\" (statuses and the :unreachable path)."
     }
   ]
 

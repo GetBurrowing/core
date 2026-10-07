@@ -159,6 +159,8 @@ write_files:
             OIDC_PKCE_ENABLED: "true"
             PHX_HOST: "suite-01a0d69d.test"
             PHX_SERVER: "true"
+            POCKET_ID_ADMIN_ENABLED: "true"
+            POCKET_ID_ADMIN_URL: "http://pocket-id:1411"
             PORT: "4000"
           volumes:
             - "core-data:/data/platform"
@@ -317,8 +319,10 @@ write_files:
       MEMORY_DB_PASSWORD=<secret:MEMORY_DB_PASSWORD>
       MEMORY_SERVICE_API_KEY=<secret:MEMORY_SERVICE_API_KEY>
       OIDC_CLIENT_SECRET=<secret:OIDC_CLIENT_SECRET>
+      POCKET_ID_API_KEY=<secret:STATIC_API_KEY>
       POSTGRES_PASSWORD=<secret:POSTGRES_PASSWORD>
       SECRET_KEY_BASE=<secret:SECRET_KEY_BASE>
+      STATIC_API_KEY=<secret:STATIC_API_KEY>
       VAULT_MASTER_KEY=<secret:VAULT_MASTER_KEY>
   - path: "/opt/suite/services.txt"
     owner: "root:root"

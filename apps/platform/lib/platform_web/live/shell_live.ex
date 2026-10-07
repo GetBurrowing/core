@@ -1335,6 +1335,9 @@ defmodule PlatformWeb.ShellLive do
       PlatformWeb.AdminOrgsLive ->
         "Admin"
 
+      PlatformWeb.AdminSignInUsersLive ->
+        "Admin"
+
       _ ->
         view
         |> Module.split()

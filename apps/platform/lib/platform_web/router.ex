@@ -871,6 +871,39 @@ defmodule PlatformWeb.Router do
     end
   end
 
+  # Task 01a113ea stage 3: the native sign-in users page, which manages the
+  # install's bundled pocket-id users. Its own scope because the gate plug
+  # runs BEFORE `:require_auth`: with `POCKET_ID_ADMIN_ENABLED` off, every
+  # caller (admin, non-admin, signed out) gets 404, never a login redirect
+  # that would reveal the page exists. The rest of the pipeline is the fenced
+  # scope's, in the same order. Its own `live_session` too, because a
+  # `live_session` belongs to one scope; the `on_mount` list and layout are
+  # the `:admin` session's, so `:ensure_admin` still refuses a non-admin.
+  # `/admin/users` stays `UserAccessLive`, unchanged.
+  pipeline :require_sign_in_admin do
+    plug(PlatformWeb.Plugs.RequireSignInAdmin)
+  end
+
+  scope "/", PlatformWeb do
+    pipe_through([
+      :browser,
+      :require_sign_in_admin,
+      :require_auth,
+      :enforce_external_scope,
+      :require_app_surface
+    ])
+
+    live_session :admin_sign_in,
+      on_mount: [
+        PlatformWeb.ShellLive,
+        {PlatformWeb.LiveAuth, :default},
+        {PlatformWeb.LiveAuth, :ensure_admin}
+      ],
+      layout: {PlatformWeb.Layouts, :shell} do
+      live("/admin/sign-in-users", AdminSignInUsersLive, :index)
+    end
+  end
+
   # ── HOST-AGNOSTIC MACHINE-CALLER SCOPES (deliberate — task 019fcf22
   # stage 3). Everything from here to the end of the file is called by
   # software, not a browser, and authenticates on a bearer token, a session

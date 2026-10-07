@@ -658,6 +658,70 @@ class TargetAndTlsTest(PositiveControlMixin, unittest.TestCase):
         )
 
 
+# ---------------------------------------------------------------------------
+# core's Users page env (task 01a113ea stage 4)
+# ---------------------------------------------------------------------------
+
+SIGN_IN_ADMIN_VARS = ("POCKET_ID_ADMIN_ENABLED", "POCKET_ID_ADMIN_URL", "POCKET_ID_API_KEY")
+
+
+def core_compose_block(compose):
+    return compose.split("\n  core-platform:\n", 1)[1].split("\n  core-postgres:\n", 1)[0]
+
+
+def external_oidc_render(path):
+    raw = load(path)
+    raw["auth"] = {
+        "mode": "external-oidc",
+        "issuer": "https://id.customer.example",
+        "client_id": "suite",
+        "client_secret_ref": "CUSTOMER_OIDC_SECRET",
+    }
+    with tempfile.TemporaryDirectory(prefix="suite-install-01a113ea-") as tmp:
+        supplied = os.path.join(tmp, "c.env")
+        with open(supplied, "w") as handle:
+            handle.write("CUSTOMER_OIDC_SECRET=oidc-value-01a113ea\n")
+        return build(valid(raw), customer_secrets=supplied)
+
+
+class SignInAdminEnvTest(PositiveControlMixin, unittest.TestCase):
+    """Bundled pocket-id gives core the Users page env; external OIDC gives none.
+
+    The key is pocket-id's admin-grade STATIC_API_KEY, aliased as
+    POCKET_ID_API_KEY: it must reach core only through secrets.env (0600).
+    """
+
+    def test_bundled_single_host_wires_core_to_the_pocket_id_admin_api(self):
+        rendered = build(manifest_from(EXAMPLE))
+        compose = rendered.files["compose.yaml"][0]
+        core = core_compose_block(compose)
+        self.assertIn('POCKET_ID_ADMIN_ENABLED: "true"', core)
+        self.assertIn('POCKET_ID_ADMIN_URL: "http://pocket-id:1411"', core)
+        # The URL names the upstream Caddy already proxies the auth host to.
+        self.assertIn("reverse_proxy pocket-id:1411", rendered.files["Caddyfile"][0])
+
+        key = rendered.generated["STATIC_API_KEY"]
+        self.assertGreaterEqual(len(key), 16)  # pocket-id refuses a shorter key
+        text, mode = rendered.files["secrets.env"]
+        self.assertEqual(mode, 0o600)
+        env = dict(line.split("=", 1) for line in text.splitlines() if "=" in line)
+        self.assertEqual(env["POCKET_ID_API_KEY"], key)
+        self.assertEqual(env["STATIC_API_KEY"], key)
+        # Never in compose.yaml: neither the name nor the value.
+        self.assertNotIn("POCKET_ID_API_KEY", compose)
+        self.assertNotIn(key, compose)
+        self.assertNotIn(key, rendered.files["Caddyfile"][0])
+
+    def test_external_oidc_writes_none_of_the_users_page_vars(self):
+        # Positive control: the bundled render of the same manifest has all three.
+        bundled = all_text(build(manifest_from(EXAMPLE)))
+        for name in SIGN_IN_ADMIN_VARS:
+            self.assertIn(name, bundled)
+        text = all_text(external_oidc_render(EXAMPLE))
+        for name in (*SIGN_IN_ADMIN_VARS, "STATIC_API_KEY", "pocket-id:1411"):
+            self.assertNotIn(name, text)
+
+
 if __name__ == "__main__":
     unittest.main()
 

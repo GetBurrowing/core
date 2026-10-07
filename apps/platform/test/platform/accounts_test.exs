@@ -511,4 +511,67 @@ defmodule Platform.AccountsTest do
       assert membership.org.slug == "fabrikam"
     end
   end
+
+  # ── relink_oidc_identity/2 (task 01a113ea stage 2) ───────────────────
+
+  describe "relink_oidc_identity/2" do
+    setup do
+      seed_bystander_fabrikam_membership!()
+    end
+
+    test "relinks an archived user to a new sub and unarchives them; a login with the new sub finds the same row" do
+      attrs = oidc_attrs(%{email: "relink-me@example.com"})
+      {:ok, user} = Accounts.find_or_create_from_oidc(attrs)
+      {:ok, archived} = Accounts.archive_user(user, reason: "sign-in removed")
+      new_sub = "relinked-#{System.unique_integer([:positive])}"
+
+      assert {:ok, relinked} = Accounts.relink_oidc_identity(archived, new_sub)
+
+      assert relinked.id == user.id
+      assert relinked.oidc_sub == new_sub
+      assert is_nil(relinked.archived_at)
+      assert is_nil(relinked.archived_by_user_id)
+      assert is_nil(relinked.archived_reason)
+
+      count_before = Repo.aggregate(Accounts.User, :count)
+
+      assert {:ok, logged_in} =
+               Accounts.find_or_create_from_oidc(%{
+                 sub: new_sub,
+                 email: attrs.email,
+                 name: attrs.name
+               })
+
+      assert logged_in.id == user.id
+      assert Repo.aggregate(Accounts.User, :count) == count_before
+
+      # The old sub no longer reaches the row.
+      assert {:ok, other} =
+               Accounts.find_or_create_from_oidc(%{attrs | email: "old-sub@example.com"})
+
+      refute other.id == user.id
+    end
+
+    test "refuses a user that is not archived and writes nothing" do
+      {:ok, user} = Accounts.find_or_create_from_oidc(oidc_attrs(%{}))
+      before = Repo.get!(Accounts.User, user.id)
+
+      assert {:error, :not_archived} = Accounts.relink_oidc_identity(user, "never-applied")
+
+      assert Repo.get!(Accounts.User, user.id) == before
+    end
+
+    test "a sub already held by another user returns a changeset and leaves the row unchanged" do
+      {:ok, holder} = Accounts.find_or_create_from_oidc(oidc_attrs(%{}))
+      {:ok, user} = Accounts.find_or_create_from_oidc(oidc_attrs(%{}))
+      {:ok, archived} = Accounts.archive_user(user, reason: "sign-in removed")
+      before = Repo.get!(Accounts.User, user.id)
+
+      assert {:error, %Ecto.Changeset{} = changeset} =
+               Accounts.relink_oidc_identity(archived, holder.oidc_sub)
+
+      assert {_, [constraint: :unique, constraint_name: _]} = changeset.errors[:oidc_sub]
+      assert Repo.get!(Accounts.User, user.id) == before
+    end
+  end
 end

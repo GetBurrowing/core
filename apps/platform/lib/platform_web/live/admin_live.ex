@@ -15,6 +15,12 @@ defmodule PlatformWeb.AdminLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    {:ok, assign(socket, :page_title, "Admin")}
+    # Task 01a113ea stage 3: the sign-in users tile exists only while the
+    # page does (`Platform.SignInAdmin.Config.enabled?/0`); with the switch
+    # off, `/admin` names neither the route nor pocket-id.
+    {:ok,
+     socket
+     |> assign(:page_title, "Admin")
+     |> assign(:sign_in_admin?, Platform.SignInAdmin.Config.enabled?())}
   end
 end

@@ -40,6 +40,8 @@ services:
       OIDC_PKCE_ENABLED: "true"
       PHX_HOST: "suite.example.test"
       PHX_SERVER: "true"
+      POCKET_ID_ADMIN_ENABLED: "true"
+      POCKET_ID_ADMIN_URL: "http://pocket-id:1411"
       PORT: "4000"
       TRUST_PROXY_HEADERS: "true"
     volumes:
