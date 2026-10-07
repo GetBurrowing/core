@@ -81,9 +81,18 @@ struct PersonEntity {
     /// name). The import NEVER throws (task 01a111bb stage 7): a throw here
     /// reached Siri as a generic "there's a problem" with nothing logged.
     /// No match or several matches are carried to `perform` unresolved.
+    ///
+    /// `exporting:` MUST stay a key path. Xcode 27's metadata extractor
+    /// reads this declaration as syntax and takes the IntentValue type from
+    /// the key path only: with a closure it records NO exportable or
+    /// importable type, Siri's structured-data fetch then logs "Failed to
+    /// extract Person for PersonEntity(...)" and the send never starts
+    /// (iPadOS 27.0.1, "Message Dalton saying ..."). With `\PersonEntity.person`
+    /// it records `com.apple.appintents.IntentPerson` both ways
+    /// (PersonEntityMetadataTests pins it).
     static var transferRepresentation: some TransferRepresentation {
         IntentValueRepresentation(
-            exporting: { (entity: PersonEntity) in entity.person },
+            exporting: \PersonEntity.person,
             importing: { (person: IntentPerson) in
                 if case .one(let found) = await PersonResolver.resolve(person, site: "person.import") { return found }
                 return PersonEntity(unresolved: person)

@@ -351,3 +351,27 @@ final class PersonalIndexTests: XCTestCase {
         XCTAssertTrue(memory.names(host: b).contains("Dalton B"))
     }
 }
+
+/// Task 01a111bb stage 7, round 3: on iPadOS 27.0.1 Siri resolved "Message
+/// Dalton saying ..." to the right PersonEntity, then logged "Failed to
+/// extract Person for PersonEntity(...)" and never ran the send. The cause
+/// is in the BUILT metadata, not the Swift: Xcode 27's extractor records a
+/// value representation's IntentPerson type only from a key path
+/// (`exporting: \PersonEntity.person`); a closure records nothing. This
+/// reads the host app's own Metadata.appintents, so it fails if the
+/// declaration goes back to a closure.
+final class PersonEntityMetadataTests: XCTestCase {
+    func testPersonEntityIsRecordedAsIntentPersonExportableAndImportable() throws {
+        let url = Bundle.main.bundleURL.appendingPathComponent("Metadata.appintents/extract.actionsdata")
+        let data = try Data(contentsOf: url)
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let entities = try XCTUnwrap(root["entities"] as? [String: Any])
+        let person = try XCTUnwrap(entities["PersonEntity"] as? [String: Any], "PersonEntity missing from the app's metadata")
+        let transfer = try XCTUnwrap(person["transferableContentTypes"] as? [String: Any])
+        func types(_ key: String) -> [String] {
+            ((transfer[key] as? [[String: Any]]) ?? []).compactMap { $0["contentType"] as? String }
+        }
+        XCTAssertEqual(types("exportableTypes"), ["com.apple.appintents.IntentPerson"], "Siri cannot extract a Person from PersonEntity")
+        XCTAssertEqual(types("importableTypes"), ["com.apple.appintents.IntentPerson"], "Siri cannot hand an IntentPerson back to PersonEntity")
+    }
+}
