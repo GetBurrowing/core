@@ -30,6 +30,7 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     func sceneDidBecomeActive(_ scene: UIScene) {
         WidgetCountsRefresher.refresh()
         VoIPRegistrar.shared.registerWithSignedInInstalls()
+        IntentAppHooks.didBecomeActive()
     }
 
     /// The only place App Shortcut phrases are refreshed: as the person

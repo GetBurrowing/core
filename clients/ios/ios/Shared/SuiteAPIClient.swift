@@ -684,11 +684,18 @@ enum ReadOutcome: Equatable {
 extension SuiteAPIClient {
     /// People to message: `?q=` searches (so a person outside the recent set
     /// is still found by name); no query is the recent collaborators.
-    func people(host: String, query: String? = nil) async throws -> [SuitePerson] {
+    /// `directory: true` (no query) is the whole set the app indexes for
+    /// Siri: collaborators, space mates, org mates and agents, scoped by the
+    /// server exactly as a search is (task 01a111bb stage 7).
+    func people(host: String, query: String? = nil, directory: Bool = false) async throws -> [SuitePerson] {
         struct Body: Decodable { let people: [SuitePerson] }
         var components = URLComponents()
         components.path = "/api/app/people"
-        if let query, !query.isEmpty { components.queryItems = [URLQueryItem(name: "q", value: query)] }
+        if let query, !query.isEmpty {
+            components.queryItems = [URLQueryItem(name: "q", value: query)]
+        } else if directory {
+            components.queryItems = [URLQueryItem(name: "scope", value: "directory")]
+        }
         return try await fetch(Body.self, host: host, path: components.string ?? "/api/app/people").people
     }
 

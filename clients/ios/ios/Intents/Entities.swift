@@ -399,8 +399,8 @@ enum SpotlightIndexer {
     /// Indexes one install's entities under the host as the domain
     /// identifier, so `SpotlightIndex.removeAll(host:)` drops exactly them.
     static func index<E: IndexedEntity>(_ entities: [E], host: String, expires: Date? = nil) {
-        guard IntentHooks.indexesSpotlight, !entities.isEmpty else { return }
-        CSSearchableIndex.default().indexSearchableItems(items(entities, host: host, expires: expires)) { _ in }
+        guard IntentHooks.indexesSpotlight, !entities.isEmpty, !SpotlightIndex.isSuppressed(host) else { return }
+        SpotlightIndex.store.index(items(entities, host: host, expires: expires))
     }
 
     /// Entities whose ids name their own host (`<host>|<uuid>`), indexed
@@ -457,6 +457,7 @@ struct EntityCatalog {
             let entities = spaces.map { SpaceEntity($0, host: host, env: env) }
             IntentHooks.didFetchEntities?("spaces", host, entities.map { "\($0.id)\t\($0.name)" })
             if #available(iOS 18, *) { SpotlightIndexer.index(entities, host: host) }
+            PersonalIndex.index(spaces: spaces, host: host, env: env)
             return entities
         }
     }
@@ -464,11 +465,15 @@ struct EntityCatalog {
     /// People to message on each host (task 01a111bb): `query` searches
     /// server-side (`?q=`), so a person who is not among the recent
     /// collaborators is still found by name; nil lists recent collaborators.
-    func people(hosts: [String], query: String? = nil) async -> [(host: String, person: SuitePerson)] {
+    /// `directory` (task 01a111bb stage 7) lists the whole set the device
+    /// indexes for Siri: collaborators, space mates, org mates and agents.
+    /// Every list (not a search) is indexed per host as it arrives.
+    func people(hosts: [String], query: String? = nil, directory: Bool = false) async -> [(host: String, person: SuitePerson)] {
         await load("people", hosts: hosts) { host in
-            let people = try await env.client.people(host: host, query: query)
+            let people = try await env.client.people(host: host, query: query, directory: directory)
             if query == nil {
                 IntentHooks.didFetchEntities?("people", host, people.map { "\(EntityRef(host: host, uuid: $0.id).id)\t\($0.name)" })
+                PersonalIndex.index(people: people, host: host, env: env)
             }
             return people.map { (host: host, person: $0) }
         }
@@ -480,6 +485,7 @@ struct EntityCatalog {
             let spaces = try await env.client.spaces(host: host)
             Self.spaceIDsBySegment[host] = Dictionary(spaces.map { ($0.linkSegment, $0.id) }, uniquingKeysWith: { first, _ in first })
             IntentHooks.didFetchEntities?("spaces", host, spaces.map { "\(EntityRef(host: host, uuid: $0.id).id)\t\($0.name)" })
+            PersonalIndex.index(spaces: spaces, host: host, env: env)
             return spaces.map { (host: host, space: $0) }
         }
     }

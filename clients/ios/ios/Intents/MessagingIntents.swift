@@ -34,6 +34,17 @@ extension MessageDestination {
             return .person(id: person.id, name: person.name, isAgent: person.isAgent)
         }
     }
+
+    /// `burrowDestination`, and for a system person whose Burrow id is not
+    /// in this process's cache (Siri launching a cold process), the person
+    /// resolved on the id's own host (task 01a111bb stage 7).
+    func resolvedBurrowDestination() async -> MessageDestinationRef? {
+        if let known = burrowDestination { return known }
+        guard case .people(let people) = self, people.count == 1, case .applicationDefined(let id) = people[0].identifier,
+            let person = try? await PersonQuery().entities(for: [id]).first
+        else { return nil }
+        return .person(id: person.id, name: person.name, isAgent: person.isAgent)
+    }
 }
 
 // MARK: - Send
@@ -66,7 +77,7 @@ struct MessagesSendIntent {
     var install: InstallEntity?
 
     func perform() async throws -> some ReturnsValue<[MessageEntity]> & ProvidesDialog {
-        guard let target = destination.burrowDestination else { throw IntentFailure.notFound }
+        guard let target = await destination.resolvedBurrowDestination() else { throw IntentFailure.notFound }
         let text = content.map { String($0.characters) } ?? ""
         let sent = try await MessagingActions().send(to: target, text: text) { prompt in
             try await requestConfirmation(
@@ -75,7 +86,42 @@ struct MessagesSendIntent {
         let entity = MessagingIntentSupport.messageEntity(for: sent, destination: destination)
         MessageRegistry.shared.remember(entity)
         IntentHooks.didSucceed?(self)
+        // A message to an AGENT is a question (task 01a111bb stage 7): "Message
+        // Burrow Helper saying what's the build status" waits for the reply
+        // like Ask does, for up to 90 s, and speaks it; past that, the reply
+        // arrives as a notification.
+        if case .person(_, let name, true) = target, let reply = try await awaitAgentReply(to: sent, agentID: target.entityID) {
+            switch reply {
+            case .reply(let text): return .result(value: [entity], dialog: spoken(IntentCopy.agentSays(agent: name, reply: text)))
+            case .timedOut: return .result(value: [entity], dialog: spoken(IntentCopy.agentReplyWillNotify(agent: name)))
+            }
+        }
         return .result(value: [entity], dialog: spoken(IntentCopy.sent(space: target.name)))
+    }
+}
+
+@available(iOS 27, *)
+extension MessagesSendIntent: LongRunningIntent, CancellableIntent {
+    /// The agent's reply to the message `sent`, or nil if the ids don't
+    /// parse. Cancellation (`.timeout`, `.userCancelled`) ends the wait.
+    func awaitAgentReply(to sent: SentMessageRef, agentID: String) async throws -> AskOutcome? {
+        guard let message = EntityRef(sent.id), let space = EntityRef(sent.conversationID), let agent = EntityRef(agentID) else { return nil }
+        let cancelled = AskCancelFlag()
+        let progress = progress
+        progress.totalUnitCount = 100
+        return try await performBackgroundTask(
+            operation: {
+                try await IntentActions().awaitAgentReply(
+                    host: message.host, agentUUID: agent.uuid, spaceID: space.uuid, after: message.uuid, window: AskAgent.longReplyWindow,
+                    isCancelled: { cancelled.isSet }
+                ) { fraction in
+                    progress.completedUnitCount = Int64(fraction * 100)
+                }
+            },
+            onCancel: { reason in
+                cancelled.set()
+                IntentLog.route(reason == .timeout ? "ask_cancel_timeout" : "ask_cancel_user", host: "-", status: 0)
+            })
     }
 }
 

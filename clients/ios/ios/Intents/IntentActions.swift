@@ -165,7 +165,22 @@ struct IntentActions {
         let text = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { throw IntentFailure.emptyMessage }
         let dm = try await call("agent_dm", ref.host) { try await env.client.dmWithAgent(host: ref.host, agentID: ref.uuid) }
-        var cursor = try await call("send_message", ref.host) { try await env.client.sendText(host: ref.host, spaceID: dm.spaceID, text: text) }
+        let posted = try await call("send_message", ref.host) { try await env.client.sendText(host: ref.host, spaceID: dm.spaceID, text: text) }
+        return try await awaitAgentReply(
+            host: ref.host, agentUUID: ref.uuid, spaceID: dm.spaceID, after: posted, window: window, isCancelled: isCancelled,
+            progress: progress)
+    }
+
+    /// Waits for `agentUUID`'s first message after `after` in `spaceID`,
+    /// polling every `AskAgent.pollInterval` for up to `window`. Shared by
+    /// Ask and by a schema send to an agent (task 01a111bb stage 7), so both
+    /// log the same `ask_outcome` line: outcome and seconds, never text.
+    func awaitAgentReply(
+        host: String, agentUUID: String, spaceID: String, after: String, window: TimeInterval = AskAgent.currentWindow,
+        isCancelled: @escaping () -> Bool = { false }, progress: ((Double) -> Void)? = nil
+    ) async throws -> AskOutcome {
+        let ref = EntityRef(host: host, uuid: agentUUID)
+        var cursor = after
         let start = env.now()
         func finish(_ outcome: AskOutcome) -> AskOutcome {
             let seconds = Int(env.now().timeIntervalSince(start).rounded())
@@ -183,7 +198,7 @@ struct IntentActions {
             progress?(min(1, elapsed / window))
             let messages: [SuiteMessage]
             do {
-                messages = try await env.client.messagesAfter(host: ref.host, spaceID: dm.spaceID, after: cursor)
+                messages = try await env.client.messagesAfter(host: ref.host, spaceID: spaceID, after: cursor)
             } catch {
                 // The question is posted; a failed poll is not a failed ask.
                 IntentLog.route("poll_messages", host: ref.host, status: EntityCatalog.status(of: error))

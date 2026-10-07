@@ -1,4 +1,5 @@
 import AppIntents
+import CoreSpotlight
 import CoreTransferable
 import Foundation
 import GeoToolbox
@@ -69,10 +70,12 @@ struct PersonEntity {
         IntentValueRepresentation(
             exporting: { (entity: PersonEntity) in entity.person },
             importing: { (person: IntentPerson) in
-                guard case .applicationDefined(let id) = person.identifier, let cached = PeopleCache.shared.entity(for: id) else {
-                    throw IntentFailure.notFound
-                }
-                return cached
+                guard case .applicationDefined(let id) = person.identifier else { throw IntentFailure.notFound }
+                // A cold process (Siri launching the app for one request) has
+                // an empty cache: resolve on the id's own host.
+                if let cached = PeopleCache.shared.entity(for: id) { return cached }
+                guard let found = try await PersonQuery().entities(for: [id]).first else { throw IntentFailure.notFound }
+                return found
             })
     }
 }
@@ -85,6 +88,16 @@ extension PersonEntity: Transferable {}
 @available(iOS 27, *)
 extension PersonEntity: IndexedEntity, SyncableEntity, OwnershipProvidingEntity {
     var ownership: EntityOwnership { .shared }
+
+    /// The schema's mapping (`person` -> `primaryRecipients`), plus the name
+    /// as display name and the given name as an alternate, so "Dalton"
+    /// matches "Dalton Rourke" (task 01a111bb stage 7).
+    var attributeSet: CSSearchableItemAttributeSet {
+        let set = defaultAttributeSet
+        set.displayName = name
+        set.alternateNames = PersonalIndex.alternateNames(person: name, isAgent: isAgent)
+        return set
+    }
 }
 
 @available(iOS 27, *)
@@ -104,9 +117,10 @@ struct PersonQuery: EntityStringQuery {
 
     private var scope: String? { installScope ?? send?.install.id }
 
-    /// Each id resolves on ITS host only: a person found earlier (search
-    /// or suggestions) from the in-memory cache, otherwise among that
-    /// host's recent collaborators. An unknown host makes no request.
+    /// Each id resolves on ITS host only: a person found earlier (search,
+    /// suggestions or the index refresh) from the in-memory cache, otherwise
+    /// in that host's people directory (the set the device indexes). An
+    /// unknown host makes no request.
     func entities(for identifiers: [String]) async throws -> [PersonEntity] {
         let catalog = EntityCatalog()
         let cache = PeopleCache.shared
@@ -118,20 +132,19 @@ struct PersonQuery: EntityStringQuery {
         }
         if !missing.isEmpty {
             let loaded = await catalog.resolve(missing) { host in
-                await catalog.people(hosts: [host]).map { PersonEntity($0.person, host: $0.host, env: catalog.env) }
+                await catalog.people(hosts: [host], directory: true).map { PersonEntity($0.person, host: $0.host, env: catalog.env) }
             }
             for entity in loaded { found[entity.id] = entity }
         }
         return identifiers.compactMap { found[$0] }
     }
 
-    /// Recent collaborators: the people the person actually talks to.
+    /// Recent collaborators: the people the person actually talks to. The
+    /// fetch indexes them (EntityCatalog.people).
     func suggestedEntities() async throws -> [PersonEntity] {
         let catalog = EntityCatalog()
-        let people = PeopleCache.shared.remember(
+        return PeopleCache.shared.remember(
             await catalog.people(hosts: catalog.hosts(scope: scope)).map { PersonEntity($0.person, host: $0.host, env: catalog.env) })
-        SpotlightIndexer.indexByHost(people)
-        return people
     }
 
     /// The server's search (`?q=`), never a filter over the suggestions, so
@@ -237,12 +250,11 @@ struct ConversationQuery: EntityStringQuery {
         }
     }
 
+    /// Every conversation; the fetch indexes them (EntityCatalog.spaceRows).
     func suggestedEntities() async throws -> [ConversationEntity] {
         let catalog = EntityCatalog()
-        let conversations = await catalog.spaceRows(hosts: catalog.hosts(scope: installScope))
+        return await catalog.spaceRows(hosts: catalog.hosts(scope: installScope))
             .map { ConversationEntity($0.space, host: $0.host, env: catalog.env) }
-        SpotlightIndexer.indexByHost(conversations)
-        return conversations
     }
 
     func entities(matching string: String) async throws -> [ConversationEntity] {
@@ -255,6 +267,42 @@ struct ConversationQuery: EntityStringQuery {
 @available(iOS 27, *)
 extension ConversationEntity: IndexedEntity, SyncableEntity, OwnershipProvidingEntity {
     var ownership: EntityOwnership { .shared }
+
+    /// The schema's mapping, plus the bare name ("general") as an alternate
+    /// to the org-qualified display name ("general · Fabrikam").
+    var attributeSet: CSSearchableItemAttributeSet {
+        let set = defaultAttributeSet
+        set.alternateNames = [displayName, conversationName].compactMap { $0 }
+        return set
+    }
+}
+
+// The system may ask for a reindex (iOS 27 `IndexedEntityQuery`): every
+// signed-in install's directory and conversations are fetched again, which
+// indexes them per host.
+
+@available(iOS 27, *)
+extension PersonQuery: IndexedEntityQuery {
+    func reindexEntities(for identifiers: [String], indexDescription: CSSearchableIndexDescription) async throws {
+        _ = try await entities(for: identifiers)
+    }
+
+    func reindexAllEntities(indexDescription: CSSearchableIndexDescription) async throws {
+        let catalog = EntityCatalog()
+        _ = await catalog.people(hosts: catalog.env.signedInHosts, directory: true)
+    }
+}
+
+@available(iOS 27, *)
+extension ConversationQuery: IndexedEntityQuery {
+    func reindexEntities(for identifiers: [String], indexDescription: CSSearchableIndexDescription) async throws {
+        _ = try await entities(for: identifiers)
+    }
+
+    func reindexAllEntities(indexDescription: CSSearchableIndexDescription) async throws {
+        let catalog = EntityCatalog()
+        _ = await catalog.spaceRows(hosts: catalog.env.signedInHosts)
+    }
 }
 
 // MARK: - Message

@@ -94,6 +94,7 @@
 		673A8D97377F884B8BCA62C4 /* ShareSheetModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02587FC2025F6C12C4038D77 /* ShareSheetModel.swift */; };
 		67740B5377F807ABF1532F55 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED2016878D44EAA9692D059F /* SceneDelegate.swift */; };
 		680844FDA2AB2B0E052C1A93 /* ShortcutParameterRefresh.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE185BEDD232F08332626453 /* ShortcutParameterRefresh.swift */; };
+		685945D840CE528AF9790D94 /* PersonalIndex.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA623D3963F4BCFBB477D85D /* PersonalIndex.swift */; };
 		68FBCB46612651E204EEEE1F /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C4E8F0B9FA4F9E4D6F5C1A5 /* ShareViewController.swift */; };
 		6A53356E2D3D694943E3AAAD /* MessagingActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED3B99F76B669B5C6D360D67 /* MessagingActions.swift */; };
 		6A5B81534AE9C9DFFD70A896 /* MultipartFormTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8BCDC22DDFAA9ECFB5ADCB9 /* MultipartFormTests.swift */; };
@@ -102,6 +103,7 @@
 		707C8B72E67C85DB94D99BF2 /* MessagingIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4A209DF9B0ACB4D8CE63E6C /* MessagingIntents.swift */; };
 		70911964303A313E1BCF644E /* Intents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95476033D891E158ED21FA8F /* Intents.swift */; };
 		72FCB6A6EAFDF33BAF86128D /* InstallPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CAF730251520CCFD80696C8 /* InstallPickerView.swift */; };
+		731ED95C0F636C7947E4DB4C /* PersonalIndex.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA623D3963F4BCFBB477D85D /* PersonalIndex.swift */; };
 		734D66D391EF3B0FF9075628 /* SlabState.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCEC8A0CD2D3DB02BB85718E /* SlabState.swift */; };
 		77EA1202CE361931617C37B4 /* NavigationPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34783DF2CF8177A50A2AF0BA /* NavigationPolicyTests.swift */; };
 		7999524BD61C37FBB86C10DB /* CountsProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = C39EBB7593D52A541A08EEEF /* CountsProvider.swift */; };
@@ -116,6 +118,7 @@
 		81138B00431411BE1EF97D97 /* capacitor.config.json in Resources */ = {isa = PBXBuildFile; fileRef = 68ED4E8FE0185474B6E8E85B /* capacitor.config.json */; };
 		8170B1DAA90E82CB990B3D44 /* EvidenceUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F2FFE4489BC31338AC8C9EC /* EvidenceUITests.swift */; };
 		8200BB5853F8B373D250391D /* InstallStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E69F987B892561A06F26BE1 /* InstallStore.swift */; };
+		83766D31177476EC38F9CB16 /* PersonalIndex.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA623D3963F4BCFBB477D85D /* PersonalIndex.swift */; };
 		84230A51D8CB3BC9752BCB43 /* TaskReminderTrial.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CAD421181524C41F26D5056 /* TaskReminderTrial.swift */; };
 		86ACBC15F996EA87643DCCF8 /* RingBannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62EB15AFD720B054ACA4A0F9 /* RingBannerView.swift */; };
 		881125625A3A9148DAAEE166 /* DonationPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2CB880C6D4F67075F9EED68 /* DonationPolicy.swift */; };
@@ -135,6 +138,7 @@
 		9746794DCAD03A86C6F9B107 /* TestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BCA4F7949BCEADF89CA73DD /* TestSupport.swift */; };
 		9882EDC81404B836F9A6134A /* Colors.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F20AEF676C004D2C37F1D06C /* Colors.xcassets */; };
 		98C474DC77F7657C40E7A5F5 /* KeychainTokenStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BFB6A384F7FA204052DB6C2D /* KeychainTokenStoreTests.swift */; };
+		990449CE17F8F7A44D1F75E3 /* PersonalIndexTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7996FE25C68D64011A453A6 /* PersonalIndexTests.swift */; };
 		9A470546E17410818A8CDDA6 /* KeychainTokenStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70196345FD59A4C9806BE4E5 /* KeychainTokenStore.swift */; };
 		9ABD003A8FC8171D875452AD /* InstallSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E403DEF8CD6D9A80946DB96B /* InstallSessionTests.swift */; };
 		9B0A8F444306A11704825D5D /* InstallStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E69F987B892561A06F26BE1 /* InstallStore.swift */; };
@@ -171,6 +175,7 @@
 		BF8199311F69A1DBE7F12E0D /* InCallModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53A302BFBC4A79FDF762850D /* InCallModel.swift */; };
 		C017F0CBD0F66A5A22EBFAAF /* MeetingAPITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBCBC8BD688D82DFA20B569B /* MeetingAPITests.swift */; };
 		C263DC4140062DB53091FB3D /* Entities.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FD909F861CBD9239A49DB52 /* Entities.swift */; };
+		C33C760B72CD050A32E45EF8 /* PersonalIndex.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA623D3963F4BCFBB477D85D /* PersonalIndex.swift */; };
 		C35F1C4173E39FB2C4B8DE1F /* PublicSans-Variable.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 39697D42725EF18B41A8339A /* PublicSans-Variable.ttf */; };
 		C3DEFDF9E78B362F9835C23E /* CountsCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D27347C121D5A67129627D1 /* CountsCache.swift */; };
 		C444F6AD625727E7A9EBD770 /* Entities.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FD909F861CBD9239A49DB52 /* Entities.swift */; };
@@ -361,6 +366,7 @@
 		9D27347C121D5A67129627D1 /* CountsCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CountsCache.swift; sourceTree = "<group>"; };
 		9FF8E4E0D1FFE8E18A9853D1 /* WidgetApprovalIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetApprovalIntents.swift; sourceTree = "<group>"; };
 		A0CFBCAFD26B9ABA5F4922C4 /* Controls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Controls.swift; sourceTree = "<group>"; };
+		A7996FE25C68D64011A453A6 /* PersonalIndexTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersonalIndexTests.swift; sourceTree = "<group>"; };
 		A9DC08ECFA84095D28184D7E /* IntentSourceScanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntentSourceScanTests.swift; sourceTree = "<group>"; };
 		AC96500C251272FC26DC89DB /* NotificationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationTests.swift; sourceTree = "<group>"; };
 		AEA2B3BC253F91FAD530FA0A /* IntentSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntentSupport.swift; sourceTree = "<group>"; };
@@ -369,6 +375,7 @@
 		B7E0806D82BAD00F729000FD /* SuiteAPIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SuiteAPIClient.swift; sourceTree = "<group>"; };
 		B9944C7EE764DE0881EC97B3 /* MessagingEntities.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessagingEntities.swift; sourceTree = "<group>"; };
 		BA34F7BCD1785FB63C540ECE /* ApprovalsWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApprovalsWidget.swift; sourceTree = "<group>"; };
+		BA623D3963F4BCFBB477D85D /* PersonalIndex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersonalIndex.swift; sourceTree = "<group>"; };
 		BFB6A384F7FA204052DB6C2D /* KeychainTokenStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainTokenStoreTests.swift; sourceTree = "<group>"; };
 		C1B412D64B3F0BB4C9DE56AD /* SuiteAPIClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SuiteAPIClientTests.swift; sourceTree = "<group>"; };
 		C37D7AC24B0CAE74724A40C5 /* SuiteWidgetBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SuiteWidgetBundle.swift; sourceTree = "<group>"; };
@@ -467,6 +474,7 @@
 				34783DF2CF8177A50A2AF0BA /* NavigationPolicyTests.swift */,
 				AC96500C251272FC26DC89DB /* NotificationTests.swift */,
 				CFC7C5DC2BC35F7484C1EF57 /* PersonalContextTests.swift */,
+				A7996FE25C68D64011A453A6 /* PersonalIndexTests.swift */,
 				E146E1C002664F63C25DB344 /* PKCETests.swift */,
 				886FF05F9CF153F76DC13237 /* PrivacyUsageDescriptionTests.swift */,
 				5CD9BD23135D38FF5068EB7F /* RingBannerTests.swift */,
@@ -642,6 +650,7 @@
 				ED3B99F76B669B5C6D360D67 /* MessagingActions.swift */,
 				B9944C7EE764DE0881EC97B3 /* MessagingEntities.swift */,
 				C4A209DF9B0ACB4D8CE63E6C /* MessagingIntents.swift */,
+				BA623D3963F4BCFBB477D85D /* PersonalIndex.swift */,
 				EE185BEDD232F08332626453 /* ShortcutParameterRefresh.swift */,
 				E207F14F676AA0A3745860A5 /* StartCallIntent.swift */,
 				9CAD421181524C41F26D5056 /* TaskReminderTrial.swift */,
@@ -1020,6 +1029,7 @@
 				C4B690C2AEC6DDBE58AE49AD /* MessagingEntities.swift in Sources */,
 				90D15CB08305100B666613D1 /* MessagingIntents.swift in Sources */,
 				E77549BF32A12CAD72491F16 /* NotificationService.swift in Sources */,
+				C33C760B72CD050A32E45EF8 /* PersonalIndex.swift in Sources */,
 				673A8D97377F884B8BCA62C4 /* ShareSheetModel.swift in Sources */,
 				680844FDA2AB2B0E052C1A93 /* ShortcutParameterRefresh.swift in Sources */,
 				F877863E202DECB42ADDDF7C /* SlabState.swift in Sources */,
@@ -1063,6 +1073,7 @@
 				6A53356E2D3D694943E3AAAD /* MessagingActions.swift in Sources */,
 				083D4D795113B6A50D2C4827 /* MessagingEntities.swift in Sources */,
 				A96B5A379619F5D87AF49712 /* MessagingIntents.swift in Sources */,
+				83766D31177476EC38F9CB16 /* PersonalIndex.swift in Sources */,
 				8A53910772C243D9F91960BC /* ShareSheetModel.swift in Sources */,
 				1E48C872DEB85431E418F709 /* ShareSheetView.swift in Sources */,
 				FBACA29AB5F22CCA7EB41071 /* ShortcutParameterRefresh.swift in Sources */,
@@ -1132,6 +1143,7 @@
 				C9EBE9623C35A1E505514D6B /* MessagingEntities.swift in Sources */,
 				707C8B72E67C85DB94D99BF2 /* MessagingIntents.swift in Sources */,
 				1263CD52F9690E5CAA14A00F /* NavigationPolicy.swift in Sources */,
+				731ED95C0F636C7947E4DB4C /* PersonalIndex.swift in Sources */,
 				14674C0B74C66D26C36A8714 /* RecentCalls.swift in Sources */,
 				05F82264DE2C47C780F86D98 /* RingBanner.swift in Sources */,
 				86ACBC15F996EA87643DCCF8 /* RingBannerView.swift in Sources */,
@@ -1178,6 +1190,7 @@
 				A83CF1ADDB568356498DAB39 /* NotificationTests.swift in Sources */,
 				E06A3A001D6B5BA9967414CC /* PKCETests.swift in Sources */,
 				3236F91765FD8551EDDF94A0 /* PersonalContextTests.swift in Sources */,
+				990449CE17F8F7A44D1F75E3 /* PersonalIndexTests.swift in Sources */,
 				E148CAEBE85295927118EFE4 /* PrivacyUsageDescriptionTests.swift in Sources */,
 				8BD7A0F5537D8BF38BCD0C5E /* RingBannerTests.swift in Sources */,
 				52587DE54E0AD3D712213B34 /* ShortcutParameterRefreshTests.swift in Sources */,
@@ -1215,6 +1228,7 @@
 				950248DC801ECC9497B03BD8 /* MessagingActions.swift in Sources */,
 				BB336A1BF8020247E993D679 /* MessagingEntities.swift in Sources */,
 				1E6B20D4A0050A4CD3FB2EC0 /* MessagingIntents.swift in Sources */,
+				685945D840CE528AF9790D94 /* PersonalIndex.swift in Sources */,
 				9E7E2CB95A035D2C87E10DFA /* ShareSheetModel.swift in Sources */,
 				B4A45E556F1D9EC0014C3BDC /* ShortcutParameterRefresh.swift in Sources */,
 				B44C8DE014B8C9DB4A85C3BE /* SlabState.swift in Sources */,

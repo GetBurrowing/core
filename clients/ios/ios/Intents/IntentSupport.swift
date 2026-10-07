@@ -217,10 +217,46 @@ enum IntentHooks {
     static var indexesSpotlight = false
 }
 
+/// Where Spotlight items go. The app uses the system index; tests swap in
+/// an in-memory one to count what was indexed per host.
+protocol SearchableIndexStore: AnyObject {
+    func index(_ items: [CSSearchableItem])
+    func deleteDomains(_ domains: [String])
+}
+
+/// The system's default Spotlight index.
+final class SystemSearchableIndex: SearchableIndexStore {
+    func index(_ items: [CSSearchableItem]) {
+        CSSearchableIndex.default().indexSearchableItems(items) { _ in }
+    }
+
+    func deleteDomains(_ domains: [String]) {
+        CSSearchableIndex.default().deleteSearchableItems(withDomainIdentifiers: domains) { _ in }
+    }
+}
+
 /// Spotlight entries per install: the host is the domain identifier, so
 /// signing out of (or removing) an install deletes exactly its entries.
+///
+/// A host that was signed out of is SUPPRESSED until it signs in again
+/// (task 01a111bb stage 7): an index refresh still in flight when the person
+/// signs out must not put that install's people back after the delete.
 enum SpotlightIndex {
-    static func removeAll(host: String, index: CSSearchableIndex = .default()) {
-        index.deleteSearchableItems(withDomainIdentifiers: [host]) { _ in }
+    static var store: SearchableIndexStore = SystemSearchableIndex()
+    private static let lock = NSLock()
+    private static var suppressed: Set<String> = []
+
+    static func removeAll(host: String) {
+        lock.withLock { _ = suppressed.insert(host) }
+        store.deleteDomains([host])
+    }
+
+    /// The install was signed in to (again): its entries may be indexed.
+    static func allow(host: String) {
+        lock.withLock { _ = suppressed.remove(host) }
+    }
+
+    static func isSuppressed(_ host: String) -> Bool {
+        lock.withLock { suppressed.contains(host) }
     }
 }

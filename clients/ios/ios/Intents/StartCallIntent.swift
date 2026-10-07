@@ -1,4 +1,5 @@
 import AppIntents
+import CoreSpotlight
 import Foundation
 
 // "Start a meeting with X" (task 01a111bb stage 6): the iOS 27 phone-domain
@@ -95,6 +96,21 @@ struct CallPersonEntity {
 
     init(_ entity: PersonEntity) {
         self.init(id: entity.id, name: entity.name, kind: entity.kind, subtitle: entity.subtitle)
+    }
+}
+
+// Indexed per host (task 01a111bb stage 7) from the same people directory
+// as PersonEntity, humans only: Siri resolves "Start a meeting with Harper"
+// against the index, as it does a message recipient.
+@available(iOS 27, *)
+extension CallPersonEntity: IndexedEntity, SyncableEntity, OwnershipProvidingEntity {
+    var ownership: EntityOwnership { .shared }
+
+    var attributeSet: CSSearchableItemAttributeSet {
+        let set = defaultAttributeSet
+        set.displayName = name
+        set.alternateNames = PersonalIndex.alternateNames(person: name, isAgent: isAgent)
+        return set
     }
 }
 

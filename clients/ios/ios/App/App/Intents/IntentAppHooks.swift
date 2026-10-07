@@ -1,7 +1,8 @@
 import AppIntents
 import Foundation
 
-/// Wires the shared intent code to the app process: Spotlight indexing;
+/// Wires the shared intent code to the app process: Spotlight indexing
+/// (proactive per host after sign-in and on foreground, PersonalIndex);
 /// App Shortcut parameters refreshed when the app's scene goes to the
 /// background, only if the agents or spaces changed
 /// (ShortcutParameterRefresh), never from a fetch; and, after an Ask, a
@@ -34,12 +35,28 @@ enum IntentAppHooks {
         return donations.donate(.askedAgent(host: ref.host, agentID: ref.uuid))
     }
 
+    /// A sign-in to `host` completed (task 01a111bb stage 7): index its
+    /// people and conversations for Siri, and publish its agents to the App
+    /// Shortcut phrases now.
+    @discardableResult
+    static func didSignIn(host: String, refresh: PersonalIndexRefresh = PersonalIndexRefresh()) -> Task<PersonalIndexCounts, Never> {
+        Task { await refresh.didSignIn(host: host) }
+    }
+
+    /// The app came to the foreground: re-index installs not refreshed in
+    /// the last 15 minutes.
+    @discardableResult
+    static func didBecomeActive(refresh: PersonalIndexRefresh = PersonalIndexRefresh()) -> Task<[String: PersonalIndexCounts], Never> {
+        Task { await refresh.refreshStale() }
+    }
+
     /// Sign-out or removal of an install: its titles stop being searchable,
     /// its donations are deleted, and its remembered meeting space is
     /// forgotten. Another install's entries and donations are untouched.
     @discardableResult
     static func forget(host: String, donations: Donations = .shared) -> Task<Void, Never> {
         SpotlightIndex.removeAll(host: host)
+        PersonalIndexRefresh().forget(host: host)
         ShortcutParameterRefresh.shared.forget(host: host)
         EntityCatalog.spaceIDsBySegment[host] = nil
         LastMeetingSpaceStore().remove(for: host)
