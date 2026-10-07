@@ -368,6 +368,7 @@ struct AskAgentIntent: AppIntent, ProgressReportingIntent {
     }
 
     func perform() async throws -> some IntentResult & ProvidesDialog & ShowsSnippetView {
+        IntentLog.step("ask", "start")
         progress.totalUnitCount = 100
         let outcome: AskOutcome
         let timedOut: String

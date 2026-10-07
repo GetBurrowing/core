@@ -35,16 +35,52 @@ extension MessageDestination {
         }
     }
 
-    /// `burrowDestination`, and for a system person whose Burrow id is not
-    /// in this process's cache (Siri launching a cold process), the person
-    /// resolved on the id's own host (task 01a111bb stage 7).
-    func resolvedBurrowDestination() async -> MessageDestinationRef? {
-        if let known = burrowDestination { return known }
-        guard case .people(let people) = self, people.count == 1, case .applicationDefined(let id) = people[0].identifier,
-            let person = try? await PersonQuery().entities(for: [id]).first
-        else { return nil }
-        return .person(id: person.id, name: person.name, isAgent: person.isAgent)
+    /// The case name, for the log.
+    var caseName: String {
+        switch self {
+        case .people(let people): return "people(\(people.count))"
+        case .messagePerson: return "messagePerson"
+        case .messagePeople(let people): return "messagePeople(\(people.count))"
+        }
     }
+
+    /// The one Burrow person this destination names (task 01a111bb stage
+    /// 7): a resolved entity as is; a system person or an unresolved entity
+    /// through PersonResolver, asking `choose` when several match. Throws a
+    /// spoken failure, never a bare one, and logs each step.
+    func resolvedBurrowDestination(site: String, choose: PersonResolver.Choose) async throws -> MessageDestinationRef {
+        IntentLog.step(site, "destination=\(caseName)")
+        let person: PersonEntity
+        switch self {
+        case .messagePerson(let entity):
+            person = entity
+        case .messagePeople(let people):
+            guard people.count == 1 else {
+                IntentLog.step(site, "refused=several_recipients")
+                throw IntentFailure.onePersonAtATime
+            }
+            person = people[0]
+        case .people(let people):
+            guard people.count == 1 else {
+                IntentLog.step(site, "refused=several_recipients")
+                throw IntentFailure.onePersonAtATime
+            }
+            person = PersonEntity(unresolved: people[0])
+        }
+        let found = person.isUnresolved ? try await PersonResolver.require(person.person, site: site, choose: choose) : person
+        return .person(id: found.id, name: found.name, isAgent: found.isAgent)
+    }
+}
+
+/// Builds the "which one?" prompt for an intent: up to five people, each
+/// with its subtitle (org and install), plus Cancel.
+@available(iOS 27, *)
+func choosePerson<I: AppIntent>(_ intent: I, name: String, people: [PersonEntity]) async throws -> PersonEntity {
+    let options = people.map { IntentChoiceOption(title: LocalizedStringResource(stringLiteral: "\($0.name), \($0.subtitle)")) }
+    let picked = try await intent.requestChoice(between: options + [.cancel], dialog: IntentDialog("Which \(name)?"))
+    guard let index = options.firstIndex(of: picked) else { throw CancellationError() }
+    IntentLog.step("person.choose", "picked=\(index)")
+    return people[index]
 }
 
 // MARK: - Send
@@ -77,7 +113,9 @@ struct MessagesSendIntent {
     var install: InstallEntity?
 
     func perform() async throws -> some ReturnsValue<[MessageEntity]> & ProvidesDialog {
-        guard let target = await destination.resolvedBurrowDestination() else { throw IntentFailure.notFound }
+        let target = try await destination.resolvedBurrowDestination(site: "send") { name, people in
+            try await choosePerson(self, name: name, people: people)
+        }
         let text = content.map { String($0.characters) } ?? ""
         let sent = try await MessagingActions().send(to: target, text: text) { prompt in
             try await requestConfirmation(
@@ -145,10 +183,16 @@ struct MessagesDraftIntent {
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let env = IntentEnvironment.current
-        guard let target = destination?.burrowDestination else {
-            guard let host = env.installs.selectedHost else { throw IntentFailure.notFound }
+        guard let destination else {
+            guard let host = env.installs.selectedHost else {
+                IntentLog.step("draft", "refused=no_selected_install")
+                throw IntentFailure.signedOut
+            }
             IntentNavigator.open(DeepLink(host: host, path: "/chat"))
             return .result(dialog: spoken(IntentCopy.draftOpened))
+        }
+        let target = try await destination.resolvedBurrowDestination(site: "draft") { name, people in
+            try await choosePerson(self, name: name, people: people)
         }
         let link = try await MessagingIntentSupport.conversationLink(for: target, env: env)
         IntentNavigator.open(link)

@@ -470,7 +470,15 @@ struct EntityCatalog {
     /// Every list (not a search) is indexed per host as it arrives.
     func people(hosts: [String], query: String? = nil, directory: Bool = false) async -> [(host: String, person: SuitePerson)] {
         await load("people", hosts: hosts) { host in
-            let people = try await env.client.people(host: host, query: query, directory: directory)
+            let people: [SuitePerson]
+            do {
+                people = try await env.client.people(host: host, query: query, directory: directory)
+            } catch  where directory && query == nil && Self.status(of: error) == 404 {
+                // An install on an older server has no directory: index its
+                // recent collaborators instead.
+                IntentLog.route("people_directory", host: host, status: 404)
+                people = try await env.client.people(host: host)
+            }
             if query == nil {
                 IntentHooks.didFetchEntities?("people", host, people.map { "\(EntityRef(host: host, uuid: $0.id).id)\t\($0.name)" })
                 PersonalIndex.index(people: people, host: host, env: env)

@@ -78,10 +78,7 @@ struct CallPersonEntity {
     var subtitle: String
 
     var isAgent: Bool { kind == "agent" }
-    var name: String {
-        if case .displayName(let name) = person.name { return name }
-        return "Someone"
-    }
+    var name: String { PersonResolver.spokenName(person) ?? "Someone" }
 
     var displayRepresentation: DisplayRepresentation {
         DisplayRepresentation(title: "\(name)", subtitle: "\(subtitle)", image: .init(systemName: isAgent ? "cpu" : "person.crop.circle"))
@@ -96,6 +93,20 @@ struct CallPersonEntity {
 
     init(_ entity: PersonEntity) {
         self.init(id: entity.id, name: entity.name, kind: entity.kind, subtitle: entity.subtitle)
+    }
+}
+
+/// A call's person as a Burrow person: a `<host>|<uuid>` id on a saved
+/// install as is, anything else through PersonResolver.
+@available(iOS 27, *)
+enum CallPersonResolution {
+    static func resolve(
+        _ person: CallPersonEntity, env: IntentEnvironment = .current, choose: PersonResolver.Choose
+    ) async throws -> PersonEntity {
+        if let ref = EntityRef(person.id), env.install(ref.host) != nil {
+            return PersonEntity(id: person.id, name: person.name, kind: person.kind, subtitle: person.subtitle)
+        }
+        return try await PersonResolver.require(person.person, site: "call", env: env, choose: choose)
     }
 }
 
@@ -160,15 +171,28 @@ struct StartCallIntent: AudioRecordingIntent, AudioStartingIntent {
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let target: CallTarget
         if let conversation {
+            IntentLog.step("call", "destination=conversation")
             target = .conversation(id: conversation.id, name: conversation.displayName)
         } else {
+            let person: CallPersonEntity
             switch destination {
-            case .person(let person):
-                target = .person(id: person.id, name: person.name, isAgent: person.isAgent)
+            case .person(let one):
+                IntentLog.step("call", "destination=person")
+                person = one
             case .people(let people):
-                guard people.count == 1, let person = people.first else { throw IntentFailure.notFound }
-                target = .person(id: person.id, name: person.name, isAgent: person.isAgent)
+                IntentLog.step("call", "destination=people(\(people.count))")
+                guard people.count == 1, let one = people.first else {
+                    IntentLog.step("call", "refused=several_recipients")
+                    throw IntentFailure.onePersonAtATime
+                }
+                person = one
             }
+            // A person whose id is not one of Burrow's (task 01a111bb stage
+            // 7) is matched by its IntentPerson, as a message recipient is.
+            let found = try await CallPersonResolution.resolve(person) { name, people in
+                try await choosePerson(self, name: name, people: people)
+            }
+            target = .person(id: found.id, name: found.name, isAgent: found.isAgent)
         }
         let text = try await CallActions().start(target, video: audioVisualMode == .video) { prompt in
             try await requestConfirmation(

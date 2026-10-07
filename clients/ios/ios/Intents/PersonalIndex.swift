@@ -102,9 +102,16 @@ enum PersonalIndex {
         SpotlightIndexer.index(entities.filter { !$0.isAgent }.map(CallPersonEntity.init), host: host)
     }
 
+    /// Named spaces only, not DMs or groups (which the server names after
+    /// the other member). Xcode 27.0's schema processor refuses a
+    /// conversation as a send destination ("Parameter 'destination' does
+    /// not match required AppSchemaIntent type 'MessageDestinationCases:
+    /// (Array<Person> | Schema<MessagePerson> | Array<Schema<MessagePerson>>)'"),
+    /// so an indexed conversation named "Dalton" could only compete with
+    /// the person Dalton for the spoken name.
     static func index(spaces: [SuiteSpace], host: String, env: IntentEnvironment) {
         guard #available(iOS 27, *) else { return }
-        SpotlightIndexer.index(spaces.map { ConversationEntity($0, host: host, env: env) }, host: host)
+        SpotlightIndexer.index(spaces.filter { !$0.isDirectMessage && $0.kind != "group" }.map { ConversationEntity($0, host: host, env: env) }, host: host)
     }
 
     /// Other names Spotlight may match a person by: the full name and, for a

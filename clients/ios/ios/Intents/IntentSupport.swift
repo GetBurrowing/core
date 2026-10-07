@@ -123,6 +123,11 @@ enum IntentFailure: Error, Equatable, CustomLocalizedStringResourceConvertible {
     case cannotCallAgents
     /// 422 `too_many_invitees`.
     case tooManyInvitees
+    /// No Burrow person answers to the name Siri heard (task 01a111bb
+    /// stage 7). Spoken with the name; never logged.
+    case personNotFound(name: String?)
+    /// A schema send to several people: Burrow messages one at a time.
+    case onePersonAtATime
 
     var message: String {
         switch self {
@@ -138,6 +143,10 @@ enum IntentFailure: Error, Equatable, CustomLocalizedStringResourceConvertible {
         case .cannotMarkUnread: return "Burrow can't mark messages unread."
         case .cannotCallAgents: return "Burrow can't call agents yet."
         case .tooManyInvitees: return "That's too many people for one call."
+        case .personNotFound(let name):
+            guard let name else { return "Burrow couldn't tell who that is. Try their full name." }
+            return "Burrow couldn't find anyone named \(name). Try their full name."
+        case .onePersonAtATime: return "Burrow can message one person at a time."
         }
     }
 
@@ -177,6 +186,13 @@ enum IntentLog {
 
     static func count(_ name: String, host: String, count: Int) {
         logger.info("intent fetch=\(name, privacy: .public) host=\(host, privacy: .public) count=\(count)")
+    }
+
+    /// A step inside an intent: where it is, and a fixed detail (a case
+    /// name, an identifier kind, a reason). Callers pass only constants and
+    /// counts: never a name, a handle, an id or text.
+    static func step(_ site: String, _ detail: String) {
+        logger.notice("intent step=\(site, privacy: .public) \(detail, privacy: .public)")
     }
 }
 

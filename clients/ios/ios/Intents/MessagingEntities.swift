@@ -33,8 +33,13 @@ struct PersonEntity {
     var subtitle: String
 
     var isAgent: Bool { kind == "agent" }
+    /// A system person the import could not match to ONE Burrow person:
+    /// carried to `perform`, which can ask which one or say who it couldn't
+    /// find (an import can do neither).
+    var isUnresolved: Bool { kind == Self.unresolvedKind }
+    static let unresolvedKind = "unresolved"
     var name: String {
-        if case .displayName(let name) = person.name { return name }
+        if let name = PersonResolver.spokenName(person) { return name }
         return "Someone"
     }
 
@@ -47,6 +52,14 @@ struct PersonEntity {
         self.kind = kind
         self.subtitle = subtitle
         self.person = Self.intentPerson(id: id, name: name)
+    }
+
+    /// Wraps a system person that matched no single Burrow person.
+    init(unresolved person: IntentPerson) {
+        self.id = Self.unresolvedKind + EntityRef.separator.description + UUID().uuidString
+        self.kind = Self.unresolvedKind
+        self.subtitle = ""
+        self.person = person
     }
 
     init(_ person: SuitePerson, host: String, env: IntentEnvironment) {
@@ -64,18 +77,16 @@ struct PersonEntity {
     }
 
     /// To and from the system's `IntentPerson`: out as the schema person;
-    /// in only when its identifier is one of Burrow's `<host>|<uuid>` ids
-    /// on a saved install (a contact from elsewhere is not a Burrow person).
+    /// in as the Burrow person it matches (PersonResolver: id, handle, then
+    /// name). The import NEVER throws (task 01a111bb stage 7): a throw here
+    /// reached Siri as a generic "there's a problem" with nothing logged.
+    /// No match or several matches are carried to `perform` unresolved.
     static var transferRepresentation: some TransferRepresentation {
         IntentValueRepresentation(
             exporting: { (entity: PersonEntity) in entity.person },
             importing: { (person: IntentPerson) in
-                guard case .applicationDefined(let id) = person.identifier else { throw IntentFailure.notFound }
-                // A cold process (Siri launching the app for one request) has
-                // an empty cache: resolve on the id's own host.
-                if let cached = PeopleCache.shared.entity(for: id) { return cached }
-                guard let found = try await PersonQuery().entities(for: [id]).first else { throw IntentFailure.notFound }
-                return found
+                if case .one(let found) = await PersonResolver.resolve(person, site: "person.import") { return found }
+                return PersonEntity(unresolved: person)
             })
     }
 }
@@ -178,6 +189,12 @@ final class PeopleCache: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return entities[id]
+    }
+
+    func all() -> [PersonEntity] {
+        lock.lock()
+        defer { lock.unlock() }
+        return Array(entities.values)
     }
 
     func removeAll(host: String) {

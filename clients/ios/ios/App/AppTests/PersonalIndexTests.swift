@@ -1,3 +1,4 @@
+import AppIntents
 import CoreSpotlight
 import XCTest
 
@@ -38,6 +39,10 @@ final class PersonalIndexTests: XCTestCase {
     private let daltonID = "da000000-0000-4000-8000-000000000001"
     private let priyaID = "9e000000-0000-4000-8000-000000000002"
     private let helperID = "0a0a0a0a-0000-4000-8000-000000000001"
+    /// Priya's id on install B: a bare uuid then names exactly one person.
+    private let priyaIDOnB = "9e000000-0000-4000-8000-00000000000b"
+    /// Hosts whose server predates the directory (it answers 404).
+    private var noDirectory: Set<String> = []
     private var defaultsName = ""
     private var memory = MemorySearchableIndex()
     private var updates = 0
@@ -97,9 +102,10 @@ final class PersonalIndexTests: XCTestCase {
         switch request.url?.path ?? "" {
         case "/api/app/people":
             let directory = request.url?.query == "scope=directory"
+            if directory && noDirectory.contains(host) { return (404, Data(#"{"error":"not_found"}"#.utf8)) }
             var people = [#"{"id":"\#(daltonID)","kind":"user","name":"Dalton \#(tag)","org_names":["Fabrikam"]}"#]
             if directory {
-                people.append(#"{"id":"\#(priyaID)","kind":"user","name":"Priya \#(tag)","org_names":["Fabrikam"]}"#)
+                people.append(#"{"id":"\#(tag == "A" ? priyaID : priyaIDOnB)","kind":"user","name":"Priya \#(tag)","org_names":["Fabrikam"]}"#)
                 people.append(#"{"id":"\#(helperID)","kind":"agent","name":"Burrow Helper \#(tag)","org_names":[]}"#)
             }
             return (200, Data(#"{"people":[\#(people.joined(separator: ","))]}"#.utf8))
@@ -250,5 +256,98 @@ final class PersonalIndexTests: XCTestCase {
         let active = try body(of: "func sceneDidBecomeActive(", in: "SceneDelegate.swift")
         XCTAssertFalse(active.isEmpty)
         XCTAssertTrue(active.contains("IntentAppHooks.didBecomeActive()"), "foreground must refresh stale installs")
+    }
+
+    // MARK: Round 2: a person shaped the way Siri hands it back
+
+    private func siriPerson(_ identifier: IntentPerson.Identifier, name: String?) -> IntentPerson {
+        IntentPerson(identifier: identifier, name: name.map { .displayName($0) } ?? .unknown, handle: nil)
+    }
+
+    @available(iOS 27, *)
+    private func noChoice(_ name: String, _ people: [PersonEntity]) async throws -> PersonEntity {
+        XCTFail("asked which \(name) among \(people.count)")
+        throw CancellationError()
+    }
+
+    func testASiriPersonWithNoBurrowIdResolvesByName() async throws {
+        guard #available(iOS 27, *) else { throw XCTSkip("iOS 27") }
+        await indexer().didSignIn(host: a)
+        // A display name only, as an unknown identifier: Siri's likeliest shape.
+        let unknown = try await MessageDestination.people([siriPerson(.unknown, name: "Priya A")])
+            .resolvedBurrowDestination(site: "test", choose: noChoice)
+        XCTAssertEqual(unknown.entityID, EntityRef(host: a, uuid: priyaID).id)
+
+        // A contact identifier, the given name only.
+        let contact = try await MessageDestination.people([siriPerson(.contact("ABC-123"), name: "priya a")])
+            .resolvedBurrowDestination(site: "test", choose: noChoice)
+        XCTAssertEqual(contact.entityID, EntityRef(host: a, uuid: priyaID).id)
+
+        // An unresolved entity carried from the import resolves the same way.
+        let carried = try await MessageDestination.messagePerson(PersonEntity(unresolved: siriPerson(.unknown, name: "Dalton A")))
+            .resolvedBurrowDestination(site: "test", choose: noChoice)
+        XCTAssertEqual(carried.entityID, EntityRef(host: a, uuid: daltonID).id)
+    }
+
+    func testABareUuidResolvesOnTheInstallThatHasIt() async throws {
+        guard #available(iOS 27, *) else { throw XCTSkip("iOS 27") }
+        await indexer().didSignIn(host: a)
+        await indexer().didSignIn(host: b)
+        let target = try await MessageDestination.people([siriPerson(.applicationDefined(priyaIDOnB), name: nil)])
+            .resolvedBurrowDestination(site: "test", choose: noChoice)
+        XCTAssertEqual(target.entityID, EntityRef(host: b, uuid: priyaIDOnB).id)
+    }
+
+    func testTwoPeopleWithTheSpokenNameAreAskedAbout() async throws {
+        guard #available(iOS 27, *) else { throw XCTSkip("iOS 27") }
+        await indexer().didSignIn(host: a)
+        await indexer().didSignIn(host: b)
+        var asked: (String, [String])?
+        let target = try await MessageDestination.people([siriPerson(.unknown, name: "Dalton")])
+            .resolvedBurrowDestination(site: "test") { name, people in
+                asked = (name, people.map(\.name).sorted())
+                return people.first { $0.name == "Dalton B" }!
+            }
+        XCTAssertEqual(asked?.0, "Dalton")
+        XCTAssertEqual(asked?.1, ["Dalton A", "Dalton B"], "a given-name match on both installs is asked, not guessed")
+        XCTAssertEqual(target.entityID, EntityRef(host: b, uuid: daltonID).id)
+    }
+
+    func testNobodyByThatNameIsSaidWithTheName() async throws {
+        guard #available(iOS 27, *) else { throw XCTSkip("iOS 27") }
+        await indexer().didSignIn(host: a)
+        do {
+            _ = try await MessageDestination.people([siriPerson(.unknown, name: "Zed")])
+                .resolvedBurrowDestination(site: "test", choose: noChoice)
+            XCTFail("resolved a person nobody is named")
+        } catch let failure as IntentFailure {
+            XCTAssertEqual(failure, .personNotFound(name: "Zed"))
+            XCTAssertTrue(failure.message.contains("Zed"))
+        }
+        XCTAssertFalse(
+            requests(host: a, path: "/api/app/people").filter { $0.url?.query == "q=Zed" }.isEmpty,
+            "the server's search is asked before giving up")
+    }
+
+    func testACallToAPersonWithNoBurrowIdResolvesByName() async throws {
+        guard #available(iOS 27, *) else { throw XCTSkip("iOS 27") }
+        await indexer().didSignIn(host: a)
+        var foreign = CallPersonEntity(id: "contact-xyz", name: "Dalton A", kind: "user", subtitle: "")
+        foreign.person = siriPerson(.contact("contact-xyz"), name: "Dalton A")
+        let found = try await CallPersonResolution.resolve(foreign, choose: noChoice)
+        XCTAssertEqual(found.id, EntityRef(host: a, uuid: daltonID).id)
+    }
+
+    // MARK: Round 2: an install whose server has no directory
+
+    func testAnInstallWithoutTheDirectoryStillIndexesItsCollaborators() async throws {
+        guard #available(iOS 27, *) else { throw XCTSkip("iOS 27") }
+        noDirectory = [b]
+        let counts = await indexer().didSignIn(host: b)
+        XCTAssertEqual(
+            requests(host: b, path: "/api/app/people").map { $0.url?.query ?? "" }, ["scope=directory", ""],
+            "the 404 falls back to the recent collaborators")
+        XCTAssertEqual(counts.people, 1)
+        XCTAssertTrue(memory.names(host: b).contains("Dalton B"))
     }
 }
