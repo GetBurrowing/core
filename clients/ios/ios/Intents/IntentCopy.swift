@@ -89,6 +89,20 @@ enum IntentCopy {
         "\(agent) is still working on it. Burrow will notify you."
     }
 
+    static let whichProjectForMeeting = "Which project is the meeting for?"
+    static let whatIsTheTask = "What's the task?"
+
+    static func taskCreated(title: String, project: String) -> String { "Created \"\(title)\" in \(project)." }
+
+    /// The confirmation before a group call rings everyone in it.
+    static func callConversationConfirm(name: String) -> String {
+        "Call \(name)? This rings everyone in it, up to 25 people."
+    }
+
+    static func callStarted(name: String, video: Bool) -> String {
+        video ? "Calling \(name). Burrow calls are audio only, so this is an audio call." : "Calling \(name)."
+    }
+
     /// iOS 27, after the 90 s window: the reply comes as a notification.
     static func agentReplyWillNotify(agent: String) -> String {
         "\(agent) is still working on it. The reply will arrive as a notification."

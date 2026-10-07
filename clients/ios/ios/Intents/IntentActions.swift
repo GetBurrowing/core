@@ -21,6 +21,14 @@ enum AskAgent {
     }
 }
 
+/// The body of a Start Meeting POST: at most one of space and project.
+struct MeetingRequest: Equatable {
+    let host: String
+    let spaceID: String?
+    let spaceName: String?
+    let projectID: String?
+}
+
 /// What asking an agent came to.
 enum AskOutcome: Equatable {
     case reply(String)
@@ -92,12 +100,53 @@ struct IntentActions {
 
     /// `startMeeting`, also returning the new meeting's id so the app can
     /// join it natively (MeetingLauncher).
-    func startMeetingDetails(host: String, spaceID: String?, spaceName: String? = nil) async throws -> (link: DeepLink, meetingID: String) {
+    func startMeetingDetails(
+        host: String, spaceID: String?, spaceName: String? = nil, projectID: String? = nil
+    ) async throws -> (link: DeepLink, meetingID: String) {
         guard env.install(host) != nil else { throw IntentFailure.notFound }
-        let meeting = try await call("create_meeting", host) { try await env.client.createMeeting(host: host, spaceID: spaceID) }
+        let meeting = try await call("create_meeting", host) {
+            try await env.client.createMeeting(host: host, spaceID: spaceID, projectID: projectID)
+        }
         if let spaceID { env.lastMeetingSpaces.set(spaceID, name: spaceName, for: host) }
         guard let link = DeepLink.meeting(host: host, slug: meeting.slug) else { throw IntentFailure.notFound }
         return (link, meeting.id)
+    }
+
+    /// Creates a task titled `title` in `project`, on the project's host.
+    func createTask(in project: ProjectEntity, title: String) async throws -> CreatedTask {
+        let ref = try ref(project.id)
+        let text = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { throw IntentFailure.emptyMessage }
+        return try await call("create_task", ref.host) {
+            try await env.client.createTask(host: ref.host, projectID: ref.uuid, title: text, description: nil)
+        }
+    }
+
+    /// What Start Meeting posts (task 01a111bb stage 6). A legacy Shortcut's
+    /// space wins (POST `space_id`, as before); then a chosen project; with
+    /// neither, the install's projects decide: a non-null
+    /// `last_meeting_project_id` lets the server reuse it with no question,
+    /// and only a null one asks for a project (`askProject`). The remembered
+    /// meeting space (LastMeetingSpaceStore) is not consulted.
+    func meetingRequest(
+        host: String, space: SpaceEntity?, project: ProjectEntity?, askProject: () async throws -> ProjectEntity
+    ) async throws -> MeetingRequest {
+        if let space {
+            let ref = try ref(space.id)
+            return MeetingRequest(host: ref.host, spaceID: ref.uuid, spaceName: space.name, projectID: nil)
+        }
+        if let project {
+            let ref = try ref(project.id)
+            return MeetingRequest(host: ref.host, spaceID: nil, spaceName: nil, projectID: ref.uuid)
+        }
+        guard env.install(host) != nil else { throw IntentFailure.notFound }
+        let projects = try await call("projects", host) { try await env.client.projects(host: host) }
+        if projects.lastMeetingProjectID != nil {
+            return MeetingRequest(host: host, spaceID: nil, spaceName: nil, projectID: nil)
+        }
+        let picked = try ref(try await askProject().id)
+        guard picked.host == host else { throw IntentFailure.notFound }
+        return MeetingRequest(host: host, spaceID: nil, spaceName: nil, projectID: picked.uuid)
     }
 
     /// Opens the person's DM with the agent, posts the question, then polls

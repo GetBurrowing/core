@@ -548,9 +548,19 @@ extension SuiteAPIClient {
 
     /// Starts a meeting now. `spaceID` only picks the project; the server
     /// answers 422 `no_project` when the person has no project to hold it.
-    func createMeeting(host: String, spaceID: String?) async throws -> CreatedMeeting {
+    /// `POST /api/app/meetings`. `spaceID` (a legacy Shortcut) or `projectID`
+    /// picks the meeting's project; neither lets the server use the last
+    /// meeting's project. `inviteeUserIDs` (at most 10) or `inviteSpaceID`
+    /// (a group, capped at 25 by the server) ring people into it (task
+    /// 01a111bb stage 6).
+    func createMeeting(
+        host: String, spaceID: String?, projectID: String? = nil, inviteeUserIDs: [String]? = nil, inviteSpaceID: String? = nil
+    ) async throws -> CreatedMeeting {
         var json: [String: Any] = [:]
         if let spaceID { json["space_id"] = spaceID }
+        if let projectID { json["project_id"] = projectID }
+        if let inviteeUserIDs { json["invitee_user_ids"] = inviteeUserIDs }
+        if let inviteSpaceID { json["invite_space_id"] = inviteSpaceID }
         return try await fetch(CreatedMeeting.self, host: host, path: "/api/app/meetings", method: "POST", json: json)
     }
 

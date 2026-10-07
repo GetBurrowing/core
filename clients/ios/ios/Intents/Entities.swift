@@ -253,6 +253,62 @@ struct MeetingQuery: EntityStringQuery {
     }
 }
 
+// MARK: - Project
+
+/// A project that holds meetings and tasks (task 01a111bb stage 6). The
+/// subtitle names the org, so same-named projects in two orgs differ.
+struct ProjectEntity: AppEntity {
+    static var typeDisplayRepresentation: TypeDisplayRepresentation = "Project"
+    static var defaultQuery = ProjectQuery()
+
+    let id: String
+    let name: String
+    let subtitle: String
+
+    var displayRepresentation: DisplayRepresentation {
+        DisplayRepresentation(title: "\(name)", subtitle: "\(subtitle)", image: .init(systemName: "folder"))
+    }
+
+    init(id: String, name: String, subtitle: String) {
+        self.id = id
+        self.name = name
+        self.subtitle = subtitle
+    }
+
+    init(_ project: SuiteProject, host: String, env: IntentEnvironment) {
+        self.init(
+            id: EntityRef(host: host, uuid: project.id).id, name: project.name,
+            subtitle: IntentCopy.subtitle(["Project", project.org?.name], install: env.disambiguator(host)))
+    }
+}
+
+struct ProjectQuery: EntityStringQuery {
+    @IntentParameterDependency<StartMeetingIntent>(\.$install) var startMeeting
+    @IntentParameterDependency<CreateTaskIntent>(\.$install) var createTask
+
+    /// Set by tests in place of the dependencies above.
+    var installScope: String?
+
+    init() {}
+
+    init(installScope: String?) { self.installScope = installScope }
+
+    private var scope: String? { installScope ?? startMeeting?.install.id ?? createTask?.install.id }
+
+    func entities(for identifiers: [String]) async throws -> [ProjectEntity] {
+        await EntityCatalog().resolve(identifiers) { await EntityCatalog().projects(hosts: [$0]) }
+    }
+
+    func suggestedEntities() async throws -> [ProjectEntity] {
+        let catalog = EntityCatalog()
+        return await catalog.projects(hosts: catalog.hosts(scope: scope))
+    }
+
+    func entities(matching string: String) async throws -> [ProjectEntity] {
+        try await suggestedEntities().filter { $0.name.localizedCaseInsensitiveContains(string) }
+    }
+}
+
 // MARK: - Agent
 
 struct AgentEntity: AppEntity {
@@ -425,6 +481,12 @@ struct EntityCatalog {
             Self.spaceIDsBySegment[host] = Dictionary(spaces.map { ($0.linkSegment, $0.id) }, uniquingKeysWith: { first, _ in first })
             IntentHooks.didFetchEntities?("spaces", host, spaces.map { "\(EntityRef(host: host, uuid: $0.id).id)\t\($0.name)" })
             return spaces.map { (host: host, space: $0) }
+        }
+    }
+
+    func projects(hosts: [String]) async -> [ProjectEntity] {
+        await load("projects", hosts: hosts) { host in
+            try await env.client.projects(host: host).projects.map { ProjectEntity($0, host: host, env: env) }
         }
     }
 

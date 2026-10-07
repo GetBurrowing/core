@@ -279,40 +279,71 @@ struct StartMeetingIntent: AppIntent {
     static var description = IntentDescription("Starts a meeting now and opens it in Burrow.")
     static var openAppWhenRun = true
 
-    /// Picks the meeting's project; defaults to the last space a meeting was
-    /// started for on that install.
-    @Parameter(title: "Space")
+    /// The meeting's project (task 01a111bb stage 6). Left empty, the server
+    /// reuses the project of the install's last meeting; only an install
+    /// with no meeting yet asks for one.
+    @Parameter(title: "Project")
+    var project: ProjectEntity?
+
+    /// Deprecated, kept only so existing Shortcuts that set it keep working:
+    /// a space still POSTs `space_id`. Not in the summary.
+    @Parameter(title: "Space (deprecated)")
     var space: SpaceEntity?
 
     @Parameter(title: "Install")
     var install: InstallEntity?
 
+    static var parameterSummary: some ParameterSummary {
+        Summary("Start a meeting in \(\.$project)") {
+            \.$install
+        }
+    }
+
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        let env = IntentEnvironment.current
-        let actions = IntentActions(env: env)
-        var chosen = space
-        var host: String
-        var spaceID: String?
-        if let chosen {
-            let ref = try actions.ref(chosen.id)
-            host = ref.host
-            spaceID = ref.uuid
-        } else {
-            host = try selectedHost(install)
-            spaceID = env.lastMeetingSpaces.spaceID(for: host)
-            if spaceID == nil {
-                let picked = try await $space.requestValue(dialog(IntentCopy.whichSpaceForMeeting))
-                let ref = try actions.ref(picked.id)
-                host = ref.host
-                spaceID = ref.uuid
-                chosen = picked
-            }
+        let actions = IntentActions()
+        let host = space == nil && project == nil ? try selectedHost(install) : ""
+        let request = try await actions.meetingRequest(host: host, space: space, project: project) {
+            try await $project.requestValue(dialog(IntentCopy.whichProjectForMeeting))
         }
-        let started = try await actions.startMeetingDetails(host: host, spaceID: spaceID, spaceName: chosen?.name)
-        MeetingLauncher.open(host: host, meetingID: started.meetingID, fallback: started.link)
+        let started = try await actions.startMeetingDetails(
+            host: request.host, spaceID: request.spaceID, spaceName: request.spaceName, projectID: request.projectID)
+        MeetingLauncher.open(host: request.host, meetingID: started.meetingID, fallback: started.link)
         IntentHooks.didSucceed?(self)
-        return .result(dialog: dialog(IntentCopy.meetingStarted(space: chosen?.name)))
+        return .result(dialog: dialog(IntentCopy.meetingStarted(space: space?.name)))
+    }
+}
+
+// MARK: - Create a task
+
+/// "Create a task in Burrow" (task 01a111bb stage 6), iOS 17+: a project and
+/// a title, asking for the title when it is missing. POSTs /api/app/tasks.
+struct CreateTaskIntent: AppIntent {
+    static var title: LocalizedStringResource = "Create Task"
+    static var description = IntentDescription("Creates a task in a Burrow project.")
+
+    @Parameter(title: "Project")
+    var project: ProjectEntity
+
+    @Parameter(title: "Title")
+    var taskTitle: String?
+
+    @Parameter(title: "Install")
+    var install: InstallEntity?
+
+    static var parameterSummary: some ParameterSummary {
+        Summary("Create \(\.$taskTitle) in \(\.$project)") {
+            \.$install
+        }
+    }
+
+    init() {}
+
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        var text = taskTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if text.isEmpty { text = try await $taskTitle.requestValue(dialog(IntentCopy.whatIsTheTask)) }
+        let created = try await IntentActions().createTask(in: project, title: text)
+        return .result(dialog: dialog(IntentCopy.taskCreated(title: created.title, project: project.name)))
     }
 }
 

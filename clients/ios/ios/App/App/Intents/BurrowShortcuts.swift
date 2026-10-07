@@ -42,6 +42,11 @@ struct BurrowShortcuts: AppShortcutsProvider {
             shortTitle: "My Tasks",
             systemImageName: "checklist")
         AppShortcut(
+            intent: CreateTaskIntent(),
+            phrases: ["Create a task in \(.applicationName)"],
+            shortTitle: "Create Task",
+            systemImageName: "plus.circle")
+        AppShortcut(
             intent: ApproveIntent(),
             phrases: ["Approve a plan in \(.applicationName)"],
             shortTitle: "Approve Plan",

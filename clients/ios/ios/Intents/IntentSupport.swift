@@ -119,6 +119,10 @@ enum IntentFailure: Error, Equatable, CustomLocalizedStringResourceConvertible {
     case messageFrozen(by: String?)
     /// 422 `not_supported` on mark-unread.
     case cannotMarkUnread
+    /// A call to an agent (task 01a111bb stage 6).
+    case cannotCallAgents
+    /// 422 `too_many_invitees`.
+    case tooManyInvitees
 
     var message: String {
         switch self {
@@ -132,6 +136,8 @@ enum IntentFailure: Error, Equatable, CustomLocalizedStringResourceConvertible {
             guard let by, !by.isEmpty else { return "An agent began work on that message, so it can't be edited. Send a follow-up instead." }
             return "\(by) began work on that message, so it can't be edited. Send a follow-up instead."
         case .cannotMarkUnread: return "Burrow can't mark messages unread."
+        case .cannotCallAgents: return "Burrow can't call agents yet."
+        case .tooManyInvitees: return "That's too many people for one call."
         }
     }
 
@@ -147,6 +153,10 @@ enum IntentFailure: Error, Equatable, CustomLocalizedStringResourceConvertible {
             return IntentFailure.signedOut
         case SuiteAPIClient.Failure.status(404), SuiteAPIClient.Failure.refused(status: 404, code: _):
             return IntentFailure.notFound
+        case SuiteAPIClient.Failure.refused(status: 422, code: "agent_not_callable"):
+            return IntentFailure.cannotCallAgents
+        case SuiteAPIClient.Failure.refused(status: 422, code: "too_many_invitees"):
+            return IntentFailure.tooManyInvitees
         case SuiteAPIClient.Failure.refused(status: 422, code: "no_project"):
             return IntentFailure.noProject(install: env.installName(host))
         default:

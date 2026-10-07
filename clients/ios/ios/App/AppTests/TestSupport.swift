@@ -1,4 +1,5 @@
 import Foundation
+
 @testable import App
 
 /// An in-memory `TokenStore`: host -> bearer.
@@ -13,15 +14,34 @@ struct MemoryTokenStore: TokenStore {
 final class StubURLProtocol: URLProtocol {
     private static let lock = NSLock()
     private static var _requests: [URLRequest] = []
+    private static var _bodies: [Data?] = []
     static var respond: (URLRequest) -> (Int, Data) = { _ in (200, Data("{}".utf8)) }
 
     static var requests: [URLRequest] {
-        lock.lock(); defer { lock.unlock() }
+        lock.lock()
+        defer { lock.unlock() }
         return _requests
     }
 
+    /// Each request's body (read from its stream), in request order.
+    static var bodies: [Data?] {
+        lock.lock()
+        defer { lock.unlock() }
+        return _bodies
+    }
+
+    /// Request `index`'s body as a JSON object, or nil.
+    static func json(at index: Int) -> [String: Any]? {
+        let all = bodies
+        guard index < all.count, let data = all[index] else { return nil }
+        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    }
+
     static func reset() {
-        lock.lock(); _requests = []; lock.unlock()
+        lock.lock()
+        _requests = []
+        _bodies = []
+        lock.unlock()
         respond = { _ in (200, Data("{}".utf8)) }
     }
 
@@ -35,7 +55,11 @@ final class StubURLProtocol: URLProtocol {
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
-        Self.lock.lock(); Self._requests.append(request); Self.lock.unlock()
+        let body = request.httpBody ?? request.httpBodyStream.map(Self.read)
+        Self.lock.lock()
+        Self._requests.append(request)
+        Self._bodies.append(body)
+        Self.lock.unlock()
         let (status, data) = Self.respond(request)
         let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: nil)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
@@ -44,4 +68,17 @@ final class StubURLProtocol: URLProtocol {
     }
 
     override func stopLoading() {}
+
+    private static func read(_ stream: InputStream) -> Data {
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while stream.hasBytesAvailable {
+            let count = stream.read(&buffer, maxLength: buffer.count)
+            guard count > 0 else { break }
+            data.append(buffer, count: count)
+        }
+        return data
+    }
 }
