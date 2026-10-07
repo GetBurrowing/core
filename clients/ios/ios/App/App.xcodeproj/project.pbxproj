@@ -184,6 +184,7 @@
 		D811D6D8851C97B667406CC9 /* DeepLinkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AB72D587D4F0F2BF4D98D9D /* DeepLinkTests.swift */; };
 		D945CB8F4F75FE12293DA1BB /* Colors.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F20AEF676C004D2C37F1D06C /* Colors.xcassets */; };
 		DB85697BEEEACA5831087520 /* VoIPRegistrar.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5CA68A6E37861FFC3234F07 /* VoIPRegistrar.swift */; };
+		DCD946AF0D3CA682A43EDB70 /* AskAgentSystemTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1789456078BB71790213DC24 /* AskAgentSystemTests.swift */; };
 		DDBA16A62D69BDBF390B65C3 /* InstallStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E69F987B892561A06F26BE1 /* InstallStore.swift */; };
 		DE6827C0F5689CD0BFD29161 /* IntentSnippets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32798D99CA9F9644F3696A57 /* IntentSnippets.swift */; };
 		DF7A4214CA5E54AE4C653589 /* IntentCopy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 061669E0BB04D24A1853F001 /* IntentCopy.swift */; };
@@ -292,6 +293,7 @@
 		0FD909F861CBD9239A49DB52 /* Entities.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Entities.swift; sourceTree = "<group>"; };
 		1057831535AAC14BF4CC1F1F /* PersonalContextSystemTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersonalContextSystemTests.swift; sourceTree = "<group>"; };
 		152AACD85538342C084D74C8 /* SuiteNativePlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SuiteNativePlugin.swift; sourceTree = "<group>"; };
+		1789456078BB71790213DC24 /* AskAgentSystemTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AskAgentSystemTests.swift; sourceTree = "<group>"; };
 		1BCA4F7949BCEADF89CA73DD /* TestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestSupport.swift; sourceTree = "<group>"; };
 		1C4AA74020F1E1EC630A56D4 /* WidgetApprovalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetApprovalTests.swift; sourceTree = "<group>"; };
 		3105A037DC16B7EB85FA7C98 /* IntentAppHooks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntentAppHooks.swift; sourceTree = "<group>"; };
@@ -523,6 +525,7 @@
 		5208DCF27924C565192ACB40 /* IntentsSystemTests */ = {
 			isa = PBXGroup;
 			children = (
+				1789456078BB71790213DC24 /* AskAgentSystemTests.swift */,
 				DA67FF4273339C4D4D25F62F /* MessagesDomainSystemTests.swift */,
 				1057831535AAC14BF4CC1F1F /* PersonalContextSystemTests.swift */,
 			);
@@ -970,6 +973,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				DCD946AF0D3CA682A43EDB70 /* AskAgentSystemTests.swift in Sources */,
 				26DF438390017B770692B510 /* MessagesDomainSystemTests.swift in Sources */,
 				59ED11D54689A365DB1C227C /* PersonalContextSystemTests.swift in Sources */,
 			);

@@ -89,6 +89,11 @@ enum IntentCopy {
         "\(agent) is still working on it. Burrow will notify you."
     }
 
+    /// iOS 27, after the 90 s window: the reply comes as a notification.
+    static func agentReplyWillNotify(agent: String) -> String {
+        "\(agent) is still working on it. The reply will arrive as a notification."
+    }
+
     static func agentWorking(agent: String) -> String { "\(agent) is working" }
 
     static func agentTimedOutSnippet(agent: String) -> String {

@@ -193,6 +193,7 @@ final class PersonalContextTests: XCTestCase {
 
         await IntentAppHooks.forget(host: a, donations: donor).value
         XCTAssertEqual(manager.deleted, [aIDs], "exactly host A's donations")
+        guard manager.deleted.count == 1 else { return }
         XCTAssertEqual(donor.ledger.ids(for: a), [])
         XCTAssertEqual(donor.ledger.ids(for: b), bIDs, "host B's ledger survives")
 
@@ -201,6 +202,7 @@ final class PersonalContextTests: XCTestCase {
         XCTAssertEqual(donor.ledger.ids(for: b).count, 2)
         await IntentAppHooks.forget(host: b, donations: donor).value
         XCTAssertEqual(manager.deleted.count, 2)
+        guard manager.deleted.count == 2 else { return }
         XCTAssertEqual(manager.deleted.last, bIDs + [manager.donated.last!.id])
         XCTAssertTrue(Set(manager.deleted[0]).isDisjoint(with: manager.deleted[1]))
     }

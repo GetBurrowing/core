@@ -1,10 +1,24 @@
 import Foundation
 
 /// Ask-an-agent timing (canvas open question 3: designed for about 20 s,
-/// set by engineering against Siri's own timeout).
+/// set by engineering against Siri's own timeout). On iOS 27 the ask runs
+/// as a long-running intent (task 01a111bb stage 5) and waits 90 s.
 enum AskAgent {
     static let replyWindow: TimeInterval = 20
+    static let longReplyWindow: TimeInterval = 90
     static let pollInterval: TimeInterval = 2
+
+    /// The window for an OS: 90 s where the intent is long-running (iOS 27),
+    /// otherwise exactly the old 20 s.
+    static func window(longRunning: Bool) -> TimeInterval {
+        longRunning ? longReplyWindow : replyWindow
+    }
+
+    /// This runtime's window.
+    static var currentWindow: TimeInterval {
+        if #available(iOS 27, *) { return window(longRunning: true) }
+        return window(longRunning: false)
+    }
 }
 
 /// What asking an agent came to.
@@ -87,22 +101,37 @@ struct IntentActions {
     }
 
     /// Opens the person's DM with the agent, posts the question, then polls
-    /// every `AskAgent.pollInterval` for at most `AskAgent.replyWindow`,
-    /// returning the first message THAT agent wrote after the question.
-    /// Anyone else's message is skipped. After the window: `.timedOut`, and
-    /// no further request (the reply arrives by push).
-    func askAgent(_ agent: AgentEntity, question: String, progress: ((Double) -> Void)? = nil) async throws -> AskOutcome {
+    /// every `AskAgent.pollInterval` for at most `window`, returning the
+    /// first message THAT agent wrote after the question. Anyone else's
+    /// message is skipped. After the window: `.timedOut`, and no further
+    /// request (the reply arrives by push, as an ordinary chat notification).
+    /// A cancelled task, or `isCancelled` turning true (the intent's cancel
+    /// handler), throws CancellationError before the next poll is sent.
+    /// Only the outcome and the elapsed seconds are logged.
+    func askAgent(
+        _ agent: AgentEntity, question: String, window: TimeInterval = AskAgent.currentWindow,
+        isCancelled: @escaping () -> Bool = { false }, progress: ((Double) -> Void)? = nil
+    ) async throws -> AskOutcome {
         let ref = try ref(agent.id)
         let text = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { throw IntentFailure.emptyMessage }
         let dm = try await call("agent_dm", ref.host) { try await env.client.dmWithAgent(host: ref.host, agentID: ref.uuid) }
         var cursor = try await call("send_message", ref.host) { try await env.client.sendText(host: ref.host, spaceID: dm.spaceID, text: text) }
         let start = env.now()
+        func finish(_ outcome: AskOutcome) -> AskOutcome {
+            let seconds = Int(env.now().timeIntervalSince(start).rounded())
+            switch outcome {
+            case .reply: IntentLog.count("ask_outcome.answered", host: ref.host, count: seconds)
+            case .timedOut: IntentLog.count("ask_outcome.timed_out", host: ref.host, count: seconds)
+            }
+            return outcome
+        }
         while true {
             try await env.sleeper.sleep(seconds: AskAgent.pollInterval)
+            if Task.isCancelled || isCancelled() { throw CancellationError() }
             let elapsed = env.now().timeIntervalSince(start)
-            guard elapsed <= AskAgent.replyWindow else { return .timedOut }
-            progress?(min(1, elapsed / AskAgent.replyWindow))
+            guard elapsed <= window else { return finish(.timedOut) }
+            progress?(min(1, elapsed / window))
             let messages: [SuiteMessage]
             do {
                 messages = try await env.client.messagesAfter(host: ref.host, spaceID: dm.spaceID, after: cursor)
@@ -113,7 +142,7 @@ struct IntentActions {
             }
             if let last = messages.last { cursor = last.id }
             if let reply = messages.first(where: { $0.authorType == "agent" && $0.authorID == ref.uuid }) {
-                return .reply(reply.content ?? "")
+                return finish(.reply(reply.content ?? ""))
             }
         }
     }

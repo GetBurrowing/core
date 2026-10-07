@@ -338,8 +338,16 @@ struct AskAgentIntent: AppIntent, ProgressReportingIntent {
 
     func perform() async throws -> some IntentResult & ProvidesDialog & ShowsSnippetView {
         progress.totalUnitCount = 100
-        let outcome = try await IntentActions().askAgent(agent, question: question) { fraction in
-            progress.completedUnitCount = Int64(fraction * 100)
+        let outcome: AskOutcome
+        let timedOut: String
+        if #available(iOS 27, *) {
+            outcome = try await askInBackground()
+            timedOut = IntentCopy.agentReplyWillNotify(agent: agent.name)
+        } else {
+            outcome = try await IntentActions().askAgent(agent, question: question) { fraction in
+                progress.completedUnitCount = Int64(fraction * 100)
+            }
+            timedOut = IntentCopy.agentTimedOut(agent: agent.name)
         }
         IntentHooks.didSucceed?(self)
         switch outcome {
@@ -349,8 +357,44 @@ struct AskAgentIntent: AppIntent, ProgressReportingIntent {
                 view: AskAgentSnippetView(agent: agent.name, question: question, state: .reply(reply)))
         case .timedOut:
             return .result(
-                dialog: dialog(IntentCopy.agentTimedOut(agent: agent.name)),
+                dialog: dialog(timedOut),
                 view: AskAgentSnippetView(agent: agent.name, question: question, state: .timedOut))
         }
     }
+}
+
+// iOS 27 (task 01a111bb stage 5): the SAME intent type becomes long-running
+// and cancellable, so existing Shortcuts keep working. The poll runs as a
+// background task for up to 90 s, reports progress on each poll, and a
+// `.timeout` or `.userCancelled` cancel ends it before the next request.
+@available(iOS 27, *)
+extension AskAgentIntent: LongRunningIntent, CancellableIntent {
+    func askInBackground() async throws -> AskOutcome {
+        let cancelled = AskCancelFlag()
+        let agent = agent
+        let question = question
+        let progress = progress
+        return try await performBackgroundTask(
+            operation: {
+                try await IntentActions().askAgent(
+                    agent, question: question, window: AskAgent.longReplyWindow, isCancelled: { cancelled.isSet }
+                ) { fraction in
+                    progress.completedUnitCount = Int64(fraction * 100)
+                }
+            },
+            onCancel: { reason in
+                cancelled.set()
+                IntentLog.route(reason == .timeout ? "ask_cancel_timeout" : "ask_cancel_user", host: "-", status: 0)
+            })
+    }
+}
+
+/// Set once by an intent's cancel handler; read before each poll.
+final class AskCancelFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+
+    var isSet: Bool { lock.withLock { value } }
+
+    func set() { lock.withLock { value = true } }
 }
