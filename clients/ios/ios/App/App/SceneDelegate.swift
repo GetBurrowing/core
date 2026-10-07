@@ -54,6 +54,8 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         #if DEBUG
             // `burrow://debug/voip?payload=`: the ring injection seam.
             if urlContexts.contains(where: { DebugVoIPSeam.handle(url: $0.url) }) { return }
+            // `burrow://debug/personal-context?host=`: donation and index counts.
+            if urlContexts.contains(where: { DebugPersonalContext.handle(url: $0.url) }) { return }
         #endif
         // `burrow://open?...` is a widget deep link (SuiteBridgeViewController
         // opens it); anything else is Capacitor's.

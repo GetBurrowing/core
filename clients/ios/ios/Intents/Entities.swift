@@ -322,19 +322,46 @@ extension MeetingEntity: IndexedEntity {}
 @available(iOS 18, *)
 extension AgentEntity: IndexedEntity {}
 
+// iOS 27 (task 01a111bb stage 4): the entities a person shares with
+// others are syncable (their `<host>|<uuid>` id is the server's, the same on
+// every device) and owned as `.shared` (they live in a workspace). People
+// and conversations are indexed too, through SpotlightIndexer, so their
+// entries carry the host as the domain identifier like every other entry.
+
+@available(iOS 27, *)
+extension TaskEntity: SyncableEntity, OwnershipProvidingEntity {
+    var ownership: EntityOwnership { .shared }
+}
+
+@available(iOS 27, *)
+extension MeetingEntity: SyncableEntity, OwnershipProvidingEntity {
+    var ownership: EntityOwnership { .shared }
+}
+
 @available(iOS 18, *)
 enum SpotlightIndexer {
     /// Indexes one install's entities under the host as the domain
     /// identifier, so `SpotlightIndex.removeAll(host:)` drops exactly them.
     static func index<E: IndexedEntity>(_ entities: [E], host: String, expires: Date? = nil) {
         guard IntentHooks.indexesSpotlight, !entities.isEmpty else { return }
-        let items = entities.map { entity -> CSSearchableItem in
+        CSSearchableIndex.default().indexSearchableItems(items(entities, host: host, expires: expires)) { _ in }
+    }
+
+    /// Entities whose ids name their own host (`<host>|<uuid>`), indexed
+    /// per host. An id that names no host is not indexed.
+    static func indexByHost<E: IndexedEntity>(_ entities: [E]) where E.ID == String {
+        let groups = Dictionary(grouping: entities.compactMap { entity in EntityRef(entity.id).map { ($0.host, entity) } }, by: \.0)
+        for (host, rows) in groups { index(rows.map(\.1), host: host) }
+    }
+
+    /// The searchable items for one install's entities.
+    static func items<E: IndexedEntity>(_ entities: [E], host: String, expires: Date? = nil) -> [CSSearchableItem] {
+        entities.map { entity -> CSSearchableItem in
             let item = CSSearchableItem(appEntity: entity)
             item.domainIdentifier = host
             if let expires { item.expirationDate = expires }
             return item
         }
-        CSSearchableIndex.default().indexSearchableItems(items) { _ in }
     }
 }
 

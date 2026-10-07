@@ -103,8 +103,11 @@ final class CallController: NSObject, ObservableObject {
 
     // MARK: Requests (our surface, the plugin, the intents)
 
+    /// `donates`: a call the person started in Burrow's UI is donated as a
+    /// recipients-only meeting value (DonationPolicy); an intent run passes
+    /// false, as the system already knows about it.
     @discardableResult
-    func start(host: String, meetingID: String, ifOver: (() -> Void)? = nil) -> StartOutcome {
+    func start(host: String, meetingID: String, donates: Bool = true, ifOver: (() -> Void)? = nil) -> StartOutcome {
         if let current = self.meetingID { return current == meetingID ? .alreadyInCall : .busy }
         self.meetingID = meetingID
         self.host = host
@@ -117,6 +120,7 @@ final class CallController: NSObject, ObservableObject {
                 let join = try await api.join(host: host, meetingID: meetingID)
                 guard self.meetingID == meetingID else { return }
                 begin(join)
+                if donates { Self.donateJoin(join, host: host) }
             } catch MeetingAPI.Failure.meetingOver {
                 finish(.meetingOver, callLeave: false)
                 if let ifOver {
@@ -213,6 +217,7 @@ final class CallController: NSObject, ObservableObject {
                 let join = try await api.join(host: host, meetingID: meetingID)
                 guard self.meetingID == meetingID else { return completion(false) }
                 RecentCalls.record(handle: join.meeting.name, host: host, meetingID: meetingID, spaceID: join.meeting.spaceID)
+                Self.donateJoin(join, host: host)
                 prepare(join)
                 Self.configureAudioSession()
                 guard let session else { return completion(false) }
@@ -232,6 +237,11 @@ final class CallController: NSObject, ObservableObject {
                 finish(.failed, callLeave: true)
             }
         }
+    }
+
+    /// The meeting alone (its id, name and slug), never who else is in it.
+    private static func donateJoin(_ join: MeetingJoin, host: String) {
+        Donations.shared.donate(.meetingJoined(host: host, meetingID: join.meeting.id, name: join.meeting.name, slug: join.meeting.slug))
     }
 
     /// "Switch" on the invite banner: leave this call, then join `meetingID`.

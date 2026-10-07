@@ -92,6 +92,7 @@ targets:
         product: LiveKit
       - target: ShareExtension
       - target: SuiteWidgets
+      - target: NotificationService
     configFiles:
       Debug: ../debug.xcconfig
     settings:
@@ -146,6 +147,29 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.kobo-ai.burrow.widgets
         INFOPLIST_FILE: ../SuiteWidgets/Info.plist
         CODE_SIGN_ENTITLEMENTS: ../SuiteWidgets/SuiteWidgets.entitlements
+        APPLICATION_EXTENSION_API_ONLY: "YES"
+        SKIP_INSTALL: "YES"
+        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+  # Communication notifications (task 01a111bb stage 4): names the sender
+  # and conversation of a chat push, and on iOS 27 its message and
+  # conversation entities. No network, no logging. ../Intents for the entity
+  # types its EntityIdentifiers name.
+  NotificationService:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: ../NotificationService
+        excludes:
+          - "Info.plist"
+          - "NotificationService.entitlements"
+      - path: ../Shared
+      - path: ../Intents
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kobo-ai.burrow.notifications
+        INFOPLIST_FILE: ../NotificationService/Info.plist
+        CODE_SIGN_ENTITLEMENTS: ../NotificationService/NotificationService.entitlements
         APPLICATION_EXTENSION_API_ONLY: "YES"
         SKIP_INSTALL: "YES"
         IPHONEOS_DEPLOYMENT_TARGET: "17.0"

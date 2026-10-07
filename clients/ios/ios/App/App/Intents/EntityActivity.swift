@@ -31,6 +31,16 @@ enum EntityActivity {
         }
     }
 
+    /// The donation for opening the entity at `url` (a space or a task).
+    static func donationEvent(for url: URL?, host: String) -> DonationEvent? {
+        let target = target(for: url, host: host, spaceIDsBySegment: EntityCatalog.spaceIDsBySegment[host] ?? [:])
+        switch target {
+        case .space(let id): return EntityRef(id).map { .spaceOpened(host: $0.host, spaceID: $0.uuid) }
+        case .task(let id): return EntityRef(id).map { .taskOpened(host: $0.host, taskID: $0.uuid) }
+        case nil: return nil
+        }
+    }
+
     /// An activity annotated with the entity, or nil off an entity page.
     static func activity(for url: URL?, host: String) -> NSUserActivity? {
         guard #available(iOS 18.2, *),

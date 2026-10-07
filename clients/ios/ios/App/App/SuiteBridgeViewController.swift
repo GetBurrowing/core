@@ -411,6 +411,8 @@ final class SuiteBridgeViewController: CAPBridgeViewController {
         }
         userActivity = activity
         activity.becomeCurrent()
+        // A space or task the person opened is donated (ids and its name).
+        if let event = EntityActivity.donationEvent(for: url, host: host) { Donations.shared.donate(event) }
     }
 
     @objc private func pullToRefresh() {

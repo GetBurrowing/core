@@ -80,6 +80,13 @@ struct PersonEntity {
 @available(iOS 27, *)
 extension PersonEntity: Transferable {}
 
+// Indexed (stage 4) under the host as the domain identifier, syncable (the
+// id is the server's) and `.shared` (a person in a workspace).
+@available(iOS 27, *)
+extension PersonEntity: IndexedEntity, SyncableEntity, OwnershipProvidingEntity {
+    var ownership: EntityOwnership { .shared }
+}
+
 @available(iOS 27, *)
 struct PersonQuery: EntityStringQuery {
     // Suggestions are scoped once the send's Install is chosen; unset still
@@ -121,8 +128,10 @@ struct PersonQuery: EntityStringQuery {
     /// Recent collaborators: the people the person actually talks to.
     func suggestedEntities() async throws -> [PersonEntity] {
         let catalog = EntityCatalog()
-        return PeopleCache.shared.remember(
+        let people = PeopleCache.shared.remember(
             await catalog.people(hosts: catalog.hosts(scope: scope)).map { PersonEntity($0.person, host: $0.host, env: catalog.env) })
+        SpotlightIndexer.indexByHost(people)
+        return people
     }
 
     /// The server's search (`?q=`), never a filter over the suggestions, so
@@ -230,8 +239,10 @@ struct ConversationQuery: EntityStringQuery {
 
     func suggestedEntities() async throws -> [ConversationEntity] {
         let catalog = EntityCatalog()
-        return await catalog.spaceRows(hosts: catalog.hosts(scope: installScope))
+        let conversations = await catalog.spaceRows(hosts: catalog.hosts(scope: installScope))
             .map { ConversationEntity($0.space, host: $0.host, env: catalog.env) }
+        SpotlightIndexer.indexByHost(conversations)
+        return conversations
     }
 
     func entities(matching string: String) async throws -> [ConversationEntity] {
@@ -239,6 +250,11 @@ struct ConversationQuery: EntityStringQuery {
             $0.displayName.localizedCaseInsensitiveContains(string) || ($0.conversationName ?? "").localizedCaseInsensitiveContains(string)
         }
     }
+}
+
+@available(iOS 27, *)
+extension ConversationEntity: IndexedEntity, SyncableEntity, OwnershipProvidingEntity {
+    var ownership: EntityOwnership { .shared }
 }
 
 // MARK: - Message

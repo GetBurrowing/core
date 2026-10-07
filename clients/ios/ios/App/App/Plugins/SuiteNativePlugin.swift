@@ -58,12 +58,27 @@ struct PushPayload {
     let url: String?
     let spaceID: String?
     let messageID: String?
+    let authorID: String?
+    let authorType: String?
 
     init(userInfo: [AnyHashable: Any]) {
         installHost = userInfo["install_host"] as? String
         url = userInfo["url"] as? String
         spaceID = userInfo["space_id"] as? String
         messageID = userInfo["message_id"] as? String
+        authorID = userInfo["author_id"] as? String
+        authorType = userInfo["author_type"] as? String
+    }
+
+    /// A reply from the notification: the space, and the author it answers
+    /// as the recipient. Ids only; the reply text is never part of it.
+    func replyDonation() -> DonationEvent? {
+        guard let host = installHost, let spaceID, UUID(uuidString: spaceID) != nil else { return nil }
+        var recipients: [DonationRecipient] = []
+        if let authorID, UUID(uuidString: authorID) != nil, let type = authorType, type == "user" || type == "agent" {
+            recipients = [DonationRecipient(type: type, id: authorID.lowercased())]
+        }
+        return .messageSent(host: host, spaceID: spaceID.lowercased(), recipients: recipients)
     }
 
     /// The page to open: an absolute URL on the install host, or a path
@@ -201,7 +216,8 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
                 return completionHandler()
             }
             let task = UIApplication.shared.beginBackgroundTask(withName: "suite.reply")
-            SuiteAPI.reply(host: host, spaceID: spaceID, replyTo: payload.messageID, text: text) { _ in
+            SuiteAPI.reply(host: host, spaceID: spaceID, replyTo: payload.messageID, text: text) { result in
+                if case .success = result, let event = payload.replyDonation() { Donations.shared.donate(event) }
                 DispatchQueue.main.async {
                     completionHandler()
                     UIApplication.shared.endBackgroundTask(task)
@@ -253,7 +269,8 @@ public class SuiteNativePlugin: CAPPlugin, CAPBridgedPlugin {
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "pushState", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "enablePush", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "switchInstall", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "switchInstall", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "donate", returnType: CAPPluginReturnPromise),
     ]
 
     /// The shell's navigation policy, consulted for every web view
@@ -317,6 +334,18 @@ public class SuiteNativePlugin: CAPPlugin, CAPBridgedPlugin {
             self.shell?.presentPicker()
             call.resolve()
         }
+    }
+
+    /// A `PlatformWeb.NativeDonation` payload from the web view (ids only):
+    /// donated as a recipients-only value for the install the web view is
+    /// showing. Unknown kinds and malformed ids are ignored.
+    @objc func donate(_ call: CAPPluginCall) {
+        let payload = Dictionary(uniqueKeysWithValues: call.options.compactMap { key, value in (key as? String).map { ($0, value) } })
+        guard let host = InstallStore.shared.selectedHost, let event = DonationEvent.fromBridge(payload, host: host) else {
+            return call.resolve(["donated": false])
+        }
+        Donations.shared.donate(event)
+        call.resolve(["donated": true])
     }
 
     static func state(_ status: UNAuthorizationStatus) -> String {
