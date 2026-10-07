@@ -182,6 +182,14 @@ defmodule Platform.Regression.SpawnPrimitiveInventoryAuditTest do
       primitive: :task_async,
       justification: "shell_exec branch: Task.async wrapping System.cmd/3 — no Repo touch."
     },
+    %{
+      path: "lib/platform/code_mode/slots.ex",
+      primitive: :task_start,
+      justification:
+        "drain/2 (task 01a114a8 stage 2): the spawned probe only calls " <>
+          "Wasmex.StoreOrCaller.get_fuel/1 on a run's wasm Store (it returns once the Store " <>
+          "is idle) and then send/2 to the Slots server — no Repo call in the spawned process."
+    },
 
     # ── Safe: pinned exemptions, must not be supervised away ──
     %{

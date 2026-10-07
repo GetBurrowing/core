@@ -18,11 +18,11 @@ defmodule PlatformWeb.MCPController do
 
   use PlatformWeb, :controller
 
-  alias Platform.Chat
+  alias Platform.Federation.Jsonable
   alias Platform.Federation.McpContent
   alias Platform.Federation.ResultBound
-  alias Platform.Federation.ToolArguments
   alias Platform.Federation.ToolAuthorization
+  alias Platform.Federation.ToolCall
   alias Platform.Federation.ToolDoc
 
   @protocol_version "2025-06-18"
@@ -86,20 +86,15 @@ defmodule PlatformWeb.MCPController do
 
   defp dispatch("tools/call", %{"name" => name, "arguments" => args}, runtime)
        when is_binary(name) and is_map(args) do
-    case ToolAuthorization.authorize(name, runtime) do
-      :ok ->
-        context = build_context(args, runtime)
-
-        # `ToolArguments.dispatch/3`, not `ToolSurface.execute/3`: the argument
-        # gate runs first and refuses a call that names no required argument,
-        # so a malformed call gets a `missing_<param>` code instead of whatever
-        # 500 the handler happened to raise. Authorization stays above it —
-        # capability is decided before arguments are looked at.
-        case ToolArguments.dispatch(name, args, context) do
-          {:ok, data} -> {:ok, success_content(data)}
-          {:error, reason} -> {:ok, error_content(reason)}
-          other -> {:ok, error_content(other)}
-        end
+    # `ToolCall.invoke/4` is the single path (task 01a114a8 stage 1):
+    # `ToolAuthorization.authorize/2`, then `ToolArguments.dispatch/3` (the
+    # argument gate, so a malformed call gets a `missing_<param>` code instead
+    # of whatever 500 the handler happened to raise), then the ledger row.
+    # Capability is decided before arguments are looked at. The refusal
+    # framing stays HERE: a JSON-RPC -32001 error, not a tool result.
+    case ToolCall.invoke(name, args, runtime) do
+      {:ok, data} ->
+        {:ok, success_content(data)}
 
       {:error, :forbidden} ->
         :telemetry.execute(
@@ -109,6 +104,9 @@ defmodule PlatformWeb.MCPController do
         )
 
         {:error, -32001, ToolAuthorization.deny_message(name)}
+
+      {:error, reason} ->
+        {:ok, error_content(reason)}
     end
   end
 
@@ -127,30 +125,6 @@ defmodule PlatformWeb.MCPController do
     case ToolAuthorization.deny_reason(name) do
       :forbidden -> :forbidden
       {:unknown_tool, _suggestion} -> :unknown_tool
-    end
-  end
-
-  # ── Execution context ───────────────────────────────────────────────
-
-  defp build_context(args, runtime) do
-    space_id = Map.get(args, "space_id")
-    agent_participant_id = lookup_participant(space_id, runtime.agent_id)
-
-    %{
-      space_id: space_id,
-      agent_id: runtime.agent_id,
-      agent_participant_id: agent_participant_id,
-      runtime_id: runtime.runtime_id
-    }
-  end
-
-  defp lookup_participant(nil, _agent_id), do: nil
-  defp lookup_participant(_space_id, nil), do: nil
-
-  defp lookup_participant(space_id, agent_id) do
-    case Chat.get_agent_participant(space_id, agent_id) do
-      %Chat.Participant{id: id} -> id
-      _ -> nil
     end
   end
 
@@ -323,61 +297,9 @@ defmodule PlatformWeb.MCPController do
   # `RuntimeChannel.execute_tool_call/4` already pushes the handler map intact.
   # Carrying every key is what makes the two federation transports agree, which
   # is what the fix above set out to do.
-  defp error_envelope(%Ecto.Changeset{} = changeset),
-    do: %{error: inspect(changeset.errors)}
-
-  defp error_envelope(reason) when is_map(reason) and not is_struct(reason) do
-    reason
-    |> Map.drop([:error])
-    |> Map.new(fn {key, value} -> {key, jsonable(value)} end)
-    |> Map.put(:error, error_message(reason))
-    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
-    |> Map.new()
-  end
-
-  defp error_envelope(reason) when is_binary(reason), do: %{error: reason}
-  defp error_envelope(reason), do: %{error: inspect(reason)}
-
-  # `error` is always a string, whatever the handler put there — a client
-  # branching on `code` still needs something human-readable to log.
-  defp error_message(%{error: message}) when is_binary(message), do: message
-  defp error_message(%{error: %Ecto.Changeset{} = changeset}), do: inspect(changeset.errors)
-  defp error_message(%{error: nil} = reason), do: inspect(reason)
-  defp error_message(%{error: other}), do: inspect(other)
-  defp error_message(reason), do: inspect(reason)
-
-  # Guarantees the envelope encodes. Every `code:` in the tool surface today
-  # is an atom or a binary, but an unencodable value here would turn a
-  # handled refusal into a 500 — strictly worse than the bug being fixed.
   #
-  # Lists and plain maps recurse instead of collapsing to `inspect/1`, because
-  # the payloads worth carrying are shaped like `[%{id: _, title: _}]` and a
-  # client branching on them needs structure, not a debug string. Structs are
-  # kept only when they already implement `Jason.Encoder` (`DateTime` and
-  # friends do); anything else still falls through to `inspect/1`, so the 500
-  # this clause exists to prevent stays prevented.
-  defp jsonable(value) when is_atom(value) or is_binary(value) or is_number(value), do: value
-  defp jsonable(value) when is_list(value), do: Enum.map(value, &jsonable/1)
-
-  # `Jason.Encoder` sets `@fallback_to_any true`, so `impl_for/1` never
-  # returns nil for a struct: one with no encoder of its own resolves to
-  # `Jason.Encoder.Any`, whose `encode/2` raises. That module is the
-  # "not encodable" answer, not nil (the Elixir 1.20 type checker flagged
-  # the old `if impl_for(value)` test as always true).
-  defp jsonable(%_{} = value) do
-    case Jason.Encoder.impl_for(value) do
-      Jason.Encoder.Any -> inspect(value)
-      _encoder -> value
-    end
-  end
-
-  defp jsonable(value) when is_map(value),
-    do: Map.new(value, fn {key, val} -> {jsonable_key(key), jsonable(val)} end)
-
-  defp jsonable(value), do: inspect(value)
-
-  # Jason encodes atom, binary and numeric keys; anything else (a tuple key,
-  # a pid) would raise mid-encode, which is the 500 again.
-  defp jsonable_key(key) when is_atom(key) or is_binary(key) or is_number(key), do: key
-  defp jsonable_key(key), do: inspect(key)
+  # The envelope and the JSON-safe projection live in
+  # `Platform.Federation.Jsonable` (task 01a114a8 stage 2), so `suite_run`'s
+  # inner calls hand a script exactly what this transport hands a client.
+  defp error_envelope(reason), do: Jsonable.error_envelope(reason)
 end

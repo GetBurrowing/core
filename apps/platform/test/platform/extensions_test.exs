@@ -524,18 +524,36 @@ defmodule Platform.ExtensionsTest do
       {"experiment_exclude", "experiments"},
       {"experiment_goal_set", "experiments"},
       {"experiment_goal_list", "experiments"},
-      {"experiment_promote", "experiments"}
+      {"experiment_promote", "experiments"},
+      {"dispatch_metrics_list", "experiments"},
+      {"code_mode_report", "experiments"},
+      {"suite_run", "code_mode"},
+      {"suite_run_describe", "code_mode"}
     ]
 
     # Re-pinned by task 01a0fcfa stage 1: attachment.get_inline's `returns`
     # and `limitations` text now document the MCP image content block. That
     # is the only tool-definition change; names and bundles are unchanged.
-    @main_tool_digest_off "aeed155fe1eddc517699538d9ec4a22f158c25fb87ac83672892de7adf56fb68"
+    #
+    # Re-pinned by task 01a114a8 stage 1: `dispatch_metrics_list` joins the
+    # `experiments` bundle. Measured on moon at the stage's branch.
+    #
+    # Re-pinned by task 01a114a8 stage 2: `suite_run` in the new `code_mode`
+    # bundle, last. Measured on moon at the stage's branch.
+    #
+    # Re-pinned by task 01a114a8 stage 3: `suite_run_describe`, the
+    # `returns_schema` key on 12 definitions, federation_status's filter
+    # parameters and the suite_run primer. Measured on moon.
+    #
+    # Re-pinned by task 01a114a8 stage 4: `code_mode_report` in `experiments`,
+    # plus doc text on experiment_create (dispatch_usage, agent_id cohort,
+    # dispatch.code_mode target). Measured on moon at the stage's branch.
+    @main_tool_digest_off "9c1561c7bf4d7b652b6b6a9477de5690297f1fbffda1f88468b678136a09e4e8"
     @main_kinds_summaries_digest_off "4c060fb7a6914985f94857aaac9effbb519dd2b2170c7a9c0013d4db15a73ea4"
     @main_kinds_tool_schemas_digest_off "e454cd9e2aeb1d821a70b74fe433e81ba98b94f7ae9f2d59c55f8cf5bf509af8"
     # main's lists minus exactly `play`.
-    @core_bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments)
-    @core_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments)
+    @core_bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode)
+    @core_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode)
     @main_rail [
       :chat,
       :tasks,
@@ -552,7 +570,7 @@ defmodule Platform.ExtensionsTest do
     # main's lists minus exactly Play's two metric slugs and two surface keys,
     # in main's order.
     @core_metrics ~w(cycle_time manual_gate_rejection_rate overscoped_gate_count plan_revision_count stages_per_plan time_in_phase validation_failure_rate)
-    @core_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.open_question_classifier dispatch.product_docs_preamble)
+    @core_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.open_question_classifier dispatch.product_docs_preamble dispatch.code_mode)
 
     defp canon(%_{} = s), do: canon(Map.from_struct(s))
 

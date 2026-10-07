@@ -74,6 +74,7 @@ defmodule Platform.Federation.ToolSurface do
   alias Platform.Repo
 
   alias Platform.Federation.ResultBound
+  alias Platform.Federation.ReturnSchemas
   alias Platform.Federation.RuntimePresence
   alias Platform.Federation.TaskAttrs
 
@@ -82,7 +83,7 @@ defmodule Platform.Federation.ToolSurface do
   # Core's own bundles. The full list is these plus every extension bundle
   # (`Platform.Extensions.tool_bundle_names/0`), read per call: never widen
   # this attribute with an extension's name (ADR 0055).
-  @bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments)
+  @bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode)
 
   # Per-message content cap (graphemes) for space_get_messages /
   # space_search_messages. Anything longer is sliced and flagged via the
@@ -151,6 +152,8 @@ defmodule Platform.Federation.ToolSurface do
     "experiment_list" => :experiments,
     "experiment_signals_list" => :signals,
     "experiment_goal_list" => :goals,
+    "dispatch_metrics_list" => :dispatches,
+    "code_mode_report" => :rows,
     "memory_search" => :results,
     "space_get_messages" => :messages,
     "space_list_agents" => :agents,
@@ -260,6 +263,10 @@ defmodule Platform.Federation.ToolSurface do
   defp tools_for_bundle("experiments"),
     do: tag(Platform.Federation.ExperimentTools.definitions(), "experiments")
 
+  # Task 01a114a8 stage 2: `suite_run`. Grantable, never a default
+  # (AgentRuntime's @default_allowed_bundles does not list it).
+  defp tools_for_bundle("code_mode"), do: tag(code_mode_tools(), "code_mode")
+
   # An extension's bundle (ADR 0055): its definitions as the extension lists
   # them at call time. An unknown name is skipped, as it always was.
   defp tools_for_bundle(name) do
@@ -271,15 +278,113 @@ defmodule Platform.Federation.ToolSurface do
 
   defp tag(tools, bundle), do: Enum.map(tools, &Map.put(&1, :bundle, bundle))
 
+  defp code_mode_tools do
+    [
+      %{
+        name: "suite_run",
+        # Task 01a114a8 stage 3: a ten-line primer, one fact per line, so a
+        # model reads the contract before it writes its first script.
+        description:
+          Enum.join(
+            [
+              "Run a short JavaScript program (QuickJS, ES2023) that calls your Suite tools and returns one JSON result, instead of making many tool calls one by one.",
+              "1. Bindings: every tool you can call is a function on `suite`: `suite.task_get({task_id})`; dotted names nest (`suite.canvas.create({...})`); `suite.call(name, args)` takes any name.",
+              "2. Calls are synchronous: each returns the tool's data (the same JSON a direct call returns) or throws an Error with `kind`, `code` and `message`.",
+              "3. Thrown kinds: forbidden | tool_error | result_too_large | invalid_args | call_limit | store_error.",
+              "4. The last expression is the result (top-level `await` is allowed; a script that uses `return` runs as a function body). `inputs` is the JSON you pass.",
+              "5. `console.log` is captured (8 KB). There is no fetch, require, import(), timer or filesystem.",
+              "6. `store.get(key)`, `store.set(key, value, {ttl: seconds})`, `store.delete(key)`: JSON kept across runs of the same `session` (or runtime), 30 min by default, 6 h at most, ephemeral.",
+              "7. Limits: 50 tool calls, 64 MB memory, a CPU budget, 10 s wall (timeout_ms up to 30 s), a 100 KB result, 1 MB per inner result, 2 concurrent runs per runtime.",
+              "8. A failed run returns {ok: false, error: {kind, message}} with kind timeout | memory | fuel | call_limit | output_limit | script_error | forbidden.",
+              "9. Call suite_run_describe first: with no arguments it lists your tools; with {tools: [names]} it returns their TypeScript argument and return types."
+            ],
+            "\n"
+          ),
+        parameters: %{
+          script: %{
+            type: "string",
+            required: true,
+            description: "JavaScript source (QuickJS-ng, ES2023), at most 256 KB"
+          },
+          inputs: %{
+            type: "object",
+            description: "Any JSON value, exposed to the script as the global `inputs`",
+            schema: %{description: "Any JSON value, exposed to the script as `inputs`"}
+          },
+          session: %{
+            type: "string",
+            description: "Names the store scope shared across runs (default: this runtime)"
+          },
+          timeout_ms: %{
+            type: "integer",
+            description: "Wall limit in ms (default 10000, at most 30000)"
+          }
+        },
+        returns:
+          "{ok: true, result, logs, logs_truncated, calls, run_id, elapsed_ms} or {ok: false, error: {kind, message}, calls, run_id, elapsed_ms}; kind is timeout | memory | fuel | call_limit | output_limit | script_error | forbidden",
+        limitations:
+          "No network, filesystem, modules, timers or setTimeout: `fetch`, `require` and `import()` fail with script_error. 50 tool calls per run (past that the run ends call_limit), 64 MB of memory, a CPU (fuel) budget and a 10 s wall limit (timeout_ms up to 30 s), a result of at most 100 KB of JSON, 1 MB per inner result. At most 2 concurrent runs per runtime and 8 per node; a run over the cap is refused with code concurrency_limit, not queued. A script can only call the tools your runtime may call; suite_run cannot call itself. The script, inputs and result are never stored; the ledger keeps the script's sha256 and length.",
+        when_to_use:
+          "When an answer needs several dependent tool calls (list, then read each, then filter): one script returns the filtered result instead of every intermediate payload."
+      },
+      %{
+        name: "suite_run_describe",
+        description:
+          "TypeScript declarations of the tools a suite_run script can call: exactly your runtime's tools, no others. With no arguments, an index (one line per tool, grouped by bundle). With `tools` and/or `bundle`, full declarations for those tools: argument types, return types (where the tool declares a return schema) and their documentation.",
+        parameters: %{
+          tools: %{
+            type: "array",
+            required: false,
+            description: "Tool names to declare in full, e.g. [\"task_list\", \"stage_list\"]",
+            schema: %{type: "array", items: %{type: "string"}}
+          },
+          bundle: %{
+            type: "string",
+            required: false,
+            description: "Declare every tool of this bundle in full (see `bundles` in the result)"
+          }
+        },
+        returns_schema: ReturnSchemas.for_tool("suite_run_describe"),
+        returns:
+          "{docs, tools, not_available, bundles}: `docs` is the declaration text; `tools` the names it covers; `not_available` the requested names you cannot call; `bundles` your bundles.",
+        limitations:
+          "A tool without a declared return schema is typed `unknown`, with its prose `Returns` in the doc comment. A name you cannot call is listed under `not_available` whether or not it exists. suite_run itself is never declared (a script cannot call it).",
+        when_to_use:
+          "Before writing a suite_run script: read the index once, then fetch types for the few tools the script will call."
+      }
+    ]
+  end
+
   defp federation_tools do
     [
       %{
         name: "federation_status",
         description:
-          "Check the status of all registered agent runtimes. Reports three groups of facts that routinely disagree: connection (is a socket up), build (which code the process SAYS it is running, and why that is unknown when it is), and proven (which capabilities core has actually OBSERVED this runtime exercise).",
-        parameters: %{},
+          "Check the status of all registered agent runtimes. Reports three groups of facts that routinely disagree: connection (is a socket up), build (which code the process SAYS it is running, and why that is unknown when it is), and proven (which capabilities core has actually OBSERVED this runtime exercise). Narrow it with `online`, `runtime_ids` and `fields` to answer a small question without reading every runtime.",
+        parameters: %{
+          online: %{
+            type: "boolean",
+            required: false,
+            description:
+              "true: only runtimes with a live socket; false: only runtimes without one. Omit for all."
+          },
+          runtime_ids: %{
+            type: "array",
+            required: false,
+            description: "Only these runtime_ids (the slug, e.g. \"rowan-coder\"). Omit for all.",
+            schema: %{type: "array", items: %{type: "string"}}
+          },
+          fields: %{
+            type: "array",
+            required: false,
+            description:
+              "Only these keys per row (runtime_id is always kept), e.g. [\"agent_slug\", \"online\"]. An unknown name is refused with code unknown_field. Omit for every key.",
+            schema: %{type: "array", items: %{type: "string"}}
+          }
+        },
+        returns_schema: ReturnSchemas.for_tool("federation_status"),
         returns:
-          "Array of runtime status objects with runtime_id, agent_name, agent_slug; connection: online, connected_at, last_seen_at, last_connected_at; build: client_build (a commit sha when client_build_status is \"reported\", otherwise the literal \"unknown\"), client_build_status (\"reported\" | \"unresolved\" | \"not_reported\" | \"no_client_info\"), client_build_error (string or null), process_started_at (ISO8601 or null); proven: {capability => ISO8601 timestamp or \"never\"}; declared_features",
+          "%{runtimes: [...]}: one runtime status object per active runtime with runtime_id, agent_name, agent_slug; connection: online, connected_at, last_seen_at, last_connected_at; build: client_build (a commit sha when client_build_status is \"reported\", otherwise the literal \"unknown\"), client_build_status (\"reported\" | \"unresolved\" | \"not_reported\" | \"no_client_info\"), client_build_error (string or null), process_started_at (ISO8601 or null); proven: {capability => ISO8601 timestamp or \"never\"}; declared_features",
         limitations:
           "Only shows active runtimes. CONNECTION is populated for every online runtime; `online` means the socket is live and nothing more. BUILD IS NOT POPULATED FOR EVERY RUNTIME: `client_build` carries a sha only when `client_build_status` is \"reported\", which needs claude-code-suite-channel at or after commit 85e499f or openclaw-suite-channel at or after commit 098cfec, AND a client process restart since that update. Every other row reads \"unknown\", and the status says why: \"unresolved\" = the client is on the build contract but could not resolve its commit (`client_build_error` says why); \"not_reported\" = the client declared client_info but predates the build contract; \"no_client_info\" = the client declared nothing on join. `version` is never used as a build. `client_build` and `process_started_at` are CLIENT ATTESTATION: fine for diagnosis, never for authorization or deploy gating. `process_started_at` is the client PROCESS start as reported by the client, null when not sent, never the connect time. It is a one-way test: a start before a fix landed refutes that the process runs the fix; a later start proves nothing (the checkout may have been behind). A reconnect moves `connected_at` but not `process_started_at`; a restart moves both. PROVEN and presence are in-memory and reset on core restart, so `never` after a core restart means \"not since restart\". `declared_features` is the runtime's own claim and cannot discriminate builds that ship a capability from builds that do not; read `client_build` and `proven` instead.",
         when_to_use:
@@ -1361,6 +1466,7 @@ defmodule Platform.Federation.ToolSurface do
             description: "Cursor: only return messages older than this message ID"
           }
         },
+        returns_schema: ReturnSchemas.for_tool("space_get_messages"),
         returns:
           "%{messages: [...], total, limit, has_more} — an ENVELOPE, not a bare array. `messages` is newest first; each is a message object with id, participant_id, content_type, content, content_truncated, thread_id, inserted_at, attachments. Each attachments entry is %{url, content_type, byte_size, filename}; the array is empty when the message has no attachments. " <>
             "`total` is the number of top-level messages this call could reach — same space, not deleted, older than `before_id` when one is given, and not earlier than your history grant — counted independent of `limit`; `has_more` is true exactly when such messages remain beyond the ones returned. " <>
@@ -1437,8 +1543,9 @@ defmodule Platform.Federation.ToolSurface do
             description: "Max results per kind (default 20, capped at 100)."
           }
         },
+        returns_schema: ReturnSchemas.for_tool("principal_search"),
         returns:
-          "Array of result rows. User rows: `{type: \"user\", id, display_name, email, avatar_url}`. Agent rows: `{type: \"agent\", id, display_name, slug, kind, classification}` where classification is one of `ext_single_responsibility`, `fed_conversational`, `loc_built_in` (see Platform.Agents.Kind).",
+          "%{results: [...]}, users first, then agents. User rows: `{type: \"user\", id, display_name, email, avatar_url}`. Agent rows: `{type: \"agent\", id, display_name, slug, kind, classification}` where classification is one of `ext_single_responsibility`, `fed_conversational`, `loc_built_in` (see Platform.Agents.Kind).",
         limitations:
           "Substring matches on name/slug/display_name; exact case-insensitive match on user email. Queries under 2 characters return an empty list to avoid catalog-wide scans. Results are not permission-filtered — visibility filters land in a follow-up.",
         when_to_use:
@@ -1863,6 +1970,7 @@ defmodule Platform.Federation.ToolSurface do
             description: "The task ID"
           }
         },
+        returns_schema: ReturnSchemas.for_tool("task_get"),
         returns:
           "Task object with id, title, description, status, priority, project_id, epic_id, and sponsor (nil or %{id, name, email} per ADR 0042). Also `paused_reason` (the rollup-pause stamp map, or nil); `blocked_reason` (the escalation sentence last stamped when the orchestration layer moved this task to blocked, or nil); and `blocked_reason_at` (ISO-8601, or nil). The blocked stamp PERSISTS after unblock, so read it together with `status` and `blocked_reason_at`.",
         limitations: "Returns nil if task not found",
@@ -1908,6 +2016,7 @@ defmodule Platform.Federation.ToolSurface do
             description: "Max events to return. Defaults to 50, hard-capped at 200."
           }
         },
+        returns_schema: ReturnSchemas.for_tool("runtime_event_list"),
         returns:
           "%{task_id, count, limit, total, has_more, events: [%{event_type, payload, runtime_id, phase, lease_id, occurred_at}]} — events are NEWEST FIRST. " <>
             "`count` is the number of events RETURNED; `total` is the number of the task's events matching `event_type`, counted independent of `limit`; `has_more` is true exactly when older matching events were cut by `limit`. `payload` is returned verbatim, including `payload[\"stage_id\"]`, which is how you attribute an event to a specific stage: there is no top-level stage_id column.",
@@ -1938,6 +2047,7 @@ defmodule Platform.Federation.ToolSurface do
             description: "Max leases to return. Defaults to 50, hard-capped at 200."
           }
         },
+        returns_schema: ReturnSchemas.for_tool("execution_lease_list"),
         returns:
           "%{task_id, count, limit, status_filter, total, has_more, leases: [%{id, stage_id, phase, runtime_id, status, started_at, last_heartbeat_at, last_progress_at, expires_at, block_reason, metadata}]} — newest first by started_at. " <>
             "`count` is the number of leases RETURNED; `total` is the number of the task's leases matching `status`, counted independent of `limit`; `has_more` is true exactly when older matching leases were cut by `limit`.",
@@ -1998,6 +2108,7 @@ defmodule Platform.Federation.ToolSurface do
               "\"summary\" (default) truncates each description to #{ResultBound.snippet_chars()} characters; \"full\" returns descriptions whole. Use task_get for one task's full description rather than asking for full detail across a list."
           }
         },
+        returns_schema: ReturnSchemas.for_tool("task_list"),
         returns:
           "%{tasks: [...], total, limit, offset, has_more, filters} — an ENVELOPE, not a bare array. " <>
             "`filters` lists ONLY the filters the query applied, string-keyed (e.g. " <>
@@ -2911,6 +3022,7 @@ defmodule Platform.Federation.ToolSurface do
             description: "What to say. At most 2000 characters; blank is refused."
           }
         },
+        returns_schema: ReturnSchemas.for_tool("meeting_say"),
         returns:
           "%{utterance_id, status: \"spoken\" | \"failed\" | \"no_ack\", duration_s, error, room_name}. `duration_s` is nil unless the worker reported it. `error` is the worker's own failure string on `failed`, and nil otherwise.",
         limitations:
@@ -2979,6 +3091,7 @@ defmodule Platform.Federation.ToolSurface do
               "Optional free-text context, most useful with `rejected` — it is carried into the correction record that tunes future classification."
           }
         },
+        returns_schema: ReturnSchemas.for_tool("intent_ack"),
         returns:
           "%{intent_id, meeting_id, status, subagent_id, acked_at}. `status` is the intent's NEW queue status, which is not the same word you sent: `working` → `acked`, `completed` and `rejected` → `completed`, `cancel_honored` → `cancelled` (or `cancelled_late` if the work had already completed).",
         limitations:
@@ -3072,6 +3185,7 @@ defmodule Platform.Federation.ToolSurface do
                 "as \"no such plan exists\"."
           }
         },
+        returns_schema: ReturnSchemas.for_tool("plan_get"),
         returns:
           "Plan object with stages and validations preloaded, plus `status`, `version`, " <>
             "`rejection_reason`, `architecture_verdict`, and `is_current`. `is_current` is false " <>
@@ -3365,6 +3479,7 @@ defmodule Platform.Federation.ToolSurface do
               "\"summary\" (default) truncates each stage `description` to #{ResultBound.snippet_chars()} characters and replaces each validation's `evidence` and `evaluation_payload` with an empty map plus `_omitted`/`_length` markers; \"full\" returns everything whole."
           }
         },
+        returns_schema: ReturnSchemas.for_tool("stage_list"),
         returns:
           "%{stages: [...], total, limit, offset, has_more} — an ENVELOPE, not a bare array. `total` is the " <>
             "number of stages on the resolved plan, independent of `limit`; `has_more` is true exactly when " <>
@@ -3546,6 +3661,7 @@ defmodule Platform.Federation.ToolSurface do
         parameters: %{
           stage_id: %{type: "string", required: true, description: "The stage ID"}
         },
+        returns_schema: ReturnSchemas.for_tool("validation_list"),
         returns:
           "%{validations: [validation], total, has_more} — an ENVELOPE, not a bare array. `total` is the number of validations returned (this tool has no limit and returns every match); `has_more` is always false here. A server-side payload cap that drops records sets `has_more` to true.",
         limitations: "None",
@@ -4803,7 +4919,13 @@ defmodule Platform.Federation.ToolSurface do
   def execute("task_get", args, _context) do
     task_id = Map.get(args, "task_id") || Map.get(args, "id")
 
-    case Tasks.get_task_record(task_id) do
+    # A malformed id used to reach `Repo.get/2` and raise
+    # `Ecto.Query.CastError` (a 500 naming nothing). It now gets the same
+    # not-found envelope as a well-formed id that names no task (01a114a8
+    # stage 3).
+    record = if Platform.UUID.valid?(task_id), do: Tasks.get_task_record(task_id)
+
+    case record do
       nil ->
         {:error,
          %{
@@ -7002,9 +7124,22 @@ defmodule Platform.Federation.ToolSurface do
 
   def execute("validation_list", args, _context) do
     stage_id = Map.get(args, "stage_id")
-    validations = Tasks.list_validations(stage_id)
-    # Task 01a04a7a stage 4: `Tasks.list_validations/1` has no LIMIT.
-    {:ok, ResultBound.whole(:validations, Enum.map(validations, &serialize_validation/1))}
+
+    # A malformed stage_id used to raise `Ecto.Query.CastError` inside the
+    # query; it is refused in the error envelope instead (01a114a8 stage 3).
+    if Platform.UUID.valid?(stage_id) do
+      validations = Tasks.list_validations(stage_id)
+      # Task 01a04a7a stage 4: `Tasks.list_validations/1` has no LIMIT.
+      {:ok, ResultBound.whole(:validations, Enum.map(validations, &serialize_validation/1))}
+    else
+      {:error,
+       %{
+         error: "validation_list: stage_id must be a UUID, got #{inspect(stage_id)}",
+         code: :invalid_stage_id,
+         recoverable: true,
+         suggestion: "Pass the stage's id from stage_list or plan_get."
+       }}
+    end
   end
 
   def execute("prompt_template_list", _args, _context) do
@@ -7068,43 +7203,10 @@ defmodule Platform.Federation.ToolSurface do
 
   # ── Federation tools ─────────────────────────────────────────────────
 
-  def execute("federation_status", _args, _context) do
-    status = Platform.Federation.federation_status()
-
-    runtimes =
-      Enum.map(status, fn r ->
-        %{
-          runtime_id: r.runtime_id,
-          agent_name: r.agent_name,
-          agent_slug: r.agent_slug,
-
-          # 1. Connection. `online` is the socket and only the socket.
-          online: r.online,
-          connected_at: format_datetime(r.connected_at),
-          last_seen_at: format_datetime(r.last_seen_at),
-          last_connected_at: format_datetime(r.last_connected_at),
-
-          # 2. Build. Independent of connection: a runtime that is offline
-          # right now still reports the build from its last handshake.
-          client_build: format_build(r.client_build),
-          # WHY client_build is or is not a sha — so the literal "unknown"
-          # above is never ambiguous between a client that could not resolve
-          # its build, one that predates the contract, and one that declared
-          # nothing. See AgentRuntime.client_build_status/1.
-          client_build_status: r.client_build_status,
-          client_build_error: r.client_build_error,
-          process_started_at: format_datetime(r.process_started_at),
-
-          # 3. Proven — what core observed, `never` where it observed nothing.
-          proven: format_proven(r.proven),
-
-          # 4. Declared — what the runtime asserted. Last, after everything
-          # core measured itself.
-          declared_features: r.declared_features
-        }
-      end)
-
-    {:ok, %{runtimes: runtimes}}
+  def execute("federation_status", args, _context) do
+    with {:ok, filters} <- federation_status_filters(args) do
+      {:ok, %{runtimes: federation_status_rows(filters)}}
+    end
   end
 
   # ── Memory tool dispatch (ADR-0041 T5) ──────────────────────────────────
@@ -7494,6 +7596,21 @@ defmodule Platform.Federation.ToolSurface do
         err
     end
   end
+
+  # Code mode (task 01a114a8 stage 2), `code_mode` bundle.
+  def execute("suite_run", args, context), do: Platform.CodeMode.Run.run_tool(args, context)
+
+  # Task 01a114a8 stage 3: binding docs from the caller's effective tools.
+  def execute("suite_run_describe", args, context),
+    do: Platform.CodeMode.Docs.run_tool(args, context)
+
+  # Per-dispatch measurements (task 01a114a8 stage 1), `experiments` bundle.
+  def execute("dispatch_metrics_list", args, context),
+    do: Platform.Orchestration.DispatchMetrics.run_tool(args, context)
+
+  # Per-agent code-mode report (task 01a114a8 stage 4), `experiments` bundle.
+  def execute("code_mode_report", args, context),
+    do: Platform.Experiments.Tools.execute("code_mode_report", args, context)
 
   # Every `experiment_*` tool (task 01a0d415 stage 2); no other tool name has this prefix.
   def execute("experiment_" <> _ = tool, args, context),
@@ -14325,8 +14442,13 @@ defmodule Platform.Federation.ToolSurface do
           |> Map.put(:"#{key}_omitted", true)
           |> Map.put(:"#{key}_length", byte_size(Jason.encode!(blob)))
 
+        # Task 01a114a8 stage 3: `_length` is present on every summary row,
+        # null when the blob was returned whole, so a row's keys do not
+        # depend on whether its blob happened to be empty.
         _ ->
-          Map.put(acc, :"#{key}_omitted", false)
+          acc
+          |> Map.put(:"#{key}_omitted", false)
+          |> Map.put(:"#{key}_length", nil)
       end
     end)
   end
@@ -14476,7 +14598,19 @@ defmodule Platform.Federation.ToolSurface do
   defp maybe_snippet(record, true, _fields), do: record
 
   defp maybe_snippet(record, false, fields),
-    do: Enum.reduce(fields, record, &ResultBound.snippet(&2, &1))
+    do: Enum.reduce(fields, record, &stable_snippet(&2, &1))
+
+  # Task 01a114a8 stage 3: `ResultBound.snippet/2` adds its two markers only
+  # when the field is a string, so a row whose description is NULL lacked
+  # `description_truncated` / `description_length` while its neighbours had
+  # them: the key set of a list row depended on the data. Both markers are now
+  # always present in summary detail; a null field reads `false` / `null`.
+  defp stable_snippet(record, field) do
+    record
+    |> ResultBound.snippet(field)
+    |> Map.put_new(:"#{field}_truncated", false)
+    |> Map.put_new(:"#{field}_length", nil)
+  end
 
   # `detail` selects how much of each record's prose comes back. "summary" (the
   # default) snippets; "full" restores the pre-01a049de per-record shape for a
@@ -14887,6 +15021,131 @@ defmodule Platform.Federation.ToolSurface do
       scheduled_start_at: format_datetime(meeting.scheduled_start_at),
       scheduled_end_at: format_datetime(meeting.scheduled_end_at)
     }
+  end
+
+  # Task 01a114a8 stage 3: `online`, `runtime_ids` and `fields` narrow the
+  # report. With none of them the rows are exactly what they always were:
+  # every active runtime, every field. Filters run AFTER the status read, so
+  # a filter can only drop rows or keys, never change a value.
+  defp federation_status_rows(filters) do
+    status = Platform.Federation.federation_status()
+
+    runtimes =
+      Enum.map(status, fn r ->
+        %{
+          runtime_id: r.runtime_id,
+          agent_name: r.agent_name,
+          agent_slug: r.agent_slug,
+
+          # 1. Connection. `online` is the socket and only the socket.
+          online: r.online,
+          connected_at: format_datetime(r.connected_at),
+          last_seen_at: format_datetime(r.last_seen_at),
+          last_connected_at: format_datetime(r.last_connected_at),
+
+          # 2. Build. Independent of connection: a runtime that is offline
+          # right now still reports the build from its last handshake.
+          client_build: format_build(r.client_build),
+          # WHY client_build is or is not a sha — so the literal "unknown"
+          # above is never ambiguous between a client that could not resolve
+          # its build, one that predates the contract, and one that declared
+          # nothing. See AgentRuntime.client_build_status/1.
+          client_build_status: r.client_build_status,
+          client_build_error: r.client_build_error,
+          process_started_at: format_datetime(r.process_started_at),
+
+          # 3. Proven — what core observed, `never` where it observed nothing.
+          proven: format_proven(r.proven),
+
+          # 4. Declared — what the runtime asserted. Last, after everything
+          # core measured itself.
+          declared_features: r.declared_features
+        }
+      end)
+
+    runtimes
+    |> Enum.filter(&federation_status_keep?(&1, filters))
+    |> Enum.map(&federation_status_project(&1, filters.fields))
+  end
+
+  defp federation_status_keep?(row, %{online: online, runtime_ids: ids}) do
+    (is_nil(online) or row.online == online) and (is_nil(ids) or row.runtime_id in ids)
+  end
+
+  # `runtime_id` is always kept, so a projected row still names its runtime.
+  defp federation_status_project(row, nil), do: row
+
+  defp federation_status_project(row, fields),
+    do: Map.take(row, [:runtime_id | Enum.map(fields, &String.to_existing_atom/1)])
+
+  defp federation_status_filters(args) do
+    with {:ok, online} <- federation_status_online(Map.get(args, "online")),
+         {:ok, ids} <- federation_status_string_list(args, "runtime_ids"),
+         {:ok, fields} <- federation_status_string_list(args, "fields"),
+         :ok <- federation_status_known_fields(fields) do
+      {:ok, %{online: online, runtime_ids: ids, fields: fields}}
+    end
+  end
+
+  defp federation_status_online(nil), do: {:ok, nil}
+  defp federation_status_online(value) when is_boolean(value), do: {:ok, value}
+
+  defp federation_status_online(other) do
+    {:error,
+     %{
+       error: "federation_status: `online` must be true or false, got #{inspect(other)}",
+       code: :invalid_online,
+       recoverable: true,
+       suggestion:
+         "Pass online: true for connected runtimes only, false for offline only, or omit it."
+     }}
+  end
+
+  defp federation_status_string_list(args, key) do
+    case Map.get(args, key) do
+      nil ->
+        {:ok, nil}
+
+      list when is_list(list) ->
+        if Enum.all?(list, &is_binary/1),
+          do: {:ok, list},
+          else: federation_status_list_error(key)
+
+      _ ->
+        federation_status_list_error(key)
+    end
+  end
+
+  defp federation_status_list_error(key) do
+    {:error,
+     %{
+       error: "federation_status: `#{key}` must be a list of strings",
+       code: :"invalid_#{key}",
+       recoverable: true,
+       suggestion: "Pass `#{key}` as a JSON array of strings, or omit it."
+     }}
+  end
+
+  # A misspelt field REFUSES rather than silently projecting it away: a row
+  # missing the key you asked for would read as "this runtime has no value".
+  defp federation_status_known_fields(nil), do: :ok
+
+  defp federation_status_known_fields(fields) do
+    known = Platform.Federation.ReturnSchemas.federation_runtime_fields()
+
+    case Enum.reject(fields, &(&1 in known)) do
+      [] ->
+        :ok
+
+      unknown ->
+        {:error,
+         %{
+           error: "federation_status: unknown field(s) #{Enum.join(unknown, ", ")}",
+           code: :unknown_field,
+           recoverable: true,
+           suggestion: "Use any of: #{Enum.join(known, ", ")}."
+         }}
+    end
   end
 
   # A runtime that has not told us its build reports the literal "unknown".

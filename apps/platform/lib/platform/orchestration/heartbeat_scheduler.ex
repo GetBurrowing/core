@@ -358,7 +358,11 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
 
     # After the case, so the served row, the derived default and the
     # hardcoded last resort all pass through the one helper.
-    append_experiment_directive(prompt, "planner.stage_budget", "dispatch.planning", task)
+    prompt
+    |> append_experiment_directive("planner.stage_budget", "dispatch.planning", task,
+      phase: "planning"
+    )
+    |> append_code_mode_directive(task, "planning")
   end
 
   # DERIVE, don't restate (task 019ff10f stage 1).
@@ -386,10 +390,17 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   # ── Experiment directives (task 01a0d415 stage 4) ───────────────────────
   #
   # THE one code path by which a non-prompt experiment surface reaches a
-  # dispatch prompt. `planning_prompt/2` and `in_progress_prompt/4` call it on
-  # whatever body their render produced — the served row, the derived
-  # default or the hardcoded last resort — so no branch can skip it or carry
-  # a second copy.
+  # dispatch prompt's TEXT. `planning_prompt/2`, `in_progress_prompt/4` and
+  # (since task 01a114a8 stage 4, for `dispatch.code_mode` only)
+  # `review_prompt/5` call it on whatever body their render produced — the
+  # served row, the derived default or the hardcoded last resort — so no
+  # branch can skip it or carry a second copy.
+  #
+  # SCOPE, measured by task 01a114a8 stage 4: this is the only path into the
+  # prompt text, not into the dispatch. `dispatch.product_docs_preamble` is
+  # resolved by `Platform.Org.PreambleBuilder.product_doc_keys/1` into the
+  # dispatch context's org preamble, with its own subject builder (which
+  # carries no `agent_id`).
   #
   # The block is APPENDED rather than interpolated through a template
   # placeholder, so running an experiment never needs a template edit.
@@ -411,17 +422,36 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   #
   # `:experiments_surface_resolver` (default `Platform.Experiments.Surfaces`)
   # is a TEST SEAM for the raising-resolver case; no config file sets it.
+  #
+  # `opts[:phase]` ("planning" | "execution" | "review") names the phase
+  # being dispatched, so the subject carries that phase's assignee as
+  # `agent_id` (task 01a114a8 stage 4). Without it no `agent_id` is set.
   @doc false
-  @spec append_experiment_directive(String.t(), String.t(), String.t(), map()) :: String.t()
-  def append_experiment_directive(prompt, surface_key, target, task) when is_binary(prompt) do
-    case experiment_directive_block(surface_key, target, task) do
+  @spec append_experiment_directive(String.t(), String.t(), String.t(), map(), keyword()) ::
+          String.t()
+  def append_experiment_directive(prompt, surface_key, target, task, opts \\ [])
+      when is_binary(prompt) do
+    case experiment_directive_block(surface_key, target, task, Keyword.get(opts, :phase)) do
       block when is_binary(block) -> prompt <> block
       nil -> prompt
     end
   end
 
-  defp experiment_directive_block(surface_key, target, task) do
-    with %ExperimentSubject{} = subject <- experiment_subject(task),
+  # `dispatch.code_mode` (task 01a114a8 stage 4) on the planning, execution
+  # and review renders. One target for all three: the arm is per task, so
+  # every dispatch of a task carries the same directive.
+  defp append_code_mode_directive(prompt, task, phase) do
+    append_experiment_directive(
+      prompt,
+      ExperimentSurfaces.CodeMode.key(),
+      ExperimentSurfaces.CodeMode.target(),
+      task,
+      phase: phase
+    )
+  end
+
+  defp experiment_directive_block(surface_key, target, task, phase) do
+    with %ExperimentSubject{} = subject <- experiment_subject(task, phase),
          surface when not is_nil(surface) <- ExperimentSurfaces.get(surface_key),
          true <- function_exported?(surface, :render_directive, 1),
          resolver =
@@ -453,7 +483,12 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   # Built from the task already in hand; policies read only these
   # attributes (subject.ex moduledoc). A nil value is left out rather than
   # passed, so the resolver can fill it (see `Surfaces.with_attributes/3`).
-  defp experiment_subject(task) do
+  #
+  # `agent_id` (task 01a114a8 stage 4) is the dispatched phase's AGENT
+  # assignee: the phase slot of `phase_assignees`, else the top-level
+  # assignee, the resolution `Tasks.assignee_for_phase/2` uses. A user
+  # assignee is not an agent and sets nothing.
+  defp experiment_subject(task, phase) do
     with id when is_binary(id) <- contract_id(task, :id),
          true <- Platform.UUID.valid?(id) do
       attributes =
@@ -461,13 +496,39 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
           project_id: Map.get(task, :project_id),
           epic_id: Map.get(task, :epic_id),
           inserted_at: Map.get(task, :inserted_at),
-          org_id: task_org_id(task)
+          org_id: task_org_id(task),
+          agent_id: phase_agent_id(task, phase)
         ]
         |> Enum.reject(fn {_key, value} -> is_nil(value) end)
         |> Map.new()
 
       ExperimentSubject.new("task", id, attributes)
     else
+      _ -> nil
+    end
+  end
+
+  defp phase_agent_id(task, phase) when is_binary(phase) do
+    slot =
+      case Map.get(task, :phase_assignees) do
+        %{} = slots -> Map.get(slots, phase)
+        _ -> nil
+      end
+
+    case slot do
+      %{"assignee_id" => id} = slot when is_binary(id) ->
+        if Map.get(slot, "assignee_type", "agent") == "agent", do: id
+
+      _ ->
+        if Map.get(task, :assignee_type) == "agent", do: binary_or_nil(task, :assignee_id)
+    end
+  end
+
+  defp phase_agent_id(_task, _phase), do: nil
+
+  defp binary_or_nil(task, key) do
+    case Map.get(task, key) do
+      value when is_binary(value) -> value
       _ -> nil
     end
   end
@@ -568,7 +629,10 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
 
     prompt
     |> enrich_in_progress_prompt(task, stage)
-    |> append_experiment_directive("mail.draft.generator", "dispatch.in_progress", task)
+    |> append_experiment_directive("mail.draft.generator", "dispatch.in_progress", task,
+      phase: "execution"
+    )
+    |> append_code_mode_directive(task, "execution")
   end
 
   # `dispatch.in_review` and `dispatch.review_e2e` share one assigns body — they
@@ -637,7 +701,9 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
           end)
       end
 
-    enrich_in_review_prompt(prompt, task, stage)
+    prompt
+    |> enrich_in_review_prompt(task, stage)
+    |> append_code_mode_directive(task, "review")
   end
 
   defp deploying_prompt(task, plan, stage) do

@@ -37,7 +37,12 @@ defmodule Platform.Federation.PlayToolsTest do
   # main's catalogue at 23ff27a0, in order (119 tools). Measured, not derived.
   # 120 with `validation_payload_amend` after `plan_reject` (task 01a0acb4
   # stage 2). 121 with `task_delivery_candidate_list` after
-  # `task_close_as_delivered` (task 01a044b0 stage 4).
+  # `task_close_as_delivered` (task 01a044b0 stage 4). 122 with
+  # `dispatch_metrics_list` after `experiment_promote` (task 01a114a8 stage 1).
+  # 123 with `suite_run` (bundle `code_mode`) last (task 01a114a8 stage 2).
+  # 124 with `suite_run_describe` after it (task 01a114a8 stage 3).
+  # 125 with `code_mode_report` after `dispatch_metrics_list` (task 01a114a8
+  # stage 4).
   @main_tool_names ~w(
     canvas.create canvas.patch canvas.describe canvas.list_kinds canvas.template canvas.versions
     canvas.restore send_media react project_list org_list_descendants project_update epic_list
@@ -61,7 +66,8 @@ defmodule Platform.Federation.PlayToolsTest do
     meeting_activity_push intent_ack experiment_surface_list experiment_list experiment_get
     experiment_create experiment_variant_add experiment_start experiment_stop experiment_conclude
     experiment_results experiment_signals_list experiment_exclude experiment_goal_set
-    experiment_goal_list experiment_promote
+    experiment_goal_list experiment_promote dispatch_metrics_list code_mode_report suite_run
+    suite_run_describe
   )
 
   @names ~w(play_session_start play_session_stop play_session_status)
@@ -112,8 +118,8 @@ defmodule Platform.Federation.PlayToolsTest do
   defp catalogue_names, do: Enum.map(ToolSurface.tool_definitions(), & &1.name)
 
   describe "GUARD: with GAME_STREAM_ENABLED unset the tool list is main's" do
-    test "tool_definitions/0 names equal main's 121, in order" do
-      assert length(@main_tool_names) == 121
+    test "tool_definitions/0 names equal main's 125, in order" do
+      assert length(@main_tool_names) == 125
       assert catalogue_names() == @main_tool_names
     end
 

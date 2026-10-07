@@ -807,11 +807,15 @@ jobs:
               {:ok, img} = Vix.Vips.Operation.black(4, 3)
               IO.puts("vips_op=" <> inspect({Vix.Vips.Image.width(img), Vix.Vips.Image.height(img)}))
               IO.puts("crypto=" <> Base.encode16(:crypto.hash(:sha256, "smoke"), case: :lower))
+              IO.puts("code_mode=" <> inspect(Platform.CodeMode.Run.eval("1+1")))
             ')"
           echo "$out"
           echo "$out" | grep -q "^arch=${EXPECTED_ARCH}-" || { echo "::error::image arch is not ${EXPECTED_ARCH}"; exit 1; }
           echo "$out" | grep -q '^vips_op={4, 3}$' || { echo "::error::vix NIF did not run"; exit 1; }
           echo "$out" | grep -q '^crypto=[0-9a-f]\{64\}$' || { echo "::error::crypto NIF did not run"; exit 1; }
+          # Wasmex (task 01a114a8 stage 2): the wasmtime NIF loads for this
+          # arch AND the vendored QuickJS wasm runs a script (suite_run).
+          echo "$out" | grep -q '^code_mode={:ok, 2}$' || { echo "::error::wasmex NIF or code_mode wasm did not run"; exit 1; }
 
   publish-manifest:
     name: Publish multi-arch manifest

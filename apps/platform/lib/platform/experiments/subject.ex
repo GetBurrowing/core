@@ -28,8 +28,9 @@ defmodule Platform.Experiments.Subject do
 
   ## `attributes` carries only what the caller already knows
 
-  `:project_id`, `:epic_id`, `:inserted_at` — plain map keys, supplied by the
-  caller from data it already has in hand. Policies read scoping information
+  `:project_id`, `:epic_id`, `:inserted_at`, and (task 01a114a8 stage 4)
+  `:agent_id`, the dispatched phase's assignee — plain map keys, supplied by
+  the caller from data it already has in hand. Policies read scoping information
   from here and from nowhere else. A policy that needs a fact not present in
   `attributes` returns `:no_opinion` rather than going and fetching it.
   """

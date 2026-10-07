@@ -27,7 +27,11 @@ defmodule Platform.Agents.AgentRuntime do
   # ADR 0055), read per call: never widen this attribute with a module's
   # bundle. A module bundle (e.g. `play`, task 01a0db5f, which drives a
   # physical GPU on a LAN machine) is grantable and NOT a default.
-  @core_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments)
+  #
+  # `code_mode` (task 01a114a8 stage 2, `suite_run`) is grantable and NOT a
+  # default: it runs agent-written programs, so it is granted per runtime as
+  # data (Control Center allowed_bundles), never by a deploy.
+  @core_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode)
 
   # `meetings` is a DEFAULT, not merely grantable (task 01a066af stage 4).
   # `meeting_say` is the only way an invited agent can speak in a room, and it

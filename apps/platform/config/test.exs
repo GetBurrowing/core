@@ -410,6 +410,11 @@ config :platform, :stack_deployer,
 # write and teardown doesn't race with background Task.Supervisor children.
 config :platform, :canvas_persist_sync, true
 
+# The tool-call ledger (task 01a114a8 stage 1) writes inline in tests, under
+# the sandbox owner, instead of in a Platform.TaskSupervisor child. The
+# body is identical and still rescues everything; see ToolCallLedger.
+config :platform, :tool_call_ledger_sync, true
+
 # T2 (ADR-0041, task 019e41d9-8b50-7f11-bfd0-b667b453c8f2) ships a
 # scope-creep guard that asserts Platform.Org.Context has not changed
 # since T1 HEAD (commit 4d6d332). The constant below is the sha256 of

@@ -165,7 +165,14 @@ defmodule Platform.Federation.ToolSurfaceTest do
       # 121 as of task 01a044b0 stage 4, which added the read-only
       # `task_delivery_candidate_list` to the `task` bundle. A genuinely new
       # tool, no new bundle.
-      assert length(tools) == 121
+      # 122 as of task 01a114a8 stage 1, which added the read-only
+      # `dispatch_metrics_list` to the `experiments` bundle. A genuinely new
+      # tool, no new bundle.
+      # 123 as of task 01a114a8 stage 2, which added `suite_run` in the new
+      # `code_mode` bundle (grantable, never a default).
+      # 124 as of task 01a114a8 stage 3: `suite_run_describe`, same bundle.
+      # 125 as of task 01a114a8 stage 4: `code_mode_report` in `experiments`.
+      assert length(tools) == 125
 
       tool_names = Enum.map(tools, & &1.name)
       assert "task_close_as_delivered" in tool_names

@@ -117,6 +117,11 @@ defmodule Platform.Application do
            Platform.Federation.Peers.Boot,
            # Task supervisor for parallel agent dispatch (ADR 0027)
            {Task.Supervisor, name: Platform.TaskSupervisor},
+           # Code mode (task 01a114a8 stage 2): suite_run's concurrency slots
+           # and its ephemeral ETS store (NonceCache shape). No DB, no
+           # PubSub; both must exist before the Endpoint takes a tools/call.
+           Platform.CodeMode.Slots,
+           Platform.CodeMode.Store,
            # Dedicated HTTP/2 pool for APNs (task 01a10882 stage 2). Apple
            # requires HTTP/2 and multiplexes every push for one provider
            # over a connection, so the pool is its own and HTTP/2 only.

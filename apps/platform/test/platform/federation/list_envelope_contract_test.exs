@@ -71,10 +71,11 @@ defmodule Platform.Federation.ListEnvelopeContractTest do
       assert missing == []
     end
 
-    # 25 audited by task 01a04a7a, plus task_delivery_candidate_list (01a044b0).
-    test "the registry covers the 26 registered tools, each with an atom rows key" do
+    # 25 audited by task 01a04a7a, plus task_delivery_candidate_list (01a044b0),
+    # dispatch_metrics_list (01a114a8 stage 1) and code_mode_report (stage 4).
+    test "the registry covers the 28 registered tools, each with an atom rows key" do
       tools = ToolSurface.list_envelope_tools()
-      assert map_size(tools) == 26
+      assert map_size(tools) == 28
       assert Enum.all?(tools, fn {_name, key} -> is_atom(key) and not is_nil(key) end)
     end
 
@@ -323,6 +324,64 @@ defmodule Platform.Federation.ListEnvelopeContractTest do
       end
 
     %{task: task, plan: plan, stages: stages}
+  end
+
+  describe "runtime conformance: dispatch_metrics_list" do
+    # Three started stages with no ack and no lease: three `stage_row`
+    # dispatches (task 01a114a8 stage 1).
+    setup do
+      %{task: task, stages: stages} = plan_with_stages(3)
+
+      for stage <- stages do
+        {:ok, _} =
+          stage
+          |> Platform.Tasks.Stage.changeset(%{status: "running", started_at: DateTime.utc_now()})
+          |> Platform.Repo.update()
+      end
+
+      %{task: task}
+    end
+
+    test "truncated: limit 2 over 3 rows", %{task: task} do
+      env = call("dispatch_metrics_list", %{"task_id" => task.id, "limit" => 2})
+      assert_truncated("dispatch_metrics_list", env, 3)
+      assert env.limit == 2
+    end
+
+    test "untruncated: limit 50 over 3 rows", %{task: task} do
+      env = call("dispatch_metrics_list", %{"task_id" => task.id, "limit" => 50})
+      assert_whole("dispatch_metrics_list", env, 3)
+    end
+  end
+
+  describe "runtime conformance: code_mode_report" do
+    # Three cohort agents and no dispatch: one n-0 row per agent x arm, so
+    # 3 agents x 2 arms = 6 rows, returned whole (task 01a114a8 stage 4).
+    test "every agent x arm row, whole" do
+      ids = for _ <- 1..3, do: tenant_agent!(nil).id
+
+      {:ok, experiment} =
+        Platform.Experiments.create_experiment(%{
+          slug: "env-cm-#{u()}",
+          name: "Env code mode",
+          surface_key: "dispatch.code_mode",
+          surface_target: "dispatch.prompt_directive",
+          assignment_policy: %{"type" => "task_cohort", "cohort" => %{"agent_id" => ids}}
+        })
+
+      {:ok, _} =
+        Platform.Experiments.add_variant(experiment, %{
+          slug: "treatment",
+          payload: %{"suite_run" => true},
+          weight: 1
+        })
+
+      {:ok, _} =
+        Platform.Experiments.start(experiment, %Platform.Accounts.User{id: Ecto.UUID.generate()})
+
+      env = call("code_mode_report", %{"experiment_id" => experiment.id})
+      assert_unbounded("code_mode_report", env, 6)
+    end
   end
 
   describe "runtime conformance: stage_list" do

@@ -200,6 +200,13 @@ defmodule Platform.MixProject do
       {:bandit, "~> 1.5"},
       {:oauth2, "~> 2.1"},
       {:mox, "~> 1.0", only: :test},
+      # ex_json_schema: validates tools' real output against their
+      # `returns_schema` (task 01a114a8 stage 3,
+      # test/platform/code_mode/return_contract_test.exs). Already in every
+      # env's tree through ex_mcp (pinned 0.11.3 in mix.lock), so declaring it
+      # adds nothing to a release; an `only: :test` here would diverge from
+      # that and mix refuses it.
+      {:ex_json_schema, "~> 0.11"},
       {:web_push_encryption, "~> 0.3"},
       {:earmark, "~> 1.4"},
       {:makeup, "~> 1.2"},
@@ -248,6 +255,14 @@ defmodule Platform.MixProject do
       # mailroom, which failed against a real server). Pure Elixir: no NIFs,
       # no system libraries.
       {:mail, "~> 0.5"},
+      # wasmex: the wasmtime runtime behind `suite_run` (task 01a114a8 stage
+      # 2, Platform.CodeMode). Agent-written JavaScript runs in QuickJS-ng
+      # compiled to wasm32-wasip1 (priv/code_mode/quickjs_cm.wasm), so a
+      # memory-safety bug in the interpreter stays inside wasm linear memory
+      # instead of running natively in the BEAM. `rustler_precompiled`
+      # fetches the NIF per target at compile time (aarch64 and x86_64 linux
+      # gnu are both in the package's checksum file); nothing compiles Rust.
+      {:wasmex, "== 0.15.1"},
       # imp: Imp (DSPy for Elixir). PILOT dependency for task 01a0e8b5, used
       # ONLY by the meeting open_question classifier pilot
       # (lib/platform/meetings/open_question_pilot/**, the

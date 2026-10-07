@@ -178,7 +178,15 @@ defmodule Platform.Federation.ToolArgumentsTest do
   # `require_amend_payload/1`, also before any lookup. None is tolerated
   # absent, and `reason` may not be: the reason is what the amendment history
   # records as WHY a gate case changed after authoring.
-  @surveyed_required_count 172
+  # 173 with `suite_run`'s `script` (task 01a114a8 stage 2). HONEST: read
+  # under its declared key only by `Platform.CodeMode.Run.run_tool/2`, which
+  # refuses an absent, non-binary or empty script (`missing_script`) before
+  # any slot is taken or wasm is instantiated. No alias, no context fallback.
+  # 174 with `code_mode_report`'s `experiment_id` (task 01a114a8 stage 4).
+  # HONEST: read under its declared key only, by
+  # `Platform.Experiments.Tools`'s `fetch_visible/3` -> `required_uuid/3`,
+  # which refuses an absent or malformed id. No alias, no context fallback.
+  @surveyed_required_count 174
 
   defp read_source(relative) do
     # Resolved from __DIR__ (apps/platform/test/platform/federation) rather

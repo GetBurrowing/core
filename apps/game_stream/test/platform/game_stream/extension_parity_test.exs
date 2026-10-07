@@ -249,7 +249,11 @@ defmodule Platform.GameStream.ExtensionParityTest do
       {"experiment_exclude", "experiments"},
       {"experiment_goal_set", "experiments"},
       {"experiment_goal_list", "experiments"},
-      {"experiment_promote", "experiments"}
+      {"experiment_promote", "experiments"},
+      {"dispatch_metrics_list", "experiments"},
+      {"code_mode_report", "experiments"},
+      {"suite_run", "code_mode"},
+      {"suite_run_describe", "code_mode"}
     ]
 
     # sha256 of the canonical term of `tool_definitions/0` on main (see
@@ -260,15 +264,31 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # the only tool-definition change. The off digest equals the one
     # apps/platform/test/platform/extensions_test.exs already pins for the
     # same change; both values were measured by main CI at ccff9306b.
-    @main_tool_digest_off "aeed155fe1eddc517699538d9ec4a22f158c25fb87ac83672892de7adf56fb68"
-    @main_tool_digest_on "396ffdd2b405d9601d1245485c7fef9be1f59553af12ed483b4f2b0fad56c997"
+    #
+    # Re-pinned by task 01a114a8 stage 1: `dispatch_metrics_list` joins the
+    # `experiments` bundle. Both values measured on moon at the stage's
+    # branch; the off digest equals the one extensions_test.exs pins.
+    #
+    # Re-pinned by task 01a114a8 stage 2: `suite_run` in the new `code_mode`
+    # bundle. Both values measured on moon at the stage's branch; the off
+    # digest equals the one extensions_test.exs pins.
+    #
+    # Re-pinned by task 01a114a8 stage 3: `suite_run_describe`, the
+    # `returns_schema` key on 12 definitions, federation_status's filters and
+    # the suite_run primer. Measured on moon; off equals extensions_test.exs.
+    #
+    # Re-pinned by task 01a114a8 stage 4: `code_mode_report` in `experiments`
+    # and experiment_create doc text. Measured on moon; off equals
+    # extensions_test.exs.
+    @main_tool_digest_off "9c1561c7bf4d7b652b6b6a9477de5690297f1fbffda1f88468b678136a09e4e8"
+    @main_tool_digest_on "0e06bc46d2a4286e40d87ba68768bd293a0f02277872d0d1b7435043d6914276"
     @main_kinds_summaries_digest_off "4c060fb7a6914985f94857aaac9effbb519dd2b2170c7a9c0013d4db15a73ea4"
     @main_kinds_summaries_digest_on "dbab62a1b3d154e23378f3a990b77deb17c5f50eb30adf0b055bc0df8ce6c1e3"
     @main_kinds_tool_schemas_digest_off "e454cd9e2aeb1d821a70b74fe433e81ba98b94f7ae9f2d59c55f8cf5bf509af8"
     @main_kinds_tool_schemas_digest_on "66a2afcec34a8e4b6275ab78f21f7bb124b671a12f690399556b2ad6f2b331ef"
     @main_metrics_catalog_digest "95805ed557855b482286544ea8d5ea6063b81e47ce1ee28268467a7df2848ee9"
-    @main_bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments play)
-    @main_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments play)
+    @main_bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode play)
+    @main_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode play)
     @main_rail [
       :chat,
       :tasks,
@@ -294,8 +314,10 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # Task 01a10a44 adds dispatch.product_docs_preamble, a core surface appended
     # after the classifier in core's list, so it precedes the Play keys. It is
     # new, so both pins gain it the same way game_stream.touch was added.
-    @main_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary game_stream.encoder_preset game_stream.roster meetings.open_question_classifier game_stream.touch dispatch.product_docs_preamble)
-    @branch_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.open_question_classifier dispatch.product_docs_preamble game_stream.encoder_preset game_stream.roster game_stream.touch)
+    # Task 01a114a8 stage 4 adds dispatch.code_mode, a core surface appended
+    # after dispatch.product_docs_preamble, so it too precedes the Play keys.
+    @main_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary game_stream.encoder_preset game_stream.roster meetings.open_question_classifier game_stream.touch dispatch.product_docs_preamble dispatch.code_mode)
+    @branch_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.open_question_classifier dispatch.product_docs_preamble dispatch.code_mode game_stream.encoder_preset game_stream.roster game_stream.touch)
 
     defp canon(%_{} = s), do: canon(Map.from_struct(s))
 

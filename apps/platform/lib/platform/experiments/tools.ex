@@ -240,6 +240,32 @@ defmodule Platform.Experiments.Tools do
     end
   end
 
+  # Task 01a114a8 stage 4: the per-agent code-mode report. Not an
+  # `experiment_*` name, so `ToolSurface` routes it here with its own clause.
+  defp run("code_mode_report", args, caller) do
+    with {:ok, experiment} <- fetch_visible("code_mode_report", args, caller) do
+      if experiment.surface_key == "dispatch.code_mode" do
+        rows = experiment |> Results.by_agent() |> Enum.map(&serialize_agent_row/1)
+
+        {:ok,
+         ResultBound.whole(:rows, rows, %{
+           experiment_id: experiment.id,
+           surface_key: experiment.surface_key,
+           status: experiment.status,
+           min_subjects: Results.min_subjects(experiment)
+         })}
+      else
+        err(
+          "code_mode_report",
+          :wrong_surface,
+          "experiment is on #{inspect(experiment.surface_key)}, not \"dispatch.code_mode\"",
+          true,
+          "Pass the id of an experiment on the dispatch.code_mode surface; use experiment_results for others."
+        )
+      end
+    end
+  end
+
   defp run("experiment_signals_list", args, caller) do
     with {:ok, experiment} <- fetch_visible("experiment_signals_list", args, caller) do
       opts =
@@ -820,6 +846,16 @@ defmodule Platform.Experiments.Tools do
       subjects: row.subjects,
       min_subjects: row.min_subjects,
       reason: to_string(row.reason)
+    }
+  end
+
+  defp serialize_agent_row(row) do
+    %{
+      row
+      | metrics:
+          Map.new(row.metrics, fn {key, metric} ->
+            {key, %{metric | reason: to_string(metric.reason)}}
+          end)
     }
   end
 
