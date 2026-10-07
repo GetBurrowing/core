@@ -468,10 +468,9 @@ defmodule Platform.SignInAdmin do
   # because Enable could then not wait for it.
   defp mint_link(user, pocket_id_user_id) do
     with {:ok, %PocketId.Token{value: token}} <- PocketId.one_time_token(pocket_id_user_id) do
-      expires_at =
-        DateTime.utc_now()
-        |> DateTime.add(@link_ttl_seconds, :second)
-        |> DateTime.truncate(:second)
+      # Not truncated (task 01a11503): `note_sign_in_link_expiry/2` rounds
+      # UP, which only works on the raw sub-second value.
+      expires_at = DateTime.add(DateTime.utc_now(), @link_ttl_seconds, :second)
 
       case Accounts.note_sign_in_link_expiry(user, expires_at) do
         {:ok, user} ->

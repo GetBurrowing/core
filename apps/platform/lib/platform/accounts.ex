@@ -222,6 +222,11 @@ defmodule Platform.Accounts do
   current `sign_in_link_expires_at` and `expires_at`, so a second, shorter
   link never shortens the window of a longer one still live.
 
+  The stored value is `expires_at` rounded UP to the next whole second, plus
+  a 5-second margin (task 01a11503): pocket-id keeps the token alive to a
+  later instant than Suite's own sample, so a truncated or exact copy could
+  let Enable through while the token still works.
+
   `Platform.SignInAdmin.enable/2` refuses while that value is in the future:
   pocket-id has no route to revoke a one-time token, and it restores a token
   a disabled user tried to redeem, so a link minted before a Disable would
@@ -232,6 +237,13 @@ defmodule Platform.Accounts do
   a stale `user` struct cannot move the value backwards. Returns
   `{:error, :not_found}` when the row no longer exists.
   """
+  # Task 01a11503 (evidence canvas 01a11502-9e61-7001-8992-1be3e31eb59d):
+  # a refused redeem restores pocket-id's token to a whole second that can sit
+  # after Suite's truncated copy, so Enable went through while the pre-Disable
+  # link still worked. Rounding up closes the sub-second gap; the margin also
+  # absorbs clock skew between the Suite and pocket-id hosts.
+  @sign_in_link_expiry_margin_seconds 5
+
   @spec note_sign_in_link_expiry(User.t(), DateTime.t()) ::
           {:ok, User.t()} | {:error, :not_found}
   def note_sign_in_link_expiry(
@@ -240,7 +252,12 @@ defmodule Platform.Accounts do
       ) do
     # `users.sign_in_link_expires_at` is a UTC `timestamp` column: compare as
     # naive UTC so no session time zone is involved.
-    expires_at = expires_at |> DateTime.truncate(:second) |> DateTime.to_naive()
+    expires_at =
+      expires_at
+      |> ceil_to_second()
+      |> DateTime.add(@sign_in_link_expiry_margin_seconds, :second)
+      |> DateTime.to_naive()
+
     now = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_naive()
 
     query =
@@ -261,6 +278,12 @@ defmodule Platform.Accounts do
       {0, _} -> {:error, :not_found}
     end
   end
+
+  # Whole-second ceiling: a value already on the second is left alone.
+  defp ceil_to_second(%DateTime{microsecond: {0, _}} = at), do: DateTime.truncate(at, :second)
+
+  defp ceil_to_second(%DateTime{} = at),
+    do: at |> DateTime.truncate(:second) |> DateTime.add(1, :second)
 
   @doc """
   Find a user by OIDC `sub`, creating one if missing, or refreshing

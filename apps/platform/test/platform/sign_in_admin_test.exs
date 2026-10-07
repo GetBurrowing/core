@@ -310,6 +310,14 @@ defmodule Platform.SignInAdminTest do
     end
   end
 
+  # What `Accounts.note_sign_in_link_expiry/2` stores for a link expiring at
+  # `at`: rounded UP to the whole second, plus 5 s (task 01a11503).
+  defp recorded_expiry(%DateTime{microsecond: {0, _}} = at),
+    do: at |> DateTime.truncate(:second) |> DateTime.add(5, :second)
+
+  defp recorded_expiry(%DateTime{} = at),
+    do: at |> DateTime.truncate(:second) |> DateTime.add(6, :second)
+
   defp refute_secret(text, what) do
     refute text =~ @token, "token leaked in #{what}"
     refute text =~ @key, "API key leaked in #{what}"
@@ -779,6 +787,7 @@ defmodule Platform.SignInAdminTest do
     test "an invitee disabled with a live link is refused, before any pocket-id request",
          %{admin: admin} do
       agent = fake!(ids: ["pid-live"])
+      before = DateTime.utc_now()
 
       assert {:ok, %{user: user, link: link}} =
                SignInAdmin.invite(admin, %{
@@ -787,13 +796,25 @@ defmodule Platform.SignInAdminTest do
                  role: :member
                })
 
-      assert Repo.get!(Accounts.User, user.id).sign_in_link_expires_at == link.expires_at
+      # Task 01a11503: mint_link/2 must hand the RAW clock value to the
+      # recording point. A truncated `link.expires_at` would satisfy the
+      # equality below too (it is computed from the same value), so pin the
+      # precision: `utc_now/0` always carries 6 digits, truncation leaves 0.
+      assert {_, 6} = link.expires_at.microsecond
+
+      recorded = recorded_expiry(link.expires_at)
+      assert Repo.get!(Accounts.User, user.id).sign_in_link_expires_at == recorded
+
+      # Behavioural floor, in addition to the equality: the clock was sampled
+      # after `before`, so the recorded value covers ceil(before + TTL) + 5 s.
+      floor = recorded_expiry(DateTime.add(before, 30 * 60, :second))
+      assert DateTime.compare(recorded, floor) in [:gt, :eq]
       assert {:ok, _} = SignInAdmin.disable(admin, user.id)
       _ = requests()
 
       assert {:error, {:sign_in_link_live, until}} = SignInAdmin.enable(admin, user.id)
 
-      assert until == link.expires_at
+      assert until == recorded
       refute_received {:pocket_id_req, %{kind: :put}}
       assert requests() == []
       assert %DateTime{} = Repo.get!(Accounts.User, user.id).archived_at

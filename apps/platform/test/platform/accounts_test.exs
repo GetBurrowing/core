@@ -584,14 +584,18 @@ defmodule Platform.AccountsTest do
 
     @earlier ~U[2030-01-01 12:00:00Z]
     @later ~U[2030-01-01 12:30:00Z]
+    # What each is stored as: already whole seconds, so only the 5 s margin
+    # is added (task 01a11503).
+    @earlier_stored ~U[2030-01-01 12:00:05Z]
+    @later_stored ~U[2030-01-01 12:30:05Z]
 
     test "stores the first value on a user with none" do
       {:ok, user} = Accounts.find_or_create_from_oidc(oidc_attrs(%{}))
       assert is_nil(user.sign_in_link_expires_at)
 
       assert {:ok, noted} = Accounts.note_sign_in_link_expiry(user, @earlier)
-      assert noted.sign_in_link_expires_at == @earlier
-      assert Repo.get!(Accounts.User, user.id).sign_in_link_expires_at == @earlier
+      assert noted.sign_in_link_expires_at == @earlier_stored
+      assert Repo.get!(Accounts.User, user.id).sign_in_link_expires_at == @earlier_stored
     end
 
     test "earlier then later keeps the later" do
@@ -600,20 +604,53 @@ defmodule Platform.AccountsTest do
       {:ok, user} = Accounts.note_sign_in_link_expiry(user, @earlier)
       assert {:ok, noted} = Accounts.note_sign_in_link_expiry(user, @later)
 
-      assert noted.sign_in_link_expires_at == @later
-      assert Repo.get!(Accounts.User, user.id).sign_in_link_expires_at == @later
+      assert noted.sign_in_link_expires_at == @later_stored
+      assert Repo.get!(Accounts.User, user.id).sign_in_link_expires_at == @later_stored
     end
 
     test "later then earlier keeps the later, even through a stale struct" do
       {:ok, user} = Accounts.find_or_create_from_oidc(oidc_attrs(%{}))
 
       {:ok, noted} = Accounts.note_sign_in_link_expiry(user, @later)
-      assert noted.sign_in_link_expires_at == @later
+      assert noted.sign_in_link_expires_at == @later_stored
 
       # `user` still carries nil: the comparison must use the stored value.
       assert {:ok, again} = Accounts.note_sign_in_link_expiry(user, @earlier)
-      assert again.sign_in_link_expires_at == @later
-      assert Repo.get!(Accounts.User, user.id).sign_in_link_expires_at == @later
+      assert again.sign_in_link_expires_at == @later_stored
+      assert Repo.get!(Accounts.User, user.id).sign_in_link_expires_at == @later_stored
+    end
+
+    # Task 01a11503: the ticket's evidence. Truncating stored :18, before the
+    # token pocket-id restored to :19 had expired.
+    test "a sub-second expiry is rounded UP to the next second, plus 5 s" do
+      {:ok, user} = Accounts.find_or_create_from_oidc(oidc_attrs(%{}))
+
+      assert {:ok, noted} =
+               Accounts.note_sign_in_link_expiry(user, ~U[2026-10-07 06:42:18.608Z])
+
+      assert noted.sign_in_link_expires_at == ~U[2026-10-07 06:42:24Z]
+      assert Repo.get!(Accounts.User, user.id).sign_in_link_expires_at == ~U[2026-10-07 06:42:24Z]
+    end
+
+    test "a whole-second expiry is not bumped by the rounding, only by the 5 s" do
+      {:ok, user} = Accounts.find_or_create_from_oidc(oidc_attrs(%{}))
+
+      assert {:ok, noted} = Accounts.note_sign_in_link_expiry(user, ~U[2026-10-07 06:42:18Z])
+
+      assert noted.sign_in_link_expires_at == ~U[2026-10-07 06:42:23Z]
+      assert Repo.get!(Accounts.User, user.id).sign_in_link_expires_at == ~U[2026-10-07 06:42:23Z]
+    end
+
+    test "GREATEST compares the rounded values" do
+      {:ok, user} = Accounts.find_or_create_from_oidc(oidc_attrs(%{}))
+
+      {:ok, _} = Accounts.note_sign_in_link_expiry(user, ~U[2026-10-07 06:42:18.608Z])
+      assert {:ok, same} = Accounts.note_sign_in_link_expiry(user, ~U[2026-10-07 06:42:18.200Z])
+      assert same.sign_in_link_expires_at == ~U[2026-10-07 06:42:24Z]
+
+      assert {:ok, moved} = Accounts.note_sign_in_link_expiry(user, ~U[2026-10-07 06:42:19.001Z])
+      assert moved.sign_in_link_expires_at == ~U[2026-10-07 06:42:25Z]
+      assert Repo.get!(Accounts.User, user.id).sign_in_link_expires_at == ~U[2026-10-07 06:42:25Z]
     end
 
     test "a user row that no longer exists is :not_found" do
