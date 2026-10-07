@@ -69,6 +69,14 @@ struct PersonEntity {
             subtitle: IntentCopy.subtitle([lead, person.orgNames.first], install: env.disambiguator(host)))
     }
 
+    /// The schema person as exported to the system, through a key path the
+    /// metadata extractor can read (see transferRepresentation). Traced, so
+    /// an export shows up in the intent trace.
+    var exportedPerson: IntentPerson {
+        IntentLog.step("person.export", "kind=\(kind) identifier=\(PersonResolver.kind(of: person)) handle=\(person.handle != nil)")
+        return person
+    }
+
     static func intentPerson(id: String, name: String) -> IntentPerson {
         IntentPerson(
             identifier: .applicationDefined(id),
@@ -82,7 +90,8 @@ struct PersonEntity {
     /// reached Siri as a generic "there's a problem" with nothing logged.
     /// No match or several matches are carried to `perform` unresolved.
     ///
-    /// `exporting:` MUST stay a key path. Xcode 27's metadata extractor
+    /// `exporting:` MUST stay a key path (to a property with a declared
+    /// IntentPerson type). Xcode 27's metadata extractor
     /// reads this declaration as syntax and takes the IntentValue type from
     /// the key path only: with a closure it records NO exportable or
     /// importable type, Siri's structured-data fetch then logs "Failed to
@@ -92,7 +101,7 @@ struct PersonEntity {
     /// (PersonEntityMetadataTests pins it).
     static var transferRepresentation: some TransferRepresentation {
         IntentValueRepresentation(
-            exporting: \PersonEntity.person,
+            exporting: \PersonEntity.exportedPerson,
             importing: { (person: IntentPerson) in
                 if case .one(let found) = await PersonResolver.resolve(person, site: "person.import") { return found }
                 return PersonEntity(unresolved: person)
@@ -157,7 +166,32 @@ struct PersonQuery: EntityStringQuery {
             }
             for entity in loaded { found[entity.id] = entity }
         }
-        return identifiers.compactMap { found[$0] }
+        let result = identifiers.compactMap { found[$0] }
+        Self.trace(identifiers, result: result, cacheHits: identifiers.count - missing.count, env: catalog.env)
+        return result
+    }
+
+    /// The SHAPE of a lookup, for the trace (task 01a111bb stage 7, round
+    /// 3): counts and booleans only, never a uuid, a host or a name.
+    static func trace(_ identifiers: [String], result: [PersonEntity], cacheHits: Int, env: IntentEnvironment) {
+        for id in identifiers {
+            let ref = EntityRef(id)
+            let segments = id.split(separator: EntityRef.separator, omittingEmptySubsequences: false).count
+            let installKnown = ref.map { env.install($0.host) != nil } ?? false
+            let uuidOK = ref.map { UUID(uuidString: $0.uuid) != nil } ?? false
+            IntentLog.step(
+                "person.query",
+                "req len=\(id.count) segments=\(segments) parsed=\(ref != nil) install=\(installKnown) uuid=\(uuidOK)")
+        }
+        let returned = result.map(\.id)
+        let match = returned == identifiers
+        let personIDsMatch = result.allSatisfy { entity in
+            if case .applicationDefined(let raw) = entity.person.identifier { return raw == entity.id }
+            return false
+        }
+        IntentLog.step(
+            "person.query",
+            "result count=\(result.count) cacheHits=\(cacheHits) idsMatch=\(match) personIdMatch=\(personIDsMatch) kinds=\(result.map(\.kind).joined(separator: ","))")
     }
 
     /// Recent collaborators: the people the person actually talks to. The
