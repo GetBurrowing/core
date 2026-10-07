@@ -79,7 +79,8 @@ struct SpaceEntity: AppEntity {
             name: space.name,
             isDirectMessage: space.isDirectMessage,
             pathSegment: space.linkSegment,
-            subtitle: IntentCopy.subtitle([space.isDirectMessage ? "Direct message" : "Space"], install: env.disambiguator(host)))
+            subtitle: IntentCopy.subtitle(
+                [space.isDirectMessage ? "Direct message" : "Space", space.org?.name], install: env.disambiguator(host)))
     }
 }
 
@@ -374,6 +375,29 @@ struct EntityCatalog {
             IntentHooks.didFetchEntities?("spaces", host, entities.map { "\($0.id)\t\($0.name)" })
             if #available(iOS 18, *) { SpotlightIndexer.index(entities, host: host) }
             return entities
+        }
+    }
+
+    /// People to message on each host (task 01a111bb): `query` searches
+    /// server-side (`?q=`), so a person who is not among the recent
+    /// collaborators is still found by name; nil lists recent collaborators.
+    func people(hosts: [String], query: String? = nil) async -> [(host: String, person: SuitePerson)] {
+        await load("people", hosts: hosts) { host in
+            let people = try await env.client.people(host: host, query: query)
+            if query == nil {
+                IntentHooks.didFetchEntities?("people", host, people.map { "\(EntityRef(host: host, uuid: $0.id).id)\t\($0.name)" })
+            }
+            return people.map { (host: host, person: $0) }
+        }
+    }
+
+    /// Every space on each host, as raw rows (for conversation entities).
+    func spaceRows(hosts: [String]) async -> [(host: String, space: SuiteSpace)] {
+        await load("spaces", hosts: hosts) { host in
+            let spaces = try await env.client.spaces(host: host)
+            Self.spaceIDsBySegment[host] = Dictionary(spaces.map { ($0.linkSegment, $0.id) }, uniquingKeysWith: { first, _ in first })
+            IntentHooks.didFetchEntities?("spaces", host, spaces.map { "\(EntityRef(host: host, uuid: $0.id).id)\t\($0.name)" })
+            return spaces.map { (host: host, space: $0) }
         }
     }
 

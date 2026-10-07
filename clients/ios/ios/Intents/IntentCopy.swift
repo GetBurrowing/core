@@ -12,6 +12,21 @@ enum IntentCopy {
 
     static func sent(space: String) -> String { "Sent to \(space)." }
 
+    // MARK: Messages domain (task 01a111bb)
+
+    static let messageEdited = "Edited."
+    static let messageUnsent = "Unsent."
+    static let markedRead = "Marked as read."
+    static let draftOpened = "Opened in Burrow."
+
+    /// A conversation's spoken title: "general · Fabrikam". The org tells two
+    /// same-named spaces in two orgs apart; a DM or org-less space is its
+    /// name alone.
+    static func conversationTitle(name: String, org: String?) -> String {
+        guard let org, !org.isEmpty else { return name }
+        return "\(name) · \(org)"
+    }
+
     // MARK: Approve and reject
 
     static func approveConfirm(isPlan: Bool, title: String, space: String?, install: String?) -> String {

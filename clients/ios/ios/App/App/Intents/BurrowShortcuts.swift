@@ -46,5 +46,14 @@ struct BurrowShortcuts: AppShortcutsProvider {
             phrases: ["Approve a plan in \(.applicationName)"],
             shortTitle: "Approve Plan",
             systemImageName: "checkmark.seal")
+        // The iOS 27 messages-domain intents (task 01a111bb) are NOT listed
+        // here, deliberately. Siri reaches all five through their schemas
+        // from one sentence, with no phrase, and they appear in Shortcuts.
+        // Listing them would need `if #available(iOS 27, *)` in this
+        // builder, and AppShortcutsBuilder's array overloads that make
+        // `if #available` work are iOS 17.4+; with the app at iOS 17.0 the
+        // build fails ("cannot pass array of type '[AppShortcut]' as
+        // variadic arguments"). The old Send Message shortcut above keeps
+        // its phrases on every version.
     }
 }

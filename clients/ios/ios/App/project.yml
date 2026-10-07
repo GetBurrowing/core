@@ -208,6 +208,26 @@ targets:
         GENERATE_INFOPLIST_FILE: "YES"
         TEST_TARGET_NAME: App
 
+  # iOS 27 messages domain through AppIntentsTesting (task 01a111bb). Its own
+  # target and scheme because AppIntentsTesting is iOS 27 only, and the App
+  # scheme's AppTests must still run on pre-27 runtimes.
+  IntentsSystemTests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "27.0"
+    sources:
+      - path: IntentsSystemTests
+    dependencies:
+      - target: App
+      - sdk: AppIntentsTesting.framework
+        root: DEVELOPER_DIR
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kobo-ai.burrow.intentssystem
+        GENERATE_INFOPLIST_FILE: "YES"
+        TEST_TARGET_NAME: App
+        FRAMEWORK_SEARCH_PATHS: "$(inherited) $(PLATFORM_DIR)/Developer/Library/Frameworks"
+
 schemes:
   App:
     build:
@@ -240,3 +260,12 @@ schemes:
       config: Debug
       targets:
         - ExtensionRenderTests
+  IntentsSystem:
+    build:
+      targets:
+        App: all
+        IntentsSystemTests: [test]
+    test:
+      config: Debug
+      targets:
+        - IntentsSystemTests

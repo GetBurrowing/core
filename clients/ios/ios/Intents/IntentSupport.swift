@@ -115,6 +115,10 @@ enum IntentFailure: Error, Equatable, CustomLocalizedStringResourceConvertible {
     case noProject(install: String)
     case emptyMessage
     case emptyNote
+    /// 409 `frozen` on an edit: an agent began work on the message.
+    case messageFrozen(by: String?)
+    /// 422 `not_supported` on mark-unread.
+    case cannotMarkUnread
 
     var message: String {
         switch self {
@@ -124,6 +128,10 @@ enum IntentFailure: Error, Equatable, CustomLocalizedStringResourceConvertible {
         case .noProject(let install): return "There's no project on \(install) to hold a meeting. Create a project, then try again."
         case .emptyMessage: return "There's nothing to send."
         case .emptyNote: return "A rejection needs a note for the agent."
+        case .messageFrozen(let by):
+            guard let by, !by.isEmpty else { return "An agent began work on that message, so it can't be edited. Send a follow-up instead." }
+            return "\(by) began work on that message, so it can't be edited. Send a follow-up instead."
+        case .cannotMarkUnread: return "Burrow can't mark messages unread."
         }
     }
 
