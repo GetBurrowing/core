@@ -178,6 +178,71 @@ defmodule Platform.Mobile.AppPeopleTest do
     end
   end
 
+  describe "directory (scope: \"directory\", task 01a111bb stage 7)" do
+    test "recent collaborators, space mates and org mates, with no shared space needed" do
+      org = Platform.Tenancy.get_org_by_slug!("sxi")
+      me = create_user!(%{name: "Dir Me"})
+      plain_member!(me, org)
+      recent = create_user!(%{name: "Dir Recent"})
+      mate = create_user!(%{name: "Dir Space Mate"})
+      priya = create_user!(%{name: "Dir Priya"})
+      plain_member!(priya, org)
+      stranger = create_user!(%{name: "Dir Stranger"})
+      bot = agent!("Dir Bot #{token()}")
+
+      {group, gp} = group!([me, recent])
+      message!(group.id, gp[me.id])
+      channel = channel!()
+      add_user!(channel.id, me.id)
+      add_user!(channel.id, mate.id)
+
+      rows = AppPeople.list_people(me, scope: "directory")
+      row_ids = ids(rows)
+
+      # Priya shares NO space with the caller: only the org puts her here.
+      assert priya.id in row_ids
+      assert recent.id in row_ids
+      assert mate.id in row_ids
+      assert bot.id in row_ids
+      refute stranger.id in row_ids
+      refute me.id in row_ids
+      assert hd(row_ids) == recent.id, "recent collaborators lead"
+      assert Enum.find(rows, &(&1.id == priya.id)).org_names == [org.name]
+
+      # The recent-collaborator list (no scope) is unchanged: no Priya.
+      refute priya.id in ids(AppPeople.list_people(me))
+    end
+
+    test "an archived space contributes nobody" do
+      me = create_user!()
+      gone = create_user!()
+      {:ok, space} = Chat.create_space(%{kind: "group"})
+      add_user!(space.id, me.id)
+      add_user!(space.id, gone.id)
+      Repo.update!(Ecto.Changeset.change(space, archived_at: DateTime.utc_now()))
+
+      refute gone.id in ids(AppPeople.list_people(me, scope: "directory"))
+    end
+
+    test "external scoping holds: Ext never gets a non-allow-listed person, even one sharing a space" do
+      world = external_world()
+      bot = agent!("Ext Dir Bot #{token()}")
+
+      # Riley (world.n, org B only) shares a group AND a channel with Ext.
+      {group, gp} = group!([world.ext, world.m, world.n, {:agent, bot}])
+      message!(group.id, gp[world.ext.id])
+      add_user!(world.a.id, world.n.id)
+
+      row_ids = ids(AppPeople.list_people(world.ext, scope: "directory"))
+
+      # Positive control: the allow-listed org mate IS listed.
+      assert world.m.id in row_ids
+      refute world.n.id in row_ids
+      refute bot.id in row_ids
+      refute world.ext.id in row_ids
+    end
+  end
+
   describe "open_dm/2" do
     test "finds or creates the DM and answers its id as the path segment" do
       me = create_user!()

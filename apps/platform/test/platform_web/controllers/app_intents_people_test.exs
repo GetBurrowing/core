@@ -86,6 +86,33 @@ defmodule PlatformWeb.AppIntentsPeopleTest do
     end
   end
 
+  describe "GET /api/app/people?scope=directory" do
+    test "lists an org mate who shares no space; Ext still cannot get Riley", %{conn: conn} do
+      world = external_world()
+      priya = create_user!()
+      plain_member!(priya, world.org_a)
+      # Riley (world.n, org B only) shares a channel with Ext.
+      add_user!(world.a.id, world.n.id)
+
+      ids_for = fn user ->
+        conn
+        |> bearer(token!(user))
+        |> get("/api/app/people", %{"scope" => "directory"})
+        |> json_response(200)
+        |> Map.fetch!("people")
+        |> Enum.map(& &1["id"])
+      end
+
+      # An internal org member sees Priya with no shared space.
+      assert priya.id in ids_for.(world.int)
+
+      ext_ids = ids_for.(world.ext)
+      # Positive control, then the negative: Riley (org B) is never listed.
+      assert world.m.id in ext_ids
+      refute world.n.id in ext_ids
+    end
+  end
+
   describe "POST /api/app/people/:user_id/dm" do
     test "opens the DM and answers its id", %{conn: conn} do
       me = create_user!()

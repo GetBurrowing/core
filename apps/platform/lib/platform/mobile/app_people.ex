@@ -15,7 +15,18 @@ defmodule Platform.Mobile.AppPeople do
 
   ## Rows
 
-  `%{id, kind: "user" | "agent", name, org_names, dm_space_id}`. No email and
+  `%{id, kind: "user" | "agent", name, org_names, dm_space_id}`.
+
+  ## The directory (`scope: "directory"`)
+
+  What the app puts in the device's Spotlight index so Siri can resolve a
+  spoken name (task 01a111bb stage 7): on iOS 27.0.1 Siri matches a name
+  against indexed entities and never calls the app's string query. It is the
+  recent collaborators, then everyone who shares a space with the caller,
+  then the members of the caller's orgs, plus the agents the picker offers.
+  Every human goes through `Chat.dm_candidates/3` with `:ids`, so an
+  external caller gets only allow-listed people and no agents, exactly as
+  the search does. No email and
   no phone: a person is named by display name only. `dm_space_id` is the
   caller's existing DM with that person, or nil; listing never creates one.
 
@@ -41,6 +52,8 @@ defmodule Platform.Mobile.AppPeople do
   @search_max_limit 50
   @recent_limit 20
   @recent_days 30
+  @directory_limit 500
+  @directory_agent_limit 100
 
   @doc """
   With a non-blank `opts[:q]`, a search over humans and agents, at most
@@ -48,12 +61,17 @@ defmodule Platform.Mobile.AppPeople do
   the caller's recent collaborators: the humans and agents in DMs and groups
   where the caller posted in the last #{@recent_days} days, ordered by the
   last activity in a space they share, at most #{@recent_limit}.
+
+  With no `q` and `opts[:scope] == "directory"`, the directory (see the
+  moduledoc): at most #{@directory_limit} humans and #{@directory_agent_limit}
+  agents.
   """
   @spec list_people(User.t(), keyword()) :: [map()]
   def list_people(%User{} = user, opts \\ []) do
-    case normalize_query(Keyword.get(opts, :q)) do
-      nil -> recent_collaborators(user)
-      q -> search(user, q, Keyword.get(opts, :limit))
+    case {normalize_query(Keyword.get(opts, :q)), Keyword.get(opts, :scope)} do
+      {nil, "directory"} -> directory(user)
+      {nil, _scope} -> recent_collaborators(user)
+      {q, _scope} -> search(user, q, Keyword.get(opts, :limit))
     end
   end
 
@@ -154,6 +172,76 @@ defmodule Platform.Mobile.AppPeople do
       group_by: [p.participant_type, p.participant_id],
       order_by: [desc: max(a.last_at), asc: p.participant_id],
       select: {p.participant_type, p.participant_id, max(a.last_at)}
+    )
+    |> Repo.all()
+  end
+
+  # ── directory ────────────────────────────────────────────────────
+
+  defp directory(%User{id: user_id} = user) do
+    since = DateTime.add(DateTime.utc_now(), -@recent_days * 86_400, :second)
+    recent = for {"user", id, _at} <- collaborator_activity(user, since), do: id
+
+    candidates =
+      (recent ++ space_mates(user_id) ++ org_mates(user_id))
+      |> Enum.uniq()
+      |> Enum.reject(&(&1 == user_id))
+
+    # The SAME predicate as the search and the picker, asked about this set.
+    humans = permitted(candidates, &Chat.dm_candidates(user, "", ids: &1))
+    recent_set = MapSet.new(recent)
+
+    {recent_rows, rest} =
+      candidates
+      |> Enum.flat_map(fn id ->
+        case Map.fetch(humans, id) do
+          {:ok, name} -> [{"user", id, name}]
+          :error -> []
+        end
+      end)
+      |> Enum.split_with(fn {_kind, id, _name} -> MapSet.member?(recent_set, id) end)
+
+    by_name = fn {_kind, id, name} -> {String.downcase(name || ""), id} end
+    human_rows = Enum.take(recent_rows ++ Enum.sort_by(rest, by_name), @directory_limit)
+
+    agent_rows =
+      user
+      |> Chat.dm_agent_candidates("")
+      |> Enum.map(&{"agent", &1.id, &1.name})
+      |> Enum.sort_by(by_name)
+      |> Enum.take(@directory_agent_limit)
+
+    to_rows(human_rows ++ agent_rows, user)
+  end
+
+  # Every other human in a non-archived space the caller is a member of.
+  defp space_mates(user_id) do
+    mine =
+      from(p in Participant,
+        join: s in Space,
+        on: s.id == p.space_id,
+        where:
+          p.participant_type == "user" and p.participant_id == ^user_id and
+            is_nil(s.archived_at),
+        select: p.space_id
+      )
+
+    from(p in Participant,
+      where: p.space_id in subquery(mine) and p.participant_type == "user",
+      distinct: true,
+      select: p.participant_id
+    )
+    |> Repo.all()
+  end
+
+  # Every member of an org the caller belongs to.
+  defp org_mates(user_id) do
+    mine = from(m in OrgMembership, where: m.user_id == ^user_id, select: m.org_id)
+
+    from(m in OrgMembership,
+      where: m.org_id in subquery(mine),
+      distinct: true,
+      select: m.user_id
     )
     |> Repo.all()
   end

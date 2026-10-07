@@ -163,7 +163,11 @@ defmodule PlatformWeb.AppIntentsController do
 
   def people(conn, params) do
     people =
-      AppPeople.list_people(conn.assigns.current_user, q: params["q"], limit: params["limit"])
+      AppPeople.list_people(conn.assigns.current_user,
+        q: params["q"],
+        limit: params["limit"],
+        scope: params["scope"]
+      )
 
     json(conn, %{people: people})
   end
