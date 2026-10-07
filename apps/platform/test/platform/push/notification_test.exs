@@ -444,6 +444,9 @@ defmodule Platform.Push.NotificationTest do
       apns = Notification.to_apns_payload(n)
       assert apns["author_id"] == sender.participant_id
       assert apns["author_type"] == "agent"
+      assert apns["author_name"] == "Burrow Helper"
+      assert apns["space_name"] == n.space_name
+      assert is_binary(apns["space_name"])
 
       data = Notification.to_fcm_payload(n)["data"]
       assert data["author_id"] == sender.participant_id
@@ -482,6 +485,9 @@ defmodule Platform.Push.NotificationTest do
       assert redacted.author_type == nil
       refute Map.has_key?(Notification.to_apns_payload(redacted), "author_id")
       refute Map.has_key?(Notification.to_apns_payload(redacted), "author_type")
+      refute Map.has_key?(Notification.to_apns_payload(redacted), "author_name")
+      refute Map.has_key?(Notification.to_apns_payload(redacted), "space_name")
+      refute Map.has_key?(Notification.to_apns_payload(redacted), "space_id")
       refute Map.has_key?(Notification.to_fcm_payload(redacted)["data"], "author_id")
 
       # The same through the real external-recipient path.

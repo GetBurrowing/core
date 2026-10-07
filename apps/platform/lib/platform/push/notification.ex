@@ -279,7 +279,8 @@ defmodule Platform.Push.Notification do
   Chat kinds (`chat_message`, `chat_mention`) also set
   `"mutable-content" => 1` so the iOS Notification Service Extension runs on
   them and can make them communication notifications (task 01a111bb). No
-  other kind sets it.
+  other kind sets it. `author_name` and `space_name` name the sender and the
+  conversation for that extension; a redacted copy carries neither.
   """
   @spec to_apns_payload(t()) :: map()
   def to_apns_payload(%__MODULE__{} = n) do
@@ -306,7 +307,12 @@ defmodule Platform.Push.Notification do
       "ring_id" => n.ring_id,
       "install_host" => n.install_host,
       "author_id" => n.author_id,
-      "author_type" => n.author_type
+      "author_type" => n.author_type,
+      # The sender's display name and the conversation name, for the
+      # INPerson and conversation the NSE builds (task 01a111bb stage 4).
+      # Both are already in the title; redact/2 clears them.
+      "author_name" => n.author_name,
+      "space_name" => n.space_name
     }
     |> drop_nils()
   end
