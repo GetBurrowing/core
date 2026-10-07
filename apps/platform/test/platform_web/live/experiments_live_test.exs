@@ -601,7 +601,8 @@ defmodule PlatformWeb.ExperimentsLiveTest do
         surface_target: @planning,
         org_id: Keyword.get(opts, :org_id),
         project_id: Keyword.get(opts, :project_id),
-        proposed_by_agent_id: Keyword.get(opts, :proposed_by_agent_id)
+        proposed_by_agent_id: Keyword.get(opts, :proposed_by_agent_id),
+        metric_spec: Keyword.get(opts, :metric_spec, %{})
       })
 
     {:ok, _} =
@@ -1061,6 +1062,76 @@ defmodule PlatformWeb.ExperimentsLiveTest do
       # The org is DERIVED from the project by the changeset.
       assert text(html, ~s([data-role="design-org"])) |> String.trim() == org.name
       assert text(html, ~s([data-role="design-project"])) |> String.trim() == "Scope Project"
+    end
+  end
+
+  # Task 01a11706: the Design tab raised a CaseClauseError on a
+  # `dispatch_usage` spec (prod, code-mode-2026-10). Every assertion is the
+  # whole cell, trimmed, so a crash, a fallback string and a wording drift are
+  # all red.
+  defp design_metric(conn, slug) do
+    {:ok, view, _html} = live(member_conn(conn), ~p"/control/experiments/#{slug}")
+
+    html =
+      view |> element(~s([data-role="experiment-tab"][data-tab="design"])) |> render_click()
+
+    text(html, ~s([data-role="design-metric"])) |> String.trim()
+  end
+
+  describe "Design tab metric words" do
+    test "a dispatch_usage spec reads as its agg, field and unit", %{conn: conn} do
+      planner_draft("design-dispatch-usage",
+        metric_spec: %{
+          "kind" => "dispatch_usage",
+          "agg" => "median",
+          "field" => "suite_tool_calls"
+        }
+      )
+
+      assert design_metric(conn, "design-dispatch-usage") ==
+               "Median suite tool calls per dispatch"
+    end
+
+    test "a dispatch_usage spec with no agg reads as the default mean", %{conn: conn} do
+      planner_draft("design-dispatch-wall",
+        metric_spec: %{"kind" => "dispatch_usage", "field" => "wall_ms"}
+      )
+
+      assert design_metric(conn, "design-dispatch-wall") == "Mean wall time (ms) per dispatch"
+    end
+
+    test "an outcome_rate spec keeps its wording", %{conn: conn} do
+      planner_draft("design-outcome-rate",
+        metric_spec: %{"kind" => "outcome_rate", "labels" => ["positive"], "window_days" => 7}
+      )
+
+      assert design_metric(conn, "design-outcome-rate") ==
+               "Share of subjects with a positive signal within 7 days of assignment"
+    end
+
+    test "a duration_between spec keeps its wording", %{conn: conn} do
+      planner_draft("design-duration-between",
+        metric_spec: %{
+          "kind" => "duration_between",
+          "from_status" => "planning",
+          "to_status" => "in_progress"
+        }
+      )
+
+      assert design_metric(conn, "design-duration-between") ==
+               "Time from planning to in_progress"
+    end
+  end
+
+  defmodule FakeKind do
+    @moduledoc false
+    def kind, do: "future_kind"
+  end
+
+  describe "spec_words/3 fallback" do
+    test "a parsed kind with no words of its own renders, never raises" do
+      assert PlatformWeb.ExperimentsLive.spec_words({:ok, FakeKind, %{"x" => 1}}, nil, []) ==
+               "future_kind metric (no description for this kind yet)"
     end
   end
 

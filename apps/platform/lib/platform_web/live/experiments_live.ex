@@ -940,8 +940,15 @@ defmodule PlatformWeb.ExperimentsLive do
   defp can_start?(_), do: false
 
   # The metric in words, from the spec when there is one.
-  defp metric_words(%Experiment{} = experiment, catalog) do
-    case MetricKind.parse(experiment.metric_spec) do
+  defp metric_words(%Experiment{} = experiment, catalog),
+    do: spec_words(MetricKind.parse(experiment.metric_spec), experiment.primary_metric, catalog)
+
+  @doc false
+  # The words for a `MetricKind.parse/1` result. Public only so the
+  # `{:ok, module, _}` fallback is testable: no kind in `MetricKind.list/0`
+  # reaches it today (task 01a11706).
+  def spec_words(parsed, primary_metric, catalog) do
+    case parsed do
       {:ok, Platform.Experiments.MetricKinds.OutcomeRate, params} ->
         labels = params |> Map.get("labels", []) |> Enum.join(" or ")
 
@@ -950,16 +957,37 @@ defmodule PlatformWeb.ExperimentsLive do
       {:ok, Platform.Experiments.MetricKinds.DurationBetween, params} ->
         "Time from #{params["from_status"]} to #{params["to_status"]}"
 
+      {:ok, Platform.Experiments.MetricKinds.DispatchUsage, %{"field" => field, "agg" => agg}} ->
+        "#{String.capitalize(agg)} #{dispatch_field_label(field)} per dispatch"
+
       {:ok, _registered, %{"slug" => slug}} ->
         registered_words(slug, catalog)
 
+      # A kind added to `MetricKind.list/0` without words here must still
+      # render, never crash the tab (task 01a11706).
+      {:ok, module, _params} ->
+        "#{module.kind()} metric (no description for this kind yet)"
+
       :none ->
-        registered_words(experiment.primary_metric, catalog)
+        registered_words(primary_metric, catalog)
 
       {:error, _} ->
         "metric spec does not parse, so nothing is measured"
     end
   end
+
+  @dispatch_field_labels %{
+    "suite_tool_calls" => "suite tool calls",
+    "client_turns" => "client turns",
+    "client_tokens_in" => "client input tokens",
+    "client_tokens_out" => "client output tokens",
+    "wall_ms" => "wall time (ms)",
+    "outcome_first_pass" => "first-pass outcome",
+    "tool_calls_error" => "errored tool calls"
+  }
+
+  defp dispatch_field_label(field),
+    do: Map.get(@dispatch_field_labels, field, String.replace(field, "_", " "))
 
   defp registered_words(nil, _catalog), do: "none set"
 
