@@ -25,6 +25,9 @@
     <string name="selected">Selected</string>
     <string name="sign_in_failed">Sign-in didn\'t finish. Try again.</string>
 
+    <!-- Launcher shortcut (iOS UIApplicationShortcutItemTitle), verbatim. -->
+    <string name="shortcut_switch_install">Switch install</string>
+
     <!-- Notifications (canvas 01a10d91, "Notifications" and "Channels"), verbatim. -->
     <string name="channel_mentions">Mentions</string>
     <string name="channel_mentions_description">When someone @mentions you in a space</string>

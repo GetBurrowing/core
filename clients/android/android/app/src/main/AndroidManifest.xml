@@ -40,6 +40,11 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
+            <!-- The launcher long-press "Switch install" (res/xml/shortcuts.xml). -->
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
+
             <!-- The server's login callback, burrow://auth/callback?code=...
                  Any app can claim this scheme; PKCE makes a stolen code
                  useless (README, "Login"). -->
@@ -53,6 +58,19 @@
                     android:path="/callback" />
             </intent-filter>
         </activity>
+
+        <!-- The "Switch install" shortcut's trampoline (SwitchInstallActivity):
+             no UI, its own empty task affinity so the CLEAR_TASK Android adds
+             to static shortcut intents clears only its throwaway task, never
+             MainActivity's. Started by the launcher as this app, so it need
+             not be exported. -->
+        <activity
+            android:name=".SwitchInstallActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.NoDisplay" />
 
         <!-- The share target: its own translucent task-less activity, so the
              sheet sits over the sending app (canvas 01a10d91), not on

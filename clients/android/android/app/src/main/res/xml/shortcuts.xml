@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The launcher long-press shortcut, iOS UIApplicationShortcutItems
+     ("Switch install"). Static: the label never changes.
+     A shortcut intent's targetPackage cannot take a manifest placeholder,
+     and the debug build is com.koboai.burrow.debug (applicationIdSuffix),
+     so src/debug/res/xml/shortcuts.xml overrides this file with the debug
+     package. ShortcutsResourceTest pins each variant to its own package.
+     The target is the SwitchInstallActivity trampoline, not MainActivity:
+     Android adds CLEAR_TASK to static shortcut intents (see that class). -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="switch_install"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_switch_install"
+        android:shortcutShortLabel="@string/shortcut_switch_install"
+        android:shortcutLongLabel="@string/shortcut_switch_install">
+        <intent
+            android:action="com.koboai.burrow.action.SWITCH_INSTALL"
+            android:targetPackage="com.koboai.burrow"
+            android:targetClass="com.koboai.burrow.SwitchInstallActivity" />
+    </shortcut>
+</shortcuts>

@@ -44,8 +44,11 @@ import java.util.concurrent.Executors
  * - back walks the WebView's history, then falls through to the system's
  *   predictive back-to-home.
  */
-class MainActivity : BridgeActivity() {
+class MainActivity :
+    BridgeActivity(),
+    LaunchRouter.Shell {
     private lateinit var store: InstallStore
+    private lateinit var pickerReturn: PickerReturn
     private lateinit var tokens: KeystoreTokenStore
     private lateinit var client: AppApiClient
     private lateinit var exposure: NativeBridgeExposure
@@ -65,6 +68,7 @@ class MainActivity : BridgeActivity() {
     private var clearHistoryOnFinish = false
     private var started = false
     private var pendingIntent: Intent? = null
+    private val router = LaunchRouter(this)
 
     private var picker: InstallPickerView? = null
     private lateinit var cover: View
@@ -73,6 +77,7 @@ class MainActivity : BridgeActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
         store = InstallStore(SharedPreferencesStore(this, InstallStore.PREFS_FILE), SharedPreferencesStore(this, InstallStore.DEVICE_FILE))
+        pickerReturn = PickerReturn(store)
         tokens = KeystoreTokenStore(SharedPreferencesStore(this, KeystoreTokenStore.PREFS_FILE), AndroidKeyStoreCipher())
         client = AppApiClient(tokens)
         registerPlugin(SuiteNativePlugin::class.java)
@@ -103,17 +108,7 @@ class MainActivity : BridgeActivity() {
         WidgetRefresh.schedule(this)
         val launchIntent = pendingIntent ?: intent
         pendingIntent = null
-        if (launchIntent != null && openFromNotification(launchIntent)) {
-            // A notification tap that cold-started the app: handled.
-        } else if (launchIntent != null && AuthCallback.code(launchIntent.dataString) != null) {
-            // A callback that cold-started the app: the verifier died with
-            // the old process, so the code cannot be used. Start over.
-            presentPicker()
-        } else if (store.hasConfirmedSelection && store.selectedInstall != null) {
-            open(store.selectedInstall!!, null)
-        } else {
-            presentPicker()
-        }
+        router.onLaunch(launchIntent, restored = savedInstanceState != null)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -124,8 +119,11 @@ class MainActivity : BridgeActivity() {
             pendingIntent = intent
             return
         }
-        if (openFromNotification(intent)) return
-        val code = AuthCallback.code(intent.dataString) ?: return
+        router.onNewIntent(intent)
+    }
+
+    /** The login callback's code, for the sign-in this activity started. */
+    override fun completeSignIn(code: String) {
         val session = auth
         auth = null
         authTabShown = false
@@ -187,7 +185,7 @@ class MainActivity : BridgeActivity() {
      * here, since an intent is input. An install that is no longer on this
      * phone just brings the app forward.
      */
-    private fun openFromNotification(intent: Intent): Boolean {
+    override fun openFromNotification(intent: Intent): Boolean {
         if (intent.action != NotificationPresenter.ACTION_OPEN) return false
         val path = PushPayload.safePath(intent.getStringExtra(NotificationPresenter.EXTRA_PATH))
         val host = intent.getStringExtra(NotificationPresenter.EXTRA_HOST)?.let { InstallStore.normalizeHost(it) }
@@ -205,7 +203,7 @@ class MainActivity : BridgeActivity() {
         return true
     }
 
-    private fun startWithSelection() {
+    override fun startWithSelection() {
         if (store.hasConfirmedSelection && store.selectedInstall != null) open(store.selectedInstall!!, null) else presentPicker()
     }
 
@@ -234,6 +232,7 @@ class MainActivity : BridgeActivity() {
         }
         currentInstall = install
         signingOutHost = null
+        pickerReturn.clear()
         policy = NavigationPolicy(install.host)
         exposure.expose(install.host)
         store.select(install.host)
@@ -316,7 +315,17 @@ class MainActivity : BridgeActivity() {
         presentPicker()
     }
 
-    fun presentPicker() {
+    /**
+     * The launcher's "Switch install": the picker, remembering the current
+     * install so back returns to it with its selection intact.
+     */
+    override fun presentSwitchPicker() {
+        pickerReturn.onPresent(switching = true)
+        presentPicker()
+    }
+
+    override fun presentPicker() {
+        pickerReturn.onPresent(switching = false)
         picker?.let {
             it.reload()
             return
@@ -335,6 +344,7 @@ class MainActivity : BridgeActivity() {
         val view = picker ?: return
         (view.parent as? ViewGroup)?.removeView(view)
         picker = null
+        pickerReturn.clear()
         updateBackState()
     }
 
@@ -417,7 +427,7 @@ class MainActivity : BridgeActivity() {
         val picker = picker
         back.isEnabled =
             if (picker != null) {
-                picker.hasSubScreen || currentInstall != null
+                pickerReturn.decide(picker.hasSubScreen, currentInstall?.host) != PickerBack.SYSTEM
             } else {
                 bridge.webView.canGoBack()
             }
@@ -426,7 +436,16 @@ class MainActivity : BridgeActivity() {
     private fun goBack() {
         val picker = picker
         if (picker != null) {
-            if (!picker.handleBack() && currentInstall != null) dismissPicker()
+            when (pickerReturn.decide(picker.hasSubScreen, currentInstall?.host)) {
+                PickerBack.CLOSE_SUB_SCREEN -> picker.handleBack()
+                PickerBack.DISMISS_TO_CURRENT -> {
+                    // A row tap selected another install; it was not picked.
+                    pickerReturn.restoreSelection()
+                    dismissPicker()
+                }
+                PickerBack.OPEN_RESTORED -> pickerReturn.restoreSelection()?.let { open(it, null) }
+                PickerBack.SYSTEM -> Unit
+            }
         } else if (bridge.webView.canGoBack()) {
             bridge.webView.goBack()
         }

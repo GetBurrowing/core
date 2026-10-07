@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DEBUG BUILDS ONLY: src/main/res/xml/shortcuts.xml with the debug
+     package (applicationIdSuffix ".debug"). targetClass keeps the
+     unsuffixed namespace. ShortcutsResourceTest pins this. -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="switch_install"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_switch_install"
+        android:shortcutShortLabel="@string/shortcut_switch_install"
+        android:shortcutLongLabel="@string/shortcut_switch_install">
+        <intent
+            android:action="com.koboai.burrow.action.SWITCH_INSTALL"
+            android:targetPackage="com.koboai.burrow.debug"
+            android:targetClass="com.koboai.burrow.SwitchInstallActivity" />
+    </shortcut>
+</shortcuts>
