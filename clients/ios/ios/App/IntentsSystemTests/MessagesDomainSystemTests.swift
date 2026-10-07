@@ -1,3 +1,4 @@
+import AppIntents
 import AppIntentsTesting
 import XCTest
 
@@ -61,5 +62,23 @@ final class MessagesDomainSystemTests: XCTestCase {
         XCTAssertEqual(suggested.count, 0)
         let foreign = try await definitions.entities["PersonEntity"].entities(identifiers: ["evil.example.com|9e000000-0000-4000-8000-000000000001"])
         XCTAssertEqual(foreign.count, 0, "an id on an unknown host resolves to nothing")
+    }
+
+    /// Task 01a111bb stage 7, round 3: on the device Siri's send never
+    /// reached `perform` (no `intent step=send`). Run the schema send the
+    /// way the system does, with a contact Burrow cannot match: perform
+    /// must RUN and refuse with Burrow's own spoken failure, not die in
+    /// the framework before it.
+    func testSchemaSendRunsPerformForASystemPerson() async throws {
+        let person = IntentPerson(identifier: .unknown, name: .displayName("Nobody Here"), handle: nil)
+        let intent = definitions.intents["MessagesSendIntent"].makeIntent(destination: [person], content: AttributedString("hi"))
+        do {
+            let result = try await intent.run()
+            print("system-test send result: \(result)")
+        } catch {
+            let text = String(describing: error)
+            print("system-test send refused: \(text.prefix(400))")
+            XCTAssertFalse(text.contains("is not present"), "metadata not indexed yet: \(text.prefix(200))")
+        }
     }
 }

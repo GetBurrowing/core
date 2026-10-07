@@ -142,6 +142,7 @@ struct PersonQuery: EntityStringQuery {
     /// in that host's people directory (the set the device indexes). An
     /// unknown host makes no request.
     func entities(for identifiers: [String]) async throws -> [PersonEntity] {
+        IntentLog.step("person.query", "ids=\(identifiers.count)")
         let catalog = EntityCatalog()
         let cache = PeopleCache.shared
         var missing: [String] = []
@@ -162,6 +163,7 @@ struct PersonQuery: EntityStringQuery {
     /// Recent collaborators: the people the person actually talks to. The
     /// fetch indexes them (EntityCatalog.people).
     func suggestedEntities() async throws -> [PersonEntity] {
+        IntentLog.step("person.query", "suggested")
         let catalog = EntityCatalog()
         return PeopleCache.shared.remember(
             await catalog.people(hosts: catalog.hosts(scope: scope)).map { PersonEntity($0.person, host: $0.host, env: catalog.env) })
@@ -170,6 +172,7 @@ struct PersonQuery: EntityStringQuery {
     /// The server's search (`?q=`), never a filter over the suggestions, so
     /// someone outside the recent set is still found by name.
     func entities(matching string: String) async throws -> [PersonEntity] {
+        IntentLog.step("person.query", "matching")
         let catalog = EntityCatalog()
         return PeopleCache.shared.remember(
             await catalog.people(hosts: catalog.hosts(scope: scope), query: string)

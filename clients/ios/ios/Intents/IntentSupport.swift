@@ -182,10 +182,12 @@ enum IntentLog {
 
     static func route(_ name: String, host: String, status: Int) {
         logger.info("intent route=\(name, privacy: .public) host=\(host, privacy: .public) status=\(status)")
+        IntentTrace.append("route=\(name) host=\(host) status=\(status)")
     }
 
     static func count(_ name: String, host: String, count: Int) {
         logger.info("intent fetch=\(name, privacy: .public) host=\(host, privacy: .public) count=\(count)")
+        IntentTrace.append("fetch=\(name) host=\(host) count=\(count)")
     }
 
     /// A step inside an intent: where it is, and a fixed detail (a case
@@ -193,6 +195,48 @@ enum IntentLog {
     /// counts: never a name, a handle, an id or text.
     static func step(_ site: String, _ detail: String) {
         logger.notice("intent step=\(site, privacy: .public) \(detail, privacy: .public)")
+        IntentTrace.append("step=\(site) \(detail)")
+    }
+}
+
+/// Debug builds only (task 01a111bb stage 7, round 3): every IntentLog line
+/// also goes to `Library/Caches/intent-trace.log` in the process's own
+/// container, with the pid, so a perform in ANY process (the system can
+/// launch a fresh background instance for an intent) is visible afterwards:
+/// `xcrun devicectl device copy from --domain-type appDataContainer
+/// --domain-identifier com.kobo-ai.burrow --source Library/Caches/intent-trace.log`.
+/// Same content as the os_log lines: constants, counts and hosts only.
+/// Release builds compile this to nothing.
+enum IntentTrace {
+    #if DEBUG
+        private static let lock = NSLock()
+        private static let url: URL? = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("intent-trace.log")
+        private static let stamp = ISO8601DateFormatter()
+    #endif
+
+    static func append(_ line: String) {
+        #if DEBUG
+            guard let url else { return }
+            lock.lock()
+            defer { lock.unlock() }
+            let entry = "\(stamp.string(from: Date())) pid=\(ProcessInfo.processInfo.processIdentifier) \(line)\n"
+            guard let data = entry.data(using: .utf8) else { return }
+            if let handle = try? FileHandle(forWritingTo: url) {
+                _ = try? handle.seekToEnd()
+                try? handle.write(contentsOf: data)
+                try? handle.close()
+            } else {
+                try? data.write(to: url)
+            }
+        #endif
+    }
+
+    /// The build's git sha (Info.plist `BurrowGitSHA`, set from the
+    /// `BURROW_GIT_SHA` build setting), or "unset".
+    static var buildSHA: String {
+        let value = Bundle.main.object(forInfoDictionaryKey: "BurrowGitSHA") as? String ?? ""
+        return value.isEmpty ? "unset" : value
     }
 }
 

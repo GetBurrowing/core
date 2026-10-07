@@ -16,6 +16,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         center.delegate = NotificationRouter.shared
         SuiteNotificationCategory.register(center: center)
         IntentAppHooks.install()
+        IntentTrace.append("launch sha=\(IntentTrace.buildSHA) state=\(application.applicationState.rawValue)")
         // Rings (stage 5): the CallKit provider exists, then PushKit starts,
         // both before launch returns, so a VoIP push that launched the app
         // is reported to CallKit.
