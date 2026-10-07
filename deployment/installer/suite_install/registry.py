@@ -540,6 +540,13 @@ def _pocket_id_env(ctx):
         # Data sovereignty: no third-party heartbeat by default.
         "ANALYTICS_DISABLED": "true",
         "ENCRYPTION_KEY": "{secret:ENCRYPTION_KEY}",
+        # Task 01a114c1: pocket-id's request log records the full URL path, and
+        # one-time sign-in codes travel in it (GET /lc/<code>, POST
+        # /api/one-time-access-token/<code>). Every response below 500 logs at
+        # INFO, except a 429 at WARN, so "warn" would still print the code of a
+        # rate-limited exchange. "error" keeps only 5xx request lines. Never
+        # "debug": that also turns on SQL query logs.
+        "LOG_LEVEL": "error",
     }
     if ctx.mac:
         env["DB_CONNECTION_STRING"] = (

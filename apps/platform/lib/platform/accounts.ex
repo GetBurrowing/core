@@ -217,6 +217,52 @@ defmodule Platform.Accounts do
     do: {:error, :not_archived}
 
   @doc """
+  Record that a sign-in link valid until `expires_at` was minted for `user`
+  (task 01a114c1, `Platform.SignInAdmin`). Stores the LATER of the user's
+  current `sign_in_link_expires_at` and `expires_at`, so a second, shorter
+  link never shortens the window of a longer one still live.
+
+  `Platform.SignInAdmin.enable/2` refuses while that value is in the future:
+  pocket-id has no route to revoke a one-time token, and it restores a token
+  a disabled user tried to redeem, so a link minted before a Disable would
+  work again the moment the user is enabled. Only the expiry is stored, never
+  the link or its code.
+
+  The comparison runs in the database (`GREATEST`, which skips a NULL), so
+  a stale `user` struct cannot move the value backwards. Returns
+  `{:error, :not_found}` when the row no longer exists.
+  """
+  @spec note_sign_in_link_expiry(User.t(), DateTime.t()) ::
+          {:ok, User.t()} | {:error, :not_found}
+  def note_sign_in_link_expiry(
+        %User{id: id},
+        %DateTime{utc_offset: 0, std_offset: 0} = expires_at
+      ) do
+    # `users.sign_in_link_expires_at` is a UTC `timestamp` column: compare as
+    # naive UTC so no session time zone is involved.
+    expires_at = expires_at |> DateTime.truncate(:second) |> DateTime.to_naive()
+    now = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_naive()
+
+    query =
+      from(u in User,
+        where: u.id == ^id,
+        select: u,
+        update: [
+          set: [
+            sign_in_link_expires_at:
+              fragment("GREATEST(?, ?::timestamp)", u.sign_in_link_expires_at, ^expires_at),
+            updated_at: ^now
+          ]
+        ]
+      )
+
+    case Repo.update_all(query, []) do
+      {1, [user]} -> {:ok, user}
+      {0, _} -> {:error, :not_found}
+    end
+  end
+
+  @doc """
   Find a user by OIDC `sub`, creating one if missing, or refreshing
   email/name/avatar from the OIDC payload.
 

@@ -722,6 +722,70 @@ class SignInAdminEnvTest(PositiveControlMixin, unittest.TestCase):
             self.assertNotIn(name, text)
 
 
+# ---------------------------------------------------------------------------
+# bundled pocket-id log level (task 01a114c1 stage 2)
+# ---------------------------------------------------------------------------
+
+MAC_EXAMPLE = os.path.join(REPO, "deployment", "examples", "mac.install.toml")
+MAC_RENDER_FIXTURES = os.path.join(HERE, "render_fixtures")
+POCKET_ID_LOG_LEVEL = 'LOG_LEVEL: "error"'
+
+
+def compose_service_block(compose, service):
+    """The lines of one top-level compose service, header excluded."""
+    match = re.search(rf"^  {re.escape(service)}:\n((?:    .*\n)*)", compose, re.MULTILINE)
+    if not match:
+        raise AssertionError(f"no {service} service in compose.yaml")
+    return match.group(1)
+
+
+class PocketIdLogLevelTest(PositiveControlMixin, unittest.TestCase):
+    """pocket-id's request log carries one-time sign-in codes in the URL path.
+
+    The bundled pocket-id runs at LOG_LEVEL=error so only 5xx request lines
+    are written. The assertions read the pocket-id service block, not the
+    whole file.
+    """
+
+    def renders(self):
+        mac = build(
+            manifest_from(MAC_EXAMPLE),
+            customer_secrets=os.path.join(MAC_RENDER_FIXTURES, "mac-customer.env"),
+            registry_auth=os.path.join(MAC_RENDER_FIXTURES, "mac-registry-auth.json"),
+        )
+        return {"single-host": build(manifest_from(EXAMPLE)), "mac": mac}
+
+    def test_bundled_pocket_id_runs_at_error_and_nothing_else_inherits_it(self):
+        for name, rendered in self.renders().items():
+            with self.subTest(render=name):
+                compose = rendered.files["compose.yaml"][0]
+                pocket_id = compose_service_block(compose, "pocket-id")
+                # The extractor found the right block.
+                self.assertIn('image: "ghcr.io/pocket-id/pocket-id:', pocket_id)
+                self.assertIn(POCKET_ID_LOG_LEVEL, pocket_id)
+                # Scope control: the level belongs to pocket-id alone.
+                self.assertNotIn(
+                    POCKET_ID_LOG_LEVEL, compose_service_block(compose, "core-platform")
+                )
+                self.assertEqual(compose.count(POCKET_ID_LOG_LEVEL), 1)
+                # Not a secret: it must not move into secrets.env.
+                self.assertNotIn("LOG_LEVEL", rendered.files["secrets.env"][0])
+
+    def test_the_block_reader_tells_services_apart(self):
+        # Positive control for the scoping: in the mac render another service
+        # sets its own LOG_LEVEL, and the reader returns that value for it.
+        compose = self.renders()["mac"].files["compose.yaml"][0]
+        transcriber = compose_service_block(compose, "meeting-transcriber")
+        self.assertIn('LOG_LEVEL: "INFO"', transcriber)
+        self.assertNotIn(POCKET_ID_LOG_LEVEL, transcriber)
+        self.assertNotIn('LOG_LEVEL: "INFO"', compose_service_block(compose, "pocket-id"))
+
+    def test_external_oidc_renders_no_pocket_id_log_level(self):
+        compose = external_oidc_render(EXAMPLE).files["compose.yaml"][0]
+        self.assertNotRegex(compose, r"(?m)^  pocket-id:$")
+        self.assertNotIn(POCKET_ID_LOG_LEVEL, compose)
+
+
 if __name__ == "__main__":
     unittest.main()
 

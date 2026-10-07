@@ -200,6 +200,16 @@ mints a 6-character code that never auto-submits from `/lc/<code>`. With
 three vars is written. To keep the key but ship with the page off, delete
 `POCKET_ID_ADMIN_ENABLED` from core-platform's environment.
 
+The bundled pocket-id runs with `LOG_LEVEL=error` in its compose environment
+(task 01a114c1). Its request log records the full URL path, and every
+one-time sign-in code travels in one: `GET /lc/<code>` and `POST
+/api/one-time-access-token/<code>`. pocket-id logs every response below 500 at
+info, except a rate-limited 429 at warn, so `warn` would still print a code.
+At `error`, only 5xx request lines are written. The residual is that a 5xx on
+either path still logs that path, code included. `docker compose logs
+pocket-id` still shows errors, including the failures the setup steps point
+you to. Never set `debug`: it also logs SQL queries.
+
 ## JSON contract (version 1)
 
 The desktop app (task 01a0d6b9) and the skill depend on this contract. Any

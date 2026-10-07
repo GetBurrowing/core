@@ -126,6 +126,25 @@ defmodule Platform.SignInAdminTest do
 
   defp user_count, do: Repo.aggregate(Accounts.User, :count)
 
+  # A recorded link expiry 1 second in the past: no live link.
+  defp expire_link!(user) do
+    past = DateTime.utc_now() |> DateTime.add(-1, :second) |> DateTime.truncate(:second)
+
+    {1, _} =
+      Repo.update_all(from(u in Accounts.User, where: u.id == ^user.id),
+        set: [sign_in_link_expires_at: past]
+      )
+
+    past
+  end
+
+  defp backdate_archive!(user, seconds) do
+    at = DateTime.add(DateTime.utc_now(), -seconds, :second)
+
+    {1, _} =
+      Repo.update_all(from(u in Accounts.User, where: u.id == ^user.id), set: [archived_at: at])
+  end
+
   # -- fake pocket-id -------------------------------------------------------
 
   # opts: :users (list of pocket-id user maps), :passkeys (%{id => n}),
@@ -271,6 +290,8 @@ defmodule Platform.SignInAdminTest do
   end
 
   defp route(:token, conn, _body, agent) do
+    with f when is_function(f, 0) <- Agent.get(agent, &Map.get(&1, :on_token)), do: f.()
+
     if Agent.get(agent, &Map.has_key?(&1.users, Enum.at(conn.path_info, 2))),
       do: json(conn, 201, %{"token" => @token}),
       else: json(conn, 404, %{"error" => "not found"})
@@ -389,8 +410,11 @@ defmodule Platform.SignInAdminTest do
       l_row = Repo.get!(Accounts.User, logged_in.id)
       assert i_row.oidc_sub == "S1"
 
+      # `sign_in_link_expires_at` is excluded and asserted below: the invite
+      # minted a link, the first login did not (task 01a114c1).
       compared =
-        Accounts.User.__schema__(:fields) -- [:id, :email, :oidc_sub, :inserted_at, :updated_at]
+        Accounts.User.__schema__(:fields) --
+          [:id, :email, :oidc_sub, :inserted_at, :updated_at, :sign_in_link_expires_at]
 
       # Not vacuous: name, avatar, preferences and the archive columns.
       assert length(compared) >= 5
@@ -400,6 +424,9 @@ defmodule Platform.SignInAdminTest do
                "users.#{field}: invited #{inspect(Map.fetch!(i_row, field))} " <>
                  "vs first login #{inspect(Map.fetch!(l_row, field))}"
       end
+
+      assert %DateTime{} = i_row.sign_in_link_expires_at
+      assert is_nil(l_row.sign_in_link_expires_at)
 
       i_m = root_membership(invited)
       l_m = root_membership(logged_in)
@@ -516,6 +543,24 @@ defmodule Platform.SignInAdminTest do
       assert [token] = Enum.filter(reqs, &(&1.kind == :token))
       assert token.body == %{"ttl" => "30m"}
       assert token.path == "/api/users/pid-new/one-time-access-token"
+    end
+
+    test "sends the invite name to pocket-id as display, first and last name (01a114c1)",
+         %{admin: admin} do
+      fake!(ids: ["pid-carol"])
+
+      assert {:ok, %{user: user}} =
+               SignInAdmin.invite(admin, %{
+                 email: "carol.case@example.com",
+                 name: "Carol Case",
+                 role: :member
+               })
+
+      assert user.name == "Carol Case"
+      assert [create] = Enum.filter(requests(), &(&1.kind == :create))
+      assert create.body["displayName"] == "Carol Case"
+      assert create.body["firstName"] == "Carol"
+      assert create.body["lastName"] == "Case"
     end
 
     test "role :admin promotes and locks the root membership", %{admin: admin} do
@@ -728,6 +773,104 @@ defmodule Platform.SignInAdminTest do
     end
   end
 
+  # -- enable while a Suite-minted link is live (task 01a114c1) -------------
+
+  describe "enable/3 while a Suite-minted sign-in link is live" do
+    test "an invitee disabled with a live link is refused, before any pocket-id request",
+         %{admin: admin} do
+      agent = fake!(ids: ["pid-live"])
+
+      assert {:ok, %{user: user, link: link}} =
+               SignInAdmin.invite(admin, %{
+                 email: "live@example.test",
+                 name: "Live Link",
+                 role: :member
+               })
+
+      assert Repo.get!(Accounts.User, user.id).sign_in_link_expires_at == link.expires_at
+      assert {:ok, _} = SignInAdmin.disable(admin, user.id)
+      _ = requests()
+
+      assert {:error, {:sign_in_link_live, until}} = SignInAdmin.enable(admin, user.id)
+
+      assert until == link.expires_at
+      refute_received {:pocket_id_req, %{kind: :put}}
+      assert requests() == []
+      assert %DateTime{} = Repo.get!(Accounts.User, user.id).archived_at
+      assert get_in(Agent.get(agent, & &1.users), ["pid-live", "disabled"]) == true
+    end
+
+    test "positive control: the same flow with the link expired enables", %{admin: admin} do
+      agent = fake!(ids: ["pid-expired"])
+
+      assert {:ok, %{user: user}} =
+               SignInAdmin.invite(admin, %{
+                 email: "expired@example.test",
+                 name: "Expired Link",
+                 role: :member
+               })
+
+      assert {:ok, _} = SignInAdmin.disable(admin, user.id)
+      expire_link!(user)
+      _ = requests()
+
+      assert {:ok, enabled} = SignInAdmin.enable(admin, user.id)
+
+      assert enabled.id == user.id
+      assert is_nil(enabled.archived_at)
+      assert [put] = Enum.filter(requests(), &(&1.kind == :put))
+      assert put.body["disabled"] == false
+      assert get_in(Agent.get(agent, & &1.users), ["pid-expired", "disabled"]) == false
+    end
+
+    test "undo: true enables right after the Disable, and not 60 seconds later",
+         %{admin: admin} do
+      fake!(ids: ["pid-undo", "pid-late"])
+
+      assert {:ok, %{user: undone}} =
+               SignInAdmin.invite(admin, %{email: "undo@example.test", name: "U", role: :member})
+
+      assert {:ok, _} = SignInAdmin.disable(admin, undone.id)
+      # Without undo the live link refuses; with it, inside the window, it does not.
+      assert {:error, {:sign_in_link_live, _}} = SignInAdmin.enable(admin, undone.id)
+      assert {:ok, enabled} = SignInAdmin.enable(admin, undone.id, undo: true)
+      assert is_nil(enabled.archived_at)
+
+      assert {:ok, %{user: late}} =
+               SignInAdmin.invite(admin, %{email: "late@example.test", name: "L", role: :member})
+
+      assert {:ok, _} = SignInAdmin.disable(admin, late.id)
+      backdate_archive!(late, 60)
+      _ = requests()
+
+      assert {:error, {:sign_in_link_live, _}} = SignInAdmin.enable(admin, late.id, undo: true)
+      assert requests() == []
+      assert %DateTime{} = Repo.get!(Accounts.User, late.id).archived_at
+    end
+
+    test "fail closed: a link whose expiry cannot be recorded is never returned",
+         %{admin: admin} do
+      gone = suite_user!("gone")
+      agent = fake!(users: [pid_user(gone.oidc_sub, gone.email)])
+
+      # The Suite row disappears while pocket-id mints, so the expiry write
+      # finds nothing to update.
+      Agent.update(agent, fn state ->
+        Map.put(state, :on_token, fn ->
+          Repo.delete_all(from(m in OrgMembership, where: m.user_id == ^gone.id))
+          Repo.delete_all(from(u in Accounts.User, where: u.id == ^gone.id))
+        end)
+      end)
+
+      {result, log} = with_log(fn -> SignInAdmin.resend_link(admin, gone.id) end)
+
+      assert result == {:error, :link_failed}
+      assert [_] = Enum.filter(requests(), &(&1.kind == :token))
+      assert log =~ "sign_in_admin.link_expiry_not_recorded suite_user_id=#{gone.id}"
+      refute_secret(log, "the log")
+    end
+  end
+
   # -- secrets --------------------------------------------------------------
 
   describe "the link and the key are never logged or persisted" do
@@ -748,6 +891,9 @@ defmodule Platform.SignInAdminTest do
           invite = SignInAdmin.invite(admin, %{email: "logged@example.test", role: :member})
           resend = SignInAdmin.resend_link(admin, person.id)
           disable = SignInAdmin.disable(admin, person.id)
+          # The resend above recorded a live link, which would refuse Enable
+          # (task 01a114c1). Expire it so Enable still runs and logs here.
+          expire_link!(person)
           enable = SignInAdmin.enable(admin, person.id)
           remove = SignInAdmin.remove(admin, person.id)
           [invite, resend, disable, enable, remove]

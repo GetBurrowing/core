@@ -260,6 +260,7 @@ write_files:
           environment:
             ANALYTICS_DISABLED: "true"
             APP_URL: "https://auth.suite-01a0d69d.test"
+            LOG_LEVEL: "error"
             TRUST_PROXY: "true"
           volumes:
             - "pocket-id-data:/app/data"

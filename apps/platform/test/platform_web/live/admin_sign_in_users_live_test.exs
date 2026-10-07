@@ -504,6 +504,43 @@ defmodule PlatformWeb.AdminSignInUsersLiveTest do
       refute Accounts.get_user(active.id).archived_at
     end
 
+    test "Undo still enables a user who holds a live Suite-minted link (01a114c1)",
+         %{conn: conn, admin: admin} do
+      %{active: active} = people!(admin)
+
+      {1, _} =
+        Repo.update_all(from(u in Accounts.User, where: u.id == ^active.id),
+          set: [sign_in_link_expires_at: ~U[2099-01-01 14:37:00Z]]
+        )
+
+      view = mount!(conn, admin)
+      view |> element("#table-user-#{active.id} [data-role=disable]") |> render_click()
+      assert Accounts.get_user(active.id).archived_at
+
+      view |> element("[data-role=undo-disable]") |> render_click()
+      assert render(view) =~ "can sign in again."
+      refute Accounts.get_user(active.id).archived_at
+    end
+
+    test "Enable on a row with a live Suite-minted link shows when it can be enabled (01a114c1)",
+         %{conn: conn, admin: admin} do
+      %{disabled: disabled} = people!(admin)
+
+      {1, _} =
+        Repo.update_all(from(u in Accounts.User, where: u.id == ^disabled.id),
+          set: [sign_in_link_expires_at: ~U[2099-01-01 14:37:00Z]]
+        )
+
+      view = mount!(conn, admin)
+      view |> element("#table-user-#{disabled.id} [data-role=enable]") |> render_click()
+
+      assert render(view) =~
+               "A sign-in link sent before #{disabled.name} was disabled is valid until 14:37 UTC. Enable them after that."
+
+      assert Enum.filter(requests(), &(&1.kind == :put)) == []
+      assert has_element?(view, "#table-user-#{disabled.id} [data-role=enable]")
+    end
+
     test "remove asks with the soft copy and keeps the Suite row", %{conn: conn, admin: admin} do
       %{pending: pending} = people!(admin)
       view = mount!(conn, admin)

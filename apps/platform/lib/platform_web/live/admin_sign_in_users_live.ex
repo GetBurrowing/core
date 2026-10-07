@@ -248,7 +248,9 @@ defmodule PlatformWeb.AdminSignInUsersLive do
   defp event(name, %{"id" => id}, socket) when name in ["enable", "undo_disable"] do
     actor = socket.assigns.current_user_record
 
-    case SignInAdmin.enable(actor, id) do
+    # Only Undo may skip the live-link check, and the context bounds it to
+    # 30 seconds after the Disable (task 01a114c1).
+    case SignInAdmin.enable(actor, id, undo: name == "undo_disable") do
       {:ok, user} ->
         {:noreply,
          socket
@@ -452,10 +454,16 @@ defmodule PlatformWeb.AdminSignInUsersLive do
         :disabled -> "#{name} is disabled. Enable them first."
         :archived -> "#{name} is archived. Enable them first."
         :user_not_found -> "User not found."
+        {:sign_in_link_live, until} -> link_live_message(name, until)
         _ -> "Can't reach the sign-in service. Try again."
       end
 
     put_flash(socket, :error, message)
+  end
+
+  # Task 01a114c1: Enable waits until every link Suite minted has expired.
+  defp link_live_message(name, until) do
+    "A sign-in link sent before #{name} was disabled is valid until #{Calendar.strftime(until, "%H:%M")} UTC. Enable them after that."
   end
 
   defp row_name(socket, id) do

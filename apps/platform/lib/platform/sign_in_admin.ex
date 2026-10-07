@@ -8,8 +8,9 @@ defmodule Platform.SignInAdmin do
   `Platform.Accounts` and `Platform.Tenancy`. **It never writes a Suite user
   itself.** Every user row change goes through an Accounts function
   (`find_or_create_from_oidc/1`, `relink_oidc_identity/2`, `archive_user/2`,
-  `unarchive_user/1`) and every role change through a Tenancy membership
-  helper. `Platform.SignInAdmin.AccountsBoundaryTest` (syntactic) and the
+  `unarchive_user/1`, `note_sign_in_link_expiry/2`) and every role change
+  through a Tenancy membership helper.
+  `Platform.SignInAdmin.AccountsBoundaryTest` (syntactic) and the
   identical-rows test in `Platform.SignInAdminTest` (behavioural) hold that
   line.
 
@@ -49,7 +50,26 @@ defmodule Platform.SignInAdmin do
 
       sign_in_admin.invite suite_user_id=<id> path=create
 
-  The link is never logged and never stored.
+  The link is never logged and never stored. Only its expiry is, as the
+  Suite user's `sign_in_link_expires_at` (see below).
+
+  ## Enable waits for every link this module minted to expire
+
+  pocket-id v2.18.0 has no route to revoke a one-time token, and a token a
+  disabled user tries to redeem is consumed and then restored, so a link sent
+  before a Disable works again the moment the user is enabled. Every link
+  `mint_link/2` returns is first recorded with
+  `Accounts.note_sign_in_link_expiry/2` (fail closed: no record, no link), and
+  `enable/3` refuses with `{:error, {:sign_in_link_live, until}}` while the
+  recorded expiry is in the future, before any pocket-id request. The one
+  exception is `undo: true` within 30 seconds of the Disable, which the
+  Users page's Undo uses: undo means the Disable never happened (task
+  01a114c1).
+
+  This guard covers links minted by `Platform.SignInAdmin` (invite and
+  resend) and nothing else. A link minted in pocket-id's own admin UI, or
+  the installer's first-admin link, is not recorded, and Enable does not
+  wait for it.
   """
 
   require Logger
@@ -66,6 +86,10 @@ defmodule Platform.SignInAdmin do
   # `Link.expires_at`.
   @link_ttl_seconds 30 * 60
   @link_redirect "?redirect=%2Fsettings%2Faccount"
+  # How long after a Disable `enable(actor, id, undo: true)` may skip the
+  # live-link check. The Users page's Undo banner lasts 8 seconds.
+  @undo_window_seconds 30
+  @disabled_reason "sign-in disabled"
 
   @type actor :: %{:id => binary(), optional(atom()) => any()}
   @type status :: :active | :pending | :disabled | :no_identity | :not_in_suite
@@ -197,7 +221,7 @@ defmodule Platform.SignInAdmin do
   end
 
   defp provision(actor, email, name, role) do
-    with {:ok, identity, created?} <- identity_for(email),
+    with {:ok, identity, created?} <- identity_for(email, name),
          :ok <- sub_unclaimed(identity, created?) do
       case Accounts.find_or_create_from_oidc(%{sub: identity.id, email: email, name: name}) do
         {:ok, user} ->
@@ -212,13 +236,14 @@ defmodule Platform.SignInAdmin do
   defp path_name(true), do: "create"
   defp path_name(false), do: "adopt"
 
-  defp identity_for(email) do
+  # The adopt branch leaves an existing pocket-id user's name as it is.
+  defp identity_for(email, name) do
     case PocketId.find_by_email(email) do
       {:ok, %PocketId.User{} = existing} ->
         {:ok, existing, false}
 
       {:ok, nil} ->
-        with {:ok, created} <- PocketId.create_user(%{email: email}) do
+        with {:ok, created} <- PocketId.create_user(%{email: email, name: name}) do
           {:ok, created, true}
         end
 
@@ -243,8 +268,8 @@ defmodule Platform.SignInAdmin do
       {:ok, _membership} ->
         Logger.info("sign_in_admin.invite suite_user_id=#{user.id} path=#{path}")
 
-        case mint_link(identity.id) do
-          {:ok, link} ->
+        case mint_link(user, identity.id) do
+          {:ok, link, user} ->
             {:ok, %{user: user, link: link}}
 
           {:error, _} ->
@@ -291,7 +316,8 @@ defmodule Platform.SignInAdmin do
          :ok <- not_disabled(identity),
          :ok <- not_archived(user) do
       Logger.info("sign_in_admin.resend_link suite_user_id=#{user.id}")
-      mint_link(identity.id)
+
+      with {:ok, link, _user} <- mint_link(user, identity.id), do: {:ok, link}
     end
   end
 
@@ -308,15 +334,39 @@ defmodule Platform.SignInAdmin do
          {:ok, user} <- fetch_user(user_id),
          {:ok, _identity} <- set_disabled(user, true) do
       Logger.info("sign_in_admin.disable suite_user_id=#{user.id}")
-      Accounts.archive_user(user, actor: actor, reason: "sign-in disabled")
+      Accounts.archive_user(user, actor: actor, reason: @disabled_reason)
     end
   end
 
-  @doc "Re-enable a disabled user in pocket-id and unarchive the Suite user."
-  @spec enable(actor(), term()) :: {:ok, Accounts.User.t()} | {:error, term()}
-  def enable(actor, user_id) do
+  @doc """
+  Re-enable a disabled user in pocket-id and unarchive the Suite user.
+
+  Refused with `{:error, {:sign_in_link_live, until}}`, before any pocket-id
+  request, while a sign-in link this module minted for the user is still
+  valid (`until` is its expiry): pocket-id cannot revoke it, and it would work
+  again the moment the user is enabled.
+
+  `opts`:
+
+    * `undo: true`: skip that check, but only when the Suite user was
+      archived with reason "sign-in disabled" less than 30 seconds ago. Undo
+      means the Disable never happened, so the links it outlived are the ones
+      the user held before. Outside that window it gets the same refusal.
+      Only the Users page's `undo_disable` event passes it.
+  """
+  @spec enable(actor(), term(), keyword()) ::
+          {:ok, Accounts.User.t()}
+          | {:error,
+             :not_found
+             | :unauthorized
+             | :user_not_found
+             | :no_identity
+             | {:sign_in_link_live, DateTime.t()}
+             | term()}
+  def enable(actor, user_id, opts \\ []) do
     with :ok <- authorize(actor),
          {:ok, user} <- fetch_user(user_id),
+         :ok <- links_expired(user, Keyword.get(opts, :undo, false)),
          {:ok, _identity} <- set_disabled(user, false) do
       Logger.info("sign_in_admin.enable suite_user_id=#{user.id}")
       Accounts.unarchive_user(user)
@@ -357,6 +407,24 @@ defmodule Platform.SignInAdmin do
     end
   end
 
+  # A recorded link expiry still in the future refuses Enable, unless this is
+  # an Undo inside its window.
+  defp links_expired(user, undo?) do
+    until = user.sign_in_link_expires_at
+
+    cond do
+      undo? and fresh_disable?(user) -> :ok
+      is_nil(until) -> :ok
+      DateTime.compare(until, DateTime.utc_now()) == :gt -> {:error, {:sign_in_link_live, until}}
+      true -> :ok
+    end
+  end
+
+  defp fresh_disable?(%{archived_reason: @disabled_reason, archived_at: %DateTime{} = at}),
+    do: DateTime.diff(DateTime.utc_now(), at, :second) < @undo_window_seconds
+
+  defp fresh_disable?(_user), do: false
+
   # -- shared ---------------------------------------------------------------
 
   defp authorize(actor) do
@@ -396,19 +464,29 @@ defmodule Platform.SignInAdmin do
   defp not_disabled(%PocketId.User{disabled: true}), do: {:error, :disabled}
   defp not_disabled(_identity), do: :ok
 
-  defp mint_link(pocket_id_user_id) do
+  # Fail closed: a link whose expiry could not be recorded is never returned,
+  # because Enable could then not wait for it.
+  defp mint_link(user, pocket_id_user_id) do
     with {:ok, %PocketId.Token{value: token}} <- PocketId.one_time_token(pocket_id_user_id) do
       expires_at =
         DateTime.utc_now()
         |> DateTime.add(@link_ttl_seconds, :second)
         |> DateTime.truncate(:second)
 
-      {:ok,
-       %Link{
-         url: Config.public_base() <> "/lc/" <> token <> @link_redirect,
-         code: token,
-         expires_at: expires_at
-       }}
+      case Accounts.note_sign_in_link_expiry(user, expires_at) do
+        {:ok, user} ->
+          link = %Link{
+            url: Config.public_base() <> "/lc/" <> token <> @link_redirect,
+            code: token,
+            expires_at: expires_at
+          }
+
+          {:ok, link, user}
+
+        {:error, _} ->
+          Logger.warning("sign_in_admin.link_expiry_not_recorded suite_user_id=#{user.id}")
+          {:error, :link_failed}
+      end
     end
   end
 

@@ -270,7 +270,8 @@ class MacKnobTest(PositiveControlMixin, unittest.TestCase):
                 "ROOM_PATTERN",
                 "IDLE_TIMEOUT_S",
                 "EMPTY_GRACE_S",
-                "LOG_LEVEL",
+                # No LOG_LEVEL: the bundled pocket-id declares it too (task
+                # 01a114c1), so a meetings-off render still carries the name.
             },
         )
 

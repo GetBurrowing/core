@@ -574,4 +574,54 @@ defmodule Platform.AccountsTest do
       assert Repo.get!(Accounts.User, user.id) == before
     end
   end
+
+  # ── note_sign_in_link_expiry/2 (task 01a114c1 stage 1) ───────────────
+
+  describe "note_sign_in_link_expiry/2" do
+    setup do
+      seed_bystander_fabrikam_membership!()
+    end
+
+    @earlier ~U[2030-01-01 12:00:00Z]
+    @later ~U[2030-01-01 12:30:00Z]
+
+    test "stores the first value on a user with none" do
+      {:ok, user} = Accounts.find_or_create_from_oidc(oidc_attrs(%{}))
+      assert is_nil(user.sign_in_link_expires_at)
+
+      assert {:ok, noted} = Accounts.note_sign_in_link_expiry(user, @earlier)
+      assert noted.sign_in_link_expires_at == @earlier
+      assert Repo.get!(Accounts.User, user.id).sign_in_link_expires_at == @earlier
+    end
+
+    test "earlier then later keeps the later" do
+      {:ok, user} = Accounts.find_or_create_from_oidc(oidc_attrs(%{}))
+
+      {:ok, user} = Accounts.note_sign_in_link_expiry(user, @earlier)
+      assert {:ok, noted} = Accounts.note_sign_in_link_expiry(user, @later)
+
+      assert noted.sign_in_link_expires_at == @later
+      assert Repo.get!(Accounts.User, user.id).sign_in_link_expires_at == @later
+    end
+
+    test "later then earlier keeps the later, even through a stale struct" do
+      {:ok, user} = Accounts.find_or_create_from_oidc(oidc_attrs(%{}))
+
+      {:ok, noted} = Accounts.note_sign_in_link_expiry(user, @later)
+      assert noted.sign_in_link_expires_at == @later
+
+      # `user` still carries nil: the comparison must use the stored value.
+      assert {:ok, again} = Accounts.note_sign_in_link_expiry(user, @earlier)
+      assert again.sign_in_link_expires_at == @later
+      assert Repo.get!(Accounts.User, user.id).sign_in_link_expires_at == @later
+    end
+
+    test "a user row that no longer exists is :not_found" do
+      {:ok, user} = Accounts.find_or_create_from_oidc(oidc_attrs(%{}))
+      Repo.delete_all(from(m in OrgMembership, where: m.user_id == ^user.id))
+      Repo.delete!(user)
+
+      assert {:error, :not_found} = Accounts.note_sign_in_link_expiry(user, @later)
+    end
+  end
 end
