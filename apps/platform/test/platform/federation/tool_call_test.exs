@@ -195,6 +195,74 @@ defmodule Platform.Federation.ToolCallTest do
     end
   end
 
+  # ── error_kind (task 01a115b5 stage 1) ────────────────────────────────
+
+  describe "classify/2" do
+    test "a failed suite_run run is error with its enumerated kind" do
+      assert ToolCall.classify(
+               "suite_run",
+               {:ok, %{ok: false, error: %{kind: "fuel", message: "m"}}}
+             ) == {"error", "fuel"}
+    end
+
+    test "a suite_run kind outside the set is error with a nil kind, never free text" do
+      assert ToolCall.classify("suite_run", {:ok, %{ok: false, error: %{kind: "oops"}}}) ==
+               {"error", nil}
+    end
+
+    test "a successful suite_run run is ok with a nil kind" do
+      assert ToolCall.classify("suite_run", {:ok, %{ok: true, result: 1}}) == {"ok", nil}
+    end
+
+    test "any other tool returning ok:false stays ok with a nil kind" do
+      assert ToolCall.classify(
+               "task_get",
+               {:ok, %{ok: false, error: %{kind: "script_error", message: "m"}}}
+             ) == {"ok", nil}
+
+      assert ToolCall.classify("task_get", {:ok, %{ok: false}}) == {"ok", nil}
+    end
+
+    test "errors and denials keep their status and carry no kind" do
+      assert ToolCall.classify("suite_run", {:error, %{code: "missing_script"}}) ==
+               {"error", nil}
+
+      assert ToolCall.classify("task_get", :denied) == {"denied", nil}
+    end
+  end
+
+  describe "the error_kind column" do
+    test "an error_kind outside the enumerated set is an invalid changeset" do
+      base = %{runtime_id: "rt", tool: "suite_run", status: "error", attribution: "unattributed"}
+
+      refute ToolCallRecord.changeset(Map.put(base, :error_kind, "oops")).valid?
+      assert ToolCallRecord.changeset(Map.put(base, :error_kind, "timeout")).valid?
+    end
+
+    test "the ledger writes error_kind", %{agent: agent} do
+      {runtime, _token} = insert_runtime(agent, AgentRuntime.valid_bundles())
+
+      ToolCallLedger.insert(%{
+        tool: "suite_run",
+        status: "error",
+        error_kind: "memory",
+        duration_ms: 1,
+        runtime_id: runtime.runtime_id,
+        agent_id: agent.id,
+        hints: %{}
+      })
+
+      assert [%ToolCallRecord{status: "error", error_kind: "memory"}] = rows_for(runtime)
+    end
+
+    test "a non-suite_run row over /mcp carries a nil error_kind", %{agent: agent, task: task} do
+      {runtime, token} = insert_runtime(agent, AgentRuntime.valid_bundles())
+
+      mcp_call(token, "task_get", %{"task_id" => task.id})
+      assert [%ToolCallRecord{status: "ok", error_kind: nil}] = rows_for(runtime)
+    end
+  end
+
   # ── attribution ladder ────────────────────────────────────────────────
 
   describe "attribute/3" do

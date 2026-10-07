@@ -33,13 +33,16 @@ defmodule Platform.Federation.ToolCall do
   Every call, whether ok, error or denied, writes one `dispatch_tool_calls`
   row through `Platform.Federation.ToolCallLedger.record/1`. The row holds the
   tool NAME, status, duration, a size figure and the attribution. It never
-  holds argument values, result values or secrets. The write never raises
+  holds argument values, result values or secrets. A `suite_run` whose run
+  failed is ledgered as `"error"` with an enumerated `error_kind` (see
+  `classify/2`); its wire result is unchanged. The write never raises
   into the call and never changes its result (ADR-0048 posture). See
   `ToolCallLedger`.
   """
 
   alias Platform.Agents.AgentRuntime
   alias Platform.Chat
+  alias Platform.CodeMode.Run
   alias Platform.Federation.ToolArguments
   alias Platform.Federation.ToolAuthorization
   alias Platform.Federation.ToolCallLedger
@@ -117,17 +120,20 @@ defmodule Platform.Federation.ToolCall do
   defp normalize(other), do: {:error, other}
 
   defp record(call_id, name, args, runtime, opts, started, outcome) do
-    {status, result_bytes} =
+    {status, error_kind} = classify(name, outcome)
+
+    result_bytes =
       case outcome do
-        :denied -> {"denied", nil}
-        {:ok, data} -> {"ok", term_size(data)}
-        {:error, reason} -> {"error", term_size(reason)}
+        :denied -> nil
+        {:ok, data} -> term_size(data)
+        {:error, reason} -> term_size(reason)
       end
 
     entry = %{
       id: call_id,
       tool: name,
       status: status,
+      error_kind: error_kind,
       duration_ms: System.monotonic_time(:millisecond) - started,
       result_bytes: result_bytes,
       runtime_id: runtime.runtime_id,
@@ -140,6 +146,27 @@ defmodule Platform.Federation.ToolCall do
 
     entry |> Map.merge(script_fingerprint(name, args)) |> ToolCallLedger.record()
   end
+
+  @doc """
+  The ledger `{status, error_kind}` for a call's outcome (task 01a115b5
+  stage 1).
+
+  A failed `suite_run` run returns `{:ok, %{ok: false, error: %{kind: kind}}}`:
+  a successful CALL on the wire (MCP `isError: false`, a shape this module
+  never changes) whose RUN failed. The ledger reads it as `"error"`, with
+  `error_kind` set to `kind` when it is one of `Platform.CodeMode.Run.error_kinds/0`
+  and nil otherwise, so the column never holds a free-text value. Only
+  `suite_run` is read this way; every other tool keeps `{:ok, _}` as `"ok"`.
+  Every other outcome has a nil `error_kind`. The error message is never
+  part of the result.
+  """
+  @spec classify(String.t(), :denied | result()) :: {String.t(), String.t() | nil}
+  def classify("suite_run", {:ok, %{ok: false, error: %{kind: kind}}}),
+    do: {"error", if(kind in Run.error_kinds(), do: kind)}
+
+  def classify(_name, :denied), do: {"denied", nil}
+  def classify(_name, {:ok, _data}), do: {"ok", nil}
+  def classify(_name, {:error, _reason}), do: {"error", nil}
 
   # The call's own ids win. Only when it names no task, stage or plan do the
   # fallback ids apply: for `suite_run`, the ids in its `inputs`; for an

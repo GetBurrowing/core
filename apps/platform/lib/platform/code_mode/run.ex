@@ -41,6 +41,16 @@ defmodule Platform.CodeMode.Run do
   @max_script_bytes 262_144
   @max_session_bytes 128
 
+  @error_kinds ~w(timeout memory fuel call_limit output_limit script_error forbidden)
+
+  @doc """
+  Every `kind` a failed run reports in `{ok: false, error: {kind, message}}`
+  (task 01a115b5 stage 1). The ledger's `error_kind` column admits exactly
+  these values, so it holds an enumerated kind and never an error message.
+  """
+  @spec error_kinds() :: [String.t()]
+  def error_kinds, do: @error_kinds
+
   @doc "The `suite_run` tool handler (`ToolSurface.execute/3`)."
   @spec run_tool(map(), map()) :: {:ok, map()} | {:error, map()}
   def run_tool(args, context) do

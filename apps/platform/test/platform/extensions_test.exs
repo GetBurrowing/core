@@ -548,7 +548,10 @@ defmodule Platform.ExtensionsTest do
     # Re-pinned by task 01a114a8 stage 4: `code_mode_report` in `experiments`,
     # plus doc text on experiment_create (dispatch_usage, agent_id cohort,
     # dispatch.code_mode target). Measured on moon at the stage's branch.
-    @main_tool_digest_off "9c1561c7bf4d7b652b6b6a9477de5690297f1fbffda1f88468b678136a09e4e8"
+    #
+    # Re-pinned by task 01a115b5 stage 2: suite_run_describe's `detail`
+    # parameter and description text. Measured on moon at the stage's branch.
+    @main_tool_digest_off "72c6e07c622bc52f454b463a913f0bdb999be529c270f86dfdcecafd506fed1b"
     @main_kinds_summaries_digest_off "4c060fb7a6914985f94857aaac9effbb519dd2b2170c7a9c0013d4db15a73ea4"
     @main_kinds_tool_schemas_digest_off "e454cd9e2aeb1d821a70b74fe433e81ba98b94f7ae9f2d59c55f8cf5bf509af8"
     # main's lists minus exactly `play`.

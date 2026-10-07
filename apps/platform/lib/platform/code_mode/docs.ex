@@ -15,11 +15,26 @@ defmodule Platform.CodeMode.Docs do
 
     * no `tools` / `bundle`: an INDEX, one line per callable tool (its call
       path and the first sentence of its description), grouped by bundle;
-    * `tools: [names]` and/or `bundle: name`: full declarations for those
-      tools only — input type from `parameters` (a declared `:schema` is used
-      verbatim), return type from `returns_schema` (or `unknown` plus the
-      prose `returns`), and the description, limitations and when_to_use as
-      TSDoc.
+    * `tools: [names]` and/or `bundle: name`: declarations for those tools
+      only — input type from `parameters` (a declared `:schema` is used
+      verbatim) and return type from `returns_schema` (or `unknown` plus the
+      prose `returns`).
+
+  ## Detail (task 01a115b5 stage 2)
+
+  Declarations come in two details, selected by the `detail` argument:
+
+    * `"summary"` (the default): the types, plus ONE TSDoc line per tool —
+      the first sentence of its description. No limitations, no when_to_use,
+      no parameter or return-property description comments. A tool without
+      a `returns_schema` keeps its prose `Returns:`, because its type is
+      `unknown` and the prose is its only return documentation.
+    * `"full"`: the description, limitations and when_to_use as TSDoc, and
+      every parameter and property description.
+
+  The types are identical in both. Measured on the 01a114a8 rig, three tools
+  (task_list, stage_list, execution_lease_list) cost 12,208 B in full; most
+  of it was prose that restates what the types already say.
 
   An agent reads the index once, then fetches types for the handful of
   tools its script will use, instead of all of them.
@@ -57,14 +72,15 @@ defmodule Platform.CodeMode.Docs do
   @spec describe(struct(), map()) :: {:ok, map()} | {:error, map()}
   def describe(runtime, args) when is_map(args) do
     with {:ok, tools} <- string_list(args, "tools"),
-         {:ok, bundle} <- optional_string(args, "bundle") do
+         {:ok, bundle} <- optional_string(args, "bundle"),
+         {:ok, detail} <- detail(Map.get(args, "detail")) do
       available = callable(runtime)
       {selected, not_available} = select(available, tools, bundle)
 
       docs =
         if is_nil(tools) and is_nil(bundle),
           do: render_index(available),
-          else: render_declarations(selected)
+          else: render_declarations(selected, detail)
 
       {:ok,
        %{
@@ -77,8 +93,9 @@ defmodule Platform.CodeMode.Docs do
   end
 
   @doc """
-  The declaration text for `runtime`. Options: `:tools` (names) and
-  `:bundle`; with neither, the index.
+  The declaration text for `runtime`. Options: `:tools` (names),
+  `:bundle` and `:detail` (`"summary"`, the default, or `"full"`; atoms are
+  accepted); with neither `:tools` nor `:bundle`, the index.
   """
   @spec render(struct(), keyword()) :: String.t()
   def render(runtime, opts \\ []) do
@@ -86,11 +103,17 @@ defmodule Platform.CodeMode.Docs do
     tools = Keyword.get(opts, :tools)
     bundle = Keyword.get(opts, :bundle)
 
+    detail =
+      case opts |> Keyword.get(:detail) |> atom_to_string() |> detail() do
+        {:ok, detail} -> detail
+        {:error, %{error: message}} -> raise ArgumentError, message
+      end
+
     if is_nil(tools) and is_nil(bundle) do
       render_index(available)
     else
       {selected, _not_available} = select(available, tools, bundle)
-      render_declarations(selected)
+      render_declarations(selected, detail)
     end
   end
 
@@ -150,12 +173,12 @@ defmodule Platform.CodeMode.Docs do
 
   # ── Declarations ────────────────────────────────────────────────────────
 
-  defp render_declarations(selected) do
+  defp render_declarations(selected, detail) do
     tree = Enum.reduce(selected, %{}, &put_path(&2, String.split(&1.name, "."), &1))
 
     members =
       tree
-      |> render_members(1)
+      |> render_members(1, detail)
       |> Kernel.++([
         "  /** Call any tool you may call by name; same result or SuiteError as the direct binding. */",
         "  call(name: string, args?: Record<string, unknown>): unknown;"
@@ -191,22 +214,37 @@ defmodule Platform.CodeMode.Docs do
     Map.put(tree, head, put_path(sub, rest, tool))
   end
 
-  defp render_members(tree, depth) do
+  defp render_members(tree, depth, detail) do
     pad = String.duplicate("  ", depth)
 
     tree
     |> Enum.sort_by(fn {key, _} -> key end)
     |> Enum.flat_map(fn
       {key, {:tool, tool}} ->
-        tsdoc(tool, pad) ++
-          ["#{pad}#{prop_name(key)}(#{args_decl(tool, pad)}): #{return_decl(tool, pad)};"]
+        tsdoc(tool, pad, detail) ++
+          [
+            "#{pad}#{prop_name(key)}(#{args_decl(tool, pad, detail)}): #{return_decl(tool, pad, detail)};"
+          ]
 
       {key, %{} = sub} ->
-        ["#{pad}#{prop_name(key)}: {"] ++ render_members(sub, depth + 1) ++ ["#{pad}};"]
+        ["#{pad}#{prop_name(key)}: {"] ++ render_members(sub, depth + 1, detail) ++ ["#{pad}};"]
     end)
   end
 
-  defp tsdoc(tool, pad) do
+  # summary: one line, the first sentence; an untyped tool keeps its prose
+  # `Returns:` (its type is `unknown`, so the prose is its only return doc).
+  defp tsdoc(tool, pad, "summary") do
+    returns = if tool[:returns_schema], do: nil, else: labelled("Returns", tool[:returns])
+
+    [first_sentence(tool[:description]), returns]
+    |> Enum.reject(&blank?/1)
+    |> case do
+      [] -> []
+      parts -> ["#{pad}/** #{parts |> Enum.join(" ") |> one_line() |> escape_comment()} */"]
+    end
+  end
+
+  defp tsdoc(tool, pad, "full") do
     sections =
       [
         tool[:description],
@@ -233,7 +271,9 @@ defmodule Platform.CodeMode.Docs do
 
   defp escape_comment(text), do: String.replace(text, "*/", "*\\/")
 
-  defp args_decl(tool, pad) do
+  defp one_line(text), do: String.replace(text, "\n", " ")
+
+  defp args_decl(tool, pad, detail) do
     params = Map.get(tool, :parameters) || %{}
 
     if map_size(params) == 0 do
@@ -244,33 +284,65 @@ defmodule Platform.CodeMode.Docs do
       props =
         params
         |> Enum.sort_by(fn {key, _} -> to_string(key) end)
-        |> Enum.flat_map(fn {key, meta} -> param_lines(to_string(key), meta, pad <> "  ") end)
+        |> Enum.flat_map(fn {key, meta} ->
+          param_lines(to_string(key), meta, pad <> "  ", detail)
+        end)
 
       "args#{if required?, do: "", else: "?"}: {\n" <> Enum.join(props, "\n") <> "\n#{pad}}"
     end
   end
 
-  defp param_lines(key, meta, pad) when is_map(meta) do
+  defp param_lines(key, meta, pad, detail) when is_map(meta) do
     schema =
       case meta[:schema] do
-        %{} = schema -> stringify(schema)
+        %{} = schema -> schema |> stringify() |> for_detail(detail)
         _ -> %{"type" => meta[:type] || "string"}
       end
 
     optional = if meta[:required] == true, do: "", else: "?"
 
-    doc_comment(meta[:description], pad) ++
+    param_doc(meta[:description], pad, detail) ++
       ["#{pad}#{prop_name(key)}#{optional}: #{ts_type(schema, pad)};"]
   end
 
-  defp param_lines(key, _meta, pad), do: ["#{pad}#{prop_name(key)}?: unknown;"]
+  defp param_lines(key, _meta, pad, _detail), do: ["#{pad}#{prop_name(key)}?: unknown;"]
 
-  defp return_decl(tool, pad) do
+  defp param_doc(_text, _pad, "summary"), do: []
+  defp param_doc(text, pad, "full"), do: doc_comment(text, pad)
+
+  defp return_decl(tool, pad, detail) do
     case tool[:returns_schema] do
-      %{} = schema -> ts_type(stringify(schema), pad)
+      %{} = schema -> schema |> stringify() |> for_detail(detail) |> ts_type(pad)
       _ -> "unknown"
     end
   end
+
+  # summary drops every schema-level `description` (the `/** ... */` property
+  # comments `ts_type/2` renders) and nothing else. It walks the schema
+  # STRUCTURE, so a property NAMED "description" (task.description) keeps its
+  # declaration: only the keyword is removed, never a key of `properties`.
+  defp for_detail(schema, "full"), do: schema
+  defp for_detail(schema, "summary"), do: strip_descriptions(schema)
+
+  defp strip_descriptions(%{} = schema) do
+    schema
+    |> Map.delete("description")
+    |> Map.new(fn
+      {"properties", %{} = props} ->
+        {"properties", Map.new(props, fn {k, sub} -> {k, strip_descriptions(sub)} end)}
+
+      {key, %{} = sub} when key in ["items", "additionalProperties"] ->
+        {key, strip_descriptions(sub)}
+
+      {key, options} when key in ["oneOf", "anyOf"] and is_list(options) ->
+        {key, Enum.map(options, &strip_descriptions/1)}
+
+      other ->
+        other
+    end)
+  end
+
+  defp strip_descriptions(other), do: other
 
   defp doc_comment(text, pad) when is_binary(text) do
     if String.trim(text) == "",
@@ -377,6 +449,15 @@ defmodule Platform.CodeMode.Docs do
       _ -> invalid(key, "a bundle name")
     end
   end
+
+  @details ~w(summary full)
+
+  defp atom_to_string(value) when is_atom(value) and not is_nil(value), do: Atom.to_string(value)
+  defp atom_to_string(value), do: value
+
+  defp detail(nil), do: {:ok, "summary"}
+  defp detail(value) when value in @details, do: {:ok, value}
+  defp detail(_), do: invalid("detail", ~s("summary" or "full"))
 
   defp invalid(key, expected) do
     {:error,

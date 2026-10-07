@@ -10,6 +10,11 @@ defmodule Platform.Federation.ToolCallRecord do
   fingerprint and a size, from which the script cannot be recovered. Its
   `id` is the run's `run_id`, which its inner calls carry as `parent_run_id`.
 
+  `error_kind` (task 01a115b5 stage 1) is set only on a `suite_run` row whose
+  run failed (`status: "error"`). It is one of
+  `Platform.CodeMode.Run.error_kinds/0`, an enumerated kind, never the
+  error message: the changeset refuses any other value.
+
   `attribution` names the rung of the ladder that produced
   `task_id` / `stage_id` (see `ToolCallLedger.attribute/3`):
 
@@ -31,7 +36,7 @@ defmodule Platform.Federation.ToolCallRecord do
   @attributions ~w(explicit_arg execution_space sole_acked_stage sole_lease unattributed)
 
   @fields ~w(id runtime_id agent_id tool status duration_ms result_bytes task_id stage_id
-             lease_id attribution parent_run_id script_sha256 script_bytes)a
+             lease_id attribution parent_run_id script_sha256 script_bytes error_kind)a
 
   schema "dispatch_tool_calls" do
     field(:runtime_id, :string)
@@ -47,6 +52,7 @@ defmodule Platform.Federation.ToolCallRecord do
     field(:parent_run_id, :binary_id)
     field(:script_sha256, :string)
     field(:script_bytes, :integer)
+    field(:error_kind, :string)
     field(:inserted_at, :utc_datetime_usec, autogenerate: {DateTime, :utc_now, []})
   end
 
@@ -60,5 +66,6 @@ defmodule Platform.Federation.ToolCallRecord do
     |> validate_inclusion(:status, @statuses)
     |> validate_inclusion(:attribution, @attributions)
     |> validate_format(:script_sha256, ~r/\A[0-9a-f]{64}\z/)
+    |> validate_inclusion(:error_kind, Platform.CodeMode.Run.error_kinds())
   end
 end

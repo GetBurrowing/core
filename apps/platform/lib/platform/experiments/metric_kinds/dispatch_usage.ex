@@ -20,6 +20,11 @@ defmodule Platform.Experiments.MetricKinds.DispatchUsage do
       dispatch (a runtime that never acked) has a nil `re_dispatch_count`,
       so a re-dispatch of it cannot be seen; its outcome rests on the stage
       and validation status alone. `agg: mean` is the first-pass rate.
+    * `tool_calls_error` — the dispatch's tool calls (model-issued and
+      `suite_run` inner) ledgered as `error` (task 01a115b5 stage 1). A
+      `suite_run` whose run failed counts here, even though its wire result
+      is a successful call. Server-side and exact: 0, never nil, for a
+      dispatch with none.
 
   ## What `n` counts
 
@@ -46,7 +51,8 @@ defmodule Platform.Experiments.MetricKinds.DispatchUsage do
   alias Platform.Orchestration.DispatchMetrics
   alias Platform.Repo
 
-  @fields ~w(suite_tool_calls client_turns client_tokens_in client_tokens_out wall_ms outcome_first_pass)
+  @fields ~w(suite_tool_calls client_turns client_tokens_in client_tokens_out wall_ms outcome_first_pass
+             tool_calls_error)
   @aggs ~w(mean median)
 
   @doc "The fields this kind can aggregate."

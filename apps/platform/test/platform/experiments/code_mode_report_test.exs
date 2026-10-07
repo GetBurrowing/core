@@ -142,6 +142,29 @@ defmodule Platform.Experiments.CodeModeReportTest do
       assert {:error, ["unknown dispatch_usage parameters: x"]} =
                MetricKind.parse(%{"kind" => "dispatch_usage", "field" => "wall_ms", "x" => 1})
     end
+
+    test "the fields, literally" do
+      assert DispatchUsage.fields() == [
+               "suite_tool_calls",
+               "client_turns",
+               "client_tokens_in",
+               "client_tokens_out",
+               "wall_ms",
+               "outcome_first_pass",
+               "tool_calls_error"
+             ]
+    end
+
+    test "tool_calls_error: a mean over dispatches; a measured 0 counts (task 01a115b5)" do
+      assert DispatchUsage.aggregate(
+               [%{tool_calls_error: 1}, %{tool_calls_error: 0}],
+               "tool_calls_error",
+               "mean"
+             ) == {:ok, %Result{value: 0.5, n: 2, unit: :count}}
+
+      assert {:ok, DispatchUsage, %{"field" => "tool_calls_error", "agg" => "mean"}} =
+               MetricKind.parse(%{"kind" => "dispatch_usage", "field" => "tool_calls_error"})
+    end
   end
 
   # ── the fixture ─────────────────────────────────────────────────────────
@@ -244,6 +267,8 @@ defmodule Platform.Experiments.CodeModeReportTest do
       # ack at minute 2 -> stage completed at minute 11
       assert a_t.metrics["wall_ms_mean"] == %{value: 540_000.0, n: 1, reason: :measured}
       assert a_t.metrics["outcome_first_pass_mean"] == %{value: 1.0, n: 1, reason: :measured}
+      # Every fixture call is ledgered ok: a measured 0, not insufficient data.
+      assert a_t.metrics["tool_calls_error_mean"] == %{value: 0.0, n: 1, reason: :measured}
       assert {a_t.suite_run_dispatches, a_t.suite_run_adoption_rate} == {1, 1.0}
       assert a_t.control_suite_run_violations == nil
 

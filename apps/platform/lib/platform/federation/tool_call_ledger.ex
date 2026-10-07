@@ -85,7 +85,8 @@ defmodule Platform.Federation.ToolCallLedger do
   Record one call. `entry` carries `:id`, `:tool`, `:status`,
   `:duration_ms`, `:result_bytes`, `:runtime_id`, `:agent_id`,
   `:parent_run_id`, `:hints` (from `attribution_hints/1`) and, for
-  `suite_run` only, `:script_sha256` / `:script_bytes`. Always returns `:ok`.
+  `suite_run` only, `:script_sha256` / `:script_bytes` and `:error_kind`
+  (an enumerated kind, never a message). Always returns `:ok`.
   """
   @spec record(map()) :: :ok
   def record(entry) when is_map(entry) do
@@ -143,7 +144,8 @@ defmodule Platform.Federation.ToolCallLedger do
         :runtime_id,
         :agent_id,
         :script_sha256,
-        :script_bytes
+        :script_bytes,
+        :error_kind
       ])
       |> Map.put(:parent_run_id, valid_uuid_or_nil(Map.get(entry, :parent_run_id)))
       |> put_id(valid_uuid_or_nil(Map.get(entry, :id)))

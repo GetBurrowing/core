@@ -104,7 +104,9 @@ defmodule Platform.CodeMode.DocsTest do
       assert docs =~ "    sponsor: {\n"
       # The return type is declared, so the prose `Returns:` is not repeated.
       refute docs =~ "Returns:"
-      assert docs =~ "When to use:"
+
+      # Usage prose is behind detail: "full" (task 01a115b5 stage 2).
+      assert Docs.render(runtime, tools: ["task_get"], detail: "full") =~ "When to use:"
     end
 
     test "an untyped tool returns unknown and carries its prose Returns", %{runtime: runtime} do
@@ -139,6 +141,91 @@ defmodule Platform.CodeMode.DocsTest do
                Docs.describe(runtime, %{"tools" => "task_get"})
 
       assert {:error, %{code: "invalid_bundle"}} = Docs.describe(runtime, %{"bundle" => 3})
+    end
+  end
+
+  describe "detail (task 01a115b5 stage 2)" do
+    @three ["task_list", "stage_list", "execution_lease_list"]
+
+    setup %{agent: agent} do
+      {runtime, token} = insert_runtime!(agent, bundles(["code_mode", "task", "plan"]))
+      %{runtime: runtime, token: token}
+    end
+
+    # Measured on moon with this test's runtime (bundles default + code_mode +
+    # task + plan), byte_size of `docs` and of the /mcp tools/call text block:
+    #
+    #   before this stage (= detail "full" now): docs 11,479 B, text 11,875 B
+    #     (the 01a114a8 rig measured 12,208 B; -2.7%)
+    #   summary, types only:                     docs  4,218 B, text  4,560 B
+    #
+    # The plan's ceiling was 4,096 B for both. Types alone miss it, and no
+    # whitespace-only compaction reaches it for the text block without
+    # breaking an existing assertion (one-lining closed objects of <= 4
+    # scalars: ~4,474 B, and it collapses task_get's `sponsor: {`; capping
+    # indentation at depth 2: ~4,366 B). So, per the plan's fallback, the
+    # ceiling is the measured value rounded up to the next 256 B, and both
+    # stay under 6,164 B (6,439 B tool-by-tool minus the 275 B suite_run
+    # result).
+    @docs_ceiling 4_352
+    @text_ceiling 4_608
+
+    test "CEILING: three tools in summary detail fit the measured ceiling",
+         %{runtime: runtime, token: token} do
+      {:ok, described} = Docs.describe(runtime, %{"tools" => @three})
+      assert Enum.sort(described.tools) == Enum.sort(@three)
+      assert byte_size(described.docs) <= @docs_ceiling
+
+      %{"result" => %{"content" => [%{"text" => text} | _]}} =
+        mcp_call(token, "suite_run_describe", %{"tools" => @three})
+
+      assert byte_size(text) <= @text_ceiling
+      assert @text_ceiling < 6_164
+
+      %{"result" => %{"content" => [%{"text" => full} | _]}} =
+        mcp_call(token, "suite_run_describe", %{"tools" => @three, "detail" => "full"})
+
+      assert byte_size(full) > byte_size(text)
+      assert Jason.decode!(full)["docs"] =~ "Limitations:"
+    end
+
+    test "full carries Limitations and When to use; summary carries neither",
+         %{runtime: runtime} do
+      {:ok, full} = Docs.describe(runtime, %{"tools" => ["task_list"], "detail" => "full"})
+      assert full.docs =~ "Limitations:"
+      assert full.docs =~ "When to use:"
+
+      for args <- [
+            %{"tools" => ["task_list"]},
+            %{"tools" => ["task_list"], "detail" => "summary"}
+          ] do
+        {:ok, summary} = Docs.describe(runtime, args)
+        refute summary.docs =~ "Limitations:"
+        refute summary.docs =~ "When to use:"
+        # One summary line per tool: the first sentence of its description.
+        assert summary.docs =~
+                 "  /** List tasks with optional filters. */\n  task_list(args?: {\n"
+      end
+    end
+
+    test "summary keeps the types: same declarations, a property NAMED description survives",
+         %{runtime: runtime} do
+      summary = Docs.render(runtime, tools: @three)
+      full = Docs.render(runtime, tools: @three, detail: :full)
+
+      strip = fn docs ->
+        docs
+        |> String.split("\n")
+        |> Enum.reject(&String.match?(&1, ~r/^\s*(\/\*\*|\*)/))
+      end
+
+      assert strip.(summary) == strip.(full)
+      assert summary =~ ~r/^      description: string \| null;$/m
+    end
+
+    test "an unknown detail is refused recoverably", %{runtime: runtime} do
+      assert {:error, %{code: "invalid_detail", recoverable: true}} =
+               Docs.describe(runtime, %{"tools" => ["task_list"], "detail" => "bogus"})
     end
   end
 

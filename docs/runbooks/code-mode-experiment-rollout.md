@@ -154,6 +154,10 @@ surface for the task's arm. It uses the DISPATCHED PHASE's agent assignee as
   prompt is byte-identical to a render with no experiment.
 - A task first rendered for a non-cohort planner, then dispatched to a cohort
   executor, is assigned at the executor's render.
+- `experiment_stop` is NOT a kill switch. It stops NEW assignments only: every
+  task already assigned keeps its arm and keeps receiving the directive on each
+  later dispatch until it finishes. The only way to withdraw it is to untick
+  `code_mode` (see Rollback).
 
 Data accrues only as fast as these agents receive dispatches. Planning
 dispatches are not measured units (they carry no stage), so a task contributes
@@ -346,7 +350,9 @@ Read each row in this order:
    `suite_tool_calls_mean` / `_median`, `client_turns_mean`,
    `client_tokens_in_mean` / `client_tokens_out_mean`, `wall_ms_mean` /
    `_median`, `outcome_first_pass_mean` (stage passed, no failed validation,
-   no re-dispatch). Inner calls made inside `suite_run` scripts are not in
+   no re-dispatch), `tool_calls_error_mean` (tool calls ledgered as `error`
+   per dispatch; a `suite_run` whose run failed counts, though its wire
+   result is a successful call). Inner calls made inside `suite_run` scripts are not in
    `suite_tool_calls`. That is the point: those are calls the model did not
    have to issue. `dispatch_metrics_list` shows them as `inner_tool_calls`.
 
@@ -382,8 +388,11 @@ Put the dispatches per cell in the heading. Re-publish it with
 
 ## Rollback
 
-- Stop assigning NEW tasks: `experiment_stop` with feedback. Assigned tasks
-  keep their arm and their directive, by design.
+- Stop assigning NEW tasks: `experiment_stop` with feedback. `experiment_stop`
+  is NOT a kill switch: it stops new assignments only, and every task already
+  assigned keeps its arm and keeps receiving the directive on each later
+  dispatch until it finishes, by design. The only way to withdraw it is the
+  next step.
 - Remove the directive entirely: stop the experiment, then untick
   `code_mode` in Control Center. A treatment task still in flight then sees a
   directive for a tool it cannot call. Prefer letting in-flight tasks finish.

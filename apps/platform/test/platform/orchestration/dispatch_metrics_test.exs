@@ -77,6 +77,35 @@ defmodule Platform.Orchestration.DispatchMetricsTest do
       assert row.lease_ids == []
     end
 
+    test "a failed suite_run run, ledgered by the real path, is a tool_calls_error",
+         ctx do
+      # Task 01a115b5 stage 1. The row is written by ToolCall.invoke/4, not
+      # inserted here, so the count reads the ledger's classification.
+      {:ok, runtime} =
+        Platform.Federation.update_allowed_bundles(
+          ctx.runtime,
+          AgentRuntime.default_allowed_bundles() ++ ["code_mode"]
+        )
+
+      assert {:ok, %{ok: false, error: %{kind: "script_error"}, run_id: run_id}} =
+               Platform.Federation.ToolCall.invoke(
+                 "suite_run",
+                 %{"script" => "nope()", "inputs" => %{"task_id" => ctx.task.id}},
+                 runtime
+               )
+
+      {1, _} =
+        Repo.update_all(
+          from(c in ToolCallRecord, where: c.id == ^run_id),
+          set: [inserted_at: at(4)]
+        )
+
+      assert %{dispatches: [row], total: 1} = metrics(ctx)
+      assert row.suite_run_calls == 1
+      assert row.tool_calls_error == 1
+      assert row.tool_calls_denied == 0
+    end
+
     test "an acked stage produces no duplicate stage_row", ctx do
       rows = metrics(ctx).dispatches
       assert Enum.map(rows, &{&1.stage_id, &1.unit_source}) == [{ctx.stage.id, "ack"}]

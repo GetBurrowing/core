@@ -280,8 +280,12 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # Re-pinned by task 01a114a8 stage 4: `code_mode_report` in `experiments`
     # and experiment_create doc text. Measured on moon; off equals
     # extensions_test.exs.
-    @main_tool_digest_off "9c1561c7bf4d7b652b6b6a9477de5690297f1fbffda1f88468b678136a09e4e8"
-    @main_tool_digest_on "0e06bc46d2a4286e40d87ba68768bd293a0f02277872d0d1b7435043d6914276"
+    #
+    # Re-pinned by task 01a115b5 stage 2: suite_run_describe's `detail`
+    # parameter and description text. Both values measured on moon at the
+    # stage's branch; off equals extensions_test.exs.
+    @main_tool_digest_off "72c6e07c622bc52f454b463a913f0bdb999be529c270f86dfdcecafd506fed1b"
+    @main_tool_digest_on "1d9f42a133745e2c725e311678b3b96d483d21e4644bf675aeb36f52a71f9f29"
     @main_kinds_summaries_digest_off "4c060fb7a6914985f94857aaac9effbb519dd2b2170c7a9c0013d4db15a73ea4"
     @main_kinds_summaries_digest_on "dbab62a1b3d154e23378f3a990b77deb17c5f50eb30adf0b055bc0df8ce6c1e3"
     @main_kinds_tool_schemas_digest_off "e454cd9e2aeb1d821a70b74fe433e81ba98b94f7ae9f2d59c55f8cf5bf509af8"

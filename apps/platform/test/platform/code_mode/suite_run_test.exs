@@ -152,6 +152,7 @@ defmodule Platform.CodeMode.SuiteRunTest do
       outer = Repo.get!(ToolCallRecord, run_id)
       assert outer.tool == "suite_run"
       assert outer.status == "ok"
+      assert outer.error_kind == nil
       assert outer.parent_run_id == nil
       assert outer.runtime_id == runtime.runtime_id
       assert outer.script_bytes == byte_size(script)
@@ -200,6 +201,79 @@ defmodule Platform.CodeMode.SuiteRunTest do
       body = mcp_call(token, "suite_run", %{"script" => "nope()"})
       assert body["result"]["isError"] == false
       assert %{"ok" => false, "error" => %{"kind" => "script_error"}} = result_json(body)
+    end
+  end
+
+  describe "a failed run in the ledger (task 01a115b5 stage 1)" do
+    test "a script error keeps its wire shape and is ledgered as error with its kind", %{
+      agent: agent
+    } do
+      {_runtime, token} = insert_runtime!(agent, bundles(["code_mode"]))
+
+      body = mcp_call(token, "suite_run", %{"script" => "nope()"})
+      assert body["result"]["isError"] == false
+
+      assert %{"ok" => false, "error" => %{"kind" => "script_error"}, "run_id" => run_id} =
+               result_json(body)
+
+      row = Repo.get!(ToolCallRecord, run_id)
+      assert row.tool == "suite_run"
+      assert row.status == "error"
+      assert row.error_kind == "script_error"
+      assert row.script_bytes == 6
+    end
+
+    test "a run stopped at the call limit is ledgered as call_limit", %{agent: agent} do
+      previous = Application.get_env(:platform, Platform.CodeMode)
+      Application.put_env(:platform, Platform.CodeMode, max_calls: 2)
+
+      on_exit(fn ->
+        if previous,
+          do: Application.put_env(:platform, Platform.CodeMode, previous),
+          else: Application.delete_env(:platform, Platform.CodeMode)
+      end)
+
+      {_runtime, token} = insert_runtime!(agent, bundles(["code_mode"]))
+
+      script = "for (let i = 0; i < 3; i++) suite.federation_status({})"
+      body = mcp_call(token, "suite_run", %{"script" => script})
+      assert body["result"]["isError"] == false
+
+      assert %{"ok" => false, "error" => %{"kind" => "call_limit"}, "calls" => 2} =
+               result = result_json(body)
+
+      row = Repo.get!(ToolCallRecord, result["run_id"])
+      assert row.status == "error"
+      assert row.error_kind == "call_limit"
+      # The inner calls that ran are still ledgered as ok.
+      assert [%{status: "ok"}, %{status: "ok"}] = inner_rows(result["run_id"])
+    end
+
+    test "SENTINEL in a thrown error's message reaches no row and no log", %{agent: agent} do
+      {_runtime, token} = insert_runtime!(agent, bundles(["code_mode"]))
+
+      Logger.put_module_level(Platform.CodeMode.Run, :info)
+      on_exit(fn -> Logger.delete_module_level(Platform.CodeMode.Run) end)
+
+      log =
+        capture_log([level: :debug], fn ->
+          body =
+            mcp_call(token, "suite_run", %{"script" => "throw new Error('#{@sentinel}')"})
+
+          send(self(), {:body, body})
+        end)
+
+      assert_received {:body, body}
+
+      assert %{"ok" => false, "error" => %{"kind" => "script_error"}, "run_id" => run_id} =
+               result_json(body)
+
+      assert Repo.get!(ToolCallRecord, run_id).status == "error"
+      refute log =~ "SENTINEL"
+
+      refute Repo.query!("SELECT row_to_json(d)::text FROM dispatch_tool_calls d").rows
+             |> inspect()
+             |> String.contains?("SENTINEL")
     end
   end
 

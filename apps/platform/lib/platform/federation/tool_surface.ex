@@ -330,18 +330,25 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "suite_run_describe",
         description:
-          "TypeScript declarations of the tools a suite_run script can call: exactly your runtime's tools, no others. With no arguments, an index (one line per tool, grouped by bundle). With `tools` and/or `bundle`, full declarations for those tools: argument types, return types (where the tool declares a return schema) and their documentation.",
+          "TypeScript declarations of the tools a suite_run script can call: exactly your runtime's tools, no others. With no arguments, an index (one line per tool, grouped by bundle). With `tools` and/or `bundle`, declarations for those tools: argument types and return types (where the tool declares a return schema). Types only by default, with one summary line per tool; `detail: \"full\"` adds limitations and usage prose.",
         parameters: %{
           tools: %{
             type: "array",
             required: false,
-            description: "Tool names to declare in full, e.g. [\"task_list\", \"stage_list\"]",
+            description: "Tool names to declare, e.g. [\"task_list\", \"stage_list\"]",
             schema: %{type: "array", items: %{type: "string"}}
           },
           bundle: %{
             type: "string",
             required: false,
-            description: "Declare every tool of this bundle in full (see `bundles` in the result)"
+            description: "Declare every tool of this bundle (see `bundles` in the result)"
+          },
+          detail: %{
+            type: "string",
+            required: false,
+            description:
+              "\"summary\" (default): types plus one line per tool | \"full\": adds limitations, when-to-use and parameter descriptions",
+            schema: %{type: "string", enum: ["summary", "full"]}
           }
         },
         returns_schema: ReturnSchemas.for_tool("suite_run_describe"),

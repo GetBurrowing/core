@@ -258,7 +258,8 @@ defmodule Platform.Experiments.Results do
     {"client_tokens_out", "mean"},
     {"wall_ms", "mean"},
     {"wall_ms", "median"},
-    {"outcome_first_pass", "mean"}
+    {"outcome_first_pass", "mean"},
+    {"tool_calls_error", "mean"}
   ]
 
   @doc """
