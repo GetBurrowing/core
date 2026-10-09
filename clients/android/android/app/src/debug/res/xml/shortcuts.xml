@@ -14,4 +14,15 @@
             android:targetPackage="com.koboai.burrow.debug"
             android:targetClass="com.koboai.burrow.SwitchInstallActivity" />
     </shortcut>
+    <!-- Direct share (task 01a116c4): conversation shortcuts carry this
+         category, so the share sheet offers them as targets on API 29+.
+         API 26-28 get no direct-share row (no androidx.sharetarget).
+         Identical in src/main and src/debug. -->
+    <share-target android:targetClass="com.koboai.burrow.share.ShareActivity">
+        <data android:mimeType="text/plain" />
+        <data android:mimeType="image/*" />
+        <data android:mimeType="application/pdf" />
+        <data android:mimeType="*/*" />
+        <category android:name="com.koboai.burrow.category.SHARE_TARGET" />
+    </share-target>
 </shortcuts>

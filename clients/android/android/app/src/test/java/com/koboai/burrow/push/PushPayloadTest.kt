@@ -121,4 +121,41 @@ class PushPayloadTest {
         assertFalse(text.contains("banner copy"))
         assertFalse(text.contains("Harper"))
     }
+
+    // Task 01a116c4.
+
+    @Test
+    fun `isChat covers chat_mention and chat_message only`() {
+        assertTrue(PushPayload.from(mention).isChat)
+        assertTrue(PushPayload.from(mention + ("kind" to "chat_message")).isChat)
+        assertTrue(PushPayload.from(mention + ("kind" to "chat_message")).canReply)
+        assertFalse(PushPayload.from(mention + ("kind" to "task_plan_review")).isChat)
+        assertFalse(PushPayload.from(mapOf("kind" to "generic")).isChat)
+    }
+
+    @Test
+    fun `space kind and author identity are parsed, a bad author id or type is dropped`() {
+        val p = PushPayload.from(mention + ("space_kind" to "dm") + ("author_id" to "0192-u") + ("author_type" to "agent"))
+        assertEquals("dm", p.spaceKind)
+        assertEquals("0192-u", p.authorId)
+        assertEquals("agent", p.authorType)
+        assertEquals(p, PushPayload.from(p.toData()))
+
+        val bad = PushPayload.from(mention + ("author_id" to "../x") + ("author_type" to "admin"))
+        assertNull(bad.authorId)
+        assertNull(bad.authorType)
+    }
+
+    @Test
+    fun `a chat push with host and space has a shortcut id, a redacted one does not`() {
+        assertEquals("suite.example.com|0192-s", PushPayload.from(mention).shortcutId)
+        assertNull(PushPayload.from(mention - "space_id").shortcutId)
+        assertNull(PushPayload.from(mention - "install_host").shortcutId)
+        assertNull(
+            PushPayload
+                .from(
+                    mapOf("kind" to "review_request_pending", "install_host" to "suite.example.com", "space_id" to "s"),
+                ).shortcutId,
+        )
+    }
 }

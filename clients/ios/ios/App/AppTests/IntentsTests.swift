@@ -13,6 +13,23 @@ final class VirtualClock: IntentSleeper {
     }
 }
 
+/// A virtual clock that cancels the running task once `after` seconds pass.
+final class CancellingClock: IntentSleeper {
+    let virtual = VirtualClock()
+    private let start: Date
+    private let after: TimeInterval
+
+    init(after: TimeInterval) {
+        self.after = after
+        start = virtual.now
+    }
+
+    func sleep(seconds: Double) async throws {
+        try await virtual.sleep(seconds: seconds)
+        if virtual.now.timeIntervalSince(start) >= after { withUnsafeCurrentTask { $0?.cancel() } }
+    }
+}
+
 private struct Declined: Error {}
 
 final class IntentsTests: XCTestCase {
@@ -42,7 +59,9 @@ final class IntentsTests: XCTestCase {
 
     /// An environment whose install list is exactly `hosts`, with the given
     /// bearers, a stubbed network and virtual time.
-    private func env(tokens: [String: String], hosts: [String], clock: VirtualClock = VirtualClock()) -> IntentEnvironment {
+    private func env(
+        tokens: [String: String], hosts: [String], clock: VirtualClock = VirtualClock(), sleeper: IntentSleeper? = nil
+    ) -> IntentEnvironment {
         let defaults = UserDefaults(suiteName: defaultsName)!
         let store = InstallStore(defaults: defaults)
         let removeHook = InstallStore.didRemove
@@ -53,7 +72,7 @@ final class IntentsTests: XCTestCase {
         XCTAssertEqual(store.installs.map(\.host), hosts)
         return IntentEnvironment(
             client: SuiteAPIClient(session: StubURLProtocol.session(), tokens: MemoryTokenStore(tokens: tokens)),
-            installs: store, sleeper: clock, now: { clock.now }, lastMeetingSpaces: LastMeetingSpaceStore(defaults: defaults))
+            installs: store, sleeper: sleeper ?? clock, now: { clock.now }, lastMeetingSpaces: LastMeetingSpaceStore(defaults: defaults))
     }
 
     private func json(_ text: String) -> Data { Data(text.utf8) }
@@ -300,7 +319,8 @@ final class IntentsTests: XCTestCase {
         let actions = IntentActions(env: env(tokens: [a: "token-for-a"], hosts: [a], clock: clock))
         StubURLProtocol.respond = askResponder(polls: [])
 
-        let outcome = try await actions.askAgent(agent(a), question: "Is the banner copy final?")
+        // The pre-27 window (iOS 27's 90 s window has its own tests below).
+        let outcome = try await actions.askAgent(agent(a), question: "Is the banner copy final?", window: AskAgent.window(longRunning: false))
 
         XCTAssertEqual(outcome, .timedOut)
         let polls = Int(AskAgent.replyWindow / AskAgent.pollInterval)
@@ -308,6 +328,111 @@ final class IntentsTests: XCTestCase {
         XCTAssertEqual(StubURLProtocol.requests.count, 2 + polls, "no request once the window has passed")
         XCTAssertEqual(clock.now.timeIntervalSince(start), AskAgent.replyWindow + AskAgent.pollInterval)
         XCTAssertEqual(IntentCopy.agentTimedOut(agent: "Saru"), "Saru is still working on it. Burrow will notify you.")
+    }
+
+    // MARK: Ask an agent, iOS 27 long-running window (task 01a111bb stage 5)
+
+    private func emptyPolls(_ count: Int) -> [String] { Array(repeating: "[]", count: count) }
+
+    private var replyAt46s: [String] {
+        // Poll k runs at 2k s; the reply first shows at the poll at 46 s.
+        emptyPolls(22) + [#"[{"id":"m9","author_type":"agent","author_id":"\#(agentID)","content":"Done."}]"#]
+    }
+
+    func testTheWindowIs90SecondsOnIOS27And20Below() {
+        XCTAssertEqual(AskAgent.window(longRunning: true), 90)
+        XCTAssertEqual(AskAgent.window(longRunning: false), 20)
+        XCTAssertEqual(AskAgent.window(longRunning: false), AskAgent.replyWindow, "below 27 the window is unchanged")
+        if #available(iOS 27, *) {
+            XCTAssertEqual(AskAgent.currentWindow, 90)
+        } else {
+            XCTAssertEqual(AskAgent.currentWindow, 20)
+        }
+    }
+
+    func testAReplyAt45SecondsAnswersOnIOS27AndTimesOutBelow() async throws {
+        let long = IntentActions(env: env(tokens: [a: "token-for-a"], hosts: [a], clock: VirtualClock()))
+        StubURLProtocol.respond = askResponder(polls: replyAt46s)
+        let answered = try await long.askAgent(agent(a), question: "Done?", window: AskAgent.window(longRunning: true))
+        XCTAssertEqual(answered, .reply("Done."))
+        XCTAssertEqual(StubURLProtocol.requests.count, 2 + 23)
+
+        StubURLProtocol.reset()
+        let short = IntentActions(env: env(tokens: [a: "token-for-a"], hosts: [a], clock: VirtualClock()))
+        StubURLProtocol.respond = askResponder(polls: replyAt46s)
+        let timedOut = try await short.askAgent(agent(a), question: "Done?", window: AskAgent.window(longRunning: false))
+        XCTAssertEqual(timedOut, .timedOut)
+        XCTAssertEqual(StubURLProtocol.requests.count, 2 + 10, "exactly the old 20 s polling")
+    }
+
+    func testCancellingAt30SecondsSendsNoFurtherRequest() async throws {
+        let clock = VirtualClock()
+        let start = clock.now
+        let actions = IntentActions(env: env(tokens: [a: "token-for-a"], hosts: [a], clock: clock))
+        StubURLProtocol.respond = askResponder(polls: [])
+        do {
+            _ = try await actions.askAgent(
+                agent(a), question: "Done?", window: AskAgent.window(longRunning: true),
+                isCancelled: { clock.now.timeIntervalSince(start) >= 30 })
+            XCTFail("a cancelled ask must not return an outcome")
+        } catch is CancellationError {}
+        XCTAssertEqual(StubURLProtocol.requests.count, 2 + 14, "polls at 2..28 s only")
+        XCTAssertEqual(clock.now.timeIntervalSince(start), 30)
+    }
+
+    func testACancelledTaskStopsPolling() async throws {
+        let clock = CancellingClock(after: 30)
+        let actions = IntentActions(env: env(tokens: [a: "token-for-a"], hosts: [a], clock: clock.virtual, sleeper: clock))
+        StubURLProtocol.respond = askResponder(polls: [])
+        let task = Task { try await actions.askAgent(agent(a), question: "Done?", window: AskAgent.window(longRunning: true)) }
+        let result = await task.result
+        XCTAssertThrowsError(try result.get()) { XCTAssertTrue($0 is CancellationError) }
+        XCTAssertEqual(StubURLProtocol.requests.count, 2 + 14)
+    }
+
+    func testNoRequestAfterThe90SecondWindowAndProgressIsMonotonic() async throws {
+        let clock = VirtualClock()
+        let start = clock.now
+        let actions = IntentActions(env: env(tokens: [a: "token-for-a"], hosts: [a], clock: clock))
+        StubURLProtocol.respond = askResponder(polls: [])
+        var fractions: [Double] = []
+        let outcome = try await actions.askAgent(agent(a), question: "Done?", window: AskAgent.window(longRunning: true)) {
+            fractions.append($0)
+        }
+        XCTAssertEqual(outcome, .timedOut)
+        XCTAssertEqual(StubURLProtocol.requests.count, 2 + 45, "dm, post, 45 polls, nothing after 90 s")
+        XCTAssertEqual(clock.now.timeIntervalSince(start), 92)
+        XCTAssertEqual(fractions.count, 45, "progress on every poll")
+        XCTAssertEqual(fractions, fractions.sorted())
+        XCTAssertEqual(Set(fractions).count, fractions.count, "strictly increasing")
+        XCTAssertEqual(fractions.last, 1)
+        XCTAssertTrue(fractions.allSatisfy { $0 > 0 && $0 <= 1 })
+    }
+
+    /// The timeout fallback: the agent's later reply is an ordinary chat
+    /// push (stage 2: author_id, author_type, mutable-content), which the
+    /// NSE (stage 4) turns into a communication notification naming the
+    /// message and conversation. No new server push.
+    func testTheFallbackReplyPushNamesItsEntities() throws {
+        let info: [AnyHashable: Any] = [
+            "aps": ["alert": ["title": "Saru in Saru", "body": "Done."], "mutable-content": 1, "category": "SUITE_MESSAGE"],
+            "kind": "chat_message", "install_host": a, "space_id": dmID, "message_id": "3e000000-0000-4000-8000-000000000002",
+            "author_id": agentID, "author_type": "agent", "author_name": "Saru", "space_name": "Saru",
+        ]
+        let payload = try XCTUnwrap(CommunicationPayload(userInfo: info))
+        XCTAssertEqual(payload.authorType, "agent")
+        XCTAssertEqual(payload.senderID, "\(a)|\(agentID)")
+        XCTAssertEqual(payload.messageEntityID, "\(a)|3e000000-0000-4000-8000-000000000002")
+        XCTAssertEqual(payload.conversationEntityID, "\(a)|\(dmID)")
+        let intent = CommunicationNotification.sendMessageIntent(payload)
+        XCTAssertEqual(intent.sender?.displayName, "Saru")
+        XCTAssertNil(intent.speakableGroupName, "an agent DM is one-to-one")
+        if #available(iOS 27, *) {
+            XCTAssertEqual(CommunicationNotification.entityIdentifiers(payload).map { $0.identifier }, [payload.messageEntityID, payload.conversationEntityID])
+        }
+        XCTAssertEqual(
+            PushPayload(userInfo: info).replyDonation(), .messageSent(host: a, spaceID: dmID, recipients: [DonationRecipient(type: "agent", id: agentID)]))
+        XCTAssertEqual(IntentCopy.agentReplyWillNotify(agent: "Saru"), "Saru is still working on it. The reply will arrive as a notification.")
     }
 
     // MARK: Copy and entities

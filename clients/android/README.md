@@ -35,7 +35,8 @@ and widgets (stage 4).
 | `AppApiClient.kt` | `Shared/SuiteAPIClient.swift` | `/api/app/*` calls. The bearer is attached in one place, looked up by the host the request is for. |
 | `InstallSession.kt` | `App/InstallSession.swift` | `InstallLauncher` (relaunch through `POST /api/app/handoff`) and `NativeSignOut`. |
 | `NavigationPolicy.kt` | `App/NavigationPolicy.swift` | Which navigations stay in the WebView. |
-| `SuiteNativePlugin.kt` | `App/Plugins/SuiteNativePlugin.swift` | The ONE Capacitor plugin, `SuiteNative`: `pushState`, `enablePush`, `switchInstall`. See "Push". |
+| `SuiteNativePlugin.kt` | `App/Plugins/SuiteNativePlugin.swift` | The ONE Capacitor plugin, `SuiteNative`: `pushState`, `enablePush`, `switchInstall`, `donate`. See "Push" and "Conversations, shortcuts and voice reply". |
+| `shortcuts/` | `Intents/` (INSendMessageIntent donation) | Conversation shortcuts, the `donate` bridge and the sender monogram. See "Conversations, shortcuts and voice reply". |
 | `share/` | `Shared/ShareSheetModel.swift`, `ShareExtension` | The share target. See "Share". |
 | `widgets/` | `Shared/SlabState.swift`, `CountsCache.swift`, `SuiteWidgets` | Glance count widgets. See "Widgets". |
 | `push/` | `App/Push*.swift`, `NotificationRouter` | FCM, the permission explainer, channels, the notification builder and Reply. See "Push". |
@@ -236,6 +237,102 @@ way.
 **Back.** With nothing typed, back closes the sheet. With something typed, it
 asks `Discard this share?` (Discard / Keep editing). With no bearer, the sheet
 says so and offers Open Burrow.
+
+## Conversations, shortcuts and voice reply
+
+Task 01a116c4. Every chat push (`chat_mention` AND `chat_message`; before this
+only mentions were) is a `MessagingStyle` conversation with a sender `Person`,
+a Reply and a long-lived conversation shortcut, so Android files it under
+Conversations and offers it as a direct-share target.
+
+**When a shortcut is published** (`shortcuts/ConversationShortcuts.kt`; each
+publish also refreshes it):
+
+| Trigger | Where | Reports usage |
+|---|---|---|
+| A chat notification, published BEFORE `notify` so the notification can name it | `NotificationPresenter.present` | no |
+| A message sent from the web view: 01a111bb's `native_donate` with kind `message_sent` (ids only), forwarded by `assets/js/native_donations.js` to `SuiteNative.donate` | `ConversationNoter` (name, kind and path from `GET /api/app/spaces`, cached 10 min per host, one refetch on a miss) | yes |
+| A Reply from the notification that the server took (2xx) | `ReplyHandler` | yes |
+| A share that was sent | `ShareActivity` | yes |
+
+Every other `donate` kind (`task_created`, `approval_acted`,
+`meeting_started`, unknown) resolves and does nothing (`DonateDispatch`).
+
+**Ids.** The shortcut id is `<host>|<spaceId>` (host normalized, space id
+`^[A-Za-z0-9_-]{1,128}$`). The notification's `shortcutId` and `locusId` are
+that same id. A sender is keyed `<host>|<author_type>:<author_id>` from the FCM
+`author_id`/`author_type`, or `<host>|name:<author_name>` when the server sent
+no id; the icon is a monogram (the payload carries no avatar URL). A dm
+(`space_kind == "dm"`) is a one-to-one conversation, anything else a group. A
+redacted push has no `space_id`, so it gets no shortcut; approvals never do.
+
+**Cap.** The launcher allows `getMaxShortcutCountPerActivity()` shortcuts, and
+the static `switch_install` counts toward it, so dynamic conversation
+shortcuts are capped at `max(0, max - manifestCount)`. The prefs file
+`burrow_shortcuts` (excluded from backup) records each id's last use; the least
+recently used is evicted first. `switch_install` is never removed and
+`removeAllDynamicShortcuts` is never called.
+
+**Removal.** Sign-out (`NativeSignOut`), a revoked bearer (the 401 branch of
+`InstallLauncher`) and removing an install in the picker each call
+`removeForHost(host)`, which removes the registry ids with the prefix
+`"<host>|"` (separator included, so `10.0.2.2` never takes `10.0.2.20`'s) as
+both dynamic and long-lived shortcuts.
+
+**Direct share.** Both `shortcuts.xml` files declare an identical
+`<share-target>` for `share.ShareActivity` with the category
+`com.koboai.burrow.category.SHARE_TARGET`, which conversation shortcuts carry.
+A share started from one reads `EXTRA_SHORTCUT_ID`; when it parses and its host
+is signed in, the sheet opens on that install with the space preselected.
+API 26-28 get no direct-share row (no `androidx.sharetarget` dependency).
+
+**Launch.** A conversation shortcut's intent is `MainActivity` with action
+`com.koboai.burrow.action.OPEN_CONVERSATION` and extras host and path
+(`/chat/<segment>`). `LaunchRouter` routes it after a notification's Open and
+before Switch install, cold and warm, and consumes it; a Recents restore
+(`restored`) does not replay it. Measured on the API 35 emulator (2026-10-07):
+the launcher starts a dynamic shortcut with `flg=0x10000000` (NEW_TASK only)
+and a warm tap reaches `onNewIntent`, unlike the static `switch_install`,
+which Android stores with CLEAR_TASK (hence its `SwitchInstallActivity`
+trampoline).
+
+**Dependencies.** Built on two branches merged into the task branch, never
+rebased: 01a116a1 (Switch install, `LaunchRouter`, `PickerBack`; on main as
+#1206) and 01a111bb (`PlatformWeb.NativeDonation`,
+`assets/js/native_donations.js`, `author_id`/`author_type` on
+`Platform.Push.Notification`). The server half of this task adds only
+`space_kind` (FCM payload only; `redact/2` clears it).
+
+### Inline reply and voice, measured on moon (2026-10-07, task branch at 638bce35d)
+
+Rig: own API 35 AVD, a dev server from the task branch on `https://10.0.2.2`
+(own CA, conscrypt apex bind, DNAT 443 to the server, Chrome SPKI flag, mock
+IdP), `fcm_stub.py` recording, pushes replayed with the debug `PUSH` broadcast
+(no `reply_stub`: the real server). Dev Alice signed in on the emulator; Dev Bob
+sent her a plain DM and an `@[Dev Alice]` mention in a group.
+
+- **The FCM data** carried `author_id`, `author_type: user` and `space_kind`
+  (`dm`, `group`). Both notifications posted with `shortcut=10.0.2.2|<space>`
+  and a matching `locusId`; both shortcuts were long-lived with the
+  conversation and share-target categories. The DM (`chat_message`) had Reply.
+- **Inline reply from the shade** on the DM: `POST
+  /api/app/spaces/<dm>/messages`, and the newest message in that DM was
+  authored by Alice's participant, top-level, with the same text in no other
+  space. The notification updated in place to `You: ...`, and usage stats
+  logged a `SHORTCUT_INVOCATION` for the DM's shortcut id.
+- **No activity launched:** `logcat -b events` showed no
+  `wm_create_activity`, `wm_resume_activity` or `wm_new_intent` for the reply
+  (on API 35 these are the `wm_*` events; the query matches `am_*` too).
+  Positive control: Open on the other notification showed `wm_new_intent` and
+  `wm_resume_activity` for MainActivity in the same query.
+- **Assistant:** the Google app (15.22.33.28) is installed and holds the
+  assistant role. Typed (the emulator has no audio input) "read my messages"
+  and "reply": both answered "Let me get some more information" with "Unlock
+  more Assistant features", because the device has no Google account; nothing
+  was read and nothing was posted. **Voice reply is NOT verified.** What was
+  tested is the RemoteInput / `SEMANTIC_ACTION_REPLY` path that an assistant
+  uses; a voice run needs a signed-in Google account on a device with a
+  microphone.
 
 ## Widgets
 

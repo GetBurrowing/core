@@ -54,7 +54,6 @@ defmodule PlatformWeb.Tasks.TaskCreateComponent do
   require Logger
 
   alias Platform.Chat.AttachmentStorage
-  alias Platform.Federation.TaskAttrs
   alias Platform.Tasks
   alias Platform.Tasks.Task
   alias Platform.Tenancy
@@ -806,20 +805,10 @@ defmodule PlatformWeb.Tasks.TaskCreateComponent do
       |> Map.update("sponsor_user_id", nil, fn v -> if v in [nil, ""], do: nil, else: v end)
       |> Map.put("reported_by", socket.assigns.current_user)
 
-    create_result =
-      with {:ok, flat_attrs, phase_attrs} <-
-             TaskAttrs.build_task_attrs(raw_attrs, :create,
-               auto_route_flat_assignee_current_phase: true,
-               current_phase: "planning"
-             ),
-           # `TaskAttrs` drops `metadata` / `deploy_strategy` (not in its
-           # canonical field list) — carry them across explicitly so the
-           # UI-only form fields still land on the row.
-           flat_attrs = merge_ui_extras(flat_attrs, raw_attrs),
-           {:ok, task} <- Tasks.create_task(flat_attrs),
-           {:ok, task} <- maybe_apply_phase_assignees(task, phase_attrs) do
-        {:ok, task}
-      end
+    # The one creation path (task 01a111bb): TaskAttrs, the UI extras,
+    # `create_task/1` and the phase assignees, in that order. The native app's
+    # `POST /api/app/tasks` calls the same function.
+    create_result = Tasks.create_from_request(raw_attrs)
 
     case create_result do
       {:ok, task} ->
@@ -828,6 +817,13 @@ defmodule PlatformWeb.Tasks.TaskCreateComponent do
         persist_task_attachments(socket, task)
 
         Tasks.broadcast_board({:task_created, task})
+
+        # Burrow personal context (task 01a111bb): ids only.
+        socket =
+          PlatformWeb.NativeDonation.push(socket, "task_created", %{
+            task_id: task.id,
+            project_id: task.project_id
+          })
 
         flash_message =
           if status == "planning",
@@ -853,24 +849,6 @@ defmodule PlatformWeb.Tasks.TaskCreateComponent do
         {:noreply, socket}
     end
   end
-
-  # `TaskAttrs.build_task_attrs/3` restricts `flat_attrs` to the canonical
-  # field list. The new-task form also carries `metadata`,
-  # `deploy_strategy`, and `dependencies` — UI-only concerns not part of
-  # the ADR 0044 canonical shape.
-  defp merge_ui_extras(flat_attrs, raw_attrs) do
-    Enum.reduce(~w(metadata deploy_strategy dependencies), flat_attrs, fn key, acc ->
-      case Map.get(raw_attrs, key) do
-        nil -> acc
-        value -> Map.put(acc, String.to_existing_atom(key), value)
-      end
-    end)
-  end
-
-  defp maybe_apply_phase_assignees(task, nil), do: {:ok, task}
-
-  defp maybe_apply_phase_assignees(task, phase_attrs) when is_map(phase_attrs),
-    do: Tasks.set_phase_assignees(task, phase_attrs)
 
   defp persist_task_attachments(socket, _task) do
     consume_uploaded_entries(socket, :task_attachments, fn %{path: path}, entry ->

@@ -26,6 +26,7 @@
 	<array>
 		<string>com.kobo-ai.burrow.viewing</string>
 		<string>INStartCallIntent</string>
+		<string>INSendMessageIntent</string>
 	</array>
 	<key>CFBundleURLTypes</key>
 	<array>

@@ -39,7 +39,7 @@ final class IntentSourceScanTests: XCTestCase {
     func testNoLogLineInIntentsOrSharedInterpolatesContent() throws {
         var scannedLogLines = 0
         var offences: [String] = []
-        for directory in ["Intents", "Shared"] {
+        for directory in ["Intents", "Shared", "NotificationService"] {
             let dir = iosRoot.appendingPathComponent(directory)
             let files = try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
                 .filter { $0.pathExtension == "swift" }
@@ -57,5 +57,33 @@ final class IntentSourceScanTests: XCTestCase {
         }
         XCTAssertGreaterThan(scannedLogLines, 0, "the scan found no log calls at all; is it reading the sources?")
         XCTAssertEqual(offences, [])
+    }
+
+    /// The Notification Service Extension (task 01a111bb stage 4) makes no
+    /// network request and logs nothing, so it can never log a title or body.
+    func testTheNotificationServiceNeitherFetchesNorLogs() throws {
+        let files = ["NotificationService/NotificationService.swift", "Intents/CommunicationNotification.swift"]
+        let banned = ["URLSession", "URLRequest", "SuiteAPIClient", "Logger(", "os_log", "print(", "NSLog", "IntentLog"]
+        for path in files {
+            let source = try String(contentsOf: iosRoot.appendingPathComponent(path), encoding: .utf8)
+            XCTAssertTrue(source.contains("UNNotification"), "\(path) was not read")
+            for word in banned { XCTAssertFalse(source.contains(word), "\(path) uses \(word)") }
+        }
+    }
+
+    /// Main donated every intent run whole (message text and questions
+    /// included). The only call into the system's donation store is now the
+    /// live DonationManaging, behind DonationPolicy's content check.
+    func testOnlyTheDonationManagerDonates() throws {
+        var callers: [String] = []
+        for directory in ["Intents", "Shared", "App/App", "App/App/Intents", "App/App/Plugins", "App/App/Meetings", "NotificationService"] {
+            let dir = iosRoot.appendingPathComponent(directory)
+            let files = try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
+                .filter { $0.pathExtension == "swift" }
+            for file in files where try String(contentsOf: file, encoding: .utf8).contains("IntentDonationManager.shared.donate(") {
+                callers.append("\(directory)/\(file.lastPathComponent)")
+            }
+        }
+        XCTAssertEqual(callers, ["Intents/DonationPolicy.swift"])
     }
 }

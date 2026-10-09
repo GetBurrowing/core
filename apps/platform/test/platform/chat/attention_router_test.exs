@@ -88,7 +88,7 @@ defmodule Platform.Chat.AttentionRouterTest do
     agent
   end
 
-  defp create_message(space_id, participant_id, attrs \\ %{}) do
+  defp create_message(space_id, participant_id, attrs) do
     defaults = %{
       space_id: space_id,
       participant_id: participant_id,
@@ -114,7 +114,7 @@ defmodule Platform.Chat.AttentionRouterTest do
   # JOIN keeps those bogus rows visible while still dropping known-archived
   # users. Tests here need REAL user rows so `Accounts.archive_user/1` has
   # something to flip.
-  defp insert_test_user(opts \\ []) do
+  defp insert_test_user(opts) do
     n = System.unique_integer([:positive])
 
     Repo.insert!(%Platform.Accounts.User{
@@ -1943,6 +1943,18 @@ defmodule Platform.Chat.AttentionRouterTest do
       message = create_message(space.id, user.id, %{content: "@[Higgins] hi"})
 
       refute AttentionRouter.mentioned?(participant, message)
+    end
+  end
+
+  describe "push_notification/6 space_kind (task 01a116c4)" do
+    test "sets space_kind from space.kind" do
+      for kind <- ~w(dm group channel) do
+        space = %Platform.Chat.Space{id: Ecto.UUID.generate(), kind: kind, name: "S", slug: nil}
+        message = %Message{id: Ecto.UUID.generate(), content: "hi"}
+
+        assert AttentionRouter.push_notification("Harper", message, :all, space, []).space_kind ==
+                 kind
+      end
     end
   end
 end

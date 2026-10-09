@@ -63,7 +63,7 @@ defmodule PlatformWeb.ChatLiveTest do
     })
   end
 
-  defp insert_chat_agent(attrs \\ %{}) do
+  defp insert_chat_agent(attrs) do
     Repo.insert!(%Agent{
       slug: Map.get(attrs, :slug, "agent-#{System.unique_integer([:positive, :monotonic])}"),
       name: Map.get(attrs, :name, "Agent #{System.unique_integer([:positive, :monotonic])}"),

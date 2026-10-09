@@ -15,16 +15,24 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.Person
 import androidx.core.app.RemoteInput
 import androidx.core.content.ContextCompat
+import androidx.core.content.LocusIdCompat
 import com.koboai.burrow.MainActivity
 import com.koboai.burrow.R
+import com.koboai.burrow.shortcuts.ConversationShortcuts
+import com.koboai.burrow.shortcuts.Monogram
 
 /**
  * Builds and posts every Burrow notification from a data-only FCM payload
  * (canvas 01a10d91, "Notifications"):
  *
- * - `chat_mention`: MessagingStyle (conversation = the space, sender = the
- *   author) in Mentions, grouped per install and space, with Reply (inline
- *   RemoteInput) and Open;
+ * - `chat_mention` and `chat_message`: MessagingStyle (conversation = the
+ *   space, sender = the author as a [Person] with a stable key and a
+ *   monogram) in Mentions, grouped per install and space, with Reply
+ *   (inline RemoteInput) and Open. The conversation shortcut
+ *   ([ConversationShortcuts]) is published BEFORE the notification is
+ *   posted, and the notification names it by shortcutId and locusId, so
+ *   Android shows it as a conversation. A dm is a one-to-one conversation,
+ *   anything else a group. No bubble;
  * - `task_plan_review`, `review_request_pending`: the standard layout in
  *   Approvals, grouped per install, Open only;
  * - anything else: a tap opens it.
@@ -58,7 +66,10 @@ object NotificationPresenter {
         } else {
             BurrowPush.ensureChannels(context, payload.installHost)
         }
-        post(context, payload.tag, build(context, payload))
+        // Published before notify: a conversation notification must name a
+        // shortcut that already exists.
+        val shortcutId = payload.shortcutId?.let { publishShortcut(context, payload) }
+        post(context, payload.tag, build(context, payload, shortcutId = shortcutId))
         payload.groupKey?.let { postSummary(context, payload, it) }
     }
 
@@ -113,18 +124,20 @@ object NotificationPresenter {
         history: NotificationCompat.MessagingStyle? = null,
         sent: String? = null,
         alert: Boolean = sent == null,
+        shortcutId: String? = payload.shortcutId,
     ): Notification {
         val builder = base(context, payload).setContentIntent(openIntent(context, payload))
         if (!alert) builder.setOnlyAlertOnce(true).setSilent(true)
         when {
-            payload.isMention -> {
-                val style = history ?: mentionStyle(context, payload)
+            payload.isChat -> {
+                val style = history ?: chatStyle(context, payload)
                 if (sent != null) style.addMessage(sent, System.currentTimeMillis(), null as Person?)
                 builder
                     .setStyle(style)
                     .setCategory(NotificationCompat.CATEGORY_MESSAGE)
                     .setContentTitle(payload.spaceName ?: payload.title)
                     .setContentText(sent?.let { context.getString(R.string.reply_you, it) } ?: payload.body)
+                shortcutId?.let { builder.setShortcutId(it).setLocusId(LocusIdCompat(it)) }
                 if (payload.canReply) builder.addAction(replyAction(context, payload))
                 builder.addAction(0, context.getString(R.string.action_open), openIntent(context, payload))
             }
@@ -180,17 +193,74 @@ object NotificationPresenter {
         return builder
     }
 
-    private fun mentionStyle(
+    private fun chatStyle(
         context: Context,
         payload: PushPayload,
     ): NotificationCompat.MessagingStyle {
         val you = Person.Builder().setName(context.getString(R.string.reply_you_name)).build()
-        val author = Person.Builder().setName(payload.authorName ?: context.getString(R.string.someone)).build()
         return NotificationCompat
             .MessagingStyle(you)
             .setConversationTitle(payload.spaceName)
-            .setGroupConversation(true)
-            .addMessage(payload.body ?: payload.title.orEmpty(), System.currentTimeMillis(), author)
+            .setGroupConversation(payload.spaceKind != "dm")
+            .addMessage(payload.body ?: payload.title.orEmpty(), System.currentTimeMillis(), sender(context, payload))
+    }
+
+    /**
+     * The author: keyed `<host>|<authorType>:<authorId>`, or
+     * `<host>|name:<authorName>` when the server sent no id (a bare-name
+     * sender), so Android can tell people apart across installs. The icon
+     * is a monogram: the payload has no avatar URL.
+     */
+    internal fun sender(
+        context: Context,
+        payload: PushPayload,
+    ): Person {
+        val name = payload.authorName ?: context.getString(R.string.someone)
+        val host = payload.installHost
+        val key =
+            when {
+                host == null -> null
+                payload.authorId != null && payload.authorType != null -> "$host|${payload.authorType}:${payload.authorId}"
+                payload.authorName != null -> "$host|name:${payload.authorName}"
+                else -> null
+            }
+        return Person
+            .Builder()
+            .setName(name)
+            .setKey(key)
+            .setIcon(Monogram.personIcon(name))
+            .build()
+    }
+
+    /** The conversation shortcut, published for [payload]; its id, or null. */
+    private fun publishShortcut(
+        context: Context,
+        payload: PushPayload,
+    ): String? = conversation(context, payload, reportUse = false)
+
+    /** After a Reply the server took: re-publish [payload]'s conversation and report the use. */
+    fun noteConversationUsed(
+        context: Context,
+        payload: PushPayload,
+    ): String? = if (payload.shortcutId == null) null else conversation(context, payload, reportUse = true)
+
+    private fun conversation(
+        context: Context,
+        payload: PushPayload,
+        reportUse: Boolean,
+    ): String? {
+        val host = payload.installHost ?: return null
+        val spaceId = payload.spaceId ?: return null
+        val name = payload.spaceName ?: payload.authorName ?: context.getString(R.string.app_name)
+        val shortcuts = ConversationShortcuts.forContext(context)
+        val path = ConversationShortcuts.conversationPath(payload.url, spaceId)
+        val persons = listOf(sender(context, payload))
+        val isGroup = payload.spaceKind != "dm"
+        return if (reportUse) {
+            shortcuts.noteUsed(host, spaceId, name, path, persons, isGroup)
+        } else {
+            shortcuts.publish(host, spaceId, name, path, persons, isGroup)
+        }
     }
 
     private fun replyAction(

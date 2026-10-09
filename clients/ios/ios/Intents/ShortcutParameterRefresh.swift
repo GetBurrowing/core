@@ -11,10 +11,11 @@ import Foundation
 /// called it again: a storm of 20-30 requests a second (review of
 /// 5b5c9895). So:
 /// - fetches only RECORD what they saw (`record`), and never refresh;
-/// - a refresh happens only from `refreshIfNeeded`, which the app calls when
+/// - a refresh happens from `refreshIfNeeded`, which the app calls when
 ///   its scene goes to the background (never from an intent or a query), only
 ///   when the agent or space set changed since the last refresh, or none
-///   has happened yet; at most once per `minimumInterval`;
+///   has happened yet; at most once per `minimumInterval`; and from
+///   `refreshNow`, right after a sign-in;
 /// - what the system's own re-query fetches during `settleWindow` after a
 ///   refresh is what the refresh already published: it never marks dirty.
 ///
@@ -87,6 +88,19 @@ final class ShortcutParameterRefresh {
         // Outside the lock: the re-query it causes may call `record`.
         if due { update() }
         return due
+    }
+
+    /// Refreshes now, whatever the digests say: only after a sign-in
+    /// (PersonalIndexRefresh.didSignIn), whose fetch just recorded the new
+    /// install's agents (task 01a111bb stage 7: a newly added install's
+    /// agents were never speakable until a later background). Never called
+    /// from a fetch, so the system's re-query cannot loop back here.
+    func refreshNow() {
+        lock.lock()
+        defaults.set(now(), forKey: Self.refreshedAtKey)
+        defaults.set(false, forKey: Self.dirtyKey)
+        lock.unlock()
+        update()
     }
 
     private var lastRefresh: Date? { defaults.object(forKey: Self.refreshedAtKey) as? Date }

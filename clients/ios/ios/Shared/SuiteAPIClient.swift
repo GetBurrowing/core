@@ -21,6 +21,10 @@ struct SuiteSpace: Decodable, Equatable, Identifiable {
     /// no slug, so deep links use this, never `slug`.
     let pathSegment: String?
     let agents: [Agent]
+    /// The space's own org (task 01a111bb), so two "general" channels in two
+    /// orgs read apart. Nil for a DM, an org-less space, or an older server
+    /// that sends no `org` at all.
+    let org: SuiteOrg?
 
     /// What `/chat/<segment>` opens this space by. The server's
     /// `path_segment` when it sends one; otherwise the id, which
@@ -31,18 +35,22 @@ struct SuiteSpace: Decodable, Equatable, Identifiable {
     var isDirectMessage: Bool { kind == "dm" }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, slug, kind, agents
+        case id, name, slug, kind, agents, org
         case pathSegment = "path_segment"
         case displayName = "display_name"
     }
 
-    init(id: String, name: String, slug: String? = nil, kind: String? = nil, pathSegment: String? = nil, agents: [Agent] = []) {
+    init(
+        id: String, name: String, slug: String? = nil, kind: String? = nil, pathSegment: String? = nil, agents: [Agent] = [],
+        org: SuiteOrg? = nil
+    ) {
         self.id = id
         self.name = name
         self.slug = slug
         self.kind = kind
         self.pathSegment = pathSegment
         self.agents = agents
+        self.org = org
     }
 
     init(from decoder: Decoder) throws {
@@ -57,7 +65,16 @@ struct SuiteSpace: Decodable, Equatable, Identifiable {
         kind = try container.decodeIfPresent(String.self, forKey: .kind)
         pathSegment = try container.decodeIfPresent(String.self, forKey: .pathSegment)
         agents = try container.decodeIfPresent([Agent].self, forKey: .agents) ?? []
+        // Tolerant: an older server sends no `org`, and a malformed one must
+        // not fail the whole list (the share sheet decodes this too).
+        org = (try? container.decodeIfPresent(SuiteOrg.self, forKey: .org)) ?? nil
     }
+}
+
+/// An org as the server names it: `{id, name}`.
+struct SuiteOrg: Codable, Equatable {
+    let id: String
+    let name: String
 }
 
 /// Bearer requests to one install's `/api/app/*` routes.
@@ -531,9 +548,19 @@ extension SuiteAPIClient {
 
     /// Starts a meeting now. `spaceID` only picks the project; the server
     /// answers 422 `no_project` when the person has no project to hold it.
-    func createMeeting(host: String, spaceID: String?) async throws -> CreatedMeeting {
+    /// `POST /api/app/meetings`. `spaceID` (a legacy Shortcut) or `projectID`
+    /// picks the meeting's project; neither lets the server use the last
+    /// meeting's project. `inviteeUserIDs` (at most 10) or `inviteSpaceID`
+    /// (a group, capped at 25 by the server) ring people into it (task
+    /// 01a111bb stage 6).
+    func createMeeting(
+        host: String, spaceID: String?, projectID: String? = nil, inviteeUserIDs: [String]? = nil, inviteSpaceID: String? = nil
+    ) async throws -> CreatedMeeting {
         var json: [String: Any] = [:]
         if let spaceID { json["space_id"] = spaceID }
+        if let projectID { json["project_id"] = projectID }
+        if let inviteeUserIDs { json["invitee_user_ids"] = inviteeUserIDs }
+        if let inviteSpaceID { json["invite_space_id"] = inviteSpaceID }
         return try await fetch(CreatedMeeting.self, host: host, path: "/api/app/meetings", method: "POST", json: json)
     }
 
@@ -572,5 +599,152 @@ extension SuiteAPIClient {
         }
         guard let body = try? JSONDecoder().decode(Body.self, from: data) else { throw Failure.badResponse }
         return body.message.id
+    }
+}
+
+// MARK: - Siri AI routes (task 01a111bb)
+
+/// One row of `GET /api/app/people`: a human or an agent the person may
+/// message. No email or phone, by design.
+struct SuitePerson: Decodable, Equatable {
+    let id: String
+    /// `user` or `agent`.
+    let kind: String
+    let name: String
+    let orgNames: [String]
+    /// The person's existing DM with the caller, if any.
+    let dmSpaceID: String?
+
+    var isAgent: Bool { kind == "agent" }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, kind, name
+        case orgNames = "org_names"
+        case dmSpaceID = "dm_space_id"
+    }
+
+    init(id: String, kind: String, name: String, orgNames: [String] = [], dmSpaceID: String? = nil) {
+        self.id = id
+        self.kind = kind
+        self.name = name
+        self.orgNames = orgNames
+        self.dmSpaceID = dmSpaceID
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        kind = try container.decodeIfPresent(String.self, forKey: .kind) ?? "user"
+        name = try container.decodeIfPresent(String.self, forKey: .name) ?? "Someone"
+        orgNames = try container.decodeIfPresent([String].self, forKey: .orgNames) ?? []
+        dmSpaceID = try container.decodeIfPresent(String.self, forKey: .dmSpaceID)
+    }
+}
+
+/// One project from `GET /api/app/projects`.
+struct SuiteProject: Decodable, Equatable {
+    let id: String
+    let name: String
+    let org: SuiteOrg?
+}
+
+/// `GET /api/app/projects`: the projects, and the project of the newest
+/// meeting the person can see (nil when there is none: ask).
+struct SuiteProjects: Decodable, Equatable {
+    let projects: [SuiteProject]
+    let lastMeetingProjectID: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case projects
+        case lastMeetingProjectID = "last_meeting_project_id"
+    }
+}
+
+/// `POST /api/app/tasks`: 201 `{id, title, path}`.
+struct CreatedTask: Decodable, Equatable {
+    let id: String
+    let title: String
+    let path: String?
+}
+
+/// What editing a sent message came to.
+enum EditOutcome: Equatable {
+    case edited
+    /// 409 `frozen`: an agent began work on it. `by` is who, when known.
+    case frozen(by: String?)
+}
+
+/// What marking a message read came to.
+enum ReadOutcome: Equatable {
+    case marked
+    /// 422 `not_supported`: Burrow has no mark-unread.
+    case notSupported
+}
+
+extension SuiteAPIClient {
+    /// People to message: `?q=` searches (so a person outside the recent set
+    /// is still found by name); no query is the recent collaborators.
+    /// `directory: true` (no query) is the whole set the app indexes for
+    /// Siri: collaborators, space mates, org mates and agents, scoped by the
+    /// server exactly as a search is (task 01a111bb stage 7).
+    func people(host: String, query: String? = nil, directory: Bool = false) async throws -> [SuitePerson] {
+        struct Body: Decodable { let people: [SuitePerson] }
+        var components = URLComponents()
+        components.path = "/api/app/people"
+        if let query, !query.isEmpty {
+            components.queryItems = [URLQueryItem(name: "q", value: query)]
+        } else if directory {
+            components.queryItems = [URLQueryItem(name: "scope", value: "directory")]
+        }
+        return try await fetch(Body.self, host: host, path: components.string ?? "/api/app/people").people
+    }
+
+    /// Finds or creates the DM with a human.
+    func personDM(host: String, userID: String) async throws -> AgentDM {
+        try await fetch(AgentDM.self, host: host, path: "/api/app/people/\(Self.segment(userID))/dm", method: "POST", json: [:])
+    }
+
+    func projects(host: String) async throws -> SuiteProjects {
+        try await fetch(SuiteProjects.self, host: host, path: "/api/app/projects")
+    }
+
+    func editMessage(host: String, messageID: String, text: String) async throws -> EditOutcome {
+        let response = try await send(host: host, path: Self.messagePath(messageID), method: "PATCH", json: ["text": text])
+        if response.status == 409 {
+            let object = try? JSONSerialization.jsonObject(with: response.data) as? [String: Any]
+            return .frozen(by: object?["by"] as? String)
+        }
+        guard response.isSuccess else { throw Failure.refused(status: response.status, code: response.errorCode) }
+        return .edited
+    }
+
+    func unsendMessage(host: String, messageID: String) async throws {
+        let response = try await send(host: host, path: Self.messagePath(messageID), method: "DELETE")
+        guard response.isSuccess else { throw Failure.refused(status: response.status, code: response.errorCode) }
+    }
+
+    func markRead(host: String, spaceID: String, messageID: String, read: Bool) async throws -> ReadOutcome {
+        let response = try await send(
+            host: host, path: "/api/app/spaces/\(Self.segment(spaceID))/read", method: "POST",
+            json: ["message_id": messageID, "read": read])
+        if response.status == 422, response.errorCode == "not_supported" { return .notSupported }
+        guard response.isSuccess else { throw Failure.refused(status: response.status, code: response.errorCode) }
+        return .marked
+    }
+
+    func createTask(
+        host: String, projectID: String, title: String, description: String?, assigneeID: String? = nil, assigneeType: String? = nil
+    ) async throws -> CreatedTask {
+        var json: [String: Any] = ["project_id": projectID, "title": title]
+        if let description { json["description"] = description }
+        if let assigneeID, let assigneeType {
+            json["assignee_id"] = assigneeID
+            json["assignee_type"] = assigneeType
+        }
+        return try await fetch(CreatedTask.self, host: host, path: "/api/app/tasks", method: "POST", json: json)
+    }
+
+    static func messagePath(_ messageID: String) -> String {
+        "/api/app/messages/\(segment(messageID))"
     }
 }

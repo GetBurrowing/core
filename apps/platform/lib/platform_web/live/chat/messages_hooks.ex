@@ -101,6 +101,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   alias Platform.Chat.ClosedDms
   alias PlatformWeb.ChatLive
   alias PlatformWeb.ChatLive.SearchHooks
+  alias PlatformWeb.NativeDonation
 
   @message_limit 50
 
@@ -991,6 +992,8 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
         {:ok, msg} ->
           {:halt,
            socket
+           # Burrow personal context (task 01a111bb): recipients only.
+           |> NativeDonation.message_sent(space, participant.id)
            |> update(:inline_thread_messages, fn itm ->
              Map.update(itm, msg_id, [msg], &(&1 ++ [msg]))
            end)
@@ -1988,6 +1991,16 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
                    poster_user_id: socket.assigns[:user_id]
                  ) do
               {:ok, msg, saved_attachments} ->
+                # Burrow personal context (task 01a111bb): every web send
+                # (composer, thread with files, ChatLive's own) lands here.
+                # Recipients only, never the message.
+                socket =
+                  NativeDonation.message_sent(
+                    socket,
+                    donation_space(socket, attrs[:space_id]),
+                    attrs[:participant_id]
+                  )
+
                 {:ok, socket, msg, saved_attachments}
 
               {:error, _reason} ->
@@ -1998,6 +2011,13 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
           {:error, :storage_failed} ->
             {:error, socket, "Failed to store attachment."}
         end
+    end
+  end
+
+  defp donation_space(socket, space_id) do
+    case socket.assigns[:active_space] do
+      %{id: ^space_id} = space -> space
+      _ -> nil
     end
   end
 

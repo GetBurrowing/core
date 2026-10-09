@@ -23,6 +23,7 @@ import com.getcapacitor.BridgeActivity
 import com.koboai.burrow.push.BurrowPush
 import com.koboai.burrow.push.NotificationPresenter
 import com.koboai.burrow.push.PushPayload
+import com.koboai.burrow.shortcuts.ConversationShortcuts
 import com.koboai.burrow.widgets.CountsRepository
 import com.koboai.burrow.widgets.WidgetRefresh
 import kotlinx.coroutines.runBlocking
@@ -194,13 +195,33 @@ class MainActivity :
         }
         // Consumed: a recreated activity must not replay it.
         intent.action = null
+        openInstallAt(host, path)
+        return true
+    }
+
+    /** A conversation shortcut: the same switch-and-load as a notification's Open. */
+    override fun openConversation(
+        host: String?,
+        path: String,
+    ) {
+        openInstallAt(host, PushPayload.safePath(path))
+    }
+
+    /**
+     * Shows [path] on [host]'s install, switching to it first when another
+     * is showing. An install that is no longer on this phone just brings the
+     * app forward.
+     */
+    private fun openInstallAt(
+        host: String?,
+        path: String,
+    ) {
         val install = host?.let { h -> store.installs.firstOrNull { it.host == h } }
         when {
             install == null -> if (currentInstall == null) startWithSelection()
             install.host == currentInstall?.host && picker == null -> bridge.webView.loadUrl("https://${install.host}$path")
             else -> open(install, "https://${install.host}$path")
         }
-        return true
     }
 
     override fun startWithSelection() {
@@ -245,7 +266,7 @@ class MainActivity :
         destination: String?,
     ) {
         lastHandoffAt = SystemClock.elapsedRealtime()
-        val launcher = InstallLauncher(client, tokens)
+        val launcher = InstallLauncher(client, tokens, ::removeShortcuts)
         io.execute {
             val step = launcher.start(install, destination)
             main.post {
@@ -295,7 +316,7 @@ class MainActivity :
     private fun signOut(install: Install) {
         signingOutHost = install.host
         cover.visibility = View.VISIBLE
-        val signOut = NativeSignOut(client, tokens, store.appInstallId)
+        val signOut = NativeSignOut(client, tokens, store.appInstallId, ::removeShortcuts)
         io.execute {
             signOut.run(install.host)
             // The old account's counts must not show under the next sign-in.
@@ -331,7 +352,7 @@ class MainActivity :
             return
         }
         val view =
-            InstallPickerView(this, store) { install ->
+            InstallPickerView(this, store, ::removeShortcuts) { install ->
                 open(install, null)
             }
         (bridge.webView.parent as ViewGroup).addView(view, ViewGroup.LayoutParams(MATCH, MATCH))
@@ -469,6 +490,11 @@ class MainActivity :
                 }
             WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightStatusBars = !dark
         }
+    }
+
+    /** One install's conversation shortcuts, after its sign-out, revocation or removal. */
+    private fun removeShortcuts(host: String) {
+        ConversationShortcuts.forContext(applicationContext).removeForHost(host)
     }
 
     private fun deviceName(): String = Settings.Global.getString(contentResolver, Settings.Global.DEVICE_NAME) ?: Build.MODEL

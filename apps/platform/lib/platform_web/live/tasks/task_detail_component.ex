@@ -594,25 +594,29 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
   def handle_event("plan_approve", %{"plan-id" => plan_id}, socket) do
     plan = fetch_plan(plan_id)
 
-    if plan && plan.status == "pending_review" do
-      case Tasks.approve_plan(plan, socket.assigns[:current_user_id]) do
-        {:ok, _} ->
-          flash(:info, "Plan approved.")
-          request_refresh()
+    socket =
+      if plan && plan.status == "pending_review" do
+        case Tasks.approve_plan(plan, socket.assigns[:current_user_id]) do
+          {:ok, _} ->
+            flash(:info, "Plan approved.")
+            request_refresh()
+            donate_approval(socket, plan, "approve")
 
-        {:error, reason} ->
-          # Log the reason: an approval failure used to produce a constant
-          # flash and NO server-side output at all, which made a production
-          # outage effectively invisible.
-          Logger.error(
-            "plan_approve failed for plan #{plan.id} (task #{plan.task_id}): #{inspect(reason)}"
-          )
+          {:error, reason} ->
+            # Log the reason: an approval failure used to produce a constant
+            # flash and NO server-side output at all, which made a production
+            # outage effectively invisible.
+            Logger.error(
+              "plan_approve failed for plan #{plan.id} (task #{plan.task_id}): #{inspect(reason)}"
+            )
 
-          flash(:error, "Failed to approve plan.")
+            flash(:error, "Failed to approve plan.")
+            socket
+        end
+      else
+        flash(:error, "Plan not found or not pending review.")
+        socket
       end
-    else
-      flash(:error, "Plan not found or not pending review.")
-    end
 
     {:noreply, socket}
   end
@@ -622,18 +626,22 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
   def handle_event("plan_reject", %{"plan-id" => plan_id}, socket) do
     plan = fetch_plan(plan_id)
 
-    if plan && plan.status == "pending_review" do
-      case Tasks.reject_plan(plan, socket.assigns[:current_user_id]) do
-        {:ok, _} ->
-          flash(:info, "Plan rejected.")
-          request_refresh()
+    socket =
+      if plan && plan.status == "pending_review" do
+        case Tasks.reject_plan(plan, socket.assigns[:current_user_id]) do
+          {:ok, _} ->
+            flash(:info, "Plan rejected.")
+            request_refresh()
+            donate_approval(socket, plan, "reject")
 
-        {:error, _} ->
-          flash(:error, "Failed to reject plan.")
+          {:error, _} ->
+            flash(:error, "Failed to reject plan.")
+            socket
+        end
+      else
+        flash(:error, "Plan not found or not pending review.")
+        socket
       end
-    else
-      flash(:error, "Plan not found or not pending review.")
-    end
 
     {:noreply, socket}
   end
@@ -686,6 +694,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
 
             {:noreply,
              socket
+             |> donate_approval(plan, "reject")
              |> assign(:reject_plan_open, nil)
              |> assign(:reject_plan_feedback_text, "")}
 
@@ -724,6 +733,15 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
     socket
     |> assign(:show_reopen_modal, false)
     |> assign(:reopen_reason, "")
+  end
+
+  # Burrow personal context (task 01a111bb): which task, and what was done.
+  # Ids only; the plan text and any feedback never leave the server.
+  defp donate_approval(socket, plan, action) do
+    PlatformWeb.NativeDonation.push(socket, "approval_acted", %{
+      task_id: plan.task_id,
+      action: action
+    })
   end
 
   defp fetch_plan(plan_id) do

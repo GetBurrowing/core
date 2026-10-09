@@ -12,6 +12,8 @@ data class ShareSpace(
     val name: String,
     val pathSegment: String?,
     val agents: List<Agent>,
+    /** `dm`, `group`, `channel`, ...; null when the server sent none. */
+    val kind: String? = null,
 ) {
     data class Agent(
         val id: String,
@@ -68,7 +70,11 @@ class AppShareClient(
         const val SPACES_PATH = "/api/app/spaces"
         private val ID = Regex("^[A-Za-z0-9_-]{1,128}$")
 
-        /** `{"spaces": [{id, name, path_segment, agents: [{id, name}]}]}`; a space without an id is skipped. */
+        /**
+         * `{"spaces": [{id, name, path_segment, kind, agents: [{id, name}]}]}`;
+         * a space without an id is skipped, and keys this does not read (01a111bb's
+         * `org`) are ignored.
+         */
         fun parseSpaces(body: String): List<ShareSpace> {
             val list =
                 try {
@@ -84,6 +90,7 @@ class AppShareClient(
                     id = id,
                     name = o.optString("name").ifEmpty { id },
                     pathSegment = o.optString("path_segment").ifEmpty { null },
+                    kind = o.optString("kind").ifEmpty { null },
                     agents =
                         (0 until (agents?.length() ?: 0)).mapNotNull { j ->
                             val a = agents!!.optJSONObject(j) ?: return@mapNotNull null

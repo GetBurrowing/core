@@ -16,6 +16,12 @@ import com.koboai.burrow.push.PermissionExplainerActivity
 import com.koboai.burrow.push.PermissionStep
 import com.koboai.burrow.push.PushError
 import com.koboai.burrow.push.PushPermission
+import com.koboai.burrow.share.AppShareClient
+import com.koboai.burrow.shortcuts.ConversationNoter
+import com.koboai.burrow.shortcuts.ConversationShortcuts
+import com.koboai.burrow.shortcuts.DonateDispatch
+import com.koboai.burrow.shortcuts.Recipient
+import org.json.JSONArray
 import java.util.concurrent.Executors
 
 /**
@@ -29,7 +35,11 @@ import java.util.concurrent.Executors
  *   `POST /api/app/devices` answered 2xx, `{registered: false, state:
  *   "denied"}` when the person said no, and otherwise rejects with
  *   `not_signed_in`, `token_failed` or `registration_failed`;
- * - `switchInstall()` opens the install picker.
+ * - `switchInstall()` opens the install picker;
+ * - `donate(detail)` takes 01a111bb's `native_donate` payload (ids only,
+ *   forwarded by `assets/js/native_donations.js`). `message_sent` notes the
+ *   conversation as a used shortcut ([ConversationNoter]); every other kind
+ *   resolves and does nothing ([DonateDispatch]).
  *
  * On Android 13+ `enablePush` shows the native explainer before the system
  * prompt. The web hook calls `enablePush` on mount when the state is
@@ -108,6 +118,33 @@ class SuiteNativePlugin : Plugin() {
     }
 
     @PluginMethod
+    fun donate(call: PluginCall) {
+        val kind = call.getString("kind")
+        if (kind != DonateDispatch.MESSAGE_SENT) {
+            call.resolve()
+            return
+        }
+        val host = (activity as? MainActivity)?.currentHost
+        val spaceId = call.getString("space_id")
+        val recipients = recipients(call.getArray("recipient_ids"))
+        io.execute {
+            when (val outcome = DonateDispatch.dispatch(kind, spaceId, recipients, host, noter())) {
+                DonateDispatch.Outcome.Ok -> call.resolve()
+                is DonateDispatch.Outcome.Rejected -> call.reject("Conversation not noted: ${outcome.code}", outcome.code)
+            }
+        }
+    }
+
+    /** One per plugin, so its spaces cache lives as long as the page. */
+    private var conversationNoter: ConversationNoter? = null
+
+    private fun noter(): ConversationNoter =
+        conversationNoter ?: ConversationNoter(
+            AppShareClient(BurrowPush.client(context)),
+            ConversationShortcuts.forContext(context),
+        ).also { conversationNoter = it }
+
+    @PluginMethod
     fun switchInstall(call: PluginCall) {
         val shell = activity as? MainActivity
         activity.runOnUiThread {
@@ -140,6 +177,16 @@ class SuiteNativePlugin : Plugin() {
     private fun finishAll(answer: (PluginCall) -> Unit) {
         val calls = synchronized(waiting) { waiting.toList().also { waiting.clear() } }
         calls.forEach(answer)
+    }
+
+    private fun recipients(array: JSONArray?): List<Recipient> {
+        if (array == null) return emptyList()
+        return (0 until array.length()).mapNotNull { i ->
+            val o = array.optJSONObject(i) ?: return@mapNotNull null
+            val type = o.optString("type").ifEmpty { return@mapNotNull null }
+            val id = o.optString("id").ifEmpty { return@mapNotNull null }
+            Recipient(type, id)
+        }
     }
 
     private fun denied() = JSObject().put("registered", false).put("state", "denied")

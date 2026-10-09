@@ -12,6 +12,7 @@ defmodule PlatformWeb.AppIntentsControllerTest do
   alias Platform.Chat
   alias Platform.Inbox
   alias Platform.Inbox.Item
+  alias Platform.Meetings.Invite
   alias Platform.Meetings.Meeting
   alias Platform.Mobile
   alias Platform.Repo
@@ -31,7 +32,12 @@ defmodule PlatformWeb.AppIntentsControllerTest do
     {:post, "/api/app/meetings", %{}},
     {:get, "/api/app/agents", %{}},
     {:post, "/api/app/agents/:id/dm", %{}},
-    {:get, "/api/app/spaces/:space_id/messages", %{}}
+    {:get, "/api/app/spaces/:space_id/messages", %{}},
+    # Task 01a111bb.
+    {:get, "/api/app/people", %{}},
+    {:post, "/api/app/people/:id/dm", %{}},
+    {:get, "/api/app/projects", %{}},
+    {:post, "/api/app/tasks", %{}}
   ]
 
   defp pkce do
@@ -563,6 +569,252 @@ defmodule PlatformWeb.AppIntentsControllerTest do
         conn |> bearer(token) |> get("/api/app/spaces/#{space.id}/messages", %{"after" => "x"})
 
       assert json_response(conn2, 422) == %{"error" => "invalid_cursor"}
+    end
+  end
+
+  # ── Task 01a111bb: projects, call invitees, Create Task ──────────────
+
+  defp org_project!(user) do
+    org = Platform.Tenancy.get_org_by_slug!("sxi")
+    plain_member!(user, org)
+
+    {:ok, project} =
+      Tasks.create_project(%{name: "Siri #{System.unique_integer([:positive])}", org_id: org.id})
+
+    {org, project}
+  end
+
+  defp meeting_count, do: Repo.aggregate(Meeting, :count, :id)
+
+  describe "GET /api/app/projects" do
+    test "lists projects with their org; last_meeting_project_id is null until a meeting exists",
+         %{conn: conn, token: token, user: user} do
+      {org, project} = org_project!(user)
+
+      body = conn |> bearer(token) |> get("/api/app/projects") |> json_response(200)
+
+      assert %{"id" => _, "name" => name, "org" => %{"id" => org_id, "name" => org_name}} =
+               Enum.find(body["projects"], &(&1["id"] == project.id))
+
+      assert {name, org_id, org_name} == {project.name, org.id, org.name}
+      # No prior meeting: null, never a fallback to some project.
+      assert Map.has_key?(body, "last_meeting_project_id")
+      assert body["last_meeting_project_id"] == nil
+
+      conn
+      |> bearer(token)
+      |> post("/api/app/meetings", %{"project_id" => project.id})
+      |> json_response(201)
+
+      again = conn |> bearer(token) |> get("/api/app/projects") |> json_response(200)
+      assert again["last_meeting_project_id"] == project.id
+    end
+  end
+
+  describe "POST /api/app/meetings with invitees" do
+    test "invitee_user_ids writes a draft invite per person", %{
+      conn: conn,
+      token: token,
+      user: user
+    } do
+      {_org, project} = org_project!(user)
+      harper = create_user!()
+
+      body =
+        conn
+        |> bearer(token)
+        |> post("/api/app/meetings", %{
+          "project_id" => project.id,
+          "invitee_user_ids" => [harper.id]
+        })
+        |> json_response(201)
+
+      assert body["invited_count"] == 1
+
+      assert [%Invite{user_id: invited}] =
+               Repo.all(from(i in Invite, where: i.meeting_id == ^body["id"]))
+
+      assert invited == harper.id
+    end
+
+    test "a refused invitee is 403 and creates NO meeting", %{
+      conn: conn,
+      token: token,
+      user: user
+    } do
+      {_org, project} = org_project!(user)
+      before = meeting_count()
+
+      conn1 =
+        conn
+        |> bearer(token)
+        |> post("/api/app/meetings", %{
+          "project_id" => project.id,
+          "invitee_user_ids" => [Ecto.UUID.generate()]
+        })
+
+      assert json_response(conn1, 403) == %{"error" => "forbidden"}
+      assert meeting_count() == before
+    end
+
+    test "an external caller ringing a person they may not reach is 403 with no meeting row", %{
+      conn: conn
+    } do
+      world = external_world()
+      %{token: ext_token} = app_session!(world.ext)
+      before = meeting_count()
+
+      conn1 =
+        conn
+        |> bearer(ext_token)
+        |> post("/api/app/meetings", %{"invitee_user_ids" => [world.n.id]})
+
+      assert json_response(conn1, 403) == %{"error" => "forbidden"}
+      assert meeting_count() == before
+    end
+
+    test "an agent is 422 agent_not_callable; more than 10 is 422; neither creates a meeting",
+         %{conn: conn, token: token, user: user} do
+      {_org, project} = org_project!(user)
+      before = meeting_count()
+
+      conn1 =
+        conn
+        |> bearer(token)
+        |> post("/api/app/meetings", %{
+          "project_id" => project.id,
+          "invitee_user_ids" => [agent!("Callee").id]
+        })
+
+      assert json_response(conn1, 422) == %{"error" => "agent_not_callable"}
+
+      many = for _ <- 1..11, do: create_user!().id
+
+      conn2 =
+        conn
+        |> bearer(token)
+        |> post("/api/app/meetings", %{"project_id" => project.id, "invitee_user_ids" => many})
+
+      assert json_response(conn2, 422) == %{"error" => "too_many_invitees"}
+      assert meeting_count() == before
+    end
+
+    test "the cap: invite_space_id on a space with 30 other humans invites exactly 25", %{
+      conn: conn,
+      token: token,
+      user: user
+    } do
+      {_org, project} = org_project!(user)
+      all_hands = channel!()
+      add_user!(all_hands.id, user.id)
+      for _ <- 1..30, do: add_user!(all_hands.id, create_user!().id)
+
+      body =
+        conn
+        |> bearer(token)
+        |> post("/api/app/meetings", %{
+          "project_id" => project.id,
+          "invite_space_id" => all_hands.id
+        })
+        |> json_response(201)
+
+      invited = Repo.all(from(i in Invite, where: i.meeting_id == ^body["id"], select: i.user_id))
+      assert length(invited) == 25
+      assert body["invited_count"] == 25
+      refute user.id in invited
+    end
+  end
+
+  describe "POST /api/app/tasks" do
+    # The 019f42fd regression, through the API: the flat assignee must land in
+    # phase_assignees["planning"] and survive the first phase transition the
+    # board runs (`Tasks.transition_task/3`).
+    test "an assignee lands in phase_assignees[\"planning\"] and survives the first transition",
+         %{conn: conn, token: token, user: user} do
+      {_org, project} = org_project!(user)
+      agent = agent!("Planner")
+
+      body =
+        conn
+        |> bearer(token)
+        |> post("/api/app/tasks", %{
+          "project_id" => project.id,
+          "title" => "  From Siri  ",
+          "description" => "Spoken",
+          "assignee_id" => agent.id,
+          "assignee_type" => "agent"
+        })
+        |> json_response(201)
+
+      assert %{"id" => id, "title" => "From Siri", "path" => path} = body
+      assert path == "/tasks/#{id}"
+
+      task = Tasks.get_task_record(id)
+      planning = %{"assignee_id" => agent.id, "assignee_type" => "agent"}
+      assert task.phase_assignees["planning"] == planning
+      assert task.reported_by == user.name || task.reported_by == user.email
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: id, status: "approved", version: 1})
+
+      {:ok, _stage} =
+        Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "S1", status: "pending"})
+
+      {:ok, planned} = Tasks.transition_task(task, "planning", {:user, user.id})
+      {:ok, _executing} = Tasks.transition_task(planned, "in_progress", {:user, user.id})
+
+      reloaded = Tasks.get_task_record(id)
+      assert reloaded.status == "in_progress"
+      assert reloaded.phase_assignees["planning"] == planning
+      assert reloaded.assignee_id == agent.id
+    end
+
+    test "a project the user cannot see is 403 and creates nothing", %{
+      conn: conn,
+      token: token,
+      user: user
+    } do
+      # An org the caller holds no membership in.
+      other_org = Platform.Tenancy.get_org_by_slug!("soylent")
+
+      {:ok, hidden} =
+        Tasks.create_project(%{
+          name: "Hidden #{System.unique_integer([:positive])}",
+          org_id: other_org.id
+        })
+
+      refute Enum.any?(Tasks.list_projects_for_user(user), &(&1.id == hidden.id))
+
+      conn1 =
+        conn
+        |> bearer(token)
+        |> post("/api/app/tasks", %{"project_id" => hidden.id, "title" => "Nope"})
+
+      assert json_response(conn1, 403) == %{"error" => "forbidden"}
+      assert Tasks.list_tasks_by_project(hidden.id) == []
+    end
+
+    test "a bad assignee or a blank title is 422", %{conn: conn, token: token, user: user} do
+      {_org, project} = org_project!(user)
+
+      conn1 =
+        conn
+        |> bearer(token)
+        |> post("/api/app/tasks", %{
+          "project_id" => project.id,
+          "title" => "T",
+          "assignee_id" => Ecto.UUID.generate(),
+          "assignee_type" => "robot"
+        })
+
+      assert json_response(conn1, 422) == %{"error" => "invalid_assignee"}
+
+      conn2 =
+        conn
+        |> bearer(token)
+        |> post("/api/app/tasks", %{"project_id" => project.id, "title" => "  "})
+
+      assert json_response(conn2, 422) == %{"error" => "task_not_created"}
+      assert Tasks.list_tasks_by_project(project.id) == []
     end
   end
 end

@@ -7755,9 +7755,13 @@ defmodule PlatformWeb.MeetingLive do
             # completed and reset the flag, and it would commit a second
             # meeting. This process is about to be replaced by the
             # navigation, so leaving the flag set costs nothing.
+            #
+            # Burrow personal context (task 01a111bb): the meeting id only.
+            # LiveView flushes pending events before a navigation.
             {:noreply,
              socket
              |> assign(:meet_now_pending?, true)
+             |> PlatformWeb.NativeDonation.push("meeting_started", %{meeting_id: meeting.id})
              |> push_navigate(to: ~p"/meetings/#{meeting.slug}")}
         end
 

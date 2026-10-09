@@ -5,4 +5,5 @@
     <exclude domain="sharedpref" path="burrow_bearer_tokens.xml" />
     <exclude domain="sharedpref" path="burrow_device.xml" />
     <exclude domain="sharedpref" path="burrow_push.xml" />
+    <exclude domain="sharedpref" path="burrow_shortcuts.xml" />
 </full-backup-content>

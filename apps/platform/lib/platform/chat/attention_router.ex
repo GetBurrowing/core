@@ -322,7 +322,7 @@ defmodule Platform.Chat.AttentionRouter do
         here_decisions ++ named_mention_decisions
       else
         Enum.flat_map(human_recipients, fn participant ->
-          case decide_human(participant, message) do
+          case decide_human_in_space(space, participant, message) do
             nil -> []
             reason -> [%{participant_id: participant.id, reason: reason}]
           end
@@ -335,8 +335,11 @@ defmodule Platform.Chat.AttentionRouter do
     online_user_ids = space_id |> Presence.list_space() |> Map.keys() |> MapSet.new()
 
     # Preload message author display name for notification body.
+    # The author participant itself (task 01a111bb): the push carries its
+    # display name AND its participant type/id, so the iOS Notification
+    # Service Extension can name the sender. "Someone" when unresolved.
     author = Enum.find(participants, &(&1.id == author_id))
-    sender_name = if author, do: author.display_name || "Someone", else: "Someone"
+    sender = author || "Someone"
 
     # Build a lookup from participant record ID → participant for online checks
     participant_by_id = Map.new(participants, fn p -> {p.id, p} end)
@@ -362,7 +365,7 @@ defmodule Platform.Chat.AttentionRouter do
           user_id = if participant, do: participant.participant_id, else: pid
 
           if send_push?(reason, MapSet.member?(online_user_ids, user_id)) do
-            maybe_send_push(participant || pid, sender_name, message, reason, space)
+            maybe_send_push(participant || pid, sender, message, reason, space)
           end
       end
 
@@ -643,7 +646,7 @@ defmodule Platform.Chat.AttentionRouter do
   # `recipient` is the `%Participant{}` row when the caller resolved one (it
   # already holds `participant_by_id`, so this costs no query), otherwise the
   # bare `chat_participants.id`.
-  defp maybe_send_push(recipient, sender_name, %Message{} = message, reason, %Space{} = space) do
+  defp maybe_send_push(recipient, sender, %Message{} = message, reason, %Space{} = space) do
     # Skip in test env. The spawned Task races with Ecto sandbox teardown:
     # when a test finishes, its Repo connection owner exits, and an
     # in-flight `Repo.all(Subscription)` inside this Task raises a
@@ -658,7 +661,7 @@ defmodule Platform.Chat.AttentionRouter do
 
         notification =
           push_notification(
-            sender_name,
+            sender,
             message,
             reason,
             space,
@@ -684,23 +687,40 @@ defmodule Platform.Chat.AttentionRouter do
   space and message ids both transports route on. `attachments` are
   `%{content_type, filename}` maps, read only when the message has no text.
 
+  `sender` is the author's `%Participant{}` (task 01a111bb), whose
+  `participant_type` / `participant_id` become the notification's
+  `author_type` / `author_id`, or a bare display name, which carries no
+  author identity.
+
   Pure (no queries), so tests can assert the exact notification without the
   push `Task`, which short-circuits under `:test`.
   """
-  @spec push_notification(String.t(), Message.t(), atom(), Space.t(), [map()], String.t() | nil) ::
+  @spec push_notification(
+          Participant.t() | String.t(),
+          Message.t(),
+          atom(),
+          Space.t(),
+          [map()],
+          String.t() | nil
+        ) ::
           Platform.Push.Notification.t()
   def push_notification(
-        sender_name,
+        sender,
         %Message{} = message,
         reason,
         %Space{} = space,
         attachments,
         conversation_name \\ nil
       ) do
+    {sender_name, author_type, author_id} = sender_identity(sender)
+
     Platform.Push.Notification.chat(%{
       reason: reason,
       author: sender_name,
+      author_type: author_type,
+      author_id: author_id,
       space_name: space.name,
+      space_kind: space.kind,
       conversation_name: conversation_name,
       space_path: Platform.Chat.space_path_segment(space),
       space_id: space.id,
@@ -709,6 +729,12 @@ defmodule Platform.Chat.AttentionRouter do
       attachments: attachments
     })
   end
+
+  defp sender_identity(%Participant{} = p),
+    do: {p.display_name || "Someone", p.participant_type, p.participant_id}
+
+  defp sender_identity(name) when is_binary(name), do: {name, nil, nil}
+  defp sender_identity(_), do: {"Someone", nil, nil}
 
   @doc """
   The recipient's label for `space`, carried as the notification's
@@ -821,6 +847,21 @@ defmodule Platform.Chat.AttentionRouter do
     do: Platform.Push.Notification.chat_title(sender_name, nil, reason)
 
   # ── Human participant decision (unchanged) ─────────────────────────────────
+
+  # A DM is addressed to its other person by construction, so a human
+  # recipient there attends to every message (`:all`), whatever their
+  # per-membership mode, unless the mode already decided (heartbeat keeps its
+  # queue). Before task 01a111bb stage 2 a DM participant in the default
+  # "mention" mode got NO decision for an un-mentioned message, so an agent's
+  # reply in a user-to-agent DM never pushed to the user. Burrow's AskAgent
+  # timeout fallback relies on that reply arriving as an ordinary chat push.
+  # `:all` is a human-only reason: AgentResponder does not route it, and
+  # `send_push?/2` pushes it only to an offline recipient.
+  defp decide_human_in_space(%Space{kind: "dm"}, participant, message),
+    do: decide_human(participant, message) || :all
+
+  defp decide_human_in_space(_space, participant, message),
+    do: decide_human(participant, message)
 
   defp decide_human(%Participant{attention_mode: "all"}, _message), do: :all
   defp decide_human(%Participant{attention_mode: "active"}, _message), do: :active

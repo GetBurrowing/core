@@ -97,6 +97,11 @@ defmodule Platform.Accounts do
   sheet) drop them with no explicit filter. The admin surface
   (`UserAccessLive`, task 019f671f Stage 6) opts in with
   `include_archived: true`.
+
+  `:ids` narrows the list to those user ids (task 01a111bb). It is how
+  `Platform.Chat.dm_candidates/3` asks the SAME query about a known set of
+  people (recent collaborators, call invitees) instead of a search. The ids
+  must already be valid UUIDs; callers guard them.
   """
   @spec list_users(keyword()) :: [User.t()]
   def list_users(opts \\ []) do
@@ -104,6 +109,12 @@ defmodule Platform.Accounts do
     include_archived = Keyword.get(opts, :include_archived, false)
 
     base = from(u in User, order_by: [asc: u.name])
+
+    base =
+      case Keyword.get(opts, :ids) do
+        ids when is_list(ids) -> where(base, [u], u.id in ^ids)
+        _ -> base
+      end
 
     base =
       if include_archived do

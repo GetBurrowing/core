@@ -74,4 +74,34 @@ class ShortcutsResourceTest {
         assertEquals(SwitchInstallActivity::class.java.name, intent["targetClass"])
         assertEquals(BuildConfig.APPLICATION_ID, intent["targetPackage"])
     }
+
+    // Task 01a116c4: the direct-share target, in this variant's merged resources.
+    @Test
+    fun `one share-target for ShareActivity with the conversation category`() {
+        val context = RuntimeEnvironment.getApplication()
+        val parser: XmlResourceParser = context.resources.getXml(R.xml.shortcuts)
+        val targets = mutableListOf<String?>()
+        val mimeTypes = mutableListOf<String?>()
+        val categories = mutableListOf<String?>()
+        var inTarget = false
+        while (parser.next() != XmlPullParser.END_DOCUMENT) {
+            when {
+                parser.eventType == XmlPullParser.START_TAG && parser.name == "share-target" -> {
+                    inTarget = true
+                    targets.add(parser.getAttributeValue(android, "targetClass"))
+                }
+                parser.eventType == XmlPullParser.END_TAG && parser.name == "share-target" -> inTarget = false
+                inTarget && parser.eventType == XmlPullParser.START_TAG && parser.name == "data" ->
+                    mimeTypes.add(parser.getAttributeValue(android, "mimeType"))
+                inTarget && parser.eventType == XmlPullParser.START_TAG && parser.name == "category" ->
+                    categories.add(parser.getAttributeValue(android, "name"))
+            }
+        }
+        parser.close()
+        assertEquals(listOf("com.koboai.burrow.share.ShareActivity"), targets)
+        assertEquals(listOf("text/plain", "image/*", "application/pdf", "*/*"), mimeTypes)
+        assertEquals(listOf(com.koboai.burrow.shortcuts.ConversationShortcuts.CATEGORY_SHARE_TARGET), categories)
+        // Still exactly one <shortcut>.
+        assertEquals(listOf("switch_install"), shortcuts().map { it.id })
+    }
 }

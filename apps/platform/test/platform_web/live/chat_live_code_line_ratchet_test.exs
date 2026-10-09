@@ -533,7 +533,7 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   # composer's attachment cap instead of a second copy of the number. Stage 1
   # landed the code without the bump; stage 2's full-suite run caught it.
   # 2364 + 2 = 2366, re-derived from the guard's own measurement.
-  @chat_live_code_line_count 2366
+  @chat_live_code_line_count 2363
 
   @doc """
   Count the CODE lines of a source file.

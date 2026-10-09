@@ -81,4 +81,31 @@ defmodule PlatformWeb.AppApiSpacesNamesTest do
     assert spaces[user_dm.id]["path_segment"] == Chat.space_path_segment(user_dm)
     assert spaces[channel.id]["path_segment"] == Chat.space_path_segment(channel)
   end
+
+  # Task 01a111bb: "general" in two orgs must be told apart, by the SPACE's
+  # own org, never the user's.
+  test "each space carries its own org; DMs and org-less spaces carry null", %{conn: conn} do
+    me = create_user!(%{name: "Two Orgs"})
+    other = create_user!()
+    fabrikam = Platform.Tenancy.get_org_by_slug!("sxi")
+    red_star = Platform.Tenancy.get_org_by_slug!("soylent")
+    plain_member!(me, fabrikam)
+    plain_member!(me, red_star)
+
+    n = System.unique_integer([:positive])
+    general_a = channel!(%{name: "general", slug: "general-a-#{n}", org_id: fabrikam.id})
+    general_b = channel!(%{name: "general", slug: "general-b-#{n}", org_id: red_star.id})
+    orgless = channel!(%{name: "No Org #{n}"})
+    for space <- [general_a, general_b, orgless], do: add_user!(space.id, me.id)
+    {:ok, dm} = Chat.find_or_create_dm(me.id, "user", other.id)
+
+    spaces = list_spaces(conn, bearer_token!(me))
+
+    assert spaces[general_a.id]["org"] == %{"id" => fabrikam.id, "name" => fabrikam.name}
+    assert spaces[general_b.id]["org"] == %{"id" => red_star.id, "name" => red_star.name}
+    assert spaces[general_a.id]["org"]["name"] != spaces[general_b.id]["org"]["name"]
+    assert spaces[orgless.id]["org"] == nil
+    assert Map.has_key?(spaces[dm.id], "org")
+    assert spaces[dm.id]["org"] == nil
+  end
 end

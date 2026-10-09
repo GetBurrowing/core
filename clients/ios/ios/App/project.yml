@@ -52,7 +52,9 @@ settings:
       ENABLE_TESTABILITY: "YES"
       DEBUG_INFORMATION_FORMAT: dwarf
       SWIFT_OPTIMIZATION_LEVEL: "-Onone"
-      SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+      # BURROW_TASKS_TRIAL (task 01a111bb stage 6): the reminders-schema
+      # trial (Intents/TaskReminderTrial.swift). Debug ONLY; never Release.
+      SWIFT_ACTIVE_COMPILATION_CONDITIONS: "DEBUG BURROW_TASKS_TRIAL"
       GCC_PREPROCESSOR_DEFINITIONS: "DEBUG=1 $(inherited)"
     Release:
       DEBUG_INFORMATION_FORMAT: dwarf-with-dsym
@@ -92,6 +94,7 @@ targets:
         product: LiveKit
       - target: ShareExtension
       - target: SuiteWidgets
+      - target: NotificationService
     configFiles:
       Debug: ../debug.xcconfig
     settings:
@@ -146,6 +149,29 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.kobo-ai.burrow.widgets
         INFOPLIST_FILE: ../SuiteWidgets/Info.plist
         CODE_SIGN_ENTITLEMENTS: ../SuiteWidgets/SuiteWidgets.entitlements
+        APPLICATION_EXTENSION_API_ONLY: "YES"
+        SKIP_INSTALL: "YES"
+        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+  # Communication notifications (task 01a111bb stage 4): names the sender
+  # and conversation of a chat push, and on iOS 27 its message and
+  # conversation entities. No network, no logging. ../Intents for the entity
+  # types its EntityIdentifiers name. No entitlements: it builds everything
+  # from the payload and reads nothing from the App Group store, so its
+  # profile needs only the bundle id.
+  NotificationService:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: ../NotificationService
+        excludes:
+          - "Info.plist"
+      - path: ../Shared
+      - path: ../Intents
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kobo-ai.burrow.notifications
+        INFOPLIST_FILE: ../NotificationService/Info.plist
         APPLICATION_EXTENSION_API_ONLY: "YES"
         SKIP_INSTALL: "YES"
         IPHONEOS_DEPLOYMENT_TARGET: "17.0"
@@ -208,6 +234,26 @@ targets:
         GENERATE_INFOPLIST_FILE: "YES"
         TEST_TARGET_NAME: App
 
+  # iOS 27 messages domain through AppIntentsTesting (task 01a111bb). Its own
+  # target and scheme because AppIntentsTesting is iOS 27 only, and the App
+  # scheme's AppTests must still run on pre-27 runtimes.
+  IntentsSystemTests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "27.0"
+    sources:
+      - path: IntentsSystemTests
+    dependencies:
+      - target: App
+      - sdk: AppIntentsTesting.framework
+        root: DEVELOPER_DIR
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kobo-ai.burrow.intentssystem
+        GENERATE_INFOPLIST_FILE: "YES"
+        TEST_TARGET_NAME: App
+        FRAMEWORK_SEARCH_PATHS: "$(inherited) $(PLATFORM_DIR)/Developer/Library/Frameworks"
+
 schemes:
   App:
     build:
@@ -240,3 +286,12 @@ schemes:
       config: Debug
       targets:
         - ExtensionRenderTests
+  IntentsSystem:
+    build:
+      targets:
+        App: all
+        IntentsSystemTests: [test]
+    test:
+      config: Debug
+      targets:
+        - IntentsSystemTests

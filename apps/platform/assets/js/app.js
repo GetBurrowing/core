@@ -24,6 +24,7 @@ import {Socket} from "phoenix"
 import {LiveSocket} from "phoenix_live_view"
 import topbar from "../vendor/topbar"
 import Hooks from "./hooks"
+import {installNativeDonations} from "./native_donations"
 
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 const liveSocket = new LiveSocket("/live", Socket, {
@@ -46,6 +47,10 @@ const liveSocket = new LiveSocket("/live", Socket, {
 topbar.config({barColors: {0: "#29d"}, shadowColor: "rgba(0, 0, 0, .3)"})
 window.addEventListener("phx:page-loading-start", _info => topbar.show(300))
 window.addEventListener("phx:page-loading-stop", _info => topbar.hide())
+
+// Burrow app only: forward `native_donate` (ids only) to SuiteNative.donate.
+// A no-op in a browser (task 01a111bb).
+installNativeDonations()
 
 // Diagnostic: surface LiveView socket close codes + errors in the console
 // so the cause of an "Attempting to reconnect" toast can be identified

@@ -115,6 +115,14 @@ enum IntentFailure: Error, Equatable, CustomLocalizedStringResourceConvertible {
     case noProject(install: String)
     case emptyMessage
     case emptyNote
+    /// 409 `frozen` on an edit: an agent began work on the message.
+    case messageFrozen(by: String?)
+    /// 422 `not_supported` on mark-unread.
+    case cannotMarkUnread
+    /// A call to an agent (task 01a111bb stage 6).
+    case cannotCallAgents
+    /// 422 `too_many_invitees`.
+    case tooManyInvitees
 
     var message: String {
         switch self {
@@ -124,6 +132,12 @@ enum IntentFailure: Error, Equatable, CustomLocalizedStringResourceConvertible {
         case .noProject(let install): return "There's no project on \(install) to hold a meeting. Create a project, then try again."
         case .emptyMessage: return "There's nothing to send."
         case .emptyNote: return "A rejection needs a note for the agent."
+        case .messageFrozen(let by):
+            guard let by, !by.isEmpty else { return "An agent began work on that message, so it can't be edited. Send a follow-up instead." }
+            return "\(by) began work on that message, so it can't be edited. Send a follow-up instead."
+        case .cannotMarkUnread: return "Burrow can't mark messages unread."
+        case .cannotCallAgents: return "Burrow can't call agents yet."
+        case .tooManyInvitees: return "That's too many people for one call."
         }
     }
 
@@ -139,6 +153,10 @@ enum IntentFailure: Error, Equatable, CustomLocalizedStringResourceConvertible {
             return IntentFailure.signedOut
         case SuiteAPIClient.Failure.status(404), SuiteAPIClient.Failure.refused(status: 404, code: _):
             return IntentFailure.notFound
+        case SuiteAPIClient.Failure.refused(status: 422, code: "agent_not_callable"):
+            return IntentFailure.cannotCallAgents
+        case SuiteAPIClient.Failure.refused(status: 422, code: "too_many_invitees"):
+            return IntentFailure.tooManyInvitees
         case SuiteAPIClient.Failure.refused(status: 422, code: "no_project"):
             return IntentFailure.noProject(install: env.installName(host))
         default:
@@ -199,10 +217,46 @@ enum IntentHooks {
     static var indexesSpotlight = false
 }
 
+/// Where Spotlight items go. The app uses the system index; tests swap in
+/// an in-memory one to count what was indexed per host.
+protocol SearchableIndexStore: AnyObject {
+    func index(_ items: [CSSearchableItem])
+    func deleteDomains(_ domains: [String])
+}
+
+/// The system's default Spotlight index.
+final class SystemSearchableIndex: SearchableIndexStore {
+    func index(_ items: [CSSearchableItem]) {
+        CSSearchableIndex.default().indexSearchableItems(items) { _ in }
+    }
+
+    func deleteDomains(_ domains: [String]) {
+        CSSearchableIndex.default().deleteSearchableItems(withDomainIdentifiers: domains) { _ in }
+    }
+}
+
 /// Spotlight entries per install: the host is the domain identifier, so
 /// signing out of (or removing) an install deletes exactly its entries.
+///
+/// A host that was signed out of is SUPPRESSED until it signs in again
+/// (task 01a111bb stage 7): an index refresh still in flight when the person
+/// signs out must not put that install's people back after the delete.
 enum SpotlightIndex {
-    static func removeAll(host: String, index: CSSearchableIndex = .default()) {
-        index.deleteSearchableItems(withDomainIdentifiers: [host]) { _ in }
+    static var store: SearchableIndexStore = SystemSearchableIndex()
+    private static let lock = NSLock()
+    private static var suppressed: Set<String> = []
+
+    static func removeAll(host: String) {
+        lock.withLock { _ = suppressed.insert(host) }
+        store.deleteDomains([host])
+    }
+
+    /// The install was signed in to (again): its entries may be indexed.
+    static func allow(host: String) {
+        lock.withLock { _ = suppressed.remove(host) }
+    }
+
+    static func isSuppressed(_ host: String) -> Bool {
+        lock.withLock { suppressed.contains(host) }
     }
 }

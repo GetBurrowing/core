@@ -2436,7 +2436,7 @@ defmodule PlatformWeb.ChatLive do
     # `msg_id` is a `phx-value-` param, and the fully-qualified spelling is
     # invisible to `git grep "Repo.get("`, which is how it evaded the sweep.
     with %Platform.Chat.Message{} = msg <- Platform.Chat.get_message(msg_id),
-         :ok <- authorize_edit(msg, socket.assigns.current_participant) do
+         :ok <- Chat.authorize_author(msg, socket.assigns.current_participant) do
       {:noreply,
        socket
        |> assign(:editing_message_id, msg_id)
@@ -3605,7 +3605,7 @@ defmodule PlatformWeb.ChatLive do
 
     with %Platform.Chat.Message{} = msg <- Platform.Chat.get_message(message_id),
          {:ok, original} <- {:ok, msg},
-         :ok <- authorize_edit(msg, participant) do
+         :ok <- Chat.authorize_author(msg, participant) do
       case Platform.Chat.Messages.Edit.apply_edit(msg, participant, body) do
         {:ok, updated} ->
           {:noreply,
@@ -3645,12 +3645,6 @@ defmodule PlatformWeb.ChatLive do
          |> put_flash(:error, "You can only edit your own messages.")}
     end
   end
-
-  defp authorize_edit(_msg, nil), do: {:error, :forbidden}
-
-  defp authorize_edit(%Platform.Chat.Message{participant_id: pid}, %{id: pid}), do: :ok
-
-  defp authorize_edit(_msg, _participant), do: {:error, :forbidden}
 
   defp frozen_toast_message(freezing_action) do
     case freezing_action do

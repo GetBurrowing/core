@@ -130,7 +130,17 @@ defmodule Platform.Regression.OrgScopeChokePointAuditTest do
     # widening hazard as `lib/platform/meetings.ex` above, for the same
     # reason, blocked on the same sponsor decision. The two move
     # together.
-    "lib/platform/meetings/archive.ex"
+    "lib/platform/meetings/archive.ex",
+
+    # `Mobile.AppPeople.org_mates/1` — the Burrow people directory
+    # (`GET /api/app/people?scope=directory`) lists the members of the
+    # orgs the caller BELONGS to. That is deliberately narrower than
+    # `Tenancy.visibility/1`, which bypasses on `root_member?/1`: every
+    # OIDC signup is a root-org member, so composing the choke point
+    # would hand each of them a directory of every user in every tenant.
+    # It is a membership join for a contact picker, not a visibility
+    # scope, and it can only ever narrow.
+    "lib/platform/mobile/app_people.ex"
   ]
 
   describe "private org filters outside the choke point" do

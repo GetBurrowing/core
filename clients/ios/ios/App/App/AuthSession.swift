@@ -123,6 +123,7 @@ final class AuthSession: NSObject, ASWebAuthenticationPresentationContextProvidi
                 return completion(.failure(Failure.badResponse))
             }
             WidgetCountsRefresher.refresh(host: host)
+            IntentAppHooks.didSignIn(host: host)
             completion(.success(handoff))
         }.resume()
     }

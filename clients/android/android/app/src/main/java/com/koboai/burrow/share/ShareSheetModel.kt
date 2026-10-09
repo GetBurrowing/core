@@ -1,6 +1,7 @@
 package com.koboai.burrow.share
 
 import com.koboai.burrow.ApiException
+import com.koboai.burrow.shortcuts.ConversationShortcuts
 import java.util.Locale
 
 /**
@@ -19,6 +20,13 @@ class ShareSheetModel(
     val files: List<SharedFile>,
     /** A shared link or text, sent in the first message's `text`. */
     val sharedText: String?,
+    /**
+     * The space a direct-share target (a conversation shortcut) named, to
+     * select once the spaces load. Ignored when that space is not listed.
+     */
+    val preselectSpaceId: String? = null,
+    /** After a successful send: the conversation was used (publish and report). */
+    private val onSent: (host: String, space: ShareSpace) -> Unit = { _, _ -> },
 ) {
     enum class Phase { LOADING_SPACES, NOT_SIGNED_IN, READY, SENDING, SENT }
 
@@ -79,7 +87,11 @@ class ShareSheetModel(
         if (banner == Banner.SPACES_FAILED) banner = null
         try {
             spaces = client.spaces(host)
-            if (selectedSpaceId == null && spaces.size == 1) selectedSpaceId = spaces.single().id
+            if (selectedSpaceId == null) {
+                selectedSpaceId =
+                    preselectSpaceId?.takeIf { id -> spaces.any { it.id == id } }
+                        ?: spaces.singleOrNull()?.id
+            }
             phase = Phase.READY
         } catch (e: ApiException) {
             if (signedOut(e)) {
@@ -109,6 +121,7 @@ class ShareSheetModel(
                 if (form.file != null) sentFiles++ else textSent = true
             }
             phase = Phase.SENT
+            onSent(host, space)
             true
         } catch (e: ApiException) {
             if (signedOut(e)) {
@@ -152,6 +165,23 @@ class ShareSheetModel(
         e.kind == ApiException.Kind.NOT_SIGNED_IN || (e.kind == ApiException.Kind.STATUS && e.status == 401)
 
     companion object {
+        /**
+         * Which install and space a share opens on. A direct-share target
+         * carries its shortcut id (`<host>|<spaceId>`): when that parses and
+         * its host is signed in, the share goes to THAT host with the space
+         * preselected. Anything else is today's behaviour: the selected
+         * install, nothing preselected.
+         */
+        fun target(
+            shortcutId: String?,
+            selectedHost: String?,
+            isSignedIn: (String) -> Boolean,
+        ): Pair<String?, String?> {
+            val parsed = shortcutId?.let { ConversationShortcuts.parse(it) } ?: return selectedHost to null
+            val (host, spaceId) = parsed
+            return if (isSignedIn(host)) host to spaceId else selectedHost to null
+        }
+
         const val NOT_SIGNED_IN_TEXT = "Sign in to Burrow first. Open the Burrow app, sign in, then share again."
 
         /** "12.4 MB": decimal megabytes, one decimal place, as the canvas copy reads. */

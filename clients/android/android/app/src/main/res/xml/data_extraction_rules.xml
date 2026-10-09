@@ -7,10 +7,12 @@
         <exclude domain="sharedpref" path="burrow_bearer_tokens.xml" />
         <exclude domain="sharedpref" path="burrow_device.xml" />
         <exclude domain="sharedpref" path="burrow_push.xml" />
+        <exclude domain="sharedpref" path="burrow_shortcuts.xml" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="sharedpref" path="burrow_bearer_tokens.xml" />
         <exclude domain="sharedpref" path="burrow_device.xml" />
         <exclude domain="sharedpref" path="burrow_push.xml" />
+        <exclude domain="sharedpref" path="burrow_shortcuts.xml" />
     </device-transfer>
 </data-extraction-rules>

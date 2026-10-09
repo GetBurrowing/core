@@ -48,6 +48,8 @@ class ReplyReceiver : BroadcastReceiver() {
 /** What a Reply does, synchronously (so the tests drive it directly). */
 class ReplyHandler(
     private val client: AppApiClient,
+    /** After a 2xx: re-publish the conversation and report the use (stage 2, task 01a116c4). */
+    private val noteUsed: (Context, PushPayload) -> Unit = { c, p -> NotificationPresenter.noteConversationUsed(c, p) },
 ) {
     /** True when the server took the reply. */
     fun handle(
@@ -62,6 +64,7 @@ class ReplyHandler(
         }
         val sent = send(payload, text)
         if (sent) {
+            noteUsed(context, payload)
             NotificationPresenter.showReplySent(context, payload, text)
         } else {
             NotificationPresenter.showReplyFailed(context, payload, text)

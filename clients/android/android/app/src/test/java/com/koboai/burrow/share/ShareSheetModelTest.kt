@@ -206,4 +206,51 @@ class ShareSheetModelTest {
             )
         assertEquals(listOf(ShareSpace("s1", "Ops", "ops", listOf(ShareSpace.Agent("a1", "Higgins")))), spaces)
     }
+
+    // Task 01a116c4: direct share from a conversation shortcut.
+
+    private val other = ShareSpace("0192-s2", "Design", "design", emptyList(), kind = "group")
+
+    @Test
+    fun `a direct-share target opens its own signed-in host with its space preselected`() {
+        val (h, space) =
+            ShareSheetModel.target("suite.milv.life|0192-s2", host) { it == "suite.milv.life" }
+        assertEquals("suite.milv.life", h)
+        assertEquals("0192-s2", space)
+
+        val m = ShareSheetModel(h, FakeClient(spaces = listOf(this.space, other)), emptyList(), "x", space)
+        m.start()
+        assertEquals("0192-s2", m.selectedSpaceId)
+    }
+
+    @Test
+    fun `a target whose host is not signed in, or no target, falls back to the selected install`() {
+        assertEquals(host to null, ShareSheetModel.target("suite.milv.life|0192-s2", host) { it == host })
+        assertEquals(host to null, ShareSheetModel.target(null, host) { true })
+        assertEquals(host to null, ShareSheetModel.target("switch_install", host) { true })
+    }
+
+    @Test
+    fun `an unknown preselected space selects nothing and does not crash`() {
+        val m = ShareSheetModel(host, FakeClient(spaces = listOf(space, other)), emptyList(), "x", "0192-gone")
+        m.start()
+        assertEquals(ShareSheetModel.Phase.READY, m.phase)
+        assertNull(m.selectedSpaceId)
+    }
+
+    @Test
+    fun `a sent share reports the conversation, a failed one does not`() {
+        val noted = mutableListOf<Pair<String, String>>()
+        val ok = ShareSheetModel(host, FakeClient(spaces = listOf(space)), emptyList(), "hi") { h, s -> noted.add(h to s.id) }
+        ok.start()
+        assertTrue(ok.send())
+        assertEquals(listOf(host to space.id), noted)
+
+        noted.clear()
+        val failingClient = FakeClient(spaces = listOf(space), failOn = setOf(0))
+        val failing = ShareSheetModel(host, failingClient, emptyList(), "hi") { h, s -> noted.add(h to s.id) }
+        failing.start()
+        assertFalse(failing.send())
+        assertTrue(noted.isEmpty())
+    }
 }

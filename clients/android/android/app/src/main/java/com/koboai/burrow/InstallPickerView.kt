@@ -42,6 +42,8 @@ import java.util.concurrent.Executors
 class InstallPickerView(
     context: Context,
     private val store: InstallStore,
+    /** Removes the host's conversation shortcuts (ConversationShortcuts.removeForHost). */
+    private val removeShortcuts: (String) -> Unit,
     private val onContinue: (Install) -> Unit,
 ) : FrameLayout(context) {
     private enum class Reachability { UNKNOWN, REACHABLE, UNREACHABLE }
@@ -330,6 +332,7 @@ class InstallPickerView(
             .setMessage(context.getString(R.string.remove_confirm, install.displayName))
             .setPositiveButton(R.string.remove) { _, _ ->
                 store.remove(install.host)
+                removeShortcuts(install.host)
                 renderRows()
             }.setNegativeButton(R.string.cancel, null)
             .show()

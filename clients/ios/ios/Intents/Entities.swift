@@ -79,7 +79,8 @@ struct SpaceEntity: AppEntity {
             name: space.name,
             isDirectMessage: space.isDirectMessage,
             pathSegment: space.linkSegment,
-            subtitle: IntentCopy.subtitle([space.isDirectMessage ? "Direct message" : "Space"], install: env.disambiguator(host)))
+            subtitle: IntentCopy.subtitle(
+                [space.isDirectMessage ? "Direct message" : "Space", space.org?.name], install: env.disambiguator(host)))
     }
 }
 
@@ -252,6 +253,62 @@ struct MeetingQuery: EntityStringQuery {
     }
 }
 
+// MARK: - Project
+
+/// A project that holds meetings and tasks (task 01a111bb stage 6). The
+/// subtitle names the org, so same-named projects in two orgs differ.
+struct ProjectEntity: AppEntity {
+    static var typeDisplayRepresentation: TypeDisplayRepresentation = "Project"
+    static var defaultQuery = ProjectQuery()
+
+    let id: String
+    let name: String
+    let subtitle: String
+
+    var displayRepresentation: DisplayRepresentation {
+        DisplayRepresentation(title: "\(name)", subtitle: "\(subtitle)", image: .init(systemName: "folder"))
+    }
+
+    init(id: String, name: String, subtitle: String) {
+        self.id = id
+        self.name = name
+        self.subtitle = subtitle
+    }
+
+    init(_ project: SuiteProject, host: String, env: IntentEnvironment) {
+        self.init(
+            id: EntityRef(host: host, uuid: project.id).id, name: project.name,
+            subtitle: IntentCopy.subtitle(["Project", project.org?.name], install: env.disambiguator(host)))
+    }
+}
+
+struct ProjectQuery: EntityStringQuery {
+    @IntentParameterDependency<StartMeetingIntent>(\.$install) var startMeeting
+    @IntentParameterDependency<CreateTaskIntent>(\.$install) var createTask
+
+    /// Set by tests in place of the dependencies above.
+    var installScope: String?
+
+    init() {}
+
+    init(installScope: String?) { self.installScope = installScope }
+
+    private var scope: String? { installScope ?? startMeeting?.install.id ?? createTask?.install.id }
+
+    func entities(for identifiers: [String]) async throws -> [ProjectEntity] {
+        await EntityCatalog().resolve(identifiers) { await EntityCatalog().projects(hosts: [$0]) }
+    }
+
+    func suggestedEntities() async throws -> [ProjectEntity] {
+        let catalog = EntityCatalog()
+        return await catalog.projects(hosts: catalog.hosts(scope: scope))
+    }
+
+    func entities(matching string: String) async throws -> [ProjectEntity] {
+        try await suggestedEntities().filter { $0.name.localizedCaseInsensitiveContains(string) }
+    }
+}
+
 // MARK: - Agent
 
 struct AgentEntity: AppEntity {
@@ -321,19 +378,46 @@ extension MeetingEntity: IndexedEntity {}
 @available(iOS 18, *)
 extension AgentEntity: IndexedEntity {}
 
+// iOS 27 (task 01a111bb stage 4): the entities a person shares with
+// others are syncable (their `<host>|<uuid>` id is the server's, the same on
+// every device) and owned as `.shared` (they live in a workspace). People
+// and conversations are indexed too, through SpotlightIndexer, so their
+// entries carry the host as the domain identifier like every other entry.
+
+@available(iOS 27, *)
+extension TaskEntity: SyncableEntity, OwnershipProvidingEntity {
+    var ownership: EntityOwnership { .shared }
+}
+
+@available(iOS 27, *)
+extension MeetingEntity: SyncableEntity, OwnershipProvidingEntity {
+    var ownership: EntityOwnership { .shared }
+}
+
 @available(iOS 18, *)
 enum SpotlightIndexer {
     /// Indexes one install's entities under the host as the domain
     /// identifier, so `SpotlightIndex.removeAll(host:)` drops exactly them.
     static func index<E: IndexedEntity>(_ entities: [E], host: String, expires: Date? = nil) {
-        guard IntentHooks.indexesSpotlight, !entities.isEmpty else { return }
-        let items = entities.map { entity -> CSSearchableItem in
+        guard IntentHooks.indexesSpotlight, !entities.isEmpty, !SpotlightIndex.isSuppressed(host) else { return }
+        SpotlightIndex.store.index(items(entities, host: host, expires: expires))
+    }
+
+    /// Entities whose ids name their own host (`<host>|<uuid>`), indexed
+    /// per host. An id that names no host is not indexed.
+    static func indexByHost<E: IndexedEntity>(_ entities: [E]) where E.ID == String {
+        let groups = Dictionary(grouping: entities.compactMap { entity in EntityRef(entity.id).map { ($0.host, entity) } }, by: \.0)
+        for (host, rows) in groups { index(rows.map(\.1), host: host) }
+    }
+
+    /// The searchable items for one install's entities.
+    static func items<E: IndexedEntity>(_ entities: [E], host: String, expires: Date? = nil) -> [CSSearchableItem] {
+        entities.map { entity -> CSSearchableItem in
             let item = CSSearchableItem(appEntity: entity)
             item.domainIdentifier = host
             if let expires { item.expirationDate = expires }
             return item
         }
-        CSSearchableIndex.default().indexSearchableItems(items) { _ in }
     }
 }
 
@@ -373,7 +457,42 @@ struct EntityCatalog {
             let entities = spaces.map { SpaceEntity($0, host: host, env: env) }
             IntentHooks.didFetchEntities?("spaces", host, entities.map { "\($0.id)\t\($0.name)" })
             if #available(iOS 18, *) { SpotlightIndexer.index(entities, host: host) }
+            PersonalIndex.index(spaces: spaces, host: host, env: env)
             return entities
+        }
+    }
+
+    /// People to message on each host (task 01a111bb): `query` searches
+    /// server-side (`?q=`), so a person who is not among the recent
+    /// collaborators is still found by name; nil lists recent collaborators.
+    /// `directory` (task 01a111bb stage 7) lists the whole set the device
+    /// indexes for Siri: collaborators, space mates, org mates and agents.
+    /// Every list (not a search) is indexed per host as it arrives.
+    func people(hosts: [String], query: String? = nil, directory: Bool = false) async -> [(host: String, person: SuitePerson)] {
+        await load("people", hosts: hosts) { host in
+            let people = try await env.client.people(host: host, query: query, directory: directory)
+            if query == nil {
+                IntentHooks.didFetchEntities?("people", host, people.map { "\(EntityRef(host: host, uuid: $0.id).id)\t\($0.name)" })
+                PersonalIndex.index(people: people, host: host, env: env)
+            }
+            return people.map { (host: host, person: $0) }
+        }
+    }
+
+    /// Every space on each host, as raw rows (for conversation entities).
+    func spaceRows(hosts: [String]) async -> [(host: String, space: SuiteSpace)] {
+        await load("spaces", hosts: hosts) { host in
+            let spaces = try await env.client.spaces(host: host)
+            Self.spaceIDsBySegment[host] = Dictionary(spaces.map { ($0.linkSegment, $0.id) }, uniquingKeysWith: { first, _ in first })
+            IntentHooks.didFetchEntities?("spaces", host, spaces.map { "\(EntityRef(host: host, uuid: $0.id).id)\t\($0.name)" })
+            PersonalIndex.index(spaces: spaces, host: host, env: env)
+            return spaces.map { (host: host, space: $0) }
+        }
+    }
+
+    func projects(hosts: [String]) async -> [ProjectEntity] {
+        await load("projects", hosts: hosts) { host in
+            try await env.client.projects(host: host).projects.map { ProjectEntity($0, host: host, env: env) }
         }
     }
 

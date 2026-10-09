@@ -32,7 +32,6 @@ defmodule PlatformWeb.ChatLive.NewConversationComponent do
 
   use PlatformWeb, :live_component
 
-  alias Platform.Accounts
   alias Platform.Chat
 
   @impl true
@@ -45,7 +44,7 @@ defmodule PlatformWeb.ChatLive.NewConversationComponent do
      |> assign(assigns)
      |> assign(:external?, external?)
      |> assign(:users, picker_users(external?, user_id, ""))
-     |> assign(:agents, picker_agents(external?, ""))
+     |> assign(:agents, picker_agents(external?, user_id, ""))
      |> assign(:query, "")
      |> assign(:selected, [])}
   end
@@ -75,7 +74,7 @@ defmodule PlatformWeb.ChatLive.NewConversationComponent do
      socket
      |> assign(:query, query)
      |> assign(:users, picker_users(external?, user_id, query))
-     |> assign(:agents, picker_agents(external?, query))}
+     |> assign(:agents, picker_agents(external?, user_id, query))}
   end
 
   def handle_event("new_conversation_toggle", %{"type" => type, "id" => id}, socket) do
@@ -265,32 +264,16 @@ defmodule PlatformWeb.ChatLive.NewConversationComponent do
   # filter is applied on BOTH open and every keystroke, so typing a
   # non-allowlisted name can never surface them.
   #
-  # Internal mode (external? == false) is the unchanged full user list.
-  defp picker_users(false, _user_id, query), do: Accounts.list_users(query: query)
+  # Task 01a111bb moved the body into `Chat.dm_candidates/3` and
+  # `Chat.dm_agent_candidates/3`, which the native app's people directory
+  # also calls, so the picker and the app cannot offer different people. The
+  # picker still passes the surface's `external?` flag: internal mode is the
+  # unchanged full user list, and external mode drops agents entirely.
+  defp picker_users(external?, user_id, query),
+    do: Chat.dm_candidates(%{id: user_id}, query, external?: external?)
 
-  defp picker_users(true, user_id, query) do
-    query
-    |> then(&Accounts.list_users(query: &1))
-    |> Enum.filter(fn candidate ->
-      Chat.external_dm_permitted?(user_id, "user", candidate.id)
-    end)
-  end
-
-  # External users get NO agent surface (canvas §7/§1 — the external chat
-  # surface is scoped to allowlisted humans). Internal mode keeps the existing
-  # name-prefix agent filter.
-  defp picker_agents(true, _query), do: []
-
-  defp picker_agents(false, query) do
-    agents = Chat.list_agents_for_picker()
-
-    if query == "" do
-      agents
-    else
-      pattern = String.downcase(query)
-      Enum.filter(agents, fn a -> String.contains?(String.downcase(a.name || ""), pattern) end)
-    end
-  end
+  defp picker_agents(external?, user_id, query),
+    do: Chat.dm_agent_candidates(%{id: user_id}, query, external?: external?)
 
   defp selected_name(%{type: "user", id: id}, users, _agents) do
     case Enum.find(users, fn u -> u.id == id end) do

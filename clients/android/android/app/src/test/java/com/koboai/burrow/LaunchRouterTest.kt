@@ -29,6 +29,13 @@ class LaunchRouterTest {
             return true
         }
 
+        override fun openConversation(
+            host: String?,
+            path: String,
+        ) {
+            calls.add("openConversation($host,$path)")
+        }
+
         override fun presentPicker() {
             calls.add("presentPicker")
         }
@@ -129,6 +136,45 @@ class LaunchRouterTest {
     @Test
     fun `a restore does not replay a notification's Open`() {
         router.onLaunch(Intent(NotificationPresenter.ACTION_OPEN), restored = true)
+        assertEquals(listOf("startWithSelection"), shell.calls)
+    }
+
+    private fun conversation(
+        host: String = "suite.example.com",
+        path: String = "/chat/internal-fabrikam-sxi",
+    ) = Intent(LaunchRouter.ACTION_OPEN_CONVERSATION)
+        .setClassName("com.koboai.burrow", "com.koboai.burrow.MainActivity")
+        .putExtra(LaunchRouter.EXTRA_CONVERSATION_HOST, host)
+        .putExtra(LaunchRouter.EXTRA_CONVERSATION_PATH, path)
+
+    @Test
+    fun `a conversation shortcut opens the conversation cold and warm and is consumed`() {
+        val cold = conversation()
+        router.onLaunch(cold, restored = false)
+        assertEquals(listOf("openConversation(suite.example.com,/chat/internal-fabrikam-sxi)"), shell.calls)
+        assertNull(cold.action)
+        shell.calls.clear()
+        val warm = conversation()
+        router.onNewIntent(warm)
+        assertEquals(listOf("openConversation(suite.example.com,/chat/internal-fabrikam-sxi)"), shell.calls)
+        assertNull(warm.action)
+    }
+
+    @Test
+    fun `a conversation shortcut's host and path are guarded`() {
+        router.onNewIntent(conversation(host = "not a host", path = "//evil.example"))
+        assertEquals(listOf("openConversation(null,/)"), shell.calls)
+    }
+
+    @Test
+    fun `a conversation shortcut relaunched from Recents opens the last install`() {
+        router.onLaunch(conversation().addFlags(Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY), restored = false)
+        assertEquals(listOf("startWithSelection"), shell.calls)
+    }
+
+    @Test
+    fun `a restore does not replay a conversation shortcut`() {
+        router.onLaunch(conversation(), restored = true)
         assertEquals(listOf("startWithSelection"), shell.calls)
     }
 }
