@@ -1,5 +1,7 @@
 import { Room, RoomEvent, Track } from "livekit-client"
 import { participantLabel, readParticipantNames } from "./lib/participant_label"
+import { toggleScreenShare } from "./lib/screen_share_policy"
+import { ScreenShareFullscreenController } from "./lib/screen_share_viewer"
 
 /**
  * True when the LiveKit track / publication is a screen-share video
@@ -49,6 +51,9 @@ const MeetingClient = {
     // element's parent changes — so the camera never goes black mid-switch.
     this._localVideoEl = null
     this._localVideoTrack = null
+    this._screenShareController = null
+    this._screenSharePublication = null
+    this._screenShareParticipant = null
 
     this.handleEvent("join-meeting", (payload) => this._join(payload))
     this.handleEvent("leave-meeting", () => {
@@ -66,7 +71,10 @@ const MeetingClient = {
     // Migrate tiles between desktop/mobile grids when the viewport crosses
     // the lg breakpoint (rotation, window resize, dev tools toggle).
     this._viewportQuery = window.matchMedia("(min-width: 1024px)")
-    this._onViewportChange = () => this._rehomeTiles()
+    this._onViewportChange = () => {
+      this._rehomeTiles()
+      this._rehomeScreenShare()
+    }
     this._viewportQuery.addEventListener("change", this._onViewportChange)
 
     // ── Reconnect survival (task 019e4b3e stage 1) ──────────────────────
@@ -122,6 +130,8 @@ const MeetingClient = {
     window.removeEventListener("pagehide", this._onPageHide)
     window.removeEventListener("beforeunload", this._onPageHide)
     this._viewportQuery?.removeEventListener("change", this._onViewportChange)
+    this._screenShareController?.destroy()
+    this._screenShareController = null
   },
 
   // v4 case-3 fix: Phoenix LiveView calls reconnected() on the hook after
@@ -177,6 +187,7 @@ const MeetingClient = {
   // no room to ask (pre-join, mid-reconnect) we keep the old re-dock
   // behaviour rather than blanking a feed that may well be live.
   updated() {
+    this._rehomeScreenShare()
     if (!this._localVideoEl) return
     if (this._localCameraOff(this._room)) {
       this._suspendLocalVideo()
@@ -220,10 +231,17 @@ const MeetingClient = {
     // black frame over the avatar.
     this._reconcileLocalVideo(room)
 
+    for (const pub of room.localParticipant?.trackPublications?.values?.() || []) {
+      const source = pub.source || pub.track?.source
+      if (pub.track && isScreenShareSource(source)) {
+        this._attachTrack(pub.track, room.localParticipant, pub)
+      }
+    }
+
     for (const participant of room.remoteParticipants.values()) {
       this._ensureTile(participant)
       for (const pub of participant.trackPublications.values()) {
-        if (pub.track) this._attachTrack(pub.track, participant)
+        if (pub.track) this._attachTrack(pub.track, participant, pub)
       }
     }
 
@@ -592,7 +610,7 @@ const MeetingClient = {
     })
     bind(RoomEvent.ParticipantDisconnected, (p) => this._removeTile(p.identity))
     bind(RoomEvent.TrackSubscribed, (track, pub, participant) => {
-      this._attachTrack(track, participant)
+      this._attachTrack(track, participant, pub)
       this._pushMediaStates(room)
     })
     bind(RoomEvent.TrackUnsubscribed, (track, pub, participant) =>
@@ -612,7 +630,7 @@ const MeetingClient = {
         return
       }
       if (pub.track && pub.kind === Track.Kind.Video) {
-        this._attachTrack(pub.track, room.localParticipant)
+        this._attachTrack(pub.track, room.localParticipant, pub)
       }
     })
     bind(RoomEvent.LocalTrackUnpublished, (pub) => {
@@ -886,10 +904,17 @@ const MeetingClient = {
     // black frame over the avatar.
     this._reconcileLocalVideo(room)
 
+    for (const pub of room.localParticipant?.trackPublications?.values?.() || []) {
+      const source = pub.source || pub.track?.source
+      if (pub.track && isScreenShareSource(source)) {
+        this._attachTrack(pub.track, room.localParticipant, pub)
+      }
+    }
+
     for (const participant of room.remoteParticipants.values()) {
       this._ensureTile(participant)
       for (const pub of participant.trackPublications.values()) {
-        if (pub.track) this._attachTrack(pub.track, participant)
+        if (pub.track) this._attachTrack(pub.track, participant, pub)
       }
     }
 
@@ -948,13 +973,20 @@ const MeetingClient = {
     } else {
       // Defensive: clear any orphaned slot state even if our tracking
       // got out of sync with the room.
+      this._screenShareController?.destroy()
+      this._screenShareController = null
       document
         .querySelectorAll("[data-quickmeet-screen-share-slot]")
         .forEach((slot) => {
           while (slot.firstChild) slot.removeChild(slot.firstChild)
           slot.classList.add("hidden")
           slot.dataset.screenShareActive = "false"
+          if (slot.parentElement?.dataset) slot.parentElement.dataset.screenShareActive = "false"
           delete slot.dataset.screenShareSharer
+          const label = slot.parentElement?.querySelector?.(
+            "[data-quickmeet-screen-share-sharer]",
+          )
+          if (label) label.textContent = ""
         })
     }
   },
@@ -1091,9 +1123,8 @@ const MeetingClient = {
   async _toggleScreenShare() {
     const room = this._room
     if (!room || !room.localParticipant) return
-    const enabled = room.localParticipant.isScreenShareEnabled
     try {
-      await room.localParticipant.setScreenShareEnabled(!enabled)
+      await toggleScreenShare(room)
     } catch (err) {
       console.warn("[MeetingClient] screen-share toggle failed:", err)
     }
@@ -1258,14 +1289,96 @@ const MeetingClient = {
     return mobileSlot || desktopSlot
   },
 
-  _attachTrack(track, participant) {
+  _mountScreenShareController(slot, video, publication) {
+    this._screenShareController?.destroy()
+    const viewer = slot?.parentElement || slot
+    const button = viewer?.querySelector?.("[data-screen-share-fullscreen]")
+    this._screenShareController = new ScreenShareFullscreenController({
+      root: viewer,
+      viewport: viewer,
+      button,
+      video,
+      publication,
+      env: window,
+    }).mount()
+  },
+
+  // Desktop and mobile Quick Meet panes coexist in the DOM. Move the already
+  // attached video on a breakpoint/orientation change; never detach or
+  // republish the LiveKit track merely because the visible pane changed.
+  _rehomeScreenShare() {
+    const track = this._screenShareTrack
+    const video = this._screenShareEl
+    if (!track || !video) return
+    const slot = this._screenShareSlot()
+    if (!slot) return
+    if (video.parentElement === slot) {
+      const button = slot.parentElement?.querySelector?.("[data-screen-share-fullscreen]")
+      // phx-update="ignore" preserves the JS-owned <video>, but the
+      // surrounding viewer/button are still server patched. A patch can
+      // therefore reset these server-authored attributes to their inactive
+      // defaults while the live track remains attached. Re-stamp the active
+      // surface on every hook update so fullscreen does not silently vanish
+      // after a roster/timer/LiveView reconnect render.
+      slot.classList?.remove("hidden")
+      slot.dataset.screenShareActive = "true"
+      if (slot.parentElement?.dataset) slot.parentElement.dataset.screenShareActive = "true"
+      if (this._screenShareParticipant?.identity) {
+        slot.dataset.screenShareSharer = this._screenShareParticipant.identity
+      }
+      const label = slot.parentElement?.querySelector?.(
+        "[data-quickmeet-screen-share-sharer]",
+      )
+      if (label) {
+        label.textContent =
+          this._screenShareParticipant?.name || this._screenShareParticipant?.identity || ""
+      }
+      if (button) button.hidden = false
+      if (this._screenShareController?.button !== button) {
+        this._mountScreenShareController(slot, video, this._screenSharePublication)
+      }
+      return
+    }
+
+    const oldSlot = video.parentElement
+    this._screenShareController?.destroy()
+    this._screenShareController = null
+
+    if (oldSlot?.dataset) {
+      oldSlot.dataset.screenShareActive = "false"
+      delete oldSlot.dataset.screenShareSharer
+      oldSlot.classList?.add("hidden")
+      if (oldSlot.parentElement?.dataset) oldSlot.parentElement.dataset.screenShareActive = "false"
+      const oldLabel = oldSlot.parentElement?.querySelector?.(
+        "[data-quickmeet-screen-share-sharer]",
+      )
+      if (oldLabel) oldLabel.textContent = ""
+    }
+
+    while (slot.firstChild) slot.removeChild(slot.firstChild)
+    slot.appendChild(video)
+    slot.classList.remove("hidden")
+    slot.dataset.screenShareActive = "true"
+    if (slot.parentElement?.dataset) slot.parentElement.dataset.screenShareActive = "true"
+    if (this._screenShareParticipant?.identity) {
+      slot.dataset.screenShareSharer = this._screenShareParticipant.identity
+    }
+    const label = slot.parentElement?.querySelector?.("[data-quickmeet-screen-share-sharer]")
+    if (label) {
+      label.textContent =
+        this._screenShareParticipant?.name || this._screenShareParticipant?.identity || ""
+    }
+    this._mountScreenShareController(slot, video, this._screenSharePublication)
+  },
+
+  _attachTrack(track, participant, publication = null) {
     if (track.kind === Track.Kind.Video) {
       // Task 019e420f stage 3: route screen-share video to a dedicated
       // full-width container instead of cramming it into the
       // participant's avatar tile (where it rendered ~80×80). Cameras
       // continue to attach into the tile as before.
       if (isScreenShareSource(track.source)) {
-        this._attachScreenShareTrack(track, participant)
+        this._attachScreenShareTrack(track, participant, publication)
         return
       }
 
@@ -1329,7 +1442,7 @@ const MeetingClient = {
    * policy: if a track is already attached, the second one is ignored
    * until the first ends (mirrors `MeetingScreenShare._syncExistingTrack`).
    */
-  _attachScreenShareTrack(track, participant) {
+  _attachScreenShareTrack(track, participant, publication = null) {
     const slot = this._screenShareSlot()
     if (!slot) return
     if (this._screenShareTrack === track) return
@@ -1351,6 +1464,8 @@ const MeetingClient = {
 
     slot.classList.remove("hidden")
     slot.dataset.screenShareActive = "true"
+    const viewer = slot.parentElement
+    if (viewer?.dataset) viewer.dataset.screenShareActive = "true"
     if (participant?.identity) {
       slot.dataset.screenShareSharer = participant.identity
     }
@@ -1364,6 +1479,9 @@ const MeetingClient = {
 
     this._screenShareTrack = track
     this._screenShareEl = el
+    this._screenSharePublication = publication
+    this._screenShareParticipant = participant
+    this._mountScreenShareController(slot, el, publication)
   },
 
   _detachTrack(track, participant) {
@@ -1402,8 +1520,12 @@ const MeetingClient = {
       return
     }
 
+    this._screenShareController?.destroy()
+    this._screenShareController = null
     this._screenShareTrack = null
     this._screenShareEl = null
+    this._screenSharePublication = null
+    this._screenShareParticipant = null
 
     // Hide both slots — only one is visible at a time but resetting both
     // keeps the orientation-flip path clean.
@@ -1413,6 +1535,7 @@ const MeetingClient = {
         while (slot.firstChild) slot.removeChild(slot.firstChild)
         slot.classList.add("hidden")
         slot.dataset.screenShareActive = "false"
+        if (slot.parentElement?.dataset) slot.parentElement.dataset.screenShareActive = "false"
         delete slot.dataset.screenShareSharer
         const sharerLabel = slot.parentElement?.querySelector(
           "[data-quickmeet-screen-share-sharer]",

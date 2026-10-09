@@ -1440,7 +1440,7 @@ defmodule PlatformWeb.ChatLive.Partials do
              the participants grid so it's never cropped by avatar
              tiles. `phx-update="ignore"` because the LV doesn't render
              the video element itself. --%>
-        <div class="mb-2">
+        <div class="relative mb-2" data-screen-share-viewer data-screen-share-active="false">
           <div
             data-quickmeet-screen-share-slot
             data-pane="desktop"
@@ -1450,6 +1450,17 @@ defmodule PlatformWeb.ChatLive.Partials do
             class="hidden aspect-video w-full overflow-hidden rounded-lg bg-black"
           >
           </div>
+          <button
+            type="button"
+            hidden
+            data-screen-share-fullscreen
+            aria-label="Enter full screen"
+            aria-pressed="false"
+            class="screen-share-fullscreen-button focus-visible-ring"
+          >
+            <span class="hero-arrows-pointing-out size-5" aria-hidden="true"></span>
+            <span class="sr-only" data-screen-share-fullscreen-label>Enter full screen</span>
+          </button>
           <p
             data-quickmeet-screen-share-sharer
             class="mt-1 text-xs text-base-content/50 truncate"
@@ -1606,7 +1617,7 @@ defmodule PlatformWeb.ChatLive.Partials do
       <div class="flex-1 overflow-y-auto p-4" data-role="call-stage" data-pane="mobile">
         <%!-- Screen-share preview (task 019e420f stage 3). See the
              desktop variant for the rationale. --%>
-        <div class="mb-2">
+        <div class="relative mb-2" data-screen-share-viewer data-screen-share-active="false">
           <div
             data-quickmeet-screen-share-slot
             data-pane="mobile"
@@ -1616,6 +1627,17 @@ defmodule PlatformWeb.ChatLive.Partials do
             class="hidden aspect-video w-full overflow-hidden rounded-lg bg-black"
           >
           </div>
+          <button
+            type="button"
+            hidden
+            data-screen-share-fullscreen
+            aria-label="Enter full screen"
+            aria-pressed="false"
+            class="screen-share-fullscreen-button focus-visible-ring"
+          >
+            <span class="hero-arrows-pointing-out size-5" aria-hidden="true"></span>
+            <span class="sr-only" data-screen-share-fullscreen-label>Enter full screen</span>
+          </button>
           <p
             data-quickmeet-screen-share-sharer
             class="mt-1 text-xs text-base-content/50 truncate"

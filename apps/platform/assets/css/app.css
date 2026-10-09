@@ -8262,3 +8262,88 @@ body, .font-fabrikam {
     transform: scaleY(var(--wave-mid, 0.5)) !important;
   }
 }
+/* Screen-share fullscreen viewer (task 01a11cee, stage 2).
+   Native Fullscreen APIs are preferred. This fixed-viewport state is the
+   mobile/iOS PWA fallback and deliberately owns every safe-area edge. */
+[data-screen-share-viewer] {
+  position: relative;
+}
+
+.screen-share-fullscreen-button {
+  position: absolute;
+  z-index: 4;
+  top: max(0.5rem, env(safe-area-inset-top, 0px));
+  right: max(0.5rem, env(safe-area-inset-right, 0px));
+  display: inline-flex;
+  min-width: 2.75rem;
+  min-height: 2.75rem;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgb(255 255 255 / 0.2);
+  border-radius: 0.75rem;
+  background: rgb(0 0 0 / 0.68);
+  color: white;
+  box-shadow: 0 0.25rem 1rem rgb(0 0 0 / 0.35);
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.screen-share-fullscreen-button:hover {
+  background: rgb(0 0 0 / 0.82);
+}
+
+.screen-share-viewer--fallback {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 80 !important;
+  box-sizing: border-box;
+  width: 100vw !important;
+  max-width: none !important;
+  height: var(--screen-share-viewport-height, 100dvh) !important;
+  margin: 0 !important;
+  padding:
+    env(safe-area-inset-top, 0px)
+    env(safe-area-inset-right, 0px)
+    env(safe-area-inset-bottom, 0px)
+    env(safe-area-inset-left, 0px) !important;
+  overflow: hidden !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: black !important;
+}
+
+.screen-share-viewer--fallback [data-screen-share-slot],
+.screen-share-viewer--fallback [data-quickmeet-screen-share-slot] {
+  position: absolute !important;
+  inset: 0 !important;
+  display: block !important;
+  width: 100% !important;
+  height: 100% !important;
+  aspect-ratio: auto !important;
+  border-radius: 0 !important;
+}
+
+.screen-share-viewer--fallback video,
+[data-screen-share-viewer]:fullscreen video,
+[data-screen-share-viewer]:-webkit-full-screen video {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: contain !important;
+  background: black;
+}
+
+.screen-share-viewer--fallback [data-quickmeet-screen-share-sharer] {
+  position: absolute;
+  z-index: 3;
+  left: max(0.75rem, env(safe-area-inset-left, 0px));
+  bottom: max(0.75rem, env(safe-area-inset-bottom, 0px));
+  margin: 0;
+  color: rgb(255 255 255 / 0.78);
+}
+
+html.screen-share-fullscreen-active,
+body.screen-share-fullscreen-active {
+  overflow: hidden !important;
+  overscroll-behavior: none;
+}

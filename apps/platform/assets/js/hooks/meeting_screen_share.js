@@ -1,3 +1,5 @@
+import { ScreenShareFullscreenController } from "./lib/screen_share_viewer"
+
 /**
  * MeetingScreenShare hook — attaches the active LiveKit screen-share track
  * to the Screen-mode center stage.
@@ -25,6 +27,8 @@ const MeetingScreenShare = {
     this._videoEl = null
     this._attachedTrack = null
     this._sharerIdentity = null
+    this._publication = null
+    this._fullscreenController = null
 
     this._boundTrackSubscribed = this._onTrackSubscribed.bind(this)
     this._boundTrackUnsubscribed = this._onTrackUnsubscribed.bind(this)
@@ -37,6 +41,12 @@ const MeetingScreenShare = {
   updated() {
     this._tryBind()
     this._syncExistingTrack()
+    if (
+      this._attachedTrack &&
+      this._fullscreenController?.button !== this._fullscreenButton()
+    ) {
+      this._mountFullscreenController()
+    }
   },
 
   destroyed() {
@@ -52,6 +62,10 @@ const MeetingScreenShare = {
 
   _placeholder() {
     return this.el.querySelector("[data-screen-share-empty]")
+  },
+
+  _fullscreenButton() {
+    return this.el.querySelector("[data-screen-share-fullscreen]")
   },
 
   _tryBind() {
@@ -123,7 +137,7 @@ const MeetingScreenShare = {
       if (!pubs) continue
       for (const pub of pubs.values()) {
         if (pub.track && this._isScreenShare(pub)) {
-          this._attach(pub.track, participant)
+          this._attach(pub.track, participant, pub)
           return
         }
       }
@@ -141,7 +155,7 @@ const MeetingScreenShare = {
   _onTrackSubscribed(track, pub, participant) {
     if (!this._isScreenShare(pub) && !this._isScreenShare(track)) return
     if (this._attachedTrack) return
-    this._attach(track, participant)
+    this._attach(track, participant, pub)
   },
 
   _onTrackUnsubscribed(track, _pub, participant) {
@@ -155,7 +169,7 @@ const MeetingScreenShare = {
   _onLocalPublished(pub) {
     if (!this._isScreenShare(pub)) return
     if (this._attachedTrack) return
-    if (pub?.track) this._attach(pub.track, this._room?.localParticipant)
+    if (pub?.track) this._attach(pub.track, this._room?.localParticipant, pub)
   },
 
   _onLocalUnpublished(pub) {
@@ -163,7 +177,7 @@ const MeetingScreenShare = {
     if (this._attachedTrack === pub?.track) this._detach()
   },
 
-  _attach(track, participant) {
+  _attach(track, participant, publication = null) {
     const slot = this._slot()
     if (!slot) return
     if (this._attachedTrack === track) return
@@ -179,6 +193,7 @@ const MeetingScreenShare = {
     slot.appendChild(el)
     this._videoEl = el
     this._attachedTrack = track
+    this._publication = publication
     this._sharerIdentity = participant?.identity || null
 
     slot.classList.remove("hidden")
@@ -188,9 +203,25 @@ const MeetingScreenShare = {
     if (this._sharerIdentity) {
       this.el.dataset.screenShareSharer = this._sharerIdentity
     }
+
+    this._mountFullscreenController()
+  },
+
+  _mountFullscreenController() {
+    this._fullscreenController?.destroy()
+    this._fullscreenController = new ScreenShareFullscreenController({
+      root: this.el,
+      viewport: this.el,
+      button: this._fullscreenButton(),
+      video: this._videoEl,
+      publication: this._publication,
+      env: window,
+    }).mount()
   },
 
   _detach() {
+    this._fullscreenController?.destroy()
+    this._fullscreenController = null
     if (this._attachedTrack) {
       try {
         const els = this._attachedTrack.detach()
@@ -212,6 +243,7 @@ const MeetingScreenShare = {
     this.el.dataset.screenShareActive = "false"
     delete this.el.dataset.screenShareSharer
     this._sharerIdentity = null
+    this._publication = null
   },
 }
 
