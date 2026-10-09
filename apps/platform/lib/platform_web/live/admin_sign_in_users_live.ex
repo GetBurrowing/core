@@ -17,8 +17,8 @@ defmodule PlatformWeb.AdminSignInUsersLive do
   ## Admin check on mount AND on every event (layer 1 of 2)
 
   `:ensure_admin` refuses a non-admin mount. Every `handle_event/3` then runs
-  `guard/1` first, which re-reads the gate and `Platform.Tenancy.fabrikam_admin?/1`
-  from the database instead of trusting the mount-time `:fabrikam_admin?` assign,
+  `guard/1` first, which re-reads the gate and `Platform.Tenancy.root_admin?/1`
+  from the database instead of trusting the mount-time `:root_admin?` assign,
   so an admin demoted while the page is open is refused on their next click
   with a flash and a navigation to `/`, before the context is called. The
   context re-checks both on every call (layer 2), so neither layer is
@@ -101,9 +101,9 @@ defmodule PlatformWeb.AdminSignInUsersLive do
     do: assign(socket, :visible, visible_rows(socket.assigns.rows, socket.assigns.query))
 
   @doc false
-  # Fresh reads, never the mount-time `:fabrikam_admin?` assign.
+  # Fresh reads, never the mount-time `:root_admin?` assign.
   def guard(socket) do
-    if Config.enabled?() and Tenancy.fabrikam_admin?(socket.assigns[:current_user_record]) do
+    if Config.enabled?() and Tenancy.root_admin?(socket.assigns[:current_user_record]) do
       :ok
     else
       {:denied, deny(socket)}
@@ -340,7 +340,7 @@ defmodule PlatformWeb.AdminSignInUsersLive do
   # Suite rows render at once; pocket-id statuses arrive with the async load.
   defp assign_suite_rows(socket) do
     users = Accounts.list_users(include_archived: true)
-    admins = MapSet.new(for u <- users, Tenancy.fabrikam_admin?(u), do: u.id)
+    admins = MapSet.new(for u <- users, Tenancy.root_admin?(u), do: u.id)
     status = if socket.assigns.service == :unreachable, do: :unknown, else: :loading
 
     rows =

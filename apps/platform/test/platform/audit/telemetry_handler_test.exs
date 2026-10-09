@@ -252,7 +252,7 @@ defmodule Platform.Audit.TelemetryHandlerTest do
   describe "actor_org_id threading (ADR 0040)" do
     test "actor_org_id from telemetry metadata persists to audit_events.actor_org_id" do
       user_id = Ecto.UUID.generate()
-      org_id = fabrikam_org_id()
+      org_id = acme_org_id()
 
       :telemetry.execute(
         [:platform, :auth, :callback],
@@ -278,7 +278,7 @@ defmodule Platform.Audit.TelemetryHandlerTest do
         %{
           action: "redirect",
           actor_id: Ecto.UUID.generate(),
-          actor_org_id: fabrikam_org_id(),
+          actor_org_id: acme_org_id(),
           ip_address: "10.0.0.1"
         }
       )

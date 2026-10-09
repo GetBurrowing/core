@@ -50,7 +50,7 @@ defmodule Platform.ChatDmAllowlistTest do
     default = %{
       name: "Tenant #{n}",
       slug: "tenant_#{n}",
-      parent_org_id: Tenancy.get_org_by_slug!("fabrikam").id
+      parent_org_id: Tenancy.get_org_by_slug!("acme").id
     }
 
     %Org{} |> Org.changeset(Map.merge(default, attrs)) |> Repo.insert!()

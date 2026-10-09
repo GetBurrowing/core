@@ -56,7 +56,7 @@ defmodule PlatformWeb.MeetingLiveGuestHostFlashTest do
     %OrgMembership{}
     |> OrgMembership.changeset(%{
       user_id: user.id,
-      org_id: Platform.TenancyFixtures.fabrikam_org_id(),
+      org_id: Platform.TenancyFixtures.acme_org_id(),
       role: "member"
     })
     |> Repo.insert!()
@@ -68,7 +68,7 @@ defmodule PlatformWeb.MeetingLiveGuestHostFlashTest do
       |> Project.changeset(%{
         name: "Guest Host Flash Project #{System.unique_integer([:positive])}",
         slug: "guest-host-flash-#{System.unique_integer([:positive])}",
-        org_id: Platform.TenancyFixtures.fabrikam_org_id()
+        org_id: Platform.TenancyFixtures.acme_org_id()
       })
       |> Repo.insert()
 

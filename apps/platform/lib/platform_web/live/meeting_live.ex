@@ -1310,7 +1310,7 @@ defmodule PlatformWeb.MeetingLive do
     # `{:meeting_created, _}` / `{:meeting_ended, _}` / `{:meeting_started, _}`
     # broadcasts flowing in.
     # The index is viewer-scoped: `Meetings.list_meetings_for_user/1`
-    # supplies the rule (Fabrikam root admin sees all; an external user sees
+    # supplies the rule (root-org admin sees all; an external user sees
     # the meetings they hold a live invite for; everyone else is narrowed
     # by org membership), and the calendar below shares that one rule via
     # its range sibling. The project picker is viewer-scoped too. (Which

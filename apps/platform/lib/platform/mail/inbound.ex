@@ -22,7 +22,7 @@ defmodule Platform.Mail.Inbound do
        `\\Drafts`, `\\Trash`, `\\Junk`, `\\Flagged`, `\\Archive`), matched
        case-insensitively. INBOX is never excluded. Gmail's `[Gmail]/All Mail`
        holds every message including sent mail, so reading it posted the
-       user's own outgoing mail as received (fabrikam install, 2026-09-24). A
+       user's own outgoing mail as received (a production install, 2026-09-24). A
        configured list is not filtered: naming `[Gmail]/Sent Mail` reads it.
 
        The attributes come from a plain `LIST "" "*"` (no

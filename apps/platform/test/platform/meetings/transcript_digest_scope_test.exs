@@ -3,7 +3,7 @@ defmodule Platform.Meetings.TranscriptDigestScopeTest do
   Stack member 12 (rbac-external-users) — the `:scope` partition on
   `Platform.Meetings.list_transcripts_since/2`, mirroring the messages
   corpus: `:internal` (default) excludes external-user spaces from the
-  Fabrikam-internal digest; `{:external_spaces, ids}` restricts to them.
+  Acme-internal digest; `{:external_spaces, ids}` restricts to them.
 
   Since task 01a0a12e the transcripts corpus is excluded from the digest by
   default, so the partition is exercised with `meeting_transcripts: :included`
@@ -83,11 +83,11 @@ defmodule Platform.Meetings.TranscriptDigestScopeTest do
 
   describe "list_transcripts_since/2 :scope" do
     test "the DEFAULT returns nothing in either partition (task 01a0a12e)" do
-      fabrikam = create_user!()
+      acme = create_user!()
       ext = external_user!()
 
-      internal = create_space!("fabrikam-eng")
-      add_user!(internal.id, fabrikam.id)
+      internal = create_space!("acme-eng")
+      add_user!(internal.id, acme.id)
       complete_transcript!(internal.id, "internal meeting")
 
       external = create_space!("sxi-support")
@@ -105,11 +105,11 @@ defmodule Platform.Meetings.TranscriptDigestScopeTest do
     end
 
     test "default :internal omits external-space transcripts" do
-      fabrikam = create_user!()
+      acme = create_user!()
       ext = external_user!()
 
-      internal = create_space!("fabrikam-eng")
-      add_user!(internal.id, fabrikam.id)
+      internal = create_space!("acme-eng")
+      add_user!(internal.id, acme.id)
       complete_transcript!(internal.id, "internal meeting")
 
       external = create_space!("sxi-support")
@@ -127,11 +127,11 @@ defmodule Platform.Meetings.TranscriptDigestScopeTest do
     end
 
     test "{:external_spaces, ids} returns only those spaces' transcripts" do
-      fabrikam = create_user!()
+      acme = create_user!()
       ext = external_user!()
 
-      internal = create_space!("fabrikam-eng")
-      add_user!(internal.id, fabrikam.id)
+      internal = create_space!("acme-eng")
+      add_user!(internal.id, acme.id)
       complete_transcript!(internal.id, "internal meeting")
 
       external = create_space!("sxi-support")
@@ -153,9 +153,9 @@ defmodule Platform.Meetings.TranscriptDigestScopeTest do
     end
 
     test "zero external users → default filter is a no-op (regression guard)" do
-      fabrikam = create_user!()
-      internal = create_space!("fabrikam-eng")
-      add_user!(internal.id, fabrikam.id)
+      acme = create_user!()
+      internal = create_space!("acme-eng")
+      add_user!(internal.id, acme.id)
       complete_transcript!(internal.id, "internal meeting")
 
       assert Chat.external_space_ids() == []

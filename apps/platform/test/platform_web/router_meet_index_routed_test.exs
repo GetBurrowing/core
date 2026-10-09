@@ -71,7 +71,7 @@ defmodule PlatformWeb.RouterMeetIndexRoutedTest do
     %OrgMembership{}
     |> OrgMembership.changeset(%{
       user_id: user.id,
-      org_id: Platform.TenancyFixtures.fabrikam_org_id(),
+      org_id: Platform.TenancyFixtures.acme_org_id(),
       role: "member",
       external: true
     })
@@ -88,7 +88,7 @@ defmodule PlatformWeb.RouterMeetIndexRoutedTest do
   # A meeting the external user holds NO invite to — the per-meeting gate's
   # subject. Same org as the viewer, so only the missing invite can deny it.
   defp uninvited_meeting! do
-    org_id = Platform.TenancyFixtures.fabrikam_org_id()
+    org_id = Platform.TenancyFixtures.acme_org_id()
 
     {:ok, project} =
       Tasks.create_project(%{

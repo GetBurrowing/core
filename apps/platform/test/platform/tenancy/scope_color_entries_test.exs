@@ -6,10 +6,13 @@ defmodule Platform.Tenancy.ScopeColorEntriesTest do
   Since stage 5 moved the six shipped orgs onto the runtime colour path, a
   scope chip is coloured ONLY by a rule in that block. The block used to be
   built from `scope_slug_entries/1`, the Tasks rail's list, which narrows a
-  Fabrikam member who is not an admin to the orgs they belong to. Chat shows
+  Acme member who is not an admin to the orgs they belong to. Chat shows
   that same member every org's channels, each with a header chip, so their
   SXI chip rendered with no colour at all. Admins never saw it, because an
   admin's rail list is every org.
+
+  The root org is in the list for every viewer (task 01a116de gate-fix
+  stage); other tenants only for viewers who can see them.
   """
   use Platform.DataCase, async: false
 
@@ -18,7 +21,7 @@ defmodule Platform.Tenancy.ScopeColorEntriesTest do
   alias Platform.Tenancy
   alias Platform.Tenancy.{Org, OrgMembership}
 
-  @seeded ~w(fabrikam soylent wayne_tech sxi paragon)
+  @seeded ~w(acme soylent wayne_tech sxi paragon)
 
   defp user! do
     n = System.unique_integer([:positive])
@@ -44,41 +47,58 @@ defmodule Platform.Tenancy.ScopeColorEntriesTest do
 
   defp slugs(entries), do: entries |> Enum.map(& &1.slug) |> MapSet.new()
 
-  test "a Fabrikam member who is not an admin gets a colour for every org chat shows them" do
-    user = user!() |> member!("fabrikam")
+  test "an Acme member who is not an admin gets a colour for every org chat shows them" do
+    user = user!() |> member!("acme")
 
-    refute Tenancy.fabrikam_admin?(user)
+    refute Tenancy.root_admin?(user)
     assert Tenancy.visibility(user) == :root_all
 
     colour = slugs(Tenancy.scope_color_entries(user))
 
-    for slug <- @seeded, do: assert(slug in colour, "#{slug} has no colour for a Fabrikam member")
+    for slug <- @seeded, do: assert(slug in colour, "#{slug} has no colour for an Acme member")
 
     # The Tasks rail's list is narrower on purpose, and that difference is
     # exactly the gap the colour list must not inherit.
-    assert slugs(Tenancy.scope_slug_entries(user)) == MapSet.new(["fabrikam"])
+    assert slugs(Tenancy.scope_slug_entries(user)) == MapSet.new(["acme"])
   end
 
-  test "a member of one tenant only gets that tenant's colour and nothing else" do
+  test "a member of one tenant gets that tenant's colour and the root's, and no other tenant's" do
     user = user!() |> member!("sxi")
+    root = Tenancy.get_root_org()
 
-    assert slugs(Tenancy.scope_color_entries(user)) == MapSet.new(["sxi"])
+    # The root is always emitted (task 01a116de gate-fix stage): its section
+    # and pill reach non-root viewers, and its colour is not tenant-private.
+    assert slugs(Tenancy.scope_color_entries(user)) == MapSet.new(["sxi", root.slug])
   end
 
   test "an archived org has no colour, and a viewer with no memberships gets none" do
-    admin = user!() |> member!("fabrikam", "admin")
+    admin = user!() |> member!("acme", "admin")
 
     Repo.update_all(from(o in Org, where: o.slug == "paragon"),
       set: [archived_at: DateTime.utc_now()]
     )
 
     refute "paragon" in slugs(Tenancy.scope_color_entries(admin))
+
+    # A viewer with no visibility of any org still gets the root, and only
+    # the root.
+    root = Tenancy.get_root_org()
+    assert slugs(Tenancy.scope_color_entries(nil)) == MapSet.new([root.slug])
+    assert slugs(Tenancy.scope_color_entries(user!())) == MapSet.new([root.slug])
+  end
+
+  test "an archived root is not emitted" do
+    root = Tenancy.get_root_org()
+
+    Repo.update_all(from(o in Org, where: o.id == ^root.id),
+      set: [archived_at: DateTime.utc_now()]
+    )
+
     assert Tenancy.scope_color_entries(nil) == []
-    assert Tenancy.scope_color_entries(user!()) == []
   end
 
   test "each entry carries the stored fill lightness the six are solved at" do
-    user = user!() |> member!("fabrikam")
+    user = user!() |> member!("acme")
     sxi = Enum.find(Tenancy.scope_color_entries(user), &(&1.slug == "sxi"))
 
     assert %{hue: 162, chroma: 0.15, lightness: 0.7, label: "SXI"} = sxi

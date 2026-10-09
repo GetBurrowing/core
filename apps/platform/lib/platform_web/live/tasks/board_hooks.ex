@@ -48,7 +48,7 @@ defmodule PlatformWeb.Tasks.BoardHooks do
       socket = PlatformWeb.Tasks.BoardHooks.attach(socket)
   """
 
-  import Phoenix.Component, only: [assign: 3]
+  import Phoenix.Component, only: [assign: 3, assign_new: 3]
   import Phoenix.LiveView, only: [attach_hook: 4, connected?: 1, send_update: 2]
 
   alias Platform.Tasks
@@ -218,6 +218,9 @@ defmodule PlatformWeb.Tasks.BoardHooks do
     # board events.
     |> assign(:scope_counts, Tasks.count_by_scope())
     |> assign(:scope_counts_db, Tasks.count_by_scope())
+    # The all-tasks bucket's key (task 01a116de stage 3): the root org's slug
+    # from config or its row, read once per LiveView, never a literal.
+    |> assign_new(:root_org_slug, fn -> Platform.Tenancy.root_org_slug() end)
     |> assign(:visible_task_count, length(tasks))
     |> sync_review_request_subscriptions(tasks)
     # An active search must survive PubSub-driven refreshes — the assigns
@@ -264,21 +267,25 @@ defmodule PlatformWeb.Tasks.BoardHooks do
     # Marlowe 2026-07-12 ("narrow everything"): while a query is active every
     # on-screen count — columns, scope-rail chips, header total — describes
     # the filtered board. Chips mirror Tasks.count_by_scope/0's current stub
-    # semantics (everything under "fabrikam"); when that becomes a real per-org
-    # GROUP BY this branch needs the matching in-memory group-by over `tasks`.
+    # semantics (everything under the root org's slug); when that becomes a
+    # real per-org GROUP BY this branch needs the matching in-memory group-by
+    # over `tasks`.
     #
-    # The key is the STRING "fabrikam" since task 01a09287 stage 2 re-keyed
-    # `count_by_scope/0` on the org rows. As `:fabrikam` it would have added a
-    # SEVENTH entry beside the real one rather than overwriting it — the
-    # header total is `Map.values |> Enum.sum`, so the searched board's total
-    # would have double-counted instead of failing.
+    # The key is the root org's slug as a STRING (task 01a116de stage 3; a
+    # literal before that), matching `count_by_scope/0`'s row-derived keys.
+    # An atom key would add a SECOND entry beside the real one rather than
+    # overwriting it — the header total is `Map.values |> Enum.sum`, so the
+    # searched board's total would double-count instead of failing.
     scope_counts =
       if q == "" do
         socket.assigns.scope_counts_db
       else
-        socket.assigns.scope_counts_db
-        |> Map.new(fn {key, _} -> {key, 0} end)
-        |> Map.put("fabrikam", length(tasks))
+        zeroed = Map.new(socket.assigns.scope_counts_db, fn {key, _} -> {key, 0} end)
+
+        case socket.assigns[:root_org_slug] || Platform.Tenancy.root_org_slug() do
+          root_slug when is_binary(root_slug) -> Map.put(zeroed, root_slug, length(tasks))
+          nil -> zeroed
+        end
       end
 
     socket

@@ -140,7 +140,7 @@ defmodule Platform.Meetings.Archive do
   Three branches, matching `Platform.Meetings.viewer_listing_query/1` so the
   archive and the `/meetings` index scope alike:
 
-    * `Platform.Tenancy.fabrikam_admin?/1` — everything.
+    * `Platform.Tenancy.root_admin?/1` — everything.
     * `Platform.Tenancy.external_user?/1` — only meetings the viewer holds a
       LIVE invite for, via `Platform.Meetings.invited_meeting_ids_query/1`.
       Invitation, not participation and not org membership: an external
@@ -814,7 +814,7 @@ defmodule Platform.Meetings.Archive do
 
   # NOT `Tenancy.scope/3`, deliberately — see "Authorization" in the
   # moduledoc. This mirrors `Meetings.fetch_meeting_for_user/2`'s
-  # `fabrikam_admin?/1` bypass, which is narrower than `visibility/1`'s
+  # `root_admin?/1` bypass, which is narrower than `visibility/1`'s
   # `root_member?/1`. Converting widens who can read the archive.
   # Three branches, in the same order and with the same predicates as
   # `Platform.Meetings.viewer_listing_query/1`, so the archive and the index
@@ -834,7 +834,7 @@ defmodule Platform.Meetings.Archive do
   # nil semantics.
   defp narrow_to_viewer(query, viewer) do
     cond do
-      Tenancy.fabrikam_admin?(viewer) ->
+      Tenancy.root_admin?(viewer) ->
         query
 
       Tenancy.external_user?(viewer) ->

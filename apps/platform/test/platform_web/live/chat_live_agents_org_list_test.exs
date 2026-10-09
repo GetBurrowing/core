@@ -58,22 +58,22 @@ defmodule PlatformWeb.ChatLiveAgentsOrgListTest do
     {init_test_session(conn, current_user_id: user.id), user}
   end
 
-  # `can_edit_goal?` is `Tenancy.fabrikam_admin?/1`, so case (d) — which drives
-  # `save_goal` — needs the viewer to be a Fabrikam admin or the write is refused.
-  defp make_fabrikam_admin(user) do
+  # `can_edit_goal?` is `Tenancy.root_admin?/1`, so case (d) — which drives
+  # `save_goal` — needs the viewer to be an Acme admin or the write is refused.
+  defp make_acme_admin(user) do
     %Tenancy.OrgMembership{}
     |> Tenancy.OrgMembership.changeset(%{
       user_id: user.id,
-      org_id: fabrikam_org().id,
+      org_id: acme_org().id,
       role: "admin"
     })
     |> Repo.insert!()
   end
 
-  defp fabrikam_org, do: Tenancy.get_org_by_slug!("fabrikam")
+  defp acme_org, do: Tenancy.get_org_by_slug!("acme")
 
-  defp fabrikam_section do
-    Enum.find(Sidebar.list_active_default_sections(), &(&1.org_id == fabrikam_org().id))
+  defp acme_section do
+    Enum.find(Sidebar.list_active_default_sections(), &(&1.org_id == acme_org().id))
   end
 
   defp create_space(name, attrs) do
@@ -86,7 +86,7 @@ defmodule PlatformWeb.ChatLiveAgentsOrgListTest do
             name: "#{name} #{n}",
             slug: "agents-org-list-#{name}-#{n}",
             kind: "channel",
-            org_id: fabrikam_org().id
+            org_id: acme_org().id
           },
           Map.new(attrs)
         )
@@ -115,14 +115,14 @@ defmodule PlatformWeb.ChatLiveAgentsOrgListTest do
   end
 
   # The org fixture: a goal-capable space and a no-goal sibling, both in the
-  # Fabrikam org, the viewer a participant of both.
+  # Acme org, the viewer a participant of both.
   defp seed(conn, agents_attrs) do
     {conn, user} = authenticated_conn(conn)
     agents = create_space("agents", agents_attrs)
     sibling = create_space("design", %{})
     add_user(agents, user)
     add_user(sibling, user)
-    %{conn: conn, user: user, agents: agents, sibling: sibling, section: fabrikam_section()}
+    %{conn: conn, user: user, agents: agents, sibling: sibling, section: acme_section()}
   end
 
   defp in_org_section?(html, section, space) do
@@ -198,7 +198,7 @@ defmodule PlatformWeb.ChatLiveAgentsOrgListTest do
 
     # Positive control for the section selector: the fixture org's section
     # must exist, or every `refute in_org_section?` below passes vacuously.
-    assert section, "the Fabrikam org has no default channel section"
+    assert section, "the Acme org has no default channel section"
 
     {:ok, _view, html} = live_at(conn, "/chat/#{sibling.slug}")
 
@@ -212,7 +212,7 @@ defmodule PlatformWeb.ChatLiveAgentsOrgListTest do
            "the no-goal sibling was filtered out of its org too"
 
     # Only the listing changed: the row keeps its org.
-    assert Repo.reload!(agents).org_id == fabrikam_org().id
+    assert Repo.reload!(agents).org_id == acme_org().id
   end
 
   test "(b) flag off: the space lists under its org and no block renders", %{conn: conn} do
@@ -246,7 +246,7 @@ defmodule PlatformWeb.ChatLiveAgentsOrgListTest do
     %{conn: conn, user: user, agents: agents, sibling: sibling, section: section} =
       seed(conn, %{})
 
-    make_fabrikam_admin(user)
+    make_acme_admin(user)
 
     {:ok, view, html} = live_at(conn, "/chat/#{agents.slug}")
 
@@ -257,7 +257,7 @@ defmodule PlatformWeb.ChatLiveAgentsOrgListTest do
     html = render_change(view, "save_goal", %{"goal" => "Close backlog items in Suite"})
 
     assert Repo.reload!(agents).goal == "Close backlog items in Suite",
-           "save_goal was refused — the viewer is not a Fabrikam admin"
+           "save_goal was refused — the viewer is not an Acme admin"
 
     refute in_org_section?(html, section, agents),
            "a saved goal left the space listed under its org beside the block"

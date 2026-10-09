@@ -49,7 +49,7 @@ defmodule PlatformWeb.Tasks.RailMaskSurfacesTest do
 
   @tenants ~w(soylent wayne_tech sxi)
 
-  defp fabrikam_admin_conn(conn) do
+  defp acme_admin_conn(conn) do
     n = System.unique_integer([:positive])
 
     user =
@@ -60,7 +60,7 @@ defmodule PlatformWeb.Tasks.RailMaskSurfacesTest do
       })
 
     Enum.each(Tenancy.list_orgs(), fn org ->
-      role = if org.slug == "fabrikam", do: "admin", else: "member"
+      role = if org.slug == "acme", do: "admin", else: "member"
 
       %OrgMembership{}
       |> OrgMembership.changeset(%{user_id: user.id, org_id: org.id, role: role})
@@ -145,7 +145,7 @@ defmodule PlatformWeb.Tasks.RailMaskSurfacesTest do
   describe "mobile #project-sheet" do
     test "renders the same masked rows as the desktop aside — text and attributes",
          %{conn: conn} do
-      conn = fabrikam_admin_conn(conn)
+      conn = acme_admin_conn(conn)
       projects = seed_rail()
 
       {:ok, view, html} = live(conn, ~p"/tasks")
@@ -170,7 +170,7 @@ defmodule PlatformWeb.Tasks.RailMaskSurfacesTest do
 
     test "the mode strip renders INSIDE the sheet, so the state is visible on a phone",
          %{conn: conn} do
-      conn = fabrikam_admin_conn(conn)
+      conn = acme_admin_conn(conn)
       seed_rail()
 
       {:ok, view, html} = live(conn, ~p"/tasks")
@@ -198,7 +198,7 @@ defmodule PlatformWeb.Tasks.RailMaskSurfacesTest do
 
   describe "page-header breadcrumb" do
     test "the org label and the project name both follow the mask", %{conn: conn} do
-      conn = fabrikam_admin_conn(conn)
+      conn = acme_admin_conn(conn)
       projects = seed_rail()
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
@@ -225,7 +225,7 @@ defmodule PlatformWeb.Tasks.RailMaskSurfacesTest do
 
   describe "scope-rail chips" do
     test "the pill's visible text AND its aria-label take the resolved label", %{conn: conn} do
-      conn = fabrikam_admin_conn(conn)
+      conn = acme_admin_conn(conn)
       seed_rail()
 
       {:ok, view, html} = live(conn, ~p"/tasks")
@@ -257,7 +257,7 @@ defmodule PlatformWeb.Tasks.RailMaskSurfacesTest do
     end
 
     test "a masked chip still filters the board to its real org", %{conn: conn} do
-      conn = fabrikam_admin_conn(conn)
+      conn = acme_admin_conn(conn)
       seed_rail()
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
@@ -282,7 +282,7 @@ defmodule PlatformWeb.Tasks.RailMaskSurfacesTest do
 
   describe "epic-create sheet project select" do
     test "the optgroup label and the option text are both masked", %{conn: conn} do
-      conn = fabrikam_admin_conn(conn)
+      conn = acme_admin_conn(conn)
       projects = seed_rail()
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
@@ -298,7 +298,7 @@ defmodule PlatformWeb.Tasks.RailMaskSurfacesTest do
       for name <- real_names(projects), do: refute_name_anywhere(select, name, @machine_attrs)
 
       # `Workspace B`, not `A`: the letters come from the SAME map the rail
-      # letters from, where Fabrikam is `Workspace A`. Fabrikam owns no project here so
+      # letters from, where Acme is `Workspace A`. Acme owns no project here so
       # it has no optgroup — and that is the point. A picker that lettered its
       # groups independently would call Soylent `Workspace A` here and
       # `Workspace B` in the rail two inches away, which is worse than not
@@ -310,7 +310,7 @@ defmodule PlatformWeb.Tasks.RailMaskSurfacesTest do
 
   describe "new-task sheet project select" do
     test "the optgroup label and the option text are both masked", %{conn: conn} do
-      conn = fabrikam_admin_conn(conn)
+      conn = acme_admin_conn(conn)
       projects = seed_rail()
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
@@ -328,7 +328,7 @@ defmodule PlatformWeb.Tasks.RailMaskSurfacesTest do
       for name <- real_names(projects), do: refute_name_anywhere(select, name, @machine_attrs)
 
       # `Workspace B`, not `A`: the letters come from the SAME map the rail
-      # letters from, where Fabrikam is `Workspace A`. Fabrikam owns no project here so
+      # letters from, where Acme is `Workspace A`. Acme owns no project here so
       # it has no optgroup — and that is the point. A picker that lettered its
       # groups independently would call Soylent `Workspace A` here and
       # `Workspace B` in the rail two inches away, which is worse than not
@@ -347,7 +347,7 @@ defmodule PlatformWeb.Tasks.RailMaskSurfacesTest do
   describe "project-create sheet" do
     test "the org select is masked; the name field the user is typing into is NOT",
          %{conn: conn} do
-      conn = fabrikam_admin_conn(conn)
+      conn = acme_admin_conn(conn)
       seed_rail()
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
@@ -448,7 +448,7 @@ defmodule PlatformWeb.Tasks.RailMaskSurfacesTest do
 
   describe "epic name in the breadcrumb" do
     test "the selected epic's real name is nowhere in the masked document", %{conn: conn} do
-      conn = fabrikam_admin_conn(conn)
+      conn = acme_admin_conn(conn)
       projects = seed_rail()
       epic = seed_epic(projects.soylent, "Zephyr Migration")
 
@@ -474,7 +474,7 @@ defmodule PlatformWeb.Tasks.RailMaskSurfacesTest do
   describe "org slug in data-* and phx-value-*" do
     test "the raw slug is nowhere in the masked document, in either spelling",
          %{conn: conn} do
-      conn = fabrikam_admin_conn(conn)
+      conn = acme_admin_conn(conn)
       seed_rail()
 
       {:ok, view, html} = live(conn, ~p"/tasks")
@@ -506,7 +506,7 @@ defmodule PlatformWeb.Tasks.RailMaskSurfacesTest do
 
   describe "assertion integrity" do
     test "DETONATION: the breadcrumb sweep fires when its mask is removed", %{conn: conn} do
-      conn = fabrikam_admin_conn(conn)
+      conn = acme_admin_conn(conn)
       projects = seed_rail()
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
@@ -534,7 +534,7 @@ defmodule PlatformWeb.Tasks.RailMaskSurfacesTest do
     end
 
     test "DETONATION: the scope-rail sweep fires when its mask is removed", %{conn: conn} do
-      conn = fabrikam_admin_conn(conn)
+      conn = acme_admin_conn(conn)
       seed_rail()
 
       {:ok, _view, html} = live(conn, ~p"/tasks")
@@ -550,7 +550,7 @@ defmodule PlatformWeb.Tasks.RailMaskSurfacesTest do
 
     test "the mask does not leak into the UNMASKED mode on the wider-entity surfaces",
          %{conn: conn} do
-      conn = fabrikam_admin_conn(conn)
+      conn = acme_admin_conn(conn)
       seed_rail()
 
       {:ok, view, html} = live(conn, ~p"/tasks")

@@ -81,7 +81,7 @@ defmodule Platform.Meetings.InviteRoomParityTest do
     Repo.insert!(
       OrgMembership.changeset(%OrgMembership{}, %{
         user_id: user.id,
-        org_id: Platform.TenancyFixtures.fabrikam_org_id(),
+        org_id: Platform.TenancyFixtures.acme_org_id(),
         role: "member"
       })
     )

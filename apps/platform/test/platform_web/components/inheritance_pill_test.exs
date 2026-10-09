@@ -3,7 +3,7 @@ defmodule PlatformWeb.Components.InheritancePillTest do
   Unit tests for the inheritance-provenance pill.
 
   Covers the 3 visual states (`:inherited`, `:defined_here`, `:overridden`),
-  aria-label per state, click-target gating on `@fabrikam_admin?`, and the
+  aria-label per state, click-target gating on `@root_admin?`, and the
   non-admin tooltip.
 
   Uses `Platform.DataCase` (not `ExUnit.Case`) because the underlying
@@ -11,7 +11,7 @@ defmodule PlatformWeb.Components.InheritancePillTest do
   `Repo.get/2` — without a DB-backed Org, the `:inherited` and
   `:overridden` paths can't be exercised end-to-end.
 
-  Seeded orgs (`fabrikam`, `soylent`, `wayne_tech`, `sxi`, `paragon`) come from
+  Seeded orgs (`acme`, `soylent`, `wayne_tech`, `sxi`, `paragon`) come from
   the `20260519143620_seed_root_orgs.exs` migration that DataCase pulls in.
   """
   use Platform.DataCase, async: true
@@ -37,9 +37,9 @@ defmodule PlatformWeb.Components.InheritancePillTest do
     end
   end
 
-  defp lookup_inherited(soylent_id, fabrikam_id) do
-    # Soylent has no value; Fabrikam defines it. Resolver walks up.
-    build_lookup(%{{fabrikam_id, :my_skill} => "fabrikam-default"})
+  defp lookup_inherited(soylent_id, acme_id) do
+    # Soylent has no value; Acme defines it. Resolver walks up.
+    build_lookup(%{{acme_id, :my_skill} => "acme-default"})
     |> tap(fn _ -> :ok end)
     |> ignore(soylent_id)
   end
@@ -49,16 +49,16 @@ defmodule PlatformWeb.Components.InheritancePillTest do
   defp ignore(fun, _), do: fun
 
   defp lookup_defined_here(soylent_id) do
-    # Soylent defines locally; Fabrikam doesn't. Resolver finds it on the org.
+    # Soylent defines locally; Acme doesn't. Resolver finds it on the org.
     build_lookup(%{{soylent_id, :my_skill} => "soylent-local"})
   end
 
-  defp lookup_overridden(soylent_id, fabrikam_id) do
+  defp lookup_overridden(soylent_id, acme_id) do
     # Both define it. Resolver returns :overridden because the value at
     # `org` is set AND an ancestor also defines it.
     build_lookup(%{
       {soylent_id, :my_skill} => "soylent-local",
-      {fabrikam_id, :my_skill} => "fabrikam-default"
+      {acme_id, :my_skill} => "acme-default"
     })
   end
 
@@ -70,7 +70,7 @@ defmodule PlatformWeb.Components.InheritancePillTest do
       record_key={@record_key}
       default={@default}
       lookup_fn={@lookup_fn}
-      fabrikam_admin?={@fabrikam_admin?}
+      root_admin?={@root_admin?}
     />
     """)
   end
@@ -78,18 +78,18 @@ defmodule PlatformWeb.Components.InheritancePillTest do
   # ── Setup ─────────────────────────────────────────────────────────────
 
   setup do
-    fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+    acme = Tenancy.get_org_by_slug!("acme")
     soylent = Tenancy.get_org_by_slug!("soylent")
 
     {:ok,
-     fabrikam: fabrikam,
+     acme: acme,
      soylent: soylent,
      base_assigns: %{
        org: soylent,
        scope: :soylent,
        record_key: :my_skill,
        default: nil,
-       fabrikam_admin?: false
+       root_admin?: false
      }}
   end
 
@@ -144,7 +144,7 @@ defmodule PlatformWeb.Components.InheritancePillTest do
         Map.put(
           ctx.base_assigns,
           :lookup_fn,
-          lookup_overridden(ctx.soylent.id, ctx.fabrikam.id)
+          lookup_overridden(ctx.soylent.id, ctx.acme.id)
         )
 
       html = render_pill(assigns)
@@ -156,7 +156,7 @@ defmodule PlatformWeb.Components.InheritancePillTest do
         Map.put(
           ctx.base_assigns,
           :lookup_fn,
-          lookup_overridden(ctx.soylent.id, ctx.fabrikam.id)
+          lookup_overridden(ctx.soylent.id, ctx.acme.id)
         )
 
       html = render_pill(assigns)
@@ -168,7 +168,7 @@ defmodule PlatformWeb.Components.InheritancePillTest do
         Map.put(
           ctx.base_assigns,
           :lookup_fn,
-          lookup_overridden(ctx.soylent.id, ctx.fabrikam.id)
+          lookup_overridden(ctx.soylent.id, ctx.acme.id)
         )
 
       html = render_pill(assigns)
@@ -180,11 +180,11 @@ defmodule PlatformWeb.Components.InheritancePillTest do
         Map.put(
           ctx.base_assigns,
           :lookup_fn,
-          lookup_overridden(ctx.soylent.id, ctx.fabrikam.id)
+          lookup_overridden(ctx.soylent.id, ctx.acme.id)
         )
 
       html = render_pill(assigns)
-      assert html =~ ~s(aria-label="Overridden from Fabrikam")
+      assert html =~ ~s(aria-label="Overridden from Acme")
     end
   end
 
@@ -194,11 +194,11 @@ defmodule PlatformWeb.Components.InheritancePillTest do
         Map.put(
           ctx.base_assigns,
           :lookup_fn,
-          lookup_inherited(ctx.soylent.id, ctx.fabrikam.id)
+          lookup_inherited(ctx.soylent.id, ctx.acme.id)
         )
 
       html = render_pill(assigns)
-      assert html =~ "Inherited from Fabrikam"
+      assert html =~ "Inherited from Acme"
     end
 
     test "applies the inheritance-pill--inherited modifier class", ctx do
@@ -206,7 +206,7 @@ defmodule PlatformWeb.Components.InheritancePillTest do
         Map.put(
           ctx.base_assigns,
           :lookup_fn,
-          lookup_inherited(ctx.soylent.id, ctx.fabrikam.id)
+          lookup_inherited(ctx.soylent.id, ctx.acme.id)
         )
 
       html = render_pill(assigns)
@@ -218,7 +218,7 @@ defmodule PlatformWeb.Components.InheritancePillTest do
         Map.put(
           ctx.base_assigns,
           :lookup_fn,
-          lookup_inherited(ctx.soylent.id, ctx.fabrikam.id)
+          lookup_inherited(ctx.soylent.id, ctx.acme.id)
         )
 
       html = render_pill(assigns)
@@ -230,54 +230,54 @@ defmodule PlatformWeb.Components.InheritancePillTest do
         Map.put(
           ctx.base_assigns,
           :lookup_fn,
-          lookup_inherited(ctx.soylent.id, ctx.fabrikam.id)
+          lookup_inherited(ctx.soylent.id, ctx.acme.id)
         )
 
       html = render_pill(assigns)
-      assert html =~ ~s(aria-label="Inherited from Fabrikam")
+      assert html =~ ~s(aria-label="Inherited from Acme")
     end
   end
 
   # ── Click-target gating ───────────────────────────────────────────────
 
-  describe "click-target gating on @fabrikam_admin?" do
-    test "inherited + fabrikam_admin? true renders as a clickable <button>", ctx do
+  describe "click-target gating on @root_admin?" do
+    test "inherited + root_admin? true renders as a clickable <button>", ctx do
       assigns =
         ctx.base_assigns
-        |> Map.put(:lookup_fn, lookup_inherited(ctx.soylent.id, ctx.fabrikam.id))
-        |> Map.put(:fabrikam_admin?, true)
+        |> Map.put(:lookup_fn, lookup_inherited(ctx.soylent.id, ctx.acme.id))
+        |> Map.put(:root_admin?, true)
 
       html = render_pill(assigns)
       assert html =~ "<button"
       assert html =~ ~s(phx-click="open_override_dialog")
     end
 
-    test "inherited + fabrikam_admin? false renders as a non-interactive <span>", ctx do
+    test "inherited + root_admin? false renders as a non-interactive <span>", ctx do
       assigns =
         ctx.base_assigns
-        |> Map.put(:lookup_fn, lookup_inherited(ctx.soylent.id, ctx.fabrikam.id))
-        |> Map.put(:fabrikam_admin?, false)
+        |> Map.put(:lookup_fn, lookup_inherited(ctx.soylent.id, ctx.acme.id))
+        |> Map.put(:root_admin?, false)
 
       html = render_pill(assigns)
       refute html =~ "<button"
     end
 
-    test "defined_here + fabrikam_admin? true is STILL non-interactive (nothing to override)",
+    test "defined_here + root_admin? true is STILL non-interactive (nothing to override)",
          ctx do
       assigns =
         ctx.base_assigns
         |> Map.put(:lookup_fn, lookup_defined_here(ctx.soylent.id))
-        |> Map.put(:fabrikam_admin?, true)
+        |> Map.put(:root_admin?, true)
 
       html = render_pill(assigns)
       refute html =~ "<button"
     end
 
-    test "overridden + fabrikam_admin? true is non-interactive (already overridden)", ctx do
+    test "overridden + root_admin? true is non-interactive (already overridden)", ctx do
       assigns =
         ctx.base_assigns
-        |> Map.put(:lookup_fn, lookup_overridden(ctx.soylent.id, ctx.fabrikam.id))
-        |> Map.put(:fabrikam_admin?, true)
+        |> Map.put(:lookup_fn, lookup_overridden(ctx.soylent.id, ctx.acme.id))
+        |> Map.put(:root_admin?, true)
 
       html = render_pill(assigns)
       refute html =~ "<button"
@@ -285,21 +285,21 @@ defmodule PlatformWeb.Components.InheritancePillTest do
   end
 
   describe "non-admin tooltip" do
-    test "inherited + fabrikam_admin? false carries the permission tooltip text", ctx do
+    test "inherited + root_admin? false carries the permission tooltip text", ctx do
       assigns =
         ctx.base_assigns
-        |> Map.put(:lookup_fn, lookup_inherited(ctx.soylent.id, ctx.fabrikam.id))
-        |> Map.put(:fabrikam_admin?, false)
+        |> Map.put(:lookup_fn, lookup_inherited(ctx.soylent.id, ctx.acme.id))
+        |> Map.put(:root_admin?, false)
 
       html = render_pill(assigns)
-      assert html =~ "Only Fabrikam admins can override"
+      assert html =~ "Only root-org admins can override"
     end
 
     test "non-admin tooltip uses cursor-not-allowed to signal disabled affordance", ctx do
       assigns =
         ctx.base_assigns
-        |> Map.put(:lookup_fn, lookup_inherited(ctx.soylent.id, ctx.fabrikam.id))
-        |> Map.put(:fabrikam_admin?, false)
+        |> Map.put(:lookup_fn, lookup_inherited(ctx.soylent.id, ctx.acme.id))
+        |> Map.put(:root_admin?, false)
 
       html = render_pill(assigns)
       assert html =~ "cursor-not-allowed"
@@ -309,10 +309,10 @@ defmodule PlatformWeb.Components.InheritancePillTest do
       assigns =
         ctx.base_assigns
         |> Map.put(:lookup_fn, lookup_defined_here(ctx.soylent.id))
-        |> Map.put(:fabrikam_admin?, false)
+        |> Map.put(:root_admin?, false)
 
       html = render_pill(assigns)
-      refute html =~ "Only Fabrikam admins can override"
+      refute html =~ "Only root-org admins can override"
     end
   end
 
@@ -332,7 +332,7 @@ defmodule PlatformWeb.Components.InheritancePillTest do
   # five-org SEEDED set, and a sixth seeded org would turn them red.
   describe "cyberdyne scope" do
     setup do
-      admin = create_fabrikam_admin!()
+      admin = create_acme_admin!()
       {:ok, cyberdyne} = Tenancy.create_org(admin, %{name: "Cyberdyne", slug: "cyberdyne"})
       {:ok, cyberdyne: cyberdyne}
     end
@@ -343,7 +343,7 @@ defmodule PlatformWeb.Components.InheritancePillTest do
         scope: :cyberdyne,
         record_key: :my_skill,
         default: nil,
-        fabrikam_admin?: false,
+        root_admin?: false,
         lookup_fn: build_lookup(%{{ctx.cyberdyne.id, :my_skill} => "cyberdyne-local"})
       }
 
@@ -359,11 +359,11 @@ defmodule PlatformWeb.Components.InheritancePillTest do
         scope: :cyberdyne,
         record_key: :my_skill,
         default: nil,
-        fabrikam_admin?: false,
+        root_admin?: false,
         lookup_fn:
           build_lookup(%{
             {ctx.cyberdyne.id, :my_skill} => "cyberdyne-local",
-            {ctx.fabrikam.id, :my_skill} => "fabrikam-default"
+            {ctx.acme.id, :my_skill} => "acme-default"
           })
       }
 
@@ -383,15 +383,15 @@ defmodule PlatformWeb.Components.InheritancePillTest do
           scope: :cyberdyne,
           record_key: :my_skill,
           default: nil,
-          fabrikam_admin?: false,
+          root_admin?: false,
           lookup_fn: build_lookup(%{{ctx.cyberdyne.id, :my_skill} => "v"})
         })
 
       assert html =~ Tenancy.scope_color(:cyberdyne)
     end
 
-    test "inherited resolves cyberdyne's parent to the fabrikam accent, not cyberdyne's", ctx do
-      # A tenant inherits from the root, so the SOURCE org here is Fabrikam.
+    test "inherited resolves cyberdyne's parent to the acme accent, not cyberdyne's", ctx do
+      # A tenant inherits from the root, so the SOURCE org here is Acme.
       # `:inherited` renders no accent at all (`accent_class(:inherited, _)`
       # is nil) — asserted so a future accent-on-inherited change has to
       # come past this test.
@@ -401,11 +401,11 @@ defmodule PlatformWeb.Components.InheritancePillTest do
           scope: :cyberdyne,
           record_key: :my_skill,
           default: nil,
-          fabrikam_admin?: false,
-          lookup_fn: build_lookup(%{{ctx.fabrikam.id, :my_skill} => "fabrikam-default"})
+          root_admin?: false,
+          lookup_fn: build_lookup(%{{ctx.acme.id, :my_skill} => "acme-default"})
         })
 
-      assert html =~ "Inherited from Fabrikam"
+      assert html =~ "Inherited from Acme"
       refute html =~ "text-cyberdyne"
     end
 
@@ -413,14 +413,14 @@ defmodule PlatformWeb.Components.InheritancePillTest do
       # The sibling suites assert the exact five-org seeded set; this pins
       # that a runtime create does not join it.
       slugs = Tenancy.list_orgs() |> Enum.map(& &1.slug) |> Enum.sort()
-      assert slugs == ~w(paragon soylent fabrikam wayne_tech sxi cyberdyne)
-      assert ctx.cyberdyne.parent_org_id == ctx.fabrikam.id
+      assert slugs == ~w(acme paragon soylent wayne_tech sxi cyberdyne)
+      assert ctx.cyberdyne.parent_org_id == ctx.acme.id
       assert Tenancy.tier(ctx.cyberdyne) == :tenant
     end
   end
 
-  # Fabrikam-admin actor — `Tenancy.create_org/2` refuses anyone else.
-  defp create_fabrikam_admin! do
+  # Acme-admin actor — `Tenancy.create_org/2` refuses anyone else.
+  defp create_acme_admin! do
     n = System.unique_integer([:positive])
 
     user =
@@ -435,7 +435,7 @@ defmodule PlatformWeb.Components.InheritancePillTest do
     %Platform.Tenancy.OrgMembership{}
     |> Platform.Tenancy.OrgMembership.changeset(%{
       user_id: user.id,
-      org_id: Tenancy.get_org_by_slug!("fabrikam").id,
+      org_id: Tenancy.get_org_by_slug!("acme").id,
       role: "admin"
     })
     |> Platform.Repo.insert!()

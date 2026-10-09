@@ -20,6 +20,8 @@ defmodule PlatformWeb.ChatLiveSectionGroupingTest do
   alias Platform.Chat.Space
   alias PlatformWeb.ChatLive
 
+  require Ecto.Query
+
   # Bucket keys are runtime-derived (one per org) as of stage 3, so the
   # expected key set comes from the same public helper the template uses
   # rather than a second hardcoded list that could drift from it.
@@ -64,7 +66,7 @@ defmodule PlatformWeb.ChatLiveSectionGroupingTest do
       result = ChatLive.channel_sections([ch], [])
 
       assert result.sub_orgs["Soylent"] == [ch]
-      assert result.sub_orgs["Fabrikam"] == []
+      assert result.sub_orgs["Acme"] == []
     end
 
     test "a channel in the Wayne-Tech org (slug `wayne_tech`) lands in the Wayne-Tech bucket" do
@@ -73,7 +75,7 @@ defmodule PlatformWeb.ChatLiveSectionGroupingTest do
       result = ChatLive.channel_sections([ch], [])
 
       assert result.sub_orgs["Wayne-Tech"] == [ch]
-      assert result.sub_orgs["Fabrikam"] == []
+      assert result.sub_orgs["Acme"] == []
     end
 
     test "a channel in the SXI org lands in the SXI bucket" do
@@ -82,18 +84,18 @@ defmodule PlatformWeb.ChatLiveSectionGroupingTest do
       result = ChatLive.channel_sections([ch], [])
 
       assert result.sub_orgs["SXI"] == [ch]
-      assert result.sub_orgs["Fabrikam"] == []
+      assert result.sub_orgs["Acme"] == []
     end
 
-    test "a channel with no resolvable org falls through to the Fabrikam default" do
+    test "a channel with no resolvable org falls through to the Acme default" do
       ch = channel("general")
 
       result = ChatLive.channel_sections([ch], [])
 
-      assert result.sub_orgs["Fabrikam"] == [ch]
+      assert result.sub_orgs["Acme"] == [ch]
     end
 
-    test "a channel whose org cannot be resolved falls through to Fabrikam" do
+    test "a channel whose org cannot be resolved falls through to Acme" do
       # `soylent-news` names no org, so the fixture leaves org_id nil and the
       # channel takes the explicit default-bucket clause. Nothing about the
       # channel's own slug is consulted any more — this used to pass because
@@ -103,7 +105,7 @@ defmodule PlatformWeb.ChatLiveSectionGroupingTest do
 
       result = ChatLive.channel_sections([ch], [])
 
-      assert result.sub_orgs["Fabrikam"] == [ch]
+      assert result.sub_orgs["Acme"] == [ch]
       assert result.sub_orgs["Soylent"] == []
     end
 
@@ -258,22 +260,41 @@ defmodule PlatformWeb.ChatLiveSectionGroupingTest do
              "channel with org_id = SXI bucketed by its slug instead of its org"
     end
 
-    test "Fixture D: a channel slugged `cyberdyne` under the Fabrikam org buckets under Fabrikam" do
-      fabrikam = Platform.Tenancy.get_org_by_slug!("fabrikam")
-      ch = org_channel("cyberdyne", fabrikam.id)
+    test "Fixture D: a channel slugged `cyberdyne` under the Acme org buckets under Acme" do
+      acme = Platform.Tenancy.get_org_by_slug!("acme")
+      ch = org_channel("cyberdyne", acme.id)
 
-      assert hidden_bucket_of(ch) == "Fabrikam",
-             "slug match beat org_id: a Fabrikam channel slugged `cyberdyne` " <>
+      assert hidden_bucket_of(ch) == "Acme",
+             "slug match beat org_id: an Acme channel slugged `cyberdyne` " <>
                "was filed under Cyberdyne"
     end
 
-    test "Fixture E: a channel with org_id: nil keeps today's Fabrikam fallback" do
+    test "Fixture E: a channel with org_id: nil lands in the root org's own bucket" do
       # Deliberate pin of existing behaviour, not an aspiration. Personal /
-      # unscoped spaces must keep landing in the default tenant bucket after
-      # the stage-3 rewrite.
+      # unscoped spaces keep landing in the root org's bucket. Since task
+      # 01a116de stage 3 that bucket is named by the root ROW, not by a
+      # compiled literal: this database's root is the neutral `Acme` fixture
+      # (task 01a116de stage 4), so the literal below is DATA.
+      assert Platform.Tenancy.get_root_org().name == "Acme"
+
       ch = org_channel("unscoped-thing", nil)
 
-      assert hidden_bucket_of(ch) == "Fabrikam"
+      assert hidden_bucket_of(ch) == "Acme"
+    end
+
+    test "Fixture E': the nil-org bucket follows a renamed root row" do
+      root = Platform.Tenancy.get_root_org()
+
+      {1, _} =
+        Platform.Repo.update_all(
+          Ecto.Query.from(o in Platform.Tenancy.Org, where: o.id == ^root.id),
+          set: [name: "Root Org"]
+        )
+
+      ch = org_channel("unscoped-thing", nil)
+
+      assert hidden_bucket_of(ch) == "Root Org"
+      refute "Acme" in sub_org_keys()
     end
   end
 
@@ -305,14 +326,14 @@ defmodule PlatformWeb.ChatLiveSectionGroupingTest do
       # shipped orgs, so it also exercises the binary-slug path: its bucket
       # resolves to the org row's slug and name, not to a closed map
       # (task 01a0938b stage 1).
-      fabrikam = Platform.Tenancy.get_org_by_slug!("fabrikam")
+      acme = Platform.Tenancy.get_org_by_slug!("acme")
 
       org =
         Platform.Repo.insert!(
           Platform.Tenancy.Org.changeset(%Platform.Tenancy.Org{}, %{
             name: "Newclient",
             slug: "new_client",
-            parent_org_id: fabrikam.id
+            parent_org_id: acme.id
           })
         )
 

@@ -94,14 +94,14 @@
   </div>
   <%!-- Desktop icon-rail (lg+ width). Single-source-of-truth destination
        list lives in PlatformWeb.Components.IconRail.destinations/1; the
-       template here just hands off current_path / is_fabrikam_user /
+       template here just hands off current_path / root_user /
        sidebar_collapsed and lets the component own the rendering. Mobile
        gets the matching `<.bottom_rail>` below. Admin tiles are gated by
-       `is_fabrikam_user` and never render in the DOM for non-Fabrikam users (task
+       `root_user` and never render in the DOM for non-root users (task
        019e389b Stage 3 — replaces the inline 11-link sidebar). --%>
   <.icon_rail
     current_path={@current_path}
-    is_fabrikam_user={@is_fabrikam_user}
+    root_user={@root_user}
     sidebar_collapsed={@sidebar_collapsed}
     inbox_unread_count={@inbox_unread_count}
     chat_unread_count={@chat_unread_count}
@@ -450,13 +450,13 @@
     </main>
 
     <%!-- Mobile bottom-rail (task 019e389b Stage 3) — keys off `current_path`
-         + `is_fabrikam_user` from the same single source of truth as the desktop
+         + `root_user` from the same single source of truth as the desktop
          icon-rail above. lg:hidden inside the component itself so desktop
          continues to use the icon-rail. Tasks-badge wiring is parked: the
          old `<.bottom_nav>` rendered it; the icon-rail rev re-introduces
          badge support in a later stage (badge data assign `@tasks_count`
          still computed in `shell_live.ex` for the future). --%>
-    <.bottom_rail current_path={@current_path} is_fabrikam_user={@is_fabrikam_user} />
+    <.bottom_rail current_path={@current_path} root_user={@root_user} />
 
     <%!-- Mobile More sheet (task 019e1322 Stage 2) — bottom sheet that surfaces
          the long-tail destinations (Skills, Changelog, Agent Resources, Org
@@ -466,7 +466,7 @@
     <.more_sheet
       open={@more_sheet_open}
       current_user={@current_user}
-      is_fabrikam_user={@is_fabrikam_user}
+      root_user={@root_user}
     />
 
     <%!-- Persistent meeting bar (survives navigation) --%>

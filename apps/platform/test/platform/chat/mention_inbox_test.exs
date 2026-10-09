@@ -17,7 +17,7 @@ defmodule Platform.Chat.MentionInboxTest do
   """
   use Platform.DataCase, async: false
 
-  import Platform.TenancyFixtures, only: [fabrikam_org_id: 0]
+  import Platform.TenancyFixtures, only: [acme_org_id: 0]
 
   alias Platform.Accounts.User
   alias Platform.Chat
@@ -376,7 +376,7 @@ defmodule Platform.Chat.MentionInboxTest do
       alice = create_user!("Alice")
       bob = create_user!("Bob")
 
-      space = create_space("channel", %{name: "General", org_id: fabrikam_org_id()})
+      space = create_space("channel", %{name: "General", org_id: acme_org_id()})
       refute is_nil(space.slug), "org-scoped channels still HAVE a slug"
 
       alice_p = add_user(space.id, alice, "Alice")

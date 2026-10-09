@@ -472,12 +472,12 @@ defmodule PlatformWeb.ChatLive do
       # Collapse state for the sidebar's "Archived" group (task 019e95ea
       # stage 2) — collapsed by default, toggled by `toggle_archived_section`.
       |> assign(:archived_open, false)
-      # Whether the CURRENT user may unarchive the active space (Fabrikam admin
+      # Whether the CURRENT user may unarchive the active space (root-org admin
       # or creator). UI affordance only — `Chat.unarchive_space/2` is the
       # gate. Recomputed wherever :active_space is (re)assigned.
       |> assign(:can_unarchive?, false)
       # Whether the CURRENT user may cancel a scheduled deletion on the
-      # active space (task 019e95ea stage 4). Fabrikam admin ONLY — creators
+      # active space (task 019e95ea stage 4). root-org admin ONLY — creators
       # don't qualify, mirroring `Chat.cancel_space_deletion/2`. Affordance
       # only; recomputed wherever :active_space is (re)assigned.
       |> assign(:can_cancel_deletion?, false)
@@ -577,31 +577,31 @@ defmodule PlatformWeb.ChatLive do
       # normal until the user opts into editing. Desktop only (the whole
       # rail is `hidden lg:flex`); mobile is out of scope for this stack.
       |> assign(:sidebar_edit, false)
-      # Fabrikam-admin "Edit default" mode (chat sidebar Stage 6). A SEPARATE mode
+      # root-admin "Edit default" mode (chat sidebar Stage 6). A SEPARATE mode
       # from the personal "Edit layout" (@sidebar_edit): admin-edit routes the
       # same gestures to the GLOBAL org default (Sidebar Stage 2 API) instead
-      # of the acting user's prefs, so a Fabrikam admin curates what every user
-      # sees by default. Visible ONLY to Fabrikam admins (@fabrikam_admin? gate) and
+      # of the acting user's prefs, so a root-org admin curates what every user
+      # sees by default. Visible ONLY to root-org admins (@root_admin? gate) and
       # mutually exclusive with @sidebar_edit — entering one exits the other.
       #
-      # We compute @fabrikam_admin? here from the resolved user_id (rather than
+      # We compute @root_admin? here from the resolved user_id (rather than
       # relying solely on the LiveAuth `:default` on_mount that also assigns it
       # on the /chat route) so the assign is guaranteed present on BOTH mount
       # paths — the standalone surface AND the embedded child LV (which mounts
       # via `embedded_mount/3` and does not run the LiveAuth on_mount chain).
       # The actor we pass to every Sidebar.* admin write is `%{id: user_id}`,
-      # the same shape fabrikam_admin?/1 authorizes, so the client-side toggle and
+      # the same shape root_admin?/1 authorizes, so the client-side toggle and
       # the server-side gate agree. Desktop only — the whole rail is
       # `hidden lg:flex`; the admin toggle lives inside that aside.
-      |> assign(:fabrikam_admin?, Platform.Tenancy.fabrikam_admin?(%{id: user_id}))
-      # Who may edit the goal. Fabrikam admin only, mirroring
+      |> assign(:root_admin?, Platform.Tenancy.root_admin?(%{id: user_id}))
+      # Who may edit the goal. root-org admin only, mirroring
       # `:can_cancel_deletion?` above: the goal is org-wide state with a
       # daily heartbeat behind it, not a per-user preference. This is an
       # AFFORDANCE — `save_goal` re-checks it server-side before writing.
-      |> assign(:can_edit_goal?, Platform.Tenancy.fabrikam_admin?(%{id: user_id}))
+      |> assign(:can_edit_goal?, Platform.Tenancy.root_admin?(%{id: user_id}))
       # Container-lifecycle affordances on the org section headers (task
       # 019f4eaa stage 6). `:tenant_org_ids` is the set of NON-root org ids —
-      # the root (Fabrikam) section never gets archive controls (the lifecycle
+      # the root section never gets archive controls (the lifecycle
       # refuses it). `:lifecycle_menu_key` is the single open kebab menu;
       # `:delete_modal` is `nil` or the `%{type:, id:, name:}` the confirm
       # dialog targets.
@@ -781,7 +781,7 @@ defmodule PlatformWeb.ChatLive do
         # mount picks up its subscription without a reload.
         ChatPubSub.subscribe_sidebar(user_id)
         # Shared org-default topic (Stage 6): a `:sidebar_defaults_changed`
-        # broadcast from a Fabrikam-admin curation write (rename / recolor / reorder
+        # broadcast from a root-admin curation write (rename / recolor / reorder
         # / reassign) triggers a resolver recompute in EVERY connected session,
         # so an admin's default change is visible to all users live.
         ChatPubSub.subscribe_sidebar_defaults()
@@ -914,7 +914,7 @@ defmodule PlatformWeb.ChatLive do
         |> assign(:page_title, page_title)
         |> assign_active_space(space)
         |> assign(:can_unarchive?, can_unarchive?(space, socket.assigns.user_id))
-        |> assign(:can_cancel_deletion?, socket.assigns.fabrikam_admin?)
+        |> assign(:can_cancel_deletion?, socket.assigns.root_admin?)
         |> assign(:current_participant, participant)
         # Same teardown as the standalone surface's `handle_params/3`. The
         # embed bootstraps once per mount, so today this clears an already-
@@ -1098,7 +1098,7 @@ defmodule PlatformWeb.ChatLive do
        |> assign(:page_title, page_title)
        |> assign_active_space(space)
        |> assign(:can_unarchive?, can_unarchive?(space, socket.assigns.user_id))
-       |> assign(:can_cancel_deletion?, socket.assigns.fabrikam_admin?)
+       |> assign(:can_cancel_deletion?, socket.assigns.root_admin?)
        |> assign(:current_participant, participant)
        # Reconnect-aware meeting restore (task 019e4b3e stage 2): after a
        # transient LV socket drop, if the user still has an active live
@@ -1592,7 +1592,7 @@ defmodule PlatformWeb.ChatLive do
   # sectioned rail (or the chat-header pill) narrows the visible sub-org
   # sections to just that scope. Clicking the same scope again clears the
   # filter (toggle semantics). Payload `scope` is the atom name as a
-  # string (e.g. "fabrikam", "wayne_tech"). Unknown values clear the filter.
+  # string (e.g. "sxi", "wayne_tech"). Unknown values clear the filter.
   #
   # Future hook: Stack B (MT/RBAC) will replace the in-template filter
   # with a `?scope=` query-string patch so the filter state is shareable.
@@ -1646,7 +1646,7 @@ defmodule PlatformWeb.ChatLive do
 
   # Open/close the sidebar layout overflow menu (chat sidebar header). The
   # menu is the SINGLE entry point that fans out to personal-edit and (for
-  # Fabrikam admins) admin-edit, so the ~260px rail header only ever hosts one
+  # root-org admins) admin-edit, so the ~260px rail header only ever hosts one
   # control. Closing on phx-click-away / Escape is handled in the template;
   # this handler is the explicit toggle on the "More" button itself.
   def handle_event("toggle_sidebar_menu", _params, socket) do
@@ -1687,13 +1687,13 @@ defmodule PlatformWeb.ChatLive do
      |> ShellLive.queue_chat_unread_refresh()}
   end
 
-  # ── Fabrikam-admin "Edit default" mode (chat sidebar Stage 6) ──────────────
+  # ── root-admin "Edit default" mode (chat sidebar Stage 6) ──────────────
   #
   # A SEPARATE mode from the personal "Edit layout" above. Visible ONLY to
-  # Fabrikam admins and routes gestures to the GLOBAL org default (Sidebar Stage 2
+  # root-org admins and routes gestures to the GLOBAL org default (Sidebar Stage 2
   # API), not the acting user's prefs. Every write re-checks authorization
   # SERVER-SIDE by going through `Sidebar.*`, which gates on
-  # `Tenancy.fabrikam_admin?/1` — the toggle + controls are an affordance, never
+  # `Tenancy.root_admin?/1` — the toggle + controls are an affordance, never
   # the gate. A forged event from a non-admin client returns
   # `{:error, :unauthorized}` and we no-op (with a flash). On success we
   # recompute the acting admin's own `@sidebar_sections` and broadcast
@@ -1701,11 +1701,11 @@ defmodule PlatformWeb.ChatLive do
 
   # Flip the rail between normal and admin-edit (curate org default) mode.
   # Entering admin-edit always exits personal-edit (mutual exclusivity). We
-  # re-check `@fabrikam_admin?` here too so a forged toggle from a non-admin
+  # re-check `@root_admin?` here too so a forged toggle from a non-admin
   # client can't even open the mode (the per-gesture Sidebar gate is the real
   # backstop, but refusing to flip the assign keeps the UI honest).
   def handle_event("toggle_sidebar_admin_edit", _params, socket) do
-    if socket.assigns.fabrikam_admin? do
+    if socket.assigns.root_admin? do
       {:noreply,
        socket
        |> assign(:sidebar_admin_edit, !socket.assigns.sidebar_admin_edit)
@@ -1739,16 +1739,16 @@ defmodule PlatformWeb.ChatLive do
     end
   end
 
-  # Recolor an org-default section (admin-edit). `color` is one of the 5 scope
-  # tokens (fabrikam / soylent / wayne-tech / sxi / paragon) — the compact palette
-  # in the section header.
+  # Recolor an org-default section (admin-edit). `color` is one of the five
+  # sibling scope tokens (soylent / wayne-tech / sxi / paragon / cyberdyne) or
+  # the section's OWN org token — the compact palette in the section header.
   def handle_event(
         "recolor_section_default",
         %{"section_id" => section_id, "color" => color},
         socket
       )
       when is_binary(section_id) and is_binary(color) do
-    if valid_scope_token?(color) do
+    if valid_scope_token?(color, section_id, socket.assigns[:sidebar_sections] || []) do
       case Sidebar.recolor_section(%{id: socket.assigns.user_id}, section_id, color) do
         {:ok, _section} ->
           {:noreply, recompute_sidebar_after_admin_write(socket)}
@@ -1788,7 +1788,7 @@ defmodule PlatformWeb.ChatLive do
   # already requested and rendered. It cannot re-point an approved move at a
   # different channel or a different destination.
 
-  # Step 1 — open the confirmation. `@fabrikam_admin?` is re-checked here (the
+  # Step 1 — open the confirmation. `@root_admin?` is re-checked here (the
   # control is an affordance, never the gate) so a non-admin's forged request
   # assigns nothing and therefore has nothing to confirm.
   def handle_event(
@@ -1797,7 +1797,7 @@ defmodule PlatformWeb.ChatLive do
         socket
       )
       when is_binary(channel_id) and is_binary(section_id) do
-    with true <- socket.assigns.fabrikam_admin?,
+    with true <- socket.assigns.root_admin?,
          %{} = destination <- section_summary(socket.assigns.sidebar_sections, section_id),
          %Chat.Space{kind: "channel"} = channel <- Chat.get_space(channel_id),
          # The SOURCE org is the channel's own `org_id`, read from the ORG
@@ -1903,7 +1903,7 @@ defmodule PlatformWeb.ChatLive do
       match?(%{channel_id: ^channel_id}, socket.assigns.reassign_picker)
 
     with false <- already_open?,
-         true <- socket.assigns.fabrikam_admin?,
+         true <- socket.assigns.root_admin?,
          %Chat.Space{} = channel <- Chat.get_space(channel_id),
          true <- movable_channel?(channel) do
       {:noreply,
@@ -1922,8 +1922,8 @@ defmodule PlatformWeb.ChatLive do
   end
 
   # ── Container lifecycle (task 019f4eaa stage 6) ───────────────────────
-  # Fabrikam-admin-only archive / schedule-deletion on the org section headers.
-  # The controls only render behind `@fabrikam_admin?` and only for tenant orgs
+  # root-admin-only archive / schedule-deletion on the org section headers.
+  # The controls only render behind `@root_admin?` and only for tenant orgs
   # (never the root), and every call re-authorizes underneath in
   # `Platform.Tenancy.Lifecycle`, so a forged event still gets refused.
 
@@ -2659,7 +2659,7 @@ defmodule PlatformWeb.ChatLive do
   end
 
   # Unarchive from the read-only banner. Authorization lives in
-  # `Chat.unarchive_space/2` (Fabrikam admin or creator) — the banner button is
+  # `Chat.unarchive_space/2` (root-org admin or creator) — the banner button is
   # UI affordance only. On success we re-ensure the user's participant row
   # (implicit join is frozen on archived spaces, so `ensure_participant/2`
   # returned nil when the user entered the archived view) and refresh the
@@ -2720,7 +2720,7 @@ defmodule PlatformWeb.ChatLive do
   end
 
   # Cancel a scheduled deletion from the read-only banner (task 019e95ea
-  # stage 4). Fabrikam-admin only — `Chat.cancel_space_deletion/2` is the gate,
+  # stage 4). root-admin only — `Chat.cancel_space_deletion/2` is the gate,
   # the banner button is UI affordance. The space stays archived (the banner
   # reverts to the archive copy with its Unarchive button) and reappears in
   # the sidebar's Archived section, which excludes deletion-flagged channels.
@@ -2736,7 +2736,7 @@ defmodule PlatformWeb.ChatLive do
              socket
              |> assign_active_space(updated)
              |> assign(:can_unarchive?, can_unarchive?(updated, socket.assigns.user_id))
-             |> assign(:can_cancel_deletion?, socket.assigns.fabrikam_admin?)
+             |> assign(:can_cancel_deletion?, socket.assigns.root_admin?)
              |> assign(:archived_channels, rail_archived_channels(socket))
              |> put_flash(:info, "Deletion cancelled — the channel remains archived.")}
 
@@ -3373,7 +3373,7 @@ defmodule PlatformWeb.ChatLive do
   # section ids (data-section-id); we resolve them against the currently
   # rendered `@sidebar_sections` to confirm they're real, build the new
   # ordered id list, and write it via `Sidebar.reorder_sections/2` (which
-  # gates on fabrikam_admin?). On success we broadcast `:sidebar_defaults_changed`
+  # gates on root_admin?). On success we broadcast `:sidebar_defaults_changed`
   # so all other sessions converge, then recompute this admin's view.
   defp reorder_sections_default(socket, from_id, to_id) do
     current_ids = Enum.map(socket.assigns.sidebar_sections, fn %{section: s} -> s.id end)
@@ -3490,8 +3490,56 @@ defmodule PlatformWeb.ChatLive do
   # The scope tokens are the recolor palette — whitelist-validate the
   # inbound color so a forged payload can't write an arbitrary string onto a
   # section's `color` (defense-in-depth on top of the admin gate).
-  defp valid_scope_token?(color),
-    do: color in ["paragon", "soylent", "fabrikam", "wayne-tech", "sxi", "cyberdyne"]
+  #
+  # The palette is the five compiled sibling tokens plus the section's OWN
+  # org token (task 01a116de stage 3). The root org has no compiled token:
+  # it is install data, so its swatch is read off its row and an admin can
+  # always put a section back on its own org's colour.
+  @sibling_scope_tokens ~w(soylent wayne-tech sxi paragon cyberdyne)
+
+  @doc false
+  @spec sibling_scope_tokens() :: [String.t()]
+  def sibling_scope_tokens, do: @sibling_scope_tokens
+
+  defp valid_scope_token?(color, section_id, sidebar_sections) do
+    color in @sibling_scope_tokens or color == own_scope_token(sidebar_sections, section_id)
+  end
+
+  defp own_scope_token(sidebar_sections, section_id) do
+    Enum.find_value(sidebar_sections, fn
+      %{section: %{id: ^section_id} = section} -> section_own_token(section)
+      _ -> nil
+    end)
+  end
+
+  @doc """
+  The CSS-form colour token a section wears when it follows its own org: the
+  org slug as stored with `_` -> `-`, the same rule `Sidebar` seeds `color`
+  with. `nil` when the section was loaded without its org.
+  """
+  @spec section_own_token(map()) :: String.t() | nil
+  def section_own_token(section), do: section |> Map.get(:org_slug) |> css_slug()
+
+  @doc """
+  The `data-scope` value that colours a section's header dot through the
+  slug-agnostic var path (`PlatformWeb.Components.ScopeColorStyles`), or
+  `nil` when the dot takes a compiled `bg-<token>-dot` class instead or the
+  section wears a colour that is not its own org's.
+
+  This is how the root org's dot is coloured: it has no compiled class, so
+  its colour comes from its own row (`color_hue` / `color_chroma` /
+  `color_lightness`), whatever the root is called on this install.
+  """
+  @spec section_dot_scope(map()) :: String.t() | nil
+  def section_dot_scope(section) do
+    color = Map.get(section, :color)
+    org_slug = Map.get(section, :org_slug)
+
+    if is_nil(section_dot_class(color)) and is_binary(org_slug) and
+         css_slug(org_slug) == color,
+       do: org_slug,
+       else: nil
+  end
 
   # Shared tail for every successful admin-default write: broadcast the
   # shared-defaults invalidation to all OTHER sessions (so non-admin users and
@@ -3980,7 +4028,7 @@ defmodule PlatformWeb.ChatLive do
   end
 
   # Shared org-DEFAULT invalidation (chat sidebar Stage 6). Fired on the
-  # `chat:sidebar:defaults` topic when a Fabrikam admin curates the default layer
+  # `chat:sidebar:defaults` topic when a root-org admin curates the default layer
   # (rename / recolor / reorder / reassign). EVERY connected session receives
   # this (except the acting admin's own tab, which recomputed synchronously)
   # and refreshes its rail so the admin's default change is visible to all
@@ -4110,7 +4158,7 @@ defmodule PlatformWeb.ChatLive do
       # to that lookup — which is how navigating to an existing channel could
       # silently INSERT a duplicate of it. The lookup is `org_id IS NULL`
       # specifically, NOT the unscoped oldest-row branch, so ADR-0042 per-org
-      # slug scoping ("#general" in Fabrikam vs in SXI) is untouched: a channel
+      # slug scoping ("#general" in Acme vs in SXI) is untouched: a channel
       # belonging to ANOTHER org still bootstraps a fresh one for this org.
       #
       # The adopted row is returned AS IS, not stamped with the active org.
@@ -4153,7 +4201,7 @@ defmodule PlatformWeb.ChatLive do
   # migration; meeting/dm/group spaces intentionally cross-org). The
   # org-scoped `get_space_by_slug/2` filters them out; fall back to an
   # unscoped lookup, guarded by the reserved-prefix list so the ADR-0042
-  # per-org channel-slug scoping ("#general" in Fabrikam vs "#general" in SXI)
+  # per-org channel-slug scoping ("#general" in Acme vs "#general" in SXI)
   # is NEVER weakened for user-created channel slugs.
   defp system_prefix_fallback(slug) when is_binary(slug) do
     if Chat.reserved_slug_prefix?(slug) do
@@ -4386,10 +4434,10 @@ defmodule PlatformWeb.ChatLive do
   # soft-delete to reconcile. If the user is in the space they get their
   # existing row; otherwise a fresh row is inserted.
   # Task 019e95ea stage 2: UI mirror of the context-layer archive/unarchive
-  # authorization (Fabrikam admin or space creator). Affordance only — the real
+  # authorization (root-org admin or space creator). Affordance only — the real
   # gate is `with_space_lifecycle_authz/3` inside `Chat.unarchive_space/2`.
   defp can_unarchive?(space, user_id) do
-    Platform.Tenancy.fabrikam_admin?(%{id: user_id}) or space.created_by == user_id
+    Platform.Tenancy.root_admin?(%{id: user_id}) or space.created_by == user_id
   end
 
   defp ensure_participant(space_id, user_id) do
@@ -4474,7 +4522,7 @@ defmodule PlatformWeb.ChatLive do
   #       sub_orgs: %{
   #         "Paragon" => [Space.t()],
   #         "Soylent" => [Space.t()],
-  #         "Fabrikam"     => [Space.t()],    # catch-all for anything not matching another bucket
+  #         "Root Org" => [Space.t()],    # the root org's own name: catch-all for anything unmatched
   #         "Wayne-Tech" => [Space.t()],
   #         "SXI"      => [Space.t()]
   #       }
@@ -4491,7 +4539,8 @@ defmodule PlatformWeb.ChatLive do
   #   2. DM (`kind in ["dm", "group"]`) → :dms.
   #   3. Channel's `org_id` resolves to an org → that org's bucket.
   #   4. Anything else (`org_id: nil`, or an org that no longer exists) →
-  #      "Fabrikam" (today's default tenant). See `@default_bucket`.
+  #      the root org's own `name`, read from its row; `Channels` when the
+  #      install has no root row. See `default_bucket/1`.
   #
   # Sub-org bucket keys are stable string keys; the map preserves a key for
   # EVERY org even when the bucket is empty, so the template can render
@@ -4515,9 +4564,14 @@ defmodule PlatformWeb.ChatLive do
   # flat list, ordered by when the user pinned them. A `MapSet` is also
   # accepted, in which case the block falls back to input order.
   # The bucket a channel lands in when its `org_id` is nil (personal / unscoped
-  # spaces) or names an org that no longer exists. Deliberately preserved
-  # behaviour, pinned by Fixture E in chat_live_section_grouping_test.exs.
-  @default_bucket "Fabrikam"
+  # spaces) or names an org that no longer exists: the ROOT org's own `name`,
+  # read from the same `list_orgs/0` call as the other buckets, so it merges
+  # with the root's org bucket (the `Enum.uniq/1` in `bucket_names/2`). When
+  # there is no root row the literal below names the bucket. Pinned by
+  # Fixture E in chat_live_section_grouping_test.exs (task 01a116de stage 3:
+  # this used to be a compiled org name, which gave every install's rail a
+  # section named after one client).
+  @no_root_bucket "Channels"
 
   @doc """
   Group the user's channel + DM list into the sectioned-rail shape consumed
@@ -4566,13 +4620,13 @@ defmodule PlatformWeb.ChatLive do
     # ROW behind each bucket, so the rail can render a bucket's scope pill from
     # the org's slug and name instead of a closed map keyed on six display
     # names. Do NOT add a second `list_orgs/0` call for it.
-    {org_buckets, bucket_orgs} = org_indexes()
-    empty_buckets = Map.new(bucket_names(org_buckets), fn name -> {name, []} end)
+    {org_buckets, bucket_orgs, default_bucket} = org_indexes()
+    empty_buckets = Map.new(bucket_names(org_buckets, default_bucket), fn name -> {name, []} end)
 
     sub_orgs =
       unpinned_channels
       |> Enum.reduce(empty_buckets, fn channel, acc ->
-        bucket = channel_scope(channel, org_buckets)
+        bucket = channel_scope(channel, org_buckets, default_bucket)
         Map.update(acc, bucket, [channel], fn existing -> existing ++ [channel] end)
       end)
 
@@ -4864,7 +4918,6 @@ defmodule PlatformWeb.ChatLive do
   @spec section_scope_atom(String.t() | nil) :: atom() | nil
   def section_scope_atom("paragon"), do: :paragon
   def section_scope_atom("soylent"), do: :soylent
-  def section_scope_atom("fabrikam"), do: :fabrikam
   def section_scope_atom("wayne-tech"), do: :wayne_tech
   def section_scope_atom("sxi"), do: :sxi
   def section_scope_atom("cyberdyne"), do: :cyberdyne
@@ -4881,7 +4934,6 @@ defmodule PlatformWeb.ChatLive do
   @spec section_dot_class(String.t() | nil) :: String.t() | nil
   def section_dot_class("paragon"), do: "bg-paragon-dot"
   def section_dot_class("soylent"), do: "bg-soylent-dot"
-  def section_dot_class("fabrikam"), do: "bg-fabrikam-dot"
   def section_dot_class("wayne-tech"), do: "bg-wayne-tech-dot"
   def section_dot_class("sxi"), do: "bg-sxi-dot"
   def section_dot_class("cyberdyne"), do: "bg-cyberdyne-dot"
@@ -4902,7 +4954,7 @@ defmodule PlatformWeb.ChatLive do
   # "works for five, mysteriously broken for the sixth".
   @spec org_bucket_index() :: %{binary() => String.t()}
   defp org_bucket_index do
-    {org_buckets, _bucket_orgs} = org_indexes()
+    {org_buckets, _bucket_orgs, _default_bucket} = org_indexes()
     org_buckets
   end
 
@@ -4910,24 +4962,40 @@ defmodule PlatformWeb.ChatLive do
   # the value `scope_pill`'s `scope` attr takes — see `org_scope/1`.
   @type bucket_org :: %{slug: String.t(), name: String.t(), scope: atom() | String.t()}
 
-  # BOTH org indexes from ONE `Tenancy.list_orgs/0` read:
+  # BOTH org indexes, and the default bucket, from ONE `Tenancy.list_orgs/0`
+  # read:
   #
   #   * `org_buckets` — `org_id => display name`, what a channel buckets by.
   #   * `bucket_orgs` — `display name => bucket_org()`, the row behind each
   #     bucket, so a bucket's pill reads the org's slug and name rather than
   #     a closed name-keyed map (task 01a0938b stage 1).
+  #   * `default_bucket` — the root org's own `name` (structural:
+  #     `parent_org_id` is nil), or `@no_root_bucket` when there is none.
   #
   # Keyed by name because the bucket key IS the name. Two orgs sharing a name
   # already share a bucket in `org_buckets`; `bucket_orgs` inherits that
   # collision rather than introducing a new one.
-  @spec org_indexes() :: {%{binary() => String.t()}, %{String.t() => bucket_org()}}
+  @spec org_indexes() ::
+          {%{binary() => String.t()}, %{String.t() => bucket_org()}, String.t()}
   defp org_indexes do
     orgs = Platform.Tenancy.list_orgs()
 
     {
       Map.new(orgs, fn org -> {org.id, org.name} end),
-      Map.new(orgs, fn org -> {org.name, bucket_org(org)} end)
+      Map.new(orgs, fn org -> {org.name, bucket_org(org)} end),
+      default_bucket(orgs)
     }
+  end
+
+  @doc false
+  # The root org's own name off its row, else `@no_root_bucket`. Public for
+  # the grouping tests; never a compiled org name.
+  @spec default_bucket([map()]) :: String.t()
+  def default_bucket(orgs) do
+    Enum.find_value(orgs, @no_root_bucket, fn
+      %{parent_org_id: nil, name: name} when is_binary(name) and name != "" -> name
+      _ -> nil
+    end)
   end
 
   defp bucket_org(org), do: %{slug: org.slug, name: org.name, scope: org_scope(org.slug)}
@@ -4990,32 +5058,33 @@ defmodule PlatformWeb.ChatLive do
   defp css_slug(_), do: nil
 
   # Every bucket key the rail can render: one per org, plus the default bucket
-  # so the `org_id: nil` fallback always has somewhere to land even in a
-  # deployment where no org happens to be named "Fabrikam".
-  @spec bucket_names(%{binary() => String.t()}) :: [String.t()]
-  defp bucket_names(org_buckets) do
+  # so the `org_id: nil` fallback always has somewhere to land even on an
+  # install with no root row. With a root row the default IS the root's name,
+  # so the two merge here.
+  @spec bucket_names(%{binary() => String.t()}, String.t()) :: [String.t()]
+  defp bucket_names(org_buckets, default_bucket) do
     org_buckets
     |> Map.values()
-    |> then(&[@default_bucket | &1])
+    |> then(&[default_bucket | &1])
     |> Enum.uniq()
   end
 
   # Bucket a channel by the org it actually belongs to. Takes the pre-built
   # index rather than reading the DB — see the hoist in `channel_sections/5`.
-  defp channel_scope(%{org_id: org_id}, org_buckets) when is_binary(org_id) do
+  defp channel_scope(%{org_id: org_id}, org_buckets, default_bucket) when is_binary(org_id) do
     # An org_id naming an org that no longer exists takes the same explicit
     # fallback as a nil one, below.
-    Map.get(org_buckets, org_id, @default_bucket)
+    Map.get(org_buckets, org_id, default_bucket)
   end
 
   # DELIBERATE, not a catch-all fall-through: a space with no org (personal
   # spaces, DMs that reached this path, anything unscoped) keeps landing in the
-  # default tenant bucket, which is exactly where it landed before this stage.
+  # root org's bucket, which is exactly where it landed before this stage.
   # Fixture E in chat_live_section_grouping_test.exs pins this; if that test
   # changes, DM/personal behaviour was altered by accident.
-  defp channel_scope(%{org_id: nil}, _org_buckets), do: @default_bucket
+  defp channel_scope(%{org_id: nil}, _org_buckets, default_bucket), do: default_bucket
 
-  defp channel_scope(_channel, _org_buckets), do: @default_bucket
+  defp channel_scope(_channel, _org_buckets, default_bucket), do: default_bucket
 
   # ── Sectioned-rail render helpers (chat plan v2 Stage 2) ───────────────
   #
@@ -5030,7 +5099,10 @@ defmodule PlatformWeb.ChatLive do
   buckets — they're rendered separately above the sub-orgs.
   """
   @spec sub_org_order() :: [String.t()]
-  def sub_org_order, do: org_bucket_index() |> bucket_names() |> Enum.sort()
+  def sub_org_order do
+    {org_buckets, _bucket_orgs, default_bucket} = org_indexes()
+    org_buckets |> bucket_names(default_bucket) |> Enum.sort()
+  end
 
   # ── Per-user section order (chat plan v2 Stage 3) ──────────────────────
   #
@@ -5081,7 +5153,7 @@ defmodule PlatformWeb.ChatLive do
   #
   # Do NOT go back to matching the *channel's own* slug here: that made every
   # channel whose name wasn't a literal org slug (e.g. "orion") fall through
-  # to a `:fabrikam` default and mislabel its org (task 019fa0ac).
+  # to a compiled root-org default and mislabel its org (task 019fa0ac).
   #
   # Org slugs are stored underscore-form (`wayne_tech`); `section_scope_atom/1`
   # speaks the CSS-token form (`wayne-tech`), so normalize `_` -> `-` at the
@@ -5198,7 +5270,6 @@ defmodule PlatformWeb.ChatLive do
   @spec parse_scope(String.t()) :: atom() | nil
   def parse_scope("paragon"), do: :paragon
   def parse_scope("soylent"), do: :soylent
-  def parse_scope("fabrikam"), do: :fabrikam
   def parse_scope("wayne_tech"), do: :wayne_tech
   def parse_scope("sxi"), do: :sxi
   def parse_scope("cyberdyne"), do: :cyberdyne

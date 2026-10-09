@@ -22,16 +22,16 @@ defmodule PlatformWeb.ShellLiveTest do
       })
 
     # MT/RBAC stack 2 (task 019e3c4a): the admin nav gate now reads
-    # `Tenancy.fabrikam_admin_preloaded?/1` instead of the
-    # `Accounts.is_fabrikam_user?/1` stub. Default test users are admin so
+    # `Tenancy.root_admin_preloaded?/1` instead of the
+    # `Accounts.root_user?/1` stub. Default test users are admin so
     # the existing "renders rail / admin section" assertions keep working;
     # tests that need a non-admin can pass `role: "member"`.
     if role do
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+      acme = Tenancy.get_org_by_slug!("acme")
 
       Repo.insert!(%OrgMembership{
         user_id: user.id,
-        org_id: fabrikam.id,
+        org_id: acme.id,
         role: role
       })
     end
@@ -789,9 +789,9 @@ defmodule PlatformWeb.ShellLiveTest do
   #
   # The component-level rendering contract is covered by IconRailTest.
   # These tests check the *wiring*: shell layout passes the right assigns
-  # (current_path, is_fabrikam_user, sidebar_collapsed) to the icon-rail and
+  # (current_path, root_user, sidebar_collapsed) to the icon-rail and
   # bottom-rail at both breakpoints, and the Admin slot's DOM presence
-  # respects the is_fabrikam_user gate end-to-end.
+  # respects the root_user gate end-to-end.
   # ---------------------------------------------------------------------
 
   describe "icon-rail integration" do
@@ -838,8 +838,8 @@ defmodule PlatformWeb.ShellLiveTest do
       {:ok, _view, html} = live(conn, ~p"/tasks")
 
       # After MT/RBAC stack 2 (task 019e3c4a), the Admin tile is gated on
-      # `Tenancy.fabrikam_admin_preloaded?/1` instead of the
-      # `Accounts.is_fabrikam_user?/1` stub. Default test conn seeds an admin
+      # `Tenancy.root_admin_preloaded?/1` instead of the
+      # `Accounts.root_user?/1` stub. Default test conn seeds an admin
       # membership so the tile renders.
       assert html =~ ~s(data-destination="admin")
     end
@@ -880,19 +880,19 @@ defmodule PlatformWeb.ShellLiveTest do
     end
   end
 
-  describe "Admin gate (fabrikam_admin? + is_fabrikam_user)" do
-    test "is_fabrikam_user assign reflects real Fabrikam-root admin membership", %{conn: conn} do
+  describe "Admin gate (root_admin? + root_user)" do
+    test "root_user assign reflects real Acme-root admin membership", %{conn: conn} do
       conn = authenticated_conn(conn, role: "admin")
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      assert :sys.get_state(view.pid).socket.assigns.is_fabrikam_user == true
+      assert :sys.get_state(view.pid).socket.assigns.root_user == true
     end
 
-    test "is_fabrikam_user is false for a Fabrikam member (non-admin)", %{conn: conn} do
+    test "root_user is false for an Acme member (non-admin)", %{conn: conn} do
       conn = authenticated_conn(conn, role: "member")
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      assert :sys.get_state(view.pid).socket.assigns.is_fabrikam_user == false
+      assert :sys.get_state(view.pid).socket.assigns.root_user == false
     end
 
     test "More sheet renders the Admin section for an admin user", %{conn: conn} do
@@ -2685,7 +2685,7 @@ defmodule PlatformWeb.ShellLiveTest do
       Repo.insert!(%Platform.Tenancy.Org{
         name: "Reconcile Tenant #{n}",
         slug: "tenant_reconcile_#{n}",
-        parent_org_id: Tenancy.get_org_by_slug!("fabrikam").id
+        parent_org_id: Tenancy.get_org_by_slug!("acme").id
       })
     end
 
@@ -2850,7 +2850,7 @@ defmodule PlatformWeb.ShellLiveTest do
       user = Repo.get!(User, user_id)
       refute Tenancy.external_user?(user)
 
-      org = Tenancy.get_org_by_slug!("fabrikam")
+      org = Tenancy.get_org_by_slug!("acme")
       %{read_row: read_row, unread_row: unread_row} = mention_pair!(user, org.id)
 
       assert Inbox.unread_count(user_id) == 2

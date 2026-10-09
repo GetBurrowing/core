@@ -25,7 +25,7 @@ defmodule PlatformWeb.MeetingLiveProjectScopeTest do
   alias Platform.Tenancy.OrgMembership
 
   # `@example.com` keeps `Tenancy.derive_role_from_email/1` at `:member`;
-  # a `@example.com` address would derive admin and blanket-bypass the very
+  # a `@acme.test` address would derive admin and blanket-bypass the very
   # scope these tests pin.
   defp user!(role, org_id) do
     user =
@@ -63,13 +63,13 @@ defmodule PlatformWeb.MeetingLiveProjectScopeTest do
   end
 
   defp seed do
-    fabrikam_org_id = Platform.TenancyFixtures.fabrikam_org_id()
+    acme_org_id = Platform.TenancyFixtures.acme_org_id()
     tenant_org_id = Platform.TenancyFixtures.tenant_org_id("sxi")
 
-    own = project!(fabrikam_org_id, "Own Fabrikam Project #{System.unique_integer([:positive])}")
+    own = project!(acme_org_id, "Own Acme Project #{System.unique_integer([:positive])}")
     foreign = project!(tenant_org_id, "Foreign Project #{System.unique_integer([:positive])}")
 
-    %{fabrikam_org_id: fabrikam_org_id, own: own, foreign: foreign}
+    %{acme_org_id: acme_org_id, own: own, foreign: foreign}
   end
 
   describe "start-meeting project picker scoping" do
@@ -94,7 +94,7 @@ defmodule PlatformWeb.MeetingLiveProjectScopeTest do
       # Preconditions: an admin viewer bypasses the scope by design, and a
       # root-org viewer sees everything by design. Either would make a broken
       # filter look correct.
-      refute Tenancy.fabrikam_admin?(user)
+      refute Tenancy.root_admin?(user)
       refute Tenancy.root_member?(user)
 
       conn = init_test_session(conn, current_user_id: user.id)
@@ -113,11 +113,11 @@ defmodule PlatformWeb.MeetingLiveProjectScopeTest do
       refute foreign.name in options
     end
 
-    test "a Fabrikam root admin sees both orgs' projects", %{conn: conn} do
-      %{fabrikam_org_id: fabrikam_org_id, own: own, foreign: foreign} = seed()
-      admin = user!("admin", fabrikam_org_id)
+    test "an Acme root admin sees both orgs' projects", %{conn: conn} do
+      %{acme_org_id: acme_org_id, own: own, foreign: foreign} = seed()
+      admin = user!("admin", acme_org_id)
 
-      assert Tenancy.fabrikam_admin?(admin) == true
+      assert Tenancy.root_admin?(admin) == true
 
       conn = init_test_session(conn, current_user_id: admin.id)
       {:ok, view, _html} = live(conn, "/meetings")
@@ -196,7 +196,7 @@ defmodule PlatformWeb.MeetingLiveProjectScopeTest do
       {_foreign_project, foreign_meeting} = meeting!(foreign_org_id, "Foreign")
 
       user = user!("member", own_org_id)
-      refute Tenancy.fabrikam_admin?(user)
+      refute Tenancy.root_admin?(user)
       refute Tenancy.root_member?(user)
 
       {:ok, view, html} = live(index_conn(conn, user), "/meetings")

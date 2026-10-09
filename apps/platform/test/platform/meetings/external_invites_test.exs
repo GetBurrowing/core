@@ -59,7 +59,7 @@ defmodule Platform.Meetings.ExternalInvitesTest do
     |> Tenancy.Org.changeset(%{
       name: "ExtInvite Org #{n}",
       slug: "extinvite_#{n}",
-      parent_org_id: Tenancy.get_org_by_slug!("fabrikam").id
+      parent_org_id: Tenancy.get_org_by_slug!("acme").id
     })
     |> Repo.insert!()
   end

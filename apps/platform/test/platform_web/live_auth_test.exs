@@ -46,37 +46,37 @@ defmodule PlatformWeb.LiveAuthTest do
   end
 
   describe "on_mount(:default, ...)" do
-    test "assigns :current_user_org_membership + :fabrikam_admin? for an admin" do
+    test "assigns :current_user_org_membership + :root_admin? for an admin" do
       user = create_user!()
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
-      create_membership!(user, fabrikam, "admin")
+      acme = Tenancy.get_org_by_slug!("acme")
+      create_membership!(user, acme, "admin")
       loaded = Platform.Accounts.get_user(user.id)
 
       {:cont, socket} = LiveAuth.on_mount(:default, %{}, %{}, socket_with(loaded))
 
-      assert socket.assigns.fabrikam_admin? == true
-      assert %{role: :admin, org: %{slug: "fabrikam"}} = socket.assigns.current_user_org_membership
+      assert socket.assigns.root_admin? == true
+      assert %{role: :admin, org: %{slug: "acme"}} = socket.assigns.current_user_org_membership
     end
 
-    test "assigns :current_user_org_membership + fabrikam_admin?=false for a member" do
+    test "assigns :current_user_org_membership + root_admin?=false for a member" do
       user = create_user!()
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
-      create_membership!(user, fabrikam, "member")
+      acme = Tenancy.get_org_by_slug!("acme")
+      create_membership!(user, acme, "member")
       loaded = Platform.Accounts.get_user(user.id)
 
       {:cont, socket} = LiveAuth.on_mount(:default, %{}, %{}, socket_with(loaded))
 
-      assert socket.assigns.fabrikam_admin? == false
-      assert %{role: :member, org: %{slug: "fabrikam"}} = socket.assigns.current_user_org_membership
+      assert socket.assigns.root_admin? == false
+      assert %{role: :member, org: %{slug: "acme"}} = socket.assigns.current_user_org_membership
     end
 
-    test "assigns nil membership + fabrikam_admin?=false for an anonymous mount" do
+    test "assigns nil membership + root_admin?=false for an anonymous mount" do
       socket = %Socket{endpoint: PlatformWeb.Endpoint, assigns: %{__changed__: %{}, flash: %{}}}
       socket = Phoenix.Component.assign(socket, :current_user_record, nil)
 
       {:cont, socket} = LiveAuth.on_mount(:default, %{}, %{}, socket)
 
-      assert socket.assigns.fabrikam_admin? == false
+      assert socket.assigns.root_admin? == false
       assert is_nil(socket.assigns.current_user_org_membership)
     end
 
@@ -86,22 +86,22 @@ defmodule PlatformWeb.LiveAuthTest do
 
       {:cont, socket} = LiveAuth.on_mount(:default, %{}, %{}, socket)
 
-      assert socket.assigns.fabrikam_admin? == false
+      assert socket.assigns.root_admin? == false
       assert is_nil(socket.assigns.current_user_org_membership)
     end
   end
 
   describe "on_mount(:ensure_admin, ...)" do
-    test "continues when :fabrikam_admin? is true" do
+    test "continues when :root_admin? is true" do
       socket = %Socket{endpoint: PlatformWeb.Endpoint, assigns: %{__changed__: %{}, flash: %{}}}
-      socket = Phoenix.Component.assign(socket, :fabrikam_admin?, true)
+      socket = Phoenix.Component.assign(socket, :root_admin?, true)
 
       assert {:cont, _socket} = LiveAuth.on_mount(:ensure_admin, %{}, %{}, socket)
     end
 
-    test "halts and pushes a redirect when :fabrikam_admin? is false" do
+    test "halts and pushes a redirect when :root_admin? is false" do
       socket = %Socket{endpoint: PlatformWeb.Endpoint, assigns: %{__changed__: %{}, flash: %{}}}
-      socket = Phoenix.Component.assign(socket, :fabrikam_admin?, false)
+      socket = Phoenix.Component.assign(socket, :root_admin?, false)
 
       assert {:halt, socket} = LiveAuth.on_mount(:ensure_admin, %{}, %{}, socket)
 
@@ -111,7 +111,7 @@ defmodule PlatformWeb.LiveAuthTest do
       assert Phoenix.Flash.get(socket.assigns.flash, :error) =~ "don't have access"
     end
 
-    test "halts when :fabrikam_admin? assign is missing entirely" do
+    test "halts when :root_admin? assign is missing entirely" do
       socket = %Socket{endpoint: PlatformWeb.Endpoint, assigns: %{__changed__: %{}, flash: %{}}}
 
       assert {:halt, _socket} = LiveAuth.on_mount(:ensure_admin, %{}, %{}, socket)

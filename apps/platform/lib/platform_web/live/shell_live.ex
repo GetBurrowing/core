@@ -40,15 +40,15 @@ defmodule PlatformWeb.ShellLive do
       end
 
     # MT/RBAC stack 2 (task 019e3c4a): admin nav is now gated on real
-    # Fabrikam-root admin membership, not the legacy `Accounts.is_fabrikam_user?/1`
+    # root-org admin membership, not the legacy `Accounts.root_user?/1`
     # stub which returned `true` for every user. We use the *pure*
-    # `fabrikam_admin_preloaded?/1` variant so this lookup costs zero extra
+    # `root_admin_preloaded?/1` variant so this lookup costs zero extra
     # Repo queries — `Accounts.get_user/1` (called a few lines above)
     # preloaded `:org_memberships` with the nested `:org`.
     # Both assigns are kept so existing components (icon_rail, bottom_rail,
-    # more_sheet) that read `is_fabrikam_user` continue to render correctly
-    # while new code adopts `fabrikam_admin?` via the LiveAuth hook.
-    is_fabrikam_user = Platform.Tenancy.fabrikam_admin_preloaded?(user_record)
+    # more_sheet) that read `root_user` continue to render correctly
+    # while new code adopts `root_admin?` via the LiveAuth hook.
+    root_user = Platform.Tenancy.root_admin_preloaded?(user_record)
 
     # Resolve org visibility ONCE and thread it (Tenancy moduledoc). The
     # preloaded clause costs zero queries because `Accounts.get_user/1`
@@ -172,7 +172,7 @@ defmodule PlatformWeb.ShellLive do
       |> assign(:more_sheet_open, false)
       |> assign(:sidebar_collapsed, false)
       |> assign(:active_module, active_module)
-      |> assign(:is_fabrikam_user, is_fabrikam_user)
+      |> assign(:root_user, root_user)
       |> assign(:tasks_count, compute_tasks_count(raw_user_id))
       |> assign(:inbox_unread_count, compute_inbox_count(raw_user_id))
       # Task 01a01b29 stage 1: one chat-unread total for the whole viewer, so

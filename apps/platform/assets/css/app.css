@@ -24,7 +24,7 @@
   width: var(--suite-sidebar-width, 224px);
 }
 
-/* Fabrikam Design System — Public Sans */
+/* Suite design system — Public Sans */
 @import url("https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700;800;900&display=swap");
 
 /* See the Tailwind configuration guide for advanced usage
@@ -74,7 +74,7 @@
   default: true;
   prefersdark: false;
   color-scheme: "light";
-  /* Fabrikam surfaces */
+  /* Suite design-system surfaces */
   --color-base-100: oklch(100% 0 0);          /* #FFFFFF */
   /* #F2F2F2, not #F5F5F5. The comment read #F5F5F5 from this line's first
      commit until task 01a09333-d374 stage 6; oklch(96% 0 0) paints
@@ -120,7 +120,7 @@
      start of a line, and prose must not be able to trip it. */
   --focus-ring: var(--color-interactive);
   --color-base-content: oklch(0% 0 0);        /* #000000 */
-  /* Fabrikam cyan primary. ONE value in both themes (task 01a07435).
+  /* Brand cyan primary. ONE value in both themes (task 01a07435).
 
      The hex is authoritative over the oklch it replaces: oklch(82% 0.12 207)
      renders #4EDAEB, a visibly paler cyan, and the dark block declared a
@@ -177,8 +177,8 @@
   --color-error: oklch(63% 0.22 25);          /* #EF4444 */
   --color-error-content: oklch(100% 0 0);
   --radius-selector: 1rem;      /* pill-at-height for badges/toggles — re-skin Phase 1 (task 019f4f76) */
-  --radius-field: 0.625rem;     /* 10px buttons/inputs per Fabrikam spec — re-skin Phase 1 */
-  --radius-box: 0.875rem;       /* 14px cards/modals per Fabrikam spec — re-skin Phase 1 */
+  --radius-field: 0.625rem;     /* 10px buttons/inputs per the design-system spec — re-skin Phase 1 */
+  --radius-box: 0.875rem;       /* 14px cards/modals per the design-system spec — re-skin Phase 1 */
   --size-selector: 0.21875rem;
   --size-field: 0.21875rem;
   --border: 1px;
@@ -192,7 +192,7 @@
   default: false;
   prefersdark: true;
   color-scheme: "dark";
-  /* Fabrikam dark surfaces — merge the comp-aligned chat pane with the newer
+  /* Suite dark surfaces — merge the comp-aligned chat pane with the newer
      deeper sidebar/input treatment already on main.
 
      GROUND, decided 2026-09-06 by Harper Parker alongside the primary
@@ -235,7 +235,7 @@
      test/platform/design/focus_ring_slot_test.exs, not copied. */
   --focus-ring: var(--color-primary);
   --color-base-content: oklch(95% 0 0);       /* near-white text */
-  /* Fabrikam cyan, the SAME value as light. See the light block above for why
+  /* Brand cyan, the SAME value as light. See the light block above for why
      the two themes were unified. The declaration this replaces,
      oklch(78% 0.14 200), rendered #00D1DA, so the comp it claimed to match
      (#00bcd4) was drifted as well: three different cyans were named for one
@@ -261,8 +261,8 @@
   --color-error: oklch(63% 0.22 25);
   --color-error-content: oklch(100% 0 0);
   --radius-selector: 1rem;      /* pill-at-height for badges/toggles — re-skin Phase 1 (task 019f4f76) */
-  --radius-field: 0.625rem;     /* 10px buttons/inputs per Fabrikam spec — re-skin Phase 1 */
-  --radius-box: 0.875rem;       /* 14px cards/modals per Fabrikam spec — re-skin Phase 1 */
+  --radius-field: 0.625rem;     /* 10px buttons/inputs per the design-system spec — re-skin Phase 1 */
+  --radius-box: 0.875rem;       /* 14px cards/modals per the design-system spec — re-skin Phase 1 */
   --size-selector: 0.21875rem;
   --size-field: 0.21875rem;
   --border: 1px;
@@ -347,8 +347,8 @@
    the slug-agnostic `.scope-*` rules below, reading custom properties that
    `PlatformWeb.Components.ScopeColorStyles` emits per org from its row.
 
-   Until task 01a09333-d374 stage 5 the six shipped orgs (fabrikam, soylent,
-   wayne-tech, sxi, paragon, cyberdyne) had their own hand-authored chip
+   Until task 01a09333-d374 stage 5 the six shipped orgs (the root org,
+   soylent, wayne-tech, sxi, paragon, cyberdyne) had their own hand-authored chip
    utilities here: `bg-<slug>` (12% alpha), `bg-<slug>-active`,
    `border-<slug>` (30% alpha), `hover:bg-<slug>/22` and
    `text-<slug>-label`. Stage 5 moved the six onto the var path and deleted
@@ -463,9 +463,12 @@
      `ScopePillTest` holds each one to the values the stage 5 migration
      writes to that row. They are a second copy of
      that fill and a candidate for the var path in their own right; do not
-     add a seventh slug here. Set the org's `color_hue` instead. */
-  .text-fabrikam { color: oklch(72% 0.16 50); }
-  .bg-fabrikam-dot { background-color: oklch(72% 0.16 50); }
+     add a slug here. Set the org's `color_hue` instead.
+
+     The root org has NO entry (task 01a116de stage 3). It is install data,
+     not a compiled slug, so its dot reads `--scope-fill` off its own row:
+     `.scope-dot-current` below and the chat rail's
+     `.channel-section-color-dot--unassigned[data-scope]`. */
   .text-soylent { color: oklch(65% 0.20 295); }
   .bg-soylent-dot { background-color: oklch(65% 0.20 295); }
   .text-wayne-tech { color: oklch(68% 0.15 240); }
@@ -476,6 +479,13 @@
   .bg-paragon-dot { background-color: oklch(80% 0.16 95); }
   .text-cyberdyne { color: oklch(66% 0.19 340); }
   .bg-cyberdyne-dot { background-color: oklch(66% 0.19 340); }
+
+  /* A list-row org dot that takes the org's row colour when one is emitted
+     for its `data-scope`, and otherwise the element's own `color` (the
+     `.text-<slug>` / `text-muted` class beside it). Replaces `bg-current`
+     on those dots so the root org, which has no `.text-<slug>`, is still
+     coloured from its row (task 01a116de stage 3). */
+  .scope-dot-current { background-color: var(--scope-fill, currentColor); }
 }
 
 /* ──────────────────────────────────────────────────────
@@ -962,14 +972,14 @@ pre .makeup .sa { color: #79c0ff; }        /* string affix */
 .card[draggable="true"]:active {
   cursor: grabbing;
 }
-/* ── Fabrikam Design System — Custom utilities ──────────────────────── */
+/* ── Suite design system — Custom utilities ──────────────────────── */
 
 /* Typography — re-skin Phase 1 (task 019f4f76).
    The previous `* { … !important }` rule force-locked Public Sans onto every
    element, which silently defeated `font-mono` utilities and any @font-face.
    Body inherits the sans face; mono opts in via Tailwind's font-mono, whose
    --font-mono we override below. */
-body, .font-fabrikam {
+body, .font-suite {
   font-family: "Public Sans", system-ui, sans-serif;
 }
 
@@ -995,7 +1005,7 @@ body, .font-fabrikam {
 /* ── Re-skin Phase 1 tokens: mono stack, elevation, motion ─────────
    Shadows follow the border-first depth model: 1px hairlines separate,
    shadows only reinforce (04-accessibility motion rules gate animation).
-   Names map to the Fabrikam spec's card / cardHover / dropdown / modal. */
+   Names map to the design-system spec's card / cardHover / dropdown / modal. */
 :root {
   /* The daisyui-theme plugin splits comma-separated font stacks in its options
      block into multiple --font-sans declarations (last fragment wins → generic
@@ -1217,9 +1227,9 @@ body, .font-fabrikam {
   background: oklch(74% 0.177 207 / 0.08);
 }
 
-/* ── Fabrikam progress bar ───────────────────────────────────────────── */
-.progress-fabrikam::-webkit-progress-value { background: oklch(82% 0.12 207); }
-.progress-fabrikam::-moz-progress-bar { background: oklch(82% 0.12 207); }
+/* ── Brand progress bar ──────────────────────────────────────────── */
+.progress-brand::-webkit-progress-value { background: oklch(82% 0.12 207); }
+.progress-brand::-moz-progress-bar { background: oklch(82% 0.12 207); }
 
 /* ── Checklist inline card ───────────────────────────────────────── */
 
@@ -2427,7 +2437,7 @@ body, .font-fabrikam {
   animation: chat-jump-chip-in 150ms cubic-bezier(0, 0, 0.2, 1);
 }
 
-/* ── Fabrikam Design System — Pill-shaped Chat Input Bar ─────────────── */
+/* ── Suite design system — Pill-shaped Chat Input Bar ─────────────── */
 .compose-input-area {
   padding: 12px 20px 16px;
 }
@@ -5426,6 +5436,17 @@ body, .font-fabrikam {
     box-shadow: inset 0 0 0 1px var(--color-base-300);
   }
 
+  /* The same slot, for a section wearing its own org's colour with no
+     compiled `bg-<token>-dot` (the root org on every install; task 01a116de
+     stage 3). `data-scope` is the org slug, so `--scope-fill` is the org's
+     row colour when `ScopeColorStyles` emitted one: fill and ring both take
+     it and the dot reads solid. An org with no `color_hue` emits nothing,
+     both fallbacks fire, and the dot stays the hollow ring above. */
+  .channel-section-color-dot--unassigned[data-scope] {
+    background-color: var(--scope-fill, transparent);
+    box-shadow: inset 0 0 0 1px var(--scope-fill, var(--color-base-300));
+  }
+
   /* Drag handle — invisible until the parent .channel-section is hovered.
      Tailwind's `group-hover:` matches the `group` class on the section. */
   .channel-section-drag-handle {
@@ -5897,11 +5918,11 @@ body, .font-fabrikam {
     @apply flex-shrink-0 flex items-center gap-2 w-full px-3 py-2 text-sm text-base-content/70 hover:text-primary hover:bg-base-300 transition-colors;
   }
 
-  /* ── Fabrikam-admin "Edit default" mode (chat sidebar Stage 6) ────────────
+  /* ── Root-admin "Edit default" mode (chat sidebar Stage 6) ────────────
      Curate the company-wide default sidebar. Visually DISTINCT from the
      personal "Edit layout" controls (warning accent) so an admin can always
      tell they are editing what everyone sees, not just their own view. All
-     controls are gated behind @sidebar_admin_edit + @fabrikam_admin? in the
+     controls are gated behind @sidebar_admin_edit + @root_admin? in the
      template; every write re-authorizes server-side via Sidebar.* . */
 
   /* "Done (admin)" exit button shown in the sidebar header while in admin-edit
@@ -5941,8 +5962,11 @@ body, .font-fabrikam {
     @apply ring-2 ring-warning ring-offset-1 ring-offset-base-200;
   }
 
-  .channel-section-swatch--fabrikam {
-    background-color: oklch(72% 0.16 50);
+  /* The section's OWN org swatch, coloured from the org's row through its
+     `data-scope` (task 01a116de stage 3): how the root org, which has no
+     compiled token, gets a swatch. Hollow when the org has no colour. */
+  .channel-section-swatch--own {
+    background-color: var(--scope-fill, transparent);
   }
 
   .channel-section-swatch--soylent {

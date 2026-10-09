@@ -6,9 +6,9 @@ defmodule Platform.Org.PreambleBuilderTest do
 
   Coverage:
 
-    (a) tenant-SXI task preamble contains SXI + Fabrikam (root super-context)
+    (a) tenant-SXI task preamble contains SXI + Acme (root super-context)
         files, NOT sibling tenants' files
-    (b) root-Fabrikam no-task call returns Fabrikam full + descendant
+    (b) root-Acme no-task call returns Acme full + descendant
         IDENTITY.md summaries + TENANTS_SUMMARY.md if seeded; NOT full
         descendant files
     (c) project-scoped files load only when `task.project_id` matches
@@ -92,15 +92,15 @@ defmodule Platform.Org.PreambleBuilderTest do
     project
   end
 
-  # ── (a) tenant scope: SXI gets SXI + Fabrikam, NOT WayneTech ─────────────────
+  # ── (a) tenant scope: SXI gets SXI + Acme, NOT WayneTech ─────────────────
 
   test "tenant task preamble = own pages + root super-context, no siblings" do
-    fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+    acme = Tenancy.get_org_by_slug!("acme")
     sxi = Tenancy.get_org_by_slug!("sxi")
     wayne_tech = Tenancy.get_org_by_slug!("wayne_tech")
 
-    seed_page!("org/fabrikam/IDENTITY.md", preamble_body("# Fabrikam identity"), fabrikam.id)
-    seed_page!("org/fabrikam/MEMORY.md", preamble_body("# Fabrikam memory"), fabrikam.id)
+    seed_page!("org/acme/IDENTITY.md", preamble_body("# Acme identity"), acme.id)
+    seed_page!("org/acme/MEMORY.md", preamble_body("# Acme memory"), acme.id)
     seed_page!("org/sxi/IDENTITY.md", preamble_body("# SXI identity"), sxi.id)
     seed_page!("org/wayne_tech/IDENTITY.md", preamble_body("# Wayne-Tech identity"), wayne_tech.id)
 
@@ -111,8 +111,8 @@ defmodule Platform.Org.PreambleBuilderTest do
 
     keys = Map.keys(result)
     assert "org/sxi/IDENTITY.md" in keys
-    assert "org/fabrikam/IDENTITY.md" in keys
-    assert "org/fabrikam/MEMORY.md" in keys
+    assert "org/acme/IDENTITY.md" in keys
+    assert "org/acme/MEMORY.md" in keys
     # Sibling tenant — explicitly excluded by ADR 0042 §3.
     refute "org/wayne_tech/IDENTITY.md" in keys
 
@@ -123,23 +123,23 @@ defmodule Platform.Org.PreambleBuilderTest do
            )
   end
 
-  # ── (b) root scope: Fabrikam gets full + descendant IDENTITY.md only ──────
+  # ── (b) root scope: Acme gets full + descendant IDENTITY.md only ──────
 
-  test "root no-task call returns Fabrikam full + descendant IDENTITY summaries" do
-    fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+  test "root no-task call returns Acme full + descendant IDENTITY summaries" do
+    acme = Tenancy.get_org_by_slug!("acme")
     sxi = Tenancy.get_org_by_slug!("sxi")
     soylent = Tenancy.get_org_by_slug!("soylent")
 
-    # Fabrikam's own pages — should appear in full.
-    seed_page!("org/fabrikam/IDENTITY.md", preamble_body("# Fabrikam identity"), fabrikam.id)
-    seed_page!("org/fabrikam/MEMORY.md", preamble_body("# Fabrikam memory"), fabrikam.id)
+    # Acme's own pages — should appear in full.
+    seed_page!("org/acme/IDENTITY.md", preamble_body("# Acme identity"), acme.id)
+    seed_page!("org/acme/MEMORY.md", preamble_body("# Acme memory"), acme.id)
 
     # TENANTS_SUMMARY.md curated by Stage 3; we seed it manually here so
     # we don't need to run the curator.
     seed_page!(
-      "org/fabrikam/TENANTS_SUMMARY.md",
+      "org/acme/TENANTS_SUMMARY.md",
       preamble_body("## SXI\n\nSBS does things.\n"),
-      fabrikam.id
+      acme.id
     )
 
     # Descendants: IDENTITY only should surface, MEMORY explicitly NOT.
@@ -152,12 +152,12 @@ defmodule Platform.Org.PreambleBuilderTest do
       soylent.id
     )
 
-    result = PreambleBuilder.build(nil, nil, org_id: fabrikam.id)
+    result = PreambleBuilder.build(nil, nil, org_id: acme.id)
 
     keys = Map.keys(result)
-    assert "org/fabrikam/IDENTITY.md" in keys
-    assert "org/fabrikam/MEMORY.md" in keys
-    assert "org/fabrikam/TENANTS_SUMMARY.md" in keys
+    assert "org/acme/IDENTITY.md" in keys
+    assert "org/acme/MEMORY.md" in keys
+    assert "org/acme/TENANTS_SUMMARY.md" in keys
     assert "org/sxi/IDENTITY.md" in keys
     assert "org/soylent/IDENTITY.md" in keys
     # The whole point of super-context-at-root: descendants summarize,
@@ -169,21 +169,21 @@ defmodule Platform.Org.PreambleBuilderTest do
 
   test "root-rooted project task preamble includes project pages" do
     # Regression test for V2 e2e failure: a task whose project's org is
-    # the Fabrikam root used to silently drop its `project/<id>/*` pages
+    # the Acme root used to silently drop its `project/<id>/*` pages
     # because the root branch of collect_entries/4 never called
     # project_entries/2.
-    fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+    acme = Tenancy.get_org_by_slug!("acme")
     sxi = Tenancy.get_org_by_slug!("sxi")
 
-    seed_page!("org/fabrikam/IDENTITY.md", preamble_body("# Fabrikam identity"), fabrikam.id)
+    seed_page!("org/acme/IDENTITY.md", preamble_body("# Acme identity"), acme.id)
     seed_page!("org/sxi/IDENTITY.md", preamble_body("# SXI identity"), sxi.id)
 
-    project = seed_project!(fabrikam.id, "fabrikam-#{System.unique_integer([:positive])}")
+    project = seed_project!(acme.id, "acme-#{System.unique_integer([:positive])}")
 
     seed_page!(
       "project/#{project.id}/SCOPE.md",
       preamble_body("# Suite Infra scope"),
-      fabrikam.id,
+      acme.id,
       project_id: project.id
     )
 
@@ -194,10 +194,10 @@ defmodule Platform.Org.PreambleBuilderTest do
 
     # Project pages must show up even though the operating org is root.
     assert "project/#{project.id}/SCOPE.md" in keys,
-           "expected project page under Fabrikam-rooted project; got #{inspect(keys)}"
+           "expected project page under Acme-rooted project; got #{inspect(keys)}"
 
     # Root super-context still applies.
-    assert "org/fabrikam/IDENTITY.md" in keys
+    assert "org/acme/IDENTITY.md" in keys
     # Descendant tenant IDENTITY.md still surfaces (super-context-at-root).
     assert "org/sxi/IDENTITY.md" in keys
   end
@@ -243,7 +243,7 @@ defmodule Platform.Org.PreambleBuilderTest do
 
   test "tight budget evicts in documented order and fires telemetry" do
     sxi = Tenancy.get_org_by_slug!("sxi")
-    fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+    acme = Tenancy.get_org_by_slug!("acme")
     project = seed_project!(sxi.id, "evict-#{System.unique_integer([:positive])}")
     space_id = Ecto.UUID.generate()
 
@@ -253,8 +253,8 @@ defmodule Platform.Org.PreambleBuilderTest do
     # `project` (priority 3) to survive longest.
     big = String.duplicate("x", 400)
 
-    seed_page!("space/#{space_id}/notes.md", preamble_body(big), fabrikam.id)
-    seed_page!("org/fabrikam/IDENTITY.md", preamble_body(big), fabrikam.id)
+    seed_page!("space/#{space_id}/notes.md", preamble_body(big), acme.id)
+    seed_page!("org/acme/IDENTITY.md", preamble_body(big), acme.id)
     seed_page!("org/sxi/IDENTITY.md", preamble_body(big), sxi.id)
 
     seed_page!(
@@ -366,13 +366,13 @@ defmodule Platform.Org.PreambleBuilderTest do
     end
 
     test "under a budget that forces eviction, org and project pages evict before the index" do
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+      acme = Tenancy.get_org_by_slug!("acme")
       sxi = Tenancy.get_org_by_slug!("sxi")
       project = seed_project!(sxi.id, "burrow-evict-#{System.unique_integer([:positive])}")
       big = String.duplicate("x", 400)
 
       seed_burrow!(@index, preamble_body(big))
-      seed_page!("org/fabrikam/IDENTITY.md", preamble_body(big), fabrikam.id)
+      seed_page!("org/acme/IDENTITY.md", preamble_body(big), acme.id)
       seed_page!("org/sxi/IDENTITY.md", preamble_body(big), sxi.id)
 
       seed_page!("project/#{project.id}/decisions.md", preamble_body(big), sxi.id,

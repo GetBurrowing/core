@@ -58,6 +58,14 @@ defmodule PlatformWeb.ExternalHoldingLiveTest do
       assert has_element?(view, "[data-role=holding-logout]")
       assert html =~ "your workspace is being set up"
 
+      # The brand chip names the install's app, from the branding row, not a
+      # compiled product name (task 01a116de stage 3).
+      app_name = Platform.Branding.app_name()
+      chip = view |> element("[data-role=brand-chip]") |> render()
+      assert chip =~ ~s(alt="#{app_name}")
+      assert chip =~ ">#{app_name}</span>"
+      refute chip =~ ~r/fabrikam/i
+
       # No shell / icon rail / bottom nav — the discovery leak the separate
       # live_session + chrome-less layout exist to prevent.
       refute has_element?(view, "#shell-sidebar")

@@ -1759,7 +1759,7 @@ defmodule Platform.Federation.ToolSurface do
             type: "string",
             required: true,
             description:
-              "UUID of the parent org to enumerate descendants for. Use the Fabrikam root id to list every tenant."
+              "UUID of the parent org to enumerate descendants for. Use the root org id to list every tenant."
           }
         },
         returns:
@@ -2174,7 +2174,7 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "task_close_as_delivered",
         description:
-          "Record a task as `done` when the work genuinely shipped without a plan cycle \u2014 a `backlog` / `planning` / `blocked` / `stack_pending` task whose fix merged by direct PR. AUTHORIZATION: callable ONLY when the AgentRuntime you are calling through is owned by a user who is a Fabrikam admin; the authority is that admin's, delegated, and the closure records both the admin and this agent. `delivery_reference` is REQUIRED and is VERIFIED against the project's repository before anything is written \u2014 accepted forms are a 7\u201340 character commit sha, `#1018`, a github.com pull URL, or a github.com commit URL, and a URL naming a DIFFERENT repository than the project's is refused. A PR resolves only when it is MERGED. This does NOT widen the transition table: `backlog -> done` remains absent from @valid_task_transitions, and a task already in `in_progress` / `in_review` / `deploying` is refused, because those have a legitimate route to `done` and this must not become a way around the review gate.",
+          "Record a task as `done` when the work genuinely shipped without a plan cycle \u2014 a `backlog` / `planning` / `blocked` / `stack_pending` task whose fix merged by direct PR. AUTHORIZATION: callable ONLY when the AgentRuntime you are calling through is owned by a user who is a root-org admin; the authority is that admin's, delegated, and the closure records both the admin and this agent. `delivery_reference` is REQUIRED and is VERIFIED against the project's repository before anything is written \u2014 accepted forms are a 7\u201340 character commit sha, `#1018`, a github.com pull URL, or a github.com commit URL, and a URL naming a DIFFERENT repository than the project's is refused. A PR resolves only when it is MERGED. This does NOT widen the transition table: `backlog -> done` remains absent from @valid_task_transitions, and a task already in `in_progress` / `in_review` / `deploying` is refused, because those have a legitimate route to `done` and this must not become a way around the review gate.",
         parameters: %{
           task_id: %{type: "string", required: true, description: "The task to close"},
           delivery_reference: %{
@@ -5116,9 +5116,9 @@ defmodule Platform.Federation.ToolSurface do
                    "as cancelled is unrecoverable and is the corruption task 01a049be exists " <>
                    "to stop. If the work genuinely shipped without a plan cycle, call " <>
                    "task_close_as_delivered with a merge/PR reference \u2014 it is callable when " <>
-                   "the runtime you are calling through is owned by a Fabrikam admin, and it " <>
+                   "the runtime you are calling through is owned by a root-org admin, and it " <>
                    "verifies the reference against the project's repo before writing. If you " <>
-                   "have no such runtime, ask a Fabrikam admin to run it. If it truly was " <>
+                   "have no such runtime, ask a root-org admin to run it. If it truly was " <>
                    "abandoned or superseded, then " <>
                    "task_update with status='cancelled' is correct."
              }}
@@ -5137,7 +5137,7 @@ defmodule Platform.Federation.ToolSurface do
   # ── task_close_as_delivered — THE PERMISSION DECISION (task 01a0a552) ──
   #
   # An agent may call this ONLY when the AgentRuntime it is calling
-  # through is owned by a user who satisfies `Platform.Tenancy.fabrikam_admin?/1`.
+  # through is owned by a user who satisfies `Platform.Tenancy.root_admin?/1`.
   # THE AUTHORITY IS THE OWNER'S, DELEGATED; the agent is the instrument.
   # That is why `Tasks.close_as_delivered/4` receives the owner as `admin`
   # (so `actor_kind` on the recorded transition is `"user"`) and the agent
@@ -5149,7 +5149,7 @@ defmodule Platform.Federation.ToolSurface do
   # the next person to widen this will face the same two:
   #
   #   (a) "any agent holding the `task` bundle may call it". That makes
-  #       every agent a Fabrikam admin for this one verb — precisely the
+  #       every agent a root-org admin for this one verb — precisely the
   #       widening task 01a049be exists to prevent — and it detaches the
   #       closure from any human who could be asked why.
   #
@@ -5161,9 +5161,9 @@ defmodule Platform.Federation.ToolSurface do
   #       given — an escalation one UPDATE wide, invisible to every
   #       membership check.
   #
-  # `fabrikam_admin?/1` is install-coupled: it means "an admin of the ROOT
-  # org" (`Platform.Tenancy` root-membership), which on this install is
-  # Fabrikam. Whoever generalises admin-ness later wants this call site and
+  # `root_admin?/1` is install-coupled: it means "an admin of the ROOT
+  # org" (`Platform.Tenancy` root-membership), whatever that org is called
+  # on a given install. Whoever generalises admin-ness later wants this call site and
   # the two in `Platform.Tasks` (`reinstate_cancelled_task/3`,
   # `close_as_delivered/4`) — those three are the set today.
   #
@@ -7811,7 +7811,7 @@ defmodule Platform.Federation.ToolSurface do
                      "abandoned or superseded, never to close work that actually shipped. " <>
                      "Delivered-but-unplanned work is recorded with " <>
                      "task_close_as_delivered, which requires a merge/PR reference and is " <>
-                     "callable when the runtime you are calling through is owned by a Fabrikam " <>
+                     "callable when the runtime you are calling through is owned by a root-org " <>
                      "admin (otherwise ask one to run it); a task already cancelled by " <>
                      "mistake is corrected via Platform.Tasks.reinstate_cancelled_task/3."
                }}
@@ -11909,7 +11909,7 @@ defmodule Platform.Federation.ToolSurface do
          %{owner_user_id: owner_id} when is_binary(owner_id) <-
            Platform.Federation.get_runtime_by_runtime_id(runtime_id),
          %{} = owner <- Platform.Accounts.get_user(owner_id),
-         true <- Tenancy.fabrikam_admin?(owner) do
+         true <- Tenancy.root_admin?(owner) do
       {:ok, owner}
     else
       _ -> {:error, delivery_not_authorized()}
@@ -11924,11 +11924,11 @@ defmodule Platform.Federation.ToolSurface do
   defp delivery_not_authorized do
     %{
       error:
-        "task_close_as_delivered: not authorized. This tool exercises a Fabrikam admin's own " <>
+        "task_close_as_delivered: not authorized. This tool exercises a root-org admin's own " <>
           "authority and is callable only through a runtime owned by one.",
       recoverable: false,
       suggestion:
-        "Ask a Fabrikam admin to record the delivery, either from the operator console or " <>
+        "Ask a root-org admin to record the delivery, either from the operator console or " <>
           "through a runtime they own."
     }
   end
@@ -12284,7 +12284,7 @@ defmodule Platform.Federation.ToolSurface do
   # link lives on `agent.metadata["org_id"]` — agents without that key
   # (the historical default) behave as root-equivalent system callers
   # and can specify any org. Root agents (`metadata["org_id"]` set to
-  # the Fabrikam root id) can also specify any tenant.
+  # the root org id) can also specify any tenant.
   #
   # When the metadata key is present AND identifies a tenant, the
   # requested `org_id` must match. Anything else is rejected with the
@@ -12315,7 +12315,7 @@ defmodule Platform.Federation.ToolSurface do
   end
 
   # Returns `:root` when the agent has no metadata-pinned org, or is
-  # pinned to the Fabrikam root. Returns `{:tenant, org_id}` when pinned to
+  # pinned to the root org. Returns `{:tenant, org_id}` when pinned to
   # a tenant.
   defp agent_home_org(%Agent{metadata: metadata}) when is_map(metadata) do
     case Map.get(metadata, "org_id") || Map.get(metadata, :org_id) do
@@ -13638,7 +13638,7 @@ defmodule Platform.Federation.ToolSurface do
       code: :project_archived,
       recoverable: false,
       suggestion:
-        "Do not retry. If this project should be active again, a Fabrikam admin can restore it " <>
+        "Do not retry. If this project should be active again, a root-org admin can restore it " <>
           "from the Recovery view (/admin/recovery); otherwise pick a different project."
     }
   end

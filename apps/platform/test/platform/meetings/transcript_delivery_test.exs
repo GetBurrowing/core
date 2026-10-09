@@ -183,7 +183,7 @@ defmodule Platform.Meetings.TranscriptDeliveryTest do
       |> Platform.Tasks.Project.changeset(%{
         name: "Transcript Delivery Project #{System.unique_integer([:positive])}",
         slug: "transcript-delivery-project-#{System.unique_integer([:positive])}",
-        org_id: Platform.TenancyFixtures.fabrikam_org_id()
+        org_id: Platform.TenancyFixtures.acme_org_id()
       })
       |> Repo.insert()
 

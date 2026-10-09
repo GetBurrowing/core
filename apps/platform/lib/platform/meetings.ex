@@ -109,7 +109,7 @@ defmodule Platform.Meetings do
       `Ecto.MultipleResultsError` as soon as two projects pick the same slug.
       Two rows returns `{:error, :ambiguous}`; a slug-only URL genuinely
       cannot disambiguate and this function will not pick one for you.
-    * Root (Fabrikam) **admins** bypass the org-membership filter — see
+    * Root-org **admins** bypass the org-membership filter — see
       `Platform.Chat` and `Platform.Chat.Sidebar` for the same precedent.
       Without it a root operator who is not an explicit member of a tenant org
       would lose access to that tenant's meetings. The ambiguity handling
@@ -120,7 +120,7 @@ defmodule Platform.Meetings do
   This is the one viewer-scoping site the tenancy consolidation left on its
   own query, on purpose. The two predicates are NOT the same:
 
-    * here, the bypass is `Tenancy.fabrikam_admin?/1` — root membership at
+    * here, the bypass is `Tenancy.root_admin?/1` — root membership at
       **admin** role;
     * `Tenancy.visibility/1` bypasses on `Tenancy.root_member?/1` — root
       membership at **any** role, which is strictly wider.
@@ -148,9 +148,9 @@ defmodule Platform.Meetings do
   There is no `project_members` table in this codebase. The finest membership
   grain that exists is `org_memberships`. Worse,
   `Platform.Accounts.find_or_create_from_oidc/1` gives **every** new user an
-  `org_memberships` row in the Fabrikam root org. So this function does **not**
-  create per-project isolation within a single org: every Fabrikam-org user can
-  still read every Fabrikam-org meeting, by design.
+  `org_memberships` row in the root org. So this function does **not**
+  create per-project isolation within a single org: every root-org user can
+  still read every root-org meeting, by design.
 
   What it closes is the cross-**org** read — a Soylent user reading a
   Wayne-Tech meeting, an external user reading an internal one, an
@@ -162,7 +162,7 @@ defmodule Platform.Meetings do
   def fetch_meeting_for_user(%{id: user_id} = user, slug)
       when is_binary(user_id) and is_binary(slug) do
     slug
-    |> viewer_meeting_query(user_id, Platform.Tenancy.fabrikam_admin?(user))
+    |> viewer_meeting_query(user_id, Platform.Tenancy.root_admin?(user))
     |> Repo.all()
     |> case do
       [] ->
@@ -184,7 +184,7 @@ defmodule Platform.Meetings do
 
   @doc """
   Fetch a meeting BY ID that `user` may see, under the same viewer rule as
-  `list_meetings_for_user/1` (`viewer_listing_query/1`): Fabrikam root admins see
+  `list_meetings_for_user/1` (`viewer_listing_query/1`): root-org admins see
   everything, an external user sees the meetings they hold a live invite for,
   and an internal user sees the meetings of their orgs' projects.
 
@@ -213,7 +213,7 @@ defmodule Platform.Meetings do
 
   # NOT YET on `Tenancy.scope/3`, and deliberately so — see the "Why this is
   # still hand-rolled" section of the moduledoc. The bypass predicate here is
-  # `fabrikam_admin?/1`; `visibility/1`'s is `root_member?/1`, which is strictly
+  # `root_admin?/1`; `visibility/1`'s is `root_member?/1`, which is strictly
   # wider. Swapping them is an access change, not a refactor.
   defp viewer_meeting_query(slug, _user_id, true = _root_admin?) do
     from(m in Meeting, where: m.slug == ^slug, limit: 2)
@@ -704,8 +704,8 @@ defmodule Platform.Meetings do
   # Three branches, matching the detail route (`fetch_meeting_for_user/2`)
   # wherever a listing can:
   #
-  #   * Fabrikam root ADMIN — everything. The bypass predicate is
-  #     `Tenancy.fabrikam_admin?/1`, the same one `viewer_meeting_query/3` uses.
+  #   * Root-org ADMIN — everything. The bypass predicate is
+  #     `Tenancy.root_admin?/1`, the same one `viewer_meeting_query/3` uses.
   #     NOT `root_member?/1`, which is strictly wider: every OIDC signup gets a
   #     plain `role: "member"` row in the root org, so swapping the predicate
   #     would hand every signed-up user every tenant's meetings. See the
@@ -725,7 +725,7 @@ defmodule Platform.Meetings do
   #     join the project and require its `org_id` among the viewer's orgs.
   defp viewer_listing_query(user) do
     cond do
-      Platform.Tenancy.fabrikam_admin?(user) ->
+      Platform.Tenancy.root_admin?(user) ->
         from(m in Meeting)
 
       Platform.Tenancy.external_user?(user) ->
@@ -4814,7 +4814,7 @@ defmodule Platform.Meetings do
   # External-space digest partition (stack member 12, rbac-external-users).
   # Mirrors `Chat.list_messages_since/2`'s `:scope` opt on the transcript
   # corpus: `:internal` (default) excludes external-user spaces from the
-  # Fabrikam-internal digest; `{:external_spaces, ids}` restricts to an external
+  # internal digest; `{:external_spaces, ids}` restricts to an external
   # user's allowlisted spaces. See `Chat.external_space_ids/0`.
   defp apply_digest_scope(query, :internal) do
     exclude = Chat.external_space_ids()

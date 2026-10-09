@@ -17,7 +17,7 @@ defmodule PlatformWeb.Components.ScopePillTest do
     assigns =
       Map.merge(
         %{
-          scope: :fabrikam,
+          scope: :acme,
           propagated_to: nil,
           # nil = let the component pick the size-appropriate default (true at
           # :default size, false at :compact). Tests that care pass it explicitly.
@@ -59,7 +59,7 @@ defmodule PlatformWeb.Components.ScopePillTest do
     assigns =
       Map.merge(
         %{
-          scope: :fabrikam,
+          scope: :acme,
           propagated_to: nil,
           clickable: nil,
           active: false,
@@ -104,8 +104,10 @@ defmodule PlatformWeb.Components.ScopePillTest do
   end
 
   describe "scopes/0 enum" do
-    test "returns the canonical 6-atom list in display order" do
-      assert scopes() == [:fabrikam, :soylent, :wayne_tech, :sxi, :paragon, :cyberdyne]
+    test "returns the canonical 5-atom list in display order" do
+      # The root org has no compiled atom since task 01a116de stage 3: it is
+      # install data and is passed by its slug string.
+      assert scopes() == [:soylent, :wayne_tech, :sxi, :paragon, :cyberdyne]
     end
   end
 
@@ -118,7 +120,6 @@ defmodule PlatformWeb.Components.ScopePillTest do
     @retired ~w(bg-SLUG text-SLUG-label border-SLUG bg-SLUG-dot bg-SLUG-active hover:bg-SLUG/22)
 
     for {scope, fragment, label} <- [
-          {:fabrikam, "fabrikam", "Fabrikam"},
           {:soylent, "soylent", "Soylent"},
           {:wayne_tech, "wayne-tech", "Wayne-Tech"},
           {:sxi, "sxi", "SXI"},
@@ -165,12 +166,12 @@ defmodule PlatformWeb.Components.ScopePillTest do
     end
 
     test "renders without the arrow glyph" do
-      html = render_pill(%{scope: :fabrikam})
+      html = render_pill(%{scope: :acme})
       refute html =~ "hero-arrow-right"
     end
 
     test "renders a colored dot as a redundant signal beyond color (WCAG 1.4.1)" do
-      html = render_pill(%{scope: :fabrikam})
+      html = render_pill(%{scope: :acme})
       assert html =~ "rounded-full"
       assert html =~ ~s(aria-hidden="true")
     end
@@ -258,7 +259,7 @@ defmodule PlatformWeb.Components.ScopePillTest do
     test "the shipped six still carry data-scope, so the probe is not slug-specific" do
       # data-scope is emitted for EVERY chip. Since stage 5 it is also the
       # ONLY thing that colours the six: their rules are keyed on it.
-      assert render_pill(%{scope: :fabrikam}) =~ ~s(data-scope="fabrikam")
+      assert render_pill(%{scope: :acme}) =~ ~s(data-scope="acme")
       assert render_pill(%{scope: :wayne_tech}) =~ ~s(data-scope="wayne_tech")
     end
 
@@ -354,38 +355,38 @@ defmodule PlatformWeb.Components.ScopePillTest do
 
   describe "propagated variant" do
     test "renders both chips when propagated_to is set" do
-      html = render_pill(%{scope: :soylent, propagated_to: :fabrikam})
+      html = render_pill(%{scope: :soylent, propagated_to: :acme})
       assert html =~ "Soylent"
-      assert html =~ "Fabrikam"
+      assert html =~ "Acme"
     end
 
     test "renders the hero-arrow-right glyph joining the two chips" do
-      html = render_pill(%{scope: :soylent, propagated_to: :fabrikam})
+      html = render_pill(%{scope: :soylent, propagated_to: :acme})
       assert html =~ "hero-arrow-right"
     end
 
     test "wraps the pair in a propagated container span" do
-      html = render_pill(%{scope: :soylent, propagated_to: :fabrikam})
+      html = render_pill(%{scope: :soylent, propagated_to: :acme})
       assert html =~ "scope-pill-propagated"
     end
   end
 
   describe "click-to-filter wiring (clickable: true, the default)" do
     test "renders as a <button> not a <span>" do
-      html = render_pill(%{scope: :fabrikam})
+      html = render_pill(%{scope: :acme})
       assert html =~ "<button"
       assert html =~ ~s(type="button")
     end
 
     test "fires phx-click=\"scope_filter\" with phx-value-scope" do
-      html = render_pill(%{scope: :fabrikam})
+      html = render_pill(%{scope: :acme})
       assert html =~ ~s(phx-click="scope_filter")
-      assert html =~ ~s(phx-value-scope="fabrikam")
+      assert html =~ ~s(phx-value-scope="acme")
     end
 
     test "includes phx-value-propagated-to when propagated" do
-      html = render_pill(%{scope: :soylent, propagated_to: :fabrikam})
-      assert html =~ ~s(phx-value-propagated-to="fabrikam")
+      html = render_pill(%{scope: :soylent, propagated_to: :acme})
+      assert html =~ ~s(phx-value-propagated-to="acme")
     end
 
     test "renders aria-label \"Filter by {scope-name} scope\"" do
@@ -394,13 +395,13 @@ defmodule PlatformWeb.Components.ScopePillTest do
     end
 
     test "applies the project's standard focus-visible-ring class" do
-      html = render_pill(%{scope: :fabrikam})
+      html = render_pill(%{scope: :acme})
       assert html =~ "focus-visible-ring"
     end
 
     test "has hover styling on the default (non-active) state" do
       # Hover is on the edge since stage 4, and the six take it since stage 5.
-      assert "scope-edge-hover" in chip_classes(render_pill(%{scope: :fabrikam}))
+      assert "scope-edge-hover" in chip_classes(render_pill(%{scope: :acme}))
     end
   end
 
@@ -429,14 +430,14 @@ defmodule PlatformWeb.Components.ScopePillTest do
 
   describe "active-filter state styling (active: true)" do
     test "renders the hero-check icon instead of the colored dot" do
-      html = render_pill(%{scope: :fabrikam, active: true})
+      html = render_pill(%{scope: :acme, active: true})
       assert html =~ "hero-check"
     end
 
     test "applies the full-saturation background via scope-active" do
       # `.scope-active` paints `--scope-fill` with `--scope-active-content`
       # text and the soft outer ring; the resting tint must not appear.
-      tokens = chip_classes(render_pill(%{scope: :fabrikam, active: true}))
+      tokens = chip_classes(render_pill(%{scope: :acme, active: true}))
       assert "scope-active" in tokens
       refute Enum.any?(tokens, &String.starts_with?(&1, "scope-tint"))
       refute "bg-fabrikam-active" in tokens
@@ -445,7 +446,7 @@ defmodule PlatformWeb.Components.ScopePillTest do
     test "active utility carries the soft outer ring via box-shadow" do
       css = File.read!("assets/css/app.css")
       assert css =~ ~r/\.scope-active \{[^}]*box-shadow: 0 0 0 2px/
-      assert "scope-active" in chip_classes(render_pill(%{scope: :fabrikam, active: true}))
+      assert "scope-active" in chip_classes(render_pill(%{scope: :acme, active: true}))
     end
 
     test "aria-label flips to \"Currently filtered by {scope-name} scope\"" do
@@ -464,7 +465,7 @@ defmodule PlatformWeb.Components.ScopePillTest do
     end
 
     test "does not apply hover style when active (active state is terminal)" do
-      tokens = chip_classes(render_pill(%{scope: :fabrikam, active: true}))
+      tokens = chip_classes(render_pill(%{scope: :acme, active: true}))
       refute Enum.any?(tokens, &String.contains?(&1, "hover")), inspect(tokens)
     end
 
@@ -478,7 +479,7 @@ defmodule PlatformWeb.Components.ScopePillTest do
 
   describe "compact size variant" do
     test "applies the compact chrome (tighter padding, smaller dot, truncation)" do
-      html = render_pill(%{scope: :fabrikam, size: :compact})
+      html = render_pill(%{scope: :acme, size: :compact})
       assert html =~ "px-1.5"
       assert html =~ "py-px"
       assert html =~ "size-1.5"
@@ -486,18 +487,18 @@ defmodule PlatformWeb.Components.ScopePillTest do
     end
 
     test "drops the border at compact size (a ring reads as noise in a list)" do
-      html = render_pill(%{scope: :fabrikam, size: :compact})
+      html = render_pill(%{scope: :acme, size: :compact})
       refute "border" in chip_classes(html)
       refute html =~ "rounded-full border"
     end
 
     test "keeps text-xs (12px) — density comes from chrome, not type size" do
-      html = render_pill(%{scope: :fabrikam, size: :compact})
+      html = render_pill(%{scope: :acme, size: :compact})
       assert html =~ "text-xs"
     end
 
     test "default size is unchanged (bordered, px-2, size-2 dot)" do
-      html = render_pill(%{scope: :fabrikam, size: :default})
+      html = render_pill(%{scope: :acme, size: :default})
       assert html =~ "rounded-full border"
       assert html =~ "px-2"
       assert html =~ "size-2"
@@ -505,52 +506,52 @@ defmodule PlatformWeb.Components.ScopePillTest do
     end
 
     test "is non-clickable by default (a ~16px tap target fails WCAG 2.5.8)" do
-      html = render_pill(%{scope: :fabrikam, size: :compact})
+      html = render_pill(%{scope: :acme, size: :compact})
       refute html =~ "<button"
       assert html =~ "<span"
       refute html =~ "phx-click"
     end
 
     test "non-clickable compact floors opacity at 0.70 (not 0.55)" do
-      html = render_pill(%{scope: :fabrikam, size: :compact})
+      html = render_pill(%{scope: :acme, size: :compact})
       assert html =~ "opacity-70"
       refute html =~ "opacity-55"
     end
 
     test "explicit clickable={true} opts back into a button with an expanded hit area" do
-      html = render_pill(%{scope: :fabrikam, size: :compact, clickable: true})
+      html = render_pill(%{scope: :acme, size: :compact, clickable: true})
       assert html =~ "<button"
       assert html =~ ~s(phx-click="scope_filter")
       assert html =~ "scope-pill-hit-expand"
     end
 
     test "active compact keeps the dot + full-saturation fill, no check icon" do
-      html = render_pill(%{scope: :fabrikam, size: :compact, active: true})
+      html = render_pill(%{scope: :acme, size: :compact, active: true})
       refute html =~ "hero-check"
       assert "scope-active" in chip_classes(html)
       assert html =~ "size-1.5"
     end
 
     test "propagated collapses to the source chip only at compact size" do
-      html = render_pill(%{scope: :soylent, propagated_to: :fabrikam, size: :compact})
+      html = render_pill(%{scope: :soylent, propagated_to: :acme, size: :compact})
       refute html =~ "hero-arrow-right"
       refute html =~ "scope-pill-propagated"
       assert html =~ ">Soylent</span>"
-      refute html =~ ">Fabrikam</span>"
+      refute html =~ ">Acme</span>"
     end
 
     test "compact propagated preserves full provenance in aria-label and title" do
-      html = render_pill(%{scope: :soylent, propagated_to: :fabrikam, size: :compact})
-      assert html =~ ~s(aria-label="Soylent scope, propagated to Fabrikam")
-      assert html =~ ~s(title="Soylent → Fabrikam")
+      html = render_pill(%{scope: :soylent, propagated_to: :acme, size: :compact})
+      assert html =~ ~s(aria-label="Soylent scope, propagated to Acme")
+      assert html =~ ~s(title="Soylent → Acme")
     end
 
     test "propagated at default size still renders both chips + arrow (regression)" do
-      html = render_pill(%{scope: :soylent, propagated_to: :fabrikam, size: :default})
+      html = render_pill(%{scope: :soylent, propagated_to: :acme, size: :default})
       assert html =~ "hero-arrow-right"
       assert html =~ "scope-pill-propagated"
       assert html =~ ">Soylent</span>"
-      assert html =~ ">Fabrikam</span>"
+      assert html =~ ">Acme</span>"
     end
   end
 
@@ -625,9 +626,9 @@ defmodule PlatformWeb.Components.ScopePillTest do
     end
 
     test "a propagated pair takes the surface on both chips, the shipped target included" do
-      # Until stage 5 the `:fabrikam` target stayed on its legacy classes and
+      # Until stage 5 the `:acme` target stayed on its legacy classes and
       # ignored the surface. It now wears the -200 pair like the source.
-      html = render_pill_on(:base_200, %{scope: "acme", propagated_to: :fabrikam})
+      html = render_pill_on(:base_200, %{scope: "acme", propagated_to: :acme})
 
       chips =
         html
@@ -952,7 +953,7 @@ defmodule PlatformWeb.Components.ScopePillTest do
     alias Platform.Tenancy.ScopeColor
 
     @css_path "assets/css/app.css"
-    @fragments ~w(fabrikam soylent wayne-tech sxi paragon cyberdyne)
+    @fragments ~w(soylent wayne-tech sxi paragon cyberdyne)
 
     setup do
       %{css: File.read!(@css_path), rules: @css_path |> File.read!() |> CssRules.rules()}
@@ -1020,6 +1021,27 @@ defmodule PlatformWeb.Components.ScopePillTest do
         assert ScopeColor.composite_painted(value, 1.0, "#000000") ==
                  ScopeColor.composite_painted(Map.fetch!(pinned, fragment), 1.0, "#000000"),
                "#{selector} paints #{value}; the org row stores #{pinned[fragment]}"
+      end
+    end
+
+    test "the root org has no per-slug utility: it is coloured from its row (task 01a116de stage 3)",
+         %{rules: rules} do
+      # The shipped root slug's three hand-authored rules are deleted; its dot
+      # and swatch read `--scope-fill` through `data-scope` instead.
+      for selector <- [".text-fabrikam", ".bg-fabrikam-dot", ".channel-section-swatch--fabrikam"] do
+        refute Enum.any?(rules, &(&1.selector == selector)), "#{selector} is still in app.css"
+      end
+
+      for {selector, property, value} <- [
+            {".channel-section-color-dot--unassigned[data-scope]", "background-color",
+             "var(--scope-fill, transparent)"},
+            {".channel-section-swatch--own", "background-color",
+             "var(--scope-fill, transparent)"},
+            {".scope-dot-current", "background-color", "var(--scope-fill, currentColor)"}
+          ] do
+        rule = Enum.find(rules, &(&1.selector == selector))
+        assert rule, "#{selector} is missing from app.css"
+        assert declared(rule.body, property) == value
       end
     end
   end

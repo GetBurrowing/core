@@ -47,7 +47,7 @@ defmodule Platform.DataMigrations.BackfillCascadeChildDeletionClocksTest do
 
   # ── seeding helpers ────────────────────────────────────────────────────
 
-  # A live tenant org parented to Fabrikam. Children must be created while the
+  # A live tenant org parented to Acme. Children must be created while the
   # org is still live — `Tasks.create_project/1` (and space creation) reject
   # an `org_id` that already belongs to a deletion-scheduled org — so we
   # stamp the org's clock LAST, via `stamp_org_clock!/1`.
@@ -58,7 +58,7 @@ defmodule Platform.DataMigrations.BackfillCascadeChildDeletionClocksTest do
     |> Org.changeset(%{
       name: "Cascade org #{n}",
       slug: "cascade_org_#{n}",
-      parent_org_id: Tenancy.get_org_by_slug!("fabrikam").id
+      parent_org_id: Tenancy.get_org_by_slug!("acme").id
     })
     |> Repo.insert!()
   end

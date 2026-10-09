@@ -21,7 +21,7 @@ defmodule Platform.SignInAdmin do
 
     * `{:error, :not_found}` when `Platform.SignInAdmin.Config.enabled?/0`
       is false, so an install without the switch has no such feature;
-    * `{:error, :unauthorized}` unless `Platform.Tenancy.fabrikam_admin?/1` is
+    * `{:error, :unauthorized}` unless `Platform.Tenancy.root_admin?/1` is
       true, a fresh database read on every call (an admin demoted mid-session
       is refused on their next action).
 
@@ -430,7 +430,7 @@ defmodule Platform.SignInAdmin do
   defp authorize(actor) do
     cond do
       not Config.enabled?() -> {:error, :not_found}
-      not Tenancy.fabrikam_admin?(actor) -> {:error, :unauthorized}
+      not Tenancy.root_admin?(actor) -> {:error, :unauthorized}
       true -> :ok
     end
   end

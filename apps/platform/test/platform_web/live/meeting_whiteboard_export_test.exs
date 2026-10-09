@@ -32,7 +32,7 @@ defmodule PlatformWeb.MeetingWhiteboardExportTest do
     %OrgMembership{}
     |> OrgMembership.changeset(%{
       user_id: user.id,
-      org_id: Platform.TenancyFixtures.fabrikam_org_id(),
+      org_id: Platform.TenancyFixtures.acme_org_id(),
       role: "member"
     })
     |> Repo.insert!()
@@ -53,7 +53,7 @@ defmodule PlatformWeb.MeetingWhiteboardExportTest do
       |> Project.changeset(%{
         name: "Meeting Project #{System.unique_integer([:positive])}",
         slug: "meeting-project-#{System.unique_integer([:positive])}",
-        org_id: Platform.TenancyFixtures.fabrikam_org_id()
+        org_id: Platform.TenancyFixtures.acme_org_id()
       })
       |> Repo.insert()
 

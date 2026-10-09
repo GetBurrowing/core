@@ -9,7 +9,7 @@ defmodule PlatformWeb.Components.ScopePill do
   ## Purpose
 
   Suite is a Linear-style unified workspace (one view, filterable) — NOT a
-  Discord-style org switcher. Fabrikam admins see ALL orgs at once; the scope
+  Discord-style org switcher. root-org admins see ALL orgs at once; the scope
   pill is the filter affordance.
 
   * Click a pill → narrows the surface to that scope (parent LV handles
@@ -89,8 +89,8 @@ defmodule PlatformWeb.Components.ScopePill do
 
   ### How the six shipped orgs got here (task 01a09333-d374 stage 5)
 
-  Until stage 5 there were two paths. The six shipped slugs (fabrikam, soylent,
-  wayne-tech, sxi, paragon, cyberdyne) kept hand-authored build-time
+  Until stage 5 there were two paths. The six shipped slugs (the root org,
+  soylent, wayne-tech, sxi, paragon, cyberdyne) kept hand-authored build-time
   utilities in `app.css` (`bg-<slug>` at 12%, `text-<slug>-label`,
   `border-<slug>` at 30%, `bg-<slug>-active`, `hover:bg-<slug>/22`), chosen
   by an explicit six-slug branch here, because their labels were
@@ -151,8 +151,8 @@ defmodule PlatformWeb.Components.ScopePill do
   other org. Until task 01a0938b the chat rail and the chat header reached
   only those six, through closed six-name maps, so stage 5 is when those two
   declarations first took effect. Since 01a0938b both surfaces resolve the
-  pill from the org ROW (`ChatLive.org_scope/1`: a compiled atom for the six,
-  the slug binary for any other org), so every org on them, runtime-created
+  pill from the org ROW (`ChatLive.org_scope/1`: a compiled atom for the five
+  sibling tenants, the slug binary for any other org, the root included), so every org on them, runtime-created
   ones included, wears its declared surface.
 
   ## Edge and hover (task 01a09333-d374 stage 4)
@@ -177,7 +177,7 @@ defmodule PlatformWeb.Components.ScopePill do
 
   The 3:1 figure is for the chip as solved. A non-clickable chip still
   carries `opacity-55` (`opacity-70` at compact), which composites its edge
-  toward the ground along with its label: fabrikam's solved edge paints at
+  toward the ground along with its label: the root org's solved edge paints at
   about 1.8:1 there (2.2:1 at compact), and its label at 2.21:1 (2.83:1 at
   compact). That opacity is Marlowe-approved (2026-05-18) and its conflict
   with the contrast rules is an open decision on the design canvas; neither
@@ -200,21 +200,25 @@ defmodule PlatformWeb.Components.ScopePill do
 
   ## Examples
 
-      <.scope_pill scope={:fabrikam} />
-      <.scope_pill scope={:soylent} propagated_to={:fabrikam} />
+      <.scope_pill scope="acme" label="Acme" />
+      <.scope_pill scope={:soylent} propagated_to="acme" />
       <.scope_pill scope={:wayne_tech} clickable={false} />
       <.scope_pill scope={:sxi} active={true} />
-      <.scope_pill scope={:fabrikam} size={:compact} />
-      <.scope_pill scope={:soylent} propagated_to={:fabrikam} size={:compact} />
+      <.scope_pill scope={:sxi} size={:compact} />
+      <.scope_pill scope={:soylent} propagated_to="acme" size={:compact} />
       <.scope_pill scope={:sxi} size={:compact} clickable={true} />
   """
   use Phoenix.Component
   import PlatformWeb.CoreComponents, only: [icon: 1]
 
-  @scopes [:fabrikam, :soylent, :wayne_tech, :sxi, :paragon, :cyberdyne]
+  # The root org has no compiled atom: it is whatever row the install seeded,
+  # so callers pass its slug as a string (task 01a116de stage 3). The five
+  # sibling atoms below are the inventory FOLLOW-UP, not install-neutral.
+  @scopes [:soylent, :wayne_tech, :sxi, :paragon, :cyberdyne]
 
   @doc """
-  The canonical list of scope atoms, in display order.
+  The canonical list of compiled scope atoms, in display order. The root org
+  is not among them; it is addressed by its slug string.
 
   Used by tests and any caller that needs to iterate the scope enum without
   hard-coding it locally.
@@ -237,11 +241,10 @@ defmodule PlatformWeb.Components.ScopePill do
     """
   )
 
-  attr(:propagated_to, :atom,
+  attr(:propagated_to, :any,
     default: nil,
-    values: [nil, :fabrikam, :soylent, :wayne_tech, :sxi, :paragon, :cyberdyne],
     doc:
-      "When set, renders the propagated variant — `<scope> → <propagated_to>` joined by a hero-arrow-right glyph."
+      "When set, renders the propagated variant — `<scope> → <propagated_to>` joined by a hero-arrow-right glyph. One of `scopes/0` or an org slug string (the root org has no atom)."
   )
 
   attr(:clickable, :boolean,
@@ -559,8 +562,8 @@ defmodule PlatformWeb.Components.ScopePill do
   #
   #   * The CHAT rail's hidden-drawer group label and both chat header
   #     pills (task 01a0938b) pass `scope` = the org's scope value (a
-  #     compiled atom for the six shipped orgs, the slug binary as stored for
-  #     an org created at runtime), `label` = the org's NAME unmasked or the
+  #     compiled atom for the five sibling tenants, the slug binary as stored
+  #     for the root org and any org created at runtime), `label` = the org's NAME unmasked or the
   #     placeholder masked, and `value` = the org's SLUG unmasked or nil
   #     masked. Unmasked, `@value` is the slug, so the chip keeps its colour.
   #     Masked, only the placeholder `label` arrives, and the clause below
@@ -628,7 +631,6 @@ defmodule PlatformWeb.Components.ScopePill do
 
   # ── Labels ─────────────────────────────────────────────────────────
 
-  defp scope_label(:fabrikam), do: "Fabrikam"
   defp scope_label(:soylent), do: "Soylent"
   defp scope_label(:wayne_tech), do: "Wayne-Tech"
   defp scope_label(:sxi), do: "SXI"
@@ -636,7 +638,7 @@ defmodule PlatformWeb.Components.ScopePill do
   defp scope_label(:cyberdyne), do: "Cyberdyne"
 
   # Total fallback (task 01a09287 stage 2). Reached by any org outside the
-  # six compiled ones. Callers that know the org's real name pass it as
+  # five compiled ones, the root org included. Callers that know the org's real name pass it as
   # `label`, which wins over this via `display_label/2` — the rail always
   # does. This is only what a caller that passed a bare slug gets.
   defp scope_label(scope) when is_binary(scope) do

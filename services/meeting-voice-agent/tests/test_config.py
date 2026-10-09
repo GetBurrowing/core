@@ -1,6 +1,6 @@
 import pytest
 
-from meeting_voice_agent.config import AgentConfig, TurnDetectorConfig
+from meeting_voice_agent.config import AgentConfig, ConfigError, TurnDetectorConfig
 
 
 def test_defaults_are_config_not_hardcoded_elsewhere():
@@ -15,15 +15,18 @@ def test_defaults_are_config_not_hardcoded_elsewhere():
     assert config.interruption.allow_interruptions is True
 
 
-def test_mcp_base_url_defaults_to_the_public_host_not_an_in_cluster_url():
-    """Task 01a0d4a0 stage 4 round 2: Dalton's moon run found the service was
-    defaulting to an in-cluster `:4000` URL that redirects, which the MCP
-    client correctly refuses to follow. The default must be the public host
-    directly."""
-    config = AgentConfig.from_env()
+@pytest.mark.parametrize("value", [None, "", "   "])
+def test_mcp_base_url_is_required_and_names_the_var(monkeypatch, value):
+    """Task 01a116de: MVA_MCP_BASE_URL has no default, because any default
+    would name one particular Suite install. Unset, empty and blank all raise
+    a config error that names the variable."""
+    if value is None:
+        monkeypatch.delenv("MVA_MCP_BASE_URL", raising=False)
+    else:
+        monkeypatch.setenv("MVA_MCP_BASE_URL", value)
 
-    assert config.mcp.base_url == "https://suite.example.com/mcp"
-    assert "4000" not in config.mcp.base_url
+    with pytest.raises(ConfigError, match="MVA_MCP_BASE_URL is required"):
+        AgentConfig.from_env()
 
 
 def test_mcp_base_url_env_override_wins(monkeypatch):

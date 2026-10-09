@@ -26,7 +26,7 @@ defmodule Platform.Push.APNs do
   | `:topic`   | `APNS_TOPIC`     | `:topic`     | `apns-topic`   |
   | `:auth_key`| `APNS_AUTH_KEY`  | `:auth_key`  | `apns-auth-key`|
 
-  `:topic` is the iOS app's bundle id, `com.kobo-ai.burrow` (Burrow).
+  `:topic` is the iOS app's bundle id (Burrow), set per install.
   `:auth_key` is the `.p8` PEM. A partial configuration logs WHICH keys are
   missing and never a value.
 

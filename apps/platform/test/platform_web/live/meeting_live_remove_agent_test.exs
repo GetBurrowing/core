@@ -91,7 +91,7 @@ defmodule PlatformWeb.MeetingLiveRemoveAgentTest do
     Repo.insert!(
       OrgMembership.changeset(%OrgMembership{}, %{
         user_id: user.id,
-        org_id: Platform.TenancyFixtures.fabrikam_org_id(),
+        org_id: Platform.TenancyFixtures.acme_org_id(),
         role: "member"
       })
     )
@@ -120,7 +120,7 @@ defmodule PlatformWeb.MeetingLiveRemoveAgentTest do
         Project.changeset(%Project{}, %{
           name: "Remove Agent LV Project #{n}",
           slug: "remove-agent-lv-project-#{n}",
-          org_id: Platform.TenancyFixtures.fabrikam_org_id()
+          org_id: Platform.TenancyFixtures.acme_org_id()
         })
       )
 

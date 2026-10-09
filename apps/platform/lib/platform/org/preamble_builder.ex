@@ -6,9 +6,9 @@ defmodule Platform.Org.PreambleBuilder do
   a builder that honours the two-tier MT/RBAC topology:
 
     * The operating org is resolved per call (from `task.project.org`, an
-      `org_id` opt, or the Fabrikam root fallback).
+      `org_id` opt, or the root-org fallback).
     * Pages inherit upward along the `parent_org_id` chain so tenant
-      preambles automatically include Fabrikam's `org/fabrikam/*` super-context.
+      preambles automatically include the root's `org/*` super-context.
     * At the root org, descendant tenants contribute their
       `org/<slug>/IDENTITY.md` summary (and a single `TENANTS_SUMMARY.md`
       from `Platform.Org.TenantsSummary`) so the root sees a roster
@@ -230,7 +230,7 @@ defmodule Platform.Org.PreambleBuilder do
     #
     # ADR-0042 e2e fix: when the call is *scoped to a task* (even one
     # whose project rolls up directly under the root org), include the
-    # `project/<project_id>/*` pages too. Without this, a Fabrikam-rooted
+    # `project/<project_id>/*` pages too. Without this, a root-org
     # project task receives the descendant tenants' IDENTITY.md files
     # but loses its own project preamble — Case 2 of the reviewer's
     # validation. The tenant branch already does this; the root branch

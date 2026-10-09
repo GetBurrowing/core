@@ -164,8 +164,8 @@ defmodule PlatformWeb.Tasks.BoardData do
 
       iex> PlatformWeb.Tasks.BoardData.tasks_path(:all, :priority, "", :all)
       "/tasks"
-      iex> PlatformWeb.Tasks.BoardData.tasks_path(:mine, :updated, "zephyr", "fabrikam")
-      "/tasks?sponsor=mine&sort=updated&q=zephyr&scope=fabrikam"
+      iex> PlatformWeb.Tasks.BoardData.tasks_path(:mine, :updated, "zephyr", "acme")
+      "/tasks?sponsor=mine&sort=updated&q=zephyr&scope=acme"
   """
   @spec tasks_path(
           :all | :mine | nil,

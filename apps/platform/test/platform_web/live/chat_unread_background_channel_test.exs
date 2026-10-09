@@ -247,7 +247,7 @@ defmodule PlatformWeb.ChatUnreadBackgroundChannelTest do
         Org.changeset(%Org{}, %{
           name: "Unread Fixture Tenant #{unique()}",
           slug: "unread_fixture_tenant_#{unique()}",
-          parent_org_id: Tenancy.get_org_by_slug!("fabrikam").id
+          parent_org_id: Tenancy.get_org_by_slug!("acme").id
         })
       )
 

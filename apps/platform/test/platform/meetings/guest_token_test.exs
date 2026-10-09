@@ -207,7 +207,7 @@ defmodule Platform.Meetings.GuestTokenTest do
 
     test "inherits org_id from the meeting's project" do
       # `Tasks.create_project/1` auto-fills `:org_id` from the seeded
-      # `fabrikam` org when the caller doesn't pass one (see the migration
+      # `acme` org when the caller doesn't pass one (see the migration
       # `20260519143620_seed_root_orgs.exs`). The guest chat_space
       # should carry the SAME org so cross-tenant slug uniqueness
       # scoping matches the host meeting.

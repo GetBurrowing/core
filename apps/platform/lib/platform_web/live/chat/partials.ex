@@ -667,7 +667,7 @@ defmodule PlatformWeb.ChatLive.Partials do
       `users.preferences["hidden_channel_ids"]`, and the Hidden drawer that
       reverses it lists channels, so offering it on a DM would create a state
       with no way back.
-    * Move to organisation…: Fabrikam admin, on a channel with an `org_id`. It
+    * Move to organisation…: root-org admin, on a channel with an `org_id`. It
       stays reachable from a PINNED row: pinning lifts a channel out of its
       sub-org section, so gating this on "unpinned" would strand it.
 
@@ -750,7 +750,7 @@ defmodule PlatformWeb.ChatLive.Partials do
     doc: "nil when closed, else the `row_actions_target/5` map for the row that opened it"
   )
 
-  attr(:fabrikam_admin?, :boolean, default: false)
+  attr(:root_admin?, :boolean, default: false)
 
   def row_actions_dialog(assigns) do
     ~H"""
@@ -830,7 +830,7 @@ defmodule PlatformWeb.ChatLive.Partials do
                  destination chooser never opens on top of it. Same shape as
                  the drawer's `new_conversation_open |> close_mobile_browser`
                  pair; no new server event. --%>
-            <li :if={@fabrikam_admin? and @target.movable} class="border-t border-edge">
+            <li :if={@root_admin? and @target.movable} class="border-t border-edge">
               <button
                 type="button"
                 class="flex min-h-11 w-full items-center gap-3 rounded-lg px-2 py-2 text-left text-sm text-base-content transition-colors hover:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"

@@ -139,7 +139,7 @@ defmodule Platform.FixtureExtension do
         path: "/fixture",
         hero_icon: "hero-puzzle-piece",
         cluster: :working,
-        fabrikam_only?: false
+        root_only?: false
       }
     ]
   end

@@ -16,7 +16,7 @@ defmodule PlatformWeb.FileBlobControllerTest do
     * 404 for unknown file id.
     * 403 for an unauthenticated session.
     * 403 for an authenticated user who's not a member of the file's
-      org and is not a Fabrikam admin.
+      org and is not an Acme admin.
   """
 
   use PlatformWeb.ConnCase, async: false
@@ -62,12 +62,12 @@ defmodule PlatformWeb.FileBlobControllerTest do
         oidc_sub: "oidc-blob-#{uniq}"
       })
 
-    # Default: make the user a Fabrikam-org member so the controller's
-    # `authorize/2` lets them through for fixtures parked in a Fabrikam
+    # Default: make the user an Acme-org member so the controller's
+    # `authorize/2` lets them through for fixtures parked in an Acme
     # project. Pass `member: false` to skip and exercise the forbidden
     # path.
     unless opts[:member] == false do
-      add_member!(user, fabrikam_org_id(), opts[:role] || "member")
+      add_member!(user, acme_org_id(), opts[:role] || "member")
     end
 
     user
@@ -82,12 +82,12 @@ defmodule PlatformWeb.FileBlobControllerTest do
   defp authed_conn(conn, user),
     do: init_test_session(conn, current_user_id: user.id)
 
-  defp seed_fabrikam_project do
+  defp seed_acme_project do
     {:ok, project} =
       Tasks.create_project(%{
         name: "Blob Project #{System.unique_integer([:positive])}",
         slug: "blob-project-#{System.unique_integer([:positive])}",
-        org_id: fabrikam_org_id()
+        org_id: acme_org_id()
       })
 
     project
@@ -126,7 +126,7 @@ defmodule PlatformWeb.FileBlobControllerTest do
   describe "GET /files/blob/:id (default disposition)" do
     test "renders inline for image content type", %{conn: conn} do
       user = insert_user()
-      project = seed_fabrikam_project()
+      project = seed_acme_project()
       {file, _path} = seed_blob(project, "image/png", "PNGBYTES")
 
       conn = conn |> authed_conn(user) |> get(~p"/files/blob/#{file.id}")
@@ -140,7 +140,7 @@ defmodule PlatformWeb.FileBlobControllerTest do
 
     test "renders inline for text content type", %{conn: conn} do
       user = insert_user()
-      project = seed_fabrikam_project()
+      project = seed_acme_project()
       {file, _path} = seed_blob(project, "text/plain", "hello body")
 
       conn = conn |> authed_conn(user) |> get(~p"/files/blob/#{file.id}")
@@ -152,7 +152,7 @@ defmodule PlatformWeb.FileBlobControllerTest do
 
     test "renders inline for application/pdf", %{conn: conn} do
       user = insert_user()
-      project = seed_fabrikam_project()
+      project = seed_acme_project()
       {file, _path} = seed_blob(project, "application/pdf", "%PDF-1.4")
 
       conn = conn |> authed_conn(user) |> get(~p"/files/blob/#{file.id}")
@@ -164,7 +164,7 @@ defmodule PlatformWeb.FileBlobControllerTest do
 
     test "forces attachment for unknown content type", %{conn: conn} do
       user = insert_user()
-      project = seed_fabrikam_project()
+      project = seed_acme_project()
       {file, _path} = seed_blob(project, "application/octet-stream", "<<bytes>>")
 
       conn = conn |> authed_conn(user) |> get(~p"/files/blob/#{file.id}")
@@ -176,7 +176,7 @@ defmodule PlatformWeb.FileBlobControllerTest do
 
     test "sets x-content-type-options: nosniff", %{conn: conn} do
       user = insert_user()
-      project = seed_fabrikam_project()
+      project = seed_acme_project()
       {file, _path} = seed_blob(project, "text/plain", "x")
 
       conn = conn |> authed_conn(user) |> get(~p"/files/blob/#{file.id}")
@@ -192,7 +192,7 @@ defmodule PlatformWeb.FileBlobControllerTest do
     # through the route rather than by reading the source.
     test "text/html is served as an attachment by default", %{conn: conn} do
       user = insert_user()
-      project = seed_fabrikam_project()
+      project = seed_acme_project()
       {file, _path} = seed_blob(project, "text/html", "<h1>Mockup</h1>")
 
       conn = conn |> authed_conn(user) |> get(~p"/files/blob/#{file.id}")
@@ -205,7 +205,7 @@ defmodule PlatformWeb.FileBlobControllerTest do
 
     test "the change is narrow: text/plain and text/csv still render inline", %{conn: conn} do
       user = insert_user()
-      project = seed_fabrikam_project()
+      project = seed_acme_project()
 
       for ct <- ["text/plain", "text/csv", "text/markdown"] do
         {file, _path} = seed_blob(project, ct, "body of #{ct}")
@@ -219,7 +219,7 @@ defmodule PlatformWeb.FileBlobControllerTest do
     test "?preview=1 serves markup inline for the sandboxed frame, under a sandbox CSP",
          %{conn: conn} do
       user = insert_user()
-      project = seed_fabrikam_project()
+      project = seed_acme_project()
       {file, _path} = seed_blob(project, "text/html", "<h1>Mockup</h1>")
 
       conn = conn |> authed_conn(user) |> get(~p"/files/blob/#{file.id}?preview=1")
@@ -239,7 +239,7 @@ defmodule PlatformWeb.FileBlobControllerTest do
     test "?preview=1 does not widen anything else — a non-markup type is unaffected",
          %{conn: conn} do
       user = insert_user()
-      project = seed_fabrikam_project()
+      project = seed_acme_project()
       {file, _path} = seed_blob(project, "application/octet-stream", "<<bytes>>")
 
       conn = conn |> authed_conn(user) |> get(~p"/files/blob/#{file.id}?preview=1")
@@ -255,7 +255,7 @@ defmodule PlatformWeb.FileBlobControllerTest do
 
     test "download=1 still wins over preview=1 for markup", %{conn: conn} do
       user = insert_user()
-      project = seed_fabrikam_project()
+      project = seed_acme_project()
       {file, _path} = seed_blob(project, "text/html", "<h1>Mockup</h1>")
 
       conn = conn |> authed_conn(user) |> get(~p"/files/blob/#{file.id}?preview=1&download=1")
@@ -269,7 +269,7 @@ defmodule PlatformWeb.FileBlobControllerTest do
     test "a flagged file requested by the preview iframe receives sandbox allow-scripts",
          %{conn: conn} do
       user = insert_user()
-      project = seed_fabrikam_project()
+      project = seed_acme_project()
       {file, _path} = seed_blob(project, "text/html", "<h1>Mockup</h1>")
       {:ok, file} = Files.mark_interactive(%{id: user.id}, file)
 
@@ -302,7 +302,7 @@ defmodule PlatformWeb.FileBlobControllerTest do
     test "a flagged file requested as a top-level document (not framed) falls back to bare sandbox",
          %{conn: conn} do
       user = insert_user()
-      project = seed_fabrikam_project()
+      project = seed_acme_project()
       {file, _path} = seed_blob(project, "text/html", "<h1>Mockup</h1>")
       {:ok, file} = Files.mark_interactive(%{id: user.id}, file)
 
@@ -321,7 +321,7 @@ defmodule PlatformWeb.FileBlobControllerTest do
     test "a flagged, framed response still carries Phoenix's base-uri and frame-ancestors",
          %{conn: conn} do
       user = insert_user()
-      project = seed_fabrikam_project()
+      project = seed_acme_project()
       {file, _path} = seed_blob(project, "text/html", "<h1>Mockup</h1>")
       {:ok, file} = Files.mark_interactive(%{id: user.id}, file)
 
@@ -340,7 +340,7 @@ defmodule PlatformWeb.FileBlobControllerTest do
   describe "GET /files/blob/:id?download=1" do
     test "forces attachment disposition for an inline-default type (image)", %{conn: conn} do
       user = insert_user()
-      project = seed_fabrikam_project()
+      project = seed_acme_project()
       {file, _path} = seed_blob(project, "image/png", "PNGBYTES")
 
       conn =
@@ -356,7 +356,7 @@ defmodule PlatformWeb.FileBlobControllerTest do
 
     test "forces attachment disposition for PDF", %{conn: conn} do
       user = insert_user()
-      project = seed_fabrikam_project()
+      project = seed_acme_project()
       {file, _path} = seed_blob(project, "application/pdf", "%PDF-1.4")
 
       conn =
@@ -370,7 +370,7 @@ defmodule PlatformWeb.FileBlobControllerTest do
 
     test "download=true also accepted (truthy alias)", %{conn: conn} do
       user = insert_user()
-      project = seed_fabrikam_project()
+      project = seed_acme_project()
       {file, _path} = seed_blob(project, "image/png", "PNG")
 
       conn =
@@ -386,10 +386,10 @@ defmodule PlatformWeb.FileBlobControllerTest do
   describe "errors" do
     test "403 for an authenticated user that's not a member of the file's org",
          %{conn: conn} do
-      project = seed_fabrikam_project()
+      project = seed_acme_project()
       {file, _path} = seed_blob(project, "text/plain", "x")
 
-      # `member: false` skips the default Fabrikam-org membership, so the
+      # `member: false` skips the default Acme-org membership, so the
       # controller's `do_authorize/2` hits the final `:forbidden`
       # branch.
       user = insert_user(member: false)
@@ -412,7 +412,7 @@ defmodule PlatformWeb.FileBlobControllerTest do
 
     test "unauthenticated session is bounced to /auth/login by the pipeline",
          %{conn: conn} do
-      project = seed_fabrikam_project()
+      project = seed_acme_project()
       {file, _path} = seed_blob(project, "text/plain", "x")
 
       # No init_test_session — the :require_auth pipeline plug halts
@@ -436,7 +436,7 @@ defmodule PlatformWeb.FileBlobControllerTest do
     # `accept` header. On every other `:browser` route the Accept path is
     # still refused with 406 — the widening is scoped to this route alone.
     test "bearer token without a session gets 401, not a login redirect", %{conn: conn} do
-      project = seed_fabrikam_project()
+      project = seed_acme_project()
       {file, _path} = seed_blob(project, "text/plain", "x")
 
       conn =
@@ -448,7 +448,7 @@ defmodule PlatformWeb.FileBlobControllerTest do
     end
 
     test "the 401 body is JSON, not an HTML login page", %{conn: conn} do
-      project = seed_fabrikam_project()
+      project = seed_acme_project()
       {file, _path} = seed_blob(project, "text/plain", "x")
 
       conn =
@@ -465,7 +465,7 @@ defmodule PlatformWeb.FileBlobControllerTest do
     test "positive control: an authenticated session still gets the exact bytes",
          %{conn: conn} do
       user = insert_user()
-      project = seed_fabrikam_project()
+      project = seed_acme_project()
       body = "POSITIVE-CONTROL-BYTES"
       {file, _path} = seed_blob(project, "text/plain", body)
 
@@ -477,7 +477,7 @@ defmodule PlatformWeb.FileBlobControllerTest do
 
     test "Accept: application/json without a session reaches RequireAuth and gets 401 JSON",
          %{conn: conn} do
-      project = seed_fabrikam_project()
+      project = seed_acme_project()
       {file, _path} = seed_blob(project, "text/plain", "JSON-PREFERRING-CLIENT-BYTES")
 
       # Before task 01a09415 this request raised `Phoenix.NotAcceptableError`
@@ -498,7 +498,7 @@ defmodule PlatformWeb.FileBlobControllerTest do
     test "an authenticated session sending Accept: application/json still gets the exact bytes",
          %{conn: conn} do
       user = insert_user()
-      project = seed_fabrikam_project()
+      project = seed_acme_project()
       body = "JSON-ACCEPT-POSITIVE-CONTROL-BYTES"
       {file, _path} = seed_blob(project, "text/plain", body)
 
@@ -516,10 +516,10 @@ defmodule PlatformWeb.FileBlobControllerTest do
 
     test "authenticated non-member sending Accept: application/json gets 403 Forbidden",
          %{conn: conn} do
-      project = seed_fabrikam_project()
+      project = seed_acme_project()
       {file, _path} = seed_blob(project, "text/plain", "x")
 
-      # `member: false` skips the default Fabrikam-org membership, so the
+      # `member: false` skips the default Acme-org membership, so the
       # controller's own org gate — which this task does not change —
       # answers. Reachable only now that the Accept header no longer 406s.
       user = insert_user(member: false)

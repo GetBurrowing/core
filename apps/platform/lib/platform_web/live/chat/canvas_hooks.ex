@@ -296,7 +296,7 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
 
   Not fixed here. Deliberately left for the stage that owns canvas READ
   surfaces (task 019e2c4b stage 3/4), because closing it means deciding
-  whether Fabrikam admins keep their current de-facto global canvas read — a
+  whether root-org admins keep their current de-facto global canvas read — a
   policy question, not a refactor. Recorded so the next person does not have
   to rediscover it.
 
@@ -768,7 +768,7 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   defp handle_canvas_action_value(_value, _canvas, socket), do: {:halt, socket}
 
   # Authorization for junk_batch: allow the source canvas's creator (by
-  # participant id) OR any Fabrikam root admin. `current_user` may be
+  # participant id) OR any root-org admin. `current_user` may be
   # absent in test/system paths — in that case, admin check falls
   # through to false and only the participant path can succeed.
   defp authorize_junk_batch(socket, canvas) do
@@ -788,22 +788,22 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
 
   defp canvas_owner?(_socket, _canvas), do: false
 
-  # Prefer the `:fabrikam_admin?` assign that `PlatformWeb.LiveAuth`'s
+  # Prefer the `:root_admin?` assign that `PlatformWeb.LiveAuth`'s
   # `:default` on_mount populates — it's a pure derivation on the
   # preloaded `:current_user_record` and avoids a per-click DB hit. Fall
-  # back to a live `Tenancy.fabrikam_admin?/1` lookup for sockets that
+  # back to a live `Tenancy.root_admin?/1` lookup for sockets that
   # didn't ride that on_mount chain (embedded mounts, tests that stub
   # in a bare user).
   defp admin_user?(socket) do
     case socket.assigns do
-      %{fabrikam_admin?: true} ->
+      %{root_admin?: true} ->
         true
 
       %{current_user_record: %{} = user} ->
-        Platform.Tenancy.fabrikam_admin?(user)
+        Platform.Tenancy.root_admin?(user)
 
       %{current_user: %{} = user} ->
-        Platform.Tenancy.fabrikam_admin?(user)
+        Platform.Tenancy.root_admin?(user)
 
       _ ->
         false

@@ -241,7 +241,7 @@ defmodule Platform.CodeMode.SandboxAdversarialTest do
 
   test "an inner tool error is catchable and carries the tool's code", %{agent: agent} do
     {runtime, _} = insert_runtime!(agent, bundles(["code_mode", "task"]))
-    org_id = Platform.TenancyFixtures.fabrikam_org_id()
+    org_id = Platform.TenancyFixtures.acme_org_id()
     {:ok, _project} = Tasks.create_project(%{name: "CM #{u()}", org_id: org_id})
 
     script = """

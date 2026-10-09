@@ -217,10 +217,10 @@ defmodule Platform.Mail.AccountsTest do
                Mail.create_account(external, ctx.org_id, attrs("ext"), %{})
     end
 
-    test "a Fabrikam admin who is not an admin of the org is refused", ctx do
-      fabrikam_id = Tenancy.get_org_by_slug!("fabrikam").id
-      root = user!() |> member!(fabrikam_id, "admin")
-      assert Tenancy.fabrikam_admin?(root)
+    test "an Acme admin who is not an admin of the org is refused", ctx do
+      acme_id = Tenancy.get_org_by_slug!("acme").id
+      root = user!() |> member!(acme_id, "admin")
+      assert Tenancy.root_admin?(root)
 
       assert {:error, :unauthorized} = Mail.create_account(root, ctx.org_id, attrs("root"), %{})
 
@@ -268,7 +268,7 @@ defmodule Platform.Mail.AccountsTest do
 
   # ── port / tls pairing ─────────────────────────────────────────────────
   #
-  # Measured (fabrikam, 2026-09-24): smtp.gmail.com:465 with "starttls" failed
+  # Measured (acme, 2026-09-24): smtp.gmail.com:465 with "starttls" failed
   # every delivery with {:network_failure, _, {:error, :closed}}.
 
   describe "port / tls pairing" do

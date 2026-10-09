@@ -1,7 +1,7 @@
 defmodule PlatformWeb.Plugs.RequireAuthTest do
   @moduledoc """
   Tests for the `RequireAuth` plug, focused on the MT/RBAC stack 2
-  additions (`:current_user_org_membership` + `:fabrikam_admin?` assigns).
+  additions (`:current_user_org_membership` + `:root_admin?` assigns).
 
   Hot-path concern: the assigns must derive from the already-preloaded
   user struct — NOT from a follow-up Repo query — so any future
@@ -55,41 +55,41 @@ defmodule PlatformWeb.Plugs.RequireAuthTest do
   end
 
   describe "MT/RBAC assigns" do
-    test "admin user → membership + fabrikam_admin?=true", %{conn: conn} do
+    test "admin user → membership + root_admin?=true", %{conn: conn} do
       user = create_user!()
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
-      create_membership!(user, fabrikam, "admin")
+      acme = Tenancy.get_org_by_slug!("acme")
+      create_membership!(user, acme, "admin")
 
       conn = call(conn, user.id)
 
       assert conn.assigns.current_user.id == user.id
-      assert conn.assigns.fabrikam_admin? == true
+      assert conn.assigns.root_admin? == true
 
-      assert %{role: :admin, org: %{slug: "fabrikam"}} =
+      assert %{role: :admin, org: %{slug: "acme"}} =
                conn.assigns.current_user_org_membership
     end
 
-    test "member user → membership + fabrikam_admin?=false", %{conn: conn} do
+    test "member user → membership + root_admin?=false", %{conn: conn} do
       user = create_user!()
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
-      create_membership!(user, fabrikam, "member")
+      acme = Tenancy.get_org_by_slug!("acme")
+      create_membership!(user, acme, "member")
 
       conn = call(conn, user.id)
 
       assert conn.assigns.current_user.id == user.id
-      assert conn.assigns.fabrikam_admin? == false
+      assert conn.assigns.root_admin? == false
 
-      assert %{role: :member, org: %{slug: "fabrikam"}} =
+      assert %{role: :member, org: %{slug: "acme"}} =
                conn.assigns.current_user_org_membership
     end
 
-    test "user with no memberships → nil membership + fabrikam_admin?=false", %{conn: conn} do
+    test "user with no memberships → nil membership + root_admin?=false", %{conn: conn} do
       user = create_user!()
 
       conn = call(conn, user.id)
 
       assert conn.assigns.current_user.id == user.id
-      assert conn.assigns.fabrikam_admin? == false
+      assert conn.assigns.root_admin? == false
       assert is_nil(conn.assigns.current_user_org_membership)
     end
 
@@ -100,7 +100,7 @@ defmodule PlatformWeb.Plugs.RequireAuthTest do
       assert Phoenix.ConnTest.redirected_to(conn) == "/auth/login"
       refute Map.has_key?(conn.assigns, :current_user)
       refute Map.has_key?(conn.assigns, :current_user_org_membership)
-      refute Map.has_key?(conn.assigns, :fabrikam_admin?)
+      refute Map.has_key?(conn.assigns, :root_admin?)
     end
 
     test "stale session (user deleted) → drop session, redirect to login", %{conn: conn} do
@@ -140,8 +140,8 @@ defmodule PlatformWeb.Plugs.RequireAuthTest do
     # must arrive on `:current_user` AND drive the derived assigns.
     test "current_user has :org_memberships preloaded (not %NotLoaded{})", %{conn: conn} do
       user = create_user!()
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
-      create_membership!(user, fabrikam, "admin")
+      acme = Tenancy.get_org_by_slug!("acme")
+      create_membership!(user, acme, "admin")
 
       conn = call(conn, user.id)
 

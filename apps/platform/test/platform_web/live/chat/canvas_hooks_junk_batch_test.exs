@@ -137,7 +137,7 @@ defmodule PlatformWeb.ChatLive.CanvasHooksJunkBatchTest do
       end
     end
 
-    test "fabrikam admin (non-owner) click also opens the modal", %{conn: conn} do
+    test "acme admin (non-owner) click also opens the modal", %{conn: conn} do
       owner = insert_user("owner-admin-modal@example.com")
       admin = insert_user("root-admin-modal@example.com")
       :ok = promote_admin(admin)

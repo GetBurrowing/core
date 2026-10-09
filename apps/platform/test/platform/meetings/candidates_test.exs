@@ -110,7 +110,7 @@ defmodule Platform.Meetings.CandidatesTest do
 
   describe "create/1 — org derivation" do
     test "derives org_id from a real meeting -> project chain" do
-      org_id = fabrikam_org_id()
+      org_id = acme_org_id()
       meeting = create_meeting!(org_id)
 
       {:ok, candidate} = Candidates.create(candidate_attrs(meeting.id))
@@ -119,15 +119,15 @@ defmodule Platform.Meetings.CandidatesTest do
     end
 
     test "two meetings in different orgs derive different org_ids" do
-      fabrikam = fabrikam_org_id()
+      acme = acme_org_id()
       sxi = tenant_org_id("sxi")
 
-      {:ok, fabrikam_candidate} = Candidates.create(candidate_attrs(create_meeting!(fabrikam).id))
+      {:ok, acme_candidate} = Candidates.create(candidate_attrs(create_meeting!(acme).id))
       {:ok, sxi_candidate} = Candidates.create(candidate_attrs(create_meeting!(sxi).id))
 
-      assert fabrikam_candidate.org_id == fabrikam
+      assert acme_candidate.org_id == acme
       assert sxi_candidate.org_id == sxi
-      refute fabrikam_candidate.org_id == sxi_candidate.org_id
+      refute acme_candidate.org_id == sxi_candidate.org_id
     end
 
     test "a meeting id that resolves to nothing still writes, with a nil org_id" do
@@ -155,7 +155,7 @@ defmodule Platform.Meetings.CandidatesTest do
     end
 
     test "an explicit org_id wins over derivation" do
-      meeting = create_meeting!(fabrikam_org_id())
+      meeting = create_meeting!(acme_org_id())
       explicit = tenant_org_id("paragon")
 
       {:ok, candidate} = Candidates.create(candidate_attrs(meeting.id, %{org_id: explicit}))
@@ -164,7 +164,7 @@ defmodule Platform.Meetings.CandidatesTest do
     end
 
     test "an explicit nil org_id still derives" do
-      org_id = fabrikam_org_id()
+      org_id = acme_org_id()
       meeting = create_meeting!(org_id)
 
       {:ok, candidate} = Candidates.create(candidate_attrs(meeting.id, %{org_id: nil}))
@@ -173,7 +173,7 @@ defmodule Platform.Meetings.CandidatesTest do
     end
 
     test "string-keyed attrs derive too" do
-      org_id = fabrikam_org_id()
+      org_id = acme_org_id()
       meeting = create_meeting!(org_id)
 
       {:ok, candidate} =
@@ -643,7 +643,7 @@ defmodule Platform.Meetings.CandidatesTest do
 
   describe "graduate/2" do
     setup do
-      %{meeting: create_meeting!(fabrikam_org_id())}
+      %{meeting: create_meeting!(acme_org_id())}
     end
 
     test "a :task candidate gets a real task, and canvas_id stays nil", %{meeting: meeting} do

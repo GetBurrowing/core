@@ -266,7 +266,7 @@ defmodule PlatformWeb.NativeDonationTest do
         |> Project.changeset(%{
           name: "Donate Meet #{u()}",
           slug: "donate-meet-#{u()}",
-          org_id: Platform.TenancyFixtures.fabrikam_org_id()
+          org_id: Platform.TenancyFixtures.acme_org_id()
         })
         |> Repo.insert()
 

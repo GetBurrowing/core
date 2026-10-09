@@ -28,7 +28,7 @@ defmodule Platform.Orchestration.DispatchMetricsTest do
   setup do
     agent = insert_agent()
     runtime = insert_runtime(agent)
-    org_id = Platform.TenancyFixtures.fabrikam_org_id()
+    org_id = Platform.TenancyFixtures.acme_org_id()
     {:ok, project} = Tasks.create_project(%{name: "Metrics #{u()}", org_id: org_id})
 
     {:ok, task} =

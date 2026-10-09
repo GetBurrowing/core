@@ -70,7 +70,7 @@ defmodule PlatformWeb.ChatLive.NewConversationComponentExternalTest do
     |> Org.changeset(%{
       name: "Tenant #{n}",
       slug: "tenant_nc_#{n}",
-      parent_org_id: Tenancy.get_org_by_slug!("fabrikam").id
+      parent_org_id: Tenancy.get_org_by_slug!("acme").id
     })
     |> Repo.insert!()
   end

@@ -35,7 +35,7 @@ defmodule Platform.Meetings.CandidateSweeperTest do
     {:ok, project} =
       Platform.Tasks.create_project(%{
         name: "Sweeper Project #{n}",
-        org_id: Platform.Tenancy.get_org_by_slug!("fabrikam").id
+        org_id: Platform.Tenancy.get_org_by_slug!("acme").id
       })
 
     {:ok, meeting} =

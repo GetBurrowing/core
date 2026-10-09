@@ -146,7 +146,7 @@ defmodule Platform.Memory.DreamingReviewE2ETest do
   describe "Case B: format_normalize auto-apply, 3 bare-slug references" do
     test "3 bare refs auto-normalize, 3 audit rows, NO proposal blocks, journal summary count=3" do
       # ── Setup: 3 target pages + 3 referrers with bare wikilinks ─────────
-      {:ok, _fabrikam} = Wiki.upsert_page("org/page/team/fabrikam.md", %{content: "Fabrikam anchor page."})
+      {:ok, _acme} = Wiki.upsert_page("org/page/team/acme.md", %{content: "Acme anchor page."})
 
       {:ok, _higgins} =
         Wiki.upsert_page("org/page/team/higgins.md", %{content: "Higgins anchor page."})
@@ -155,7 +155,7 @@ defmodule Platform.Memory.DreamingReviewE2ETest do
 
       {:ok, _ref_a} =
         Wiki.upsert_page("org/page/ref-a.md", %{
-          content: "See [[fabrikam]] for background."
+          content: "See [[acme]] for background."
         })
 
       {:ok, _ref_b} =
@@ -193,10 +193,10 @@ defmodule Platform.Memory.DreamingReviewE2ETest do
       page_b = Wiki.get_page("org/page/ref-b.md")
       page_c = Wiki.get_page("org/page/ref-c.md")
 
-      assert page_a.content =~ "[[org/page/team/fabrikam.md]]",
+      assert page_a.content =~ "[[org/page/team/acme.md]]",
              "ref-a not rewritten to absolute form: #{page_a.content}"
 
-      refute page_a.content =~ "[[fabrikam]]", "ref-a still contains bare-slug reference"
+      refute page_a.content =~ "[[acme]]", "ref-a still contains bare-slug reference"
 
       assert page_b.content =~ "[[org/page/team/higgins.md]]",
              "ref-b not rewritten to absolute form: #{page_b.content}"
@@ -254,12 +254,12 @@ defmodule Platform.Memory.DreamingReviewE2ETest do
             journal_path: "org/journal/2026-07-19.md",
             block_hash:
               :sha256
-              |> :crypto.hash("fabrikam-self-serve-#{System.unique_integer([:positive])}")
+              |> :crypto.hash("acme-self-serve-#{System.unique_integer([:positive])}")
               |> Base.encode16(case: :lower),
             category: "strategic-insight",
             confidence: "high",
             evidence: "seeded for review",
-            body: "Fabrikam should launch a self-serve tier",
+            body: "Acme should launch a self-serve tier",
             status: "pending",
             expires_at: DateTime.add(now, 7 * 86_400, :second),
             inserted_at: now,

@@ -11,7 +11,7 @@ defmodule Platform.Mail do
 
     * `can_manage_accounts?/2` — add, edit, replace a secret, manage senders,
       archive. **Org admins only**: `Platform.Tenancy.org_admin?/2`, with no
-      Fabrikam root-admin bypass.
+      root-admin bypass.
     * `can_use?/2` — draft, send, read the module's Inbox/Sent/Refused. Any
       non-external member of the org.
 

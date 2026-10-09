@@ -1439,8 +1439,8 @@ defmodule Platform.Agents.HistorianTest do
       ws = Ecto.UUID.generate()
       today = Date.utc_today()
 
-      internal = insert_channel_space("fabrikam-eng")
-      ip = insert_user_participant(internal.id, "Fabrikam")
+      internal = insert_channel_space("acme-eng")
+      ip = insert_user_participant(internal.id, "Acme")
       insert_message_at!(internal.id, ip.id, "internal-msg", today)
       insert_transcript_at!(%{space_id: internal.id, summary: "internal-mtg"}, today)
 
@@ -1476,8 +1476,8 @@ defmodule Platform.Agents.HistorianTest do
       start_at = DateTime.new!(today, ~T[00:00:00], "Etc/UTC")
       end_at = DateTime.new!(Date.add(today, 1), ~T[00:00:00], "Etc/UTC")
 
-      internal = insert_channel_space("fabrikam-eng")
-      ip = insert_user_participant(internal.id, "Fabrikam")
+      internal = insert_channel_space("acme-eng")
+      ip = insert_user_participant(internal.id, "Acme")
       insert_message_at!(internal.id, ip.id, "internal-msg", today)
 
       external = insert_channel_space("sxi-support")
@@ -1494,8 +1494,8 @@ defmodule Platform.Agents.HistorianTest do
       ws = Ecto.UUID.generate()
       today = Date.utc_today()
 
-      internal = insert_channel_space("fabrikam-eng")
-      ip = insert_user_participant(internal.id, "Fabrikam")
+      internal = insert_channel_space("acme-eng")
+      ip = insert_user_participant(internal.id, "Acme")
       insert_message_at!(internal.id, ip.id, "internal-msg", today)
       insert_transcript_at!(%{space_id: internal.id, summary: "internal-mtg"}, today)
 

@@ -231,7 +231,7 @@ defmodule Platform.Tasks do
   #
   # Task 019f4eaa stage 3. Implemented in `Platform.Tenancy.Lifecycle`
   # (single-row — projects have no cascade of their own); delegated here
-  # so callers use the natural context API. All four require a Fabrikam admin
+  # so callers use the natural context API. All four require a root-org admin
   # actor.
 
   @doc "See `Platform.Tenancy.Lifecycle.archive_project/2`."
@@ -313,7 +313,7 @@ defmodule Platform.Tasks do
       (`:root_all`), not just root admins. Rowan's 2026-08-05 ruling:
       sub-orgs are filtering mechanisms, so a root member sees every
       tenant's content. This is deliberately wider than the previous
-      `fabrikam_admin?/1`-only bypass. Membership is read from the preloaded
+      `root_admin?/1`-only bypass. Membership is read from the preloaded
       `:org_memberships` when loaded (zero queries — the live path, since
       `Accounts.get_user/1` preloads), else from the `Repo`.
     * Results stay ordered alphabetically by name, which
@@ -1550,8 +1550,8 @@ defmodule Platform.Tasks do
       fresh filing of the same-titled work.
     * Similarity metric: `String.jaro_distance/2` between the normalized
       candidate title and each existing normalized title. Normalization
-      lowercases + collapses whitespace so `"Provision Fabrikam Account"` and
-      `"provision  fabrikam  account"` compare equal.
+      lowercases + collapses whitespace so `"Provision Acme Account"` and
+      `"provision  acme  account"` compare equal.
     * Threshold: `opts[:threshold]` (float) or the application env
       `:meetings_triage_dedup_threshold` (default `0.85`). Matches at
       exactly the threshold are included (`>=`).
@@ -5625,7 +5625,7 @@ defmodule Platform.Tasks do
   path — human operator only.
 
   `admin` must be a `%Platform.Accounts.User{}` (or any struct/map with an
-  `:id`) that satisfies `Platform.Tenancy.fabrikam_admin?/1`. `:system`, an
+  `:id`) that satisfies `Platform.Tenancy.root_admin?/1`. `:system`, an
   agent actor, `nil` and a non-admin user are all refused with
   `{:error, :not_authorized}`, and that check runs FIRST so a non-admin
   cannot use the refusal envelope to probe a task's status.
@@ -5636,7 +5636,7 @@ defmodule Platform.Tasks do
   broadcast on the board topic.
 
   Refusal cases:
-    * `{:error, :not_authorized}` — actor is not a Fabrikam admin
+    * `{:error, :not_authorized}` — actor is not a root-org admin
     * `{:error, :reason_required}` — `reason` is nil or blank/whitespace
     * `{:error, :not_cancelled}` — task is not currently `cancelled`
     * `{:error, :not_found}` — no such task
@@ -5646,7 +5646,7 @@ defmodule Platform.Tasks do
           | {:error, :not_authorized | :reason_required | :not_cancelled | :not_found | term()}
   def reinstate_cancelled_task(task_id, reason, admin) when is_binary(task_id) do
     cond do
-      not Platform.Tenancy.fabrikam_admin?(admin) ->
+      not Platform.Tenancy.root_admin?(admin) ->
         {:error, :not_authorized}
 
       blank?(reason) ->
@@ -5687,10 +5687,10 @@ defmodule Platform.Tasks do
 
   This is the deliberate, auditable alternative. It is NOT a general
   completion route: `delivery_reference` is required and is persisted, the
-  actor must be a Fabrikam admin, and only the statuses from which `done` is
+  actor must be a root-org admin, and only the statuses from which `done` is
   otherwise unreachable are accepted (`#{Enum.join(@undeliverable_statuses, "`, `")}`).
   The plan gate that ADR 0029 exists to protect is untouched. This function
-  grants exactly one route to `done`, and its scope is: a Fabrikam admin's own
+  grants exactly one route to `done`, and its scope is: a root-org admin's own
   authority, exercised either directly or through an agent that admin owns,
   with a delivery reference required and persisted either way. It confers
   no independent agent authority — the `admin` argument is always the
@@ -5705,7 +5705,7 @@ defmodule Platform.Tasks do
   set of tasks closed this way is a single query rather than a guess.
 
   Refusal cases:
-    * `{:error, :not_authorized}` — actor is not a Fabrikam admin
+    * `{:error, :not_authorized}` — actor is not a root-org admin
     * `{:error, :delivery_reference_required}` — nil or blank/whitespace
     * `{:error, :not_correctable}` — task is `done`, `cancelled`, or in an
       execution phase that already has a legitimate route to `done`
@@ -5746,7 +5746,7 @@ defmodule Platform.Tasks do
   def close_as_delivered(task_id, delivery_reference, admin, opts)
       when is_binary(task_id) and is_list(opts) do
     cond do
-      not Platform.Tenancy.fabrikam_admin?(admin) ->
+      not Platform.Tenancy.root_admin?(admin) ->
         {:error, :not_authorized}
 
       blank?(delivery_reference) ->
@@ -6675,20 +6675,21 @@ defmodule Platform.Tasks do
 
   # ── Scope-filter rail (Stage 3 of Tasks v2 plan, 2026-05-19) ──────────────
   #
-  # Six sub-org scopes — fabrikam, soylent, wayne_tech, sxi, paragon, cyberdyne —
-  # match the
-  # canonical scope list in `PlatformWeb.Components.ScopePill` (futureproof
-  # seam for the MT/RBAC stack 019e3c49). Today, `tasks` has no `org_id`
-  # column, so we can't bucket tasks per-org from the DB. The today-state
-  # contract (per the Stage 3 dispatch + the MT/RBAC plan) is to fold every
-  # task under `:fabrikam` and report 0 for the others. Once `tasks.org_id`
-  # lands the body of `count_by_scope/0` becomes a `group_by org_id` query;
-  # the public API (a map keyed by the scope atoms) stays unchanged so
-  # the LiveView's scope-rail render isn't coupled to the data shape.
-  @scope_keys [:fabrikam, :soylent, :wayne_tech, :sxi, :paragon, :cyberdyne]
+  # Five compiled sibling scopes — soylent, wayne_tech, sxi, paragon,
+  # cyberdyne — match the canonical scope list in
+  # `PlatformWeb.Components.ScopePill` (futureproof seam for the MT/RBAC
+  # stack 019e3c49). The root org is NOT among them: it is install data,
+  # resolved from its row (`Tenancy.root_org_slug/0`), never a compiled atom
+  # (task 01a116de stage 3). Today, `tasks` has no `org_id` column, so we
+  # can't bucket tasks per-org from the DB. The today-state contract (per the
+  # Stage 3 dispatch + the MT/RBAC plan) is to fold every task under the
+  # root org's slug and report 0 for the others. Once `tasks.org_id` lands
+  # the body of `count_by_scope/0` becomes a `group_by org_id` query.
+  @scope_keys [:soylent, :wayne_tech, :sxi, :paragon, :cyberdyne]
 
   @doc """
-  Returns the canonical list of the six COMPILED scope atoms.
+  Returns the canonical list of the five COMPILED sibling scope atoms. The
+  root org has none; it is addressed by its slug string.
 
   > #### No longer the scope rail's source {: .warning}
   >
@@ -6717,14 +6718,17 @@ defmodule Platform.Tasks do
 
   The keys are strings for the same reason the rail's are: an org slug is
   user input and may never have been compiled as an atom, so there is no
-  safe conversion. Callers doing `counts.fabrikam` must become
-  `counts["fabrikam"]`.
+  safe conversion. Callers doing `counts.sxi` must become
+  `counts["sxi"]`.
 
   ## Today-state (pre-MT/RBAC-on-Tasks)
 
   `tasks` has no `org_id` column yet, so the helper folds every non-deleted
-  task under `"fabrikam"` and returns 0 for every other org. This keeps the
-  scope rail rendering today without coupling the UI to a schema change.
+  task under the ROOT org's slug (`Tenancy.root_org_slug/0`, read from the
+  configured slug or the root row, never a literal) and returns 0 for every
+  other org. On an install with no root row there is no all-tasks bucket.
+  This keeps the scope rail rendering today without coupling the UI to a
+  schema change.
 
   ## Future state (post-task-orgs)
 
@@ -6739,12 +6743,17 @@ defmodule Platform.Tasks do
       |> where([t], is_nil(t.deleted_at))
       |> Repo.aggregate(:count)
 
-    Platform.Tenancy.Org
-    |> where([o], is_nil(o.archived_at))
-    |> select([o], o.slug)
-    |> Repo.all()
-    |> Map.new(fn slug -> {slug, 0} end)
-    |> Map.put("fabrikam", total)
+    counts =
+      Platform.Tenancy.Org
+      |> where([o], is_nil(o.archived_at))
+      |> select([o], o.slug)
+      |> Repo.all()
+      |> Map.new(fn slug -> {slug, 0} end)
+
+    case Platform.Tenancy.root_org_slug() do
+      root_slug when is_binary(root_slug) -> Map.put(counts, root_slug, total)
+      nil -> counts
+    end
   end
 
   @doc """

@@ -177,7 +177,7 @@ defmodule Platform.Mail.InboundTest do
       refute Enum.any?(FakeClient.calls(host), &match?({:examine, "[Gmail]"}, &1))
     end
 
-    # Measured on the fabrikam install 2026-09-24: an empty scope on imap.gmail.com
+    # Measured on a production install 2026-09-24: an empty scope on imap.gmail.com
     # read `[Gmail]/All Mail`, which holds sent mail, and posted the user's own
     # outgoing message as received.
     test "an empty scope skips RFC 6154 special-use folders (Gmail-shaped LIST)", ctx do

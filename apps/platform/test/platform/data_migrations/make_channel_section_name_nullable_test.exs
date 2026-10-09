@@ -59,7 +59,7 @@ defmodule Platform.DataMigrations.MakeChannelSectionNameNullableTest do
       |> Org.changeset(%{
         name: org_name,
         slug: "secnull#{System.unique_integer([:positive])}",
-        parent_org_id: Tenancy.get_org_by_slug!("fabrikam").id
+        parent_org_id: Tenancy.get_org_by_slug!("acme").id
       })
       |> Repo.insert!()
 

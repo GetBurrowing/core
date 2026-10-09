@@ -518,65 +518,65 @@ defmodule Platform.TasksTest do
 
     test "returns exact-match tasks", %{project: project} do
       {:ok, existing} =
-        Tasks.create_task(%{project_id: project.id, title: "Provision Neven Fabrikam account"})
+        Tasks.create_task(%{project_id: project.id, title: "Provision Neven Acme account"})
 
       assert [%Platform.Tasks.Task{id: id}] =
-               Tasks.similar_open_titles(project.id, "Provision Neven Fabrikam account")
+               Tasks.similar_open_titles(project.id, "Provision Neven Acme account")
 
       assert id == existing.id
     end
 
     test "case-insensitive + whitespace-normalized matching", %{project: project} do
       {:ok, existing} =
-        Tasks.create_task(%{project_id: project.id, title: "Provision Neven Fabrikam account"})
+        Tasks.create_task(%{project_id: project.id, title: "Provision Neven Acme account"})
 
       assert [%Platform.Tasks.Task{id: id}] =
-               Tasks.similar_open_titles(project.id, "provision  neven  FABRIKAM  account")
+               Tasks.similar_open_titles(project.id, "provision  neven  ACME  account")
 
       assert id == existing.id
     end
 
     test "matches near-duplicate above default threshold", %{project: project} do
       {:ok, existing} =
-        Tasks.create_task(%{project_id: project.id, title: "Provision Neven Fabrikam account"})
+        Tasks.create_task(%{project_id: project.id, title: "Provision Neven Acme account"})
 
       # Small typo variant — Jaro-Winkler ≥ 0.85 territory.
-      matches = Tasks.similar_open_titles(project.id, "Provision Nevan Fabrikam acct")
+      matches = Tasks.similar_open_titles(project.id, "Provision Nevan Acme acct")
 
       assert Enum.any?(matches, fn %{id: id} -> id == existing.id end)
     end
 
     test "rejects unrelated titles below threshold", %{project: project} do
       {:ok, _existing} =
-        Tasks.create_task(%{project_id: project.id, title: "Provision Neven Fabrikam account"})
+        Tasks.create_task(%{project_id: project.id, title: "Provision Neven Acme account"})
 
       assert [] = Tasks.similar_open_titles(project.id, "Refactor billing pipeline")
     end
 
     test "opts[:threshold] overrides the default", %{project: project} do
       {:ok, existing} =
-        Tasks.create_task(%{project_id: project.id, title: "Provision Neven Fabrikam account"})
+        Tasks.create_task(%{project_id: project.id, title: "Provision Neven Acme account"})
 
       # With a very permissive threshold, even weakly-related titles hit.
       matches =
-        Tasks.similar_open_titles(project.id, "Provision Fabrikam whatever", threshold: 0.5)
+        Tasks.similar_open_titles(project.id, "Provision Acme whatever", threshold: 0.5)
 
       assert Enum.any?(matches, fn %{id: id} -> id == existing.id end)
 
       # Same call with the default threshold returns empty (0.5 → 0.85).
-      assert [] = Tasks.similar_open_titles(project.id, "Provision Fabrikam whatever")
+      assert [] = Tasks.similar_open_titles(project.id, "Provision Acme whatever")
     end
 
     test "wrong project is excluded", %{project: project, other_project: other} do
       {:ok, _existing} =
-        Tasks.create_task(%{project_id: other.id, title: "Provision Neven Fabrikam account"})
+        Tasks.create_task(%{project_id: other.id, title: "Provision Neven Acme account"})
 
-      assert [] = Tasks.similar_open_titles(project.id, "Provision Neven Fabrikam account")
+      assert [] = Tasks.similar_open_titles(project.id, "Provision Neven Acme account")
     end
 
     test "done + cancelled tasks are excluded", %{project: project} do
       {:ok, done_task} =
-        Tasks.create_task(%{project_id: project.id, title: "Provision Neven Fabrikam account"})
+        Tasks.create_task(%{project_id: project.id, title: "Provision Neven Acme account"})
 
       # Bypass the transition guard — flip status directly with an
       # Ecto.Changeset.change/2 update so we can test the query filter
@@ -586,25 +586,25 @@ defmodule Platform.TasksTest do
       |> Repo.update!()
 
       {:ok, cancelled_task} =
-        Tasks.create_task(%{project_id: project.id, title: "Provision Neven Fabrikam account 2"})
+        Tasks.create_task(%{project_id: project.id, title: "Provision Neven Acme account 2"})
 
       cancelled_task
       |> Ecto.Changeset.change(status: "cancelled")
       |> Repo.update!()
 
-      assert [] = Tasks.similar_open_titles(project.id, "Provision Neven Fabrikam account")
-      assert [] = Tasks.similar_open_titles(project.id, "Provision Neven Fabrikam account 2")
+      assert [] = Tasks.similar_open_titles(project.id, "Provision Neven Acme account")
+      assert [] = Tasks.similar_open_titles(project.id, "Provision Neven Acme account 2")
     end
 
     test "soft-deleted tasks are excluded", %{project: project} do
       {:ok, task} =
-        Tasks.create_task(%{project_id: project.id, title: "Provision Neven Fabrikam account"})
+        Tasks.create_task(%{project_id: project.id, title: "Provision Neven Acme account"})
 
       task
       |> Ecto.Changeset.change(deleted_at: DateTime.utc_now())
       |> Repo.update!()
 
-      assert [] = Tasks.similar_open_titles(project.id, "Provision Neven Fabrikam account")
+      assert [] = Tasks.similar_open_titles(project.id, "Provision Neven Acme account")
     end
 
     test "candidate titles shorter than 6 chars short-circuit to []", %{project: project} do

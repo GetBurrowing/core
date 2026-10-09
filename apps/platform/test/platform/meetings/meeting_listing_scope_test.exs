@@ -21,7 +21,7 @@ defmodule Platform.Meetings.MeetingListingScopeTest do
   the row an invitee needs in order to join. Two tests here pin that split in
   both directions.
 
-  Users are seeded with `@example.com` addresses: a `@example.com` address
+  Users are seeded with `@example.com` addresses: a `@acme.test` address
   would make `Tenancy.derive_role_from_email/1` return `:admin` and
   blanket-bypass the filter under test.
   """
@@ -129,7 +129,7 @@ defmodule Platform.Meetings.MeetingListingScopeTest do
 
   setup do
     %{
-      fabrikam: Platform.TenancyFixtures.fabrikam_org_id(),
+      acme: Platform.TenancyFixtures.acme_org_id(),
       org_a: Platform.TenancyFixtures.tenant_org_id("soylent"),
       org_b: Platform.TenancyFixtures.tenant_org_id("wayne_tech")
     }
@@ -140,7 +140,7 @@ defmodule Platform.Meetings.MeetingListingScopeTest do
   describe "list_meetings_for_user/1 — internal users see their own orgs" do
     test "own-org meeting is returned, other-org meeting is not", ctx do
       user = user!() |> member!(ctx.org_a)
-      refute Tenancy.fabrikam_admin?(user)
+      refute Tenancy.root_admin?(user)
       refute Tenancy.external_user?(user)
 
       own = meeting!(ctx.org_a)
@@ -183,10 +183,10 @@ defmodule Platform.Meetings.MeetingListingScopeTest do
 
   # ── The root bypass is ADMIN-only, as on the detail route ─────────────────
 
-  describe "list_meetings_for_user/1 — the Fabrikam root bypass" do
-    test "a Fabrikam root ADMIN sees every org's meetings", ctx do
-      admin = user!(name: "Root Admin") |> member!(ctx.fabrikam, role: "admin")
-      assert Tenancy.fabrikam_admin?(admin)
+  describe "list_meetings_for_user/1 — the Acme root bypass" do
+    test "an Acme root ADMIN sees every org's meetings", ctx do
+      admin = user!(name: "Root Admin") |> member!(ctx.acme, role: "admin")
+      assert Tenancy.root_admin?(admin)
 
       a = meeting!(ctx.org_a)
       b = meeting!(ctx.org_b)
@@ -197,14 +197,14 @@ defmodule Platform.Meetings.MeetingListingScopeTest do
     end
 
     # Mirrors `fetch_meeting_for_user/2`: the bypass predicate here is
-    # `fabrikam_admin?/1`, NOT the strictly wider `root_member?/1`. Every OIDC
+    # `root_admin?/1`, NOT the strictly wider `root_member?/1`. Every OIDC
     # signup gets a plain root `member` row, so widening this is an access
     # change. If that decision is ever made, REWRITE this test to the chosen
     # rule rather than deleting it.
     test "a plain root member resolves :root_all but is not handed tenant meetings", ctx do
-      member = user!(name: "Root Member") |> member!(ctx.fabrikam, role: "member")
-      admin = user!(name: "Root Admin") |> member!(ctx.fabrikam, role: "admin")
-      refute Tenancy.fabrikam_admin?(member)
+      member = user!(name: "Root Member") |> member!(ctx.acme, role: "member")
+      admin = user!(name: "Root Admin") |> member!(ctx.acme, role: "admin")
+      refute Tenancy.root_admin?(member)
       assert Tenancy.root_member?(member)
       assert Tenancy.visibility(member) == :root_all
 
@@ -445,8 +445,8 @@ defmodule Platform.Meetings.MeetingListingScopeTest do
       refute uninvited.id in ids
     end
 
-    test "a Fabrikam root admin spans orgs, a nil viewer gets []", ctx do
-      admin = user!(name: "Root Admin") |> member!(ctx.fabrikam, role: "admin")
+    test "an Acme root admin spans orgs, a nil viewer gets []", ctx do
+      admin = user!(name: "Root Admin") |> member!(ctx.acme, role: "admin")
       {from, to} = window()
       at = DateTime.add(from, 900, :second)
 

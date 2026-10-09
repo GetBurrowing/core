@@ -36,7 +36,7 @@ defmodule Platform.Tenancy.OrgGroupClaimTest do
     |> Org.changeset(%{
       name: "#{name} #{n}",
       slug: "#{name |> String.downcase() |> String.replace(~r/[^a-z]/, "-")}-#{n}",
-      parent_org_id: Tenancy.get_org_by_slug!("fabrikam").id
+      parent_org_id: Tenancy.get_org_by_slug!("acme").id
     })
     |> Repo.insert!()
   end

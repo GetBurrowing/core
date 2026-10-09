@@ -88,7 +88,24 @@ defmodule PlatformWeb.Tasks.BoardComponent do
   def mount(socket), do: {:ok, assign(socket, :open_task_actions_id, nil)}
 
   @impl true
-  def update(assigns, socket), do: {:ok, assign(socket, assigns)}
+  def update(assigns, socket) do
+    socket = assign(socket, assigns)
+
+    # The all-tasks scope is the ROOT org's slug, read once per component
+    # from config or the root row (task 01a116de stage 3; a literal before).
+    # `@board_scope` is what the column filters take: the root's chip is
+    # the unfiltered board, so it maps onto `:all`.
+    socket = assign_new(socket, :root_org_slug, fn -> Platform.Tenancy.root_org_slug() end)
+
+    {:ok, assign(socket, :board_scope, board_scope(socket.assigns))}
+  end
+
+  defp board_scope(%{scope_filter: scope, root_org_slug: root})
+       when is_binary(root) and scope == root,
+       do: :all
+
+  defp board_scope(%{scope_filter: scope}), do: scope
+  defp board_scope(_assigns), do: :all
 
   # ── Events ─────────────────────────────────────────────────────────────
 
@@ -827,7 +844,8 @@ defmodule PlatformWeb.Tasks.BoardComponent do
 
          Stage 3 (2026-05-19): `desktop_column_items_for_scope/6`
          wraps `desktop_column_items/5` with the active scope-rail
-         selection — `:all` and `:fabrikam` are passthrough today; the
+         selection (`@board_scope`) — `:all` and the root org's slug
+         are passthrough today; the
          other four scopes render empty until `tasks.org_id` lands. --%>
       <%!-- Stage-2 of task 019f3f22 (ADR-0042 sponsor visibility):
          board-level custom empty state — shown ONLY when the
@@ -855,7 +873,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                 @kanban_columns,
                 @columns,
                 @desktop_stacks_by_column,
-                @scope_filter
+                @board_scope
               )
           }
           data-role="search-empty-state"
@@ -888,7 +906,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                 @kanban_columns,
                 @columns,
                 @desktop_stacks_by_column,
-                @scope_filter
+                @board_scope
               )
           }
           data-role="sponsor-filter-empty-state"
@@ -906,7 +924,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                      @kanban_columns,
                      @columns,
                      @desktop_stacks_by_column,
-                     @scope_filter
+                     @board_scope
                    ))
           }
           id={"column-#{col_key}"}
@@ -924,7 +942,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                   @columns,
                   @desktop_stacks_by_column,
                   col_key,
-                  @scope_filter,
+                  @board_scope,
                   @board_sort,
                   @stack_board_data
                 )
@@ -940,7 +958,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
              only tasks carry `draggable="true"` and the KanbanDragDrop
              hook's drag handlers. --%>
           <div class="flex flex-1 flex-col gap-2 overflow-y-auto px-2 pb-2">
-            <%= for item <- desktop_column_items_for_scope(@columns, @desktop_stacks_by_column, col_key, @scope_filter, @board_sort, @stack_board_data) do %>
+            <%= for item <- desktop_column_items_for_scope(@columns, @desktop_stacks_by_column, col_key, @board_scope, @board_sort, @stack_board_data) do %>
               <%= case item.__struct__ do %>
                 <% Platform.Tasks.Stack -> %>
                   <% board_data =
@@ -1445,7 +1463,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                   @columns,
                   @desktop_stacks_by_column,
                   col_key,
-                  @scope_filter,
+                  @board_scope,
                   @board_sort,
                   @stack_board_data
                 ) == []
@@ -1635,8 +1653,9 @@ defmodule PlatformWeb.Tasks.BoardComponent do
   end
 
   # Stage-3 wrapper: filters `desktop_column_items/5` through the active
-  # scope-rail selection. `:all` is the unfiltered passthrough. `"fabrikam"` also
-  # returns the full list today because every task folds under :fabrikam until
+  # scope-rail selection, as `@board_scope`. `:all` is the unfiltered
+  # passthrough, and the root org's chip arrives as `:all` too (see
+  # `board_scope/1`), because every task folds under the root org until
   # `tasks.org_id` lands (the same contract `count_by_scope/0` encodes). The
   # other scopes return an empty list today; once MT/RBAC ships this helper
   # becomes the single seam to swap in real per-task scope filtering.
@@ -1644,17 +1663,12 @@ defmodule PlatformWeb.Tasks.BoardComponent do
     desktop_column_items(columns, stacks_by_column, col_key, sort, data)
   end
 
-  defp desktop_column_items_for_scope(columns, stacks_by_column, col_key, scope, sort, data)
-       when scope in [:fabrikam, "fabrikam"] do
-    desktop_column_items(columns, stacks_by_column, col_key, sort, data)
-  end
-
   # Any OTHER org — not just the five that used to be listed here by atom.
   # Task 01a09287 stage 2 turned `@scope_filter` into an org slug string and
   # removed the fixed enum, so this has to be keyed on "is a scope that is
-  # not fabrikam" rather than on a membership list that a new tenant falls out
-  # of. Falling out of it silently returned the FULL board under the other
-  # clause below, i.e. a new org's chip would have shown every Fabrikam task.
+  # not the root" rather than on a membership list that a new tenant falls
+  # out of. Falling out of it silently returned the FULL board under the
+  # other clause below, i.e. a new org's chip would have shown every task.
   defp desktop_column_items_for_scope(_columns, _stacks_by_column, _col_key, scope, _sort, _data)
        when is_binary(scope) or scope in [:soylent, :wayne_tech, :sxi, :paragon, :cyberdyne] do
     []

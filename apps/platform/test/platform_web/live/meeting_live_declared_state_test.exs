@@ -119,7 +119,7 @@ defmodule PlatformWeb.MeetingLiveDeclaredStateTest do
     %OrgMembership{}
     |> OrgMembership.changeset(%{
       user_id: user.id,
-      org_id: Platform.TenancyFixtures.fabrikam_org_id(),
+      org_id: Platform.TenancyFixtures.acme_org_id(),
       role: "member"
     })
     |> Repo.insert!()
@@ -142,7 +142,7 @@ defmodule PlatformWeb.MeetingLiveDeclaredStateTest do
       |> Project.changeset(%{
         name: "Declared State Project #{n}",
         slug: "declared-state-project-#{n}",
-        org_id: Platform.TenancyFixtures.fabrikam_org_id()
+        org_id: Platform.TenancyFixtures.acme_org_id()
       })
       |> Repo.insert()
 

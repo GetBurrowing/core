@@ -32,7 +32,7 @@ defmodule PlatformWeb.ControlCenter.VaultEvents do
 
   `/control/:agent_slug` sits in `live_session :authenticated`, so any member
   reads the vault panel — deliberately, it is metadata only. Both handlers here
-  re-check `@fabrikam_admin?` themselves before touching `Platform.Vault`. Hiding
+  re-check `@root_admin?` themselves before touching `Platform.Vault`. Hiding
   the form is an affordance; a forged event from a non-admin client costs
   nothing to send and is refused by this code, not by the template. Same shape
   as `PlatformWeb.ExperimentsLive`, which the router points at
@@ -107,13 +107,13 @@ defmodule PlatformWeb.ControlCenter.VaultEvents do
 
   # ── The gate ────────────────────────────────────────────────────────────────
   #
-  # `fun` is not evaluated at all unless the acting user is a Fabrikam admin, so a
+  # `fun` is not evaluated at all unless the acting user is a root-org admin, so a
   # refused write cannot have reached Platform.Vault first.
   defp admin_only(socket, fun) do
-    if socket.assigns[:fabrikam_admin?] do
+    if socket.assigns[:root_admin?] do
       fun.()
     else
-      {:noreply, put_flash(socket, :error, "Only Fabrikam admins can change vault credentials.")}
+      {:noreply, put_flash(socket, :error, "Only root-org admins can change vault credentials.")}
     end
   end
 

@@ -72,7 +72,7 @@ defmodule PlatformWeb.ExperimentsLiveTest do
         oidc_sub: "oidc-experiments-admin-#{n}"
       })
 
-    org = Tenancy.get_org_by_slug!("fabrikam")
+    org = Tenancy.get_org_by_slug!("acme")
 
     %OrgMembership{}
     |> OrgMembership.changeset(%{user_id: user.id, org_id: org.id, role: "admin"})
@@ -348,6 +348,51 @@ defmodule PlatformWeb.ExperimentsLiveTest do
       assert reloaded.status == "running"
       assert reloaded.id == experiment.id
       assert Experiments.list_experiments() |> Enum.count() == 1
+    end
+
+    test "every refused write flashes the root-org copy, literally", %{conn: conn} do
+      # Task 01a116de stage 3: the refusal names the role, not a client org.
+      running_experiment("member-flash", [])
+
+      # The two inline notices a member reads: the guardrails panel on the
+      # list page, the lifecycle note on the detail page.
+      {:ok, _list_view, list_html} = live(member_conn(conn), ~p"/control/experiments")
+      assert list_html =~ "Only root-org admins can change guardrails."
+      refute list_html =~ ~r/Fabrikam admins/i
+
+      {:ok, view, _html} = live(member_conn(conn), ~p"/control/experiments/member-flash")
+
+      # The lifecycle note lives on the detail page's promotions tab.
+      html = render_hook(view, "select_tab", %{"tab" => "promotions"})
+      assert html =~ "Only root-org admins can start, stop, conclude or promote an experiment."
+      refute html =~ ~r/Fabrikam admins/i
+
+      for event <- [
+            "show_create",
+            "create_experiment",
+            "delete_experiment",
+            "activate",
+            "start",
+            "approve_launch",
+            "show_stop",
+            "stop",
+            "conclude",
+            "promote",
+            "add_variant",
+            "guardrails_save"
+          ] do
+        # Clear the previous event's flash first, so each assertion is about
+        # THIS event's refusal and not a leftover.
+        cleared = render_hook(view, "lv:clear-flash", %{"key" => "error"})
+        refute cleared =~ "Only root-org admins can change experiments."
+
+        flashed = render_hook(view, event, %{})
+
+        assert flashed =~ "Only root-org admins can change experiments.",
+               "#{event} did not flash the root-org refusal"
+
+        refute flashed =~ ~r/Fabrikam admins/i, "#{event} flashed a compiled org name"
+      end
     end
 
     test "an admin firing the same events does change state — the control", %{conn: conn} do
@@ -636,7 +681,7 @@ defmodule PlatformWeb.ExperimentsLiveTest do
   # An org that turned approval ON, and an agent-proposed experiment in it
   # that an agent start has parked at pending.
   defp pending_experiment(slug) do
-    org = Tenancy.get_org_by_slug!("fabrikam")
+    org = Tenancy.get_org_by_slug!("acme")
 
     Repo.insert!(%Guardrail{
       org_id: org.id,
@@ -886,7 +931,7 @@ defmodule PlatformWeb.ExperimentsLiveTest do
     end
 
     test "an org's row is saved separately from the install-wide row", %{conn: conn} do
-      org = Tenancy.get_org_by_slug!("fabrikam")
+      org = Tenancy.get_org_by_slug!("acme")
       {:ok, view, _html} = live(admin_conn(conn), ~p"/control/experiments")
 
       view
@@ -972,7 +1017,7 @@ defmodule PlatformWeb.ExperimentsLiveTest do
   describe "the human controls" do
     test "an admin creates a draft on a non-prompt surface through the rendered form",
          %{conn: conn} do
-      org = Tenancy.get_org_by_slug!("fabrikam")
+      org = Tenancy.get_org_by_slug!("acme")
       {:ok, view, _html} = live(admin_conn(conn), ~p"/control/experiments")
 
       view |> element(~s([data-role="new-experiment-button"])) |> render_click()
@@ -1048,7 +1093,7 @@ defmodule PlatformWeb.ExperimentsLiveTest do
 
   describe "the Design tab" do
     test "shows the surface, target, org and project scope from the columns", %{conn: conn} do
-      org = Tenancy.get_org_by_slug!("fabrikam")
+      org = Tenancy.get_org_by_slug!("acme")
       {:ok, project} = Tasks.create_project(%{name: "Scope Project", org_id: org.id})
       planner_draft("design-scope", project_id: project.id)
 

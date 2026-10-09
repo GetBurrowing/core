@@ -39,13 +39,13 @@ end
 
 # ── Root org slug (per-install root/default org) ──────────────────────────────
 # `Platform.Tenancy.root_org_slug/0` reads this key at runtime. config.exs
-# defaults it to "fabrikam"; an install whose root org carries a different slug
-# sets ROOT_ORG_SLUG so org_id-less writes, the derived-role hook, and the
-# admin promote/revoke helpers all resolve the org that actually exists there.
+# sets no default; when the key is unset the accessor falls back to the slug
+# of the structural root org (`parent_org_id IS NULL`). An install sets
+# ROOT_ORG_SLUG to pin the slug explicitly.
 #
-# Written only when the var is present and non-blank, so dev, test and CI keep
-# the config.exs default and per-test `Application.put_env/3` overrides are the
-# only thing that moves it.
+# Written only when the var is present and non-blank, so an unset or blank
+# var leaves the structural fallback in charge and per-test
+# `Application.put_env/3` overrides are the only other thing that moves it.
 case System.get_env("ROOT_ORG_SLUG") do
   slug when is_binary(slug) and slug != "" ->
     config :platform, :root_org_slug, slug
@@ -58,23 +58,23 @@ end
 # `Platform.Tenancy.root_org_admin_email_domain/0` reads this key at runtime
 # and `derive_role_from_email/1` uses it on every user INSERT and every
 # email-change UPDATE. Renamed from ADMIN_EMAIL_DOMAIN / :admin_email_domain
-# (task 01a068f6 stage 1): config.exs no longer defaults this key to
-# "example.com" at all — only `config/dev.exs` and `config/test.exs` pin
-# that value now, as an environment convenience rather than a shared
-# production default.
+# (task 01a068f6 stage 1): config.exs no longer defaults this key at all —
+# only `config/test.exs` pins a value now, as an environment convenience
+# rather than a shared production default.
 #
 # The branch shape here deliberately differs from SESSION_COOKIE_DOMAIN and
 # ROOT_ORG_SLUG above, which both skip a blank value. Here a blank value is
 # MEANINGFUL: ROOT_ORG_ADMIN_EMAIL_DOMAIN="" disables auto-admin entirely,
 # and must NOT fall back to whatever the environment config pinned (e.g.
-# dev/test's "example.com"). An install that does not want Fabrikam addresses
+# test's fixture domain). An install that does not want any address
 # auto-promoted on its database has to be able to say so by setting the var
 # empty, without inventing a sentinel string.
 #
 # Unset (nil) means "keep whatever config.exs + the env-specific config file
-# already set" — nothing on a production release (no default anywhere), and
-# "example.com" in dev/test — so per-test `Application.put_env/3` overrides
-# remain the only thing that moves the key there.
+# already set" — nothing on a production release or in dev (no default
+# anywhere), and the fixture domain in test — so per-test
+# `Application.put_env/3` overrides remain the only thing that moves the key
+# there.
 case System.get_env("ROOT_ORG_ADMIN_EMAIL_DOMAIN") do
   nil -> :ok
   domain -> config :platform, :root_org_admin_email_domain, String.trim(domain)
@@ -402,7 +402,7 @@ if config_env() == :prod do
   chat_host = System.get_env("CHAT_HOST")
 
   # EXTRA_ORIGIN_APEXES is an optional comma-separated list of ADDITIONAL apex
-  # domains (e.g. "example.com") that resolve to this same Phoenix endpoint.
+  # domains (e.g. "example.org") that resolve to this same Phoenix endpoint.
   # Suite is being served on a second apex in parallel with the PHX_HOST apex
   # ahead of a later cutover: Traefik already routes suite./chat./meet.<apex>
   # there with a valid wildcard cert, but check_origin only allowlists the

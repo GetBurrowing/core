@@ -928,7 +928,7 @@ defmodule PlatformWeb.MCPControllerTest do
       {:ok, _} =
         Tenancy.mark_membership_external(%{
           user_id: runtime.owner_user_id,
-          org_id: fabrikam_org_id()
+          org_id: acme_org_id()
         })
 
       runtime

@@ -407,7 +407,7 @@ defmodule Platform.Chat do
 
   Deliberately narrower than `get_space_by_slug(slug, [])`: that back-compat
   branch returns the OLDEST row of any org, so an SXI channel would answer a
-  Fabrikam member's lookup and ADR-0042's per-org slug scoping would be weakened.
+  root-org member's lookup and ADR-0042's per-org slug scoping would be weakened.
   This one matches `org_id IS NULL` explicitly and can therefore never hand
   back another tenant's channel.
 
@@ -710,7 +710,7 @@ defmodule Platform.Chat do
   end
 
   @doc """
-  User-initiated archive. Allowed for Fabrikam admins and the space's creator
+  User-initiated archive. Allowed for root-org admins and the space's creator
   (`created_by`); returns `{:error, :unauthorized}` for anyone else. The
   check lives here in the context layer — LiveView assigns are UI affordance
   only, never the gate.
@@ -751,7 +751,7 @@ defmodule Platform.Chat do
 
   @doc """
   Reverse an archive by clearing `archived_at`. Same authorization as
-  `archive_space/2`: Fabrikam admin or space creator.
+  `archive_space/2`: root-org admin or space creator.
   """
   @spec unarchive_space(map(), Space.t()) ::
           {:ok, Space.t()} | {:error, :unauthorized | Ecto.Changeset.t()}
@@ -769,7 +769,7 @@ defmodule Platform.Chat do
   end
 
   defp with_space_lifecycle_authz(actor, %Space{} = space, fun) do
-    if Platform.Tenancy.fabrikam_admin?(actor) or space_creator?(actor, space) do
+    if Platform.Tenancy.root_admin?(actor) or space_creator?(actor, space) do
       fun.()
     else
       {:error, :unauthorized}
@@ -785,7 +785,7 @@ defmodule Platform.Chat do
   @doc """
   Flag a channel for permanent deletion (task 019e95ea stage 3).
 
-  Fabrikam-admin only — deletion is destructive, so unlike `archive_space/2`
+  Root-admin only — deletion is destructive, so unlike `archive_space/2`
   the space's creator does NOT qualify. Only `kind: "channel"` spaces are
   deletable: execution spaces are task audit logs (deleting them corrupts
   task history), and dm/group conversations are out of scope — all return
@@ -801,7 +801,7 @@ defmodule Platform.Chat do
           {:ok, Space.t()} | {:error, :unauthorized | :not_deletable | Ecto.Changeset.t()}
   def schedule_space_deletion(actor, %Space{} = space) do
     cond do
-      not Platform.Tenancy.fabrikam_admin?(actor) ->
+      not Platform.Tenancy.root_admin?(actor) ->
         {:error, :unauthorized}
 
       space.kind != "channel" ->
@@ -826,7 +826,7 @@ defmodule Platform.Chat do
   end
 
   @doc """
-  Cancel a scheduled deletion (Fabrikam-admin only, task 019e95ea stage 3).
+  Cancel a scheduled deletion (root-admin only, task 019e95ea stage 3).
 
   Clears `deletion_scheduled_at` but leaves `archived_at` — the channel
   returns to the plain archived state; `unarchive_space/2` is the separate
@@ -837,7 +837,7 @@ defmodule Platform.Chat do
           {:ok, Space.t()} | {:error, :unauthorized | :not_scheduled | Ecto.Changeset.t()}
   def cancel_space_deletion(actor, %Space{} = space) do
     cond do
-      not Platform.Tenancy.fabrikam_admin?(actor) ->
+      not Platform.Tenancy.root_admin?(actor) ->
         {:error, :unauthorized}
 
       is_nil(space.deletion_scheduled_at) ->
@@ -2622,7 +2622,7 @@ defmodule Platform.Chat do
   # The Historian's activity digest partitions message/transcript selection
   # by the M1 `external` marker in BOTH directions:
   #   * `:internal` (default) — exclude external-user spaces/DMs from the
-  #     Fabrikam-internal digest.
+  #     internal digest.
   #   * `{:external_spaces, ids}` — restrict to the external user's
   #     allowlisted spaces for an external-user-facing summary.
   # `external_space_ids/0` and `participant_space_ids_for_user/1` supply the
@@ -2643,10 +2643,10 @@ defmodule Platform.Chat do
   spaces where at least one external user (a user holding an
   `org_memberships.external == true` membership, per M1) participates.
 
-  A MIXED space (both a Fabrikam human and an external user as participants)
+  A MIXED space (both an internal human and an external user as participants)
   classifies as external here: its content is already visible to an
   external party, so it belongs to the external surface and is excluded
-  from the pure Fabrikam-internal Historian digest.
+  from the pure internal Historian digest.
 
   Returns `[]` when there are no external memberships (fast path — the
   internal digest's `NOT IN ^[]` filter is then a no-op, leaving all-internal
@@ -2680,7 +2680,7 @@ defmodule Platform.Chat do
   This is the allowlisted-space set that scopes an external-user-facing
   summary: an external user is only ever a participant of their allowlisted
   spaces, so scoping a digest to this set intrinsically excludes
-  Fabrikam-internal content.
+  internal content.
   """
   @spec participant_space_ids_for_user(binary()) :: [binary()]
   def participant_space_ids_for_user(user_id) when is_binary(user_id) do

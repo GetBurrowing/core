@@ -52,7 +52,7 @@ defmodule Platform.Org.WikiPage do
   # existing write paths keep working while we migrate them. Resolved
   # structurally via `Platform.Tenancy.get_root_org/0` (`parent_org_id IS
   # NULL`) — resolving by slug instead (task 01a068f6) meant an install
-  # whose root org was not literally "fabrikam" resolved nil here and wrote
+  # whose root org did not carry the expected slug resolved nil here and wrote
   # the row unowned.
   defp maybe_default_org_id(changeset) do
     case Ecto.Changeset.get_field(changeset, :org_id) do
@@ -74,7 +74,7 @@ defmodule Platform.Org.WikiPage do
   `:org_id` / `:project_id` are castable here (task 01a0008c stage 2)
   so a row whose tenancy is wrong can be repaired by rewriting it.
   Before this, they were castable on insert and nowhere else, which
-  made `maybe_default_org_id/1`'s Fabrikam fallback a **permanent** state
+  made `maybe_default_org_id/1`'s root-org fallback a **permanent** state
   for any page written at a tenant path — the path said one tenant,
   the row said another, and no write through `Wiki.upsert_page/3`
   could ever move it back.

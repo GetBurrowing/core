@@ -628,7 +628,7 @@ defmodule PlatformWeb.TasksLiveShellNonAccretionTest do
   #     3-line comment — and `toggle_create_menu/2` growing from a one-line
   #     `assign` to a 4-line pipe so the two menus cannot be open at once
   #     (4 insertions - 1 deletion): +13.
-  # No new derived state: `@fabrikam_admin?` comes from the `LiveAuth :default`
+  # No new derived state: `@root_admin?` comes from the `LiveAuth :default`
   # on_mount that was already assigning it, and the destination's access
   # control is `live_session :admin`, not this flag.
   #

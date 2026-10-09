@@ -837,7 +837,7 @@ defmodule PlatformWeb.Router do
       layout: {PlatformWeb.Layouts, :shell} do
       live("/admin", AdminLive, :index)
       live("/admin/recovery", RecoveryLive, :index)
-      # rbac-external-users M3 stage 4 (task 019f8837): the Fabrikam-admin
+      # rbac-external-users M3 stage 4 (task 019f8837): the root-admin
       # recovery queue for external logins awaiting setup. Inherits the
       # `:ensure_admin` gate + `:shell` chrome from this live_session.
       live("/admin/external-logins", ExternalRecoveryLive, :index)
@@ -847,7 +847,7 @@ defmodule PlatformWeb.Router do
       # exactly the same shape as `/admin/users`, so it takes the same gate
       # from this live_session rather than inventing a second one — and the
       # context function re-checks the actor itself
-      # (`Lifecycle.with_fabrikam_admin_authz/2`) so neither half is load-bearing
+      # (`Lifecycle.with_root_admin_authz/2`) so neither half is load-bearing
       # alone.
       live("/admin/orgs", AdminOrgsLive, :index)
       # Task 01a0879a stage 4: this install's PWA identity (name, colours,

@@ -24,7 +24,7 @@ defmodule PlatformWeb.Components.IconRailTest do
       Map.merge(
         %{
           current_path: "/chat",
-          is_fabrikam_user: false,
+          root_user: false,
           sidebar_collapsed: false
         },
         assigns
@@ -33,7 +33,7 @@ defmodule PlatformWeb.Components.IconRailTest do
     rendered_to_string(~H"""
     <.icon_rail
       current_path={@current_path}
-      is_fabrikam_user={@is_fabrikam_user}
+      root_user={@root_user}
       sidebar_collapsed={@sidebar_collapsed}
     />
     """)
@@ -44,37 +44,37 @@ defmodule PlatformWeb.Components.IconRailTest do
       Map.merge(
         %{
           current_path: "/chat",
-          is_fabrikam_user: false
+          root_user: false
         },
         assigns
       )
 
     rendered_to_string(~H"""
-    <.bottom_rail current_path={@current_path} is_fabrikam_user={@is_fabrikam_user} />
+    <.bottom_rail current_path={@current_path} root_user={@root_user} />
     """)
   end
 
   describe "destinations/1" do
-    test "returns 9 destinations for a non-Fabrikam user (Admin + Prompts filtered out)" do
+    test "returns 9 destinations for a non-Acme user (Admin + Prompts filtered out)" do
       # Count bumped from 7 → 8 when ADR-0042 stage 5 added the Files
-      # destination (working cluster, fabrikam_only?: false), 8 → 9 when
+      # destination (working cluster, root_only?: false), 8 → 9 when
       # task 019fe6ba added Experiments, 9 → 10 when task 019fea0d added
       # Pipeline, and back 10 → 9 when task 019fed1e removed Pipeline again
       # (it moved to an admin-only cog in the Tasks header). Any future
       # destination addition should bump the matching guard below.
-      list = destinations(is_fabrikam_user: false)
+      list = destinations(root_user: false)
       assert length(list) == 9
       refute Enum.any?(list, &(&1.key == :admin))
-      # Prompts is also fabrikam_only?: true as of 2026-05-20 (admin-only access
+      # Prompts is also root_only?: true as of 2026-05-20 (admin-only access
       # at the route level; previously rendered for members but redirected
-      # on click — bug fixed by filtering fabrikam_only? in all clusters).
+      # on click — bug fixed by filtering root_only? in all clusters).
       refute Enum.any?(list, &(&1.key == :prompts))
       # Files (ADR-0042 stage 5) is visible to every authenticated user.
       assert Enum.any?(list, &(&1.key == :files))
     end
 
-    test "returns all 11 destinations for a Fabrikam user (Admin + Prompts included)" do
-      list = destinations(is_fabrikam_user: true)
+    test "returns all 11 destinations for an Acme user (Admin + Prompts included)" do
+      list = destinations(root_user: true)
       assert length(list) == 11
       assert Enum.any?(list, &(&1.key == :admin))
       assert Enum.any?(list, &(&1.key == :prompts))
@@ -84,17 +84,17 @@ defmodule PlatformWeb.Components.IconRailTest do
     test "Experiments is a member-visible destination pointing at /control/experiments" do
       # Reachability guard for task 019fe6ba: `/control/experiments` sits in
       # `live_session :authenticated`, so a NON-admin member must see the nav
-      # entry. Asserting against the is_fabrikam_user: false list is the whole
-      # point — a fabrikam_only? regression here restores the original defect
+      # entry. Asserting against the root_user: false list is the whole
+      # point — a root_only? regression here restores the original defect
       # (the page reachable only by typing the URL).
       dest =
-        destinations(is_fabrikam_user: false)
+        destinations(root_user: false)
         |> Enum.find(&(&1.key == :experiments))
 
-      assert dest, "Experiments must appear for a non-Fabrikam member"
+      assert dest, "Experiments must appear for a non-Acme member"
       assert dest.path == "/control/experiments"
       assert dest.cluster == :working
-      refute dest.fabrikam_only?
+      refute dest.root_only?
     end
 
     test "the rail offers no Pipeline destination at all" do
@@ -103,11 +103,11 @@ defmodule PlatformWeb.Components.IconRailTest do
       # shell destination, and its route moved to `/admin/pipeline`.
       #
       # NOTE THE LIST. This asserts against the UNFILTERED
-      # `destinations(is_fabrikam_user: true)`. Against the member list a
-      # re-added entry marked `fabrikam_only?: true` is filtered out, so the
+      # `destinations(root_user: true)`. Against the member list a
+      # re-added entry marked `root_only?: true` is filtered out, so the
       # refute would pass while the tile was back in the rail for admins —
       # the filtered list hides exactly the state under test.
-      list = destinations(is_fabrikam_user: true)
+      list = destinations(root_user: true)
 
       assert list != [], "no destinations at all — this guard would be vacuous"
       refute Enum.any?(list, &(&1.key == :pipeline))
@@ -118,48 +118,48 @@ defmodule PlatformWeb.Components.IconRailTest do
       # The class-level guard rather than one test per page. Both /control
       # surfaces shipped unreachable, one after the other, because "route
       # added" was treated as "shipped". This fails if a future /control tile
-      # is added as fabrikam_only? while its route stays in :authenticated.
+      # is added as root_only? while its route stays in :authenticated.
       #
       # NOTE the list this iterates. Written first against
-      # `destinations(is_fabrikam_user: false)`, this test was VACUOUS: setting a
-      # /control entry to fabrikam_only?: true filters it OUT of that list, so the
+      # `destinations(root_user: false)`, this test was VACUOUS: setting a
+      # /control entry to root_only?: true filters it OUT of that list, so the
       # loop never saw it and the refute never fired — the guard could not
       # fail for the exact regression it exists to catch. Proven by mutation:
-      # flipping :pipeline to fabrikam_only?: true left this test green.
+      # flipping :pipeline to root_only?: true left this test green.
       # It must iterate the UNFILTERED list, where a hidden entry is still
       # present and can be inspected.
       control_dests =
-        destinations(is_fabrikam_user: true)
+        destinations(root_user: true)
         |> Enum.filter(&String.starts_with?(&1.path, "/control"))
 
       assert control_dests != [], "no /control destinations found — this guard would be vacuous"
 
       for dest <- control_dests do
-        refute dest.fabrikam_only?,
-               "#{dest.key} points at #{dest.path} but is hidden from non-Fabrikam members"
+        refute dest.root_only?,
+               "#{dest.key} points at #{dest.path} but is hidden from non-Acme members"
       end
     end
 
     test "every entry has the required keys" do
-      for dest <- destinations(is_fabrikam_user: true) do
+      for dest <- destinations(root_user: true) do
         assert is_atom(dest.key)
         assert is_binary(dest.label)
         assert is_binary(dest.path)
         assert is_binary(dest.hero_icon)
         assert String.starts_with?(dest.hero_icon, "hero-")
         assert dest.cluster in [:live, :working, :admin]
-        assert is_boolean(dest.fabrikam_only?)
+        assert is_boolean(dest.root_only?)
       end
     end
 
-    test "fabrikam_only? entries are Prompts and Admin, in canonical order" do
-      # Ordered assertion: if anyone adds another fabrikam_only? entry without
+    test "root_only? entries are Prompts and Admin, in canonical order" do
+      # Ordered assertion: if anyone adds another root_only? entry without
       # updating this list, the test fails immediately. Canonical order is
       # the position in canonical_destinations/0 (Prompts is in the working
       # cluster between Context+Memory and Meetings; Admin is the last entry
       # in the admin cluster).
-      fabrikam_only = destinations(is_fabrikam_user: true) |> Enum.filter(& &1.fabrikam_only?)
-      assert Enum.map(fabrikam_only, & &1.key) == [:prompts, :admin]
+      acme_only = destinations(root_user: true) |> Enum.filter(& &1.root_only?)
+      assert Enum.map(acme_only, & &1.key) == [:prompts, :admin]
     end
 
     test "cluster assignment" do
@@ -167,7 +167,7 @@ defmodule PlatformWeb.Components.IconRailTest do
       # Working = Skills / Context / Prompts / Meetings (Memory tabs under Context per Marlowe 2026-05-18)
       # Admin = Admin
       by_key =
-        destinations(is_fabrikam_user: true)
+        destinations(root_user: true)
         |> Enum.into(%{}, fn dest -> {dest.key, dest.cluster} end)
 
       assert by_key[:chat] == :live
@@ -218,15 +218,15 @@ defmodule PlatformWeb.Components.IconRailTest do
       assert html =~ "icon-rail-divider"
     end
 
-    test "omits the Admin cluster tiles when is_fabrikam_user is false" do
-      html = render_icon_rail(%{is_fabrikam_user: false})
+    test "omits the Admin cluster tiles when root_user is false" do
+      html = render_icon_rail(%{root_user: false})
       # Cluster wrapper still renders (for consistent layout / mt-auto spacer),
       # but no Admin tiles inside it.
       refute html =~ ~s(data-destination="admin")
     end
 
-    test "renders the Admin cluster tile when is_fabrikam_user is true" do
-      html = render_icon_rail(%{is_fabrikam_user: true})
+    test "renders the Admin cluster tile when root_user is true" do
+      html = render_icon_rail(%{root_user: true})
       assert html =~ ~s(data-destination="admin")
     end
 
@@ -240,24 +240,24 @@ defmodule PlatformWeb.Components.IconRailTest do
       assert html =~ "w-56"
     end
 
-    test "renders 11 destination tiles for a Fabrikam user (Chat..Meetings + Files + Admin)" do
+    test "renders 11 destination tiles for an Acme user (Chat..Meetings + Files + Admin)" do
       # Tile count bumped from 9 → 10 when ADR-0042 stage 5 added Files, and
       # 10 → 11 when task 019fe6ba added Experiments.
-      html = render_icon_rail(%{is_fabrikam_user: true})
+      html = render_icon_rail(%{root_user: true})
       assert count_data_destination_matches(html) == 11
     end
 
-    test "renders 9 destination tiles for a non-Fabrikam user (no Admin, no Prompts)" do
+    test "renders 9 destination tiles for a non-Acme user (no Admin, no Prompts)" do
       # 7 → 8 when Files (visible to all authenticated users) shipped;
       # 8 → 9 when Experiments shipped (also visible to all).
-      html = render_icon_rail(%{is_fabrikam_user: false})
+      html = render_icon_rail(%{root_user: false})
       assert count_data_destination_matches(html) == 9
       assert html =~ ~s(data-destination="experiments")
       assert html =~ "/control/experiments"
     end
 
     test "Admin slot pins to the bottom of the rail via the mt-auto spacer" do
-      html = render_icon_rail(%{is_fabrikam_user: true})
+      html = render_icon_rail(%{root_user: true})
       # A dedicated mt-auto spacer precedes the Admin hairline + cluster,
       # pushing them to the bottom of the flex column. v2 (task 019f575e)
       # dropped the "Admin" eyebrow but kept this mt-auto pinning.
@@ -304,10 +304,10 @@ defmodule PlatformWeb.Components.IconRailTest do
       assert Enum.count(all_toggles) == 1
     end
 
-    test "no Admin group eyebrow renders for Fabrikam users, in either rail state" do
+    test "no Admin group eyebrow renders for Acme users, in either rail state" do
       for collapsed <- [true, false] do
         doc =
-          render_icon_rail(%{is_fabrikam_user: true, sidebar_collapsed: collapsed})
+          render_icon_rail(%{root_user: true, sidebar_collapsed: collapsed})
           |> LazyHTML.from_fragment()
 
         eyebrow_labels =
@@ -317,9 +317,9 @@ defmodule PlatformWeb.Components.IconRailTest do
       end
     end
 
-    test "Admin cluster keeps its tile and a hairline separator (Fabrikam, expanded)" do
+    test "Admin cluster keeps its tile and a hairline separator (Acme, expanded)" do
       doc =
-        render_icon_rail(%{is_fabrikam_user: true, sidebar_collapsed: false})
+        render_icon_rail(%{root_user: true, sidebar_collapsed: false})
         |> LazyHTML.from_fragment()
 
       assert doc |> LazyHTML.query(~s([data-destination="admin"])) |> Enum.count() == 1
@@ -338,7 +338,7 @@ defmodule PlatformWeb.Components.IconRailTest do
         path: "/alpha",
         hero_icon: "hero-book-open",
         cluster: :live,
-        fabrikam_only?: false,
+        root_only?: false,
         children: [%{key: :alpha_child, label: "Alpha Child", path: "/alpha/child"}]
       },
       %{
@@ -347,7 +347,7 @@ defmodule PlatformWeb.Components.IconRailTest do
         path: "/beta",
         hero_icon: "hero-inbox",
         cluster: :working,
-        fabrikam_only?: false
+        root_only?: false
       }
     ]
 
@@ -356,7 +356,7 @@ defmodule PlatformWeb.Components.IconRailTest do
         Map.merge(
           %{
             current_path: "/",
-            is_fabrikam_user: false,
+            root_user: false,
             sidebar_collapsed: false,
             destinations: @stage4_destinations
           },
@@ -366,7 +366,7 @@ defmodule PlatformWeb.Components.IconRailTest do
       rendered_to_string(~H"""
       <.icon_rail
         current_path={@current_path}
-        is_fabrikam_user={@is_fabrikam_user}
+        root_user={@root_user}
         sidebar_collapsed={@sidebar_collapsed}
         destinations={@destinations}
       />
@@ -402,16 +402,16 @@ defmodule PlatformWeb.Components.IconRailTest do
 
   describe "icon_rail/1 hero icons" do
     test "renders the hero icon class for every visible destination" do
-      html = render_icon_rail(%{is_fabrikam_user: true})
+      html = render_icon_rail(%{root_user: true})
 
-      for dest <- destinations(is_fabrikam_user: true) do
+      for dest <- destinations(root_user: true) do
         assert html =~ dest.hero_icon,
                "expected hero icon class #{inspect(dest.hero_icon)} for destination #{inspect(dest.key)}"
       end
     end
 
-    test "does not render the Admin hero icon when is_fabrikam_user is false" do
-      html = render_icon_rail(%{is_fabrikam_user: false})
+    test "does not render the Admin hero icon when root_user is false" do
+      html = render_icon_rail(%{root_user: false})
       # hero-cog-6-tooth belongs to Admin only — should be absent.
       refute html =~ "hero-cog-6-tooth"
     end
@@ -446,9 +446,9 @@ defmodule PlatformWeb.Components.IconRailTest do
     end
 
     test "every desktop tile carries an aria-label" do
-      html = render_icon_rail(%{is_fabrikam_user: true})
+      html = render_icon_rail(%{root_user: true})
 
-      for dest <- destinations(is_fabrikam_user: true) do
+      for dest <- destinations(root_user: true) do
         assert html =~ ~s(aria-label="#{dest.label}"),
                "expected aria-label=#{inspect(dest.label)} for destination #{inspect(dest.key)}"
       end
@@ -487,14 +487,14 @@ defmodule PlatformWeb.Components.IconRailTest do
     end
 
     test "longest prefix wins: /admin/prompts lights Prompts, not Admin" do
-      html = render_icon_rail(%{current_path: "/admin/prompts", is_fabrikam_user: true})
+      html = render_icon_rail(%{current_path: "/admin/prompts", root_user: true})
 
       assert html =~ ~r/icon-rail-tab--active[^"]*"[^>]*data-destination="prompts"/
       refute html =~ ~r/icon-rail-tab--active[^"]*"[^>]*data-destination="admin"/
     end
 
     test "exact /admin lights Admin (and not Prompts)" do
-      html = render_icon_rail(%{current_path: "/admin", is_fabrikam_user: true})
+      html = render_icon_rail(%{current_path: "/admin", root_user: true})
 
       assert html =~ ~r/icon-rail-tab--active[^"]*"[^>]*data-destination="admin"/
       refute html =~ ~r/icon-rail-tab--active[^"]*"[^>]*data-destination="prompts"/
@@ -530,12 +530,12 @@ defmodule PlatformWeb.Components.IconRailTest do
       assert html =~ ~s(aria-label="More surfaces")
     end
 
-    test "tile count is invariant to is_fabrikam_user (Admin lives in More sheet)" do
-      fabrikam = render_bottom_rail(%{is_fabrikam_user: true})
-      non_fabrikam = render_bottom_rail(%{is_fabrikam_user: false})
+    test "tile count is invariant to root_user (Admin lives in More sheet)" do
+      acme = render_bottom_rail(%{root_user: true})
+      non_acme = render_bottom_rail(%{root_user: false})
 
-      assert count_data_destination_matches(fabrikam) == 5
-      assert count_data_destination_matches(non_fabrikam) == 5
+      assert count_data_destination_matches(acme) == 5
+      assert count_data_destination_matches(non_acme) == 5
     end
   end
 
@@ -614,7 +614,7 @@ defmodule PlatformWeb.Components.IconRailTest do
         Map.merge(
           %{
             current_path: "/chat",
-            is_fabrikam_user: false,
+            root_user: false,
             sidebar_collapsed: false,
             inbox_unread_count: count
           },
@@ -624,7 +624,7 @@ defmodule PlatformWeb.Components.IconRailTest do
       rendered_to_string(~H"""
       <.icon_rail
         current_path={@current_path}
-        is_fabrikam_user={@is_fabrikam_user}
+        root_user={@root_user}
         sidebar_collapsed={@sidebar_collapsed}
         inbox_unread_count={@inbox_unread_count}
       />
@@ -736,10 +736,10 @@ defmodule PlatformWeb.Components.IconRailTest do
   # ---------------------------------------------------------------------
   describe "icon_rail/1 carries no notification state" do
     test "no bell node renders, at either rail width, with or without unread items" do
-      for collapsed <- [true, false], count <- [0, 7], fabrikam <- [true, false] do
+      for collapsed <- [true, false], count <- [0, 7], acme <- [true, false] do
         doc =
           count
-          |> render_rail_with_count(%{sidebar_collapsed: collapsed, is_fabrikam_user: fabrikam})
+          |> render_rail_with_count(%{sidebar_collapsed: collapsed, root_user: acme})
           |> LazyHTML.from_fragment()
 
         for selector <- [
@@ -754,7 +754,7 @@ defmodule PlatformWeb.Components.IconRailTest do
             ] do
           assert doc |> LazyHTML.query(selector) |> Enum.count() == 0,
                  "expected no #{selector} in the rail " <>
-                   "(collapsed=#{collapsed}, count=#{count}, fabrikam=#{fabrikam})"
+                   "(collapsed=#{collapsed}, count=#{count}, acme=#{acme})"
         end
 
         # Positive control: this is a fully rendered rail, so the absences
@@ -810,7 +810,7 @@ defmodule PlatformWeb.Components.IconRailTest do
         Map.merge(
           %{
             current_path: "/tasks",
-            is_fabrikam_user: false,
+            root_user: false,
             sidebar_collapsed: false,
             inbox_unread_count: inbox_count,
             chat_unread_count: chat_count
@@ -821,7 +821,7 @@ defmodule PlatformWeb.Components.IconRailTest do
       rendered_to_string(~H"""
       <.icon_rail
         current_path={@current_path}
-        is_fabrikam_user={@is_fabrikam_user}
+        root_user={@root_user}
         sidebar_collapsed={@sidebar_collapsed}
         inbox_unread_count={@inbox_unread_count}
         chat_unread_count={@chat_unread_count}
@@ -1053,11 +1053,11 @@ defmodule PlatformWeb.Components.IconRailMailFlagTest do
     end)
   end
 
-  defp render_rail(is_fabrikam_user) do
-    assigns = %{is_fabrikam_user: is_fabrikam_user}
+  defp render_rail(root_user) do
+    assigns = %{root_user: root_user}
 
     rendered_to_string(~H"""
-    <.icon_rail current_path="/chat" is_fabrikam_user={@is_fabrikam_user} sidebar_collapsed={false} />
+    <.icon_rail current_path="/chat" root_user={@root_user} sidebar_collapsed={false} />
     <.bottom_rail current_path="/chat" />
     """)
   end
@@ -1065,9 +1065,9 @@ defmodule PlatformWeb.Components.IconRailMailFlagTest do
   test "flag off: no Email destination in the list or the rendered rails" do
     with_mail(false)
 
-    for fabrikam? <- [false, true] do
-      refute Enum.any?(destinations(is_fabrikam_user: fabrikam?), &(&1.key == :email))
-      html = render_rail(fabrikam?)
+    for acme? <- [false, true] do
+      refute Enum.any?(destinations(root_user: acme?), &(&1.key == :email))
+      html = render_rail(acme?)
       # Positive control: the rail rendered its other Working tiles.
       assert html =~ ~s(data-destination="meetings")
       refute html =~ ~s(data-destination="email")
@@ -1075,17 +1075,17 @@ defmodule PlatformWeb.Components.IconRailMailFlagTest do
     end
   end
 
-  test "flag on: exactly one Email destination, in Working, for members and Fabrikam users" do
+  test "flag on: exactly one Email destination, in Working, for members and Acme users" do
     with_mail(true)
 
-    for fabrikam? <- [false, true] do
-      assert [email] = Enum.filter(destinations(is_fabrikam_user: fabrikam?), &(&1.key == :email))
+    for acme? <- [false, true] do
+      assert [email] = Enum.filter(destinations(root_user: acme?), &(&1.key == :email))
       assert email.cluster == :working
       assert email.path == "/email"
       assert email.hero_icon == "hero-envelope"
-      refute email.fabrikam_only?
+      refute email.root_only?
 
-      html = render_rail(fabrikam?)
+      html = render_rail(acme?)
       doc = LazyHTML.from_fragment(html)
       assert doc |> LazyHTML.query(~s([data-destination="email"])) |> Enum.count() == 1
     end

@@ -25,7 +25,7 @@ defmodule PlatformWeb.SkillsLiveProjectScopeTest do
   alias Platform.Tenancy.OrgMembership
 
   # `@example.com` keeps `Tenancy.derive_role_from_email/1` at `:member`;
-  # a `@example.com` address would derive admin and blanket-bypass the scope
+  # a `@acme.test` address would derive admin and blanket-bypass the scope
   # these tests pin.
   defp user!(role, org_id) do
     user =
@@ -79,13 +79,13 @@ defmodule PlatformWeb.SkillsLiveProjectScopeTest do
   end
 
   defp seed do
-    fabrikam_org_id = Platform.TenancyFixtures.fabrikam_org_id()
+    acme_org_id = Platform.TenancyFixtures.acme_org_id()
     tenant_org_id = Platform.TenancyFixtures.tenant_org_id("sxi")
 
-    own = project!(fabrikam_org_id, "Own Fabrikam Project #{System.unique_integer([:positive])}")
+    own = project!(acme_org_id, "Own Acme Project #{System.unique_integer([:positive])}")
     foreign = project!(tenant_org_id, "Foreign Project #{System.unique_integer([:positive])}")
 
-    %{fabrikam_org_id: fabrikam_org_id, own: own, foreign: foreign, skill: skill!()}
+    %{acme_org_id: acme_org_id, own: own, foreign: foreign, skill: skill!()}
   end
 
   # The plain member is seeded into a TENANT org, not the root org. Per Rowan's
@@ -110,7 +110,7 @@ defmodule PlatformWeb.SkillsLiveProjectScopeTest do
     # Preconditions: an admin viewer bypasses the scope by design, and a
     # root-org viewer sees everything by design. Either would make a broken
     # filter look correct.
-    refute Tenancy.fabrikam_admin?(user)
+    refute Tenancy.root_admin?(user)
     refute Tenancy.root_member?(user)
 
     conn = init_test_session(conn, current_user_id: user.id)
@@ -123,11 +123,11 @@ defmodule PlatformWeb.SkillsLiveProjectScopeTest do
     refute foreign.name in options
   end
 
-  test "a Fabrikam root admin is offered both orgs' projects", %{conn: conn} do
-    %{fabrikam_org_id: fabrikam_org_id, own: own, foreign: foreign, skill: skill} = seed()
-    admin = user!("admin", fabrikam_org_id)
+  test "an Acme root admin is offered both orgs' projects", %{conn: conn} do
+    %{acme_org_id: acme_org_id, own: own, foreign: foreign, skill: skill} = seed()
+    admin = user!("admin", acme_org_id)
 
-    assert Tenancy.fabrikam_admin?(admin) == true
+    assert Tenancy.root_admin?(admin) == true
 
     conn = init_test_session(conn, current_user_id: admin.id)
     {:ok, _view, html} = live(conn, "/skills/#{skill.slug}")
@@ -143,8 +143,8 @@ defmodule PlatformWeb.SkillsLiveProjectScopeTest do
   # LiveView mount. The panel carries no `id` and no `data-role`, so it is
   # selected by the class recipe that is unique to it on this page.
   test "the skill detail panel carries the shared desktop width cap", %{conn: conn} do
-    %{fabrikam_org_id: fabrikam_org_id, skill: skill} = seed()
-    user = user!("member", fabrikam_org_id)
+    %{acme_org_id: acme_org_id, skill: skill} = seed()
+    user = user!("member", acme_org_id)
 
     conn = init_test_session(conn, current_user_id: user.id)
     {:ok, _view, html} = live(conn, "/skills/#{skill.slug}")
@@ -164,9 +164,9 @@ defmodule PlatformWeb.SkillsLiveProjectScopeTest do
   end
 
   test "an already-attached project drops out of the picker", %{conn: conn} do
-    %{fabrikam_org_id: fabrikam_org_id, own: own, skill: skill} = seed()
-    user = user!("member", fabrikam_org_id)
-    refute Tenancy.fabrikam_admin?(user)
+    %{acme_org_id: acme_org_id, own: own, skill: skill} = seed()
+    user = user!("member", acme_org_id)
+    refute Tenancy.root_admin?(user)
 
     conn = init_test_session(conn, current_user_id: user.id)
 

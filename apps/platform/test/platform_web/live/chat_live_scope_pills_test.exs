@@ -39,7 +39,7 @@ defmodule PlatformWeb.ChatLiveScopePillsTest do
   # space's `org_id` (mirroring the sidebar rail), NOT the channel slug — so a
   # channel must actually belong to the org whose pill we expect to render.
   # The seeded root orgs (priv/repo/migrations/20260519143620_seed_root_orgs.exs)
-  # use slugs fabrikam/soylent/wayne_tech/sxi/paragon — the same tokens these tests
+  # use slugs acme/soylent/wayne_tech/sxi/paragon — the same tokens these tests
   # pass in — so resolve the matching org and stamp its id. (Sidebar *section*
   # bucketing is still slug-based via `channel_scope/1`, so the
   # `channel-section-label` assertions are unaffected by the added org_id.)
@@ -145,7 +145,7 @@ defmodule PlatformWeb.ChatLiveScopePillsTest do
 
     test "header pill click pushes scope_filter event and narrows the sub-org rail", %{conn: conn} do
       conn = authenticated_conn(conn)
-      create_channel("fabrikam")
+      create_channel("acme")
       create_channel("paragon")
       create_channel("soylent")
 
@@ -166,12 +166,12 @@ defmodule PlatformWeb.ChatLiveScopePillsTest do
       # Soylent bucket header is still present…
       assert sidebar =~ "Soylent"
 
-      # …but Paragon and Fabrikam sub-org headers are filtered out.
+      # …but Paragon and Acme sub-org headers are filtered out.
       refute sidebar =~ ~r/<span[^>]*class="channel-section-label"[^>]*>\s*Paragon\s*</,
              "Paragon sub-org section should be hidden by the Soylent scope filter"
 
-      refute sidebar =~ ~r/<span[^>]*class="channel-section-label"[^>]*>\s*Fabrikam\s*</,
-             "Fabrikam sub-org section should be hidden by the Soylent scope filter"
+      refute sidebar =~ ~r/<span[^>]*class="channel-section-label"[^>]*>\s*Acme\s*</,
+             "Acme sub-org section should be hidden by the Soylent scope filter"
     end
 
     test "header pill is not rendered when no channel is active (DM surface)", %{conn: conn} do

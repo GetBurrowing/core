@@ -40,7 +40,7 @@ defmodule Platform.Meetings.MeetingAttributionTest do
       |> Project.changeset(%{
         name: "Attribution #{n}",
         slug: "attribution-#{n}",
-        org_id: Platform.TenancyFixtures.fabrikam_org_id()
+        org_id: Platform.TenancyFixtures.acme_org_id()
       })
       |> Repo.insert()
 

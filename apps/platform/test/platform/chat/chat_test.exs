@@ -298,17 +298,17 @@ defmodule Platform.ChatTest do
 
   # Inline org helper — the chat suite doesn't otherwise touch tenancy, and
   # pulling in a fixtures module to seed two rows wouldn't earn its keep.
-  # Parents every test org under the seeded Fabrikam root to satisfy the
+  # Parents every test org under the seeded Acme root to satisfy the
   # `orgs_single_root` partial unique index (a second `parent_org_id IS NULL`
   # would be rejected at the DB layer).
   defp insert_org do
     n = System.unique_integer([:positive])
-    fabrikam = Platform.Tenancy.get_org_by_slug!("fabrikam")
+    acme = Platform.Tenancy.get_org_by_slug!("acme")
 
     Platform.Repo.insert!(%Platform.Tenancy.Org{
       name: "Org #{n}",
       slug: "org-#{n}",
-      parent_org_id: fabrikam.id
+      parent_org_id: acme.id
     })
   end
 
@@ -715,17 +715,17 @@ defmodule Platform.ChatTest do
 
     test "assigns a channel to an org via the org_id FK" do
       space = create_space()
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+      acme = Tenancy.get_org_by_slug!("acme")
 
-      assert {:ok, updated} = Chat.assign_space_org(space, fabrikam.id)
-      assert updated.org_id == fabrikam.id
-      assert Chat.get_space(space.id).org_id == fabrikam.id
+      assert {:ok, updated} = Chat.assign_space_org(space, acme.id)
+      assert updated.org_id == acme.id
+      assert Chat.get_space(space.id).org_id == acme.id
     end
 
     test "nil clears an existing org assignment" do
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+      acme = Tenancy.get_org_by_slug!("acme")
       space = create_space()
-      {:ok, space} = Chat.assign_space_org(space, fabrikam.id)
+      {:ok, space} = Chat.assign_space_org(space, acme.id)
 
       assert {:ok, cleared} = Chat.assign_space_org(space, nil)
       assert is_nil(cleared.org_id)

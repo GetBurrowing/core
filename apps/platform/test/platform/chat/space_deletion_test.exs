@@ -4,7 +4,7 @@ defmodule Platform.Chat.SpaceDeletionTest do
 
   Invariants under test:
 
-    1. `schedule_space_deletion/2` is Fabrikam-admin ONLY (creator does not
+    1. `schedule_space_deletion/2` is Acme-admin ONLY (creator does not
        qualify) and only for `kind: "channel"` spaces.
     2. Scheduling sets BOTH `archived_at` and `deletion_scheduled_at` in one
        update, so the stage-1 write freeze applies immediately and the space
@@ -50,7 +50,7 @@ defmodule Platform.Chat.SpaceDeletionTest do
     %OrgMembership{}
     |> OrgMembership.changeset(%{
       user_id: user.id,
-      org_id: Tenancy.get_org_by_slug!("fabrikam").id,
+      org_id: Tenancy.get_org_by_slug!("acme").id,
       role: role
     })
     |> Repo.insert!()
@@ -136,7 +136,7 @@ defmodule Platform.Chat.SpaceDeletionTest do
   # ── schedule_space_deletion/2 ──────────────────────────────────────────
 
   describe "schedule_space_deletion/2 authorization" do
-    test "fabrikam admin can schedule a channel for deletion" do
+    test "acme admin can schedule a channel for deletion" do
       admin = admin_user!()
       space = channel!()
 
@@ -287,7 +287,7 @@ defmodule Platform.Chat.SpaceDeletionTest do
       # this channel's own deletion clock.
       scheduled =
         scheduled
-        |> Ecto.Changeset.change(archived_cascade_org_id: Tenancy.get_org_by_slug!("fabrikam").id)
+        |> Ecto.Changeset.change(archived_cascade_org_id: Tenancy.get_org_by_slug!("acme").id)
         |> Repo.update!()
 
       refute is_nil(scheduled.archived_cascade_org_id)

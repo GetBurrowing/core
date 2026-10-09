@@ -10,9 +10,10 @@ defmodule Platform.DataMigrations.Adr0042RootOrgResolutionTest do
   is now resolved structurally: the single `orgs` row with
   `parent_org_id IS NULL`.
 
-  CI never saw the crash because `config/test.exs` pins
-  `ROOT_ORG_SLUG=fabrikam`, so every test DB's root IS slugged `fabrikam`. A test
-  against that seeded row passes before and after the fix. Each case here
+  CI never saw the crash because `config/test.exs` pinned
+  `ROOT_ORG_SLUG=fabrikam`, so every test DB's root WAS slugged `fabrikam` (task
+  01a116de stage 4 renamed the fixture root to `acme`). A test against a
+  seeded row passes before and after the fix. Each case here
   therefore clears `orgs` first and builds its own topology inside the
   sandboxed, rolled-back transaction.
 

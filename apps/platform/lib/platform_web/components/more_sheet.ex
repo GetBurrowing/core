@@ -11,8 +11,8 @@ defmodule PlatformWeb.Components.MoreSheet do
   Sections:
     * **Working** — Skills, Context, Memory, Prompts, Meetings (the
       `:working` cluster from `IconRail.destinations/1`).
-    * **Admin** — gated on `is_fabrikam_user`; hidden entirely (DOM-absent, not
-      `display: none`) for non-Fabrikam users.
+    * **Admin** — gated on `root_user`; hidden entirely (DOM-absent, not
+      `display: none`) for non-root users.
 
   A profile row at the bottom exposes the user's name and the sign-out
   shortcut (unchanged from the previous revision).
@@ -27,7 +27,7 @@ defmodule PlatformWeb.Components.MoreSheet do
 
   ## Examples
 
-      <.more_sheet open={@more_sheet_open} current_user={@current_user} is_fabrikam_user={@is_fabrikam_user} />
+      <.more_sheet open={@more_sheet_open} current_user={@current_user} root_user={@root_user} />
   """
   use Phoenix.Component
   use PlatformWeb, :verified_routes
@@ -39,7 +39,7 @@ defmodule PlatformWeb.Components.MoreSheet do
 
   attr(:open, :boolean, default: false, doc: "whether the sheet is shown")
 
-  attr(:is_fabrikam_user, :boolean,
+  attr(:root_user, :boolean,
     default: false,
     doc: "when true, the Admin section renders; otherwise it is omitted from the DOM entirely"
   )
@@ -50,11 +50,11 @@ defmodule PlatformWeb.Components.MoreSheet do
   )
 
   def more_sheet(assigns) do
-    is_fabrikam_user = Map.get(assigns, :is_fabrikam_user, false)
+    root_user = Map.get(assigns, :root_user, false)
 
     assigns =
       assigns
-      |> assign(:working_destinations, working_destinations(is_fabrikam_user))
+      |> assign(:working_destinations, working_destinations(root_user))
       |> assign(:admin_destinations, admin_destinations())
 
     ~H"""
@@ -82,7 +82,7 @@ defmodule PlatformWeb.Components.MoreSheet do
           <span>{dest.label}</span>
         </.link>
 
-        <%= if @is_fabrikam_user do %>
+        <%= if @root_user do %>
           <div class="more-sheet-divider" aria-hidden="true"></div>
           <p class="more-sheet-section-label">Admin</p>
 
@@ -121,17 +121,17 @@ defmodule PlatformWeb.Components.MoreSheet do
     """
   end
 
-  # Pass the actual is_fabrikam_user through so fabrikam_only? tiles (e.g. Prompts
+  # Pass the actual root_user through so root_only? tiles (e.g. Prompts
   # as of 2026-05-20) are correctly hidden from members. Previously this
-  # hardcoded `is_fabrikam_user: true` which leaked admin-only working-cluster
+  # hardcoded `root_user: true` which leaked admin-only working-cluster
   # tiles to every user in the More sheet.
-  defp working_destinations(is_fabrikam_user) do
-    IconRail.destinations(is_fabrikam_user: is_fabrikam_user)
+  defp working_destinations(root_user) do
+    IconRail.destinations(root_user: root_user)
     |> Enum.filter(&(&1.cluster == :working))
   end
 
   defp admin_destinations do
-    IconRail.destinations(is_fabrikam_user: true)
+    IconRail.destinations(root_user: true)
     |> Enum.filter(&(&1.cluster == :admin))
   end
 

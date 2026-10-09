@@ -583,7 +583,7 @@ defmodule Platform.Push.APNsTest do
       {:ok, _} =
         Tenancy.mark_membership_external(%{
           user_id: user.id,
-          org_id: TenancyFixtures.fabrikam_org_id()
+          org_id: TenancyFixtures.acme_org_id()
         })
 
       insert_device(user)

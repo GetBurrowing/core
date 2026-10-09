@@ -4,7 +4,7 @@ defmodule Platform.Security.ExternalHistorianScopeTest do
   exclusion (M12).
 
   Neither digest direction leaks the other's content. Given an internal-only
-  channel, a fully-external space, and a MIXED (Fabrikam + external) space — each
+  channel, a fully-external space, and a MIXED (Acme + external) space — each
   with in-window messages and a completed transcript:
 
     * `Chat.external_space_ids/0` classifies the external AND mixed spaces
@@ -81,13 +81,13 @@ defmodule Platform.Security.ExternalHistorianScopeTest do
     |> Repo.insert!()
   end
 
-  # Internal-only #fabrikam-eng, fully-external #sxi-support, mixed #sxi-shared.
+  # Internal-only #acme-eng, fully-external #sxi-support, mixed #sxi-shared.
   defp seed_three_spaces do
-    fabrikam = World.create_user!()
+    acme = World.create_user!()
     ext = external_user!()
 
-    internal = World.channel!(%{name: "fabrikam-eng-m15"})
-    kp = World.add_user!(internal.id, fabrikam.id)
+    internal = World.channel!(%{name: "acme-eng-m15"})
+    kp = World.add_user!(internal.id, acme.id)
     post_msg!(internal.id, kp.id, "engmsg-internal-secret")
     transcript!(internal.id, "eng-transcript-internal")
 
@@ -97,7 +97,7 @@ defmodule Platform.Security.ExternalHistorianScopeTest do
     transcript!(external.id, "support-transcript-external")
 
     mixed = World.channel!(%{name: "sxi-shared-m15"})
-    mk = World.add_user!(mixed.id, fabrikam.id)
+    mk = World.add_user!(mixed.id, acme.id)
     _me = World.add_user!(mixed.id, ext.id)
     post_msg!(mixed.id, mk.id, "sharedmsg-mixed-secret")
     transcript!(mixed.id, "shared-transcript-mixed")
@@ -205,9 +205,9 @@ defmodule Platform.Security.ExternalHistorianScopeTest do
     test "message + transcript bytes exclude external-space content" do
       one_hour_ago = DateTime.add(DateTime.utc_now(), -3600, :second)
 
-      internal = World.channel!(%{name: "fabrikam-eng-bytes"})
-      fabrikam = World.create_user!()
-      kp = World.add_user!(internal.id, fabrikam.id)
+      internal = World.channel!(%{name: "acme-eng-bytes"})
+      acme = World.create_user!()
+      kp = World.add_user!(internal.id, acme.id)
       im = post_msg!(internal.id, kp.id, "internal-hist-msg")
       backdate_message(im, one_hour_ago)
       transcript!(internal.id, "internal-hist-mtg")
@@ -240,9 +240,9 @@ defmodule Platform.Security.ExternalHistorianScopeTest do
 
   describe "zero-external regression" do
     test "with no external memberships, classification is [] and internal content survives" do
-      internal = World.channel!(%{name: "fabrikam-only-m15"})
-      fabrikam = World.create_user!()
-      kp = World.add_user!(internal.id, fabrikam.id)
+      internal = World.channel!(%{name: "acme-only-m15"})
+      acme = World.create_user!()
+      kp = World.add_user!(internal.id, acme.id)
       post_msg!(internal.id, kp.id, "solo-internal-secret")
       transcript!(internal.id, "solo-transcript")
 

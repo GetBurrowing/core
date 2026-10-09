@@ -54,7 +54,7 @@ defmodule Platform.Audit.EventOwnerOrgTest do
     end
 
     test "actor_org_id persists to the database" do
-      org_id = fabrikam_org_id()
+      org_id = acme_org_id()
 
       {:ok, event} =
         %Event{}

@@ -15,7 +15,7 @@ defmodule PlatformWeb.RootLayoutThemeColorsTest do
   GET re-reads the row (no cache).
 
   The page is `/tasks`, an ordinary app page through the `:browser`
-  pipeline and the root layout, rendered as the Fabrikam admin the save needs.
+  pipeline and the root layout, rendered as the Acme admin the save needs.
   """
 
   use PlatformWeb.ConnCase, async: false
@@ -46,7 +46,7 @@ defmodule PlatformWeb.RootLayoutThemeColorsTest do
     %OrgMembership{}
     |> OrgMembership.changeset(%{
       user_id: user.id,
-      org_id: Tenancy.get_org_by_slug!("fabrikam").id,
+      org_id: Tenancy.get_org_by_slug!("acme").id,
       role: "admin"
     })
     |> Repo.insert!()

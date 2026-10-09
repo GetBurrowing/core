@@ -27,7 +27,7 @@ defmodule Platform.Responsibilities.AgentsGoalHeartbeatDirectionTest do
              ) == :grow
     end
 
-    test "Fabrikam's live goal is :close" do
+    test "Acme's live goal is :close" do
       assert Handler.goal_direction("Close backlog items in Suite") == :close
     end
 

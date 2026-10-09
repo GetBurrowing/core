@@ -284,8 +284,13 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # Re-pinned by task 01a115b5 stage 2: suite_run_describe's `detail`
     # parameter and description text. Both values measured on moon at the
     # stage's branch; off equals extensions_test.exs.
-    @main_tool_digest_off "72c6e07c622bc52f454b463a913f0bdb999be529c270f86dfdcecafd506fed1b"
-    @main_tool_digest_on "1d9f42a133745e2c725e311678b3b96d483d21e4644bf675aeb36f52a71f9f29"
+    #
+    # Re-pinned by task 01a116de stage 2: two description strings stop naming
+    # one install's root org ("Use the root org id", "root-org admin"). Both
+    # values measured on moon at the stage's branch; off equals
+    # extensions_test.exs.
+    @main_tool_digest_off "393233a9add41feb9c556b3e03cd293bd7d9fa5739f27bd53556229bdbff0dd0"
+    @main_tool_digest_on "bae8efd61579b23fdd94329273a53449323255ddd045b07ae494e9ed8166b79c"
     @main_kinds_summaries_digest_off "4c060fb7a6914985f94857aaac9effbb519dd2b2170c7a9c0013d4db15a73ea4"
     @main_kinds_summaries_digest_on "dbab62a1b3d154e23378f3a990b77deb17c5f50eb30adf0b055bc0df8ce6c1e3"
     @main_kinds_tool_schemas_digest_off "e454cd9e2aeb1d821a70b74fe433e81ba98b94f7ae9f2d59c55f8cf5bf509af8"
@@ -373,7 +378,7 @@ defmodule Platform.GameStream.ExtensionParityTest do
         assert AgentRuntime.valid_bundles() == @main_valid_bundles
         assert Metrics.known_metrics() == @main_metrics
         assert digest(Metrics.catalog()) == @main_metrics_catalog_digest
-        assert Enum.map(IconRail.destinations(is_fabrikam_user: true), & &1.key) == @main_rail
+        assert Enum.map(IconRail.destinations(root_user: true), & &1.key) == @main_rail
       end
 
       Application.delete_env(:game_stream, :enabled)

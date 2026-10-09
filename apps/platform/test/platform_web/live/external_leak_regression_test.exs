@@ -10,7 +10,7 @@ defmodule PlatformWeb.ExternalLeakRegressionTest do
 
   Fixtures use the AUTHORITATIVE grant path (`ExternalGrants.apply_grant/2`) so
   the external user holds a `chat_participants` row for Orion and NOTHING
-  else; a Fabrikam-internal `General` channel exists that must never appear; an
+  else; an Acme-internal `General` channel exists that must never appear; an
   ordinary internal user is the control.
   """
   use PlatformWeb.ConnCase, async: false
@@ -44,7 +44,7 @@ defmodule PlatformWeb.ExternalLeakRegressionTest do
     |> Org.changeset(%{
       name: "SXI #{n}",
       slug: "sxi_leak_#{n}",
-      parent_org_id: Tenancy.get_org_by_slug!("fabrikam").id
+      parent_org_id: Tenancy.get_org_by_slug!("acme").id
     })
     |> Repo.insert!()
   end
@@ -101,7 +101,7 @@ defmodule PlatformWeb.ExternalLeakRegressionTest do
     sxi = sxi_org!()
     testerson = create_user!("Rowan Testerson")
     orion = channel!("Orion", org_id: sxi.id)
-    # Fabrikam-internal channel — Testerson has NO participant row for it.
+    # Acme-internal channel — Testerson has NO participant row for it.
     general = channel!("General")
 
     grant_only!(testerson, sxi, orion)

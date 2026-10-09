@@ -37,7 +37,7 @@ defmodule Platform.Federation.ToolCallTest do
 
   setup do
     agent = insert_agent()
-    org_id = Platform.TenancyFixtures.fabrikam_org_id()
+    org_id = Platform.TenancyFixtures.acme_org_id()
     {:ok, project} = Tasks.create_project(%{name: "ToolCall #{u()}", org_id: org_id})
     {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "ToolCall task"})
     %{agent: agent, task: task, project: project}

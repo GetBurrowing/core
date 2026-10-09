@@ -135,7 +135,7 @@ defmodule Platform.Federation.ToolSurfaceT5E2ETest do
     # pinned via Roles (task 019f2444 stage 6 retired `system_events`).
     historian = create_agent("historian-a", assign_historian?: true)
 
-    text = "# Org Identity\n\nFabrikam — AI-native consultancy."
+    text = "# Org Identity\n\nAcme — AI-native consultancy."
 
     # actions: As the Historian, create the page, then view it.
     assert {:ok, create_result} =

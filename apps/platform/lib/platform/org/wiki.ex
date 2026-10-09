@@ -63,7 +63,7 @@ defmodule Platform.Org.Wiki do
   `:org_id` / `:project_id` are the ADR-0042 tenancy columns (task
   `01a0008c` stage 2). They are **opt-in**: a caller that omits them
   keeps the historical behaviour exactly, which for `:org_id` means
-  `WikiPage.changeset/2` attaching the row to the root Fabrikam org. A
+  `WikiPage.changeset/2` attaching the row to the root org. A
   caller that writes under a tenant-scoped path — anything shaped
   `project/<uuid>/…` — must pass both, or the row's tenancy will
   disagree with its own `file_key`.
@@ -499,7 +499,7 @@ defmodule Platform.Org.Wiki do
   #
   # Absence and an explicit nil are deliberately NOT the same thing
   # here. Absence means "I have no opinion" and must leave the legacy
-  # behaviour untouched, including the Fabrikam default on insert. An
+  # behaviour untouched, including the root-org default on insert. An
   # explicit nil means "unset this", which is a legitimate thing to ask
   # for on `project_id` and which the changeset will reject on `org_id`
   # (it is `validate_required`) rather than silently re-defaulting.

@@ -407,7 +407,7 @@ defmodule PlatformWeb.TasksLiveSearchTest do
     html = after_filter(view)
     assert html =~ "Composer dock retrofit"
     refute html =~ "Unrelated widget"
-    # header badge + fabrikam scope chip both show exactly one visible task
+    # header badge + acme scope chip both show exactly one visible task
     assert view |> element("#tasks-page-header") |> render() =~ ">1<"
 
     # clearing restores the unfiltered totals everywhere
@@ -552,7 +552,7 @@ defmodule PlatformWeb.TasksLiveSearchTest do
       # `filter_scope` for a real sub-org slug only succeeds when the
       # viewer belongs to that org (`parse_scope/2` checks `@active_scopes`)
       # — `member_of_all_orgs!/1` is the same fixture
-      # `tasks_live_test.exs`'s scope-rail tests use for the "fabrikam" chip.
+      # `tasks_live_test.exs`'s scope-rail tests use for the "acme" chip.
       user =
         Repo.insert!(%User{
           email: "tasks_search_scope_#{System.unique_integer([:positive])}@example.com",
@@ -564,7 +564,7 @@ defmodule PlatformWeb.TasksLiveSearchTest do
       conn = init_test_session(conn, current_user_id: user.id)
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      _ = render_click(filters(view), "filter_scope", %{"scope" => "fabrikam"})
+      _ = render_click(filters(view), "filter_scope", %{"scope" => "acme"})
       assert assert_patch_kind(view) == :push
 
       # Negative control: the search box's own patches, on the same view, DO

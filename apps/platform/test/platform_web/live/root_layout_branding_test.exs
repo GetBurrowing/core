@@ -14,7 +14,7 @@ defmodule PlatformWeb.RootLayoutBrandingTest do
   SAME test, including that the `/branding/<version>/` segment is identical
   across both.
 
-  The page rendered is `/admin/branding` as a Fabrikam admin: it is the one
+  The page rendered is `/admin/branding` as an Acme admin: it is the one
   page whose fixture this test already needs, and it goes through the
   `:browser` pipeline and the root layout like every other app page.
   """
@@ -62,7 +62,7 @@ defmodule PlatformWeb.RootLayoutBrandingTest do
     %OrgMembership{}
     |> OrgMembership.changeset(%{
       user_id: user.id,
-      org_id: Tenancy.get_org_by_slug!("fabrikam").id,
+      org_id: Tenancy.get_org_by_slug!("acme").id,
       role: "admin"
     })
     |> Repo.insert!()

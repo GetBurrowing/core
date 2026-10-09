@@ -72,7 +72,7 @@ defmodule PlatformWeb.OrgMemoryLiveT7E2ETest do
     Repo.delete_all(WikiPage)
 
     {:ok, page} =
-      Wiki.upsert_page("org/page/identity.md", %{content: "# Identity\n\nWe are Fabrikam.\n"})
+      Wiki.upsert_page("org/page/identity.md", %{content: "# Identity\n\nWe are Acme.\n"})
 
     assert page.version == 1
 
@@ -128,7 +128,7 @@ defmodule PlatformWeb.OrgMemoryLiveT7E2ETest do
 
     # The UI failed closed BEFORE reaching the domain layer: version
     # still 1, content untouched.
-    assert %WikiPage{version: 1, content: "# Identity\n\nWe are Fabrikam.\n"} =
+    assert %WikiPage{version: 1, content: "# Identity\n\nWe are Acme.\n"} =
              Wiki.get_page("org/page/identity.md")
   end
 
@@ -207,7 +207,7 @@ defmodule PlatformWeb.OrgMemoryLiveT7E2ETest do
   test "e2e 3: wikilink rendering — resolved anchor vs dangling span", %{conn: conn} do
     Repo.delete_all(WikiPage)
 
-    {:ok, _} = Wiki.upsert_page("org/page/identity.md", %{content: "# Identity\n\nWe are Fabrikam."})
+    {:ok, _} = Wiki.upsert_page("org/page/identity.md", %{content: "# Identity\n\nWe are Acme."})
 
     # 2026-06-11 amendment: the script's original [[identity]] form is
     # now replayable LITERALLY — basename resolution landed in the

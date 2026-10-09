@@ -524,7 +524,7 @@ defmodule Platform.InboxTest do
     {:ok, project} =
       Platform.Tasks.create_project(%{
         name: "Reconcile #{System.unique_integer([:positive])}",
-        org_id: Platform.TenancyFixtures.fabrikam_org_id()
+        org_id: Platform.TenancyFixtures.acme_org_id()
       })
 
     project
@@ -887,7 +887,7 @@ defmodule Platform.InboxTest do
         Repo.insert!(%Platform.Tenancy.Org{
           name: "Reach Tenant #{n}",
           slug: "tenant_reach_#{n}",
-          parent_org_id: Platform.TenancyFixtures.fabrikam_org_id()
+          parent_org_id: Platform.TenancyFixtures.acme_org_id()
         })
 
       {:ok, _} = Platform.Tenancy.mark_membership_external(%{user_id: user.id, org_id: org.id})

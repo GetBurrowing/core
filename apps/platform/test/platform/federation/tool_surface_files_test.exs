@@ -69,12 +69,12 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
   # ── Setup ──────────────────────────────────────────────────────────────
 
   setup do
-    fabrikam = ensure_root_org()
+    acme = ensure_root_org()
     # Two tenant orgs so we can exercise sibling-tenant isolation.
-    sxi = ensure_tenant_org("sxi-files-#{System.unique_integer([:positive])}", fabrikam)
+    sxi = ensure_tenant_org("sxi-files-#{System.unique_integer([:positive])}", acme)
 
     wayne_tech =
-      ensure_tenant_org("wayne-tech-files-#{System.unique_integer([:positive])}", fabrikam)
+      ensure_tenant_org("wayne-tech-files-#{System.unique_integer([:positive])}", acme)
 
     {:ok, project_a} = Tasks.create_project(%{name: "ProjA #{u()}", org_id: sxi.id})
     {:ok, project_b} = Tasks.create_project(%{name: "ProjB #{u()}", org_id: wayne_tech.id})
@@ -84,11 +84,11 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
     # Agent pinned to Wayne-tech — sibling of agent_sxi.
     agent_pt = create_agent("pt-agent", %{"org_id" => wayne_tech.id})
     # Agent pinned to the root org — root-equivalent, sees every tenant.
-    agent_root = create_agent("root-agent", %{"org_id" => fabrikam.id})
+    agent_root = create_agent("root-agent", %{"org_id" => acme.id})
 
     {:ok,
      %{
-       fabrikam: fabrikam,
+       acme: acme,
        sxi: sxi,
        wayne_tech: wayne_tech,
        project_a: project_a,
@@ -102,11 +102,11 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
   defp u, do: System.unique_integer([:positive])
 
   defp ensure_root_org do
-    case Repo.get_by(Tenancy.Org, slug: "fabrikam") do
+    case Repo.get_by(Tenancy.Org, slug: "acme") do
       nil ->
         {:ok, org} =
           %Tenancy.Org{}
-          |> Tenancy.Org.changeset(%{slug: "fabrikam", name: "Fabrikam", parent_org_id: nil})
+          |> Tenancy.Org.changeset(%{slug: "acme", name: "Acme", parent_org_id: nil})
           |> Repo.insert()
 
         org

@@ -704,7 +704,7 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
     # bumped by task 01a0a552 stage 3 — `task_close_as_delivered`, added to
     # the existing `task` bundle beside `task_complete`. An admin-owned
     # runtime recording work that shipped outside the plan pipeline, gated
-    # on the runtime OWNER being a Fabrikam admin. Not a T6 concern — it adds no
+    # on the runtime OWNER being an Acme admin. Not a T6 concern — it adds no
     # schedule, no trigger and no historian surface
     # (+task_close_as_delivered -> 105)
     # bumped by task 01a0d415 stage 2 — the `experiments` bundle, 14

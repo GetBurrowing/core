@@ -135,7 +135,7 @@ defmodule Platform.Repo.Migrations.BackfillExecSpaceOrgIdTest do
 
   describe "up/0 against a seeded table" do
     test "stamps the resolvable rows with the RIGHT org and leaves the rest NULL" do
-      org_a = fabrikam_org_id()
+      org_a = acme_org_id()
       org_b = tenant_org_id("sxi")
 
       # ANTI-VACUITY. With one org in the fixture, "resolved the task's project
@@ -341,7 +341,7 @@ defmodule Platform.Repo.Migrations.BackfillExecSpaceOrgIdTest do
 
   describe "the kind filter is load-bearing" do
     test "a non-execution space with the same metadata shape is not touched" do
-      org = fabrikam_org_id()
+      org = acme_org_id()
       task = task_in(project_in(org))
 
       meeting_space = exec_space!(task.id, kind: "meeting")
@@ -366,7 +366,7 @@ defmodule Platform.Repo.Migrations.BackfillExecSpaceOrgIdTest do
       # keeps the migration alive here; the `NOT EXISTS` guard evaluates against
       # the pre-UPDATE snapshot and cannot see a collision this same statement
       # is about to create.
-      org = fabrikam_org_id()
+      org = acme_org_id()
       task = task_in(project_in(org))
       shared_slug = "task-exec-racedup-#{System.unique_integer([:positive])}"
 
@@ -387,7 +387,7 @@ defmodule Platform.Repo.Migrations.BackfillExecSpaceOrgIdTest do
     test "an exec space whose (org, slug) pair is already held is skipped" do
       # The `NOT EXISTS` guard's own case: a different row already owns the
       # target pair, so stamping this one would collide.
-      org = fabrikam_org_id()
+      org = acme_org_id()
       task = task_in(project_in(org))
       shared_slug = "task-exec-taken-#{System.unique_integer([:positive])}"
 

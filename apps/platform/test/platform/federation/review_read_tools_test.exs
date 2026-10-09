@@ -113,9 +113,9 @@ defmodule Platform.Federation.ReviewReadToolsTest do
   @read_tools ~w(review_request_get review_item_list)
 
   setup do
-    fabrikam = ensure_root_org()
-    sxi = ensure_tenant_org("sxi-review-#{u()}", fabrikam)
-    wayne_tech = ensure_tenant_org("wayne-tech-review-#{u()}", fabrikam)
+    acme = ensure_root_org()
+    sxi = ensure_tenant_org("sxi-review-#{u()}", acme)
+    wayne_tech = ensure_tenant_org("wayne-tech-review-#{u()}", acme)
 
     {:ok, project} = Tasks.create_project(%{name: "Review Proj #{u()}", org_id: sxi.id})
     {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Review Task"})
@@ -140,7 +140,7 @@ defmodule Platform.Federation.ReviewReadToolsTest do
       ReviewRequests.reject_item(item.id, "rowan", "FAB overlaps the bottom nav at 375px")
 
     %{
-      fabrikam: fabrikam,
+      acme: acme,
       sxi: sxi,
       wayne_tech: wayne_tech,
       task: task,
@@ -149,7 +149,7 @@ defmodule Platform.Federation.ReviewReadToolsTest do
       item: ruled,
       agent_sxi: create_agent("sxi-agent", %{"org_id" => sxi.id}),
       agent_pt: create_agent("pt-agent", %{"org_id" => wayne_tech.id}),
-      agent_root: create_agent("root-agent", %{"org_id" => fabrikam.id})
+      agent_root: create_agent("root-agent", %{"org_id" => acme.id})
     }
   end
 
@@ -369,11 +369,11 @@ defmodule Platform.Federation.ReviewReadToolsTest do
   defp u, do: System.unique_integer([:positive])
 
   defp ensure_root_org do
-    case Repo.get_by(Tenancy.Org, slug: "fabrikam") do
+    case Repo.get_by(Tenancy.Org, slug: "acme") do
       nil ->
         {:ok, org} =
           %Tenancy.Org{}
-          |> Tenancy.Org.changeset(%{slug: "fabrikam", name: "Fabrikam", parent_org_id: nil})
+          |> Tenancy.Org.changeset(%{slug: "acme", name: "Acme", parent_org_id: nil})
           |> Repo.insert()
 
         org

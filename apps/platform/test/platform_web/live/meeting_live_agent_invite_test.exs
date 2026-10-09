@@ -121,12 +121,12 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
 
     # `/meetings/:slug` resolves through `fetch_meeting_for_user/2`, which
     # requires an `org_memberships` row in the meeting's org. `@example.com`
-    # keeps `derive_role_from_email/1` at `:member`; a `@example.com` address
+    # keeps `derive_role_from_email/1` at `:member`; a `@acme.test` address
     # would derive admin and blanket-bypass every scope check below.
     Repo.insert!(
       OrgMembership.changeset(%OrgMembership{}, %{
         user_id: user.id,
-        org_id: Platform.TenancyFixtures.fabrikam_org_id(),
+        org_id: Platform.TenancyFixtures.acme_org_id(),
         role: "member"
       })
     )
@@ -153,7 +153,7 @@ defmodule PlatformWeb.MeetingLiveAgentInviteTest do
         Project.changeset(%Project{}, %{
           name: "Agent Invite Project #{n}",
           slug: "agent-invite-project-#{n}",
-          org_id: Platform.TenancyFixtures.fabrikam_org_id()
+          org_id: Platform.TenancyFixtures.acme_org_id()
         })
       )
 

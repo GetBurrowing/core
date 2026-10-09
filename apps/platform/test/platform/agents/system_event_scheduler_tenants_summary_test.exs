@@ -61,7 +61,7 @@ defmodule Platform.Agents.SystemEventSchedulerTenantsSummaryTest do
 
     defp summary_page do
       from(p in WikiPage,
-        where: p.file_key == "org/fabrikam/TENANTS_SUMMARY.md" and is_nil(p.workspace_id),
+        where: p.file_key == "org/acme/TENANTS_SUMMARY.md" and is_nil(p.workspace_id),
         limit: 1
       )
       |> Repo.one()
@@ -89,7 +89,7 @@ defmodule Platform.Agents.SystemEventSchedulerTenantsSummaryTest do
     test "recompute_tenants_summary_now/1 runs the curator end-to-end with a stub" do
       stub = fn name, _raw -> {:ok, "Stub paragraph for #{name}."} end
 
-      assert {:ok, %WikiPage{file_key: "org/fabrikam/TENANTS_SUMMARY.md"}} =
+      assert {:ok, %WikiPage{file_key: "org/acme/TENANTS_SUMMARY.md"}} =
                SystemEventScheduler.recompute_tenants_summary_now(llm_fun: stub)
 
       page = summary_page()

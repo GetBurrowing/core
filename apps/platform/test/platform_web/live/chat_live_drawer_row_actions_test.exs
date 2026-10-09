@@ -49,7 +49,7 @@ defmodule PlatformWeb.ChatLiveDrawerRowActionsTest do
     {init_test_session(conn, current_user_id: user.id), user}
   end
 
-  defp fabrikam_org, do: Tenancy.get_org_by_slug!("fabrikam")
+  defp acme_org, do: Tenancy.get_org_by_slug!("acme")
 
   defp create_channel(slug) do
     {:ok, ch} =
@@ -57,7 +57,7 @@ defmodule PlatformWeb.ChatLiveDrawerRowActionsTest do
         name: String.capitalize(slug),
         slug: slug,
         kind: "channel",
-        org_id: fabrikam_org().id
+        org_id: acme_org().id
       })
 
     ch

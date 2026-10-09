@@ -76,7 +76,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooksAgentTypingTest do
       |> Platform.Tasks.Project.changeset(%{
         name: "Typing Project #{System.unique_integer([:positive])}",
         slug: "typing-project-#{System.unique_integer([:positive])}",
-        org_id: Platform.TenancyFixtures.fabrikam_org_id()
+        org_id: Platform.TenancyFixtures.acme_org_id()
       })
       |> Repo.insert()
 

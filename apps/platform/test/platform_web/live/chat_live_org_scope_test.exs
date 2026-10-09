@@ -23,13 +23,13 @@ defmodule PlatformWeb.ChatLiveOrgScopeTest do
   # Deliberately a name that is NOT the title-cased slug ("New Client"), so a
   # label derived from the slug and one read from the row cannot agree.
   defp runtime_org!(attrs \\ %{}) do
-    fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+    acme = Tenancy.get_org_by_slug!("acme")
 
     Repo.insert!(
       Org.changeset(
         %Org{},
         Map.merge(
-          %{name: "Newclient", slug: "new_client", parent_org_id: fabrikam.id, color_hue: 200},
+          %{name: "Newclient", slug: "new_client", parent_org_id: acme.id, color_hue: 200},
           attrs
         )
       )
@@ -48,9 +48,14 @@ defmodule PlatformWeb.ChatLiveOrgScopeTest do
   end
 
   describe "org_scope/1" do
-    test "a shipped slug keeps its existing scope atom" do
+    test "a shipped sibling slug keeps its existing scope atom" do
       assert ChatLive.org_scope("wayne_tech") == :wayne_tech
-      assert ChatLive.org_scope("fabrikam") == :fabrikam
+    end
+
+    test "the root org's slug is the stored binary: it has no compiled atom" do
+      # Task 01a116de stage 3: the root is install data, so even a root slugged
+      # `acme` takes the runtime-org path and still gets its pill.
+      assert ChatLive.org_scope("acme") == "acme"
     end
 
     test "a runtime org's slug is returned as the stored binary, never an atom" do

@@ -46,9 +46,9 @@ defmodule Platform.Federation.ToolSurfaceTransitionListTest do
   alias Platform.Tenancy
 
   setup do
-    fabrikam = ensure_root_org()
-    sxi = ensure_tenant_org("sxi-transitions-#{u()}", fabrikam)
-    wayne_tech = ensure_tenant_org("wayne-tech-transitions-#{u()}", fabrikam)
+    acme = ensure_root_org()
+    sxi = ensure_tenant_org("sxi-transitions-#{u()}", acme)
+    wayne_tech = ensure_tenant_org("wayne-tech-transitions-#{u()}", acme)
 
     {:ok, project} = Tasks.create_project(%{name: "Transitions Proj #{u()}", org_id: sxi.id})
 
@@ -65,7 +65,7 @@ defmodule Platform.Federation.ToolSurfaceTransitionListTest do
       quiet_task: quiet_task,
       agent_sxi: create_agent("sxi-agent", %{"org_id" => sxi.id}),
       agent_pt: create_agent("pt-agent", %{"org_id" => wayne_tech.id}),
-      agent_root: create_agent("root-agent", %{"org_id" => fabrikam.id})
+      agent_root: create_agent("root-agent", %{"org_id" => acme.id})
     }
   end
 
@@ -253,11 +253,11 @@ defmodule Platform.Federation.ToolSurfaceTransitionListTest do
   defp u, do: System.unique_integer([:positive])
 
   defp ensure_root_org do
-    case Repo.get_by(Tenancy.Org, slug: "fabrikam") do
+    case Repo.get_by(Tenancy.Org, slug: "acme") do
       nil ->
         {:ok, org} =
           %Tenancy.Org{}
-          |> Tenancy.Org.changeset(%{slug: "fabrikam", name: "Fabrikam", parent_org_id: nil})
+          |> Tenancy.Org.changeset(%{slug: "acme", name: "Acme", parent_org_id: nil})
           |> Repo.insert()
 
         org

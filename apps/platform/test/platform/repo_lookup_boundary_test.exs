@@ -1345,7 +1345,7 @@ defmodule Platform.RepoLookupBoundaryTest do
     # `is_nil(o.parent_org_id)` — a NULL test over a column, pinning NO id at
     # all, so nothing crosses a boundary into it and `Ecto.Query.CastError` is
     # unreachable. No `Platform.UUID.valid?/1` guard applies. It deliberately
-    # does NOT use `get_org_by_slug!("fabrikam")`: resolving the root by slug would
+    # does NOT use `get_org_by_slug!("acme")`: resolving the root by slug would
     # both raise on a bare DB and let a rename silently reparent new orgs.
     "platform/tenancy/lifecycle.ex" => 3,
     # 4 → 3 for task 019f9cb8 stage 2: `delete/2` now resolves through

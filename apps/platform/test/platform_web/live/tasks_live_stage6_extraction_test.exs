@@ -80,14 +80,14 @@ defmodule PlatformWeb.TasksLiveStage6ExtractionTest do
       # POSITIVE CONTROL: drive it OFF :all first, so the assertion below is
       # not satisfied by the mount default.
       view
-      |> element(~s([data-scope-chip="fabrikam"] button))
+      |> element(~s([data-scope-chip="acme"] button))
       |> render_click()
 
       _ = :sys.get_state(view.pid)
       # The org SLUG, a string — task 01a09287 stage 2 removed the allowlist
       # that made converting it to an atom safe, so `:all` is the only atom
       # `@scope_filter` still holds.
-      assert :sys.get_state(view.pid).socket.assigns.scope_filter == "fabrikam"
+      assert :sys.get_state(view.pid).socket.assigns.scope_filter == "acme"
 
       view
       |> element(~s(button[data-scope-chip="all"]))
@@ -96,7 +96,7 @@ defmodule PlatformWeb.TasksLiveStage6ExtractionTest do
       _ = :sys.get_state(view.pid)
 
       # The SHELL assign moved — that is the mediation. The component writing
-      # its own copy would leave this at :fabrikam and the board unnarrowed.
+      # its own copy would leave this at :acme and the board unnarrowed.
       assert :sys.get_state(view.pid).socket.assigns.scope_filter == :all
     end
 
@@ -107,7 +107,7 @@ defmodule PlatformWeb.TasksLiveStage6ExtractionTest do
       [attrs] =
         html
         |> LazyHTML.from_fragment()
-        |> LazyHTML.query(~s([data-scope-chip="fabrikam"] button))
+        |> LazyHTML.query(~s([data-scope-chip="acme"] button))
         |> LazyHTML.attributes()
         |> Enum.map(&Map.new/1)
 

@@ -92,12 +92,12 @@ defmodule Platform.PushTest do
     :ok
   end
 
-  # Mark a user external in the seeded fabrikam org (M13 external-preview fixtures).
+  # Mark a user external in the seeded acme org (M13 external-preview fixtures).
   defp mark_external(user) do
     {:ok, _} =
       Tenancy.mark_membership_external(%{
         user_id: user.id,
-        org_id: TenancyFixtures.fabrikam_org_id()
+        org_id: TenancyFixtures.acme_org_id()
       })
 
     user
@@ -433,7 +433,7 @@ defmodule Platform.PushTest do
         %Platform.Tenancy.OrgMembership{}
         |> Platform.Tenancy.OrgMembership.changeset(%{
           user_id: user.id,
-          org_id: TenancyFixtures.fabrikam_org_id(),
+          org_id: TenancyFixtures.acme_org_id(),
           role: "member"
         })
         |> Repo.insert()

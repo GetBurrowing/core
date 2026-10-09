@@ -61,7 +61,7 @@ defmodule PlatformWeb.MeetingLiveCandidateUndoTest do
     %OrgMembership{}
     |> OrgMembership.changeset(%{
       user_id: user.id,
-      org_id: Platform.TenancyFixtures.fabrikam_org_id(),
+      org_id: Platform.TenancyFixtures.acme_org_id(),
       role: "member"
     })
     |> Repo.insert!()
@@ -69,7 +69,7 @@ defmodule PlatformWeb.MeetingLiveCandidateUndoTest do
     {:ok, project} =
       Platform.Tasks.create_project(%{
         name: "Undo Project #{n}",
-        org_id: Platform.TenancyFixtures.fabrikam_org_id()
+        org_id: Platform.TenancyFixtures.acme_org_id()
       })
 
     {:ok, meeting} =
@@ -261,7 +261,7 @@ defmodule PlatformWeb.MeetingLiveCandidateUndoTest do
       {:ok, other_project} =
         Platform.Tasks.create_project(%{
           name: "Other Undo Project #{System.unique_integer([:positive])}",
-          org_id: Platform.TenancyFixtures.fabrikam_org_id()
+          org_id: Platform.TenancyFixtures.acme_org_id()
         })
 
       {:ok, other} =

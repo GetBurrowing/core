@@ -8,7 +8,7 @@ defmodule Platform.Tenancy.Lifecycle do
   (`archive_space/2`, `schedule_space_deletion/2`, …) but adds the two
   things containers need that a single channel does not:
 
-    * **Root guard.** The root org (Fabrikam, `tier == :root`) can never be
+    * **Root guard.** The root org (`tier == :root`) can never be
       archived or deleted — every org function returns
       `{:error, :not_deletable}` for it before touching the DB.
 
@@ -20,7 +20,7 @@ defmodule Platform.Tenancy.Lifecycle do
       org drove — a child that was archived independently keeps a NULL
       `archived_cascade_org_id` and is therefore left hidden on restore.
 
-  Authorization: every function requires a Fabrikam (root) admin actor. There
+  Authorization: every function requires a root-org admin actor. There
   is no creator carve-out (orgs and projects have no owner column) and no
   system path — a `nil`/non-admin actor gets `{:error, :unauthorized}`.
 
@@ -58,7 +58,7 @@ defmodule Platform.Tenancy.Lifecycle do
   the seed migration `20260519143620_seed_root_orgs.exs`, so onboarding a
   client meant shipping a migration.
 
-  Fabrikam-admin only, and deliberately actor-first arity-2 like every sibling
+  Root-admin only, and deliberately actor-first arity-2 like every sibling
   in this module: creating an org is a *higher*-privilege act than archiving
   one, so it gets the same `{:error, :unauthorized}` gate rather than
   resting solely on the caller's route hook. There is no unauthenticated
@@ -104,7 +104,7 @@ defmodule Platform.Tenancy.Lifecycle do
   @spec create_org(actor(), map()) ::
           {:ok, Org.t()} | {:error, :unauthorized | Ecto.Changeset.t()}
   def create_org(actor, attrs) when is_map(attrs) do
-    with_fabrikam_admin_authz(actor, fn ->
+    with_root_admin_authz(actor, fn ->
       changeset =
         %Org{}
         |> Org.changeset(put_default_parent(attrs))
@@ -156,7 +156,7 @@ defmodule Platform.Tenancy.Lifecycle do
 
   # The root org is resolved by STRUCTURE — the single row the
   # `orgs_single_root` partial unique index permits to have a NULL parent —
-  # not by the "fabrikam" slug, so a rename can never silently reparent new orgs.
+  # not by any slug, so a rename can never silently reparent new orgs.
   # Returns nil rather than raising when no root exists (a bare test DB);
   # `require_tenant_parent/1` then turns that into a changeset error instead
   # of a `Repo.get_by!` blow-up.
@@ -186,7 +186,7 @@ defmodule Platform.Tenancy.Lifecycle do
 
   @doc """
   Soft-archive an org: set `archived_at` on the org and cascade-hide its
-  not-already-archived projects and chat_spaces. Fabrikam-admin only; the root
+  not-already-archived projects and chat_spaces. Root-admin only; the root
   org returns `{:error, :not_deletable}`.
   """
   @spec archive_org(actor(), Org.t()) ::
@@ -201,7 +201,7 @@ defmodule Platform.Tenancy.Lifecycle do
   @doc """
   Flag an org for permanent deletion. Stamps `deletion_scheduled_at`
   (and `archived_at`, when not already archived) on the org and runs the
-  same cascade-hide as `archive_org/2`. Fabrikam-admin only; root returns
+  same cascade-hide as `archive_org/2`. Root-admin only; root returns
   `{:error, :not_deletable}`.
   """
   @spec schedule_org_deletion(actor(), Org.t()) ::
@@ -242,7 +242,7 @@ defmodule Platform.Tenancy.Lifecycle do
   container was purged. Here every child is enumerated (see `purge_preview/1`)
   and the admin's include/keep decision is honored exactly.
 
-  Fabrikam-admin only; root org returns `{:error, :not_deletable}`. Emits the same
+  Root-admin only; root org returns `{:error, :not_deletable}`. Emits the same
   `[:platform, :tenancy, :org_deletion_scheduled]` event as `/2`.
   """
   @spec schedule_org_deletion(actor(), Org.t(), [binary()]) ::
@@ -267,7 +267,7 @@ defmodule Platform.Tenancy.Lifecycle do
   @doc """
   Reverse an archive: clear the org's own flags and un-hide ONLY the
   children this org cascade-hid (`archived_cascade_org_id == org.id`).
-  Independently-archived children are left untouched. Fabrikam-admin only.
+  Independently-archived children are left untouched. Root-admin only.
   """
   @spec unarchive_org(actor(), Org.t()) ::
           {:ok, Org.t()} | {:error, org_error() | Ecto.Changeset.t()}
@@ -281,7 +281,7 @@ defmodule Platform.Tenancy.Lifecycle do
   Cancel a scheduled org deletion: identical restore to `unarchive_org/2`
   (clears the org's flags and un-hides only its cascade children).
   Returns `{:error, :not_scheduled}` when no deletion is pending.
-  Fabrikam-admin only.
+  Root-admin only.
   """
   @spec cancel_org_deletion(actor(), Org.t()) ::
           {:ok, Org.t()} | {:error, org_error() | Ecto.Changeset.t()}
@@ -481,7 +481,7 @@ defmodule Platform.Tenancy.Lifecycle do
 
   Passing `[]` is equivalent to the plain org restore: the whole subtree revives.
   The event mirrors the org's state — `:org_deletion_cancelled` for a scheduled
-  org, `:org_unarchived` otherwise. Fabrikam-admin only; root is `:not_deletable`.
+  org, `:org_unarchived` otherwise. Root-admin only; root is `:not_deletable`.
 
   Fixes the gap where restoring an org left a child it hid still counting down
   to a permanent purge with no way to say "revive everything except this one".
@@ -816,7 +816,7 @@ defmodule Platform.Tenancy.Lifecycle do
   their org rather than hiding them. That is what makes selective restore
   possible.
 
-  No actor argument: the recovery route is Fabrikam-admin-gated at the LiveView
+  No actor argument: the recovery route is root-admin-gated at the LiveView
   (`PlatformWeb.LiveAuth.ensure_admin`), and every restore re-authorizes in
   the stage-3 mutation. This read is the admin's full recoverable inventory.
   """
@@ -890,7 +890,7 @@ defmodule Platform.Tenancy.Lifecycle do
 
   defp with_org_authz(actor, %Org{} = org, fun) do
     cond do
-      not Tenancy.fabrikam_admin?(actor) -> {:error, :unauthorized}
+      not Tenancy.root_admin?(actor) -> {:error, :unauthorized}
       Tenancy.tier(org) == :root -> {:error, :not_deletable}
       true -> fun.()
     end
@@ -899,7 +899,7 @@ defmodule Platform.Tenancy.Lifecycle do
   # ── Project lifecycle (single-row; no children to cascade) ─────────────
 
   @doc """
-  Soft-archive a single project (`archived_at`). Fabrikam-admin only.
+  Soft-archive a single project (`archived_at`). Root-admin only.
   Projects have no cascade of their own — chat_spaces are org-scoped, not
   project-scoped.
   """
@@ -919,7 +919,7 @@ defmodule Platform.Tenancy.Lifecycle do
     end)
   end
 
-  @doc "Reverse a project archive — clears both lifecycle flags. Fabrikam-admin only."
+  @doc "Reverse a project archive — clears both lifecycle flags. Root-admin only."
   @spec unarchive_project(actor(), Project.t()) ::
           {:ok, Project.t()} | {:error, project_error() | Ecto.Changeset.t()}
   def unarchive_project(actor, %Project{} = project) do
@@ -936,7 +936,7 @@ defmodule Platform.Tenancy.Lifecycle do
 
   @doc """
   Flag a project for permanent deletion — sets `deletion_scheduled_at`
-  (and `archived_at` when not already archived). Fabrikam-admin only.
+  (and `archived_at` when not already archived). Root-admin only.
   """
   @spec schedule_project_deletion(actor(), Project.t()) ::
           {:ok, Project.t()} | {:error, project_error() | Ecto.Changeset.t()}
@@ -963,7 +963,7 @@ defmodule Platform.Tenancy.Lifecycle do
 
   @doc """
   Cancel a scheduled project deletion — clears both flags. Returns
-  `{:error, :not_scheduled}` when no deletion is pending. Fabrikam-admin only.
+  `{:error, :not_scheduled}` when no deletion is pending. Root-admin only.
   """
   @spec cancel_project_deletion(actor(), Project.t()) ::
           {:ok, Project.t()} | {:error, project_error() | Ecto.Changeset.t()}
@@ -998,7 +998,7 @@ defmodule Platform.Tenancy.Lifecycle do
   end
 
   defp with_project_authz(actor, fun) do
-    if Tenancy.fabrikam_admin?(actor), do: fun.(), else: {:error, :unauthorized}
+    if Tenancy.root_admin?(actor), do: fun.(), else: {:error, :unauthorized}
   end
 
   # ── Selective restore (Recovery hub — task 019f7600 stage 3) ───────────
@@ -1013,7 +1013,7 @@ defmodule Platform.Tenancy.Lifecycle do
   `archived_cascade_org_id` provenance marker, then clears the org's own flags
   so the restored project has a live parent. Sibling rows are never touched.
 
-  Fabrikam-admin only: a selective restore resurrects the child's entire org, so
+  Root-admin only: a selective restore resurrects the child's entire org, so
   creator-level access must not suffice (projects carry no creator column in
   any case). Emits `[:platform, :tasks, :project_unarchived]` for the project
   and, only when the org was actually hidden, `[:platform, :tenancy,
@@ -1026,7 +1026,7 @@ defmodule Platform.Tenancy.Lifecycle do
   @spec restore_project_with_ancestors(actor(), Project.t()) ::
           {:ok, Project.t()} | {:error, restore_error() | Ecto.Changeset.t()}
   def restore_project_with_ancestors(actor, %Project{} = project) do
-    with_fabrikam_admin_authz(actor, fn ->
+    with_root_admin_authz(actor, fn ->
       restore_child_with_ancestors(
         actor,
         Project,
@@ -1047,7 +1047,7 @@ defmodule Platform.Tenancy.Lifecycle do
   restored channel reappears live — the freshness hook a project restore
   doesn't need (projects have no sidebar row).
 
-  Fabrikam-admin only — deliberately STRICTER than `Chat.unarchive_space/2`, which
+  Root-admin only — deliberately STRICTER than `Chat.unarchive_space/2`, which
   also admits the space creator: resurrecting the whole org is a privileged act,
   so this mirrors the destructive `schedule_space_deletion/2` precedent that
   drops the creator. Emits `[:platform, :chat, :space_unarchived]` and, only
@@ -1059,7 +1059,7 @@ defmodule Platform.Tenancy.Lifecycle do
   @spec restore_space_with_ancestors(actor(), Space.t()) ::
           {:ok, Space.t()} | {:error, restore_error() | Ecto.Changeset.t()}
   def restore_space_with_ancestors(actor, %Space{} = space) do
-    with_fabrikam_admin_authz(actor, fn ->
+    with_root_admin_authz(actor, fn ->
       with {:ok, restored} <-
              restore_child_with_ancestors(
                actor,
@@ -1165,13 +1165,13 @@ defmodule Platform.Tenancy.Lifecycle do
 
   defp broadcast_space_restored(_actor), do: :ok
 
-  # Fabrikam-admin-only gate for selective restore, shared by both entity types.
+  # Root-admin-only gate for selective restore, shared by both entity types.
   # Deliberately has NO creator carve-out (unlike `Chat.unarchive_space/2`):
   # restoring one cascade child reactivates its entire org, so creator-level
   # access must not suffice — the same precedent as the destructive
   # `schedule_space_deletion/2`. A nil / non-admin actor gets :unauthorized.
-  defp with_fabrikam_admin_authz(actor, fun) do
-    if Tenancy.fabrikam_admin?(actor), do: fun.(), else: {:error, :unauthorized}
+  defp with_root_admin_authz(actor, fun) do
+    if Tenancy.root_admin?(actor), do: fun.(), else: {:error, :unauthorized}
   end
 
   # ── Create-time guard ─────────────────────────────────────────────────

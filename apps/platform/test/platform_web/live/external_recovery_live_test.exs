@@ -49,22 +49,22 @@ defmodule PlatformWeb.ExternalRecoveryLiveTest do
   defp create_org!(overrides \\ %{}) do
     n = System.unique_integer([:positive])
     # Only ONE root org may exist (orgs_single_root), so target orgs are
-    # children of the Fabrikam root.
-    fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+    # children of the Acme root.
+    acme = Tenancy.get_org_by_slug!("acme")
 
     attrs =
       Map.merge(
-        %{name: "Target Org #{n}", slug: "target-org-#{n}", parent_org_id: fabrikam.id},
+        %{name: "Target Org #{n}", slug: "target-org-#{n}", parent_org_id: acme.id},
         overrides
       )
 
     %Org{} |> Org.changeset(attrs) |> Repo.insert!()
   end
 
-  defp create_fabrikam_admin! do
+  defp create_acme_admin! do
     user = create_user!()
-    fabrikam = Tenancy.get_org_by_slug!("fabrikam")
-    create_membership!(user, fabrikam, "admin")
+    acme = Tenancy.get_org_by_slug!("acme")
+    create_membership!(user, acme, "admin")
     user
   end
 
@@ -115,7 +115,7 @@ defmodule PlatformWeb.ExternalRecoveryLiveTest do
 
   describe "queue" do
     test "lists a holding login and excludes an already-provisioned external user", %{conn: conn} do
-      admin = create_fabrikam_admin!()
+      admin = create_acme_admin!()
 
       holding = create_user!(%{name: "Still Holding"})
       record_holding!(holding)
@@ -136,7 +136,7 @@ defmodule PlatformWeb.ExternalRecoveryLiveTest do
 
   describe "grant" do
     test "clicking Grant materializes the grant and drops the row on reload", %{conn: conn} do
-      admin = create_fabrikam_admin!()
+      admin = create_acme_admin!()
       target_org = create_org!()
 
       holding = create_user!(%{name: "Grant Me"})
@@ -161,7 +161,7 @@ defmodule PlatformWeb.ExternalRecoveryLiveTest do
     test "granting 2+ channels in one submit creates a participant row per channel", %{
       conn: conn
     } do
-      admin = create_fabrikam_admin!()
+      admin = create_acme_admin!()
       target_org = create_org!()
       chan_a = create_channel!("Orion")
       chan_b = create_channel!("Bug Reports")
@@ -192,7 +192,7 @@ defmodule PlatformWeb.ExternalRecoveryLiveTest do
     test "granting with zero channels still provisions the org and adds no participants", %{
       conn: conn
     } do
-      admin = create_fabrikam_admin!()
+      admin = create_acme_admin!()
       target_org = create_org!()
 
       holding = create_user!(%{name: "Org Only"})
@@ -215,7 +215,7 @@ defmodule PlatformWeb.ExternalRecoveryLiveTest do
 
   describe "add channels to an already-provisioned user" do
     setup %{conn: conn} do
-      admin = create_fabrikam_admin!()
+      admin = create_acme_admin!()
       target_org = create_org!()
       chan_a = create_channel!("Orion")
       chan_b = create_channel!("Bug Reports")
@@ -300,7 +300,7 @@ defmodule PlatformWeb.ExternalRecoveryLiveTest do
     test "an external_admission_holding broadcast appends a row and bumps the badge", %{
       conn: conn
     } do
-      admin = create_fabrikam_admin!()
+      admin = create_acme_admin!()
       newcomer = create_user!(%{name: "Just Arrived"})
 
       {:ok, view, _html} = conn |> authenticated_conn(admin) |> live("/admin/external-logins")
@@ -333,7 +333,7 @@ defmodule PlatformWeb.ExternalRecoveryLiveTest do
     test "a live-appended row carries the same keys AND suggestion as a reloaded one", %{
       conn: conn
     } do
-      admin = create_fabrikam_admin!()
+      admin = create_acme_admin!()
       org = create_org!()
       reloaded_user = create_user!(%{name: "Reloaded"})
       appended_user = create_user!(%{name: "Appended"})
@@ -405,7 +405,7 @@ defmodule PlatformWeb.ExternalRecoveryLiveTest do
     end
 
     test "a live-appended row whose suggested org was archived shows no suggestion", %{conn: conn} do
-      admin = create_fabrikam_admin!()
+      admin = create_acme_admin!()
       org = create_org!()
       newcomer = create_user!(%{name: "Archived Suggestion"})
 
@@ -485,7 +485,7 @@ defmodule PlatformWeb.ExternalRecoveryLiveTest do
     end
 
     test "a one-match row pre-selects exactly that org and labels it a suggestion", %{conn: conn} do
-      admin = create_fabrikam_admin!()
+      admin = create_acme_admin!()
       org = create_org!()
       _other = create_org!()
 
@@ -504,7 +504,7 @@ defmodule PlatformWeb.ExternalRecoveryLiveTest do
     end
 
     test "a zero-match row selects no org — the placeholder holds the slot", %{conn: conn} do
-      admin = create_fabrikam_admin!()
+      admin = create_acme_admin!()
       _org_a = create_org!()
       _org_b = create_org!()
 
@@ -526,7 +526,7 @@ defmodule PlatformWeb.ExternalRecoveryLiveTest do
     end
 
     test "a two-match row selects no org and says the claim was ambiguous", %{conn: conn} do
-      admin = create_fabrikam_admin!()
+      admin = create_acme_admin!()
       _org_a = create_org!()
       _org_b = create_org!()
 
@@ -543,7 +543,7 @@ defmodule PlatformWeb.ExternalRecoveryLiveTest do
     end
 
     test "submitting a DIFFERENT org than the suggestion grants the submitted one", %{conn: conn} do
-      admin = create_fabrikam_admin!()
+      admin = create_acme_admin!()
       suggested = create_org!()
       chosen = create_org!()
 
@@ -564,28 +564,28 @@ defmodule PlatformWeb.ExternalRecoveryLiveTest do
     end
 
     test "an inferred grant into the INTERNAL root org is still external: true", %{conn: conn} do
-      admin = create_fabrikam_admin!()
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+      admin = create_acme_admin!()
+      acme = Tenancy.get_org_by_slug!("acme")
 
       user = create_user!(%{name: "Root Org Target"})
-      record_holding_with_claim!(user, fabrikam.id, "one")
+      record_holding_with_claim!(user, acme.id, "one")
 
       {:ok, view, _html} = conn |> authenticated_conn(admin) |> live("/admin/external-logins")
-      assert selected_org_ids(row_html(view, user.id)) == [fabrikam.id]
+      assert selected_org_ids(row_html(view, user.id)) == [acme.id]
 
       view
       |> element(~s([data-role=queue-row][data-user-id="#{user.id}"] form[data-role=grant-form]))
-      |> render_submit(%{"user_id" => user.id, "target_org_id" => fabrikam.id})
+      |> render_submit(%{"user_id" => user.id, "target_org_id" => acme.id})
 
       # The whole task exists to protect this: a mapped internal-looking group
       # must not mint an `external: false` membership.
       assert [%OrgMembership{org_id: org_id, external: true}] = memberships(user.id)
-      assert org_id == fabrikam.id
+      assert org_id == acme.id
       assert Tenancy.external_user?(reload_user(user))
     end
 
     test "submitting an empty target org creates no membership", %{conn: conn} do
-      admin = create_fabrikam_admin!()
+      admin = create_acme_admin!()
       _org = create_org!()
 
       user = create_user!(%{name: "Empty Submit"})
@@ -634,7 +634,7 @@ defmodule PlatformWeb.ExternalRecoveryLiveTest do
     end
 
     test "adding a mapping renders a new row and persists it", %{conn: conn} do
-      admin = create_fabrikam_admin!()
+      admin = create_acme_admin!()
       org = create_org!(%{name: "Northwind Supply", slug: "northwind-supply"})
 
       {:ok, view, html} = conn |> authenticated_conn(admin) |> live("/admin/external-logins")
@@ -657,7 +657,7 @@ defmodule PlatformWeb.ExternalRecoveryLiveTest do
     end
 
     test "a blank claim value is rejected and nothing is inserted", %{conn: conn} do
-      admin = create_fabrikam_admin!()
+      admin = create_acme_admin!()
       org = create_org!()
 
       {:ok, view, _html} = conn |> authenticated_conn(admin) |> live("/admin/external-logins")
@@ -673,7 +673,7 @@ defmodule PlatformWeb.ExternalRecoveryLiveTest do
 
     test "a duplicate claim value is rejected, names the owning org, and creates no second row",
          %{conn: conn} do
-      admin = create_fabrikam_admin!()
+      admin = create_acme_admin!()
       owner = create_org!(%{name: "Northwind Supply", slug: "northwind-supply"})
       other = create_org!(%{name: "Contoso Freight", slug: "contoso-freight"})
       map_group!("clients-northwind", owner)
@@ -696,7 +696,7 @@ defmodule PlatformWeb.ExternalRecoveryLiveTest do
 
     test "deleting a mapping removes it AND a later holding login no longer pre-selects",
          %{conn: conn} do
-      admin = create_fabrikam_admin!()
+      admin = create_acme_admin!()
       org = create_org!(%{name: "Northwind Supply", slug: "northwind-supply"})
       claim = map_group!("clients-northwind", org)
 
@@ -727,7 +727,7 @@ defmodule PlatformWeb.ExternalRecoveryLiveTest do
 
     test "an unmapped holding row shows the values it carried, and says so when it carried none",
          %{conn: conn} do
-      admin = create_fabrikam_admin!()
+      admin = create_acme_admin!()
 
       carried = create_user!(%{name: "Carried Groups"})
       record_holding_with_groups!(carried, ["clients-northwind", "everyone"])
@@ -760,8 +760,8 @@ defmodule PlatformWeb.ExternalRecoveryLiveTest do
 
     test "a non-admin is halted on mount, so no mapping handler is reachable", %{conn: conn} do
       member = create_user!()
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
-      create_membership!(member, fabrikam, "member")
+      acme = Tenancy.get_org_by_slug!("acme")
+      create_membership!(member, acme, "member")
       org = create_org!()
       before = claim_count()
 
@@ -777,7 +777,7 @@ defmodule PlatformWeb.ExternalRecoveryLiveTest do
       #    handle_event can arrive through) rather than only asserting the
       #    static redirect above.
       socket = %Phoenix.LiveView.Socket{
-        assigns: %{fabrikam_admin?: false, flash: %{}, __changed__: %{}},
+        assigns: %{root_admin?: false, flash: %{}, __changed__: %{}},
         private: %{
           connect_info: %{},
           lifecycle: %Phoenix.LiveView.Lifecycle{},
@@ -794,7 +794,7 @@ defmodule PlatformWeb.ExternalRecoveryLiveTest do
       refute Map.has_key?(halted.assigns, :orgs)
 
       # And an admin CAN reach it — the gate is what differs, not the route.
-      admin_conn = authenticated_conn(build_conn(), create_fabrikam_admin!())
+      admin_conn = authenticated_conn(build_conn(), create_acme_admin!())
       {:ok, view, _html} = live(admin_conn, "/admin/external-logins")
       submit_mapping(view, %{"claim_value" => "clients-contoso", "org_id" => org.id})
 
@@ -838,8 +838,8 @@ defmodule PlatformWeb.ExternalRecoveryLiveTest do
   describe "admin gate" do
     test "a non-admin member is redirected away", %{conn: conn} do
       user = create_user!()
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
-      create_membership!(user, fabrikam, "member")
+      acme = Tenancy.get_org_by_slug!("acme")
+      create_membership!(user, acme, "member")
 
       assert {:error, {:live_redirect, %{to: "/"}}} =
                conn |> authenticated_conn(user) |> live("/admin/external-logins")

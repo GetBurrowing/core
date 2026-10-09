@@ -50,13 +50,13 @@ defmodule Platform.Meetings.ArchiveArtifactsTest do
     |> Repo.insert!()
   end
 
-  # A plain member, not "admin" — `fabrikam_admin?/1` reads admin as "sees every
+  # A plain member, not "admin" — `root_admin?/1` reads admin as "sees every
   # org", which would make the viewer argument untested here.
-  defp viewer_in_fabrikam! do
+  defp viewer_in_acme! do
     user = create_user!()
 
     %OrgMembership{}
-    |> OrgMembership.changeset(%{user_id: user.id, org_id: fabrikam_org_id(), role: "member"})
+    |> OrgMembership.changeset(%{user_id: user.id, org_id: acme_org_id(), role: "member"})
     |> Repo.insert!()
 
     user
@@ -66,7 +66,7 @@ defmodule Platform.Meetings.ArchiveArtifactsTest do
     n = System.unique_integer([:positive])
 
     {:ok, project} =
-      Tasks.create_project(%{name: "Artifacts Project #{n}", org_id: fabrikam_org_id()})
+      Tasks.create_project(%{name: "Artifacts Project #{n}", org_id: acme_org_id()})
 
     {:ok, meeting} = Meetings.create_meeting(%{project_id: project.id, name: name})
 
@@ -171,7 +171,7 @@ defmodule Platform.Meetings.ArchiveArtifactsTest do
 
   describe "artifacts_for/2 canvas revision spans" do
     test "each meeting's chip spans only the revisions written inside its own window" do
-      viewer = viewer_in_fabrikam!()
+      viewer = viewer_in_acme!()
 
       # Meeting A ran 2026-06-11 09:00–09:30; meeting B ran 2026-07-29
       # 14:00–14:52. Revision 7 lands on 2026-07-01, between the two.
@@ -219,7 +219,7 @@ defmodule Platform.Meetings.ArchiveArtifactsTest do
     end
 
     test "a canvas with exactly one in-window revision renders no dash" do
-      viewer = viewer_in_fabrikam!()
+      viewer = viewer_in_acme!()
 
       meeting = create_meeting!("Ops review")
       canvas = canvas!(meeting, "Ops runbook")
@@ -236,7 +236,7 @@ defmodule Platform.Meetings.ArchiveArtifactsTest do
     end
 
     test "a canvas whose only revisions fall outside the window contributes no chip, while one written during it does" do
-      viewer = viewer_in_fabrikam!()
+      viewer = viewer_in_acme!()
 
       meeting = create_meeting!("Retention review")
 
@@ -263,7 +263,7 @@ defmodule Platform.Meetings.ArchiveArtifactsTest do
 
   describe "artifacts_for/2 soft-deleted canvases" do
     test "a deleted canvas contributes no chip and a live one in the same space does" do
-      viewer = viewer_in_fabrikam!()
+      viewer = viewer_in_acme!()
 
       meeting = create_meeting!("Experiment editor v2")
 
@@ -290,7 +290,7 @@ defmodule Platform.Meetings.ArchiveArtifactsTest do
 
   describe "artifacts_for/2 summary and transcript chips" do
     test "the two chips resolve independently from the same transcript row, in both directions" do
-      viewer = viewer_in_fabrikam!()
+      viewer = viewer_in_acme!()
 
       summarised = create_meeting!("Budget sync")
       transcript!(summarised, %{summary: "We settled the bucket policy.", segments: []})
@@ -324,7 +324,7 @@ defmodule Platform.Meetings.ArchiveArtifactsTest do
 
   describe "artifacts_for/2 action items" do
     test "the chip is a count, with a shortened mobile label" do
-      viewer = viewer_in_fabrikam!()
+      viewer = viewer_in_acme!()
 
       meeting = create_meeting!("Experiment editor v2")
       canvas = canvas!(meeting, "Action items")
@@ -348,7 +348,7 @@ defmodule Platform.Meetings.ArchiveArtifactsTest do
 
   describe "artifacts_for/2 row context" do
     test "carries the duration, host, attendee count and project path the subtitle renders" do
-      viewer = viewer_in_fabrikam!()
+      viewer = viewer_in_acme!()
 
       meeting = create_meeting!("Experiment editor v2")
       host = participant!(meeting, "Rowan")
@@ -370,7 +370,7 @@ defmodule Platform.Meetings.ArchiveArtifactsTest do
     end
 
     test "a cancelled meeting has no duration and no artifacts" do
-      viewer = viewer_in_fabrikam!()
+      viewer = viewer_in_acme!()
 
       meeting = create_meeting!("Budget sync")
       canvas = canvas!(meeting, "Bucket policy canvas")
@@ -392,7 +392,7 @@ defmodule Platform.Meetings.ArchiveArtifactsTest do
 
   describe "artifacts_for/2 scoping" do
     test "a meeting in an org the viewer has no membership in is absent from the result" do
-      viewer = viewer_in_fabrikam!()
+      viewer = viewer_in_acme!()
 
       {:ok, project} =
         Tasks.create_project(%{name: "Soylent planning", org_id: tenant_org_id("soylent")})
@@ -403,7 +403,7 @@ defmodule Platform.Meetings.ArchiveArtifactsTest do
       version!(canvas, 1, at("2026-07-29T14:20:00Z"))
       theirs = run_meeting!(theirs, at("2026-07-29T14:00:00Z"), at("2026-07-29T14:52:00Z"))
 
-      mine = create_meeting!("Fabrikam sync")
+      mine = create_meeting!("Acme sync")
       mine_canvas = canvas!(mine, "My canvas")
       version!(mine_canvas, 1, at("2026-07-29T14:20:00Z"))
       mine = run_meeting!(mine, at("2026-07-29T14:00:00Z"), at("2026-07-29T14:52:00Z"))
@@ -419,7 +419,7 @@ defmodule Platform.Meetings.ArchiveArtifactsTest do
 
   describe "artifacts_for/2 batching" do
     test "issues the same number of queries for a page of six meetings as for one" do
-      viewer = viewer_in_fabrikam!()
+      viewer = viewer_in_acme!()
 
       [one | _] = many = Enum.map(1..6, &archived_meeting_with_artifacts!("Batch #{&1}"))
 
@@ -434,7 +434,7 @@ defmodule Platform.Meetings.ArchiveArtifactsTest do
       # Pinned exactly, not `> 0`: the telemetry handler silently measuring
       # nothing would make the equality below hold at 0 == 0, and the whole
       # test would pass on a resolver that never touched the database. Six is
-      # `fabrikam_admin?/1`'s membership lookup, `external_user?/1`'s membership
+      # `root_admin?/1`'s membership lookup, `external_user?/1`'s membership
       # lookup, one query per chip family, and the row context — see the
       # moduledoc's "Batching".
       #

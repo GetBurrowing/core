@@ -27,7 +27,7 @@ defmodule PlatformWeb.ChatLiveRuntimeOrgScopePillTest do
   @drawer_label ".channel-hidden-drawer-group-label"
   @header_pills [".chat-header-scope-pill", ".chat-header-scope-pill-mobile"]
 
-  # A Fabrikam member: `ScopeColorStyles` emits a rule for every org the VIEWER
+  # An Acme member: `ScopeColorStyles` emits a rule for every org the VIEWER
   # can see, and a user with no membership sees none, which would leave the
   # colour-rule assertion below with nothing to find for a reason unrelated
   # to this task.
@@ -44,7 +44,7 @@ defmodule PlatformWeb.ChatLiveRuntimeOrgScopePillTest do
     %OrgMembership{}
     |> OrgMembership.changeset(%{
       user_id: user.id,
-      org_id: Tenancy.get_org_by_slug!("fabrikam").id,
+      org_id: Tenancy.get_org_by_slug!("acme").id,
       role: "member"
     })
     |> Repo.insert!()
@@ -57,7 +57,7 @@ defmodule PlatformWeb.ChatLiveRuntimeOrgScopePillTest do
       Org.changeset(%Org{}, %{
         name: "Newclient",
         slug: "new_client",
-        parent_org_id: Tenancy.get_org_by_slug!("fabrikam").id,
+        parent_org_id: Tenancy.get_org_by_slug!("acme").id,
         color_hue: 200
       })
     )

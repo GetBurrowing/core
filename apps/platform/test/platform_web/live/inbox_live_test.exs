@@ -19,7 +19,7 @@ defmodule PlatformWeb.InboxLiveTest do
 
   import Ecto.Query, only: [from: 2]
   import Phoenix.LiveViewTest
-  import Platform.TenancyFixtures, only: [fabrikam_org_id: 0]
+  import Platform.TenancyFixtures, only: [acme_org_id: 0]
 
   alias Platform.Accounts.User
   alias Platform.Chat
@@ -450,7 +450,7 @@ defmodule PlatformWeb.InboxLiveTest do
           kind: "channel",
           name: "Product Launch",
           slug: "product-launch-#{System.unique_integer([:positive])}",
-          org_id: fabrikam_org_id()
+          org_id: acme_org_id()
         })
 
       url = "/chat/#{Chat.space_path_segment(channel)}?message=#{Ecto.UUID.generate()}"

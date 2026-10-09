@@ -6,7 +6,7 @@ defmodule Platform.Responsibilities.GoalCadenceAcceptanceTest do
 
   The row is the real `agents.goal_heartbeat`, registered through its
   provider. The write is `Responsibilities.set_goal_heartbeat_cadence/3`
-  as a fabrikam admin. The Router is never told to reload directly: it hears
+  as an acme admin. The Router is never told to reload directly: it hears
   the broadcast the write emits, and `:sys.get_state/1` is the barrier.
   Time is simulated through the Router's `:now_fn` clock seam and
   `{:tick_at, t}` messages, minute by minute. No sleeps, no wall clock.
@@ -18,7 +18,7 @@ defmodule Platform.Responsibilities.GoalCadenceAcceptanceTest do
   use Platform.DataCase, async: false
 
   import Ecto.Query
-  import Platform.TenancyFixtures, only: [fabrikam_org_id: 0]
+  import Platform.TenancyFixtures, only: [acme_org_id: 0]
 
   alias Platform.Accounts.User
   alias Platform.Audit.Event
@@ -49,7 +49,7 @@ defmodule Platform.Responsibilities.GoalCadenceAcceptanceTest do
       |> Repo.insert!()
 
     %OrgMembership{}
-    |> OrgMembership.changeset(%{user_id: user.id, org_id: fabrikam_org_id(), role: role})
+    |> OrgMembership.changeset(%{user_id: user.id, org_id: acme_org_id(), role: role})
     |> Repo.insert!()
 
     user
@@ -57,13 +57,13 @@ defmodule Platform.Responsibilities.GoalCadenceAcceptanceTest do
 
   defp admin! do
     admin = user!("admin")
-    assert Tenancy.fabrikam_admin?(admin)
+    assert Tenancy.root_admin?(admin)
     admin
   end
 
   defp member! do
     member = user!("member")
-    refute Tenancy.fabrikam_admin?(member)
+    refute Tenancy.root_admin?(member)
     member
   end
 

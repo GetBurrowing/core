@@ -93,7 +93,7 @@ defmodule PlatformWeb.ChatLiveSpaceAdmissionTest do
     {init_test_session(conn, current_user_id: user.id), user}
   end
 
-  defp fabrikam_org, do: Tenancy.get_org_by_slug!("fabrikam")
+  defp acme_org, do: Tenancy.get_org_by_slug!("acme")
 
   defp add_user(space, user_or_id, name) do
     id = if is_binary(user_or_id), do: user_or_id, else: user_or_id.id
@@ -127,7 +127,7 @@ defmodule PlatformWeb.ChatLiveSpaceAdmissionTest do
         name: "Channel #{n}",
         slug: "admission-channel-#{n}",
         kind: "channel",
-        org_id: fabrikam_org().id
+        org_id: acme_org().id
       })
 
     ch

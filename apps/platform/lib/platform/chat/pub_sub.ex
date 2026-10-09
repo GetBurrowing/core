@@ -75,7 +75,7 @@ defmodule Platform.Chat.PubSub do
   Returns the shared topic for org-DEFAULT sidebar changes (Stage 6).
 
   Subscribers receive `:sidebar_defaults_changed` and recompute their
-  resolved sidebar sections. Used so a Fabrikam-admin curation write (rename /
+  resolved sidebar sections. Used so a root-admin curation write (rename /
   recolor / reorder / reassign of the org-default layer) propagates to ALL
   connected sessions, not just the acting admin's tab. Distinct from the
   per-user `sidebar_topic/1` (personal arrangement changes) because an admin
@@ -154,7 +154,7 @@ defmodule Platform.Chat.PubSub do
   Subscribe the calling process to the shared org-default sidebar topic.
 
   Used by ChatLive in `mount/3` so a `:sidebar_defaults_changed` broadcast
-  (fired by Stage 6 Fabrikam-admin curation writes) prompts a resolver recompute
+  (fired by Stage 6 root-admin curation writes) prompts a resolver recompute
   in every connected session — an admin default change is visible to all
   users, not just the acting admin.
   """
@@ -254,7 +254,7 @@ defmodule Platform.Chat.PubSub do
 
   @doc """
   Broadcast a `:sidebar_defaults_changed` invalidation to every connected
-  session (Stage 6 Fabrikam-admin curation write).
+  session (Stage 6 root-admin curation write).
 
   Fired by `broadcast_from/3` from the acting admin's pid: the admin handler
   recomputes its own `@sidebar_sections` synchronously, so it must not also

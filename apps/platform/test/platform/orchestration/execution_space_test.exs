@@ -57,7 +57,7 @@ defmodule Platform.Orchestration.ExecutionSpaceTest do
     # `unique_constraint(:slug, name: :chat_spaces_unique_org_slug)`, so the
     # insert never raises.
     test "two tasks sharing the UUIDv7 millisecond get distinct slugs in one org" do
-      org_id = fabrikam_org_id()
+      org_id = acme_org_id()
 
       {:ok, project} =
         Tasks.create_project(%{name: "Exec Slug Collision Project", org_id: org_id})
@@ -117,16 +117,16 @@ defmodule Platform.Orchestration.ExecutionSpaceTest do
     # inside an org and clicking a pinned rail row bounces the user
     # back to `/chat`.
     test "stamps org_id on new exec space from task → project.org_id" do
-      fabrikam_id = fabrikam_org_id()
+      acme_id = acme_org_id()
 
       {:ok, project} =
-        Tasks.create_project(%{name: "Exec Org Stamp Project", org_id: fabrikam_id})
+        Tasks.create_project(%{name: "Exec Org Stamp Project", org_id: acme_id})
 
       {:ok, task} =
         Tasks.create_task(%{project_id: project.id, title: "Exec org stamp"})
 
       assert {:ok, space} = ExecutionSpace.find_or_create(task.id)
-      assert space.org_id == fabrikam_id
+      assert space.org_id == acme_id
       assert space.metadata["task_id"] == task.id
     end
 
@@ -175,16 +175,16 @@ defmodule Platform.Orchestration.ExecutionSpaceTest do
     end
 
     test "idempotency preserved — second call returns same row without touching org_id" do
-      fabrikam_id = fabrikam_org_id()
+      acme_id = acme_org_id()
 
       {:ok, project} =
-        Tasks.create_project(%{name: "Exec Idempotency Project", org_id: fabrikam_id})
+        Tasks.create_project(%{name: "Exec Idempotency Project", org_id: acme_id})
 
       {:ok, task} =
         Tasks.create_task(%{project_id: project.id, title: "Idempotency"})
 
       assert {:ok, space1} = ExecutionSpace.find_or_create(task.id)
-      assert space1.org_id == fabrikam_id
+      assert space1.org_id == acme_id
 
       # Force the row to a different org_id to prove the second call
       # short-circuits on `find_by_task_id` and does NOT rewrite it.

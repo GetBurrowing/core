@@ -6,7 +6,7 @@ defmodule Platform.Responsibilities.GoalCadenceTest do
   use Platform.DataCase, async: false
 
   import Ecto.Query
-  import Platform.TenancyFixtures, only: [fabrikam_org_id: 0]
+  import Platform.TenancyFixtures, only: [acme_org_id: 0]
 
   alias Platform.Accounts.User
   alias Platform.Audit.Event
@@ -49,7 +49,7 @@ defmodule Platform.Responsibilities.GoalCadenceTest do
     user =
       %User{}
       |> User.changeset(%{
-        # Not an @example.com address: that domain derives admin on its own,
+        # Not an @acme.test address: that domain derives admin on its own,
         # which would make a refusal pass for the wrong reason.
         email: "cadence-#{n}@example.com",
         name: "Cadence #{n}",
@@ -58,7 +58,7 @@ defmodule Platform.Responsibilities.GoalCadenceTest do
       |> Repo.insert!()
 
     %OrgMembership{}
-    |> OrgMembership.changeset(%{user_id: user.id, org_id: fabrikam_org_id(), role: role})
+    |> OrgMembership.changeset(%{user_id: user.id, org_id: acme_org_id(), role: role})
     |> Repo.insert!()
 
     user
@@ -66,13 +66,13 @@ defmodule Platform.Responsibilities.GoalCadenceTest do
 
   defp admin! do
     admin = user!("admin")
-    assert Tenancy.fabrikam_admin?(admin)
+    assert Tenancy.root_admin?(admin)
     admin
   end
 
   defp member! do
     member = user!("member")
-    refute Tenancy.fabrikam_admin?(member)
+    refute Tenancy.root_admin?(member)
     member
   end
 

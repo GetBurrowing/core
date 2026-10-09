@@ -1,7 +1,7 @@
 defmodule PlatformWeb.RecoveryLive do
   @moduledoc """
   Recovery hub for archived / deletion-scheduled containers — orgs, projects,
-  AND channels (task 019f7600 stage 4). The one place a Fabrikam admin brings a
+  AND channels (task 019f7600 stage 4). The one place a root-org admin brings a
   retired container back.
 
   ## What changed from the stage-6 (019f4eaa) surface
@@ -30,7 +30,7 @@ defmodule PlatformWeb.RecoveryLive do
       reactivated too") with a View quick-link to the restored item and an Undo
       that re-archives just that item — reversible inside the retention window.
 
-  Fabrikam-only gate is inherited from the `:admin` live_session's
+  root-admin-only gate is inherited from the `:admin` live_session's
   `PlatformWeb.LiveAuth.ensure_admin` hook; every restore re-authorizes
   underneath in `Platform.Tenancy.Lifecycle`.
   """
@@ -505,9 +505,10 @@ defmodule PlatformWeb.RecoveryLive do
           <span
             :if={org_scope_slug(@row)}
             class={[
-              "size-2 shrink-0 rounded-full bg-current",
+              "size-2 shrink-0 rounded-full scope-dot-current",
               Tenancy.scope_color(org_scope_slug(@row))
             ]}
+            data-scope={org_scope_slug(@row)}
             aria-hidden="true"
           />
           <span class="truncate">{org_name(@row)}</span>

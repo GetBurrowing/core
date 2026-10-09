@@ -91,11 +91,11 @@ defmodule PlatformWeb.FilesPresignedRoundTripTest do
   defp u, do: System.unique_integer([:positive])
 
   defp ensure_root_org do
-    case Repo.get_by(Tenancy.Org, slug: "fabrikam") do
+    case Repo.get_by(Tenancy.Org, slug: "acme") do
       nil ->
         {:ok, org} =
           %Tenancy.Org{}
-          |> Tenancy.Org.changeset(%{slug: "fabrikam", name: "Fabrikam", parent_org_id: nil})
+          |> Tenancy.Org.changeset(%{slug: "acme", name: "Acme", parent_org_id: nil})
           |> Repo.insert()
 
         org
@@ -126,14 +126,14 @@ defmodule PlatformWeb.FilesPresignedRoundTripTest do
   setup :with_tmp_storage_root
 
   setup do
-    fabrikam = ensure_root_org()
+    acme = ensure_root_org()
 
     {:ok, org} =
       %Tenancy.Org{}
       |> Tenancy.Org.changeset(%{
         slug: "rt-files-#{u()}",
         name: "Round Trip",
-        parent_org_id: fabrikam.id
+        parent_org_id: acme.id
       })
       |> Repo.insert()
 

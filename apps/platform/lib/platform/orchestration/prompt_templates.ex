@@ -23,6 +23,19 @@ defmodule Platform.Orchestration.PromptTemplates do
   The old `heartbeat` slug is retained as DEPRECATED for one release and
   removed in the stage 6 ADR cleanup pass.
 
+  ## `dispatch.scribe_completion` live rows carry install-specific text
+
+  Task 01a116de made the code default for `dispatch.scribe_completion`
+  install-neutral: it asks the scribe to call out every proper-noun or
+  hostname it corrected, without naming any one install's org or host.
+  Existing rows were deliberately NOT updated — `seed_defaults/0` is
+  insert-only — so an install seeded before that change keeps its own
+  mishearing corrections (its org name and hostname) in the DB row, which is
+  install data. A future force-update migration of
+  `dispatch.scribe_completion` that writes `default_content_for_slug/1` over
+  the whole row would DROP that install-specific text from live rows; carry
+  it over surgically, or accept the loss explicitly.
+
   ## Experimenting on `federation.preamble` is confounded by construction
 
   Read this BEFORE setting an experiment up on the `federation.preamble` slug.
@@ -457,8 +470,8 @@ defmodule Platform.Orchestration.PromptTemplates do
   # row on 2026-09-10 (prompt_template_update, updated_by `dalton`) and never
   # carried into this descriptor. Task 01a0d41e stage 2 found it while reading
   # the live rows before a force-update, which would otherwise have deleted it
-  # on both installs. Folded in byte-for-byte from the live row (fabrikam and milv
-  # identical) and shared with `HeartbeatScheduler.hardcoded_dispatch_planning/4`
+  # on both installs. Folded in byte-for-byte from the live row (identical on
+  # both production installs) and shared with `HeartbeatScheduler.hardcoded_dispatch_planning/4`
   # like the notices above. Edit it HERE; a row-only edit is lost to the next
   # force-update migration for this slug.
   @planning_ci_evidence_section """
@@ -1582,9 +1595,7 @@ defmodule Platform.Orchestration.PromptTemplates do
           `user:saru` on the invite (as on the SXI 2026-07-13 meeting) — flag it inline: "attributed
           to Harper/Saru — transcriber cannot disambiguate".
         - Transcript stats: rough turn count, total words (from the transcript summary if available).
-        - Mishearing corrections applied — always call out "Cozoa" → "Fabrikam" and "sweet.cozoa.ai.com"
-          → "suite.example.com" if you saw either token in the raw transcript. Note any other
-          org-specific corrections applied.
+        - Mishearing corrections applied — call out every proper-noun or hostname you corrected from the raw transcript.
 
         ### Card 2 — Decisions
 
@@ -1644,8 +1655,8 @@ defmodule Platform.Orchestration.PromptTemplates do
         - `source_transcript_id`: `{{transcript_id}}`
         - `room_id`: `{{room_id}}`
         - `meeting_length`: <wall-clock, minutes>
-        - `corrections_applied`: bullet list of every mishearing you fixed in Card 1 (Cozoa→Fabrikam
-          etc.), one bullet each. Empty list explicitly rendered as "- none" if you applied none.
+        - `corrections_applied`: bullet list of every mishearing you fixed in Card 1, one bullet
+          each. Empty list explicitly rendered as "- none" if you applied none.
         - `scribe_run_at`: current UTC timestamp.
 
         ## After canvas_create — dispatch the triage agent

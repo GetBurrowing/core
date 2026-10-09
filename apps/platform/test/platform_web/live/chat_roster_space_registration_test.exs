@@ -282,7 +282,7 @@ defmodule PlatformWeb.ChatRosterSpaceRegistrationTest do
         Org.changeset(%Org{}, %{
           name: "Roster Fixture Tenant #{unique()}",
           slug: "roster_fixture_tenant_#{unique()}",
-          parent_org_id: Tenancy.get_org_by_slug!("fabrikam").id
+          parent_org_id: Tenancy.get_org_by_slug!("acme").id
         })
       )
 

@@ -115,18 +115,18 @@ defmodule Platform.Meetings.TriageTest do
     test "skips a title fuzzy-matching an existing open task and returns {:skipped, id}",
          %{project: project, canvas: canvas} do
       {:ok, existing} =
-        Tasks.create_task(%{project_id: project.id, title: "Provision Neven Fabrikam account"})
+        Tasks.create_task(%{project_id: project.id, title: "Provision Neven Acme account"})
 
       pre_count = Repo.aggregate(Task, :count, :id)
 
       assert {:ok, %{filed: [], skipped: [%{existing_task_id: id, title: title}], errors: []}} =
                Triage.file_tasks_from_canvas(canvas,
                  project_id: project.id,
-                 action_items: [%{title: "Provision Neven Fabrikam account"}]
+                 action_items: [%{title: "Provision Neven Acme account"}]
                )
 
       assert id == existing.id
-      assert title == "Provision Neven Fabrikam account"
+      assert title == "Provision Neven Acme account"
 
       # Skip really means "no insert" — the total row count is unchanged.
       assert Repo.aggregate(Task, :count, :id) == pre_count
@@ -137,14 +137,14 @@ defmodule Platform.Meetings.TriageTest do
       canvas: canvas
     } do
       {:ok, existing} =
-        Tasks.create_task(%{project_id: project.id, title: "Provision Neven Fabrikam account"})
+        Tasks.create_task(%{project_id: project.id, title: "Provision Neven Acme account"})
 
       :ok = ChatPubSub.subscribe_canvas(canvas.id)
 
       {:ok, _result} =
         Triage.file_tasks_from_canvas(canvas,
           project_id: project.id,
-          action_items: [%{title: "Provision Neven Fabrikam account"}]
+          action_items: [%{title: "Provision Neven Acme account"}]
         )
 
       canvas_id = canvas.id
@@ -154,7 +154,7 @@ defmodule Platform.Meetings.TriageTest do
                       %{
                         type: "triage_task_skipped",
                         existing_task_id: ^existing_id,
-                        candidate_title: "Provision Neven Fabrikam account"
+                        candidate_title: "Provision Neven Acme account"
                       }},
                      500
     end
@@ -164,12 +164,12 @@ defmodule Platform.Meetings.TriageTest do
       canvas: canvas
     } do
       {:ok, existing} =
-        Tasks.create_task(%{project_id: project.id, title: "Provision Neven Fabrikam account"})
+        Tasks.create_task(%{project_id: project.id, title: "Provision Neven Acme account"})
 
       {:ok, _result} =
         Triage.file_tasks_from_canvas(canvas,
           project_id: project.id,
-          action_items: [%{title: "Provision Neven Fabrikam account"}]
+          action_items: [%{title: "Provision Neven Acme account"}]
         )
 
       # The canvas server persists asynchronously — refetch until the
@@ -193,10 +193,10 @@ defmodule Platform.Meetings.TriageTest do
 
     test "mixed batch — some skip, some file", %{project: project, canvas: canvas} do
       {:ok, existing} =
-        Tasks.create_task(%{project_id: project.id, title: "Provision Neven Fabrikam account"})
+        Tasks.create_task(%{project_id: project.id, title: "Provision Neven Acme account"})
 
       items = [
-        %{title: "Provision Neven Fabrikam account"},
+        %{title: "Provision Neven Acme account"},
         %{title: "Prep Q3 board deck"}
       ]
 
@@ -466,12 +466,12 @@ defmodule Platform.Meetings.TriageTest do
       canvas: canvas
     } do
       {:ok, _existing} =
-        Tasks.create_task(%{project_id: project.id, title: "Provision Neven Fabrikam account"})
+        Tasks.create_task(%{project_id: project.id, title: "Provision Neven Acme account"})
 
       {:ok, %{filed: [], skipped: [_]}} =
         Triage.file_tasks_from_canvas(canvas,
           project_id: project.id,
-          action_items: [%{title: "Provision Neven Fabrikam account"}]
+          action_items: [%{title: "Provision Neven Acme account"}]
         )
 
       # dispatch fires (batch entered) but no per-task event

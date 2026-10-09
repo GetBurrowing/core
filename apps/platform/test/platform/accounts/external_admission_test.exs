@@ -27,7 +27,7 @@ defmodule Platform.Accounts.ExternalAdmissionTest do
     default = %{
       name: "Tenant #{n}",
       slug: "tenant_#{n}",
-      parent_org_id: Tenancy.get_org_by_slug!("fabrikam").id
+      parent_org_id: Tenancy.get_org_by_slug!("acme").id
     }
 
     %Org{} |> Org.changeset(Map.merge(default, attrs)) |> Repo.insert!()
@@ -47,7 +47,7 @@ defmodule Platform.Accounts.ExternalAdmissionTest do
 
     %User{}
     |> User.changeset(%{
-      email: "admin-#{n}@example.com",
+      email: "admin-#{n}@acme.test",
       name: "Admin #{n}",
       oidc_sub: "oidc-admin-#{n}"
     })
@@ -90,7 +90,7 @@ defmodule Platform.Accounts.ExternalAdmissionTest do
   # admission writes nothing ANYWHERE, not merely nothing for this user.
   #
   # NOTE the identity membership: `Accounts.find_or_create_from_oidc/1`
-  # upserts a Fabrikam membership with the email-derived role for EVERY new user,
+  # upserts an Acme membership with the email-derived role for EVERY new user,
   # before `decide/3` ever runs. That row is user identity, not scoped access,
   # and predates this task — so the census is taken around the ADMISSION
   # decision (see `admit_twice_census/2`), and external memberships are
@@ -360,22 +360,22 @@ defmodule Platform.Accounts.ExternalAdmissionTest do
   end
 
   describe "admit/2 — internal app login is unchanged" do
-    test "fabrikam admin -> :full/external? false with admin role; non-fabrikam member -> member role" do
-      assert %Result{state: :full, external?: false, reason: nil, user: fabrikam_user} =
+    test "acme admin -> :full/external? false with admin role; non-acme member -> member role" do
+      assert %Result{state: :full, external?: false, reason: nil, user: acme_user} =
                ExternalAdmission.admit(
                  %{
                    sub: "oidc|int-1",
-                   email: "someone@example.com",
+                   email: "someone@acme.test",
                    name: "Internal Admin",
                    external_claim?: false
                  },
                  surface: :app
                )
 
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
-      assert Repo.get_by!(OrgMembership, user_id: fabrikam_user.id, org_id: fabrikam.id).role == "admin"
+      acme = Tenancy.get_org_by_slug!("acme")
+      assert Repo.get_by!(OrgMembership, user_id: acme_user.id, org_id: acme.id).role == "admin"
       # Internal user is never routed to holding and never gets scoped external rows.
-      assert external_membership_count(fabrikam_user.id) == 0
+      assert external_membership_count(acme_user.id) == 0
 
       assert %Result{state: :full, external?: false, user: member_user} =
                ExternalAdmission.admit(
@@ -388,7 +388,7 @@ defmodule Platform.Accounts.ExternalAdmissionTest do
                  surface: :app
                )
 
-      assert Repo.get_by!(OrgMembership, user_id: member_user.id, org_id: fabrikam.id).role ==
+      assert Repo.get_by!(OrgMembership, user_id: member_user.id, org_id: acme.id).role ==
                "member"
     end
   end

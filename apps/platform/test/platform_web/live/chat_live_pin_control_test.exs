@@ -87,7 +87,7 @@ defmodule PlatformWeb.ChatLivePinControlTest do
     {init_test_session(conn, current_user_id: user.id), user}
   end
 
-  # A Fabrikam admin, which is the viewer the arrange-mode section below uses.
+  # An Acme admin, which is the viewer the arrange-mode section below uses.
   # Marlowe reported this bug as an admin, and an admin's menu is the LONGEST
   # one — it is the only viewer whose row menu holds "Move to organisation…" —
   # so a menu-parity assertion made as an admin covers the shorter menus too.
@@ -97,7 +97,7 @@ defmodule PlatformWeb.ChatLivePinControlTest do
     Repo.insert!(
       OrgMembership.changeset(%OrgMembership{}, %{
         user_id: user.id,
-        org_id: fabrikam_org().id,
+        org_id: acme_org().id,
         role: "admin"
       })
     )
@@ -105,10 +105,10 @@ defmodule PlatformWeb.ChatLivePinControlTest do
     {init_test_session(conn, current_user_id: user.id), user}
   end
 
-  defp fabrikam_org, do: Tenancy.get_org_by_slug!("fabrikam")
+  defp acme_org, do: Tenancy.get_org_by_slug!("acme")
 
-  defp fabrikam_section do
-    Enum.find(Sidebar.list_active_default_sections(), &(&1.org_id == fabrikam_org().id))
+  defp acme_section do
+    Enum.find(Sidebar.list_active_default_sections(), &(&1.org_id == acme_org().id))
   end
 
   defp create_channel(slug) do
@@ -117,7 +117,7 @@ defmodule PlatformWeb.ChatLivePinControlTest do
         name: String.capitalize(slug),
         slug: slug,
         kind: "channel",
-        org_id: fabrikam_org().id
+        org_id: acme_org().id
       })
 
     ch
@@ -205,7 +205,7 @@ defmodule PlatformWeb.ChatLivePinControlTest do
   defp dm_section(sidebar), do: section_by(sidebar, ~s(data-section-key="dms"))
 
   defp client_section(sidebar) do
-    section_by(sidebar, ~s(data-section-id="#{fabrikam_section().id}"))
+    section_by(sidebar, ~s(data-section-id="#{acme_section().id}"))
   end
 
   # Every pin control in a slice, raw. Buttons never nest, so the non-greedy
@@ -1126,7 +1126,7 @@ defmodule PlatformWeb.ChatLivePinControlTest do
 
   # ── 8. Arrange mode: the row's control set (019ff8ba stage 2) ───────────
   #
-  # Marlowe's report was about arrange mode: for a Fabrikam admin the sub-org channel
+  # Marlowe's report was about arrange mode: for an Acme admin the sub-org channel
   # names read "f...", "e...", "p...". Six controls held a slot on that row —
   # drag, up, down, pin, hide and "Move to organisation…" — and the name got
   # 25px at the rail's 224px width. Stage 1 took the last three off the row in

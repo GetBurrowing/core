@@ -93,7 +93,7 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
          re-authorizes.
 
          Stage 4: when a deletion is scheduled the banner shows the purge
-         date instead, with a Cancel button for Fabrikam admins only
+         date instead, with a Cancel button for root-org admins only
          (@can_cancel_deletion?). Unarchive is hidden while deletion is
          pending — cancel first, then unarchive. Deletion-flagged channels
          are excluded from the sidebar's Archived section, so this banner

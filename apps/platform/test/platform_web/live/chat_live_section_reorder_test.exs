@@ -45,16 +45,16 @@ defmodule PlatformWeb.ChatLiveSectionReorderTest do
     })
   end
 
-  # A Fabrikam (root-org) admin actor — `Sidebar.*` writes gate on
-  # `Tenancy.fabrikam_admin?/1`, which checks for an admin membership in the
+  # An Acme (root-org) admin actor — `Sidebar.*` writes gate on
+  # `Tenancy.root_admin?/1`, which checks for an admin membership in the
   # parentless root org.
-  defp make_fabrikam_admin(suffix) do
+  defp make_acme_admin(suffix) do
     user = insert_user(suffix)
 
     %OrgMembership{}
     |> OrgMembership.changeset(%{
       user_id: user.id,
-      org_id: Tenancy.get_org_by_slug!("fabrikam").id,
+      org_id: Tenancy.get_org_by_slug!("acme").id,
       role: "admin"
     })
     |> Repo.insert!()
@@ -115,7 +115,7 @@ defmodule PlatformWeb.ChatLiveSectionReorderTest do
       sidebar = desktop_sidebar(html)
 
       offsets =
-        for label <- ["Paragon", "Soylent", "Fabrikam", "Wayne-Tech", "SXI"] do
+        for label <- ["Acme", "Paragon", "Soylent", "Wayne-Tech", "SXI"] do
           {label, :binary.match(sidebar, label) |> elem(0)}
         end
 
@@ -135,7 +135,7 @@ defmodule PlatformWeb.ChatLiveSectionReorderTest do
     test "non-default order rehydrates on mount", %{conn: conn} do
       user = insert_user("hydrate")
       # SXI first → Paragon last (intentionally non-alphabetical), by id.
-      saved_slugs = ["sxi", "fabrikam", "soylent", "wayne-tech", "paragon"]
+      saved_slugs = ["sxi", "acme", "soylent", "wayne-tech", "paragon"]
       saved_order = Enum.map(saved_slugs, &section_id_for_slug/1)
       {:ok, _} = Accounts.update_user_preference(user.id, :chat_section_order, saved_order)
 
@@ -145,7 +145,7 @@ defmodule PlatformWeb.ChatLiveSectionReorderTest do
       sidebar = desktop_sidebar(html)
 
       # The rendered NAME labels should appear in the saved id order.
-      labels = ["SXI", "Fabrikam", "Soylent", "Wayne-Tech", "Paragon"]
+      labels = ["SXI", "Acme", "Soylent", "Wayne-Tech", "Paragon"]
 
       offsets =
         for label <- labels do
@@ -200,7 +200,7 @@ defmodule PlatformWeb.ChatLiveSectionReorderTest do
       sidebar = desktop_sidebar(html)
 
       offsets =
-        for label <- ["Paragon", "Soylent", "Fabrikam", "Wayne-Tech", "SXI"] do
+        for label <- ["Acme", "Paragon", "Soylent", "Wayne-Tech", "SXI"] do
           {label, :binary.match(sidebar, label) |> elem(0)}
         end
 
@@ -237,7 +237,7 @@ defmodule PlatformWeb.ChatLiveSectionReorderTest do
       sxi_idx = :binary.match(sidebar, "SXI") |> elem(0)
       soylent_idx = :binary.match(sidebar, "Soylent") |> elem(0)
 
-      # New order: Paragon, Fabrikam, Wayne-Tech, Soylent, SXI
+      # New order: Acme, Paragon, Wayne-Tech, Soylent, SXI
       assert protect_idx < soylent_idx,
              "Expected Soylent after Wayne-Tech, got Soylent at #{soylent_idx} and Wayne-Tech at #{protect_idx}"
 
@@ -246,13 +246,13 @@ defmodule PlatformWeb.ChatLiveSectionReorderTest do
 
       # Persisted: re-fetch user and assert preferences blob updated. The order
       # is stored as section IDS (audit finding #3), so assert against the id
-      # sequence for the expected new order: Paragon, Fabrikam, Wayne-Tech, Soylent,
+      # sequence for the expected new order: Acme, Paragon, Wayne-Tech, Soylent,
       # SXI.
       updated_user = Repo.get!(User, user.id)
       saved = updated_user.preferences["chat_section_order"]
 
       expected_ids =
-        ["paragon", "fabrikam", "wayne-tech", "soylent", "sxi"]
+        ["acme", "paragon", "wayne-tech", "soylent", "sxi"]
         |> Enum.map(&section_id_for_slug/1)
 
       assert saved == expected_ids
@@ -264,8 +264,8 @@ defmodule PlatformWeb.ChatLiveSectionReorderTest do
       create_channel("general")
       {:ok, view, _html} = live_following_redirect(conn)
 
-      fabrikam_id = section_id_for_slug("fabrikam")
-      render_hook(view, "section_reordered", %{"from" => fabrikam_id, "to" => fabrikam_id})
+      acme_id = section_id_for_slug("acme")
+      render_hook(view, "section_reordered", %{"from" => acme_id, "to" => acme_id})
 
       # No persisted change.
       updated_user = Repo.get!(User, user.id)
@@ -284,7 +284,7 @@ defmodule PlatformWeb.ChatLiveSectionReorderTest do
       # A bogus `from` id resolves to no section → the reorder is a no-op.
       render_hook(view, "section_reordered", %{
         "from" => "not-a-real-section-id",
-        "to" => section_id_for_slug("fabrikam")
+        "to" => section_id_for_slug("acme")
       })
 
       updated_user = Repo.get!(User, user.id)
@@ -385,27 +385,27 @@ defmodule PlatformWeb.ChatLiveSectionReorderTest do
       user = insert_user("rename_survive")
       create_channel("general")
 
-      # The user personally puts Fabrikam FIRST (non-default; default is
-      # alphabetical, so Fabrikam would normally sit 3rd).
+      # The user personally puts Acme FIRST (non-default; default is
+      # alphabetical, so Acme would normally sit 3rd).
       personal_order =
-        ["fabrikam", "paragon", "soylent", "wayne-tech", "sxi"]
+        ["acme", "paragon", "soylent", "wayne-tech", "sxi"]
         |> Enum.map(&section_id_for_slug/1)
 
       {:ok, _} = Accounts.update_user_preference(user.id, :chat_section_order, personal_order)
 
-      # Sanity: before the rename, Fabrikam renders first.
+      # Sanity: before the rename, Acme renders first.
       conn1 = authenticated_conn(conn, user)
       {:ok, _v1, html1} = live_following_redirect(conn1)
       sidebar1 = desktop_sidebar(html1)
-      fabrikam_idx1 = :binary.match(sidebar1, "Fabrikam") |> elem(0)
+      acme_idx1 = :binary.match(sidebar1, "Acme") |> elem(0)
       paragon_idx1 = :binary.match(sidebar1, "Paragon") |> elem(0)
-      assert fabrikam_idx1 < paragon_idx1, "Fabrikam should render first from the personal order"
+      assert acme_idx1 < paragon_idx1, "Acme should render first from the personal order"
 
-      # An admin renames the Fabrikam section (id unchanged). Use the Sidebar API
-      # directly with a Fabrikam admin actor so the rename actually lands.
-      fabrikam_section_id = section_id_for_slug("fabrikam")
-      admin = make_fabrikam_admin("rename_survive_admin")
-      {:ok, _} = Sidebar.rename_section(admin, fabrikam_section_id, "Fabrikam HQ")
+      # An admin renames the Acme section (id unchanged). Use the Sidebar API
+      # directly with an Acme admin actor so the rename actually lands.
+      acme_section_id = section_id_for_slug("acme")
+      admin = make_acme_admin("rename_survive_admin")
+      {:ok, _} = Sidebar.rename_section(admin, acme_section_id, "Acme HQ")
 
       # The user re-mounts. The renamed section must STILL render first (its id
       # is unchanged in the saved order) — not dumped to the bottom.
@@ -413,14 +413,14 @@ defmodule PlatformWeb.ChatLiveSectionReorderTest do
       {:ok, _v2, html2} = live_following_redirect(conn2)
       sidebar2 = desktop_sidebar(html2)
 
-      fabrikam_hq_idx = :binary.match(sidebar2, "Fabrikam HQ") |> elem(0)
+      acme_hq_idx = :binary.match(sidebar2, "Acme HQ") |> elem(0)
       paragon_idx2 = :binary.match(sidebar2, "Paragon") |> elem(0)
       sxi_idx2 = :binary.match(sidebar2, "SXI") |> elem(0)
 
-      assert fabrikam_hq_idx < paragon_idx2,
+      assert acme_hq_idx < paragon_idx2,
              "Renamed section must keep its personal slot (first), not fall to the tail"
 
-      assert fabrikam_hq_idx < sxi_idx2,
+      assert acme_hq_idx < sxi_idx2,
              "Renamed section must not be dumped below the last section"
     end
   end
@@ -500,15 +500,15 @@ defmodule PlatformWeb.ChatLiveSectionReorderTest do
       user = insert_user("acct1")
 
       {:ok, updated} =
-        Accounts.update_user_preference(user.id, :chat_section_order, ["SXI", "Fabrikam"])
+        Accounts.update_user_preference(user.id, :chat_section_order, ["SXI", "Acme"])
 
-      assert updated.preferences == %{"chat_section_order" => ["SXI", "Fabrikam"]}
+      assert updated.preferences == %{"chat_section_order" => ["SXI", "Acme"]}
 
       # Idempotent — overwriting the same key works.
       {:ok, updated2} =
-        Accounts.update_user_preference(user.id, :chat_section_order, ["Fabrikam", "SXI"])
+        Accounts.update_user_preference(user.id, :chat_section_order, ["Acme", "SXI"])
 
-      assert updated2.preferences == %{"chat_section_order" => ["Fabrikam", "SXI"]}
+      assert updated2.preferences == %{"chat_section_order" => ["Acme", "SXI"]}
     end
 
     test "merges into existing preferences without clobbering siblings" do

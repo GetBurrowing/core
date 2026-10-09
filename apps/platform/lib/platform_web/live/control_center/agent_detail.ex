@@ -1338,7 +1338,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
   attr :agent_credentials, :list, required: true
   attr :platform_credentials, :list, required: true
   attr :all_platform_credentials, :list, default: []
-  attr :fabrikam_admin?, :boolean, default: false
+  attr :root_admin?, :boolean, default: false
   attr :show_credential_form, :boolean, default: false
   attr :credential_form, :map, default: %{}
 
@@ -1394,7 +1394,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
               provider is outside this agent's model chain: an admin who has
               just added an `elevenlabs` key to an Anthropic agent's page needs
               to see that it landed, not wonder where it went. --%>
-        <div :if={@fabrikam_admin?} class="border-t border-edge pt-4" data-role="vault-manage">
+        <div :if={@root_admin?} class="border-t border-edge pt-4" data-role="vault-manage">
           <div class="flex flex-wrap items-center justify-between gap-2">
             <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
               All platform credentials

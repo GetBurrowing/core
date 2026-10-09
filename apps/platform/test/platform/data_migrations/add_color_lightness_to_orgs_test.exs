@@ -51,10 +51,13 @@ defmodule Platform.DataMigrations.AddColorLightnessToOrgsTest do
     "cyberdyne" => "oklch(66% 0.19 340)"
   }
 
-  # The five seeded by `20260519143620_seed_root_orgs`. Cyberdyne was
-  # created through the admin panel on installs that have it, so it is not
-  # in a fresh test database.
-  @seeded ~w(fabrikam soylent wayne_tech sxi paragon)
+  # The four shipped tenants `test_helper.exs` seeds into the test database
+  # before re-running `pin_shipped_colours/1`. The test database's root is
+  # the neutral `acme` fixture (task 01a116de stage 4), so the historical
+  # `fabrikam` pin has no row here; "fabrikam is painted when its row exists" below
+  # inserts one. Cyberdyne was created through the admin panel on installs
+  # that have it, so it is not in a fresh test database either.
+  @seeded ~w(soylent wayne_tech sxi paragon)
 
   setup_all do
     Code.require_file(@migration_path)
@@ -81,7 +84,7 @@ defmodule Platform.DataMigrations.AddColorLightnessToOrgsTest do
     %Org{}
     |> Org.changeset(
       Map.merge(
-        %{name: "Org #{slug}", slug: slug, parent_org_id: Tenancy.get_org_by_slug!("fabrikam").id},
+        %{name: "Org #{slug}", slug: slug, parent_org_id: Tenancy.get_root_org().id},
         attrs
       )
     )
@@ -134,6 +137,13 @@ defmodule Platform.DataMigrations.AddColorLightnessToOrgsTest do
 
       assert Repo.get!(Org, acme.id).color_lightness == nil
     end
+
+    test "the test database's root is outside the six, so it carries no pinned colour" do
+      root = Tenancy.get_root_org()
+
+      assert root.slug == "acme"
+      assert {root.color_hue, root.color_lightness} == {nil, nil}
+    end
   end
 
   describe "pin_shipped_colours/1" do
@@ -171,6 +181,17 @@ defmodule Platform.DataMigrations.AddColorLightnessToOrgsTest do
       assert Tenancy.get_org_by_slug("cyberdyne") == nil
     end
 
+    test "paints a fabrikam row when one exists (the pin is keyed on the historical slug)" do
+      assert Tenancy.get_org_by_slug("fabrikam") == nil
+      tenant!("fabrikam", %{color_hue: 12, color_chroma: 0.15})
+
+      counts = migration().pin_shipped_colours(Repo)
+
+      assert counts["fabrikam"] == 1
+      assert colour("fabrikam") == {50, 0.16, 0.72}
+      assert colour("fabrikam") == pinned("fabrikam")
+    end
+
     test "colours a cyberdyne row an operator created with a hue of their own" do
       tenant!("cyberdyne", %{color_hue: 12, color_chroma: 0.15})
 
@@ -205,7 +226,11 @@ defmodule Platform.DataMigrations.AddColorLightnessToOrgsTest do
 
       # The six shipped slugs still land on exactly the component's atoms, so
       # the header's `@scope_filter == header_scope` active state keeps working.
-      atoms = Enum.map(~w(paragon soylent fabrikam wayne_tech sxi cyberdyne), &ChatLive.org_scope/1)
+      # The root org is the exception since task 01a116de stage 3: it has no
+      # compiled atom and takes the binary path like any runtime org.
+      assert ChatLive.org_scope("fabrikam") == "fabrikam"
+
+      atoms = Enum.map(~w(paragon soylent wayne_tech sxi cyberdyne), &ChatLive.org_scope/1)
 
       assert atoms |> Enum.uniq() |> Enum.sort() ==
                Enum.sort(PlatformWeb.Components.ScopePill.scopes())
@@ -259,7 +284,7 @@ defmodule Platform.DataMigrations.AddColorLightnessToOrgsTest do
 
     test "the CHECK constraint refuses a raw write the changeset never saw" do
       assert_raise Postgrex.Error, ~r/orgs_color_lightness_range/, fn ->
-        Repo.update_all(from(o in Org, where: o.slug == "fabrikam"), set: [color_lightness: 1.5])
+        Repo.update_all(from(o in Org, where: o.slug == "sxi"), set: [color_lightness: 1.5])
       end
     end
   end

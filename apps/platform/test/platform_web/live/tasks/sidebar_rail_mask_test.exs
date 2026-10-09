@@ -45,12 +45,12 @@ defmodule PlatformWeb.Tasks.SidebarRailMaskTest do
   # Nothing to exclude any more — see the moduledoc.
   @machine_attrs []
 
-  # Tenant orgs only. Fabrikam is masked too, but "fabrikam" appears in the page's
+  # Tenant orgs only. Acme is masked too, but "acme" appears in the page's
   # own chrome (routes, ids) outside the rail, and sweeping the root org
   # would test the fixture rather than the feature.
   @tenants ~w(soylent wayne_tech sxi)
 
-  defp fabrikam_admin_conn(conn) do
+  defp acme_admin_conn(conn) do
     n = System.unique_integer([:positive])
 
     user =
@@ -60,10 +60,10 @@ defmodule PlatformWeb.Tasks.SidebarRailMaskTest do
         oidc_sub: "oidc-rail-mask-#{n}"
       })
 
-    # Member everywhere (project_sections is viewer-scoped), admin in Fabrikam so
+    # Member everywhere (project_sections is viewer-scoped), admin in Acme so
     # the lifecycle kebab — a derived-string leak site — actually renders.
     Enum.each(Tenancy.list_orgs(), fn org ->
-      role = if org.slug == "fabrikam", do: "admin", else: "member"
+      role = if org.slug == "acme", do: "admin", else: "member"
 
       %OrgMembership{}
       |> OrgMembership.changeset(%{user_id: user.id, org_id: org.id, role: role})
@@ -116,7 +116,7 @@ defmodule PlatformWeb.Tasks.SidebarRailMaskTest do
 
   describe "unmasked (default)" do
     test "the rail renders real names and real slugs, and the eye is unpressed", %{conn: conn} do
-      conn = fabrikam_admin_conn(conn)
+      conn = acme_admin_conn(conn)
       projects = seed_rail()
 
       {:ok, _view, html} = live(conn, ~p"/tasks")
@@ -138,7 +138,7 @@ defmodule PlatformWeb.Tasks.SidebarRailMaskTest do
 
   describe "masked" do
     test "no real name survives anywhere in the rail — text or attribute", %{conn: conn} do
-      conn = fabrikam_admin_conn(conn)
+      conn = acme_admin_conn(conn)
       projects = seed_rail()
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
@@ -154,7 +154,7 @@ defmodule PlatformWeb.Tasks.SidebarRailMaskTest do
     end
 
     test "data-org-slug carries the placeholder's slug, not the org's", %{conn: conn} do
-      conn = fabrikam_admin_conn(conn)
+      conn = acme_admin_conn(conn)
       seed_rail()
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
@@ -171,7 +171,7 @@ defmodule PlatformWeb.Tasks.SidebarRailMaskTest do
 
     test "the lifecycle kebab's aria-label and phx-value-name take the resolved label",
          %{conn: conn} do
-      conn = fabrikam_admin_conn(conn)
+      conn = acme_admin_conn(conn)
       seed_rail()
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
@@ -200,7 +200,7 @@ defmodule PlatformWeb.Tasks.SidebarRailMaskTest do
     end
 
     test "the mode strip is the signal, and its copy names no privacy claim", %{conn: conn} do
-      conn = fabrikam_admin_conn(conn)
+      conn = acme_admin_conn(conn)
       seed_rail()
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
@@ -223,7 +223,7 @@ defmodule PlatformWeb.Tasks.SidebarRailMaskTest do
 
     test "per-item reveal buttons are in the DOM for every masked row, not hover-gated",
          %{conn: conn} do
-      conn = fabrikam_admin_conn(conn)
+      conn = acme_admin_conn(conn)
       seed_rail()
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
@@ -240,7 +240,7 @@ defmodule PlatformWeb.Tasks.SidebarRailMaskTest do
   describe "reveal and re-mask" do
     test "revealing one org shows only that name; the rest of the rail stays masked",
          %{conn: conn} do
-      conn = fabrikam_admin_conn(conn)
+      conn = acme_admin_conn(conn)
       projects = seed_rail()
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
@@ -266,7 +266,7 @@ defmodule PlatformWeb.Tasks.SidebarRailMaskTest do
     end
 
     test "Show all re-masks everything while leaving the mode on", %{conn: conn} do
-      conn = fabrikam_admin_conn(conn)
+      conn = acme_admin_conn(conn)
       projects = seed_rail()
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
@@ -290,7 +290,7 @@ defmodule PlatformWeb.Tasks.SidebarRailMaskTest do
 
     test "FAIL CLOSED: turning the mode off clears reveals, so re-enabling starts fully masked",
          %{conn: conn} do
-      conn = fabrikam_admin_conn(conn)
+      conn = acme_admin_conn(conn)
       projects = seed_rail()
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
@@ -314,7 +314,7 @@ defmodule PlatformWeb.Tasks.SidebarRailMaskTest do
 
     test "the toggle posts the desired next state, so a duplicated event is idempotent",
          %{conn: conn} do
-      conn = fabrikam_admin_conn(conn)
+      conn = acme_admin_conn(conn)
       seed_rail()
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
@@ -330,7 +330,7 @@ defmodule PlatformWeb.Tasks.SidebarRailMaskTest do
   describe "assertion integrity" do
     test "the sweep FIRES when a real name is present — it is not vacuously green",
          %{conn: conn} do
-      conn = fabrikam_admin_conn(conn)
+      conn = acme_admin_conn(conn)
       seed_rail()
 
       {:ok, _view, html} = live(conn, ~p"/tasks")

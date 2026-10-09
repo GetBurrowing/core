@@ -131,7 +131,7 @@ defmodule Platform.Meetings.TranscriptTelemetryTest do
       |> Platform.Tasks.Project.changeset(%{
         name: "TT Project #{System.unique_integer([:positive])}",
         slug: "tt-project-#{System.unique_integer([:positive])}",
-        org_id: Platform.TenancyFixtures.fabrikam_org_id()
+        org_id: Platform.TenancyFixtures.acme_org_id()
       })
       |> Repo.insert()
 

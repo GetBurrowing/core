@@ -18,7 +18,7 @@ defmodule Platform.Chat.CanvasAccessTest do
     * `:task_reader` — attachment to a live task in an org the viewer belongs
       to, including the incident shape (canvas in an EXECUTION space)
     * `:org_reader` — accessible non-archived CHANNEL with a non-nil org, for
-      an org member or a Fabrikam admin
+      an org member or an Acme admin
     * external users are capped at `:member`
     * a null `org_id` DENIES (DMs and groups)
     * execution and archived spaces are excluded from `:org_reader`
@@ -80,11 +80,11 @@ defmodule Platform.Chat.CanvasAccessTest do
     canvas
   end
 
-  defp fabrikam_admin! do
+  defp acme_admin! do
     user = create_user!()
 
     %OrgMembership{}
-    |> OrgMembership.changeset(%{user_id: user.id, org_id: fabrikam_org_id(), role: "admin"})
+    |> OrgMembership.changeset(%{user_id: user.id, org_id: acme_org_id(), role: "admin"})
     |> Repo.insert!()
 
     user
@@ -626,11 +626,11 @@ defmodule Platform.Chat.CanvasAccessTest do
       assert {:ok, _canvas, :org_reader} = CanvasAccess.fetch_for_viewer(canvas.id, user)
     end
 
-    test "a Fabrikam admin reads a channel canvas in any org", %{org_a: org_a} do
+    test "an Acme admin reads a channel canvas in any org", %{org_a: org_a} do
       space = space!(%{org_id: org_a.id})
       canvas = canvas!(space)
 
-      assert {:ok, _canvas, :org_reader} = CanvasAccess.fetch_for_viewer(canvas.id, fabrikam_admin!())
+      assert {:ok, _canvas, :org_reader} = CanvasAccess.fetch_for_viewer(canvas.id, acme_admin!())
     end
 
     test "a member of a DIFFERENT org is denied", %{org_a: org_a, org_b: org_b} do
@@ -653,13 +653,13 @@ defmodule Platform.Chat.CanvasAccessTest do
       assert {:error, :forbidden} = CanvasAccess.fetch_for_viewer(canvas.id, user)
     end
 
-    test "a NULL org_id denies a Fabrikam admin too" do
+    test "a NULL org_id denies an Acme admin too" do
       # DMs and group conversations never set org_id. If null were a wildcard,
       # every private conversation in the product would be org-readable.
       space = space!(%{org_id: nil})
       canvas = canvas!(space)
 
-      assert {:error, :forbidden} = CanvasAccess.fetch_for_viewer(canvas.id, fabrikam_admin!())
+      assert {:error, :forbidden} = CanvasAccess.fetch_for_viewer(canvas.id, acme_admin!())
     end
 
     test "a GROUP space with an org_id is still denied — channels only", %{org_a: org_a} do
@@ -951,9 +951,9 @@ defmodule Platform.Chat.CanvasAccessTest do
       assert {:error, :forbidden} = CanvasAccess.fetch_for_writer(canvas.id, {:user, user.id})
     end
 
-    test "a Fabrikam admin with no participation is rejected", %{org_a: org_a} do
+    test "an Acme admin with no participation is rejected", %{org_a: org_a} do
       canvas = canvas!(space!(%{org_id: org_a.id}))
-      admin = fabrikam_admin!()
+      admin = acme_admin!()
 
       assert {:ok, _canvas, :org_reader} = CanvasAccess.fetch_for_viewer(canvas.id, admin)
       assert {:error, :forbidden} = CanvasAccess.fetch_for_writer(canvas.id, {:user, admin.id})

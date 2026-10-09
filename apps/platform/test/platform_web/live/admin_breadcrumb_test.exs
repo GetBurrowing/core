@@ -19,7 +19,7 @@ defmodule PlatformWeb.AdminBreadcrumbTest do
   alias Platform.Tenancy
   alias Platform.Tenancy.OrgMembership
 
-  defp fabrikam_admin_conn(conn) do
+  defp acme_admin_conn(conn) do
     n = System.unique_integer([:positive])
 
     user =
@@ -32,7 +32,7 @@ defmodule PlatformWeb.AdminBreadcrumbTest do
     %OrgMembership{}
     |> OrgMembership.changeset(%{
       user_id: user.id,
-      org_id: Tenancy.get_org_by_slug!("fabrikam").id,
+      org_id: Tenancy.get_org_by_slug!("acme").id,
       role: "admin"
     })
     |> Repo.insert!()
@@ -54,7 +54,7 @@ defmodule PlatformWeb.AdminBreadcrumbTest do
         ] do
       test "#{path} breadcrumb up-targets /admin", %{conn: conn} do
         {:ok, view, _html} =
-          conn |> fabrikam_admin_conn() |> live(unquote(path))
+          conn |> acme_admin_conn() |> live(unquote(path))
 
         # The breadcrumb is present and its root segment navigates UP to /admin.
         assert has_element?(view, breadcrumb_root_selector()),
@@ -80,7 +80,7 @@ defmodule PlatformWeb.AdminBreadcrumbTest do
         })
 
       {:ok, view, _html} =
-        conn |> fabrikam_admin_conn() |> live(~p"/admin/prompts/#{template.slug}")
+        conn |> acme_admin_conn() |> live(~p"/admin/prompts/#{template.slug}")
 
       # Root segment still links up to /admin.
       assert has_element?(view, breadcrumb_root_selector())

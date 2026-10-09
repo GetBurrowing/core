@@ -4,7 +4,7 @@ defmodule Platform.Chat.DigestScopeTest do
   partition primitives on `Platform.Chat`:
 
     * `external_space_ids/0` — spaces carrying any external-visible content
-      (fully-external AND mixed Fabrikam+external spaces), `[]` when no external
+      (fully-external AND mixed Acme+external spaces), `[]` when no external
       users exist.
     * `participant_space_ids_for_user/1` — the external user's allowlisted
       spaces.
@@ -85,17 +85,17 @@ defmodule Platform.Chat.DigestScopeTest do
 
   describe "external_space_ids/0" do
     test "returns the fully-external and mixed spaces but not internal-only" do
-      fabrikam = create_user!()
+      acme = create_user!()
       ext = external_user!()
 
-      internal = create_space!("fabrikam-eng")
-      add_user!(internal.id, fabrikam.id)
+      internal = create_space!("acme-eng")
+      add_user!(internal.id, acme.id)
 
       external = create_space!("sxi-support")
       add_user!(external.id, ext.id)
 
       mixed = create_space!("sxi-shared")
-      add_user!(mixed.id, fabrikam.id)
+      add_user!(mixed.id, acme.id)
       add_user!(mixed.id, ext.id)
 
       ids = Chat.external_space_ids()
@@ -106,9 +106,9 @@ defmodule Platform.Chat.DigestScopeTest do
     end
 
     test "returns [] when there are no external memberships" do
-      fabrikam = create_user!()
-      internal = create_space!("fabrikam-eng")
-      add_user!(internal.id, fabrikam.id)
+      acme = create_user!()
+      internal = create_space!("acme-eng")
+      add_user!(internal.id, acme.id)
 
       assert Chat.external_space_ids() == []
     end
@@ -128,7 +128,7 @@ defmodule Platform.Chat.DigestScopeTest do
       add_user!(b.id, ext.id)
 
       # A space the external user is NOT in.
-      c = create_space!("fabrikam-eng")
+      c = create_space!("acme-eng")
       add_user!(c.id, other.id)
 
       ids = Chat.participant_space_ids_for_user(ext.id)
@@ -142,11 +142,11 @@ defmodule Platform.Chat.DigestScopeTest do
 
   describe "list_messages_since/2 :scope" do
     test "default :internal omits external + mixed space rows, keeps internal" do
-      fabrikam = create_user!()
+      acme = create_user!()
       ext = external_user!()
 
-      internal = create_space!("fabrikam-eng")
-      kp = add_user!(internal.id, fabrikam.id)
+      internal = create_space!("acme-eng")
+      kp = add_user!(internal.id, acme.id)
       post!(internal.id, kp.id, "internal msg")
 
       external = create_space!("sxi-support")
@@ -154,7 +154,7 @@ defmodule Platform.Chat.DigestScopeTest do
       post!(external.id, ep.id, "external msg")
 
       mixed = create_space!("sxi-shared")
-      mk = add_user!(mixed.id, fabrikam.id)
+      mk = add_user!(mixed.id, acme.id)
       _me = add_user!(mixed.id, ext.id)
       post!(mixed.id, mk.id, "mixed msg")
 
@@ -168,11 +168,11 @@ defmodule Platform.Chat.DigestScopeTest do
     end
 
     test "{:external_spaces, ids} returns only those spaces' rows" do
-      fabrikam = create_user!()
+      acme = create_user!()
       ext = external_user!()
 
-      internal = create_space!("fabrikam-eng")
-      kp = add_user!(internal.id, fabrikam.id)
+      internal = create_space!("acme-eng")
+      kp = add_user!(internal.id, acme.id)
       post!(internal.id, kp.id, "internal msg")
 
       external = create_space!("sxi-support")
@@ -191,10 +191,10 @@ defmodule Platform.Chat.DigestScopeTest do
     end
 
     test "with zero external users the default filter is a no-op (regression guard)" do
-      fabrikam = create_user!()
+      acme = create_user!()
 
-      internal = create_space!("fabrikam-eng")
-      kp = add_user!(internal.id, fabrikam.id)
+      internal = create_space!("acme-eng")
+      kp = add_user!(internal.id, acme.id)
       post!(internal.id, kp.id, "internal msg")
 
       {ws, we} = window()

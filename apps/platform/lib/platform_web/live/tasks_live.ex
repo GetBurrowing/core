@@ -106,7 +106,7 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:task_search_query, "")
      |> assign(:create_menu_open, false)
      # Task 019fed1e: the admin-only Tasks settings menu (one row today,
-     # Pipeline). The trigger renders only behind `@fabrikam_admin?` and the
+     # Pipeline). The trigger renders only behind `@root_admin?` and the
      # destination is gated again by `live_session :admin`.
      |> assign(:settings_menu_open, false)
      |> assign(:agents, agents)

@@ -9,14 +9,27 @@ an `AgentConfig` (or a value pulled from one) as an argument.
 
 Every value has a documented default so the service is runnable out of the
 box against moon/wave's currently-known addresses, but every one of those
-defaults is expected to be overridden per-deployment via env vars. See
-README.md for the full list.
+defaults is expected to be overridden per-deployment via env vars. The one
+exception is `MVA_MCP_BASE_URL`, the Suite install this agent talks to: it has
+no default, because any default would name one particular install, and an
+empty or unset value raises `ConfigError`. See README.md for the full list.
 """
 
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+
+
+class ConfigError(ValueError):
+    """A required environment variable is missing or empty."""
+
+
+def _env_required_str(name: str, hint: str) -> str:
+    value = os.environ.get(name)
+    if value is None or value.strip() == "":
+        raise ConfigError(f"{name} is required and has no default: {hint}")
+    return value
 
 
 def _env_str(name: str, default: str) -> str:
@@ -239,9 +252,13 @@ class McpConfig:
             # the MCP client correctly refuses to follow a redirect rather
             # than silently re-POSTing — so the *URL* has to be right, not
             # the client's redirect handling (Dalton's moon run, rollup
-            # space 01a0b5bf: "the MCP base has to be
-            # https://suite.example.com/mcp").
-            base_url=_env_str("MVA_MCP_BASE_URL", "https://suite.example.com/mcp"),
+            # space 01a0b5bf). Required, with no default: a default would
+            # name one particular Suite install (task 01a116de).
+            base_url=_env_required_str(
+                "MVA_MCP_BASE_URL",
+                "set it to this deployment's public Suite MCP URL, "
+                "e.g. https://suite.example.com/mcp",
+            ),
             auth_token=_env_str("MVA_MCP_AUTH_TOKEN", ""),
             client_session_timeout_seconds=_env_float("MVA_MCP_TIMEOUT", 10.0),
         )

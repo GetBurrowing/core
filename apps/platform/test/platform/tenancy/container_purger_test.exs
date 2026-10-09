@@ -55,7 +55,7 @@ defmodule Platform.Tenancy.ContainerPurgerTest do
     %OrgMembership{}
     |> OrgMembership.changeset(%{
       user_id: user.id,
-      org_id: Tenancy.get_org_by_slug!("fabrikam").id,
+      org_id: Tenancy.get_org_by_slug!("acme").id,
       role: role
     })
     |> Repo.insert!()
@@ -67,14 +67,14 @@ defmodule Platform.Tenancy.ContainerPurgerTest do
     user
   end
 
-  # A fresh tenant org parented to Fabrikam — isolated from seeded tenants.
+  # A fresh tenant org parented to Acme — isolated from seeded tenants.
   defp tenant_org!(attrs \\ %{}) do
     n = System.unique_integer([:positive])
 
     default = %{
       name: "Tenant #{n}",
       slug: "tenant_#{n}",
-      parent_org_id: Tenancy.get_org_by_slug!("fabrikam").id
+      parent_org_id: Tenancy.get_org_by_slug!("acme").id
     }
 
     %Org{} |> Org.changeset(Map.merge(default, attrs)) |> Repo.insert!()

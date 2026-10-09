@@ -75,7 +75,7 @@
        Section order:
          1. Pinned   (renders only when non-empty; locked at top)
          2. DMs      (always shown; renders empty-state when no DMs)
-         3. Sub-orgs (Paragon / Soylent / Fabrikam / Wayne-Tech / SXI, ALWAYS
+         3. Sub-orgs (one per org, the root org included, ALWAYS
                       rendered as section headers — empty buckets get an
                       empty-state hint instead of being suppressed)
 
@@ -108,7 +108,7 @@
     sidebar_edit={@sidebar_edit}
     sidebar_admin_edit={@sidebar_admin_edit}
     sidebar_menu_open={@sidebar_menu_open}
-    fabrikam_admin?={@fabrikam_admin?}
+    root_admin?={@root_admin?}
     mask_names?={@mask_names?}
     revealed_section_ids={@revealed_section_ids}
     sidebar_sections={@sidebar_sections}
@@ -596,7 +596,7 @@
      (`toggle_pinned`, `hide_channel`) are the wrong verbs for a task pin. --%>
 <.row_actions_dialog
   :if={!@embedded and !@external?}
-  fabrikam_admin?={@fabrikam_admin?}
+  root_admin?={@root_admin?}
   target={
     rail_row_actions_target(
       @row_actions_space_id,

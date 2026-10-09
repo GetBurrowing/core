@@ -42,7 +42,7 @@ defmodule Platform.Agents.HistorianProductDocsExclusionTest do
 
   defp seed!(file_key, content, opts \\ []) do
     {:ok, page} =
-      Wiki.upsert_page(file_key, %{content: content, org_id: fabrikam_org_id()}, opts)
+      Wiki.upsert_page(file_key, %{content: content, org_id: acme_org_id()}, opts)
 
     {1, _} =
       Repo.update_all(from(p in WikiPage, where: p.id == ^page.id), set: [updated_at: @row_at])

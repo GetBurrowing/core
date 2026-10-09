@@ -56,7 +56,7 @@ defmodule PlatformWeb.AdminSignInUsersLiveTest do
 
     admin = suite_user!("admin")
     {:ok, _} = Tenancy.promote_to_admin(admin)
-    assert Tenancy.fabrikam_admin?(admin)
+    assert Tenancy.root_admin?(admin)
 
     %{conn: conn, admin: admin}
   end
@@ -89,7 +89,7 @@ defmodule PlatformWeb.AdminSignInUsersLiveTest do
       )
 
     assert n >= 1
-    refute Tenancy.fabrikam_admin?(user)
+    refute Tenancy.root_admin?(user)
   end
 
   defp pid_user(id, email, overrides \\ %{}) do
@@ -270,7 +270,7 @@ defmodule PlatformWeb.AdminSignInUsersLiveTest do
   describe "gate off" do
     setup %{admin: admin} do
       member = suite_user!("member")
-      refute Tenancy.fabrikam_admin?(member)
+      refute Tenancy.root_admin?(member)
       gate(false)
       %{member: member, admin: admin}
     end

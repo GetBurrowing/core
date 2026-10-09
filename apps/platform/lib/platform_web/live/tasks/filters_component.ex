@@ -160,7 +160,7 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
 
            Click semantics: the "All" chip dispatches `filter_scope` with
            `phx-value-scope="all"`; sub-org chips dispatch it with their scope
-           SLUG, a plain string (`"fabrikam"`, `"soylent"`, etc) that stays a
+           SLUG, a plain string (`"acme"`, `"soylent"`, etc) that stays a
            string all the way through `parse_scope/2` into `@scope_filter`. The
            shell narrows the kanban render via
            `desktop_column_items_for_scope/6` once it mirrors the value. --%>

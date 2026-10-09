@@ -5,7 +5,7 @@ defmodule PlatformWeb.PipelineLive do
 
   ADMIN-ONLY, and reached from the cog in the Tasks module header. The route
   sits in `live_session :admin`, whose `:ensure_admin` hook halts a non-admin
-  mount; `mount/3` re-checks `:fabrikam_admin?` anyway rather than assuming the
+  mount; `mount/3` re-checks `:root_admin?` anyway rather than assuming the
   hook ran. The figures here are org-wide over a time window — nothing on
   this page is scoped to a project.
 
@@ -75,7 +75,7 @@ defmodule PlatformWeb.PipelineLive do
     # again rather than assuming it, so a routing change that moves the page
     # out of that live_session degrades to a redirect and not to an open
     # admin surface.
-    if socket.assigns[:fabrikam_admin?] do
+    if socket.assigns[:root_admin?] do
       {:ok,
        socket
        |> assign(:page_title, "Pipeline health")

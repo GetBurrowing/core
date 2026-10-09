@@ -3,7 +3,7 @@ defmodule Platform.Push.FCM do
   Firebase Cloud Messaging HTTP v1 transport (task 01a10d8e stage 1).
 
   Delivers a `%Platform.Push.Notification{}` to every `fcm_devices` row of a
-  user (the Android app, package `com.koboai.burrow`). Like
+  user (the Android app; its package id lives in `Platform.Mobile.FcmDevice`). Like
   `Platform.Push.APNs`, it is reached only from `Platform.Push`, AFTER the
   archived-user check and the external redaction ran on the notification, so
   it never decides what a notification says, only where it goes. The message

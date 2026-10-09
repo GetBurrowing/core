@@ -48,7 +48,7 @@ defmodule Platform.Meetings.AgentActivityTest do
       |> Project.changeset(%{
         name: "Activity Project #{System.unique_integer([:positive])}",
         slug: "activity-project-#{System.unique_integer([:positive])}",
-        org_id: Platform.TenancyFixtures.fabrikam_org_id()
+        org_id: Platform.TenancyFixtures.acme_org_id()
       })
       |> Repo.insert()
 

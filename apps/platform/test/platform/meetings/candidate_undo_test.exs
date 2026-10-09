@@ -41,7 +41,7 @@ defmodule Platform.Meetings.CandidateUndoTest do
   alias Platform.Repo
 
   setup do
-    %{meeting: create_meeting!(Platform.TenancyFixtures.fabrikam_org_id())}
+    %{meeting: create_meeting!(Platform.TenancyFixtures.acme_org_id())}
   end
 
   # ── fixtures ──────────────────────────────────────────────────────────────

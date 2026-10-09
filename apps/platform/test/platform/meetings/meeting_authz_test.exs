@@ -29,7 +29,7 @@ defmodule Platform.Meetings.MeetingAuthzTest do
   # ── Fixtures ──────────────────────────────────────────────────────────────
 
   # `@example.com` so `Tenancy.derive_role_from_email/1` yields `:member` —
-  # a `@example.com` address would derive admin and bypass the very check
+  # a `@acme.test` address would derive admin and bypass the very check
   # under test.
   defp user!(overrides \\ %{}) do
     n = System.unique_integer([:positive])
@@ -76,13 +76,13 @@ defmodule Platform.Meetings.MeetingAuthzTest do
       assert space_id == meeting.chat_space_id
     end
 
-    test "a Fabrikam root admin resolves a tenant-org meeting they hold no membership in" do
+    test "an Acme root admin resolves a tenant-org meeting they hold no membership in" do
       org_id = tenant_org_id("wayne_tech")
       meeting = meeting_in_org!(org_id, "Root Admin Reach")
-      admin = user!() |> member!(fabrikam_org_id(), "admin")
+      admin = user!() |> member!(acme_org_id(), "admin")
 
       refute Tenancy.member_of?(admin, org_id)
-      assert Tenancy.fabrikam_admin?(admin)
+      assert Tenancy.root_admin?(admin)
 
       assert {:ok, fetched} = Meetings.fetch_meeting_for_user(admin, meeting.slug)
       assert fetched.id == meeting.id
@@ -94,10 +94,10 @@ defmodule Platform.Meetings.MeetingAuthzTest do
   describe "fetch_meeting_for_user/2 — unentitled viewers" do
     test "a non-member of the meeting's org gets :not_found" do
       meeting = meeting_in_org!(tenant_org_id("soylent"), "Private Sync")
-      # Fabrikam membership only, at member level — the shape every OIDC signup has.
-      outsider = user!() |> member!(fabrikam_org_id())
+      # Acme membership only, at member level — the shape every OIDC signup has.
+      outsider = user!() |> member!(acme_org_id())
 
-      refute Tenancy.fabrikam_admin?(outsider)
+      refute Tenancy.root_admin?(outsider)
       assert {:error, :not_found} = Meetings.fetch_meeting_for_user(outsider, meeting.slug)
     end
 
@@ -176,7 +176,7 @@ defmodule Platform.Meetings.MeetingAuthzTest do
 
     test "a root admin entitled to both also gets :ambiguous rather than MultipleResultsError",
          ctx do
-      admin = user!() |> member!(fabrikam_org_id(), "admin")
+      admin = user!() |> member!(acme_org_id(), "admin")
 
       assert {:error, :ambiguous} = Meetings.fetch_meeting_for_user(admin, ctx.slug)
     end

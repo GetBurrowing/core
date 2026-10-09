@@ -160,7 +160,7 @@ defmodule Platform.Meetings.RingingTest do
       |> Org.changeset(%{
         name: "Ring Tenant #{n}",
         slug: "tenant_ring_#{n}",
-        parent_org_id: Tenancy.get_org_by_slug!("fabrikam").id
+        parent_org_id: Tenancy.get_org_by_slug!("acme").id
       })
       |> Repo.insert!()
 

@@ -14,16 +14,16 @@ defmodule Platform.Files.Cataloger do
 
   `Platform.Org.Wiki.upsert_page/3` used to read only `:content` and
   `:updated_by`. A card written at an SXI project path therefore landed
-  as a root-Fabrikam row with a nil `project_id` — `WikiPage.changeset/2`
-  fills a nil `org_id` with the Fabrikam org by design, and
+  as a root-org row with a nil `project_id` — `WikiPage.changeset/2`
+  fills a nil `org_id` with the root org by design, and
   `update_changeset/2` cast neither column, so nothing could repair it
-  afterwards. The path said SXI, the row said Fabrikam, permanently.
+  afterwards. The path said SXI, the row said the root org, permanently.
 
   Stage 2 widened both changesets to accept the pair, and this module
   always passes it: the `org_id` comes from the card's own project, not
   from a default. `resolve_org_id/1` refuses to write at all when the
   project cannot be loaded or has no org, because falling through to
-  the Fabrikam default is the exact bug this paragraph exists to describe.
+  the root-org default is the exact bug this paragraph exists to describe.
 
   ## Self-gating — there is no enforcement to lean on
 

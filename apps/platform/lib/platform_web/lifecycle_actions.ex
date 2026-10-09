@@ -174,7 +174,7 @@ defmodule PlatformWeb.LifecycleActions do
   """
   @spec error_message(atom() | Ecto.Changeset.t()) :: String.t()
   def error_message(:unauthorized), do: "You don't have permission to do that."
-  def error_message(:not_deletable), do: "The Fabrikam root org can't be archived or deleted."
+  def error_message(:not_deletable), do: "The root org can't be archived or deleted."
   def error_message(:not_scheduled), do: "That item isn't scheduled for deletion."
   def error_message(:not_found), do: "That item no longer exists."
   def error_message(_other), do: "Something went wrong — please try again."

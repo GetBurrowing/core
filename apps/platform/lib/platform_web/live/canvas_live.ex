@@ -61,7 +61,7 @@ defmodule PlatformWeb.CanvasLive do
     * the creator's display name, from the ADR-0038 snapshot on the canvas row.
       Naming the owner is the whole point of the state: a door, not a wall.
     * the parent space, and only to a viewer who is a member of that space's
-      org. Everyone else is told "a space in Fabrikam", so the denial page cannot
+      org. Everyone else is told "a private space", so the denial page cannot
       be walked as a space directory.
 
   The existence oracle this creates is the tradeoff the plan already accepted
@@ -180,7 +180,7 @@ defmodule PlatformWeb.CanvasLive do
   # denial page names a real place only to someone who already has standing in
   # that org; to everyone else it stays a generic statement so the page cannot
   # be walked as a directory of spaces.
-  @generic_place "a space in Fabrikam"
+  @generic_place "a private space"
 
   # The 403 still offers one action when the creator snapshot is empty, which
   # is the case for canvases written before ADR-0038 landed.
@@ -214,7 +214,7 @@ defmodule PlatformWeb.CanvasLive do
 
   defp owner_label(_canvas), do: @unknown_owner
 
-  # Strict `member_of?/2`, not `fabrikam_admin?/1`: the question this answers is
+  # Strict `member_of?/2`, not `root_admin?/1`: the question this answers is
   # "does the viewer already have standing where this canvas lives", and a
   # root-org admin badge is not standing in a sibling org.
   defp place_label(%{org_id: org_id, name: name}, {:user, user_id})

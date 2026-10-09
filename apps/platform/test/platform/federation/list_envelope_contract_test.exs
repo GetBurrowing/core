@@ -1023,7 +1023,7 @@ defmodule Platform.Federation.ListEnvelopeContractTest do
       corpus = length(Platform.Tenancy.list_tenants())
       assert corpus > 0
 
-      env = call("org_list_descendants", %{"org_id" => fabrikam_org_id()})
+      env = call("org_list_descendants", %{"org_id" => acme_org_id()})
       assert_unbounded("org_list_descendants", env, corpus)
 
       leaf = call("org_list_descendants", %{"org_id" => tenant_org_id("envelope-leaf-#{u()}")})

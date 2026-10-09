@@ -60,7 +60,7 @@ defmodule Platform.Chat.TelemetryHandler do
     [:platform, :chat, :canvas_created],
     [:platform, :chat, :canvas_updated],
     [:platform, :chat, :attention_routed],
-    # Task 019fd76a stage 3: a Fabrikam admin moving a channel between orgs via
+    # Task 019fd76a stage 3: a root-org admin moving a channel between orgs via
     # `Platform.Chat.Sidebar.reassign_channel/3`. Metadata carries the space
     # id, the acting user, and both org ids (`from_org_id` / `to_org_id`,
     # each omitted when it is nil). This is the only durable record of the

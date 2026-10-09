@@ -54,7 +54,7 @@ defmodule Platform.SignInAdminTest do
 
     admin = suite_user!("admin")
     {:ok, _} = Tenancy.promote_to_admin(admin)
-    assert Tenancy.fabrikam_admin?(admin)
+    assert Tenancy.root_admin?(admin)
 
     %{admin: admin}
   end
@@ -372,7 +372,7 @@ defmodule Platform.SignInAdminTest do
   describe "admin authorization in the context" do
     test "a non-admin actor is :unauthorized everywhere, with zero pocket-id requests" do
       member = suite_user!("member")
-      refute Tenancy.fabrikam_admin?(member)
+      refute Tenancy.root_admin?(member)
       target = suite_user!("target")
       fake!(users: [pid_user(target.oidc_sub, target.email)])
       count = user_count()
@@ -536,7 +536,7 @@ defmodule Platform.SignInAdminTest do
       assert user.name == "New Person"
       assert user.oidc_sub == "pid-new"
       assert is_nil(user.archived_at)
-      refute Tenancy.fabrikam_admin?(user)
+      refute Tenancy.root_admin?(user)
 
       assert link.code == @token
       assert link.url == "https://issuer.example.com/lc/#{@token}?redirect=%2Fsettings%2Faccount"
@@ -577,7 +577,7 @@ defmodule Platform.SignInAdminTest do
       assert {:ok, %{user: user}} =
                SignInAdmin.invite(admin, %{email: "boss@example.test", name: "B", role: "admin"})
 
-      assert Tenancy.fabrikam_admin?(user)
+      assert Tenancy.root_admin?(user)
       assert %DateTime{} = root_membership(user).roles_locked_at
     end
 

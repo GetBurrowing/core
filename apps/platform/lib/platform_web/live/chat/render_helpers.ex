@@ -35,7 +35,7 @@ defmodule PlatformWeb.ChatLive.RenderHelpers do
   alias Platform.Chat
 
   # Which rows get the "Move to organisation…" control. Two conditions, and
-  # both are about the ROW, not the viewer (`@fabrikam_admin?` gates that
+  # both are about the ROW, not the viewer (`@root_admin?` gates that
   # separately):
   #
   #   * `kind == "channel"` — the Pinned block holds channels AND DMs in one

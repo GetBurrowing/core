@@ -14,7 +14,7 @@ defmodule Platform.DataMigrations.SeedRootOrgsTest do
   same pattern as the other `test/platform/data_migrations/*_test.exs`
   files. Migrations run to `:up` once, outside ExUnit's sandbox, before the
   suite boots (see `config/test.exs`), so this test DB already carries a
-  root org seeded under the "fabrikam"/"Fabrikam" env pin that file sets. Each test
+  root org seeded under the "acme"/"Acme" env pin that file sets. Each test
   here clears the `orgs` table first to reproduce a truly fresh database's
   first migrate.
   """
@@ -46,7 +46,7 @@ defmodule Platform.DataMigrations.SeedRootOrgsTest do
   setup do
     # Reproduce a genuinely empty database: this test DB's `orgs` table
     # already has the one root org seeded at boot (config/test.exs pins
-    # ROOT_ORG_SLUG=fabrikam/ROOT_ORG_NAME=Fabrikam), which `up/0`'s
+    # ROOT_ORG_SLUG=acme/ROOT_ORG_NAME=Acme), which `up/0`'s
     # `ON CONFLICT (slug) DO NOTHING` would silently no-op against, and a
     # differently-slugged insert would trip the `orgs_single_root` partial
     # unique index. Clearing it first (inside this test's own sandboxed,

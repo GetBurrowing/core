@@ -124,12 +124,14 @@ runtime stage 2 registered (`MVA_MCP_BASE_URL`, `MVA_MCP_AUTH_TOKEN`).
   memory`) — see that task's moduledoc for why neither dropped bundle can be
   narrowed any finer than an outright drop (authorization is per-bundle, not
   per-tool-name).
-- **MCP base URL must be the public host.** `MVA_MCP_BASE_URL` defaults to
-  `https://suite.example.com/mcp`, not an in-cluster `:4000` URL — Dalton's
-  moon run found the service defaulting to the latter, which Core redirects,
-  and the MCP client correctly refuses to follow a redirect rather than
-  silently re-POSTing. Point it elsewhere only if you know your deployment's
-  real public MCP host.
+- **MCP base URL must be the public host, and it is required.**
+  `MVA_MCP_BASE_URL` has no default (task 01a116de): any default would name
+  one particular Suite install, so an unset or empty value fails config
+  loading with an error naming the variable. Set it to your deployment's
+  public MCP URL (e.g. `https://suite.example.com/mcp`), not an in-cluster
+  `:4000` URL — Dalton's moon run found the service pointed at the latter,
+  which Core redirects, and the MCP client correctly refuses to follow a
+  redirect rather than silently re-POSTing.
 - **`build_tool_surface(config, room_name)`** (in `agent.py`) is what
   `entrypoint` hands to `MeetingVoiceAgent(config, tools=...)`: the live
   `MCPToolset` plus one local wrapper tool, `post_to_meeting_chat`.

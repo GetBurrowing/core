@@ -673,7 +673,7 @@ defmodule PlatformWeb.TasksLiveTest do
       # primitive; data-scope-chip is our wrapper hook that lets a test
       # / Playwright loop target the chip without depending on the
       # underlying ScopePill markup.
-      assert html =~ ~s(data-scope-chip="fabrikam")
+      assert html =~ ~s(data-scope-chip="acme")
       assert html =~ ~s(data-scope-chip="soylent")
       assert html =~ ~s(data-scope-chip="wayne_tech")
       assert html =~ ~s(data-scope-chip="sxi")
@@ -681,14 +681,14 @@ defmodule PlatformWeb.TasksLiveTest do
 
       # The scope_pill primitive emits these labels — confirming the chips
       # are actually rendered (not just the wrapper).
-      assert html =~ "Fabrikam"
+      assert html =~ "Acme"
       assert html =~ "Soylent"
       assert html =~ "Wayne-Tech"
       assert html =~ "SXI"
       assert html =~ "Paragon"
     end
 
-    test ~s(today-state: all tasks count under "fabrikam", others under 0), %{conn: conn} do
+    test ~s(today-state: all tasks count under "acme", others under 0), %{conn: conn} do
       project = create_project()
       # Clean DB for this test: count what we put in.
       _t1 = create_task(project, %{title: "A", status: "backlog"})
@@ -700,13 +700,13 @@ defmodule PlatformWeb.TasksLiveTest do
 
       counts = :sys.get_state(view.pid).socket.assigns.scope_counts
 
-      # Today-state contract: every task lives under "fabrikam" until org_id
+      # Today-state contract: every task lives under "acme" until org_id
       # ships. The rail rendering reads from this map.
       #
       # STRING keys since task 01a09287 stage 2 re-keyed `count_by_scope/0`
       # on the org rows — an org slug is user input and has no safe atom
       # conversion, so an atom key here is that bug returning.
-      assert counts["fabrikam"] >= 3
+      assert counts["acme"] >= 3
       assert counts["soylent"] == 0
       assert counts["wayne_tech"] == 0
       assert counts["sxi"] == 0
@@ -740,35 +740,35 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      # Drive the fabrikam chip via the inbound scope_filter event the same way
+      # Drive the acme chip via the inbound scope_filter event the same way
       # ScopePill emits it (`phx-value-scope` is the org SLUG).
-      _ = render_click(filters(view), "filter_scope", %{"scope" => "fabrikam"})
+      _ = render_click(filters(view), "filter_scope", %{"scope" => "acme"})
       html = after_filter(view)
 
       # The slug STAYS a string — task 01a09287 stage 2 removed the
       # allowlist that made converting it to an atom safe, so `parse_scope/2`
       # is a membership test now and `:all` is the one atom left. Asserting
-      # the string is what holds that line: `:fabrikam` passing here again would
+      # the string is what holds that line: `:acme` passing here again would
       # mean something re-introduced the conversion.
-      assert :sys.get_state(view.pid).socket.assigns.scope_filter == "fabrikam"
-      # The fabrikam chip is now marked active.
-      assert html =~ ~s(data-scope-chip="fabrikam" data-active="true")
+      assert :sys.get_state(view.pid).socket.assigns.scope_filter == "acme"
+      # The acme chip is now marked active.
+      assert html =~ ~s(data-scope-chip="acme" data-active="true")
       # And the All chip is no longer marked active.
       assert html =~ ~s(data-scope-chip="all" data-active="false")
     end
 
-    test "fabrikam scope: kanban still shows all tasks (today-state passthrough)", %{conn: conn} do
+    test "acme scope: kanban still shows all tasks (today-state passthrough)", %{conn: conn} do
       project = create_project()
-      t1 = create_task(project, %{title: "Alpha Fabrikam Card", status: "in_progress"})
-      t2 = create_task(project, %{title: "Beta Fabrikam Card", status: "backlog"})
+      t1 = create_task(project, %{title: "Alpha Acme Card", status: "in_progress"})
+      t2 = create_task(project, %{title: "Beta Acme Card", status: "backlog"})
 
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      _ = render_click(filters(view), "filter_scope", %{"scope" => "fabrikam"})
+      _ = render_click(filters(view), "filter_scope", %{"scope" => "acme"})
 
       html = after_filter(view)
-      # Today-state: every task folds under :fabrikam, so filtering to :fabrikam
+      # Today-state: every task folds under :acme, so filtering to :acme
       # is functionally a no-op for the desktop kanban (matches
       # count_by_scope's contract). Both cards remain on the desktop
       # board (`id="task-card-…"` markers are emitted only by the desktop
@@ -777,7 +777,7 @@ defmodule PlatformWeb.TasksLiveTest do
       assert html =~ ~s(id="task-card-#{t2.id}")
     end
 
-    test "non-fabrikam sub-org scope: kanban is empty today (no org_id yet)", %{conn: conn} do
+    test "non-acme sub-org scope: kanban is empty today (no org_id yet)", %{conn: conn} do
       project = create_project()
       t1 = create_task(project, %{title: "Hidden Card Alpha", status: "in_progress"})
       t2 = create_task(project, %{title: "Hidden Card Beta", status: "backlog"})
@@ -788,7 +788,7 @@ defmodule PlatformWeb.TasksLiveTest do
       _ = render_click(filters(view), "filter_scope", %{"scope" => "soylent"})
 
       html = after_filter(view)
-      # Pre-MT/RBAC contract: filtering to a non-fabrikam scope produces an
+      # Pre-MT/RBAC contract: filtering to a non-acme scope produces an
       # empty board because no task carries an org_id yet. The mobile
       # path is unscoped so the card title still appears in the mobile
       # list — assert specifically against the desktop card id markers,
@@ -808,7 +808,7 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      # Pin to a non-fabrikam scope → desktop card marker disappears (mobile
+      # Pin to a non-acme scope → desktop card marker disappears (mobile
       # list keeps the title, so assert on the desktop-only id).
       _ = render_click(filters(view), "filter_scope", %{"scope" => "sxi"})
       hidden = after_filter(view)
@@ -846,7 +846,7 @@ defmodule PlatformWeb.TasksLiveTest do
 
       # And the mobile pills do NOT contain the scope-chip data attribute —
       # scope filtering is desktop-only.
-      assert html =~ ~s(data-scope-chip="fabrikam")
+      assert html =~ ~s(data-scope-chip="acme")
 
       mobile_block =
         case Regex.run(~r/id="tasks-status-filter-pills".*?<\/nav>/s, html) do
@@ -4078,7 +4078,7 @@ defmodule PlatformWeb.TasksLiveTest do
              "(pending_idx=#{pending_idx}, outputs_idx=#{outputs_idx})"
   end
 
-  # Hotfix (Fabrikam prod, 2026-09-29 18:52Z): the inline output canvas wrapper
+  # Hotfix (production, 2026-09-29 18:52Z): the inline output canvas wrapper
   # carried an UNTARGETED phx-click="canvas_open" (meant for ChatLive), so a
   # click on an output canvas in the Tasks page reached TasksLive, which has
   # no clause for it — FunctionClauseError, LiveView crash. The steering

@@ -101,7 +101,7 @@ defmodule Platform.Meetings.IntentDispatcherTest do
   # UUID, which is correct for the queue (Registry-keyed, no DB) and
   # useless the moment a durable row has to resolve a tenant.
   defp new_real_meeting! do
-    org_id = Platform.TenancyFixtures.fabrikam_org_id()
+    org_id = Platform.TenancyFixtures.acme_org_id()
 
     {:ok, project} =
       Platform.Tasks.create_project(%{

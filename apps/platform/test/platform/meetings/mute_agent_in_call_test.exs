@@ -114,7 +114,7 @@ defmodule Platform.Meetings.MuteAgentInCallTest do
     Repo.insert!(
       OrgMembership.changeset(%OrgMembership{}, %{
         user_id: user.id,
-        org_id: Platform.TenancyFixtures.fabrikam_org_id(),
+        org_id: Platform.TenancyFixtures.acme_org_id(),
         role: "member"
       })
     )
@@ -143,7 +143,7 @@ defmodule Platform.Meetings.MuteAgentInCallTest do
         Project.changeset(%Project{}, %{
           name: "Mute Agent Project #{n}",
           slug: "mute-agent-project-#{n}",
-          org_id: Platform.TenancyFixtures.fabrikam_org_id()
+          org_id: Platform.TenancyFixtures.acme_org_id()
         })
       )
 

@@ -232,7 +232,7 @@ defmodule Platform.ExtensionsTest do
       refute Enum.any?(ToolSurface.tool_definitions(), &String.starts_with?(&1.name, "play_"))
       refute Enum.any?(Surfaces.list(), &String.starts_with?(&1.key(), "game_stream."))
       refute Enum.any?(Metrics.known_metrics(), &String.starts_with?(&1, "game_stream"))
-      refute :fixture in Enum.map(IconRail.destinations(is_fabrikam_user: true), & &1.key)
+      refute :fixture in Enum.map(IconRail.destinations(root_user: true), & &1.key)
       assert Extensions.migrations_paths() == []
       assert Platform.MixSupport.extension_migration_args() == []
       assert Extensions.live_hooks() == []
@@ -551,7 +551,13 @@ defmodule Platform.ExtensionsTest do
     #
     # Re-pinned by task 01a115b5 stage 2: suite_run_describe's `detail`
     # parameter and description text. Measured on moon at the stage's branch.
-    @main_tool_digest_off "72c6e07c622bc52f454b463a913f0bdb999be529c270f86dfdcecafd506fed1b"
+    #
+    # Re-pinned by task 01a116de stage 2: two description strings stop naming
+    # one install's root org (`org_list_descendants`'s parent_org_id now says
+    # "Use the root org id", task_close_as_delivered says "root-org admin").
+    # Names and bundles are unchanged (asserted above). Measured on moon at
+    # the stage's branch (c42cf2819).
+    @main_tool_digest_off "393233a9add41feb9c556b3e03cd293bd7d9fa5739f27bd53556229bdbff0dd0"
     @main_kinds_summaries_digest_off "4c060fb7a6914985f94857aaac9effbb519dd2b2170c7a9c0013d4db15a73ea4"
     @main_kinds_tool_schemas_digest_off "e454cd9e2aeb1d821a70b74fe433e81ba98b94f7ae9f2d59c55f8cf5bf509af8"
     # main's lists minus exactly `play`.
@@ -609,7 +615,7 @@ defmodule Platform.ExtensionsTest do
       assert Metrics.known_metrics() == @core_metrics
       assert Enum.map(Metrics.catalog(), & &1.slug) |> Enum.sort() == Enum.sort(@core_metrics)
       assert Enum.map(Surfaces.list(), & &1.key()) == @core_surfaces
-      assert Enum.map(IconRail.destinations(is_fabrikam_user: true), & &1.key) == @main_rail
+      assert Enum.map(IconRail.destinations(root_user: true), & &1.key) == @main_rail
       assert Kinds.names() == @core_kinds
       assert digest(Kinds.summaries()) == @main_kinds_summaries_digest_off
       assert digest(Kinds.tool_schemas()) == @main_kinds_tool_schemas_digest_off

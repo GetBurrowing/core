@@ -47,13 +47,13 @@ defmodule Platform.Tenancy.ProjectWriteFreezeTest do
       })
       |> Repo.insert!()
 
-    # New users get a baseline "member" row on Fabrikam; upgrade rather than insert.
-    fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+    # New users get a baseline "member" row on Acme; upgrade rather than insert.
+    acme = Tenancy.get_org_by_slug!("acme")
 
-    case Repo.get_by(OrgMembership, user_id: user.id, org_id: fabrikam.id) do
+    case Repo.get_by(OrgMembership, user_id: user.id, org_id: acme.id) do
       nil ->
         %OrgMembership{}
-        |> OrgMembership.changeset(%{user_id: user.id, org_id: fabrikam.id, role: "admin"})
+        |> OrgMembership.changeset(%{user_id: user.id, org_id: acme.id, role: "admin"})
         |> Repo.insert!()
 
       existing ->
@@ -70,7 +70,7 @@ defmodule Platform.Tenancy.ProjectWriteFreezeTest do
     |> Org.changeset(%{
       name: "Tenant #{n}",
       slug: "tenant_#{n}",
-      parent_org_id: Tenancy.get_org_by_slug!("fabrikam").id
+      parent_org_id: Tenancy.get_org_by_slug!("acme").id
     })
     |> Repo.insert!()
   end

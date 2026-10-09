@@ -35,7 +35,7 @@ defmodule PlatformWeb.ChatLive.SettingsComponent do
   @impl true
   def update(%{open: open, space: space} = assigns, socket) do
     # Danger-zone permissions are (re)computed only on the closed → open
-    # transition, so the fabrikam_admin? DB check runs once per open rather
+    # transition, so the root_admin? DB check runs once per open rather
     # than on every parent re-render while the modal is up.
     freshly_opened? = open && socket.assigns[:open] != true
 
@@ -65,15 +65,15 @@ defmodule PlatformWeb.ChatLive.SettingsComponent do
 
   # Task 019e95ea stage 4: UI affordance only — `Chat.archive_space/2` and
   # `Chat.schedule_space_deletion/2` re-authorize in the context layer.
-  # `can_archive?` mirrors the archive rule (Fabrikam admin OR creator);
-  # `can_delete?` mirrors the deletion rule (Fabrikam admin ONLY). The typed
+  # `can_archive?` mirrors the archive rule (root-org admin OR creator);
+  # `can_delete?` mirrors the deletion rule (root-org admin ONLY). The typed
   # confirmation state resets on every fresh open.
   defp maybe_authorize_danger_zone(socket, true, %{} = space) do
-    fabrikam_admin? = Tenancy.fabrikam_admin?(%{id: socket.assigns.current_user_id})
+    root_admin? = Tenancy.root_admin?(%{id: socket.assigns.current_user_id})
 
     socket
-    |> assign(:can_archive?, fabrikam_admin? or space.created_by == socket.assigns.current_user_id)
-    |> assign(:can_delete?, fabrikam_admin?)
+    |> assign(:can_archive?, root_admin? or space.created_by == socket.assigns.current_user_id)
+    |> assign(:can_delete?, root_admin?)
     |> assign(:delete_confirmed?, false)
   end
 

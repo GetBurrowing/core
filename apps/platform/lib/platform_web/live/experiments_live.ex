@@ -79,7 +79,7 @@ defmodule PlatformWeb.ExperimentsLive do
   ## Reads are member-visible, writes are admin-only, checked server-side
 
   These routes sit in `live_session :authenticated`, so any member can read
-  the page. Every write handler re-checks `@fabrikam_admin?` ITSELF before
+  the page. Every write handler re-checks `@root_admin?` ITSELF before
   touching the context (`admin_only/2`). Hiding a button is an affordance; a
   forged event from a non-admin client is refused by the handler.
   """
@@ -138,7 +138,7 @@ defmodule PlatformWeb.ExperimentsLive do
      |> assign(:surface_options, surface_options())
      # Org names are for the admin's pickers only; a member's panel shows the
      # install-wide row and lists no foreign org (ADR-0042).
-     |> assign(:orgs, if(socket.assigns[:fabrikam_admin?], do: sorted_orgs(), else: []))
+     |> assign(:orgs, if(socket.assigns[:root_admin?], do: sorted_orgs(), else: []))
      |> assign(:projects, Tasks.list_projects_for_user(user))}
   end
 
@@ -264,7 +264,7 @@ defmodule PlatformWeb.ExperimentsLive do
     {:noreply, assign(socket, :create_form, form)}
   end
 
-  # ── WRITES. Every one re-checks `@fabrikam_admin?` server-side ──────────────
+  # ── WRITES. Every one re-checks `@root_admin?` server-side ──────────────
   #
   # The buttons below are hidden from non-admins, and that is an affordance
   # only. A member who fires an event by name over the socket — which costs
@@ -592,13 +592,13 @@ defmodule PlatformWeb.ExperimentsLive do
     end)
   end
 
-  # The gate. `fun` is not evaluated at all unless the acting user is a Fabrikam
+  # The gate. `fun` is not evaluated at all unless the acting user is a root-org
   # admin, so a refused write cannot have run a context function first.
   defp admin_only(socket, fun) do
-    if socket.assigns[:fabrikam_admin?] do
+    if socket.assigns[:root_admin?] do
       fun.()
     else
-      {:noreply, put_flash(socket, :error, "Only Fabrikam admins can change experiments.")}
+      {:noreply, put_flash(socket, :error, "Only root-org admins can change experiments.")}
     end
   end
 
@@ -1053,7 +1053,7 @@ defmodule PlatformWeb.ExperimentsLive do
               empty. Both are hidden from non-admins, and that is an
               affordance only — the refusal lives in `admin_only/2`. --%>
         <button
-          :if={@fabrikam_admin? and not @show_create}
+          :if={@root_admin? and not @show_create}
           type="button"
           phx-click="show_create"
           data-role="new-experiment-button"
@@ -1084,7 +1084,7 @@ defmodule PlatformWeb.ExperimentsLive do
           helped — or says it does not know yet.
         </p>
         <button
-          :if={@fabrikam_admin?}
+          :if={@root_admin?}
           type="button"
           phx-click="show_create"
           data-role="empty-create-cta"
@@ -1138,7 +1138,7 @@ defmodule PlatformWeb.ExperimentsLive do
               </span>
             </p>
             <button
-              :if={@fabrikam_admin?}
+              :if={@root_admin?}
               type="button"
               phx-click="approve_launch"
               phx-value-slug={experiment.slug}
@@ -1206,7 +1206,7 @@ defmodule PlatformWeb.ExperimentsLive do
                 {@guard_live} of {@guardrails.max_live} used
               </span>
               <input
-                :if={@fabrikam_admin?}
+                :if={@root_admin?}
                 type="number"
                 name="max_live"
                 min="0"
@@ -1222,14 +1222,14 @@ defmodule PlatformWeb.ExperimentsLive do
           <div class="py-2 space-y-2">
             <dt>Surfaces in scope</dt>
             <dd class="space-y-1" data-role="guardrails-surfaces">
-              <input :if={@fabrikam_admin?} type="hidden" name="allowed_surfaces[]" value="" />
+              <input :if={@root_admin?} type="hidden" name="allowed_surfaces[]" value="" />
               <label :for={key <- @guard_surfaces} class="flex items-center gap-2 font-mono text-sm">
                 <input
                   type="checkbox"
                   name="allowed_surfaces[]"
                   value={key}
                   checked={key in (@guardrails.allowed_surfaces || [])}
-                  disabled={not @fabrikam_admin?}
+                  disabled={not @root_admin?}
                   data-role="guardrails-surface"
                   class="checkbox checkbox-sm"
                 />
@@ -1252,7 +1252,7 @@ defmodule PlatformWeb.ExperimentsLive do
             <dt><label for="guardrails-approval">Require human approval to launch</label></dt>
             <dd>
               <input
-                :if={@fabrikam_admin?}
+                :if={@root_admin?}
                 type="hidden"
                 name="require_human_approval"
                 value="false"
@@ -1263,7 +1263,7 @@ defmodule PlatformWeb.ExperimentsLive do
                 name="require_human_approval"
                 value="true"
                 checked={@guardrails.require_human_approval == true}
-                disabled={not @fabrikam_admin?}
+                disabled={not @root_admin?}
                 data-role="guardrails-approval"
                 class="checkbox checkbox-sm"
               />
@@ -1273,14 +1273,14 @@ defmodule PlatformWeb.ExperimentsLive do
           <div class="py-2 flex items-center justify-between gap-2">
             <dt><label for="guardrails-auto-promote">Allow agents to promote</label></dt>
             <dd>
-              <input :if={@fabrikam_admin?} type="hidden" name="allow_auto_promote" value="false" />
+              <input :if={@root_admin?} type="hidden" name="allow_auto_promote" value="false" />
               <input
                 id="guardrails-auto-promote"
                 type="checkbox"
                 name="allow_auto_promote"
                 value="true"
                 checked={@guardrails.allow_auto_promote == true}
-                disabled={not @fabrikam_admin?}
+                disabled={not @root_admin?}
                 data-role="guardrails-auto-promote"
                 class="checkbox checkbox-sm"
               />
@@ -1288,13 +1288,13 @@ defmodule PlatformWeb.ExperimentsLive do
           </div>
         </dl>
 
-        <div :if={@fabrikam_admin?} class="flex justify-end">
+        <div :if={@root_admin?} class="flex justify-end">
           <button type="submit" data-role="guardrails-save" class="btn btn-sm btn-neutral">
             Save guardrails
           </button>
         </div>
-        <p :if={not @fabrikam_admin?} class="text-xs text-base-content/70">
-          Only Fabrikam admins can change guardrails.
+        <p :if={not @root_admin?} class="text-xs text-base-content/70">
+          Only root-org admins can change guardrails.
         </p>
       </form>
     </section>
@@ -1314,7 +1314,7 @@ defmodule PlatformWeb.ExperimentsLive do
 
     ~H"""
     <section
-      :if={@show_create and @fabrikam_admin?}
+      :if={@show_create and @root_admin?}
       data-role="create-experiment-panel"
       class="bg-base-200 rounded-lg p-4 md:p-6 max-w-2xl"
     >
@@ -1539,7 +1539,7 @@ defmodule PlatformWeb.ExperimentsLive do
 
       <%!-- Controls. Neutral, all of them: Promote, on an earned row, is the
             only primary action on this page. --%>
-      <div :if={@fabrikam_admin?} class="flex flex-wrap gap-2" data-role="experiment-controls">
+      <div :if={@root_admin?} class="flex flex-wrap gap-2" data-role="experiment-controls">
         <button
           :if={can_start?(@experiment)}
           type="button"
@@ -1571,7 +1571,7 @@ defmodule PlatformWeb.ExperimentsLive do
       </div>
 
       <form
-        :if={@fabrikam_admin? and @show_stop_form and @experiment.status == "running"}
+        :if={@root_admin? and @show_stop_form and @experiment.status == "running"}
         phx-submit="stop"
         data-role="stop-form"
         class="bg-base-200 rounded-lg p-4 space-y-3 max-w-2xl"
@@ -1632,7 +1632,7 @@ defmodule PlatformWeb.ExperimentsLive do
           the live limit and the one-experiment-per-surface rule.
         </p>
         <button
-          :if={@fabrikam_admin?}
+          :if={@root_admin?}
           type="button"
           phx-click="approve_launch"
           phx-value-slug={@experiment.slug}
@@ -1693,7 +1693,7 @@ defmodule PlatformWeb.ExperimentsLive do
             })}
           </div>
           <div
-            :if={row.earned? and @fabrikam_admin? and @experiment.status != "draft"}
+            :if={row.earned? and @root_admin? and @experiment.status != "draft"}
             class="shrink-0 sm:ml-auto"
           >
             <button
@@ -1780,7 +1780,7 @@ defmodule PlatformWeb.ExperimentsLive do
         <section
           :if={
             is_nil(@experiment.target_template_slug) and is_nil(@experiment.surface_target) and
-              @experiment.status == "draft" and @fabrikam_admin?
+              @experiment.status == "draft" and @root_admin?
           }
           data-role="activate-panel"
           class="border border-edge rounded-lg p-4 space-y-3 max-w-2xl"
@@ -1818,7 +1818,7 @@ defmodule PlatformWeb.ExperimentsLive do
 
         <form
           :if={
-            @fabrikam_admin? and @experiment.status == "draft" and
+            @root_admin? and @experiment.status == "draft" and
               @experiment.surface_key not in [nil, "dispatch.prompt"]
           }
           phx-submit="add_variant"
@@ -1871,7 +1871,7 @@ defmodule PlatformWeb.ExperimentsLive do
         <%!-- Draft only, and hiding it is an affordance: the refusal is in
               `Experiments.delete_experiment/1` and reaches a by-name event
               too. An activated experiment's assignments are its record. --%>
-        <div :if={@experiment.status == "draft" and @fabrikam_admin?} class="pt-2">
+        <div :if={@experiment.status == "draft" and @root_admin?} class="pt-2">
           <button
             type="button"
             phx-click="delete_experiment"
@@ -1969,8 +1969,8 @@ defmodule PlatformWeb.ExperimentsLive do
           does not promote anything.
         </p>
 
-        <p :if={not @fabrikam_admin?} data-role="admin-only-note" class="text-sm text-neutral">
-          Only Fabrikam admins can start, stop, conclude or promote an experiment.
+        <p :if={not @root_admin?} data-role="admin-only-note" class="text-sm text-neutral">
+          Only root-org admins can start, stop, conclude or promote an experiment.
         </p>
       </section>
     </div>

@@ -7,11 +7,11 @@ defmodule Platform.Tasks.ProjectScopeTest do
   instead. These tests pin the org-membership filter.
 
   Users are seeded with `@example.com` addresses and an explicit
-  `%OrgMembership{role: "member"}` row. A `@example.com` address would
+  `%OrgMembership{role: "member"}` row. A `@acme.test` address would
   make `Tenancy.derive_role_from_email/1` return `:admin` and
   blanket-bypass the very filter under test — same trap documented at
   `PlatformWeb.MeetingLiveTest`. Each negative case asserts
-  `refute Tenancy.fabrikam_admin?(user)` inline first: without that
+  `refute Tenancy.root_admin?(user)` inline first: without that
   precondition a broken scope reads as correct.
   """
   use Platform.DataCase, async: true
@@ -51,7 +51,7 @@ defmodule Platform.Tasks.ProjectScopeTest do
 
   setup do
     %{
-      fabrikam: Platform.TenancyFixtures.fabrikam_org_id(),
+      acme: Platform.TenancyFixtures.acme_org_id(),
       org_a: Platform.TenancyFixtures.tenant_org_id("soylent"),
       org_b: Platform.TenancyFixtures.tenant_org_id("wayne_tech"),
       org_c: Platform.TenancyFixtures.tenant_org_id("sxi")
@@ -61,7 +61,7 @@ defmodule Platform.Tasks.ProjectScopeTest do
   describe "list_projects_for_user/2 — plain member" do
     test "does not return a foreign org's project", ctx do
       user = user!() |> member!(ctx.org_a)
-      refute Tenancy.fabrikam_admin?(user)
+      refute Tenancy.root_admin?(user)
       refute Tenancy.root_member?(user)
 
       foreign = project!(ctx.org_b, "Foreign Scope Project")
@@ -72,7 +72,7 @@ defmodule Platform.Tasks.ProjectScopeTest do
 
     test "returns the viewer's own org project (positive control)", ctx do
       user = user!() |> member!(ctx.org_a)
-      refute Tenancy.fabrikam_admin?(user)
+      refute Tenancy.root_admin?(user)
       refute Tenancy.root_member?(user)
 
       own = project!(ctx.org_a, "Own Scope Project")
@@ -83,7 +83,7 @@ defmodule Platform.Tasks.ProjectScopeTest do
 
     test "multi-org member sees both their orgs and not a third", ctx do
       user = user!() |> member!(ctx.org_a) |> member!(ctx.org_b)
-      refute Tenancy.fabrikam_admin?(user)
+      refute Tenancy.root_admin?(user)
       refute Tenancy.root_member?(user)
 
       a = project!(ctx.org_a, "Multi A Project")
@@ -98,9 +98,9 @@ defmodule Platform.Tasks.ProjectScopeTest do
   end
 
   describe "list_projects_for_user/2 — root membership sees everything" do
-    test "a Fabrikam root admin sees projects in every org", ctx do
-      admin = user!(name: "Root Admin") |> member!(ctx.fabrikam, "admin")
-      assert Tenancy.fabrikam_admin?(admin) == true
+    test "an Acme root admin sees projects in every org", ctx do
+      admin = user!(name: "Root Admin") |> member!(ctx.acme, "admin")
+      assert Tenancy.root_admin?(admin) == true
 
       a = project!(ctx.org_a, "Admin Visible A")
       b = project!(ctx.org_b, "Admin Visible B")
@@ -114,10 +114,10 @@ defmodule Platform.Tasks.ProjectScopeTest do
     # not walls — a root-org member sees every tenant's content regardless
     # of role. `Tenancy.visibility/1` therefore returns `:root_all` for ANY
     # root member, which is deliberately wider than the previous
-    # `fabrikam_admin?/1`-only bypass. This test pins the widening on purpose.
+    # `root_admin?/1`-only bypass. This test pins the widening on purpose.
     test "a plain root member (role: member) also sees every org", ctx do
-      member = user!(name: "Root Member") |> member!(ctx.fabrikam, "member")
-      refute Tenancy.fabrikam_admin?(member)
+      member = user!(name: "Root Member") |> member!(ctx.acme, "member")
+      refute Tenancy.root_admin?(member)
       assert Tenancy.root_member?(member)
       assert Tenancy.visibility(member) == :root_all
 
@@ -133,7 +133,7 @@ defmodule Platform.Tasks.ProjectScopeTest do
   describe "list_projects_for_user/2 — zero memberships fail closed" do
     test "a user with no membership rows gets [] from a non-empty fixture", ctx do
       user = user!(name: "Orphan Viewer")
-      refute Tenancy.fabrikam_admin?(user)
+      refute Tenancy.root_admin?(user)
       refute Tenancy.root_member?(user)
       assert Tenancy.visibility(user) == :none
 
@@ -172,7 +172,7 @@ defmodule Platform.Tasks.ProjectScopeTest do
 
     test "list_projects_for_user/2 returns only the member's own org", ctx do
       user = user!() |> member!(ctx.org_a)
-      refute Tenancy.fabrikam_admin?(user)
+      refute Tenancy.root_admin?(user)
       refute Tenancy.root_member?(user)
 
       a = project!(ctx.org_a, "Split Scoped A")
@@ -234,7 +234,7 @@ defmodule Platform.Tasks.ProjectScopeTest do
   describe "list_projects_for_user/2 — opts" do
     test ":org_id narrows further and never widens", ctx do
       user = user!() |> member!(ctx.org_a) |> member!(ctx.org_b)
-      refute Tenancy.fabrikam_admin?(user)
+      refute Tenancy.root_admin?(user)
       refute Tenancy.root_member?(user)
 
       a = project!(ctx.org_a, "Opt Narrow A")

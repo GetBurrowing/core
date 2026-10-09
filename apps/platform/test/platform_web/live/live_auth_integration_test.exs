@@ -44,37 +44,37 @@ defmodule PlatformWeb.LiveAuthIntegrationTest do
   end
 
   describe "live_session :authenticated → LiveAuth :default" do
-    test "admin user has :fabrikam_admin? = true on LV mount", %{conn: conn} do
+    test "admin user has :root_admin? = true on LV mount", %{conn: conn} do
       user = create_user!()
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
-      create_membership!(user, fabrikam, "admin")
+      acme = Tenancy.get_org_by_slug!("acme")
+      create_membership!(user, acme, "admin")
 
       {:ok, view, _html} = conn |> authenticated_conn(user) |> live(~p"/tasks")
       assigns = :sys.get_state(view.pid).socket.assigns
 
-      assert assigns.fabrikam_admin? == true
-      assert %{role: :admin, org: %{slug: "fabrikam"}} = assigns.current_user_org_membership
+      assert assigns.root_admin? == true
+      assert %{role: :admin, org: %{slug: "acme"}} = assigns.current_user_org_membership
     end
 
-    test "member user has :fabrikam_admin? = false on LV mount", %{conn: conn} do
+    test "member user has :root_admin? = false on LV mount", %{conn: conn} do
       user = create_user!()
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
-      create_membership!(user, fabrikam, "member")
+      acme = Tenancy.get_org_by_slug!("acme")
+      create_membership!(user, acme, "member")
 
       {:ok, view, _html} = conn |> authenticated_conn(user) |> live(~p"/tasks")
       assigns = :sys.get_state(view.pid).socket.assigns
 
-      assert assigns.fabrikam_admin? == false
-      assert %{role: :member, org: %{slug: "fabrikam"}} = assigns.current_user_org_membership
+      assert assigns.root_admin? == false
+      assert %{role: :member, org: %{slug: "acme"}} = assigns.current_user_org_membership
     end
 
-    test "user with no memberships has :fabrikam_admin? = false + nil membership", %{conn: conn} do
+    test "user with no memberships has :root_admin? = false + nil membership", %{conn: conn} do
       user = create_user!()
 
       {:ok, view, _html} = conn |> authenticated_conn(user) |> live(~p"/tasks")
       assigns = :sys.get_state(view.pid).socket.assigns
 
-      assert assigns.fabrikam_admin? == false
+      assert assigns.root_admin? == false
       assert is_nil(assigns.current_user_org_membership)
     end
   end

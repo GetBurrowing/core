@@ -37,7 +37,7 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
 
   ## Read-only attrs (owned by the shell, never written here)
 
-  `:project_sections`, `:projects_by_org`, `:orgs`, `:fabrikam_admin?`,
+  `:project_sections`, `:projects_by_org`, `:orgs`, `:root_admin?`,
   `:lifecycle_menu_key`, `:selected_project_id`, `:selected_epic_id`,
   `:current_user_id`, `:current_user_record`.
 
@@ -139,7 +139,12 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
 
   @impl true
   def update(assigns, socket) do
-    socket = assign(socket, assigns)
+    socket =
+      socket
+      |> assign(assigns)
+      # Resolved ONCE per component lifetime, not per rendered org row:
+      # `Tenancy.root_org_slug/0` may fall back to a DB read of the root org.
+      |> assign_new(:root_org_slug, fn -> Tenancy.root_org_slug() end)
 
     # The project form's org default depends on the viewer, which only
     # arrives with the first `update/2`. Build it once, then leave it to the
@@ -335,25 +340,25 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
 
   # Stage 5 of ADR-0042: pre-populate the New-Project form's org select
   # with the current user's primary membership's org (via
-  # `Tenancy.load_membership/1`). Falls back to the Fabrikam root org when no
+  # `Tenancy.load_membership/1`). Falls back to the root org when no
   # membership exists yet — matches `Tasks.create_project/1`'s server-side
   # default and keeps the form usable for fresh accounts.
   defp default_project_form_attrs(user_id) when is_binary(user_id) do
     case Accounts.get_user(user_id) do
       nil ->
-        fabrikam_default_attrs()
+        root_default_attrs()
 
       user ->
         case Tenancy.load_membership(user) do
           %{org: %Tenancy.Org{id: org_id}} -> %{"org_id" => org_id}
-          _ -> fabrikam_default_attrs()
+          _ -> root_default_attrs()
         end
     end
   end
 
-  defp default_project_form_attrs(_), do: fabrikam_default_attrs()
+  defp default_project_form_attrs(_), do: root_default_attrs()
 
-  defp fabrikam_default_attrs do
+  defp root_default_attrs do
     case Tenancy.get_root_org() do
       %Tenancy.Org{id: id} -> %{"org_id" => id}
       _ -> %{}
@@ -437,7 +442,7 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
         </div>
 
         <%!-- Stage 5 of ADR-0042: project picker grouped by org via collapsible
-             <details> sections. Fabrikam first (root), then tenant orgs alphabetically.
+             <details> sections. The root org first, then tenant orgs alphabetically.
              Header carries the scope color dot (Tenancy.scope_color/1, pure +
              DB-free) so users see at a glance which org a section belongs to. --%>
         <%!-- Mode strip (task 01a00cf1 stage 2). THE STRIP IS THE SIGNAL, NOT
@@ -502,12 +507,21 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
                 # other than here. Kebab and reveal each claim a slot; the row
                 # reserves exactly as many as it renders.
                 summary_pad(
-                  @fabrikam_admin and org_slug not in [Tenancy.root_org_slug(), "_unassigned"],
+                  @root_admin? and org_slug not in [@root_org_slug, "_unassigned"],
                   @mask_names? and not MapSet.member?(@revealed_rail_ids, org_slug)
                 )
               ]
             }>
-              <span class={"size-2 rounded-full bg-current #{Tenancy.scope_color(org_slug)}"}></span>
+              <span
+                class={"size-2 rounded-full scope-dot-current #{Tenancy.scope_color(org_slug)}"}
+                data-scope={
+                  if(@mask_names? and not MapSet.member?(@revealed_rail_ids, org_slug),
+                    do: nil,
+                    else: org_slug
+                  )
+                }
+              >
+              </span>
               <span>{TaskDisplay.rail_label(@mask_labels, {:org, org_slug})}</span>
               <span class="ml-auto text-[10px] tracking-normal text-base-content/40">
                 {length(org_projects)}
@@ -527,7 +541,7 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
               type="button"
               class={[
                 "channel-section-reveal-button absolute top-1.5",
-                if(@fabrikam_admin and org_slug not in [Tenancy.root_org_slug(), "_unassigned"],
+                if(@root_admin? and org_slug not in [@root_org_slug, "_unassigned"],
                   do: "right-8",
                   else: "right-1"
                 )
@@ -542,14 +556,14 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
             </button>
             <%!-- Org kebab: a sibling of <summary> (NOT a descendant) positioned
                  over the row's right edge, so clicking it opens the lifecycle
-                 menu without toggling the native <details>. Root org (Fabrikam) is
+                 menu without toggling the native <details>. The root org is
                  never offered — the lifecycle refuses it.
 
                  Container lifecycle is stage 7's concern: these controls carry
                  NO phx-target, so their events reach the parent LiveView, which
                  still owns them and the directory maps they refresh. --%>
             <.lifecycle_menu
-              :if={@fabrikam_admin and org_slug not in [Tenancy.root_org_slug(), "_unassigned"]}
+              :if={@root_admin? and org_slug not in [@root_org_slug, "_unassigned"]}
               key={"org:#{TaskDisplay.rail_org_slug(@mask_labels, org_slug)}"}
               open={@lifecycle_menu_key == "org:#{TaskDisplay.rail_org_slug(@mask_labels, org_slug)}"}
               type="org"
@@ -589,7 +603,7 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
                    `aria-label`, `phx-value-name` and from there the confirm
                    modal and the flash. It takes the RESOLVED label. --%>
               <.lifecycle_menu
-                :if={@fabrikam_admin}
+                :if={@root_admin?}
                 key={"project:#{project.id}"}
                 open={@lifecycle_menu_key == "project:#{project.id}"}
                 type="project"
@@ -679,11 +693,20 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
             <summary class={[
               "flex items-center gap-2 px-3 py-2 text-xs font-semibold uppercase tracking-widest text-base-content/60 cursor-pointer select-none",
               summary_pad(
-                @fabrikam_admin and org_slug not in [Tenancy.root_org_slug(), "_unassigned"],
+                @root_admin? and org_slug not in [@root_org_slug, "_unassigned"],
                 @mask_names? and not MapSet.member?(@revealed_rail_ids, org_slug)
               )
             ]}>
-              <span class={"size-2 rounded-full bg-current #{Tenancy.scope_color(org_slug)}"}></span>
+              <span
+                class={"size-2 rounded-full scope-dot-current #{Tenancy.scope_color(org_slug)}"}
+                data-scope={
+                  if(@mask_names? and not MapSet.member?(@revealed_rail_ids, org_slug),
+                    do: nil,
+                    else: org_slug
+                  )
+                }
+              >
+              </span>
               <span>{TaskDisplay.rail_label(@mask_labels, {:org, org_slug})}</span>
               <span class="ml-auto text-[10px] tracking-normal text-base-content/40">
                 {length(org_projects)}
@@ -698,7 +721,7 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
               type="button"
               class={[
                 "channel-section-reveal-button absolute top-1.5",
-                if(@fabrikam_admin and org_slug not in [Tenancy.root_org_slug(), "_unassigned"],
+                if(@root_admin? and org_slug not in [@root_org_slug, "_unassigned"],
                   do: "right-8",
                   else: "right-1"
                 )
@@ -715,9 +738,9 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
                  sidebar, keyed with a `mobile-` prefix so its open-state never
                  collides with the desktop menu's data-menu-key in the DOM.
                  Positioned sibling of <summary> so a tap opens the menu without
-                 toggling the native <details>. Root org (Fabrikam) is never offered. --%>
+                 toggling the native <details>. The root org is never offered. --%>
             <.lifecycle_menu
-              :if={@fabrikam_admin and org_slug not in [Tenancy.root_org_slug(), "_unassigned"]}
+              :if={@root_admin? and org_slug not in [@root_org_slug, "_unassigned"]}
               key={"mobile-org:#{TaskDisplay.rail_org_slug(@mask_labels, org_slug)}"}
               open={
                 @lifecycle_menu_key ==
@@ -758,7 +781,7 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
                    Takes the RESOLVED label: `name` reaches aria-label,
                    phx-value-name, the confirm modal and the archive flash. --%>
               <.lifecycle_menu
-                :if={@fabrikam_admin}
+                :if={@root_admin?}
                 key={"mobile-project:#{project.id}"}
                 open={@lifecycle_menu_key == "mobile-project:#{project.id}"}
                 type="project"
@@ -914,7 +937,7 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
       <%!-- New-Project sheet (ADR-0042 stage 5). Mirrors the New-Epic sheet's
            shape: bottom drawer on mobile, modal on desktop (the `.sheet`
            component handles the responsive split). The form requires org_id;
-           defaults to the current user's primary membership's org, else Fabrikam. --%>
+           defaults to the current user's primary membership's org, else the root org. --%>
       <.sheet
         :if={@show_project_create_sheet}
         id="project-create-sheet"

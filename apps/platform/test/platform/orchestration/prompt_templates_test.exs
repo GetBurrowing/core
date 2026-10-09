@@ -838,6 +838,43 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
     end
   end
 
+  # Task 01a116de stage 2: the code default is install-neutral, and existing
+  # rows (install data) are never rewritten by seeding.
+  describe "dispatch.scribe_completion install neutrality (task 01a116de)" do
+    test "the code default names no install org or host" do
+      content = PromptTemplates.default_content_for_slug("dispatch.scribe_completion")
+
+      assert is_binary(content)
+      refute content =~ ~r/fabrikam/i
+      refute content =~ ~r/cozoa/i
+
+      assert content =~
+               "- Mishearing corrections applied — call out every proper-noun or hostname " <>
+                 "you corrected from the raw transcript."
+
+      assert content =~
+               "- `corrections_applied`: bullet list of every mishearing you fixed in Card 1, one bullet"
+    end
+
+    test "seed_defaults/0 leaves an existing row's content byte-identical" do
+      :ok = PromptTemplates.seed_defaults()
+
+      install_content =
+        "Install-specific scribe prompt.\n" <>
+          ~s(- always call out "Cozoa" → "Fabrikam" and "sweet.cozoa.ai.com" → "suite.example.com"\n)
+
+      template = PromptTemplates.get_template_by_slug("dispatch.scribe_completion")
+      assert template
+
+      {:ok, _} = PromptTemplates.update_template(template, %{content: install_content})
+
+      :ok = PromptTemplates.seed_defaults()
+
+      assert PromptTemplates.get_template_by_slug("dispatch.scribe_completion").content ==
+               install_content
+    end
+  end
+
   describe "default_content_for_slug/1 — dispatch.triage_dispatch" do
     # Task 019f5e2b (meeting-to-tasks pipeline stack member M4) Stage 2
     # ships the real triage-officer runtime body. These guards lock the
@@ -3030,7 +3067,7 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
       :ok = PromptTemplates.seed_defaults()
 
       assigns = %{
-        federation_preamble: "You are Historian, running under the Fabrikam federation preamble.",
+        federation_preamble: "You are Historian, running under the Acme federation preamble.",
         date: "2026-07-18",
         workspace_id: "ws-dreaming-001",
         activity_digest: "[digest] 12 journal entries, 4 chat threads today.",

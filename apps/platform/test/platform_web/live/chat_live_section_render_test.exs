@@ -9,7 +9,7 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
 
   Coverage:
     * Pinned / DMs / sub-org section order
-    * Sub-org alphabetical order (Paragon / Soylent / Fabrikam / Wayne-Tech / SXI)
+    * Sub-org alphabetical order (Paragon / Soylent / Acme / Wayne-Tech / SXI)
     * Empty sub-org section renders header + empty-state hint
     * Sub-org headers carry a `<.scope_pill>` reference
     * Drag-handle (`☰`) glyph is present in DOM
@@ -140,9 +140,9 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
 
       # Each sub-org header is rendered as text inside a <p class="channel-section-label">.
       # Capture their offset positions and verify they appear in the
-      # required A-Z order (Paragon / Soylent / Fabrikam / Wayne-Tech / SXI).
+      # required A-Z order (Paragon / Soylent / Acme / Wayne-Tech / SXI).
       offsets =
-        for label <- ["Paragon", "Soylent", "Fabrikam", "Wayne-Tech", "SXI"] do
+        for label <- ["Acme", "Paragon", "Soylent", "Wayne-Tech", "SXI"] do
           {label, :binary.match(sidebar, label) |> elem(0)}
         end
 
@@ -158,7 +158,7 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
       conn: conn
     } do
       conn = authenticated_conn(conn)
-      # Single Fabrikam channel, no Paragon channel — Paragon bucket is empty.
+      # Single Acme channel, no Paragon channel — Paragon bucket is empty.
       create_channel("general")
       {:ok, _view, html} = live_following_redirect(conn)
       sidebar = desktop_sidebar(html)
@@ -185,8 +185,12 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
       assert sidebar =~ "channel-section-color-dot"
       assert sidebar =~ "bg-paragon-dot"
       assert sidebar =~ "bg-soylent-dot"
-      assert sidebar =~ "bg-fabrikam-dot"
       assert sidebar =~ "bg-wayne-tech-dot"
+      # The root org has no compiled dot class (task 01a116de stage 3): its
+      # dot reads the org row's colour through `data-scope`.
+      assert sidebar =~
+               ~r/class="channel-section-color-dot channel-section-color-dot--unassigned"\s+data-scope="acme"/
+
       assert sidebar =~ "bg-sxi-dot"
 
       # The old text-bearing scope pill is gone from the section header.
@@ -212,16 +216,16 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
     test "section with 20+ channels renders every row; no truncation toggle", %{conn: conn} do
       conn = authenticated_conn(conn)
 
-      # 20 channels in the Fabrikam bucket (catch-all). Pre-v3 this would have
+      # 20 channels in the Acme bucket (catch-all). Pre-v3 this would have
       # rendered 8 visible + `+ 12 more` toggle. v3 deletes the cap.
-      for n <- 1..20, do: create_channel("fabrikam-test-#{n}")
+      for n <- 1..20, do: create_channel("acme-test-#{n}")
 
       {:ok, _view, html} = live_following_redirect(conn)
       sidebar = desktop_sidebar(html)
 
       for n <- 1..20 do
-        assert sidebar =~ "Fabrikam-test-#{n}",
-               "Channel fabrikam-test-#{n} should render after the cap removal"
+        assert sidebar =~ "Acme-test-#{n}",
+               "Channel acme-test-#{n} should render after the cap removal"
       end
 
       refute sidebar =~ "channel-section-show-more",
@@ -382,7 +386,7 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
 
       # The org-default sub-org section labels surface in the overlay markup.
       assert has_element?(view, "#mobile-channel-browser", "Paragon")
-      assert has_element?(view, "#mobile-channel-browser", "Fabrikam")
+      assert has_element?(view, "#mobile-channel-browser", "Acme")
     end
 
     test "Pinned section is suppressed in the overlay when there are no pinned channels",
@@ -546,7 +550,7 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
 
       view = open_mobile_browser(conn)
 
-      # Resolver default is alphabetical (Paragon, Soylent, Fabrikam, ...).
+      # Resolver default is alphabetical (Acme, Paragon, Soylent, ...).
       # Reorder semantics are "insert ABOVE the drop target" (mirroring the
       # border-top drop indicator), so dropping the first section onto the
       # SECOND is a no-op — drop it onto the THIRD to move it down one slot.
@@ -554,20 +558,20 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
       # sends; drive it from the mobile nav element to prove the mobile
       # wiring reaches the shared server pipeline
       # (put_section_order -> chat_section_order pref).
-      [paragon_id, soylent_id, fabrikam_id | _] = rendered_section_ids(render(view))
+      [paragon_id, soylent_id, acme_id | _] = rendered_section_ids(render(view))
 
       view
       |> element("#mobile-section-list")
-      |> render_hook("section_reordered", %{"from" => paragon_id, "to" => fabrikam_id})
+      |> render_hook("section_reordered", %{"from" => paragon_id, "to" => acme_id})
 
-      assert [^soylent_id, ^paragon_id, ^fabrikam_id | _] = rendered_section_ids(render(view)),
-             "Dropping Paragon onto Fabrikam should re-slot it between Soylent and Fabrikam"
+      assert [^soylent_id, ^paragon_id, ^acme_id | _] = rendered_section_ids(render(view)),
+             "Dropping Paragon onto Acme should re-slot it between Soylent and Acme"
 
       # Persistence: a fresh mount must come back in the saved order, not
       # the alphabetical default.
       {:ok, _view, html} = live_following_redirect(conn)
 
-      assert [^soylent_id, ^paragon_id, ^fabrikam_id | _] = rendered_section_ids(html),
+      assert [^soylent_id, ^paragon_id, ^acme_id | _] = rendered_section_ids(html),
              "Reordered layout should persist across a remount via chat_section_order"
     end
   end
@@ -1100,14 +1104,14 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
     |> LazyHTML.to_html()
   end
 
-  defp fabrikam_admin_conn(conn) do
+  defp acme_admin_conn(conn) do
     conn = authenticated_conn(conn)
     uid = user_id(conn)
 
     %OrgMembership{}
     |> OrgMembership.changeset(%{
       user_id: uid,
-      org_id: Tenancy.get_org_by_slug!("fabrikam").id,
+      org_id: Tenancy.get_org_by_slug!("acme").id,
       role: "admin"
     })
     |> Repo.insert!()
@@ -1117,7 +1121,7 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
 
   describe "section header dot — an org with no colour token" do
     test "an unrecognised colour token renders a hollow dot, not no dot", %{conn: conn} do
-      {conn, admin} = fabrikam_admin_conn(conn)
+      {conn, admin} = acme_admin_conn(conn)
       create_channel("general")
 
       # Goes through the REAL org-creation path, so the section row is the one
@@ -1148,7 +1152,7 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
     end
 
     test "a nil colour renders a hollow dot, not no dot", %{conn: conn} do
-      {conn, admin} = fabrikam_admin_conn(conn)
+      {conn, admin} = acme_admin_conn(conn)
       create_channel("general")
 
       {:ok, org} = Tenancy.create_org(admin, %{name: "Colourless", slug: "colourless"})

@@ -134,7 +134,7 @@ defmodule PlatformWeb.ChatLiveMaskDesktopTest do
 
       sidebar = view |> toggle_mask() |> desktop_sidebar()
 
-      for name <- ["Wayne-Tech", "Soylent", "Paragon", "Fabrikam"] do
+      for name <- ["Wayne-Tech", "Soylent", "Paragon", "Acme"] do
         refute_name_anywhere(sidebar, name)
       end
     end
@@ -176,7 +176,20 @@ defmodule PlatformWeb.ChatLiveMaskDesktopTest do
       sidebar = view |> toggle_mask() |> desktop_sidebar()
 
       assert sidebar =~ "channel-section-color-dot"
-      assert sidebar =~ "bg-fabrikam-dot"
+      assert sidebar =~ "bg-sxi-dot"
+      assert sidebar =~ "channel-section-color-dot--unassigned"
+    end
+
+    test "a masked root section's dot drops its data-scope (task 01a116de stage 3)", %{
+      conn: conn
+    } do
+      # The root org's dot is coloured from its row through `data-scope`, and
+      # the slug is a spelling of the org's name, so masking suppresses it,
+      # the same cost a masked scope chip already pays.
+      {view, html} = conn |> authenticated_conn() |> mounted_view()
+      assert desktop_sidebar(html) =~ ~s(data-scope="acme")
+
+      refute view |> toggle_mask() |> desktop_sidebar() =~ ~s(data-scope="acme")
     end
 
     test "turning the mode back off restores the real names", %{conn: conn} do

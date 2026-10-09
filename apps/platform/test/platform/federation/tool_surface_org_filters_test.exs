@@ -13,7 +13,7 @@ defmodule Platform.Federation.ToolSurfaceOrgFiltersTest do
        `"not a member of org"` and `recoverable: false`.
     c. `project_list` with an `org_id` filter returns only the projects
        belonging to that org and each row carries `org_id` + `org_slug`.
-    d. `org_list_descendants` for the Fabrikam root returns the four seeded
+    d. `org_list_descendants` for the Acme root returns the four seeded
        tenants in slug order; for a tenant, returns `[]`; for an
        unknown id, returns a `:not_found` envelope.
   """
@@ -112,13 +112,13 @@ defmodule Platform.Federation.ToolSurfaceOrgFiltersTest do
     # (sibling tenant) content because no implicit scope was applied.
     sxi_id = tenant_org_id("sxi")
     wayne_tech_id = tenant_org_id("wayne_tech")
-    fabrikam_id = fabrikam_org_id()
+    acme_id = acme_org_id()
 
     sxi_agent = create_agent(%{"org_id" => sxi_id})
 
     _sxi = seed_journal_entry(sxi_id, "marker delta sxi-only entry")
     _pt = seed_journal_entry(wayne_tech_id, "marker delta wayne_tech-only entry")
-    _ko = seed_journal_entry(fabrikam_id, "marker delta fabrikam-root entry")
+    _ko = seed_journal_entry(acme_id, "marker delta acme-root entry")
 
     {:ok, %{results: results}} =
       ToolSurface.execute(
@@ -132,8 +132,8 @@ defmodule Platform.Federation.ToolSurfaceOrgFiltersTest do
     assert Enum.any?(contents, &String.contains?(&1, "sxi-only entry")),
            "expected SXI hit, got: #{inspect(contents)}"
 
-    assert Enum.any?(contents, &String.contains?(&1, "fabrikam-root entry")),
-           "expected inherited Fabrikam root hit, got: #{inspect(contents)}"
+    assert Enum.any?(contents, &String.contains?(&1, "acme-root entry")),
+           "expected inherited Acme root hit, got: #{inspect(contents)}"
 
     refute Enum.any?(contents, &String.contains?(&1, "wayne_tech-only entry")),
            "wayne_tech content leaked to SXI agent with no explicit filter: #{inspect(contents)}"
@@ -213,8 +213,8 @@ defmodule Platform.Federation.ToolSurfaceOrgFiltersTest do
 
   # ── Case (d) — org_list_descendants over root, tenant, unknown ───────
 
-  test "org_list_descendants for the Fabrikam root returns the four seeded tenants in slug order" do
-    root_id = fabrikam_org_id()
+  test "org_list_descendants for the Acme root returns the four seeded tenants in slug order" do
+    root_id = acme_org_id()
 
     {:ok, %{descendants: descendants}} =
       ToolSurface.execute("org_list_descendants", %{"org_id" => root_id}, %{})

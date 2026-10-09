@@ -39,7 +39,7 @@ defmodule PlatformWeb.Components.LifecycleControls do
   @doc """
   Kebab overflow menu with Archive + Schedule deletion for one container.
 
-  The host gates rendering on `Tenancy.fabrikam_admin?/1` and never renders it
+  The host gates rendering on `Tenancy.root_admin?/1` and never renders it
   for the root org (which the lifecycle refuses anyway).
   """
   attr :key, :string,

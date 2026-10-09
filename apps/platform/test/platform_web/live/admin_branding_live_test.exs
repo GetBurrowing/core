@@ -53,7 +53,7 @@ defmodule PlatformWeb.AdminBrandingLiveTest do
     %OrgMembership{}
     |> OrgMembership.changeset(%{
       user_id: user.id,
-      org_id: Tenancy.get_org_by_slug!("fabrikam").id,
+      org_id: Tenancy.get_org_by_slug!("acme").id,
       role: role
     })
     |> Repo.insert!()
@@ -111,7 +111,7 @@ defmodule PlatformWeb.AdminBrandingLiveTest do
       assert flash["error"] =~ "access"
     end
 
-    test "a Fabrikam admin gets the form", %{conn: conn} do
+    test "an Acme admin gets the form", %{conn: conn} do
       {:ok, _view, html} = conn |> admin_conn() |> live(~p"/admin/branding")
 
       assert html =~ ~s(data-role="branding-dropzone")

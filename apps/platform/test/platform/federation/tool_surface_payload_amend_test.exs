@@ -705,10 +705,10 @@ defmodule Platform.Federation.ToolSurfacePayloadAmendTest do
   defp u, do: System.unique_integer([:positive])
 
   defp ensure_root_org do
-    case Repo.get_by(Tenancy.Org, slug: "fabrikam") do
+    case Repo.get_by(Tenancy.Org, slug: "acme") do
       nil ->
         Repo.insert!(
-          Tenancy.Org.changeset(%Tenancy.Org{}, %{slug: "fabrikam", name: "Fabrikam", parent_org_id: nil})
+          Tenancy.Org.changeset(%Tenancy.Org{}, %{slug: "acme", name: "Acme", parent_org_id: nil})
         )
 
       org ->

@@ -6,7 +6,7 @@ defmodule Platform.BrandingTest do
   What these tests are for:
 
     1. DEFAULTS ARE PINNED. A migrated database with no upload answers with
-       Fabrikam's identity and the repo's own static asset paths. Those must not
+       Acme's identity and the repo's own static asset paths. Those must not
        move silently.
     2. THE VALUE CHANGES WITHOUT A RESTART. `update_identity/2` then
        `app_name/0` reads it back in the same process, with no
@@ -46,7 +46,7 @@ defmodule Platform.BrandingTest do
     %OrgMembership{}
     |> OrgMembership.changeset(%{
       user_id: user.id,
-      org_id: Tenancy.get_org_by_slug!("fabrikam").id,
+      org_id: Tenancy.get_org_by_slug!("acme").id,
       role: role
     })
     |> Repo.insert!()
@@ -60,7 +60,7 @@ defmodule Platform.BrandingTest do
   # ── Defaults ───────────────────────────────────────────────────────────
 
   describe "defaults on a migrated database" do
-    test "identity fields are Fabrikam's, and the colours are dark base-100" do
+    test "identity fields are Acme's, and the colours are dark base-100" do
       assert Branding.app_name() == "Suite"
 
       # The one place a raw hex is allowed to live in the shipped change is

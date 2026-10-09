@@ -46,7 +46,7 @@ defmodule Platform.Chat.ExternalScopeTest do
     |> Org.changeset(%{
       name: "Tenant #{n}",
       slug: "tenant_#{n}",
-      parent_org_id: Tenancy.get_org_by_slug!("fabrikam").id
+      parent_org_id: Tenancy.get_org_by_slug!("acme").id
     })
     |> Repo.insert!()
   end

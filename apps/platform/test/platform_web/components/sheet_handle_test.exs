@@ -85,7 +85,7 @@ defmodule PlatformWeb.Components.SheetHandleTest do
         rendered_to_string(~H"""
         <PlatformWeb.Components.MoreSheet.more_sheet
           open={true}
-          is_fabrikam_user={false}
+          root_user={false}
           current_user={nil}
         />
         """)

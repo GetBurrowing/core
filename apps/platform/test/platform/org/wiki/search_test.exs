@@ -240,9 +240,9 @@ defmodule Platform.Org.Wiki.SearchTest do
 
   describe "RRF fusion math" do
     test "score equals 1/(60 + sem_rank) + 1/(60 + lex_rank) for hits in both channels" do
-      page_alpha = seed_page("org/page/alpha.md", "fabrikam platform alpha story")
-      page_bravo = seed_page("org/page/bravo.md", "fabrikam platform bravo story")
-      page_charlie = seed_page("org/page/charlie.md", "fabrikam platform charlie story")
+      page_alpha = seed_page("org/page/alpha.md", "acme platform alpha story")
+      page_bravo = seed_page("org/page/bravo.md", "acme platform bravo story")
+      page_charlie = seed_page("org/page/charlie.md", "acme platform charlie story")
 
       # Semantic ranks: alpha=1, charlie=2 (bravo is lexical-only).
       install_provider([
@@ -250,7 +250,7 @@ defmodule Platform.Org.Wiki.SearchTest do
         %{entry_id: page_charlie.id, score: 0.8, memory_type: "page"}
       ])
 
-      {:ok, %{results: results}} = Search.search("fabrikam platform", limit: 5)
+      {:ok, %{results: results}} = Search.search("acme platform", limit: 5)
 
       by_id = Map.new(results, fn r -> {r.id, r} end)
 

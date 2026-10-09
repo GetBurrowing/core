@@ -5,7 +5,7 @@ defmodule Platform.Tenancy.LifecycleTest do
 
   Invariants under test:
 
-    1. Every lifecycle function requires a Fabrikam admin actor (no creator
+    1. Every lifecycle function requires an Acme admin actor (no creator
        carve-out, no system path). Root org is never deletable.
     2. Archiving/scheduling an org cascade-hides its child projects and
        chat_spaces IN ONE transaction, but only children that are not
@@ -50,7 +50,7 @@ defmodule Platform.Tenancy.LifecycleTest do
     %OrgMembership{}
     |> OrgMembership.changeset(%{
       user_id: user.id,
-      org_id: Tenancy.get_org_by_slug!("fabrikam").id,
+      org_id: Tenancy.get_org_by_slug!("acme").id,
       role: role
     })
     |> Repo.insert!()
@@ -68,7 +68,7 @@ defmodule Platform.Tenancy.LifecycleTest do
     user
   end
 
-  # A fresh tenant org parented to Fabrikam — isolated from the seeded tenants
+  # A fresh tenant org parented to Acme — isolated from the seeded tenants
   # so archiving it can't perturb anything else.
   defp tenant_org!(attrs \\ %{}) do
     n = System.unique_integer([:positive])
@@ -76,7 +76,7 @@ defmodule Platform.Tenancy.LifecycleTest do
     default = %{
       name: "Tenant #{n}",
       slug: "tenant_#{n}",
-      parent_org_id: Tenancy.get_org_by_slug!("fabrikam").id
+      parent_org_id: Tenancy.get_org_by_slug!("acme").id
     }
 
     %Org{} |> Org.changeset(Map.merge(default, attrs)) |> Repo.insert!()
@@ -114,14 +114,14 @@ defmodule Platform.Tenancy.LifecycleTest do
   describe "create_org/2" do
     test "creates a tenant org parented to the root and PERSISTS it" do
       admin = admin_user!()
-      fabrikam_id = Tenancy.get_org_by_slug!("fabrikam").id
+      acme_id = Tenancy.get_org_by_slug!("acme").id
 
       assert {:ok, %Org{} = org} =
                Tenancy.create_org(admin, %{name: "Cyberdyne", slug: "cyberdyne"})
 
       assert org.name == "Cyberdyne"
       assert org.slug == "cyberdyne"
-      assert org.parent_org_id == fabrikam_id
+      assert org.parent_org_id == acme_id
       assert Tenancy.tier(org) == :tenant
       assert is_nil(org.archived_at)
       assert is_nil(org.deletion_scheduled_at)
@@ -131,7 +131,7 @@ defmodule Platform.Tenancy.LifecycleTest do
       persisted = Tenancy.get_org_by_slug("cyberdyne")
       assert %Org{} = persisted
       assert persisted.id == org.id
-      assert persisted.parent_org_id == fabrikam_id
+      assert persisted.parent_org_id == acme_id
 
       assert Enum.any?(Tenancy.list_orgs(), &(&1.id == org.id))
       assert Enum.any?(Tenancy.list_tenants(), &(&1.id == org.id))
@@ -143,7 +143,7 @@ defmodule Platform.Tenancy.LifecycleTest do
       assert {:ok, %Org{} = org} =
                Tenancy.create_org(admin, %{"name" => "Form Org", "slug" => "form_org"})
 
-      assert org.parent_org_id == Tenancy.get_org_by_slug!("fabrikam").id
+      assert org.parent_org_id == Tenancy.get_org_by_slug!("acme").id
       assert Tenancy.tier(org) == :tenant
     end
 
@@ -508,15 +508,15 @@ defmodule Platform.Tenancy.LifecycleTest do
       assert {:error, :unauthorized} = Tenancy.archive_org(nil, org)
     end
 
-    test "root org (Fabrikam) is never deletable, for any org function" do
+    test "root org (Acme) is never deletable, for any org function" do
       admin = admin_user!()
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+      acme = Tenancy.get_org_by_slug!("acme")
 
-      assert {:error, :not_deletable} = Tenancy.archive_org(admin, fabrikam)
-      assert {:error, :not_deletable} = Tenancy.schedule_org_deletion(admin, fabrikam)
-      assert {:error, :not_deletable} = Tenancy.unarchive_org(admin, fabrikam)
-      assert {:error, :not_deletable} = Tenancy.cancel_org_deletion(admin, fabrikam)
-      assert is_nil(Repo.reload!(fabrikam).archived_at)
+      assert {:error, :not_deletable} = Tenancy.archive_org(admin, acme)
+      assert {:error, :not_deletable} = Tenancy.schedule_org_deletion(admin, acme)
+      assert {:error, :not_deletable} = Tenancy.unarchive_org(admin, acme)
+      assert {:error, :not_deletable} = Tenancy.cancel_org_deletion(admin, acme)
+      assert is_nil(Repo.reload!(acme).archived_at)
     end
   end
 
@@ -843,15 +843,15 @@ defmodule Platform.Tenancy.LifecycleTest do
       assert %DateTime{} = chan_row.deletion_scheduled_at
     end
 
-    test "the Fabrikam root org never appears, even alongside archived tenants" do
+    test "the Acme root org never appears, even alongside archived tenants" do
       admin = admin_user!()
       org = tenant_org!()
       {:ok, _} = Tenancy.archive_org(admin, org)
 
       rows = Lifecycle.list_recoverable()
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+      acme = Tenancy.get_org_by_slug!("acme")
 
-      refute Enum.any?(rows, &(&1.type == :org and &1.id == fabrikam.id))
+      refute Enum.any?(rows, &(&1.type == :org and &1.id == acme.id))
       # …while the archived tenant is present.
       assert recoverable_row(rows, :org, org.id)
     end
@@ -1206,9 +1206,9 @@ defmodule Platform.Tenancy.LifecycleTest do
       admin = admin_user!()
       member = member_user!()
       org = tenant_org!()
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+      acme = Tenancy.get_org_by_slug!("acme")
 
-      assert {:error, :not_deletable} = Lifecycle.schedule_org_deletion(admin, fabrikam, [])
+      assert {:error, :not_deletable} = Lifecycle.schedule_org_deletion(admin, acme, [])
       assert {:error, :unauthorized} = Lifecycle.schedule_org_deletion(member, org, [])
       assert is_nil(Repo.reload!(org).deletion_scheduled_at)
     end

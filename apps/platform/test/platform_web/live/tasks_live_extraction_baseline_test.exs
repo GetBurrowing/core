@@ -61,7 +61,7 @@ defmodule PlatformWeb.TasksLiveExtractionBaselineTest do
       Tasks.create_project(%{
         name: name || "Baseline Project #{n}",
         repo_url: "git@github.com:test/repo.git",
-        org_id: fabrikam_org_id()
+        org_id: acme_org_id()
       })
 
     project

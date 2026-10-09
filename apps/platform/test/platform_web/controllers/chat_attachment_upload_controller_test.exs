@@ -58,11 +58,11 @@ defmodule PlatformWeb.ChatAttachmentUploadControllerTest do
   end
 
   defp ensure_root_org do
-    case Repo.get_by(Tenancy.Org, slug: "fabrikam") do
+    case Repo.get_by(Tenancy.Org, slug: "acme") do
       nil ->
         {:ok, org} =
           %Tenancy.Org{}
-          |> Tenancy.Org.changeset(%{slug: "fabrikam", name: "Fabrikam", parent_org_id: nil})
+          |> Tenancy.Org.changeset(%{slug: "acme", name: "Acme", parent_org_id: nil})
           |> Repo.insert()
 
         org
@@ -77,7 +77,7 @@ defmodule PlatformWeb.ChatAttachmentUploadControllerTest do
   # `files/` namespace, and a token from the SAME signer the LocalDisk
   # adapter uses (see "presigned_url token verifies" below).
   defp reserve_pending_file(byte_size, content_type \\ "text/plain") do
-    fabrikam = ensure_root_org()
+    acme = ensure_root_org()
     n = System.unique_integer([:positive])
 
     {:ok, org} =
@@ -85,7 +85,7 @@ defmodule PlatformWeb.ChatAttachmentUploadControllerTest do
       |> Tenancy.Org.changeset(%{
         slug: "ul-files-#{n}",
         name: "Upload Files",
-        parent_org_id: fabrikam.id
+        parent_org_id: acme.id
       })
       |> Repo.insert()
 

@@ -1,6 +1,6 @@
 defmodule PlatformWeb.ExternalRecoveryLive do
   @moduledoc """
-  External Recovery — the Fabrikam-admin surface listing external logins still
+  External Recovery — the root-admin surface listing external logins still
   awaiting setup, with a one-click Grant that live-applies to the waiting
   session (rbac-external-users M3 stage 4, task 019f8837).
 
@@ -35,7 +35,7 @@ defmodule PlatformWeb.ExternalRecoveryLive do
   carried (or says they were not recorded) so an admin maps a real value
   instead of a guessed one.
 
-  Fabrikam-only gate is inherited from the `:admin` `live_session`
+  root-admin-only gate is inherited from the `:admin` `live_session`
   (`{PlatformWeb.LiveAuth, :ensure_admin}`).
   """
   use PlatformWeb, :live_view
@@ -352,7 +352,7 @@ defmodule PlatformWeb.ExternalRecoveryLive do
   their checked value still submits; checked rows also stay visible even when
   they don't match the query. `checked_ids` pre-checks channels; `disabled_ids`
   renders those as locked (already joined). Semantic DaisyUI token slots only
-  (`exploring` brand — Fabrikam cyan `primary`, no hardcoded palette).
+  (`exploring` brand — brand cyan `primary`, no hardcoded palette).
   """
   attr :id, :string, required: true
   attr :spaces, :list, required: true

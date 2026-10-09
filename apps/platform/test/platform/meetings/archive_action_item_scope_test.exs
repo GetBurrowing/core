@@ -60,9 +60,9 @@ defmodule Platform.Meetings.ArchiveActionItemScopeTest do
 
   # ── Fixtures ──────────────────────────────────────────────────────────────
 
-  # A plain member, not "admin": `fabrikam_admin?/1` short-circuits the viewer
+  # A plain member, not "admin": `root_admin?/1` short-circuits the viewer
   # scope entirely, which would leave `narrow_to_viewer/2` untested here.
-  defp viewer_in_fabrikam! do
+  defp viewer_in_acme! do
     n = System.unique_integer([:positive])
 
     user =
@@ -75,7 +75,7 @@ defmodule Platform.Meetings.ArchiveActionItemScopeTest do
       |> Repo.insert!()
 
     %OrgMembership{}
-    |> OrgMembership.changeset(%{user_id: user.id, org_id: fabrikam_org_id(), role: "member"})
+    |> OrgMembership.changeset(%{user_id: user.id, org_id: acme_org_id(), role: "member"})
     |> Repo.insert!()
 
     user
@@ -88,7 +88,7 @@ defmodule Platform.Meetings.ArchiveActionItemScopeTest do
     n = System.unique_integer([:positive])
 
     {:ok, project} =
-      Tasks.create_project(%{name: "AI Scope Project #{n}", org_id: fabrikam_org_id()})
+      Tasks.create_project(%{name: "AI Scope Project #{n}", org_id: acme_org_id()})
 
     {:ok, meeting} = Meetings.create_meeting(%{project_id: project.id, name: name})
 
@@ -212,7 +212,7 @@ defmodule Platform.Meetings.ArchiveActionItemScopeTest do
 
   describe "artifacts_for/2 counts action items from both paths" do
     test "a meeting that filed by both paths shows both" do
-      viewer = viewer_in_fabrikam!()
+      viewer = viewer_in_acme!()
       %{meeting: meeting, project: project, canvas: canvas} = meeting_fixture!("Both paths")
 
       live = graduate!(meeting, "somebody should rotate the S3 keys")
@@ -230,7 +230,7 @@ defmodule Platform.Meetings.ArchiveActionItemScopeTest do
     end
 
     test "POSITIVE CONTROL: the triage path alone still counts, unchanged" do
-      viewer = viewer_in_fabrikam!()
+      viewer = viewer_in_acme!()
       %{meeting: meeting, project: project, canvas: canvas} = meeting_fixture!("Triage only")
 
       file!(canvas, project, "Draft the rollback runbook")
@@ -243,7 +243,7 @@ defmodule Platform.Meetings.ArchiveActionItemScopeTest do
     end
 
     test "the live path alone counts — the case the canvas join scored zero" do
-      viewer = viewer_in_fabrikam!()
+      viewer = viewer_in_acme!()
       %{meeting: meeting} = meeting_fixture!("Live only")
 
       graduate!(meeting, "somebody should rotate the S3 keys")
@@ -259,7 +259,7 @@ defmodule Platform.Meetings.ArchiveActionItemScopeTest do
     # Asymmetric on purpose: a meeting-blind implementation pools these into
     # 3 and 3, which neither number below can be mistaken for.
     test "a different meeting's live-path task is not counted here" do
-      viewer = viewer_in_fabrikam!()
+      viewer = viewer_in_acme!()
 
       %{meeting: target} = meeting_fixture!("Target, one live")
       %{meeting: other} = meeting_fixture!("Other, two live")
@@ -282,7 +282,7 @@ defmodule Platform.Meetings.ArchiveActionItemScopeTest do
     end
 
     test "a different meeting's triage-path task is not counted here" do
-      viewer = viewer_in_fabrikam!()
+      viewer = viewer_in_acme!()
 
       %{meeting: target, project: t_project, canvas: t_canvas} =
         meeting_fixture!("Target, two triage")
@@ -304,7 +304,7 @@ defmodule Platform.Meetings.ArchiveActionItemScopeTest do
     end
 
     test "a task with no meeting provenance at all is counted by nobody" do
-      viewer = viewer_in_fabrikam!()
+      viewer = viewer_in_acme!()
       %{meeting: meeting, project: project} = meeting_fixture!("No stray tasks")
 
       live = graduate!(meeting, "somebody should rotate the S3 keys")
@@ -327,7 +327,7 @@ defmodule Platform.Meetings.ArchiveActionItemScopeTest do
     end
 
     test "a soft-deleted live-path task stops counting" do
-      viewer = viewer_in_fabrikam!()
+      viewer = viewer_in_acme!()
       %{meeting: meeting} = meeting_fixture!("Soft delete")
 
       live = graduate!(meeting, "somebody should rotate the S3 keys")
@@ -351,7 +351,7 @@ defmodule Platform.Meetings.ArchiveActionItemScopeTest do
 
   describe "search/2 searches live-path action item titles" do
     test "a live-path task's title matches, and only its own meeting" do
-      viewer = viewer_in_fabrikam!()
+      viewer = viewer_in_acme!()
 
       %{meeting: target} = meeting_fixture!("Search target")
       %{meeting: other} = meeting_fixture!("Search other")
@@ -380,7 +380,7 @@ defmodule Platform.Meetings.ArchiveActionItemScopeTest do
     end
 
     test "type_counts credits the live path under :action_items" do
-      viewer = viewer_in_fabrikam!()
+      viewer = viewer_in_acme!()
 
       %{meeting: meeting} = meeting_fixture!("Search type counts")
       graduate!(meeting, "somebody should decommission the zeppelin fleet")

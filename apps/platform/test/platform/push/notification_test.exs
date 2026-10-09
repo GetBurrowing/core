@@ -36,7 +36,7 @@ defmodule Platform.Push.NotificationTest do
     user = insert_user("Xavier External")
 
     {:ok, _} =
-      Tenancy.mark_membership_external(%{user_id: user.id, org_id: TenancyFixtures.fabrikam_org_id()})
+      Tenancy.mark_membership_external(%{user_id: user.id, org_id: TenancyFixtures.acme_org_id()})
 
     user
   end
@@ -44,8 +44,8 @@ defmodule Platform.Push.NotificationTest do
   defp space do
     %Space{
       id: Ecto.UUID.generate(),
-      name: "Internal Fabrikam SXI",
-      slug: "internal-fabrikam-sxi"
+      name: "Internal Acme SXI",
+      slug: "internal-acme-sxi"
     }
   end
 
@@ -177,7 +177,7 @@ defmodule Platform.Push.NotificationTest do
 
       assert n.category == "SUITE_MENTION"
       assert n.thread_id == s.id
-      assert n.url == "/chat/internal-fabrikam-sxi?message=#{n.message_id}"
+      assert n.url == "/chat/internal-acme-sxi?message=#{n.message_id}"
       assert n.space_id == s.id
     end
 
@@ -230,7 +230,7 @@ defmodule Platform.Push.NotificationTest do
   describe "copy (canvas 01a10887 rev 23)" do
     test "mention title is {Author} in {Space}" do
       n = AttentionRouter.push_notification("Harper", message("x"), :mention, space(), [])
-      assert n.title == "Harper in Internal Fabrikam SXI"
+      assert n.title == "Harper in Internal Acme SXI"
     end
 
     test "plan and review titles are fixed and the body is the task title" do
@@ -295,8 +295,8 @@ defmodule Platform.Push.NotificationTest do
       n = AttentionRouter.push_notification("Harper", message("hi"), :mention, space(), [])
 
       assert n.author_name == "Harper"
-      assert n.space_name == "Internal Fabrikam SXI"
-      assert n.title == "Harper in Internal Fabrikam SXI", "the title is unchanged"
+      assert n.space_name == "Internal Acme SXI"
+      assert n.title == "Harper in Internal Acme SXI", "the title is unchanged"
     end
 
     test "to_fcm_payload is data-only, high priority, with string values only" do
@@ -332,7 +332,7 @@ defmodule Platform.Push.NotificationTest do
       end
 
       assert data["author_name"] == "Harper"
-      assert data["space_name"] == "Internal Fabrikam SXI"
+      assert data["space_name"] == "Internal Acme SXI"
       refute Map.has_key?(data, "task_id")
     end
 
@@ -366,7 +366,7 @@ defmodule Platform.Push.NotificationTest do
       refute Map.has_key?(data, "space_name")
       refute Map.has_key?(data, "space_id")
       refute Jason.encode!(data) =~ "Harper"
-      refute Jason.encode!(data) =~ "Internal Fabrikam SXI"
+      refute Jason.encode!(data) =~ "Internal Acme SXI"
       assert data["title"] == "New message"
     end
   end

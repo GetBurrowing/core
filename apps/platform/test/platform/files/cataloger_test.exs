@@ -61,7 +61,7 @@ defmodule Platform.Files.CatalogerTest do
     test "the written row carries the project's real org_id and a non-nil project_id" do
       # THE test for this stage's blocker. `Wiki.upsert_page/3` used to
       # read only :content and :updated_by, so a page written at an SXI
-      # project path was stored as a Fabrikam row with a nil project_id and
+      # project path was stored as an Acme row with a nil project_id and
       # `update_changeset/2` could never repair it.
       #
       # Note what is NOT asserted here on its own: that a page exists at
@@ -80,8 +80,8 @@ defmodule Platform.Files.CatalogerTest do
              "the card row's org_id must be the project's org, not whatever " <>
                "`maybe_default_org_id/1` fell back to"
 
-      refute row.org_id == fabrikam_org_id(),
-             "the card landed in the root Fabrikam org — the path says SXI and the row says Fabrikam"
+      refute row.org_id == acme_org_id(),
+             "the card landed in the root Acme org — the path says SXI and the row says Acme"
 
       assert row.project_id == project.id
       refute is_nil(row.project_id)
@@ -89,7 +89,7 @@ defmodule Platform.Files.CatalogerTest do
 
     test "a card written at a project path is repairable — the update path carries tenancy too" do
       # `update_changeset/2` cast neither column before this stage, which
-      # is what made the Fabrikam default permanent rather than merely wrong.
+      # is what made the Acme default permanent rather than merely wrong.
       # Simulate the legacy row, then catalog over it.
       project = sxi_project!("Repair Card")
       file = ingested_file!(project, "Brief.pdf", "A project brief.")
@@ -97,7 +97,7 @@ defmodule Platform.Files.CatalogerTest do
       key = Cataloger.card_file_key(file)
 
       {:ok, legacy} = Wiki.upsert_page(key, %{content: "legacy body"})
-      assert legacy.org_id == fabrikam_org_id(), "precondition: the legacy shape is a Fabrikam row"
+      assert legacy.org_id == acme_org_id(), "precondition: the legacy shape is an Acme row"
       assert is_nil(legacy.project_id)
 
       stub_llm!(self(), "A brief.\nSUPERSEDES: none")
@@ -199,23 +199,23 @@ defmodule Platform.Files.CatalogerTest do
   describe "the LLM pass and supersession resolution" do
     test "records a supersession claim that resolves to a real sibling" do
       project = sxi_project!("Supersession Resolves")
-      original = ingested_file!(project, "Fabrikam x SXI (Order Form).pdf", "Order form, June.")
-      revision = ingested_file!(project, "Fabrikam x SXI (Order Form) v1.3.pdf", "Order form, July.")
+      original = ingested_file!(project, "Acme x SXI (Order Form).pdf", "Order form, June.")
+      revision = ingested_file!(project, "Acme x SXI (Order Form) v1.3.pdf", "Order form, July.")
 
       stub_llm!(
         self(),
-        "A revised order form.\nSUPERSEDES: Fabrikam x SXI (Order Form).pdf"
+        "A revised order form.\nSUPERSEDES: Acme x SXI (Order Form).pdf"
       )
 
       assert {:ok, page} = Cataloger.catalog_file(revision)
 
       assert page.frontmatter["supersedes_file_id"] == original.id
-      assert page.frontmatter["supersedes_filename"] == "Fabrikam x SXI (Order Form).pdf"
+      assert page.frontmatter["supersedes_filename"] == "Acme x SXI (Order Form).pdf"
 
       assert page.frontmatter["supersession_ruling"] == "unruled",
              "the claim is recorded immediately as visible metadata and never blocks the card"
 
-      assert page.content =~ "Supersedes: Fabrikam x SXI (Order Form).pdf"
+      assert page.content =~ "Supersedes: Acme x SXI (Order Form).pdf"
     end
 
     test "DROPS a claim naming a document that is not in the sibling set" do
@@ -224,12 +224,12 @@ defmodule Platform.Files.CatalogerTest do
       # written into a card is a dangling reference in the one artifact
       # whose entire value is being trustworthy. A dropped claim is not.
       project = sxi_project!("Supersession Drops")
-      _sibling = ingested_file!(project, "Fabrikam x SXI (Order Form).pdf", "Order form, June.")
+      _sibling = ingested_file!(project, "Acme x SXI (Order Form).pdf", "Order form, June.")
       subject = ingested_file!(project, "Statement of Work.pdf", "An SOW.")
 
       stub_llm!(
         self(),
-        "A statement of work.\nSUPERSEDES: Fabrikam x SXI (Master Services Agreement) v2.pdf"
+        "A statement of work.\nSUPERSEDES: Acme x SXI (Master Services Agreement) v2.pdf"
       )
 
       assert {:ok, page} = Cataloger.catalog_file(subject)
@@ -249,7 +249,7 @@ defmodule Platform.Files.CatalogerTest do
       # the string the model was SHOWN is stricter than matching on one
       # it was asked to copy.
       project = sxi_project!("Roster Shape")
-      sibling = ingested_file!(project, "Fabrikam x SXI (Order Form).pdf", "June.")
+      sibling = ingested_file!(project, "Acme x SXI (Order Form).pdf", "June.")
       subject = ingested_file!(project, "Statement of Work.pdf", "An SOW.")
 
       stub_llm!(self(), "An SOW.\nSUPERSEDES: none")
@@ -259,7 +259,7 @@ defmodule Platform.Files.CatalogerTest do
       assert_received {:llm_body, body}
       prompt = Enum.map_join(body["messages"], "\n", & &1["content"])
 
-      assert prompt =~ "Fabrikam x SXI (Order Form).pdf"
+      assert prompt =~ "Acme x SXI (Order Form).pdf"
       assert prompt =~ Date.to_iso8601(DateTime.to_date(sibling.inserted_at))
 
       refute prompt =~ sibling.id,

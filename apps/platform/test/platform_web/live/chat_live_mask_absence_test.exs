@@ -35,7 +35,7 @@ defmodule PlatformWeb.ChatLiveMaskAbsenceTest do
   ## Fixture names
 
   The seeded root orgs (`priv/repo/migrations/20260519143620_seed_root_orgs.exs`)
-  are Fabrikam, Soylent, Wayne-Tech, SXI and Paragon. Those are the production-shaped
+  are Acme, Soylent, Wayne-Tech, SXI and Paragon. Those are the production-shaped
   strings, so they are what the assertions bite on. `Cyberdyne` is not a seeded
   org on this branch and is not invented here — a fixture the app never renders
   would make every refute about it vacuously true.
@@ -200,7 +200,7 @@ defmodule PlatformWeb.ChatLiveMaskAbsenceTest do
 
       revealed_name = section_name(unmasked, section_id)
 
-      assert revealed_name in @orgs or revealed_name == "Fabrikam" or revealed_name == "Paragon",
+      assert revealed_name in @orgs or revealed_name == "Acme" or revealed_name == "Paragon",
              "expected the first rail section to be a seeded org, got #{inspect(revealed_name)}"
 
       html =

@@ -320,7 +320,7 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
     defp goal_less_view(conn, admin?) do
       {conn, user} = authenticated_conn(conn)
       enable_flag()
-      if admin?, do: make_fabrikam_admin(user)
+      if admin?, do: make_acme_admin(user)
 
       space = create_space(name: "agents-first-goal")
       add_user(space, user)
@@ -368,7 +368,7 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
     } do
       {conn, user} = authenticated_conn(conn)
       enable_flag()
-      make_fabrikam_admin(user)
+      make_acme_admin(user)
 
       agents = create_space(name: "agents-existing", goal: "Close backlog items in Suite")
       add_user(agents, user)
@@ -393,7 +393,7 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
 
     defp invite_fixture(conn, admin?) do
       {conn, user} = authenticated_conn(conn)
-      if admin?, do: make_fabrikam_admin(user)
+      if admin?, do: make_acme_admin(user)
       space = create_space(name: "agents-invite")
       add_user(space, user)
       {conn, user, space}
@@ -470,7 +470,7 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
       refute html =~ ~s(data-role="agents-goal-strip")
 
       {admin_conn, admin} = authenticated_conn(build_conn())
-      make_fabrikam_admin(admin)
+      make_acme_admin(admin)
       add_user(space, admin)
 
       {:ok, _view, admin_html} = live_at(admin_conn, "/chat/#{space.slug}")
@@ -625,12 +625,12 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
       agent = insert_agent("Dalton")
       enable_flag()
 
-      # `can_edit_goal?` is `Tenancy.fabrikam_admin?/1` (chat_live.ex:569), so
+      # `can_edit_goal?` is `Tenancy.root_admin?/1` (chat_live.ex:569), so
       # the pencil does NOT render for an ordinary user. Without this the
       # pencil test reads a nil class attribute, every `refute ... in` on it
       # passes vacuously, and only the one `assert` catches it — which is
       # how this was caught on the first moon run rather than shipped.
-      if Keyword.get(opts, :admin?, false), do: make_fabrikam_admin(user)
+      if Keyword.get(opts, :admin?, false), do: make_acme_admin(user)
 
       space = create_space(goal: "Close backlog items in Suite", leader_agent_id: agent.id)
       add_user(space, user)
@@ -638,8 +638,8 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
       html
     end
 
-    defp make_fabrikam_admin(user) do
-      org_id = Platform.Tenancy.get_org_by_slug!("fabrikam").id
+    defp make_acme_admin(user) do
+      org_id = Platform.Tenancy.get_org_by_slug!("acme").id
 
       %Platform.Tenancy.OrgMembership{}
       |> Platform.Tenancy.OrgMembership.changeset(%{
@@ -748,8 +748,8 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
       enable_flag()
 
       case role do
-        :admin -> make_fabrikam_admin(user)
-        :member -> fabrikam_member(user)
+        :admin -> make_acme_admin(user)
+        :member -> acme_member(user)
       end
 
       a = Platform.Tenancy.get_org_by_slug!("soylent")
@@ -770,13 +770,13 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
       %{conn: conn, space: space, p1: p1, p2: p2, pf: pf}
     end
 
-    # A root-org member who is NOT an admin: sees the space, `fabrikam_admin?/1`
+    # A root-org member who is NOT an admin: sees the space, `root_admin?/1`
     # is false, so a refusal is the admin gate and not visibility.
-    defp fabrikam_member(user) do
+    defp acme_member(user) do
       %Platform.Tenancy.OrgMembership{}
       |> Platform.Tenancy.OrgMembership.changeset(%{
         user_id: user.id,
-        org_id: Platform.Tenancy.get_org_by_slug!("fabrikam").id,
+        org_id: Platform.Tenancy.get_org_by_slug!("acme").id,
         role: "member"
       })
       |> Repo.insert!()
@@ -841,7 +841,7 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
 
       # Positive control: the same payload from an admin on the same space.
       {admin_conn, admin} = authenticated_conn(build_conn())
-      make_fabrikam_admin(admin)
+      make_acme_admin(admin)
       add_user(f.space, admin)
       {:ok, admin_view, _html} = live_at(admin_conn, "/chat/#{f.space.id}")
 
@@ -940,8 +940,8 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
       enable_flag()
 
       case role do
-        :admin -> make_fabrikam_admin(user)
-        :member -> fabrikam_member(user)
+        :admin -> make_acme_admin(user)
+        :member -> acme_member(user)
       end
 
       {:ok, [row]} =
@@ -975,7 +975,7 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
           oidc_sub: "oidc-cadence-admin-#{System.unique_integer([:positive])}"
         })
 
-      make_fabrikam_admin(admin)
+      make_acme_admin(admin)
       {:ok, _} = Platform.Responsibilities.set_goal_heartbeat_cadence(admin, cadence, opts)
     end
 
@@ -1098,7 +1098,7 @@ defmodule PlatformWeb.ChatLiveAgentsGoalSurfaceTest do
 
       # POSITIVE CONTROL: the same submit from an admin on the same space.
       {admin_conn, admin} = authenticated_conn(build_conn())
-      make_fabrikam_admin(admin)
+      make_acme_admin(admin)
       add_user(f.space, admin)
       {:ok, admin_view, _html} = live_at(admin_conn, "/chat/#{f.space.id}")
 

@@ -64,12 +64,12 @@ defmodule PlatformWeb.ChatLiveMobileNoSpacesTest do
         oidc_sub: "oidc-mobile-no-spaces-#{n}"
       })
 
-    fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+    acme = Tenancy.get_org_by_slug!("acme")
 
-    case Repo.get_by(OrgMembership, user_id: user.id, org_id: fabrikam.id) do
+    case Repo.get_by(OrgMembership, user_id: user.id, org_id: acme.id) do
       nil ->
         %OrgMembership{}
-        |> OrgMembership.changeset(%{user_id: user.id, org_id: fabrikam.id, role: "admin"})
+        |> OrgMembership.changeset(%{user_id: user.id, org_id: acme.id, role: "admin"})
         |> Repo.insert!()
 
       existing ->
