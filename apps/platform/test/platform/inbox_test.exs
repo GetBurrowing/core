@@ -698,6 +698,8 @@ defmodule Platform.InboxTest do
     # while the task runs. If this detonates, someone has added a reconciler
     # clause for the kind, and the decision must be REOPENED, not the test
     # adjusted.
+    # (Opening the task as its sponsor DOES dismiss the row — a user action, not
+    # reconciliation; see tasks_live_sponsor_inbox_dismiss_test.exs, task 01a116ff.)
     test "a sponsor row survives reconciliation, including after its task completes" do
       user = insert_user()
       {:ok, task} = Platform.Tasks.create_task(%{project_id: project!().id, title: "Sponsored"})

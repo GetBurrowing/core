@@ -154,6 +154,7 @@ defmodule PlatformWeb.TasksLive do
     with {:ok, _} <- Platform.UUID.cast(task_id),
          task when not is_nil(task) <- Tasks.get_task_detail(task_id) do
       pending_reviews = ReviewRequests.list_pending_for_task(task.id)
+      Platform.Inbox.dismiss_sponsor_row_on_open(socket.assigns.current_user_id, task.id)
 
       # The execution log, its participant and the steering composer all
       # belong to `SteeringComponent` (stage 5). It loads them off the

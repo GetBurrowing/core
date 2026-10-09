@@ -975,7 +975,19 @@ defmodule PlatformWeb.TasksLiveShellNonAccretionTest do
   # 650. `require Logger` and the blank line after it were removed: the shell
   # calls no Logger macro, and 1.20 reports that as an unused require. The
   # count went down, so the non-accretion promise above still holds.
-  @shell_line_count 650
+  #
+  # RAISED 650 -> 651 (+1), 2026-10-07, task 01a116ff stage 1 (opening a task
+  # as its sponsor dismisses that task's `task_sponsor_assigned` inbox row).
+  # ARITHMETIC: 650 + 1 = 651, the single call
+  # `Platform.Inbox.dismiss_sponsor_row_on_open(socket.assigns.current_user_id,
+  # task.id)` in the `/tasks/:task_id` clause of `handle_params/3`, which is
+  # the one clause both open paths (board pane `push_patch`, inbox deep link
+  # `push_navigate`) run. The `is_binary` guard, the REQUIRED
+  # `kind: "task_sponsor_assigned"` filter and the explanation all live in
+  # `Platform.Inbox.dismiss_sponsor_row_on_open/2`, not in the shell. 651 is
+  # inside the 653 budget in `scripts/surface-budgets.txt`, which is not
+  # raised.
+  @shell_line_count 651
 
   defp line_count(source), do: source |> :binary.matches("\n") |> length()
 

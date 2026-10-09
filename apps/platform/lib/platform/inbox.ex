@@ -17,7 +17,11 @@ defmodule Platform.Inbox do
   (`mark_read/2`, written when the user opens an item) records that it was seen
   and nothing more; it does not take the row off the list or out of the badge.
   Every scope in this module keys on `dismissed_at` alone — see
-  `unread_scope/1`, which carries the full note.
+  `unread_scope/1`, which carries the full note. One kind is the exception to
+  "opening only reads": opening a task you sponsor DISMISSES your
+  `task_sponsor_assigned` row for it (`dismiss_sponsor_row_on_open/2`, called
+  from `PlatformWeb.TasksLive.handle_params/3`, task `01a116ff`) — a dismissal,
+  so dismissal is still the only clear.
   """
   import Ecto.Query
 
@@ -363,8 +367,10 @@ defmodule Platform.Inbox do
   `task_plan_review` both carry `source_type: "task"` and the same task id, so
   an unfiltered sweep from a plan-settle path dismisses the sponsor row too —
   in the same write, with the same `dismissed_at`. That contradicts
-  `row_stale?/1`'s documented decision that sponsor rows are cleared by the
-  human, by hand, and it silently undoes a choice this system made on purpose.
+  `row_stale?/1`'s documented decision that sponsor rows are cleared by hand
+  OR when the sponsor opens the task (`dismiss_sponsor_row_on_open/2`, task
+  `01a116ff`, which itself calls this with `kind: "task_sponsor_assigned"`),
+  and it silently undoes a choice this system made on purpose.
 
   So a caller that owns ONE kind passes `kind: "task_plan_review"` and touches
   nothing else. Callers whose resolution genuinely retires every row for the
@@ -394,6 +400,31 @@ defmodule Platform.Inbox do
 
     {:ok, count}
   end
+
+  @doc """
+  Dismiss `user_id`'s live `task_sponsor_assigned` row for `task_id`: the
+  sponsor opened the task (task `01a116ff`).
+
+  Called from `PlatformWeb.TasksLive.handle_params/3` for `/tasks/:task_id`,
+  the one clause both open paths run: the board pane (`select_task` ->
+  `push_patch`) and the inbox deep link (`InboxLive` "open" ->
+  `push_navigate` -> mount). A call in `InboxLive` alone would miss the pane.
+
+  Scoped to the CURRENT user, so a non-sponsor's visit clears nothing of the
+  sponsor's (a former sponsor whose old row is still live clears their own
+  row, which is intended). `kind:` is REQUIRED here: `task_plan_review` rows
+  carry the same `source_type: "task"` and task id, and an unfiltered sweep
+  would clear the plan-review row too. `handle_params/3` runs on both the
+  dead and the connected render; the second call is a count-0 no-op that
+  does not broadcast. A non-binary `user_id` (no session user) is a no-op.
+  """
+  @spec dismiss_sponsor_row_on_open(term(), Ecto.UUID.t()) :: :ok
+  def dismiss_sponsor_row_on_open(user_id, task_id) when is_binary(user_id) do
+    {:ok, _} = dismiss_by_source(user_id, "task", task_id, kind: "task_sponsor_assigned")
+    :ok
+  end
+
+  def dismiss_sponsor_row_on_open(_user_id, _task_id), do: :ok
 
   # nil kind means "every kind for this source" — the pre-existing behaviour,
   # kept as the default so no current caller changes shape.
@@ -630,7 +661,10 @@ defmodule Platform.Inbox do
   # means "you now own this", which becomes MORE relevant while the task runs,
   # not less. Clearing on completion would dismiss a row whose subject is still
   # true — the never-dismiss-what-you-cannot-confirm-dead rule violated from the
-  # other direction. Sponsor rows are cleared by the human, by hand.
+  # other direction. Sponsor rows are cleared by hand OR when the sponsor opens
+  # the task (`dismiss_sponsor_row_on_open/2`, task 01a116ff). That reverses #811's
+  # "open only marks read" rule for this one kind only; it is a user action,
+  # not a reconciler clause, so the decision here is unchanged.
   # `inbox_test.exs` pins this: a sponsor row survives reconciliation even after
   # its task completes. If that test detonates, the decision is being changed
   # and must be reopened rather than patched.
