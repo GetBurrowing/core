@@ -323,7 +323,9 @@ defmodule PlatformWeb.ControlCenterLiveTest do
     conn = authenticated_conn(conn)
     {:ok, _view, html} = live(conn, ~p"/control/#{agent.slug}")
 
-    assert html =~ "Startup Suite"
+    # The rail label is the install's app name, "Burrow" on a migrated DB
+    # (task 01a120c5 stage 3).
+    assert html =~ "Burrow"
     assert html =~ "/chat"
     assert html =~ "/control"
   end

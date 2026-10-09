@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="368.74 61.70 1566.72 1121.47">
+  <!-- Burrow mark: <g id="arch"> and its two gradients, taken unchanged from the
+       Burrow lockup (burrow-lockup.svg). Wordmark removed; viewBox cropped to the
+       arch bounding box (408.74,101.70)-(1895.46,1143.17) with 40 units of padding
+       on every side. Geometry and gradient stops are byte-identical to the lockup. -->
+  <defs>
+    <style>
+      .st0 {
+        fill: url(#linear-gradient1);
+      }
+
+      .st1 {
+        fill: url(#linear-gradient);
+      }
+    </style>
+    <linearGradient id="linear-gradient" x1="930.47" y1="925.33" x2="1316.37" y2="1141.27" gradientTransform="translate(-2731.5105 4419.8141) scale(3.5066 -3.5066)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ff4d20"/>
+      <stop offset=".55" stop-color="#ff841e"/>
+      <stop offset="1" stop-color="#ffb52f"/>
+    </linearGradient>
+    <linearGradient id="linear-gradient1" x1="1043.77" y1="1057.26" x2="1234.77" y2="926.26" gradientTransform="translate(-2731.5105 4419.8141) scale(3.5066 -3.5066)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffd38a"/>
+      <stop offset="1" stop-color="#ffbc63"/>
+    </linearGradient>
+  </defs>
+  <g id="arch">
+    <path class="st1" d="M523.22,1143.17c-73.64,0-126.24-45.59-112.21-115.72,49.09-231.44,192.87-480.41,375.21-655.74,175.33-168.32,368.2-270.01,568.08-270.01s350.66,98.19,438.33,270.01c84.16,164.81,108.71,375.21,101.69,585.61v115.72c0,46.76-22.21,70.13-66.63,70.13h-455.86c7.01-112.21-3.51-241.96-70.13-336.64-45.59-66.63-101.69-87.67-161.31-87.67-178.84,0-291.05,175.33-315.6,424.3h-301.57Z"/>
+    <path class="st0" d="M824.79,1143.17c17.53-241.96,108.71-455.86,255.98-571.58,56.11-45.59,122.73-66.63,185.85-66.63,133.25,0,238.45,84.16,298.06,217.41,59.61,126.24,84.16,277.02,84.16,420.8h-277.02c7.01-112.21-3.51-241.96-70.13-336.64-45.59-66.63-101.69-87.67-161.31-87.67-178.84,0-291.05,175.33-315.6,424.3Z"/>
+  </g>
+</svg>

@@ -209,6 +209,16 @@ defmodule Platform.Tenancy.ScopeColor do
   # `#F5F5F5`, wrong by three per channel, until task 01a09333-d374 stage 6
   # corrected it. Reading the declaration is what made this module immune to
   # that while the comment was wrong. Keep reading the declaration.
+  #
+  # NOT YET BURROW (task 01a120c5 stage 1, deliberately deferred). app.css now
+  # declares the Burrow grounds (light #fbfaf9 / #f6f4f1, dark #191b20 /
+  # #111214, 16.53:1 apart, so the "no single colour" argument above still
+  # holds). These four are the PRE-Burrow grounds, kept because the solved
+  # ramps are pinned against browser-painted bytes in scope_color_test.exs,
+  # scope_color_styles_shipped_six_test.exs and the scope pill tests, and
+  # re-solving them needs a fresh painted gate, not a constant swap. The
+  # nearest delta is small (white vs #fbfaf9; #171b25 vs #191b20), but it is
+  # a delta: re-solve against the Burrow grounds as a follow-up.
   @surfaces %{
     light: [
       {"base-100", "oklch(100% 0 0)"},

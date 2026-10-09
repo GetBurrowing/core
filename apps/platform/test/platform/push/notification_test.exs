@@ -408,8 +408,9 @@ defmodule Platform.Push.NotificationTest do
       assert data["author_name"] == "Bob Sender"
       assert data["space_id"] == dm.id
       assert data["message_id"] == msg.id
-      # The title is what APNs and web push show; it is unchanged.
-      assert n.title == "Bob Sender in Suite"
+      # The title is what APNs and web push show. A DM has no name, so it
+      # names the install (task 01a120c5 stage 3; was a compiled "Suite").
+      assert n.title == "Bob Sender in Burrow"
     end
 
     test "a named space keeps its own name; an unresolved recipient falls back to it" do

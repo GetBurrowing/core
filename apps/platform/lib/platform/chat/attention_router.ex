@@ -654,7 +654,8 @@ defmodule Platform.Chat.AttentionRouter do
     # failures on other tests sharing the pool. Tests don't exercise push
     # (no subscriptions, no VAPID keys), so short-circuiting here costs
     # nothing and eliminates the flake. The notification itself is built by
-    # the pure `push_notification/5`, which tests call directly.
+    # `push_notification/5` (pure apart from one branding-row read for the
+    # app name), which tests call directly.
     if Application.get_env(:platform, :env) != :test do
       Task.start(fn ->
         attachments = if blank?(message.content), do: message_attachments(message.id), else: []
@@ -692,8 +693,10 @@ defmodule Platform.Chat.AttentionRouter do
   `author_type` / `author_id`, or a bare display name, which carries no
   author identity.
 
-  Pure (no queries), so tests can assert the exact notification without the
-  push `Task`, which short-circuits under `:test`.
+  Its only query is one read of the branding row for the install's app name
+  (the title of a space with no name; task 01a120c5 stage 3), so tests can
+  assert the exact notification without the push `Task`, which
+  short-circuits under `:test`.
   """
   @spec push_notification(
           Participant.t() | String.t(),
@@ -726,7 +729,11 @@ defmodule Platform.Chat.AttentionRouter do
       space_id: space.id,
       message_id: message.id,
       content: message.content,
-      attachments: attachments
+      attachments: attachments,
+      # The install's product name for the title of a space with no name (a
+      # DM or unnamed group): read once here, at the router boundary, so
+      # `Notification.chat_title/4` stays pure (task 01a120c5 stage 3).
+      app_name: Platform.Branding.app_name()
     })
   end
 
@@ -830,21 +837,23 @@ defmodule Platform.Chat.AttentionRouter do
   Build the push-notification title for a given sender + routing reason.
 
   The push itself now names the space (`push_notification/5`, task 01a10882);
-  this is that title with no space, which reads `in Suite`.
+  this is that title with no space, which reads `in {app name}`: the
+  install's `Platform.Branding.app_name/0` (task 01a120c5 stage 3), unless
+  the caller passes `app_name` explicitly.
 
   For `:here` broadcasts, surface the `@here` context so the recipient knows
   they were pinged as part of a channel-wide blast (not a direct mention or
   ambient activity). All other reasons reuse the default
-  `"<sender> in Suite"` form — keeping push behaviour stable for the
+  `"<sender> in <app name>"` form — keeping push behaviour stable for the
   existing `:mention`, `:all`, `:active`, `:directed`, `:watch`, etc. paths.
 
-  Pure helper, no side effects — exposed so tests can exercise the title
-  shape without spawning the push `Task` (which short-circuits under
-  `:test` env anyway).
+  With `app_name` given it is a pure helper; the two-argument form reads the
+  branding row once. Exposed so tests can exercise the title shape without
+  spawning the push `Task` (which short-circuits under `:test` env anyway).
   """
-  @spec notification_title(String.t(), atom()) :: String.t()
-  def notification_title(sender_name, reason),
-    do: Platform.Push.Notification.chat_title(sender_name, nil, reason)
+  @spec notification_title(String.t(), atom(), String.t() | nil) :: String.t()
+  def notification_title(sender_name, reason, app_name \\ Platform.Branding.app_name()),
+    do: Platform.Push.Notification.chat_title(sender_name, nil, reason, app_name)
 
   # ── Human participant decision (unchanged) ─────────────────────────────────
 

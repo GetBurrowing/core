@@ -306,25 +306,28 @@ defmodule Platform.Design.CanvasSearchSnippetContrastTest do
   describe "the measured ratios" do
     # Pinned so a token move is visible as a number rather than only as a
     # threshold crossing. The thresholds above are what must hold; these say
-    # what the shipped values actually are.
+    # what the shipped values actually are. Re-derived for the Burrow palette
+    # (task 01a120c5; light base-content black, kept by stage 4); the
+    # pre-Burrow light/dark context figures were 6.6964 / 6.3992, as the
+    # moduledoc records.
     test "light", %{light: c, ground_alpha: ga, context_alpha: ta, fill_spec: fs} do
       ground = W.composite(c.content, ga, c.base_100)
       fill = fill_color(c, fs, ground)
 
-      assert_in_delta W.contrast(W.composite(c.content, ta, ground), ground), 6.6964, @tolerance
-      assert_in_delta W.contrast(c.content, fill), 11.7647, @tolerance
-      assert_in_delta W.contrast(fill, ground), 1.5980, @tolerance
-      assert_in_delta W.contrast(c.edge, c.base_100), 1.4355, @tolerance
+      assert_in_delta W.contrast(W.composite(c.content, ta, ground), ground), 6.5904, @tolerance
+      assert_in_delta W.contrast(c.content, fill), 11.3113, @tolerance
+      assert_in_delta W.contrast(fill, ground), 1.5949, @tolerance
+      assert_in_delta W.contrast(c.edge, c.base_100), 1.4275, @tolerance
     end
 
     test "dark", %{dark: c, ground_alpha: ga, context_alpha: ta, fill_spec: fs} do
       ground = W.composite(c.content, ga, c.base_100)
       fill = fill_color(c, fs, ground)
 
-      assert_in_delta W.contrast(W.composite(c.content, ta, ground), ground), 6.3992, @tolerance
-      assert_in_delta W.contrast(c.content, fill), 7.2295, @tolerance
-      assert_in_delta W.contrast(fill, ground), 1.8189, @tolerance
-      assert_in_delta W.contrast(c.edge, c.base_100), 1.1966, @tolerance
+      assert_in_delta W.contrast(W.composite(c.content, ta, ground), ground), 6.4331, @tolerance
+      assert_in_delta W.contrast(c.content, fill), 7.2517, @tolerance
+      assert_in_delta W.contrast(fill, ground), 1.8239, @tolerance
+      assert_in_delta W.contrast(c.edge, c.base_100), 1.5361, @tolerance
     end
   end
 
@@ -480,7 +483,7 @@ defmodule Platform.Design.CanvasSearchSnippetContrastTest do
                         W.composite(token_color!(c, spec.token), spec.alpha, ground),
                         ground
                       ),
-                      5.5449,
+                      5.5361,
                       @tolerance
     end
 
@@ -488,7 +491,8 @@ defmodule Platform.Design.CanvasSearchSnippetContrastTest do
       # Pins the failure the scoped rule exists to route around, and with it
       # both of its inputs. A retune of either token that "fixes" the line by
       # moving this number is visible here as well as in the AA clauses.
-      assert_in_delta W.contrast(c.neutral, token_color!(c, ground_token)), 2.2346, @tolerance
+      # Burrow (task 01a120c5): 2.0240 on the #111214 drawer ground (2.2346 before).
+      assert_in_delta W.contrast(c.neutral, token_color!(c, ground_token)), 2.024, @tolerance
     end
 
     test "light, untouched", %{
@@ -497,7 +501,7 @@ defmodule Platform.Design.CanvasSearchSnippetContrastTest do
       indexing_utility_token: text_token
     } do
       assert_in_delta W.contrast(token_color!(c, text_token), token_color!(c, ground_token)),
-                      6.6599,
+                      6.8146,
                       @tolerance
     end
   end

@@ -1650,23 +1650,25 @@ defmodule Platform.Chat.AttentionRouterTest do
   # than pass the helper output through.
 
   describe "notification_title/2" do
+    # The no-space title names the install (Platform.Branding.app_name/0,
+    # "Burrow" on a migrated DB; task 01a120c5 stage 3), never a compiled name.
     test "for :here, surfaces the @here broadcast context in the title" do
-      assert AttentionRouter.notification_title("Rowan", :here) == "Rowan @here in Suite"
+      assert AttentionRouter.notification_title("Rowan", :here) == "Rowan @here in Burrow"
     end
 
     test "for :mention, uses the default sender-only title" do
-      assert AttentionRouter.notification_title("Rowan", :mention) == "Rowan in Suite"
+      assert AttentionRouter.notification_title("Rowan", :mention) == "Rowan in Burrow"
     end
 
     test "for :all, uses the default sender-only title" do
-      assert AttentionRouter.notification_title("Rowan", :all) == "Rowan in Suite"
+      assert AttentionRouter.notification_title("Rowan", :all) == "Rowan in Burrow"
     end
 
     test "for any other reason atom, uses the default sender-only title" do
       # Defensive: future reasons (e.g. :directed, :watch, :active_agent)
       # should fall through to the default rather than crash.
       for reason <- [:directed, :watch, :active_agent, :active, :multi_mention] do
-        assert AttentionRouter.notification_title("Rowan", reason) == "Rowan in Suite",
+        assert AttentionRouter.notification_title("Rowan", reason) == "Rowan in Burrow",
                "expected default title for reason #{inspect(reason)}"
       end
     end

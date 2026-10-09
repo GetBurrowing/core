@@ -149,7 +149,7 @@ defmodule PlatformWeb.AuthControllerTest do
 
       body = response(conn, 403)
       assert body =~ "archived"
-      assert body =~ "Suite administrator"
+      assert body =~ "Contact your Burrow administrator."
 
       # No `current_user_id` planted in the session, and any bleed-through
       # was dropped by `configure_session(drop: true)`.

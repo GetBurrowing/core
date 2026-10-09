@@ -32,11 +32,20 @@ defmodule Platform.Design.DarkTokenPaintedFixture do
   exactly (`base-100` vs `base-200`, live and mock). This fixture measures the
   difference; it does not propose the mock's ground.
 
-  ## Staleness
+  ## Staleness, and the Burrow supersession
 
   Every live row carries the dark-block DECLARATION it was read from. If a
   later change edits any of those declarations, the diff test fails with
   "re-measure" instead of leaving a stale table behind.
+
+  The Burrow recolor (task 01a120c5 stage 1) replaced every live dark token
+  this table compares. The table, and the signed decision document built on
+  it, compare the PRE-Burrow palette with the meetings mock; re-deciding
+  their recommendations is not a re-measure, so they are kept as a dated
+  record and marked superseded (`superseded_by/0`). The live side WAS
+  re-measured with the same probe: `results-burrow-01a120c5.json` in the
+  measurements directory, and the staleness guard now holds the CURRENT dark
+  block to that run instead.
   """
 
   @doc "Where and how the bytes below were taken."
@@ -51,9 +60,20 @@ defmodule Platform.Design.DarkTokenPaintedFixture do
       instrument: "priv/measurements/01a0cf85-dark-token-diff/probe.mjs",
       runs:
         "six full runs (four in stage 1, two in stage 2 after the -content tokens were added); " <>
-          "every reading common to them is byte-identical"
+          "every reading common to them is byte-identical",
+      superseded_by: "01a120c5-9c98-7001-af58-38f6a2c596a6"
     }
   end
+
+  @doc """
+  The task whose palette change made this table a historical record, or nil
+  while it still describes what ships. Read from `provenance/0`.
+  """
+  def superseded_by, do: Map.get(provenance(), :superseded_by)
+
+  @doc "The live-side re-measure taken for the superseding palette."
+  def burrow_remeasure_path,
+    do: "priv/measurements/01a0cf85-dark-token-diff/results-burrow-01a120c5.json"
 
   @doc "The planted known colour. It appears nowhere in either palette."
   def planted, do: "#7B3F1D"

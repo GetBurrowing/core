@@ -243,7 +243,9 @@ defmodule PlatformWeb.ShellLiveTest do
     # Wait for the async load to resolve to {principal_name: nil, ...}; the
     # template then falls through to the legacy "Agent" label branch.
     html = render_async(view, 1_000)
-    assert html =~ "Startup Suite"
+    # The rail label is the install's app name, "Burrow" on a migrated DB
+    # (task 01a120c5 stage 3).
+    assert html =~ "Burrow"
   end
 
   test "WS-connected mount initially renders roster + presence as loading AsyncResults", %{

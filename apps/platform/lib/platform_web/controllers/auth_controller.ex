@@ -369,12 +369,16 @@ defmodule PlatformWeb.AuthController do
   # Stage 5: archived-user interstitial. Drops any session bleed-through
   # (defensive — the OIDC + dev_login paths shouldn't have set
   # `current_user_id` yet, but a stale session cookie can be lingering),
-  # then renders 403 with the message the plan pins.
+  # then renders 403 with the message the plan pins. The product name is the
+  # install's own (Platform.Branding.app_name/0), never a compiled one
+  # (task 01a120c5 stage 3).
   defp user_archived(conn) do
     conn
     |> configure_session(drop: true)
     |> put_status(:forbidden)
-    |> text("This account has been archived. Contact your Suite administrator.")
+    |> text(
+      "This account has been archived. Contact your #{Platform.Branding.app_name()} administrator."
+    )
   end
 
   defp emit_access_blocked(conn, reason, email) do

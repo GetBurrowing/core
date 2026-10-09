@@ -102,6 +102,15 @@ defmodule PlatformWeb.Components.IconRail do
         "canonical list (nil)."
   )
 
+  attr(:brand_name, :string,
+    default: "",
+    doc:
+      "the install's app name (Platform.Branding.app_name/0, assigned once per mount by " <>
+        "ShellLive) — the alt text of the Burrow mark and the label text in the rail header " <>
+        "(task 01a120c5 stages 2 and 3). Never a compiled " <>
+        "product name; empty (decorative) only when a caller renders the rail without one."
+  )
+
   @doc """
   Desktop vertical icon-rail. Hidden below the `lg` breakpoint.
 
@@ -164,10 +173,10 @@ defmodule PlatformWeb.Components.IconRail do
           :if={!@sidebar_collapsed}
           class="flex size-10 flex-shrink-0 items-center justify-center"
         >
-          <img src={~p"/images/logo.svg"} alt="Startup Suite" class="size-5" />
+          <img src={~p"/images/burrow-mark.svg"} alt={@brand_name} class="size-5" />
         </div>
         <span :if={!@sidebar_collapsed} class="icon-rail-label text-sm font-semibold">
-          Startup Suite
+          {@brand_name}
         </span>
         <button
           :if={!@sidebar_collapsed}

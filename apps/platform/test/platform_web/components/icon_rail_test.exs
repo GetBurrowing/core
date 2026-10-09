@@ -25,7 +25,8 @@ defmodule PlatformWeb.Components.IconRailTest do
         %{
           current_path: "/chat",
           root_user: false,
-          sidebar_collapsed: false
+          sidebar_collapsed: false,
+          brand_name: "Acme Ops"
         },
         assigns
       )
@@ -35,6 +36,7 @@ defmodule PlatformWeb.Components.IconRailTest do
       current_path={@current_path}
       root_user={@root_user}
       sidebar_collapsed={@sidebar_collapsed}
+      brand_name={@brand_name}
     />
     """)
   end
@@ -286,15 +288,18 @@ defmodule PlatformWeb.Components.IconRailTest do
 
     test "collapsed mode hides the platform logo (the toggle takes the header slot)" do
       doc = render_icon_rail(%{sidebar_collapsed: true}) |> LazyHTML.from_fragment()
-      assert doc |> LazyHTML.query(~s(img[alt="Startup Suite"])) |> Enum.count() == 0
+      assert doc |> LazyHTML.query(".icon-rail-header img") |> Enum.count() == 0
     end
 
     test "expanded mode keeps logo + wordmark + a single collapse toggle in the header" do
       doc = render_icon_rail(%{sidebar_collapsed: false}) |> LazyHTML.from_fragment()
 
-      assert doc
-             |> LazyHTML.query(~s(.icon-rail-header img[alt="Startup Suite"]))
-             |> Enum.count() == 1
+      # The Burrow mark (task 01a120c5 stage 2), alt = the app name passed in.
+      logo = LazyHTML.query(doc, ".icon-rail-header img")
+      assert Enum.count(logo) == 1
+      assert [src] = LazyHTML.attribute(logo, "src")
+      assert String.starts_with?(src, "/images/burrow-mark")
+      assert LazyHTML.attribute(logo, "alt") == ["Acme Ops"]
 
       header_buttons = LazyHTML.query(doc, ".icon-rail-header button")
       assert Enum.count(header_buttons) == 1

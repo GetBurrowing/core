@@ -201,7 +201,7 @@ defmodule Platform.Push.Notification do
 
     new(%{
       kind: kind,
-      title: chat_title(attrs[:author], attrs[:space_name], attrs[:reason]),
+      title: chat_title(attrs[:author], attrs[:space_name], attrs[:reason], attrs[:app_name]),
       body: body_text(attrs[:content], attrs[:attachments] || []),
       url: chat_url(attrs[:space_path], attrs[:message_id]),
       space_id: attrs[:space_id],
@@ -228,13 +228,33 @@ defmodule Platform.Push.Notification do
     })
   end
 
-  @doc "Mention title: `{Author} in {Space}` (`@here` variant for a broadcast)."
-  @spec chat_title(String.t() | nil, String.t() | nil, atom() | nil) :: String.t()
-  def chat_title(author, space_name, :here),
-    do: "#{presence(author) || "Someone"} @here in #{presence(space_name) || "Suite"}"
+  @doc """
+  Mention title: `{Author} in {Space}` (`@here` variant for a broadcast).
 
-  def chat_title(author, space_name, _reason),
-    do: "#{presence(author) || "Someone"} in #{presence(space_name) || "Suite"}"
+  A space with no name (a DM or unnamed group) reads `{Author} in {App}`,
+  where `app_name` is the install's product name. It is passed IN by the
+  caller (`Platform.Chat.AttentionRouter.push_notification/6` reads
+  `Platform.Branding.app_name/0` once at that boundary), so this stays a
+  pure function. Task 01a120c5 stage 3 replaced the compiled `"Suite"`
+  fallback. With neither a space name nor an app name the title is just
+  `{Author}` (or `{Author} @here`): no compiled product name, ever.
+  """
+  @spec chat_title(String.t() | nil, String.t() | nil, atom() | nil, String.t() | nil) ::
+          String.t()
+  def chat_title(author, space_name, reason, app_name \\ nil)
+
+  def chat_title(author, space_name, :here, app_name),
+    do: "#{presence(author) || "Someone"} @here" <> place(space_name, app_name)
+
+  def chat_title(author, space_name, _reason, app_name),
+    do: (presence(author) || "Someone") <> place(space_name, app_name)
+
+  defp place(space_name, app_name) do
+    case presence(space_name) || presence(app_name) do
+      nil -> ""
+      name -> " in " <> name
+    end
+  end
 
   @doc """
   The redacted copy an external recipient gets on EVERY transport. Every

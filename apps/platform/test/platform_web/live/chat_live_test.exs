@@ -194,7 +194,9 @@ defmodule PlatformWeb.ChatLiveTest do
     # chat plan v2 Stage 2 (Pinned / Direct Messages / sub-org sections);
     # the DMs label is the cheapest stable hook on the desktop sidebar.
     assert html =~ "Direct Messages"
-    assert html =~ "Startup Suite"
+    # The rail label is the install's app name, "Burrow" on a migrated DB
+    # (task 01a120c5 stage 3).
+    assert html =~ "Burrow"
   end
 
   test "shell sidebar is rendered on /chat", %{conn: conn} do
@@ -202,7 +204,9 @@ defmodule PlatformWeb.ChatLiveTest do
     {:ok, _view, html} = live(conn, ~p"/chat")
 
     # Shell nav and top bar present
-    assert html =~ "Startup Suite"
+    # The rail label is the install's app name, "Burrow" on a migrated DB
+    # (task 01a120c5 stage 3).
+    assert html =~ "Burrow"
     assert html =~ "/chat"
     assert html =~ "/control"
   end

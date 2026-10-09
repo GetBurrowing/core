@@ -401,7 +401,7 @@ defmodule PlatformWeb.AdminBrandingLive do
       {:ok, %InstallBranding{}} ->
         {:noreply,
          socket
-         |> put_flash(:info, "App colours reset to the Suite default.")
+         |> put_flash(:info, "App colours reset to the Burrow default.")
          |> redirect(to: ~p"/admin/branding")}
 
       {:error, %Ecto.Changeset{} = changeset} ->

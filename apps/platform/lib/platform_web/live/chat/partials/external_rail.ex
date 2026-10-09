@@ -85,7 +85,7 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
       >
         <div class="flex items-center justify-between px-3 py-2.5">
           <div class="flex items-center gap-2 min-w-0" data-role="brand-chip">
-            <img src={~p"/images/logo.svg"} alt={@brand_name} class="size-6 flex-shrink-0" />
+            <img src={~p"/images/burrow-mark.svg"} alt={@brand_name} class="size-6 flex-shrink-0" />
             <span class="truncate text-sm font-semibold tracking-tight text-base-content">
               {@brand_name}
             </span>
@@ -228,7 +228,7 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
         <header class="flex-shrink-0 border-b border-edge safe-area-top">
           <div class="flex h-12 items-center justify-between px-4">
             <div class="flex items-center gap-2 min-w-0" data-role="brand-chip">
-              <img src={~p"/images/logo.svg"} alt={@brand_name} class="size-6 flex-shrink-0" />
+              <img src={~p"/images/burrow-mark.svg"} alt={@brand_name} class="size-6 flex-shrink-0" />
               <span class="truncate text-sm font-semibold tracking-tight text-base-content">
                 {@brand_name}
               </span>

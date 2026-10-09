@@ -482,13 +482,14 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
   glyphs; a face in it says someone is accountable with no label and no
   added height, and the ring is the only chroma on this surface.
 
-  The ring was `ring-primary` until task 01a0ca8b stage 2, and #06D5ED
-  painted 1.5956:1 against the light rail: the one device the block spends
-  its boldness on was close to invisible in light. `--focus-ring` is the
-  existing theme-split slot minted for exactly this job (a non-text
-  indicator that must clear 3:1 on every ground): painted in Chrome it
-  measures 4.199:1 on the light rail (#087F93) and 11.5672:1 on the dark
-  rail, where it IS #06D5ED, so dark renders the same ring as before.
+  The ring was `ring-primary` until task 01a0ca8b stage 2, and the
+  pre-Burrow cyan painted 1.5956:1 against the light rail: the one device the
+  block spends its boldness on was close to invisible in light. `--focus-ring`
+  is the existing theme-split slot minted for exactly this job (a non-text
+  indicator that must clear 3:1 on every ground). On the Burrow tokens (task
+  01a120c5), computed from app.css against the rail's `bg-base-200`, it is
+  #8b3b04 at 7.0195:1 in light and #f47721 (the dark primary) at 6.7002:1 in
+  dark.
   `focus_ring_slot_test.exs` pins the slot's ratios, so a retune that
   breaks the floor reds there first. The avatar is not focusable, so the
   ring cannot be mistaken for a focus state on this element.

@@ -252,15 +252,17 @@ defmodule Platform.Design.CandidateLiveQuoteContrastTest do
                "flags a known-good token and is not trustworthy."
     end
 
-    test "dark: --cc-title-half on the rail's own ground is roughly 6.71:1, clears AA", ctx do
+    test "dark: --cc-title-half on the rail's own ground is roughly 6.23:1, clears AA", ctx do
       fg = painted(resolve!(ctx.tokens.dark, "--cc-title-half"))
       got = W.contrast(fg, ctx.rail_ground.dark)
 
+      # 6.2250 on the Burrow rail ground #141518 (task 01a120c5), recorded beside
+      # the pre-Burrow 6.7068 in app.css's --cc-stage comment.
       assert_in_delta got,
-                      6.7068,
+                      6.2250,
                       @negative_control_tolerance,
                       "--cc-title-half on the rail's own ground (#{W.to_hex(ctx.rail_ground.dark)}) " <>
-                        "measures #{fmt(got)}, expected roughly 6.71:1 — the figure task 01a07a90's " <>
+                        "measures #{fmt(got)}, expected roughly 6.23:1 — the Burrow re-measure of the figure task 01a07a90's " <>
                         "own comment in app.css records (a browser pixel-read) for this token/ground " <>
                         "pair. A miss bigger than this is worth reporting as a real drift, not widening " <>
                         "further."

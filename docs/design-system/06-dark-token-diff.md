@@ -1,5 +1,11 @@
 # 06: Dark token diff, live vs the meetings mock
 
+> **Superseded (2026-10-09).** The Burrow recolor (task 01a120c5) replaced
+> every live dark token compared below. This document is kept as the dated
+> record of the pre-Burrow comparison; its recommendations were not
+> re-decided. The live side was re-measured with the same probe:
+> `apps/platform/priv/measurements/01a0cf85-dark-token-diff/results-burrow-01a120c5.json`.
+
 **Decision document, task 01a0cf85.** Every dark-theme token, live Suite
 against the meetings desktop mock, with a recommendation per token for Marlowe to
 approve or reject row by row. **Nothing here is applied.** No `app.css` value

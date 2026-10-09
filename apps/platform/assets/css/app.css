@@ -74,44 +74,33 @@
   default: true;
   prefersdark: false;
   color-scheme: "light";
-  /* Suite design-system surfaces */
-  --color-base-100: oklch(100% 0 0);          /* #FFFFFF */
-  /* #F2F2F2, not #F5F5F5. The comment read #F5F5F5 from this line's first
-     commit until task 01a09333-d374 stage 6; oklch(96% 0 0) paints
-     242,242,242, three per channel darker, verified by painting the
-     declaration on two independent rigs. Four modules had already recorded
-     the discrepancy and worked around it by measuring the declaration
-     instead (scope_color.ex, focus_ring_slot_test.exs,
-     primary_contrast_sweep_test.exs, and the note further down this block);
-     none of them could fix it from where they stood. */
-  --color-base-200: oklch(96% 0 0);           /* #F2F2F2 */
-  --color-base-300: oklch(88% 0 0);           /* #D7D7D7 */
-  /* Border/edge slot. Byte-identical to --color-base-300 above, and that
-     identity is deliberate: light --color-base-100 is pure white, so the
-     light theme never had the invisible-border defect (light base-300 on
-     white is already 1.4393:1, a visible edge). Declaring the same value
-     here is what keeps light pixel-identical to what shipped. Kept as the
-     same oklch text rather than transcribed to a hex so that no rounding
-     difference between a converter and the browser can shift the light edge
-     by a hair. If base-300 is ever re-tuned, decide explicitly whether this
-     follows it; do not assume. */
-  --edge: oklch(88% 0 0);
+  /* Burrow surfaces (task 01a120c5, Harper's 2026-10-05 "minimal recolor"
+     spec): warm off-whites. Hex literals, because a hex cannot drift from
+     its own comment. */
+  --color-base-100: #fbfaf9;
+  --color-base-200: #f6f4f1;
+  --color-base-300: #efebe7;
+  /* Border/edge slot. Its own value, no longer a copy of --color-base-300:
+     the Burrow base-300 #efebe7 is only 1.1376:1 against base-100, too faint
+     to be an edge, so the spec gives the edge a deeper warm grey. #d9d3c9
+     measures 1.4275:1 on base-100, 1.3556:1 on base-200 and 1.2548:1 on
+     base-300, and is DARKER than the surface, the light-theme direction
+     test/platform/design/border_token_direction_test.exs pins. */
+  --edge: #d9d3c9;
   /* Focus-ring slot, theme-split (task 01a0833d). WCAG 2.2 SC 1.4.11 Non-text
-     Contrast wants 3:1 minimum against every adjacent ground, and
-     --color-primary cannot supply it here: #06D5ED is 1.7875:1 on base-100,
-     1.5913:1 on base-200 and 1.2452:1 on base-300. The darkened action cyan
-     does: #087F93 measures 4.7007:1 on base-100 (#FFFFFF), 4.1847:1 on
-     base-200 (#F2F2F2) and 3.2747:1 on base-300 (#D7D7D7). base-300 is the
-     tightest ground, 0.27 above the floor, so re-tuning base-300 lighter is
-     what breaks this first.
+     Contrast wants 3:1 minimum against every adjacent ground. The slot reads
+     --color-interactive (#8b3b04), which measures 7.3919:1 on base-100
+     (#fbfaf9), 7.0195:1 on base-200 (#f6f4f1) and 6.4978:1 on base-300
+     (#efebe7). The Burrow primary #ad4b07 would also clear 3:1 here (5.3202,
+     5.0521 and 4.6766:1), unlike the cyan it replaced, but the slot's
+     mechanism is deliberately unchanged by the recolor: light rings with the
+     interactive colour, dark with the primary.
 
-     Every ratio above was computed from this file's own declarations by
-     test/platform/design/focus_ring_slot_test.exs through
+     Every ratio above was computed from this file's own declarations through
      Platform.Design.WcagContrast; none is copied from another comment, because
-     the comments in this file are known to drift (light --color-base-200 was
-     commented #F5F5F5 while it rendered #F2F2F2, from its first commit until
-     task 01a09333-d374 stage 6 corrected the comment above; the figures here
-     were always measured against the declaration, so none of them moved).
+     the comments in this file are known to drift. They are asserted by
+     test/platform/design/focus_ring_slot_test.exs and
+     test/platform/design/burrow_palette_guard_test.exs.
 
      Must be named --focus-ring, never --color-focus-ring — see the
      @theme inline block below for why a --color-* name here breaks. The
@@ -119,46 +108,54 @@
      matches a declaration as `--color-focus-ring` followed by a colon at the
      start of a line, and prose must not be able to trip it. */
   --focus-ring: var(--color-interactive);
-  --color-base-content: oklch(0% 0 0);        /* #000000 */
-  /* Brand cyan primary. ONE value in both themes (task 01a07435).
+  /* Black: main's value, KEPT over the minimal-recolor spec's warm #221f1b
+     for WCAG AA (task 01a120c5 stage 4; same shape as dark success-content,
+     and the same rule stage 1 applied to pipeline-human: where the spec value
+     fails, keep main's and record why). Secondary text paints this slot at
+     reduced strength, by class (text-base-content/60, 401 occurrences in
+     lib/; /55, 33; daisyUI .label at 60%) and by rule (.empty-bot-author,
+     opacity 0.55). On the warm grounds the spec ink measured, at 60%,
+     4.2824 / 4.2312 / 4.0937:1 on base-100/200/300, and at 55%
+     3.6755 / 3.6400 / 3.5509: text failures main's black did not have. A
+     warm ink clears 60% (#141310: 4.8150 / 4.7132 / 4.5992), but at 55% the
+     ink has to go essentially to black (#050504 still measures 4.4551 on
+     base-200). Black: 4.7356 / 4.6398 / 4.5414 at 55%, 5.6764 / 5.5683 /
+     5.4434 at 60%, and
+     20.1440:1 at full on base-100. Ratios use the WCAG 2.x formula on the
+     sRGB composite rounded to 8 bits, as painted (axe read the spec ink's
+     composites #797774 and #777471 off the rendered build). Asserted by
+     test/platform/design/burrow_palette_guard_test.exs. */
+  --color-base-content: #000000;
+  /* Burrow orange primary (task 01a120c5). The themes carry DIFFERENT
+     oranges, unlike the single cyan they replace (task 01a07435): light uses
+     the deep #ad4b07, dark the bright #f47721, each chosen by the spec for
+     its own ground.
 
-     The hex is authoritative over the oklch it replaces: oklch(82% 0.12 207)
-     renders #4EDAEB, a visibly paler cyan, and the dark block declared a
-     second cyan of its own. Two reasons the split is gone. The brand names
-     #06D5ED as its single action colour, and
-     docs/design-system/04-accessibility.md:21 already specifies the focus
-     ring as `var(--color-primary)` (cyan; same in light + dark themes), so
-     one value is what makes this file agree with the spec it contradicted.
-     No record was ever left of why the themes were split in the first place.
-
-     Written as a hex because a hex cannot drift from its own comment, which
-     is the defect being fixed here.
-
-     Measured: 9.63:1 on the dark panel #171b25, 11.75:1 against
-     --color-primary-content (black). The brand rule that cyan is NEVER text
-     on a light surface is untouched by this; --color-interactive is still
-     the AA-safe text cyan and this token is still fill-only.
+     Measured: #ad4b07 is 5.3202:1 on base-100 #fbfaf9 and 5.3202:1 against
+     --color-primary-content (#fbfaf9, the light surface colour); black on
+     it would be only 3.7863:1, which is why the label is light here and
+     black in dark. The rule that the primary is fill-only still stands;
+     --color-interactive is the text colour.
 
      The trailing `renders #XXXXXX` marker carried by each of the four
      --color-primary / --color-accent declarations is asserted against the
      value it sits on by test/platform/design/primary_contrast_sweep_test.exs
      (task 01a07435 stage 2). A comment that disagrees with its own
-     declaration is the defect this task closed, and that marker is what reds
-     the build if it comes back. Do not drop it. */
-  --color-primary: #06D5ED;                   /* renders #06D5ED */
-  --color-primary-content: oklch(0% 0 0);     /* black text on cyan */
-  --color-secondary: oklch(30% 0.01 0);       /* #4A4A4A */
+     declaration is the defect that marker reds the build for. Do not drop
+     it. */
+  --color-primary: #ad4b07;                   /* renders #ad4b07 */
+  --color-primary-content: #fbfaf9;           /* light text on deep orange */
+  --color-secondary: #635b53;                 /* warm grey */
   --color-secondary-content: oklch(100% 0 0);
   /* Accent has always held the same value as primary in both themes, so it
-     follows primary here rather than being left behind as a second cyan.
-     Its five consumers are chat/canvas/theme.ex:85,
+     follows primary here. Its five consumers are chat/canvas/theme.ex:85,
      planning_step_extension.ex:197, :198, :454 and board_component.ex:1134;
      none needs a distinct value, and no stylesheet reads var(--color-accent). */
-  --color-accent: #06D5ED;                    /* renders #06D5ED */
-  --color-accent-content: oklch(0% 0 0);
+  --color-accent: #ad4b07;                    /* renders #ad4b07 */
+  --color-accent-content: #fbfaf9;
   --color-neutral: oklch(45% 0.01 0);         /* ~#737373 — bumped from 55% to fix WCAG 1.4.3 AA contrast vs --color-neutral-content (3.54:1 → 4.7:1) per audit 1B-A11Y-5 */
   --color-neutral-content: oklch(100% 0 0);
-  --color-info: oklch(54% 0.16 255);         /* info-blue — approved palette 2026-07-11; L54 clears AA both as text-on-white AND as fill under white content (≈4.9:1) */
+  --color-info: #0e7382;                      /* Burrow teal; 5.3104:1 as text on base-100, 5.5361:1 under white content */
   --color-info-content: oklch(100% 0 0);
   /* Pipeline health (task 019fe6b8): human wait, paired against --color-info
      (engine time). Validated CVD separation light ΔE 27.0 protan / 31.6 tritan.
@@ -170,12 +167,17 @@
      appear in a plain table on the page. */
   --color-pipeline-human: oklch(72% 0.16 50);
   --color-pipeline-human-content: oklch(0% 0 0);
-  --color-success: oklch(70% 0.15 162);       /* #10B981 */
+  --color-success: #2d7638;                   /* 5.5850:1 under white content */
   --color-success-content: oklch(100% 0 0);
-  --color-warning: oklch(76% 0.17 70);        /* #F59E0B */
-  --color-warning-content: oklch(0% 0 0);
+  --color-warning: #925d0c;                   /* 5.3105:1 under its #fbfaf9 content */
+  --color-warning-content: #fbfaf9;
   --color-error: oklch(63% 0.22 25);          /* #EF4444 */
-  --color-error-content: oklch(100% 0 0);
+  /* Black, not white (task 01a120c5). White on this red measures 3.8948:1,
+     under the 4.5:1 AA floor for text, and had since before the recolor;
+     the Burrow guard asserts every fill/content pair clears AA, and this was
+     the one other pair that failed it. Black measures 5.3918:1. The red
+     itself is unchanged. */
+  --color-error-content: oklch(0% 0 0);
   --radius-selector: 1rem;      /* pill-at-height for badges/toggles — re-skin Phase 1 (task 019f4f76) */
   --radius-field: 0.625rem;     /* 10px buttons/inputs per the design-system spec — re-skin Phase 1 */
   --radius-box: 0.875rem;       /* 14px cards/modals per the design-system spec — re-skin Phase 1 */
@@ -192,74 +194,63 @@
   default: false;
   prefersdark: true;
   color-scheme: "dark";
-  /* Suite dark surfaces — merge the comp-aligned chat pane with the newer
-     deeper sidebar/input treatment already on main.
+  /* Burrow dark surfaces (task 01a120c5, Harper's 2026-10-05 "minimal
+     recolor" spec): neutral charcoals with a faint cool cast.
 
-     GROUND, decided 2026-09-06 by Harper Parker alongside the primary
-     unification (task 01a07435): the ground stays #000306, which is what
-     --color-base-200 below already renders. The mockup proposed #0C1016 and
-     it was rejected on panel-against-ground separation: the #171b25 panel is
-     1.2011:1 against #000306 and 1.1077:1 against #0C1016, so the lighter
-     ground gives away separation on the boundary it would have affected.
-     Recorded as a decision and NOT as an edit: #0C1016 is declared nowhere
-     in this repo and #000306 is already what ships, so the CSS half of this
-     ruling is a deliberate no-op. Do not add a ground token for it. */
-  --color-base-100: #171b25;                  /* Chat Pane */
-  --color-base-200: oklch(9% 0.018 240);      /* #000306 — sidebar */
-  --color-base-300: oklch(20% 0.028 240);     /* #091821 — raised, input bar */
-  /* Border/edge slot, split out of --color-base-300 (task 01a0740b).
+     GROUND. The spec's ground is --color-base-200 #111214, superseding the
+     2026-09-06 ruling by Harper Parker that kept #000306 and rejected the
+     mockup's #0C1016 on panel-against-ground separation (the pre-Burrow
+     #171b25 panel was 1.2011:1 against #000306 and 1.1077:1 against
+     #0C1016). The #191b20 panel is 1.0879:1 against the Burrow ground. Raised fills (--color-base-300 #25272b) are now LIGHTER
+     than the panel, 1.1516:1, and 1.2528:1 against the ground. */
+  --color-base-100: #191b20;                  /* Chat Pane */
+  --color-base-200: #111214;                  /* sidebar / ground */
+  --color-base-300: #25272b;                  /* raised, input bar */
+  /* Border/edge slot, split out of --color-base-300 (task 01a0740b), when
+     base-300 was darker than the panel and could not serve as an edge.
 
-     base-300 renders #091821, which is DARKER than this theme's
-     --color-base-100 (#171b25): 1.0478:1, an edge nobody can see. Cards,
-     inputs and panels shipped with borders that are not there.
-
-     base-300 could not simply be retuned, because it also serves as a
-     raised fill on the near-black --color-base-200 (#000306), where being
-     darker than what surrounds it is correct (1.1463:1 the other way). One
-     token, two jobs, opposite requirements. So the border job moved here.
-
-     This value is LIGHTER than the surface, which is the entire point of
-     the ticket: #232A38 against --color-base-100 #171b25 is 1.1966:1. A hex
-     literal is used deliberately, matching --color-base-100 above: a hex
-     cannot drift from its own comment, which is exactly the defect the four
-     comment corrections in this file were fixing.
+     This value is LIGHTER than the surface: #383b42 against --color-base-100
+     #191b20 is 1.5361:1 (1.6711:1 on base-200, 1.3339:1 on base-300). A hex
+     literal is used deliberately: a hex cannot drift from its own comment.
 
      Direction, not value, is what is pinned. See
      test/platform/design/border_token_direction_test.exs. */
-  --edge: #232A38;
-  /* Focus-ring slot, theme-split (task 01a0833d). Dark keeps the brand cyan
-     and clears WCAG 2.2 SC 1.4.11 with room to spare: #06D5ED measures
-     9.6304:1 on base-100 (#171B25), 11.5762:1 on base-200 (#000306) and
-     10.1049:1 on base-300 (#091821). Light is the theme that had to move off
-     primary; see the light block above. Ratios computed by
-     test/platform/design/focus_ring_slot_test.exs, not copied. */
+  --edge: #383b42;
+  /* Focus-ring slot, theme-split (task 01a0833d). Dark rings with the
+     primary and clears WCAG 2.2 SC 1.4.11 with room to spare: #f47721
+     measures 6.1588:1 on base-100 (#191b20), 6.7002:1 on base-200 (#111214)
+     and 5.3480:1 on base-300 (#25272b). Light rings with --color-interactive
+     instead; see the light block above. Ratios computed through
+     Platform.Design.WcagContrast, not copied. */
   --focus-ring: var(--color-primary);
-  --color-base-content: oklch(95% 0 0);       /* near-white text */
-  /* Brand cyan, the SAME value as light. See the light block above for why
-     the two themes were unified. The declaration this replaces,
-     oklch(78% 0.14 200), rendered #00D1DA, so the comp it claimed to match
-     (#00bcd4) was drifted as well: three different cyans were named for one
-     colour across this file. */
-  --color-primary: #06D5ED;                   /* renders #06D5ED */
-  --color-primary-content: oklch(0% 0 0);     /* black text on cyan */
-  --color-secondary: oklch(70% 0.01 0);       /* #B0B0B0 */
+  --color-base-content: #eeeff1;              /* near-white text */
+  /* Burrow bright orange. A different value from light's #ad4b07; see the
+     light block. Black on it measures 7.5073:1. */
+  --color-primary: #f47721;                   /* renders #f47721 */
+  --color-primary-content: oklch(0% 0 0);     /* black text on orange */
+  --color-secondary: #a9abb2;
   --color-secondary-content: oklch(0% 0 0);
-  --color-accent: #06D5ED;                    /* renders #06D5ED; follows primary */
+  --color-accent: #f47721;                    /* renders #f47721; follows primary */
   --color-accent-content: oklch(0% 0 0);
   --color-neutral: oklch(40% 0.01 0);         /* #6A6A6A */
   --color-neutral-content: oklch(90% 0 0);
-  --color-info: oklch(72% 0.12 255);          /* info-blue dark label value — text-info on #171b25 ≈7:1 (design review caught L58 failing AA as dark text) */
-  --color-info-content: oklch(0% 0 0);        /* dark fills pair with black content (≈9:1) */
+  --color-info: #22d3ee;                      /* 9.5330:1 as text on base-100 */
+  --color-info-content: oklch(0% 0 0);        /* black content on the info fill, 11.6203:1 */
   /* Pipeline health human wait, re-stepped for dark rather than flipped —
      dark separation 25.2 protan / 30.0 tritan against the dark surface. */
   --color-pipeline-human: oklch(66% 0.16 50);
   --color-pipeline-human-content: oklch(0% 0 0);
-  --color-success: oklch(70% 0.15 162);
-  --color-success-content: oklch(100% 0 0);
-  --color-warning: oklch(76% 0.17 70);
+  --color-success: #6bae75;
+  /* DEVIATION from the spec (task 01a120c5). The mock inherited white here,
+     and white on #6bae75 measures 2.6460:1, which fails WCAG AA. Black
+     measures 7.9365:1. */
+  --color-success-content: oklch(0% 0 0);
+  --color-warning: #e5a33d;
   --color-warning-content: oklch(0% 0 0);
   --color-error: oklch(63% 0.22 25);
-  --color-error-content: oklch(100% 0 0);
+  /* Black, not white: white on this red is 3.8948:1, under AA; black is
+     5.3918:1. Same fix, same reason, as the light block. */
+  --color-error-content: oklch(0% 0 0);
   --radius-selector: 1rem;      /* pill-at-height for badges/toggles — re-skin Phase 1 (task 019f4f76) */
   --radius-field: 0.625rem;     /* 10px buttons/inputs per the design-system spec — re-skin Phase 1 */
   --radius-box: 0.875rem;       /* 14px cards/modals per the design-system spec — re-skin Phase 1 */
@@ -1024,10 +1015,12 @@ body, .font-suite {
   --duration-slow: 300ms;      /* layout shifts: panels, sheets */
   --duration-emphasis: 400ms;  /* modals, page-level moments */
   --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
-  /* Re-skin Phase 2 (task 019f51ca): action-cyan for interactive text — pure
-     #06D5ED fails contrast as text on white (~1.6:1), so links/active labels
-     use this AA-safe darkened cyan. Fill-cyan stays #06D5ED with black on it. */
-  --color-interactive: #087f93;
+  /* Interactive text (task 019f51ca; Burrow values task 01a120c5). The
+     primary is fill-only, so links and active labels use this text colour:
+     #8b3b04, a deeper orange than the light primary, 7.3919:1 on base-100
+     #fbfaf9 and 6.4978:1 on base-300. Dark is #ff9b55 in both dark selectors
+     below, 8.2625:1 on base-100 #191b20. */
+  --color-interactive: #8b3b04;
   /* The focus indicator has NO declaration here. Task 01a0785c stage 3 first
      declared a --color-focus-ring alias in this :root and in both dark
      selectors below; task 01a0833d landed first with the bare --focus-ring
@@ -1042,7 +1035,7 @@ body, .font-suite {
     0 0 16px color-mix(in srgb, var(--color-primary) 18%, transparent);
 }
 
-/* Dark shadows: light-theme shadows vanish on #171b25 — darker and wider,
+/* Dark shadows: light-theme shadows vanish on #191b20 — darker and wider,
    while hairline borders stay the primary depth cue. Same dual-selector
    pattern as .msg-agent below (explicit data-theme wins over OS preference). */
 [data-theme="dark"] {
@@ -1050,7 +1043,7 @@ body, .font-suite {
   --shadow-card-hover: 0 2px 4px rgb(0 0 0 / 0.50), 0 8px 20px rgb(0 0 0 / 0.45);
   --shadow-dropdown: 0 4px 8px rgb(0 0 0 / 0.50), 0 12px 28px rgb(0 0 0 / 0.55);
   --shadow-modal: 0 12px 24px rgb(0 0 0 / 0.60), 0 32px 64px rgb(0 0 0 / 0.55);
-  --color-interactive: #4dd7e8;
+  --color-interactive: #ff9b55;
   --glow-btn: 0 0 0 1px color-mix(in srgb, var(--color-primary) 45%, transparent),
     0 0 12px color-mix(in srgb, var(--color-primary) 16%, transparent);
 }
@@ -1061,7 +1054,7 @@ body, .font-suite {
     --shadow-card-hover: 0 2px 4px rgb(0 0 0 / 0.50), 0 8px 20px rgb(0 0 0 / 0.45);
     --shadow-dropdown: 0 4px 8px rgb(0 0 0 / 0.50), 0 12px 28px rgb(0 0 0 / 0.55);
     --shadow-modal: 0 12px 24px rgb(0 0 0 / 0.60), 0 32px 64px rgb(0 0 0 / 0.55);
-    --color-interactive: #4dd7e8;
+    --color-interactive: #ff9b55;
     --glow-btn: 0 0 0 1px color-mix(in srgb, var(--color-primary) 45%, transparent),
       0 0 12px color-mix(in srgb, var(--color-primary) 16%, transparent);
   }
@@ -2324,9 +2317,10 @@ body, .font-suite {
    comment: a text scanner cannot tell a warning from a claim, and the guard
    in `jump_to_latest_hooks_test.exs` fires on either.)
 
-   If cyan is ever put on the bubble the fill still clears the bar — 17.3:1
-   light and 8.2:1 dark against #06D5ED and #00BCD4 — so this ruling survives
-   that change.
+   If the brand fill is ever put on the bubble, re-measure: this ruling was
+   written against the pre-Burrow cyan (17.3:1 light, 8.2:1 dark against
+   #00BCD4), and the Burrow primaries (#ad4b07 light, #f47721 dark) have not
+   been measured against this bar.
 
    The requirement is 4.5:1, not 3:1 — this is text, not a boundary, and 3:1
    is the non-text threshold. STANDING AND DELIBERATELY UNEXERCISED: if 4.5:1
@@ -2493,9 +2487,26 @@ body, .font-suite {
   border: 0 !important;
 }
 
-.compose-pill-bar:focus-within {
-  border-color: oklch(0.75 0.15 207);
-  box-shadow: 0 0 0 3px rgba(0, 191, 255, 0.1);
+/* Composer focus indicator (task 01a120c5 stage 5). #compose_text strips its
+   own chrome (below), so this :focus-within ring is the ONLY thing a keyboard
+   user sees on the most-used input. It reads the theme-split
+   --color-focus-ring slot, like every other ring, and uses the input variant's
+   shape (`.input.focus-visible-ring`: the border is the offset, a 2px band
+   outside it). box-shadow plus a same-width border keeps the pill's box size,
+   so no layout moves on focus.
+
+   It was cyan literals (oklch(0.75 0.15 207) border, rgba(0,191,255,0.1)
+   halo). In dark the border never applied: the theme rules below are
+   (0,2,0) and (0,3,0) and the dark one came later, so focus showed only the
+   10%-alpha halo, about 1.2:1. Hence the dark selector list here, whose
+   `:root:not([data-theme="light"])` member is (0,4,0) and beats both the
+   theme rule and the prefers-color-scheme copy near the end of this section
+   regardless of order. Light's (0,3,0) beats its (0,2,0) theme rule. */
+.compose-pill-bar:focus-within,
+[data-theme="dark"] .compose-pill-bar:focus-within,
+:root:not([data-theme="light"]) .compose-pill-bar:focus-within {
+  border-color: var(--color-focus-ring);
+  box-shadow: 0 0 0 2px var(--color-focus-ring);
 }
 
 /* Theme-aware pill bar backgrounds */
@@ -2511,8 +2522,8 @@ body, .font-suite {
 }
 
 [data-theme="light"] .compose-pill-bar:focus-within {
-  border-color: oklch(0.75 0.15 207);
-  box-shadow: 0 0 0 3px rgba(0, 191, 255, 0.1);
+  border-color: var(--color-focus-ring);
+  box-shadow: 0 0 0 2px var(--color-focus-ring);
 }
 
 /* Textarea inside pill — strip all chrome */
@@ -2986,9 +2997,9 @@ body, .font-suite {
 
   /* A SUBTLE STEP UP FROM THE PANEL, IN BOTH THEMES. `--color-base-200` cannot
      do this job: the dark base ladder is NOT monotonic. Measured from the
-     theme blocks at the top of this file, dark base-100 is #171b25 (L 22.3%)
-     while base-200 is oklch(9% …), thirteen points DARKER than the panel it
-     would sit on, where light base-200 is four points lighter. The two swap
+     theme blocks at the top of this file, dark base-100 is #191b20 (OKLCH L
+     22.2%) while base-200 is #111214 (L 18.2%), four points DARKER than the
+     panel it would sit on, where light base-200 is lighter than base-300. The two swap
      relative order between themes, so no opaque base token is one step up in
      both. A translucent tint of the FOREGROUND composited over the panel is,
      and it survives a change to the panel's own token.
@@ -3004,7 +3015,10 @@ body, .font-suite {
      placeholder. MEASURED 2026-09-06 against the panel ground:
 
        light  --color-neutral #5a5355 on #ffffff  7.48:1   passes
-       dark   --color-neutral #4d4647 on #171b25  1.86:1   FAILS
+       dark   --color-neutral #4d4647 on the pre-Burrow panel  1.86:1   FAILS
+
+     Re-measured on the Burrow panels (task 01a120c5): light 7.1762:1 on
+     #fbfaf9, dark 1.8604:1 on #191b20. Same verdicts.
 
      Ten-pixel text gets no large-text allowance, so it owes 4.5:1. Dark misses
      it by a factor of two and the labels are effectively invisible. Corrected
@@ -3125,8 +3139,10 @@ body, .font-suite {
 
 /* Panel header ("Add reaction" + close).
 
-   THE HAIRLINE IS `--edge`, NOT `--color-base-300`. Dark base-300 renders
-   #091821 against a #171b25 panel — 1.0478:1, a border nobody can see. That is
+   THE HAIRLINE IS `--edge`, NOT `--color-base-300`. Before the Burrow recolor
+   (task 01a120c5) dark base-300 rendered #091821 against the panel at
+   1.0478:1, a border nobody could see. Burrow base-300 #25272b is 1.1516:1
+   on the #191b20 panel, still fainter than --edge's 1.5361:1. That is
    the exact defect task 01a0740b split `--edge` out to fix, and the panel
    itself already carries `border-edge` at its call site in overlays.ex. This
    line was still on base-300 and was therefore invisible in dark. */
@@ -3451,8 +3467,9 @@ body, .font-suite {
    fill with its ordinary label colour.
 
    The demoted fill is the component's own tint rather than `--color-base-300`:
-   dark base-300 is #091821 against a #171b25 panel, 1.05:1, so a base-300
-   "active" chip would not be visible at all in dark. Same reasoning as the
+   pre-Burrow dark base-300 (#091821) was 1.05:1 against the panel, so a
+   base-300 "active" chip would not have been visible at all in dark (Burrow
+   base-300 #25272b on #191b20 is 1.1516:1, still barely there). Same reasoning as the
    sticky header ground. */
 .reaction-picker-panel:has(:focus-visible) .reaction-picker-chip[aria-current="true"] {
   background-color: var(--reaction-picker-tint-strong);
@@ -3756,8 +3773,10 @@ body, .font-suite {
    strip's own backing is `--color-base-100`, so the hover fill is read
    against THAT, not against the page:
 
-     light   base-100 #FFFFFF vs base-300 oklch(88%)  ->  1.36:1
-     dark    base-100 #171b25 vs base-300 oklch(20%)  ->  1.09:1
+     light   base-100 #FFFFFF vs base-300 oklch(88%)  ->  1.36:1   (pre-Burrow)
+     dark    base-100 (pre-Burrow) vs base-300 oklch(20%)  ->  1.09:1
+     light   base-100 #fbfaf9 vs base-300 #efebe7  ->  1.1376:1   (Burrow)
+     dark    base-100 #191b20 vs base-300 #25272b  ->  1.1516:1   (Burrow)
 
    1.09:1 is not a subtle hover, it is no hover: in dark the fill lands
    within a percent of the surface it sits on, because base-300 is defined
@@ -4298,30 +4317,31 @@ body, .font-suite {
   transform: scale(0.97);
 }
 
-/* Action-cyan, not the fill-only brand cyan (task 01a0785c-bf6f-7001-824d-dd99bcb7db89
-   stage 1). This tab has TWO light grounds and they pull in opposite directions:
+/* The interactive text colour, not the fill-only primary (task
+   01a0785c-bf6f-7001-824d-dd99bcb7db89 stage 1; Burrow values task 01a120c5).
+   This tab has TWO light grounds and they pull in opposite directions:
 
-     [data-theme="light"] .bottom-nav   #F9F9F9   primary 1.6913  ->  interactive 4.4478
-     unqualified .bottom-nav on light   #0C0C0C   primary 10.9561 ->  interactive 4.1661
-     dark theme .bottom-nav             #030303   primary 11.5593 ->  interactive 12.0046
+     [data-theme="light"] .bottom-nav   #F8F8F8   interactive #8b3b04  7.2791
+     unqualified .bottom-nav on light   #0C0C0C   interactive #8b3b04  2.5444
+     dark theme .bottom-nav             #030303   interactive #ff9b55  9.9095
 
-   Neither light figure reaches 4.5:1 and NO colour can reach both: clearing AA on
-   the near-white nav needs a relative luminance of at most 0.170779, clearing it
-   on the near-black nav needs at least 0.191270. The second ground exists only
+   (Pre-Burrow, the cyan interactive measured 4.4478 / 4.1661 / 12.0046 here.)
+
+   NO colour can clear AA on both light grounds: clearing it on the near-white
+   nav needs a relative luminance of at most 0.170406, clearing it on the
+   near-black nav needs at least 0.190978. The second ground exists only
    because `.bottom-nav` declares its light background under [data-theme="light"]
    with no `prefers-color-scheme: light` twin, so a viewer who picks the "system"
    theme gets a near-black nav under light tokens. That missing variant is the
    real defect and is filed as a follow-up; it is not this stage's to fix.
 
    Optimised for the [data-theme="light"] nav, which is what an explicit-light
-   viewer paints. The worst case across all three grounds improves from 1.6913:1
-   to 4.1661:1. Measured in primary_contrast_sweep_test.exs clauses F3 and F4.
-
-   The ::before bar moves with the label, deliberately. It is a non-text indicator
-   owing 3:1 under SC 1.4.11, and as --color-primary it measured 1.6913:1 on the
-   near-white nav, i.e. an active cue nobody can see on that ground. As
-   --color-interactive it clears 3:1 on all three grounds (4.4478 / 4.1661 /
-   12.0046), and the two active cues stay one hue. Weight and size of the label
+   viewer paints, and the Burrow orange now clears AA there. The deep orange is
+   WORSE than the old cyan on the near-black ground, 2.5444:1, and that applies
+   to the ::before bar too, which owes 3:1 as a non-text cue (it clears on the
+   other two grounds, 7.2791 and 9.9095). Recorded in
+   primary_contrast_sweep_test.exs clauses F3, F4 and the ::before clause.
+   Weight and size of the label
    are unchanged; the large-text allowance is not a contrast fix. */
 .bottom-nav-tab--active {
   color: var(--color-interactive);
@@ -6135,11 +6155,9 @@ body, .font-suite {
 
      `--color-primary` is paired with `--color-primary-content` (black) by the
      brand itself, so this borrows a blessed pairing rather than inventing a
-     colour: 11.75:1, the same in both themes since task 01a07435 made
-     `--color-primary` one value. The 12.55:1 / 11.13:1 pair recorded here
-     before that was two themes carrying two different cyans, and it was
-     sampled in Chrome rather than computed; 11.75:1 is arithmetic, #06D5ED
-     on black. Filling it also turns a text link into an obvious control,
+     colour. On the Burrow tokens (task 01a120c5) it is 5.3202:1 in light
+     (#fbfaf9 on #ad4b07) and 7.5073:1 in dark (black on #f47721), computed
+     from the declarations, not sampled. Filling it also turns a text link into an obvious control,
      which suits Undo being the way back from an action that makes a row
      vanish.
 
@@ -6343,10 +6361,10 @@ body, .font-suite {
      focused field and is filed as a follow-up, not smuggled in here.
 
      What that border actually is matters to the no-offset ring drawn just
-     outside it: the ring's inner neighbour is #000000 in light (4.4674:1
-     against the #087f93 band) and #EEEEEE in dark (1.5447:1 against the
-     #06D5ED band, unchanged by this task, which measured the same 1.5447
-     before it). Both variants are identified against the page ground, which is
+     outside it: the ring's inner neighbour is --color-base-content, #000000
+     in light (2.7251:1 against the #8b3b04 band) and #eeeff1 in dark
+     (2.4313:1 against the #f47721 band), re-measured for the Burrow tokens
+     (task 01a120c5). Both variants are identified against the page ground, which is
      what L6/L7 and D6/D7 assert in primary_contrast_sweep_test.exs. */
   .input:focus,
   .input:focus-within,
@@ -6556,13 +6574,13 @@ body, .font-suite {
     padding-block: 0.5rem;
   }
 
-  /* Interactive text — action-cyan, never raw #06D5ED on light surfaces. */
+  /* Interactive text — the AA text colour; the primary is fill-only. */
   .text-interactive {
     color: var(--color-interactive);
   }
 }
 
-/* Dark: tints raise 12% → 16% so they don't go muddy on #171b25; labels
+/* Dark: tints raise 12% → 16% so they don't go muddy on #191b20; labels
    lift to the L≈70 values; dropdowns get a surface step-up because shadow
    alone won't separate them on dark. Dual-selector per file convention. */
 [data-theme="dark"] .chip-soft {
@@ -6805,7 +6823,9 @@ body, .font-suite {
      the rail's own ground and #5D6577 measured 3.3658:1 in dark: both under AA
      for a 10px uppercase label, and neither caused by the `opacity` this task
      removed — this label sits OUTSIDE the card. `--cc-title-half` measures
-     5.0024:1 light / 6.7068:1 dark on that ground. */
+     5.0024:1 light / 6.7068:1 dark on that ground. On the Burrow grounds
+     (task 01a120c5; rail ground #F8F6F4 light, #141518 dark) it is
+     4.9712:1 light / 6.2250:1 dark, computed from the tokens. */
   --cc-stage: var(--cc-title-half);
   --cc-reason: #6a7284;
   --cc-micro: var(--cc-title-half);
@@ -6827,9 +6847,12 @@ body, .font-suite {
      browser (painted pixels, not palette arithmetic) against
      `--cc-bg-closed` (#F4F5F7):
 
-       --color-interactive  #087F93   4.31:1   FAILS AA at 4.5
+       --color-interactive  (pre-Burrow)  4.31:1   FAILS AA at 4.5
        --color-neutral      #5A5355   6.87:1   passes
        --cc-title-dead      #767D8D   3.78:1   FAILS AA at 4.5
+
+     (The Burrow interactive #8b3b04 is 7.0641:1 on #F4F5F7, task 01a120c5;
+     the row-scoped correction below is left as it was.)
 
      So exactly ONE of the three is corrected, scoped to this row and
      derived from the token rather than replacing it. `--color-neutral`
@@ -6987,7 +7010,7 @@ body, .font-suite {
      (`--cc-bg-closed`, #12151C) puts the corrections in DIFFERENT
      places, which is why they are two token sets and not one:
 
-       --color-interactive  #4DD7E8   10.61:1  passes, used untouched
+       --color-interactive  #ff9b55   8.7599:1 passes, used untouched (Burrow, task 01a120c5)
        --color-neutral      #4D4647    1.99:1  FAILS, and badly
        --color-base-300     #091821    1.01:1  invisible, not quiet
 
@@ -7043,9 +7066,11 @@ body, .font-suite {
 
      THE GROUND RESOLVES DARKER THAN THE CARD HERE, and that is correct
      rather than a slot picked upside down. This theme's elevation runs
-     DOWNWARD: `--color-base-100` is the chat pane (#171b25), base-200 is
-     the sidebar (#000306) and base-300 the input bar (#091821), so the
-     surface slot a drawer takes is darker than the pane it sits in. At
+     DOWNWARD: `--color-base-100` is the chat pane (#191b20) and base-200
+     the sidebar (#111214), so the surface slot a drawer takes is darker
+     than the pane it sits in. (Written against the pre-Burrow tokens; under
+     Burrow, task 01a120c5, base-300 #25272b is raised, lighter than the
+     pane, so only the base-200 half of "downward" still holds.) At
      1.19:1 against the card (1.17:1 on acting's bottom stop, 1.20:1 on
      shaping's) it reads as an inset well in the card, which is what
      "belongs to the card rather than floats over it" has to mean in a
@@ -7117,7 +7142,7 @@ body, .font-suite {
        (`--cc-bg-closed`, #12151C) puts the corrections in DIFFERENT
        places, which is why they are two token sets and not one:
 
-         --color-interactive  #4DD7E8   10.61:1  passes, used untouched
+         --color-interactive  #ff9b55   8.7599:1 passes, used untouched (Burrow, task 01a120c5)
          --color-neutral      #4D4647    1.99:1  FAILS, and badly
          --color-base-300     #091821    1.01:1  invisible, not quiet
 

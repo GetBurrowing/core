@@ -116,9 +116,11 @@ defmodule PlatformWeb.OrgMemoryLive.NamespaceTree do
   # One pair of class lists for BOTH leaf kinds (Burrow Docs and the Pages
   # tree), so the two cannot drift apart again. The selected leaf keeps the
   # canvas's `--color-interactive` text and sits on `base-100`, the lightest
-  # ground each theme ships. `base-300` failed AA in light: #087f93 on
-  # #D7D7D7 is 3.27:1; on base-100 it is 4.70:1 light and 10.00:1 dark
-  # (pinned in selected_leaf_contrast_test.exs, computed from app.css). The
+  # ground each theme ships. `base-300` failed AA in light when this was
+  # written (the pre-Burrow interactive on #D7D7D7, 3.27:1). On the Burrow
+  # tokens (task 01a120c5) the interactive is 7.3919:1 on base-100 light and
+  # 8.2625:1 dark (pinned in selected_leaf_contrast_test.exs, computed from
+  # app.css). The
   # global `--color-interactive` token is untouched; it colours every link
   # in the product.
   #

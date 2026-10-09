@@ -39,7 +39,9 @@ defmodule PlatformWeb.PageControllerTest do
     # rail (chat plan v2 Stage 2/3) replaced the flat "Channels" label
     # with per-section headers — assert the rail's aria-label instead of
     # the old top-level label that no longer exists.
-    assert html =~ "Startup Suite"
+    # The rail label is the install's app name, "Burrow" on a migrated DB
+    # (task 01a120c5 stage 3).
+    assert html =~ "Burrow"
     assert html =~ ~s(aria-label="Channel sections")
   end
 end

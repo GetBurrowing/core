@@ -38,30 +38,63 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
   `#0C1016` 1.1077. Those are asserted in the first describe block. If the luminance
   code is ever wrong, it is wrong there first, and every number below is void.
 
+  ## The Burrow recolor (task 01a120c5 stage 1)
+
+  The cyan this file was written around is gone. Primary is now a per-theme
+  orange (#ad4b07 light, #f47721 dark), the interactive text colour is #8b3b04
+  light and #ff9b55 dark, and the grounds are #fbfaf9 / #f6f4f1 (light) and
+  #191b20 / #111214 (dark). Every pin below was re-derived from the new
+  declarations; the history in this moduledoc is kept as written, because its
+  figures are the only copy and the record guards at the bottom of the file
+  assert them. What the recolor changed in the classification:
+
+    * L3 promoted from (b) to (a): the light primary fill now clears 3:1 on
+      base-100 (5.3202).
+    * F2 and F3 promoted from (c) to (a): the deeper interactive clears AA on
+      base-200 (7.0195) and on the near-white nav (7.2791).
+    * L8 REGRESSED from (a) to a recorded miss, 2.7251:1: the light no-offset
+      ring (#8b3b04) against the focused input's own border, which paints
+      --color-base-content (#000000; stage 4 kept main's black over the spec's
+      #221f1b, against which it was 2.1293). It was 4.4674 with the darkened
+      cyan against black. Same shape as D8: the ring is identified against the page ground,
+      L7 at 7.3919. The values that produce it (the light ring slot and the
+      interactive hex) are fixed by the spec, so it is recorded, not tuned.
+    * The ::before bar REGRESSED on the near-black nav under light tokens,
+      2.5444:1 against its 3:1 floor (was 4.1661). F4, the label on the same
+      ground, moved from 4.1661 to 2.5444 and stays (c). Both sit on the ground
+      that only exists because `.bottom-nav` lacks a prefers-color-scheme light
+      background, the defect already filed as the real fix.
+
   ## The classification, per pairing
 
   A threshold is asserted only where the obligation actually attaches. Asserting 3:1
   on a boundary that another cue carries would fail correct code, and asserting a
   threshold a pairing already misses would fail code this ticket did not break.
 
+  Measured on the Burrow tokens (task 01a120c5); the pre-Burrow figure follows
+  in brackets.
+
   | id | pairing                                                   | class | measured  |
   |----|-----------------------------------------------------------|-------|-----------|
-  | L1 | primary-content (black) on the primary fill, light        | (a)   | 11.7483   |
-  | L2 | accent-content (black) on the accent fill, light          | (a)   | 11.7483   |
-  | L3 | primary fill vs base-100, light                           | (b)   | 1.7875    |
-  | L4 | --color-interactive #087f93 as text on base-100           | (a)   | 4.7007    |
-  | L5 | .chip-primary label on the 6% .chip-soft fill, light       | (a)   | 4.5524    |
-  | L6 | offset focus ring vs base-100, light                      | (a)   | 4.7007    |
-  | L7 | no-offset focus ring vs base-100, light                   | (a)   | 4.7007    |
-  | L8 | no-offset ring vs the input border it abuts, light        | (a)   | 4.4674    |
-  | D1 | primary-content (black) on the primary fill, dark         | (a)   | 11.7483   |
-  | D2 | accent-content (black) on the accent fill, dark           | (a)   | 11.7483   |
-  | D3 | primary fill vs base-100 #171b25, dark                    | (a)   | 9.6304    |
-  | D4 | --color-interactive #4dd7e8 as text on #171b25            | (a)   | 10.0015   |
-  | D5 | .chip-primary label on the 16% .chip-soft fill, dark       | (a)   | 7.4558    |
-  | D6 | offset focus ring vs #171b25, dark                        | (a)   | 9.6304    |
-  | D7 | no-offset focus ring vs #171b25, dark                     | (a)   | 9.6304    |
-  | D8 | no-offset ring vs the input border it abuts, dark         | (c)   | 1.5447    |
+  | L1 | primary-content (#fbfaf9) on the primary fill, light      | (a)   | 5.3202 [11.7483] |
+  | L2 | accent-content (#fbfaf9) on the accent fill, light        | (a)   | 5.3202 [11.7483] |
+  | L3 | primary fill vs base-100, light                           | (a)   | 5.3202 [1.7875]  |
+  | L4 | --color-interactive #8b3b04 as text on base-100           | (a)   | 7.3919 [4.7007]  |
+  | L5 | .chip-primary label on the 6% .chip-soft fill, light       | (a)   | 6.8125 [4.5524]  |
+  | L6 | offset focus ring vs base-100, light                      | (a)   | 7.3919 [4.7007]  |
+  | L7 | no-offset focus ring vs base-100, light                   | (a)   | 7.3919 [4.7007]  |
+  | L8 | no-offset ring vs the input border it abuts, light        | (c)*  | 2.1293 [4.4674]  |
+  | D1 | primary-content (black) on the primary fill, dark         | (a)   | 7.5073 [11.7483] |
+  | D2 | accent-content (black) on the accent fill, dark           | (a)   | 7.5073 [11.7483] |
+  | D3 | primary fill vs base-100 #191b20, dark                    | (a)   | 6.1588 [9.6304]  |
+  | D4 | --color-interactive #ff9b55 as text on #191b20            | (a)   | 8.2625 [10.0015] |
+  | D5 | .chip-primary label on the 16% .chip-soft fill, dark       | (a)   | 6.6080 [7.4558]  |
+  | D6 | offset focus ring vs #191b20, dark                        | (a)   | 6.1588 [9.6304]  |
+  | D7 | no-offset focus ring vs #191b20, dark                     | (a)   | 6.1588 [9.6304]  |
+  | D8 | no-offset ring vs the input border it abuts, dark         | (c)   | 2.4313 [1.5447]  |
+
+  (c)* L8 is not a pre-existing miss: the Burrow recolor introduced it. See
+  "The Burrow recolor" above.
 
   Both chip percentages are `--chip-tint-pct`, resolved per tone per theme from the
   stylesheet rather than read as a literal out of the shared formula.
@@ -522,7 +555,11 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
   # ══════════════════════════════════════════════════════════════════════════
 
   describe "the four --color-primary / --color-accent declarations" do
-    test "there are exactly four, and all four hold the same hex", %{css: css} do
+    test "there are exactly four hex literals, primary == accent within each theme", %{
+      css: css,
+      light: light,
+      dark: dark
+    } do
       decls =
         Regex.scan(~r/^[^\S\n]*--color-(?:primary|accent):[^\S\n]*([^;\n]+);/m, css,
           capture: :all_but_first
@@ -543,10 +580,16 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
                  "beside it, which is the defect this whole task closed."
       end
 
-      assert decls |> Enum.map(&String.upcase/1) |> Enum.uniq() |> length() == 1,
-             "the four declarations no longer agree: #{inspect(decls)}. Primary and " <>
-               "accent have held one value in both themes since task 01a07435; a split " <>
-               "is how the three-cyan drift started."
+      # Since the Burrow recolor (task 01a120c5) the two themes carry DIFFERENT
+      # oranges by design. What still holds is that accent follows primary
+      # inside each theme.
+      for {theme, block} <- [{"light", light.block}, {"dark", dark.block}] do
+        p = block |> decl!("--color-primary") |> Map.fetch!(:value) |> String.upcase()
+        a = block |> decl!("--color-accent") |> Map.fetch!(:value) |> String.upcase()
+
+        assert p == a,
+               "#{theme} --color-accent (#{a}) no longer follows --color-primary (#{p})."
+      end
     end
 
     test "each declaration's own trailing comment names the value it sits on", %{
@@ -598,8 +641,8 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
     test "L1 (a): --color-primary-content is AA text on the primary fill", %{light: l} do
       ratio = W.contrast(l.primary_content, l.primary)
 
-      assert_threshold("L1", "black on the light primary fill", ratio, @aa_text)
-      assert_ratio("L1", ratio, 11.7483)
+      assert_threshold("L1", "the light label on the light primary fill", ratio, @aa_text)
+      assert_ratio("L1", ratio, 5.3202)
     end
 
     test "L2 (a): --color-accent-content is AA text on the accent fill", %{light: l} do
@@ -608,37 +651,29 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
       # clause that notices.
       ratio = W.contrast(l.accent_content, l.accent)
 
-      assert_threshold("L2", "black on the light accent fill", ratio, @aa_text)
-      assert_ratio("L2", ratio, 11.7483)
+      assert_threshold("L2", "the light label on the light accent fill", ratio, @aa_text)
+      assert_ratio("L2", ratio, 5.3202)
     end
 
-    test "L3 (b): the primary fill against base-100 is pinned, not thresholded", %{light: l} do
-      # No 3:1 obligation attaches to this edge, and asserting one would fail
-      # correct code. The primary button draws a 1px --color-primary border of
-      # its own (app.css `.btn-primary`), its label is black at 11.75:1, and the
-      # brand rule forbids cyan as text on white, so nothing about identifying
-      # the button rests on fill-vs-ground. Pinned so the number cannot move
-      # unwatched.
+    test "L3 (a): the light primary fill clears 3:1 against base-100", %{light: l} do
+      # Was (b), pinned at 1.7875 with no threshold, while the light primary was
+      # the cyan. The Burrow orange (task 01a120c5) separates from the ground on
+      # its own, so the clause is promoted: losing that would now be a
+      # regression, not a known property.
       ratio = W.contrast(l.primary, l.base_100)
 
-      assert_ratio("L3", ratio, 1.7875)
-
-      refute ratio >= @non_text,
-             "L3 now clears 3:1 (#{Float.round(ratio, 4)}). That is not a failure of " <>
-               "the code, but this clause was written on the premise that the light " <>
-               "primary fill does NOT separate from white and that another cue carries " <>
-               "the button. Re-read the classification before editing the number."
+      assert_threshold("L3", "the light primary fill against base-100", ratio, @non_text)
+      assert_ratio("L3", ratio, 5.3202)
     end
 
     test "L4 (a): --color-interactive is AA text on base-100", %{light: l} do
-      # #087f93 is hardcoded, not derived from the token, so this change does not
-      # move it. Asserted anyway: a future edit to the source cyan that reached
-      # this slot is exactly what would, and it is the slot the brand rule points
-      # every cyan-as-text at.
+      # The interactive text colour is its own literal (#8b3b04 since task
+      # 01a120c5), not derived from the primary; it is the slot the brand rule
+      # points every brand-coloured text at.
       ratio = W.contrast(l.interactive, l.base_100)
 
       assert_threshold("L4", "--color-interactive as text on light base-100", ratio, @aa_text)
-      assert_ratio("L4", ratio, 4.7007)
+      assert_ratio("L4", ratio, 7.3919)
     end
 
     test "L5 (a): the light .chip-primary label clears AA on its own fill", %{
@@ -656,7 +691,7 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
       ratio = W.contrast(l.interactive, fill)
 
       assert_threshold("L5", "the light chip-primary label on its own fill", ratio, @aa_text)
-      assert_ratio("L5", ratio, 4.5524)
+      assert_ratio("L5", ratio, 6.8125)
     end
 
     test "L6 (a): the light offset focus ring clears the 3:1 indicator floor", %{
@@ -679,7 +714,7 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
       ratio = W.contrast(shadow_band_color!(body, "4px", l.tokens), l.base_100)
 
       assert_threshold("L6", "the light offset focus ring against base-100", ratio, @non_text)
-      assert_ratio("L6", ratio, 4.7007)
+      assert_ratio("L6", ratio, 7.3919)
     end
 
     test "L7 (a): the light no-offset focus ring clears 3:1 against the page ground", %{
@@ -697,35 +732,41 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
       ratio = W.contrast(shadow_band_color!(body, "2px", l.tokens), l.base_100)
 
       assert_threshold("L7", "the light no-offset focus ring against base-100", ratio, @non_text)
-      assert_ratio("L7", ratio, 4.7007)
+      assert_ratio("L7", ratio, 7.3919)
     end
 
-    test "L8 (a): the light no-offset ring separates from the border the input paints", %{
-      css: css,
-      light: l
-    } do
+    test "L8 (c)*: the light no-offset ring vs the border the input paints, a recorded regression",
+         %{
+           css: css,
+           light: l
+         } do
       # The no-offset ring's INNER neighbour. Not `.input:focus`'s declared
       # border-color: that declaration does not render, for the layer-order
       # reason recorded beside it in app.css and read back out of the vendored
       # plugin by focused_input_border_token!/0 below. What paints is
-      # --color-base-content, #000000 in light.
+      # --color-base-content, #000000 in light (kept by task 01a120c5 stage 4).
       #
-      # This one got WORSE and still clears: #06D5ED against black was 11.7483,
-      # #087f93 against black is 4.4674. The trade is deliberate — L7, the
-      # boundary against the page ground, went 1.7875 to 4.7007 — and it is
-      # recorded rather than buried.
+      # REGRESSED by the Burrow recolor and recorded, not tuned. History: the
+      # cyan against black was 11.7483, the darkened cyan against black 4.4674
+      # (stage 3's deliberate trade). The Burrow ring #8b3b04 against black
+      # is 2.7251, under 3:1; it was 2.1293 against the spec ink #221f1b, which
+      # stage 4 did not ship (black kept for secondary-text AA). The ring is fixed by the spec
+      # (the light ring slot reads --color-interactive), so this is the same
+      # shape of miss as D8: the ring is identified against the page ground,
+      # L7 at 7.3919. A colour clearing 3:1 against both this border and the
+      # page ground exists (relative luminance 0.1 to 0.285733), so the
+      # disposition is a
+      # judgement for the design owner, not an impossibility.
       body = grouped_rule_body!(css, ".input.focus-visible-ring:focus-visible")
       border = Map.fetch!(l.tokens, focused_input_border_token!())
       ratio = W.contrast(shadow_band_color!(body, "2px", l.tokens), border)
 
-      assert_threshold(
-        "L8",
-        "the light no-offset ring against the input border",
-        ratio,
-        @non_text
-      )
+      assert_ratio("L8", ratio, 2.7251)
 
-      assert_ratio("L8", ratio, 4.4674)
+      assert ratio < @non_text,
+             "L8 now clears the 3:1 floor against the focused input's own border " <>
+               "(#{Float.round(ratio, 4)}). Promote it back to a threshold assertion " <>
+               "and close the regression recorded in the moduledoc."
     end
 
     test "both focus-ring rules draw their band from --color-focus-ring at 2px", %{css: css} do
@@ -798,9 +839,10 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
       # `.input` rules are in `utilities`, ordered after it, so daisyUI's
       # `--input-color: var(--color-base-content)` wins on focus whatever this
       # says. Pinned anyway, because a dead declaration naming the WRONG token is
-      # how the next reader concludes the focused input border is cyan. It is
-      # not: it paints #000000 light, #EEEEEE dark, which is what L8 and D8
-      # measure the no-offset ring against.
+      # how the next reader concludes the focused input border is the ring
+      # colour. It is not: it paints --color-base-content (#000000 light,
+      # #eeeff1 dark), which is what L8 and D8 measure the no-offset ring
+      # against.
       body = grouped_rule_body!(css, ".input:focus")
 
       assert squish(body) =~ "border-color: var(--color-focus-ring)",
@@ -819,28 +861,28 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
       ratio = W.contrast(d.primary_content, d.primary)
 
       assert_threshold("D1", "black on the dark primary fill", ratio, @aa_text)
-      assert_ratio("D1", ratio, 11.7483)
+      assert_ratio("D1", ratio, 7.5073)
     end
 
     test "D2 (a): --color-accent-content is AA text on the accent fill", %{dark: d} do
       ratio = W.contrast(d.accent_content, d.accent)
 
       assert_threshold("D2", "black on the dark accent fill", ratio, @aa_text)
-      assert_ratio("D2", ratio, 11.7483)
+      assert_ratio("D2", ratio, 7.5073)
     end
 
     test "D3 (a): the primary fill clears 3:1 against the dark base-100", %{dark: d} do
       ratio = W.contrast(d.primary, d.base_100)
 
-      assert_threshold("D3", "the dark primary fill against #171b25", ratio, @non_text)
-      assert_ratio("D3", ratio, 9.6304)
+      assert_threshold("D3", "the dark primary fill against base-100", ratio, @non_text)
+      assert_ratio("D3", ratio, 6.1588)
     end
 
     test "D4 (a): --color-interactive is AA text on the dark base-100", %{dark: d} do
       ratio = W.contrast(d.interactive, d.base_100)
 
-      assert_threshold("D4", "--color-interactive as text on #171b25", ratio, @aa_text)
-      assert_ratio("D4", ratio, 10.0015)
+      assert_threshold("D4", "--color-interactive as text on base-100", ratio, @aa_text)
+      assert_ratio("D4", ratio, 8.2625)
     end
 
     test "D5 (a): the dark .chip-primary label clears AA on its 16% fill", %{
@@ -856,22 +898,22 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
       # dark percentage alone, and this clause is what notices if a light-only
       # change leaks into dark.
       assert_threshold("D5", "the dark chip-primary label on its own fill", ratio, @aa_text)
-      assert_ratio("D5", ratio, 7.4558)
+      assert_ratio("D5", ratio, 6.608)
     end
 
     test "D6 (a): the dark offset focus ring clears 3:1 against base-100", %{
       css: css,
       dark: d
     } do
-      # Confirmed rather than assumed by stage 3 of ticket #{@followup_ticket}:
-      # dark keeps the brand cyan, so the figure is unchanged at 9.6304. It is
-      # now resolved through the rule the way L6 is, so pointing the ring
-      # elsewhere reds this clause instead of leaving it measuring a token.
+      # Dark rings with the primary: the brand cyan at 9.6304 until the Burrow
+      # recolor, #f47721 at 6.1588 since (task 01a120c5). Resolved through the
+      # rule the way L6 is, so pointing the ring elsewhere reds this clause
+      # instead of leaving it measuring a token.
       body = rule_body!(css, ".focus-visible-ring:focus-visible")
       ratio = W.contrast(shadow_band_color!(body, "4px", d.tokens), d.base_100)
 
-      assert_threshold("D6", "the dark offset focus ring against #171b25", ratio, @non_text)
-      assert_ratio("D6", ratio, 9.6304)
+      assert_threshold("D6", "the dark offset focus ring against base-100", ratio, @non_text)
+      assert_ratio("D6", ratio, 6.1588)
     end
 
     test "D7 (a): the dark no-offset focus ring clears 3:1 against the page ground", %{
@@ -881,8 +923,8 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
       body = grouped_rule_body!(css, ".input.focus-visible-ring:focus-visible")
       ratio = W.contrast(shadow_band_color!(body, "2px", d.tokens), d.base_100)
 
-      assert_threshold("D7", "the dark no-offset focus ring against #171b25", ratio, @non_text)
-      assert_ratio("D7", ratio, 9.6304)
+      assert_threshold("D7", "the dark no-offset focus ring against base-100", ratio, @non_text)
+      assert_ratio("D7", ratio, 6.1588)
     end
 
     test "D8 (c): the dark no-offset ring does not separate from the input's own border", %{
@@ -927,7 +969,9 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
       border = Map.fetch!(d.tokens, focused_input_border_token!())
       ratio = W.contrast(shadow_band_color!(body, "2px", d.tokens), border)
 
-      assert_ratio("D8", ratio, 1.5447)
+      # Burrow (task 01a120c5): #f47721 against #eeeff1 is 2.4313. Still a miss,
+      # still (c); the history above is the pre-Burrow record.
+      assert_ratio("D8", ratio, 2.4313)
 
       assert ratio < @non_text,
              "D8 now clears the 3:1 floor against the focused input's own border " <>
@@ -956,17 +1000,22 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
                "including the mid-grey one the design canvas already rejected on " <>
                "quality below."
 
-      # 0.132988 (the floor) is invariant across convention: it derives solely
-      # from --color-base-100's #171b25 hex literal, which has nothing to round.
+      # Burrow (task 01a120c5): floor 0.132845 from --color-base-100 #191b20,
+      # ceiling 0.254203 from --color-base-content #eeeff1; both hex literals
+      # now, so neither splits by convention. The pre-Burrow pair, below, was
+      # 0.132988 / 0.252458.
+      #
+      # 0.132988 (the floor) was invariant across convention: it derived solely
+      # from --color-base-100's pre-Burrow hex literal, which had nothing to round.
       # 0.252458 (the ceiling) is the token-space figure produced by the border's
       # oklch(95% 0 0) declaration; a browser that first rounds that border to its
       # #EEEEEE shorthand reads a ceiling of 0.251664 instead. The general rule
       # for a figure the comments here don't cover: it is convention-independent
       # iff every operand is declared as a hex literal, and it splits iff any
       # operand is declared in oklch(...).
-      assert abs(floor_l - 0.132988) < 0.0001 and abs(ceiling_l - 0.252458) < 0.0001,
-             "the D8 window moved: floor #{Float.round(floor_l, 6)} (recorded 0.132988), " <>
-               "ceiling #{Float.round(ceiling_l, 6)} (recorded 0.252458). The focused " <>
+      assert abs(floor_l - 0.132845) < 0.0001 and abs(ceiling_l - 0.254203) < 0.0001,
+             "the D8 window moved: floor #{Float.round(floor_l, 6)} (recorded 0.132845), " <>
+               "ceiling #{Float.round(ceiling_l, 6)} (recorded 0.254203). The focused " <>
                "input's border token or --color-base-100 changed value; re-derive D8's " <>
                "disposition rather than re-pinning these bounds blind."
 
@@ -1039,18 +1088,18 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
       ratio = W.contrast(declared_color!(body, "color", l.tokens), l.base_100)
 
       assert_threshold("F1", ".wikilink as text on light --color-base-100", ratio, @aa_text)
-      assert_ratio("F1 (.wikilink on light --color-base-100)", ratio, 4.7007)
+      assert_ratio("F1 (.wikilink on light --color-base-100)", ratio, 7.3919)
 
       # The slot is theme-redefined, so one declaration covers both themes. Dark
       # is asserted rather than assumed: a light-only fix that dark inherits is
       # exactly the shape of regression this pairing could hide.
       dark_ratio = W.contrast(declared_color!(body, "color", d.tokens), d.base_100)
 
-      assert_threshold("F1 dark", ".wikilink as text on #171b25", dark_ratio, @aa_text)
-      assert_ratio("F1 dark (.wikilink on dark --color-base-100)", dark_ratio, 10.0015)
+      assert_threshold("F1 dark", ".wikilink as text on dark base-100", dark_ratio, @aa_text)
+      assert_ratio("F1 dark (.wikilink on dark --color-base-100)", dark_ratio, 8.2625)
     end
 
-    test "F2 (c): .code-block-expand improved 2.6x and still misses AA on base-200", %{
+    test "F2 (a): .code-block-expand clears AA on base-200 since the Burrow recolor", %{
       css: css,
       light: l,
       dark: d
@@ -1067,31 +1116,19 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
 
       ratio = W.contrast(declared_color!(body, "color", l.tokens), l.base_200)
 
-      # Measured against what --color-base-200 actually renders, oklch(96% 0 0)
-      # = #F2F2F2. Its own trailing comment claimed #F5F5F5 until task
-      # 01a09333-d374 stage 6 corrected it; reading the comment would have
-      # given 4.2941, so this figure is what it always was.
-      assert_ratio("F2 (.code-block-expand on light --color-base-200)", ratio, 4.1847)
-
-      # Still (c). --color-interactive was derived against pure WHITE, where it
-      # measures 4.7007; this is the one site of the three that sits on base-200
-      # instead, and 0.32 of the difference is the whole shortfall. Clearing it
-      # means darkening the slot itself (#077384 would give 4.9268 here), which
-      # repaints every link in the product and needs its own gate. The threshold
-      # is deliberately NOT asserted, and the floor is deliberately NOT lowered.
-      assert ratio < @aa_text,
-             "F2 now clears 4.5:1 (#{Float.round(ratio, 4)}). If the action-cyan slot " <>
-               "was darkened, promote this clause from a (c) pin to an (a) threshold " <>
-               "and close the finding in the moduledoc rather than leaving a resolved " <>
-               "miss recorded as open."
+      # Promoted from (c) to (a) by the Burrow recolor (task 01a120c5): the
+      # interactive #8b3b04 on base-200 #f6f4f1 is 7.0195. The pre-Burrow cyan
+      # measured 4.1847 here and was the recorded miss.
+      assert_threshold("F2", ".code-block-expand on light base-200", ratio, @aa_text)
+      assert_ratio("F2 (.code-block-expand on light --color-base-200)", ratio, 7.0195)
 
       dark_ratio = W.contrast(declared_color!(body, "color", d.tokens), d.base_200)
 
-      assert_threshold("F2 dark", ".code-block-expand on #000306", dark_ratio, @aa_text)
-      assert_ratio("F2 dark (.code-block-expand on dark --color-base-200)", dark_ratio, 12.0222)
+      assert_threshold("F2 dark", ".code-block-expand on dark base-200", dark_ratio, @aa_text)
+      assert_ratio("F2 dark (.code-block-expand on dark --color-base-200)", dark_ratio, 8.9889)
     end
 
-    test "F3 (c): .bottom-nav-tab--active on the [data-theme=light] nav surface", %{
+    test "F3 (a): .bottom-nav-tab--active on the [data-theme=light] nav surface", %{
       css: css,
       light: l
     } do
@@ -1104,15 +1141,12 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
       surface = nav_surface!(css, ~s([data-theme="light"] .bottom-nav), l.base_100)
       ratio = W.contrast(declared_color!(body, "color", l.tokens), surface)
 
-      assert_ratio("F3 (.bottom-nav-tab--active on #{W.to_hex(surface)})", ratio, 4.4478)
-
-      # Still (c), by 0.05. See F4 and the clause below it: this is not a value
-      # that was tuned badly, it is a pairing that cannot be satisfied at the
-      # same time as F4's. The threshold is not asserted and @aa_text is not moved.
-      assert ratio < @aa_text,
-             "F3 now clears 4.5:1 (#{Float.round(ratio, 4)}) on the near-white nav. " <>
-               "Check F4 before promoting it: the two nav grounds are mutually " <>
-               "exclusive, so clearing this one may have pushed the other further under."
+      # Promoted from (c) to (a) by the Burrow recolor (task 01a120c5): 7.2791,
+      # where the cyan measured 4.4478. The two nav grounds are still mutually
+      # exclusive (see the clause below), and clearing this one pushed F4
+      # further under.
+      assert_threshold("F3", ".bottom-nav-tab--active on the near-white nav", ratio, @aa_text)
+      assert_ratio("F3 (.bottom-nav-tab--active on #{W.to_hex(surface)})", ratio, 7.2791)
     end
 
     test "F4 (c): the same tab on the default near-black nav under light tokens", %{
@@ -1133,7 +1167,9 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
       surface = nav_surface!(css, ".bottom-nav", l.base_100)
       ratio = W.contrast(declared_color!(body, "color", l.tokens), surface)
 
-      assert_ratio("F4 (.bottom-nav-tab--active on #{W.to_hex(surface)})", ratio, 4.1661)
+      # Burrow (task 01a120c5): the deep orange is 2.5444 here, worse than the
+      # cyan's 4.1661. Still (c), for the same reason.
+      assert_ratio("F4 (.bottom-nav-tab--active on #{W.to_hex(surface)})", ratio, 2.5444)
 
       assert ratio < @aa_text,
              "F4 now clears 4.5:1 (#{Float.round(ratio, 4)}). Check F3 before " <>
@@ -1164,18 +1200,21 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
                "be fixed together; re-open them rather than leaving both recorded as " <>
                "unsatisfiable."
 
-      assert abs(ceiling - 0.170779) < 0.0001 and abs(floor - 0.191270) < 0.0001,
+      # Burrow (task 01a120c5): the nav backgrounds composite over the new
+      # light base-100 #fbfaf9; pre-Burrow the bounds were 0.170779 / 0.191270.
+      assert abs(ceiling - 0.170406) < 0.0001 and abs(floor - 0.190978) < 0.0001,
              "the nav-ground bounds moved: ceiling #{Float.round(ceiling, 6)} " <>
-               "(recorded 0.170779), floor #{Float.round(floor, 6)} (recorded " <>
-               "0.191270). Those two figures are quoted in the comment above " <>
+               "(recorded 0.170406), floor #{Float.round(floor, 6)} (recorded " <>
+               "0.190978). Those two figures are quoted in the comment above " <>
                "`.bottom-nav-tab--active` in app.css; update both together."
     end
 
-    test "the active tab's ::before bar clears the 3:1 indicator floor on every ground", %{
-      css: css,
-      light: l,
-      dark: d
-    } do
+    test "the active tab's ::before bar: 3:1 on two grounds, a recorded regression on the third",
+         %{
+           css: css,
+           light: l,
+           dark: d
+         } do
       # A 28x3px non-text active cue, so SC 1.4.11's 3:1 is the obligation rather
       # than 4.5:1. It moved to --color-interactive with the label deliberately:
       # as --color-primary it measured 1.6913 on the near-white nav, an indicator
@@ -1189,17 +1228,30 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
 
       bar_light = declared_color!(body, "background", l.tokens)
 
-      for {label, surface, expected} <- [
-            {"near-white nav",
-             nav_surface!(css, ~s([data-theme="light"] .bottom-nav), l.base_100), 4.4478},
-            {"near-black nav under light tokens", nav_surface!(css, ".bottom-nav", l.base_100),
-             4.1661}
-          ] do
-        ratio = W.contrast(bar_light, surface)
+      near_white = nav_surface!(css, ~s([data-theme="light"] .bottom-nav), l.base_100)
+      ratio = W.contrast(bar_light, near_white)
 
-        assert_threshold("::before on the #{label}", "the active-tab bar", ratio, @non_text)
-        assert_ratio("::before on the #{label} (#{W.to_hex(surface)})", ratio, expected)
-      end
+      assert_threshold("::before on the near-white nav", "the active-tab bar", ratio, @non_text)
+      assert_ratio("::before on the near-white nav (#{W.to_hex(near_white)})", ratio, 7.2791)
+
+      # REGRESSED by the Burrow recolor (task 01a120c5) and recorded: the deep
+      # orange on the near-black nav under light tokens is 2.5444, under the
+      # 3:1 floor (the cyan measured 4.1661). This ground exists only because
+      # `.bottom-nav` has no prefers-color-scheme light background, the defect
+      # already filed as the real fix; the interactive hex is fixed by the spec.
+      near_black = nav_surface!(css, ".bottom-nav", l.base_100)
+      black_ratio = W.contrast(bar_light, near_black)
+
+      assert_ratio(
+        "::before on the near-black nav under light tokens (#{W.to_hex(near_black)})",
+        black_ratio,
+        2.5444
+      )
+
+      assert black_ratio < @non_text,
+             "the ::before bar now clears 3:1 on the near-black nav under light tokens " <>
+               "(#{Float.round(black_ratio, 4)}). Restore the threshold and close the " <>
+               "regression recorded in the moduledoc."
 
       dark_surface = nav_surface!(css, ".bottom-nav", d.base_100)
       dark_ratio = W.contrast(declared_color!(body, "background", d.tokens), dark_surface)
@@ -1211,7 +1263,7 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
         @non_text
       )
 
-      assert_ratio("::before dark (#{W.to_hex(dark_surface)})", dark_ratio, 12.0046)
+      assert_ratio("::before dark (#{W.to_hex(dark_surface)})", dark_ratio, 9.9095)
     end
 
     test "no fixed site reached AA by growing or emboldening its text", %{css: css} do
@@ -1621,8 +1673,8 @@ defmodule Platform.Design.PrimaryContrastSweepTest do
 
     assert light != dark,
            "light and dark --focus-ring now hold the same value (#{light}). " <>
-             "The slot exists because no single cyan is both AA-legible on white and " <>
-             "strong on #171b25; if collapsing it is intended, re-derive L6 and D6 " <>
+             "The slot is theme-split by mechanism (light rings with the interactive " <>
+             "text colour, dark with the primary); if collapsing it is intended, re-derive L6 and D6 " <>
              "first."
 
     [light_token, dark_token] =

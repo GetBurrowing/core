@@ -15,10 +15,18 @@ defmodule Platform.Design.PrimaryLiteralGuardTest do
 
   Comments are stripped because they legitimately record measured values
   ("#06D5ED is 1.7875:1 on white"); the guard is about declarations.
+
+  Burrow recolor (task 01a120c5): the theme blocks now declare the Burrow
+  oranges, #ad4b07 (light) and #f47721 (dark). The same rule applies to them,
+  and the retired cyan stays banned outside comments so it cannot creep back
+  as a literal.
   """
   use ExUnit.Case, async: true
 
   @css_path Path.expand("../../../assets/css/app.css", __DIR__)
+
+  # The Burrow default primaries, light then dark (task 01a120c5).
+  @burrow_primaries ["#ad4b07", "#f47721"]
 
   defp declarations_outside_theme_blocks do
     @css_path
@@ -56,11 +64,39 @@ defmodule Platform.Design.PrimaryLiteralGuardTest do
   test "the stripper actually removes the theme blocks (positive control)" do
     raw = @css_path |> File.read!() |> String.replace(~r{/\*.*?\*/}s, "")
 
-    assert raw =~ ~r/--color-primary:\s*#06d5ed/i,
-           "app.css no longer declares the default cyan in a theme block; this guard " <>
-             "has nothing to exclude and should be revisited"
+    for hex <- @burrow_primaries do
+      assert raw =~ ~r/--color-primary:\s*#{hex}/i,
+             "app.css no longer declares the default #{hex} in a theme block; this " <>
+               "guard has nothing to exclude and should be revisited"
 
-    refute declarations_outside_theme_blocks() =~ ~r/--color-primary:\s*#06d5ed/i
+      refute declarations_outside_theme_blocks() =~ ~r/--color-primary:\s*#{hex}/i
+    end
+  end
+
+  test "no rule outside the theme blocks paints a Burrow primary as a hex literal" do
+    for hex <- @burrow_primaries do
+      hits = Regex.scan(~r/[^\n]*#{hex}[^\n]*/i, declarations_outside_theme_blocks())
+
+      assert hits == [],
+             "these app.css lines name #{hex} directly, so they will not follow an " <>
+               "install's colours. Use var(--color-primary) or a color-mix of it:\n" <>
+               Enum.map_join(hits, "\n", &hd/1)
+    end
+  end
+
+  test "no rule outside the theme blocks paints a Burrow primary as rgb()/rgba()" do
+    for {r, g, b} <- [{173, 75, 7}, {244, 119, 33}] do
+      hits =
+        Regex.scan(
+          ~r/[^\n]*rgba?\(\s*#{r}\s*,?\s*#{g}\s*,?\s*#{b}[^\n]*/,
+          declarations_outside_theme_blocks()
+        )
+
+      assert hits == [],
+             "these app.css lines name rgb(#{r}, #{g}, #{b}); use " <>
+               "color-mix(in srgb, var(--color-primary) N%, transparent):\n" <>
+               Enum.map_join(hits, "\n", &hd/1)
+    end
   end
 
   test "no rule outside the theme blocks paints the Suite cyan as a hex literal" do
