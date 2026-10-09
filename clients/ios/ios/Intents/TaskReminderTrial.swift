@@ -2,7 +2,8 @@
 // Compiled ONLY under BURROW_TASKS_TRIAL, which project.yml sets for Debug
 // builds; a Release build contains none of it. Nothing else references
 // these types: project -> list, request -> title, description -> note.
-#if BURROW_TASKS_TRIAL
+// App target only (BURROW_APP): see the note in MessagingIntents.swift.
+#if BURROW_TASKS_TRIAL && BURROW_APP
     import AppIntents
     import Foundation
     import GeoToolbox

@@ -741,6 +741,7 @@
 				37BFF6A8CB5CC7FA21AD3FA3 /* Resources */,
 				BC0DC3536DED64E0E8C9923E /* Frameworks */,
 				7C6B2DB89D01A1E9B8F2A565 /* Embed Foundation Extensions */,
+				6D082A5BFA836738261C5F04 /* Check extensions declare no schema intents */,
 			);
 			buildRules = (
 			);
@@ -992,6 +993,28 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		6D082A5BFA836738261C5F04 /* Check extensions declare no schema intents */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Check extensions declare no schema intents";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "/usr/bin/python3 \"${SRCROOT}/../../scripts/check_extension_schema_intents.py\" \"${TARGET_BUILD_DIR}/${WRAPPER_NAME}\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		17457C94CBDF9C57D2F7B3DC /* Sources */ = {
@@ -1390,6 +1413,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = "com.kobo-ai.burrow";
 				SUITE_APS_ENVIRONMENT = development;
 				SUITE_PUSH_ENVIRONMENT = sandbox;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) BURROW_APP";
 			};
 			name = Debug;
 		};
@@ -1506,6 +1530,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = "com.kobo-ai.burrow";
 				SUITE_APS_ENVIRONMENT = production;
 				SUITE_PUSH_ENVIRONMENT = production;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) BURROW_APP";
 			};
 			name = Release;
 		};

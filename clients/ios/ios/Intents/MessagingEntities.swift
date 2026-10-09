@@ -135,7 +135,10 @@ struct PersonQuery: EntityStringQuery {
     // searches every install, which Siri needs to resolve a spoken name.
     // The dependency's `install` reads as non-optional although the
     // parameter is optional, hence `dep?.install.id`.
-    @IntentParameterDependency<MessagesSendIntent>(\.$install) var send
+    // MessagesSendIntent is App-only (BURROW_APP, see MessagingIntents.swift).
+    #if BURROW_APP
+        @IntentParameterDependency<MessagesSendIntent>(\.$install) var send
+    #endif
 
     /// Set by tests in place of the dependency above.
     var installScope: String?
@@ -144,7 +147,11 @@ struct PersonQuery: EntityStringQuery {
 
     init(installScope: String?) { self.installScope = installScope }
 
-    private var scope: String? { installScope ?? send?.install.id }
+    #if BURROW_APP
+        private var scope: String? { installScope ?? send?.install.id }
+    #else
+        private var scope: String? { installScope }
+    #endif
 
     /// Each id resolves on ITS host only: a person found earlier (search,
     /// suggestions or the index refresh) from the in-memory cache, otherwise

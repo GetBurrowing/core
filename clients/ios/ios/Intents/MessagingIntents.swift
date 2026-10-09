@@ -2,6 +2,13 @@ import AppIntents
 import Foundation
 import GeoToolbox
 
+// BURROW_APP: set for the App target only (project.yml). Siri refuses a
+// schema intent that more than one bundle declares (ToolDiscoveryError 4,
+// "Multiple flow tools found"), and ../Intents is compiled into
+// SuiteWidgets and NotificationService too, so every schema intent and
+// everything that names one is App-only (task 01a111bb).
+#if BURROW_APP
+
 // The iOS 27 messages domain (task 01a111bb stage 3). Apple makes this
 // domain all-or-nothing: an app that adopts one of its five schemas must
 // adopt all five, and the build checks it. So all five are here, and each
@@ -277,3 +284,4 @@ enum MessagingIntentSupport {
         return link
     }
 }
+#endif

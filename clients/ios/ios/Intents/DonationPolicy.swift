@@ -1,6 +1,10 @@
 import AppIntents
 import Foundation
 
+// App target only (BURROW_APP): it names MessagesSendIntent; see the note
+// in MessagingIntents.swift.
+#if BURROW_APP
+
 // Personal-context donations (task 01a111bb stage 4).
 //
 // Rules this file keeps:
@@ -341,3 +345,4 @@ struct LiveDonationResolver: DonationResolving {
         return nil
     }
 }
+#endif

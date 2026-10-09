@@ -156,6 +156,12 @@ enum CallDestination {
     case people([CallPersonEntity])
 }
 
+// BURROW_APP: set for the App target only (project.yml). Siri refuses a
+// schema intent that more than one bundle declares (ToolDiscoveryError 4,
+// "Multiple flow tools found"), and ../Intents is compiled into
+// SuiteWidgets and NotificationService too, so every schema intent and
+// everything that names one is App-only (task 01a111bb).
+#if BURROW_APP
 @available(iOS 27, *)
 @AppIntent(schema: .phone.startCall)
 struct StartCallIntent: AudioRecordingIntent, AudioStartingIntent {
@@ -203,3 +209,4 @@ struct StartCallIntent: AudioRecordingIntent, AudioStartingIntent {
         return .result(dialog: IntentDialog("\(text)"))
     }
 }
+#endif

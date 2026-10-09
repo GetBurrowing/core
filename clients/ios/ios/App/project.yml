@@ -97,10 +97,22 @@ targets:
       - target: NotificationService
     configFiles:
       Debug: ../debug.xcconfig
+    # Fails the build when an embedded extension's Metadata.appintents
+    # declares a schema intent (see SWIFT_ACTIVE_COMPILATION_CONDITIONS).
+    postBuildScripts:
+      - name: Check extensions declare no schema intents
+        basedOnDependencyAnalysis: false
+        script: |
+          /usr/bin/python3 "${SRCROOT}/../../scripts/check_extension_schema_intents.py" "${TARGET_BUILD_DIR}/${WRAPPER_NAME}"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kobo-ai.burrow
         INFOPLIST_FILE: App/Info.plist
+        # The iOS 27 schema intents (messages.*, phone.startCall,
+        # reminders.createReminder) compile ONLY here. ../Intents is also in
+        # SuiteWidgets and NotificationService, and a schema intent declared by
+        # more than one bundle makes Siri refuse it (task 01a111bb).
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "$(inherited) BURROW_APP"
         CODE_SIGN_ENTITLEMENTS: App/App.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: primary
