@@ -1553,5 +1553,409 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
       view |> element(~s([data-role="tab-strip"] button[data-tab="pages"])) |> render_click()
       assert has_element?(view, "h1", "org/page/identity.md")
     end
+
+    # ── Desktop expandable panel row (task 01a1170a stage 1) ──────────────
+
+    defp query_html(view, selector) do
+      view |> render() |> LazyHTML.from_document() |> LazyHTML.query(selector)
+    end
+
+    defp node_texts(nodes), do: Enum.map(nodes, &String.trim(LazyHTML.text(&1)))
+
+    test "chevron opens a panel with the target path and the body as diff lines, and closes it",
+         %{conn: conn} do
+      proposal =
+        insert_proposal!(%{
+          body: "+ new line\n- old line",
+          target_page_key: "org/page/expand-target.md"
+        })
+
+      {:ok, view, _html} = live(conn, "/memory/proposals")
+
+      refute has_element?(view, "#proposal-panel-#{proposal.id}")
+      refute has_element?(view, ~s([data-role="proposal-panel"]))
+
+      render_click(view, "toggle_proposal_row", %{"id" => proposal.id})
+
+      assert has_element?(view, ~s(#proposal-panel-#{proposal.id}[data-role="proposal-panel"]))
+
+      lines =
+        query_html(view, ~s([data-role="proposals-table"] [data-role="proposal-diff-line"]))
+
+      assert Enum.count(lines) == 2
+
+      assert node_texts(LazyHTML.query(lines, ~s([data-role="proposal-diff-gutter"]))) == [
+               "+",
+               "+"
+             ]
+
+      # Untrimmed on purpose: the text span is whitespace-pre-wrap, so any
+      # template whitespace around the expression would render as blank lines.
+      assert Enum.map(
+               LazyHTML.query(lines, ~s([data-role="proposal-diff-text"])),
+               &LazyHTML.text/1
+             ) == [
+               "+ new line",
+               "- old line"
+             ]
+
+      assert has_element?(
+               view,
+               ~s(#proposal-panel-#{proposal.id} [data-role="proposal-target"]),
+               "org/page/expand-target.md"
+             )
+
+      # Full, untruncated evidence lives in the panel. Compared untrimmed: the
+      # paragraph is whitespace-pre-wrap, so template whitespace would show.
+      assert [evidence] =
+               view
+               |> query_html(~s(#proposal-panel-#{proposal.id} [data-role="proposal-evidence"]))
+               |> Enum.map(&LazyHTML.text/1)
+
+      assert evidence == "Rowan flagged pricing anchors drifting 3x this week."
+
+      render_click(view, "toggle_proposal_row", %{"id" => proposal.id})
+
+      refute has_element?(view, "#proposal-panel-#{proposal.id}")
+      refute has_element?(view, ~s([data-role="proposal-diff-line"]))
+    end
+
+    test "two rows can be open at once", %{conn: conn} do
+      a = insert_proposal!(%{body: "Body A"})
+      b = insert_proposal!(%{body: "Body B"})
+
+      {:ok, view, _html} = live(conn, "/memory/proposals")
+
+      render_click(view, "toggle_proposal_row", %{"id" => a.id})
+      render_click(view, "toggle_proposal_row", %{"id" => b.id})
+
+      assert has_element?(view, "#proposal-panel-#{a.id}")
+      assert has_element?(view, "#proposal-panel-#{b.id}")
+    end
+
+    test "approving one open row leaves another open row open", %{conn: conn} do
+      a = insert_proposal!(%{body: "Body A"})
+      b = insert_proposal!(%{body: "Body B"})
+
+      {:ok, view, _html} = live(conn, "/memory/proposals")
+
+      render_click(view, "toggle_proposal_row", %{"id" => a.id})
+      render_click(view, "toggle_proposal_row", %{"id" => b.id})
+
+      view
+      |> element(~s(#proposal-panel-#{a.id} button[phx-click="approve_proposal"]))
+      |> render_click()
+
+      refute has_element?(view, "#proposal-panel-#{a.id}")
+      assert has_element?(view, "#proposal-panel-#{b.id}")
+    end
+
+    test "the chevron's aria-expanded tracks the panel and aria-controls names it",
+         %{conn: conn} do
+      proposal = insert_proposal!(%{body: "Aria body"})
+
+      {:ok, view, _html} = live(conn, "/memory/proposals")
+
+      chevron = ~s(#proposal-row-#{proposal.id} button[phx-click="toggle_proposal_row"])
+
+      assert has_element?(
+               view,
+               chevron <>
+                 ~s([aria-expanded="false"][aria-controls="proposal-panel-#{proposal.id}"])
+             )
+
+      view |> element(chevron) |> render_click()
+      assert has_element?(view, chevron <> ~s([aria-expanded="true"]))
+
+      view |> element(chevron) |> render_click()
+      assert has_element?(view, chevron <> ~s([aria-expanded="false"]))
+    end
+
+    test "a blank body renders the empty note and keeps Approve", %{conn: conn} do
+      # The changeset's validate_required rejects a whitespace-only body, so
+      # this shape can only arrive by a direct write (the column is NOT NULL,
+      # not non-blank). Insert a valid row, then blank the body underneath it.
+      proposal = insert_proposal!(%{body: "about to be blanked"})
+
+      {1, _} =
+        Repo.update_all(from(p in MemoryProposal, where: p.id == ^proposal.id),
+          set: [body: "   "]
+        )
+
+      {:ok, view, _html} = live(conn, "/memory/proposals")
+      render_click(view, "toggle_proposal_row", %{"id" => proposal.id})
+
+      assert has_element?(view, "#proposal-panel-#{proposal.id}", "No body on this proposal")
+      refute has_element?(view, ~s(#proposal-panel-#{proposal.id} [data-role="proposal-diff"]))
+
+      assert has_element?(
+               view,
+               ~s(#proposal-panel-#{proposal.id} button[phx-click="approve_proposal"]),
+               "Approve"
+             )
+    end
+
+    test "rejecting from an open panel swaps its action bar for the form, no second row",
+         %{conn: conn} do
+      proposal = insert_proposal!(%{body: "Reject from panel"})
+
+      {:ok, view, _html} = live(conn, "/memory/proposals")
+      render_click(view, "toggle_proposal_row", %{"id" => proposal.id})
+
+      view
+      |> element(~s(#proposal-panel-#{proposal.id} button[phx-click="show_reject_form"]))
+      |> render_click()
+
+      assert has_element?(
+               view,
+               ~s(#proposal-panel-#{proposal.id} #proposal-reject-form-#{proposal.id})
+             )
+
+      refute has_element?(view, "#proposal-reject-row-#{proposal.id}")
+
+      refute has_element?(
+               view,
+               ~s(#proposal-panel-#{proposal.id} [data-role="proposal-panel-actions"])
+             )
+    end
+
+    test "a long body clamps behind Show full diff on desktop", %{conn: conn} do
+      body = Enum.map_join(1..13, "\n", &"line #{&1}")
+      proposal = insert_proposal!(%{body: body})
+
+      {:ok, view, _html} = live(conn, "/memory/proposals")
+      render_click(view, "toggle_proposal_row", %{"id" => proposal.id})
+
+      toggle =
+        ~s(#proposal-panel-#{proposal.id} [data-role="proposal-diff-toggle"][phx-click="toggle_proposal_diff"])
+
+      assert has_element?(view, toggle, "Show full diff")
+      view |> element(toggle) |> render_click()
+      assert has_element?(view, toggle, "Show less")
+    end
+
+    # Task 01a1170a stage 4: at 1280px the auto-layout table measured 919px
+    # in an 800px pane (a project Source label and the 96ch panel set its
+    # width). table-fixed makes the header widths the layout; every other
+    # column truncates; the panel is capped at the cell width.
+    test "the table is fixed-layout so no cell content can widen it past the pane",
+         %{conn: conn} do
+      proposal =
+        insert_proposal!(%{
+          body: Enum.map_join(1..13, "\n", &"line #{&1}"),
+          journal_path: "project/01a1207e-0000-7000-8000-000000000000/journal/2026-10-06.md"
+        })
+
+      {:ok, view, _html} = live(conn, "/memory/proposals")
+      render_click(view, "toggle_proposal_row", %{"id" => proposal.id})
+
+      assert has_element?(view, ~s(table#org-memory-proposals-table.table-fixed.w-full))
+
+      # Opaque sticky header: a translucent one let diff lines show through.
+      assert has_element?(view, ~s(#org-memory-proposals-table thead.sticky.bg-base-200))
+      refute has_element?(view, ~s(#org-memory-proposals-table thead[class*="bg-base-200/"]))
+
+      widths =
+        view
+        |> query_html("#org-memory-proposals-table thead th")
+        |> Enum.map(fn th ->
+          th
+          |> LazyHTML.attribute("class")
+          |> hd()
+          |> String.split()
+          |> Enum.find(&String.starts_with?(&1, "w-"))
+        end)
+
+      # Evidence (4th) is the only flexible column.
+      assert widths == ["w-10", "w-40", "w-28", nil, "w-36", "w-20", "w-28"]
+
+      row = "#proposal-row-#{proposal.id}"
+      assert has_element?(view, ~s(#{row} td[data-role="proposal-source"].truncate))
+
+      assert has_element?(
+               view,
+               ~s(#{row} td[data-role="proposal-source"][title="project/01a1207e-0000-7000-8000-000000000000/journal/2026-10-06.md"])
+             )
+
+      assert has_element?(view, ~s(#{row} td[data-role="evidence-cell"].truncate))
+
+      # Panel content is capped at the cell (pane) width, not just 96ch.
+      assert has_element?(
+               view,
+               ~s|#proposal-panel-#{proposal.id} td > div.min-w-0[class~="max-w-[min(96ch,100%)]"]|
+             )
+
+      # Show full diff uses text-secondary (AA on the open-row ground in both
+      # themes), not text-interactive (4.20:1 on light #F2F2F2).
+      toggle = ~s(#proposal-panel-#{proposal.id} [data-role="proposal-diff-toggle"])
+      assert has_element?(view, toggle <> ".text-secondary")
+      refute has_element?(view, toggle <> ".text-interactive")
+    end
+  end
+
+  # Task 01a1170a stage 2: the proposals table's Source link points at the
+  # Journal tab focused on the proposal's day, not at `/org_memory/<path>`
+  # (journal days have no org_wiki_pages row, so that was "Page not found").
+  describe "Source link → Journal tab focused on that date (01a1170a stage 2)" do
+    # 2026-09-01 is outside the 14-day `list_recent` window for any run on
+    # or after 2026-09-16, so following the link exercises the
+    # `get_for_date` merge in `load_journal/1`. (The plan named
+    # 2026-10-01, which is only 6 days before the 2026-10-07 authoring
+    # date — inside the window, so it could not exercise the merge.)
+    @source_date ~D[2026-09-01]
+
+    setup %{conn: conn} do
+      Repo.delete_all(MemoryProposal)
+      Repo.delete_all(WikiPage)
+
+      {:ok, conn: authenticated_conn(conn, create_user!())}
+    end
+
+    defp source_hrefs(html) do
+      html
+      |> LazyHTML.from_fragment()
+      |> LazyHTML.query(~s([data-role="proposals-table"] [data-role="proposal-source"] a))
+      |> LazyHTML.attribute("href")
+    end
+
+    test "the focus date really is outside the recent window" do
+      assert Date.diff(Date.utc_today(), @source_date) > 14
+    end
+
+    test "org source: literal href, and following it renders that day's entry",
+         %{conn: conn} do
+      {:ok, _} =
+        Journal.append(%{content: "source entry marker 7f3a", date: @source_date},
+          namespace: "org"
+        )
+
+      insert_proposal!(%{journal_path: "org/journal/2026-09-01.md"})
+
+      {:ok, _view, html} = live(conn, "/memory/proposals")
+
+      assert source_hrefs(html) == [
+               "/org_memory?tab=journal&date=2026-09-01#journal-day-2026-09-01"
+             ]
+
+      {:ok, view, html} = live(conn, "/org_memory?tab=journal&date=2026-09-01")
+
+      assert has_element?(view, "#journal-day-2026-09-01")
+      assert html =~ "source entry marker 7f3a"
+      refute html =~ "Page not found"
+    end
+
+    test "project source: href carries the encoded ns and lands on the project entry only",
+         %{conn: conn} do
+      project_id = Ecto.UUID.generate()
+      ns = "project/#{project_id}"
+
+      {:ok, _} =
+        Journal.append(%{content: "project entry marker b21e", date: @source_date},
+          namespace: ns
+        )
+
+      {:ok, _} =
+        Journal.append(%{content: "org entry marker c904", date: @source_date},
+          namespace: "org"
+        )
+
+      insert_proposal!(%{journal_path: "project/#{project_id}/journal/2026-09-01.md"})
+
+      {:ok, _view, html} = live(conn, "/memory/proposals")
+
+      assert source_hrefs(html) == [
+               "/org_memory?tab=journal&date=2026-09-01&ns=project%2F#{project_id}" <>
+                 "#journal-day-2026-09-01"
+             ]
+
+      {:ok, view, html} =
+        live(conn, "/org_memory?tab=journal&date=2026-09-01&ns=project%2F#{project_id}")
+
+      assert has_element?(view, "#journal-day-2026-09-01")
+      assert html =~ "project entry marker b21e"
+      refute html =~ "org entry marker c904"
+    end
+
+    test "an unparsable journal_path renders the label as plain text with no link",
+         %{conn: conn} do
+      insert_proposal!(%{journal_path: "org/page/not-a-journal.md"})
+
+      {:ok, view, html} = live(conn, "/memory/proposals")
+
+      assert has_element?(view, ~s([data-role="proposal-source"]), "org/page/not-a-journal.md")
+      assert source_hrefs(html) == []
+    end
+
+    test "a nil journal_path renders — with no <a> in the cell" do
+      # journal_path is NOT NULL in the table, so the nil case is rendered
+      # from an in-memory struct.
+      proposal = %MemoryProposal{
+        id: Ecto.UUID.generate(),
+        journal_path: nil,
+        category: "recurring-theme",
+        confidence: "high",
+        body: "Body",
+        evidence: nil,
+        inserted_at: DateTime.utc_now()
+      }
+
+      html =
+        render_component(&PlatformWeb.OrgMemoryLive.ProposalsPane.proposals_pane/1,
+          proposals: [proposal]
+        )
+
+      cell =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(~s([data-role="proposal-source"]))
+
+      assert LazyHTML.text(cell) |> String.trim() == "—"
+      assert source_hrefs(html) == []
+      assert PlatformWeb.OrgMemoryLive.ProposalsPane.source_href(nil) == nil
+    end
+
+    test "an invalid date mounts on the Journal tab without crashing", %{conn: conn} do
+      {:ok, view, html} = live(conn, "/org_memory?tab=journal&date=not-a-date")
+
+      assert has_element?(
+               view,
+               ~s([data-role="tab-strip"] button[data-tab="journal"][aria-selected="true"])
+             )
+
+      assert has_element?(view, ~s([data-role="journal-pane"]))
+      refute html =~ "Page not found"
+    end
+
+    test "regression: no href in the proposals table starts with /org_memory/org/journal/",
+         %{conn: conn} do
+      insert_proposal!(%{journal_path: "org/journal/2026-09-01.md"})
+      insert_proposal!(%{journal_path: "org/journal/2026-07-17.md"})
+
+      {:ok, _view, html} = live(conn, "/memory/proposals")
+
+      hrefs =
+        html
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query(~s([data-role="proposals-table"] a))
+        |> LazyHTML.attribute("href")
+
+      assert length(source_hrefs(html)) == 2
+      refute Enum.any?(hrefs, &String.starts_with?(&1, "/org_memory/org/journal/"))
+    end
+
+    test "switch_tab clears the ns override so the journal follows the tree again",
+         %{conn: conn} do
+      project_id = Ecto.UUID.generate()
+
+      {:ok, view, _html} =
+        live(conn, "/org_memory?tab=journal&date=2026-09-01&ns=project%2F#{project_id}")
+
+      assert :sys.get_state(view.pid).socket.assigns.journal_namespace_override ==
+               "project/#{project_id}"
+
+      view |> element(~s([data-role="tab-strip"] button[data-tab="journal"])) |> render_click()
+
+      assert :sys.get_state(view.pid).socket.assigns.journal_namespace_override == nil
+    end
   end
 end

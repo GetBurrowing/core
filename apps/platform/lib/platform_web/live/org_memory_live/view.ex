@@ -116,6 +116,7 @@ defmodule PlatformWeb.OrgMemoryLive do
      |> assign(:journal_groups, [])
      |> assign(:journal_draft, "")
      |> assign(:journal_focus_date, nil)
+     |> assign(:journal_namespace_override, nil)
      |> assign(:search_query, "")
      |> assign(:search_corpus, "all")
      |> assign(:search_namespace, "all")
@@ -130,6 +131,7 @@ defmodule PlatformWeb.OrgMemoryLive do
      |> assign(:show_reject_form_for, nil)
      |> assign(:tree_drawer_open, false)
      |> assign(:expanded_diffs, MapSet.new())
+     |> assign(:expanded_proposals, MapSet.new())
      |> assign(:proposals, [])}
   end
 
@@ -175,6 +177,38 @@ defmodule PlatformWeb.OrgMemoryLive do
     end
   end
 
+  # Journal deep link (task 01a1170a stage 2):
+  # `/org_memory?tab=journal&date=<iso>[&ns=<namespace>]`. This is the
+  # href the proposals table's Source cell points at, so it must survive
+  # a full page load from another route — `open_result_journal` is a
+  # phx-click event with no URL and cannot. An invalid or missing date
+  # opens the Journal tab unfocused (no crash, no flash); an `ns` outside
+  # `org` / `project/<id>` / `space/<id>` falls back to the default.
+  def handle_params(
+        %{"tab" => "journal"} = params,
+        _url,
+        %{assigns: %{live_action: :index}} = socket
+      ) do
+    focus_date =
+      with date_str when is_binary(date_str) <- params["date"],
+           {:ok, date} <- Date.from_iso8601(date_str) do
+        date
+      else
+        _ -> nil
+      end
+
+    {:noreply,
+     socket
+     |> assign(:selected_page, nil)
+     |> assign(:backlinks, [])
+     |> assign(:editing, false)
+     |> assign(:creating, false)
+     |> assign(:view_mode, :journal)
+     |> assign(:journal_focus_date, focus_date)
+     |> assign(:journal_namespace_override, parse_namespace_param(params["ns"]))
+     |> load_journal()}
+  end
+
   def handle_params(_params, _url, socket) do
     {:noreply,
      socket
@@ -191,9 +225,13 @@ defmodule PlatformWeb.OrgMemoryLive do
     # Close-on-select for the mobile tree drawer (task 019f9282). The
     # desktop rail ignores `:tree_drawer_open`, so assigning false is a
     # no-op there — the tree/expansion/selection invariants are untouched.
+    #
+    # Selecting a page drops any `?ns=` journal override (stage 2 of task
+    # 01a1170a): the journal namespace follows the selected page again.
     {:noreply,
      socket
      |> assign(:tree_drawer_open, false)
+     |> assign(:journal_namespace_override, nil)
      |> push_patch(to: ~p"/org_memory/#{String.split(file_key, "/")}")}
   end
 
@@ -235,7 +273,13 @@ defmodule PlatformWeb.OrgMemoryLive do
   @impl true
   def handle_event("switch_tab", %{"tab" => tab}, socket) when tab in @tabs do
     view_mode = view_mode_for(tab)
-    socket = assign(socket, :view_mode, view_mode)
+
+    # A tab click drops the `?ns=` deep-link override (task 01a1170a
+    # stage 2), so the journal namespace follows the tree as before.
+    socket =
+      socket
+      |> assign(:view_mode, view_mode)
+      |> assign(:journal_namespace_override, nil)
 
     socket =
       case view_mode do
@@ -267,7 +311,11 @@ defmodule PlatformWeb.OrgMemoryLive do
         authored_by: socket.assigns.current_user_id
       }
 
-      namespace = journal_namespace(socket.assigns.selected_page)
+      namespace =
+        effective_journal_namespace(
+          socket.assigns.journal_namespace_override,
+          socket.assigns.selected_page
+        )
 
       case Journal.append(attrs, namespace: namespace) do
         {:ok, entry} ->
@@ -414,8 +462,11 @@ defmodule PlatformWeb.OrgMemoryLive do
   # Approve → `Proposals.approve/2` flips status + `Proposals.queue_promotion/1`
   # runs the concrete promotion pipeline: appends the body to the target
   # wiki page, strips the source `<synthesis-proposal>` block from the
-  # journal, and records a `platform.memory.proposal_promoted` audit row
-  # (task 019f70e9 stage-8 fix).
+  # journal ONLY when the journal is page-backed (entry-only journals are
+  # append-only, so the block is retained there), and records a
+  # `platform.memory.proposal_promoted` audit row whose
+  # `journal_block_disposition` says which happened (task 019f70e9
+  # stage-8 fix; task 01a1170a stage 3).
   #
   # If promotion fails after approve succeeded, the row stays approved
   # (the approve is durable) but a flash error is surfaced so Rowan can
@@ -493,16 +544,22 @@ defmodule PlatformWeb.OrgMemoryLive do
     {:noreply, assign(socket, :show_reject_form_for, nil)}
   end
 
-  # Mobile-only (task 019f9282): toggle the "show full diff" expansion of
-  # a long proposal card. Server-held so it survives LiveView patches
-  # (unlike a client-only checkbox). Desktop renders the full table and
-  # ignores this assign.
+  # Toggle the "show full diff" expansion of a long proposal body
+  # (task 019f9282 mobile, task 01a1170a desktop). Server-held so it
+  # survives LiveView patches (unlike a client-only checkbox). Both the
+  # mobile card and the desktop panel row read this assign through
+  # `ProposalBody.proposal_diff/1`.
   @impl true
   def handle_event("toggle_proposal_diff", %{"id" => id}, socket) do
-    {:noreply,
-     update(socket, :expanded_diffs, fn set ->
-       if MapSet.member?(set, id), do: MapSet.delete(set, id), else: MapSet.put(set, id)
-     end)}
+    {:noreply, update(socket, :expanded_diffs, &toggle_member(&1, id))}
+  end
+
+  # Desktop (task 01a1170a): open / close a proposal's panel row. Many
+  # rows can be open at once. `load_proposals_tab/1` deliberately does not
+  # reset this set, so approving row A leaves row B open.
+  @impl true
+  def handle_event("toggle_proposal_row", %{"id" => id}, socket) do
+    {:noreply, update(socket, :expanded_proposals, &toggle_member(&1, id))}
   end
 
   # ── Events: editing ─────────────────────────────────────────────────────
@@ -769,7 +826,7 @@ defmodule PlatformWeb.OrgMemoryLive do
               <JournalPane.journal_pane
                 groups={@journal_groups}
                 draft={@journal_draft}
-                namespace={journal_namespace(@selected_page)}
+                namespace={effective_journal_namespace(@journal_namespace_override, @selected_page)}
                 focus_date={@journal_focus_date}
               />
             <% :search -> %>
@@ -791,6 +848,8 @@ defmodule PlatformWeb.OrgMemoryLive do
               <ProposalsPane.proposals_pane
                 proposals={@proposals}
                 show_reject_form_for={@show_reject_form_for}
+                expanded_proposals={@expanded_proposals}
+                expanded_diffs={@expanded_diffs}
               />
             <% :pages -> %>
               <%= if @creating do %>
@@ -847,7 +906,7 @@ defmodule PlatformWeb.OrgMemoryLive do
         backlinks={@backlinks}
         updated_by_display={@updated_by_display}
         journal_groups={@journal_groups}
-        journal_namespace={journal_namespace(@selected_page)}
+        journal_namespace={effective_journal_namespace(@journal_namespace_override, @selected_page)}
         journal_draft={@journal_draft}
         journal_focus_date={@journal_focus_date}
         search_query={@search_query}
@@ -1115,6 +1174,10 @@ defmodule PlatformWeb.OrgMemoryLive do
   # `workspace_id: nil` == "no filter" per `Proposals.list_pending/1`
   # docs — the /memory/proposals view is org-scoped, so this matches
   # the desired shape.
+  #
+  # Does NOT reset `expanded_proposals` / `expanded_diffs`: a reload after
+  # approving row A must leave row B open. Ids of rows that left the
+  # pending list linger in the sets harmlessly (nothing renders for them).
   defp load_proposals_tab(socket) do
     pending = Proposals.list_pending(workspace_id: nil)
 
@@ -1123,6 +1186,10 @@ defmodule PlatformWeb.OrgMemoryLive do
     |> assign(:proposals_pending_count, length(pending))
     |> assign(:show_reject_form_for, nil)
     |> assign(:proposals, pending)
+  end
+
+  defp toggle_member(set, id) do
+    if MapSet.member?(set, id), do: MapSet.delete(set, id), else: MapSet.put(set, id)
   end
 
   # Cheap count for the tab-strip badge — surfaces on every tab so
@@ -1135,15 +1202,22 @@ defmodule PlatformWeb.OrgMemoryLive do
   # Reload the journal feed: recent entries for the active namespace,
   # grouped by date (newest day first, entries within a day oldest
   # first — the V1 memory-feed grouping).
+  #
+  # When `:journal_focus_date` is set, that day is read with
+  # `Journal.get_for_date/2` and merged in as its own group (task
+  # 01a1170a stage 2): a deep link to a day older than the 14-day window,
+  # or a busy day the `limit` pushed out, must still land on rendered
+  # content. The focused day replaces any partial group the recent read
+  # returned for it.
   defp load_journal(socket) do
+    %{journal_namespace_override: override, selected_page: page} = socket.assigns
+    namespace = effective_journal_namespace(override, page)
+
     groups =
-      [
-        days_back: @journal_days_back,
-        limit: @journal_limit,
-        namespace: journal_namespace(socket.assigns.selected_page)
-      ]
+      [days_back: @journal_days_back, limit: @journal_limit, namespace: namespace]
       |> Journal.list_recent()
       |> Enum.group_by(& &1.date)
+      |> merge_focus_day(socket.assigns.journal_focus_date, namespace)
       |> Enum.sort_by(fn {date, _entries} -> date end, {:desc, Date})
       |> Enum.map(fn {date, entries} ->
         {date, Enum.sort_by(entries, & &1.inserted_at, DateTime)}
@@ -1151,6 +1225,34 @@ defmodule PlatformWeb.OrgMemoryLive do
 
     assign(socket, :journal_groups, groups)
   end
+
+  defp merge_focus_day(groups, nil, _namespace), do: groups
+
+  defp merge_focus_day(groups, %Date{} = focus_date, namespace) do
+    case Journal.get_for_date(focus_date, namespace: namespace) do
+      [] -> groups
+      entries -> Map.put(groups, focus_date, entries)
+    end
+  end
+
+  # The namespace the Journal tab reads from and appends to: the `?ns=`
+  # deep-link override when one is set, else the selected page's.
+  defp effective_journal_namespace(override, _page) when is_binary(override), do: override
+  defp effective_journal_namespace(nil, page), do: journal_namespace(page)
+
+  # `?ns=` accepts only `org`, `project/<id>` or `space/<id>`; anything
+  # else (missing, empty, extra segments, unknown kind) falls back to the
+  # journal default.
+  defp parse_namespace_param("org"), do: "org"
+
+  defp parse_namespace_param(ns) when is_binary(ns) do
+    case String.split(ns, "/") do
+      [kind, id] when kind in ["project", "space"] and id != "" -> ns
+      _ -> Journal.default_namespace()
+    end
+  end
+
+  defp parse_namespace_param(_), do: Journal.default_namespace()
 
   # Namespace dimension for journal reads/appends: derived from the
   # selected page's file_key (`org/...` → `"org"`,

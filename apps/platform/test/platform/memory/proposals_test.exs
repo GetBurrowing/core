@@ -644,6 +644,9 @@ defmodule Platform.Memory.ProposalsTest do
       refute journal.content =~ "Pricing block body."
       assert journal.content =~ "Federation block body."
       assert journal.content =~ "Intervening prose that should survive."
+
+      [event] = Audit.list(event_type: "platform.memory.proposal_promoted", limit: 5)
+      assert event.metadata["journal_block_disposition"] == "stripped"
     end
 
     test "records a platform.memory.proposal_promoted audit event with expected metadata" do
@@ -696,11 +699,72 @@ defmodule Platform.Memory.ProposalsTest do
       # The page will have been appended twice (retry pattern is
       # additive), but the point of this test is the pipeline doesn't
       # blow up when the block is already gone.
-      assert length(Audit.list(event_type: "platform.memory.proposal_promoted", limit: 5)) == 2
+      events = Audit.list(event_type: "platform.memory.proposal_promoted", limit: 5)
+      assert length(events) == 2
+
+      assert events |> Enum.map(& &1.metadata["journal_block_disposition"]) |> Enum.sort() ==
+               ["not_found", "stripped"]
+    end
+
+    # Task 01a1170a stage 3: the JournalSweep / memory_create path writes
+    # only `org_wiki_journal_entries`, never an `org_wiki_pages` row.
+    @entry_only_block ~s(<synthesis-proposal category="strategic-insight" confidence="high" evidence="e">Body 9c1d</synthesis-proposal>)
+
+    # Measured first (test-first run, local/s3-01a1170a 026b88f64): with the
+    # original `refute contents =~ "<synthesis-proposal"` this test went red
+    # AFTER queue_promotion returned :ok and the page held the body. The
+    # journal is append-only, so the block is retained and the audit row
+    # says so rather than the code claiming a strip it never did.
+    test "entry-only journal: approve promotes the body and records the block as retained" do
+      approved = approve_entry_only_fixture!()
+
+      assert Proposals.queue_promotion(approved) == :ok
+
+      page = Wiki.get_page(approved.target_page_key)
+      assert page.content =~ "Body 9c1d"
+
+      contents =
+        ~D[2026-10-01]
+        |> Journal.get_for_date(namespace: "org")
+        |> Enum.map_join("\n", & &1.content)
+
+      assert contents =~ "Body 9c1d"
+
+      [event] = Audit.list(event_type: "platform.memory.proposal_promoted", limit: 5)
+      assert event.metadata["journal_block_disposition"] == "retained_append_only"
+    end
+
+    test "entry-only journal: the retained block cannot be re-proposed after approve" do
+      approved = approve_entry_only_fixture!()
+      assert Proposals.queue_promotion(approved) == :ok
+
+      assert {:ok, 0} =
+               Proposals.ingest_from_journal(nil, "org/journal/2026-10-01.md", @entry_only_block)
+
+      pending_hashes = Proposals.list_pending(workspace_id: nil) |> Enum.map(& &1.block_hash)
+      refute approved.block_hash in pending_hashes
     end
   end
 
   # ── Test helpers ─────────────────────────────────────────────────────
+
+  # The prod shape: the journal day exists only as an append-only entry,
+  # and the proposal was ingested from it. Returns the approved proposal.
+  defp approve_entry_only_fixture! do
+    {:ok, _entry} =
+      Journal.append(%{content: @entry_only_block, date: ~D[2026-10-01]}, namespace: "org")
+
+    {:ok, 1} =
+      Proposals.ingest_from_journal(nil, "org/journal/2026-10-01.md", @entry_only_block)
+
+    # POSITIVE CONTROL: no page row backs this journal, so a pass cannot
+    # come from the fixture having created one.
+    assert OrgContext.get_file("org/journal/2026-10-01.md") == nil
+
+    [row] = Repo.all(MemoryProposal)
+    {:ok, approved} = Proposals.approve(row)
+    approved
+  end
 
   defp insert_proposal!(overrides) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)

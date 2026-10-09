@@ -298,6 +298,72 @@ defmodule PlatformWeb.OrgMemoryLiveMobileTest do
       refute html =~ ~s(data-mobile-proposal-id="#{proposal.id}")
       refute html =~ ~s(id="m-proposal-reject-form-#{proposal.id}")
     end
+
+    # Task 01a1170a stage 1: the diff now renders through the shared
+    # `ProposalBody.proposal_diff/1`. Everything on mobile stays as it was
+    # except the line colour (base-content on a success band, replacing the
+    # AA-failing `text-success` text), which these tests deliberately do not pin.
+    test "REGRESSION: the shared diff keeps the mobile \"+ \" prefix on every line", %{
+      conn: conn
+    } do
+      seed_pages!()
+
+      %MemoryProposal{}
+      |> MemoryProposal.changeset(%{
+        journal_path: "org/journal/#{Date.to_iso8601(Date.utc_today())}.md",
+        block_hash: "mobile-short-#{System.unique_integer([:positive])}",
+        category: "recurring-theme",
+        confidence: "high",
+        evidence: "seen twice",
+        body: "+ new line\n- old line",
+        target_page_key: "org/page/memory.md",
+        status: "pending"
+      })
+      |> Repo.insert!()
+
+      {:ok, view, _html} = live(authed(conn), "/memory/proposals")
+
+      diff = ~s([data-role="mobile-proposals"] [data-role="mobile-proposal-diff"])
+      html = view |> element(diff) |> render()
+
+      assert html =~ "+ + new line"
+      assert html =~ "+ - old line"
+
+      # Each line's text is exactly its content, untrimmed: the diff is
+      # whitespace-pre-wrap, so template newlines/indent inside the line
+      # element would paint tinted blank rows on the success band.
+      lines =
+        view
+        |> render()
+        |> LazyHTML.from_document()
+        |> LazyHTML.query(~s([data-role="mobile-proposal-diff-line"]))
+        |> Enum.map(&LazyHTML.text/1)
+
+      assert lines == ["+ + new line", "+ - old line"]
+
+      # A two-line body is short: no clamp, no toggle.
+      refute has_element?(view, ~s([data-role="mobile-diff-toggle"]))
+    end
+
+    test "REGRESSION: a long body still clamps behind the 44px Show full diff toggle", %{
+      conn: conn
+    } do
+      seed_pages!()
+      proposal = insert_proposal!()
+
+      {:ok, view, _html} = live(authed(conn), "/memory/proposals")
+
+      toggle = ~s([data-role="mobile-diff-toggle"][phx-click="toggle_proposal_diff"])
+      assert has_element?(view, toggle, "Show full diff")
+      assert has_element?(view, toggle <> ".min-h-11")
+      assert has_element?(view, ~s([data-role="mobile-proposal-diff"].max-h-64))
+
+      view |> element(toggle) |> render_click()
+
+      assert has_element?(view, toggle, "Show less")
+      refute has_element?(view, ~s([data-role="mobile-proposal-diff"].max-h-64))
+      assert has_element?(view, ~s([data-mobile-proposal-id="#{proposal.id}"]))
+    end
   end
 
   describe "search input + facet chips" do
