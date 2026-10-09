@@ -349,6 +349,9 @@ defmodule Platform.RepoLookupBoundaryTest do
      "Files.get_file/2 checks Platform.UUID.valid?/1 before piping through the soft-delete filter, so the raw file_id MCP argument behind file_get_metadata / file_get_text / file_delete returns nil"},
     {"platform/files.ex", :get!, "~q:File", 1, :safe_internal,
      "Files.get_file!/2 checks Platform.UUID.valid?/1 and raises Ecto.NoResultsError — its documented miss exception — rather than Ecto.Query.CastError"},
+    # ── Inbox ──────────────────────────────────────────────────────────
+    {"platform/inbox.ex", :platform_uuid_guard, "-", 2, :safe_internal,
+     "fetch_owned/2, the one owned-row lookup behind mark_read/2, mark_dismissed/2 and open_item/2 (task 01a11703), checks Platform.UUID.valid?/1 on both item_id and user_id before `where: i.id == ^item_id and i.user_id == ^user_id`. item_id arrives from InboxLive's client \"open\"/\"dismiss\" events, so a malformed id folds into the existing {:error, :not_found} instead of raising Ecto.Query.CastError"},
     # ── Lifecycle ──────────────────────────────────────────────────────
     {"platform/lifecycle/executor.ex", :get, "TaskSchema", 1, :safe_internal,
      "task 019fe1b6 stage 4 — `maybe_notify/3` loads the task to read `sponsor_user_id` before emitting a `lifecycle_step_failed` inbox row. The id is `run.task_id`, read off a `%StepRun{}` this function just loaded from `lifecycle_step_runs`, so it is a persisted column value constrained by a NOT NULL FK to `tasks`; it cannot be malformed without the FK having admitted a malformed row. Note the module deliberately calls `Repo.get/2` and NOT `Platform.Tasks.get_task/1` — that name belongs to the artifacts-summary reader and returns `{:ok, %Detail{}} | {:error, :not_found}`, a different concept that compiles fine here and fails at the field access"},
@@ -1027,7 +1030,15 @@ defmodule Platform.RepoLookupBoundaryTest do
     # upload token, not a caller-supplied id. No `Platform.UUID.valid?/1`
     # guard applies.
     "platform/files.ex" => 3,
-    "platform/inbox.ex" => 1,
+    # 1 → 2 for task 01a11703. Stage 1: `open_item/2` shares
+    # `fetch_owned/2` with `set_timestamp/3` rather than adding a second
+    # Repo.one, and that lookup is UUID-guarded (see the inventory entry).
+    # Stage 3: `last_dismissed_on_open/2` adds one. Triaged by hand: its
+    # `where:` pins only `i.user_id == ^user_id`, and the one caller
+    # (`InboxLive.open_undo_toast/2`) passes the mount-time
+    # `current_user_id` from the signed session, never a client event, so
+    # no `Platform.UUID.valid?/1` guard applies.
+    "platform/inbox.ex" => 2,
     # Task 019fe1b6 stage 1 — `Runs.next_run_seq/2` and `Runs.run_count/2`.
     # Triaged by hand as this map asks: both `where:` clauses pin
     # `r.task_id == ^task_id` against a `:binary_id` column, so a malformed

@@ -8,14 +8,16 @@ defmodule PlatformWeb.InboxLiveTest do
     * a broadcast `{:inbox_item_added, item}` streams a new row in at the top
       (and reveals a previously-hidden section);
     * a dismiss event removes the row and it does not reappear on re-render;
-    * a click marks `read_at` and navigates to `item.url`, and the read item
-      is gone on the next mount;
+    * a click navigates to `item.url` through `Inbox.open_item/2`: a
+      non-action row is gone on the next mount, an action row stays listed and
+      leaves the badge (task `01a11703`);
     * an empty inbox renders the `EmptyState` `:minimal` copy;
     * Mentions are grouped by space (per-row space label).
   """
 
   use PlatformWeb.ConnCase, async: false
 
+  import Ecto.Query, only: [from: 2]
   import Phoenix.LiveViewTest
   import Platform.TenancyFixtures, only: [fabrikam_org_id: 0]
 
@@ -535,7 +537,11 @@ defmodule PlatformWeb.InboxLiveTest do
       html = render(lv)
 
       assert html =~ "empty-minimal"
-      assert html =~ "You&#39;re all caught up" or html =~ "You're all caught up"
+      assert html =~ "Nothing waiting on you."
+
+      assert html =~
+               "Plans to review, mentions and meetings about to start will show up here."
+
       refute has_element?(lv, ~s([data-role="inbox-section"]))
       refute has_element?(lv, ~s([data-role="inbox-item"]))
     end
@@ -1084,13 +1090,16 @@ defmodule PlatformWeb.InboxLiveTest do
 
   # ── Badge / list unification (one unread source of truth) ──────────────
 
-  describe "badge equals streamed rows (unified unread scope)" do
+  describe "badge equals streamed UNREAD rows (badge scope composed on the list scope)" do
     # The desktop icon-rail badge (rendered by ShellLive into the shell layout)
-    # and the /inbox row list must show the SAME number at all times. They used
-    # to drift because the badge filtered read/dismissed in SQL while the list
-    # applied the read filter in Elixir, and silent mutations (mark_read,
-    # dismiss_by_source) never told the badge to recompute. Both now build on
-    # `Inbox.unread_scope/1`; these are the three events that drifted.
+    # and the /inbox row list used to drift because the badge filtered
+    # read/dismissed in SQL while the list applied the read filter in Elixir,
+    # and silent mutations (mark_read, dismiss_by_source) never told the badge
+    # to recompute. Both now build on `Inbox.unread_scope/1`.
+    #
+    # Since task `01a11703` the badge counts `Inbox.badge_scope/1` — the
+    # list's rows with `read_at` nil — so the invariant is "badge == listed rows
+    # nobody has opened", and it must hold live after each of these events.
 
     defp badge_number(view) do
       text =
@@ -1116,7 +1125,7 @@ defmodule PlatformWeb.InboxLiveTest do
       |> Kernel.-(1)
     end
 
-    test "badge == row count after emit, after mark_read, and after dismiss_by_source",
+    test "badge == unread row count after emit, after mark_read, and after dismiss_by_source",
          %{conn: conn} do
       user = insert_user()
       {:ok, lv, _html} = live(auth(conn, user), "/inbox")
@@ -1139,18 +1148,16 @@ defmodule PlatformWeb.InboxLiveTest do
       assert streamed_row_count(lv) == 2
       assert badge_number(lv) == streamed_row_count(lv)
 
-      # After mark_read: task `01a00108` stage 4 retired read-as-cleared, so the
-      # read row stays on the list AND in the badge. This assertion used to be
-      # `== 1` on both. The #589/#592 invariant being guarded here — badge and
-      # rows are the same number — is NOT retired and is asserted on every line;
-      # only the definition of a cleared row moved, and it moved for both sides
-      # at once because both build on `Inbox.unread_scope/1`.
+      # After mark_read: the read row stays on the list (dismissal is the only
+      # list clear) and leaves the badge (task `01a11703`: the badge counts
+      # unopened rows). The badge moving here is also the proof that
+      # `mark_read/2`'s broadcast reaches the shell.
       {:ok, _} = Inbox.mark_read(a.id, user.id)
       assert streamed_row_count(lv) == 2
-      assert badge_number(lv) == streamed_row_count(lv)
+      assert badge_number(lv) == 1
 
-      # Dismissing the row that was read clears it from both, so a read row is
-      # still reachable by the ordinary clear path.
+      # Dismissing the row that was read takes it off the list; the badge,
+      # which no longer counted it, does not move.
       {:ok, _} = Inbox.mark_dismissed(a.id, user.id)
       assert streamed_row_count(lv) == 1
       assert badge_number(lv) == streamed_row_count(lv)
@@ -1163,40 +1170,326 @@ defmodule PlatformWeb.InboxLiveTest do
     end
   end
 
-  # ── Open (mark read + navigate) ────────────────────────────────────────
+  # ── Open (acknowledge on open + navigate) ──────────────────────────────
+  #
+  # REWRITTEN by task `01a11703` stage 1. The test here used to pin #811's rule
+  # that opening only marks read and the row stays listed. Opening now goes
+  # through `Inbox.open_item/2`: every kind outside `Inbox.action_kinds/0` is
+  # dismissed in the same write that marks it read; an action kind is only
+  # marked read, stays listed, and leaves the badge. Its own resolution path
+  # (plan approve/reject, review resolution) still dismisses it.
 
   describe "open" do
-    test "marks read_at, navigates to item.url, and the read item REMAINS on re-mount",
+    defp open_row(lv, %Item{} = item) do
+      lv
+      |> element(~s(#{row_selector(item)} [data-role="inbox-item-open"]))
+      |> render_click()
+    end
+
+    # A task whose sponsor is stamped by a direct update, so the
+    # `task_sponsor_assigned` producer in `Tasks.create_task/1` never adds a
+    # second row to the sponsor's badge. Mirrors
+    # `review_request_inbox_test.exs`'s `setup_task/2`.
+    defp sponsored_task!(sponsor) do
+      {:ok, project} =
+        Platform.Tasks.create_project(%{
+          name: "Open ack #{System.unique_integer([:positive])}",
+          repo_url: "https://github.com/test/open-ack"
+        })
+
+      {:ok, task} = Platform.Tasks.create_task(%{project_id: project.id, title: "Sponsored"})
+
+      task
+      |> Ecto.Changeset.change(sponsor_user_id: sponsor.id)
+      |> Repo.update!()
+    end
+
+    # Test A. M1 (reverting the handler to `Inbox.mark_read/2`) turns the
+    # `dismissed_at` and row-absent assertions red. The badge assertion does NOT
+    # go red under M1, because `mark_read/2` also sets `read_at`.
+    test "a non-action row (meeting_invited) is dismissed on open, with read_at == dismissed_at",
          %{conn: conn} do
-      # INVERTED by task `01a00108` stage 4, and this one is the heart of the
-      # stage. It read "Read items drop off the inbox on the next load" and
-      # asserted `refute has_element?`. Opening was the clear mechanism; that is
-      # exactly what Harper was complaining about, because it meant the only way
-      # to clear an item was to open it. Reading now records "seen" and nothing
-      # more, and dismissal is the only clear.
       user = insert_user()
-      item = emit!(user, kind: "chat_mention", title: "open me", url: "/chat/general")
+
+      item =
+        emit!(user,
+          kind: "meeting_invited",
+          source_type: "meeting",
+          title: "Design sync",
+          url: "/meetings"
+        )
+
+      assert Inbox.reachable_unread_count(user.id) == 1
 
       {:ok, lv, _html} = live(auth(conn, user), "/inbox")
 
-      assert {:error, {:live_redirect, %{to: "/chat/general"}}} =
+      assert {:error, {:live_redirect, %{to: "/meetings"}}} = open_row(lv, item)
+
+      assert %Item{dismissed_at: %DateTime{} = dismissed_at, read_at: %DateTime{} = read_at} =
+               Repo.get!(Item, item.id)
+
+      assert dismissed_at == read_at
+      assert Inbox.reachable_unread_count(user.id) == 0
+
+      {:ok, lv2, _html} = live(auth(conn, user), "/inbox")
+      refute has_element?(lv2, row_selector(item))
+      # Positive control: the surface rendered.
+      assert has_element?(lv2, ~s([data-role="inbox-surface"]))
+    end
+
+    # Test B. M2 (open_item dismisses every kind) turns `dismissed_at == nil`
+    # red. M3 (badge_scope without `is_nil(read_at)`) turns the `0` badge red.
+    test "an action row (task_plan_review) is marked read, stays listed, leaves the badge, " <>
+           "and is dismissed when the plan is approved",
+         %{conn: conn} do
+      sponsor = insert_user()
+      task = sponsored_task!(sponsor)
+
+      plan =
+        %Platform.Tasks.Plan{}
+        |> Platform.Tasks.Plan.changeset(%{
+          task_id: task.id,
+          version: 1,
+          status: "pending_review"
+        })
+        |> Repo.insert!()
+
+      item =
+        emit!(sponsor,
+          kind: "task_plan_review",
+          source_type: "task",
+          source_id: task.id,
+          title: "Plan ready for review: Sponsored",
+          url: "/tasks/#{task.id}"
+        )
+
+      assert Inbox.reachable_unread_count(sponsor.id) == 1
+
+      {:ok, lv, _html} = live(auth(conn, sponsor), "/inbox")
+      assert {:error, {:live_redirect, %{to: to}}} = open_row(lv, item)
+      assert to == "/tasks/#{task.id}"
+
+      assert %Item{dismissed_at: nil, read_at: %DateTime{}} = Repo.get!(Item, item.id)
+      assert Inbox.reachable_unread_count(sponsor.id) == 0
+
+      {:ok, lv2, _html} = live(auth(conn, sponsor), "/inbox")
+      assert has_element?(lv2, row_selector(item))
+
+      # The resolution path still clears it.
+      assert {:ok, _} = Platform.Tasks.approve_plan(plan, sponsor.id)
+      assert %Item{dismissed_at: %DateTime{}} = Repo.get!(Item, item.id)
+    end
+
+    # Test C.
+    test "an action row (review_request_pending) is marked read, stays listed, leaves the " <>
+           "badge, and is dismissed when the review resolves",
+         %{conn: conn} do
+      sponsor = insert_user()
+      task = sponsored_task!(sponsor)
+
+      {:ok, plan} = Platform.Tasks.create_plan(%{task_id: task.id})
+
+      {:ok, stage} =
+        Platform.Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Stage 1"})
+
+      {:ok, _} = Platform.Tasks.PlanEngine.start_stage(stage.id)
+
+      {:ok, validation} =
+        Platform.Tasks.create_validation(%{stage_id: stage.id, kind: "manual_approval"})
+
+      {:ok, request} =
+        Platform.Tasks.ReviewRequests.create_review_request(%{
+          validation_id: validation.id,
+          task_id: task.id,
+          submitted_by: "some-agent",
+          items: [%{label: "Desktop"}]
+        })
+
+      [item] =
+        Repo.all(
+          from(i in Item, where: i.user_id == ^sponsor.id and i.kind == "review_request_pending")
+        )
+
+      assert Inbox.reachable_unread_count(sponsor.id) == 1
+
+      {:ok, lv, _html} = live(auth(conn, sponsor), "/inbox")
+      assert {:error, {:live_redirect, _}} = open_row(lv, item)
+
+      assert %Item{dismissed_at: nil, read_at: %DateTime{}} = Repo.get!(Item, item.id)
+      assert Inbox.reachable_unread_count(sponsor.id) == 0
+
+      {:ok, lv2, _html} = live(auth(conn, sponsor), "/inbox")
+      assert has_element?(lv2, row_selector(item))
+
+      for it <- request.items do
+        {:ok, _} = Platform.Tasks.ReviewRequests.approve_item(it.id, sponsor.id)
+      end
+
+      assert %Item{dismissed_at: %DateTime{}} = Repo.get!(Item, item.id)
+    end
+
+    # Test D. `open_item/2` is scoped by id AND user_id.
+    test "another user's item id changes nothing" do
+      owner = insert_user()
+      other = insert_user()
+      item = emit!(owner, kind: "meeting_invited", source_type: "meeting", title: "Not yours")
+
+      :ok = Inbox.subscribe(owner.id)
+
+      assert {:error, :not_found} = Inbox.open_item(item.id, other.id)
+      assert %Item{read_at: nil, dismissed_at: nil} = Repo.get!(Item, item.id)
+      refute_receive {:inbox_item_dismissed, _}, 100
+      refute_receive {:inbox_changed, _}, 50
+    end
+  end
+
+  # ── Open-undo toast (task 01a11703 stage 3) ───────────────────────────
+  #
+  # Opening a non-action row dismisses it and navigates away, so the undo is
+  # derived from the DB on the next /inbox mount (`Inbox.last_dismissed_on_open/2`).
+  describe "open-undo toast" do
+    defp open_and_leave(conn, user, %Item{} = item) do
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+
+      assert {:error, {:live_redirect, _}} =
                lv
                |> element(~s(#{row_selector(item)} [data-role="inbox-item-open"]))
                |> render_click()
+    end
 
-      # `read_at` is still written — the field and the write both survive the
-      # change; only its meaning as a filter was retired.
-      assert %Item{read_at: %DateTime{}} = Repo.get!(Item, item.id)
-      assert %Item{dismissed_at: nil} = Repo.get!(Item, item.id)
+    defp toast_text(lv) do
+      lv
+      |> element(~s([data-role="toast-message"]))
+      |> render()
+      |> String.replace(~r/<[^>]*>/, "")
+      |> String.trim()
+      |> html_unescape()
+    end
 
-      # An opened-but-undone item is still on your list.
+    # Stamp the open shape (`dismissed_at == read_at`, one value) at a chosen
+    # age, so the window is tested without sleeping.
+    defp stamp_opened!(%Item{} = item, age_seconds) do
+      at = DateTime.add(DateTime.utc_now(), -age_seconds, :second)
+      item |> Ecto.Changeset.change(read_at: at, dismissed_at: at) |> Repo.update!()
+    end
+
+    test "opening a meeting_invited row and remounting shows the single toast", %{conn: conn} do
+      user = insert_user()
+
+      item =
+        emit!(user,
+          kind: "meeting_invited",
+          source_type: "meeting",
+          title: "Design sync",
+          url: "/meetings"
+        )
+
+      open_and_leave(conn, user, item)
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+      assert toast_text(lv) == ~s(Removed "Design sync")
+      assert has_element?(lv, ~s([data-role="inbox-toast"][data-variant="single"]))
+      # One line, no X: the toast times out.
+      refute has_element?(lv, ~s([data-role="inbox-toast"] button[phx-click="dismiss_toast"]))
+    end
+
+    test "Undo brings the row back read: dismissed_at nil, read_at kept, badge 0",
+         %{conn: conn} do
+      user = insert_user()
+
+      item =
+        emit!(user,
+          kind: "meeting_invited",
+          source_type: "meeting",
+          title: "Design sync",
+          url: "/meetings"
+        )
+
+      open_and_leave(conn, user, item)
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+      refute has_element?(lv, row_selector(item))
+
+      undo(lv)
+
+      assert has_element?(lv, row_selector(item))
+      refute has_element?(lv, ~s([data-role="inbox-toast"]))
+      assert %Item{dismissed_at: nil, read_at: %DateTime{}} = Repo.get!(Item, item.id)
+      assert Inbox.reachable_unread_count(user.id) == 0
+
+      # Restored, so the next mount derives no toast from it.
       {:ok, lv2, _html} = live(auth(conn, user), "/inbox")
-      assert has_element?(lv2, row_selector(item))
+      refute has_element?(lv2, ~s([data-role="inbox-toast"]))
+    end
 
-      # And dismissal still takes it off, so the row is not stuck there.
-      {:ok, _} = Inbox.mark_dismissed(item.id, user.id)
-      {:ok, lv3, _html} = live(auth(conn, user), "/inbox")
-      refute has_element?(lv3, row_selector(item))
+    test "opening a task_plan_review row and remounting shows no toast", %{conn: conn} do
+      user = insert_user()
+      task = sponsored_task!(user)
+
+      %Platform.Tasks.Plan{}
+      |> Platform.Tasks.Plan.changeset(%{task_id: task.id, version: 1, status: "pending_review"})
+      |> Repo.insert!()
+
+      item =
+        emit!(user,
+          kind: "task_plan_review",
+          source_type: "task",
+          source_id: task.id,
+          title: "Plan ready for review",
+          url: "/tasks/#{task.id}"
+        )
+
+      open_and_leave(conn, user, item)
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+      assert has_element?(lv, row_selector(item))
+      refute has_element?(lv, ~s([data-role="inbox-toast"]))
+    end
+
+    test "an open dismissal 301s old shows no toast; the same row 60s old does",
+         %{conn: conn} do
+      user = insert_user()
+
+      item =
+        emit!(user, kind: "meeting_invited", source_type: "meeting", title: "Old sync")
+
+      stamp_opened!(item, 301)
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+      refute has_element?(lv, ~s([data-role="inbox-toast"]))
+
+      # Positive control: inside the window the same row does raise it, so the
+      # refute above is the window talking, not a toast that never renders.
+      stamp_opened!(item, 60)
+      {:ok, lv2, _html} = live(auth(conn, user), "/inbox")
+      assert toast_text(lv2) == ~s(Removed "Old sync")
+    end
+
+    # Kills the mutation that drops `dismissed_at == read_at`: a row dismissed
+    # by the X (or any sweep) has `read_at` nil or a different instant, and is
+    # not an open. None of the four tests above can see that clause — the
+    # plan-review row is never dismissed and the 301s row fails the window.
+    test "a row dismissed WITHOUT opening it shows no toast", %{conn: conn} do
+      user = insert_user()
+
+      item =
+        emit!(user, kind: "meeting_invited", source_type: "meeting", title: "Just dismissed")
+
+      assert {:ok, _} = Inbox.mark_dismissed(item.id, user.id)
+
+      {:ok, lv, _html} = live(auth(conn, user), "/inbox")
+      refute has_element?(lv, ~s([data-role="inbox-toast"]))
+    end
+
+    test "only the most recent open is offered" do
+      user = insert_user()
+      older = emit!(user, kind: "meeting_invited", source_type: "meeting", title: "First")
+      newer = emit!(user, kind: "meeting_invited", source_type: "meeting", title: "Second")
+
+      stamp_opened!(older, 30)
+      stamp_opened!(newer, 10)
+
+      assert %Item{id: id} = Inbox.last_dismissed_on_open(user.id)
+      assert id == newer.id
     end
   end
 

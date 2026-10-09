@@ -594,8 +594,12 @@ defmodule PlatformWeb.ShellLive do
       # the Tasks badge (`compute_tasks_count`). The old running +1 / -1 counter
       # drifted: it only reacted to add/dismiss, so a `mark_read` or a
       # `dismiss_by_source` rollup dismissal (now broadcast as `:inbox_changed`)
-      # silently desynced the badge from the list. Recomputing from the shared
-      # `unread_scope/1` is the single source of truth, so badge and list agree.
+      # silently desynced the badge from the list. The count is
+      # `Inbox.reachable_badge_scope/1`, which composes on the list's
+      # `unread_scope/1` and adds `is_nil(read_at)`: the badge is the list's
+      # unopened subset (task 01a11703), so every counted row is listed, and a
+      # read action row is listed without being counted. Opening a row from
+      # /inbox (`Inbox.open_item/2`) broadcasts, so the badge moves live.
       # We stay `:cont` so InboxLive's own `handle_info` still runs on `/inbox`.
       |> attach_hook(:inbox_count_refresh, :handle_info, fn
         {evt, _payload}, socket
@@ -1422,8 +1426,7 @@ defmodule PlatformWeb.ShellLive do
   # one — a count never includes something the viewer has no way to act on.
   # BOTH the mount assign and the `:inbox_count_refresh` recompute go through
   # here, so the first paint and the live badge can never disagree about what
-  # is being counted. Internal users are unaffected (identical to
-  # `Inbox.unread_count/1`).
+  # is being counted. For an internal user it equals `Inbox.unread_count/1`.
   defp compute_inbox_count(user_id) when is_binary(user_id) do
     Inbox.reachable_unread_count(user_id)
   rescue

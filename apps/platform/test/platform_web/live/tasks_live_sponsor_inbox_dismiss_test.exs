@@ -110,7 +110,8 @@ defmodule PlatformWeb.TasksLiveSponsorInboxDismissTest do
     assert Repo.get!(Item, sponsor_row.id).dismissed_at == nil
   end
 
-  test "the inbox deep link (open -> push_navigate) dismisses the sponsor row", %{conn: conn} do
+  test "the inbox deep link (open -> push_navigate) dismisses the sponsor row, and the task page keeps it dismissed",
+       %{conn: conn} do
     sponsor = insert_user()
     task = create_task!()
     sponsor_row = emit!(sponsor, task, "task_sponsor_assigned")
@@ -126,12 +127,18 @@ defmodule PlatformWeb.TasksLiveSponsorInboxDismissTest do
 
     assert to == "/tasks/#{task.id}"
 
-    # The inbox's own "open" only marks read; the dismissal belongs to the
-    # task page, so it has not happened yet.
-    assert Repo.get!(Item, sponsor_row.id).dismissed_at == nil
+    # Task 01a11703: the inbox's own "open" acknowledges every kind outside
+    # `Inbox.action_kinds/0`, so the sponsor row is already dismissed, with
+    # `dismissed_at == read_at`, before the task page mounts. (This asserted
+    # `dismissed_at == nil` here while opening only marked read.)
+    opened = Repo.get!(Item, sponsor_row.id)
+    assert %DateTime{} = opened.dismissed_at
+    assert opened.dismissed_at == opened.read_at
 
     {:ok, _view, _html} = live(conn, to)
 
-    assert Repo.get!(Item, sponsor_row.id).dismissed_at != nil
+    # The task page's dismiss is a no-op on an already-dismissed row: the
+    # acknowledgement timestamp survives.
+    assert Repo.get!(Item, sponsor_row.id).dismissed_at == opened.dismissed_at
   end
 end

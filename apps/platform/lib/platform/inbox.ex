@@ -13,12 +13,22 @@ defmodule Platform.Inbox do
   `(user_id, source_type, source_id)` triple ALWAYS inserts a fresh row even if
   a prior row for that triple was dismissed — there is no dedup or resurrection.
 
-  **Dismissal is the ONLY clear** (task `01a00108` stage 4). Reading a row
-  (`mark_read/2`, written when the user opens an item) records that it was seen
-  and nothing more; it does not take the row off the list or out of the badge.
-  Every scope in this module keys on `dismissed_at` alone — see
-  `unread_scope/1`, which carries the full note. One kind is the exception to
-  "opening only reads": opening a task you sponsor DISMISSES your
+  **Dismissal is the only thing that takes a row off the LIST** (task
+  `01a00108` stage 4). The list scope, `unread_scope/1`, keys on `dismissed_at`
+  alone. What changed in task `01a11703` is WHAT dismisses on open:
+
+    * Opening a row from `/inbox` goes through `open_item/2`. For every kind
+      outside `action_kinds/0` it is an acknowledgement: one write stamps
+      `read_at` and `dismissed_at` with the same instant, so the row leaves the
+      list. For a kind in `action_kinds/0` it stamps `read_at` only; the row
+      stays listed until the thing it asks for is resolved (the plan settles,
+      the reviews resolve) or the user dismisses it by hand.
+    * The BADGE is `badge_scope/1`: undismissed rows with `read_at` nil. A row
+      the user has opened is never in the badge, whatever its kind, so the
+      badge counts what nobody has looked at yet and the list carries what is
+      still outstanding. The two are different numbers on purpose.
+
+  Opening a task you sponsor from the task pane also DISMISSES your
   `task_sponsor_assigned` row for it (`dismiss_sponsor_row_on_open/2`, called
   from `PlatformWeb.TasksLive.handle_params/3`, task `01a116ff`) — a dismissal,
   so dismissal is still the only clear.
@@ -32,10 +42,26 @@ defmodule Platform.Inbox do
   alias Platform.Repo
   alias Platform.Tenancy
 
+  # The kinds whose row asks the user to DO something that has its own
+  # resolution path (approve/reject the plan, resolve the review). Opening one
+  # marks it read and leaves it listed. An ALLOWLIST: every other kind,
+  # including any kind added later, is acknowledged (dismissed) on open.
+  # Equal to `Platform.Mobile`'s `@approval_kinds`.
+  @action_kinds ~w(task_plan_review review_request_pending)
+
   # The inbox kinds an EXTERNAL viewer has a destination for on their surface.
   # A new kind is excluded by default: the rule holds without anyone
   # remembering to exclude it.
   @external_reachable_kinds ["chat_mention"]
+
+  @doc """
+  The kinds that stay listed after they are opened: `task_plan_review` and
+  `review_request_pending`. `open_item/2` marks these read and dismisses every
+  other kind. The list is an allowlist, so a new kind is acknowledged on open
+  unless it is added here.
+  """
+  @spec action_kinds() :: [String.t()]
+  def action_kinds, do: @action_kinds
 
   @doc "PubSub topic for a user's inbox stream."
   @spec topic(Ecto.UUID.t()) :: String.t()
@@ -114,8 +140,8 @@ defmodule Platform.Inbox do
   > second spelling of the canonical scope with an ordering baked in. It is
   > kept, unrenamed, only because rewriting its test call sites would inflate a
   > diff whose risk lives elsewhere. Do not reach for it in new production
-  > code: compose `unread_scope/1` instead, so there stays exactly one query
-  > the badge and the list can be read off.
+  > code: compose `unread_scope/1` instead, so there stays exactly one list
+  > query, and the badge (`badge_scope/1`) stays built on it.
   """
   @spec list_unread_for_user(Ecto.UUID.t(), keyword()) :: [Item.t()]
   def list_unread_for_user(user_id, opts \\ []) do
@@ -130,10 +156,16 @@ defmodule Platform.Inbox do
   defp maybe_filter_kind(query, kind), do: where(query, [i], i.kind == ^kind)
 
   @doc """
-  The single canonical "live" scope — the Ecto query the badge COUNT and the
-  `/inbox` list both build on, so the two can never diverge (the #589/#592
-  badge-vs-list drift). A row is live iff it is not dismissed (`dismissed_at`),
-  scoped to `user_id`.
+  The LIST scope: the rows `/inbox` renders. A row is listed iff it is not
+  dismissed (`dismissed_at`), scoped to `user_id`. It is not the badge scope;
+  the badge is `badge_scope/1`, which composes on this one and adds
+  `is_nil(read_at)`. Because the badge is built ON this query, the badge is
+  always a subset of the list and the #589/#592 drift (a badge counting rows
+  the list does not show) cannot recur.
+
+  Built on this scope: `InboxLive.load_items/1`, `dismiss_all_unread/1` (Clear
+  all clears what is listed), `reachable_unread_scope/1,2` and
+  `Platform.Mobile.AppEntities.list_approvals/1`.
 
   ## Reading is not clearing (task `01a00108` stage 4)
 
@@ -142,9 +174,10 @@ defmodule Platform.Inbox do
   reading and doing are two different acts: opening an item is now just having
   seen it, and only an explicit dismissal takes it off the list.
 
-  `mark_read/2` still writes `read_at` and it still means something — "has been
-  seen" — it simply no longer means "done". Nothing reads it as a filter any
-  more; do not reintroduce it here without reopening the decision.
+  `read_at` means "has been seen", not "done", so it is not a filter HERE. Do
+  not reintroduce it into this scope without reopening that decision. Since
+  task `01a11703` it IS a filter in `badge_scope/1`, which is where "seen"
+  belongs.
 
   Migration `20260817120000_backfill_read_as_dismissed_inbox_items.exs` copied
   `read_at` into `dismissed_at` for every historical row, so the rows users
@@ -159,7 +192,7 @@ defmodule Platform.Inbox do
   Returns a composable query (no `order_by`, no execution) — callers add their
   own ordering/aggregation:
 
-    * `unread_count/1` → `Repo.aggregate(unread_scope(user_id), :count)`
+    * `badge_scope/1` → `unread_scope(user_id) |> where(is_nil(read_at))`
     * `InboxLive.load_items/1` →
       `unread_scope(user_id) |> order_by(desc: :inserted_at) |> Repo.all()`
   """
@@ -188,8 +221,10 @@ defmodule Platform.Inbox do
     rail already renders (and marks unread) on the host they are on.
   * internal viewer → `unread_scope/1` VERBATIM. No filter, no behaviour change.
 
-  This composes ON `unread_scope/1` rather than restating it, so the badge and
-  the `/inbox` list keep building on one query (the #589/#592 drift). The
+  This composes ON `unread_scope/1` rather than restating it, so it is the
+  reachable LIST. The reachable BADGE is `reachable_badge_scope/1,2`, which
+  applies the same rule to `badge_scope/1` (itself composed on
+  `unread_scope/1`), so every reachable badge row is a reachable list row. The
   externality branch keys off `Platform.Tenancy.external_user?/1`, the existing
   shared predicate — there is deliberately no second externality test.
 
@@ -218,15 +253,58 @@ defmodule Platform.Inbox do
   end
 
   @doc """
-  `unread_count/1` narrowed to what this viewer can reach — the badge number.
+  The BADGE scope: the rows of `unread_scope/1` the user has not opened
+  (`read_at` nil). Task `01a11703`.
 
-  One aggregate over `reachable_unread_scope/1`. For an internal user this is
-  `unread_count/1` exactly; for an external user it counts reachable kinds only,
-  and 0 means the badge node leaves the DOM.
+  It composes ON `unread_scope/1` rather than restating it, so the badge is
+  always a subset of the list. The difference between the two is exactly the
+  read, undismissed rows: an action row (`action_kinds/0`) the user opened and
+  has not yet resolved, or any row restored by an undo after it was opened.
+  Those are listed and not counted.
+  """
+  @spec badge_scope(Ecto.UUID.t()) :: Ecto.Query.t()
+  def badge_scope(user_id) do
+    user_id |> unread_scope() |> where([i], is_nil(i.read_at))
+  end
+
+  @doc """
+  `badge_scope/1` narrowed to what this viewer can reach, by the same rule as
+  `reachable_unread_scope/1,2`: an internal viewer gets `badge_scope/1`
+  VERBATIM, an external viewer gets it filtered to
+  `#{inspect(@external_reachable_kinds)}`. It selects exactly the rows of
+  `reachable_unread_scope/1,2` with `read_at` nil.
+
+  It composes on `badge_scope/1`, not on `reachable_unread_scope/1,2` plus a
+  second copy of the `read_at` filter, so the "not yet opened" predicate is
+  written once. Every badge number (the rail, the Dock/title marker, the
+  app-icon `approvals` count) is built on this scope.
+  """
+  @spec reachable_badge_scope(Ecto.UUID.t(), boolean()) :: Ecto.Query.t()
+  def reachable_badge_scope(user_id, external?)
+
+  def reachable_badge_scope(user_id, true) do
+    where(badge_scope(user_id), [i], i.kind in @external_reachable_kinds)
+  end
+
+  def reachable_badge_scope(user_id, false), do: badge_scope(user_id)
+
+  @spec reachable_badge_scope(Ecto.UUID.t()) :: Ecto.Query.t()
+  def reachable_badge_scope(user_id) do
+    reachable_badge_scope(user_id, Tenancy.external_user?(%{id: user_id}))
+  end
+
+  @doc """
+  The badge number for this viewer: one aggregate over
+  `reachable_badge_scope/1`. For an internal user this is `unread_count/1`
+  exactly; for an external user it counts reachable kinds only, and 0 means
+  the badge node leaves the DOM.
+
+  The name is kept because `PlatformWeb.ShellLive` calls it; read "unread" as
+  "not yet opened". It is NOT the length of the `/inbox` list.
   """
   @spec reachable_unread_count(Ecto.UUID.t()) :: non_neg_integer()
   def reachable_unread_count(user_id) do
-    Repo.aggregate(reachable_unread_scope(user_id), :count)
+    Repo.aggregate(reachable_badge_scope(user_id), :count)
   end
 
   @doc """
@@ -250,16 +328,16 @@ defmodule Platform.Inbox do
   end
 
   @doc """
-  Count a user's non-dismissed inbox items — the live-badge number.
+  The badge number: undismissed rows the user has not opened. One aggregate
+  over `badge_scope/1`.
 
-  A single aggregate query, cheaper than materializing rows just to take a
-  length. It counts exactly what the Inbox surface renders, because it is the
-  SAME query: one `Repo.aggregate` over `unread_scope/1`, which is what
-  `InboxLive.load_items/1` selects rows from. That shared predicate is the
-  standing fix for #589/#592 (a read item inflating the badge while the list
-  showed nothing), and it is why stage 4 of task `01a00108` could change the
-  meaning of "cleared" in one place: move the scope and the badge and the list
-  move together, or they drift apart again in the opposite direction.
+  It is NOT the length of the `/inbox` list. A read action row (opened, not
+  yet resolved) is listed and not counted; since task `01a11703` that is the
+  only kind of row the two disagree on in normal use, plus a row restored by
+  an undo after it was opened. Every counted row is listed, because
+  `badge_scope/1` composes on `unread_scope/1`, which is what
+  `InboxLive.load_items/1` selects from. That is the half of the #589/#592 fix
+  that still holds: the badge never counts a row the list does not show.
 
   Scoping is inherent: only rows whose `user_id` matches are counted, so an
   external user's count is naturally limited to their own (allowlisted) rows
@@ -267,24 +345,19 @@ defmodule Platform.Inbox do
   """
   @spec unread_count(Ecto.UUID.t()) :: non_neg_integer()
   def unread_count(user_id) do
-    Repo.aggregate(unread_scope(user_id), :count)
+    Repo.aggregate(badge_scope(user_id), :count)
   end
 
   @doc """
   Mark an item read for `user_id` — "the user has seen this", and nothing more.
 
-  Reading does NOT clear a row. Since stage 4 of task `01a00108` the row stays
-  on `/inbox` and in the badge until it is explicitly dismissed; only
-  `dismissed_at` takes it off. `read_at` is kept, and kept written, because
-  "seen" is a real fact worth having — it is what migration `20260817120000`
-  read to preserve historical clears, and it is the natural input to any future
-  seen/unseen affordance.
+  Reading alone does NOT take a row off the list; only `dismissed_at` does.
+  It DOES take the row out of the badge: since task `01a11703`, `read_at` has
+  a reader, `badge_scope/1`, which counts only rows with `read_at` nil.
 
-  Be clear-eyed about what that leaves, though: as of this stage `read_at` is a
-  column with a writer and NO reader. Nothing filters on it and nothing renders
-  it (the row's dot is unconditional — see `PlatformWeb.Components.InboxItem`).
-  It is retained on purpose, not by oversight, and a later stage that adds a
-  seen/unseen affordance is where it earns its keep again.
+  `/inbox` no longer calls this when a row is opened; it calls `open_item/2`,
+  which also dismisses every kind outside `action_kinds/0`. This stays the
+  plain "seen" write for any caller that wants exactly that.
 
   The `user_id` is a defensive cross-user guard: the update is scoped by both
   `id` and `user_id`, so a mismatched user mutates nothing and gets
@@ -294,26 +367,98 @@ defmodule Platform.Inbox do
   def mark_read(item_id, user_id) do
     case set_timestamp(item_id, user_id, :read_at) do
       {:ok, item} = ok ->
-        # Kept deliberately, and deliberately NOT load-bearing today. Reading
-        # used to drop a row from `unread_scope/1` without any add/dismiss event
-        # to announce it — a silent mutation the live badge missed, which is
-        # what this broadcast was added to fix. Now that reading clears nothing,
-        # the coarse `{:inbox_changed, user_id}` moves neither the count nor the
-        # rendered set: shells recompute to the same number and InboxLive
-        # re-derives the same rows.
-        #
-        # It stays because every other writer here signals the same way, and the
-        # uniform "a row changed, re-derive" rule is what keeps surfaces from
-        # drifting; a writer that stays quiet is the shape of the original bug.
-        # Do not read this as proof that a read is observable — it is not, until
-        # something renders `read_at`. A cross-user guard miss
-        # (`{:error, :not_found}`) broadcasts nothing.
+        # Load-bearing since task `01a11703`: the badge (`badge_scope/1`)
+        # filters on `read_at`, so a read moves the count, and this coarse
+        # `{:inbox_changed, user_id}` is what tells shells to recompute it. A
+        # cross-user guard miss (`{:error, :not_found}`) broadcasts nothing.
         broadcast_changed(item.user_id)
         ok
 
       other ->
         other
     end
+  end
+
+  @doc """
+  Acknowledge an inbox row the user opened from `/inbox`. Task `01a11703`.
+
+    * A kind in `action_kinds/0`: sets `read_at` only, then broadcasts
+      `{:inbox_changed, user_id}`. The row stays listed, out of the badge,
+      until its own resolution path dismisses it (plan approve/reject,
+      review resolution, or the reconciler) or the user dismisses it.
+    * Every other kind: ONE update sets `read_at` and `dismissed_at` to the
+      SAME instant, then broadcasts `{:inbox_item_dismissed, item}`. The equal
+      timestamps are how a later reader tells "dismissed by opening" from any
+      other dismissal.
+
+  A row that is already dismissed keeps its `dismissed_at`; only `read_at` is
+  written. Cross-user guarded like `mark_read/2`: the row is loaded by `id`
+  AND `user_id`, so another user's id returns `{:error, :not_found}`, writes
+  nothing and broadcasts nothing.
+  """
+  @spec open_item(Ecto.UUID.t(), Ecto.UUID.t()) :: {:ok, Item.t()} | {:error, :not_found}
+  def open_item(item_id, user_id) do
+    case fetch_owned(item_id, user_id) do
+      nil -> {:error, :not_found}
+      %Item{} = item -> acknowledge(item, DateTime.utc_now())
+    end
+  end
+
+  defp acknowledge(%Item{kind: kind} = item, now) when kind in @action_kinds do
+    {:ok, updated} = item |> Ecto.Changeset.change(%{read_at: now}) |> Repo.update()
+    broadcast_changed(updated.user_id)
+    {:ok, updated}
+  end
+
+  defp acknowledge(%Item{dismissed_at: %DateTime{}} = item, now) do
+    {:ok, updated} = item |> Ecto.Changeset.change(%{read_at: now}) |> Repo.update()
+    broadcast_changed(updated.user_id)
+    {:ok, updated}
+  end
+
+  defp acknowledge(%Item{} = item, now) do
+    {:ok, updated} =
+      item
+      |> Ecto.Changeset.change(%{read_at: now, dismissed_at: now})
+      |> Repo.update()
+
+    Phoenix.PubSub.broadcast(
+      Platform.PubSub,
+      topic(updated.user_id),
+      {:inbox_item_dismissed, updated}
+    )
+
+    {:ok, updated}
+  end
+
+  @doc """
+  The newest row `user_id` dismissed by OPENING it within the last
+  `within_seconds` (default 300), or `nil`. Task `01a11703` stage 3.
+
+  `/inbox` derives its single-row Undo toast from this on mount: the open
+  navigates away, so a socket-assign toast cannot survive the trip.
+
+  "Dismissed by opening" is read off the shape `open_item/2` writes for a kind
+  outside `action_kinds/0`: `dismissed_at == read_at`, stamped from one `now`.
+  No other writer in this module stamps both from one value — `mark_read/2`,
+  `mark_dismissed/2` and `dismiss_many/2` each take their own `utc_now/0` at
+  microsecond precision. Rows the backfill migration stamped equal carry old
+  timestamps and fall outside the window. Action kinds are excluded outright:
+  opening one never dismisses it.
+  """
+  @spec last_dismissed_on_open(Ecto.UUID.t(), pos_integer()) :: Item.t() | nil
+  def last_dismissed_on_open(user_id, within_seconds \\ 300) do
+    since = DateTime.add(DateTime.utc_now(), -within_seconds, :second)
+
+    Item
+    |> where([i], i.user_id == ^user_id)
+    |> where([i], i.kind not in ^@action_kinds)
+    |> where([i], not is_nil(i.dismissed_at))
+    |> where([i], i.dismissed_at == i.read_at)
+    |> where([i], i.dismissed_at > ^since)
+    |> order_by([i], desc: i.dismissed_at, desc: i.id)
+    |> limit(1)
+    |> Repo.one()
   end
 
   defp broadcast_changed(user_id) do
@@ -417,6 +562,11 @@ defmodule Platform.Inbox do
   would clear the plan-review row too. `handle_params/3` runs on both the
   dead and the connected render; the second call is a count-0 no-op that
   does not broadcast. A non-binary `user_id` (no session user) is a no-op.
+
+  Since task `01a11703`, the inbox deep link dismisses the clicked sponsor row
+  itself (`open_item/2`, with `dismissed_at == read_at`) before navigating, so
+  on that path this call clears only OTHER live sponsor rows for the same task
+  (usually none). The board pane remains the path this call exists for.
   """
   @spec dismiss_sponsor_row_on_open(term(), Ecto.UUID.t()) :: :ok
   def dismiss_sponsor_row_on_open(user_id, task_id) when is_binary(user_id) do
@@ -498,8 +648,10 @@ defmodule Platform.Inbox do
   must be the SAME set, or the button lies — and an undo built from the write
   would restore rows into invisibility.
 
-  `unread_scope/1` is what satisfies that: the badge counts it, `/inbox`
-  renders it, and this clears it. One scope, so no call site has to guess.
+  `unread_scope/1` is what satisfies that: `/inbox` renders it and this clears
+  it. One scope, so no call site has to guess. (Since task `01a11703` the rail
+  badge counts the narrower `badge_scope/1`; the button's own count comes from
+  the rendered sections, which are this scope.)
 
   This paragraph used to argue something narrower — that the sweep must skip
   read-but-not-dismissed rows, because such a row was absent from the surface
@@ -587,8 +739,8 @@ defmodule Platform.Inbox do
   column, no migration. Staleness is DERIVED on read from the subject's own
   state, so it cannot disagree with that state the way a denormalised column
   could. Clearing goes through `mark_dismissed/2`, so the existing
-  `{:inbox_item_dismissed, item}` broadcast and the `unread_scope/1` badge/list
-  unification are unchanged.
+  `{:inbox_item_dismissed, item}` broadcast and the badge and list scopes are
+  unchanged.
 
   ## Per-kind clauses
 
@@ -661,10 +813,11 @@ defmodule Platform.Inbox do
   # means "you now own this", which becomes MORE relevant while the task runs,
   # not less. Clearing on completion would dismiss a row whose subject is still
   # true — the never-dismiss-what-you-cannot-confirm-dead rule violated from the
-  # other direction. Sponsor rows are cleared by hand OR when the sponsor opens
-  # the task (`dismiss_sponsor_row_on_open/2`, task 01a116ff). That reverses #811's
-  # "open only marks read" rule for this one kind only; it is a user action,
-  # not a reconciler clause, so the decision here is unchanged.
+  # other direction. Sponsor rows are cleared by hand, when the sponsor opens
+  # the task (`dismiss_sponsor_row_on_open/2`, task 01a116ff), or when the sponsor
+  # opens the row from /inbox (`open_item/2`, task 01a11703, which dismisses
+  # every kind outside `action_kinds/0`). Both are user actions, not
+  # reconciler clauses, so the decision here is unchanged.
   # `inbox_test.exs` pins this: a sponsor row survives reconciliation even after
   # its task completes. If that test detonates, the decision is being changed
   # and must be reopened rather than patched.
@@ -697,9 +850,7 @@ defmodule Platform.Inbox do
   defp review_row_task_id(_), do: nil
 
   defp set_timestamp(item_id, user_id, field) do
-    query = from(i in Item, where: i.id == ^item_id and i.user_id == ^user_id)
-
-    case Repo.one(query) do
+    case fetch_owned(item_id, user_id) do
       nil ->
         {:error, :not_found}
 
@@ -707,6 +858,16 @@ defmodule Platform.Inbox do
         item
         |> Ecto.Changeset.change(%{field => DateTime.utc_now()})
         |> Repo.update()
+    end
+  end
+
+  # The one owned-row lookup behind `mark_read/2`, `mark_dismissed/2` and
+  # `open_item/2`: scoped by `id` AND `user_id`. `item_id` arrives from a
+  # client event (`InboxLive` "open"/"dismiss"), so a malformed id is
+  # `nil` (-> `{:error, :not_found}`) rather than an `Ecto.Query.CastError`.
+  defp fetch_owned(item_id, user_id) do
+    if Platform.UUID.valid?(item_id) and Platform.UUID.valid?(user_id) do
+      Repo.one(from(i in Item, where: i.id == ^item_id and i.user_id == ^user_id))
     end
   end
 end

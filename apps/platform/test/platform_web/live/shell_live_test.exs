@@ -1085,7 +1085,11 @@ defmodule PlatformWeb.ShellLiveTest do
       assert_push_event(view, "app_badge", %{count: 0, label: nil})
     end
 
-    test "reading an item does NOT move the badge (stage 4: reading is not clearing)",
+    # INVERTED by task 01a11703: the badge counts rows the user has not opened
+    # (`Inbox.badge_scope/1`), so a read moves it even though the row stays on
+    # the /inbox list. This used to pin "reading does NOT move the badge"
+    # (task 01a00108 stage 4).
+    test "reading an item clears it from the badge and pushes the clear",
          %{conn: conn} do
       conn = authenticated_conn(conn)
       user_id = conn.private.plug_session["current_user_id"]
@@ -1095,13 +1099,14 @@ defmodule PlatformWeb.ShellLiveTest do
       {:ok, view, _html} = live(conn, ~p"/tasks")
       assert_push_event(view, "app_badge", %{count: 1, label: "1"})
 
-      # The recompute runs (mark_read/2 still broadcasts) and lands on the same
-      # number, so the count the client is holding stays 1.
+      # mark_read/2 broadcasts `:inbox_changed`; the recompute lands on 0.
       {:ok, _} = Inbox.mark_read(item.id, user_id)
       _ = render(view)
 
-      refute_push_event(view, "app_badge", %{count: 0, label: nil})
-      assert Platform.Inbox.unread_count(user_id) == 1
+      assert_push_event(view, "app_badge", %{count: 0, label: nil})
+      assert Platform.Inbox.unread_count(user_id) == 0
+      # Still listed: reading is not a list clear.
+      assert user_id |> Platform.Inbox.unread_scope() |> Platform.Repo.aggregate(:count) == 1
     end
 
     test "the pushed label uses the rail's cap, not a second one", %{conn: _conn} do

@@ -455,8 +455,11 @@ defmodule Platform.Mobile do
   @doc """
   The two numbers the app badges.
 
-    * `approvals`: reachable unread inbox items of kind `task_plan_review` or
-      `review_request_pending` (the same scope the web Inbox badge counts).
+    * `approvals`: inbox items of kind `task_plan_review` or
+      `review_request_pending` in `Inbox.reachable_badge_scope/1`, the same
+      scope the web Inbox badge counts: undismissed and not yet opened. An
+      approval the user has opened stays in `AppEntities.list_approvals/1` and
+      leaves this count.
     * `tasks`: tasks assigned to the user (`assignee_type: "user"`) that are
       open: not `done`, not `cancelled`, not soft-deleted.
   """
@@ -468,7 +471,7 @@ defmodule Platform.Mobile do
   def counts_for_user(%User{id: user_id}) do
     approvals =
       user_id
-      |> Inbox.reachable_unread_scope()
+      |> Inbox.reachable_badge_scope()
       |> where([i], i.kind in @approval_kinds)
       |> Repo.aggregate(:count)
 
