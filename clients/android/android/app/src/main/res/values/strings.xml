@@ -61,6 +61,9 @@
     <string name="share_discard">Discard</string>
     <string name="share_keep_editing">Keep editing</string>
     <string name="share_open_burrow">Open Burrow</string>
+    <string name="share_handed_off">Uploading in the background. You can close this.</string>
+    <string name="upload_channel">Uploads</string>
+    <string name="upload_in_progress">Uploading to Burrow</string>
 
     <!-- Widgets (iOS SlabState.swift / SuiteWidgets copy). -->
     <string name="widget_approvals_title">My approvals</string>

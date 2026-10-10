@@ -12,6 +12,7 @@ defmodule Platform.Chat.Attachment do
     field(:message_id, :binary_id)
     field(:canvas_id, :binary_id)
     field(:uploaded_by_agent_id, :binary_id)
+    field(:uploaded_by_user_id, :binary_id)
     field(:filename, :string)
     field(:content_type, :string)
     field(:byte_size, :integer)
@@ -31,6 +32,7 @@ defmodule Platform.Chat.Attachment do
       :message_id,
       :canvas_id,
       :uploaded_by_agent_id,
+      :uploaded_by_user_id,
       :filename,
       :content_type,
       :byte_size,

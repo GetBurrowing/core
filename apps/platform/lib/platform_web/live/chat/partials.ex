@@ -892,8 +892,20 @@ defmodule PlatformWeb.ChatLive.Partials do
   attr(:uploads, :any, required: true)
   attr(:caption, :string, default: "")
   attr(:tagged_agents, :any, required: true)
+  # Large files (task 01a120be stage 3): staged over-the-inline-cap files and
+  # the server's limits (`LargeUploadHooks.limits/0`), so the hint and the
+  # too-large copy both name the install's real limit.
+  attr(:large_staged, :list, default: [])
+  attr(:limits, :map, default: nil)
 
   def upload_dialog(assigns) do
+    assigns =
+      assign(
+        assigns,
+        :has_files?,
+        assigns.uploads.attachments.entries != [] or assigns.large_staged != []
+      )
+
     ~H"""
     <div :if={@open} class="upload-backdrop" phx-click="upload_dialog_close">
       <div class="upload-panel" phx-click="noop">
@@ -926,7 +938,7 @@ defmodule PlatformWeb.ChatLive.Partials do
              registration — drops on this label register entries through the
              same code path as the file picker. --%>
         <label
-          :if={@uploads.attachments.entries == []}
+          :if={not @has_files?}
           id="upload-dropzone"
           for={@uploads.attachments.ref}
           phx-drop-target={@uploads.attachments.ref}
@@ -946,10 +958,15 @@ defmodule PlatformWeb.ChatLive.Partials do
             Browse files
           </span>
           <div class="upload-dropzone-sub">You can also paste images with ⌘V</div>
-          <div class="upload-dropzone-formats">
+          <div :if={@limits} class="upload-dropzone-formats" data-role="upload-limit-hint">
+            Up to {@limits.label} per file
+          </div>
+          <div :if={!@limits} class="upload-dropzone-formats">
             PNG · JPG · GIF · WebP · SVG — max 15 MB each
           </div>
         </label>
+
+        <.large_staged_rows :if={@large_staged != []} staged={@large_staged} limits={@limits} />
 
         <div :if={@uploads.attachments.entries != []} class="upload-grid-area">
           <div class="upload-grid">
@@ -1053,7 +1070,7 @@ defmodule PlatformWeb.ChatLive.Partials do
              after `LiveUploader.trackFiles` had nowhere to serialize, and
              the entry never registered. With the form always present, paste
              on an empty modal works on the very first attempt. --%>
-        <div :if={@uploads.attachments.entries != []}>
+        <div :if={@has_files?}>
           <div class="upload-comment">
             <textarea
               name="caption"
@@ -1066,8 +1083,18 @@ defmodule PlatformWeb.ChatLive.Partials do
 
           <div class="upload-footer">
             <div class="upload-count">
-              <strong>{length(@uploads.attachments.entries)}</strong>
-              {if length(@uploads.attachments.entries) == 1, do: "image", else: "images"} selected
+              <%= if @large_staged == [] do %>
+                <strong>{length(@uploads.attachments.entries)}</strong>
+                {if length(@uploads.attachments.entries) == 1, do: "image", else: "images"} selected
+              <% else %>
+                <strong>{length(@uploads.attachments.entries) + length(@large_staged)}</strong>
+                {if length(@uploads.attachments.entries) + length(@large_staged) == 1,
+                  do: "file",
+                  else: "files"} selected
+              <% end %>
+              <span :if={@limits} class="block text-xs text-base-content/60">
+                Up to {@limits.label} per file
+              </span>
             </div>
             <div class="upload-footer-actions">
               <button type="button" class="upload-btn-cancel" phx-click="upload_dialog_close">
@@ -1081,7 +1108,9 @@ defmodule PlatformWeb.ChatLive.Partials do
                   Enum.any?(
                     @uploads.attachments.entries,
                     &(&1.progress > 0 and &1.progress < 100)
-                  )
+                  ) or
+                    (@uploads.attachments.entries == [] and @large_staged != [] and
+                       Enum.all?(@large_staged, & &1.too_large?))
                 }
               >
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
@@ -1094,6 +1123,53 @@ defmodule PlatformWeb.ChatLive.Partials do
         </div>
       </div>
     </div>
+    """
+  end
+
+  attr(:staged, :list, required: true)
+  attr(:limits, :map, required: true)
+
+  # One row per staged large file. A file over the install's limit reads
+  # "(!) <name> is 1.1 GB. This Suite accepts files up to 1 GB." with the
+  # error hue on the icon only (the token fails AA as small text), and never
+  # uploads. Design canvas 01a120be-f336, "TOO LARGE".
+  defp large_staged_rows(assigns) do
+    ~H"""
+    <ul class="flex flex-col gap-2 px-5 pb-2" data-role="large-staged">
+      <li
+        :for={file <- @staged}
+        id={"large-staged-#{file.ref}"}
+        data-too-large={to_string(file.too_large?)}
+        class="flex items-start gap-2 rounded-box border border-edge bg-base-200 px-3 py-2 text-sm"
+      >
+        <%= if file.too_large? do %>
+          <span class="hero-exclamation-circle size-5 shrink-0 text-error" aria-hidden="true"></span>
+          <span class="min-w-0 flex-1 text-base-content">
+            <span title={file.name}>
+              {PlatformWeb.ChatLive.Partials.Composer.middle_truncate(file.name)}
+            </span>
+            is {Platform.Chat.UploadLimits.format_bytes(max(file.size, 0))}. This Suite accepts files up to {@limits &&
+              @limits.label}.
+          </span>
+        <% else %>
+          <span class="hero-document size-5 shrink-0 text-base-content/60" aria-hidden="true"></span>
+          <span class="min-w-0 flex-1 truncate" title={file.name}>
+            {PlatformWeb.ChatLive.Partials.Composer.middle_truncate(file.name)}
+          </span>
+          <span class="shrink-0 font-mono text-[11px] tabular-nums text-base-content/60">
+            {Platform.Chat.UploadLimits.format_bytes(max(file.size, 0))}
+          </span>
+        <% end %>
+        <button
+          type="button"
+          class="btn btn-ghost btn-xs shrink-0"
+          phx-click="large_upload_unstage"
+          phx-value-ref={file.ref}
+        >
+          Remove
+        </button>
+      </li>
+    </ul>
     """
   end
 

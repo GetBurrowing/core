@@ -54,6 +54,7 @@ defmodule PlatformWeb.ChatLive do
   alias PlatformWeb.ChatLive.SearchHooks
   alias PlatformWeb.ChatLive.MembersComponent
   alias PlatformWeb.ChatLive.SettingsComponent
+  alias PlatformWeb.ChatLive.LargeUploadHooks
   alias PlatformWeb.ChatLive.UploadHooks
   alias PlatformWeb.Extensions
   alias PlatformWeb.LifecycleActions
@@ -808,6 +809,8 @@ defmodule PlatformWeb.ChatLive do
       |> PinHooks.attach()
       |> SearchHooks.attach()
       |> MentionsHooks.attach()
+      # Before UploadHooks, which halts "upload_dialog_close" (task 01a120be).
+      |> LargeUploadHooks.attach()
       |> UploadHooks.attach()
       |> CanvasHooks.attach()
       |> Extensions.attach_live_hooks()

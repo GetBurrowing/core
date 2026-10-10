@@ -26,6 +26,9 @@ struct ShareSheetView: View {
                     if case .sent(let name) = model.phase {
                         sentOverlay(name)
                     }
+                    if model.phase == .handedOff {
+                        handedOffOverlay
+                    }
                 }
             }
         }
@@ -239,6 +242,23 @@ struct ShareSheetView: View {
         .accessibilityElement(children: .combine)
     }
 
+    /// A large file went to the background uploader: the sheet says so and
+    /// closes at once (design canvas 01a120be-f336, share sheet).
+    private var handedOffOverlay: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "arrow.up.circle.fill")
+                .font(.system(size: 44, weight: .semibold))
+            Text(ShareSheetModel.handedOffText)
+                .font(SuiteFont.body(.semibold))
+                .multilineTextAlignment(.center)
+        }
+        .foregroundColor(SuiteColor.onSurface.color)
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(SuiteColor.surface.color.opacity(0.94))
+        .accessibilityElement(children: .combine)
+    }
+
     private func sentOverlay(_ spaceName: String) -> some View {
         VStack(spacing: 12) {
             Image(systemName: "checkmark.circle.fill")
@@ -323,7 +343,9 @@ struct PreviewCard: View {
             default: kind = "File"
             }
             let size = (try? FileManager.default.attributesOfItem(atPath: part.url.path)[.size] as? NSNumber)??.int64Value ?? 0
-            return "\(kind), \(ByteCountFormatter.string(fromByteCount: size, countStyle: .decimal))"
+            // The one decimal size rule (task 01a120be), so the card, a
+            // too-large banner and the server's label agree ("1.2 GB").
+            return "\(kind), \(ByteLabel.format(size))"
         case .url(let url): return url.absoluteString
         case .text: return "Text"
         case nil: return ""

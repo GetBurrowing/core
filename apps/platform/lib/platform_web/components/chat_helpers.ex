@@ -24,6 +24,11 @@ defmodule PlatformWeb.Components.ChatHelpers do
     String.starts_with?(attachment.content_type || "", "image/")
   end
 
+  # Task 01a120be stage 3: video attachments render as an in-place player.
+  def video_attachment?(attachment) do
+    String.starts_with?(attachment.content_type || "", "video/")
+  end
+
   def attachment_url(attachment), do: ~p"/chat/attachments/#{attachment.id}"
 
   def present?(value) when is_binary(value), do: String.trim(value) != ""
@@ -58,14 +63,11 @@ defmodule PlatformWeb.Components.ChatHelpers do
     "#{people}#{tail} reacted with #{emoji}"
   end
 
-  def format_bytes(size) when is_integer(size) and size < 1_024, do: "#{size} B"
+  # One size-label rule for every surface (task 01a120be): the file chip
+  # beside a video card must not read binary-as-MB while the card reads
+  # decimal.
+  def format_bytes(size) when is_integer(size) and size >= 0,
+    do: Platform.Chat.UploadLimits.format_bytes(size)
 
-  def format_bytes(size) when is_integer(size) and size < 1_048_576,
-    do: "#{Float.round(size / 1_024, 1)} KB"
-
-  def format_bytes(size) when is_integer(size) and size < 1_073_741_824,
-    do: "#{Float.round(size / 1_048_576, 1)} MB"
-
-  def format_bytes(size) when is_integer(size), do: "#{Float.round(size / 1_073_741_824, 1)} GB"
   def format_bytes(_size), do: "—"
 end

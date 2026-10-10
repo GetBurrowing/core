@@ -93,9 +93,17 @@ class ShareActivity : AppCompatActivity() {
                     client::isSignedIn,
                 )
             val m =
-                ShareSheetModel(host, client, shared.files, shared.text, preselect) { h, space ->
-                    noteShared(app, h, space)
-                }
+                ShareSheetModel(
+                    host,
+                    client,
+                    shared.files,
+                    shared.text,
+                    preselect,
+                    onSent = { h, space -> noteShared(app, h, space) },
+                    // Large files (task 01a120be): copied into app storage while
+                    // the share grant is live, then uploaded by WorkManager.
+                    enqueuer = WorkManagerLargeUploadEnqueuer(app),
+                )
             m.start()
             main.post {
                 model = m
@@ -128,7 +136,8 @@ class ShareActivity : AppCompatActivity() {
     /** Back, the X and a tap outside: close, unless something is typed. */
     private fun close() {
         val m = model
-        if (m != null && m.hasTypedText && m.phase != ShareSheetModel.Phase.SENT) {
+        val done = m?.phase == ShareSheetModel.Phase.SENT || m?.phase == ShareSheetModel.Phase.HANDED_OFF
+        if (m != null && m.hasTypedText && !done) {
             AlertDialog
                 .Builder(this)
                 .setMessage(R.string.share_discard_title)
@@ -185,10 +194,11 @@ class ShareActivity : AppCompatActivity() {
         body.isVisible = !notSignedIn && m.phase != ShareSheetModel.Phase.LOADING_SPACES
         sendButton.isVisible = !notSignedIn
         title.text =
-            if (m.phase == ShareSheetModel.Phase.SENT) {
-                getString(R.string.share_sent_to, m.selectedSpace?.name.orEmpty())
-            } else {
-                getString(R.string.share_title)
+            when (m.phase) {
+                ShareSheetModel.Phase.SENT -> getString(R.string.share_sent_to, m.selectedSpace?.name.orEmpty())
+                // The sheet closes at once; the upload carries on in WorkManager.
+                ShareSheetModel.Phase.HANDED_OFF -> getString(R.string.share_handed_off)
+                else -> getString(R.string.share_title)
             }
 
         val size = m.size
@@ -219,7 +229,10 @@ class ShareActivity : AppCompatActivity() {
         }
         agents.isVisible = agents.isNotEmpty()
 
-        val locked = m.phase == ShareSheetModel.Phase.SENDING || m.phase == ShareSheetModel.Phase.SENT
+        val locked =
+            m.phase == ShareSheetModel.Phase.SENDING ||
+                m.phase == ShareSheetModel.Phase.SENT ||
+                m.phase == ShareSheetModel.Phase.HANDED_OFF
         messageField.isEnabled = !locked
         sendLabel.text = m.sendLabel
         sendLabel.isVisible = m.phase != ShareSheetModel.Phase.SENDING
@@ -404,7 +417,7 @@ class ShareActivity : AppCompatActivity() {
     ): View {
         val line =
             text(
-                "${file.name} · ${ShareSheetModel.rowSize(file.size)}",
+                "${file.name} · ${ByteLabel.format(file.size)}",
                 15f,
                 400,
                 R.color.burrow_on_surface,

@@ -294,6 +294,10 @@ defmodule PlatformWeb.Router do
     pipe_through(:api)
 
     post("/chat/attachments/upload/:token", ChatAttachmentUploadController, :create)
+    # Resumable chunked verbs (task 01a120be). HEAD arrives here as GET:
+    # the endpoint's `Plug.Head` rewrites it before the router runs.
+    get("/chat/attachments/upload/:token", ChatAttachmentUploadController, :head)
+    patch("/chat/attachments/upload/:token", ChatAttachmentUploadController, :append)
   end
 
   # Calendar feed pipeline (task 019fb955-b702 stage 3) — same posture as
@@ -967,6 +971,9 @@ defmodule PlatformWeb.Router do
     delete("/devices/:app_install_id", AppApiController, :unregister_device)
     get("/spaces", AppApiController, :spaces)
     post("/spaces/:space_id/messages", AppApiController, :create_message)
+    # Large-file chunked uploads (task 01a120be stage 2).
+    post("/spaces/:space_id/uploads", AppApiController, :create_upload)
+    get("/upload_config", AppApiController, :upload_config)
     get("/counts", AppApiController, :counts)
 
     # App Intents (task 01a10db6): Siri, Shortcuts, widgets, controls.

@@ -713,6 +713,10 @@ defmodule Platform.RepoLookupBoundaryTest do
     {"platform_web/live/chat/active_agent_hooks.ex", :get, "Platform.Agents.Agent", 1,
      :safe_internal,
      "`resolve_by_agent_id/1` is fed `participant.participant_id` off the socket's loaded participant list"},
+    {"platform_web/live/chat/large_upload_hooks.ex", :get, "Attachment", 1, :must_cast,
+     "task 01a120be. `delete_reservation/2` takes the `\"id\"` of the `\"large_upload_cancel\"` LiveView event, a client params value. Guarded by the `Platform.UUID.valid?/1` entry below in the same `with`, so a malformed id falls out of the `with` (nothing deleted) instead of raising `Ecto.Query.CastError`"},
+    {"platform_web/live/chat/large_upload_hooks.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "the guard itself, paired with the `:get \"Attachment\"` entry above: used as a BOOLEAN in `delete_reservation/2`'s `with`, the original string then reaches `Repo.get/2` unchanged, safe because `valid?/1` is the strict 36-character check"},
     {"platform_web/live/chat_live.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "valid_uuid?/1 is now Platform.UUID.valid?/1. It gates Chat.get_space/1 on the /chat/:slug URL PATH SEGMENT at :522 and :589, passing the ORIGINAL value, so a 16-character channel slug used to clear the bare cast and raise inside Repo on the mount path"},
     {"platform_web/live/control_center_live.ex", :get, "Agent", 1, :safe_internal,
@@ -1265,6 +1269,12 @@ defmodule Platform.RepoLookupBoundaryTest do
     # `agent_id`, a JSON body value, behind Platform.UUID.valid?/1 (recorded
     # in @inventory).
     "platform_web/controllers/app_api_controller.ex" => 2,
+    # Task 01a120be: 0 -> 2, triaged by hand. `settle_chunk/3` and
+    # `release_claim/1` re-read the reservation `FOR UPDATE`, pinning
+    # `a.id` to the `id` field of the `%Attachment{}` the controller already
+    # loaded by `storage_key` (recorded in @inventory), so neither `where:`
+    # sees a raw client value.
+    "platform_web/controllers/chat_attachment_upload_controller.ex" => 2,
     # ADR-0046 merge: `latest_live_plan/1`, whose `where: p.task_id == ^task_id`
     # pins a UUID column and so raises Ecto.Query.CastError on a malformed id
     # exactly as Repo.get/2 would — the case this map exists to make someone

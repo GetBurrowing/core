@@ -16,6 +16,8 @@ final class StubURLProtocol: URLProtocol {
     private static var _requests: [URLRequest] = []
     private static var _bodies: [Data?] = []
     static var respond: (URLRequest) -> (Int, Data) = { _ in (200, Data("{}".utf8)) }
+    /// Response headers per request (task 01a120be: `Upload-Offset`).
+    static var respondHeaders: (URLRequest) -> [String: String] = { _ in [:] }
 
     static var requests: [URLRequest] {
         lock.lock()
@@ -43,6 +45,7 @@ final class StubURLProtocol: URLProtocol {
         _bodies = []
         lock.unlock()
         respond = { _ in (200, Data("{}".utf8)) }
+        respondHeaders = { _ in [:] }
     }
 
     static func session() -> URLSession {
@@ -61,7 +64,8 @@ final class StubURLProtocol: URLProtocol {
         Self._bodies.append(body)
         Self.lock.unlock()
         let (status, data) = Self.respond(request)
-        let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: nil)!
+        let response = HTTPURLResponse(
+            url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: Self.respondHeaders(request))!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: data)
         client?.urlProtocolDidFinishLoading(self)

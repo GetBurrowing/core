@@ -226,13 +226,57 @@ file is one multipart `POST /api/app/spaces/<id>/messages`, with `text` (the
 message, then any shared link) and `agent_id` on the FIRST request only. A
 retry after a partial failure sends only the files that are left.
 
-**Size limit.** A file is over when it is larger than
-`SizeCheck.MAX_SHARE_FILE_BYTES` (8 MiB, the plan's constant) OR when its
-request body would pass `MAX_REQUEST_BYTES` (8_000_000). That second number is
-the server's real limit: Plug.Parsers' multipart `:length` applies to the whole
-body, and it is what iOS uses. With only the 8 MiB check, an 8.2 MB file would
-pass and then get a 413. The copy is the canvas's, and it reads "8 MB" either
-way.
+**Size limit and large files (task 01a120be).** The limit is the server's:
+the sheet reads `GET /api/app/upload_config` (`max_upload_bytes`,
+`max_upload_label`, `chunk_bytes`, `multipart_max_bytes`) and holds no
+per-file limit of its own. `SizeCheck` then sorts each file:
+
+- **Request body at or under `multipart_max_bytes` (8_000_000):** today's
+  multipart `POST`. The threshold is Plug.Parsers' multipart `:length`, which
+  counts the WHOLE body, so routing measures the request, not just the file.
+- **Larger, up to `max_upload_bytes` (1 GB by default, per install):**
+  `POST /api/app/spaces/<id>/uploads` reserves it (with the text and agent
+  when it is the first request), the file is copied into app storage while
+  the share grant is live, and `share/LargeUploadWorker` (WorkManager,
+  expedited, `NetworkType.CONNECTED`, a `dataSync` foreground service with an
+  ongoing "412 of 900 MB" notification, one unique work per reservation id)
+  PATCHes `chunk_bytes` slices to the returned upload URL with
+  `Upload-Offset`. Every run first HEADs the server's offset and resumes from
+  it, never from zero; a 409 adopts the server's offset; a network failure is
+  `Result.retry()` with exponential backoff. The sheet says "Uploading in the
+  background. You can close this." and closes. The server posts the message
+  when the last chunk lands; the device shows "Sent to #<space>".
+  - **Offline.** A default-network callback (and WorkManager stopping the run
+    when `CONNECTED` goes unmet) aborts the chunk in flight at once
+    (`ChunkTransport.cancel`, which disconnects the `HttpURLConnection`;
+    timeouts 15 s connect / 30 s read). The run ends in `Result.retry()` and
+    leaves a separate ongoing "Waiting for connection · 377 of 899.1 MB"
+    notification (`waitingNotificationId`), since the foreground one goes
+    with the run. The next run clears it as it starts and shows progress again.
+  - **Progress** is `setForeground` about once a second, and the same
+    notification is also posted directly, so it shows even when the
+    foreground start is refused.
+  - **Failure.** HEAD or PATCH 404/410 (the reservation was reaped) posts
+    "Couldn't send <file> to #<space>: the upload expired after the connection
+    was lost too long. Share it again."; any other failure posts its own
+    "Couldn't send ..." line with the HTTP status.
+  - **Debug stub** (debug builds only): `rig.sh adb shell am broadcast -a
+    com.koboai.burrow.debug.PUSH -n
+    com.koboai.burrow.debug/com.koboai.burrow.push.DebugPushReceiver --es
+    upload_stub 899109076/1000` (bytes / ms per 33,554,432-byte chunk) runs the real worker against an
+    in-process stand-in for the upload endpoint (no request leaves the
+    device), so `svc wifi disable` / `svc data disable` show the offline path.
+- **Over `max_upload_bytes`:** refused before any upload, with the server's
+  label: "<name> is 1.2 GB. This Suite accepts files up to 1 GB."
+
+Every size label (the file row, the over-limit copy, the notifications) is
+`ByteLabel`: the one decimal rule shared with the server, web and iOS
+("899.1 MB", "1 GB", "512 bytes"; "416 of 899.1 MB").
+
+Against a server without `upload_config`, only the multipart path exists and
+a request over `MAX_REQUEST_BYTES` (8_000_000) is over, with the canvas 01a10d91
+"8 MB" copy. `MAX_SHARE_FILE_BYTES` (8 MiB) is gone: it was never the server's
+limit.
 
 **Back.** With nothing typed, back closes the sheet. With something typed, it
 asks `Discard this share?` (Discard / Keep editing). With no bearer, the sheet

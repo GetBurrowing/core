@@ -5,6 +5,12 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Android 13+: asked through PermissionExplainerActivity, never cold. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Large shared files (task 01a120be): the chunked upload runs as an
+         expedited WorkManager job in a dataSync foreground service. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- The large-upload worker watches the default network to pause at once when it is lost. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <!-- Custom Tabs: find a browser that supports them (Android 11+ package visibility). -->
     <queries>
@@ -122,6 +128,13 @@
             android:name=".push.PermissionExplainerActivity"
             android:exported="false"
             android:theme="@style/AppTheme.NoActionBar" />
+
+        <!-- WorkManager's foreground service, typed for the large-upload
+             worker (LargeUploadWorker); Android 14+ requires the type. -->
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            tools:node="merge" />
 
         <!-- FCM: data-only pushes and token rotation. -->
         <service

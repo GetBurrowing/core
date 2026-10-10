@@ -34,6 +34,21 @@ interface ShareClient {
         spaceId: String,
         form: MultipartForm,
     )
+
+    /**
+     * `GET /api/app/upload_config` (task 01a120be), or null when the server
+     * predates it or the call fails: then only the multipart path exists.
+     */
+    fun uploadConfig(host: String): UploadConfig? = null
+
+    /** `POST /api/app/spaces/<id>/uploads`. Throws [ApiException] (413 when over the limit). */
+    fun reserveUpload(
+        host: String,
+        spaceId: String,
+        file: SharedFile,
+        text: String?,
+        agentId: String?,
+    ): UploadReservation = throw ApiException(ApiException.Kind.BAD_RESPONSE, route = "uploads")
 }
 
 /**
@@ -64,6 +79,31 @@ class AppShareClient(
                 throw ApiException(ApiException.Kind.NETWORK, route = path)
             }
         if (response.status !in 200..299) throw ApiException(ApiException.Kind.STATUS, response.status, path)
+    }
+
+    override fun uploadConfig(host: String): UploadConfig? =
+        try {
+            UploadConfig.parse(api.getJson(host, UploadConfig.PATH))
+        } catch (_: ApiException) {
+            null
+        }
+
+    override fun reserveUpload(
+        host: String,
+        spaceId: String,
+        file: SharedFile,
+        text: String?,
+        agentId: String?,
+    ): UploadReservation {
+        if (!ID.matches(spaceId)) throw ApiException(ApiException.Kind.BAD_RESPONSE, route = "uploads")
+        val body =
+            JSONObject()
+                .put("filename", file.name)
+                .put("content_type", file.mimeType)
+                .put("byte_size", file.size)
+        text?.takeIf { it.isNotEmpty() }?.let { body.put("text", it) }
+        agentId?.takeIf { it.isNotEmpty() }?.let { body.put("agent_id", it) }
+        return UploadReservation.parse(api.postJson(host, UploadReservation.uploadsPath(spaceId), body.toString()))
     }
 
     companion object {

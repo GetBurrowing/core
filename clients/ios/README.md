@@ -210,11 +210,42 @@ a host with no token fails before any request exists.
 
 Activation: one image, one file, one web URL, or text. The sheet uses the
 install selected in the app and its Keychain bearer, never web-view cookies.
-`POST /api/app/spaces/:id/messages` multipart, body written to a temp file
-and uploaded from it. **Cap: 8_000_000 bytes for the whole body** (Plug's
-default multipart length; the server does not raise it, so chat's 15 MB does
-not apply). Past it the sheet says so before sending. HEIC photos are
-re-encoded as JPEG. States and copy follow canvas 01a10887.
+Two paths, chosen from the server's `GET /api/app/upload_config`
+(`max_upload_bytes`, `max_upload_label`, `chunk_bytes`,
+`multipart_max_bytes`); the client holds no per-file limit of its own
+(task 01a120be):
+
+- **Multipart body at or under `multipart_max_bytes` (8_000_000):** today's
+  `POST /api/app/spaces/:id/messages` multipart, body written to a temp file
+  and uploaded from it. The threshold is the WHOLE request body (Plug's
+  multipart `:length`), so routing measures the body, not just the file.
+- **Larger, up to `max_upload_bytes` (1 GB by default, per install):**
+  `POST /api/app/spaces/:id/uploads` reserves the file (the message text and
+  agent ride along). While the sheet is still in the foreground,
+  `BackgroundUploader` cuts the file into one slice file per `chunk_bytes`
+  chunk in the App Group and queues an `uploadTask(with:fromFile:)` PATCH for
+  EVERY chunk at once (`Upload-Offset = i * chunk_bytes`, exactly
+  `min(chunk_bytes, total - offset)` bytes) on a background URLSession shared
+  with the App Group; the server accepts aligned chunks out of order. Tasks
+  created later by a suspended, relaunched app are rate-limited by iOS (the
+  review saw gaps of 70 s doubling to 962 s, past the server's 900 s
+  reservation TTL), so nothing waits on that. A slice is deleted on its 2xx;
+  only a chunk whose task failed is re-created. After a relaunch the app
+  rebuilds which chunks have live tasks from the session's task list, HEADs
+  for the contiguous offset and queues only missing chunks at or past it.
+  The server posts the message on the PATCH that completes coverage (200),
+  and the device shows "Sent to #<space>"; if every chunk is acknowledged but
+  that 200 was lost, a zero-length PATCH at `total` fetches it. A 404 or 410 (reservation
+  expired) cancels the rest and shows "Couldn't send <file> to #<space>: the
+  upload expired after the connection was lost too long. Share it again.";
+  any other terminal failure also notifies.
+- **Over `max_upload_bytes`:** refused before any byte moves, with the
+  server's label: "<name> is 1.2 GB. This Suite accepts files up to 1 GB."
+  Sizes everywhere use one decimal rule (`ByteLabel`): 1 MB = 1_000_000 bytes.
+
+Against a server without `upload_config`, only the multipart path exists and
+its 8_000_000 cap applies. HEIC photos are re-encoded as JPEG. States and copy
+follow canvases 01a10887 and 01a120be-f336.
 
 ## Widgets
 

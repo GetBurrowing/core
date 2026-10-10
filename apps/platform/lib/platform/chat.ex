@@ -2104,6 +2104,194 @@ defmodule Platform.Chat do
     end
   end
 
+  # ── Large-file user uploads (task 01a120be stage 2) ─────────────────────
+
+  @doc """
+  Reserve a chunked large-file upload for a user's message. The ONE entry
+  point the app API (`POST /api/app/spaces/:space_id/uploads`) and the web
+  composer share, so web and native cannot drift.
+
+  `poster` is an already-authorized sender: `%{space_id, participant_id,
+  user_id, thread_id, content}` (the caller checked membership, as
+  `post_message_with_attachments/3`'s callers do). `file` is `%{filename,
+  content_type, byte_size}`.
+
+  Refuses `byte_size` over `Platform.Chat.UploadLimits.max_bytes/0` with
+  `{:error, :too_large}` and runs the same space-writable, DM and external
+  scope guards a post would, all before any byte moves. On success inserts a
+  pending `chat_attachments` row owned by `uploaded_by_user_id` that carries
+  the message to post in `metadata["pending_message"]`, presigns it, and
+  returns `%{id, upload_url, chunk_bytes, offset: 0, expires_at,
+  max_upload_bytes}`. The upload's last PATCH posts the message server-side
+  (`Platform.Chat.Attachments.ToolHandlers.finalize_pending/2`), so a client
+  whose process is gone by then (iOS background URLSession, Android
+  WorkManager) loses nothing.
+  """
+  @spec reserve_user_upload(map(), map()) ::
+          {:ok, map()}
+          | {:error,
+             :too_large
+             | :invalid_file
+             | :space_archived
+             | :dm_not_allowed
+             | :out_of_external_scope
+             | term()}
+  def reserve_user_upload(poster, file) do
+    %{space_id: space_id, participant_id: participant_id, user_id: user_id} = poster
+    byte_size = file[:byte_size]
+    filename = file[:filename]
+
+    with :ok <- valid_reservation_file(filename, byte_size),
+         :ok <- Platform.Chat.UploadLimits.check_size(byte_size),
+         :ok <- ensure_space_writable(space_id),
+         :ok <- ensure_dm_send_allowed(space_id, participant_id),
+         :ok <- ensure_external_upload_allowed(space_id, user_id) do
+      do_reserve_user_upload(poster, filename, file[:content_type], byte_size)
+    end
+  end
+
+  @doc """
+  `reserve_user_upload/2` for a caller that holds only a space id, which may
+  have come from the client (the web composer's re-reservation after an
+  expiry carries the space the upload began in, not the session's).
+
+  Composes `SpaceAccess.authorize_writer/2` first and derives the poster from
+  the participant row it returns, so a forged space id is `{:error,
+  :forbidden}` and no row is written. `attrs` is `%{space_id, content,
+  thread_id, participant_id}`; when `participant_id` is given it must be the
+  actor's own row in that space, otherwise `{:error, :forbidden}`. `file` is
+  as for `reserve_user_upload/2`.
+  """
+  @spec reserve_space_upload(SpaceAccess.actor(), map(), map()) ::
+          {:ok, map()} | {:error, :forbidden | term()}
+  def reserve_space_upload(actor, attrs, file) do
+    with {:ok, participant} <- SpaceAccess.authorize_writer(attrs[:space_id], actor),
+         :ok <- same_participant(participant, attrs[:participant_id]) do
+      reserve_user_upload(
+        %{
+          space_id: participant.space_id,
+          participant_id: participant.id,
+          user_id: participant.participant_id,
+          thread_id: attrs[:thread_id],
+          content: attrs[:content] || ""
+        },
+        file
+      )
+    end
+  end
+
+  defp same_participant(_participant, nil), do: :ok
+  defp same_participant(%Participant{id: id}, id), do: :ok
+  defp same_participant(_participant, _other), do: {:error, :forbidden}
+
+  defp valid_reservation_file(filename, byte_size)
+       when is_binary(filename) and filename != "" and is_integer(byte_size) and byte_size > 0,
+       do: :ok
+
+  defp valid_reservation_file(_filename, _byte_size), do: {:error, :invalid_file}
+
+  defp do_reserve_user_upload(poster, filename, client_type, byte_size) do
+    %{storage_key: key, content_type: content_type} =
+      Platform.Chat.AttachmentStorage.reservation(filename, client_type)
+
+    ttl_s = Application.get_env(:platform, :pending_ttl_seconds, 15 * 60)
+
+    adapter =
+      Application.get_env(
+        :platform,
+        :attachment_storage_adapter,
+        Platform.Chat.AttachmentStorage.Adapter.LocalDisk
+      )
+
+    pending_message = %{
+      "space_id" => poster.space_id,
+      "participant_id" => poster.participant_id,
+      "user_id" => poster.user_id,
+      "thread_id" => Map.get(poster, :thread_id),
+      "content" => Map.get(poster, :content) || ""
+    }
+
+    with {:ok, attachment} <-
+           create_attachment(%{
+             space_id: poster.space_id,
+             uploaded_by_user_id: poster.user_id,
+             filename: filename,
+             content_type: content_type,
+             byte_size: byte_size,
+             storage_key: key,
+             state: "pending",
+             upload_expires_at: DateTime.utc_now() |> DateTime.add(ttl_s, :second),
+             metadata: %{"pending_message" => pending_message}
+           }) do
+      case adapter.presign_upload(key, Platform.Chat.UploadLimits.max_bytes(), ttl_s) do
+        {:ok, %{url: url, expires_at: expires_at}} ->
+          {:ok,
+           %{
+             id: attachment.id,
+             upload_url: url,
+             chunk_bytes: Platform.Chat.UploadLimits.chunk_bytes(),
+             offset: 0,
+             expires_at: expires_at,
+             max_upload_bytes: Platform.Chat.UploadLimits.max_bytes()
+           }}
+
+        {:error, reason} ->
+          Repo.delete(attachment)
+          {:error, {:presign_failed, reason}}
+      end
+    end
+  end
+
+  @doc """
+  Sibling of `post_message_with_attachments/3` for a `chat_attachments` row
+  that already exists and is `ready` (the finished chunked upload): posts the
+  message and LINKS the row to it instead of inserting one. Same guards, same
+  broadcast and notification path. The link is conditional on the row having
+  no message yet, so a row can never end up attached to two messages.
+  """
+  @spec post_message_with_existing_attachment(map(), Attachment.t(), keyword()) ::
+          {:ok, Message.t(), [Attachment.t()]}
+          | {:error, :space_archived | :dm_not_allowed | :out_of_external_scope | term()}
+  def post_message_with_existing_attachment(attrs, %Attachment{} = attachment, opts \\ []) do
+    space_id = attrs[:space_id]
+    participant_id = attrs[:participant_id]
+    poster_user_id = Keyword.get(opts, :poster_user_id)
+
+    with :ok <- ensure_space_writable(space_id),
+         :ok <- ensure_dm_send_allowed(space_id, participant_id),
+         :ok <- ensure_external_upload_allowed(space_id, poster_user_id) do
+      attrs = put_author_snapshot(attrs, :participant_id, :author)
+
+      Multi.new()
+      |> Multi.insert(:message, Message.changeset(%Message{}, attrs))
+      |> Multi.run(:v1_version, fn _repo, %{message: message} ->
+        {:ok, MessageVersions.record_v1!(message)}
+      end)
+      |> Multi.run(:attachment, fn repo, %{message: message} ->
+        from(a in Attachment,
+          where: a.id == ^attachment.id and is_nil(a.message_id) and a.state == "ready",
+          select: a
+        )
+        |> repo.update_all(set: [message_id: message.id])
+        |> case do
+          {1, [linked]} -> {:ok, linked}
+          _ -> {:error, :attachment_not_linkable}
+        end
+      end)
+      |> Repo.transaction()
+      |> case do
+        {:ok, %{message: message, attachment: linked}} ->
+          message |> reinvite_and_pin_mentioned() |> notify_refused_summons(message, opts)
+          emit_inbox_for_mentions(message)
+          publish_message_posted(message, opts)
+          {:ok, message, [linked]}
+
+        {:error, _operation, reason, _changes_so_far} ->
+          {:error, reason}
+      end
+    end
+  end
+
   @doc """
   Fetch a message by primary key. Returns `nil` if not found.
 

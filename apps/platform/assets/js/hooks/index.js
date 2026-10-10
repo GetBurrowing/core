@@ -23,6 +23,7 @@ import FilePreviewScale from "./file_preview_scale"
 import HexField from "./hex_field"
 import InfiniteScroll from "./infinite_scroll"
 import InlineEdit from "./inline_edit"
+import LargeUpload, { LargeUploadTimeline } from "./large_upload"
 import InlineFocus from "./inline_focus"
 import InlineThread from "./inline_thread"
 import KanbanDragDrop from "./kanban_drag_drop"
@@ -87,6 +88,8 @@ export default {
   HexField,
   InfiniteScroll,
   InlineEdit,
+  LargeUpload,
+  LargeUploadTimeline,
   InlineFocus,
   InlineThread,
   KanbanDragDrop,

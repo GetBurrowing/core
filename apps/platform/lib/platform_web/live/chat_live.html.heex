@@ -452,6 +452,7 @@
         mask_names?={@mask_names?}
         revealed_section_ids={@revealed_section_ids}
         sidebar_sections={@sidebar_sections}
+        limits={@large_upload_limits}
       />
 
       <.upload_dialog
@@ -460,6 +461,8 @@
         uploads={@uploads}
         caption={@upload_caption}
         tagged_agents={@upload_tagged_agents}
+        large_staged={@large_upload_staged}
+        limits={@large_upload_limits}
       />
     </div>
 

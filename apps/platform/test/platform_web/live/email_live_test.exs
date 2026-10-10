@@ -360,6 +360,11 @@ defmodule PlatformWeb.EmailLiveTest do
     defp reader_rows(reader),
       do: Repo.all(from(m in InboundMessage, where: m.account_id == ^reader.id))
 
+    # render_async/1's default wait is 100 ms. The poll runs an IMAP round
+    # trip (fake server) plus inserts, which overran 100 ms under full-suite
+    # load in CI on PR #1219 (two attempts, first pass, green on the serial
+    # retry). The wait is a ceiling, not an assertion: 2_000 as in
+    # shell_chat_subscribe_set_test.exs.
     test "Refresh polls now and the fetched message appears in the inbox",
          %{conn: conn} = ctx do
       queue_mail!(ctx.reader, "Refreshed arrival")
@@ -371,7 +376,7 @@ defmodule PlatformWeb.EmailLiveTest do
       assert is_pid(Inbound.poller_pid(ctx.reader.id))
 
       assert view |> element(~s([data-role="mail-refresh"])) |> render_click() =~ "Refreshing"
-      html = render_async(view)
+      html = render_async(view, 2_000)
 
       assert [row] = reader_rows(ctx.reader)
       assert has_element?(view, ~s([data-role="mail-inbox-row"][data-message-id="#{row.id}"]))
@@ -386,7 +391,7 @@ defmodule PlatformWeb.EmailLiveTest do
       {:ok, view, _html} = live(login(conn, ctx.admin), "/email")
 
       view |> element(~s([data-role="mail-refresh"])) |> render_click()
-      html = render_async(view)
+      html = render_async(view, 2_000)
 
       assert html =~ "#{ctx.reader.name}: failed (unable to connect)"
       refute html =~ ctx.imap_pass
@@ -399,7 +404,7 @@ defmodule PlatformWeb.EmailLiveTest do
       refute has_element?(view, ~s([data-role="mail-refresh"]))
 
       render_hook(view, "refresh_inbox", %{})
-      html = render_async(view)
+      html = render_async(view, 2_000)
 
       assert html =~ "Only org admins"
       assert reader_rows(ctx.reader) == []

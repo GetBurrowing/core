@@ -18,6 +18,14 @@
 // across renders), so a fixed id selector is unreliable. The
 // always-present `#upload-send-form` is stable and contains exactly one
 // file input: the one for `:attachments`.
+//
+// Large files (task 01a120be): a picked file over the composer's inline cap
+// is taken out of this input by the LargeUpload hook's capture-phase
+// listener (./large_upload.js) before LiveView sees it, and staged for the
+// chunked path. Staging opens the dialog server-side, so the change handler
+// below only opens it when inline files remain or large ones were staged.
+import { stagedFiles } from "./large_upload"
+
 function findFileInput() {
   return document.querySelector("#upload-send-form input[type=\"file\"]");
 }
@@ -67,8 +75,11 @@ const UploadButton = {
       }
       this._fileInput = fileInput;
       this._onFileChange = () => {
-        // Open the staging dialog after iOS native picker returns selected files.
-        this.pushEvent("upload_dialog_open", {});
+        // Open the staging dialog after iOS native picker returns selected files
+        // (inline ones are in the input; large ones were staged by LargeUpload).
+        if ((this._fileInput.files || []).length > 0 || stagedFiles.size > 0) {
+          this.pushEvent("upload_dialog_open", {});
+        }
       };
       this._fileInput.addEventListener("change", this._onFileChange);
     }

@@ -25,6 +25,8 @@ import {LiveSocket} from "phoenix_live_view"
 import topbar from "../vendor/topbar"
 import Hooks from "./hooks"
 import {installNativeDonations} from "./native_donations"
+import {uploadManager} from "./hooks/large_upload"
+import {installReloadGuard} from "./lib/reload_guard"
 
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 const liveSocket = new LiveSocket("/live", Socket, {
@@ -42,6 +44,14 @@ const liveSocket = new LiveSocket("/live", Socket, {
   params: {_csrf_token: csrfToken, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone},
   hooks: Hooks,
 })
+
+// LiveView recovers from some failures by reloading the page
+// (`reloadWithJitter`), which destroys the File of a large upload that is
+// paused offline. Hold that reload while an upload is running; Phoenix keeps
+// retrying the connection, and a reload still needed once the uploads are
+// done goes ahead (task 01a120be, ./lib/reload_guard.js).
+const reloadGuard = installReloadGuard(liveSocket, {isBusy: () => uploadManager.isBusy()})
+uploadManager.onIdle(() => reloadGuard.kick())
 
 // Show progress bar on live navigation and form submits
 topbar.config({barColors: {0: "#29d"}, shadowColor: "rgba(0, 0, 0, .3)"})

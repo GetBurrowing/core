@@ -36,7 +36,10 @@ defmodule PlatformWeb.AppApiControllerTest do
     {:delete, "/api/app/devices/install-1", %{}},
     {:get, "/api/app/spaces", %{}},
     {:post, "/api/app/spaces/:space_id/messages", %{"text" => "hello"}},
-    {:get, "/api/app/counts", %{}}
+    {:get, "/api/app/counts", %{}},
+    {:get, "/api/app/upload_config", %{}},
+    {:post, "/api/app/spaces/:space_id/uploads",
+     %{"filename" => "a.bin", "content_type" => "application/octet-stream", "byte_size" => 10}}
   ]
 
   defp pkce do

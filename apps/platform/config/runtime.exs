@@ -222,6 +222,16 @@ config :platform,
   upload_max_bytes: String.to_integer(System.get_env("UPLOAD_MAX_BYTES", "524288000")),
   pending_ttl_seconds: String.to_integer(System.get_env("PENDING_TTL_SECONDS", "900"))
 
+# Per-install ceiling for one chat file sent through the resumable chunked
+# upload path (task 01a120be), and the size of each PATCH chunk. Read only via
+# Platform.Chat.UploadLimits. Default 1_000_000_000 bytes ("1 GB"); lower it
+# on an install to roll back without a deploy. The chunk default (32 MiB) stays well under any edge
+# (Cloudflare) request-body cap. Distinct from :upload_max_bytes (agents' single
+# POST, 500 MB) and ChatLive's 15 MB inline LiveView cap, both unchanged.
+config :platform,
+  chat_max_upload_bytes: String.to_integer(System.get_env("CHAT_MAX_UPLOAD_BYTES", "1000000000")),
+  upload_chunk_bytes: String.to_integer(System.get_env("UPLOAD_CHUNK_BYTES", "33554432"))
+
 # The attachment storage root. This file loads AFTER config/test.exs, so an
 # unguarded write here would replace the per-run tmp root test.exs sets with
 # the deploy-host path, and every file test on a box without a writable

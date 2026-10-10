@@ -133,4 +133,23 @@ final class EvidenceUITests: XCTestCase {
         shot("notification-expanded")
         _ = app
     }
+
+    /// Task 01a120be stage 4: the "Sent to #<space>" notification a finished
+    /// background upload posts, drawn by the system.
+    func test4UploadSentNotification() {
+        let app = launch(["-SuiteEvidenceSentNotification", "design-review"])
+        for _ in 0..<3 {
+            let allow = springboard.buttons["Allow"]
+            if allow.waitForExistence(timeout: 5) { allow.tap() }
+            let cancel = consentButton(app, "Cancel")
+            if cancel.waitForExistence(timeout: 3) { cancel.tap() }
+        }
+        XCUIDevice.shared.press(.home)
+        let banner = springboard.otherElements["NotificationShortLookView"].firstMatch
+        guard banner.waitForExistence(timeout: 60) else {
+            shot("upload-sent-missing")
+            return
+        }
+        shot("upload-sent-notification")
+    }
 }

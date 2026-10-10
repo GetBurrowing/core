@@ -70,6 +70,25 @@ defmodule Platform.Chat.AttachmentStorage do
     end
   end
 
+  @doc """
+  Storage key and normalized content type for a file reserved BEFORE its
+  bytes exist (the chunked large-file path, task 01a120be). Same key layout
+  and the same allowlist-gated MIME override as `persist_upload/3`.
+  """
+  @spec reservation(String.t() | nil, String.t() | nil) :: %{
+          storage_key: String.t(),
+          content_type: String.t()
+        }
+  def reservation(client_name, client_type) do
+    filename = sanitize_filename(client_name || "attachment")
+    bucket = Date.utc_today() |> Date.to_iso8601() |> String.replace("-", "/")
+
+    %{
+      storage_key: Path.join([@storage_prefix, bucket, "#{Ecto.UUID.generate()}-#{filename}"]),
+      content_type: normalize_content_type(client_type, client_name || filename)
+    }
+  end
+
   @spec delete(binary()) :: :ok
   def delete(storage_key), do: adapter().delete(storage_key)
 
@@ -97,6 +116,8 @@ defmodule Platform.Chat.AttachmentStorage do
   # override into a stored-XSS path — e.g. an attacker uploading `evil.html`
   # with client_type = "application/octet-stream" must NOT be re-labeled
   # text/html and served inline.
+  # Video (task 01a120be): an iOS .mov labelled application/octet-stream is
+  # typed as video so it plays inline; video does not execute script.
   # SVG is intentionally excluded — SVG can embed <script>.
   # text/* is intentionally excluded — text/html executes as HTML.
   @safe_override_types ~w(
@@ -107,6 +128,9 @@ defmodule Platform.Chat.AttachmentStorage do
     image/heic
     image/heif
     application/pdf
+    video/mp4
+    video/quicktime
+    video/webm
   )
 
   defp normalize_content_type(nil, filename), do: safe_infer(filename)

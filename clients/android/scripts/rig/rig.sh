@@ -143,7 +143,11 @@ cmd_bundletool() {
   ' bundletool "$@"
 }
 
-avd_name() { echo "burrow_api$1"; }
+# Per prefix, like every other name here: the AVD lives on the shared SDK
+# volume, and two rigs booting one AVD fail with "Failed to get write lock"
+# on its cache.img (measured 2026-10-09, task 01a120be, while two other
+# prefixes held burrow_api35).
+avd_name() { echo "burrow_${PREFIX}_api$1"; }
 
 cmd_emulator_up() {
   require_moon

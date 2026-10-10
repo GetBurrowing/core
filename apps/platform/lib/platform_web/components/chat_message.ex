@@ -536,8 +536,41 @@ defmodule PlatformWeb.Components.ChatMessage do
             </div>
           </div>
           <div :if={non_images != []} class="mt-1 flex flex-col gap-2">
+            <%!-- Received video (task 01a120be stage 3): plays in place with
+                 no autoplay; preload=metadata fetches only the header, and
+                 Play/seek ride Range requests. The size is always shown so a
+                 phone user knows before tapping. --%>
+            <div
+              :for={attachment <- Enum.filter(non_images, &video_attachment?/1)}
+              data-role="video-attachment"
+              class="w-full max-w-md overflow-hidden rounded-box border border-edge bg-base-200"
+            >
+              <video
+                controls
+                preload="metadata"
+                playsinline
+                src={attachment_url(attachment)}
+                class="aspect-video w-full bg-base-300"
+              >
+              </video>
+              <div class="flex items-center gap-2 px-3 py-2 text-sm">
+                <span class="min-w-0 flex-1 truncate" title={attachment.filename}>
+                  {attachment.filename}
+                </span>
+                <span class="shrink-0 font-mono text-[11px] tabular-nums text-base-content/60">
+                  {Platform.Chat.UploadLimits.format_bytes(attachment.byte_size || 0)}
+                </span>
+                <a
+                  href={attachment_url(attachment)}
+                  download={attachment.filename}
+                  class="btn btn-ghost btn-xs shrink-0"
+                >
+                  Download
+                </a>
+              </div>
+            </div>
             <a
-              :for={attachment <- non_images}
+              :for={attachment <- Enum.reject(non_images, &video_attachment?/1)}
               href={attachment_url(attachment)}
               target="_blank"
               rel="noopener noreferrer"

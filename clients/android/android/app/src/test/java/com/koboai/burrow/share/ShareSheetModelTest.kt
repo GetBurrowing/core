@@ -58,10 +58,11 @@ class ShareSheetModelTest {
     }
 
     @Test
-    fun `the cap is pinned`() {
-        assertEquals(8_388_608L, SizeCheck.MAX_SHARE_FILE_BYTES)
-        assertEquals(8L * 1024 * 1024, SizeCheck.MAX_SHARE_FILE_BYTES)
-        // The server's whole-body multipart limit (Plug.Parsers :length; iOS maxRequestBytes).
+    fun `the multipart threshold is pinned`() {
+        // Task 01a120be: the 8 MiB MAX_SHARE_FILE_BYTES user limit is gone (the
+        // per-file limit is the server's upload_config); what remains is the
+        // server's whole-body multipart limit (Plug.Parsers :length; iOS maxRequestBytes),
+        // and only as the multipart threshold.
         assertEquals(8_000_000L, SizeCheck.MAX_REQUEST_BYTES)
     }
 

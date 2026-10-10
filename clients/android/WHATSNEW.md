@@ -10,7 +10,7 @@ First internal build of Burrow for Android: the Burrow web app in a native shell
 Please try:
 - Sign in to your install, then allow notifications when asked.
 - Mentions: reply from the notification, or tap Open to land in the space.
-- Share a photo, link or PDF from another app to a Burrow space.
+- Share a photo, link, PDF or a large video (up to 1 GB by default) to a Burrow space; it uploads in the background.
 - Add the My approvals and My tasks widgets to your home screen.
 
-Known gaps: no native meetings yet; files over 8 MB cannot be shared.
+Known gaps: no native meetings yet.

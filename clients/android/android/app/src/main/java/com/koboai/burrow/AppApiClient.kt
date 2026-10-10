@@ -218,6 +218,13 @@ class AppApiClient(
         path: String,
     ): String = send(authorized(host, "GET", path, null), path).body
 
+    /** A bearer JSON `POST` of [body] to [path] on [host]; the body of a 2xx, else throws (status kept). */
+    fun postJson(
+        host: String,
+        path: String,
+        body: String,
+    ): String = send(authorized(host, "POST", path, body), path).body
+
     /** A bearer `DELETE` (`/api/app/session`, `/api/app/devices/:id`). */
     fun delete(
         host: String,

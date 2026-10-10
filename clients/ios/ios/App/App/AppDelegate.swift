@@ -24,7 +24,25 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         #if DEBUG
             EvidenceHooks.apply()
         #endif
+        // Large share-sheet uploads (task 01a120be): for a chunked upload
+        // whose share extension is gone, rebuild which chunks still have
+        // live tasks, HEAD for the server's contiguous offset and queue
+        // only the missing chunks. Every chunk was queued up front, so this
+        // creates no task unless one was lost.
+        BackgroundUploader.shared.resumePending()
         return true
+    }
+
+    /// The system relaunches the app for a background upload session the
+    /// share extension started; the uploader recreates the session by its
+    /// identifier and handles the chunk results: an acknowledged slice is
+    /// deleted, a failed chunk alone is re-sent, a 404/410 posts the
+    /// "upload expired" notification, the finishing 200 posts "Sent to".
+    func application(
+        _ application: UIApplication, handleEventsForBackgroundURLSession identifier: String,
+        completionHandler: @escaping () -> Void
+    ) {
+        BackgroundUploader.shared.reconnect(sessionID: identifier, completionHandler: completionHandler)
     }
 
     // The APNs device token is handed to the registrar and never logged.
@@ -70,6 +88,18 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
                 let store = InstallStore.shared
                 store.add(host: host)
                 _ = KeychainTokenStore.shared.store("evidence-placeholder", for: host)
+            }
+            // Task 01a120be stage 4 evidence: the large-upload completion
+            // notification, posted by the uploader's own code path once
+            // notifications are allowed (EvidenceUITests presses Home first).
+            if let space = args.string(forKey: "SuiteEvidenceSentNotification") {
+                UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, _ in
+                    guard granted else { return }
+                    // A time trigger, so the system delivers it while the
+                    // app is suspended in the background.
+                    let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 8, repeats: false)
+                    UNUserNotificationCenter.current().add(BackgroundUploader.sentNotificationRequest(space, trigger: trigger))
+                }
             }
             if args.bool(forKey: "SuiteRequestPush") {
                 UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }

@@ -99,6 +99,50 @@ final class ExtensionRenderTests: XCTestCase {
             }, size: size)
     }
 
+    // MARK: Large files (task 01a120be stage 4)
+
+    /// A sparse file of `bytes` (no disk is used for the zeros).
+    private func sparseFile(_ name: String, bytes: Int64) throws -> MultipartForm.FilePart {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent(name)
+        FileManager.default.createFile(atPath: url.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: url)
+        try handle.truncate(atOffset: UInt64(bytes))
+        try handle.close()
+        return MultipartForm.FilePart(filename: name, mimeType: "video/quicktime", url: url)
+    }
+
+    func testLargeFileShareStates() throws {
+        let size = CGSize(width: 402, height: 560)
+        let config = UploadConfig(maxUploadBytes: 1_073_741_824, maxUploadLabel: "1 GB", chunkBytes: 33_554_432, multipartMaxBytes: 8_000_000)
+        let big = try sparseFile("launch-walkthrough.mov", bytes: 900_000_000)
+        let tooBig = try sparseFile("quarterly-raw.mov", bytes: 1_153_433_600)
+        try snapshot(
+            "share-large-900mb",
+            sheet {
+                $0.debugSet(phase: .ready, spaces: spaces, uploadConfig: config)
+                $0.payload = .file(big)
+                $0.selectedSpaceID = "s1"
+                $0.message = "Launch walkthrough, final cut"
+            }, size: size)
+        try snapshot(
+            "share-too-large",
+            sheet {
+                $0.debugSet(phase: .ready, spaces: spaces, uploadConfig: config)
+                $0.payload = .file(tooBig)
+                $0.selectedSpaceID = "s1"
+            }, size: size)
+        try snapshot(
+            "share-handed-off",
+            sheet {
+                $0.debugSet(phase: .ready, spaces: spaces, uploadConfig: config)
+                $0.payload = .file(big)
+                $0.selectedSpaceID = "s1"
+                $0.debugSet(phase: .handedOff)
+            }, size: size)
+    }
+
     // MARK: iPad (task 01a10db6 stage 2)
 
     /// iPad Pro 13-inch (M5), in points.

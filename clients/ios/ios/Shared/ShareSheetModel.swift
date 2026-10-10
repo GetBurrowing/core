@@ -46,12 +46,22 @@ final class ShareSheetModel: ObservableObject {
         case ready
         case sending
         case sent(spaceName: String)
+        /// A large file handed to the background uploader (task 01a120be):
+        /// the sheet closes at once; the server posts the message when the
+        /// last chunk lands and a notification says so.
+        case handedOff
     }
+
+    /// "Uploading in the background. You can close this." (design canvas
+    /// 01a120be-f336, share sheet).
+    static let handedOffText = "Uploading in the background. You can close this."
 
     enum Banner: Equatable {
         case sendFailed
         case spacesFailed
         case tooLarge(bytes: Int64)
+        /// Over the install's own limit, worded with the server's label.
+        case overLimit(name: String, bytes: Int64, label: String)
 
         var text: String {
             switch self {
@@ -60,7 +70,10 @@ final class ShareSheetModel: ObservableObject {
             case .spacesFailed:
                 return "Couldn't load your spaces. Check your connection and try again."
             case .tooLarge(let bytes):
-                return "This item is \(ShareSheetModel.megabytes(bytes)). Burrow takes up to \(ShareSheetModel.megabytes(SuiteAPIClient.maxRequestBytes)) from the share sheet."
+                return
+                    "This item is \(ByteLabel.format(bytes)). Burrow takes up to \(ByteLabel.format(SuiteAPIClient.maxRequestBytes)) from the share sheet."
+            case .overLimit(let name, let bytes, let label):
+                return ShareRoute.tooLargeText(name: name, bytes: bytes, label: label)
             }
         }
     }
@@ -80,16 +93,27 @@ final class ShareSheetModel: ObservableObject {
     @Published var payload: SharePayload? {
         didSet { checkSize() }
     }
+    /// The install's upload limits (`GET /api/app/upload_config`). Nil
+    /// until loaded, or on a server that predates it; then only the
+    /// multipart path exists and its transport cap applies.
+    @Published private(set) var uploadConfig: UploadConfig? {
+        didSet { checkSize() }
+    }
 
     let install: Install?
     private let client: SuiteAPIClient
     private let lastSpace: UserDefaults
+    private let uploader: LargeFileUploading
 
-    init(install: Install?, client: SuiteAPIClient = .shared,
-         lastSpace: UserDefaults? = UserDefaults(suiteName: InstallStore.appGroup)) {
+    init(
+        install: Install?, client: SuiteAPIClient = .shared,
+        lastSpace: UserDefaults? = UserDefaults(suiteName: InstallStore.appGroup),
+        uploader: LargeFileUploading = BackgroundUploader.shared
+    ) {
         self.install = install
         self.client = client
         self.lastSpace = lastSpace ?? .standard
+        self.uploader = uploader
     }
 
     var selectedSpace: SuiteSpace? { spaces.first { $0.id == selectedSpaceID } }
@@ -98,7 +122,7 @@ final class ShareSheetModel: ObservableObject {
     /// Fields lock while sending and after sending.
     var fieldsLocked: Bool {
         switch phase {
-        case .sending, .sent: return true
+        case .sending, .sent, .handedOff: return true
         default: return false
         }
     }
@@ -106,7 +130,20 @@ final class ShareSheetModel: ObservableObject {
     var canSend: Bool {
         guard phase == .ready, selectedSpace != nil, payload != nil else { return false }
         if case .tooLarge = banner { return false }
+        if case .overLimit = banner { return false }
         return true
+    }
+
+    /// Where the current payload goes, given what is known of the server.
+    var route: ShareRoute {
+        guard let payload, let part = payload.filePart,
+            let body = try? payload.form(message: message, agentID: selectedAgentID).contentLength()
+        else { return .multipart }
+        let fileBytes = Self.fileSize(part.url)
+        guard let uploadConfig else {
+            return body <= SuiteAPIClient.maxRequestBytes ? .multipart : .tooLarge(name: part.filename, bytes: fileBytes, label: "")
+        }
+        return ShareRoute.decide(fileName: part.filename, fileBytes: fileBytes, multipartBodyBytes: body, config: uploadConfig)
     }
 
     /// Checks the Keychain BEFORE anything touches the network: with no
@@ -118,6 +155,16 @@ final class ShareSheetModel: ObservableObject {
             return
         }
         loadSpaces()
+        loadUploadConfig()
+    }
+
+    func loadUploadConfig() {
+        guard let install else { return }
+        client.uploadConfig(host: install.host) { [weak self] result in
+            DispatchQueue.main.async {
+                if case .success(let config) = result { self?.uploadConfig = config }
+            }
+        }
     }
 
     func loadSpaces() {
@@ -134,7 +181,8 @@ final class ShareSheetModel: ObservableObject {
         case .success(let list):
             spaces = list
             if selectedSpaceID == nil, let host = install?.host,
-               let last = lastSpace.string(forKey: Self.lastSpaceKey(host)), list.contains(where: { $0.id == last }) {
+                let last = lastSpace.string(forKey: Self.lastSpaceKey(host)), list.contains(where: { $0.id == last })
+            {
                 selectedSpaceID = last
             }
             phase = .ready
@@ -152,6 +200,9 @@ final class ShareSheetModel: ObservableObject {
         guard canSend, let install, let space = selectedSpace, let payload else { return }
         banner = nil
         phase = .sending
+        if route == .chunked, let part = payload.filePart {
+            return sendChunked(install: install, space: space, part: part, onSent: onSent)
+        }
         let form = payload.form(message: message, agentID: selectedAgentID)
         client.sendMessage(host: install.host, spaceID: space.id, form: form) { [weak self] result in
             DispatchQueue.main.async {
@@ -177,34 +228,77 @@ final class ShareSheetModel: ObservableObject {
         }
     }
 
-    /// Refuses an attachment past the server's cap as soon as it is known,
-    /// not after the upload.
+    /// A file over the multipart limit: reserve it, hand it to the
+    /// background uploader, and close the sheet at once.
+    private func sendChunked(install: Install, space: SuiteSpace, part: MultipartForm.FilePart, onSent: @escaping () -> Void) {
+        let size = Self.fileSize(part.url)
+        let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        client.reserveUpload(
+            host: install.host, spaceID: space.id, filename: part.filename, contentType: part.mimeType, byteSize: size,
+            text: text, agentID: selectedAgentID
+        ) { [weak self] result in
+            guard let self else { return }
+            let handedOff: Result<Void, Error> = result.flatMap { reservation in
+                Result {
+                    try self.uploader.enqueue(
+                        reservation: reservation, host: install.host, file: part.url, filename: part.filename, byteSize: size,
+                        spaceName: space.name)
+                }
+            }
+            DispatchQueue.main.async {
+                switch handedOff {
+                case .success:
+                    self.lastSpace.set(space.id, forKey: Self.lastSpaceKey(install.host))
+                    self.phase = .handedOff
+                    DispatchQueue.main.asyncAfter(deadline: .now() + Self.sentDwell, execute: onSent)
+                case .failure(SuiteAPIClient.Failure.refused(413, _)):
+                    self.checkSize()
+                    self.phase = .ready
+                case .failure(SuiteAPIClient.Failure.notSignedIn), .failure(SuiteAPIClient.Failure.refused(401, _)):
+                    self.phase = .notSignedIn
+                case .failure:
+                    self.banner = .sendFailed
+                    self.phase = .ready
+                }
+            }
+        }
+    }
+
+    /// Refuses an attachment past the install's limit as soon as it is
+    /// known, not after the upload. With the server's config this is the
+    /// server's limit and label; without it (an older server) only the
+    /// multipart path exists and its cap applies.
     private func checkSize() {
-        guard let payload, payload.filePart != nil,
-              let size = try? payload.form(message: message, agentID: nil).contentLength() else {
-            if case .tooLarge = banner { banner = nil }
-            return
+        let isSizeBanner: Bool = {
+            switch banner {
+            case .tooLarge, .overLimit: return true
+            default: return false
+            }
+        }()
+        switch route {
+        case .tooLarge(let name, let bytes, let label) where uploadConfig != nil:
+            banner = .overLimit(name: name, bytes: bytes, label: label)
+        case .tooLarge:
+            let body = (try? payload?.form(message: message, agentID: nil).contentLength()) ?? nil
+            banner = .tooLarge(bytes: body ?? SuiteAPIClient.maxRequestBytes + 1)
+        default:
+            if isSizeBanner { banner = nil }
         }
-        if size > SuiteAPIClient.maxRequestBytes {
-            banner = .tooLarge(bytes: size)
-        } else if case .tooLarge = banner {
-            banner = nil
-        }
+    }
+
+    static func fileSize(_ url: URL) -> Int64 {
+        ((try? FileManager.default.attributesOfItem(atPath: url.path)[.size]) as? NSNumber)?.int64Value ?? 0
     }
 
     static func lastSpaceKey(_ host: String) -> String { "suite.share.last_space.v1.\(host)" }
 
-    static func megabytes(_ bytes: Int64) -> String {
-        let value = Double(bytes) / 1_000_000
-        return value.truncatingRemainder(dividingBy: 1) == 0 ? "\(Int(value)) MB" : String(format: "%.1f MB", value)
-    }
-
     #if DEBUG
-    /// Screenshot evidence only: put the sheet in a state without a server.
-    func debugSet(phase: Phase, banner: Banner? = nil, spaces: [SuiteSpace]? = nil) {
-        if let spaces { self.spaces = spaces }
-        self.phase = phase
-        self.banner = banner
-    }
+        /// Screenshot evidence only: put the sheet in a state without a server.
+        func debugSet(phase: Phase, banner: Banner? = nil, spaces: [SuiteSpace]? = nil, uploadConfig: UploadConfig? = nil) {
+            if let spaces { self.spaces = spaces }
+            if let uploadConfig { self.uploadConfig = uploadConfig }
+            self.phase = phase
+            self.banner = banner
+        }
     #endif
 }

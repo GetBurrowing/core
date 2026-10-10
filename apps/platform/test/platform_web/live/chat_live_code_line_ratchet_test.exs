@@ -547,7 +547,17 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   # Merge of origin/main into 01a116de (deploy stage): main moved the base
   # 2366 -> 2363 (#1209). 2363 + 32 = 2395, re-measured with the guard's
   # counting rule over the merged file.
-  @chat_live_code_line_count 2395
+  #
+  # Large file uploads (task 01a120be stage 3): +2. The `LargeUploadHooks`
+  # alias and its `attach/1` pipeline step; the feature lives in
+  # `PlatformWeb.ChatLive.LargeUploadHooks`, the dialog partial and the
+  # composer partial. 2363 + 2 = 2365.
+  #
+  # Merge of origin/main into 01a120be (deploy stage): main's pin was 2395
+  # (01a116de +32 on the 2363 base); this branch adds +2 on that base.
+  # 2395 + 2 = 2397, re-measured with the guard's counting rule over the
+  # merged file.
+  @chat_live_code_line_count 2397
 
   @doc """
   Count the CODE lines of a source file.
