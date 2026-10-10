@@ -1919,6 +1919,12 @@ defmodule Platform.Federation.ToolSurface do
             required: false,
             description: "Priority: low, medium (default), high, critical"
           },
+          kind: %{
+            type: "string",
+            required: false,
+            description:
+              "Task kind: feature (default; new capability), chore (maintenance/cleanup/config), bug (shipped-behaviour defect), research (answer-producing investigation), or ops (operational/process work without a repo diff)"
+          },
           assignee_type: %{
             type: "string",
             required: false,
@@ -1961,7 +1967,7 @@ defmodule Platform.Federation.ToolSurface do
           }
         },
         returns:
-          "The created task object with id, title, status, priority, and sponsor (nil unless sponsor_user_id was supplied, else %{id, name, email}). When stack_id is supplied, the response also includes stack_id and stack_position. Response also includes advisory `similar_tasks: [%{id, title, status, priority, similarity_score, updated_at, merged_pr_url, follow_up_task_ids, cancellation_note}]` (0-5 near-duplicate hits scoped to the same project, each with a similarity_score >= 0.35; the score is the token-overlap coefficient between the new body and the candidate's title+description, NOT a rank) so the caller can detect near-duplicates and decide to fold, reference, or file fresh without a follow-up memory_search. Empty array (not nil) when no matches or when the similarity search fails.",
+          "The created task object with id, title, status, priority, kind, and sponsor (nil unless sponsor_user_id was supplied, else %{id, name, email}). When stack_id is supplied, the response also includes stack_id and stack_position. Response also includes advisory `similar_tasks: [%{id, title, status, priority, similarity_score, updated_at, merged_pr_url, follow_up_task_ids, cancellation_note}]` (0-5 near-duplicate hits scoped to the same project, each with a similarity_score >= 0.35; the score is the token-overlap coefficient between the new body and the candidate's title+description, NOT a rank) so the caller can detect near-duplicates and decide to fold, reference, or file fresh without a follow-up memory_search. Empty array (not nil) when no matches or when the similarity search fails.",
         limitations:
           "Requires a valid project_id. If stack_id is supplied, the stack must exist and the resulting in-stack DAG must remain acyclic with no cross-stack dependency edges. If sponsor_user_id is supplied it must reference an existing user (FK enforced). When auto_approve_plan is true, the plan won't auto-approve unless every phase assignee resolves to an agent.",
         when_to_use: "When you need to track a work item, feature, bug, or action item"
@@ -1979,7 +1985,7 @@ defmodule Platform.Federation.ToolSurface do
         },
         returns_schema: ReturnSchemas.for_tool("task_get"),
         returns:
-          "Task object with id, title, description, status, priority, project_id, epic_id, and sponsor (nil or %{id, name, email} per ADR 0042). Also `paused_reason` (the rollup-pause stamp map, or nil); `blocked_reason` (the escalation sentence last stamped when the orchestration layer moved this task to blocked, or nil); and `blocked_reason_at` (ISO-8601, or nil). The blocked stamp PERSISTS after unblock, so read it together with `status` and `blocked_reason_at`.",
+          "Task object with id, title, description, status, priority, kind, project_id, epic_id, and sponsor (nil or %{id, name, email} per ADR 0042). Also `paused_reason` (the rollup-pause stamp map, or nil); `blocked_reason` (the escalation sentence last stamped when the orchestration layer moved this task to blocked, or nil); and `blocked_reason_at` (ISO-8601, or nil). The blocked stamp PERSISTS after unblock, so read it together with `status` and `blocked_reason_at`.",
         limitations: "Returns nil if task not found",
         when_to_use: "When you need to check the current state of a specific task"
       },
@@ -2251,6 +2257,12 @@ defmodule Platform.Federation.ToolSurface do
             description: "New status (must be a valid transition)"
           },
           priority: %{type: "string", required: false, description: "New priority"},
+          kind: %{
+            type: "string",
+            required: false,
+            description:
+              "New task kind: feature, chore, bug, research, or ops. Omit to leave unchanged."
+          },
           epic_id: %{type: "string", required: false, description: "Move to a different epic"},
           assignee_type: %{type: "string", required: false, description: "Assignee type"},
           assignee_id: %{type: "string", required: false, description: "Assignee ID"},
@@ -2287,7 +2299,7 @@ defmodule Platform.Federation.ToolSurface do
           }
         },
         returns:
-          "The updated task object (includes sponsor: nil | %{id, name, email}), plus `previous_updated_at` — the `updated_at` the row held BEFORE this call, i.e. the revision this write displaced. Compare it against the `updated_at` you last read: if it is newer than yours, you overwrote a concurrent writer's edit. It is disclosure after the fact, not prevention — nothing warns the writer you displaced. Pass `base_updated_at` to be refused instead. This key is on the task_update envelope ONLY; task_get and task_list do not carry it, because a read displaces nothing.",
+          "The updated task object (includes kind and sponsor: nil | %{id, name, email}), plus `previous_updated_at` — the `updated_at` the row held BEFORE this call, i.e. the revision this write displaced. Compare it against the `updated_at` you last read: if it is newer than yours, you overwrote a concurrent writer's edit. It is disclosure after the fact, not prevention — nothing warns the writer you displaced. Pass `base_updated_at` to be refused instead. This key is on the task_update envelope ONLY; task_get and task_list do not carry it, because a read displaces nothing.",
         limitations:
           "The whole call is ONE write: plain fields, `status`, `phase_assignees` and a flat `assignee_id`/`assignee_type` are applied together in a single statement, and every check (transition table, plan gate, deploy target, stack gates, field validation) runs BEFORE it. Any refusal writes nothing and leaves updated_at unmoved: none of the fields in the call are applied, so retrying with the same `base_updated_at` is safe. `base_updated_at`, when supplied, guards that entire call in the statement's WHERE clause; if the row has advanced, the call is refused with a recoverable `stale_base` naming the current updated_at. WITHOUT `base_updated_at` THIS TOOL IS LAST-WRITE-WINS, as before: a concurrent writer's edit is overwritten silently and nothing tells either party. The gates themselves are read before the write, so a plan revoked in the instant between the check and the write is not caught; the atomicity guarantee covers the fields and the base. An unparseable base is rejected before any write. Status transitions are validated; not all transitions are allowed. sponsor_user_id must reference an existing user; passing an unknown UUID returns a recoverable FK error.",
         when_to_use: "When you need to update a task's details or move it between columns"
@@ -4705,6 +4717,7 @@ defmodule Platform.Federation.ToolSurface do
              title: task.title,
              status: task.status,
              priority: task.priority,
+             kind: task.kind,
              project_id: task.project_id,
              epic_id: task.epic_id,
              sponsor: serialize_sponsor(task.sponsor),
@@ -4723,6 +4736,7 @@ defmodule Platform.Federation.ToolSurface do
                  title: updated.title,
                  status: updated.status,
                  priority: updated.priority,
+                 kind: updated.kind,
                  project_id: updated.project_id,
                  epic_id: updated.epic_id,
                  sponsor: serialize_sponsor(updated.sponsor),
@@ -14174,6 +14188,7 @@ defmodule Platform.Federation.ToolSurface do
       description: task.description,
       status: task.status,
       priority: task.priority,
+      kind: task.kind,
       project_id: task.project_id,
       epic_id: task.epic_id,
       assignee_type: task.assignee_type,

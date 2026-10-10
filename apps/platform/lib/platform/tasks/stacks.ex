@@ -2847,19 +2847,33 @@ defmodule Platform.Tasks.Stacks do
         # preload here keeps the board view (only caller) consistent with
         # the desktop stack-detail panel, which already preloads `:plans`
         # via `load_stack_member_panel_data/1` in TasksLive.
+        kind = Map.get(filters, :kind)
+
         members_by_stack =
           Task
           |> where([t], t.stack_id in ^stack_ids and is_nil(t.deleted_at))
+          |> filter_members_by_kind(kind)
           |> order_by([t], asc: t.stack_position)
           |> preload(:plans)
           |> Repo.all()
           |> Enum.group_by(& &1.stack_id)
 
-        Enum.map(stacks, fn stack ->
+        stacks
+        |> Enum.map(fn stack ->
           members = Map.get(members_by_stack, stack.id, [])
           {stack, build_board_data(members)}
         end)
+        |> maybe_drop_stacks_without_kind_members(kind)
     end
+  end
+
+  defp filter_members_by_kind(query, nil), do: query
+  defp filter_members_by_kind(query, kind), do: where(query, [t], t.kind == ^kind)
+
+  defp maybe_drop_stacks_without_kind_members(entries, nil), do: entries
+
+  defp maybe_drop_stacks_without_kind_members(entries, _kind) do
+    Enum.reject(entries, fn {_stack, board_data} -> board_data.member_count == 0 end)
   end
 
   # Public-ish (private) helper exposed for tests that want to build the

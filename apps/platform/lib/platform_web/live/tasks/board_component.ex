@@ -371,6 +371,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
             sponsor_filter={@sponsor_filter}
             task_search_query={@task_search_query}
             scope_filter={@scope_filter}
+            kind_filter={@kind_filter}
             mobile?={true}
             class="inline-flex shrink-0"
           />
@@ -584,6 +585,13 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                               </span>
                               <div class="flex flex-wrap items-center gap-2">
                                 <span
+                                  class="badge badge-ghost badge-xs capitalize"
+                                  data-role="task-kind-badge"
+                                  data-task-kind={member.kind}
+                                >
+                                  {member.kind}
+                                </span>
+                                <span
                                   :if={member_action_label}
                                   class="badge badge-warning badge-xs gap-1 whitespace-nowrap shrink-0"
                                   data-role="stack-member-mobile-action"
@@ -742,6 +750,13 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                           <% end %>
                           <span :if={task.inserted_at} class="whitespace-nowrap">
                             {relative_time(task.inserted_at)}
+                          </span>
+                          <span
+                            class="badge badge-ghost badge-xs capitalize"
+                            data-role="task-kind-badge"
+                            data-task-kind={task.kind}
+                          >
+                            {task.kind}
                           </span>
                           <%!-- Badges-for-tasks-that-need-feedback (task
                            019e2c25 stage 3): mobile solo task cards now
@@ -1159,6 +1174,13 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                               {member.title}
                             </span>
                             <div class="flex items-center gap-2">
+                              <span
+                                class="badge badge-ghost badge-xs capitalize"
+                                data-role="task-kind-badge"
+                                data-task-kind={member.kind}
+                              >
+                                {member.kind}
+                              </span>
                               <%!-- ADR-0046 member 8 (019f9b29-9c47) stage 3, desktop half.
                                  COMPACT, not the fused strip: this row is a ~44px line
                                  already carrying a position glyph, a truncated title, a
@@ -1358,6 +1380,13 @@ defmodule PlatformWeb.Tasks.BoardComponent do
 
                         <%!-- Bottom row: priority + progress --%>
                         <div class="mt-1 flex items-center gap-2">
+                          <span
+                            class="badge badge-ghost badge-sm capitalize"
+                            data-role="task-kind-badge"
+                            data-task-kind={task.kind}
+                          >
+                            {task.kind}
+                          </span>
                           <span :if={task.priority} class={priority_badge_class(task.priority)}>
                             {task.priority}
                           </span>

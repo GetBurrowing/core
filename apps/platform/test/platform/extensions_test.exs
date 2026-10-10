@@ -552,12 +552,11 @@ defmodule Platform.ExtensionsTest do
     # Re-pinned by task 01a115b5 stage 2: suite_run_describe's `detail`
     # parameter and description text. Measured on moon at the stage's branch.
     #
-    # Re-pinned by task 01a116de stage 2: two description strings stop naming
-    # one install's root org (`org_list_descendants`'s parent_org_id now says
-    # "Use the root org id", task_close_as_delivered says "root-org admin").
-    # Names and bundles are unchanged (asserted above). Measured on moon at
-    # the stage's branch (c42cf2819).
-    @main_tool_digest_off "393233a9add41feb9c556b3e03cd293bd7d9fa5739f27bd53556229bdbff0dd0"
+    # Re-pinned by task 019fa1ac stage 1: task_create/task_update expose the
+    # first-class kind taxonomy and task read/write docs now name kind.
+    # Measured on moon at the stage's branch (recomputed at the rebased tip
+    # after main's Fabrikam scrub landed; see task 019fa1ac PR).
+    @main_tool_digest_off "e109ade3a736b8bcf832bc0e854a3e366433f19e0b5b3e205df66489b06cfeae"
     @main_kinds_summaries_digest_off "4c060fb7a6914985f94857aaac9effbb519dd2b2170c7a9c0013d4db15a73ea4"
     @main_kinds_tool_schemas_digest_off "e454cd9e2aeb1d821a70b74fe433e81ba98b94f7ae9f2d59c55f8cf5bf509af8"
     # main's lists minus exactly `play`.

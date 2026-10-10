@@ -6467,12 +6467,14 @@ defmodule Platform.Tasks do
     project_id = Keyword.get(opts, :project_id)
     epic_id = Keyword.get(opts, :epic_id)
     sponsor_user_id = Keyword.get(opts, :sponsor_user_id)
+    kind = Keyword.get(opts, :kind)
 
     Task
     |> where([t], is_nil(t.deleted_at))
     |> maybe_filter_project(project_id)
     |> maybe_filter_epic(epic_id)
     |> maybe_filter_sponsor(sponsor_user_id)
+    |> maybe_filter_kind(kind)
     |> order_by([t], desc: t.inserted_at)
     |> preload([:project, :epic, :sponsor, plans: :stages])
     |> Repo.all()
@@ -6538,6 +6540,12 @@ defmodule Platform.Tasks do
 
   defp maybe_filter_sponsor(query, sponsor_user_id),
     do: where(query, [t], t.sponsor_user_id == ^sponsor_user_id)
+
+  # The board's low-cardinality kind filter is query-level rather than an
+  # in-memory pass so kind + status selection can use the composite index
+  # introduced with the taxonomy. nil preserves every existing caller.
+  defp maybe_filter_kind(query, nil), do: query
+  defp maybe_filter_kind(query, kind), do: where(query, [t], t.kind == ^kind)
 
   # ── Kanban column data shape ─────────────────────────────────────────────
   #
@@ -6615,6 +6623,7 @@ defmodule Platform.Tasks do
     project_id = Keyword.get(opts, :project_id)
     epic_id = Keyword.get(opts, :epic_id)
     sponsor_user_id = Keyword.get(opts, :sponsor_user_id)
+    kind = Keyword.get(opts, :kind)
 
     # Statuses we actually pull from the DB: the 7 directly-bucketed ones
     # plus any whose tasks we fold into another bucket (e.g. cancelled →
@@ -6631,6 +6640,7 @@ defmodule Platform.Tasks do
       |> maybe_filter_project(project_id)
       |> maybe_filter_epic(epic_id)
       |> maybe_filter_sponsor(sponsor_user_id)
+      |> maybe_filter_kind(kind)
       |> order_by([t], desc: t.updated_at)
       # `plans: :stages` is required by the desktop kanban template,
       # which renders per-card plan progress (`<passed>/<total>` stage

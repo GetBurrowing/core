@@ -210,6 +210,7 @@ defmodule Platform.Federation.ReturnSchemas do
       "description" => nullable(string()),
       "status" => string(),
       "priority" => nullable(string()),
+      "kind" => string(),
       "project_id" => nullable(uuid()),
       "epic_id" => nullable(uuid()),
       "assignee_type" => nullable(string()),

@@ -599,6 +599,10 @@ defmodule Platform.Orchestration.PromptTemplates do
 
   Why any of this: a cite decays but a falsifier does not. A ticket whose central premise was false four months before it was filed still cost only one verification, because it said "if that does not reproduce, the hypothesis is wrong — say so and re-derive". Without it, a stale ticket whose instruction still applies cleanly LANDS: the fixer passes their own tests and ships the wrong change.
 
+  ## Choosing a task kind
+
+  Every task you file through `task_create` must set `kind` deliberately: `feature` for a new capability, `chore` for maintenance/cleanup/dependency/config work, `bug` for a defect in shipped behaviour, `research` for an investigation whose deliverable is an answer, or `ops` for operational/process work with no repository diff. Do not borrow Conventional Commits labels for this non-code-only task system. If none fits cleanly, choose the closest of these five rather than inventing a sixth value.
+
   ## Subagent-spawn discipline
 
   Handle this task in a subagent with fresh context, **spawned as a background process**. Spawn it via the Agent tool — `general-purpose` is fine — with `run_in_background: true` so the parent conversation stays responsive while the subagent executes. Brief it with the full dispatch payload above, including the Organization Memory section. Do NOT do this work in the parent conversation. The goals: (1) fresh context per task so the org memory discipline below isn't competing with whatever's already loaded, (2) audit clarity so the task lives in its own conversation tree, (3) parent responsiveness — the parent can keep handling other inbound messages or tasks while the subagent runs.

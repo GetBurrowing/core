@@ -441,6 +441,50 @@ defmodule PlatformWeb.MCPControllerTest do
       assert String.contains?(text, "runtimes")
     end
 
+    test "task kind round-trips through the HTTP MCP transport", %{conn: conn} do
+      {_runtime, token} = create_runtime(%{allowed_bundles: ["task"]})
+
+      {:ok, project} =
+        Tasks.create_project(%{name: "HTTP kind #{System.unique_integer([:positive])}"})
+
+      create_conn =
+        mcp_post(
+          conn,
+          token,
+          rpc("tools/call", %{
+            "name" => "task_create",
+            "arguments" => %{
+              "project_id" => project.id,
+              "title" => "HTTP kind",
+              "kind" => "research"
+            }
+          })
+        )
+
+      %{"result" => %{"content" => [%{"text" => create_json}], "isError" => false}} =
+        json_response(create_conn, 200)
+
+      created = Jason.decode!(create_json)
+      assert created["kind"] == "research"
+
+      update_conn =
+        build_conn()
+        |> mcp_post(
+          token,
+          rpc("tools/call", %{
+            "name" => "task_update",
+            "arguments" => %{"task_id" => created["id"], "kind" => "bug"}
+          })
+        )
+
+      %{"result" => %{"content" => [%{"text" => update_json}], "isError" => false}} =
+        json_response(update_conn, 200)
+
+      updated = Jason.decode!(update_json)
+      assert updated["kind"] == "bug"
+      assert Tasks.get_task_record(created["id"]).kind == "bug"
+    end
+
     test "refuses a tool that is out of scope with -32001", %{conn: conn} do
       {_runtime, token} = create_runtime(%{allowed_bundles: ["federation"]})
 

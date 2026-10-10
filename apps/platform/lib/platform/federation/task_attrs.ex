@@ -81,6 +81,7 @@ defmodule Platform.Federation.TaskAttrs do
     description
     status
     priority
+    kind
     epic_id
     project_id
     assignee_id

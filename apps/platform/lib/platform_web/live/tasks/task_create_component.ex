@@ -244,6 +244,28 @@ defmodule PlatformWeb.Tasks.TaskCreateComponent do
             </select>
           </div>
 
+          <div>
+            <label for="task-kind" class="label label-text text-xs font-medium">Kind *</label>
+            <select
+              id="task-kind"
+              name="task[kind]"
+              data-role="task-kind-select"
+              class="select select-bordered w-full"
+              required
+            >
+              <option
+                :for={kind <- Task.kinds()}
+                value={kind}
+                selected={(@task_form[:kind].value || "feature") == kind}
+              >
+                {String.capitalize(kind)}
+              </option>
+            </select>
+            <p class="mt-1 text-[11px] text-base-content/50">
+              Feature · Chore · Bug · Research · Ops
+            </p>
+          </div>
+
           <%!-- What --%>
           <.input
             type="textarea"

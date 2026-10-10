@@ -45,6 +45,7 @@ defmodule Platform.Tasks.Task do
   # `@deletable_statuses` so the UI can still fold it.
   @statuses ~w(backlog planning in_progress in_review deploying done blocked stack_pending cancelled)
   @priorities ~w(low medium high critical)
+  @kinds ~w(feature chore bug research ops)
 
   # Per-phase assignee keys. Order matches the natural lifecycle progression.
   @phases ~w(planning execution review)
@@ -103,6 +104,7 @@ defmodule Platform.Tasks.Task do
     field(:description, :string)
     field(:status, :string, default: "backlog")
     field(:priority, :string, default: "medium")
+    field(:kind, :string, default: "feature")
     # `assignee_type` / `assignee_id` are the *current-phase* assignee, derived
     # by `Platform.Tasks` whenever the phase changes. New assignments should be
     # written via `phase_assignees` so all phases get explicit values.
@@ -211,6 +213,7 @@ defmodule Platform.Tasks.Task do
 
   def statuses, do: @statuses
   def priorities, do: @priorities
+  def kinds, do: @kinds
 
   @doc """
   Sort rank for a priority value, by MEANING: `"critical"` 0, `"high"` 1,
@@ -290,6 +293,7 @@ defmodule Platform.Tasks.Task do
       :description,
       :status,
       :priority,
+      :kind,
       :assignee_type,
       :assignee_id,
       :phase_assignees,
@@ -316,6 +320,7 @@ defmodule Platform.Tasks.Task do
     |> validate_length(:title, max: 255, count: :codepoints)
     |> validate_inclusion(:status, @statuses)
     |> validate_inclusion(:priority, @priorities)
+    |> validate_inclusion(:kind, @kinds)
     |> validate_phase_assignees()
     |> validate_dependencies()
     |> validate_metadata()

@@ -32,9 +32,9 @@ defmodule Platform.Orchestration.HeartbeatSchedulerCodeModeTest do
   @fixture_task_id "0a114a80-c0de-4000-8000-000000000001"
 
   @pre_change %{
-    planning: {"3985d1a5c1a4fa182ee72157968edb2515b7ca58c4b556425630f8dd27c90ac8", 26_208},
-    in_progress: {"3b6df0b69dd3810447e798bb5be64387cffd9cd1a32d382b8720312756ad3339", 15_731},
-    in_review: {"b174acfa67f4c50c2d30586f7310a1d47e53c238512f1184ce6678fdc056d678", 18_616}
+    planning: {"d638a48d2fbd6cf7041c5d9175c0e64c8e3a1bd123f1e44612cd162d41afaa76", 26_732},
+    in_progress: {"1a5a2c2d5507013c0663d5c757b9f0291761557bfa2d1e8cc01ea0b629056f0f", 16_255},
+    in_review: {"ffc318b1e8653d2e29a5c64c83c90964eac44353f1d1a7d87b7dd6a0350beb20", 19_140}
   }
 
   @treatment_block "\n\n## Experiment directive (dispatch.code_mode)\n\n" <>

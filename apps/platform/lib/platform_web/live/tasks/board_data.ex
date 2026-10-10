@@ -96,6 +96,7 @@ defmodule PlatformWeb.Tasks.BoardData do
   }
 
   @sort_modes [:priority, :updated]
+  @task_kinds Task.kinds()
 
   @spec sort_modes() :: [:priority | :updated]
   def sort_modes, do: @sort_modes
@@ -152,35 +153,42 @@ defmodule PlatformWeb.Tasks.BoardData do
 
   def decode_scope_param(_scope, _active_scopes), do: :all
 
+  @doc "Decode a shareable task-kind filter, falling back to the unfiltered board."
+  @spec decode_kind_param(term()) :: :all | String.t()
+  def decode_kind_param(kind) when kind in @task_kinds, do: kind
+  def decode_kind_param(_kind), do: :all
+
   @doc """
-  The board URL for a sponsor filter, a sort mode, a search query and a
-  status scope — the ONE builder for every patch back to `/tasks` (task
+  The board URL for a sponsor filter, a sort mode, a search query, a
+  status scope and a task kind — the ONE builder for every patch back to `/tasks` (task
   01a0cef1 stage 2, extended by task 01a08df0 stage 1), so no patch can drop
   a param another control set.
 
-  Defaults emit nothing (`:all`, `:priority`, `""`, `:all`), exactly as
-  `?sponsor=all` is never emitted, so the canonical URL stays `/tasks`. Keys
-  come out in a fixed order — sponsor, sort, q, scope:
+  Defaults emit nothing (`:all`, `:priority`, `""`, `:all`, `:all`),
+  exactly as `?sponsor=all` is never emitted, so the canonical URL stays
+  `/tasks`. Keys come out in a fixed order — sponsor, sort, q, scope, kind:
 
-      iex> PlatformWeb.Tasks.BoardData.tasks_path(:all, :priority, "", :all)
+      iex> PlatformWeb.Tasks.BoardData.tasks_path(:all, :priority, "", :all, :all)
       "/tasks"
-      iex> PlatformWeb.Tasks.BoardData.tasks_path(:mine, :updated, "zephyr", "acme")
-      "/tasks?sponsor=mine&sort=updated&q=zephyr&scope=acme"
+      iex> PlatformWeb.Tasks.BoardData.tasks_path(:mine, :updated, "zephyr", "acme", "chore")
+      "/tasks?sponsor=mine&sort=updated&q=zephyr&scope=acme&kind=chore"
   """
   @spec tasks_path(
           :all | :mine | nil,
           :priority | :updated | nil,
           String.t() | nil,
+          :all | String.t() | nil,
           :all | String.t() | nil
         ) :: String.t()
-  def tasks_path(sponsor_filter, board_sort, task_search_query, scope_filter) do
+  def tasks_path(sponsor_filter, board_sort, task_search_query, scope_filter, kind_filter) do
     query =
       Enum.reject(
         [
           sponsor: sponsor_filter == :mine && "mine",
           sort: board_sort == :updated && "updated",
           q: search_active?(task_search_query) && task_search_query,
-          scope: scope_filter not in [:all, nil] && scope_filter
+          scope: scope_filter not in [:all, nil] && scope_filter,
+          kind: kind_filter not in [:all, nil] && kind_filter
         ],
         fn {_key, value} -> value == false end
       )
@@ -190,6 +198,9 @@ defmodule PlatformWeb.Tasks.BoardData do
     # what keeps `assert_patched` strings and shared URLs stable.
     if query == [], do: ~p"/tasks", else: ~p"/tasks" <> "?" <> URI.encode_query(query)
   end
+
+  def tasks_path(sponsor_filter, board_sort, task_search_query, scope_filter),
+    do: tasks_path(sponsor_filter, board_sort, task_search_query, scope_filter, :all)
 
   @doc """
   The board URL for a sponsor filter and a sort mode only — kept exactly as
@@ -206,11 +217,13 @@ defmodule PlatformWeb.Tasks.BoardData do
       "/tasks?sponsor=mine&sort=updated"
   """
   @spec tasks_path(:all | :mine | nil, :priority | :updated | nil) :: String.t()
-  def tasks_path(sponsor_filter, board_sort), do: tasks_path(sponsor_filter, board_sort, "", :all)
+  def tasks_path(sponsor_filter, board_sort),
+    do: tasks_path(sponsor_filter, board_sort, "", :all, :all)
 
   @doc """
-  `tasks_path/4` read off a socket's (or component's) assigns
-  (`:sponsor_filter`, `:board_sort`, `:task_search_query`, `:scope_filter`),
+  `tasks_path/5` read off a socket's (or component's) assigns
+  (`:sponsor_filter`, `:board_sort`, `:task_search_query`, `:scope_filter`,
+  `:kind_filter`),
   so a shell/component call site stays one line. An absent assign is the
   default.
   """
@@ -220,7 +233,8 @@ defmodule PlatformWeb.Tasks.BoardData do
       assigns[:sponsor_filter],
       assigns[:board_sort],
       assigns[:task_search_query],
-      assigns[:scope_filter]
+      assigns[:scope_filter],
+      assigns[:kind_filter]
     )
   end
 

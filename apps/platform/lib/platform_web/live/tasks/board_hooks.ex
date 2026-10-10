@@ -143,9 +143,14 @@ defmodule PlatformWeb.Tasks.BoardHooks do
   NEITHER branch fires (no filter actually changed — e.g. a bare `/tasks`
   mount) touches `:expanded_stacks` not at all.
   """
-  def apply_url_filters(socket, new_sponsor, new_sort, new_query, new_scope) do
+  def apply_url_filters(
+        socket,
+        {new_sponsor, new_sort, new_query, new_scope, new_kind}
+      ) do
     board_changed? =
-      {new_sponsor, new_sort} != {socket.assigns[:sponsor_filter], socket.assigns[:board_sort]}
+      {new_sponsor, new_sort, new_kind} !=
+        {socket.assigns[:sponsor_filter], socket.assigns[:board_sort],
+         socket.assigns[:kind_filter]}
 
     search_changed? = new_query != socket.assigns[:task_search_query]
 
@@ -155,6 +160,7 @@ defmodule PlatformWeb.Tasks.BoardHooks do
       |> assign(:board_sort, new_sort)
       |> assign(:task_search_query, new_query)
       |> assign(:scope_filter, new_scope)
+      |> assign(:kind_filter, new_kind)
 
     cond do
       board_changed? -> refresh_board(socket)
@@ -183,6 +189,7 @@ defmodule PlatformWeb.Tasks.BoardHooks do
       # when the "Sponsored by me" toggle is active. `nil` is the unfiltered
       # passthrough that matches every prior refresh_board call site.
       |> maybe_put(:sponsor_user_id, sponsor_filter_user_id(socket))
+      |> maybe_put(:kind, kind_filter_value(socket))
 
     tasks = Tasks.list_all_tasks(opts)
 
@@ -193,6 +200,7 @@ defmodule PlatformWeb.Tasks.BoardHooks do
       %{}
       |> maybe_put_map(:project_id, socket.assigns.selected_project_id)
       |> maybe_put_map(:sponsor_user_id, sponsor_filter_user_id(socket))
+      |> maybe_put_map(:kind, kind_filter_value(socket))
 
     stack_entries = Stacks.list_stacks_with_members(stack_filters)
     {stack_board_data, stacks} = BoardData.split_stack_entries(stack_entries)
@@ -301,6 +309,13 @@ defmodule PlatformWeb.Tasks.BoardHooks do
   # The active list order; `:priority` until something (the stage-2 `?sort=`
   # decode) assigns otherwise.
   defp board_sort(socket), do: socket.assigns[:board_sort] || :priority
+
+  defp kind_filter_value(socket) do
+    case socket.assigns[:kind_filter] do
+      kind when kind in ~w(feature chore bug research ops) -> kind
+      _ -> nil
+    end
+  end
 
   # Task 01a06df3 stage 2: a member the search FOUND must be visible without a
   # further click. Matching the parent stack (stage 1) only gets its card onto
