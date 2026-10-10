@@ -743,22 +743,34 @@ function updateRow(row, u, manager) {
   // under the card stay in the layout, invisible: removing them would make
   // the content shorter, and a scroller pinned to the bottom would clamp its
   // scrollTop and move the card down by their height.
+  //
+  // A row BUILT at 'done' (the timeline container was remounted, or the row
+  // rebuilt, between done and the swap; task 01a127bd) starts with an empty
+  // `below`, so it is filled here with the lines the last live state showed:
+  // the row must be as tall as the one it replaces, or the card moves.
   const below = row.querySelector('[data-role="large-upload-below"]')
   if (below) {
     below.style.visibility = done ? "hidden" : ""
-    if (!done) {
-      below.replaceChildren()
-      if (row._counterBelow && u.status !== "failed") {
-        const l = el("div", "mt-1 flex items-center gap-2")
-        l.appendChild(row._counterBelow)
-        const c = button("Cancel", () => manager.cancel(u.key))
-        c.setAttribute("data-role", "large-upload-cancel")
-        l.appendChild(c)
-        below.appendChild(l)
-      }
-      below.appendChild(statusLine(u, manager))
-    }
+    if (!done) fillBelow(below, row, u, manager, { asStatus: u.status })
+    else if (!below.firstElementChild) fillBelow(below, row, u, manager, { asStatus: "uploading" })
   }
+}
+
+// The lines under the card: the chip's counter line (with its Cancel) for a
+// non-video upload, then the status line(s), drawn as if the upload were in
+// `asStatus`.
+function fillBelow(below, row, u, manager, { asStatus }) {
+  below.replaceChildren()
+  if (row._counterBelow && asStatus !== "failed") {
+    const l = el("div", "mt-1 flex items-center gap-2")
+    l.appendChild(row._counterBelow)
+    const c = button("Cancel", () => manager.cancel(u.key))
+    c.setAttribute("data-role", "large-upload-cancel")
+    if (u.status === "done") c.style.visibility = "hidden"
+    l.appendChild(c)
+    below.appendChild(l)
+  }
+  below.appendChild(statusLine(asStatus === u.status ? u : { ...u, status: asStatus, notice: null }, manager))
 }
 
 // Where the pending card is painted, recorded at every render and on every

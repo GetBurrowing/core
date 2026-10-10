@@ -302,7 +302,8 @@ function setup({ video }) {
     sleep: async () => {},
     isConnected: () => true,
   })
-  m.addView(() => renderTimeline(container, m))
+  const draw = () => renderTimeline(container, m)
+  m.addView(draw)
   const u = {
     key: "k1",
     ref: "k1",
@@ -321,7 +322,7 @@ function setup({ video }) {
     active: true,
     messageId: null,
   }
-  return { doc, sc, list, container, m, u }
+  return { doc, sc, list, container, draw, m, u }
 }
 
 // The posted message, as chat_message/1 renders it: row > padded inner >
@@ -353,6 +354,37 @@ function postMessage(doc, list, { video }) {
   row.appendChild(inner)
   list.appendChild(row)
   return card
+}
+
+const pendingCard = (s) => s.container.querySelector('[data-role="large-upload-card"]')
+
+// A hook remount, as LiveView does it when the timeline container element is
+// replaced: destroyed() removes the old view, the old element leaves the DOM,
+// and mounted() on the fresh, empty element (same id and data-space-id)
+// registers a view that addView() draws at once from the registry.
+function remount(s) {
+  s.m.removeView(s.draw)
+  s.container.remove()
+  const fresh = s.doc.createElement("div")
+  fresh.id = "large-upload-timeline-s1"
+  fresh.setAttribute("data-space-id", "s1")
+  s.sc.appendChild(fresh)
+  s.container = fresh
+  s.draw = () => renderTimeline(fresh, s.m)
+  s.m.addView(s.draw)
+}
+
+// A rejoin render of #message-list: every row is replaced by a fresh node
+// with the same attributes, in the same order.
+function rejoinList(doc, list) {
+  const rows = [...list.children]
+  for (const r of rows) r.remove()
+  for (const r of rows) {
+    const n = doc.createElement(r.tagName.toLowerCase())
+    for (const [k, v] of r.attrs) n.setAttribute(k, v)
+    for (const c of [...r.children]) n.appendChild(c)
+    list.appendChild(n)
+  }
 }
 
 let savedURL
@@ -393,6 +425,124 @@ for (const video of [true, false]) {
 
       expect(container.querySelector('[data-role="large-upload-card"]')).toBe(null)
       expect({ yDone, yPosted }).toEqual({ yDone: yUploading, yPosted: yUploading })
+    })
+
+    // Task 01a127bd: after a LiveView socket reconnect the card was seen to
+    // jump 20px at completion. These cases put a hook remount (the timeline
+    // container replaced, the registry redrawn into a fresh one, exactly what
+    // LargeUploadTimeline.destroyed/mounted do) and a remount-free rejoin at
+    // each point of the upload.
+
+    it("hook remount mid-upload: the card's y is unchanged across uploading -> done -> posted", () => {
+      const s = setup({ video })
+      const { doc, sc, list, m, u } = s
+      m.uploads.set(u.key, u)
+      m.changed()
+      sc.scrollTop = sc.scrollHeight
+      const yUploading = pendingCard(s).getBoundingClientRect().y
+
+      remount(s)
+      const yRemounted = pendingCard(s).getBoundingClientRect().y
+
+      u.status = "done"
+      u.offset = u.byteSize
+      u.active = false
+      u.messageId = "m1"
+      m.changed()
+      const yDone = pendingCard(s).getBoundingClientRect().y
+
+      const posted = postMessage(doc, list, { video })
+      sc.scrollTop = sc.scrollHeight
+      m.drop(u)
+      const yPosted = posted.getBoundingClientRect().y
+
+      expect(pendingCard(s)).toBe(null)
+      expect({ yRemounted, yDone, yPosted }).toEqual({
+        yRemounted: yUploading,
+        yDone: yUploading,
+        yPosted: yUploading,
+      })
+    })
+
+    // Task 01a127bd: red on ebfb426, where a row built while the upload is
+    // already 'done' got an EMPTY large-upload-below (buildRow creates it
+    // empty and updateRow filled it only when not done), so the row was
+    // shorter than the one it replaced and the pinned scroller moved the
+    // card down (video +20px, file +40px). updateRow now fills it at done.
+    it("hook remount after done, before the swap: the card's y is unchanged", () => {
+      const s = setup({ video })
+      const { doc, sc, list, m, u } = s
+      m.uploads.set(u.key, u)
+      m.changed()
+      sc.scrollTop = sc.scrollHeight
+      const yUploading = pendingCard(s).getBoundingClientRect().y
+
+      u.status = "done"
+      u.offset = u.byteSize
+      u.active = false
+      u.messageId = "m1"
+      m.changed()
+      const yDone = pendingCard(s).getBoundingClientRect().y
+
+      remount(s)
+      const yRemounted = pendingCard(s).getBoundingClientRect().y
+      // The rebuilt row carries the lines it had while uploading, hidden.
+      const below = s.container.querySelector('[data-role="large-upload-below"]')
+      const belowAtRemount = { visibility: below.style.visibility, keep: below.querySelector("p")?.textContent ?? null }
+
+      const posted = postMessage(doc, list, { video })
+      sc.scrollTop = sc.scrollHeight
+      m.drop(u)
+      const yPosted = posted.getBoundingClientRect().y
+
+      expect(pendingCard(s)).toBe(null)
+      expect({ yDone, yRemounted, yPosted }).toEqual({
+        yDone: yUploading,
+        yRemounted: yUploading,
+        yPosted: yUploading,
+      })
+      expect(belowAtRemount).toEqual({ visibility: "hidden", keep: "Keep this tab open until it finishes." })
+    })
+
+    it("rejoin without remount: the container survives a re-rendered #message-list and the card's y holds", () => {
+      const s = setup({ video })
+      const { doc, sc, list, container, m, u } = s
+      m.uploads.set(u.key, u)
+      m.changed()
+      sc.scrollTop = sc.scrollHeight
+      const yUploading = pendingCard(s).getBoundingClientRect().y
+      const rowBefore = container.querySelector(`#large-upload-row-${u.key}`)
+
+      rejoinList(doc, list)
+      sc.scrollTop = sc.scrollHeight
+      m.changed() // a hook's reconnected() changes nothing, but redraw anyway
+      const yRejoinedUploading = pendingCard(s).getBoundingClientRect().y
+
+      u.status = "done"
+      u.offset = u.byteSize
+      u.active = false
+      u.messageId = "m1"
+      m.changed()
+      const yDone = pendingCard(s).getBoundingClientRect().y
+
+      rejoinList(doc, list)
+      sc.scrollTop = sc.scrollHeight
+      m.changed()
+      const yRejoinedDone = pendingCard(s).getBoundingClientRect().y
+      expect(container.querySelector(`#large-upload-row-${u.key}`)).toBe(rowBefore)
+
+      const posted = postMessage(doc, list, { video })
+      sc.scrollTop = sc.scrollHeight
+      m.drop(u)
+      const yPosted = posted.getBoundingClientRect().y
+
+      expect(pendingCard(s)).toBe(null)
+      expect({ yRejoinedUploading, yDone, yRejoinedDone, yPosted }).toEqual({
+        yRejoinedUploading: yUploading,
+        yDone: yUploading,
+        yRejoinedDone: yUploading,
+        yPosted: yUploading,
+      })
     })
   })
 }
