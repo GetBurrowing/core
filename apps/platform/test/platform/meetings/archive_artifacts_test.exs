@@ -448,6 +448,80 @@ defmodule Platform.Meetings.ArchiveArtifactsTest do
              "artifacts_for/2 issued #{six_rows} queries for six meetings and " <>
                "#{one_row} for one — it is resolving artifacts per row"
     end
+
+    test "count_queries/1 does not attribute a concurrent sibling process's queries" do
+      # Anti-vacuity fixture for task 01a07783 stage 1's fix. `one_row == 6`
+      # above is true for BOTH the pre-fix unfiltered `:telemetry.attach` and
+      # the stage-1 `:caller`-filtered `count_queries/1` when nothing else is
+      # running concurrently — that assertion alone cannot tell the two
+      # implementations apart, which is exactly the ticket's anti-vacuity
+      # point. This test manufactures the concurrent noise the ticket
+      # describes (another async test issuing Repo queries while the guard
+      # is attached) and checks that the count is unaffected by it.
+      viewer = viewer_in_acme!()
+      one = archived_meeting_with_artifacts!("Isolation")
+
+      test_pid = self()
+
+      # A bare `spawn` — deliberately NOT `Task.async`/`Task.Supervisor`,
+      # which propagate `$callers` to their children. A propagated
+      # `$callers` would make the spawned process read as "the same caller"
+      # under the `:caller` discriminator (`self() == pid or pid in
+      # Process.get(:"$callers", [])`, mirrored from
+      # `Platform.TelemetryHelpers.attach_scoped/4`) and defeat the point of
+      # this fixture. A bare `spawn` has no `$callers` of its own, so it is
+      # the correct stand-in for "an unrelated sibling async test module
+      # issuing queries against the same repo."
+      intruder =
+        spawn(fn ->
+          receive do
+            :go ->
+              # A real query against the SAME repo, from a process that is
+              # neither `self()` nor in `$callers` for the counted operation
+              # below.
+              Repo.all(from(o in Org, limit: 1))
+              send(test_pid, :intruder_done)
+          end
+        end)
+
+      one_row =
+        count_queries(fn ->
+          # Message rendezvous, not `Process.sleep`: release the intruder
+          # only once we're inside the handler's attach window (it detaches
+          # in `count_queries/1`'s `after` clause, which cannot run until
+          # this fun returns), then block on the intruder's own completion
+          # signal before returning. That guarantees the intruder's query —
+          # and its `[:platform, :repo, :query]` telemetry event — actually
+          # lands while the handler is attached, rather than racing it.
+          send(intruder, :go)
+          result = Archive.artifacts_for(viewer, [one])
+
+          receive do
+            :intruder_done -> :ok
+          end
+
+          result
+        end)
+
+      # Why this discriminates the two implementations:
+      #
+      # Against the PRE-STAGE-1 unfiltered `:telemetry.attach` (no per-
+      # process check at all), this same test would observe an INFLATED
+      # count — the intruder's query lands in the same handler as the
+      # counted operation's own six, giving 7, because the old handler has
+      # no way to distinguish "my emitting process" from "any emitting
+      # process in the BEAM."
+      #
+      # Against the stage-1 `:caller`-filtered handler, only queries whose
+      # emitting process is `self()` (the counted operation's own process)
+      # or appears in that process's `$callers` are counted. The intruder is
+      # neither, so its query is correctly excluded and the count stays
+      # exactly 6 — identical to what `one_row == 6` already asserts above
+      # when run with no concurrent noise. That equivalence — same answer
+      # whether or not something else is running — is the property the
+      # ticket asks for and the property a solo assertion cannot exercise.
+      assert one_row == 6
+    end
   end
 
   defp archived_meeting_with_artifacts!(name) do
@@ -460,6 +534,25 @@ defmodule Platform.Meetings.ArchiveArtifactsTest do
     run_meeting!(meeting, at("2026-07-29T14:00:00Z"), at("2026-07-29T14:52:00Z"))
   end
 
+  # NOT `Platform.TelemetryHelpers.attach_scoped/4` — its detach only runs
+  # via `on_exit`, i.e. at test-end, and this helper is called TWICE per
+  # test (`one_row` then `six_rows`) with an immediate `try/after` detach
+  # between calls. Reusing the helper as-is would leave the first
+  # invocation's handler attached while the second one runs, double-
+  # counting every query the second call issues. So this hand-rolls the
+  # same `:caller` discriminator `attach_scoped/4` uses
+  # (`telemetry_helpers.ex` — `self() == pid or pid in
+  # Process.get(:"$callers", [])`) inside the existing immediate-detach
+  # shape instead. `:telemetry` handlers run synchronously in the process
+  # that calls `:telemetry.execute/3`, so `self()` here IS the emitting
+  # process — no metadata pid is needed (repo-query metadata carries none;
+  # see `deps/ecto_sql/lib/ecto/adapters/sql.ex`).
+  #
+  # Without this filter, `[:platform, :repo, :query]` fires for every
+  # query in the BEAM while attached, including sibling `async: true` test
+  # modules running concurrently — this module is `async: false` (see the
+  # top of the file), but that never protected it, since the pollution
+  # source is OTHER modules' queries, not this module's own scheduling.
   defp count_queries(fun) do
     handler_id = "archive-artifacts-query-count-#{System.unique_integer([:positive])}"
     test_pid = self()
@@ -467,7 +560,11 @@ defmodule Platform.Meetings.ArchiveArtifactsTest do
     :telemetry.attach(
       handler_id,
       [:platform, :repo, :query],
-      fn _event, _measurements, _metadata, _config -> send(test_pid, {handler_id, :query}) end,
+      fn _event, _measurements, _metadata, _config ->
+        if self() == test_pid or test_pid in Process.get(:"$callers", []) do
+          send(test_pid, {handler_id, :query})
+        end
+      end,
       nil
     )
 
