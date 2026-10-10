@@ -1,6 +1,13 @@
 import pytest
 
-from meeting_voice_agent.config import AgentConfig, ConfigError, TurnDetectorConfig
+from meeting_voice_agent.config import (
+    AgentConfig,
+    AskFloorConfig,
+    ConfigError,
+    EndpointingConfig,
+    TurnDetectorConfig,
+    VadConfig,
+)
 
 
 def test_defaults_are_config_not_hardcoded_elsewhere():
@@ -223,9 +230,33 @@ def test_invalid_float_env_raises(monkeypatch):
         AgentConfig.from_env()
 
 
-def test_ask_floor_grace_ms_defaults_to_300_and_is_not_hardcoded_elsewhere():
+def test_ask_floor_grace_ms_defaults_to_1000_and_is_not_hardcoded_elsewhere():
     config = AgentConfig.from_env()
-    assert config.ask_floor.grace_ms == 300
+    assert config.ask_floor.grace_ms == 1000
+    # The dataclass default and the env default must agree.
+    assert AskFloorConfig().grace_ms == config.ask_floor.grace_ms
+
+
+def test_ask_floor_grace_outlasts_vad_silence_plus_endpointing():
+    """Task 01a1265f stage 3: VAD ends a speech segment (and so makes the
+    STT request) only after `min_silence_duration` of silence has REACHED it.
+    The gate detaches input `grace_ms` after release, so speech that runs up
+    to the release is never transcribed unless the grace outlasts that
+    silence. Measured with a 300 ms grace: three such holds made no STT
+    request of their own. Read from the dataclasses, so raising either
+    threshold without raising the grace fails here."""
+    config = AgentConfig.from_env()
+    floor_ms = (
+        VadConfig().min_silence_duration + EndpointingConfig().min_endpointing_delay
+    ) * 1000.0
+
+    assert config.ask_floor.grace_ms > floor_ms
+    assert AskFloorConfig().grace_ms > floor_ms
+    # The wiring reads the env-derived configs, so check those too.
+    assert (
+        config.ask_floor.grace_ms
+        > (config.vad.min_silence_duration + config.endpointing.min_endpointing_delay) * 1000.0
+    )
 
 
 def test_ask_floor_grace_ms_env_override_wins(monkeypatch):

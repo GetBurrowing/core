@@ -249,4 +249,32 @@ defmodule Platform.Meetings.MeetingTest do
       assert msg =~ "illegal transition"
     end
   end
+
+  # Task 01a1265f stage 2. Resumption is its own changeset so that
+  # `status_changeset/3` above keeps refusing ended → live for every other
+  # writer; the no-resurrection test above is unchanged and must stay green.
+  describe "resume_changeset/1" do
+    test "resumes an ended meeting: live, ended_at cleared, started_at kept" do
+      started = ~U[2026-10-10 09:00:00.000000Z]
+      ended = ~U[2026-10-10 09:30:00.000000Z]
+
+      cs =
+        Meeting.resume_changeset(%Meeting{status: "ended", started_at: started, ended_at: ended})
+
+      assert cs.valid?
+      assert Ecto.Changeset.get_field(cs, :status) == "live"
+      assert Ecto.Changeset.get_field(cs, :ended_at) == nil
+      assert Ecto.Changeset.get_field(cs, :started_at) == started
+    end
+
+    for status <- ~w(scheduled live cancelled) do
+      test "rejects a #{status} meeting" do
+        cs = Meeting.resume_changeset(%Meeting{status: unquote(status)})
+
+        refute cs.valid?
+        assert %{status: [msg]} = errors_on(cs)
+        assert msg =~ "only an ended meeting resumes"
+      end
+    end
+  end
 end

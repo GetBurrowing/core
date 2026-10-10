@@ -165,6 +165,50 @@ defmodule Platform.Meetings.MeetingAttributionTest do
       assert Meetings.meeting_id_for_space(space.id, nil) == stale.id
     end
 
+    # Task 01a1265f stage 2: THE REJOIN PAIR, beside #902's pair above.
+    # Someone rejoins an ended meeting from its own page after it ended, so
+    # the new transcript starts after `ended_at`. Resumed, the meeting is
+    # live again and must be what that transcript is about. Not resumed
+    # (any other way into the room), #902's bound must still refuse it.
+    test "a resumed meeting owns a transcript that started after its original end" do
+      space = space!()
+      project = project!()
+
+      started = ~U[2026-10-10 09:00:00.000000Z]
+      ended = ~U[2026-10-10 09:30:00.000000Z]
+      rejoined = ~U[2026-10-10 10:15:00.000000Z]
+
+      meeting = meeting!(space, project, %{status: "ended", started_at: started, ended_at: ended})
+
+      assert {:ok, resumed} = Meetings.resume_meeting(meeting)
+
+      # The attribution first, so a resume that leaves `ended_at` set fails
+      # HERE, on the property this task is about, not on the field check.
+      assert Meetings.meeting_id_for_space(space.id, rejoined) == meeting.id
+
+      assert resumed.status == "live"
+      assert resumed.ended_at == nil
+      assert resumed.started_at == started
+    end
+
+    test "control: the same rejoin WITHOUT a resume still resolves nil (#902)" do
+      space = space!()
+      project = project!()
+
+      started = ~U[2026-10-10 09:00:00.000000Z]
+      ended = ~U[2026-10-10 09:30:00.000000Z]
+      rejoined = ~U[2026-10-10 10:15:00.000000Z]
+
+      meeting = meeting!(space, project, %{status: "ended", started_at: started, ended_at: ended})
+
+      assert Meetings.meeting_id_for_space(space.id, rejoined) == nil
+
+      # And `start_meeting/2` is still not a way round it.
+      assert {:error, %Ecto.Changeset{}} = Meetings.start_meeting(meeting)
+      assert Repo.get!(Meeting, meeting.id).status == "ended"
+      assert Meetings.meeting_id_for_space(space.id, rejoined) == nil
+    end
+
     test "a space with no meeting answers nil either way" do
       space = space!()
 

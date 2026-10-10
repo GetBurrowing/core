@@ -217,13 +217,39 @@ class AskFloorConfig:
     as a reply generated from audio spoken after the human's own release).
     Tune by replaying recorded hold sessions and counting each rate
     against this value -- never hard-coded, always this field.
+
+    ## Why the default is 1000 ms, not 300 (task 01a1265f stage 3)
+
+    Input is only ever turned into an STT request when Silero VAD ends a
+    speech segment, and VAD ends one only after `VadConfig.min_silence_duration`
+    (0.55 s) of silence has reached it. Detaching the input stops VAD from
+    seeing anything, so a hold whose speech runs right up to the release
+    must keep the input attached for at least that long after "closed".
+    300 ms never could. Measured on a dev worker against a throwaway
+    `livekit-server --dev` (livekit-agents 1.8.5): control holds that went
+    silent before release made their STT request 0.71-0.75 s after the last
+    spoken sample. Three holds that spoke up to release made NO STT request
+    of their own; their audio sat in VAD's open segment and was transcribed,
+    glued to the next hold's words, as soon as that hold attached. Frames
+    kept reaching the worker after every release, even in holds where the
+    publisher stopped sending (the receiving AudioStream keeps yielding
+    frames), and the web client never mutes its mic on release. So the
+    frames are there to end the segment; the input was just detached too
+    soon, and a longer grace is the fix. Once the STT request has started,
+    detaching does not stop the reply: a measured control reply was
+    generated after its input detached. The hard floor is therefore VAD
+    silence plus inference, about 0.75 s. The default is held above the more
+    conservative `min_silence_duration` plus
+    `EndpointingConfig.min_endpointing_delay` (0.95 s), and tests pin that
+    relation, so raising either of those means raising this too. The cost:
+    up to 1 s of speech after release can reach the reply (bleed-through).
     """
 
-    grace_ms: int = 300
+    grace_ms: int = 1000
 
     @classmethod
     def from_env(cls) -> AskFloorConfig:
-        return cls(grace_ms=_env_int("MVA_ASK_FLOOR_GRACE_MS", 300))
+        return cls(grace_ms=_env_int("MVA_ASK_FLOOR_GRACE_MS", 1000))
 
 
 @dataclass(frozen=True)

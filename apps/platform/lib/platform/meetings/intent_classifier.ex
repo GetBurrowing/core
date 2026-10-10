@@ -1009,7 +1009,7 @@ defmodule Platform.Meetings.IntentClassifier do
     segment = Map.get(payload, :segment) || %{}
     chunk_text = segment_text(segment)
     meeting_id = Map.get(payload, :meeting_id)
-    chunk_id = Map.get(segment, :id) || Map.get(payload, :transcript_id)
+    chunk_id = Map.get(segment, :id) || Map.get(segment, "id") || Map.get(payload, :transcript_id)
     speaker = segment_speaker(segment, payload)
 
     # Task 01a04a7f — the card exists BEFORE the model is asked. Every

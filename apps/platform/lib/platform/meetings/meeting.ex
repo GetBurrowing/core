@@ -188,6 +188,42 @@ defmodule Platform.Meetings.Meeting do
   end
 
   @doc """
+  Changeset for RESUMING an ended meeting: `ended → live` (task 01a1265f
+  stage 2).
+
+  This is deliberately NOT a transition in `status_changeset/3`, which keeps
+  refusing `ended → live` ("no resurrection"). Resumption is a different
+  operation with exactly one caller, `Platform.Meetings.resume_meeting/2`,
+  which is reached only when someone joins the call from the meeting's OWN
+  page. Keeping it out of the general transition table means every other
+  path that writes a status (`start_meeting/2`, the LiveKit webhooks, the
+  native app) still cannot bring an ended meeting back.
+
+  Accepts only `status: "ended"`. Sets status `"live"`, clears `ended_at`
+  (an ended_at on a live row would make `Platform.Meetings.meeting_id_for_space/2`
+  apply the #902 bound against a meeting that is happening now), and keeps
+  `started_at`: the meeting started when it first started. Any other status,
+  `cancelled` included, gets an error on `:status`. A cancelled meeting never
+  happened and is never resumable.
+  """
+  @spec resume_changeset(%__MODULE__{}) :: Ecto.Changeset.t()
+  def resume_changeset(%__MODULE__{status: "ended"} = meeting) do
+    meeting
+    |> change()
+    |> put_change(:status, "live")
+    |> put_change(:ended_at, nil)
+  end
+
+  def resume_changeset(%__MODULE__{status: from} = meeting) do
+    meeting
+    |> change()
+    |> add_error(
+      :status,
+      "cannot resume a meeting that is #{from}; only an ended meeting resumes"
+    )
+  end
+
+  @doc """
   Changeset for placing or lifting the per-meeting intent mute
   (task 019fbaac stage 1).
 

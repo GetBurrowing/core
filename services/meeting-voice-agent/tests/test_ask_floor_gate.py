@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from unittest.mock import MagicMock
 
 from meeting_voice_agent import ask_floor_gate
+from meeting_voice_agent.config import AgentConfig, EndpointingConfig, VadConfig
 
 # ── parse_ask_floor_event ────────────────────────────────────────────────
 
@@ -295,3 +296,44 @@ def test_attach_ask_floor_gate_zero_grace_detaches_synchronously_on_close():
     )
 
     session.input.set_audio_enabled.assert_called_once_with(False)
+
+
+def test_attach_ask_floor_gate_default_grace_keeps_input_past_vad_silence(monkeypatch):
+    """Task 01a1265f stage 3: with the grace the worker actually runs
+    (`AgentConfig.from_env().ask_floor.grace_ms`, the value `entrypoint`
+    passes), a "closed" must keep input attached longer than VAD silence
+    plus endpointing. Otherwise speech that runs up to the release never
+    ends a VAD segment and makes no STT request, which a dev worker measured
+    on three of three such holds at the old 300 ms. The detach delay is read
+    off the scheduled sleep rather than waited out in real time."""
+    requested: list[float] = []
+
+    async def _fake_sleep(delay):
+        requested.append(delay)
+
+    async def _run():
+        session = MagicMock()
+        room = _mock_room()
+        grace_ms = AgentConfig.from_env().ask_floor.grace_ms
+        ask_floor_gate.attach_ask_floor_gate(session, room, grace_ms=grace_ms)
+
+        room._handlers["data_received"](
+            _FakeDataPacket(ask_floor_gate.ASK_FLOOR_TOPIC, _payload("open"))
+        )
+        session.input.set_audio_enabled.reset_mock()
+
+        monkeypatch.setattr(ask_floor_gate.asyncio, "sleep", _fake_sleep)
+        room._handlers["data_received"](
+            _FakeDataPacket(ask_floor_gate.ASK_FLOOR_TOPIC, _payload("closed"))
+        )
+        # Not detached synchronously on close.
+        session.input.set_audio_enabled.assert_not_called()
+        for _ in range(3):
+            await _orig_sleep(0)
+
+    _orig_sleep = asyncio.sleep
+    asyncio.run(_run())
+
+    floor_s = VadConfig().min_silence_duration + EndpointingConfig().min_endpointing_delay
+    assert requested, "closed never scheduled a detach"
+    assert requested[0] > floor_s

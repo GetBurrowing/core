@@ -898,6 +898,83 @@ defmodule Platform.Meetings do
   end
 
   @doc """
+  Resume an `ended` meeting: back to `live`, `ended_at` cleared, `started_at`
+  kept (task 01a1265f stage 2). See `Meeting.resume_changeset/1`.
+
+  ## The one caller
+
+  `PlatformWeb.MeetingLive`'s `maybe_start_meeting/1`, when somebody joins
+  the call from the meeting's own page (auto-join or the lobby's Join). That
+  is the only place that knows a join is a rejoin of THIS meeting. Every
+  other way into the room (the chat page's Meet button, `join_for_user/3`,
+  LiveKit webhooks, the transcriber, the native app) leaves an ended meeting
+  ended, so #902's bound in `meeting_id_for_space/2` still keeps an unrelated
+  later call from inheriting it.
+
+  Without this, a rejoined meeting stayed ended, `meeting_id_for_space/2`
+  resolved its new transcript to nil, and every Ask press in the rejoined
+  call closed as nothing heard.
+
+  `opts[:started_by_user_id]` is stamped only when the row has no starter
+  yet. A resume does not change who started the meeting.
+
+  ## Why `{:meeting_resumed, meeting}` and not `{:meeting_started, meeting}`
+
+  Measured against every subscriber of `project_meetings_topic/1`:
+
+    * `Platform.Meetings.MeetingNotifier` handles `:meeting_started` by
+      pushing "X started a meeting" to the attendees and RINGING invitees.
+      Its only guard against a repeat is `mark_notified/1`'s CAS on
+      `notified_at`. That stamp is set only if the notifier was running when
+      the meeting first started; a row whose `notified_at` is nil (notifier
+      down at the time, or a row older than the column) would be announced
+      and rung for again just because someone opened its page. A distinct
+      tag reaches the notifier's catch-all clause and is ignored whatever
+      `notified_at` holds.
+    * `Platform.Agents.MeetingHistorianHandler` acts only on `:meeting_ended`
+      and ignores both tags. The resumed meeting's SECOND end does fire it
+      again; that is a curation of a meeting that now has more in it, under
+      the handler's own 15-minute debounce and its default-withheld config.
+    * The meetings index (`MeetingLive`'s lifecycle `handle_info/2`) re-queries
+      and re-buckets. It is the only subscriber that needs to hear a resume,
+      and it lists `:meeting_resumed` beside `:meeting_started`.
+
+  The summarizer is keyed on transcripts and triggered by the LiveKit
+  webhook, not by this topic, so it is unaffected by either tag.
+
+  Returns `{:error, changeset}` for anything not `ended`.
+  """
+  @spec resume_meeting(Meeting.t(), keyword()) ::
+          {:ok, Meeting.t()} | {:error, Ecto.Changeset.t()}
+  def resume_meeting(%Meeting{} = meeting, opts \\ []) do
+    changeset =
+      case {meeting.started_by_user_id, Keyword.get(opts, :started_by_user_id)} do
+        {nil, user_id} when is_binary(user_id) ->
+          meeting
+          |> Meeting.resume_changeset()
+          |> Ecto.Changeset.put_change(:started_by_user_id, user_id)
+          |> Ecto.Changeset.foreign_key_constraint(:started_by_user_id)
+
+        _ ->
+          Meeting.resume_changeset(meeting)
+      end
+
+    case Repo.update(changeset) do
+      {:ok, updated} = ok ->
+        Phoenix.PubSub.broadcast(
+          Platform.PubSub,
+          project_meetings_topic(updated.project_id),
+          {:meeting_resumed, updated}
+        )
+
+        ok
+
+      error ->
+        error
+    end
+  end
+
+  @doc """
   Atomically claim the right to notify subscribers about this meeting.
 
   Performs a compare-and-swap on `meetings.notified_at` via
