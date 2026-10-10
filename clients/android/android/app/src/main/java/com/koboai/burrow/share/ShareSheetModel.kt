@@ -45,7 +45,26 @@ class ShareSheetModel(
     ) {
         SEND_FAILED("Couldn't send. Your item is still here. Try again."),
         SPACES_FAILED("Couldn't load your spaces. Check your connection and try again."),
+
+        /** The install answered with a redirect: it moved. [bannerText] names where. */
+        INSTALL_MOVED("This Suite has moved. Open Burrow and sign in to its new address, then share again."),
     }
+
+    /** The host a redirecting install points at, when [Banner.INSTALL_MOVED] knows it. */
+    var movedTo: String? = null
+        private set
+
+    /** What the banner says: [Banner.text], with a moved install's new host filled in. */
+    val bannerText: String?
+        get() {
+            val b = banner ?: return null
+            val to = movedTo
+            return if (b == Banner.INSTALL_MOVED && to != null) {
+                "This Suite moved to $to. Open Burrow, add $to and sign in there, then share again."
+            } else {
+                b.text
+            }
+        }
 
     var phase: Phase = Phase.LOADING_SPACES
         private set
@@ -70,7 +89,18 @@ class ShareSheetModel(
     /** Back with something typed asks "Discard this share?"; with nothing typed it closes. */
     val hasTypedText: Boolean get() = message.isNotBlank()
 
-    val size: SizeCheck get() = SizeCheck.of(files, uploadConfig) { file, first -> form(file, first).contentLength() }
+    /**
+     * With the space list unreachable and no [uploadConfig], the sheet never
+     * heard from the install, so it makes no claim about its limits: the "8 MB"
+     * copy is for a server that predates `upload_config`, not one we could not
+     * reach. Nothing is sendable then anyway (no space can be chosen).
+     */
+    val size: SizeCheck
+        get() {
+            val unreachable = banner == Banner.SPACES_FAILED || banner == Banner.INSTALL_MOVED
+            if (unreachable && uploadConfig == null) return SizeCheck(files, emptyList(), null, false, "Send")
+            return SizeCheck.of(files, uploadConfig) { file, first -> form(file, first).contentLength() }
+        }
 
     val sendLabel: String get() = size.sendLabel
 
@@ -94,7 +124,8 @@ class ShareSheetModel(
     fun loadSpaces() {
         val host = host ?: return
         phase = Phase.LOADING_SPACES
-        if (banner == Banner.SPACES_FAILED) banner = null
+        if (banner == Banner.SPACES_FAILED || banner == Banner.INSTALL_MOVED) banner = null
+        movedTo = null
         try {
             spaces = client.spaces(host)
             if (selectedSpaceId == null) {
@@ -102,16 +133,22 @@ class ShareSheetModel(
                     preselectSpaceId?.takeIf { id -> spaces.any { it.id == id } }
                         ?: spaces.singleOrNull()?.id
             }
-            uploadConfig = client.uploadConfig(host)
-            phase = Phase.READY
         } catch (e: ApiException) {
             if (signedOut(e)) {
                 phase = Phase.NOT_SIGNED_IN
+                return
+            }
+            if (e.kind == ApiException.Kind.STATUS && e.status in 300..399) {
+                banner = Banner.INSTALL_MOVED
+                movedTo = e.movedTo
             } else {
                 banner = Banner.SPACES_FAILED
-                phase = Phase.READY
             }
         }
+        // Asked whether or not the space list loaded: one failed call must not
+        // turn into a wrong "8 MB" limit on an install that takes 1 GB.
+        uploadConfig = client.uploadConfig(host)
+        phase = Phase.READY
     }
 
     /**

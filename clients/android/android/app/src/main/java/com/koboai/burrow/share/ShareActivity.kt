@@ -213,7 +213,7 @@ class ShareActivity : AppCompatActivity() {
         notice.isVisible = size.notice != null
         noticeText.text = size.notice
         bannerText.isVisible = m.banner != null
-        bannerText.text = m.banner?.text
+        bannerText.text = m.bannerText
 
         spaceValue.text = m.selectedSpace?.name ?: getString(R.string.share_choose_space)
         agents.removeAllViews()

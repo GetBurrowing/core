@@ -22,6 +22,8 @@ class HttpRequest(
 class HttpResponse(
     val status: Int,
     val body: String,
+    /** A 3xx's `Location` header, or null. Redirects are never followed (see [AppApiClient]). */
+    val location: String? = null,
 ) {
     override fun toString(): String = "HttpResponse($status)"
 }
@@ -58,7 +60,8 @@ class UrlConnectionTransport(
             val status = connection.responseCode
             val stream = if (status >= 400) connection.errorStream else connection.inputStream
             val text = stream?.bufferedReader()?.use { it.readText() } ?: ""
-            return HttpResponse(status, text)
+            val location = if (status in 300..399) connection.getHeaderField("Location") else null
+            return HttpResponse(status, text, location)
         } finally {
             connection.disconnect()
         }
@@ -73,6 +76,11 @@ class ApiException(
     val kind: Kind,
     val status: Int = 0,
     route: String = "",
+    /**
+     * For a 3xx: the host its `Location` names when that is an absolute
+     * `https://` URL on another host, else null. A host is not a secret.
+     */
+    val movedTo: String? = null,
 ) : Exception("${kind.name.lowercase()}${if (status != 0) " $status" else ""}${if (route.isNotEmpty()) " on $route" else ""}") {
     enum class Kind { NOT_SIGNED_IN, STATUS, BAD_RESPONSE, NETWORK }
 }
@@ -257,9 +265,28 @@ class AppApiClient(
             } catch (_: IOException) {
                 throw ApiException(ApiException.Kind.NETWORK, route = route)
             }
+        if (response.status in 300..399) {
+            // Never followed: that would send this install's bearer to whatever
+            // host the redirect names. Say where it points, so a moved install
+            // (suite.milv.life -> burrow.red-st.ar, 2026-10-10) reads as moved
+            // rather than as a dropped connection.
+            throw ApiException(ApiException.Kind.STATUS, response.status, route, movedTo(response.location, request.url))
+        }
         if (response.status !in 200..299) throw ApiException(ApiException.Kind.STATUS, response.status, route)
         return response
     }
+
+    private fun movedTo(
+        location: String?,
+        requestUrl: String,
+    ): String? =
+        try {
+            val target = URI(location ?: return null)
+            val from = URI(requestUrl).host
+            target.host?.lowercase()?.takeIf { target.scheme.equals("https", ignoreCase = true) && !it.equals(from, ignoreCase = true) }
+        } catch (_: Exception) {
+            null
+        }
 
     private fun parse(
         response: HttpResponse,
