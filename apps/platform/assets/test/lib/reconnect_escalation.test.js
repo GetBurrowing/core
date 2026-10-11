@@ -107,23 +107,78 @@ describe("createReconnectEscalation", () => {
     expect(engine.getState().failures).toBe(0)
   })
 
-  it("escalates at once when already offline at the loss", () => {
+  it("already offline at the loss goes red only after the 3 s offline grace", () => {
     online = false
     make()
     engine.socketLost("client")
-    expect(visible()).toEqual(["escalated"])
+    clock.advance(2999)
+    expect(names()).not.toContain("escalated")
+    clock.advance(1)
     expect(states.at(-1)).toEqual({ state: "escalated", kind: "client" })
-    expect(clock.now()).toBe(0)
+    expect(clock.now()).toBe(3000)
   })
 
-  it("an offline() event during reconnecting escalates immediately", () => {
+  it("an offline() event during reconnecting goes red 3 s later", () => {
     make()
     engine.socketLost("client")
     clock.advance(1000)
     expect(states.at(-1).state).toBe("reconnecting")
     engine.offline()
+    clock.advance(2999)
+    expect(states.at(-1).state).toBe("reconnecting")
+    clock.advance(1)
     expect(states.at(-1)).toEqual({ state: "escalated", kind: "client" })
-    expect(clock.now()).toBe(1000)
+    expect(clock.now()).toBe(4000)
+  })
+
+  it("an app resume that reports offline for a moment never goes red", () => {
+    // Phone brings the app back: offline event, socket drop, then online
+    // and a rejoin about a second later (Rowan, 2026-10-11).
+    make()
+    online = false
+    engine.offline()
+    engine.socketClosed("client")
+    clock.advance(800)
+    online = true
+    engine.online({ connected: false })
+    engine.socketClosed("client")
+    clock.advance(400)
+    engine.recovered({ changed: true })
+    clock.advance(2000)
+    expect(names()).not.toContain("escalated")
+    expect(visible()).toEqual(["reconnecting", "up_to_date"])
+  })
+
+  it("back online inside the grace resets the offline clock", () => {
+    make({ attempts: 100, seconds: 300 })
+    engine.offline()
+    clock.advance(2500)
+    engine.online({ connected: false })
+    engine.offline()
+    clock.advance(2999)
+    expect(names()).not.toContain("escalated")
+    clock.advance(1)
+    expect(states.at(-1)).toEqual({ state: "escalated", kind: "client" })
+  })
+
+  it("a navigator.onLine flap without online() does not restart the offline clock", () => {
+    make({ attempts: 100, seconds: 300 })
+    online = false
+    engine.socketLost("client")
+    clock.advance(1500)
+    online = true
+    engine.socketClosed("client")
+    online = false
+    clock.advance(1500)
+    expect(states.at(-1)).toEqual({ state: "escalated", kind: "client" })
+    expect(clock.now()).toBe(3000)
+  })
+
+  it("offlineGraceMs is configurable", () => {
+    make({ offlineGraceMs: 500 })
+    engine.offline()
+    clock.advance(500)
+    expect(states.at(-1)).toEqual({ state: "escalated", kind: "client" })
   })
 
   it("a crash plus fast remount stays quiet", () => {
@@ -223,24 +278,36 @@ describe("createReconnectEscalation", () => {
   it("an offline blip over a live socket recovers on online()", () => {
     make()
     engine.offline()
-    expect(states.at(-1)).toEqual({ state: "escalated", kind: "client" })
     clock.advance(3000)
+    expect(states.at(-1)).toEqual({ state: "escalated", kind: "client" })
     engine.online({ connected: true })
     expect(states.at(-1).state).toBe("up_to_date")
     clock.advance(1500)
-    expect(names()).toEqual(["escalated", "up_to_date", "idle"])
+    expect(names()).toEqual(["pending", "reconnecting", "escalated", "up_to_date", "idle"])
+  })
+
+  it("a short offline blip over a live socket stays quiet", () => {
+    make()
+    engine.offline()
+    clock.advance(200)
+    engine.online({ connected: true })
+    clock.advance(2000)
+    expect(visible()).toEqual([])
+    expect(names().at(-1)).toBe("idle")
   })
 
   it("online() with the socket still down keeps the red until the rejoin", () => {
     make()
     engine.offline()
+    clock.advance(3000)
     engine.online({ connected: false })
     engine.online()
     clock.advance(60000)
-    expect(names()).toEqual(["escalated"])
+    expect(visible()).toEqual(["reconnecting", "escalated"])
     engine.recovered({ changed: false })
     clock.advance(1500)
-    expect(names()).toEqual(["escalated", "up_to_date", "idle"])
+    expect(visible()).toEqual(["reconnecting", "escalated", "up_to_date"])
+    expect(names().at(-1)).toBe("idle")
   })
 
   it("online() while idle changes nothing", () => {
