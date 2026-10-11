@@ -29,9 +29,10 @@ defmodule PlatformWeb.AgentAvatarController do
   instead of the session check. A valid `app_sessions` bearer is the native
   equivalent of "any authenticated session": the push notification drawing
   the sender's picture runs in the FCM service or the iOS Notification
-  Service Extension, which carry the bearer and no cookie. The action is
-  identical on both routes, so the 404 for a non-UUID, missing or imageless
-  agent is identical too.
+  Service Extension, which carry the bearer and no cookie. That route uses
+  `app_show/2`, which shares the lookup, so the 404 for a non-UUID, missing
+  or imageless agent is identical; it differs only in serving a thumbnail of
+  a large original (see `app_show/2`).
 
   ## Host-agnostic mount, deliberately
 
@@ -73,6 +74,25 @@ defmodule PlatformWeb.AgentAvatarController do
     end
   end
 
+  @doc """
+  The native app route, `GET /api/app/agents/:id/avatar`.
+
+  Same lookup and the same 404s as `show/2`, but the bytes come from
+  `AvatarStorage.app_variant/1`: a 192 px PNG thumbnail of any original over
+  128 KB. Both Burrow apps drop an avatar body over 256 KB and draw the
+  letter disc, while uploads allow 5 MB and are stored unresized, so serving
+  the original here left every large avatar off the notification. The
+  browser route keeps serving the original.
+  """
+  def app_show(conn, %{"id" => id}) do
+    with storage_key when is_binary(storage_key) <- fetch_avatar_key(id),
+         {:ok, path, content_type} <- AvatarStorage.app_variant(storage_key) do
+      send_file_inline(conn, path, Path.basename(path), content_type)
+    else
+      _ -> send_resp(conn, :not_found, "Not found")
+    end
+  end
+
   # `Platform.UUID.valid?/1`, and the nil guard, are both load-bearing: `id`
   # arrives straight off the URL, and an unguarded `Repo.get(Agent, id)`
   # RAISES on a non-UUID rather than returning nil — so `/agents/x/avatar`
@@ -91,18 +111,27 @@ defmodule PlatformWeb.AgentAvatarController do
     path = AttachmentStorage.path_for(storage_key)
 
     if File.exists?(path) do
-      conn
-      |> put_resp_header("x-content-type-options", "nosniff")
-      # `private`: this response is behind a session check, so a shared
-      # proxy must never hold a copy to hand to the next viewer.
-      |> put_resp_header("cache-control", "private, no-cache")
-      |> send_download({:file, path},
-        filename: Path.basename(storage_key),
-        content_type: AvatarStorage.content_type_for_key(storage_key),
-        disposition: :inline
+      send_file_inline(
+        conn,
+        path,
+        Path.basename(storage_key),
+        AvatarStorage.content_type_for_key(storage_key)
       )
     else
       send_resp(conn, :not_found, "Not found")
     end
+  end
+
+  defp send_file_inline(conn, path, filename, content_type) do
+    conn
+    |> put_resp_header("x-content-type-options", "nosniff")
+    # `private`: this response is behind a session check, so a shared
+    # proxy must never hold a copy to hand to the next viewer.
+    |> put_resp_header("cache-control", "private, no-cache")
+    |> send_download({:file, path},
+      filename: filename,
+      content_type: content_type,
+      disposition: :inline
+    )
   end
 end

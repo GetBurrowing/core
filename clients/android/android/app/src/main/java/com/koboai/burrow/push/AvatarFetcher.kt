@@ -149,7 +149,10 @@ class AvatarFetcher(
                 Log.w(TAG, "avatar fetch: status $status")
                 return null
             }
-            if (connection.contentLengthLong > MAX_BYTES) return null
+            if (connection.contentLengthLong > MAX_BYTES) {
+                Log.w(TAG, "avatar fetch: dropped, content-length over cap")
+                return null
+            }
             val bytes = connection.inputStream.use { readCapped(it) } ?: return null
             return decode(bytes)
         } catch (_: IOException) {
@@ -168,7 +171,10 @@ class AvatarFetcher(
             if (Thread.currentThread().isInterrupted) return null
             val read = stream.read(buffer)
             if (read < 0) break
-            if (out.size() + read > MAX_BYTES) return null
+            if (out.size() + read > MAX_BYTES) {
+                Log.w(TAG, "avatar fetch: dropped, body over cap")
+                return null
+            }
             out.write(buffer, 0, read)
         }
         return out.toByteArray()

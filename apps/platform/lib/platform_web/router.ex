@@ -272,7 +272,10 @@ defmodule PlatformWeb.Router do
   scope "/api/app", PlatformWeb do
     pipe_through(:app_avatar)
 
-    get("/agents/:id/avatar", AgentAvatarController, :show)
+    # `:app_show`, not `:show`: the app gets a thumbnail of a large avatar,
+    # because both Burrow apps drop a body over 256 KB (see
+    # `AgentAvatarController.app_show/2`).
+    get("/agents/:id/avatar", AgentAvatarController, :app_show)
   end
 
   # Install PWA icon reads (task 01a0879a stage 3). NOTHING but `:accepts` —
