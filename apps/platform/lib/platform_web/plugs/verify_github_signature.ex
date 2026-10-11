@@ -52,7 +52,11 @@ defmodule PlatformWeb.Plugs.VerifyGithubSignature do
 
     case GithubSignature.verify(raw_body, signature, repo_url) do
       :ok ->
-        conn
+        # Task 01a11ec3 stage 3: record that THIS delivery verified, so a
+        # handler that must act only on signed events (external-feedback
+        # intake) can tell a verified delivery from one let through by the
+        # `:github_webhook_signature_required` rollback valve below.
+        assign(conn, :github_signature_verified, true)
 
       {:error, reason} ->
         if signature_required?() do

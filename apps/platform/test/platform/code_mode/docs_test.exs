@@ -167,8 +167,18 @@ defmodule Platform.CodeMode.DocsTest do
     # ceiling is the measured value rounded up to the next 256 B, and both
     # stay under 6,164 B (6,439 B tool-by-tool minus the 275 B suite_run
     # result).
-    @docs_ceiling 4_352
-    @text_ceiling 4_608
+    #
+    # Re-measured by task 01a11ec3 stage 1, whose task item schema gained four
+    # provenance fields (origin, trust, external_repository_identity,
+    # external_issue_number) that task_list's summary types now print:
+    # docs 4,421 B (was <= 4,352). Re-pinned by the same rule, measured value
+    # rounded up to the next 256 B; the text ceiling moves by the same 256 B.
+    # Both remain under 6,164 B. The alternative, shortening unrelated return
+    # schema descriptions to fit the old ceiling, was tried at 2e607e870 and
+    # reverted: it deleted the tie-break order and the phase_assignees shape
+    # from the docs to make room.
+    @docs_ceiling 4_608
+    @text_ceiling 4_864
 
     test "CEILING: three tools in summary detail fit the measured ceiling",
          %{runtime: runtime, token: token} do

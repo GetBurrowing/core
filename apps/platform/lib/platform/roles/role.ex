@@ -10,7 +10,7 @@ defmodule Platform.Roles.Role do
     * `key` — the natural primary key. One of the closed enum
       `designer | historian | meeting_scribe | meeting_producer |
       triage_officer | security_guard | architect | agents_leader |
-      scientist` (stack decision #2:
+      scientist | janitor` (stack decision #2:
       role roster is fixed by the platform, not user-extensible).
       Enforced by both the changeset and a DB CHECK constraint,
       mirroring `org_memberships.role`. `architect` was added in
@@ -19,7 +19,8 @@ defmodule Platform.Roles.Role do
       was added in task `01a0b491` stage 1 as the owner of
       `agents.goal_heartbeat`. `scientist` was added in task `01a0d415`
       stage 3 (the experimentation-layer ADR-0052) as the owner of
-      `experiments.label_signal`.
+      `experiments.label_signal`. `janitor` was added in task `019fa1ac-6685`
+      stage 1 as the owner of `janitor.cron_drain`, the weekly chore drain.
     * `name` — human-presentable label.
     * `description` — one-line explanation of what the role owns.
     * `icon` — hero-icon slug (e.g. `hero-paint-brush`).
@@ -41,7 +42,7 @@ defmodule Platform.Roles.Role do
   @derive {Phoenix.Param, key: :key}
   @foreign_key_type :string
 
-  @valid_keys ~w(designer historian meeting_scribe meeting_producer triage_officer security_guard architect agents_leader scientist)
+  @valid_keys ~w(designer historian meeting_scribe meeting_producer triage_officer security_guard architect agents_leader scientist janitor)
 
   schema "roles" do
     field(:name, :string)

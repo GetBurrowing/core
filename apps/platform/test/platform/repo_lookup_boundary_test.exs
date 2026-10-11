@@ -573,6 +573,8 @@ defmodule Platform.RepoLookupBoundaryTest do
     {"platform/responsibilities/handlers/agents_goal_heartbeat.ex", :platform_uuid_guard, "-", 2,
      :flagged_sibling_owned,
      "task 01a0ca9f: `resolve_scope/1` guards the space's `metadata[\"goal_project_id\"]` (free-form JSON, so :must_cast) with `Platform.UUID.cast/1` before `Tasks.get_project/1`; a malformed value resolves to `:unknown` and renders the fault clause. 1 -> 2 for task 01a0cef1's `put_goal_scope/2`, whose `raw` is the goal editor's submitted project id (a LiveView `params` value, so :must_cast): it is cast with `Platform.UUID.cast/1` before it is compared against `goal_scope_projects/1`, and a malformed value is refused as `{:error, :unknown_project}`. Under the responsibilities/ sibling prefix, so flagged per that rule"},
+    {"platform/responsibilities/janitor.ex", :platform_uuid_guard, "-", 2, :flagged_sibling_owned,
+     "task 019fa1ac-6685 stage 3, under the responsibilities/ sibling prefix. (1) `valid_uuid/1` guards `hand_back/3`'s `task_id`, which is the `janitor_hand_back` MCP tool argument (so :must_cast), BEFORE the locked `Repo.one` in `lock_task/1` (this file's `@repo_one_counts` entry); a malformed id returns `{:error, :invalid_task_id}` and opens no transaction. (2) `audit/4` uses `Platform.UUID.valid?/1` as a BOOLEAN on the caller agent id before it becomes `audit_events.actor_id`; the string is discarded when it fails, so the row records no actor rather than raising. Pinned by `janitor_cron_drain_test.exs` (hand-back refusals write nothing)."},
     {"platform/responsibilities/router.ex", :get, "Message", 1, :flagged_sibling_owned,
      "`load_message_with_space_kind/1` takes `message_id` off a responsibility trigger payload; sibling-owned — RECORD, DO NOT EDIT"},
     {"platform/responsibilities/router.ex", :get, "Platform.Chat.Space", 1,
@@ -731,9 +733,9 @@ defmodule Platform.RepoLookupBoundaryTest do
      "normalize_page_key/1 uses Platform.UUID.cast/1 and its CAST OUTPUT becomes a page key, so a 16-character LiveView param is now rejected rather than accepted as a namespace uuid. Fabricated-value family: nothing ever raised here"},
     {"platform_web/live/tasks_live.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "the surviving task_id guard uses Platform.UUID.cast/1 and passes the CAST OUTPUT downstream, so it never raised — a 16-character param was hex-encoded into an invented id that silently missed. The strict predicate makes it take the :error branch. The five plan_id guards moved to task_detail_component.ex with the plan events (task 01a008f6 stage 4) and are inventoried below"},
-    {"platform_web/live/tasks/task_detail_component.ex", :platform_uuid_guard, "-", 3,
+    {"platform_web/live/tasks/task_detail_component.ex", :platform_uuid_guard, "-", 4,
      :safe_internal,
-     "the plan_id guards moved here from tasks_live.ex with the plan-approval events (task 01a008f6 stage 4). Each uses Platform.UUID.cast/1 and passes the CAST OUTPUT to Repo.get(Plan, uuid); the classification is unchanged by the move — the ids still arrive as phx-value-plan-id LiveView params and are still cast before the lookup. Three sites rather than six because approve/reject/reject-with-feedback now share one fetch_plan/1"},
+     "the plan_id guards moved here from tasks_live.ex with the plan-approval events (task 01a008f6 stage 4). Each uses Platform.UUID.cast/1 and passes the CAST OUTPUT to Repo.get(Plan, uuid); the classification is unchanged by the move — the ids still arrive as phx-value-plan-id LiveView params and are still cast before the lookup. Three sites rather than six because approve/reject/reject-with-feedback now share one fetch_plan/1. The fourth (task 01a11ec3 stage 4) is promotable_task/1: the detail_promote_from_quarantine phx-value-id is checked with Platform.UUID.valid?/1 before Tasks.get_task_record/1, so a malformed id is \"not found\" rather than a cast raise"},
     {"platform_web/live/tasks/task_detail_component.ex", :get, "Plan", 1, :safe_internal,
      "fetch_plan/1 receives the `{:ok, uuid}` output of the cast above, which is always a well-formed 36-character UUID by construction; the guard itself is Platform.UUID.cast/1, recorded on the `:platform_uuid_guard` key for this file"},
 
@@ -764,6 +766,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "task 01a01ce0 stage 1 — lookup_participant/3 guards the space_id AND the participant_id before the get_by recorded above. Two calls, one per :binary_id column, because either one being malformed raises. The space_id is the forged phx-value- param this whole module exists to refuse, so a guard that raises instead of denying would convert an authorization refusal into a 500 on a request path"},
     {"platform/external_agents.ex", :platform_uuid_guard, "-", 2, :safe_internal,
      "get_external_agent/1 and get_external_agent!/1 — the id:-keyed get_by pair that `git grep \"Repo.get(\"` cannot see"},
+    {"platform/feedback/intake.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "configured_project_id/0's predicate (task 01a11ec3 stage 3): the FEEDBACK_INTAKE_PROJECT_ID config value is checked with Platform.UUID.valid?/1 before the Repo.exists? that pins `p.id == ^id`, so a malformed operator value resolves to no configured project instead of raising Ecto.Query.CastError inside webhook intake"},
     {"platform/files.ex", :platform_uuid_guard, "-", 3, :safe_internal,
      "get_file/2, get_file!/2 and fetch_extracted_text/1. The last matters most: Files.Text keys on a bare :binary_id, a different symptom from the UUIDv7 schemas"},
     {"platform/files/cataloger.ex", :platform_uuid_guard, "-", 1, :safe_internal,
@@ -846,6 +850,18 @@ defmodule Platform.RepoLookupBoundaryTest do
     # `fetch_org_project/2`, every pinned id behind Platform.UUID.valid?/1
     # (recorded in @inventory).
     "platform/mail/dispatch.ex" => 2,
+    # Task 01a11ec3 stage 2: 0 -> 1, `Feedback.Submission.existing/1`.
+    # Triaged by hand: the `where:` pins `r.fingerprint == ^fingerprint`, a
+    # `:string` column holding a sha256 hex digest the module computes itself
+    # (`fingerprint/1`) from the normalized submission; no caller-supplied id
+    # reaches it, and a string column cannot raise Ecto.Query.CastError.
+    "platform/feedback/submission.ex" => 1,
+    # Task 01a11ec3 stage 3: 0 -> 1, `Feedback.Intake.existing_task/2`.
+    # Triaged by hand: the `where:` pins `lower(external_repository_identity)`
+    # (a string normalized by Tasks.RepoRef) and `external_issue_number` (an
+    # integer guarded positive by `extract_issue/1`); no id is pinned, so
+    # nothing boundary-reachable can raise Ecto.Query.CastError there.
+    "platform/feedback/intake.ex" => 1,
     # Task 01a0cf21 stage 5. drafts.ex: 0 → 2 — `get/2` and `fetch_draft/1`,
     # each pinning an id behind Platform.UUID.valid?/1 in the same
     # expression (recorded in @inventory).
@@ -1299,6 +1315,11 @@ defmodule Platform.RepoLookupBoundaryTest do
     # neither needs a `Platform.UUID.valid?/1` guard.
     "platform/responsibilities/handlers/agents_goal_heartbeat.ex" => 2,
     "platform/responsibilities/handlers/architecture_cron_sweep.ex" => 1,
+    # Task 019fa1ac-6685 stage 3: `lock_task/1`'s `where: t.id == ^task_id`
+    # pins the `janitor_hand_back` tool's task_id, which `valid_uuid/1`
+    # (this file's platform_uuid_guard entry) has already refused if
+    # malformed.
+    "platform/responsibilities/janitor.ex" => 1,
     "platform/roles.ex" => 2,
     # 6 -> 7 with task 019f9b61 stage 2: `plan_task_id/1`, whose
     # `where: p.id == ^plan_id` pins a UUID column. Its caller is the
@@ -1306,7 +1327,14 @@ defmodule Platform.RepoLookupBoundaryTest do
     # FK off a board PubSub payload), but the function is public, so it guards
     # with `Platform.UUID.valid?/1` (this file's tasks.ex
     # `:platform_uuid_guard` entry, 3 -> 4) and answers nil for a malformed id.
-    "platform/tasks.ex" => 7,
+    #
+    # 7 -> 8 for task 01a11ec3 stage 1's `promote_from_quarantine/3`, which
+    # re-reads the task `FOR UPDATE` so the trust decision is made against
+    # the persisted row. Its `t.id == ^task_id` pins the `id` of a `%Task{}`
+    # struct (the function head matches `%Task{id: task_id}` with
+    # `is_binary(task_id)`), i.e. a primary key read back from the column,
+    # canonical by construction; no boundary string reaches it.
+    "platform/tasks.ex" => 8,
     "platform/tasks/chat_pins.ex" => 1,
     # 0 → 1 for task 019fba18 stage 4's `why_not_live/1`, which names WHY a
     # validation id is not a live reconciler candidate so

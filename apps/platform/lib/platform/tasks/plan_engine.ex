@@ -75,7 +75,16 @@ defmodule Platform.Tasks.PlanEngine do
   @spec start_stage(Ecto.UUID.t()) :: {:ok, Stage.t()} | {:error, term()}
   def start_stage(stage_id) do
     with {:ok, stage} <- fetch_stage(stage_id) do
+      # `transition_stage/4` is the central execution boundary and checks the
+      # owning task before every transition to running.
       transition_stage(stage, "running")
+    end
+  end
+
+  defp require_stage_task_not_quarantined(%Stage{} = stage) do
+    case Tasks.get_plan(stage.plan_id) do
+      %Plan{} = plan -> Tasks.require_not_quarantined_task(plan.task_id)
+      nil -> {:error, :task_not_found}
     end
   end
 
@@ -1393,6 +1402,17 @@ defmodule Platform.Tasks.PlanEngine do
   # every row of that round look prior-round (see `owed?/2`) and wedge the
   # designed failed->passed flip (task 01a0e8c1 stage 1).
   defp transition_stage(stage, new_status, completed_by \\ nil, opts \\ []) do
+    with :ok <- require_stage_transition_not_quarantined(stage, new_status) do
+      do_guarded_transition_stage(stage, new_status, completed_by, opts)
+    end
+  end
+
+  defp require_stage_transition_not_quarantined(stage, "running"),
+    do: require_stage_task_not_quarantined(stage)
+
+  defp require_stage_transition_not_quarantined(_stage, _new_status), do: :ok
+
+  defp do_guarded_transition_stage(stage, new_status, completed_by, opts) do
     allowed = Map.get(@valid_stage_transitions, stage.status, [])
 
     cond do

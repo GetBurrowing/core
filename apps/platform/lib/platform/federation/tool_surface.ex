@@ -252,7 +252,16 @@ defmodule Platform.Federation.ToolSurface do
   defp tools_for_bundle("review"), do: tag(review_tools(), "review")
   defp tools_for_bundle("space"), do: tag(space_tools(), "space")
   defp tools_for_bundle("context_read"), do: tag(context_read_tools(), "context_read")
-  defp tools_for_bundle("federation"), do: tag(federation_tools(), "federation")
+  # `feedback.submit` (task 01a11ec3 stage 2) rides the `federation` bundle,
+  # which every runtime holds by default, and is appended ONLY while
+  # `Platform.Feedback.Policy.enabled?/0` is true. A disabled installation
+  # therefore lists it nowhere — not in `tool_definitions/0`, not in any
+  # runtime's `ToolAuthorization.effective_tools/1` — so `authorize/2` denies
+  # it, and `execute/3` re-checks the same predicate for any caller that
+  # reaches the handler without going through authorization.
+  defp tools_for_bundle("federation"),
+    do: tag(federation_tools() ++ feedback_tools(), "federation")
+
   defp tools_for_bundle("memory"), do: tag(memory_tools(), "memory")
   defp tools_for_bundle("skill"), do: tag(skill_tools(), "skill")
   defp tools_for_bundle("attachment"), do: tag(attachment_tools(), "attachment")
@@ -1095,6 +1104,69 @@ defmodule Platform.Federation.ToolSurface do
   # only when a person sends it from the Email module (or through the email
   # deploy strategy). `tool_surface_mail_test.exs` pins that no bundle other
   # than `mail` exposes one.
+  # Listed only while the installation's feedback capability is on; see
+  # `tools_for_bundle("federation")`.
+  defp feedback_tools do
+    if Platform.Feedback.Policy.enabled?(), do: [feedback_submit_tool()], else: []
+  end
+
+  defp feedback_submit_tool do
+    %{
+      name: "feedback.submit",
+      description:
+        "Report a defect in Suite itself, or propose a concrete positive change to it, as one structured GitHub issue on the Startup-Suite feedback repository. Only the fields below are read; every other argument is ignored. Text is scrubbed for secrets and credentials before it leaves this installation.",
+      parameters: %{
+        category: %{
+          type: "string",
+          required: true,
+          description: "One of: #{Enum.join(Platform.Feedback.Submission.categories(), ", ")}"
+        },
+        title: %{
+          type: "string",
+          required: true,
+          description:
+            "One-line summary, at most #{Platform.Feedback.Submission.limits().title} characters"
+        },
+        expected_behavior: %{
+          type: "string",
+          required: true,
+          description:
+            "What Suite should do (for a positive_change: the behaviour you propose), at most #{Platform.Feedback.Submission.limits().expected_behavior} characters"
+        },
+        observed_behavior: %{
+          type: "string",
+          required: true,
+          description:
+            "What Suite does today, at most #{Platform.Feedback.Submission.limits().observed_behavior} characters"
+        },
+        reproduction_steps: %{
+          type: "string",
+          required: false,
+          description:
+            "Numbered steps that reproduce it, at most #{Platform.Feedback.Submission.limits().reproduction_steps} characters"
+        },
+        version_environment: %{
+          type: "string",
+          required: false,
+          description:
+            "Suite version / build and runtime, at most #{Platform.Feedback.Submission.limits().version_environment} characters"
+        },
+        diagnostics: %{
+          type: "object",
+          required: false,
+          description:
+            "OPT-IN and SCOPED only: {include: true, scope: one of #{Enum.join(Platform.Feedback.Submission.diagnostic_scopes(), " | ")}, content: string of at most #{Platform.Feedback.Submission.limits().diagnostics} characters}. Anything else is dropped. Never paste logs, session transcripts, environment dumps or customer data."
+        }
+      },
+      returns:
+        "{status: \"created\" | \"duplicate\", issue: {repository, issue_number, url}, fingerprint, redactions, ignored_fields, diagnostics_included, diagnostics_dropped}",
+      limitations:
+        "Exists only when this installation enables feedback (FEEDBACK_POLICY). Requires an identified agent. Lengths: per field as listed, #{Platform.Feedback.Submission.aggregate_limit()} characters in total. Rate-limited per agent and per installation; an identical submission returns the existing issue (status duplicate) and does not count against the limit. Publication goes through a server-side broker; no GitHub credential is held or returned here.",
+      when_to_use:
+        "When you hit a reproducible defect in Suite (not in the task's own code) or have a specific improvement to Suite to propose. It never substitutes for finishing your stage."
+    }
+  end
+
   defp mail_draft_tools do
     if Platform.Mail.Config.enabled?(),
       do: Platform.Federation.MailDraftTools.definitions(),
@@ -1925,6 +1997,28 @@ defmodule Platform.Federation.ToolSurface do
             description:
               "Task kind: feature (default; new capability), chore (maintenance/cleanup/config), bug (shipped-behaviour defect), research (answer-producing investigation), or ops (operational/process work without a repo diff)"
           },
+          origin: %{
+            type: "string",
+            required: false,
+            description: "Independent task origin: internal (default) or external_feedback"
+          },
+          trust: %{
+            type: "string",
+            required: false,
+            description: "Persisted trust stamp: trusted (default) or quarantined"
+          },
+          external_repository_identity: %{
+            type: "string",
+            required: false,
+            description:
+              "Canonical owner/repository identity. Required with external_issue_number when origin=external_feedback."
+          },
+          external_issue_number: %{
+            type: "integer",
+            required: false,
+            description:
+              "Positive issue number. Required with external_repository_identity when origin=external_feedback."
+          },
           assignee_type: %{
             type: "string",
             required: false,
@@ -2262,6 +2356,30 @@ defmodule Platform.Federation.ToolSurface do
             required: false,
             description:
               "New task kind: feature, chore, bug, research, or ops. Omit to leave unchanged."
+          },
+          origin: %{
+            type: "string",
+            required: false,
+            description:
+              "Persisted origin. Exposed for envelope parity, but immutable after create; attempts to rewrite it are refused."
+          },
+          trust: %{
+            type: "string",
+            required: false,
+            description:
+              "Persisted trust. Ordinary task_update cannot promote quarantined work; use the explicit attributed promotion operation."
+          },
+          external_repository_identity: %{
+            type: "string",
+            required: false,
+            description:
+              "Durable external repository identity. Immutable after create; rewrite attempts are refused."
+          },
+          external_issue_number: %{
+            type: "integer",
+            required: false,
+            description:
+              "Durable external issue number. Immutable after create; rewrite attempts are refused."
           },
           epic_id: %{type: "string", required: false, description: "Move to a different epic"},
           assignee_type: %{type: "string", required: false, description: "Assignee type"},
@@ -2947,6 +3065,43 @@ defmodule Platform.Federation.ToolSurface do
           "Provide either `assignee_id` (simple) or per-phase ids (advanced) — if any per-phase id is given, `assignee_id` is ignored. Members with `metadata.assignee_override == true` are never overwritten; clear the override first to make them inherit again. Partial per-phase updates are merged phase-by-phase onto the existing stack default.",
         when_to_use:
           "When you want to assign agents once at the stack level instead of drilling into each member task individually."
+      },
+      # Task 019fa1ac-6685 stage 3: the janitor's escalation path, backed by
+      # `Platform.Responsibilities.Janitor.hand_back/3`.
+      %{
+        name: "janitor_hand_back",
+        description:
+          "Hand a chore the janitor claimed back to the humans, because inspection showed it is not small or it touches excluded scope. In one transaction the task returns to `backlog`, `auto_approve_plan` is cleared, the janitor leaves every phase slot it holds, and the metadata gains `janitor_disposition: \"handed_back\"` with the reason, detail and a timestamp; every earlier metadata key is kept. Pass the paths you found: if any is a database migration, a `vault.ex`, auth, tenancy, secrets or deploy/runtime configuration, that category is recorded as the reason whatever reason you gave, because discovering it makes the hand-back mandatory.",
+        parameters: %{
+          task_id: %{
+            type: "string",
+            required: true,
+            description: "UUID of a task the janitor claimed this run or an earlier one."
+          },
+          reason: %{
+            type: "string",
+            required: true,
+            description:
+              "One of: #{Enum.join(Platform.Responsibilities.Janitor.hand_back_reasons(), ", ")}."
+          },
+          detail: %{
+            type: "string",
+            required: false,
+            description: "One line on what you found."
+          },
+          paths: %{
+            type: "array",
+            required: false,
+            description: "Repository paths the change would touch, as found while inspecting it.",
+            schema: %{type: "array", items: %{type: "string"}}
+          }
+        },
+        returns:
+          "%{task_id, status: \"backlog\", auto_approve_plan: false, janitor_disposition: \"handed_back\", janitor_reason, janitor_reason_detail}",
+        limitations:
+          "Only a task whose metadata says the janitor claimed it (`handled_by: \"janitor\"`, `janitor_disposition: \"claimed\"`), and only by the claim's janitor agent or an agent holding one of the task's phase slots. A task in `deploying`, `done` or `cancelled` is refused. A refusal writes nothing.",
+        when_to_use:
+          "As the janitor, instead of pushing a claimed chore through when it turns out not to be small or touches excluded scope. Handing back is the correct outcome there, not a failure."
       }
     ]
   end
@@ -4718,6 +4873,10 @@ defmodule Platform.Federation.ToolSurface do
              status: task.status,
              priority: task.priority,
              kind: task.kind,
+             origin: task.origin,
+             trust: task.trust,
+             external_repository_identity: task.external_repository_identity,
+             external_issue_number: task.external_issue_number,
              project_id: task.project_id,
              epic_id: task.epic_id,
              sponsor: serialize_sponsor(task.sponsor),
@@ -4737,6 +4896,10 @@ defmodule Platform.Federation.ToolSurface do
                  status: updated.status,
                  priority: updated.priority,
                  kind: updated.kind,
+                 origin: updated.origin,
+                 trust: updated.trust,
+                 external_repository_identity: updated.external_repository_identity,
+                 external_issue_number: updated.external_issue_number,
                  project_id: updated.project_id,
                  epic_id: updated.epic_id,
                  sponsor: serialize_sponsor(updated.sponsor),
@@ -4746,11 +4909,30 @@ defmodule Platform.Federation.ToolSurface do
                  similar_tasks: similar_tasks
                }}
 
-            {:error, _} = err ->
+            err when is_tuple(err) and elem(err, 0) == :error ->
               stack_add_error_envelope(err)
           end
       end
     else
+      # Task 01a11ec3 stage 1: a task may not be BORN quarantined in a
+      # planning/execution status. `Tasks.create_task/2` answers a 3-tuple,
+      # which no 2-tuple arm below matches (WithClauseError -> 500).
+      {:error, :quarantined, details} ->
+        {:error, quarantine_refusal_envelope(details)}
+
+      {:error, {:external_trust_not_grantable, trust}} ->
+        {:error,
+         %{
+           error:
+             "task_create cannot create an external_feedback task with trust #{inspect(trust)}. " <>
+               "External feedback created through this tool is always quarantined; trust is granted " <>
+               "only by the feedback-intake policy or an explicit attributed promotion.",
+           recoverable: true,
+           suggestion:
+             "Omit trust (it defaults to quarantined for external_feedback) or pass trust=quarantined.",
+           submitted_args: args_with_defaults
+         }}
+
       # Task 01a05877 stage 2: recoverable refusals echo the submitted
       # arguments (post-defaults) back in the response envelope ONLY —
       # never a log line, never telemetry, never an audit event (title/
@@ -5624,52 +5806,17 @@ defmodule Platform.Federation.ToolSurface do
          }}
 
       task ->
-        task =
-          case {Map.get(args, "assignee_id"), Map.get(args, "assignee_type", "agent")} do
-            {nil, _} ->
-              task
+        # Task 01a11ec3 stage 1: a quarantined external-feedback task must
+        # refuse task_start at the tool surface even though
+        # `Tasks.transition_task/3` already refuses the underlying transition
+        # — the tool is the agent-reachable boundary and must name the
+        # quarantine condition instead of a generic transition refusal.
+        case Tasks.require_not_quarantined(task) do
+          {:error, :quarantined, details} ->
+            {:error, quarantine_refusal_envelope(details)}
 
-            {assignee_id, assignee_type} ->
-              case Tasks.update_task(task, %{
-                     assignee_id: assignee_id,
-                     assignee_type: assignee_type
-                   }) do
-                {:ok, updated} -> updated
-                _ -> task
-              end
-          end
-
-        case Tasks.transition_task(task, "in_progress") do
-          {:ok, updated} ->
-            Tasks.broadcast_board({:task_updated, updated})
-
-            {:ok,
-             %{
-               id: updated.id,
-               title: updated.title,
-               status: updated.status,
-               assignee_id: updated.assignee_id,
-               assignee_type: updated.assignee_type
-             }}
-
-          {:error, :invalid_transition} ->
-            {:error, invalid_start_envelope(task)}
-
-          {:error, :no_approved_plan} ->
-            {:error,
-             %{
-               error:
-                 "Cannot start task: no approved plan exists for task #{task.id}. Per ADR 0029, plan approval is the start signal.",
-               recoverable: false,
-               suggestion:
-                 "Create a plan with plan_create, submit it with plan_submit, and have it approved (plan_approve) before starting the task. Approval transitions the task into in_progress automatically."
-             }}
-
-          {:error, :stack_plans_pending, %{stack_id: stack_id, waiting_on: waiting_on}} ->
-            {:error, stack_plans_pending_envelope(stack_id, waiting_on)}
-
-          {:error, reason} ->
-            {:error, %{error: "Failed to start task: #{inspect(reason)}", recoverable: true}}
+          :ok ->
+            do_task_start(task, args)
         end
     end
   end
@@ -5754,6 +5901,40 @@ defmodule Platform.Federation.ToolSurface do
   # LeaseManager row so the router's `:check_no_ack` handler reschedules
   # instead of firing. Emits a persistent runtime_event AND telemetry
   # (bridged to Audit by Platform.Audit.TelemetryHandler).
+  def execute("janitor_hand_back", args, context) do
+    alias Platform.Responsibilities.Janitor
+
+    case load_agent(context) do
+      %Agent{id: agent_id} ->
+        opts =
+          [agent_id: agent_id, detail: Map.get(args, "detail"), paths: Map.get(args, "paths")]
+
+        case Janitor.hand_back(Map.get(args, "task_id"), Map.get(args, "reason"), opts) do
+          {:ok, task} ->
+            {:ok,
+             %{
+               task_id: task.id,
+               status: task.status,
+               auto_approve_plan: task.auto_approve_plan,
+               janitor_disposition: task.metadata["janitor_disposition"],
+               janitor_reason: task.metadata["janitor_reason"],
+               janitor_reason_detail: task.metadata["janitor_reason_detail"]
+             }}
+
+          {:error, reason} ->
+            {:error, janitor_hand_back_error(reason)}
+        end
+
+      nil ->
+        {:error,
+         %{
+           error: "janitor_hand_back: requires an identified agent",
+           code: :unidentified_agent,
+           recoverable: false
+         }}
+    end
+  end
+
   def execute("alarm_silence", args, context) do
     task_id = Map.get(args, "task_id")
     supplied_stage_id = Map.get(args, "stage_id")
@@ -6271,6 +6452,9 @@ defmodule Platform.Federation.ToolSurface do
           {:partial, %{stack: updated, started: started, parked: parked, errors: errors}} ->
             {:ok, stack_start_payload(updated, started, parked, errors)}
 
+          {:error, :quarantined, details} ->
+            {:error, quarantine_refusal_envelope(details)}
+
           {:error, :invalid_stack_status} ->
             {:error,
              %{
@@ -6447,6 +6631,9 @@ defmodule Platform.Federation.ToolSurface do
                waves_total: waves_total
              )}
 
+          {:error, :quarantined, details} ->
+            {:error, quarantine_refusal_envelope(details)}
+
           {:noop, reason} ->
             # Stack v2 (task 019f487e stage 3): manual-mode idempotency
             # short-circuit. Surface as a soft-success payload so the
@@ -6535,47 +6722,21 @@ defmodule Platform.Federation.ToolSurface do
     task_id = Map.get(args, "task_id")
     raw_stages_input = Map.get(args, "stages", [])
 
-    # Task 01a006d1 stage 3 — the gate runs BEFORE the rewrite pipe and before
-    # the transaction opens, so a refused plan writes nothing at all. Rejecting
-    # after a draft row exists would leave the author unable to retry
-    # (`plan_create` refuses while a draft/pending_review plan is live), which
-    # is the same lockout this guard exists to prevent.
-    #
-    # Task 01a00b91 stage 3 chains a SECOND guard into the same pre-transaction
-    # position for the same reason: a manual_approval that cannot name the UI
-    # surface it will show is refused before anything is written. Both guards
-    # run before `do_plan_create/2`; neither may move below the rewrite pipe.
-    #
-    # PROBE RECORD (01a00b91 stage 5). PROBE C moved the
-    # `detect_unnamed_manual_gate/1` call from here to AFTER `Tasks.create_plan/1`,
-    # returning the same envelope from inside the transaction so the draft row
-    # committed. Predicted: the persistence control detonates and NOTHING ELSE
-    # does. That is exactly what happened, on the full suite — one failure,
-    # `assert Tasks.latest_plan(task.id) == nil`, left a `%Plan{status: "draft"}`.
-    # Every envelope assertion in the same test passed under the mutant, which
-    # is the point: the envelope is byte-identical whether or not a draft was
-    # left behind, so the nil check is the ONLY instrument that sees this
-    # ordering. Delete that one assertion and this line is free to move.
-    # (Two `Platform.Execution.ProofRunTest` failures in the same run are the
-    # known IO-contention flake; re-run green in isolation.)
-    case Platform.Tasks.PlanEngine.detect_e2e_host_collision(raw_stages_input) do
-      {:error, info} ->
-        {:error, e2e_host_collision_envelope(info)}
+    # Task 01a11ec3 stage 1 — the quarantine gate runs BEFORE the existing
+    # plan-engine gates and before any transaction opens, so a refused plan
+    # writes nothing at all (same lockout-free position the other
+    # pre-transaction guards occupy). A quarantined external-feedback task
+    # cannot author a plan through the tool surface even though
+    # `Tasks.create_plan/1` already refuses it at the domain boundary.
+    case Tasks.require_not_quarantined_task(task_id) do
+      {:error, :quarantined, details} ->
+        {:error, quarantine_refusal_envelope(details)}
+
+      {:error, :task_not_found} ->
+        do_guarded_plan_create(task_id, raw_stages_input)
 
       :ok ->
-        case Platform.Tasks.PlanEngine.detect_missing_e2e_host(raw_stages_input) do
-          {:error, info} ->
-            {:error, missing_e2e_host_envelope(info)}
-
-          :ok ->
-            case Platform.Tasks.PlanEngine.detect_unnamed_manual_gate(raw_stages_input) do
-              {:error, info} ->
-                {:error, unnamed_manual_gate_envelope(info)}
-
-              :ok ->
-                do_plan_create(task_id, raw_stages_input)
-            end
-        end
+        do_guarded_plan_create(task_id, raw_stages_input)
     end
   end
 
@@ -6627,50 +6788,16 @@ defmodule Platform.Federation.ToolSurface do
          }}
 
       plan ->
-        case Tasks.submit_plan_for_review(plan) do
-          {:ok, updated} ->
-            {:ok, serialize_plan(Repo.preload(updated, :stages))}
+        # Task 01a11ec3 stage 1 — quarantined external feedback cannot
+        # advance its plan toward review through the tool surface.
+        # `Tasks.submit_plan_for_review/1` also refuses at the domain
+        # boundary; this names the quarantine at the agent-reachable edge.
+        case Tasks.require_not_quarantined_task(plan.task_id) do
+          {:error, :quarantined, details} ->
+            {:error, quarantine_refusal_envelope(details)}
 
-          # Task 01a0588e stage 2. The refusal NAMES THE OMISSION, because
-          # the caller's mistake is invisible from a stage count: a plan
-          # carrying only the engine's synthesized task-level review stage
-          # has one stage and no work in it. Recoverable — nothing was
-          # written, the plan is still a draft, and plan_update fixes it in
-          # place. No error `code` is added: plan_submit does not carry a
-          # code taxonomy and inventing one here would be the only member of
-          # it. Tone mirrors require_plan_update_stages/1, which refuses the
-          # same omission one call earlier.
-          {:error, :no_authored_stages} ->
-            {:error,
-             %{
-               error:
-                 "plan_submit: this plan has no planner-authored implementation stage, so there " <>
-                   "is nothing for the architecture review to review or for an executor to run. " <>
-                   "A plan carrying only the engine's synthesized task-level review stage counts " <>
-                   "as none — that stage is a review host the engine adds, not work you authored.",
-               recoverable: true,
-               suggestion:
-                 "Add at least one implementation stage with plan_update (same shape and " <>
-                   "contract as plan_create's `stages`), then submit again — or discard the " <>
-                   "draft with plan_reject. The plan is untouched and still in draft."
-             }}
-
-          {:error, :invalid_transition} ->
-            {:error,
-             %{
-               error:
-                 "Plan must be in draft status to submit for review (current: #{plan.status})",
-               recoverable: false,
-               suggestion: "Only draft plans can be submitted for review"
-             }}
-
-          {:error, reason} ->
-            {:error,
-             %{
-               error: "Failed to submit plan: #{inspect(reason)}",
-               recoverable: true,
-               suggestion: "Check the plan status"
-             }}
+          _ ->
+            do_plan_submit(plan)
         end
     end
   end
@@ -6689,42 +6816,17 @@ defmodule Platform.Federation.ToolSurface do
          }}
 
       plan ->
-        case Tasks.approve_plan(plan, approved_by) do
-          {:ok, approved} ->
-            {:ok,
-             %{
-               id: approved.id,
-               task_id: approved.task_id,
-               status: approved.status,
-               approved_by: approved.approved_by
-             }}
+        # Task 01a11ec3 stage 1 — a quarantined external-feedback task
+        # cannot have its plan approved through the tool surface.
+        # `Tasks.approve_plan/3` also refuses at the domain boundary; this
+        # names the quarantine condition at the agent-reachable edge instead
+        # of a generic plan not found / invalid transition.
+        case Tasks.require_not_quarantined_task(plan.task_id) do
+          {:error, :quarantined, details} ->
+            {:error, quarantine_refusal_envelope(details)}
 
-          {:error, :invalid_transition} ->
-            {:error,
-             %{
-               error: "Cannot approve plan with status #{plan.status}. Must be pending_review.",
-               recoverable: true,
-               suggestion: "Use plan_submit first to move the plan to pending_review"
-             }}
-
-          # ADR-0046 member 5 stage 3. This tool is the agent-reachable
-          # approval writer: it lives in the `plan` capability bundle and
-          # defaults `approved_by` to `"system"`, so without an explicit
-          # arm here the refusal would arrive as an untyped
-          # "Failed to approve plan" with no suggestion. The guard itself
-          # is in `Tasks.approve_plan/3`, not here — this arm only names it.
-          {:error, :architecture_gate_open} ->
-            {:error,
-             %{
-               error:
-                 "Plan #{plan_id} is held by the architecture gate: the architect has not returned a verdict yet.",
-               recoverable: true,
-               suggestion:
-                 "Wait for the architect's verdict or the gate deadline. An agent cannot approve past an open gate; a human reviewer can, from the task UI."
-             }}
-
-          {:error, reason} ->
-            {:error, %{error: "Failed to approve plan: #{inspect(reason)}", recoverable: true}}
+          _ ->
+            do_plan_approve(plan, approved_by)
         end
     end
   end
@@ -6952,25 +7054,36 @@ defmodule Platform.Federation.ToolSurface do
   def execute("stage_start", args, _context) do
     stage_id = Map.get(args, "stage_id")
 
-    case PlanEngine.start_stage(stage_id) do
-      {:ok, stage} ->
-        {:ok, serialize_stage(stage)}
+    # Task 01a11ec3 stage 1 — a stage belongs to a plan which belongs to a
+    # task; a quarantined external-feedback task's stages must refuse to
+    # start at the tool surface too (PlanEngine.start_stage/1 already guards
+    # the domain boundary; this names the quarantine at the agent-reachable
+    # edge instead of surfacing as a generic failure).
+    case stage_task_quarantine_refusal(stage_id) do
+      {:error, :quarantined, details} ->
+        {:error, quarantine_refusal_envelope(details)}
 
-      {:error, :invalid_transition} ->
-        {:error,
-         %{
-           error: "Stage must be in pending status to start",
-           recoverable: false,
-           suggestion: "Check the stage's current status with stage_list"
-         }}
+      :ok ->
+        case PlanEngine.start_stage(stage_id) do
+          {:ok, stage} ->
+            {:ok, serialize_stage(stage)}
 
-      {:error, reason} ->
-        {:error,
-         %{
-           error: "Failed to start stage: #{inspect(reason)}",
-           recoverable: true,
-           suggestion: "Verify the stage_id is valid"
-         }}
+          {:error, :invalid_transition} ->
+            {:error,
+             %{
+               error: "Stage must be in pending status to start",
+               recoverable: false,
+               suggestion: "Check the stage's current status with stage_list"
+             }}
+
+          {:error, reason} ->
+            {:error,
+             %{
+               error: "Failed to start stage: #{inspect(reason)}",
+               recoverable: true,
+               suggestion: "Verify the stage_id is valid"
+             }}
+        end
     end
   end
 
@@ -7435,6 +7548,26 @@ defmodule Platform.Federation.ToolSurface do
       file_get_text_binary(args, context)
     else
       file_get_text_text(args, context)
+    end
+  end
+
+  # ── External feedback (task 01a11ec3 stage 2) ──────────────────────────
+  #
+  # The capability check runs FIRST and again inside `Submission.submit/2`:
+  # a disabled installation refuses before an argument is read, whichever
+  # path reached this clause.
+  def execute("feedback.submit", args, context) do
+    with :ok <- feedback_enabled() do
+      actor =
+        case load_agent(context) do
+          %Agent{id: id, slug: slug} -> %{agent_id: id, slug: slug}
+          nil -> nil
+        end
+
+      case Platform.Feedback.Submission.submit(args, actor) do
+        {:ok, result} -> {:ok, result}
+        {:error, %{code: code} = err} -> {:error, feedback_error_envelope(code, err)}
+      end
     end
   end
 
@@ -7910,6 +8043,16 @@ defmodule Platform.Federation.ToolSurface do
             # stack that already SHIPPED through its rollup cannot re-enter
             # an execution status. Not recoverable on this task — the
             # message itself says where the work goes instead.
+            # Task 01a11ec3 stage 1: `Tasks.update_task/3`'s status
+            # precheck refuses moving quarantined external feedback into
+            # planning/execution with a 3-tuple. Without this arm the
+            # refusal is a WithClauseError -> 500 instead of a named answer.
+            {:error, :quarantined, details} ->
+              envelope = quarantine_refusal_envelope(details)
+
+              {:error,
+               Map.update!(envelope, :error, &(&1 <> " " <> @task_update_nothing_written))}
+
             {:error, :stack_already_shipped, %{message: message}} ->
               {:error,
                %{
@@ -9166,6 +9309,234 @@ defmodule Platform.Federation.ToolSurface do
         "Cannot start task from status #{status}. in_progress is reachable from: #{Enum.join(sources, ", ")} (per ADR 0029, plan approval transitions to in_progress automatically).",
       recoverable: true,
       suggestion: "Check task status with task_get first"
+    }
+  end
+
+  defp do_task_start(task, args) do
+    task =
+      case {Map.get(args, "assignee_id"), Map.get(args, "assignee_type", "agent")} do
+        {nil, _} ->
+          task
+
+        {assignee_id, assignee_type} ->
+          case Tasks.update_task(task, %{
+                 assignee_id: assignee_id,
+                 assignee_type: assignee_type
+               }) do
+            {:ok, updated} -> updated
+            _ -> task
+          end
+      end
+
+    case Tasks.transition_task(task, "in_progress") do
+      {:ok, updated} ->
+        Tasks.broadcast_board({:task_updated, updated})
+
+        {:ok,
+         %{
+           id: updated.id,
+           title: updated.title,
+           status: updated.status,
+           assignee_id: updated.assignee_id,
+           assignee_type: updated.assignee_type
+         }}
+
+      {:error, :invalid_transition} ->
+        {:error, invalid_start_envelope(task)}
+
+      {:error, :no_approved_plan} ->
+        {:error,
+         %{
+           error:
+             "Cannot start task: no approved plan exists for task #{task.id}. Per ADR 0029, plan approval is the start signal.",
+           recoverable: false,
+           suggestion:
+             "Create a plan with plan_create, submit it with plan_submit, and have it approved (plan_approve) before starting the task. Approval transitions the task into in_progress automatically."
+         }}
+
+      {:error, :stack_plans_pending, %{stack_id: stack_id, waiting_on: waiting_on}} ->
+        {:error, stack_plans_pending_envelope(stack_id, waiting_on)}
+
+      {:error, reason} ->
+        {:error, %{error: "Failed to start task: #{inspect(reason)}", recoverable: true}}
+    end
+  end
+
+  defp do_guarded_plan_create(task_id, raw_stages_input) do
+    # Task 01a006d1 stage 3 — the gate runs BEFORE the rewrite pipe and before
+    # the transaction opens, so a refused plan writes nothing at all. Rejecting
+    # after a draft row exists would leave the author unable to retry
+    # (`plan_create` refuses while a draft/pending_review plan is live), which
+    # is the same lockout this guard exists to prevent.
+    #
+    # Task 01a00b91 stage 3 chains a SECOND guard into the same pre-transaction
+    # position for the same reason: a manual_approval that cannot name the UI
+    # surface it will show is refused before anything is written. Both guards
+    # run before `do_plan_create/2`; neither may move below the rewrite pipe.
+    #
+    # PROBE RECORD (01a00b91 stage 5). PROBE C moved the
+    # `detect_unnamed_manual_gate/1` call from here to AFTER `Tasks.create_plan/1`,
+    # returning the same envelope from inside the transaction so the draft row
+    # committed. Predicted: the persistence control detonates and NOTHING ELSE
+    # does. That is exactly what happened, on the full suite — one failure,
+    # `assert Tasks.latest_plan(task.id) == nil`, left a `%Plan{status: "draft"}`.
+    # Every envelope assertion in the same test passed under the mutant, which
+    # is the point: the envelope is byte-identical whether or not a draft was
+    # left behind, so the nil check is the ONLY instrument that sees this
+    # ordering. Delete that one assertion and this line is free to move.
+    # (Two `Platform.Execution.ProofRunTest` failures in the same run are the
+    # known IO-contention flake; re-run green in isolation.)
+    case Platform.Tasks.PlanEngine.detect_e2e_host_collision(raw_stages_input) do
+      {:error, info} ->
+        {:error, e2e_host_collision_envelope(info)}
+
+      :ok ->
+        case Platform.Tasks.PlanEngine.detect_missing_e2e_host(raw_stages_input) do
+          {:error, info} ->
+            {:error, missing_e2e_host_envelope(info)}
+
+          :ok ->
+            case Platform.Tasks.PlanEngine.detect_unnamed_manual_gate(raw_stages_input) do
+              {:error, info} ->
+                {:error, unnamed_manual_gate_envelope(info)}
+
+              :ok ->
+                do_plan_create(task_id, raw_stages_input)
+            end
+        end
+    end
+  end
+
+  defp do_plan_submit(plan) do
+    case Tasks.submit_plan_for_review(plan) do
+      {:ok, updated} ->
+        {:ok, serialize_plan(Repo.preload(updated, :stages))}
+
+      # Task 01a0588e stage 2. The refusal NAMES THE OMISSION, because
+      # the caller's mistake is invisible from a stage count: a plan
+      # carrying only the engine's synthesized task-level review stage
+      # has one stage and no work in it. Recoverable — nothing was
+      # written, the plan is still a draft, and plan_update fixes it in
+      # place. No error `code` is added: plan_submit does not carry a
+      # code taxonomy and inventing one here would be the only member of
+      # it. Tone mirrors require_plan_update_stages/1, which refuses the
+      # same omission one call earlier.
+      {:error, :no_authored_stages} ->
+        {:error,
+         %{
+           error:
+             "plan_submit: this plan has no planner-authored implementation stage, so there " <>
+               "is nothing for the architecture review to review or for an executor to run. " <>
+               "A plan carrying only the engine's synthesized task-level review stage counts " <>
+               "as none — that stage is a review host the engine adds, not work you authored.",
+           recoverable: true,
+           suggestion:
+             "Add at least one implementation stage with plan_update (same shape and " <>
+               "contract as plan_create's `stages`), then submit again — or discard the " <>
+               "draft with plan_reject. The plan is untouched and still in draft."
+         }}
+
+      {:error, :invalid_transition} ->
+        {:error,
+         %{
+           error: "Plan must be in draft status to submit for review (current: #{plan.status})",
+           recoverable: false,
+           suggestion: "Only draft plans can be submitted for review"
+         }}
+
+      {:error, reason} ->
+        {:error,
+         %{
+           error: "Failed to submit plan: #{inspect(reason)}",
+           recoverable: true,
+           suggestion: "Check the plan status"
+         }}
+    end
+  end
+
+  defp do_plan_approve(plan, approved_by) do
+    case Tasks.approve_plan(plan, approved_by) do
+      {:ok, approved} ->
+        {:ok,
+         %{
+           id: approved.id,
+           task_id: approved.task_id,
+           status: approved.status,
+           approved_by: approved.approved_by
+         }}
+
+      {:error, :invalid_transition} ->
+        {:error,
+         %{
+           error: "Cannot approve plan with status #{plan.status}. Must be pending_review.",
+           recoverable: true,
+           suggestion: "Use plan_submit first to move the plan to pending_review"
+         }}
+
+      # ADR-0046 member 5 stage 3. This tool is the agent-reachable
+      # approval writer: it lives in the `plan` capability bundle and
+      # defaults `approved_by` to `"system"`, so without an explicit
+      # arm here the refusal would arrive as an untyped
+      # "Failed to approve plan" with no suggestion. The guard itself
+      # is in `Tasks.approve_plan/3`, not here — this arm only names it.
+      {:error, :architecture_gate_open} ->
+        {:error,
+         %{
+           error:
+             "Plan #{plan.id} is held by the architecture gate: the architect has not returned a verdict yet.",
+           recoverable: true,
+           suggestion:
+             "Wait for the architect's verdict or the gate deadline. An agent cannot approve past an open gate; a human reviewer can, from the task UI."
+         }}
+
+      {:error, reason} ->
+        {:error, %{error: "Failed to approve plan: #{inspect(reason)}", recoverable: true}}
+    end
+  end
+
+  # Resolves a stage to its task and returns the quarantine refusal when
+  # the owning task is quarantined. `:ok` when the stage is unknown
+  # (let the normal not-found path answer) or the task is not quarantined.
+  defp stage_task_quarantine_refusal(stage_id) do
+    case stage_id && get_by_uuid(Stage, stage_id) do
+      nil ->
+        :ok
+
+      %Stage{} = stage ->
+        case Tasks.get_plan(stage.plan_id) do
+          nil -> :ok
+          %Plan{} = plan -> Tasks.require_not_quarantined_task(plan.task_id)
+        end
+    end
+  end
+
+  # Task 01a11ec3 stage 1 — the structured quarantine refusal shared by
+  # every tool-surface entry point that starts planning or execution. The
+  # persisted trust stamp is the authoritative fact; this envelope names
+  # the quarantine condition so an agent knows the task needs an explicit
+  # attributed promotion rather than a retry.
+  defp quarantine_refusal_envelope(%{message: message} = details) do
+    %{
+      error: message,
+      recoverable: false,
+      suggestion:
+        "This task is quarantined external feedback. Request an explicit attributed promotion " <>
+          "(Platform.Tasks.promote_from_quarantine/3) from a human before planning or starting it.",
+      quarantine: %{
+        task_id: Map.get(details, :task_id),
+        origin: Map.get(details, :origin),
+        trust: Map.get(details, :trust)
+      }
+    }
+  end
+
+  defp quarantine_refusal_envelope(details) do
+    %{
+      error: "Task is quarantined external feedback and may not be planned or started.",
+      recoverable: false,
+      suggestion:
+        "This task is quarantined. Request an explicit attributed promotion from a human before planning or starting it.",
+      quarantine: %{task_id: Map.get(details, :task_id), origin: Map.get(details, :origin)}
     }
   end
 
@@ -12043,6 +12414,49 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
+  defp janitor_hand_back_error(reason) do
+    {code, message, suggestion} =
+      case reason do
+        :invalid_task_id ->
+          {:invalid_task_id, "task_id must be a UUID", "Pass the claimed task's id."}
+
+        :invalid_reason ->
+          {:invalid_reason, "reason is not a hand-back reason code",
+           "Use one of: #{Enum.join(Platform.Responsibilities.Janitor.hand_back_reasons(), ", ")}."}
+
+        :invalid_paths ->
+          {:invalid_paths, "paths must be a list of strings",
+           "Pass paths as an array of strings."}
+
+        :not_found ->
+          {:not_found, "no such task", "Check the task_id."}
+
+        {:not_janitor_claimed, disposition} ->
+          {:not_janitor_claimed,
+           "the task is not janitor-claimed (disposition #{inspect(disposition)})",
+           "Only tasks the janitor claimed can be handed back; this one needs no action from you."}
+
+        :not_claim_holder ->
+          {:not_claim_holder, "you are not this claim's janitor agent or a phase assignee",
+           "Only the janitor agent the claim named can hand it back."}
+
+        {:not_handbackable, status} ->
+          {:not_handbackable, "a #{status} task cannot be handed back",
+           "Report it in the task's execution space instead."}
+
+        other ->
+          {:hand_back_failed, "hand-back rolled back: #{inspect(other)}",
+           "Nothing was written; retry once, then report it in the execution space."}
+      end
+
+    %{
+      error: "janitor_hand_back: #{message}",
+      code: code,
+      recoverable: code not in [:not_janitor_claimed, :not_handbackable],
+      suggestion: suggestion
+    }
+  end
+
   defp require_string(args, key, tool) do
     case Map.get(args, key) do
       value when is_binary(value) and value != "" ->
@@ -12440,6 +12854,80 @@ defmodule Platform.Federation.ToolSurface do
           {:error, envelope} -> {:error, file_unauthorized_envelope(envelope)}
         end
     end
+  end
+
+  # ── External feedback helpers (task 01a11ec3 stage 2) ──────────────────
+
+  defp feedback_enabled do
+    if Platform.Feedback.Policy.enabled?() do
+      :ok
+    else
+      {:error, feedback_error_envelope(:feedback_disabled, %{})}
+    end
+  end
+
+  # Every refusal is built from the bounded code and Submission's own fixed
+  # message; publisher responses never reach it.
+  defp feedback_error_envelope(:feedback_disabled, _err) do
+    %{
+      error: "feedback.submit: feedback submission is not enabled on this installation",
+      code: :feedback_disabled,
+      recoverable: false,
+      suggestion:
+        "This installation has not enabled external feedback (FEEDBACK_POLICY). Do not retry."
+    }
+  end
+
+  defp feedback_error_envelope(:rate_limited, err) do
+    %{
+      error: "feedback.submit: #{err.message}",
+      code: :rate_limited,
+      recoverable: true,
+      retry_after_seconds: Map.get(err, :retry_after_seconds),
+      suggestion:
+        "Do not resubmit now. Finish your stage; report again later only if still needed."
+    }
+  end
+
+  defp feedback_error_envelope(code, err)
+       when code in [
+              :publisher_unavailable,
+              :publisher_rate_limited,
+              :in_flight
+            ] do
+    %{
+      error: "feedback.submit: #{err.message}",
+      code: code,
+      recoverable: true,
+      suggestion:
+        "Retry the identical submission later; it is deduplicated, so a retry cannot create a second issue."
+    }
+  end
+
+  defp feedback_error_envelope(code, err)
+       when code in [
+              :publisher_not_configured,
+              :publisher_rejected,
+              :publisher_bad_response,
+              :unauthorized
+            ] do
+    %{
+      error: "feedback.submit: #{err.message}",
+      code: code,
+      recoverable: false,
+      suggestion: "Tell the person you are working with; do not retry."
+    }
+  end
+
+  defp feedback_error_envelope(code, err) do
+    %{
+      error: "feedback.submit: #{err.message}",
+      code: code,
+      recoverable: true,
+      field: Map.get(err, :field),
+      suggestion:
+        "Fix the named field and resubmit. Accepted fields: #{Enum.join(Platform.Feedback.Submission.allowed_keys(), ", ")}."
+    }
   end
 
   # ── Email draft tool helpers (task 01a0cf21 stage 5) ────────────────────
@@ -14189,6 +14677,15 @@ defmodule Platform.Federation.ToolSurface do
       status: task.status,
       priority: task.priority,
       kind: task.kind,
+      # Task 01a11ec3 stage 1 — independent provenance dimensions on the
+      # read path. `origin` is internal or external_feedback; `trust` is
+      # trusted or quarantined; the repository/issue pair carries durable
+      # external identity. Quarantined external feedback is visibly
+      # distinguishable and its provenance survives promotion.
+      origin: task.origin,
+      trust: task.trust,
+      external_repository_identity: task.external_repository_identity,
+      external_issue_number: task.external_issue_number,
       project_id: task.project_id,
       epic_id: task.epic_id,
       assignee_type: task.assignee_type,

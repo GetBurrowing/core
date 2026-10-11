@@ -197,7 +197,7 @@ defmodule PlatformWeb.TasksLive do
     new_scope = BoardData.decode_scope_param(params["scope"], socket.assigns[:active_scopes])
     new_kind = BoardData.decode_kind_param(params["kind"])
     filters = {new_sponsor, new_sort, new_query, new_scope, new_kind}
-    socket = BoardHooks.apply_url_filters(socket, filters)
+    socket = BoardHooks.apply_url_filters(socket, filters, params)
 
     {:noreply, socket |> assign(:selected_task, nil) |> assign(:show_detail, false)}
   end

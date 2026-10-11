@@ -738,7 +738,11 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
     # per-agent report in the existing `experiments` bundle; no schedule, no
     # trigger and no historian surface.
     # (+code_mode_report -> 125)
-    @t6_baseline_tool_count 125
+    # bumped by task 019fa1ac-6685 stage 3 — `janitor_hand_back` in the
+    # `task` bundle, the janitor's escalation path; no schedule, no trigger
+    # and no historian surface.
+    # (+janitor_hand_back -> 126)
+    @t6_baseline_tool_count 126
 
     defp t6_root, do: Mix.Project.project_file() |> Path.dirname()
 

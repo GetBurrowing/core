@@ -1057,7 +1057,11 @@ defmodule PlatformWeb.Router do
 
   scope "/api/webhooks", PlatformWeb do
     pipe_through(:github_webhook)
-    post("/github", GithubWebhookController, :handle)
+    # `log: false` (task 01a11ec3 stage 3): Phoenix's route-dispatch log line
+    # prints the full `Parameters:` map, and an `issues` delivery's params ARE
+    # the external issue's title and body — untrusted text that must never
+    # reach a log. The endpoint's request line (method + path) still logs.
+    post("/github", GithubWebhookController, :handle, log: false)
   end
 
   scope "/api/webhooks", PlatformWeb do

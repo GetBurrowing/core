@@ -27,12 +27,37 @@ defmodule Platform.Repo.Migrations.SeedScientistRole do
 
   Runs after `20260924190100_add_scientist_to_roles_check.exs` extends the
   CHECK constraint, so this insert cannot violate it.
+
+  ## Pinned to its era's roster (task 019fa1ac-6685 stage 1)
+
+  `up/0` used to call `seed_defaults/0` unqualified. That stayed correct
+  only while `scientist` was the newest role: once task `019fa1ac-6685`
+  added `janitor` to `Seeds.default_roles/0`, an unqualified call here
+  would insert `janitor` on a FRESH database before
+  `20261009060918_add_janitor_role.exs` admits it, and fail on
+  `roles_key_check`. So it now seeds exactly the keys the CHECK admits at
+  this version, as `20260918140200_seed_agents_leader_role.exs` was pinned
+  when `scientist` arrived. Already-migrated databases never re-run this
+  file, so the edit changes nothing for them.
   """
 
   use Ecto.Migration
 
+  # Keys admitted by `roles_key_check` at this migration's version.
+  @roster_at_this_version [
+    "designer",
+    "historian",
+    "meeting_scribe",
+    "meeting_producer",
+    "triage_officer",
+    "security_guard",
+    "architect",
+    "agents_leader",
+    "scientist"
+  ]
+
   def up do
-    Platform.Roles.Seeds.seed_defaults()
+    Platform.Roles.Seeds.seed_defaults(only_keys: @roster_at_this_version)
   end
 
   def down do

@@ -292,6 +292,10 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
     # by design: Platform.Experiments.Signals.MailSubscriber drives the
     # labeler, not the Router (task 01a0d415 stage 3).
     {"platform.experiments.mail_subscriber_only", :global},
+    # Sentinel. `feedback.intake` declares it and no publisher exists, by
+    # design: signed GitHub `issues` deliveries drive Platform.Feedback.Intake
+    # and its tool-less classifier, never a Router fire (task 01a11ec3 stage 3).
+    {"platform.feedback.intake_only", :global},
     {"(dynamic) entry.topic", :global}
   ]
 

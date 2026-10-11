@@ -63,6 +63,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
   alias Platform.Tasks
   alias Platform.Tasks.{Stack, Task}
   alias PlatformWeb.Tasks.BoardData
+  alias PlatformWeb.Tasks.ExternalFeedbackComponents
   alias PlatformWeb.Tasks.SortControl
 
   import PlatformWeb.Tasks.StackStyles,
@@ -228,6 +229,9 @@ defmodule PlatformWeb.Tasks.BoardComponent do
   def render(assigns) do
     ~H"""
     <div id={@id} class="contents">
+      <%!-- External Feedback lane (task 01a11ec3 stage 4): a visible header
+           while the board is narrowed to the persisted external origin. --%>
+      <ExternalFeedbackComponents.lane_banner :if={@origin_filter == "external_feedback"} />
       <%!-- Epics above board --%>
       <div :if={@selected_project_id && @epics != []} class="px-4 pt-3" id="epics-section">
         <div class="flex items-center justify-between mb-2">
@@ -372,6 +376,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
             task_search_query={@task_search_query}
             scope_filter={@scope_filter}
             kind_filter={@kind_filter}
+            origin_filter={@origin_filter}
             mobile?={true}
             class="inline-flex shrink-0"
           />
@@ -591,6 +596,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                                 >
                                   {member.kind}
                                 </span>
+                                <ExternalFeedbackComponents.trust_badge task={member} />
                                 <span
                                   :if={member_action_label}
                                   class="badge badge-warning badge-xs gap-1 whitespace-nowrap shrink-0"
@@ -758,6 +764,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                           >
                             {task.kind}
                           </span>
+                          <ExternalFeedbackComponents.trust_badge task={task} />
                           <%!-- Badges-for-tasks-that-need-feedback (task
                            019e2c25 stage 3): mobile solo task cards now
                            render the same warning chip the stack-detail
@@ -1181,6 +1188,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                               >
                                 {member.kind}
                               </span>
+                              <ExternalFeedbackComponents.trust_badge task={member} />
                               <%!-- ADR-0046 member 8 (019f9b29-9c47) stage 3, desktop half.
                                  COMPACT, not the fused strip: this row is a ~44px line
                                  already carrying a position glyph, a truncated title, a
@@ -1387,6 +1395,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                           >
                             {task.kind}
                           </span>
+                          <ExternalFeedbackComponents.trust_badge task={task} />
                           <span :if={task.priority} class={priority_badge_class(task.priority)}>
                             {task.priority}
                           </span>

@@ -337,7 +337,11 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
       # `|| ""` keeps the assign a binary — `subject_id/1` treats BOTH as
       # no-subject, so nothing is fabricated.
       federation_preamble:
-        PromptTemplates.federation_preamble(%{task_id: contract_id(task, :id) || ""})
+        PromptTemplates.federation_preamble(%{task_id: contract_id(task, :id) || ""}),
+      # Task 01a11ec3 stage 2: `""` unless the installation's feedback
+      # capability is on (`Platform.Feedback.Policy.enabled?/0`, the predicate
+      # ToolSurface lists and executes `feedback.submit` under).
+      feedback_guidance: PromptTemplates.feedback_guidance()
     }
 
     prompt =
@@ -613,7 +617,11 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
       # (task 019f5e2a stage 2). See planning branch above for rationale,
       # including the task-scoped subject (task 01a00c99 stage 3).
       federation_preamble:
-        PromptTemplates.federation_preamble(%{task_id: contract_id(task, :id) || ""})
+        PromptTemplates.federation_preamble(%{task_id: contract_id(task, :id) || ""}),
+      # Task 01a11ec3 stage 2: `""` unless the installation's feedback
+      # capability is on (`Platform.Feedback.Policy.enabled?/0`, the predicate
+      # ToolSurface lists and executes `feedback.submit` under).
+      feedback_guidance: PromptTemplates.feedback_guidance()
     }
 
     prompt =
@@ -677,7 +685,9 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
         # branch via Map.merge below. Task-scoped subject as on the planning
         # branch (task 01a00c99 stage 3).
         federation_preamble:
-          PromptTemplates.federation_preamble(%{task_id: contract_id(task, :id) || ""})
+          PromptTemplates.federation_preamble(%{task_id: contract_id(task, :id) || ""}),
+        # Task 01a11ec3 stage 2: see the in_progress branch.
+        feedback_guidance: PromptTemplates.feedback_guidance()
       }
       |> Map.merge(extra_assigns)
 
@@ -763,7 +773,11 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
       # (task 019f5e2a stage 2). Task-scoped subject as on the planning
       # branch (task 01a00c99 stage 3).
       federation_preamble:
-        PromptTemplates.federation_preamble(%{task_id: contract_id(task, :id) || ""})
+        PromptTemplates.federation_preamble(%{task_id: contract_id(task, :id) || ""}),
+      # Task 01a11ec3 stage 2: `""` unless the installation's feedback
+      # capability is on (`Platform.Feedback.Policy.enabled?/0`, the predicate
+      # ToolSurface lists and executes `feedback.submit` under).
+      feedback_guidance: PromptTemplates.feedback_guidance()
     }
 
     prompt =
@@ -792,7 +806,11 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
       # (task 019f5e2a stage 2). Task-scoped subject as on the planning
       # branch (task 01a00c99 stage 3).
       federation_preamble:
-        PromptTemplates.federation_preamble(%{task_id: contract_id(task, :id) || ""})
+        PromptTemplates.federation_preamble(%{task_id: contract_id(task, :id) || ""}),
+      # Task 01a11ec3 stage 2: `""` unless the installation's feedback
+      # capability is on (`Platform.Feedback.Policy.enabled?/0`, the predicate
+      # ToolSurface lists and executes `feedback.submit` under).
+      feedback_guidance: PromptTemplates.feedback_guidance()
     }
 
     case PromptTemplates.render_template("dispatch.fallback", assigns) do
@@ -1122,7 +1140,9 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
         if(pending_ids == "",
           do: "(none — call stage_complete if work is done)",
           else: pending_ids
-        )
+        ),
+      # Task 01a11ec3 stage 2: the one-line form, `""` while feedback is off.
+      feedback_guidance: PromptTemplates.feedback_guidance(:nudge)
     }
 
     case PromptTemplates.render_template("nudge", assigns) do
@@ -2208,7 +2228,8 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
       "Task #{task_id} stage #{stage_id} — no ack in #{elapsed_str}m. " <>
         "Please ack, push validation, or report_blocker.\n"
 
-    preamble <> nudge_contract(task, stage)
+    # Same capability gate as the seeded row's `{{feedback_guidance}}`.
+    preamble <> nudge_contract(task, stage) <> PromptTemplates.feedback_guidance(:nudge)
   end
 
   # ── Enrichment pipeline ─────────────────────────────────────────────────

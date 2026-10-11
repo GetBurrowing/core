@@ -109,14 +109,14 @@ defmodule Platform.Roles.SeedsTest do
   end
 
   describe "seed_defaults/0" do
-    test "inserts nine roles and twenty-nine bundle rows on a fresh DB" do
+    test "inserts ten roles and thirty-one bundle rows on a fresh DB" do
       assert :ok = Seeds.seed_defaults()
 
       # 8 roles: designer, historian, meeting_producer, meeting_scribe,
       # triage_officer, security_guard, architect (ADR-0044 stage 1),
       # agents_leader (task 01a0b491 stage 1), scientist (task 01a0d415
-      # stage 3).
-      assert Repo.aggregate(Role, :count, :key) == 9
+      # stage 3), janitor (task 019fa1ac-6685 stage 1).
+      assert Repo.aggregate(Role, :count, :key) == 10
 
       # 26 bundle rows = 6 (designer) + 4 (historian) + 1 (meeting_producer)
       #                + 4 (meeting_scribe) + 4 (triage_officer)
@@ -151,20 +151,31 @@ defmodule Platform.Roles.SeedsTest do
       # EXISTING `scientist` bundle, so only the bundle count moved and the
       # roster stayed at 9 — the goal loop belongs to the role that already
       # owns the experiments.
-      assert Repo.aggregate(RoleResponsibility, :count, :id) == 29
+      #
+      # 29 -> 30 in task 01a11ec3 stage 3: `feedback.intake` joined the
+      # EXISTING `triage_officer` bundle (roster stays at 9). The bundle row
+      # names only whose model classifies an external issue; the classifier
+      # is tool-less, so the triage officer's runtime bundles never apply.
+      #
+      # 30 -> 31 in task 019fa1ac-6685 stage 1: `janitor` moved BOTH numbers
+      # (roster 9 -> 10). `janitor.cron_drain` gets its own role because
+      # unattended chore execution is a separate trust decision from triage:
+      # pinning it onto `triage_officer` would hand autonomous execution to an
+      # agent chosen for sorting.
+      assert Repo.aggregate(RoleResponsibility, :count, :id) == 31
     end
 
     test "is idempotent — calling twice does not duplicate rows" do
       assert :ok = Seeds.seed_defaults()
       assert :ok = Seeds.seed_defaults()
 
-      assert Repo.aggregate(Role, :count, :key) == 9
+      assert Repo.aggregate(Role, :count, :key) == 10
 
-      # Same 29 as the fresh-DB case above — the point of this test is
+      # Same 30 as the fresh-DB case above — the point of this test is
       # that the SECOND `seed_defaults/0` adds nothing, so the number
       # must be read off the same breakdown rather than drifting into
       # an independent literal.
-      assert Repo.aggregate(RoleResponsibility, :count, :id) == 29
+      assert Repo.aggregate(RoleResponsibility, :count, :id) == 31
     end
 
     test "each role's bundle round-trips via Platform.Roles.bundle_for/1" do

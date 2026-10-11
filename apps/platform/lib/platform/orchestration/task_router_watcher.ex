@@ -455,7 +455,13 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
     # absent on the plain maps some test helpers and transient PubSub
     # payloads use. Both "key missing" and "key set to nil" mean "not
     # deleted"; only an actual timestamp suppresses the router.
-    is_nil(Map.get(task, :deleted_at))
+    #
+    # Task 01a11ec3 stage 1 (defense in depth): a quarantined external-
+    # feedback task must never have a router spawned even if a stale
+    # transition slipped through another seam. The persisted trust stamp
+    # is the authoritative fact regardless of status or assignee.
+    is_nil(Map.get(task, :deleted_at)) and
+      not Platform.Tasks.quarantined?(task)
   end
 
   def should_run?(_), do: false
@@ -1177,6 +1183,7 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
         t.assignee_type == "agent" and
           not is_nil(t.assignee_id) and
           t.status in @active_statuses and
+          t.trust != "quarantined" and
           is_nil(t.deleted_at) and
           p.dispatch_paused == false,
       preload: [project: p]

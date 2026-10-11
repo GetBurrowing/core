@@ -451,6 +451,7 @@ defmodule Platform.ExtensionsTest do
       {"stack_retry_member_merge", "task"},
       {"stack_start_planning", "task"},
       {"stack_assign_agents", "task"},
+      {"janitor_hand_back", "task"},
       {"plan_create", "plan"},
       {"plan_update", "plan"},
       {"plan_get", "plan"},
@@ -556,7 +557,19 @@ defmodule Platform.ExtensionsTest do
     # first-class kind taxonomy and task read/write docs now name kind.
     # Measured on moon at the stage's branch (recomputed at the rebased tip
     # after main's Fabrikam scrub landed; see task 019fa1ac PR).
-    @main_tool_digest_off "e109ade3a736b8bcf832bc0e854a3e366433f19e0b5b3e205df66489b06cfeae"
+    #
+    # Re-pinned by task 01a11ec3 stage 1: task_create/task_update expose
+    # origin, trust and external repository/issue provenance alongside the
+    # independent kind taxonomy. Measured on moon at the stage's branch.
+    #
+    # Re-pinned by task 019fa1ac-6685 stage 3: `janitor_hand_back` in the
+    # `task` bundle, after `stack_assign_agents`. Measured on moon at the
+    # stage's branch.
+    #
+    # Re-pinned at the stack/feedback-intake-boundary merge of origin/main
+    # (c135cbe7, PR #1226): the stack's surface with main's Fabrikam-scrubbed tool
+    # copy. Measured on moon at the merge.
+    @main_tool_digest_off "117e4578b58c81a1c77552b7d6e5a99a20e9e20c55212208e3c6721d29e6e1e2"
     @main_kinds_summaries_digest_off "4c060fb7a6914985f94857aaac9effbb519dd2b2170c7a9c0013d4db15a73ea4"
     @main_kinds_tool_schemas_digest_off "e454cd9e2aeb1d821a70b74fe433e81ba98b94f7ae9f2d59c55f8cf5bf509af8"
     # main's lists minus exactly `play`.

@@ -300,6 +300,29 @@ config :platform, :meetings_enabled, false
 # with `Application.put_env` + `on_exit` restore in async: false modules.
 config :platform, :mail_enabled, false
 
+# External feedback (task 01a11ec3 stage 2). Pinned off so the suite is not a
+# function of the host's FEEDBACK_POLICY (config/runtime.exs skips the key
+# under :test). Both publisher adapters go to `Req.Test` stubs named after
+# their modules, so no test can reach a broker or GitHub. Tests that need the
+# capability flip `:feedback_policy` per-test and restore it on exit.
+config :platform, :feedback_policy, "disabled"
+
+config :platform, Platform.Feedback.GithubPublisher,
+  adapter: Platform.Feedback.GithubPublisher.Broker,
+  repository: "Startup-Suite/core",
+  broker_url: "https://feedback-broker.test",
+  github_api_url: "https://github-api.test"
+
+config :platform, :feedback_broker_req_options,
+  plug: {Req.Test, Platform.Feedback.GithubPublisher.Broker}
+
+config :platform, :feedback_github_req_options,
+  plug: {Req.Test, Platform.Feedback.GithubPublisher.GithubApp}
+
+# Intake (task 01a11ec3 stage 3): dispositions off by default so no test
+# reaches the broker stub unless it opts in with a fake adapter.
+config :platform, Platform.Feedback.Intake, disposition_mode: "none"
+
 # Install-to-install federation master switch (task 01a0d90f stage 2, ADR
 # 0054). Same reasoning as :mail_enabled above: without the injected key
 # `Federation.Peers.Config.enabled?/0` reads `PEER_FEDERATION_ENABLED` from

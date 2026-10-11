@@ -176,6 +176,7 @@ defmodule Platform.GameStream.ExtensionParityTest do
       {"stack_retry_member_merge", "task"},
       {"stack_start_planning", "task"},
       {"stack_assign_agents", "task"},
+      {"janitor_hand_back", "task"},
       {"plan_create", "plan"},
       {"plan_update", "plan"},
       {"plan_get", "plan"},
@@ -294,8 +295,13 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # and Burrow rebrand landed on main): task_create/task_update expose the
     # kind taxonomy and task read/write docs name kind. Both values measured
     # by main CI at this branch head; off equals extensions_test.exs.
-    @main_tool_digest_off "e109ade3a736b8bcf832bc0e854a3e366433f19e0b5b3e205df66489b06cfeae"
-    @main_tool_digest_on "d377a230f8f03cb1126bbdab70c6f9ce6bf92bf0b0c9b9ba427a24da28fe5491"
+    #
+    # Re-pinned at the stack/feedback-intake-boundary merge of origin/main
+    # (PR #1226): the stack's kind, external-feedback provenance and
+    # `janitor_hand_back` (task 019fa1ac-6685) on main's scrubbed copy. Both
+    # values measured on moon at the merge; off equals extensions_test.exs.
+    @main_tool_digest_off "117e4578b58c81a1c77552b7d6e5a99a20e9e20c55212208e3c6721d29e6e1e2"
+    @main_tool_digest_on "279cc1b431d875c9494ced8750851d788afbfba49766baa66d4eb1465d152942"
     @main_kinds_summaries_digest_off "4c060fb7a6914985f94857aaac9effbb519dd2b2170c7a9c0013d4db15a73ea4"
     @main_kinds_summaries_digest_on "dbab62a1b3d154e23378f3a990b77deb17c5f50eb30adf0b055bc0df8ce6c1e3"
     @main_kinds_tool_schemas_digest_off "e454cd9e2aeb1d821a70b74fe433e81ba98b94f7ae9f2d59c55f8cf5bf509af8"

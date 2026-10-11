@@ -121,6 +121,15 @@ defmodule Platform.Audit.TelemetryHandler do
     # handle_event clause) so the row exists when the call returns. An
     # unregistered emit fails SILENTLY.
     [:platform, :tasks, :validation_payload_amended],
+    # Task 01a11ec3 stage 1 — the explicit, attributed promotion of a
+    # quarantined external-feedback task to trusted. Emitted by
+    # `Platform.Tasks.promote_from_quarantine/3` after the write commits.
+    # Metadata carries task_id, origin, trust, external_repository_identity,
+    # external_issue_number, actor_type / actor_id and via, plus
+    # resource_type "task" / resource_id / action for the Audit.Event
+    # columns. Registration here is load-bearing: an emit with no matching
+    # @events entry fails SILENTLY and the audit row never appears.
+    [:platform, :tasks, :external_feedback_promoted],
     # Task 019e95ea — channel lifecycle. Emitted by `Platform.Chat.archive_space/1,2`
     # and `unarchive_space/2`; metadata carries actor_id (nil for system
     # callers), resource_type: "chat_space", space kind + name.

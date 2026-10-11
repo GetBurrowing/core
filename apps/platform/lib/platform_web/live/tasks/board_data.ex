@@ -159,6 +159,15 @@ defmodule PlatformWeb.Tasks.BoardData do
   def decode_kind_param(_kind), do: :all
 
   @doc """
+  Decode the External Feedback lane (`?origin=external_feedback`, task
+  01a11ec3 stage 4). Only the persisted `external_feedback` origin selects a
+  lane; every other value, including `internal`, fails open to the full board.
+  """
+  @spec decode_origin_param(term()) :: :all | String.t()
+  def decode_origin_param("external_feedback"), do: "external_feedback"
+  def decode_origin_param(_origin), do: :all
+
+  @doc """
   The board URL for a sponsor filter, a sort mode, a search query, a
   status scope and a task kind — the ONE builder for every patch back to `/tasks` (task
   01a0cef1 stage 2, extended by task 01a08df0 stage 1), so no patch can drop
@@ -180,7 +189,24 @@ defmodule PlatformWeb.Tasks.BoardData do
           :all | String.t() | nil,
           :all | String.t() | nil
         ) :: String.t()
-  def tasks_path(sponsor_filter, board_sort, task_search_query, scope_filter, kind_filter) do
+  def tasks_path(sponsor_filter, board_sort, task_search_query, scope_filter, kind_filter),
+    do: tasks_path(sponsor_filter, board_sort, task_search_query, scope_filter, kind_filter, :all)
+
+  @doc """
+  `tasks_path/5` plus the External Feedback lane, emitted last as
+  `origin=external_feedback` (task 01a11ec3 stage 4).
+
+      iex> PlatformWeb.Tasks.BoardData.tasks_path(:all, :priority, "", :all, "bug", "external_feedback")
+      "/tasks?kind=bug&origin=external_feedback"
+  """
+  def tasks_path(
+        sponsor_filter,
+        board_sort,
+        task_search_query,
+        scope_filter,
+        kind_filter,
+        origin_filter
+      ) do
     query =
       Enum.reject(
         [
@@ -188,7 +214,8 @@ defmodule PlatformWeb.Tasks.BoardData do
           sort: board_sort == :updated && "updated",
           q: search_active?(task_search_query) && task_search_query,
           scope: scope_filter not in [:all, nil] && scope_filter,
-          kind: kind_filter not in [:all, nil] && kind_filter
+          kind: kind_filter not in [:all, nil] && kind_filter,
+          origin: origin_filter == "external_feedback" && origin_filter
         ],
         fn {_key, value} -> value == false end
       )
@@ -234,7 +261,8 @@ defmodule PlatformWeb.Tasks.BoardData do
       assigns[:board_sort],
       assigns[:task_search_query],
       assigns[:scope_filter],
-      assigns[:kind_filter]
+      assigns[:kind_filter],
+      assigns[:origin_filter]
     )
   end
 

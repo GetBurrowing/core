@@ -60,6 +60,7 @@ defmodule PlatformWeb.Tasks.SortControl do
   attr :task_search_query, :string, default: ""
   attr :scope_filter, :any, default: :all
   attr :kind_filter, :any, default: :all
+  attr :origin_filter, :any, default: :all
   attr :mobile?, :boolean, default: false, doc: "44px touch target"
   attr :class, :string, default: nil
 
@@ -125,7 +126,8 @@ defmodule PlatformWeb.Tasks.SortControl do
                 board_sort: mode,
                 task_search_query: @task_search_query,
                 scope_filter: @scope_filter,
-                kind_filter: @kind_filter
+                kind_filter: @kind_filter,
+                origin_filter: @origin_filter
               })
             }
             role="menuitemradio"

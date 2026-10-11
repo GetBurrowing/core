@@ -250,6 +250,60 @@ if config_env() != :test do
   config :platform, Platform.Mail.Mailer, adapter: Swoosh.Adapters.SMTP
 end
 
+# ── External feedback (task 01a11ec3 stage 2) ─────────────────────────────────
+# FEEDBACK_POLICY is the ONE capability value: disabled | quarantined | trusted.
+# `Platform.Feedback.Policy.normalize/1` treats unset, blank and every other
+# value as disabled, so a typo turns the capability off, never on.
+#
+# Publisher settings carry NO credential. FEEDBACK_PUBLISHER selects the
+# adapter: `broker` (default; every Burrow installation) posts to
+# FEEDBACK_BROKER_URL and holds no GitHub secret at all; `github_app` is for
+# the Suite-hosted broker side only and reads FEEDBACK_GITHUB_APP_ID,
+# FEEDBACK_GITHUB_APP_INSTALLATION_ID and FEEDBACK_GITHUB_APP_PRIVATE_KEY from
+# the process environment at call time — they are deliberately NOT copied
+# into application config here.
+#
+# Skipped under :test, which pins the policy to disabled and routes both
+# adapters to Req.Test stubs; tests flip keys per-test and restore them.
+if config_env() != :test do
+  config :platform, :feedback_policy, System.get_env("FEEDBACK_POLICY", "disabled")
+
+  feedback_adapter =
+    case System.get_env("FEEDBACK_PUBLISHER", "broker") |> String.trim() |> String.downcase() do
+      "github_app" -> Platform.Feedback.GithubPublisher.GithubApp
+      _ -> Platform.Feedback.GithubPublisher.Broker
+    end
+
+  config :platform, Platform.Feedback.GithubPublisher,
+    adapter: feedback_adapter,
+    repository: System.get_env("FEEDBACK_REPOSITORY", "Startup-Suite/core"),
+    broker_url: System.get_env("FEEDBACK_BROKER_URL"),
+    github_api_url: System.get_env("FEEDBACK_GITHUB_API_URL"),
+    installation_label: System.get_env("FEEDBACK_INSTALLATION_LABEL")
+
+  feedback_int = fn name ->
+    case Integer.parse(System.get_env(name, "")) do
+      {n, ""} when n > 0 -> n
+      _ -> nil
+    end
+  end
+
+  config :platform, :feedback_rate_limits,
+    per_actor: feedback_int.("FEEDBACK_RATE_LIMIT_PER_AGENT"),
+    per_installation: feedback_int.("FEEDBACK_RATE_LIMIT_PER_INSTALLATION"),
+    window_seconds: feedback_int.("FEEDBACK_RATE_LIMIT_WINDOW_SECONDS")
+
+  # Intake (task 01a11ec3 stage 3). FEEDBACK_INTAKE_PROJECT_ID names the
+  # project accepted reports on the feedback repository are filed into (when
+  # unset, the oldest non-archived project connected to that repository).
+  # FEEDBACK_INTAKE_DISPOSITION is comment | comment_and_close | none; any
+  # other value is comment. Dispositions go through the broker, so this
+  # carries no credential either.
+  config :platform, Platform.Feedback.Intake,
+    project_id: System.get_env("FEEDBACK_INTAKE_PROJECT_ID"),
+    disposition_mode: System.get_env("FEEDBACK_INTAKE_DISPOSITION", "comment")
+end
+
 # :attachment_signing_key is set by dev.exs/test.exs for local envs; prod
 # must read it from an env var and fail fast if unset.
 if config_env() == :prod do

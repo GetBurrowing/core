@@ -54,6 +54,14 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureCronSweep do
   with metadata `%{"filed_by" => "architect_cron_sweep"}`. Limit is 3
   follow-ups per sweep — enforced client-side so a run-away model can't
   flood the backlog.
+
+  Each follow-up is filed as `kind: "chore"`, `origin: "internal"`,
+  `trust: "trusted"` (task `019fa1ac-6685` stage 3). The janitor
+  (`Platform.Responsibilities.Janitor`) claims only trusted internal
+  chores, and `Task.kind` defaults to `"feature"`, so a follow-up filed
+  without an explicit kind could never be drained. Origin and trust are
+  the schema defaults today; they are stated anyway so the filing does not
+  depend on a default someone may later move.
   """
   @behaviour Platform.Responsibilities.Provider
 
@@ -423,6 +431,9 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureCronSweep do
           title: "[architect] " <> title,
           description: description,
           status: "backlog",
+          kind: "chore",
+          origin: "internal",
+          trust: "trusted",
           metadata: %{
             "filed_by" => "architect_cron_sweep",
             "adr" => "0044",

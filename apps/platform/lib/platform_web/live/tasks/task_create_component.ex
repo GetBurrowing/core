@@ -862,6 +862,17 @@ defmodule PlatformWeb.Tasks.TaskCreateComponent do
         flash(:error, "Could not create task. Check the form for errors.")
         {:noreply, assign(socket, :task_form, to_form(changeset, as: "task"))}
 
+      # Task 01a11ec3 stage 1: `Tasks.create_task/2` refuses a quarantined
+      # row born into planning/execution with a 3-tuple; without this arm
+      # the `case` raises CaseClauseError and the LiveView crashes.
+      {:error, :quarantined, _details} ->
+        flash(
+          :error,
+          "Could not create task: quarantined external feedback cannot start planning."
+        )
+
+        {:noreply, socket}
+
       {:error, reason} ->
         # `TaskAttrs.build_task_attrs/3` can return non-changeset shape
         # errors (invalid phase key, invalid current_phase, etc). The UI

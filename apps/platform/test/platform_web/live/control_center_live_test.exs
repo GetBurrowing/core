@@ -1432,7 +1432,9 @@ defmodule PlatformWeb.ControlCenterLiveTest do
   end
 
   describe "Roles panel (M7 stage 5)" do
-    test "GET /control with no agent selected renders 9 role rows + UNFILLED pills", %{conn: conn} do
+    test "GET /control with no agent selected renders 10 role rows + UNFILLED pills", %{
+      conn: conn
+    } do
       conn = authenticated_conn(conn)
       {:ok, _view, html} = live(conn, ~p"/control")
 
@@ -1441,11 +1443,13 @@ defmodule PlatformWeb.ControlCenterLiveTest do
       # `security_guard` (ADR-0043); ADR-0044 stage 1 (task 019f3da3)
       # added `architect` bumping the count 6→7; task 01a0b491 stage 1
       # added `agents_leader`, 7→8; task 01a0d415 stage 3 added `scientist`,
-      # 8→9.
-      assert html =~ "Roles (9)"
+      # 8→9; task 019fa1ac-6685 stage 1 added `janitor`, 9→10.
+      assert html =~ "Roles (10)"
 
-      # Each of the nine seeded roles renders with name + icon class.
+      # Each of the ten seeded roles renders with name + icon class.
       assert html =~ "Agents Leader"
+      assert html =~ "Janitor"
+      assert html =~ "hero-wrench-screwdriver"
       assert html =~ "Scientist"
       assert html =~ "Architect"
       assert html =~ "Designer"

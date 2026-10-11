@@ -186,7 +186,13 @@ defmodule Platform.Federation.ToolArgumentsTest do
   # HONEST: read under its declared key only, by
   # `Platform.Experiments.Tools`'s `fetch_visible/3` -> `required_uuid/3`,
   # which refuses an absent or malformed id. No alias, no context fallback.
-  @surveyed_required_count 174
+  # 176 with `janitor_hand_back`'s `task_id` and `reason` (task 019fa1ac-6685
+  # stage 3). HONEST, both: the handler passes each under its declared key
+  # straight to `Platform.Responsibilities.Janitor.hand_back/3`, which refuses
+  # an absent or malformed task_id (`invalid_task_id`) and an absent or
+  # unknown reason (`invalid_reason`) before it opens a transaction. No
+  # alias, no context fallback.
+  @surveyed_required_count 176
 
   defp read_source(relative) do
     # Resolved from __DIR__ (apps/platform/test/platform/federation) rather

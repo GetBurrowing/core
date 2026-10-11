@@ -497,9 +497,12 @@ defmodule Platform.Tasks do
   end
 
   defp do_create_task(attrs, opts) do
-    %Task{}
-    |> Task.changeset(attrs)
-    |> Repo.insert()
+    changeset = Task.changeset(%Task{}, attrs)
+    projected = Ecto.Changeset.apply_changes(changeset)
+
+    with :ok <- require_not_quarantined_for_transition(projected, projected.status) do
+      Repo.insert(changeset)
+    end
     |> case do
       {:ok, task} = ok ->
         # Stage 2 (019f3dbb): synchronously refresh task_references from
@@ -842,6 +845,10 @@ defmodule Platform.Tasks do
     # gate error (the plan gate in particular).
     with {:ok, status_changeset, pointer_attrs} <-
            status_transition_changeset(projected, new_status),
+         # Task 01a11ec3 stage 1: MCP `task_update` with a status change
+         # is a status writer and must not be able to move a quarantined
+         # external-feedback task into a dispatch-bearing status.
+         :ok <- require_not_quarantined_for_transition(projected, new_status),
          :ok <- require_deploy_target_for(projected, new_status),
          :ok <- require_stack_commencement_for(projected, new_status),
          :ok <- require_stack_not_shipped_for(projected, new_status),
@@ -1834,7 +1841,8 @@ defmodule Platform.Tasks do
   Transition a task's status, enforcing valid transitions per ADR 0018 §7.
   """
   def transition_task_status(%Task{} = task, new_status) do
-    with :ok <- require_deploy_target_for(task, new_status),
+    with :ok <- require_not_quarantined_for_transition(task, new_status),
+         :ok <- require_deploy_target_for(task, new_status),
          :ok <- require_stack_commencement_for(task, new_status),
          :ok <- require_stack_not_shipped_for(task, new_status),
          {:ok, changeset, pointer_attrs} <- status_transition_changeset(task, new_status) do
@@ -1881,7 +1889,8 @@ defmodule Platform.Tasks do
         new_status,
         %DateTime{} = base_updated_at
       ) do
-    with :ok <- require_deploy_target_for(task, new_status),
+    with :ok <- require_not_quarantined_for_transition(task, new_status),
+         :ok <- require_deploy_target_for(task, new_status),
          :ok <- require_stack_commencement_for(task, new_status),
          :ok <- require_stack_not_shipped_for(task, new_status),
          {:ok, changeset, pointer_attrs} <- status_transition_changeset(task, new_status) do
@@ -2551,7 +2560,11 @@ defmodule Platform.Tasks do
         do_create_plan(attrs)
 
       task_id ->
-        with :ok <- Lifecycle.ensure_task_project_writable(task_id) do
+        # Task 01a11ec3 stage 1: quarantined external feedback cannot be
+        # planned through ANY server-side entry point. This is the domain
+        # chokepoint beneath plan_create.
+        with :ok <- require_not_quarantined_task(task_id),
+             :ok <- Lifecycle.ensure_task_project_writable(task_id) do
           case latest_plan(task_id) do
             %Plan{status: status} when status in ["draft", "pending_review"] ->
               {:error, :plan_pending_review}
@@ -2910,10 +2923,22 @@ defmodule Platform.Tasks do
   pass the precondition on a stale association.
   """
   def submit_plan_for_review(%Plan{status: "draft"} = plan) do
-    if authored_stage_count(plan.id) == 0 do
-      {:error, :no_authored_stages}
-    else
-      do_submit_plan_for_review(plan)
+    # Task 01a11ec3 stage 1: submitting a plan for review is a planning
+    # entry point — a quarantined external-feedback task cannot advance its
+    # plan toward approval/dispatch through ANY server-side writer.
+    case require_not_quarantined_task(plan.task_id) do
+      :ok ->
+        if authored_stage_count(plan.id) == 0 do
+          {:error, :no_authored_stages}
+        else
+          do_submit_plan_for_review(plan)
+        end
+
+      {:error, :quarantined, details} ->
+        {:error, :quarantined, details}
+
+      {:error, :task_not_found} ->
+        {:error, :invalid_transition}
     end
   end
 
@@ -4342,21 +4367,33 @@ defmodule Platform.Tasks do
   # the one gate exit and emits
   # `[:platform, :plan, :architecture_gate_overridden]`.
   def approve_plan(%Plan{status: "pending_review"} = plan, approved_by, opts) do
-    case architecture_gate_admission(plan, approved_by) do
-      :inert ->
-        plan |> do_approve_plan(approved_by, opts) |> dismiss_plan_review_inbox_on_settle()
+    # Task 01a11ec3 stage 1: approval moves a plan toward dispatch, so the
+    # quarantine guard runs here too — a quarantined external-feedback task
+    # cannot have its plan approved through ANY writer.
+    case Platform.Tasks.require_not_quarantined_task(plan.task_id) do
+      :ok ->
+        case architecture_gate_admission(plan, approved_by) do
+          :inert ->
+            plan |> do_approve_plan(approved_by, opts) |> dismiss_plan_review_inbox_on_settle()
 
-      {:override, %Accounts.User{} = user} ->
-        # Closed FIRST, approved second. If the approval then fails, the
-        # gate reads `"human_override"` and the plan is still
-        # `pending_review` — a retry works because the guard is now inert.
-        # The other order would leave an APPROVED plan behind a still-open
-        # gate, which stage 5's deadline would later try to settle again.
-        _ = record_architecture_human_override(plan, user)
-        plan |> do_approve_plan(approved_by, opts) |> dismiss_plan_review_inbox_on_settle()
+          {:override, %Accounts.User{} = user} ->
+            # Closed FIRST, approved second. If the approval then fails, the
+            # gate reads `"human_override"` and the plan is still
+            # `pending_review` — a retry works because the guard is now inert.
+            # The other order would leave an APPROVED plan behind a still-open
+            # gate, which stage 5's deadline would later try to settle again.
+            _ = record_architecture_human_override(plan, user)
+            plan |> do_approve_plan(approved_by, opts) |> dismiss_plan_review_inbox_on_settle()
 
-      :refuse ->
-        {:error, :architecture_gate_open}
+          :refuse ->
+            {:error, :architecture_gate_open}
+        end
+
+      {:error, :quarantined, details} ->
+        {:error, :quarantined, details}
+
+      {:error, :task_not_found} ->
+        {:error, :invalid_transition}
     end
   end
 
@@ -6468,6 +6505,7 @@ defmodule Platform.Tasks do
     epic_id = Keyword.get(opts, :epic_id)
     sponsor_user_id = Keyword.get(opts, :sponsor_user_id)
     kind = Keyword.get(opts, :kind)
+    origin = Keyword.get(opts, :origin)
 
     Task
     |> where([t], is_nil(t.deleted_at))
@@ -6475,6 +6513,7 @@ defmodule Platform.Tasks do
     |> maybe_filter_epic(epic_id)
     |> maybe_filter_sponsor(sponsor_user_id)
     |> maybe_filter_kind(kind)
+    |> maybe_filter_origin(origin)
     |> order_by([t], desc: t.inserted_at)
     |> preload([:project, :epic, :sponsor, plans: :stages])
     |> Repo.all()
@@ -6546,6 +6585,12 @@ defmodule Platform.Tasks do
   # introduced with the taxonomy. nil preserves every existing caller.
   defp maybe_filter_kind(query, nil), do: query
   defp maybe_filter_kind(query, kind), do: where(query, [t], t.kind == ^kind)
+
+  # The External Feedback lane (task 01a11ec3 stage 4) filters on the
+  # PERSISTED origin column, never on kind, labels, or metadata. nil keeps
+  # every existing caller unfiltered.
+  defp maybe_filter_origin(query, nil), do: query
+  defp maybe_filter_origin(query, origin), do: where(query, [t], t.origin == ^origin)
 
   # ── Kanban column data shape ─────────────────────────────────────────────
   #
@@ -6624,6 +6669,7 @@ defmodule Platform.Tasks do
     epic_id = Keyword.get(opts, :epic_id)
     sponsor_user_id = Keyword.get(opts, :sponsor_user_id)
     kind = Keyword.get(opts, :kind)
+    origin = Keyword.get(opts, :origin)
 
     # Statuses we actually pull from the DB: the 7 directly-bucketed ones
     # plus any whose tasks we fold into another bucket (e.g. cancelled →
@@ -6641,6 +6687,7 @@ defmodule Platform.Tasks do
       |> maybe_filter_epic(epic_id)
       |> maybe_filter_sponsor(sponsor_user_id)
       |> maybe_filter_kind(kind)
+      |> maybe_filter_origin(origin)
       |> order_by([t], desc: t.updated_at)
       # `plans: :stages` is required by the desktop kanban template,
       # which renders per-card plan progress (`<passed>/<total>` stage
@@ -7105,6 +7152,255 @@ defmodule Platform.Tasks do
 
   def require_deploy_target_for(_task, _new_status), do: :ok
 
+  # ── External feedback quarantine boundary (task 01a11ec3 stage 1) ────
+  #
+  # A task persisted with `trust: "quarantined"` (external feedback
+  # awaiting audit) must not be planned, dispatched, or executed through
+  # ANY server-side entry point. The persisted trust stamp is the
+  # authoritative fact; nothing about the repository, issue, or UI may
+  # override it. The only exit is `promote_from_quarantine/3`, which
+  # records an explicit attributed promotion and changes ONLY trust.
+
+  @doc """
+  True when the task carries the persisted `quarantined` trust stamp.
+  """
+  @spec quarantined?(Task.t()) :: boolean()
+  def quarantined?(%Task{trust: "quarantined"}), do: true
+  def quarantined?(_), do: false
+
+  # Statuses that begin planning, dispatch, or execution. A quarantined
+  # task may still be parked (blocked), retired (done/cancelled), or left
+  # in backlog — but it may never enter these.
+  @quarantine_refused_statuses ~w(planning stack_pending in_progress in_review deploying)
+
+  @doc """
+  The transition-time quarantine guard. Refuses any transition into a
+  dispatch-bearing status while the task is quarantined. Source of the
+  `require_not_quarantined` result used by `transition_task_status/2`.
+  """
+  @spec require_not_quarantined_for_transition(Task.t(), String.t()) ::
+          :ok | {:error, :quarantined, map()}
+  def require_not_quarantined_for_transition(%Task{trust: "quarantined"} = task, new_status) do
+    if new_status in @quarantine_refused_statuses do
+      require_not_quarantined(task)
+    else
+      :ok
+    end
+  end
+
+  def require_not_quarantined_for_transition(%Task{}, _new_status), do: :ok
+
+  @doc """
+  True when the task's origin is `external_feedback`.
+  """
+  @spec external_feedback?(Task.t()) :: boolean()
+  def external_feedback?(%Task{origin: "external_feedback"}), do: true
+  def external_feedback?(_), do: false
+
+  @doc """
+  Central plannable/executable guard: `:ok` unless the task is
+  quarantined. Call this from every server-side planning and execution
+  boundary; a check in only one transport is a failure.
+  """
+  @spec require_not_quarantined(Task.t()) :: :ok | {:error, :quarantined, map()}
+  def require_not_quarantined(%Task{trust: "quarantined"} = task) do
+    {:error, :quarantined,
+     %{
+       task_id: task.id,
+       origin: task.origin,
+       trust: task.trust,
+       message:
+         "Task is quarantined external feedback. Until an explicit attributed " <>
+           "promotion (Platform.Tasks.promote_from_quarantine/3) is recorded, " <>
+           "this task may not be planned or executed."
+     }}
+  end
+
+  def require_not_quarantined(%Task{}), do: :ok
+
+  @doc """
+  Load the task and apply `require_not_quarantined/1`. Returns
+  `{:error, :quarantined, %{...}}` when the task is quarantined;
+  `{:error, :task_not_found}` when the id names no live task.
+  """
+  @spec require_not_quarantined_task(term()) ::
+          :ok | {:error, atom(), map()} | {:error, :task_not_found}
+  def require_not_quarantined_task(task_id) when is_binary(task_id) do
+    case get_task_record(task_id) do
+      nil -> {:error, :task_not_found}
+      %Task{} = task -> require_not_quarantined(task)
+    end
+  end
+
+  def require_not_quarantined_task(_task_id), do: {:error, :task_not_found}
+
+  @doc """
+  The explicit, attributed promotion that alone may move a task from
+  `trust: "quarantined"` to `trust: "trusted"`.
+
+  This is the ONLY write that may clear quarantine. It:
+
+    * changes ONLY `trust` — `origin` and external identity are never
+      cleared, so the task stays visible in the External Feedback lane
+      with its provenance intact;
+    * records actor + via attribution through `TransitionActor` and the
+      audit telemetry stream;
+    * is idempotent on an already-trusted task (returns it unchanged and
+      emits no second audit row). The trust decision reads the persisted
+      row under a lock, never the caller's struct.
+
+  `via` is interpolated into the transition attribution; the default
+  `"quarantine_promotion"` is used by the canonical server caller. All
+  callers must pass an explicit `{:user, id}`, `{:agent, id}`, or `:system`
+  actor. Unattributed promotion is refused rather than silently audited as
+  unknown.
+  """
+  @spec promote_from_quarantine(Task.t(), term(), keyword()) :: {:ok, Task.t()} | {:error, term()}
+  def promote_from_quarantine(task, actor, opts \\ [])
+
+  def promote_from_quarantine(%Task{id: task_id}, actor, opts) when is_binary(task_id) do
+    via = Keyword.get(opts, :via, "quarantine_promotion")
+
+    with {:ok, {actor_type, actor_id}} <- promotion_actor(actor),
+         :ok <- validate_promotion_via(via) do
+      # The decision is made against the PERSISTED row, read under a row
+      # lock, never against the caller's struct: a stale struct must not be
+      # able to skip a promotion that is owed (struct says trusted, row says
+      # quarantined) or emit a second audit row for one already recorded
+      # (two concurrent promoters both holding a quarantined struct).
+      Repo.transaction(fn ->
+        case Repo.one(from(t in Task, where: t.id == ^task_id, lock: "FOR UPDATE")) do
+          nil ->
+            Repo.rollback(:task_not_found)
+
+          %Task{trust: "trusted"} = current ->
+            {current, :already_trusted}
+
+          %Task{trust: "quarantined"} = current ->
+            case TransitionActor.with_actor(actor, via, fn ->
+                   current
+                   |> Task.promotion_changeset(%{trust: "trusted"})
+                   |> Repo.update()
+                 end) do
+              {:ok, updated} -> {updated, :promoted}
+              {:error, reason} -> Repo.rollback(reason)
+            end
+        end
+      end)
+      |> case do
+        {:ok, {updated, :promoted}} ->
+          emit_external_feedback_promoted(updated, actor_type, actor_id, via)
+          {:ok, updated}
+
+        {:ok, {current, :already_trusted}} ->
+          {:ok, current}
+
+        {:error, _reason} = error ->
+          error
+      end
+    end
+  end
+
+  def promote_from_quarantine(_task, _actor, _opts), do: {:error, :task_not_found}
+
+  @doc """
+  May this HUMAN promote this task out of quarantine through the Tasks UI?
+
+  `promote_from_quarantine/3` deliberately checks no permission: it is the
+  domain write, and it also serves `:system` and `{:agent, id}` callers whose
+  authority is established elsewhere. Every human-facing caller must ask this
+  first and refuse on `false` (task 01a11ec3 stage 4); hiding a button is not
+  the boundary.
+
+  True only for a persisted user who is either
+
+    * a non-external admin of the org that owns the task's project
+      (`Platform.Tenancy.org_admin?/2`), or
+    * a root-org admin (`Platform.Tenancy.root_admin?/1`) — the same
+      operator role that gates task/project lifecycle on this board.
+
+  There is no project-owner concept in the schema, so none is consulted.
+  Anything else — `nil`, `:system`, `{:agent, _}`, an id with no user row, a
+  plain member, an external admin, an admin of another org — is `false`.
+  The user row is re-read here, never trusted from the caller's map.
+  """
+  @spec can_promote_from_quarantine?(term(), Task.t()) :: boolean()
+  def can_promote_from_quarantine?(%{id: user_id}, %Task{} = task) when is_binary(user_id) do
+    case Platform.Accounts.get_user(user_id) do
+      %Platform.Accounts.User{} = user ->
+        Platform.Tenancy.root_admin?(user) or
+          Platform.Tenancy.org_admin?(user, task_project_org_id(task))
+
+      _ ->
+        false
+    end
+  end
+
+  def can_promote_from_quarantine?(_actor, _task), do: false
+
+  # `project_id` comes off a persisted row, never off a request, so a plain
+  # preload is enough (no boundary id reaches a `where:` here).
+  defp task_project_org_id(%Task{project_id: nil}), do: nil
+
+  defp task_project_org_id(%Task{} = task) do
+    case Repo.preload(task, :project) do
+      %Task{project: %Project{org_id: org_id}} -> org_id
+      _ -> nil
+    end
+  end
+
+  defp promotion_actor({:user, id}) when is_binary(id) and id != "", do: {:ok, {"user", id}}
+  defp promotion_actor({:agent, id}) when is_binary(id) and id != "", do: {:ok, {"agent", id}}
+  defp promotion_actor(:system), do: {:ok, {"system", nil}}
+  defp promotion_actor(_actor), do: {:error, :promotion_actor_required}
+
+  defp validate_promotion_via(via) when is_binary(via) do
+    if String.trim(via) == "", do: {:error, :promotion_via_required}, else: :ok
+  end
+
+  defp validate_promotion_via(_via), do: {:error, :promotion_via_required}
+
+  # Telemetry is load-bearing via `Platform.Audit.TelemetryHandler`
+  # registration: an emit with no matching @events entry fails SILENTLY,
+  # so the registered event in that module is part of this feature.
+  defp emit_external_feedback_promoted(%Task{} = task, actor_type, actor_id, via)
+       when is_binary(actor_type) and is_binary(via) do
+    :telemetry.execute(
+      [:platform, :tasks, :external_feedback_promoted],
+      %{count: 1},
+      %{
+        task_id: task.id,
+        origin: task.origin,
+        trust: task.trust,
+        external_repository_identity: task.external_repository_identity,
+        external_issue_number: task.external_issue_number,
+        actor_type: actor_type,
+        actor_id: actor_id,
+        via: via,
+        resource_type: "task",
+        resource_id: task.id,
+        action: "external_feedback_promoted"
+      }
+    )
+  end
+
+  @doc """
+  Base query helper for the janitor follow-up task: internal, trusted
+  `chore` rows eligible for unattended maintenance. Deliberately excludes
+  every row whose `origin` is `external_feedback` or whose `trust` is
+  `quarantined` — a quarantined external report is never janitor input
+  (task 01a11ec3 stage 1; the janitor runtime itself is task 019fa1ac-6685).
+  """
+  def trusted_internal_chore_query do
+    import Ecto.Query
+
+    from(t in Task,
+      where:
+        t.status == "backlog" and t.kind == "chore" and t.origin == "internal" and
+          t.trust == "trusted"
+    )
+  end
+
   @doc """
   Returns `:ok` unless a stack member is transitioning into `in_progress`
   before every sibling has an approved plan (ADR 0042 Decision 4).
@@ -7288,8 +7584,14 @@ defmodule Platform.Tasks do
   identically to `transition_task/2`.
   """
   def transition_task(%Task{} = task, new_status, actor) do
+    # Task 01a11ec3 stage 1: a quarantined external-feedback task cannot
+    # be moved into ANY state that starts planning/execution/dispatch. The
+    # persisted trust stamp is authoritative; this guard runs before any
+    # other gate so a quarantined task can never enter `planning`,
+    # `in_progress`, or any dispatch-bearing status.
     TransitionActor.with_actor(actor, "transition_task", fn ->
-      with :ok <- require_deploy_target_for(task, new_status),
+      with :ok <- require_not_quarantined_for_transition(task, new_status),
+           :ok <- require_deploy_target_for(task, new_status),
            :ok <- require_approved_plan_for(task, new_status, actor),
            :ok <- maybe_prepare_transition(task, new_status),
            {:ok, %{updated: updated, frozen: frozen}} <-

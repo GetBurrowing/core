@@ -68,7 +68,11 @@ defmodule PlatformWeb.Tasks.BoardHooks do
   """
   @spec attach(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
   def attach(socket) do
-    attach_hook(socket, :board_info, :handle_info, &handle_info/2)
+    socket
+    # The External Feedback lane (task 01a11ec3 stage 4). Defaulted here, not
+    # in the budgeted shell; `apply_url_filters/3` is its only other writer.
+    |> assign(:origin_filter, :all)
+    |> attach_hook(:board_info, :handle_info, &handle_info/2)
   end
 
   # ── PubSub ─────────────────────────────────────────────────────────────
@@ -143,14 +147,21 @@ defmodule PlatformWeb.Tasks.BoardHooks do
   NEITHER branch fires (no filter actually changed — e.g. a bare `/tasks`
   mount) touches `:expanded_stacks` not at all.
   """
+  def apply_url_filters(socket, filters, params \\ %{})
+
   def apply_url_filters(
         socket,
-        {new_sponsor, new_sort, new_query, new_scope, new_kind}
+        {new_sponsor, new_sort, new_query, new_scope, new_kind},
+        params
       ) do
+    # `?origin=` (task 01a11ec3 stage 4) is decoded HERE from the raw params
+    # rather than in `TasksLive.handle_params/3`, whose line count is pinned.
+    new_origin = BoardData.decode_origin_param(params["origin"])
+
     board_changed? =
-      {new_sponsor, new_sort, new_kind} !=
+      {new_sponsor, new_sort, new_kind, new_origin} !=
         {socket.assigns[:sponsor_filter], socket.assigns[:board_sort],
-         socket.assigns[:kind_filter]}
+         socket.assigns[:kind_filter], socket.assigns[:origin_filter]}
 
     search_changed? = new_query != socket.assigns[:task_search_query]
 
@@ -161,6 +172,7 @@ defmodule PlatformWeb.Tasks.BoardHooks do
       |> assign(:task_search_query, new_query)
       |> assign(:scope_filter, new_scope)
       |> assign(:kind_filter, new_kind)
+      |> assign(:origin_filter, new_origin)
 
     cond do
       board_changed? -> refresh_board(socket)
@@ -190,6 +202,7 @@ defmodule PlatformWeb.Tasks.BoardHooks do
       # passthrough that matches every prior refresh_board call site.
       |> maybe_put(:sponsor_user_id, sponsor_filter_user_id(socket))
       |> maybe_put(:kind, kind_filter_value(socket))
+      |> maybe_put(:origin, origin_filter_value(socket))
 
     tasks = Tasks.list_all_tasks(opts)
 
@@ -201,6 +214,7 @@ defmodule PlatformWeb.Tasks.BoardHooks do
       |> maybe_put_map(:project_id, socket.assigns.selected_project_id)
       |> maybe_put_map(:sponsor_user_id, sponsor_filter_user_id(socket))
       |> maybe_put_map(:kind, kind_filter_value(socket))
+      |> maybe_put_map(:origin, origin_filter_value(socket))
 
     stack_entries = Stacks.list_stacks_with_members(stack_filters)
     {stack_board_data, stacks} = BoardData.split_stack_entries(stack_entries)
@@ -313,6 +327,13 @@ defmodule PlatformWeb.Tasks.BoardHooks do
   defp kind_filter_value(socket) do
     case socket.assigns[:kind_filter] do
       kind when kind in ~w(feature chore bug research ops) -> kind
+      _ -> nil
+    end
+  end
+
+  defp origin_filter_value(socket) do
+    case socket.assigns[:origin_filter] do
+      "external_feedback" -> "external_feedback"
       _ -> nil
     end
   end
