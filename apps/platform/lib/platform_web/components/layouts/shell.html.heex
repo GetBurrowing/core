@@ -452,14 +452,71 @@
           <span data-icon="moon" class="hero-moon size-4"></span>
         </button>
 
-        <span class="text-xs text-base-content/50">{@current_user}</span>
-        <.link
-          href="/auth/logout"
-          class="text-xs text-base-content/40 hover:text-base-content/70 transition-colors"
-          title="Log out"
+        <%!-- Account menu: one avatar button on every width (the burrow switcher
+              took the top bar's spare room on mobile). Log out keeps the exact
+              control it replaced: a plain GET link to /auth/logout. --%>
+        <div
+          id="account-menu"
+          class="relative"
+          phx-click-away={
+            JS.hide(to: "#account-menu-list")
+            |> JS.set_attribute({"aria-expanded", "false"}, to: "#account-menu-trigger")
+          }
+          phx-window-keydown={
+            JS.hide(to: "#account-menu-list")
+            |> JS.set_attribute({"aria-expanded", "false"}, to: "#account-menu-trigger")
+          }
+          phx-key="Escape"
         >
-          <span class="hero-arrow-right-on-rectangle size-4"></span>
-        </.link>
+          <button
+            id="account-menu-trigger"
+            type="button"
+            aria-label="Account menu"
+            aria-haspopup="menu"
+            aria-expanded="false"
+            aria-controls="account-menu-list"
+            phx-click={
+              JS.toggle(to: "#account-menu-list", display: "flex")
+              |> JS.toggle_attribute({"aria-expanded", "true", "false"})
+            }
+            class="flex items-center rounded-full focus-visible-ring"
+          >
+            <.human_avatar
+              name={@current_user}
+              avatar_url={Map.get(assigns[:current_user_record] || %{}, :avatar_url)}
+              seed={Map.get(assigns[:current_user_record] || %{}, :id) || @current_user}
+              size="sm"
+            />
+          </button>
+          <div
+            id="account-menu-list"
+            role="menu"
+            aria-label="Account"
+            class="absolute right-0 top-full z-50 mt-1 hidden w-56 max-w-[calc(100vw-1rem)] flex-col rounded-field border border-edge bg-base-100 p-1 shadow-lg"
+          >
+            <div class="min-w-0 px-2.5 py-2">
+              <p class="truncate text-sm font-medium text-base-content">{@current_user}</p>
+              <p
+                :if={
+                  is_binary(Map.get(assigns[:current_user_record] || %{}, :email)) &&
+                    @current_user_record.email != @current_user
+                }
+                class="truncate text-xs text-base-content/50"
+              >
+                {@current_user_record.email}
+              </p>
+            </div>
+            <.link
+              href="/auth/logout"
+              role="menuitem"
+              data-role="account-menu-logout"
+              class="flex min-h-11 items-center gap-2 rounded-field px-2.5 text-sm text-base-content/80 hover:bg-base-200 sm:min-h-8"
+            >
+              <span class="hero-arrow-right-on-rectangle size-4" aria-hidden="true"></span>
+              <span>Log out</span>
+            </.link>
+          </div>
+        </div>
       </div>
     </header>
     <%!-- Flash messages --%>

@@ -4015,4 +4015,39 @@ defmodule PlatformWeb.ShellLiveTest do
              "the roster switch released a chat topic that :shell_chat_space_ids still holds"
     end
   end
+
+  describe "top bar account menu" do
+    test "collapses the username and log out into one avatar button", %{conn: conn} do
+      {conn, user} = authenticated_conn_with_user(conn)
+      {:ok, view, _html} = live(conn, "/changelog")
+      html = render(view)
+
+      assert has_element?(
+               view,
+               ~s(#account-menu-trigger[aria-label="Account menu"][aria-haspopup="menu"][aria-expanded="false"])
+             )
+
+      assert has_element?(view, ~s(#account-menu-trigger [data-avatar-kind="human"]))
+
+      # The Log out item is the SAME control as before: a plain GET link to
+      # /auth/logout, no data-method, inside the menu.
+      assert has_element?(
+               view,
+               ~s(#account-menu-list[role="menu"] a[role="menuitem"][href="/auth/logout"]),
+               "Log out"
+             )
+
+      refute has_element?(view, ~s(#account-menu-list a[data-method]))
+      assert has_element?(view, "#account-menu-list", user.name)
+      assert has_element?(view, "#account-menu-list", user.email)
+
+      # Exactly one logout link in the top bar, and it lives in the menu: the
+      # old inline icon link and bare username span are gone.
+      header = view |> element("header#utility-bar") |> render()
+      assert length(Regex.scan(~r{href="/auth/logout"}, header)) == 1
+      refute header =~ ~s(title="Log out")
+      refute header =~ ~s(<span class="text-xs text-base-content/50">#{user.name}</span>)
+      assert html =~ "account-menu-list"
+    end
+  end
 end
