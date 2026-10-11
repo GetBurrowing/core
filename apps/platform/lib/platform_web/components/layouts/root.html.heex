@@ -60,6 +60,14 @@
       name="webmcp-enabled"
       content={to_string(Application.get_env(:platform, :webmcp_enabled, false))}
     />
+    <%!-- Reconnect escalation thresholds (task 01a12b10). Read once at boot by
+         app.js; the root layout is outside the LiveView, so a changed value
+         reaches the client on the next full page load. --%>
+    <meta
+      name="reconnect-escalation"
+      data-attempts={PlatformWeb.ReconnectEscalation.config().attempts}
+      data-seconds={PlatformWeb.ReconnectEscalation.config().seconds}
+    />
     <link phx-track-static rel="stylesheet" href={~p"/assets/css/app.css"} />
     <%!-- Install theme colours (task 01a0dbee-f598-7001-b450-7890103f44c4
          stage 2). MUST come after the app.css link: it overrides the daisyUI

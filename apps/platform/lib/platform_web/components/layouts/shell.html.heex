@@ -463,7 +463,7 @@
       </div>
     </header>
     <%!-- Flash messages --%>
-    <.flash_group flash={@flash} />
+    <.flash_group flash={@flash} connection_status={false} />
     <%!-- Surface. `flex-1` claims the remaining vertical space inside
          the inner column; `overflow-hidden` keeps the surface itself
          from scrolling (per-LiveView panels supply their own
@@ -483,8 +483,11 @@
          (#message-list etc.) can scroll on their own. --%>
     <main
       data-scroll-container
-      class="flex-1 min-h-0 overflow-hidden overscroll-contain"
+      class="relative flex-1 min-h-0 overflow-hidden overscroll-contain"
     >
+      <%!-- Quiet reconnect slot (task 01a12b10): pinned to the top edge of
+           the main pane, below the header, as an overlay. --%>
+      <.connection_status variant={:pane} />
       {@inner_content}
     </main>
 

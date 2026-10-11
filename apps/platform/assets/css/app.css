@@ -596,6 +596,103 @@
 }
 
 /* ──────────────────────────────────────────────────────
+   Quiet reconnect slot (task 01a12b10). #connection-status in layouts.ex;
+   state set by assets/js/lib/connection_status_view.js through data-state.
+   Colour comes from utilities on the markup only (bg-primary line,
+   bg-base-300 text-base-content pill); nothing here names a colour.
+   idle / pending / escalated: nothing shown (escalated hands over to the
+   red toast, so the slot and the toast are never visible together).
+   ────────────────────────────────────────────────────── */
+.connection-status .reconnect-line {
+  width: 30%;
+  opacity: 0;
+  transform: translateX(-100%);
+}
+.connection-status[data-state="reconnecting"] .reconnect-line {
+  opacity: 1;
+  animation: reconnect-line-travel 1.4s ease-in-out infinite;
+}
+.connection-status[data-state="up_to_date"] .reconnect-line {
+  width: 100%;
+  transform: none;
+  animation: reconnect-line-complete 600ms ease-out forwards;
+}
+.connection-status .reconnect-pill {
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity 300ms ease-in,
+    visibility 0s linear 300ms;
+}
+.connection-status[data-state="reconnecting"] .reconnect-pill,
+.connection-status[data-state="up_to_date"] .reconnect-pill {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 150ms ease-out;
+}
+.connection-status[data-state="up_to_date"] .reconnect-spinner {
+  display: none;
+}
+@keyframes reconnect-line-travel {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(334%);
+  }
+}
+@keyframes reconnect-line-complete {
+  0% {
+    opacity: 1;
+  }
+  40% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+/* The refreshed region settles in after a reconnect that changed it. */
+.reconnect-settle {
+  animation: reconnect-settle 150ms ease-out;
+}
+@keyframes reconnect-settle {
+  from {
+    opacity: 0.85;
+  }
+  to {
+    opacity: 1;
+  }
+}
+/* Explicit, because the universal reduced-motion rule above would freeze the
+   indeterminate travel on its last frame. Reduced motion: a static line at
+   40% while reconnecting, gone with no fade afterwards, no settle. */
+@media (prefers-reduced-motion: reduce) {
+  .connection-status .reconnect-line,
+  .connection-status[data-state="up_to_date"] .reconnect-line {
+    animation: none !important;
+    transition: none !important;
+    opacity: 0;
+  }
+  .connection-status[data-state="reconnecting"] .reconnect-line {
+    width: 100%;
+    transform: none;
+    opacity: 0.4;
+  }
+  .connection-status .reconnect-pill,
+  .connection-status[data-state="reconnecting"] .reconnect-pill,
+  .connection-status[data-state="up_to_date"] .reconnect-pill {
+    transition: none !important;
+  }
+  .connection-status .reconnect-spinner {
+    animation: none !important;
+  }
+  .reconnect-settle {
+    animation: none !important;
+  }
+}
+
+/* ──────────────────────────────────────────────────────
    Skip-link — keyboard users can jump past nav.
    Per docs/design-system/04-accessibility.md §3.3.
    ────────────────────────────────────────────────────── */

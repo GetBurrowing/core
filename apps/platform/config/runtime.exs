@@ -563,6 +563,25 @@ webmcp_enabled =
 
 config :platform, :webmcp_enabled, webmcp_enabled
 
+# ── Reconnect escalation thresholds (task 01a12b10) ──────────────────────────
+# A dropped LiveView connection shows a quiet "Reconnecting…" state; the red
+# toast waits for RECONNECT_ESCALATE_ATTEMPTS failed attempts or
+# RECONNECT_ESCALATE_SECONDS seconds, whichever comes first. Garbage, zero or
+# negative values fall back to the defaults (11/10);
+# PlatformWeb.ReconnectEscalation.config/0 clamps and renders them into the
+# root layout's <meta name="reconnect-escalation">. Runs in dev too, so the
+# dev-on-moon rig's EXTRA_ENV can set it.
+reconnect_escalate = fn var, default ->
+  case Integer.parse(String.trim(System.get_env(var) || "")) do
+    {n, ""} when n > 0 -> n
+    _ -> default
+  end
+end
+
+config :platform, :reconnect_escalation,
+  attempts: reconnect_escalate.("RECONNECT_ESCALATE_ATTEMPTS", 11),
+  seconds: reconnect_escalate.("RECONNECT_ESCALATE_SECONDS", 10)
+
 # ── Agents goal surface (task 01a0b491) ──────────────────────────────────────
 # Gates the WHOLE agents surface: the rail block above Pinned and the space
 # header's goal line. OFF BY DEFAULT IN EVERY ENVIRONMENT, dev included —

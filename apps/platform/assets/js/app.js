@@ -27,6 +27,8 @@ import Hooks from "./hooks"
 import {installNativeDonations} from "./native_donations"
 import {uploadManager} from "./hooks/large_upload"
 import {installReloadGuard} from "./lib/reload_guard"
+import {createReconnectEscalation, parseThresholds} from "./lib/reconnect_escalation"
+import {createConnectionStatusView, fingerprint} from "./lib/connection_status_view"
 
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 const liveSocket = new LiveSocket("/live", Socket, {
@@ -55,7 +57,16 @@ uploadManager.onIdle(() => reloadGuard.kick())
 
 // Show progress bar on live navigation and form submits
 topbar.config({barColors: {0: "#29d"}, shadowColor: "rgba(0, 0, 0, .3)"})
-window.addEventListener("phx:page-loading-start", _info => topbar.show(300))
+// A dropped connection is not a page load: LiveView dispatches
+// page-loading-start with kind "error" on every drop and kind "initial" for
+// the rejoin, and the window-wide bar would make a quiet reconnect look like
+// an unrequested navigation (task 01a12b10). `reconnecting` is defined below.
+window.addEventListener("phx:page-loading-start", info => {
+  const kind = info.detail && info.detail.kind
+  if (kind === "error") return
+  if (kind === "initial" && reconnecting()) return
+  topbar.show(300)
+})
 window.addEventListener("phx:page-loading-stop", _info => topbar.hide())
 
 // Burrow app only: forward `native_donate` (ids only) to SuiteNative.donate.
@@ -80,6 +91,99 @@ liveSocket.socket.onClose(e => {
 })
 liveSocket.socket.onError(e => {
   console.warn("[lv-socket] error", e)
+})
+
+// ── Quiet reconnect (task 01a12b10) ──────────────────────────────────────
+//
+// The stock phx-disconnected binding showed the red toast 500 ms into ANY
+// drop. The toasts now carry data-escalate / data-clear JS commands instead
+// (layouts.ex flash_group), and this controller decides when to run them:
+// ./lib/reconnect_escalation.js turns socket events into states, and
+// ./lib/connection_status_view.js renders them into #connection-status.
+// It lives here, not in a hook, because hooks are destroyed on remount.
+//
+// FAILURE COUNTING. A failed attempt always ends in a socket close, on both
+// transports (longpoll.js closeAndRetry calls onclose), so failures are
+// counted on onClose only, through escalation.socketClosed(). The first close
+// after a loss is the drop itself and is not counted; each later close is one
+// failed retry. onError marks the loss but does not count, so a websocket
+// error + close pair, or the websocket-to-longpoll switch under
+// longPollFallbackMs, is one failure and never resets the counter.
+const escalationMeta = document.querySelector('meta[name="reconnect-escalation"]')
+const thresholds = parseThresholds(
+  escalationMeta ? {attempts: escalationMeta.dataset.attempts, seconds: escalationMeta.dataset.seconds} : {}
+)
+const connectionView = createConnectionStatusView({
+  doc: document,
+  execJS: (el, cmd) => liveSocket.execJS(el, cmd),
+})
+let lossFingerprint = null
+const escalation = createReconnectEscalation({
+  ...thresholds,
+  isOnline: () => navigator.onLine,
+  onState: ({state, kind}) => {
+    connectionView.render({state, kind})
+    if (state === "escalated") {
+      console.warn("[lv-socket] escalated", {kind, ...escalation.getState(), thresholds})
+    }
+  },
+})
+const LOST_STATES = new Set(["pending", "reconnecting", "escalated"])
+function reconnecting() {
+  return LOST_STATES.has(escalation.getState().state)
+}
+function lose(kind) {
+  if (!reconnecting()) lossFingerprint = fingerprint(document)
+  escalation.socketLost(kind)
+}
+
+liveSocket.socket.onClose(_e => {
+  if (liveSocket.isUnloaded()) return
+  if (liveSocket.isConnected()) {
+    lose("client")
+    return
+  }
+  if (!reconnecting()) lossFingerprint = fingerprint(document)
+  escalation.socketClosed("client")
+})
+liveSocket.socket.onError(_e => {
+  if (liveSocket.isUnloaded()) return
+  lose("client")
+})
+window.addEventListener("phx:page-loading-start", info => {
+  const detail = info.detail || {}
+  if (detail.kind !== "error" || liveSocket.isUnloaded()) return
+  if (detail.errorKind === "server") {
+    lose("server")
+    escalation.attemptFailed("server")
+  } else {
+    lose("client")
+  }
+})
+window.addEventListener("phx:page-loading-stop", _info => {
+  if (!reconnecting() || !liveSocket.isConnected()) return
+  const changed = lossFingerprint !== fingerprint(document)
+  const {state} = escalation.getState()
+  console.info("[lv-socket] reconnect", {from: state, changed})
+  escalation.recovered({changed})
+  lossFingerprint = null
+  if (changed) connectionView.settle()
+})
+window.addEventListener("offline", () => escalation.offline())
+// An offline blip often never closes the websocket, so no rejoin follows.
+// If the LiveView is still live when the network returns, clear the red here.
+window.addEventListener("online", () => {
+  const connected = liveSocket.isConnected() && document.querySelector("[data-phx-main].phx-connected") !== null
+  escalation.online({connected})
+})
+
+// #connection-status is phx-update="ignore", but LiveView still merges data-*
+// attributes from the server render onto it, which would reset data-state to
+// "idle" on any patch. Put the controller's state back when that happens.
+new MutationObserver(() => connectionView.reassert()).observe(document.body, {
+  subtree: true,
+  attributes: true,
+  attributeFilter: ["data-state"],
 })
 
 // connect if there are any LiveViews on the page
