@@ -23,4 +23,6 @@ ext {
     glanceVersion = '1.2.0'
     workVersion = '2.11.2'
     datastoreVersion = '1.2.1'
+    // HPKE for sealed push previews (task 01a1261e); the fixture test pins it.
+    tinkVersion = '1.23.0'
 }

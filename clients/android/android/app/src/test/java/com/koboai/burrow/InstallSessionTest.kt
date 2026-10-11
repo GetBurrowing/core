@@ -77,6 +77,15 @@ class InstallSessionTest {
     }
 
     @Test
+    fun `sign-out forgets that install's push key with its bearer`() {
+        tokens.store(install.host, "b1")
+        val forgotten = mutableListOf<String>()
+        NativeSignOut(AppApiClient(tokens, RecordingTransport()), tokens, "i", { forgotten.add(it) }) { removed.add(it) }.run(install.host)
+        assertEquals(listOf(install.host), forgotten)
+        assertEquals(listOf(install.host), removed)
+    }
+
+    @Test
     fun `sign-out offline still forgets the bearer`() {
         tokens.store(install.host, "b1")
         val transport = RecordingTransport(failing = setOf("DELETE /api/app/devices/i", "DELETE /api/app/session"))

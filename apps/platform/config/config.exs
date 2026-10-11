@@ -390,7 +390,15 @@ config :phoenix, :json_library, Jason
 # "code" (task 01a10882): app login exchange and handoff codes, and the
 # PKCE `code_verifier`, arrive as request params. Phoenix matches by
 # substring, so this also filters the OIDC callback's authorization code.
-config :phoenix, :filter_parameters, ["password", "token", "secret", "api_key", "code"]
+# "sealed" (task 01a1261e): the push relay's sealed preview blobs.
+config :phoenix, :filter_parameters, [
+  "password",
+  "token",
+  "secret",
+  "api_key",
+  "code",
+  "sealed"
+]
 
 # Timezone database — Tzdata (IANA rules) backs `DateTime.shift_zone!/2`
 # for timezone-aware cron triggers (task 019f70e9 stage 6). Without this

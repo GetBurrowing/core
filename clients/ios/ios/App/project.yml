@@ -155,9 +155,13 @@ targets:
   # Communication notifications (task 01a111bb stage 4): names the sender
   # and conversation of a chat push, and on iOS 27 its message and
   # conversation entities. No network, no logging. ../Intents for the entity
-  # types its EntityIdentifiers name. No entitlements: it builds everything
-  # from the payload and reads nothing from the App Group store, so its
-  # profile needs only the bundle id.
+  # types its EntityIdentifiers name.
+  # Task 01a1261e stage 4 RE-ADDS its entitlements (01a111bb stage 6 had
+  # removed them to sign with the wildcard dev profile): the App Group, for
+  # the per-install unread store and the install list, and the shared
+  # keychain access group, for each install's sealed-preview key. Device and
+  # TestFlight builds need an explicit-App-ID profile for
+  # com.kobo-ai.burrow.notifications that carries the App Group.
   NotificationService:
     type: app-extension
     platform: iOS
@@ -166,12 +170,14 @@ targets:
       - path: ../NotificationService
         excludes:
           - "Info.plist"
+          - "NotificationService.entitlements"
       - path: ../Shared
       - path: ../Intents
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kobo-ai.burrow.notifications
         INFOPLIST_FILE: ../NotificationService/Info.plist
+        CODE_SIGN_ENTITLEMENTS: ../NotificationService/NotificationService.entitlements
         APPLICATION_EXTENSION_API_ONLY: "YES"
         SKIP_INSTALL: "YES"
         IPHONEOS_DEPLOYMENT_TARGET: "17.0"
@@ -204,6 +210,8 @@ targets:
       - path: ../SuiteWidgets/ApprovalsProvider.swift
       - path: ../SuiteWidgets/Controls.swift
       - path: App/InstallPickerView.swift
+      # The "Switched to" banner (task 01a1261e stage 4 evidence).
+      - path: App/SwitchBanner.swift
       # The in-call screen (no LiveKit: the view, its model, the state).
       - path: App/Meetings/InCallView.swift
       - path: App/Meetings/InCallModel.swift

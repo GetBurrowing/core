@@ -16,7 +16,16 @@ object InstallProbe {
         val name: String?,
     )
 
+    /**
+     * DEBUG/TEST SEAM: answers [probe] and [reachable] in-process (the debug
+     * unread receiver's emulator evidence uses it for hosts that do not
+     * exist). Null in the app.
+     */
+    @Volatile
+    internal var probeOverride: ((String) -> Result?)? = null
+
     fun probe(host: String): Result? {
+        probeOverride?.let { return it(host) }
         val install = Install(host)
         val health = fetchJson(install.healthUrl) ?: return null
         if (health.optString("status") != "ok") return null
@@ -26,7 +35,10 @@ object InstallProbe {
         return Result(name)
     }
 
-    fun reachable(host: String): Boolean = fetchJson(Install(host).healthUrl)?.optString("status") == "ok"
+    fun reachable(host: String): Boolean {
+        probeOverride?.let { return it(host) != null }
+        return fetchJson(Install(host).healthUrl)?.optString("status") == "ok"
+    }
 
     fun icon(install: Install): Bitmap? =
         try {

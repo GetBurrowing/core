@@ -70,4 +70,14 @@
     <string name="widget_tasks_title">My tasks</string>
     <string name="widget_approvals_description">Approvals waiting on you</string>
     <string name="widget_tasks_description">Your open tasks, beside your approvals</string>
+
+    <!-- Per-install unread (task 01a1261e, canvas 01a12621 "per-install badges"), verbatim. -->
+    <string name="unread_pill_cap">99+</string>
+    <plurals name="unread_pill_description">
+        <item quantity="one">%1$d unread</item>
+        <item quantity="other">%1$d unread</item>
+    </plurals>
+    <string name="row_could_not_update">Could not update</string>
+    <string name="switched_to">Switched to %1$s</string>
+    <string name="push_fallback_body">New message in %1$s</string>
 </resources>

@@ -213,6 +213,53 @@ PendingIntent made immutable (NotificationPresenterTest); the debug receiver
 declared in the main manifest (ReleaseManifestTest); pushState ignoring the
 explainer flag (PushPermissionTest).
 
+## Relayed pushes and unread badges
+
+Task 01a1261e. An install with no FCM credentials of its own sends through
+the Burrow push relay (`Platform.Push.Relay` in core). The relay forwards a
+data-only map with ONLY `install_host`, `unread_count`, `unread_as_of` and
+`sealed`: it has no `kind`, and no title or body.
+
+- **Keys** (`push/PushKeyStore.kt`). There is one X25519 keypair per install host.
+  - The public key goes to `POST /api/app/devices` as `push_public_key`, base64url without padding.
+  - The private key never leaves the phone. It is AES-256-GCM ciphertext under its own
+    non-exportable AndroidKeyStore key (`burrow_push_key_v1`), with the host as associated data,
+    in `burrow_push_keys`, which is excluded from backup.
+  - Sign-out deletes the install's key with its bearer.
+- **Opening** (`push/PushSeal.kt`, `push/PushContentPreparer.kt`). This is HPKE base mode:
+  DHKEM(X25519, HKDF-SHA256) / HKDF-SHA256 / AES-128-GCM, info `burrow push v1`,
+  aad = `install_host`, via Tink.
+  - The inner map is the server's own FCM data map, so it takes the same `PushPayload` /
+    MessagingStyle / Reply / channel path as a direct push.
+  - If the blob is missing or does not open (no key, another install's blob), the notification
+    reads `New message in <install>`. It never shows ciphertext and is never blank.
+  - With two or more installs signed in, every notification names its install
+    (`BurrowPush.installLabel`).
+    - `setSubText(<install>)` draws `Burrow • <install>` on the fallback and approval layouts.
+    - API 35's conversation template ignores the subtext and titles a chat notification from
+      its conversation SHORTCUT's label. The label therefore becomes `<space> · <install>`
+      (`<sender> · <install>` for a dm with no space name), and so do the MessagingStyle title
+      and the content title.
+    - With one install signed in, none of these change.
+  - Nothing here logs.
+- **Counts** (`push/UnreadStore.kt`, prefs `burrow_unread`, excluded from backup).
+  - Every push's `unread_count` / `unread_as_of` is written per install. Only a newer as-of
+    replaces a stored count.
+  - `MainActivity.onResume` runs `ResumeRefresh`: ONE `GET /api/app/counts` for every signed-in
+    install, 4 at a time, each with its own bearer. The answers feed the unread counts, and the
+    selected install's answer also feeds the widgets' cache.
+  - A failed fetch marks that install stale and keeps its last count. Its picker row is dimmed
+    and reads `Could not update`, including when the install is also unreachable (red dot,
+    tap to retry).
+  - The shell then fires `burrowInstallBadges` into the WebView. `SuiteNative.installBadges()`
+    answers `{others_unread}` for the switcher dot.
+- **Icon badge limit.** Android's launcher draws the app icon badge from the active
+  notifications (Launcher3 counts each one as at least 1). An app cannot set it to an exact
+  number.
+  - Each install's group summary carries `setNumber(<install unread>)` as a best effort.
+  - The exact-sum badge is an iOS property. On Android the contract is the stored per-install
+    counts and the switcher pills.
+
 ## Share
 
 `share/ShareActivity` is a translucent activity (`taskAffinity=""`,
@@ -399,8 +446,10 @@ notification Open path.
   (`burrow_widget_counts`) with this device's fetch time. A failed refresh
   keeps the last counts, which then show as stale. Sign-out forgets the host's
   counts.
-- `WidgetRefresh`: a WorkManager job every 30 minutes, plus a refresh on app
-  foreground, sign-in and sign-out. Each refresh schedules a render just past
+- `WidgetRefresh`: a WorkManager job every 30 minutes, plus a refresh on
+  sign-in and sign-out. On app foreground the widgets only re-render: the
+  open's single `/api/app/counts` per install (`push/ResumeRefresh.kt`)
+  already wrote the selected install's approvals and tasks. Each refresh schedules a render just past
   the stale boundary, so the cyan drops on time even when no refresh comes.
 - Glance cannot load Public Sans and has no tabular figures, so numerals use
   the system sans in Bold.

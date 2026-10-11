@@ -122,6 +122,10 @@ defmodule Platform.Application do
            # PubSub; both must exist before the Endpoint takes a tools/call.
            Platform.CodeMode.Slots,
            Platform.CodeMode.Store,
+           # Push relay rate-limit counters (task 01a1261e stage 2). Pure ETS
+           # lifecycle owner (NonceCache shape); must exist before the
+           # Endpoint takes a relay POST. Idle on installs not in relay mode.
+           Platform.Push.RelayRateLimit,
            # Dedicated HTTP/2 pool for APNs (task 01a10882 stage 2). Apple
            # requires HTTP/2 and multiplexes every push for one provider
            # over a connection, so the pool is its own and HTTP/2 only.

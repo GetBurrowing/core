@@ -221,6 +221,13 @@ defmodule Platform.Mobile do
   Both upsert on `token`: a token already registered (to this user or
   another) is reassigned to this user and session rather than duplicated. A
   previous token for the same `(user, app_install_id)` is replaced.
+
+  An optional `push_public_key` (task 01a1261e) is the install's X25519
+  public key for sealed previews (`Platform.Push.Seal`), base64url without
+  padding. It is optional: a build that sends none (TestFlight build 1)
+  registers exactly as before. A re-registration replaces the stored key
+  with whatever the device sends now, so a build that stops sending one
+  stops getting sealed previews rather than keeping a key it discarded.
   """
   @spec register_device(AppSession.t(), map()) ::
           {:ok, ApnsDevice.t() | FcmDevice.t()} | {:error, Ecto.Changeset.t()}
@@ -250,6 +257,7 @@ defmodule Platform.Mobile do
         token: fetch(attrs, :token),
         environment: fetch(attrs, :environment),
         bundle_id: fetch(attrs, :bundle_id),
+        push_public_key: fetch(attrs, :push_public_key),
         last_registered_at: now
       })
 
@@ -277,6 +285,7 @@ defmodule Platform.Mobile do
                     :app_install_id,
                     :environment,
                     :bundle_id,
+                    :push_public_key,
                     :last_registered_at,
                     :updated_at
                   ]},
@@ -304,6 +313,7 @@ defmodule Platform.Mobile do
         app_install_id: fetch(attrs, :app_install_id) || session.app_install_id,
         token: fetch(attrs, :token),
         package_name: fetch(attrs, :package_name),
+        push_public_key: fetch(attrs, :push_public_key),
         last_registered_at: DateTime.utc_now()
       })
 
@@ -330,6 +340,7 @@ defmodule Platform.Mobile do
                     :app_session_id,
                     :app_install_id,
                     :package_name,
+                    :push_public_key,
                     :last_registered_at,
                     :updated_at
                   ]},
@@ -453,7 +464,7 @@ defmodule Platform.Mobile do
   end
 
   @doc """
-  The two numbers the app badges.
+  The numbers the app badges.
 
     * `approvals`: inbox items of kind `task_plan_review` or
       `review_request_pending` in `Inbox.reachable_badge_scope/1`, the same
@@ -462,13 +473,24 @@ defmodule Platform.Mobile do
       leaves this count.
     * `tasks`: tasks assigned to the user (`assignee_type: "user"`) that are
       open: not `done`, not `cancelled`, not soft-deleted.
+    * `unread` (task 01a1261e): the Chat unread total,
+      `Platform.Chat.total_unread_for_viewer/1`, the same number the web
+      rail badge shows and the push payload's `unread_count` carries. The
+      app reconciles its per-install count with it on open. Composed, never
+      recounted here: that function is the single definition.
+
+  `as_of` is read BEFORE the counts, so every count reflects at least every
+  change up to it; the app keeps the value with the newest `as_of`.
   """
   @spec counts_for_user(User.t()) :: %{
           approvals: non_neg_integer(),
           tasks: non_neg_integer(),
+          unread: non_neg_integer(),
           as_of: DateTime.t()
         }
-  def counts_for_user(%User{id: user_id}) do
+  def counts_for_user(%User{id: user_id} = user) do
+    as_of = DateTime.utc_now()
+
     approvals =
       user_id
       |> Inbox.reachable_badge_scope()
@@ -483,7 +505,9 @@ defmodule Platform.Mobile do
       )
       |> Repo.aggregate(:count)
 
-    %{approvals: approvals, tasks: tasks, as_of: DateTime.utc_now()}
+    unread = Platform.Chat.total_unread_for_viewer(user)
+
+    %{approvals: approvals, tasks: tasks, unread: unread, as_of: as_of}
   end
 
   @doc "SHA-256 of a raw token or code, as stored."

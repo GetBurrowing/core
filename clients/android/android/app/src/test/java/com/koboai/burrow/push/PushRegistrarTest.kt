@@ -79,6 +79,29 @@ class PushRegistrarTest {
     }
 
     @Test
+    fun `the registration carries this install's push public key, base64url without padding`() {
+        tokens.store(host, bearer)
+        val transport = RecordingTransport(mapOf("POST /api/app/devices" to HttpResponse(201, "{}")))
+        val keys = PushKeyStore(InMemoryKeyValueStore(), FakeTokenCipher())
+        val registrar =
+            PushRegistrar(AppApiClient(tokens, transport), FixedTokenSource(fcm), "com.koboai.burrow.debug", "install-1", publicKey = {
+                keys.publicKey(it)
+            })
+        assertEquals(EnableOutcome.Registered, registrar.outcome(host))
+        val body = JSONObject(transport.requests.single().body!!)
+        assertEquals(keys.publicKey(host), body.getString("push_public_key"))
+        assertTrue(Regex("^[A-Za-z0-9_-]{43}$").matches(body.getString("push_public_key")))
+    }
+
+    @Test
+    fun `without a key the registration is the old shape`() {
+        tokens.store(host, bearer)
+        val transport = RecordingTransport(mapOf("POST /api/app/devices" to HttpResponse(201, "{}")))
+        assertEquals(EnableOutcome.Registered, registrar(AppApiClient(tokens, transport)).outcome(host))
+        assertFalse(JSONObject(transport.requests.single().body!!).has("push_public_key"))
+    }
+
+    @Test
     fun `other non-2xx answers are failures too`() {
         for (status in listOf(401, 422, 302)) {
             tokens.store(host, bearer)

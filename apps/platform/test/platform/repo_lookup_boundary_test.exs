@@ -531,6 +531,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "task 01a10882 stage 2: `devices_for_user/1` guards `user_id` with Platform.UUID.valid?/1 before `where: d.user_id == ^user_id` on the `apns_devices.user_id` binary_id column. `deliver_to_user/2` is public; today's callers in `Platform.Push` pass a user id read off a loaded `%User{}`/`%Participant{}` row, so the guard is for the next caller. Count 1 -> 2 with task 01a10db7 stage 1: `voip_devices_for_user/1`, the same guard on the same shape for `apns_voip_devices.user_id`, ahead of `deliver_voip_to_user/2`, which is public"},
     {"platform/push/fcm.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "task 01a10d8e stage 1: the FCM twin of apns.ex. `devices_for_user/1` guards `user_id` with Platform.UUID.valid?/1 before `where: d.user_id == ^user_id` on the `fcm_devices.user_id` binary_id column. `deliver_to_user/2` is public; today's callers in `Platform.Push` pass a user id read off a loaded `%User{}`/`%Participant{}` row, so the guard is for the next caller"},
+    {"platform/push/relay_server.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "task 01a1261e stage 2: `revoke_install/1` guards the install id with Platform.UUID.valid?/1 before `where: i.id == ^id` on `push_relay_installs.id`. The id arrives from an operator's `mix platform.push_relay_install --revoke <id>` argument, a boundary value, so a malformed one answers `{:error, :not_found}` instead of raising"},
     {"platform/push/notification.ex", :get, "Platform.Tasks.Task", 1, :safe_internal,
      "task 01a10882 stage 2: `task_title/2` reads `item.source_id` off an `%Inbox.Item{}` that `Inbox.emit/1` just inserted. `source_id` is an `Ecto.UUID` field cast by `Item.changeset/2`, so it is a canonical UUID by construction. The call also sits inside a rescue that falls back to the inbox title, so an unpersisted item with a bad id degrades to copy, never a raise"},
     # ── Mobile app (task 01a10882) ─────────────────────────────────────
@@ -1262,6 +1264,13 @@ defmodule Platform.RepoLookupBoundaryTest do
     # the same value inside `Tenancy.visibility/1`, so the crash is reached
     # before push ever runs. The guard is for the next caller.
     "platform/push.ex" => 1,
+    # Task 01a1261e stage 2: 0 -> 2, triaged by hand. `revoke_install/1` pins
+    # `i.id == ^id` (an operator's mix-task argument) behind
+    # Platform.UUID.valid?/1, recorded as this file's :platform_uuid_guard.
+    # `verify_credential/1` pins `i.credential_hash == ^digest`, a SHA-256
+    # binary computed here on a `:binary` column: no cast, so no CastError is
+    # reachable whatever the bearer holds.
+    "platform/push/relay_server.ex" => 2,
     # Task 01a10882 stage 1: 0 -> 2, triaged by hand. `user_participant/2`
     # pins `p.space_id` and `p.participant_id` to ids read off the `%Space{}`
     # `Chat.get_space/1` returned and the bearer's loaded `%User{}`, so

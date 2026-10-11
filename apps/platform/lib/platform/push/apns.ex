@@ -128,9 +128,13 @@ defmodule Platform.Push.APNs do
   Returns `:ok`, or `{:error, :not_configured}` when the user has devices and
   the configuration is incomplete. A user with no devices costs one query and
   no configuration lookup.
+
+  `opts`: `quiet_unconfigured: true` skips the not-configured log line (the
+  caller falls back to the push relay and logs only if that is absent too).
   """
-  @spec deliver_to_user(binary(), Notification.t()) :: :ok | {:error, :not_configured}
-  def deliver_to_user(user_id, %Notification{} = notification) when is_binary(user_id) do
+  @spec deliver_to_user(binary(), Notification.t(), keyword()) :: :ok | {:error, :not_configured}
+  def deliver_to_user(user_id, %Notification{} = notification, opts \\ [])
+      when is_binary(user_id) do
     case devices_for_user(user_id) do
       [] ->
         :ok
@@ -138,12 +142,15 @@ defmodule Platform.Push.APNs do
       devices ->
         case apns_config() do
           nil ->
-            log_unconfigured()
+            # `quiet_unconfigured: true` (task 01a1261e): the caller has
+            # another transport to try (the push relay) and logs
+            # `log_unconfigured/0` itself only when that is absent too.
+            unless opts[:quiet_unconfigured], do: log_unconfigured()
             {:error, :not_configured}
 
           config ->
             body = Notification.to_apns_payload(notification)
-            headers = alert_headers(config, notification)
+            headers = alert_headers_for(config, notification)
             Enum.each(devices, &deliver(&1, headers, body, config))
             :ok
         end
@@ -193,15 +200,58 @@ defmodule Platform.Push.APNs do
     end
   end
 
-  # ── Private ────────────────────────────────────────────────────────────────
+  @doc """
+  Send one alert push to one token (task 01a1261e stage 2): the per-token
+  core of `deliver_to_user/2`, shared with the push relay, which holds no
+  device rows.
 
-  defp devices_for_user(user_id) do
+  `target` carries `:token` and `:environment` (`"sandbox"` picks the
+  sandbox host). `headers` are the APNs headers (see `alert_headers/2`),
+  `body` the JSON body. Same provider JWT cache, Finch pool, transport retry
+  schedule and response classification as `deliver_to_user/2`. `label`
+  names the target in log lines (never the token).
+
+  Returns `:ok`, `{:error, :unregistered}` (410, or 400 `BadDeviceToken` /
+  `DeviceTokenNotForTopic`: the token is dead and its owner should forget
+  it), or `{:error, reason}` for anything else. It deletes nothing.
+  """
+  @spec send_to_token(map(), list(), map(), keyword(), String.t()) ::
+          :ok | {:error, :unregistered | term()}
+  def send_to_token(target, headers, body, config, label \\ "relay target") do
+    case do_send(target, headers, body, config, label) do
+      {:unregistered, _reason} -> {:error, :unregistered}
+      other -> other
+    end
+  end
+
+  @doc """
+  The alert headers for `config`: the configured topic, push type `alert`,
+  priority 10, and `apns-collapse-id` when `collapse_id` is present.
+  """
+  @spec alert_headers(keyword(), String.t() | nil) :: list()
+  def alert_headers(config, collapse_id) do
+    [
+      {"apns-topic", config[:topic]},
+      {"apns-push-type", "alert"},
+      {"apns-priority", "10"}
+    ] ++ collapse_header(collapse_id)
+  end
+
+  @doc """
+  The user's `apns_devices` rows (the query `deliver_to_user/2` sends to).
+  Public so the push relay transport (`Platform.Push.Relay`) addresses
+  exactly the same set rather than a second query.
+  """
+  @spec devices_for_user(binary()) :: [ApnsDevice.t()]
+  def devices_for_user(user_id) do
     if Platform.UUID.valid?(user_id) do
       Repo.all(from(d in ApnsDevice, where: d.user_id == ^user_id))
     else
       []
     end
   end
+
+  # ── Private ────────────────────────────────────────────────────────────────
 
   # Only devices whose app session is live. Revoking a session deletes its
   # devices in the same transaction, so this is the belt to that pair of
@@ -232,13 +282,7 @@ defmodule Platform.Push.APNs do
     end)
   end
 
-  defp alert_headers(config, %Notification{} = n) do
-    [
-      {"apns-topic", config[:topic]},
-      {"apns-push-type", "alert"},
-      {"apns-priority", "10"}
-    ] ++ collapse_header(n.collapse_id)
-  end
+  defp alert_headers_for(config, %Notification{} = n), do: alert_headers(config, n.collapse_id)
 
   defp voip_headers(config, ring_id) do
     [
@@ -249,28 +293,37 @@ defmodule Platform.Push.APNs do
     ] ++ collapse_header(ring_id)
   end
 
+  # A device row: send, then prune the row on a dead token.
   defp deliver(device, headers, body, config) do
-    case provider_jwt(config) do
-      {:ok, jwt} ->
-        attempt = fn -> request(device, headers, body, jwt) end
-
-        attempt.()
-        |> retry_transport_error(attempt, retry_backoff_ms())
-        |> handle_response(device)
-
-      :error ->
-        Logger.error("[APNs] provider key could not be used to sign; device #{device.id} skipped")
+    case do_send(device, headers, body, config, "device #{device.id}") do
+      {:unregistered, reason} -> prune(device, reason)
+      other -> other
     end
   end
 
-  defp request(device, headers, body, jwt) do
+  defp do_send(target, headers, body, config, label) do
+    case provider_jwt(config) do
+      {:ok, jwt} ->
+        attempt = fn -> request(target, headers, body, jwt) end
+
+        attempt.()
+        |> retry_transport_error(attempt, retry_backoff_ms())
+        |> handle_response(label)
+
+      :error ->
+        Logger.error("[APNs] provider key could not be used to sign; #{label} skipped")
+        {:error, :signing_failed}
+    end
+  end
+
+  defp request(target, headers, body, jwt) do
     headers = [{"authorization", "bearer " <> jwt} | headers]
 
     options =
       [
         method: :post,
-        base_url: base_url(device),
-        url: "/3/device/" <> device.token,
+        base_url: base_url(target),
+        url: "/3/device/" <> target.token,
         headers: headers,
         json: body,
         retry: false,
@@ -316,35 +369,36 @@ defmodule Platform.Push.APNs do
     end
   end
 
-  defp handle_response({:ok, %{status: 200}}, _device), do: :ok
+  # Classifies an APNs answer. `{:unregistered, reason}` means the token is
+  # dead; the caller decides what forgetting it means (a device row is
+  # deleted, the relay reports it back to the install).
+  defp handle_response({:ok, %{status: 200}}, _label), do: :ok
 
-  defp handle_response({:ok, %{status: 410} = resp}, device) do
-    prune(device, reason(resp) || "Unregistered")
+  defp handle_response({:ok, %{status: 410} = resp}, _label) do
+    {:unregistered, reason(resp) || "Unregistered"}
   end
 
-  defp handle_response({:ok, %{status: 400} = resp}, device) do
+  defp handle_response({:ok, %{status: 400} = resp}, label) do
     case reason(resp) do
-      r when r in @prune_reasons -> prune(device, r)
-      r -> warn(device, 400, r)
+      r when r in @prune_reasons -> {:unregistered, r}
+      r -> warn(label, 400, r)
     end
   end
 
-  defp handle_response({:ok, %{status: 403} = resp}, device) do
+  defp handle_response({:ok, %{status: 403} = resp}, label) do
     r = reason(resp)
     if r in @stale_jwt_reasons, do: :persistent_term.erase(@jwt_cache_key)
-    warn(device, 403, r)
+    warn(label, 403, r)
   end
 
-  defp handle_response({:ok, %{status: status} = resp}, device),
-    do: warn(device, status, reason(resp))
+  defp handle_response({:ok, %{status: status} = resp}, label),
+    do: warn(label, status, reason(resp))
 
   # Transport failures are reported by kind only: an exception struct or a
   # Mint error can carry the request it failed on, which holds the token, so
   # the struct is never inspected. Only the `reason` atom is printed.
-  defp handle_response({:error, error}, device) do
-    Logger.warning(
-      "[APNs] request for device #{device.id} failed: transport_error (#{error_kind(error)})"
-    )
+  defp handle_response({:error, error}, label) do
+    Logger.warning("[APNs] request for #{label} failed: transport_error (#{error_kind(error)})")
 
     {:error, :transport_error}
   end
@@ -364,8 +418,8 @@ defmodule Platform.Push.APNs do
     {:error, :device_removed}
   end
 
-  defp warn(device, status, reason) do
-    Logger.warning("[APNs] device #{device.id} push returned #{status}: #{reason || "unknown"}")
+  defp warn(label, status, reason) do
+    Logger.warning("[APNs] #{label} push returned #{status}: #{reason || "unknown"}")
     {:error, {:http_error, status}}
   end
 
@@ -442,7 +496,10 @@ defmodule Platform.Push.APNs do
 
   # Neither key present is an unconfigured install: one quiet line. Some but
   # not all present is a misconfiguration: an error naming the missing keys.
-  defp log_unconfigured do
+  @doc false
+  # Public for `Platform.Push`, which calls it when neither direct APNs nor
+  # the push relay is configured (task 01a1261e).
+  def log_unconfigured do
     resolved = resolve_all()
     missing = for {k, nil} <- resolved, do: k
 

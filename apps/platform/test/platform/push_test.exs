@@ -791,7 +791,13 @@ defmodule Platform.PushTest do
       assert_received {:fcm_send, req}
       assert req.body["message"]["token"] == Platform.FCMFixtures.sentinel_token()
 
-      assert Map.delete(req.body["message"], "token") ==
+      # Task 01a1261e: Platform.Push stamps the recipient's unread count (and
+      # its time) into the native copy's data; everything else is the struct.
+      message = Map.delete(req.body["message"], "token")
+      assert message["data"]["unread_count"] == "0"
+      assert is_binary(message["data"]["unread_as_of"])
+
+      assert update_in(message["data"], &Map.drop(&1, ~w(unread_count unread_as_of))) ==
                Platform.Push.Notification.to_fcm_payload(n)
 
       Platform.FCMFixtures.refute_secrets(log)

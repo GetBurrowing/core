@@ -28,6 +28,16 @@
             </intent-filter>
         </receiver>
 
+        <!-- Per-install unread in a given state, in-process (DebugUnreadReceiver, task 01a1261e). -->
+        <receiver
+            android:name="com.koboai.burrow.push.DebugUnreadReceiver"
+            android:exported="true"
+            android:permission="android.permission.DUMP">
+            <intent-filter>
+                <action android:name="com.koboai.burrow.debug.UNREAD" />
+            </intent-filter>
+        </receiver>
+
         <!-- The permission explainer, startable from the adb shell (DUMP
              again) so each variant can be shown without a signed-in page:
              am start -n com.koboai.burrow.debug/com.koboai.burrow.push.DebugExplainer

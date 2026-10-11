@@ -89,7 +89,13 @@ defmodule PlatformWeb.AppApiController do
   # ── devices ──────────────────────────────────────────────────────────
 
   def register_device(conn, params) do
-    attrs = Map.take(params, ~w(token environment bundle_id app_install_id platform package_name))
+    # `push_public_key` (task 01a1261e) is optional: a registration without
+    # it behaves exactly as before.
+    attrs =
+      Map.take(
+        params,
+        ~w(token environment bundle_id app_install_id platform package_name push_public_key)
+      )
 
     case Mobile.register_device(conn.assigns.app_session, attrs) do
       {:ok, _device} ->
@@ -447,11 +453,18 @@ defmodule PlatformWeb.AppApiController do
 
   # ── counts ───────────────────────────────────────────────────────────
 
+  # `unread` (task 01a1261e) is the Chat unread total the app reconciles its
+  # per-install count with on open; see `Mobile.counts_for_user/1`.
   def counts(conn, _params) do
-    %{approvals: approvals, tasks: tasks, as_of: as_of} =
+    %{approvals: approvals, tasks: tasks, unread: unread, as_of: as_of} =
       Mobile.counts_for_user(conn.assigns.current_user)
 
-    json(conn, %{approvals: approvals, tasks: tasks, as_of: DateTime.to_iso8601(as_of)})
+    json(conn, %{
+      approvals: approvals,
+      tasks: tasks,
+      unread: unread,
+      as_of: DateTime.to_iso8601(as_of)
+    })
   end
 
   # Field names only: a changeset's error tuples can carry the rejected

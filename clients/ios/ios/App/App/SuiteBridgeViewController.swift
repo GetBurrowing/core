@@ -35,6 +35,8 @@ final class SuiteBridgeViewController: CAPBridgeViewController {
     private var didStart = false
     private var pickerHost: UIViewController?
     private let launcher = InstallLauncher()
+    private let switchBanner = SwitchBannerPresenter()
+    private var badgesObservation: NSObjectProtocol?
     /// Hides the web view while it is between installs, so one install's
     /// page never shows under another's sign-in sheet.
     private let cover = UIView()
@@ -129,7 +131,19 @@ final class SuiteBridgeViewController: CAPBridgeViewController {
         }
 
         NotificationRouter.shared.openHandler = { [weak self] install, url in
-            self?.open(install, at: url)
+            guard let self else { return }
+            // Task 01a1261e: a tap that moves the app to ANOTHER install says so.
+            let switching = SwitchBanner.shouldShow(currentHost: self.currentInstall?.host, targetHost: install.host)
+            self.open(install, at: url)
+            if switching { self.switchBanner.show(SwitchBanner.message(install.displayName), in: self) }
+        }
+
+        // Per-install unread changed: the web shell re-asks
+        // `SuiteNative.installBadges()` (task 01a1261e; contract from stage 3).
+        badgesObservation = NotificationCenter.default.addObserver(
+            forName: .burrowInstallBadgesChanged, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.bridge?.triggerWindowJSEvent(eventName: "burrowInstallBadges")
         }
 
         // An App Intent opening a space, task or meeting. Before the shell
@@ -323,7 +337,7 @@ final class SuiteBridgeViewController: CAPBridgeViewController {
 
     func presentPicker() {
         guard pickerHost == nil else { return }
-        let model = InstallPickerModel(store: store)
+        let model = InstallPickerModel(store: store, refreshUnread: { UnreadReconciler.refreshAll() })
         let picker = InstallPickerView(model: model) { [weak self] install in
             self?.open(install, at: nil)
         }

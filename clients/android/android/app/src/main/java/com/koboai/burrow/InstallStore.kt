@@ -1,5 +1,6 @@
 package com.koboai.burrow
 
+import com.koboai.burrow.push.UnreadStore
 import java.util.UUID
 
 /**
@@ -35,6 +36,8 @@ data class Install(
 class InstallStore(
     private val prefs: KeyValueStore,
     private val device: KeyValueStore,
+    /** The unread counts file ([com.koboai.burrow.push.UnreadStore.FILE]); [remove] clears the host's entry. */
+    private val unread: KeyValueStore? = null,
 ) {
     companion object {
         const val PREFS_FILE = "burrow_installs"
@@ -157,6 +160,8 @@ class InstallStore(
     fun remove(host: String) {
         save(installs.filter { it.host != host })
         if (prefs.getString(KEY_SELECTED) == host) prefs.remove(KEY_SELECTED)
+        // A removed install must not keep a count (or the icon badge) up.
+        unread?.let { UnreadStore.clear(it, host) }
     }
 
     private fun save(list: List<Install>) {

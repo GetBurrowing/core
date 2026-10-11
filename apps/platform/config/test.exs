@@ -330,6 +330,12 @@ config :platform, :apns_retry_backoff_ms, [0, 0, 0]
 config :platform, :fcm_req_options, plug: {Req.Test, Platform.Push.FCM}
 config :platform, :fcm_retry_backoff_ms, [0, 0, 0]
 
+# Push relay (task 01a1261e stage 2): every install-side relay request goes to
+# the `Req.Test` stub named `Platform.Push.Relay`, and its transport-error
+# retry schedule does not sleep.
+config :platform, :push_relay_req_options, plug: {Req.Test, Platform.Push.Relay}
+config :platform, :push_relay_retry_backoff_ms, [0, 0, 0]
+
 # Sign-in users page (task 01a113ea stage 1). Same reasoning as :mail_enabled
 # above: without the injected key `SignInAdmin.Config.enabled?/0` reads
 # `POCKET_ID_ADMIN_ENABLED` from the host. And pocket-id is never reached in

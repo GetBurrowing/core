@@ -369,6 +369,165 @@ defmodule PlatformWeb.AppApiControllerTest do
     end
   end
 
+  defp device_key(bytes \\ 32),
+    do: :crypto.strong_rand_bytes(bytes) |> Base.url_encode64(padding: false)
+
+  defp register(conn, token, extra) do
+    conn
+    |> bearer(token)
+    |> post(
+      "/api/app/devices",
+      Map.merge(
+        %{
+          "token" => @device_token,
+          "environment" => "sandbox",
+          "bundle_id" => "com.kobo-ai.burrow",
+          "app_install_id" => "install-1"
+        },
+        extra
+      )
+    )
+  end
+
+  defp seed_unread!(space, count) do
+    author = add_user!(space.id, create_user!().id)
+
+    for i <- 1..count do
+      {:ok, _} =
+        Chat.post_message(%{
+          space_id: space.id,
+          participant_id: author.id,
+          content_type: "text",
+          content: "unread #{i}"
+        })
+    end
+  end
+
+  describe "push_public_key on registration (task 01a1261e)" do
+    test "an iOS registration with a valid key stores it", %{conn: conn, token: token, user: user} do
+      key = device_key()
+      conn = register(conn, token, %{"push_public_key" => key})
+
+      assert json_response(conn, 200) == %{"registered" => true}
+      refute response(conn, 200) =~ key
+      assert [%ApnsDevice{push_public_key: ^key}] = Mobile.list_devices(user)
+    end
+
+    test "an android registration with a valid key stores it",
+         %{conn: conn, token: token, user: user} do
+      key = device_key()
+
+      conn =
+        conn
+        |> bearer(token)
+        |> post("/api/app/devices", %{
+          "platform" => "android",
+          "token" => @fcm_token,
+          "package_name" => "com.koboai.burrow",
+          "app_install_id" => "install-1",
+          "push_public_key" => key
+        })
+
+      assert json_response(conn, 200) == %{"registered" => true}
+      assert [%{push_public_key: ^key}] = Mobile.list_fcm_devices(user)
+    end
+
+    test "a 31-byte key is a 422 naming only the field", %{conn: conn, token: token, user: user} do
+      key = device_key(31)
+      body = conn |> register(token, %{"push_public_key" => key}) |> response(422)
+
+      assert Jason.decode!(body) == %{
+               "error" => "invalid_device",
+               "fields" => ["push_public_key"]
+             }
+
+      refute body =~ key
+      refute body =~ @device_token
+      assert Mobile.list_devices(user) == []
+    end
+
+    test "a padded key is a 422 naming only the field", %{conn: conn, token: token} do
+      padded = :crypto.strong_rand_bytes(32) |> Base.url_encode64()
+      assert String.ends_with?(padded, "=")
+
+      body = conn |> register(token, %{"push_public_key" => padded}) |> response(422)
+
+      assert Jason.decode!(body) == %{
+               "error" => "invalid_device",
+               "fields" => ["push_public_key"]
+             }
+    end
+
+    test "a bad key on android is refused the same way", %{conn: conn, token: token} do
+      body =
+        conn
+        |> bearer(token)
+        |> post("/api/app/devices", %{
+          "platform" => "android",
+          "token" => @fcm_token,
+          "package_name" => "com.koboai.burrow",
+          "app_install_id" => "install-1",
+          "push_public_key" => device_key(33)
+        })
+        |> response(422)
+
+      assert Jason.decode!(body) == %{
+               "error" => "invalid_device",
+               "fields" => ["push_public_key"]
+             }
+    end
+
+    test "a key-less registration (TestFlight build 1: no platform, no key) still returns 200",
+         %{conn: conn, token: token, user: user} do
+      conn = register(conn, token, %{})
+
+      assert json_response(conn, 200) == %{"registered" => true}
+      assert [%ApnsDevice{token: @device_token, push_public_key: nil}] = Mobile.list_devices(user)
+    end
+
+    test "re-registering the token replaces the stored key", %{
+      conn: conn,
+      token: token,
+      user: user
+    } do
+      first = device_key()
+      second = device_key()
+
+      assert json_response(register(conn, token, %{"push_public_key" => first}), 200)
+      assert json_response(register(conn, token, %{"push_public_key" => second}), 200)
+
+      assert [%ApnsDevice{push_public_key: ^second}] = Mobile.list_devices(user)
+    end
+  end
+
+  describe "GET /api/app/counts unread (task 01a1261e)" do
+    test "unread equals Chat.total_unread_for_viewer/1 and excludes an archived space",
+         %{conn: conn, token: token, user: user, space: space} do
+      seed_unread!(space, 3)
+
+      archived = channel!()
+      add_user!(archived.id, user.id)
+      seed_unread!(archived, 4)
+      {:ok, _} = Chat.archive_space(archived)
+
+      # Precondition: the archived space really holds unread for this user,
+      # so its absence from the total is the intersection's work, not an
+      # empty space's.
+      assert Map.get(Chat.unread_counts_for_user(user.id), archived.id) == 4
+
+      body = conn |> bearer(token) |> get("/api/app/counts") |> json_response(200)
+
+      assert body["unread"] == 3
+      assert body["unread"] == Chat.total_unread_for_viewer(user)
+      assert {:ok, _, 0} = DateTime.from_iso8601(body["as_of"])
+    end
+
+    test "a user with nothing unread gets 0", %{conn: conn, token: token} do
+      body = conn |> bearer(token) |> get("/api/app/counts") |> json_response(200)
+      assert body["unread"] == 0
+    end
+  end
+
   describe "GET /api/app/spaces" do
     test "lists only the user's spaces, each with its agents", %{
       conn: conn,

@@ -10,6 +10,8 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.Person
@@ -55,12 +57,17 @@ object NotificationPresenter {
     const val EXTRA_PATH = "com.koboai.burrow.push.PATH"
     const val EXTRA_TAG = "com.koboai.burrow.push.TAG"
 
-    /** Entry point for FCM and the debug replay receiver. */
+    /**
+     * Entry point for FCM and the debug replay receiver. A relayed push is
+     * opened first ([PushContentPreparer]): its inner data map then takes
+     * the same path as a direct push's, unchanged.
+     */
     fun present(
         context: Context,
         data: Map<String, String?>,
     ) {
-        val payload = PushPayload.from(data)
+        val prepared = BurrowPush.preparer(context).prepare(data)
+        val payload = PushPayload.from(prepared.data)
         if (payload.installHost == null) {
             NotificationChannels.ensure(context, listOf(null))
         } else {
@@ -69,8 +76,9 @@ object NotificationPresenter {
         // Published before notify: a conversation notification must name a
         // shortcut that already exists.
         val shortcutId = payload.shortcutId?.let { publishShortcut(context, payload) }
-        post(context, payload.tag, build(context, payload, shortcutId = shortcutId))
-        payload.groupKey?.let { postSummary(context, payload, it) }
+        post(context, payload.tag, build(context, payload, shortcutId = shortcutId, subText = prepared.subText))
+        payload.groupKey?.let { postSummary(context, payload, it, prepared) }
+        if (prepared.installUnread != null) BurrowPush.unreadChanged?.let { notify -> Handler(Looper.getMainLooper()).post { notify() } }
     }
 
     /** After a Reply: `You: {reply}` appended to the conversation, alerting nobody. */
@@ -125,17 +133,20 @@ object NotificationPresenter {
         sent: String? = null,
         alert: Boolean = sent == null,
         shortcutId: String? = payload.shortcutId,
+        subText: String? = null,
     ): Notification {
         val builder = base(context, payload).setContentIntent(openIntent(context, payload))
+        // Two or more installs signed in: Android draws `Burrow • <install>`.
+        subText?.let { builder.setSubText(it) }
         if (!alert) builder.setOnlyAlertOnce(true).setSilent(true)
         when {
             payload.isChat -> {
-                val style = history ?: chatStyle(context, payload)
+                val style = history ?: chatStyle(context, payload, subText)
                 if (sent != null) style.addMessage(sent, System.currentTimeMillis(), null as Person?)
                 builder
                     .setStyle(style)
                     .setCategory(NotificationCompat.CATEGORY_MESSAGE)
-                    .setContentTitle(payload.spaceName ?: payload.title)
+                    .setContentTitle(history?.conversationTitle?.toString() ?: conversationTitle(payload, subText) ?: payload.title)
                     .setContentText(sent?.let { context.getString(R.string.reply_you, it) } ?: payload.body)
                 shortcutId?.let { builder.setShortcutId(it).setLocusId(LocusIdCompat(it)) }
                 if (payload.canReply) builder.addAction(replyAction(context, payload))
@@ -162,10 +173,19 @@ object NotificationPresenter {
         payload: PushPayload,
         groupKey: String,
         count: Int,
+        subText: String? = null,
+        installUnread: Int? = null,
     ): Notification {
         val text = PushPayload.summaryText(payload, count)
-        return NotificationCompat
-            .Builder(context, NotificationChannels.channelFor(payload))
+        val builder =
+            NotificationCompat
+                .Builder(context, NotificationChannels.channelFor(payload))
+        subText?.let { builder.setSubText(it) }
+        // Best effort only: the launcher draws the icon badge from active
+        // notifications (README, "Relayed pushes and unread badges"), so no app can set it to
+        // an exact sum. A launcher that reads `number` sees the install's count.
+        installUnread?.takeIf { it > 0 }?.let { builder.setNumber(it) }
+        return builder
             .setSmallIcon(R.drawable.ic_stat_burrow)
             .setContentTitle(text)
             .setContentText(text)
@@ -193,14 +213,33 @@ object NotificationPresenter {
         return builder
     }
 
+    /**
+     * The conversation's title. With two or more installs signed in
+     * ([installName] set) it names the install too, e.g. `launch · B` (a dm
+     * with no space name: `<sender> · B`). Android 11+ draws a conversation
+     * notification's header from this title and the app name, and does NOT
+     * draw setSubText there (measured on API 35, task 01a1261e), so the title
+     * is the one place the install can show. With one install it is the
+     * space name alone, as before.
+     */
+    internal fun conversationTitle(
+        payload: PushPayload,
+        installName: String?,
+    ): String? {
+        if (installName == null) return payload.spaceName
+        val base = payload.spaceName ?: payload.authorName ?: return installName
+        return "$base · $installName"
+    }
+
     private fun chatStyle(
         context: Context,
         payload: PushPayload,
+        installName: String?,
     ): NotificationCompat.MessagingStyle {
         val you = Person.Builder().setName(context.getString(R.string.reply_you_name)).build()
         return NotificationCompat
             .MessagingStyle(you)
-            .setConversationTitle(payload.spaceName)
+            .setConversationTitle(conversationTitle(payload, installName))
             .setGroupConversation(payload.spaceKind != "dm")
             .addMessage(payload.body ?: payload.title.orEmpty(), System.currentTimeMillis(), sender(context, payload))
     }
@@ -357,6 +396,7 @@ object NotificationPresenter {
         context: Context,
         payload: PushPayload,
         groupKey: String,
+        prepared: PushContentPreparer.Prepared,
     ) {
         val children =
             manager(context)
@@ -365,7 +405,12 @@ object NotificationPresenter {
                 .map { it.tag }
         val count = groupCount(children, payload.tag)
         if (count < 2) return
-        post(context, "summary:$groupKey", buildSummary(context, payload, groupKey, count), SUMMARY_ID)
+        post(
+            context,
+            "summary:$groupKey",
+            buildSummary(context, payload, groupKey, count, prepared.subText, prepared.installUnread),
+            SUMMARY_ID,
+        )
     }
 
     private fun active(

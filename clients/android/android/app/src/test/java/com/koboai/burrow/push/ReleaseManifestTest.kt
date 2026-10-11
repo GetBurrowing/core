@@ -61,6 +61,14 @@ class ReleaseManifestTest {
     }
 
     @Test
+    fun `the unread evidence seam is debug-only and exported only to the adb shell`() {
+        assertTrue(receivers("burrow.releaseManifest").none { it.name().endsWith("DebugUnreadReceiver") })
+        val debug = receivers("burrow.debugManifest").single { it.name() == "com.koboai.burrow.push.DebugUnreadReceiver" }
+        assertEquals(listOf("com.koboai.burrow.debug.UNREAD"), debug.actions())
+        assertEquals("android.permission.DUMP", debug.getAttributeNS(android, "permission"))
+    }
+
+    @Test
     fun `the share target is its own task-less activity, not MainActivity`() {
         val activities = elements("burrow.releaseManifest", "activity")
         val share = activities.single { it.name() == "com.koboai.burrow.share.ShareActivity" }

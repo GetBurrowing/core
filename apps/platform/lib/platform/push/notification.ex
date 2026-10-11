@@ -78,7 +78,9 @@ defmodule Platform.Push.Notification do
             space_name: nil,
             space_kind: nil,
             meeting_id: nil,
-            ring_id: nil
+            ring_id: nil,
+            unread_count: nil,
+            unread_as_of: nil
 
   @type t :: %__MODULE__{
           kind: String.t(),
@@ -99,7 +101,9 @@ defmodule Platform.Push.Notification do
           space_name: String.t() | nil,
           space_kind: String.t() | nil,
           meeting_id: String.t() | nil,
-          ring_id: String.t() | nil
+          ring_id: String.t() | nil,
+          unread_count: non_neg_integer() | nil,
+          unread_as_of: DateTime.t() | nil
         }
 
   @doc "The iOS category for a kind, or nil (tap opens)."
@@ -316,7 +320,7 @@ defmodule Platform.Push.Notification do
         "alert" => drop_nils(%{"title" => n.title, "body" => n.body}),
         "sound" => "default",
         "category" => n.category,
-        "thread-id" => n.thread_id,
+        "thread-id" => apns_thread_id(n),
         "mutable-content" => if(n.kind in @mutable_kinds, do: 1)
       }
       |> drop_nils()
@@ -338,7 +342,13 @@ defmodule Platform.Push.Notification do
       # INPerson and conversation the NSE builds (task 01a111bb stage 4).
       # Both are already in the title; redact/2 clears them.
       "author_name" => n.author_name,
-      "space_name" => n.space_name
+      "space_name" => n.space_name,
+      # The recipient's chat unread total on THIS install and when it was
+      # read (task 01a1261e), so the app can keep a per-install count and
+      # sum the icon badge across installs. Additive: an older build ignores
+      # unknown keys.
+      "unread_count" => n.unread_count,
+      "unread_as_of" => iso8601(n.unread_as_of)
     }
     |> drop_nils()
   end
@@ -374,7 +384,9 @@ defmodule Platform.Push.Notification do
         "author_id" => n.author_id,
         "author_type" => n.author_type,
         "space_name" => n.space_name,
-        "space_kind" => n.space_kind
+        "space_kind" => n.space_kind,
+        "unread_count" => n.unread_count,
+        "unread_as_of" => iso8601(n.unread_as_of)
       }
       |> Enum.reject(fn {_k, v} -> is_nil(v) or v == "" end)
       |> Map.new(fn {k, v} -> {k, to_string(v)} end)
@@ -457,6 +469,25 @@ defmodule Platform.Push.Notification do
 
   defp default_thread_id(kind, _n) when kind in @approval_kinds, do: @approvals_thread
   defp default_thread_id(_kind, %__MODULE__{space_id: space_id}), do: space_id
+
+  # The APNs `thread-id` is `<install_host>:<thread>` (task 01a1261e), so one
+  # device signed in to several installs stacks each install's conversations
+  # (and its Approvals group) separately. Only the APNs serialisation carries
+  # the prefix: `thread_id` itself stays the bare space id / `approvals`,
+  # which web push, FCM `data` (Android group keys already include the host)
+  # and the sealed inner map read. Prefixing here rather than in
+  # `default_thread_id/2` also covers chat notifications, which pass their
+  # `thread_id` explicitly and never reach the default.
+  defp apns_thread_id(%__MODULE__{thread_id: thread}) when thread in [nil, ""], do: nil
+
+  defp apns_thread_id(%__MODULE__{thread_id: thread, install_host: host})
+       when is_binary(host) and host != "",
+       do: host <> ":" <> thread
+
+  defp apns_thread_id(%__MODULE__{thread_id: thread}), do: thread
+
+  defp iso8601(%DateTime{} = at), do: DateTime.to_iso8601(at)
+  defp iso8601(_), do: nil
 
   defp chat_url(path, message_id) when is_binary(path) and path != "" do
     if is_binary(message_id) and message_id != "",

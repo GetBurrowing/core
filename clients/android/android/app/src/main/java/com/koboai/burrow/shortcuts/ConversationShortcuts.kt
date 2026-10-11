@@ -12,6 +12,7 @@ import com.koboai.burrow.KeyValueStore
 import com.koboai.burrow.LaunchRouter
 import com.koboai.burrow.MainActivity
 import com.koboai.burrow.SharedPreferencesStore
+import com.koboai.burrow.push.BurrowPush
 import com.koboai.burrow.push.PushPayload
 
 /**
@@ -34,6 +35,13 @@ class ConversationShortcuts(
     private val context: Context,
     private val sink: ShortcutSink,
     private val registry: KeyValueStore,
+    /**
+     * The install's name when two or more installs are signed in, else null
+     * (BurrowPush.installLabel). Android 11+ draws a conversation
+     * notification's title from its shortcut's label, so the label is where
+     * `launch · B` has to live (task 01a1261e, measured on API 35).
+     */
+    private val installLabel: (String) -> String? = { null },
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
     /** What the shortcut system does; [SystemShortcutSink] in the app, a recorder in tests. */
@@ -114,7 +122,7 @@ class ConversationShortcuts(
                 .putExtra(LaunchRouter.EXTRA_CONVERSATION_PATH, path)
         return ShortcutInfoCompat
             .Builder(context, id)
-            .setShortLabel(name)
+            .setShortLabel(label(host, name))
             .setLongLived(true)
             .setLocusId(LocusIdCompat(id))
             // SHARE_TARGET: the share sheet's direct-share row (API 29+; the
@@ -126,6 +134,12 @@ class ConversationShortcuts(
             .setIntent(intent)
             .build()
     }
+
+    /** `<name> · <install>` with two or more installs signed in, else [name]. */
+    internal fun label(
+        host: String,
+        name: String,
+    ): String = installLabel(host)?.let { "$name · $it" } ?: name
 
     private fun evictBeyond(cap: Int) {
         val used = registry.keys().associateWith { registry.getString(it)?.toLongOrNull() ?: 0L }
@@ -193,7 +207,12 @@ class ConversationShortcuts(
 
         fun forContext(context: Context): ConversationShortcuts {
             val app = context.applicationContext
-            return ConversationShortcuts(app, sinkOverride ?: SystemShortcutSink(app), SharedPreferencesStore(app, PREFS_FILE))
+            return ConversationShortcuts(
+                app,
+                sinkOverride ?: SystemShortcutSink(app),
+                SharedPreferencesStore(app, PREFS_FILE),
+                installLabel = { host -> BurrowPush.installLabel(app, host) },
+            )
         }
 
         /** Tests swap in a recorder. */

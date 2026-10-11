@@ -125,17 +125,55 @@
       id="utility-bar"
       class="relative flex h-10 items-center justify-between border-b border-edge bg-base-200/60 px-4"
     >
-      <div class="flex items-center gap-2">
+      <%!-- min-w-0 + flex-1 here and shrink-0 on the right cluster (task
+           01a1261e stage 3): when the native install switcher shows at
+           375px, the LEFT side truncates; the roster and user controls
+           never squeeze or wrap. --%>
+      <div class="flex min-w-0 flex-1 items-center gap-2">
         <%!-- Mobile primary nav is the bottom-nav from #13; the original
              hamburger + drawer pattern was deleted in task 019e0d4b Stage 2. --%>
         <%!-- Active module name — desktop too since task 019f575e stage 3:
              the brand moved into the rail header, so the bar carries the
              current-module context instead of a second brand mark. --%>
-        <span class="text-sm font-semibold">
+        <%!-- Native install switcher (task 01a1261e stage 3). Rendered
+             `hidden` for EVERY client; only the NativeInstallSwitch hook
+             reveals it, and only inside the Burrow app on a build whose
+             SuiteNative plugin has `installBadges` (desktop, PWA and older
+             app builds see no change). Tapping opens the app's install
+             picker. The dot (no number) means another signed-in install has
+             unread; slot `bg-primary`, the chat rail's
+             `.channel-row-unread-pill` slot in dot form. The logo resolves
+             through `/branding/current/apple_touch`, which redirects to the
+             shipped Burrow mark when the install has uploaded none. --%>
+        <button
+          id="native-install-switch"
+          type="button"
+          data-role="native-install-switch"
+          phx-hook="NativeInstallSwitch"
+          aria-label={"Switch install, current: #{@brand_name}"}
+          class="hidden -ml-1 shrink-0 items-center gap-1.5 rounded-md px-1 py-0.5 hover:bg-base-300/60"
+        >
+          <img
+            src="/branding/current/apple_touch"
+            alt=""
+            class="size-5 shrink-0 rounded"
+            data-role="install-logo"
+          />
+          <span class="max-w-[7rem] truncate text-sm font-semibold">{@brand_name}</span>
+          <span class="hero-chevron-down size-4 shrink-0 text-base-content/60" aria-hidden="true">
+          </span>
+          <span
+            data-role="install-unread-dot"
+            class="hidden size-2 shrink-0 rounded-full bg-primary"
+            aria-hidden="true"
+          >
+          </span>
+        </button>
+        <span class="min-w-0 truncate text-sm font-semibold">
           {@active_module}
         </span>
       </div>
-      <div class="flex items-center gap-2">
+      <div class="flex shrink-0 items-center gap-2">
         <%!-- Roster presence indicator. Wrapped in <.async_result> so the
              initial assign_async load shows a spinner without blocking page
              paint. After PubSub-driven refreshes (refresh_roster/2) the

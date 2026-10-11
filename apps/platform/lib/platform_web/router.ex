@@ -148,6 +148,13 @@ defmodule PlatformWeb.Router do
     plug(PlatformWeb.Plugs.AppBearerAuth)
   end
 
+  # Push relay (task 01a1261e stage 2): 404 unless relay mode is on, 401
+  # without a live install credential.
+  pipeline :push_relay do
+    plug(:accepts, ["json"])
+    plug(PlatformWeb.Plugs.PushRelayAuth)
+  end
+
   pipeline :require_auth do
     plug(PlatformWeb.Plugs.RequireAuth)
   end
@@ -956,6 +963,14 @@ defmodule PlatformWeb.Router do
   # Native app API (task 01a10882). HOST-AGNOSTIC like every other `/api/*`
   # machine caller. `POST /session` is the one unauthenticated route: it
   # redeems a PKCE-bound exchange code for a bearer token.
+  scope "/api/push-relay/v1", PlatformWeb do
+    pipe_through(:push_relay)
+
+    # `log: false`: Phoenix's request log prints parameters, and nothing an
+    # install sends may reach the relay's log.
+    post("/notifications", PushRelayController, :create, log: false)
+  end
+
   scope "/api/app", PlatformWeb do
     pipe_through(:api)
 

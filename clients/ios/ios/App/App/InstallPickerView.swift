@@ -20,6 +20,19 @@ enum InstallCopy {
     static let tryAgain = "Try again"
     static let chooseAnother = "Choose another install"
     static let remove = "Remove"
+    /// A stale row's host line: its count is the last one known (task 01a1261e).
+    static let couldNotUpdate = "Could not update"
+}
+
+/// The per-install unread pill on a picker row (task 01a1261e stage 4).
+/// Zero renders NO pill (never "0"); past 99 it reads "99+".
+enum UnreadPill {
+    static let cap = 99
+
+    static func text(_ count: Int) -> String? {
+        guard count > 0 else { return nil }
+        return count > cap ? "\(cap)+" : "\(count)"
+    }
 }
 
 /// Probes an install: `/health` must answer `{"status":"ok"}` and
@@ -66,19 +79,42 @@ final class InstallPickerModel: ObservableObject {
     @Published private(set) var selectedHost: String?
     @Published private(set) var reachability: [String: Reachability] = [:]
     @Published private(set) var icons: [String: UIImage] = [:]
+    /// Per-install unread (task 01a1261e). While a refresh runs the last
+    /// counts stay on screen: this is only ever replaced by the store's
+    /// current entries, never emptied first.
+    @Published private(set) var unread: [String: InstallUnread] = [:]
     @Published var cantReachHost: String?
     @Published var continuing = false
 
     private let store: InstallStore
+    private let unreadStore: InstallUnreadStore
+    private let refreshUnread: () -> Void
+    private var unreadObservation: NSObjectProtocol?
 
-    init(store: InstallStore) {
+    init(store: InstallStore, unreadStore: InstallUnreadStore = .shared, refreshUnread: @escaping () -> Void = {}) {
         self.store = store
+        self.unreadStore = unreadStore
+        self.refreshUnread = refreshUnread
         reload()
+        unreadObservation = NotificationCenter.default.addObserver(
+            forName: .burrowInstallBadgesChanged, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.reloadUnread() }
+        }
+    }
+
+    deinit {
+        if let unreadObservation { NotificationCenter.default.removeObserver(unreadObservation) }
     }
 
     func reload() {
         installs = store.installs
         selectedHost = store.selectedHost
+        reloadUnread()
+    }
+
+    func reloadUnread() {
+        unread = unreadStore.entries()
     }
 
     func select(_ host: String) {
@@ -94,6 +130,7 @@ final class InstallPickerModel: ObservableObject {
 
     func refreshAll() {
         for install in installs { refresh(install.host) }
+        refreshUnread()
     }
 
     func refresh(_ host: String) {
@@ -213,7 +250,8 @@ struct InstallPickerView: View {
                     install: install,
                     icon: model.icons[install.host],
                     selected: install.host == model.selectedHost,
-                    unreachable: model.reachability[install.host] == .unreachable
+                    unreachable: model.reachability[install.host] == .unreachable,
+                    unread: model.unread[install.host]
                 )
                 .contentShape(Rectangle())
                 .hoverEffect()
@@ -243,11 +281,55 @@ struct InstallPickerView: View {
     }
 }
 
+/// A picker row's line under the name (task 01a1261e, review round 2).
+/// Android's `InstallPickerView.renderRow` has the same three outcomes.
+enum InstallRowStatus: Equatable {
+    /// The host, muted.
+    case host
+    /// Red dot, "Can't reach. Tap to retry.": unreachable, no stale count.
+    case unreachable
+    /// "Could not update": the count shown is the last one known. A red dot
+    /// too when the probe also failed; a tap still retries.
+    case couldNotUpdate(unreachable: Bool)
+
+    init(unreachable: Bool, unread: InstallUnread?) {
+        if unread?.stale == true {
+            self = .couldNotUpdate(unreachable: unreachable)
+        } else {
+            self = unreachable ? .unreachable : .host
+        }
+    }
+
+    func text(host: String) -> String {
+        switch self {
+        case .host: return host
+        case .unreachable: return InstallCopy.rowUnreachable
+        case .couldNotUpdate: return InstallCopy.couldNotUpdate
+        }
+    }
+
+    var showsUnreachableDot: Bool {
+        switch self {
+        case .host, .couldNotUpdate(unreachable: false): return false
+        case .unreachable, .couldNotUpdate(unreachable: true): return true
+        }
+    }
+
+    /// A stale row is dimmed whatever its count, a zero count included.
+    var dimmed: Bool {
+        if case .couldNotUpdate = self { return true }
+        return false
+    }
+}
+
 struct InstallRow: View {
     let install: Install
     let icon: UIImage?
     let selected: Bool
     let unreachable: Bool
+    var unread: InstallUnread? = nil
+
+    var status: InstallRowStatus { InstallRowStatus(unreachable: unreachable, unread: unread) }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -257,30 +339,54 @@ struct InstallRow: View {
                     .font(SuiteFont.body(.semibold))
                     .foregroundColor(SuiteColor.onSurface.color)
                     .lineLimit(1)
-                if unreachable {
-                    // The status replaces the host line so it never takes
-                    // width from the name (canvas self-critique).
-                    HStack(spacing: 6) {
+                // The status replaces the host line so it never takes width
+                // from the name (canvas self-critique). A stale count says so
+                // on that line (task 01a1261e), even when the install is also
+                // unreachable; the red dot and tap-to-retry stay.
+                HStack(spacing: 6) {
+                    if status.showsUnreachableDot {
                         Circle().fill(SuiteColor.destructive.color).frame(width: 8, height: 8)
-                        Text(InstallCopy.rowUnreachable)
-                            .font(SuiteFont.caption())
-                            .foregroundColor(SuiteColor.onSurface.color)
-                            .lineLimit(1)
                     }
-                } else {
-                    Text(install.host)
+                    Text(status.text(host: install.host))
                         .font(SuiteFont.caption())
-                        .foregroundColor(SuiteColor.muted.color)
+                        .foregroundColor(status.showsUnreachableDot ? SuiteColor.onSurface.color : SuiteColor.muted.color)
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
             }
+            .opacity(status.dimmed ? UnreadPillView.staleOpacity : 1)
             Spacer(minLength: 8)
+            // The CURRENT install shows its own count too, beside its check,
+            // so the icon badge can be reconciled with the numbers shown.
+            if let unread, let text = UnreadPill.text(unread.count) {
+                UnreadPillView(text: text, stale: unread.stale)
+            }
             SelectionMark(selected: selected)
         }
         .frame(height: 64)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+    }
+}
+
+/// Primary fill, onPrimary text, 12pt tabular digits; dimmed when stale.
+struct UnreadPillView: View {
+    static let staleOpacity = 0.45
+
+    let text: String
+    let stale: Bool
+
+    var body: some View {
+        Text(text)
+            .font(SuiteFont.pill())
+            .monospacedDigit()
+            .foregroundColor(SuiteColor.onPrimary.color)
+            .padding(.horizontal, 7)
+            .frame(minWidth: 22, minHeight: 22)
+            .background(Capsule(style: .continuous).fill(SuiteColor.primary.color))
+            .opacity(stale ? Self.staleOpacity : 1)
+            .accessibilityLabel("\(text) unread")
+            .accessibilityIdentifier("unread-pill")
     }
 }
 

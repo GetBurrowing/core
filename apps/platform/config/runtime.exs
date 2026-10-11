@@ -475,6 +475,26 @@ if vapid_public && vapid_private do
     private_key: vapid_private
 end
 
+# ── Push relay server mode (task 01a1261e stage 2) ───────────────────────────
+# PUSH_RELAY_SERVER=true turns this install into a Burrow push relay: it accepts
+# `POST /api/push-relay/v1/notifications` from registered installs and forwards
+# sealed items to APNs/FCM with its own credentials. Unset (every normal
+# install), every relay route is a 404. PUSH_RELAY_RATE_PER_MINUTE overrides
+# the per-install item budget (default 1,200/min). The INSTALL side
+# (PUSH_RELAY_URL / PUSH_RELAY_CREDENTIAL) is resolved at call time by
+# `Platform.Push.Relay.relay_config/0`, like the APNs credentials.
+if System.get_env("PUSH_RELAY_SERVER") in ["true", "1"] do
+  relay_rate =
+    case Integer.parse(System.get_env("PUSH_RELAY_RATE_PER_MINUTE") || "") do
+      {n, ""} when n > 0 -> n
+      _ -> nil
+    end
+
+  config :platform, :push_relay_server,
+    enabled: true,
+    rate_per_minute: relay_rate
+end
+
 # ── WebMCP tool surface (BACKLOG #14) ─────────────────────────────────────────
 # Gates registration of `navigator.modelContext` tools in app.js. Off by default
 # in prod; on by default in dev. Override with WEBMCP_ENABLED=true|false.

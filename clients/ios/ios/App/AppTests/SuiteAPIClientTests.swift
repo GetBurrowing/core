@@ -127,7 +127,12 @@ final class SuiteAPIClientTests: XCTestCase {
             done.fulfill()
         }
         api.counts(host: "a.example.com", now: { fetched }) { result in
-            XCTAssertEqual(try? result.get(), SuiteCounts(approvals: 3, tasks: 12, fetchedAt: fetched))
+            // `as_of` is read too since task 01a1261e (no `unread` from this server).
+            XCTAssertEqual(
+                try? result.get(),
+                SuiteCounts(
+                    approvals: 3, tasks: 12, fetchedAt: fetched, unread: nil,
+                    asOf: InstallUnreadStore.parseDate("2026-10-04T23:00:00.123456Z")))
             done.fulfill()
         }
         wait(for: [done], timeout: 5)

@@ -186,12 +186,15 @@ class AppApiClient(
      * signed-in user. Returns only when the server answered 2xx (the
      * honesty rule: push is "granted" only once the row is stored); any
      * other status throws STATUS and a transport failure throws NETWORK.
+     * [pushPublicKey] (base64url, no padding) is this phone's X25519 key for
+     * [host]'s sealed previews; it is omitted when null.
      */
     fun registerDevice(
         host: String,
         token: String,
         packageName: String,
         appInstallId: String,
+        pushPublicKey: String? = null,
     ) {
         val body =
             JSONObject()
@@ -199,6 +202,7 @@ class AppApiClient(
                 .put("platform", "android")
                 .put("package_name", packageName)
                 .put("app_install_id", appInstallId)
+                .apply { if (pushPublicKey != null) put("push_public_key", pushPublicKey) }
                 .toString()
         send(authorized(host, "POST", DEVICES_PATH, body), DEVICES_PATH)
     }

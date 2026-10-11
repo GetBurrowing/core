@@ -98,7 +98,10 @@ defmodule Platform.Push.NotificationTest do
     end
 
     assert web[:category] == apns["aps"]["category"], "category differs for #{n.kind}"
-    assert web[:thread_id] == apns["aps"]["thread-id"], "thread differs for #{n.kind}"
+    # The APNs thread id is the same thread, prefixed with the install host
+    # (task 01a1261e); web push keeps the bare thread id.
+    expected_thread = web[:thread_id] && "#{n.install_host}:#{web[:thread_id]}"
+    assert expected_thread == apns["aps"]["thread-id"], "thread differs for #{n.kind}"
 
     {web, apns}
   end
@@ -206,7 +209,9 @@ defmodule Platform.Push.NotificationTest do
         n = Notification.from_inbox_item(inbox_item(kind))
         assert n.category == "SUITE_OPEN"
         assert n.thread_id == "approvals"
-        assert Notification.to_apns_payload(n)["aps"]["thread-id"] == "approvals"
+
+        assert Notification.to_apns_payload(n)["aps"]["thread-id"] ==
+                 "#{n.install_host}:approvals"
       end
     end
 
@@ -526,6 +531,87 @@ defmodule Platform.Push.NotificationTest do
       sender = agent_sender()
       n = AttentionRouter.push_notification(sender, message("hi"), :mention, space(), [])
       assert Notification.to_fcm_payload(n)["data"]["author_id"] == sender.participant_id
+    end
+  end
+
+  defp with_unread(n, count, as_of \\ ~U[2026-10-10 15:00:00.123456Z]),
+    do: %Notification{n | unread_count: count, unread_as_of: as_of}
+
+  describe "per-install unread and thread ids (task 01a1261e)" do
+    test "APNs carries unread_count as an integer and unread_as_of as ISO-8601" do
+      [_, mention | _] = every_kind()
+      apns = Notification.to_apns_payload(with_unread(mention, 7))
+
+      assert apns["unread_count"] == 7
+      assert apns["unread_as_of"] == "2026-10-10T15:00:00.123456Z"
+
+      refute Map.has_key?(apns["aps"], "badge"),
+             "the app sums the badge, the server never sets it"
+    end
+
+    test "FCM data carries both as strings, and a zero count survives as \"0\"" do
+      [_, mention | _] = every_kind()
+
+      data = Notification.to_fcm_payload(with_unread(mention, 0))["data"]
+      assert data["unread_count"] == "0"
+      assert data["unread_as_of"] == "2026-10-10T15:00:00.123456Z"
+    end
+
+    test "with no count stamped, neither key appears on any transport" do
+      for n <- every_kind() do
+        apns = Notification.to_apns_payload(n)
+        data = Notification.to_fcm_payload(n)["data"]
+
+        refute Map.has_key?(apns, "unread_count")
+        refute Map.has_key?(apns, "unread_as_of")
+        refute Map.has_key?(data, "unread_count")
+        refute Map.has_key?(data, "unread_as_of")
+      end
+    end
+
+    test "web push never carries the count" do
+      [_, mention | _] = every_kind()
+      web = Notification.to_web_payload(with_unread(mention, 4))
+
+      refute Map.has_key?(web, :unread_count)
+      refute Map.has_key?(web, :unread_as_of)
+    end
+
+    test "the APNs thread id is prefixed with install_host; web and FCM keep the bare id" do
+      s = space()
+      n = AttentionRouter.push_notification("Harper", message("x"), :mention, s, [])
+      n = %Notification{n | install_host: "suite-b.localhost"}
+
+      assert Notification.to_apns_payload(n)["aps"]["thread-id"] == "suite-b.localhost:" <> s.id
+      assert Notification.to_web_payload(n).thread_id == s.id
+      assert Notification.to_fcm_payload(n)["data"]["thread_id"] == s.id
+
+      approvals = %Notification{
+        Notification.from_inbox_item(inbox_item("task_plan_review"))
+        | install_host: "suite-b.localhost"
+      }
+
+      assert Notification.to_apns_payload(approvals)["aps"]["thread-id"] ==
+               "suite-b.localhost:approvals"
+    end
+
+    test "two installs' threads for the same space id never collide on APNs" do
+      s = space()
+      n = AttentionRouter.push_notification("Harper", message("x"), :mention, s, [])
+
+      a = Notification.to_apns_payload(%Notification{n | install_host: "suite-a.localhost"})
+      b = Notification.to_apns_payload(%Notification{n | install_host: "suite-b.localhost"})
+
+      refute a["aps"]["thread-id"] == b["aps"]["thread-id"]
+    end
+
+    test "no install host leaves the bare thread id; no thread leaves no thread-id" do
+      n = Notification.new(%{kind: "chat_mention", title: "t", space_id: "s1", install_host: nil})
+      n = %Notification{n | install_host: nil}
+      assert Notification.to_apns_payload(n)["aps"]["thread-id"] == "s1"
+
+      generic = Notification.from_map(%{title: "a", body: "b", url: "/"})
+      refute Map.has_key?(Notification.to_apns_payload(generic)["aps"], "thread-id")
     end
   end
 end

@@ -50,6 +50,7 @@ import MeetingWatchdog from "./meeting_watchdog"
 import MeetingWhiteboard from "./meeting_whiteboard"
 import MermaidDiagram from "./mermaid_diagram"
 import MessageEditor from "./message_editor"
+import NativeInstallSwitch from "./native_install_switch"
 import PushSubscribe from "./push_subscribe"
 import ReactionPicker from "./reaction_picker"
 import ReactorPopover from "./reactor_popover"
@@ -117,6 +118,7 @@ export default {
   MermaidDiagram,
   MessageEditor,
   MessageLift,
+  NativeInstallSwitch,
   PushSubscribe,
   ReactionPicker,
   ReactorPopover,

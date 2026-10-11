@@ -152,13 +152,23 @@ struct SuiteAPIClient {
         struct Body: Decodable {
             let approvals: Int
             let tasks: Int
+            // Task 01a1261e: absent on an older server.
+            let unread: Int?
+            let asOf: String?
+
+            enum CodingKeys: String, CodingKey {
+                case approvals, tasks, unread
+                case asOf = "as_of"
+            }
         }
         get(host: host, path: "/api/app/counts") { result in
             completion(
                 result.flatMap { data in
                     Result {
                         let body = try JSONDecoder().decode(Body.self, from: data)
-                        return SuiteCounts(approvals: body.approvals, tasks: body.tasks, fetchedAt: now())
+                        return SuiteCounts(
+                            approvals: body.approvals, tasks: body.tasks, fetchedAt: now(), unread: body.unread,
+                            asOf: InstallUnreadStore.parseDate(body.asOf))
                     }.mapError { _ in Failure.badResponse }
                 })
         }

@@ -21,6 +21,9 @@ struct CommunicationPayload: Equatable {
     let authorType: String?
     let authorName: String?
     let spaceName: String?
+    /// The install's name, set by `PushContentPreparer` only while two or
+    /// more installs are signed in (task 01a1261e).
+    let installLabel: String?
 
     init?(userInfo: [AnyHashable: Any]) {
         func uuid(_ key: String) -> String? {
@@ -42,6 +45,7 @@ struct CommunicationPayload: Equatable {
         authorType = text("author_type")
         authorName = text("author_name")
         spaceName = text("space_name")
+        installLabel = text(PushContentPreparer.installLabelKey)
     }
 
     /// Every id is `<install_host>|<uuid>` from the PAYLOAD's host, never
@@ -80,11 +84,39 @@ enum CommunicationNotification {
         let sender = INPerson(
             personHandle: INPersonHandle(value: payload.senderID, type: .unknown), nameComponents: nil,
             displayName: payload.authorName, image: nil, contactIdentifier: nil, customIdentifier: payload.senderID)
-        // A DM's conversation name is the other person's name: no group name
-        // then, so it shows as a one-to-one conversation.
-        let groupName = payload.spaceName.flatMap { $0 == payload.authorName ? nil : INSpeakableString(spokenPhrase: $0) }
+        // A DM's conversation name is the other person's name: it has no
+        // space name of its own (see `conversationName` for the install).
+        let space = payload.spaceName.flatMap { $0 == payload.authorName ? nil : $0 }
+        let name = conversationName(space: space, sender: payload.authorName, install: payload.installLabel)
         return INSendMessageIntent(
-            recipients: nil, outgoingMessageType: .outgoingMessageText, content: nil, speakableGroupName: groupName,
+            recipients: groupRecipients(payload.installLabel, sender: sender), outgoingMessageType: .outgoingMessageText,
+            content: nil, speakableGroupName: name.map { INSpeakableString(spokenPhrase: $0) },
             conversationIdentifier: payload.conversationEntityID, serviceName: nil, sender: sender, attachments: nil)
+    }
+
+    /// A communication notification draws the sender and the body only:
+    /// `content.subtitle` and `content.title` are dropped (measured on iOS
+    /// 27, task 01a1261e). With two or more installs signed in the install
+    /// travels in the conversation name, as Android's `launch · B`: a space
+    /// reads `<space> · <install>`, a DM `<sender> · <install>`. One install:
+    /// the space name alone, a DM none.
+    static func conversationName(space: String?, sender: String?, install: String?) -> String? {
+        guard let install else { return space }
+        guard let base = space ?? sender else { return install }
+        return "\(base) · \(install)"
+    }
+
+    /// iOS 27 draws the conversation name (as the line under the sender) only
+    /// for a GROUP, which it infers from more than one recipient: with no
+    /// recipients the name is dropped, so before this a space's name never
+    /// showed either (measured, task 01a1261e). No recipient list travels in
+    /// the push, so while the install must show, the recipients are the
+    /// sender plus this device. One install signed in: none, as before.
+    static func groupRecipients(_ install: String?, sender: INPerson) -> [INPerson]? {
+        guard install != nil else { return nil }
+        let me = INPerson(
+            personHandle: INPersonHandle(value: nil, type: .unknown), nameComponents: nil, displayName: nil, image: nil,
+            contactIdentifier: nil, customIdentifier: nil, isMe: true)
+        return [sender, me]
     }
 }

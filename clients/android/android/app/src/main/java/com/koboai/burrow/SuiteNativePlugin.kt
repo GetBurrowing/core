@@ -36,6 +36,11 @@ import java.util.concurrent.Executors
  *   "denied"}` when the person said no, and otherwise rejects with
  *   `not_signed_in`, `token_failed` or `registration_failed`;
  * - `switchInstall()` opens the install picker;
+ * - `installBadges()` resolves `{others_unread: boolean}`: whether any
+ *   signed-in install OTHER than the one showing has unread (task 01a1261e;
+ *   the contract is stage 3's `native_install_switch.js`, verbatim). The
+ *   shell fires the window event `burrowInstallBadges` (no payload) when
+ *   the counts may have changed, and the page asks again;
  * - `donate(detail)` takes 01a111bb's `native_donate` payload (ids only,
  *   forwarded by `assets/js/native_donations.js`). `message_sent` notes the
  *   conversation as a used shortcut ([ConversationNoter]); every other kind
@@ -145,6 +150,13 @@ class SuiteNativePlugin : Plugin() {
         ).also { conversationNoter = it }
 
     @PluginMethod
+    fun installBadges(call: PluginCall) {
+        val selected = (activity as? MainActivity)?.currentHost
+        val app = context.applicationContext
+        io.execute { call.resolve(installBadgesAnswer(BurrowPush.unread(app).othersUnread(selected))) }
+    }
+
+    @PluginMethod
     fun switchInstall(call: PluginCall) {
         val shell = activity as? MainActivity
         activity.runOnUiThread {
@@ -190,6 +202,14 @@ class SuiteNativePlugin : Plugin() {
     }
 
     private fun denied() = JSObject().put("registered", false).put("state", "denied")
+
+    companion object {
+        /** `installBadges`'s answer, exactly `{others_unread: boolean}`. */
+        fun installBadgesAnswer(othersUnread: Boolean): JSObject = JSObject().put("others_unread", othersUnread)
+
+        /** The window event the page re-queries `installBadges` on. */
+        const val BADGES_EVENT = "burrowInstallBadges"
+    }
 
     private fun canAskAgain(): Boolean =
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&

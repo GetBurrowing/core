@@ -134,6 +134,59 @@ final class EvidenceUITests: XCTestCase {
         _ = app
     }
 
+    /// Task 01a1261e review round 2: what iOS RENDERS for a chat push from
+    /// one of two signed-in installs. The harness first copies each payload
+    /// named in $COMM_FILES (comma-separated) into the App Group container;
+    /// each runs through the DEBUG `-SuiteDebugLocalPush` seam (the Notification
+    /// Service Extension's own two calls). Writes every Notification Center
+    /// cell's accessibility label to `<tag>-nc-cells.txt`.
+    func testCommunicationNotificationLabels() {
+        let env = ProcessInfo.processInfo.environment
+        let tag = env["COMM_TAG"] ?? "comm"
+        let files = (env["COMM_FILES"] ?? "").split(separator: ",").map(String.init)
+        let extra = (env["COMM_ARGS"] ?? "").split(separator: " ").map(String.init)
+        var app = launch(["-SuiteRequestPush", "YES"])
+        let allow = springboard.buttons["Allow"]
+        if allow.waitForExistence(timeout: 8) { allow.tap() }
+        sleep(2)
+        app.terminate()
+        for file in files {
+            app = launch(["-SuiteDebugLocalPush", file] + extra)
+            sleep(2)
+            XCUIDevice.shared.press(.home)
+            sleep(5)
+        }
+        let cells = springboard.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier == 'NotificationShortLookView' OR identifier == 'NotificationCell'"))
+        // Pull down Notification Center from the top left; retry, since the
+        // first drag can land while springboard is still animating.
+        for _ in 0..<4 where cells.count == 0 {
+            let start = springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.0))
+            start.press(forDuration: 0.1, thenDragTo: springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.8)))
+            sleep(4)
+        }
+        var labels: [String] = []
+        for index in 0..<min(cells.count, 30) { labels.append(cells.element(boundBy: index).label) }
+        note("\(tag)-nc-cells", labels.joined(separator: "\n---\n"))
+        shot("\(tag)-nc")
+        XCUIDevice.shared.press(.home)
+    }
+
+    /// Task 01a1261e review round 2: the picker as it renders, after the
+    /// harness set up the installs. Writes the row labels and a screenshot.
+    func testPickerRows() {
+        let env = ProcessInfo.processInfo.environment
+        let tag = env["COMM_TAG"] ?? "picker"
+        let extra = (env["COMM_ARGS"] ?? "").split(separator: " ").map(String.init)
+        let app = launch(extra)
+        let title = app.staticTexts["Choose a Burrow install"]
+        if !title.waitForExistence(timeout: 20) { shot("\(tag)-no-picker") }
+        sleep(12)
+        let rows = app.descendants(matching: .any).allElementsBoundByIndex.prefix(300).map(\.label).filter { !$0.isEmpty }
+        note("\(tag)-rows", rows.joined(separator: "\n"))
+        shot("\(tag)-picker")
+    }
+
     /// Task 01a120be stage 4: the "Sent to #<space>" notification a finished
     /// background upload posts, drawn by the system.
     func test4UploadSentNotification() {

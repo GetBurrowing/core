@@ -28,6 +28,7 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.isVisible
 import androidx.core.view.updatePadding
+import com.koboai.burrow.push.InstallUnread
 import java.util.concurrent.Executors
 
 /**
@@ -44,6 +45,8 @@ class InstallPickerView(
     private val store: InstallStore,
     /** Removes the host's conversation shortcuts (ConversationShortcuts.removeForHost). */
     private val removeShortcuts: (String) -> Unit,
+    /** Per-install unread for the signed-in installs (UnreadStore.entries), read on [refreshUnread]. */
+    private val unread: () -> Map<String, InstallUnread> = { emptyMap() },
     private val onContinue: (Install) -> Unit,
 ) : FrameLayout(context) {
     private enum class Reachability { UNKNOWN, REACHABLE, UNREACHABLE }
@@ -68,6 +71,12 @@ class InstallPickerView(
 
     private var checking = false
     private var continuing = false
+
+    /**
+     * The last unread counts read. Replaced whole on [refreshUnread], never
+     * cleared first, so a refresh never flashes the pills empty.
+     */
+    private var counts: Map<String, InstallUnread> = emptyMap()
 
     init {
         setBackgroundColor(color(R.color.burrow_surface))
@@ -213,8 +222,15 @@ class InstallPickerView(
     }
 
     fun reload() {
+        counts = unread()
         renderRows()
         store.installs.forEach { refresh(it.host) }
+    }
+
+    /** Re-reads the unread counts (after a reconcile or a push) and redraws the rows in place. */
+    fun refreshUnread() {
+        counts = unread()
+        renderRows()
     }
 
     // Rows
@@ -262,6 +278,8 @@ class InstallPickerView(
 
         val texts = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
         texts.addView(text(install.displayName, 17f, 600, R.color.burrow_on_surface).apply { singleLine() })
+        val entry = counts[install.host]
+        val stale = entry?.stale == true
         if (reachability[install.host] == Reachability.UNREACHABLE) {
             // The status replaces the host line so it never takes width from
             // the name (canvas self-critique).
@@ -270,8 +288,17 @@ class InstallPickerView(
                 View(context).apply { background = circle(R.color.burrow_error) },
                 LinearLayout.LayoutParams(dp(8), dp(8)).apply { marginEnd = dp(6) },
             )
-            status.addView(text(R.string.row_unreachable, 13f, 400, R.color.burrow_on_surface).apply { singleLine() })
+            // An install whose cached count is stale reads the plan's
+            // "Could not update" (the count beside it is the last known);
+            // without a cached count it is today's "Can't reach. Tap to
+            // retry." Either way the dot is red and a tap retries.
+            val label = if (stale) R.string.row_could_not_update else R.string.row_unreachable
+            status.addView(text(label, 13f, 400, R.color.burrow_on_surface).apply { singleLine() })
             texts.addView(status, margins(top = 2))
+        } else if (stale) {
+            // The last refresh of this install's counts failed: its count
+            // stays, dimmed, and the host line says so.
+            texts.addView(text(R.string.row_could_not_update, 13f, 400, R.color.burrow_muted).apply { singleLine() }, margins(top = 2))
         } else {
             texts.addView(
                 text(install.host, 13f, 400, R.color.burrow_muted).apply {
@@ -282,8 +309,22 @@ class InstallPickerView(
             )
         }
         row.addView(texts, LinearLayout.LayoutParams(0, WRAP, 1f))
+        val pillText = UnreadPill.text(entry?.count ?: 0, context.getString(R.string.unread_pill_cap))
+        if (pillText != null) {
+            row.addView(
+                pill(pillText).apply { if (stale) alpha = STALE_ALPHA },
+                LinearLayout.LayoutParams(WRAP, dp(20)).apply { marginStart = dp(8) },
+            )
+        }
+        if (stale) texts.alpha = STALE_ALPHA
         row.addView(selectionMark(selected), LinearLayout.LayoutParams(dp(24), dp(24)).apply { marginStart = dp(8) })
-        row.contentDescription = install.displayName + if (selected) ", " + context.getString(R.string.selected) else ""
+        row.contentDescription =
+            listOfNotNull(
+                install.displayName,
+                entry?.count?.takeIf { it > 0 }?.let { resources.getQuantityString(R.plurals.unread_pill_description, it, it) },
+                if (stale) context.getString(R.string.row_could_not_update) else null,
+                if (selected) context.getString(R.string.selected) else null,
+            ).joinToString(", ")
         return row
     }
 
@@ -309,6 +350,21 @@ class InstallPickerView(
         }
         return tile
     }
+
+    /** The count pill: burrow_primary fill, on-primary 12sp tabular digits (the chat rail's unread pill). */
+    private fun pill(value: String): TextView =
+        text(value, 12f, 700, R.color.burrow_on_primary).apply {
+            fontFeatureSettings = "tnum"
+            gravity = Gravity.CENTER
+            minWidth = dp(20)
+            setPadding(dp(6), 0, dp(6), 0)
+            background =
+                GradientDrawable().apply {
+                    cornerRadius = dp(10).toFloat()
+                    setColor(color(R.color.burrow_primary))
+                }
+            importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
 
     private fun selectionMark(selected: Boolean): View {
         val mark = FrameLayout(context)
@@ -528,5 +584,6 @@ class InstallPickerView(
         private const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
         private const val RADIUS_FIELD = 10
         private const val RADIUS_BOX = 14
+        private const val STALE_ALPHA = 0.5f
     }
 }

@@ -6,4 +6,6 @@
     <exclude domain="sharedpref" path="burrow_device.xml" />
     <exclude domain="sharedpref" path="burrow_push.xml" />
     <exclude domain="sharedpref" path="burrow_shortcuts.xml" />
+    <exclude domain="sharedpref" path="burrow_push_keys.xml" />
+    <exclude domain="sharedpref" path="burrow_unread.xml" />
 </full-backup-content>

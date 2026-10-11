@@ -37,6 +37,8 @@ class PushRegistrar(
     private val appInstallId: String,
     private val backoffMillis: List<Long> = DEFAULT_BACKOFF_MILLIS,
     private val sleep: (Long) -> Unit = { Thread.sleep(it) },
+    /** [host]'s push public key (PushKeyStore.publicKey), or null to register without one. */
+    private val publicKey: (String) -> String? = { null },
 ) {
     fun register(host: String) {
         if (!client.isSignedIn(host)) throw PushError(PushError.NOT_SIGNED_IN)
@@ -46,10 +48,13 @@ class PushRegistrar(
             } catch (_: Exception) {
                 throw PushError(PushError.TOKEN_FAILED)
             }
+        // Created (once) before the POST: the install seals this phone's
+        // previews to it. A keystore failure registers without a key.
+        val key = publicKey(host)
         var attempt = 0
         while (true) {
             try {
-                client.registerDevice(host, token, packageName, appInstallId)
+                client.registerDevice(host, token, packageName, appInstallId, key)
                 return
             } catch (e: ApiException) {
                 when {

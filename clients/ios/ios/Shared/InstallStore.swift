@@ -124,6 +124,8 @@ final class InstallStore {
         if defaults.string(forKey: Key.selected) == host {
             defaults.removeObject(forKey: Key.selected)
         }
+        // Its unread count must not keep the icon badge up (task 01a1261e).
+        InstallUnreadStore.clear(host, in: defaults)
     }
 
     private func save(_ list: [Install]) {

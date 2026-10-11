@@ -122,6 +122,9 @@ dependencies {
     implementation "androidx.glance:glance-appwidget:$glanceVersion"
     implementation "androidx.work:work-runtime-ktx:$workVersion"
     implementation "androidx.datastore:datastore-preferences:$datastoreVersion"
+    // Sealed push previews (task 01a1261e): HPKE X25519 / HKDF-SHA256 /
+    // AES-128-GCM opened on the phone (push/PushSeal.kt), keys per install.
+    implementation "com.google.crypto.tink:tink-android:$tinkVersion"
     implementation project(':capacitor-android')
     // MessageHandler's constructor names Cordova's PluginManager
     // (NativeBridgeExposure); Capacitor already ships it at runtime.

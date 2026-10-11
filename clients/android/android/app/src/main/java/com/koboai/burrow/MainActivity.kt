@@ -55,6 +55,9 @@ class MainActivity :
     private lateinit var exposure: NativeBridgeExposure
 
     private val io: ExecutorService = Executors.newSingleThreadExecutor()
+
+    // Its own thread: a slow install's counts must not hold up a handoff on [io].
+    private val reconcile: ExecutorService = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
 
     private var currentInstall: Install? = null
@@ -77,7 +80,7 @@ class MainActivity :
 
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
-        store = InstallStore(SharedPreferencesStore(this, InstallStore.PREFS_FILE), SharedPreferencesStore(this, InstallStore.DEVICE_FILE))
+        store = BurrowPush.installs(this)
         pickerReturn = PickerReturn(store)
         tokens = KeystoreTokenStore(SharedPreferencesStore(this, KeystoreTokenStore.PREFS_FILE), AndroidKeyStoreCipher())
         client = AppApiClient(tokens)
@@ -157,12 +160,20 @@ class MainActivity :
     override fun onPause() {
         super.onPause()
         if (auth != null) authTabShown = true
+        BurrowPush.unreadChanged = null
     }
 
     override fun onResume() {
         super.onResume()
-        // Foreground: refresh the widget counts.
-        WidgetRefresh.now(this)
+        // Every open re-reads each install's counts ONCE (ResumeRefresh):
+        // the unread badges and the widgets' cache come from the same
+        // answer, so a notification cleared without opening the app cannot
+        // leave a stale badge and no install is asked twice. Not an
+        // intent action: it never goes through LaunchRouter, so a restore
+        // after process death (LaunchRouter.onLaunch(restored = true)) runs
+        // it without replaying a one-shot Open.
+        BurrowPush.unreadChanged = ::installBadgesChanged
+        reconcileUnread()
         // Back from the Custom Tab without a callback: the person closed it.
         if (auth != null && authTabShown) {
             auth = null
@@ -173,7 +184,30 @@ class MainActivity :
 
     override fun onDestroy() {
         io.shutdown()
+        reconcile.shutdown()
         super.onDestroy()
+    }
+
+    // Per-install unread
+
+    private fun reconcileUnread() {
+        if (!started) return
+        val app = applicationContext
+        val selected = store.selectedHost
+        reconcile.execute {
+            val hosts = BurrowPush.signedInHosts(app)
+            val outcome = if (hosts.isEmpty()) null else BurrowPush.resumeRefresh(app).run(hosts, selected)
+            // Re-render only: the counts above are the widgets' refresh.
+            WidgetRefresh.renderNow(app, outcome?.widgetCounts?.fetchedAtMillis)
+            if (outcome != null) main.post { installBadgesChanged() }
+        }
+    }
+
+    /** The counts may have changed: the page's switcher dot re-queries, an open picker redraws. */
+    private fun installBadgesChanged() {
+        if (!started || isDestroyed) return
+        bridge?.triggerWindowJSEvent(SuiteNativePlugin.BADGES_EVENT)
+        picker?.refreshUnread()
     }
 
     // Notifications
@@ -220,7 +254,11 @@ class MainActivity :
         when {
             install == null -> if (currentInstall == null) startWithSelection()
             install.host == currentInstall?.host && picker == null -> bridge.webView.loadUrl("https://${install.host}$path")
-            else -> open(install, "https://${install.host}$path")
+            else -> {
+                val banner = SwitchBanner.shouldShow(currentInstall?.host, install.host)
+                open(install, "https://${install.host}$path")
+                if (banner) SwitchBanner.show(bridge.webView.parent as ViewGroup, getString(R.string.switched_to, install.displayName))
+            }
         }
     }
 
@@ -316,7 +354,8 @@ class MainActivity :
     private fun signOut(install: Install) {
         signingOutHost = install.host
         cover.visibility = View.VISIBLE
-        val signOut = NativeSignOut(client, tokens, store.appInstallId, ::removeShortcuts)
+        val pushKeys = BurrowPush.pushKeys(applicationContext)
+        val signOut = NativeSignOut(client, tokens, store.appInstallId, pushKeys::remove, ::removeShortcuts)
         io.execute {
             signOut.run(install.host)
             // The old account's counts must not show under the next sign-in.
@@ -352,7 +391,7 @@ class MainActivity :
             return
         }
         val view =
-            InstallPickerView(this, store, ::removeShortcuts) { install ->
+            InstallPickerView(this, store, ::removeShortcuts, { BurrowPush.unread(applicationContext).entries() }) { install ->
                 open(install, null)
             }
         (bridge.webView.parent as ViewGroup).addView(view, ViewGroup.LayoutParams(MATCH, MATCH))

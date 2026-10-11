@@ -85,7 +85,8 @@ class InstallLauncher(
  * 1. `DELETE /api/app/devices/:app_install_id`, so pushes stop;
  * 2. `DELETE /api/app/session`, so the bearer is revoked server-side (the
  *    server also drops this session's fcm_devices row);
- * 3. the bearer leaves the Keystore store.
+ * 3. the bearer leaves the Keystore store, and the install's push key
+ *    (PushKeyStore) is deleted with it.
  *
  * The bearer is removed whatever the server answered: a person who signed
  * out offline is signed out on this phone.
@@ -96,6 +97,8 @@ class NativeSignOut(
     private val client: AppApiClient,
     private val tokens: MutableTokenStore,
     private val appInstallId: String,
+    /** Deletes the host's push key (PushKeyStore.remove): it goes with the bearer. */
+    private val forgetPushKey: (String) -> Unit = {},
     /** Removes the host's conversation shortcuts (ConversationShortcuts.removeForHost). */
     private val removeShortcuts: (String) -> Unit,
 ) {
@@ -111,6 +114,7 @@ class NativeSignOut(
             // Offline or already revoked: the local bearer goes regardless.
         }
         tokens.remove(host)
+        forgetPushKey(host)
         // Only this install's conversations; another signed-in install keeps its own.
         removeShortcuts(host)
     }
