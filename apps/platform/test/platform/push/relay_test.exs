@@ -288,6 +288,52 @@ defmodule Platform.Push.RelayTest do
     end
   end
 
+  # Task 01a12773 stage 2: the sender avatar url names the agent and the
+  # install, so on the relay path it must travel ONLY inside the sealed blob.
+  describe "the sender avatar url crosses the relay only sealed (task 01a12773)" do
+    test "the allow-list is exactly the eight routing fields" do
+      assert RelayServer.allowed_fields() ==
+               ~w(platform token environment install_host unread_count unread_as_of sealed collapse_id)
+    end
+
+    test "the url appears nowhere in the relay request, and opens out of the sealed blob" do
+      relay_mode!()
+      user = insert_user()
+      {apns_pub, apns_priv} = device_keypair()
+      {fcm_pub, fcm_priv} = device_keypair()
+      insert_apns_device!(user, push_public_key: apns_pub)
+      insert_fcm_device!(user, push_public_key: fcm_pub)
+      ok_relay(self())
+
+      url =
+        "https://#{@host}/api/app/agents/01a12773-0000-7000-8000-00000000a7a7/avatar?v=AVSENTINEL9"
+
+      n = notification(%{author_avatar_url: url, author_avatar_tone: "agent"})
+
+      for {platform, priv} <- [ios: apns_priv, android: fcm_priv] do
+        assert :ok = Relay.deliver_to_user(user.id, n, platform)
+        assert_received {:relay_request, req}
+
+        encoded = Jason.encode!(req.body)
+
+        for haystack <- [encoded, req.raw],
+            needle <- [url, "AVSENTINEL9", "/api/app/agents/", "author_avatar"] do
+          refute haystack =~ needle,
+                 "#{platform}: #{inspect(needle)} crossed the relay in the clear"
+        end
+
+        assert [item] = req.body["notifications"]
+        assert Map.keys(item) -- RelayServer.allowed_fields() == []
+
+        # Positive control in the same test: the url WAS sent, inside the blob.
+        assert {:ok, json} = Seal.open(priv, item["sealed"], @host)
+        inner = Jason.decode!(json)
+        assert inner["author_avatar_url"] == url
+        assert inner["author_avatar_tone"] == "agent"
+      end
+    end
+  end
+
   describe "no plaintext crosses the relay (sentinel)" do
     test "the sentinel reaches the device only inside the sealed blob", %{pem: pem} do
       relay_mode!()

@@ -36,9 +36,10 @@ defmodule Platform.Push.Seal do
   The plaintext is the JSON of the map `Platform.Push.Notification.to_fcm_payload/1`
   puts under `"data"`, for BOTH platforms: one inner shape. A sealed blob is
   at most 3,072 base64url bytes (`max_blob_bytes/0`); when a map would
-  exceed it, `seal/3` drops `"body"` and tries once more, then returns
-  `{:error, :too_large}` and the caller sends no preview at all, never a
-  truncated or plaintext one.
+  exceed it, `seal/3` drops `"author_avatar_url"` first (the app falls back
+  to the sender's letter disc; task 01a12773), then `"body"`, trying again
+  after each, and then returns `{:error, :too_large}` and the caller sends
+  no preview at all, never a truncated or plaintext one.
 
   ## Secrets
 
@@ -79,7 +80,8 @@ defmodule Platform.Push.Seal do
   inner data map (JSON-encoded here) or an already-encoded binary.
 
   Returns `{:ok, blob}` (base64url, no padding), `{:error, :too_large}` when
-  even the body-less map exceeds `max_blob_bytes/0`, or
+  even the map without `author_avatar_url` and `body` exceeds
+  `max_blob_bytes/0`, or
   `{:error, :invalid_key}`.
   """
   @spec seal(binary(), map() | binary(), String.t()) ::
@@ -217,18 +219,33 @@ defmodule Platform.Push.Seal do
 
   # ── internals ────────────────────────────────────────────────────────────
 
-  defp seal_fitting(pk_r, %{} = data, install_host, opts) do
-    case seal_binary(pk_r, Jason.encode!(data), install_host, opts) do
-      {:error, :too_large} when is_map_key(data, "body") ->
-        seal_binary(pk_r, Jason.encode!(Map.delete(data, "body")), install_host, opts)
+  # Keys dropped, in order, from a map that does not fit (task 01a12773
+  # stage 2). `author_avatar_url` goes first: the app draws the sender's
+  # letter disc without it, so losing it costs a picture, not the preview.
+  @droppable_when_too_large ~w(author_avatar_url body)
 
-      result ->
-        result
-    end
-  end
+  defp seal_fitting(pk_r, %{} = data, install_host, opts),
+    do:
+      seal_dropping(
+        pk_r,
+        data,
+        install_host,
+        opts,
+        Enum.filter(@droppable_when_too_large, &is_map_key(data, &1))
+      )
 
   defp seal_fitting(pk_r, plaintext, install_host, opts) when is_binary(plaintext),
     do: seal_binary(pk_r, plaintext, install_host, opts)
+
+  defp seal_dropping(pk_r, data, install_host, opts, droppable) do
+    case {seal_binary(pk_r, Jason.encode!(data), install_host, opts), droppable} do
+      {{:error, :too_large}, [key | rest]} ->
+        seal_dropping(pk_r, Map.delete(data, key), install_host, opts, rest)
+
+      {result, _} ->
+        result
+    end
+  end
 
   defp seal_binary(pk_r, plaintext, install_host, opts) do
     ephemeral = Keyword.get_lazy(opts, :ephemeral, &generate_keypair/0)

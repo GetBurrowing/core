@@ -88,6 +88,32 @@ object BurrowPush {
         timeoutMillis: Int = 20_000,
     ): AppApiClient = AppApiClient(tokenStoreOverride ?: tokens(context), transportOverride ?: UrlConnectionTransport(timeoutMillis))
 
+    /** Tests put a fetcher on a MockWebServer here. */
+    @Volatile
+    internal var avatarFetcherOverride: AvatarFetcher? = null
+
+    @Volatile
+    private var avatarFetcher: AvatarFetcher? = null
+
+    /**
+     * The process's one sender-avatar fetcher (task 01a12773), so its memory
+     * cache and negative cache are shared by every push.
+     */
+    fun avatars(context: Context): AvatarFetcher {
+        avatarFetcherOverride?.let { return it }
+        avatarFetcher?.let { return it }
+        return synchronized(this) {
+            val app = context.applicationContext
+            // The bearer is read at request time, so a sign-in or sign-out
+            // after the fetcher exists is seen.
+            val bearers =
+                object : TokenStore {
+                    override fun token(host: String): String? = (tokenStoreOverride ?: tokens(app)).token(host)
+                }
+            avatarFetcher ?: AvatarFetcher(bearers, app.cacheDir).also { avatarFetcher = it }
+        }
+    }
+
     fun tokenSource(context: Context): PushTokenSource = tokenSourceOverride ?: PushTokenSources.forContext(context)
 
     fun registrar(

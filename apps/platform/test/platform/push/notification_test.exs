@@ -534,6 +534,193 @@ defmodule Platform.Push.NotificationTest do
     end
   end
 
+  # ── Task 01a12773 stage 2: the sender's picture and letter-disc tone ──
+
+  defp insert_agent!(avatar_url) do
+    n = System.unique_integer([:positive])
+
+    Repo.insert!(%Platform.Agents.Agent{
+      slug: "avatar-push-#{n}",
+      name: "Avatar Push #{n}",
+      status: "active",
+      avatar_url: avatar_url
+    })
+  end
+
+  defp agent_participant(agent) do
+    %Platform.Chat.Participant{
+      id: Ecto.UUID.generate(),
+      participant_type: "agent",
+      participant_id: agent.id,
+      display_name: agent.name
+    }
+  end
+
+  defp user_participant(user, attrs \\ %{}) do
+    struct(
+      %Platform.Chat.Participant{
+        id: Ecto.UUID.generate(),
+        participant_type: "user",
+        participant_id: user.id,
+        display_name: user.name
+      },
+      attrs
+    )
+  end
+
+  defp user_with_avatar!(avatar_url) do
+    "Pictured Person"
+    |> insert_user()
+    |> Ecto.Changeset.change(avatar_url: avatar_url)
+    |> Repo.update!()
+  end
+
+  defp avatar_agent_url(agent) do
+    "https://#{Notification.install_host()}/api/app/agents/#{agent.id}/avatar?v=c0ffee12"
+  end
+
+  defp push_from(sender, reason \\ :all),
+    do: AttentionRouter.push_notification(sender, message("x"), reason, space(), [])
+
+  describe "sender avatar (task 01a12773)" do
+    test "an agent with an avatar gets the absolute bearer route with the stored ?v= verbatim" do
+      agent = insert_agent!("/agents/placeholder/avatar?v=c0ffee12")
+      n = push_from(agent_participant(agent))
+
+      assert is_binary(Notification.install_host())
+      assert n.author_avatar_url == avatar_agent_url(agent)
+      assert n.author_avatar_tone == "agent"
+    end
+
+    test "an agent without an avatar has no url, and still the agent tone" do
+      for stored <- [nil, "", "   "] do
+        n = push_from(agent_participant(insert_agent!(stored)))
+
+        assert n.author_avatar_url == nil, inspect(stored)
+        assert n.author_avatar_tone == "agent"
+        refute Map.has_key?(Notification.to_fcm_payload(n)["data"], "author_avatar_url")
+        refute Map.has_key?(Notification.to_apns_payload(n), "author_avatar_url")
+      end
+    end
+
+    test "fcm data and the apns body carry both keys; the web payload carries neither" do
+      agent = insert_agent!("/agents/placeholder/avatar?v=c0ffee12")
+      n = push_from(agent_participant(agent), :mention)
+
+      data = Notification.to_fcm_payload(n)["data"]
+      assert data["author_avatar_url"] == avatar_agent_url(agent)
+      assert data["author_avatar_tone"] == "agent"
+
+      apns = Notification.to_apns_payload(n)
+      assert apns["author_avatar_url"] == avatar_agent_url(agent)
+      assert apns["author_avatar_tone"] == "agent"
+      refute Map.has_key?(apns["aps"], "author_avatar_url")
+
+      web = Notification.to_web_payload(n)
+      web_keys = web |> Map.keys() |> Enum.map(&to_string/1)
+      refute "author_avatar_url" in web_keys
+      refute "author_avatar_tone" in web_keys
+      refute inspect(web) =~ "/api/app/agents/"
+    end
+
+    test "a user's absolute https picture is passed through verbatim" do
+      url = "https://lh3.googleusercontent.example/a/AAcHTt-face=s96-c"
+      n = push_from(user_participant(user_with_avatar!(url)))
+
+      assert n.author_avatar_url == url
+      assert Notification.to_fcm_payload(n)["data"]["author_avatar_url"] == url
+    end
+
+    test "the participant's own avatar_url wins over the user's, as in the chat" do
+      user = user_with_avatar!("https://idp.example/user.png")
+      participant = user_participant(user, %{avatar_url: "https://idp.example/participant.png"})
+
+      assert push_from(participant).author_avatar_url == "https://idp.example/participant.png"
+    end
+
+    test "a user picture that is not absolute https is dropped" do
+      for bad <- [
+            "http://idp.example/face.png",
+            "/uploads/face.png",
+            "face.png",
+            "https://",
+            "javascript:alert(1)",
+            "not a url at all",
+            ""
+          ] do
+        n = push_from(user_participant(user_with_avatar!(bad)))
+
+        assert n.author_avatar_url == nil, "kept #{inspect(bad)}"
+        assert is_binary(n.author_avatar_tone)
+      end
+    end
+
+    test "a user's tone is the palette index the chat colours that user with" do
+      user = insert_user("Tone Pair")
+      participant = user_participant(user)
+      n = push_from(participant)
+
+      # The seed the chat renders this author with, and the class it draws.
+      chat_seed =
+        PlatformWeb.ChatLive.PresenceHooks.participant_identity(participant, user).avatar_seed
+
+      assert chat_seed == user.oidc_sub
+      chat_class = PlatformWeb.AvatarComponents.fallback_palette_class(chat_seed)
+
+      assert n.author_avatar_tone in Enum.map(0..7, &Integer.to_string/1)
+      assert chat_class == "avatar-fallback-" <> n.author_avatar_tone
+    end
+
+    test "the tone moves with the seed (the pair test is not vacuous)" do
+      tones =
+        for _ <- 1..24 do
+          push_from(user_participant(insert_user("Spread"))).author_avatar_tone
+        end
+
+      assert tones |> Enum.uniq() |> length() > 1
+    end
+
+    test "a bare sender name carries neither field" do
+      n = push_from("Harper")
+      assert n.author_avatar_url == nil
+      assert n.author_avatar_tone == nil
+    end
+
+    test "redact/2 output carries neither field on any transport" do
+      n = push_from(agent_participant(insert_agent!("/agents/x/avatar?v=c0ffee12")), :mention)
+      assert n.author_avatar_url
+
+      for redacted <- [
+            Notification.redact(n, %{title: "New message", body: "", url: "/"}),
+            Push.preview_for_user(external_user().id, n)
+          ] do
+        assert redacted.author_avatar_url == nil
+        assert redacted.author_avatar_tone == nil
+
+        for payload <- [
+              Notification.to_fcm_payload(redacted)["data"],
+              Notification.to_apns_payload(redacted),
+              Notification.to_web_payload(redacted)
+            ] do
+          refute inspect(payload) =~ "author_avatar"
+          refute inspect(payload) =~ "/api/app/agents/"
+        end
+      end
+    end
+
+    test "non-chat kinds carry neither field" do
+      for n <- every_kind(), n.kind not in ~w(chat_message chat_mention) do
+        assert n.author_avatar_url == nil
+        assert n.author_avatar_tone == nil
+
+        for key <- ~w(author_avatar_url author_avatar_tone) do
+          refute Map.has_key?(Notification.to_fcm_payload(n)["data"], key)
+          refute Map.has_key?(Notification.to_apns_payload(n), key)
+        end
+      end
+    end
+  end
+
   defp with_unread(n, count, as_of \\ ~U[2026-10-10 15:00:00.123456Z]),
     do: %Notification{n | unread_count: count, unread_as_of: as_of}
 

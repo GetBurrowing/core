@@ -35,10 +35,11 @@ import UserNotifications
 
         /// `-SuiteDebugLocalPush <file>`: read an APNs payload from `<file>` in
         /// the App Group container, run it through the Notification Service
-        /// Extension's own pipeline (`PushContentPreparer` then
-        /// `CommunicationNotification.build`) and schedule the result as a local
-        /// notification 3 s out. For evidence frames on a simulator whose
-        /// `simctl push` does not launch the extension.
+        /// Extension's own pipeline (`PushContentPreparer`, then
+        /// `AvatarNotificationDelivery` with the live `AvatarFetcher`, task
+        /// 01a12773) and schedule the result as a local notification 3 s out.
+        /// For evidence frames on a simulator whose `simctl push` does not
+        /// launch the extension.
         static func applyLocalPushArgument(defaults: UserDefaults = .standard) {
             guard let name = defaults.string(forKey: "SuiteDebugLocalPush"),
                 let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: InstallStore.appGroup),
@@ -52,11 +53,16 @@ import UserNotifications
             content.body = alert?["body"] as? String ?? ""
             content.sound = .default
             content.userInfo = payload.filter { $0.key != "aps" }
-            let delivered = CommunicationNotification.build(PushContentPreparer.live().prepare(content))
-            let request = UNNotificationRequest(
-                identifier: "debug-\(name)", content: delivered,
-                trigger: UNTimeIntervalNotificationTrigger(timeInterval: 3, repeats: false))
-            UNUserNotificationCenter.current().add(request)
+            let avatars = AvatarFetcher.live()
+            let delivery = AvatarNotificationDelivery(
+                fetch: { url, host in await avatars.fetch(url, installHost: host) },
+                deliver: { delivered in
+                    let request = UNNotificationRequest(
+                        identifier: "debug-\(name)", content: delivered,
+                        trigger: UNTimeIntervalNotificationTrigger(timeInterval: 3, repeats: false))
+                    UNUserNotificationCenter.current().add(request)
+                })
+            delivery.start(PushContentPreparer.live().prepare(content))
         }
 
         @discardableResult

@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -28,8 +29,9 @@ import com.koboai.burrow.shortcuts.Monogram
  * (canvas 01a10d91, "Notifications"):
  *
  * - `chat_mention` and `chat_message`: MessagingStyle (conversation = the
- *   space, sender = the author as a [Person] with a stable key and a
- *   monogram) in Mentions, grouped per install and space, with Reply
+ *   space, sender = the author as a [Person] with a stable key and their
+ *   avatar, or the in-app letter disc when there is none; task 01a12773)
+ *   in Mentions, grouped per install and space, with Reply
  *   (inline RemoteInput) and Open. The conversation shortcut
  *   ([ConversationShortcuts]) is published BEFORE the notification is
  *   posted, and the notification names it by shortcutId and locusId, so
@@ -73,10 +75,14 @@ object NotificationPresenter {
         } else {
             BurrowPush.ensureChannels(context, payload.installHost)
         }
+        // The sender's picture, fetched (bounded, AvatarFetcher) BEFORE the
+        // notification is built. This runs on the FCM worker thread, never
+        // main. Null on any failure: the letter disc is drawn instead.
+        val avatar = if (payload.isChat) BurrowPush.avatars(context).fetch(payload.authorAvatarUrl, payload.installHost) else null
         // Published before notify: a conversation notification must name a
         // shortcut that already exists.
-        val shortcutId = payload.shortcutId?.let { publishShortcut(context, payload) }
-        post(context, payload.tag, build(context, payload, shortcutId = shortcutId, subText = prepared.subText))
+        val shortcutId = payload.shortcutId?.let { publishShortcut(context, payload, avatar) }
+        post(context, payload.tag, build(context, payload, shortcutId = shortcutId, subText = prepared.subText, avatar = avatar))
         payload.groupKey?.let { postSummary(context, payload, it, prepared) }
         if (prepared.installUnread != null) BurrowPush.unreadChanged?.let { notify -> Handler(Looper.getMainLooper()).post { notify() } }
     }
@@ -134,6 +140,8 @@ object NotificationPresenter {
         alert: Boolean = sent == null,
         shortcutId: String? = payload.shortcutId,
         subText: String? = null,
+        // Cache only by default: the reply and restore paths never fetch.
+        avatar: Bitmap? = cachedAvatar(context, payload),
     ): Notification {
         val builder = base(context, payload).setContentIntent(openIntent(context, payload))
         // Two or more installs signed in: Android draws `Burrow • <install>`.
@@ -141,7 +149,7 @@ object NotificationPresenter {
         if (!alert) builder.setOnlyAlertOnce(true).setSilent(true)
         when {
             payload.isChat -> {
-                val style = history ?: chatStyle(context, payload, subText)
+                val style = history ?: chatStyle(context, payload, subText, avatar)
                 if (sent != null) style.addMessage(sent, System.currentTimeMillis(), null as Person?)
                 builder
                     .setStyle(style)
@@ -235,24 +243,28 @@ object NotificationPresenter {
         context: Context,
         payload: PushPayload,
         installName: String?,
+        avatar: Bitmap?,
     ): NotificationCompat.MessagingStyle {
         val you = Person.Builder().setName(context.getString(R.string.reply_you_name)).build()
         return NotificationCompat
             .MessagingStyle(you)
             .setConversationTitle(conversationTitle(payload, installName))
             .setGroupConversation(payload.spaceKind != "dm")
-            .addMessage(payload.body ?: payload.title.orEmpty(), System.currentTimeMillis(), sender(context, payload))
+            .addMessage(payload.body ?: payload.title.orEmpty(), System.currentTimeMillis(), sender(context, payload, avatar))
     }
 
     /**
      * The author: keyed `<host>|<authorType>:<authorId>`, or
      * `<host>|name:<authorName>` when the server sent no id (a bare-name
      * sender), so Android can tell people apart across installs. The icon
-     * is a monogram: the payload has no avatar URL.
+     * is the sender's picture ([avatar], from `author_avatar_url`) on an
+     * opaque fill, else the in-app letter disc in the `author_avatar_tone`
+     * colour ([Monogram]).
      */
     internal fun sender(
         context: Context,
         payload: PushPayload,
+        avatar: Bitmap? = cachedAvatar(context, payload),
     ): Person {
         val name = payload.authorName ?: context.getString(R.string.someone)
         val host = payload.installHost
@@ -267,15 +279,26 @@ object NotificationPresenter {
             .Builder()
             .setName(name)
             .setKey(key)
-            .setIcon(Monogram.personIcon(name))
+            .setIcon(Monogram.personIcon(name, tone(payload), avatar, Monogram.theme(context)))
             .build()
     }
+
+    /** The letter disc's colour: the server's tone, else `agent` for an agent author. */
+    internal fun tone(payload: PushPayload): String? =
+        payload.authorAvatarTone ?: Monogram.AGENT_TONE.takeIf { payload.authorType == "agent" }
+
+    /** The sender's picture if this process or the disk cache has it; never the network. */
+    private fun cachedAvatar(
+        context: Context,
+        payload: PushPayload,
+    ): Bitmap? = if (payload.isChat) BurrowPush.avatars(context).cached(payload.authorAvatarUrl) else null
 
     /** The conversation shortcut, published for [payload]; its id, or null. */
     private fun publishShortcut(
         context: Context,
         payload: PushPayload,
-    ): String? = conversation(context, payload, reportUse = false)
+        avatar: Bitmap?,
+    ): String? = conversation(context, payload, reportUse = false, avatar = avatar)
 
     /** After a Reply the server took: re-publish [payload]'s conversation and report the use. */
     fun noteConversationUsed(
@@ -287,18 +310,28 @@ object NotificationPresenter {
         context: Context,
         payload: PushPayload,
         reportUse: Boolean,
+        avatar: Bitmap? = cachedAvatar(context, payload),
     ): String? {
         val host = payload.installHost ?: return null
         val spaceId = payload.spaceId ?: return null
         val name = payload.spaceName ?: payload.authorName ?: context.getString(R.string.app_name)
         val shortcuts = ConversationShortcuts.forContext(context)
         val path = ConversationShortcuts.conversationPath(payload.url, spaceId)
-        val persons = listOf(sender(context, payload))
+        val persons = listOf(sender(context, payload, avatar))
         val isGroup = payload.spaceKind != "dm"
+        // A DM's shortcut is the other person's face. A channel or group
+        // keeps the space-name monogram: never the latest sender's face
+        // (canvas 01a12774), which would change with every message.
+        val icon =
+            if (isGroup) {
+                null
+            } else {
+                Monogram.personShortcutIcon(payload.authorName ?: name, tone(payload), avatar, Monogram.theme(context))
+            }
         return if (reportUse) {
-            shortcuts.noteUsed(host, spaceId, name, path, persons, isGroup)
+            shortcuts.noteUsed(host, spaceId, name, path, persons, isGroup, icon)
         } else {
-            shortcuts.publish(host, spaceId, name, path, persons, isGroup)
+            shortcuts.publish(host, spaceId, name, path, persons, isGroup, icon)
         }
     }
 

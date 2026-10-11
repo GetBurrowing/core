@@ -115,13 +115,23 @@ class AppApiClient(
 
         fun devicePath(appInstallId: String) = "/api/app/devices/$appInstallId"
 
-        private fun sameHost(
+        /**
+         * True when [url] is https on exactly [host] (case-insensitive). A
+         * non-default port must be part of [host] (`localhost:8443`), so a
+         * URL on another port of the same name is another host. The one
+         * rule for "may this request carry [host]'s bearer": the handoff
+         * checks here and the push avatar fetch (push/AvatarFetcher.kt)
+         * both use it.
+         */
+        fun sameHost(
             url: String,
             host: String,
         ): Boolean =
             try {
                 val uri = URI(url)
-                uri.scheme.equals("https", ignoreCase = true) && uri.host.equals(host, ignoreCase = true)
+                val name = uri.host
+                val authority = if (uri.port == -1 || uri.port == 443) name else "$name:${uri.port}"
+                uri.scheme.equals("https", ignoreCase = true) && name != null && authority.equals(host, ignoreCase = true)
             } catch (_: Exception) {
                 false
             }

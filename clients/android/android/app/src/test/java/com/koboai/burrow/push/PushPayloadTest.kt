@@ -147,6 +147,29 @@ class PushPayloadTest {
     }
 
     @Test
+    fun `the avatar url and tone are parsed and round-trip through the reply bundle`() {
+        val url = "https://suite.example.com/api/app/agents/0192-a/avatar?v=c0ffee12"
+        val p = PushPayload.from(mention + ("author_avatar_url" to url) + ("author_avatar_tone" to "agent"))
+        assertEquals(url, p.authorAvatarUrl)
+        assertEquals("agent", p.authorAvatarTone)
+        assertEquals(p, PushPayload.from(p.toData()))
+        assertEquals(url, p.toData()["author_avatar_url"])
+        assertEquals("3", PushPayload.from(mention + ("author_avatar_tone" to "3")).authorAvatarTone)
+        // toString names keys only, never the url.
+        assertFalse(p.toString().contains("c0ffee12"))
+    }
+
+    @Test
+    fun `a non-https avatar url and an unknown tone are dropped`() {
+        for (bad in listOf("http://idp.example/a.png", "/agents/a/avatar", "javascript:alert(1)", "https://" + "a".repeat(2_100))) {
+            assertNull(bad, PushPayload.from(mention + ("author_avatar_url" to bad)).authorAvatarUrl)
+        }
+        for (tone in listOf("8", "-1", "red", "AGENT")) {
+            assertNull(tone, PushPayload.from(mention + ("author_avatar_tone" to tone)).authorAvatarTone)
+        }
+    }
+
+    @Test
     fun `a chat push with host and space has a shortcut id, a redacted one does not`() {
         assertEquals("suite.example.com|0192-s", PushPayload.from(mention).shortcutId)
         assertNull(PushPayload.from(mention - "space_id").shortcutId)

@@ -65,6 +65,7 @@ object PushTestSupport {
         BurrowPush.cipherOverride = null
         BurrowPush.transportOverride = null
         BurrowPush.tokenSourceOverride = null
+        BurrowPush.avatarFetcherOverride = null
         com.koboai.burrow.shortcuts.ConversationShortcuts.sinkOverride = null
     }
 

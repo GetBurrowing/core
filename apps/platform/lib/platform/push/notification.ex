@@ -75,6 +75,8 @@ defmodule Platform.Push.Notification do
             author_name: nil,
             author_id: nil,
             author_type: nil,
+            author_avatar_url: nil,
+            author_avatar_tone: nil,
             space_name: nil,
             space_kind: nil,
             meeting_id: nil,
@@ -98,6 +100,8 @@ defmodule Platform.Push.Notification do
           author_name: String.t() | nil,
           author_id: String.t() | nil,
           author_type: String.t() | nil,
+          author_avatar_url: String.t() | nil,
+          author_avatar_tone: String.t() | nil,
           space_name: String.t() | nil,
           space_kind: String.t() | nil,
           meeting_id: String.t() | nil,
@@ -220,6 +224,17 @@ defmodule Platform.Push.Notification do
       # communication notification.
       author_id: presence(attrs[:author_id]),
       author_type: presence(attrs[:author_type]),
+      # The sender's picture and letter-disc colour (task 01a12773), so the
+      # apps draw the sender's real avatar on the notification. The url is
+      # ABSOLUTE: `https://<install_host>/api/app/agents/<id>/avatar?v=...`
+      # for an agent (bearer-gated on the install's own host), or a user's
+      # external https picture (fetched with no bearer). The tone is
+      # `"agent"` or the in-app palette index `"0".."7"`
+      # (`Platform.Avatars.fallback_tone/1`). FCM data and the APNs body
+      # carry both, so on the relay path they travel only inside the sealed
+      # blob; web push carries neither, and redact/2 drops both.
+      author_avatar_url: presence(attrs[:author_avatar_url]),
+      author_avatar_tone: presence(attrs[:author_avatar_tone]),
       # `conversation_name` is the recipient's label for the space (a DM or
       # unnamed group has a NULL `chat_spaces.name`; the web sidebar shows the
       # other participant). It falls back to the space's own name. The TITLE
@@ -264,7 +279,8 @@ defmodule Platform.Push.Notification do
   The redacted copy an external recipient gets on EVERY transport. Every
   identifying field (space, message, task, inbox ids and the grouping and
   category derived from them) is cleared, and so are `author_name`,
-  `author_id`, `author_type` and `space_name`; only the kind and install
+  `author_id`, `author_type`, `author_avatar_url`, `author_avatar_tone`
+  and `space_name`; only the kind and install
   survive. It builds a FRESH struct, so a field added later is dropped unless
   it is copied here on purpose.
   """
@@ -343,6 +359,11 @@ defmodule Platform.Push.Notification do
       # Both are already in the title; redact/2 clears them.
       "author_name" => n.author_name,
       "space_name" => n.space_name,
+      # The sender's picture url and letter-disc tone for the NSE's INPerson
+      # image (task 01a12773), DIRECT path only: a relayed push carries
+      # these inside the sealed FCM data map instead. redact/2 clears both.
+      "author_avatar_url" => n.author_avatar_url,
+      "author_avatar_tone" => n.author_avatar_tone,
       # The recipient's chat unread total on THIS install and when it was
       # read (task 01a1261e), so the app can keep a per-install count and
       # sum the icon badge across installs. Additive: an older build ignores
@@ -383,6 +404,8 @@ defmodule Platform.Push.Notification do
         "author_name" => n.author_name,
         "author_id" => n.author_id,
         "author_type" => n.author_type,
+        "author_avatar_url" => n.author_avatar_url,
+        "author_avatar_tone" => n.author_avatar_tone,
         "space_name" => n.space_name,
         "space_kind" => n.space_kind,
         "unread_count" => n.unread_count,

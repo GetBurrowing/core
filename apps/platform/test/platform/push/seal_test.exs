@@ -157,6 +157,41 @@ defmodule Platform.Push.SealTest do
       assert Jason.decode!(json)["body"] == String.duplicate("b", 200)
     end
 
+    # Task 01a12773 stage 2: the avatar url has a letter fallback on the
+    # device, so it is the first thing a too-large map gives up.
+    test "an oversized map loses author_avatar_url before body", ctx do
+      url = "https://idp.example/" <> String.duplicate("a", 1_400)
+      body = String.duplicate("b", 1_400)
+      data = %{"title" => "Dana in launch", "body" => body, "author_avatar_url" => url}
+
+      # Precondition: the whole map does not fit, without the url it does.
+      assert byte_size(Jason.encode!(data)) > 2_256
+      assert byte_size(Jason.encode!(Map.delete(data, "author_avatar_url"))) <= 2_256
+
+      assert {:ok, blob} = Seal.seal(ctx.pk, data, ctx.host)
+      assert {:ok, json} = Seal.open(ctx.sk, blob, ctx.host)
+      assert Jason.decode!(json) == %{"title" => "Dana in launch", "body" => body}
+    end
+
+    test "when dropping the url is not enough, the body goes too", ctx do
+      data = %{
+        "title" => "Dana in launch",
+        "body" => String.duplicate("b", 4_000),
+        "author_avatar_url" => "https://idp.example/" <> String.duplicate("a", 1_400)
+      }
+
+      assert {:ok, blob} = Seal.seal(ctx.pk, data, ctx.host)
+      assert {:ok, json} = Seal.open(ctx.sk, blob, ctx.host)
+      assert Jason.decode!(json) == %{"title" => "Dana in launch"}
+    end
+
+    test "a map that fits keeps its avatar url", ctx do
+      data = %{"title" => "T", "author_avatar_url" => "https://h.example/a.png?v=1"}
+      {:ok, blob} = Seal.seal(ctx.pk, data, ctx.host)
+      {:ok, json} = Seal.open(ctx.sk, blob, ctx.host)
+      assert Jason.decode!(json) == data
+    end
+
     test "the boundary: the largest plaintext that fits, and one byte more", ctx do
       # 3,072 base64url chars encode 2,304 bytes = 32 enc + 16 tag + 2,256.
       assert {:ok, blob} = Seal.seal(ctx.pk, String.duplicate("p", 2_256), ctx.host)

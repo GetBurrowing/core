@@ -34,8 +34,6 @@ defmodule PlatformWeb.AvatarComponents do
     "lg" => "size-10 text-base"
   }
 
-  @palette_size 8
-
   @circle_base "rounded-full overflow-hidden flex items-center justify-center"
 
   @doc """
@@ -199,8 +197,15 @@ defmodule PlatformWeb.AvatarComponents do
 
   defp initials(value, count), do: value |> to_string() |> initials(count)
 
-  defp fallback_palette_class(seed) do
-    "avatar-fallback-#{:erlang.phash2(to_string(seed), @palette_size)}"
+  @doc """
+  The `avatar-fallback-N` class for a seed. The index comes from
+  `Platform.Avatars.fallback_tone/1`, the same function the push notification
+  reads for `author_avatar_tone` (task 01a12773), so the browser and the
+  native apps colour a person's letter disc identically.
+  """
+  @spec fallback_palette_class(term()) :: String.t()
+  def fallback_palette_class(seed) do
+    "avatar-fallback-#{Platform.Avatars.fallback_tone(seed)}"
   end
 
   defp normalize_optional_string(value) when is_binary(value) do

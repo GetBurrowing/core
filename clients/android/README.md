@@ -353,9 +353,26 @@ Every other `donate` kind (`task_created`, `approval_acted`,
 `^[A-Za-z0-9_-]{1,128}$`). The notification's `shortcutId` and `locusId` are
 that same id. A sender is keyed `<host>|<author_type>:<author_id>` from the FCM
 `author_id`/`author_type`, or `<host>|name:<author_name>` when the server sent
-no id; the icon is a monogram (the payload carries no avatar URL). A dm
-(`space_kind == "dm"`) is a one-to-one conversation, anything else a group. A
-redacted push has no `space_id`, so it gets no shortcut; approvals never do.
+no id. A dm (`space_kind == "dm"`) is a one-to-one conversation, anything
+else a group. A redacted push has no `space_id`, so it gets no shortcut;
+approvals never do.
+
+**Sender avatars (task 01a12773).** The push carries `author_avatar_url` (an
+absolute https url; inside the sealed blob on a relayed push) and
+`author_avatar_tone` (`agent` or the in-app palette index `0`..`7`).
+`present` fetches the picture on the FCM worker BEFORE building the
+notification (`push/AvatarFetcher.kt`): https only; the install's bearer goes
+only to a url on the install's own host (`AppApiClient.sameHost`), never to an
+OIDC picture elsewhere; no redirect is followed; connect and read timeouts of
+1.5 s each plus a 2.5 s total deadline; at most 256 KB, decoded to at most
+192 px. It is cached by the full url in memory and under
+`cacheDir/avatars/<sha256(url)>.png`, and a failure is remembered for 10
+minutes. The reply and restore paths read the cache only. The picture is
+flattened onto the theme's opaque base-100 and circle-cropped; on any failure
+the sender gets the in-app letter disc instead (`shortcuts/Monogram.kt`: an
+agent's one initial in primary on base-300, a person's up to two initials in
+the `.avatar-fallback-N` pair). A dm's shortcut is the sender's face; a
+channel or group shortcut keeps the space-name monogram.
 
 **Cap.** The launcher allows `getMaxShortcutCountPerActivity()` shortcuts, and
 the static `switch_install` counts toward it, so dynamic conversation

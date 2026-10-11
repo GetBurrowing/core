@@ -24,6 +24,15 @@ defmodule PlatformWeb.AgentAvatarController do
   looking at the agent's name and color on the same row — so the session
   check IS the authorization boundary, not a placeholder for a finer one.
 
+  The native app reaches the same action at `GET /api/app/agents/:id/avatar`
+  (task `01a12773` stage 1), behind `PlatformWeb.Plugs.AppBearerAuth`
+  instead of the session check. A valid `app_sessions` bearer is the native
+  equivalent of "any authenticated session": the push notification drawing
+  the sender's picture runs in the FCM service or the iOS Notification
+  Service Extension, which carry the bearer and no cookie. The action is
+  identical on both routes, so the 404 for a non-UUID, missing or imageless
+  agent is identical too.
+
   ## Host-agnostic mount, deliberately
 
   Mounted in a match-any-host scope alongside `/chat/attachments/:id`, NOT

@@ -693,10 +693,26 @@ defmodule Platform.Chat.AttentionRouter do
   `author_type` / `author_id`, or a bare display name, which carries no
   author identity.
 
-  Its only query is one read of the branding row for the install's app name
-  (the title of a space with no name; task 01a120c5 stage 3), so tests can
-  assert the exact notification without the push `Task`, which
-  short-circuits under `:test`.
+  It makes two reads: the branding row for the install's app name (the
+  title of a space with no name; task 01a120c5 stage 3), and the author's
+  own row for the sender avatar (task 01a12773 stage 2; the `agents` row for
+  an agent author, the `users` row for a user, none for a bare name). Both
+  are plain reads, so tests can assert the exact notification without the
+  push `Task`, which short-circuits under `:test`.
+
+  The avatar (`sender_avatar/1`) is `author_avatar_url` plus
+  `author_avatar_tone`:
+
+    * agent: the bearer-gated app route on THIS install,
+      `https://<install_host>/api/app/agents/<agent_id>/avatar`, with the
+      stored `?v=` cache token copied verbatim, or nil when the agent has no
+      avatar. Tone `"agent"`.
+    * user: the avatar url the chat renders (`participant.avatar_url`, else
+      `users.avatar_url`) ONLY when it is an absolute https url; the app
+      fetches those with no bearer. Anything else is nil. Tone is the chat's
+      palette index for the same seed (`Platform.Avatars`), `"0".."7"`.
+
+  A failure resolving the avatar never costs the push: it yields a nil url.
   """
   @spec push_notification(
           Participant.t() | String.t(),
@@ -716,12 +732,15 @@ defmodule Platform.Chat.AttentionRouter do
         conversation_name \\ nil
       ) do
     {sender_name, author_type, author_id} = sender_identity(sender)
+    {avatar_url, avatar_tone} = sender_avatar(sender)
 
     Platform.Push.Notification.chat(%{
       reason: reason,
       author: sender_name,
       author_type: author_type,
       author_id: author_id,
+      author_avatar_url: avatar_url,
+      author_avatar_tone: avatar_tone,
       space_name: space.name,
       space_kind: space.kind,
       conversation_name: conversation_name,
@@ -742,6 +761,74 @@ defmodule Platform.Chat.AttentionRouter do
 
   defp sender_identity(name) when is_binary(name), do: {name, nil, nil}
   defp sender_identity(_), do: {"Someone", nil, nil}
+
+  # `{author_avatar_url, author_avatar_tone}`; see push_notification/6.
+  defp sender_avatar(%Participant{participant_type: "agent"} = p) do
+    stored =
+      [p]
+      |> Chat.agent_avatar_map_for_participants()
+      |> Map.values()
+      |> List.first()
+
+    {agent_push_avatar_url(p.participant_id, stored), "agent"}
+  rescue
+    _ -> {nil, "agent"}
+  end
+
+  defp sender_avatar(%Participant{participant_type: "user"} = p) do
+    user = sender_user(p.participant_id)
+    tone = p |> Platform.Avatars.user_seed(user) |> Platform.Avatars.fallback_tone()
+    url = absolute_https_url(p.avatar_url) || absolute_https_url(user && user.avatar_url)
+
+    {url, Integer.to_string(tone)}
+  rescue
+    _ -> {nil, nil}
+  end
+
+  defp sender_avatar(_sender), do: {nil, nil}
+
+  defp sender_user(user_id) when is_binary(user_id) do
+    if Platform.UUID.valid?(user_id), do: Repo.get(Platform.Accounts.User, user_id)
+  end
+
+  defp sender_user(_), do: nil
+
+  # The stored agent url is `/agents/<id>/avatar?v=<token>` (session-gated);
+  # the app can only present its bearer, so the push names the bearer route
+  # on this install's own host. The `?v=` query is copied verbatim so the
+  # client's cache key changes when the bytes do.
+  defp agent_push_avatar_url(agent_id, stored)
+       when is_binary(agent_id) and is_binary(stored) do
+    case Platform.Push.Notification.install_host() do
+      host when is_binary(host) and host != "" ->
+        base = "https://#{host}/api/app/agents/#{agent_id}/avatar"
+
+        case URI.parse(stored).query do
+          query when is_binary(query) and query != "" -> base <> "?" <> query
+          _ -> base
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp agent_push_avatar_url(_agent_id, _stored), do: nil
+
+  # Passed through verbatim (trimmed), never re-serialised.
+  defp absolute_https_url(url) when is_binary(url) do
+    url = String.trim(url)
+
+    case URI.parse(url) do
+      %URI{scheme: "https", host: host} when is_binary(host) and host != "" ->
+        url
+
+      _ ->
+        nil
+    end
+  end
+
+  defp absolute_https_url(_), do: nil
 
   @doc """
   The recipient's label for `space`, carried as the notification's

@@ -7,6 +7,7 @@ import androidx.core.app.Person
 import androidx.core.content.LocusIdCompat
 import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
+import androidx.core.graphics.drawable.IconCompat
 import com.koboai.burrow.InstallStore
 import com.koboai.burrow.KeyValueStore
 import com.koboai.burrow.LaunchRouter
@@ -63,7 +64,8 @@ class ConversationShortcuts(
      * Publishes (or refreshes) the conversation shortcut for [spaceId] on
      * [host] and returns its id, or null when it cannot be published (a bad
      * host or id, or no room). Call it before posting the notification that
-     * names the id.
+     * names the id. [icon] is a DM's sender face (task 01a12773); null keeps
+     * the space-name monogram, which every channel and group uses.
      */
     fun publish(
         host: String,
@@ -72,13 +74,14 @@ class ConversationShortcuts(
         path: String,
         persons: List<Person>,
         isGroup: Boolean = true,
+        icon: IconCompat? = null,
     ): String? {
         val id = shortcutId(host, spaceId) ?: return null
         val cap = maxOf(0, sink.maxPerActivity() - sink.manifestCount())
         if (cap == 0) return null
         registry.putString(id, clock().toString())
         evictBeyond(cap)
-        sink.push(build(id, host, name, path, persons, isGroup))
+        sink.push(build(id, host, name, path, persons, isGroup, icon))
         return id
     }
 
@@ -94,8 +97,9 @@ class ConversationShortcuts(
         path: String,
         persons: List<Person>,
         isGroup: Boolean = true,
+        icon: IconCompat? = null,
     ): String? {
-        val id = publish(host, spaceId, name, path, persons, isGroup) ?: return null
+        val id = publish(host, spaceId, name, path, persons, isGroup, icon) ?: return null
         sink.reportUsed(id)
         return id
     }
@@ -114,6 +118,7 @@ class ConversationShortcuts(
         path: String,
         persons: List<Person>,
         isGroup: Boolean = true,
+        icon: IconCompat? = null,
     ): ShortcutInfoCompat {
         val intent =
             Intent(context, MainActivity::class.java)
@@ -130,7 +135,7 @@ class ConversationShortcuts(
             .setCategories(setOf(CATEGORY_CONVERSATION, CATEGORY_SHARE_TARGET))
             .setPersons(persons.toTypedArray())
             .setExtras(PersistableBundle().apply { putBoolean(EXTRA_IS_GROUP, isGroup) })
-            .setIcon(Monogram.shortcutIcon(name))
+            .setIcon(icon ?: Monogram.shortcutIcon(name))
             .setIntent(intent)
             .build()
     }

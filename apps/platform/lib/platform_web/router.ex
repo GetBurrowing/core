@@ -245,6 +245,36 @@ defmodule PlatformWeb.Router do
     get("/agents/:id/avatar", AgentAvatarController, :show)
   end
 
+  # Agent avatar reads for the native app (task 01a12773 stage 1). The FCM
+  # service and the iOS Notification Service Extension hold an
+  # `app_sessions` bearer and no session cookie, so `:agent_avatar` answers
+  # them 401. Same controller, same 404s; only the authentication differs.
+  #
+  # A SEPARATE pipeline rather than a bearer branch inside `:agent_avatar`:
+  # that pipeline is the browser <img> gate, and `RequireAuth`'s deny
+  # contract (302 vs 401) is keyed on it. Mixing a bearer path in would
+  # change every browser avatar request.
+  #
+  # NO `:accepts` plug, deliberately. `:agent_avatar`'s `["html", "json"]`
+  # works for browsers only because an <img> request's Accept ends in
+  # `*/*`; a bare `Accept: image/png` (or `image/*`) raises
+  # `Phoenix.NotAcceptableError`, a 406. A native HTTP client may send
+  # exactly that, and a 406 here is a silent fall back to the letter icon.
+  # `:app_api` (json only) refuses the same requests. Nothing is negotiated
+  # on this route: the controller takes the content type from the storage
+  # key and ignores Accept, so an `:accepts` list could only ever refuse.
+  pipeline :app_avatar do
+    plug(PlatformWeb.Plugs.AppBearerAuth)
+  end
+
+  # HOST-AGNOSTIC, like the browser avatar scope above and every other
+  # `/api/app` route.
+  scope "/api/app", PlatformWeb do
+    pipe_through(:app_avatar)
+
+    get("/agents/:id/avatar", AgentAvatarController, :show)
+  end
+
   # Install PWA icon reads (task 01a0879a stage 3). NOTHING but `:accepts` —
   # no `fetch_session`, no `RequireAuth`, deliberately. See
   # `BrandingIconController`'s moduledoc: a PWA icon is fetched by the OS at
