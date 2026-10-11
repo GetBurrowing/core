@@ -707,10 +707,16 @@ defmodule Platform.Chat.AttentionRouter do
       `https://<install_host>/api/app/agents/<agent_id>/avatar`, with the
       stored `?v=` cache token copied verbatim, or nil when the agent has no
       avatar. Tone `"agent"`.
-    * user: the avatar url the chat renders (`participant.avatar_url`, else
-      `users.avatar_url`) ONLY when it is an absolute https url; the app
-      fetches those with no bearer. Anything else is nil. Tone is the chat's
-      palette index for the same seed (`Platform.Avatars`), `"0".."7"`.
+    * user: when the picture the chat renders is the user's own absolute
+      https `users.avatar_url`, the bearer-gated app route on THIS install,
+      `https://<install_host>/api/app/users/<user_id>/avatar?v=<hash>`
+      (`Platform.Accounts.UserAvatarCache.push_url/1`), which serves that
+      picture at a size both apps accept (they drop a body over 256 KB); nil
+      while a fetch of it is remembered as failed. A participant's own
+      absolute https `avatar_url` that differs from the user's is still
+      carried verbatim (the route only ever fetches `users.avatar_url`).
+      Anything else is nil. Tone is the chat's palette index for the same
+      seed (`Platform.Avatars`), `"0".."7"`.
 
   A failure resolving the avatar never costs the push: it yields a nil url.
   """
@@ -778,14 +784,33 @@ defmodule Platform.Chat.AttentionRouter do
   defp sender_avatar(%Participant{participant_type: "user"} = p) do
     user = sender_user(p.participant_id)
     tone = p |> Platform.Avatars.user_seed(user) |> Platform.Avatars.fallback_tone()
-    url = absolute_https_url(p.avatar_url) || absolute_https_url(user && user.avatar_url)
-
-    {url, Integer.to_string(tone)}
+    {user_push_avatar_url(p, user), Integer.to_string(tone)}
   rescue
     _ -> {nil, nil}
   end
 
   defp sender_avatar(_sender), do: {nil, nil}
+
+  # The participant's own picture wins, as in the chat. When that is (or
+  # falls back to) the user's own `avatar_url`, the push names the app route
+  # that serves it sized for the apps; with no install host the url goes
+  # verbatim, as before the route existed.
+  defp user_push_avatar_url(%Participant{} = p, user) do
+    own = absolute_https_url(user && user.avatar_url)
+
+    case absolute_https_url(p.avatar_url) do
+      override when is_binary(override) and override != own ->
+        override
+
+      _ when is_binary(own) ->
+        if Platform.Push.Notification.install_host() in [nil, ""],
+          do: own,
+          else: Platform.Accounts.UserAvatarCache.push_url(user)
+
+      _ ->
+        nil
+    end
+  end
 
   defp sender_user(user_id) when is_binary(user_id) do
     if Platform.UUID.valid?(user_id), do: Repo.get(Platform.Accounts.User, user_id)

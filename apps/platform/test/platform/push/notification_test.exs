@@ -579,6 +579,11 @@ defmodule Platform.Push.NotificationTest do
     "https://#{Notification.install_host()}/api/app/agents/#{agent.id}/avatar?v=c0ffee12"
   end
 
+  defp avatar_user_url(user, source) do
+    v = :crypto.hash(:sha256, source) |> Base.encode16(case: :lower) |> binary_part(0, 16)
+    "https://#{Notification.install_host()}/api/app/users/#{user.id}/avatar?v=#{v}"
+  end
+
   defp push_from(sender, reason \\ :all),
     do: AttentionRouter.push_notification(sender, message("x"), reason, space(), [])
 
@@ -623,12 +628,40 @@ defmodule Platform.Push.NotificationTest do
       refute inspect(web) =~ "/api/app/agents/"
     end
 
-    test "a user's absolute https picture is passed through verbatim" do
+    test "a user's absolute https picture becomes the app route, versioned by its url" do
       url = "https://lh3.googleusercontent.example/a/AAcHTt-face=s96-c"
-      n = push_from(user_participant(user_with_avatar!(url)))
+      user = user_with_avatar!(url)
+      n = push_from(user_participant(user))
 
-      assert n.author_avatar_url == url
-      assert Notification.to_fcm_payload(n)["data"]["author_avatar_url"] == url
+      # The apps drop a body over 256 KB, so the push names the install's
+      # route that serves the picture sized for them, never the IdP url.
+      expected = avatar_user_url(user, url)
+      assert n.author_avatar_url == expected
+      assert Notification.to_fcm_payload(n)["data"]["author_avatar_url"] == expected
+      assert Notification.to_apns_payload(n)["author_avatar_url"] == expected
+      refute inspect(Notification.to_fcm_payload(n)) =~ "googleusercontent"
+    end
+
+    test "a changed user picture changes the route's ?v= token" do
+      user = user_with_avatar!("https://idp.example/one.png")
+      first = push_from(user_participant(user)).author_avatar_url
+
+      user =
+        user |> Ecto.Changeset.change(avatar_url: "https://idp.example/two.png") |> Repo.update!()
+
+      second = push_from(user_participant(user)).author_avatar_url
+
+      assert first == avatar_user_url(user, "https://idp.example/one.png")
+      assert second == avatar_user_url(user, "https://idp.example/two.png")
+      assert first != second
+    end
+
+    test "a participant avatar_url equal to the user's also uses the route" do
+      user = user_with_avatar!("https://idp.example/user.png")
+      participant = user_participant(user, %{avatar_url: "https://idp.example/user.png"})
+
+      assert push_from(participant).author_avatar_url ==
+               avatar_user_url(user, "https://idp.example/user.png")
     end
 
     test "the participant's own avatar_url wins over the user's, as in the chat" do

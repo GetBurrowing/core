@@ -339,6 +339,12 @@ config :platform, :peer_federation_req_options, plug: {Req.Test, Platform.Federa
 
 config :platform, :peer_federation_resolver, %{}
 
+# Member avatar fetches for the app route (`Platform.Accounts.UserAvatarCache`):
+# every request goes to the `Req.Test` stub of that name, and no host resolves
+# unless a test stubs it, so nothing reaches the network.
+config :platform, :user_avatar_req_options, plug: {Req.Test, Platform.Accounts.UserAvatarCache}
+config :platform, :user_avatar_resolver, %{}
+
 # APNs never reaches Apple in tests (task 01a10882 stage 2): every
 # `Platform.Push.APNs` request goes to the `Req.Test` stub of that name.
 config :platform, :apns_req_options, plug: {Req.Test, Platform.Push.APNs}

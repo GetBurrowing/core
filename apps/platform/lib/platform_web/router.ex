@@ -276,6 +276,11 @@ defmodule PlatformWeb.Router do
     # because both Burrow apps drop a body over 256 KB (see
     # `AgentAvatarController.app_show/2`).
     get("/agents/:id/avatar", AgentAvatarController, :app_show)
+
+    # A member's avatar for a push notification: `users.avatar_url` fetched
+    # server-side and served at a size both apps accept (see
+    # `UserAvatarController`).
+    get("/users/:id/avatar", UserAvatarController, :app_show)
   end
 
   # Install PWA icon reads (task 01a0879a stage 3). NOTHING but `:accepts` —
