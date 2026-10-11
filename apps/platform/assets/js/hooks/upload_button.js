@@ -22,12 +22,36 @@
 // Large files (task 01a120be): a picked file over the composer's inline cap
 // is taken out of this input by the LargeUpload hook's capture-phase
 // listener (./large_upload.js) before LiveView sees it, and staged for the
-// chunked path. Staging opens the dialog server-side, so the change handler
-// below only opens it when inline files remain or large ones were staged.
-import { stagedFiles } from "./large_upload"
+// chunked path. Staging opens the dialog server-side too; opening it twice
+// is harmless.
+//
+// OPENING THE DIALOG AFTER THE PICK (Android + iOS "pick an image, nothing
+// happens"). Two rules, each of which broke it once:
+//
+//   1. Do not read `input.files` in the change handler to decide whether
+//      anything was picked. Browsers fire `input` before `change`, and
+//      LiveView's window `input` listener (LiveUploader.trackFiles) copies
+//      the files into its own registry and sets `input.value = null` for a
+//      `multiple` input. By `change`, `input.files` is ALWAYS empty, so a
+//      "files.length > 0" guard never opens the dialog. A `change` event
+//      itself means the user picked something (cancel fires `cancel`).
+//
+//   2. Do not hold a reference to the input element. `live_file_input`
+//      renders `id={@upload.ref}`, and the ref is random per LiveView mount,
+//      so every socket rejoin (the tab was backgrounded, the phone slept, the
+//      network blipped: routine on a phone) re-renders the input with a new
+//      id and morphdom replaces the element. A listener bound to the old
+//      element never fires again. The listener is delegated on `document`
+//      and matches the input by selector at event time.
+
+export const FILE_INPUT_SELECTOR = "#upload-send-form input[type=\"file\"]";
 
 function findFileInput() {
-  return document.querySelector("#upload-send-form input[type=\"file\"]");
+  return document.querySelector(FILE_INPUT_SELECTOR);
+}
+
+function isUploadFileInput(el) {
+  return !!(el && typeof el.matches === "function" && el.matches(FILE_INPUT_SELECTOR));
 }
 
 const UploadButton = {
@@ -53,35 +77,12 @@ const UploadButton = {
       this.el.addEventListener("click", this._onClick, { capture: true });
 
       // When the user finishes selecting files, open the staging dialog.
-      // We listen directly on the file input.
-      this._bindFileInput();
-    }
-  },
-
-  updated() {
-    // Re-bind if LiveView replaced the file input element
-    if (this._isMobile) {
-      this._bindFileInput();
-    }
-  },
-
-  _bindFileInput() {
-    const fileInput = findFileInput();
-    // Only re-bind if the element changed
-    if (fileInput && fileInput !== this._fileInput) {
-      // Clean up old listener
-      if (this._fileInput && this._onFileChange) {
-        this._fileInput.removeEventListener("change", this._onFileChange);
-      }
-      this._fileInput = fileInput;
-      this._onFileChange = () => {
-        // Open the staging dialog after iOS native picker returns selected files
-        // (inline ones are in the input; large ones were staged by LargeUpload).
-        if ((this._fileInput.files || []).length > 0 || stagedFiles.size > 0) {
-          this.pushEvent("upload_dialog_open", {});
-        }
+      // Delegated (rule 2 above) and unconditional (rule 1 above).
+      this._onFileChange = (e) => {
+        if (!isUploadFileInput(e.target)) return;
+        this.pushEvent("upload_dialog_open", {});
       };
-      this._fileInput.addEventListener("change", this._onFileChange);
+      document.addEventListener("change", this._onFileChange);
     }
   },
 
@@ -89,8 +90,8 @@ const UploadButton = {
     if (this._onClick) {
       this.el.removeEventListener("click", this._onClick, { capture: true });
     }
-    if (this._fileInput && this._onFileChange) {
-      this._fileInput.removeEventListener("change", this._onFileChange);
+    if (this._onFileChange) {
+      document.removeEventListener("change", this._onFileChange);
     }
   },
 };
