@@ -46,6 +46,12 @@ enum SuiteFont {
     static func input() -> Font {
         .custom(family, size: 17, relativeTo: .body)
     }
+
+    /// Utility type: a host to read character by character (the add-install
+    /// confirmation card, task 01a12787).
+    static func mono() -> Font {
+        .system(.subheadline, design: .monospaced)
+    }
 }
 
 enum SuiteRadius {

@@ -53,6 +53,7 @@ object BurrowPush {
             SharedPreferencesStore(context, InstallStore.PREFS_FILE),
             SharedPreferencesStore(context, InstallStore.DEVICE_FILE),
             SharedPreferencesStore(context, UnreadStore.FILE),
+            tokenHosts = { KeystoreTokenStore.hostsIn(SharedPreferencesStore(context, KeystoreTokenStore.PREFS_FILE)) },
         )
 
     fun pushKeys(context: Context): PushKeyStore =

@@ -125,6 +125,18 @@ class KeystoreTokenStore(
 
         private fun entry(host: String) = PREFIX + host.lowercase()
 
+        /**
+         * The hosts holding a bearer in [prefs]: the entry NAMES with the
+         * prefix stripped. Never reads, decrypts or logs a value. A bearer
+         * that no longer decrypts still counts as evidence of a sign-in.
+         */
+        fun hostsIn(prefs: KeyValueStore): Set<String> =
+            prefs
+                .keys()
+                .filter { it.startsWith(PREFIX) }
+                .map { it.removePrefix(PREFIX) }
+                .toSet()
+
         private fun aad(host: String) = host.lowercase().toByteArray(Charsets.UTF_8)
     }
 

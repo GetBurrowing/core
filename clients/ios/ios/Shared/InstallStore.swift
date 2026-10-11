@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// One Suite install the app can open. Each install has its own spaces and
@@ -21,36 +22,135 @@ struct Install: Codable, Equatable, Identifiable {
 /// Group's UserDefaults so the share extension and widgets read the same
 /// list the app writes.
 ///
-/// First launch pre-lists the three internal installs with
-/// suite.example.com selected (canvas open question 2: pre-list all three,
-/// internal testers only). After that the saved list is authoritative: a
-/// default the person removed stays removed.
+/// The app ships no install list. A fresh install starts empty, and the
+/// person adds their own install. Once `suite.installs.v1` is written, the
+/// saved list is authoritative: an install the person removed stays removed.
+///
+/// Migration from builds that listed built-in installs (task 01a12787).
+/// Those builds never wrote the built-in rows. They were virtual and
+/// appeared whenever `suite.installs.v1` was absent, so on first read of an
+/// absent key this store runs a one-shot migration and then persists the
+/// result, so it never runs again:
+///
+/// - A preseeded row cannot be told apart from a user-saved one without
+///   shipping the hostnames, and the app must not ship them. So the store
+///   keys on evidence of USE instead: a bearer in the Keychain (signed in)
+///   or an explicit selection.
+/// - LEGACY means the old build ran: `suite.installs.confirmed.v1` is true
+///   or `suite.installs.selected.v1` is set. A legacy store adopts the
+///   selected host plus every host holding a Keychain bearer, normalized
+///   and de-duplicated in that order. A store that is not legacy is a fresh
+///   install and starts empty.
+/// - A saved list, which anyone who ever added, renamed or removed an
+///   install has, is kept WHOLE, including any built-in rows it
+///   materialised. Those people were internal testers and can remove the
+///   rows by hand. That is the price of never deleting a saved install.
+/// - The one case that loses a row is a legacy person who only pressed
+///   Continue on the implicit first row and never signed in. They hold no
+///   bearer and no explicit selection, so there is nothing to sign out of,
+///   and they land on the add-your-install flow.
+/// - The LEGACY gate exists because iOS Keychain items SURVIVE app
+///   deletion. Without it, a reinstall on a device that once signed in
+///   would resurrect old hosts on what should be a clean first launch.
+/// - Old builds also WROTE the built-in rows: their picker refreshed each
+///   row's name on first display, which saved the virtual list. So a saved
+///   list made only of the old built-in hosts, none of which holds a bearer,
+///   is treated as never saved: it, the selection and the confirmation are
+///   cleared once, and that person lands on the add-your-install flow. Any
+///   list with another host, or with a bearer for any built-in host, is kept
+///   WHOLE. The built-in hosts are recognised by the SHA-256 of the
+///   normalized host (`legacyDefaultHostHashes`), never by name, so no
+///   hostname ships. A renamed built-in row cannot be told from a probed
+///   one; the bearer, not the name, is the signal of real use.
+///   `suite.installs.defaults_checked.v1` makes this run once, so an install
+///   added afterwards (even a built-in host) stays.
+/// - The share extension and the widgets construct this store too. The
+///   migration is a pure function of (App Group defaults, Keychain hosts),
+///   so whichever process runs first writes the same list.
 final class InstallStore {
     static let appGroup = "group.com.kobo-ai.burrow"
-    static let defaultHosts = ["suite.example.com", "suite.example.com", "suite.milv.life"]
 
     private enum Key {
         static let installs = "suite.installs.v1"
         static let selected = "suite.installs.selected.v1"
         static let confirmed = "suite.installs.confirmed.v1"
         static let appInstallID = "suite.app_install_id.v1"
+        static let defaultsChecked = "suite.installs.defaults_checked.v1"
+    }
+
+    /// SHA-256 (lowercase hex) of each normalized pre-2026-10 built-in
+    /// install host. Hashes, not names: the app ships no hostname.
+    static let legacyDefaultHostHashes: Set<String> = [
+        "bf8aedd7f65fd728e9ebfec07705bc51e26ae0f54a35e00e8b2ed514b2bb664e",
+        "11a3b9f3cee6dab41a8d8ded38d71da667774c858c9eb82c3c596b21b6273717",
+        "c3d59dfdd4a743b27afbfd9fe449cbe919dd425ac7dcabee8790365371c2dde3",
+    ]
+
+    static func hostHash(_ host: String) -> String {
+        SHA256.hash(data: Data(host.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// True for a pre-2026-10 built-in install host.
+    static func isLegacyDefault(_ host: String) -> Bool {
+        guard let normalized = normalizeHost(host) else { return false }
+        return legacyDefaultHostHashes.contains(hostHash(normalized))
     }
 
     static let shared = InstallStore()
 
     private let defaults: UserDefaults
+    private let injectedTokenHosts: TokenHostListing?
 
-    init(defaults: UserDefaults? = UserDefaults(suiteName: InstallStore.appGroup)) {
+    /// `tokenHosts` lists the hosts holding a bearer, for the one-time
+    /// migration only. Nil means `KeychainTokenStore.shared`, resolved only
+    /// when the migration needs it.
+    init(
+        defaults: UserDefaults? = UserDefaults(suiteName: InstallStore.appGroup),
+        tokenHosts: TokenHostListing? = nil
+    ) {
         self.defaults = defaults ?? .standard
+        self.injectedTokenHosts = tokenHosts
     }
 
     var installs: [Install] {
         guard let data = defaults.data(forKey: Key.installs),
             let saved = try? JSONDecoder().decode([Install].self, from: data)
         else {
-            return Self.defaultHosts.map { Install(host: $0, name: nil) }
+            return clearUntouchedDefaults(migrateLegacyInstalls())
         }
-        return saved
+        return defaults.bool(forKey: Key.defaultsChecked) ? saved : clearUntouchedDefaults(saved)
+    }
+
+    /// Once per store: a list made only of old built-in hosts, none holding
+    /// a bearer, is treated as never saved. See the type's doc comment. The
+    /// Keychain is read only for such a list.
+    private func clearUntouchedDefaults(_ list: [Install]) -> [Install] {
+        defer { defaults.set(true, forKey: Key.defaultsChecked) }
+        guard !list.isEmpty, list.allSatisfy({ Self.isLegacyDefault($0.host) }) else { return list }
+        let tokenHosts = injectedTokenHosts ?? KeychainTokenStore.shared
+        let signedIn = Set(tokenHosts.storedHosts().compactMap(Self.normalizeHost))
+        guard !list.contains(where: { signedIn.contains($0.host) }) else { return list }
+        save([])
+        defaults.removeObject(forKey: Key.selected)
+        defaults.removeObject(forKey: Key.confirmed)
+        return []
+    }
+
+    /// Runs when `suite.installs.v1` is absent. See the type's doc comment.
+    private func migrateLegacyInstalls() -> [Install] {
+        let selected = defaults.string(forKey: Key.selected)
+        let isLegacy = defaults.bool(forKey: Key.confirmed) || selected != nil
+        var adopted: [Install] = []
+        if isLegacy {
+            let tokenHosts = injectedTokenHosts ?? KeychainTokenStore.shared
+            let candidates = (selected.map { [$0] } ?? []) + tokenHosts.storedHosts()
+            for host in candidates.compactMap(Self.normalizeHost)
+            where !adopted.contains(where: { $0.host == host }) {
+                adopted.append(Install(host: host, name: nil))
+            }
+        }
+        save(adopted)
+        return adopted
     }
 
     var selectedHost: String? {

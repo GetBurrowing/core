@@ -4,18 +4,16 @@ import android.annotation.SuppressLint
 import android.app.AlertDialog
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
 import android.os.Handler
 import android.os.Looper
-import android.text.InputType
 import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
-import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -62,12 +60,6 @@ class InstallPickerView(
     private val continueSpinner = ProgressBar(context)
     private val cantReach = LinearLayout(context)
     private val cantReachTitle = text("", 28f, 800, R.color.burrow_on_surface)
-    private val addScreen = LinearLayout(context)
-    private val addressField = EditText(context)
-    private val addError = LinearLayout(context)
-    private val addButton: FrameLayout
-    private val addButtonLabel: TextView
-    private val addSpinner = ProgressBar(context)
 
     private var checking = false
     private var continuing = false
@@ -86,7 +78,14 @@ class InstallPickerView(
                 insets.getInsets(
                     WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout() or WindowInsetsCompat.Type.ime(),
                 )
-            view.updatePadding(left = bars.left, top = bars.top, right = bars.right, bottom = bars.bottom)
+            // The window may already have resized above the keyboard (the
+            // bridge's layout does): pad only for the part of the keyboard or
+            // navigation bar that still overlaps this view, never twice.
+            // The frame relative to the root view (the decor, at the window's origin).
+            val frame = Rect(0, 0, view.width, view.height)
+            (view.rootView as? ViewGroup)?.takeIf { it !== view }?.offsetDescendantRectToMyCoords(view, frame)
+            val bottom = PickerInsets.bottomPadding(bars.bottom, view.rootView.height, frame.top, view.height)
+            view.updatePadding(left = bars.left, top = bars.top, right = bars.right, bottom = bottom)
             insets
         }
 
@@ -143,67 +142,6 @@ class InstallPickerView(
         cantReach.addView(button(R.string.choose_another, primary = false) { showList() })
         cantReach.isVisible = false
         addView(cantReach, LayoutParams(MATCH, MATCH))
-
-        // Add screen
-        addScreen.orientation = LinearLayout.VERTICAL
-        addScreen.setPadding(dp(16), dp(32), dp(16), dp(16))
-        addScreen.setBackgroundColor(color(R.color.burrow_surface))
-        addScreen.isClickable = true
-        addScreen.addView(text(R.string.add_title, 28f, 800, R.color.burrow_on_surface))
-        addScreen.addView(text(R.string.add_subtitle, 15f, 400, R.color.burrow_muted), margins(top = 4, bottom = 12))
-        addScreen.addView(text(R.string.add_address_label, 13f, 400, R.color.burrow_muted), margins(top = 12, bottom = 6))
-        val field =
-            LinearLayout(context).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(12), 0, dp(12), 0)
-                background = box(R.color.burrow_surface, RADIUS_FIELD)
-            }
-        field.addView(text("https://", 17f, 400, R.color.burrow_muted).apply { importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO })
-        addressField.apply {
-            typeface = font()
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
-            setTextColor(color(R.color.burrow_on_surface))
-            setHintTextColor(color(R.color.burrow_muted))
-            setHint(R.string.add_address_hint)
-            background = null
-            setPadding(dp(2), 0, 0, 0)
-            isSingleLine = true
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
-            imeOptions = EditorInfo.IME_ACTION_GO
-            contentDescription = context.getString(R.string.add_address_label)
-            setOnEditorActionListener { _, action, _ ->
-                if (action == EditorInfo.IME_ACTION_GO) {
-                    checkAndAdd()
-                    true
-                } else {
-                    false
-                }
-            }
-        }
-        field.addView(addressField, LinearLayout.LayoutParams(0, MATCH, 1f))
-        addScreen.addView(field, LinearLayout.LayoutParams(MATCH, dp(48)))
-        addError.orientation = LinearLayout.HORIZONTAL
-        addError.addView(
-            ImageView(context).apply {
-                setImageResource(R.drawable.ic_warning)
-                importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
-            },
-            LinearLayout.LayoutParams(dp(16), dp(16)).apply {
-                topMargin = dp(2)
-                marginEnd = dp(6)
-            },
-        )
-        addError.addView(text(R.string.add_not_burrow, 13f, 400, R.color.burrow_on_surface), LinearLayout.LayoutParams(0, WRAP, 1f))
-        addError.isVisible = false
-        addScreen.addView(addError, margins(top = 8))
-        addScreen.addView(View(context), LinearLayout.LayoutParams(MATCH, 0, 1f))
-        addButton = button(R.string.add_check, primary = true) { checkAndAdd() }
-        addButtonLabel = addButton.getChildAt(0) as TextView
-        addButton.addView(addSpinner.apply { isVisible = false }, LayoutParams(dp(24), dp(24), Gravity.CENTER))
-        addScreen.addView(addButton)
-        addScreen.isVisible = false
-        addView(addScreen, LayoutParams(MATCH, MATCH))
     }
 
     override fun onDetachedFromWindow() {
@@ -211,8 +149,8 @@ class InstallPickerView(
         super.onDetachedFromWindow()
     }
 
-    /** True while a sub-screen (add, can't reach) is up: back closes it. */
-    val hasSubScreen: Boolean get() = addScreen.isVisible || cantReach.isVisible
+    /** True while a sub-screen (add, can't reach, the first-launch card) is up: back closes it. */
+    val hasSubScreen: Boolean get() = addFlow != null || cantReach.isVisible || firstLaunch?.isConfirming == true
 
     /** Back: close a sub-screen. False when there is none. */
     fun handleBack(): Boolean {
@@ -250,6 +188,7 @@ class InstallPickerView(
         }
         continueButton.isEnabled = selected != null
         continueButton.alpha = if (selected != null) 1f else 0.4f
+        renderFirstLaunch()
     }
 
     private fun row(
@@ -435,53 +374,55 @@ class InstallPickerView(
         }
     }
 
-    // Add
+    // Add (task 01a12787 stage 4: the add-your-install flow)
+
+    init {
+        // The inset listener reads this view's frame: re-run it once a
+        // keyboard resize has moved the frame, so the padding follows.
+        addOnLayoutChangeListener { view, _, top, _, bottom, _, oldTop, _, oldBottom ->
+            if (bottom - top != oldBottom - oldTop) ViewCompat.requestApplyInsets(view)
+        }
+    }
+
+    /** The switcher's Add install sheet, while it is up. */
+    private var addFlow: AddInstallFlow? = null
+
+    /** The first-launch flow, shown in place of the list while there are no installs. */
+    private var firstLaunch: AddInstallFlow? = null
+
+    private fun newFlow() =
+        AddInstallFlow(context, store) { install ->
+            showList()
+            onContinue(install)
+        }
+
+    /** No installs: the add-your-install flow IS the picker. Otherwise the list. */
+    private fun renderFirstLaunch() {
+        val empty = store.installs.isEmpty()
+        if (empty && firstLaunch == null) {
+            firstLaunch = newFlow().also { addView(it, LayoutParams(MATCH, MATCH)) }
+        } else if (!empty && firstLaunch != null) {
+            removeView(firstLaunch)
+            firstLaunch = null
+        }
+        listScreen.isVisible = !empty && !cantReach.isVisible
+    }
 
     private fun showAdd() {
-        addressField.setText("")
-        addError.isVisible = false
-        addScreen.isVisible = true
-        addressField.requestFocus()
-        context.getSystemService(InputMethodManager::class.java)?.showSoftInput(addressField, InputMethodManager.SHOW_IMPLICIT)
+        if (addFlow != null) return
+        addFlow = newFlow().also { addView(it, LayoutParams(MATCH, MATCH)) }
         (context as? MainActivity)?.updateBackState()
     }
 
     private fun showList() {
-        addScreen.isVisible = false
+        addFlow?.let { removeView(it) }
+        addFlow = null
+        firstLaunch?.handleBack()
         cantReach.isVisible = false
         listScreen.isVisible = true
         context.getSystemService(InputMethodManager::class.java)?.hideSoftInputFromWindow(windowToken, 0)
+        renderFirstLaunch()
         (context as? MainActivity)?.updateBackState()
-    }
-
-    private fun checkAndAdd() {
-        if (checking) return
-        val typed = addressField.text.toString()
-        val host = InstallStore.normalizeHost(typed)
-        if (host == null) {
-            addError.isVisible = true
-            return
-        }
-        checking = true
-        addError.isVisible = false
-        addButtonLabel.setText(R.string.add_checking)
-        setBusy(addButton, addSpinner, true)
-        io.execute {
-            val result = InstallProbe.probe(host)
-            main.post {
-                checking = false
-                addButtonLabel.setText(R.string.add_check)
-                setBusy(addButton, addSpinner, false)
-                if (result == null) {
-                    addError.isVisible = true
-                } else {
-                    store.add(host, result.name)
-                    reachability[host] = Reachability.REACHABLE
-                    showList()
-                    reload()
-                }
-            }
-        }
     }
 
     // Building blocks

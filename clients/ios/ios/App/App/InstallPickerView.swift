@@ -60,7 +60,7 @@ enum InstallProbe {
     private static func fetchJSON(_ url: URL, session: URLSession) async throws -> [String: Any] {
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 10)
         // No `Accept: application/json`: /health answers that with 406
-        // (measured on suite.example.com, 2026-10-04).
+        // (measured on a production install, 2026-10-04).
         let (data, response) = try await session.data(for: request)
         guard (response as? HTTPURLResponse)?.statusCode == 200,
             let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -202,6 +202,11 @@ struct InstallPickerView: View {
                 } chooseAnother: {
                     model.cantReachHost = nil
                 }
+            } else if model.installs.isEmpty {
+                AddInstallFlow(store: model.installStore, mode: .firstLaunch) { install in
+                    model.reload()
+                    onContinue(install)
+                }
             } else {
                 list
             }
@@ -209,7 +214,11 @@ struct InstallPickerView: View {
         .suiteFormSheet(regular: sizeClass == .regular)
         .onAppear { model.refreshAll() }
         .sheet(isPresented: $showingAdd) {
-            AddInstallView(model: model) { showingAdd = false }
+            AddInstallFlow(store: model.installStore, mode: .sheet) { install in
+                showingAdd = false
+                model.reload()
+                onContinue(install)
+            }
         }
     }
 
@@ -475,94 +484,6 @@ struct SuiteButton: View {
     }
 }
 
-struct AddInstallView: View {
-    @ObservedObject var model: InstallPickerModel
-    let close: () -> Void
-    @State private var address = ""
-    @State private var checking = false
-    @State private var failed = false
-    @FocusState private var focused: Bool
-    @Environment(\.horizontalSizeClass) private var sizeClass
-
-    var body: some View {
-        ZStack {
-            SuiteColor.surface.color.ignoresSafeArea()
-            VStack(alignment: .leading, spacing: 0) {
-                Text(InstallCopy.addTitle)
-                    .font(SuiteFont.title())
-                    .tracking(-0.3)
-                    .foregroundColor(SuiteColor.onSurface.color)
-                    .padding(.top, 32)
-                    .padding(.bottom, 4)
-                Text(InstallCopy.addSubtitle)
-                    .font(SuiteFont.secondary())
-                    .foregroundColor(SuiteColor.muted.color)
-                    .padding(.bottom, 12)
-                Text(InstallCopy.addressLabel)
-                    .font(SuiteFont.caption())
-                    .foregroundColor(SuiteColor.muted.color)
-                    .padding(.top, 12)
-                    .padding(.bottom, 6)
-                HStack(spacing: 2) {
-                    Text("https://")
-                        .font(SuiteFont.input())
-                        .foregroundColor(SuiteColor.muted.color)
-                    TextField("suite.example.com", text: $address)
-                        .font(SuiteFont.input())
-                        .foregroundColor(SuiteColor.onSurface.color)
-                        .keyboardType(.URL)
-                        .textContentType(.URL)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .submitLabel(.go)
-                        .focused($focused)
-                        .onSubmit(check)
-                        .accessibilityLabel(InstallCopy.addressLabel)
-                        .accessibilityIdentifier("install-address")
-                }
-                .padding(.horizontal, 12)
-                .frame(height: 48)
-                .overlay(
-                    RoundedRectangle(cornerRadius: SuiteRadius.field, style: .continuous)
-                        .stroke(SuiteColor.border.color, lineWidth: 1)
-                )
-                if failed {
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundColor(SuiteColor.destructive.color)
-                            .accessibilityHidden(true)
-                        Text(InstallCopy.notSuite)
-                            .font(SuiteFont.caption())
-                            .foregroundColor(SuiteColor.onSurface.color)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .padding(.top, 8)
-                }
-                Spacer()
-                SuiteButton(title: checking ? InstallCopy.checking : InstallCopy.checkAndAdd, style: .primary, busy: checking, action: check)
-                    .disabled(address.trimmingCharacters(in: .whitespaces).isEmpty)
-                    .padding(.bottom, 16)
-            }
-            .padding(.horizontal, 16)
-            // The system already presents this as a sheet; in regular width
-            // keep its column to form-sheet width.
-            .frame(maxWidth: sizeClass == .regular ? SuiteLayout.sheetWidth : .infinity)
-        }
-        .onAppear { focused = true }
-    }
-
-    private func check() {
-        guard !checking else { return }
-        checking = true
-        failed = false
-        Task {
-            let ok = await model.add(address)
-            checking = false
-            if ok { close() } else { failed = true }
-        }
-    }
-}
-
 struct CantReachView: View {
     let host: String
     let tryAgain: () -> Void
@@ -588,5 +509,339 @@ struct CantReachView: View {
             .padding(.bottom, 16)
         }
         .padding(.horizontal, 16)
+    }
+}
+
+// MARK: - Add your install (task 01a12787 stage 2)
+
+// The first-launch flow and the switcher's Add install sheet: one field, then
+// a confirmation card showing the install's own logo, name and host, before
+// any sign-in. Canvas 01a12787-c69f "Design direction: first launch, add your
+// install", revision 1. Copy is the canvas's, verbatim.
+
+enum AddInstallCopy {
+    static let title = "Add your install"
+    static let body = "Enter the address your team uses for Burrow."
+    /// Never a real host: a realistic placeholder gets typed in literally.
+    static let placeholder = "yourteam.example.com"
+    static let continueButton = "Continue"
+    static let checking = "Checking..."
+    static let help = "Don't know it? Ask the person who invited you."
+    static let continueToSignIn = "Continue to sign in"
+    static let changeAddress = "Not this one? Change address"
+    static let offline = "You're offline. Connect and try again."
+    static let addressLabel = "Address"
+    static func notFound(_ host: String) -> String {
+        "No Burrow install answered at \(host). Check the spelling, or ask the person who invited you."
+    }
+}
+
+/// What a check of a typed address found. Offline is kept apart from not
+/// found, because they ask the person to do different things.
+enum InstallCheck: Equatable {
+    case found(name: String?)
+    case notFound
+    case offline
+}
+
+extension InstallProbe {
+    /// The URL errors that mean the device has no connection, not that the
+    /// host is wrong.
+    static let offlineCodes: Set<URLError.Code> = [.notConnectedToInternet, .networkConnectionLost, .dataNotAllowed]
+
+    /// `probe(host:)`, but telling an offline device apart from a host that
+    /// is not Burrow.
+    static func check(host: String, session: URLSession = .shared) async -> InstallCheck {
+        let install = Install(host: host)
+        do {
+            let health = try await fetchJSON(install.healthURL, session: session)
+            guard (health["status"] as? String) == "ok" else { return .notFound }
+            let manifest = try await fetchJSON(install.manifestURL, session: session)
+            guard manifest["name"] != nil || manifest["short_name"] != nil else { return .notFound }
+            return .found(name: (manifest["name"] as? String) ?? (manifest["short_name"] as? String))
+        } catch {
+            return classify(error)
+        }
+    }
+
+    static func classify(_ error: Error) -> InstallCheck {
+        if let urlError = error as? URLError, offlineCodes.contains(urlError.code) { return .offline }
+        return .notFound
+    }
+}
+
+extension InstallPickerModel {
+    /// The store the picker reads, for the add flow to write to.
+    var installStore: InstallStore { store }
+}
+
+@MainActor
+final class AddInstallFlowModel: ObservableObject {
+    enum Mode { case firstLaunch, sheet }
+
+    /// The install the card shows before sign-in.
+    struct Candidate: Equatable {
+        let host: String
+        let name: String?
+        var displayName: String { name ?? host }
+        var iconURL: URL { Install(host: host).iconURL }
+    }
+
+    enum State: Equatable {
+        case idle
+        case checking
+        case confirm(Candidate)
+        case notFound(host: String)
+        case offline
+    }
+
+    typealias Probe = (String) async -> InstallCheck
+    typealias IconLoader = (URL) async -> UIImage?
+
+    @Published var address = ""
+    @Published private(set) var state: State = .idle
+    @Published private(set) var icon: UIImage?
+
+    private let store: InstallStore
+    private let probe: Probe
+    private let loadIcon: IconLoader
+
+    init(store: InstallStore, probe: Probe? = nil, loadIcon: IconLoader? = nil) {
+        self.store = store
+        self.probe = probe ?? Self.defaultProbe
+        self.loadIcon = loadIcon ?? Self.fetchIcon
+    }
+
+    var isChecking: Bool { state == .checking }
+    var canSubmit: Bool { !isChecking && !address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    var buttonTitle: String { isChecking ? AddInstallCopy.checking : AddInstallCopy.continueButton }
+
+    /// The error line under the field, if any.
+    var message: String? {
+        switch state {
+        case .notFound(let host): return AddInstallCopy.notFound(host)
+        case .offline: return AddInstallCopy.offline
+        case .idle, .checking, .confirm: return nil
+        }
+    }
+
+    /// Continue: checks the typed address. The field stays editable while
+    /// it runs.
+    func submit() async {
+        guard canSubmit else { return }
+        let typed = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let host = InstallStore.normalizeHost(typed) else {
+            state = .notFound(host: typed)
+            return
+        }
+        state = .checking
+        icon = nil
+        switch await probe(host) {
+        case .found(let name):
+            let candidate = Candidate(host: host, name: name)
+            state = .confirm(candidate)
+            if let image = await loadIcon(candidate.iconURL), state == .confirm(candidate) {
+                icon = image
+            }
+        case .notFound:
+            state = .notFound(host: host)
+        case .offline:
+            state = .offline
+        }
+    }
+
+    /// "Not this one? Change address": back to the field, still filled.
+    func changeAddress() {
+        state = .idle
+        icon = nil
+    }
+
+    /// "Continue to sign in": saves, selects and confirms the install. The
+    /// caller then runs the same sign-in the picker's Continue runs.
+    func confirm() -> Install? {
+        guard case .confirm(let candidate) = state,
+            let install = store.add(host: candidate.host, name: candidate.name)
+        else { return nil }
+        store.confirmSelection()
+        return install
+    }
+
+    static let defaultProbe: Probe = { host in
+        #if DEBUG
+            // Screenshot seam: `-SuiteAddInstallProbe offline|notFound|<name>`.
+            if let stub = UserDefaults.standard.string(forKey: "SuiteAddInstallProbe") {
+                switch stub {
+                case "offline": return .offline
+                case "notFound": return .notFound
+                default: return .found(name: stub)
+                }
+            }
+        #endif
+        return await InstallProbe.check(host: host)
+    }
+
+    static let fetchIcon: IconLoader = { url in
+        guard let (data, response) = try? await URLSession.shared.data(from: url),
+            (response as? HTTPURLResponse)?.statusCode == 200
+        else { return nil }
+        return UIImage(data: data)
+    }
+}
+
+struct AddInstallFlow: View {
+    @StateObject private var model: AddInstallFlowModel
+    let mode: AddInstallFlowModel.Mode
+    let onContinue: (Install) -> Void
+    @FocusState private var focused: Bool
+    @Environment(\.horizontalSizeClass) private var sizeClass
+
+    init(store: InstallStore, mode: AddInstallFlowModel.Mode, onContinue: @escaping (Install) -> Void) {
+        _model = StateObject(wrappedValue: AddInstallFlowModel(store: store))
+        self.mode = mode
+        self.onContinue = onContinue
+    }
+
+    init(model: AddInstallFlowModel, mode: AddInstallFlowModel.Mode, onContinue: @escaping (Install) -> Void) {
+        _model = StateObject(wrappedValue: model)
+        self.mode = mode
+        self.onContinue = onContinue
+    }
+
+    var body: some View {
+        ZStack {
+            SuiteColor.surface.color.ignoresSafeArea()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    Image("LaunchMark")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(height: 40)
+                        .accessibilityHidden(true)
+                        .padding(.top, mode == .sheet ? 32 : 24)
+                        .padding(.bottom, 24)
+                    Text(AddInstallCopy.title)
+                        .font(SuiteFont.title())
+                        .tracking(-0.3)
+                        .foregroundColor(SuiteColor.onSurface.color)
+                        .accessibilityAddTraits(.isHeader)
+                        .padding(.bottom, 8)
+                    if case .confirm(let candidate) = model.state {
+                        card(candidate)
+                    } else {
+                        entry
+                    }
+                }
+                .padding(.horizontal, 16)
+            }
+            .scrollDismissesKeyboard(.never)
+            .frame(maxWidth: mode == .sheet && sizeClass == .regular ? SuiteLayout.sheetWidth : .infinity)
+        }
+        .onAppear { focused = true }
+    }
+
+    private var entry: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(AddInstallCopy.body)
+                .font(SuiteFont.body())
+                .foregroundColor(SuiteColor.onSurface.color)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.bottom, 20)
+            TextField(AddInstallCopy.placeholder, text: $model.address)
+                .font(SuiteFont.input())
+                .foregroundColor(SuiteColor.onSurface.color)
+                .keyboardType(.URL)
+                .textContentType(.URL)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .submitLabel(.go)
+                .focused($focused)
+                .onSubmit(submit)
+                .accessibilityLabel(AddInstallCopy.addressLabel)
+                .accessibilityIdentifier("install-address")
+                .padding(.horizontal, 12)
+                .frame(height: 48)
+                .background(
+                    RoundedRectangle(cornerRadius: SuiteRadius.field, style: .continuous)
+                        .fill(SuiteColor.surfaceMuted.color)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: SuiteRadius.field, style: .continuous)
+                        .stroke(SuiteColor.border.color, lineWidth: 1)
+                )
+            if let message = model.message {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Image(systemName: model.state == .offline ? "wifi.exclamationmark" : "exclamationmark.circle.fill")
+                        .foregroundColor(SuiteColor.destructive.color)
+                        .accessibilityHidden(true)
+                    Text(message)
+                        .font(SuiteFont.secondary())
+                        .foregroundColor(SuiteColor.onSurface.color)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.top, 12)
+                .accessibilityElement(children: .combine)
+            }
+            SuiteButton(title: model.buttonTitle, style: .primary, action: submit)
+                .disabled(!model.canSubmit)
+                .padding(.top, 16)
+            Text(AddInstallCopy.help)
+                .font(SuiteFont.secondary())
+                .foregroundColor(SuiteColor.muted.color)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 16)
+                .padding(.bottom, 16)
+        }
+    }
+
+    private func card(_ candidate: AddInstallFlowModel.Candidate) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 12) {
+                InstallIcon(install: Install(host: candidate.host, name: candidate.name), image: model.icon)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(candidate.displayName)
+                        .font(SuiteFont.body(.semibold))
+                        .foregroundColor(SuiteColor.onSurface.color)
+                        .lineLimit(2)
+                    Text(candidate.host)
+                        .font(SuiteFont.mono())
+                        .foregroundColor(SuiteColor.muted.color)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(16)
+            .background(
+                RoundedRectangle(cornerRadius: SuiteRadius.box, style: .continuous)
+                    .fill(SuiteColor.surfaceMuted.color)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: SuiteRadius.box, style: .continuous)
+                    .stroke(SuiteColor.border.color, lineWidth: 1)
+            )
+            .accessibilityElement(children: .combine)
+            .padding(.top, 12)
+            SuiteButton(title: AddInstallCopy.continueToSignIn, style: .primary) {
+                if let install = model.confirm() { onContinue(install) }
+            }
+            .padding(.top, 16)
+            Button {
+                model.changeAddress()
+                focused = true
+            } label: {
+                Text(AddInstallCopy.changeAddress)
+                    .font(SuiteFont.secondary(.semibold))
+                    .foregroundColor(SuiteColor.onSurface.color)
+                    .frame(maxWidth: .infinity, minHeight: 44)
+            }
+            .buttonStyle(.plain)
+            .hoverEffect()
+            .padding(.top, 8)
+        }
+    }
+
+    private func submit() {
+        Task { await model.submit() }
     }
 }

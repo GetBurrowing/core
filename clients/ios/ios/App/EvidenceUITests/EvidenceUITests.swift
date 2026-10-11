@@ -205,4 +205,80 @@ final class EvidenceUITests: XCTestCase {
         }
         shot("upload-sent-notification")
     }
+
+    // MARK: Add your install (task 01a12787 stage 2)
+
+    /// File name prefix, so a light and a dark run can share a directory
+    /// (TEST_RUNNER_EVIDENCE_PREFIX=dark-).
+    private var prefix: String { ProcessInfo.processInfo.environment["EVIDENCE_PREFIX"] ?? "" }
+
+    private func freshAddFlow(_ extra: [String] = []) -> XCUIApplication {
+        let app = launch(["-SuiteEvidenceReset", "YES"] + extra)
+        XCTAssertTrue(app.staticTexts["Add your install"].waitForExistence(timeout: 20))
+        return app
+    }
+
+    private func type(_ app: XCUIApplication, _ text: String) {
+        let field = app.textFields["install-address"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        field.tap()
+        field.typeText(text)
+    }
+
+    func test9AddYourInstall() {
+        // Step 1 at first launch, keyboard up.
+        var app = freshAddFlow()
+        sleep(2)
+        shot("\(prefix)add-1-first-launch")
+
+        // Checking: a host that never answers holds the probe for its 10 s timeout.
+        type(app, "10.255.255.1")
+        app.buttons["Continue"].tap()
+        XCTAssertTrue(app.buttons["Checking..."].waitForExistence(timeout: 5))
+        shot("\(prefix)add-2-checking")
+        app.terminate()
+
+        // The confirmation card against a live install: its own logo, name and host.
+        app = freshAddFlow()
+        type(app, "https://suite-exp.example.com/chat ")
+        app.buttons["Continue"].tap()
+        XCTAssertTrue(app.buttons["Continue to sign in"].waitForExistence(timeout: 20))
+        // The install's logo loads after the card appears.
+        sleep(8)
+        shot("\(prefix)add-3-confirm-card")
+        app.buttons["Not this one? Change address"].tap()
+        XCTAssertTrue(app.textFields["install-address"].waitForExistence(timeout: 5))
+        sleep(1)
+        shot("\(prefix)add-4-change-address-keeps-text")
+        app.terminate()
+
+        // Not found: a host that does not resolve.
+        app = freshAddFlow()
+        type(app, "acme.burow.app")
+        app.buttons["Continue"].tap()
+        XCTAssertTrue(
+            app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH 'No Burrow install answered'")).firstMatch
+                .waitForExistence(timeout: 20))
+        sleep(1)
+        shot("\(prefix)add-5-not-found")
+        app.terminate()
+
+        // Offline, through the DEBUG probe seam.
+        app = freshAddFlow(["-SuiteAddInstallProbe", "offline"])
+        type(app, "acme.burrow.app")
+        app.buttons["Continue"].tap()
+        XCTAssertTrue(app.staticTexts["You're offline. Connect and try again."].waitForExistence(timeout: 10))
+        sleep(1)
+        shot("\(prefix)add-6-offline")
+        app.terminate()
+
+        // The switcher's Add install sheet: the same flow.
+        app = launch(["-SuiteEvidenceReset", "YES", "-SuiteExtraInstall", "suite-exp.example.com"])
+        XCTAssertTrue(app.staticTexts["Choose a Burrow install"].waitForExistence(timeout: 20))
+        app.buttons["Add an install"].tap()
+        XCTAssertTrue(app.staticTexts["Add your install"].waitForExistence(timeout: 5))
+        sleep(2)
+        shot("\(prefix)add-7-switcher-sheet")
+        app.terminate()
+    }
 }

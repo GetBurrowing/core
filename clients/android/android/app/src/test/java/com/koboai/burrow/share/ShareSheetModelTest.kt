@@ -1,6 +1,8 @@
 package com.koboai.burrow.share
 
 import com.koboai.burrow.ApiException
+import com.koboai.burrow.InMemoryKeyValueStore
+import com.koboai.burrow.InstallStore
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -253,5 +255,22 @@ class ShareSheetModelTest {
         failing.start()
         assertFalse(failing.send())
         assertTrue(noted.isEmpty())
+    }
+
+    @Test
+    fun `a fresh app with no install is the not-signed-in state, not a crash`() {
+        // Task 01a12787: the app ships no installs, so a fresh app's selected
+        // install is null. ShareActivity passes that null host straight in.
+        val installs = InstallStore(InMemoryKeyValueStore(), InMemoryKeyValueStore())
+        val selected = installs.selectedInstall?.host
+        assertNull(selected)
+        val (host, preselect) = ShareSheetModel.target(null, selected) { true }
+        assertNull(host)
+        assertNull(preselect)
+        val client = FakeClient(spaces = listOf(space))
+        val model = ShareSheetModel(host, client, emptyList(), "x").also { it.start() }
+        assertEquals(ShareSheetModel.Phase.NOT_SIGNED_IN, model.phase)
+        assertEquals(0, client.calls)
+        assertEquals("Sign in to Burrow first. Open the Burrow app, sign in, then share again.", ShareSheetModel.NOT_SIGNED_IN_TEXT)
     }
 }

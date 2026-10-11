@@ -236,6 +236,17 @@ final class PersonalContextTests: XCTestCase {
     func testAFullChatPayloadNamesItsOwnInstallsEntities() throws {
         // The selected install is NOT the payload's: ids must use the payload's.
         let payload = try XCTUnwrap(CommunicationPayload(userInfo: chatPayload(host: b)))
+        // The app ships no installs, so give the shared store a selection.
+        let added = InstallStore.shared.installs.contains { $0.host == a } == false
+        InstallStore.shared.add(host: a)
+        defer {
+            if added {
+                let removeHook = InstallStore.didRemove
+                InstallStore.didRemove = nil
+                InstallStore.shared.remove(host: a)
+                InstallStore.didRemove = removeHook
+            }
+        }
         XCTAssertNotNil(InstallStore.shared.selectedHost, "a selected install exists to be wrongly used")
         XCTAssertNotEqual(InstallStore.shared.selectedHost, b)
         XCTAssertEqual(payload.messageEntityID, "\(b)|\(message)")

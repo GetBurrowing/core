@@ -12,8 +12,10 @@ class PickerBackTest {
     private val a = "suite.example.com"
     private val b = "suite.example.com"
 
-    /** Install A open and confirmed, as after a Continue. */
+    /** Install A open and confirmed, as after a Continue. The app ships no installs, so both are saved first. */
     private fun confirmA() {
+        store.add(a)
+        store.add(b)
         store.select(a)
         store.confirmSelection()
     }
@@ -104,5 +106,18 @@ class PickerBackTest {
         pickerReturn.clear()
         assertNull(pickerReturn.restoreSelection())
         assertEquals(PickerBack.SYSTEM, pickerReturn.decide(hasSubScreen = false, currentHost = null))
+    }
+
+    @Test
+    fun `back on the first-launch flow is the system's, never a blank WebView`() {
+        // Task 01a12787: a fresh app has no installs, so startWithSelection
+        // shows the picker (the add flow) with no install behind it. Back
+        // goes to the system (leaves the app); nothing dismisses the picker.
+        assertTrue(store.installs.isEmpty())
+        assertNull(store.selectedInstall)
+        pickerReturn.onPresent(switching = false)
+        assertEquals(PickerBack.SYSTEM, pickerReturn.decide(hasSubScreen = false, currentHost = null))
+        // On the confirmation card, back returns to the field first.
+        assertEquals(PickerBack.CLOSE_SUB_SCREEN, pickerReturn.decide(hasSubScreen = true, currentHost = null))
     }
 }

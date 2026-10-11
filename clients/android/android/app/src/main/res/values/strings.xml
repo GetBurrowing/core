@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
     <string name="app_name">Burrow</string>
     <string name="title_activity_main">Burrow</string>
 
@@ -8,13 +8,6 @@
     <string name="picker_subtitle">Each install has its own spaces and sign-in.</string>
     <string name="picker_add">Add an install</string>
     <string name="picker_continue">Continue</string>
-    <string name="add_title">Add an install</string>
-    <string name="add_subtitle">Enter the address your team uses for Burrow.</string>
-    <string name="add_address_label">Address</string>
-    <string name="add_address_hint">suite.example.com</string>
-    <string name="add_check">Check and add</string>
-    <string name="add_checking">Checking</string>
-    <string name="add_not_burrow">Couldn\'t find Burrow at this address. Check the spelling, or ask your admin for the link.</string>
     <string name="row_unreachable">Can\'t reach. Tap to retry.</string>
     <string name="cant_reach">Can\'t reach %1$s</string>
     <string name="try_again">Try again</string>
@@ -70,6 +63,19 @@
     <string name="widget_tasks_title">My tasks</string>
     <string name="widget_approvals_description">Approvals waiting on you</string>
     <string name="widget_tasks_description">Your open tasks, beside your approvals</string>
+    <!-- Add your install (task 01a12787, design canvas 01a12787-c69f rev 1): first launch and the switcher's Add install. Copy verbatim. -->
+    <string name="add_flow_title">Add your install</string>
+    <string name="add_flow_body">Enter the address your team uses for Burrow.</string>
+    <!-- Never a real host: a realistic placeholder gets typed in literally. -->
+    <string name="add_flow_placeholder" translatable="false">yourteam.example.com</string>
+    <string name="add_flow_address_label">Address</string>
+    <string name="add_flow_continue">Continue</string>
+    <string name="add_flow_checking" tools:ignore="TypographyEllipsis">Checking...</string>
+    <string name="add_flow_help">Don\'t know it? Ask the person who invited you.</string>
+    <string name="add_flow_continue_to_sign_in">Continue to sign in</string>
+    <string name="add_flow_change_address">Not this one? Change address</string>
+    <string name="add_flow_not_found">No Burrow install answered at %1$s. Check the spelling, or ask the person who invited you.</string>
+    <string name="add_flow_offline">You\'re offline. Connect and try again.</string>
 
     <!-- Per-install unread (task 01a1261e, canvas 01a12621 "per-install badges"), verbatim. -->
     <string name="unread_pill_cap">99+</string>

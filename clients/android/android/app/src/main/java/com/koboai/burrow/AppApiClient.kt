@@ -282,7 +282,7 @@ class AppApiClient(
         if (response.status in 300..399) {
             // Never followed: that would send this install's bearer to whatever
             // host the redirect names. Say where it points, so a moved install
-            // (suite.milv.life -> burrow.red-st.ar, 2026-10-10) reads as moved
+            // (an install that changed host, 2026-10-10) reads as moved
             // rather than as a dropped connection.
             throw ApiException(ApiException.Kind.STATUS, response.status, route, movedTo(response.location, request.url))
         }

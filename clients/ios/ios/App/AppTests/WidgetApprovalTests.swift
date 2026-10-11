@@ -34,7 +34,6 @@ final class WidgetApprovalTests: XCTestCase {
         InstallStore.didRemove = nil
         defer { InstallStore.didRemove = removeHook }
         for host in hosts { store.add(host: host) }
-        for host in InstallStore.defaultHosts where !hosts.contains(host) { store.remove(host: host) }
         return WidgetApprovalActions(
             client: SuiteAPIClient(session: StubURLProtocol.session(), tokens: MemoryTokenStore(tokens: [a: "token-for-a", b: "token-for-b"])),
             installs: store, store: WidgetApprovalStore(defaults: defaults), pending: PendingApproveStore(directory: pendingDirectory),

@@ -86,3 +86,9 @@ final class StubURLProtocol: URLProtocol {
         return data
     }
 }
+
+/// An in-memory `TokenHostListing`: the hosts that hold a bearer.
+struct MemoryTokenHosts: TokenHostListing {
+    var hosts: [String] = []
+    func storedHosts() -> [String] { hosts }
+}
