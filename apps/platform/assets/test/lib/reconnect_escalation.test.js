@@ -40,19 +40,33 @@ function fakeClock() {
       }
       t = end
     },
+    // A frozen page: the clock jumps and every timer that came due during
+    // the freeze fires late, at the new time, in schedule order.
+    jump(ms) {
+      t += ms
+      for (;;) {
+        const due = timers
+          .filter((x) => !x.cleared && x.at <= t)
+          .sort((a, b) => a.at - b.at || a.seq - b.seq)[0]
+        if (!due) break
+        due.cleared = true
+        due.fn()
+      }
+    },
   }
 }
 
 const VISIBLE = new Set(["reconnecting", "up_to_date", "escalated"])
 
 describe("createReconnectEscalation", () => {
-  let clock, states, online, engine
+  let clock, states, online, hidden, engine
 
   function make(overrides = {}) {
     engine = createReconnectEscalation({
       attempts: 10,
       seconds: 10,
       isOnline: () => online,
+      isHidden: () => hidden,
       now: clock.now,
       setTimeout: clock.setTimeout,
       clearTimeout: clock.clearTimeout,
@@ -69,6 +83,7 @@ describe("createReconnectEscalation", () => {
     clock = fakeClock()
     states = []
     online = true
+    hidden = false
   })
 
   it("a reconnect inside the threshold never escalates", () => {
@@ -179,6 +194,87 @@ describe("createReconnectEscalation", () => {
     engine.offline()
     clock.advance(500)
     expect(states.at(-1)).toEqual({ state: "escalated", kind: "client" })
+  })
+
+  it("a loss frozen in the background never goes red on resume", () => {
+    // Chrome Android: the socket drops, the page freezes for two minutes,
+    // and on resume the stale timers fire before the reconnect lands.
+    make()
+    engine.socketLost("client")
+    clock.advance(500)
+    clock.jump(120000)
+    expect(names()).not.toContain("escalated")
+    engine.socketClosed("client")
+    clock.advance(800)
+    engine.recovered({ changed: true })
+    clock.advance(2000)
+    expect(names()).not.toContain("escalated")
+    expect(visible()).toEqual(["reconnecting", "up_to_date"])
+  })
+
+  it("after a freeze the full 10 s limit applies again from the resume", () => {
+    make({ attempts: 100 })
+    engine.socketLost("client")
+    clock.advance(500)
+    clock.jump(120000)
+    const resumedAt = clock.now()
+    clock.advance(9999 - 0)
+    expect(names()).not.toContain("escalated")
+    clock.advance(1)
+    expect(states.at(-1)).toEqual({ state: "escalated", kind: "client" })
+    expect(clock.now() - resumedAt).toBe(10000)
+  })
+
+  it("failures before a freeze do not count after it", () => {
+    make({ attempts: 3, seconds: 300 })
+    engine.socketLost("client")
+    engine.socketClosed("client")
+    engine.socketClosed("client")
+    engine.socketClosed("client") // 2 failures
+    clock.jump(60000)
+    engine.socketClosed("client") // first close after the freeze
+    expect(engine.getState().failures).toBe(1)
+    expect(names()).not.toContain("escalated")
+  })
+
+  it("nothing escalates while hidden; resumed() restarts the clock", () => {
+    make({ attempts: 100 })
+    hidden = true
+    engine.socketLost("client")
+    clock.advance(60000)
+    expect(names()).not.toContain("escalated")
+    hidden = false
+    engine.resumed()
+    clock.advance(9999)
+    expect(names()).not.toContain("escalated")
+    clock.advance(1)
+    expect(states.at(-1)).toEqual({ state: "escalated", kind: "client" })
+  })
+
+  it("offline while hidden goes red only 3 s after the resume", () => {
+    make()
+    hidden = true
+    online = false
+    engine.offline()
+    clock.advance(30000)
+    expect(names()).not.toContain("escalated")
+    hidden = false
+    engine.resumed()
+    clock.advance(2999)
+    expect(names()).not.toContain("escalated")
+    clock.advance(1)
+    expect(states.at(-1)).toEqual({ state: "escalated", kind: "client" })
+  })
+
+  it("resumed() while idle or escalated changes nothing", () => {
+    make({ seconds: 1 })
+    engine.resumed()
+    expect(states).toEqual([])
+    engine.socketLost("client")
+    clock.advance(1000)
+    expect(states.at(-1).state).toBe("escalated")
+    engine.resumed()
+    expect(states.at(-1).state).toBe("escalated")
   })
 
   it("a crash plus fast remount stays quiet", () => {

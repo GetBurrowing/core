@@ -31,6 +31,20 @@
 // the grace and the offline clock resets; the ordinary attempt and time
 // limits still apply to the loss throughout.
 //
+// BACKGROUND AND FREEZE. The limits count only time the page is in front
+// of someone. Chrome on Android freezes a backgrounded page: no JS runs,
+// the socket dies, and on resume the wall clock has jumped by minutes. A
+// loss that began before the freeze then read as "lost for minutes" and
+// went red at once, a second before the reconnect landed (Rowan, 2026-10-11,
+// still seen after the offline grace). So:
+//   - while isHidden() is true nothing escalates;
+//   - resumed() (app.js: visibilitychange to visible, pageshow, resume)
+//     restarts the loss clock: failures, time and the offline clock;
+//   - check() also restarts the clock when it finds a gap of freezeGapMs
+//     (2500) since its last run, because frozen timers can fire before the
+//     visibility event does. A 1 s tick runs while lost so that, when
+//     visible, consecutive checks are never further apart than that.
+//
 // WHAT COUNTS AS A FAILURE. socketClosed() is fed every socket close. The
 // first close after a loss is the drop itself, not a retry, so it starts the
 // loss and is not counted; every later close is one failed retry. (Counting
@@ -109,6 +123,9 @@ export function createReconnectEscalation(opts = {}) {
   const graceMs = opts.graceMs == null ? 300 : opts.graceMs
   const upToDateMs = opts.upToDateMs == null ? 1500 : opts.upToDateMs
   const offlineGraceMs = opts.offlineGraceMs == null ? 3000 : opts.offlineGraceMs
+  const freezeGapMs = opts.freezeGapMs == null ? 2500 : opts.freezeGapMs
+  const tickMs = opts.tickMs == null ? 1000 : opts.tickMs
+  const isHidden = opts.isHidden || (() => false)
   const isOnline = opts.isOnline || (() => true)
   const now = opts.now || (() => Date.now())
   const setT = opts.setTimeout || ((fn, ms) => setTimeout(fn, ms))
@@ -125,6 +142,8 @@ export function createReconnectEscalation(opts = {}) {
   let upToDateTimer = null
   let offlineSince = null
   let offlineTimer = null
+  let tickTimer = null
+  let lastCheckAt = null
   let emitted = { state: "idle", kind: null }
 
   function clear(t) {
@@ -137,6 +156,7 @@ export function createReconnectEscalation(opts = {}) {
     deadlineTimer = clear(deadlineTimer)
     upToDateTimer = clear(upToDateTimer)
     offlineTimer = clear(offlineTimer)
+    tickTimer = clear(tickTimer)
   }
 
   // Emit only when the visible pair changes, so a screen reader announces
@@ -153,12 +173,19 @@ export function createReconnectEscalation(opts = {}) {
     graceTimer = clear(graceTimer)
     deadlineTimer = clear(deadlineTimer)
     offlineTimer = clear(offlineTimer)
+    tickTimer = clear(tickTimer)
     go("escalated", k)
   }
 
   // Re-evaluate every escalation rule. Returns true when it escalated.
   function check() {
     if (!LOST.has(state)) return false
+    if (state !== "escalated") {
+      const t = now()
+      if (lastCheckAt != null && t - lastCheckAt >= freezeGapMs) restartClock()
+      lastCheckAt = t
+      if (isHidden()) return false
+    }
     if (offlineExpired()) {
       escalate("client")
       return true
@@ -206,11 +233,39 @@ export function createReconnectEscalation(opts = {}) {
     return k === "client" ? "client" : k || kind || "client"
   }
 
+  // Start the loss clock over: a resume or a detected freeze. The loss
+  // itself (state, kind, dropClosed) is unchanged.
+  function restartClock() {
+    failures = 0
+    firstLossAt = now()
+    lastCheckAt = now()
+    if (offlineSince != null) startOffline()
+    armDeadline(seconds * 1000)
+  }
+
+  function tick() {
+    tickTimer = clear(tickTimer)
+    tickTimer = setT(() => {
+      tickTimer = null
+      if (state !== "pending" && state !== "reconnecting") return
+      if (check()) return
+      tick()
+    }, tickMs)
+  }
+
+  // The page came back to the foreground.
+  function resumed() {
+    if (state !== "pending" && state !== "reconnecting") return
+    restartClock()
+    check()
+  }
+
   function begin(k) {
     upToDateTimer = clear(upToDateTimer)
     failures = 0
     dropClosed = false
     firstLossAt = now()
+    lastCheckAt = null
     go("pending", k)
     if (check()) return
     graceTimer = setT(() => {
@@ -220,6 +275,7 @@ export function createReconnectEscalation(opts = {}) {
       go("reconnecting", kind)
     }, graceMs)
     armDeadline(seconds * 1000)
+    tick()
   }
 
   // The time limit is enforced by check() alone (one comparison); the timer
@@ -324,6 +380,7 @@ export function createReconnectEscalation(opts = {}) {
     offline,
     online,
     recovered,
+    resumed,
     destroy,
     getState: () => ({ state, kind, failures }),
     thresholds: { attempts, seconds },

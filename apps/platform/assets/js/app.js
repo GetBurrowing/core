@@ -121,6 +121,7 @@ let lossFingerprint = null
 const escalation = createReconnectEscalation({
   ...thresholds,
   isOnline: () => navigator.onLine,
+  isHidden: () => document.visibilityState === "hidden",
   onState: ({state, kind}) => {
     connectionView.render({state, kind})
     if (state === "escalated") {
@@ -170,6 +171,13 @@ window.addEventListener("phx:page-loading-stop", _info => {
   if (changed) connectionView.settle()
 })
 window.addEventListener("offline", () => escalation.offline())
+// Background and freeze time does not count toward the red limits (see
+// reconnect_escalation.js BACKGROUND AND FREEZE).
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") escalation.resumed()
+})
+document.addEventListener("resume", () => escalation.resumed())
+window.addEventListener("pageshow", () => escalation.resumed())
 // An offline blip often never closes the websocket, so no rejoin follows.
 // If the LiveView is still live when the network returns, clear the red here.
 window.addEventListener("online", () => {
