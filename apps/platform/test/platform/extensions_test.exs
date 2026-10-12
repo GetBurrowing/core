@@ -486,6 +486,8 @@ defmodule Platform.ExtensionsTest do
       {"canvas_get", "context_read"},
       {"principal_search", "context_read"},
       {"federation_status", "federation"},
+      {"vault_fetch", "federation"},
+      {"vault_list", "federation"},
       {"memory_view", "memory"},
       {"memory_create", "memory"},
       {"memory_str_replace", "memory"},
@@ -569,7 +571,11 @@ defmodule Platform.ExtensionsTest do
     # Re-pinned at the stack/feedback-intake-boundary merge of origin/main
     # (c135cbe7, PR #1226): the stack's surface with main's Fabrikam-scrubbed tool
     # copy. Measured on moon at the merge.
-    @main_tool_digest_off "117e4578b58c81a1c77552b7d6e5a99a20e9e20c55212208e3c6721d29e6e1e2"
+    #
+    # Re-pinned by task 01a131c5 stage 1: `vault_fetch` and `vault_list` in
+    # the `federation` bundle, after `federation_status`. Measured on moon at
+    # the stage's branch.
+    @main_tool_digest_off "42ab329bc2d2f2c65a8b8cf1d56664308e67e2f6de573c3c3f5897eb3b49382e"
     @main_kinds_summaries_digest_off "4c060fb7a6914985f94857aaac9effbb519dd2b2170c7a9c0013d4db15a73ea4"
     @main_kinds_tool_schemas_digest_off "e454cd9e2aeb1d821a70b74fe433e81ba98b94f7ae9f2d59c55f8cf5bf509af8"
     # main's lists minus exactly `play`.

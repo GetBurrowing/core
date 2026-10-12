@@ -53,7 +53,7 @@ defmodule Platform.Vault.CredentialTest do
     end
 
     test "all scope types are accepted" do
-      for scope_type <- ~w(platform workspace agent integration) do
+      for scope_type <- ~w(platform workspace agent integration shared) do
         changeset =
           Credential.changeset(%Credential{}, Map.put(valid_attrs(), :scope_type, scope_type))
 

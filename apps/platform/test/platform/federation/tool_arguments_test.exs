@@ -192,7 +192,11 @@ defmodule Platform.Federation.ToolArgumentsTest do
   # an absent or malformed task_id (`invalid_task_id`) and an absent or
   # unknown reason (`invalid_reason`) before it opens a transaction. No
   # alias, no context fallback.
-  @surveyed_required_count 176
+  # 177 with `vault_fetch`'s `name` (task 01a131c5 stage 1). HONEST: read
+  # under its declared key only by `Platform.Vault.ToolHandlers.fetch/2`,
+  # which refuses an absent or non-slug name (`invalid_name`) before any
+  # lookup. No alias, no context fallback.
+  @surveyed_required_count 177
 
   defp read_source(relative) do
     # Resolved from __DIR__ (apps/platform/test/platform/federation) rather

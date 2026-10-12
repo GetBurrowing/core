@@ -211,6 +211,8 @@ defmodule Platform.GameStream.ExtensionParityTest do
       {"canvas_get", "context_read"},
       {"principal_search", "context_read"},
       {"federation_status", "federation"},
+      {"vault_fetch", "federation"},
+      {"vault_list", "federation"},
       {"memory_view", "memory"},
       {"memory_create", "memory"},
       {"memory_str_replace", "memory"},
@@ -300,8 +302,13 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # (PR #1226): the stack's kind, external-feedback provenance and
     # `janitor_hand_back` (task 019fa1ac-6685) on main's scrubbed copy. Both
     # values measured on moon at the merge; off equals extensions_test.exs.
-    @main_tool_digest_off "117e4578b58c81a1c77552b7d6e5a99a20e9e20c55212208e3c6721d29e6e1e2"
-    @main_tool_digest_on "279cc1b431d875c9494ced8750851d788afbfba49766baa66d4eb1465d152942"
+    #
+    # Re-pinned by task 01a131c5 (deploy fix-forward): `vault_fetch` and
+    # `vault_list` in the `federation` bundle, after `federation_status`. Off
+    # equals extensions_test.exs (stage 1's moon measurement); on measured by
+    # main CI at this branch head.
+    @main_tool_digest_off "42ab329bc2d2f2c65a8b8cf1d56664308e67e2f6de573c3c3f5897eb3b49382e"
+    @main_tool_digest_on "09d229de4f1cd66cb0c22d39bf18c1304e90206b35d5f29d5080b94c3a74ce93"
     @main_kinds_summaries_digest_off "4c060fb7a6914985f94857aaac9effbb519dd2b2170c7a9c0013d4db15a73ea4"
     @main_kinds_summaries_digest_on "dbab62a1b3d154e23378f3a990b77deb17c5f50eb30adf0b055bc0df8ce6c1e3"
     @main_kinds_tool_schemas_digest_off "e454cd9e2aeb1d821a70b74fe433e81ba98b94f7ae9f2d59c55f8cf5bf509af8"

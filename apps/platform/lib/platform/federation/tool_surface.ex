@@ -160,7 +160,8 @@ defmodule Platform.Federation.ToolSurface do
     "org_list_descendants" => :descendants,
     "task_list_canvases" => :canvases,
     "canvas.list_kinds" => :kinds,
-    "task_delivery_candidate_list" => :candidates
+    "task_delivery_candidate_list" => :candidates,
+    "vault_list" => :secrets
   }
 
   # List-returning tools outside task 01a04a7a's scope, each with the reason.
@@ -405,6 +406,36 @@ defmodule Platform.Federation.ToolSurface do
           "Only shows active runtimes. CONNECTION is populated for every online runtime; `online` means the socket is live and nothing more. BUILD IS NOT POPULATED FOR EVERY RUNTIME: `client_build` carries a sha only when `client_build_status` is \"reported\", which needs claude-code-suite-channel at or after commit 85e499f or openclaw-suite-channel at or after commit 098cfec, AND a client process restart since that update. Every other row reads \"unknown\", and the status says why: \"unresolved\" = the client is on the build contract but could not resolve its commit (`client_build_error` says why); \"not_reported\" = the client declared client_info but predates the build contract; \"no_client_info\" = the client declared nothing on join. `version` is never used as a build. `client_build` and `process_started_at` are CLIENT ATTESTATION: fine for diagnosis, never for authorization or deploy gating. `process_started_at` is the client PROCESS start as reported by the client, null when not sent, never the connect time. It is a one-way test: a start before a fix landed refutes that the process runs the fix; a later start proves nothing (the checkout may have been behind). A reconnect moves `connected_at` but not `process_started_at`; a restart moves both. PROVEN and presence are in-memory and reset on core restart, so `never` after a core restart means \"not since restart\". `declared_features` is the runtime's own claim and cannot discriminate builds that ship a capability from builds that do not; read `client_build` and `proven` instead.",
         when_to_use:
           "When you need to diagnose connectivity issues or verify which agent runtimes are currently reachable"
+      },
+      %{
+        name: "vault_fetch",
+        description:
+          "Get a shared vault secret (an API key or token a human pasted in at /admin/vault and granted to you) WITHOUT the value entering your context. Returns a single-use download URL and the exact shell command to run. Run `command` in your own shell: it writes the value to ~/.suite-secrets/<name> (mode 0600). Then use it from that file, e.g. `CLOUDFLARE_API_TOKEN=$(cat ~/.suite-secrets/cloudflare_token) wrangler ...`. ALWAYS download with `curl -o <file>` as given; NEVER curl to stdout, cat the file into chat, or echo the value — anything printed lands in your transcript.",
+        parameters: %{
+          name: %{
+            type: "string",
+            required: true,
+            description:
+              "The secret's name as shown in vault_list (lowercase letters, digits, `_`, `.`, `-`)."
+          }
+        },
+        returns:
+          "{url, expires_in, fingerprint, command}: `url` is a single-use https URL that serves the raw value once; `expires_in` is seconds (120); `fingerprint` is `sha256 ..xxxx` (last 4 hex of the value's SHA-256) for checking you got the current value; `command` is the shell line that downloads it to ~/.suite-secrets/<name>. The value itself is never in the result.",
+        limitations:
+          "Only shared secrets granted to YOU are served; an unknown name and an ungranted name both return `not granted`, and every attempt is written to the vault access log. Accepted risks: (1) the URL is in your transcript, but it is single-use, expires in 120s, is bound to your grant and is dead once redeemed — if someone else redeems it first your curl fails with HTTP 410 and the log records their IP; (2) curling to stdout instead of `-o` puts the value in your transcript and the server cannot detect it, so `-o` is mandatory; (3) agents without a shell cannot use this. Your grant is re-checked when the URL is redeemed: if access was removed in between, the download returns 403. A rotation after issue serves the new value.",
+        when_to_use:
+          "When you need a token or API key to set up infrastructure or call an external CLI/API and a human has granted it to you in the admin vault. Call vault_list first if you do not know the name."
+      },
+      %{
+        name: "vault_list",
+        description:
+          "List the shared vault secrets you have been granted: their names, fingerprints and when each was last rotated. Never returns a value — use vault_fetch to download one to a private file.",
+        parameters: %{},
+        returns:
+          "{secrets: [%{name, fingerprint, rotated_at}], total, has_more}: only secrets granted to you, ordered by name, whole (has_more is always false); [] when none.",
+        limitations:
+          "Shows shared secrets (the admin vault) only, not platform provider keys or your own agent-scoped credentials.",
+        when_to_use: "Before vault_fetch, to find the name of a secret a human has granted you."
       }
     ]
   end
@@ -4264,6 +4295,14 @@ defmodule Platform.Federation.ToolSurface do
 
   def execute("canvas.restore", args, context),
     do: Platform.Chat.Canvas.VersionHandlers.restore(args, context)
+
+  # ── Vault tools (task 01a131c5) ─────────────────────────────────────────
+
+  def execute("vault_fetch", args, context),
+    do: Platform.Vault.ToolHandlers.fetch(args, context)
+
+  def execute("vault_list", args, context),
+    do: Platform.Vault.ToolHandlers.list(args, context)
 
   # ── Skill tools ─────────────────────────────────────────────────────────
 

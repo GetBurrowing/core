@@ -694,6 +694,10 @@ defmodule Platform.RepoLookupBoundaryTest do
     # ── Vault ──────────────────────────────────────────────────────────
     {"platform/vault.ex", :platform_uuid_guard, "-", 2, :safe_internal,
      "check_explicit_grant/4 and normalize_uuid/1 use Platform.UUID.cast/1, so a 16-byte accessor id falls back to the system sentinel instead of being hex-encoded into an invented accessor_id written to the audit column"},
+    {"platform/vault/shared.ex", :platform_uuid_guard, "-", 2, :must_cast,
+     "task 01a131c5 stage 1. `cast_agent_ids/1` and `cast_uuid/1` cast the agent ids and the credential id that `/admin/vault` LiveView params will carry (stage 2) with Platform.UUID.cast/1 BEFORE they reach `where: a.id in ^ids` or `shared_credential/1`'s `Repo.one`; a malformed agent id returns `{:error, :unknown_agent}` and a malformed credential id `{:error, :not_found}`, writing nothing. Pinned by `shared_test.exs` (unknown agent id writes nothing)."},
+    {"platform/vault/tool_handlers.ex", :platform_uuid_guard, "-", 1, :must_cast,
+     "task 01a131c5 stage 1. `list/2` casts `context.agent_id` (the MCP caller) with Platform.UUID.cast/1 before it reaches `where: g.grantee_id == ^agent_id`; a nil or malformed id answers an empty list rather than raising. Pinned by `tool_handlers_test.exs` (nil agent id lists nothing)."},
     # ── Web: channels / controllers / plugs ────────────────────────────
     {"platform_web/channels/runtime_channel.ex", :get, "Platform.Agents.Agent", 1, :safe_internal,
      "`runtime.agent_id` off the `%AgentRuntime{}` the channel authenticated at join"},
@@ -1409,6 +1413,13 @@ defmodule Platform.RepoLookupBoundaryTest do
     # That function is now unused and deleted along with its `Repo.one` call
     # — no `where:` clause survives to triage.
     "platform/vault.ex" => 3,
+    # 0 → 1 for task 01a131c5 stage 1: `serve/2`'s `where: c.id ==
+    # ^ticket.credential_id` pins an id read off the claimed `%FetchTicket{}`
+    # row (a FK column), never a boundary value — no guard needed.
+    "platform/vault/fetch.ex" => 1,
+    # 0 → 1 for task 01a131c5 stage 1: `shared_credential/1` runs only after
+    # `cast_uuid/1` (Platform.UUID.cast/1) in `set_grants/3`.
+    "platform/vault/shared.ex" => 1,
     # 1 → 0 for task 019f9cb8 stage 3 Part A: `project_secret/1`'s
     # `limit(1) |> Repo.one()` on `where: p.repo_url == ^repo_url` picked
     # whichever project row Postgres reached first when two projects shared a

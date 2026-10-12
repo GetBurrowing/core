@@ -36,7 +36,11 @@ defmodule Platform.Federation.ToolAuthorizationTest do
     test "returns exactly the tools of the granted bundles", ctx do
       runtime = runtime(ctx.internal_id, ["federation"])
 
-      assert ToolAuthorization.tool_names(runtime) == ["federation_status"]
+      assert ToolAuthorization.tool_names(runtime) == [
+               "federation_status",
+               "vault_fetch",
+               "vault_list"
+             ]
     end
 
     test "is a strict subset of the full surface for a narrow grant", ctx do
@@ -60,13 +64,21 @@ defmodule Platform.Federation.ToolAuthorizationTest do
     test "unknown bundle names are skipped silently", ctx do
       runtime = runtime(ctx.internal_id, ["federation", "not_a_bundle"])
 
-      assert ToolAuthorization.tool_names(runtime) == ["federation_status"]
+      assert ToolAuthorization.tool_names(runtime) == [
+               "federation_status",
+               "vault_fetch",
+               "vault_list"
+             ]
     end
 
     test "duplicate bundle names do not duplicate tools", ctx do
       runtime = runtime(ctx.internal_id, ["federation", "federation"])
 
-      assert ToolAuthorization.tool_names(runtime) == ["federation_status"]
+      assert ToolAuthorization.tool_names(runtime) == [
+               "federation_status",
+               "vault_fetch",
+               "vault_list"
+             ]
     end
   end
 

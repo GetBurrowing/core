@@ -136,6 +136,27 @@
       </.link>
 
       <.link
+        navigate="/admin/vault"
+        class="group block rounded-lg border border-edge bg-base-200 p-4 transition-colors hover:border-primary/40 hover:bg-base-300"
+        data-role="admin-vault-link"
+      >
+        <div class="flex items-start gap-3">
+          <span class="hero-key size-6 mt-0.5 flex-shrink-0 text-base-content/60"></span>
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center justify-between gap-3">
+              <h2 class="text-base font-semibold text-base-content">Vault</h2>
+              <span class="text-xs font-medium text-primary opacity-0 group-hover:opacity-100 transition-opacity">
+                Open →
+              </span>
+            </div>
+            <p class="mt-1 text-sm text-base-content/60">
+              Paste a secret once and grant it to agents. They fetch it with vault_fetch; it never enters chat.
+            </p>
+          </div>
+        </div>
+      </.link>
+
+      <.link
         navigate="/admin/branding"
         class="group block rounded-lg border border-edge bg-base-200 p-4 transition-colors hover:border-primary/40 hover:bg-base-300"
         data-role="admin-branding-link"

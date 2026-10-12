@@ -72,10 +72,11 @@ defmodule Platform.Federation.ListEnvelopeContractTest do
     end
 
     # 25 audited by task 01a04a7a, plus task_delivery_candidate_list (01a044b0),
-    # dispatch_metrics_list (01a114a8 stage 1) and code_mode_report (stage 4).
-    test "the registry covers the 28 registered tools, each with an atom rows key" do
+    # dispatch_metrics_list (01a114a8 stage 1), code_mode_report (stage 4)
+    # and vault_list (01a131c5 stage 1).
+    test "the registry covers the 29 registered tools, each with an atom rows key" do
       tools = ToolSurface.list_envelope_tools()
-      assert map_size(tools) == 28
+      assert map_size(tools) == 29
       assert Enum.all?(tools, fn {_name, key} -> is_atom(key) and not is_nil(key) end)
     end
 
@@ -1138,6 +1139,25 @@ defmodule Platform.Federation.ListEnvelopeContractTest do
       env = call("skill.list", %{"query" => marker})
       assert_unbounded("skill.list", env, 3)
       assert env.count == 3
+    end
+  end
+
+  describe "runtime conformance: vault_list" do
+    test "every shared secret granted to the caller, whole" do
+      admin = Platform.VaultFixtures.admin!()
+      agent = Platform.VaultFixtures.agent!()
+
+      for _ <- 1..3 do
+        {:ok, _} =
+          Platform.Vault.Shared.create(
+            admin,
+            %{slug: Platform.VaultFixtures.unique_slug("env-vault"), value: "fake-env-value"},
+            [agent.id]
+          )
+      end
+
+      env = call("vault_list", %{}, %{agent_id: agent.id})
+      assert_unbounded("vault_list", env, 3)
     end
   end
 
