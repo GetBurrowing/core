@@ -40,8 +40,13 @@ defmodule PlatformWeb.PrototypeController do
       opens the bundle full-size in a new tab); a top-level sandboxed
       document is still opaque-origin.
     * `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer` (so a
-      grant never leaks through `Referer`), and `Cache-Control: private` (a
-      version's bytes never change, but a grant does expire).
+      grant never leaks through `Referer`), and `Cache-Control: private,
+      no-cache`. A version's bytes never change, but the grant is revocable:
+      the membership check above only runs if the request reaches the
+      server. With `max-age` a browser served a re-navigated grant URL from
+      its disk cache for up to an hour after the minting user left the org
+      (member 2's review). `no-cache` makes every use revalidate, so
+      revocation shows on the next navigation.
 
   ## Honest limits
 
@@ -75,7 +80,8 @@ defmodule PlatformWeb.PrototypeController do
                 "font-src #{@bundle_source} data:; " <>
                 "connect-src 'none'; form-action 'none'"
 
-  @cache_control "private, max-age=#{PrototypeGrant.max_age()}"
+  # Revalidate every time: see "Response headers" in the moduledoc.
+  @cache_control "private, no-cache"
 
   @doc false
   def bundle_csp, do: @bundle_csp

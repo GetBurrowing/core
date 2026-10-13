@@ -17,7 +17,9 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
   One 40px bar above the frame and nothing at the sides or below: the title
   (`min-w-0 truncate`, gives way first), the pinned chip and the mono version
   stamp (`shrink-0 whitespace-nowrap`, never truncate), an Open icon button
-  and a `...` menu. The stamp opens the version list. Colour is spent only on
+  and a `...` menu. The bar is a CSS size container and the chip responds to
+  the bar's width (`@sm:` / `@lg:`), not the viewport's: a canvas is often
+  framed in a ~330px preview on a wide screen. The stamp opens the version list. Colour is spent only on
   exceptions: the info chip when an older version is pinned, and the base-200
   panel that replaces the frame for a version retention removed. The version
   list and the menu are a popover from `sm` up and a bottom sheet below it.
@@ -164,8 +166,14 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
 
     ~H"""
     <div id={@id} class="relative rounded-xl border border-edge" data-role="prototype-canvas">
+      <%!-- The bar is its own size container (`@container`): every width
+           rule below is keyed to the BAR, not the viewport. The inline
+           preview (~330px) and the Live Canvas side panel (~350px) are that
+           narrow on a 1280px screen, where viewport `sm:` rules had already
+           expanded the chip to 426px of content and pushed Open and the menu
+           off the card (member 2's review). --%>
       <div
-        class="flex h-10 items-center gap-1.5 rounded-t-xl border-b border-edge bg-base-100 pl-3 pr-1 sm:gap-2"
+        class="@container flex h-10 items-center gap-1.5 rounded-t-xl border-b border-edge bg-base-100 pl-3 pr-1 @sm:gap-2"
         data-role="prototype-bar"
       >
         <p
@@ -175,17 +183,19 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
         >
           {@view.prototype.name}
         </p>
+        <%!-- By BAR width: from 32rem the full "v1 pinned · latest v4"; from
+             24rem only "latest v4" (the stamp beside it already names the
+             pinned version); below 24rem no chip at all, because the stamp
+             plus Open and the menu are all a ~330px bar holds with any room
+             left for the title. The stamp then carries the info colour, so
+             the exception stays visible. --%>
         <.chip
           :if={@view.pinned?}
           tone="info"
-          class="shrink-0 whitespace-nowrap font-mono text-xs"
+          class="hidden shrink-0 whitespace-nowrap font-mono text-xs @sm:inline-flex"
           data-role="prototype-pinned-chip"
         >
-          <%!-- Below sm the stamp beside it already names the pinned version,
-               and the full chip plus the stamp would push Open and the menu
-               out of a 375px bar; the chip keeps only what the stamp cannot
-               say. --%>
-          <span class="hidden sm:inline">v{@view.shown} pinned · </span>latest v{@view.latest}
+          <span class="hidden @lg:inline">v{@view.shown} pinned · </span>latest v{@view.latest}
         </.chip>
         <button
           type="button"
@@ -194,8 +204,11 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
           phx-target={@myself}
           aria-haspopup="dialog"
           aria-expanded={to_string(@open == :versions)}
-          aria-label={"Version #{@view.shown}, show versions"}
-          class="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-field px-2 py-1 font-mono text-xs text-neutral hover:bg-base-200"
+          aria-label={stamp_label(@view)}
+          class={[
+            "inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-field px-2 py-1 font-mono text-xs hover:bg-base-200",
+            if(@view.pinned?, do: "text-info @sm:text-neutral", else: "text-neutral")
+          ]}
           data-role="prototype-version-stamp"
         >
           {@stamp}<span class="hero-chevron-down size-3" aria-hidden="true"></span>
@@ -349,6 +362,11 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
     </div>
     """
   end
+
+  defp stamp_label(%{pinned?: true, shown: shown, latest: latest}),
+    do: "Version #{shown}, pinned (latest is v#{latest}), show versions"
+
+  defp stamp_label(%{shown: shown}), do: "Version #{shown}, show versions"
 
   defp removed_text(days) when is_integer(days),
     do: "This version was removed after #{days} days."

@@ -129,8 +129,7 @@ defmodule PlatformWeb.PrototypeControllerTest do
 
       assert get_resp_header(conn, "x-content-type-options") == ["nosniff"]
       assert get_resp_header(conn, "referrer-policy") == ["no-referrer"]
-      assert [cache] = get_resp_header(conn, "cache-control")
-      assert cache =~ "private"
+      assert get_resp_header(conn, "cache-control") == ["private, no-cache"]
     end
 
     test "relative assets resolve under the grant and carry the same sandbox", ctx do
@@ -140,6 +139,8 @@ defmodule PlatformWeb.PrototypeControllerTest do
       assert response(conn, 200) == "document.title = 'v1';"
       [csp] = get_resp_header(conn, "content-security-policy")
       assert csp =~ "sandbox allow-scripts;"
+      assert get_resp_header(conn, "cache-control") == ["private, no-cache"]
+      assert get_resp_header(conn, "x-content-type-options") == ["nosniff"]
 
       assert build_conn() |> get(root <> "app.css") |> response(200) =~ "color: red"
       assert build_conn() |> get(root <> "nope.js") |> response(404) == "Not found"
@@ -215,7 +216,17 @@ defmodule PlatformWeb.PrototypeControllerTest do
 
     test "a grant whose user left the org gets 404 on the next request", ctx do
       grant = PrototypeGrant.sign(ctx.member.id, ctx.prototype.id, 1)
-      assert serve(ctx.prototype.id, 1, grant) |> response(200)
+      conn = serve(ctx.prototype.id, 1, grant)
+      assert response(conn, 200)
+
+      # The 404 below only happens if the browser asks again. A `max-age`
+      # here let Chrome answer a re-navigation from disk cache for an hour
+      # after revocation, so the response must forbid reuse without
+      # revalidation (and must not carry a freshness lifetime at all).
+      assert [cache] = get_resp_header(conn, "cache-control")
+      assert cache =~ "no-cache"
+      refute cache =~ "max-age"
+      refute cache =~ "immutable"
 
       Repo.delete_all(
         from(m in OrgMembership, where: m.user_id == ^ctx.member.id and m.org_id == ^ctx.org_id)

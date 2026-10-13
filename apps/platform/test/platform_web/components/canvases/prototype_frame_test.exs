@@ -142,6 +142,67 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrameTest do
       assert LazyHTML.attribute(iframe, "src") == ["/proto/#{ctx.prototype.id}/1/"]
     end
 
+    test "the pinned bar sizes by its OWN width, not the viewport's", ctx do
+      # Member 2's review: at a 1280px viewport the viewport `sm:` rule showed
+      # the full chip inside a ~330px inline preview, 426px of content, and
+      # Open and the menu left the card. Every width rule in the bar must be
+      # a container query on the bar.
+      html = render_frame(proto_node(ctx.prototype.id, %{"version" => 1}), ctx.canvas.id)
+
+      [bar] = Enum.to_list(find(html, ~s([data-role="prototype-bar"])))
+      bar_class = bar |> LazyHTML.attribute("class") |> hd()
+      assert bar_class |> String.split() |> Enum.member?("@container")
+
+      bar_html = LazyHTML.to_html(bar)
+
+      refute bar_html =~ ~r/(?<![@\w-])(sm|md|lg|xl):/,
+             "a viewport breakpoint in the bar: #{bar_html}"
+
+      # Below the bar's @sm (24rem) the chip is not shown at all ...
+      [chip] = Enum.to_list(find(html, ~s([data-role="prototype-pinned-chip"])))
+      chip_classes = chip |> LazyHTML.attribute("class") |> hd() |> String.split()
+      assert "hidden" in chip_classes
+      assert "@sm:inline-flex" in chip_classes
+      assert "whitespace-nowrap" in chip_classes
+
+      # ... from @sm it reads "latest v2", and only from @lg the full text.
+      [long] = Enum.to_list(find(html, ~s([data-role="prototype-pinned-chip"] > span)))
+      assert LazyHTML.text(long) =~ "v1 pinned"
+
+      assert long |> LazyHTML.attribute("class") |> hd() |> String.split() == [
+               "hidden",
+               "@lg:inline"
+             ]
+
+      # With the chip hidden, the stamp carries the info colour and says
+      # "pinned" to a screen reader, so the exception never disappears. The
+      # stamp itself still never truncates.
+      [stamp] = Enum.to_list(find(html, ~s([data-role="prototype-version-stamp"])))
+      stamp_classes = stamp |> LazyHTML.attribute("class") |> hd() |> String.split()
+      assert "text-info" in stamp_classes
+      assert "@sm:text-neutral" in stamp_classes
+      assert "whitespace-nowrap" in stamp_classes and "shrink-0" in stamp_classes
+      refute "truncate" in stamp_classes
+
+      assert LazyHTML.attribute(stamp, "aria-label") == [
+               "Version 1, pinned (latest is v2), show versions"
+             ]
+
+      # The title is the one thing that gives way; Open and the menu never do.
+      [title] = Enum.to_list(find(html, ~s([data-role="prototype-title"])))
+      assert title |> LazyHTML.attribute("class") |> hd() =~ "min-w-0 flex-1 truncate"
+
+      for role <- ~w(prototype-open prototype-menu-button) do
+        [el] = Enum.to_list(find(html, ~s([data-role="#{role}"])))
+
+        assert el
+               |> LazyHTML.attribute("class")
+               |> hd()
+               |> String.split()
+               |> Enum.member?("shrink-0")
+      end
+    end
+
     test "pinning the latest version is not an exception: no chip", ctx do
       html = render_frame(proto_node(ctx.prototype.id, %{"version" => 2}), ctx.canvas.id)
       assert Enum.to_list(find(html, ~s([data-role="prototype-pinned-chip"]))) == []
