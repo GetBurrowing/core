@@ -12,7 +12,9 @@ defmodule Platform.Security.RuntimeChannelCapabilityTest do
   socket:
 
     * INTERNAL owner, `["federation"]` — the `capabilities` push carries
-      exactly `["federation_status"]`, and `tool_call task_create` is denied
+      exactly `["federation_status", "vault_fetch", "vault_list"]` (the
+      vault tools joined the bundle in task 01a131c5), and `tool_call
+      task_create` is denied
       with `not in allowed bundles` WITHOUT creating a row;
     * EXTERNAL owner, broad bundles — the push is exactly the six chat tools,
       `task_create` is denied and `space_list` is not;
@@ -72,14 +74,15 @@ defmodule Platform.Security.RuntimeChannelCapabilityTest do
   # ── INTERNAL owner, narrow grant ───────────────────────────────────────
 
   describe "internal-owned runtime with only [federation]" do
-    test "advertises exactly federation_status and denies task_create before executing it", ctx do
+    test "advertises exactly the federation bundle and denies task_create before executing it",
+         ctx do
       {:ok, project} = Tasks.create_project(%{name: "WS scope #{unique()}"})
       before_count = Repo.aggregate(Tasks.Task, :count)
 
       {socket, capabilities} = join_runtime(ctx, ctx.int.id, ["federation"])
 
-      assert tool_names(capabilities) == ["federation_status"]
-      assert capabilities.tool_count == 1
+      assert tool_names(capabilities) == ["federation_status", "vault_fetch", "vault_list"]
+      assert capabilities.tool_count == 3
 
       # Otherwise-valid arguments: this call WOULD have created a row had the
       # channel executed it, which is exactly what it used to do.

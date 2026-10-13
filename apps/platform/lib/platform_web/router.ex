@@ -356,6 +356,25 @@ defmodule PlatformWeb.Router do
     patch("/chat/attachments/upload/:token", ChatAttachmentUploadController, :append)
   end
 
+  # Single-use vault fetch (task 01a131c5 stage 1). Same posture as the
+  # presigned upload above: the token in the URL is the only auth — no
+  # session, no bearer. An agent's shell curls it with `-o` to a private file
+  # (`Platform.Vault.Fetch`). No `plug(:accepts, ...)`: curl's Accept header
+  # is not ours to negotiate, and the controller sends a raw body.
+  # HOST-AGNOSTIC: the URL is minted from `PlatformWeb.Endpoint.url/0`.
+  pipeline :vault_fetch do
+    plug(:put_secure_browser_headers)
+  end
+
+  scope "/", PlatformWeb do
+    pipe_through(:vault_fetch)
+
+    # `log: false`: no route-dispatch line for a secret download. The
+    # endpoint's request line is suppressed for this path too
+    # (`PlatformWeb.Endpoint.request_log_level/1`).
+    get("/vault/fetch/:token", VaultFetchController, :show, log: false)
+  end
+
   # Calendar feed pipeline (task 019fb955-b702 stage 3) — same posture as
   # the presigned upload above: the HMAC token in the URL is the only auth.
   # No session, no bearer, no `:require_auth`, no `ExternalUserScope`,
@@ -944,6 +963,11 @@ defmodule PlatformWeb.Router do
       # install-wide for the same reason as branding. `Settings.update/2`
       # re-checks root admin on the write.
       live("/admin/prototypes", AdminPrototypesLive, :index)
+      # Task 01a131c5 stage 2: shared secrets an admin grants to agents.
+      # `Platform.Vault.Shared` re-checks the actor on every call, so this
+      # live_session's gate is not load-bearing alone.
+      live("/admin/vault", AdminVaultLive, :index)
+      live("/admin/vault/:slug", AdminVaultLive, :show)
       live("/admin/prompts", AdminPromptsLive, :index)
       live("/admin/prompts/:slug", AdminPromptsLive, :edit)
       live("/admin/federation", AdminFederationLive, :index)

@@ -428,8 +428,13 @@ defmodule PlatformWeb.RuntimeChannelTest do
 
       payload = join_and_capture_capabilities(runtime, ctx.raw_token)
 
-      assert Enum.map(payload.tools, & &1.name) == ["federation_status"]
-      assert payload.tool_count == 1
+      assert Enum.map(payload.tools, & &1.name) == [
+               "federation_status",
+               "vault_fetch",
+               "vault_list"
+             ]
+
+      assert payload.tool_count == 3
     end
 
     test "a runtime with no bundles is pushed zero tools", ctx do
@@ -480,7 +485,7 @@ defmodule PlatformWeb.RuntimeChannelTest do
 
       _payload = join_and_capture_capabilities(runtime, ctx.raw_token)
 
-      assert_receive {:capabilities_pushed, %{tool_count: 1}, metadata}
+      assert_receive {:capabilities_pushed, %{tool_count: 3}, metadata}
       assert metadata.runtime_id == runtime.runtime_id
       assert metadata.external == false
     end

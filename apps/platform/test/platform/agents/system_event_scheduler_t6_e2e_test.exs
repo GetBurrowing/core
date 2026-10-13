@@ -746,7 +746,12 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
     # `prototype.versions`, `prototype.rollback` in the new `prototype` bundle
     # (ADR 0057); no schedule, no trigger and no historian surface.
     # (+3 prototype tools -> 129)
-    @t6_baseline_tool_count 129
+    # bumped by task 01a131c5 stage 1 — `vault_fetch` and `vault_list` in the
+    # `federation` bundle, the agent read path for admin-vault secrets; no
+    # schedule, no trigger and no historian surface.
+    # (+vault_fetch, +vault_list -> 128)
+    # merged: stack prototype-runtime rollup onto main (+3 prototype, +2 vault -> 131)
+    @t6_baseline_tool_count 131
 
     defp t6_root, do: Mix.Project.project_file() |> Path.dirname()
 

@@ -1,0 +1,415 @@
+<%!-- Vault — admin-managed shared secrets (task 01a131c5 stage 2).
+     Design direction: canvas 01a131c6 ("Design direction: Vault admin screen").
+
+     WRITE-ONLY: no element in this template renders a secret value. The value
+     inputs carry no `value=` attribute and sit inside `phx-update="ignore"`
+     containers keyed by @form_nonce; see the AdminVaultLive moduledoc.
+
+     Same shell as /admin/branding: the outer column takes the bounded height
+     and the inner div is the scroller. --%>
+<div class="flex h-full min-h-0 flex-col" data-role="admin-vault">
+  <div class="flex-1 min-h-0 overflow-y-auto px-4 py-6">
+    <div class="mx-auto w-full max-w-5xl">
+      <%= if @live_action == :show and @secret do %>
+        <%!-- ── Detail ─────────────────────────────────────────────── --%>
+        <div class="mb-6">
+          <.link navigate={~p"/admin/vault"} class="text-sm text-neutral hover:text-base-content">
+            ← Vault
+          </.link>
+          <div class="mt-2 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <h1 class="font-mono text-xl font-semibold text-base-content break-all">
+              {@secret.slug}
+            </h1>
+            <span class="text-sm text-neutral">{@secret.scope_type}</span>
+          </div>
+          <p :if={@secret.note} class="mt-1 text-sm text-base-content/70">{@secret.note}</p>
+        </div>
+
+        <section class="mb-6">
+          <h2 class="mb-2 text-sm font-medium text-base-content">Value</h2>
+          <%= if @rotating do %>
+            <form id="vault-rotate-form" phx-submit="rotate" autocomplete="off">
+              <div id={"vault-rotate-fields-#{@form_nonce}"} phx-update="ignore">
+                <div class="flex items-center gap-2">
+                  <input
+                    id="vault-rotate-value"
+                    type="password"
+                    name="secret[value]"
+                    autocomplete="new-password"
+                    placeholder="Paste the new value"
+                    class="input input-bordered w-full font-mono"
+                    data-role="vault-value-input"
+                  />
+                  <button
+                    type="button"
+                    class="btn btn-ghost btn-sm"
+                    phx-click={
+                      JS.toggle_attribute({"type", "text", "password"}, to: "#vault-rotate-value")
+                    }
+                    aria-label="Show or hide the value"
+                    data-role="vault-value-toggle"
+                  >
+                    <span class="hero-eye size-5"></span>
+                  </button>
+                </div>
+              </div>
+              <div class="mt-3 flex justify-end gap-2">
+                <button type="button" class="btn btn-ghost btn-sm" phx-click="cancel_rotate">
+                  Cancel
+                </button>
+                <button type="submit" class="btn btn-primary btn-sm">Save new value</button>
+              </div>
+            </form>
+          <% else %>
+            <.sealed_value secret={@secret} />
+          <% end %>
+        </section>
+
+        <section class="mb-6">
+          <h2 class="mb-2 text-sm font-medium text-base-content">Granted to</h2>
+          <div class="flex flex-wrap items-center gap-2">
+            <span
+              :for={id <- @secret.granted_agent_ids}
+              class="inline-flex items-center gap-1 rounded-full border border-edge bg-base-200 py-1 pl-3 pr-1 text-sm"
+              data-role="vault-grant-chip"
+              data-agent-id={id}
+            >
+              {agent_name(@agent_names, id)}
+              <button
+                type="button"
+                phx-click="ungrant"
+                phx-value-id={id}
+                class="inline-flex size-6 items-center justify-center rounded-full hover:bg-base-300"
+                aria-label={"Remove #{agent_name(@agent_names, id)}'s grant"}
+              >
+                <span class="hero-x-mark size-4"></span>
+              </button>
+            </span>
+            <span
+              :if={@secret.granted_agent_ids == []}
+              class="badge badge-info badge-soft"
+              data-role="vault-chip-not-granted"
+            >
+              Not granted
+            </span>
+            <button
+              type="button"
+              phx-click="toggle_picker"
+              class="btn btn-ghost btn-sm"
+              data-role="vault-grant-open"
+            >
+              <span class="hero-plus size-4"></span> Grant agent
+            </button>
+          </div>
+          <div :if={@picker_open} class="mt-3 max-w-md">
+            <.agent_picker
+              id="vault-grant-search"
+              agents={matching_agents(@agents, @secret.granted_agent_ids, @search)}
+              search={@search}
+              event="grant"
+            />
+          </div>
+        </section>
+
+        <section class="mb-8">
+          <h2 class="mb-2 text-sm font-medium text-base-content">Access log</h2>
+          <div
+            class="overflow-x-auto rounded-lg border border-edge"
+            data-role="vault-access-log"
+          >
+            <table class="table table-sm">
+              <thead>
+                <tr class="text-neutral">
+                  <th>Time</th>
+                  <th>Agent</th>
+                  <th>Action</th>
+                  <th>Outcome</th>
+                  <th>Fingerprint</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr :if={@access_log == []}>
+                  <td colspan="5" class="text-neutral">Nothing yet.</td>
+                </tr>
+                <tr
+                  :for={row <- @access_log}
+                  data-role="vault-access-row"
+                  data-action={row.action}
+                >
+                  <td class="font-mono text-xs text-neutral whitespace-nowrap">
+                    {log_stamp(row)}
+                  </td>
+                  <td class="whitespace-nowrap">{log_actor(@agent_names, row)}</td>
+                  <td>{log_action(@agent_names, row)}</td>
+                  <td class={[
+                    "whitespace-nowrap",
+                    row.action == "denied" && "text-warning"
+                  ]}>
+                    {log_outcome(row)}
+                  </td>
+                  <td class="font-mono text-xs whitespace-nowrap">{log_fingerprint(row)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="border-t border-edge pt-6 pb-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px)+1rem)]">
+          <%= if @confirm_revoke do %>
+            <div
+              class="rounded-lg border border-error bg-base-200 p-4"
+              role="alertdialog"
+              aria-labelledby="vault-revoke-title"
+              data-role="vault-revoke-confirm"
+            >
+              <h2 id="vault-revoke-title" class="font-semibold text-error">Revoke secret?</h2>
+              <p class="mt-1 text-sm text-base-content">
+                {revoke_message(@agent_names, @secret)}
+              </p>
+              <p class="mt-1 text-sm text-neutral">The access log is kept.</p>
+              <div class="mt-3 flex gap-2">
+                <button type="button" class="btn btn-ghost btn-sm" phx-click="cancel_revoke">
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-error btn-sm"
+                  phx-click="revoke"
+                  data-role="vault-revoke-confirm-button"
+                >
+                  Revoke secret
+                </button>
+              </div>
+            </div>
+          <% else %>
+            <button
+              type="button"
+              class="btn btn-error btn-outline btn-sm"
+              phx-click="ask_revoke"
+              data-role="vault-revoke"
+            >
+              Revoke secret
+            </button>
+          <% end %>
+        </section>
+      <% else %>
+        <%!-- ── List ───────────────────────────────────────────────── --%>
+        <div class="mb-6 flex flex-wrap items-start justify-between gap-3">
+          <div class="min-w-0">
+            <.link navigate={~p"/admin"} class="text-sm text-neutral hover:text-base-content">
+              ← Admin
+            </.link>
+            <h1 class="mt-2 text-xl font-semibold text-base-content">Vault</h1>
+            <p class="mt-1 text-sm text-base-content/70">
+              Secrets agents can fetch. Values are never shown after saving.
+            </p>
+          </div>
+          <button
+            type="button"
+            class="btn btn-primary btn-sm"
+            phx-click="open_add"
+            data-role="vault-add-open"
+          >
+            <span class="hero-plus size-4"></span> Add secret
+          </button>
+        </div>
+
+        <div class="rounded-lg border border-edge bg-base-100">
+          <div class="hidden grid-cols-[minmax(12rem,1.3fr)_1.6fr_6rem_9rem] gap-4 border-b border-edge px-4 py-2 text-xs font-medium uppercase tracking-wide text-neutral sm:grid">
+            <span>Name / scope</span>
+            <span>Granted to</span>
+            <span>Rotated</span>
+            <span>Last used</span>
+          </div>
+          <p :if={@secrets == []} class="px-4 py-6 text-sm text-neutral" data-role="vault-empty">
+            No secrets yet. Add one and pick the agents that may fetch it.
+          </p>
+          <.link
+            :for={secret <- @secrets}
+            patch={~p"/admin/vault/#{secret.slug}"}
+            class="grid grid-cols-1 gap-1 border-b border-edge px-4 py-3 last:border-b-0 hover:bg-base-200 sm:grid-cols-[minmax(12rem,1.3fr)_1.6fr_6rem_9rem] sm:gap-4"
+            data-role="vault-row"
+            data-slug={secret.slug}
+          >
+            <div class="flex min-w-0 items-baseline gap-2 sm:flex-col sm:gap-0">
+              <span class="shrink-0 font-mono text-sm font-medium text-base-content break-all">
+                {secret.slug}
+              </span>
+              <span class="text-xs text-neutral">{secret.scope_type}</span>
+            </div>
+            <div class="flex min-w-0 flex-wrap items-center gap-2 text-sm">
+              <span
+                :if={secret.granted_agent_ids != []}
+                class="truncate text-base-content"
+                title={
+                  Enum.map_join(secret.granted_agent_ids, ", ", &agent_name(@agent_names, &1))
+                }
+              >
+                {granted_summary(@agent_names, secret.granted_agent_ids)}
+              </span>
+              <span
+                :if={secret.granted_agent_ids == []}
+                class="badge badge-info badge-soft badge-sm"
+                data-role="vault-chip-not-granted"
+              >
+                Not granted
+              </span>
+              <span
+                :if={secret.refused_7d > 0}
+                class="badge badge-warning badge-soft badge-sm"
+                data-role="vault-chip-refused"
+              >
+                {refused_label(secret.refused_7d)}
+              </span>
+            </div>
+            <div class="text-xs text-neutral sm:text-sm">
+              <span class="sm:hidden">Rotated </span>{short_date(sealed_at(secret))}
+            </div>
+            <div class="text-xs text-neutral sm:text-sm">
+              <span class="sm:hidden">Last used </span>{relative(secret.last_used_at)}
+            </div>
+          </.link>
+        </div>
+      <% end %>
+    </div>
+  </div>
+
+  <%!-- ── Add: a side panel on desktop, a full page on mobile ──────── --%>
+  <div
+    :if={@show_add}
+    class="fixed inset-0 z-50 flex flex-col bg-base-100 sm:left-auto sm:w-[30rem] sm:border-l sm:border-edge sm:shadow-xl"
+    role="dialog"
+    aria-labelledby="vault-add-title"
+    data-role="vault-add-panel"
+  >
+    <div class="flex items-center justify-between border-b border-edge px-4 py-3">
+      <h2 id="vault-add-title" class="text-base font-semibold text-base-content">Add secret</h2>
+      <button
+        type="button"
+        class="btn btn-ghost btn-sm"
+        phx-click="close_add"
+        aria-label="Close"
+      >
+        <span class="hero-x-mark size-5"></span>
+      </button>
+    </div>
+
+    <div class="flex-1 min-h-0 overflow-y-auto px-4 py-4">
+      <p
+        :if={@add_error}
+        class="mb-4 rounded-lg border border-error bg-base-200 px-3 py-2 text-sm text-error"
+        role="alert"
+        data-role="vault-add-error"
+      >
+        {@add_error}
+      </p>
+
+      <form id="vault-add-form" phx-submit="save" autocomplete="off">
+        <%!-- Ignored by DOM patches so agent search cannot wipe what was typed;
+             the nonce in the id replaces it (empty) after a failed submit. --%>
+        <div id={"vault-add-fields-#{@form_nonce}"} phx-update="ignore" class="space-y-4">
+          <label class="block">
+            <span class="mb-1 block text-sm font-medium text-base-content">Name</span>
+            <input
+              type="text"
+              name="secret[slug]"
+              value={@add_form["slug"]}
+              required
+              spellcheck="false"
+              autocapitalize="off"
+              placeholder="cloudflare_token"
+              class="input input-bordered w-full font-mono"
+              data-role="vault-name-input"
+            />
+            <span class="mt-1 block text-xs text-neutral">
+              Agents pass this name to vault_fetch. Scope: shared.
+            </span>
+          </label>
+
+          <div>
+            <label for="vault-add-value" class="mb-1 block text-sm font-medium text-base-content">
+              Value
+            </label>
+            <div class="flex items-center gap-2">
+              <input
+                id="vault-add-value"
+                type="password"
+                name="secret[value]"
+                autocomplete="new-password"
+                required
+                class="input input-bordered w-full font-mono"
+                data-role="vault-value-input"
+              />
+              <button
+                type="button"
+                class="btn btn-ghost btn-sm"
+                phx-click={
+                  JS.toggle_attribute({"type", "text", "password"}, to: "#vault-add-value")
+                }
+                aria-label="Show or hide the value"
+                data-role="vault-value-toggle"
+              >
+                <span class="hero-eye size-5"></span>
+              </button>
+            </div>
+          </div>
+
+          <label class="block">
+            <span class="mb-1 block text-sm font-medium text-base-content">Note</span>
+            <input
+              type="text"
+              name="secret[note]"
+              value={@add_form["note"]}
+              placeholder="optional"
+              class="input input-bordered w-full"
+            />
+          </label>
+        </div>
+      </form>
+
+      <div class="mt-4">
+        <span class="mb-1 block text-sm font-medium text-base-content">Grant to</span>
+        <div class="mb-2 flex flex-wrap gap-2" data-role="vault-add-selected">
+          <span
+            :for={id <- @add_agent_ids}
+            class="inline-flex items-center gap-1 rounded-full border border-edge bg-base-200 py-1 pl-3 pr-1 text-sm"
+            data-role="vault-add-chip"
+            data-agent-id={id}
+          >
+            {agent_name(@agent_names, id)}
+            <button
+              type="button"
+              phx-click="unpick_agent"
+              phx-value-id={id}
+              class="inline-flex size-6 items-center justify-center rounded-full hover:bg-base-300"
+              aria-label={"Remove #{agent_name(@agent_names, id)}"}
+            >
+              <span class="hero-x-mark size-4"></span>
+            </button>
+          </span>
+          <span :if={@add_agent_ids == []} class="text-sm text-neutral">
+            No agent yet. Nobody can fetch it until you grant one.
+          </span>
+        </div>
+        <.agent_picker
+          id="vault-add-search"
+          agents={matching_agents(@agents, @add_agent_ids, @search)}
+          search={@search}
+          event="pick_agent"
+        />
+      </div>
+    </div>
+
+    <div class="flex justify-end gap-2 border-t border-edge px-4 pt-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)]">
+      <button type="button" class="btn btn-ghost btn-sm" phx-click="close_add">Cancel</button>
+      <button
+        type="submit"
+        form="vault-add-form"
+        class="btn btn-primary btn-sm"
+        data-role="vault-save"
+      >
+        Save
+      </button>
+    </div>
+  </div>
+</div>

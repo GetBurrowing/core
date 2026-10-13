@@ -486,6 +486,8 @@ defmodule Platform.ExtensionsTest do
       {"canvas_get", "context_read"},
       {"principal_search", "context_read"},
       {"federation_status", "federation"},
+      {"vault_fetch", "federation"},
+      {"vault_list", "federation"},
       {"memory_view", "memory"},
       {"memory_create", "memory"},
       {"memory_str_replace", "memory"},
@@ -589,9 +591,16 @@ defmodule Platform.ExtensionsTest do
     # description names the new `set_binding` op (the MCP tool's text in
     # tool_surface.ex and the canvas tool schema in canvas/tools.ex).
     # Measured on moon at the stage's branch.
-    @main_tool_digest_off "745d5a4b0ebbaf2789c8f572fe206b469bc4dd21da7935fa4f89b15c240573c9"
-    @main_kinds_summaries_digest_off "26c0704185201d0926a8bcb6db6be411b821c54fcba3269676c631969944df72"
-    @main_kinds_tool_schemas_digest_off "264902e4c54f3146fe5be6e658c4717aafc6382ea233523ca505607d848e0925"
+    #
+    # Re-pinned by task 01a131c5 stage 1: `vault_fetch` and `vault_list` in
+    # the `federation` bundle, after `federation_status`. Measured on moon at
+    # the stage's branch.
+    #
+    # Re-pinned by the stack prototype-runtime rollup merge (#1235): both of the
+    # above. Measured on moon at the merge commit.
+    @main_tool_digest_off "REMEASURE"
+    @main_kinds_summaries_digest_off "REMEASURE"
+    @main_kinds_tool_schemas_digest_off "REMEASURE"
     # main's lists minus exactly `play`.
     @core_bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode prototype)
     @core_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode prototype)

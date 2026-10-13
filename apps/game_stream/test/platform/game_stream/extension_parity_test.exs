@@ -211,6 +211,8 @@ defmodule Platform.GameStream.ExtensionParityTest do
       {"canvas_get", "context_read"},
       {"principal_search", "context_read"},
       {"federation_status", "federation"},
+      {"vault_fetch", "federation"},
+      {"vault_list", "federation"},
       {"memory_view", "memory"},
       {"memory_create", "memory"},
       {"memory_str_replace", "memory"},
@@ -323,12 +325,21 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # description names the new `set_binding` op. Both values measured on
     # moon at the stage's branch; off equals extensions_test.exs. The kinds
     # and metrics digests are unchanged.
-    @main_tool_digest_off "745d5a4b0ebbaf2789c8f572fe206b469bc4dd21da7935fa4f89b15c240573c9"
-    @main_tool_digest_on "ee1bff6fca1dae49b286fa7abd142e2195475392d90f487d18cd81e034260d3f"
-    @main_kinds_summaries_digest_off "26c0704185201d0926a8bcb6db6be411b821c54fcba3269676c631969944df72"
-    @main_kinds_summaries_digest_on "f71832b549f7a8674c01fff90be91d869b6eea222c9cdd888723d5045ec3c450"
-    @main_kinds_tool_schemas_digest_off "264902e4c54f3146fe5be6e658c4717aafc6382ea233523ca505607d848e0925"
-    @main_kinds_tool_schemas_digest_on "cf59e8e3a7215086fa324ffa7c036b076527cd20b7dbdf5bf32eba51fb6cddbe"
+    #
+    # Re-pinned by task 01a131c5 (deploy fix-forward): `vault_fetch` and
+    # `vault_list` in the `federation` bundle, after `federation_status`. Off
+    # equals extensions_test.exs (stage 1's moon measurement); on measured by
+    # main CI at this branch head.
+    #
+    # Re-pinned by the stack prototype-runtime rollup merge (#1235): both of the
+    # above. All six values measured on moon at the merge commit; off equals
+    # extensions_test.exs.
+    @main_tool_digest_off "REMEASURE"
+    @main_tool_digest_on "REMEASURE"
+    @main_kinds_summaries_digest_off "REMEASURE"
+    @main_kinds_summaries_digest_on "REMEASURE"
+    @main_kinds_tool_schemas_digest_off "REMEASURE"
+    @main_kinds_tool_schemas_digest_on "REMEASURE"
     @main_metrics_catalog_digest "95805ed557855b482286544ea8d5ea6063b81e47ce1ee28268467a7df2848ee9"
     @main_bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode prototype play)
     @main_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode prototype play)

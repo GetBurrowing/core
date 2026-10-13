@@ -197,7 +197,12 @@ defmodule Platform.Federation.ToolArgumentsTest do
   # three: `Platform.Prototypes.Tools` reads each under its declared key only
   # (`require_string/2`, `require_integer/2`) and refuses an absent value with
   # `invalid_argument` before any read or write. No alias, no context fallback.
-  @surveyed_required_count 179
+  # 177 with `vault_fetch`'s `name` (task 01a131c5 stage 1). HONEST: read
+  # under its declared key only by `Platform.Vault.ToolHandlers.fetch/2`,
+  # which refuses an absent or non-slug name (`invalid_name`) before any
+  # lookup. No alias, no context fallback.
+  # 180 with both of the above (stack prototype-runtime rollup merge).
+  @surveyed_required_count 180
 
   defp read_source(relative) do
     # Resolved from __DIR__ (apps/platform/test/platform/federation) rather
