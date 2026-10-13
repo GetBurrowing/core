@@ -121,6 +121,17 @@ config :platform, Platform.Responsibilities,
 #     Overridable per-call via the `:threshold` opt.
 config :platform, :meetings_triage_backlog_cap, 10
 config :platform, :meetings_triage_per_canvas_cap, 20
+
+# Canvas rooms (task 01a1316b-84fa stage 1) — an experiment surface, read at
+# call time by `Platform.Chat.CanvasRoom`:
+#   * `:persist_debounce_ms` — how long accepted ops wait before ONE
+#     transaction flushes them. Larger = fewer transactions per 100 ops, and
+#     more ops lost to a brutal kill (at most one window).
+#   * `:idle_stop_ms` — how long a room with no viewers lives before it
+#     flushes and stops.
+config :platform, Platform.Chat.CanvasRoom,
+  persist_debounce_ms: 500,
+  idle_stop_ms: 60_000
 config :platform, :meetings_triage_dedup_threshold, 0.85
 
 # Meeting Producer runtime (task 019f2452). Supervisor gate: when
