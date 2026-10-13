@@ -26,8 +26,8 @@ import Foundation
 /// What a system person matched among Burrow's people.
 @available(iOS 27, *)
 enum PersonMatch {
-    case one(PersonEntity)
-    case several([PersonEntity])
+    case one(MessagePersonEntity)
+    case several([MessagePersonEntity])
     case none(name: String?)
 
     var ids: [String] {
@@ -42,7 +42,7 @@ enum PersonMatch {
 @available(iOS 27, *)
 enum PersonResolver {
     /// Picks one of several people (the intent's requestChoice).
-    typealias Choose = (_ name: String, _ people: [PersonEntity]) async throws -> PersonEntity
+    typealias Choose = (_ name: String, _ people: [MessagePersonEntity]) async throws -> MessagePersonEntity
 
     /// The identifier's kind, for the log.
     static func kind(of person: IntentPerson) -> String {
@@ -97,33 +97,33 @@ enum PersonResolver {
 
     /// `<host>|<uuid>` on a saved install, or a bare uuid on any signed-in
     /// install (only when it names exactly one person).
-    static func byID(_ raw: String, env: IntentEnvironment) async -> PersonEntity? {
+    static func byID(_ raw: String, env: IntentEnvironment) async -> MessagePersonEntity? {
         if let ref = EntityRef(raw) {
             guard env.install(ref.host) != nil else { return nil }
             if let cached = PeopleCache.shared.entity(for: raw) { return cached }
-            return try? await PersonQuery().entities(for: [raw]).first
+            return try? await MessagePersonEntityQuery().entities(for: [raw]).first
         }
         guard UUID(uuidString: raw) != nil else { return nil }
         let ids = env.signedInHosts.map { EntityRef(host: $0, uuid: raw.lowercased()).id }
         let cached = ids.compactMap { PeopleCache.shared.entity(for: $0) }
         if cached.count == 1 { return cached[0] }
-        let found = (try? await PersonQuery().entities(for: ids)) ?? []
+        let found = (try? await MessagePersonEntityQuery().entities(for: ids)) ?? []
         return found.count == 1 ? found[0] : nil
     }
 
     /// Burrow people on signed-in installs who answer to `name`.
-    static func byName(_ name: String, env: IntentEnvironment) async -> [PersonEntity] {
+    static func byName(_ name: String, env: IntentEnvironment) async -> [MessagePersonEntity] {
         let hosts = Set(env.signedInHosts)
         let known = PeopleCache.shared.all().filter { EntityRef($0.id).map { hosts.contains($0.host) } ?? false }
         let fromCache = best(known, for: name)
         if !fromCache.isEmpty { return fromCache }
-        let searched = (try? await PersonQuery(installScope: nil).entities(matching: name)) ?? []
+        let searched = (try? await MessagePersonEntityQuery(installScope: nil).entities(matching: name)) ?? []
         return best(searched, for: name)
     }
 
     /// Exact full-name or given-name matches if there are any, otherwise
     /// people whose name contains `name`. Case- and accent-insensitive.
-    static func best(_ people: [PersonEntity], for name: String) -> [PersonEntity] {
+    static func best(_ people: [MessagePersonEntity], for name: String) -> [MessagePersonEntity] {
         let wanted = fold(name)
         let exact = people.filter { person in
             let full = fold(person.name)
@@ -137,14 +137,14 @@ enum PersonResolver {
         value.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil).trimmingCharacters(in: .whitespaces)
     }
 
-    private static func unique(_ people: [PersonEntity]) -> [PersonEntity] {
+    private static func unique(_ people: [MessagePersonEntity]) -> [MessagePersonEntity] {
         var seen = Set<String>()
         return people.filter { seen.insert($0.id).inserted }
     }
 
     /// One Burrow person for `person`, asking `choose` when several match.
     /// Throws a spoken failure that names the person when none does.
-    static func require(_ person: IntentPerson, site: String, env: IntentEnvironment = .current, choose: Choose) async throws -> PersonEntity {
+    static func require(_ person: IntentPerson, site: String, env: IntentEnvironment = .current, choose: Choose) async throws -> MessagePersonEntity {
         switch await resolve(person, site: site, env: env) {
         case .one(let found):
             return found

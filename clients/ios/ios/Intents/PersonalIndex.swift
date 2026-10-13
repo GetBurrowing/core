@@ -6,7 +6,7 @@ import Foundation
 //
 // Measured on Rowan's iPad (iPadOS 27.0.1, review of 37737c21): Siri resolves
 // a spoken person or conversation in the messages schema ONLY against what
-// is already on the device. It never called PersonQuery.entities(matching:)
+// is already on the device. It never called MessagePersonEntityQuery.entities(matching:)
 // or ConversationQuery, so "Message Dalton…" failed while the server would
 // have answered `?q=Dalton`. Xcode 27.0's AppIntentSchemas.sqlite says why
 // the index is the input: the `messages.MessagePerson` schema maps its
@@ -94,7 +94,7 @@ struct PersonalIndexRefresh {
 enum PersonalIndex {
     static func index(people: [SuitePerson], host: String, env: IntentEnvironment) {
         guard #available(iOS 27, *) else { return }
-        let entities = people.map { PersonEntity($0, host: host, env: env) }
+        let entities = people.map { MessagePersonEntity($0, host: host, env: env) }
         PeopleCache.shared.remember(entities)
         SpotlightIndexer.index(entities, host: host)
         // "Start a meeting with X" uses the phone schema's own person type;

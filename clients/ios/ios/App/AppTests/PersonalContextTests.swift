@@ -302,7 +302,7 @@ final class PersonalContextTests: XCTestCase {
         XCTAssertEqual(items.count, 2)
         XCTAssertEqual(items.map(\.domainIdentifier), [a, a])
         if #available(iOS 27, *) {
-            let people = [PersonEntity(id: "\(b)|\(person)", name: "Priya", kind: "user", subtitle: "")]
+            let people = [MessagePersonEntity(id: "\(b)|\(person)", name: "Priya", kind: "user", subtitle: "")]
             XCTAssertEqual(SpotlightIndexer.items(people, host: b).map(\.domainIdentifier), [b])
         }
     }
@@ -310,7 +310,7 @@ final class PersonalContextTests: XCTestCase {
     func testSharedEntitiesAreSyncableAndShared() {
         guard #available(iOS 27, *) else { return }
         let task = TaskEntity(id: "\(a)|\(task)", title: "Ship it", subtitle: "Task")
-        let person = PersonEntity(id: "\(a)|\(person)", name: "Priya", kind: "user", subtitle: "")
+        let person = MessagePersonEntity(id: "\(a)|\(person)", name: "Priya", kind: "user", subtitle: "")
         let conversation = ConversationEntity(id: "\(a)|\(space)", name: "general", org: nil, isDirectMessage: false, pathSegment: "g", install: nil)
         let meeting = MeetingEntity(id: "\(a)|\(meeting)", name: "Standup", slug: "standup", subtitle: "")
         XCTAssertEqual(task.ownership, .shared)

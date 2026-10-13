@@ -75,13 +75,13 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             // Siri review (01a111bb stage 7, round 3): one person in the
             // people cache, `<host>|<uuid>|<name>|<kind>` on a signed-in
             // `*.invalid` host, so a system test can hand the system an
-            // entity ID and watch it resolve through PersonQuery.
+            // entity ID and watch it resolve through MessagePersonEntityQuery.
             if #available(iOS 27, *), let spec = args.string(forKey: "SuiteEvidencePerson") {
                 let parts = spec.split(separator: "|").map(String.init)
                 if parts.count == 4, parts[0].hasSuffix(".invalid") {
                     InstallStore.shared.add(host: parts[0])
                     _ = KeychainTokenStore.shared.store("evidence-placeholder", for: parts[0])
-                    PeopleCache.shared.remember([PersonEntity(id: "\(parts[0])|\(parts[1])", name: parts[2], kind: parts[3], subtitle: "Person")])
+                    PeopleCache.shared.remember([MessagePersonEntity(id: "\(parts[0])|\(parts[1])", name: parts[2], kind: parts[3], subtitle: "Person")])
                 }
             }
             if args.bool(forKey: "SuiteRequestPush") {

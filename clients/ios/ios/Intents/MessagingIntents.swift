@@ -57,7 +57,7 @@ extension MessageDestination {
     /// spoken failure, never a bare one, and logs each step.
     func resolvedBurrowDestination(site: String, choose: PersonResolver.Choose) async throws -> MessageDestinationRef {
         IntentLog.step(site, "destination=\(caseName)")
-        let person: PersonEntity
+        let person: MessagePersonEntity
         switch self {
         case .messagePerson(let entity):
             person = entity
@@ -72,7 +72,7 @@ extension MessageDestination {
                 IntentLog.step(site, "refused=several_recipients")
                 throw IntentFailure.onePersonAtATime
             }
-            person = PersonEntity(unresolved: people[0])
+            person = MessagePersonEntity(unresolved: people[0])
         }
         let found = person.isUnresolved ? try await PersonResolver.require(person.person, site: site, choose: choose) : person
         return .person(id: found.id, name: found.name, isAgent: found.isAgent)
@@ -82,7 +82,7 @@ extension MessageDestination {
 /// Builds the "which one?" prompt for an intent: up to five people, each
 /// with its subtitle (org and install), plus Cancel.
 @available(iOS 27, *)
-func choosePerson<I: AppIntent>(_ intent: I, name: String, people: [PersonEntity]) async throws -> PersonEntity {
+func choosePerson<I: AppIntent>(_ intent: I, name: String, people: [MessagePersonEntity]) async throws -> MessagePersonEntity {
     let options = people.map { IntentChoiceOption(title: LocalizedStringResource(stringLiteral: "\($0.name), \($0.subtitle)")) }
     let picked = try await intent.requestChoice(between: options + [.cancel], dialog: IntentDialog("Which \(name)?"))
     guard let index = options.firstIndex(of: picked) else { throw CancellationError() }
@@ -260,7 +260,7 @@ enum MessagingIntentSupport {
         let conversation = ConversationEntity(
             id: sent.conversationID, name: destination.burrowDestination?.name ?? "Direct message", org: nil, isDirectMessage: true,
             pathSegment: EntityRef(sent.conversationID)?.uuid ?? "", install: env.disambiguator(host))
-        let me = PersonEntity(id: EntityRef(host: host, uuid: "me").id, name: "Me", kind: "user", subtitle: "")
+        let me = MessagePersonEntity(id: EntityRef(host: host, uuid: "me").id, name: "Me", kind: "user", subtitle: "")
         return MessageEntity(id: sent.id, conversation: conversation, author: me, date: env.now())
     }
 

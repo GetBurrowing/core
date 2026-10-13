@@ -65,7 +65,7 @@ struct CallActions {
 // MARK: - iOS 27 schema types
 
 /// The phone schema's person: the same `<host>|<uuid>` people as the
-/// messages domain (PersonQuery), as a separate type because an entity has
+/// messages domain (MessagePersonEntityQuery), as a separate type because an entity has
 /// one schema.
 @available(iOS 27, *)
 @AppEntity(schema: .phone.phonePerson)
@@ -88,10 +88,10 @@ struct CallPersonEntity {
         self.id = id
         self.kind = kind
         self.subtitle = subtitle
-        self.person = PersonEntity.intentPerson(id: id, name: name)
+        self.person = MessagePersonEntity.intentPerson(id: id, name: name)
     }
 
-    init(_ entity: PersonEntity) {
+    init(_ entity: MessagePersonEntity) {
         self.init(id: entity.id, name: entity.name, kind: entity.kind, subtitle: entity.subtitle)
     }
 }
@@ -102,16 +102,16 @@ struct CallPersonEntity {
 enum CallPersonResolution {
     static func resolve(
         _ person: CallPersonEntity, env: IntentEnvironment = .current, choose: PersonResolver.Choose
-    ) async throws -> PersonEntity {
+    ) async throws -> MessagePersonEntity {
         if let ref = EntityRef(person.id), env.install(ref.host) != nil {
-            return PersonEntity(id: person.id, name: person.name, kind: person.kind, subtitle: person.subtitle)
+            return MessagePersonEntity(id: person.id, name: person.name, kind: person.kind, subtitle: person.subtitle)
         }
         return try await PersonResolver.require(person.person, site: "call", env: env, choose: choose)
     }
 }
 
 // Indexed per host (task 01a111bb stage 7) from the same people directory
-// as PersonEntity, humans only: Siri resolves "Start a meeting with Harper"
+// as MessagePersonEntity, humans only: Siri resolves "Start a meeting with Harper"
 // against the index, as it does a message recipient.
 @available(iOS 27, *)
 extension CallPersonEntity: IndexedEntity, SyncableEntity, OwnershipProvidingEntity {
@@ -128,15 +128,15 @@ extension CallPersonEntity: IndexedEntity, SyncableEntity, OwnershipProvidingEnt
 @available(iOS 27, *)
 struct CallPersonQuery: EntityStringQuery {
     func entities(for identifiers: [String]) async throws -> [CallPersonEntity] {
-        try await PersonQuery().entities(for: identifiers).map(CallPersonEntity.init)
+        try await MessagePersonEntityQuery().entities(for: identifiers).map(CallPersonEntity.init)
     }
 
     func suggestedEntities() async throws -> [CallPersonEntity] {
-        try await PersonQuery().suggestedEntities().map(CallPersonEntity.init)
+        try await MessagePersonEntityQuery().suggestedEntities().map(CallPersonEntity.init)
     }
 
     func entities(matching string: String) async throws -> [CallPersonEntity] {
-        try await PersonQuery().entities(matching: string).map(CallPersonEntity.init)
+        try await MessagePersonEntityQuery().entities(matching: string).map(CallPersonEntity.init)
     }
 }
 

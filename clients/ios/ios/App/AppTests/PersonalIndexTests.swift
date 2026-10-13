@@ -130,7 +130,7 @@ final class PersonalIndexTests: XCTestCase {
     // MARK: Finding 1 and 3: indexed at sign-in, an org mate included
 
     func testSignInIndexesTheHostsPeopleAndConversationsIncludingAnOrgMateWithNoSharedSpace() async throws {
-        guard #available(iOS 27, *) else { throw XCTSkip("PersonEntity and ConversationEntity are iOS 27") }
+        guard #available(iOS 27, *) else { throw XCTSkip("MessagePersonEntity and ConversationEntity are iOS 27") }
         let counts = await indexer().didSignIn(host: a)
 
         XCTAssertEqual(counts, PersonalIndexCounts(people: 3, conversations: 1, agents: 1))
@@ -157,7 +157,7 @@ final class PersonalIndexTests: XCTestCase {
         guard #available(iOS 27, *) else { throw XCTSkip("iOS 27") }
         await indexer().didSignIn(host: a)
         let before = StubURLProtocol.requests.count
-        let found = try await PersonQuery().entities(for: [EntityRef(host: a, uuid: priyaID).id])
+        let found = try await MessagePersonEntityQuery().entities(for: [EntityRef(host: a, uuid: priyaID).id])
         XCTAssertEqual(found.map(\.name), ["Priya A"])
         XCTAssertEqual(StubURLProtocol.requests.count, before)
     }
@@ -165,7 +165,7 @@ final class PersonalIndexTests: XCTestCase {
     func testAColdProcessResolvesAnOrgMateByIdThroughTheDirectory() async throws {
         guard #available(iOS 27, *) else { throw XCTSkip("iOS 27") }
         PeopleCache.shared.removeAll(host: a)
-        let found = try await PersonQuery().entities(for: [EntityRef(host: a, uuid: priyaID).id])
+        let found = try await MessagePersonEntityQuery().entities(for: [EntityRef(host: a, uuid: priyaID).id])
         XCTAssertEqual(found.map(\.name), ["Priya A"], "Priya is outside the recent collaborators; the directory has her")
         XCTAssertEqual(requests(host: a, path: "/api/app/people").last?.url?.query, "scope=directory")
     }
@@ -265,7 +265,7 @@ final class PersonalIndexTests: XCTestCase {
     }
 
     @available(iOS 27, *)
-    private func noChoice(_ name: String, _ people: [PersonEntity]) async throws -> PersonEntity {
+    private func noChoice(_ name: String, _ people: [MessagePersonEntity]) async throws -> MessagePersonEntity {
         XCTFail("asked which \(name) among \(people.count)")
         throw CancellationError()
     }
@@ -284,7 +284,7 @@ final class PersonalIndexTests: XCTestCase {
         XCTAssertEqual(contact.entityID, EntityRef(host: a, uuid: priyaID).id)
 
         // An unresolved entity carried from the import resolves the same way.
-        let carried = try await MessageDestination.messagePerson(PersonEntity(unresolved: siriPerson(.unknown, name: "Dalton A")))
+        let carried = try await MessageDestination.messagePerson(MessagePersonEntity(unresolved: siriPerson(.unknown, name: "Dalton A")))
             .resolvedBurrowDestination(site: "test", choose: noChoice)
         XCTAssertEqual(carried.entityID, EntityRef(host: a, uuid: daltonID).id)
     }
@@ -353,40 +353,40 @@ final class PersonalIndexTests: XCTestCase {
 }
 
 /// Task 01a111bb stage 7, round 3: on iPadOS 27.0.1 Siri resolved "Message
-/// Dalton saying ..." to the right PersonEntity, then logged "Failed to
-/// extract Person for PersonEntity(...)" and never ran the send. The cause
+/// Dalton saying ..." to the right MessagePersonEntity, then logged "Failed to
+/// extract Person for PersonEntity(...)" (its name then) and never ran the send. The cause
 /// is in the BUILT metadata, not the Swift: Xcode 27's extractor records a
 /// value representation's IntentPerson type only from a key path
-/// (`exporting: \PersonEntity.person`); a closure records nothing. This
+/// (`exporting: \MessagePersonEntity.person`); a closure records nothing. This
 /// reads the host app's own Metadata.appintents, so it fails if the
 /// declaration goes back to a closure.
-final class PersonEntityMetadataTests: XCTestCase {
-    func testPersonEntityIsRecordedAsIntentPersonExportableAndImportable() throws {
+final class MessagePersonEntityMetadataTests: XCTestCase {
+    func testMessagePersonEntityIsRecordedAsIntentPersonExportableAndImportable() throws {
         let url = Bundle.main.bundleURL.appendingPathComponent("Metadata.appintents/extract.actionsdata")
         let data = try Data(contentsOf: url)
         let root = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         let entities = try XCTUnwrap(root["entities"] as? [String: Any])
-        let person = try XCTUnwrap(entities["PersonEntity"] as? [String: Any], "PersonEntity missing from the app's metadata")
+        let person = try XCTUnwrap(entities["MessagePersonEntity"] as? [String: Any], "MessagePersonEntity missing from the app's metadata")
         let transfer = try XCTUnwrap(person["transferableContentTypes"] as? [String: Any])
         func types(_ key: String) -> [String] {
             ((transfer[key] as? [[String: Any]]) ?? []).compactMap { $0["contentType"] as? String }
         }
-        XCTAssertEqual(types("exportableTypes"), ["com.apple.appintents.IntentPerson"], "Siri cannot extract a Person from PersonEntity")
-        XCTAssertEqual(types("importableTypes"), ["com.apple.appintents.IntentPerson"], "Siri cannot hand an IntentPerson back to PersonEntity")
+        XCTAssertEqual(types("exportableTypes"), ["com.apple.appintents.IntentPerson"], "Siri cannot extract a Person from MessagePersonEntity")
+        XCTAssertEqual(types("importableTypes"), ["com.apple.appintents.IntentPerson"], "Siri cannot hand an IntentPerson back to MessagePersonEntity")
     }
 
     /// The iOS 27 schema declares MessagePerson's `person` with indexing key
     /// `primaryRecipients`; Apple's adopters carry it as
     /// `spotlightAttributeKey`, and without it Siri's planner fails
-    /// converting PersonEntity ("Type identifier conformance failed").
+    /// converting MessagePersonEntity ("Type identifier conformance failed").
     func testPersonPropertyCarriesThePrimaryRecipientsSpotlightKey() throws {
         let url = Bundle.main.bundleURL.appendingPathComponent("Metadata.appintents/extract.actionsdata")
         let data = try Data(contentsOf: url)
         let root = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         let entities = try XCTUnwrap(root["entities"] as? [String: Any])
-        let entity = try XCTUnwrap(entities["PersonEntity"] as? [String: Any])
+        let entity = try XCTUnwrap(entities["MessagePersonEntity"] as? [String: Any])
         let properties = try XCTUnwrap(entity["properties"] as? [[String: Any]])
-        let person = try XCTUnwrap(properties.first { $0["identifier"] as? String == "person" }, "PersonEntity has no `person` property")
+        let person = try XCTUnwrap(properties.first { $0["identifier"] as? String == "person" }, "MessagePersonEntity has no `person` property")
         XCTAssertEqual(person["spotlightAttributeKey"] as? String, "primaryRecipients")
     }
 }
