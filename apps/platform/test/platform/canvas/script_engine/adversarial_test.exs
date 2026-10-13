@@ -565,16 +565,28 @@ defmodule Platform.Canvas.ScriptEngine.AdversarialTest do
       assert ticks in 2..4, "tick ran #{ticks} times in 3.4 s"
     end
 
-    test "FINDING: an after(100) self-chain is not held to once a second", ctx do
+    # Stage 3 finding F4, fixed in stage 4: an `after` scheduled from a timer
+    # fire is raised to 1 s. Measured at stage 3 without it: 10 runs in 1.05 s.
+    test "an after(100) self-chain runs at most once a second over 3 s", ctx do
       bind!(ctx, "arm", "(e, ctx) => { ctx.after(100, 'tock', {}) }")
       bind!(ctx, "tock", "(e, ctx) => { ctx.increment('tocks'); ctx.after(100, 'tock', {}) }")
 
       assert {:ok, _} = call(ctx, ctx.a, "arm")
-      Process.sleep(1_050)
+      Process.sleep(3_000)
       tocks = keys(ctx.canvas)["tocks"] || 0
-      # Measured, not a bound: timer fires skip the caller's token bucket, and
-      # only `every` has a 1 s floor.
-      assert tocks >= 5, "tock ran #{tocks} times in 1.05 s"
+      # First fire at ~0.1 s (set by a call, not floored), then ~1.1, ~2.1.
+      assert tocks in 2..4, "tock ran #{tocks} times in 3 s"
+    end
+
+    test "a two-handler after(100) ping-pong is held to the same floor", ctx do
+      bind!(ctx, "arm", "(e, ctx) => { ctx.after(100, 'ping', {}) }")
+      bind!(ctx, "ping", "(e, ctx) => { ctx.increment('n'); ctx.after(100, 'pong', {}) }")
+      bind!(ctx, "pong", "(e, ctx) => { ctx.increment('n'); ctx.after(100, 'ping', {}) }")
+
+      assert {:ok, _} = call(ctx, ctx.a, "arm")
+      Process.sleep(3_000)
+      n = keys(ctx.canvas)["n"] || 0
+      assert n in 2..4, "ping/pong ran #{n} times in 3 s"
     end
 
     test "calls run 4 at once, queue 16 more, then busy", ctx do

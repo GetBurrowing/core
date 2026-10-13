@@ -168,9 +168,12 @@ defmodule Platform.Chat.CanvasRoom do
   fire runs that handler like a call, as the actor who scheduled it.
   `ctx.cancel(handler)` removes it, and re-scheduling a name replaces it.
   Caps: at most 16 named handler timers per room (`too_many_timers`),
-  `after` in 100..86_400_000 ms, `every` in 1_000..86_400_000 ms. Effects
-  are checked before any op is applied, so a refused effect applies
-  nothing.
+  `after` in 100..86_400_000 ms, `every` in 1_000..86_400_000 ms. An
+  `after` scheduled by a run that a TIMER fired is raised to 1_000 ms
+  (stage 4, finding F4): a timer fire is not charged to any token bucket,
+  so without the floor an `after(100)` self-chain ran 10 times a second.
+  Effects are checked before any op is applied, so a refused effect
+  applies nothing.
 
   **Timers are not persisted.** They live in the room process, and
   `terminate/2` cancels them all, so a stopped room fires nothing, and a
@@ -219,6 +222,7 @@ defmodule Platform.Chat.CanvasRoom do
   @max_handler_timers 16
   @after_ms_range 100..86_400_000
   @every_ms_range 1_000..86_400_000
+  @timer_chain_floor_ms 1_000
   @max_call_args_bytes 16_384
   @handler_op_keys ~w(type key value by name item id patch)
 
@@ -252,6 +256,7 @@ defmodule Platform.Chat.CanvasRoom do
       max_handler_timers: @max_handler_timers,
       after_ms: @after_ms_range,
       every_ms: @every_ms_range,
+      timer_chain_floor_ms: @timer_chain_floor_ms,
       max_call_args_bytes: @max_call_args_bytes
     }
   end
@@ -917,10 +922,19 @@ defmodule Platform.Chat.CanvasRoom do
 
       true ->
         every = if type == "every", do: ms, else: nil
+        ms = timer_floor(type, ms, inv)
         msg = {:fire, handler, args, inv.actor, inv.runtime, every}
         {:ok, {:schedule, "t:" <> handler, ms, msg}}
     end
   end
+
+  # A timer fire skips the caller's token bucket, so an `after` scheduled
+  # FROM a timer fire gets `every`'s 1 s floor (task 01a1316b-aab0 stage 4,
+  # finding F4). It is clamped, not refused: a chain keeps running, at most
+  # once a second per hop. Keyed on the trigger rather than the handler name,
+  # so a two-handler ping-pong is held to it too.
+  defp timer_floor("after", ms, %{trigger: "timer"}), do: max(ms, @timer_chain_floor_ms)
+  defp timer_floor(_type, ms, _inv), do: ms
 
   defp plan_effect(%{"type" => "cancel", "name" => name}, _inv) when is_binary(name),
     do: {:ok, {:cancel, "t:" <> name}}
