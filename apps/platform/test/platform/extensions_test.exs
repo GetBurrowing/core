@@ -529,7 +529,10 @@ defmodule Platform.ExtensionsTest do
       {"dispatch_metrics_list", "experiments"},
       {"code_mode_report", "experiments"},
       {"suite_run", "code_mode"},
-      {"suite_run_describe", "code_mode"}
+      {"suite_run_describe", "code_mode"},
+      {"prototype.publish", "prototype"},
+      {"prototype.versions", "prototype"},
+      {"prototype.rollback", "prototype"}
     ]
 
     # Re-pinned by task 01a0fcfa stage 1: attachment.get_inline's `returns`
@@ -569,12 +572,15 @@ defmodule Platform.ExtensionsTest do
     # Re-pinned at the stack/feedback-intake-boundary merge of origin/main
     # (c135cbe7, PR #1226): the stack's surface with main's Fabrikam-scrubbed tool
     # copy. Measured on moon at the merge.
-    @main_tool_digest_off "117e4578b58c81a1c77552b7d6e5a99a20e9e20c55212208e3c6721d29e6e1e2"
+    #
+    # Re-pinned by task 01a1316b-4e46 stage 1: the `prototype` bundle's three
+    # tools, last. Measured on moon at the stage's branch.
+    @main_tool_digest_off "ff95f1f88a977407f31860021d3000047d793aaecd0439080c507fc909602e93"
     @main_kinds_summaries_digest_off "4c060fb7a6914985f94857aaac9effbb519dd2b2170c7a9c0013d4db15a73ea4"
     @main_kinds_tool_schemas_digest_off "e454cd9e2aeb1d821a70b74fe433e81ba98b94f7ae9f2d59c55f8cf5bf509af8"
     # main's lists minus exactly `play`.
-    @core_bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode)
-    @core_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode)
+    @core_bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode prototype)
+    @core_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode prototype)
     @main_rail [
       :chat,
       :tasks,

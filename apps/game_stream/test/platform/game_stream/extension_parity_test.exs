@@ -254,7 +254,10 @@ defmodule Platform.GameStream.ExtensionParityTest do
       {"dispatch_metrics_list", "experiments"},
       {"code_mode_report", "experiments"},
       {"suite_run", "code_mode"},
-      {"suite_run_describe", "code_mode"}
+      {"suite_run_describe", "code_mode"},
+      {"prototype.publish", "prototype"},
+      {"prototype.versions", "prototype"},
+      {"prototype.rollback", "prototype"}
     ]
 
     # sha256 of the canonical term of `tool_definitions/0` on main (see
@@ -300,15 +303,19 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # (PR #1226): the stack's kind, external-feedback provenance and
     # `janitor_hand_back` (task 019fa1ac-6685) on main's scrubbed copy. Both
     # values measured on moon at the merge; off equals extensions_test.exs.
-    @main_tool_digest_off "117e4578b58c81a1c77552b7d6e5a99a20e9e20c55212208e3c6721d29e6e1e2"
-    @main_tool_digest_on "279cc1b431d875c9494ced8750851d788afbfba49766baa66d4eb1465d152942"
+    #
+    # Re-pinned by task 01a1316b-4e46 stage 1: the `prototype` bundle's three
+    # tools, after core's others. Both values measured on moon at the stage's
+    # branch; off equals extensions_test.exs.
+    @main_tool_digest_off "ff95f1f88a977407f31860021d3000047d793aaecd0439080c507fc909602e93"
+    @main_tool_digest_on "bd228b6819b15e0759c720b50717945f34dabe5776eabe666675c2c44745534c"
     @main_kinds_summaries_digest_off "4c060fb7a6914985f94857aaac9effbb519dd2b2170c7a9c0013d4db15a73ea4"
     @main_kinds_summaries_digest_on "dbab62a1b3d154e23378f3a990b77deb17c5f50eb30adf0b055bc0df8ce6c1e3"
     @main_kinds_tool_schemas_digest_off "e454cd9e2aeb1d821a70b74fe433e81ba98b94f7ae9f2d59c55f8cf5bf509af8"
     @main_kinds_tool_schemas_digest_on "66a2afcec34a8e4b6275ab78f21f7bb124b671a12f690399556b2ad6f2b331ef"
     @main_metrics_catalog_digest "95805ed557855b482286544ea8d5ea6063b81e47ce1ee28268467a7df2848ee9"
-    @main_bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode play)
-    @main_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode play)
+    @main_bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode prototype play)
+    @main_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode prototype play)
     @main_rail [
       :chat,
       :tasks,

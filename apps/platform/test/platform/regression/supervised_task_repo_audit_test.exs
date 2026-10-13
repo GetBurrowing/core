@@ -255,6 +255,9 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
     # soft-deleted platform_files (bytes + row) once the 30-day restore
     # window elapses. Tests call `Platform.Files.Purger.sweep/1` directly.
     :start_file_purger,
+    # Task 01a1316b-4e46 stage 1 — prototype version retention. Same shape as
+    # the file purger. Tests call `Platform.Prototypes.Purger.sweep/1` directly.
+    :start_prototype_purger,
     # Task 019fb978 stage 2 — the declarative TaskRouter watcher. This entry
     # is the audit test working exactly as designed: adding the gate to
     # application.ex failed this assertion on the first full-suite run, which

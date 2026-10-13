@@ -227,6 +227,10 @@ config :platform, :start_deploy_merge_reconciler, false
 # inside the DataCase sandbox instead of racing a global daily ticker.
 config :platform, :start_file_purger, false
 
+# PrototypePurger (task 01a1316b-4e46 stage 1): tests call `sweep/1` directly
+# inside the DataCase sandbox instead of racing a global daily ticker.
+config :platform, :start_prototype_purger, false
+
 # CatalogEmitter (task 01a0008c stage 3): a globally-booted instance would
 # subscribe to `[:platform, :files, :ingested, :stop]` for the whole suite
 # and then run Repo queries from a process that owns no sandbox

@@ -31,7 +31,10 @@ defmodule Platform.Agents.AgentRuntime do
   # `code_mode` (task 01a114a8 stage 2, `suite_run`) is grantable and NOT a
   # default: it runs agent-written programs, so it is granted per runtime as
   # data (Control Center allowed_bundles), never by a deploy.
-  @core_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode)
+  #
+  # `prototype` (task 01a1316b-4e46 stage 1, ADR 0057) is grantable and NOT a
+  # default either; publishing is also off per install until an admin turns it on.
+  @core_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode prototype)
 
   # `meetings` is a DEFAULT, not merely grantable (task 01a066af stage 4).
   # `meeting_say` is the only way an invited agent can speak in a room, and it

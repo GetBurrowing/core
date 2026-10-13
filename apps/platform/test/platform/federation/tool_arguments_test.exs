@@ -192,7 +192,12 @@ defmodule Platform.Federation.ToolArgumentsTest do
   # an absent or malformed task_id (`invalid_task_id`) and an absent or
   # unknown reason (`invalid_reason`) before it opens a transaction. No
   # alias, no context fallback.
-  @surveyed_required_count 176
+  # 179 with `prototype.versions`' `prototype_id` and `prototype.rollback`'s
+  # `prototype_id` and `version` (task 01a1316b-4e46 stage 1). HONEST, all
+  # three: `Platform.Prototypes.Tools` reads each under its declared key only
+  # (`require_string/2`, `require_integer/2`) and refuses an absent value with
+  # `invalid_argument` before any read or write. No alias, no context fallback.
+  @surveyed_required_count 179
 
   defp read_source(relative) do
     # Resolved from __DIR__ (apps/platform/test/platform/federation) rather
