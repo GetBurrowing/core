@@ -27,6 +27,16 @@ struct PersonEntity {
     let id: String
     /// The schema's person: the display name, and the `<host>|<uuid>` id as
     /// both identifier and handle. Nothing else (no email, no phone).
+    ///
+    /// The indexing key is the schema's (`AppIntentSchemas.sqlite` declares
+    /// `person` with `indexingKey: primaryRecipients`), and it is what puts
+    /// `spotlightAttributeKey: primaryRecipients` on `person` in the built
+    /// Metadata.appintents, as ChatKit's MessagePerson and
+    /// SiriMessagesFlowTools' MessagePersonEntity carry it. Without it Siri's
+    /// planner failed converting PersonEntity ("Type identifier conformance
+    /// failed", FlowToolTransformationError 3; iPadOS 27).
+    /// PersonEntityMetadataTests pins it.
+    @Property(indexingKey: \.primaryRecipients)
     var person: IntentPerson
     /// `user` or `agent`. An agent's DM opens through `/agents/:id/dm`.
     var kind: String
@@ -113,7 +123,8 @@ extension PersonEntity: Transferable {}
 extension PersonEntity: IndexedEntity, SyncableEntity, OwnershipProvidingEntity {
     var ownership: EntityOwnership { .shared }
 
-    /// The schema's mapping (`person` -> `primaryRecipients`), plus the name
+    /// The schema's mapping (`person` -> `primaryRecipients`, declared by
+    /// `@Property(indexingKey:)` on `person`), plus the name
     /// as display name and the given name as an alternate, so "Dalton"
     /// matches "Dalton Rourke" (task 01a111bb stage 7).
     var attributeSet: CSSearchableItemAttributeSet {

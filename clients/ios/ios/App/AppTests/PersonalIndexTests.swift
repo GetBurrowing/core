@@ -374,4 +374,19 @@ final class PersonEntityMetadataTests: XCTestCase {
         XCTAssertEqual(types("exportableTypes"), ["com.apple.appintents.IntentPerson"], "Siri cannot extract a Person from PersonEntity")
         XCTAssertEqual(types("importableTypes"), ["com.apple.appintents.IntentPerson"], "Siri cannot hand an IntentPerson back to PersonEntity")
     }
+
+    /// The iOS 27 schema declares MessagePerson's `person` with indexing key
+    /// `primaryRecipients`; Apple's adopters carry it as
+    /// `spotlightAttributeKey`, and without it Siri's planner fails
+    /// converting PersonEntity ("Type identifier conformance failed").
+    func testPersonPropertyCarriesThePrimaryRecipientsSpotlightKey() throws {
+        let url = Bundle.main.bundleURL.appendingPathComponent("Metadata.appintents/extract.actionsdata")
+        let data = try Data(contentsOf: url)
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let entities = try XCTUnwrap(root["entities"] as? [String: Any])
+        let entity = try XCTUnwrap(entities["PersonEntity"] as? [String: Any])
+        let properties = try XCTUnwrap(entity["properties"] as? [[String: Any]])
+        let person = try XCTUnwrap(properties.first { $0["identifier"] as? String == "person" }, "PersonEntity has no `person` property")
+        XCTAssertEqual(person["spotlightAttributeKey"] as? String, "primaryRecipients")
+    }
 }
