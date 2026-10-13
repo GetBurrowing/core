@@ -148,6 +148,11 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
                  recoverable: true
                }}
 
+            # A refused scripted embed (`prototypes_disabled`,
+            # `scripted_embed_requires_org`, ...; task 01a1316b-677a).
+            {:error, %{code: code, message: message}} ->
+              {:error, %{error: "canvas.create: #{message}", code: code, recoverable: true}}
+
             {:error, reason} ->
               {:error,
                %{
@@ -199,6 +204,9 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
              suggestion:
                "Use canvas.describe to fetch the current revision and tree, then retry with a corrected patch."
            }}
+
+        {:error, %{code: code, message: message}} ->
+          {:error, %{error: "canvas.patch: #{message}", code: code, recoverable: true}}
 
         {:error, reason} ->
           {:error, %{error: "canvas.patch failed: #{inspect(reason)}", recoverable: true}}

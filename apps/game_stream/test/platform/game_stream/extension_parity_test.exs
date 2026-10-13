@@ -312,12 +312,18 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # last in core's registry, which also enters canvas.create/patch's
     # document schema. All six values measured on moon at the stage's branch;
     # off equals extensions_test.exs.
-    @main_tool_digest_off "180f6e8da608728ed792184c3aa348bc1f980600753cef42a157e618220beb2c"
-    @main_tool_digest_on "c81a5cd609e066f8f1dd871890d6550c0d551baaaf77e75f76b4a39d17dac7d4"
-    @main_kinds_summaries_digest_off "394dc7d23738eb9c9f99c3647bf488a96353bd3c98ce6857a7d5bbcb8f916486"
-    @main_kinds_summaries_digest_on "6545a2e20a40269cbb51785f2d935253c76e31cfab44b0f758a3ff0208c50e10"
-    @main_kinds_tool_schemas_digest_off "b1090427b0b4fffc83abc9ab6c004043d6747489a3876d1f3e9a49668a60f6ba"
-    @main_kinds_tool_schemas_digest_on "8cf9a172cc8e28b7be114f5685529ee21035c50d14feb4598fe07d8c0941b7e5"
+    #
+    # Re-pinned by task 01a1316b-677a stage 1: the `embed` kind's `scripts`
+    # and `prototype_ref` props and its srcdoc / list_kinds text, which also
+    # enter canvas.create/patch's document schema. All six values measured on
+    # moon at the stage's branch; off equals extensions_test.exs. The metrics
+    # catalog digest is unchanged.
+    @main_tool_digest_off "099906a5cef8f4dc183711b2c984fbd6757be4841c7191797c261636944ef9bc"
+    @main_tool_digest_on "93f090489348985b55026c0107d9ff59035b0c737b238dd42ce99776d817a056"
+    @main_kinds_summaries_digest_off "26c0704185201d0926a8bcb6db6be411b821c54fcba3269676c631969944df72"
+    @main_kinds_summaries_digest_on "f71832b549f7a8674c01fff90be91d869b6eea222c9cdd888723d5045ec3c450"
+    @main_kinds_tool_schemas_digest_off "264902e4c54f3146fe5be6e658c4717aafc6382ea233523ca505607d848e0925"
+    @main_kinds_tool_schemas_digest_on "cf59e8e3a7215086fa324ffa7c036b076527cd20b7dbdf5bf32eba51fb6cddbe"
     @main_metrics_catalog_digest "95805ed557855b482286544ea8d5ea6063b81e47ce1ee28268467a7df2848ee9"
     @main_bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode prototype play)
     @main_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode prototype play)

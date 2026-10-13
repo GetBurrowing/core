@@ -142,7 +142,11 @@ defmodule Platform.Chat.Canvas.Kinds do
 
   defp describe("embed"),
     do:
-      "Sandboxed inline-HTML mockup. `srcdoc` carries a complete HTML document; rendered as an iframe with `sandbox=\"\"` (no JS execution)."
+      "Sandboxed inline-HTML mockup. `srcdoc` carries a complete HTML document; by default " <>
+        "rendered as an iframe with `sandbox=\"\"` (no JS execution). Set `scripts: true` for " <>
+        "interactive mockups and small widgets that need JS: the HTML then runs sealed " <>
+        "(`sandbox=\"allow-scripts\"`, no network, no Suite cookies, no access to the " <>
+        "surrounding page) and needs prototypes enabled by an admin."
 
   defp describe("table"), do: "Tabular data. `columns` + `rows` as props; no children."
   defp describe("form"), do: "Form with inline fields. Emits a `submitted` event on send."

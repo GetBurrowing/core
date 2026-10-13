@@ -4103,7 +4103,10 @@ defmodule Platform.Chat do
 
     multi =
       Multi.new()
-      |> Multi.insert(:canvas, Canvas.changeset(%Canvas{}, attrs))
+      |> Multi.insert(:inserted_canvas, Canvas.changeset(%Canvas{}, attrs))
+      |> Multi.run(:canvas, fn repo, %{inserted_canvas: canvas} ->
+        stamp_scripted_embeds(repo, canvas, CanvasVersions.attribution_from_canvas(canvas))
+      end)
       |> CanvasSearchIndex.upsert_multi(:canvas_search, & &1.canvas)
       |> Multi.merge(fn %{canvas: canvas} ->
         version_revision = canvas_version_revision(canvas)
@@ -4124,11 +4127,32 @@ defmodule Platform.Chat do
         publish_canvas_created(canvas)
         {:ok, canvas}
 
-      {:error, :canvas, %Ecto.Changeset{} = changeset, _} ->
+      {:error, step, %Ecto.Changeset{} = changeset, _} when step in [:inserted_canvas, :canvas] ->
         {:error, changeset}
 
       {:error, _step, reason, _} ->
         {:error, reason}
+    end
+  end
+
+  # Task 01a1316b-677a: stamp every embed's `prototype_ref`
+  # (`Platform.Chat.Canvas.ScriptedEmbeds`) AFTER the insert, because a
+  # canvas-owned prototype references the canvas row, and inside the same
+  # transaction, so a refused stamp (`prototypes_disabled`, ...) creates no
+  # canvas. A document with no scripted embed and no stray ref is untouched
+  # and costs no query.
+  defp stamp_scripted_embeds(repo, %Canvas{} = canvas, attribution) do
+    ctx = %{canvas_id: canvas.id, space_id: canvas.space_id, actor: attribution}
+
+    case Platform.Chat.Canvas.ScriptedEmbeds.stamp(canvas.document, ctx) do
+      {:ok, document, _verified} when document == canvas.document ->
+        {:ok, canvas}
+
+      {:ok, document, _verified} ->
+        canvas |> Canvas.changeset(%{"document" => document}) |> repo.update()
+
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -4152,7 +4176,7 @@ defmodule Platform.Chat do
 
     multi =
       Multi.new()
-      |> Multi.run(:canvas, fn repo, _changes ->
+      |> Multi.run(:inserted_canvas, fn repo, _changes ->
         attrs
         |> Map.put("space_id", space_id)
         |> Map.put("created_by", participant_id)
@@ -4160,6 +4184,17 @@ defmodule Platform.Chat do
         |> Map.put("created_by_participant_type", snapshot[:author_participant_type])
         |> then(&Canvas.changeset(%Canvas{}, &1))
         |> repo.insert()
+      end)
+      |> Multi.run(:canvas, fn repo, %{inserted_canvas: canvas} ->
+        stamp_scripted_embeds(
+          repo,
+          canvas,
+          CanvasVersions.attribution_from_fields(%{
+            type: snapshot[:author_participant_type] || "unknown",
+            id: participant_id,
+            display_name: snapshot[:author_display_name]
+          })
+        )
       end)
       |> CanvasSearchIndex.upsert_multi(:canvas_search, & &1.canvas)
       |> Multi.run(:message, fn repo, %{canvas: canvas} ->
@@ -4298,7 +4333,14 @@ defmodule Platform.Chat do
 
     multi =
       Multi.new()
-      |> Multi.update(:canvas, Canvas.changeset(canvas, attrs))
+      |> Multi.update(:updated_canvas, Canvas.changeset(canvas, attrs))
+      |> Multi.run(:canvas, fn repo, %{updated_canvas: updated} ->
+        # Only a write that changes the document can change an embed.
+        if Map.has_key?(attrs, "document") and updated.document != canvas.document,
+          do:
+            stamp_scripted_embeds(repo, updated, CanvasVersions.attribution_from_canvas(updated)),
+          else: {:ok, updated}
+      end)
       |> CanvasSearchIndex.upsert_multi(:canvas_search, & &1.canvas)
 
     case Repo.transaction(multi) do
@@ -4306,7 +4348,7 @@ defmodule Platform.Chat do
         publish_canvas_updated(updated)
         {:ok, updated}
 
-      {:error, :canvas, %Ecto.Changeset{} = changeset, _} ->
+      {:error, step, %Ecto.Changeset{} = changeset, _} when step in [:updated_canvas, :canvas] ->
         {:error, changeset}
 
       {:error, _step, reason, _} ->

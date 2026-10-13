@@ -20,6 +20,18 @@ defmodule Platform.Prototypes do
   on) or `%{kind: :user, user: user}`. Org SCOPE for an agent (a tenant agent
   may only publish into its own org) is checked by the tool layer before it
   gets here; `authorize_publish/3` decides the install POLICY.
+
+  ## Canvas-owned prototypes (task 01a1316b-677a)
+
+  A canvas `embed` with `scripts: true` runs its `srcdoc` as a single-file
+  prototype owned by that (canvas, node): `publish_embed/1`, called by
+  `Platform.Chat.Canvas.ScriptedEmbeds` on every canvas write. Those
+  prototypes are not publishable or rollback-able through `publish/3` /
+  `rollback/3` (`:canvas_owned`), so nothing can push a multi-file bundle
+  into someone's embed. `who_may_publish` is NOT applied to them: canvas
+  write access (`Platform.Chat.CanvasAccess`) already authorized the write
+  that carries the HTML. `Settings.enabled` IS applied, but only to a write
+  that needs a NEW version.
   """
 
   import Ecto.Query, only: [from: 2]
@@ -213,6 +225,10 @@ defmodule Platform.Prototypes do
   """
   @spec publish(publisher(), map(), input()) ::
           {:ok, %{prototype: Prototype.t(), version: Version.t()}} | error()
+  def publish(_publisher, %{prototype: %Prototype{canvas_id: canvas_id} = p}, _input)
+      when not is_nil(canvas_id),
+      do: canvas_owned_error(p)
+
   def publish(publisher, attrs, input) do
     settings = Settings.get()
     limits = %{max_files: settings.max_files, max_bytes: settings.max_bundle_bytes}
@@ -337,7 +353,7 @@ defmodule Platform.Prototypes do
   defp lock_or_create(attrs, prototype_id, publisher) do
     changeset =
       attrs
-      |> Map.take([:org_id, :space_id, :name])
+      |> Map.take([:org_id, :space_id, :name, :canvas_id, :canvas_node_id])
       |> Map.merge(creator(publisher))
       |> Prototype.create_changeset()
       |> Ecto.Changeset.put_change(:id, prototype_id)
@@ -360,6 +376,7 @@ defmodule Platform.Prototypes do
     do: %{created_by_agent_id: agent_id, created_by_user_id: owner_id(p)}
 
   defp creator(%{kind: :user, user: user}), do: %{created_by_user_id: user.id}
+  defp creator(%{kind: :canvas_embed}), do: %{}
 
   defp owner_id(%{owner_user: %{id: id}}), do: id
   defp owner_id(_), do: nil
@@ -369,6 +386,127 @@ defmodule Platform.Prototypes do
 
   defp published_by(%{kind: :user, user: user}), do: %{"kind" => "user", "id" => user.id}
 
+  defp published_by(%{kind: :canvas_embed} = p),
+    do: %{
+      "kind" => "canvas_embed",
+      "canvas_id" => p.canvas_id,
+      "node_id" => p.node_id,
+      "author" => p.author
+    }
+
+  # ── Canvas embeds ──────────────────────────────────────────────────────
+
+  @embed_entry "index.html"
+
+  @doc """
+  The version a `scripts: true` canvas embed runs as (task 01a1316b-677a).
+
+  `attrs`: `:org_id` (the canvas's space org), `:space_id`, `:canvas_id`,
+  `:node_id`, `:html` (the node's `srcdoc`) and `:actor` (the canvas write's
+  attribution map, recorded in `published_by`).
+
+  Finds the prototype owned by (`canvas_id`, `node_id`), creating it on first
+  use. A live version whose `index.html` has this HTML's sha256 is REUSED, so
+  an identical re-patch, or a restore to an older canvas revision, creates
+  nothing and needs no settings check. Otherwise a single-file version N+1 is
+  published, which requires `Settings.enabled`.
+
+  Returns `{:ok, %{"prototype_id", "version", "sha256"}}` (the node's
+  `prototype_ref`) or a coded error (`:prototypes_disabled`, a bundle cap).
+  """
+  @spec publish_embed(map()) :: {:ok, map()} | error()
+  def publish_embed(%{canvas_id: canvas_id, node_id: node_id, html: html} = attrs)
+      when is_binary(canvas_id) and is_binary(node_id) and is_binary(html) do
+    sha = sha256_hex(html)
+    owned = canvas_prototype(canvas_id, node_id)
+
+    case owned && version_with_entry_sha(owned.id, sha) do
+      %Version{version: version} ->
+        {:ok, embed_ref(owned.id, version, sha)}
+
+      _ ->
+        publish_embed_version(owned, attrs, sha)
+    end
+  end
+
+  @doc "The sha256 a `prototype_ref` records: lowercase hex of the bytes."
+  @spec sha256_hex(binary()) :: String.t()
+  def sha256_hex(bytes) when is_binary(bytes),
+    do: :crypto.hash(:sha256, bytes) |> Base.encode16(case: :lower)
+
+  defp publish_embed_version(owned, attrs, sha) do
+    settings = Settings.get()
+    limits = %{max_files: settings.max_files, max_bytes: settings.max_bundle_bytes}
+
+    with :ok <- embed_enabled(settings),
+         {:ok, files} <- Bundle.from_files(%{@embed_entry => %{"content" => attrs.html}}, limits) do
+      publisher = %{
+        kind: :canvas_embed,
+        canvas_id: attrs.canvas_id,
+        node_id: attrs.node_id,
+        author: Map.get(attrs, :actor) || %{}
+      }
+
+      {target, prototype_id} =
+        case owned do
+          %Prototype{id: id} ->
+            {%{prototype: owned}, id}
+
+          nil ->
+            {%{
+               org_id: attrs.org_id,
+               space_id: Map.get(attrs, :space_id),
+               name: String.slice("Canvas embed #{attrs.node_id}", 0, 200),
+               canvas_id: attrs.canvas_id,
+               canvas_node_id: attrs.node_id
+             }, Platform.Types.UUIDv7.generate()}
+        end
+
+      case write_version(publisher, target, prototype_id, @embed_entry, files) do
+        {:ok, %{prototype: p, version: v}} -> {:ok, embed_ref(p.id, v.version, sha)}
+        {:error, _} = error -> error
+      end
+    end
+  end
+
+  defp embed_enabled(%Settings{enabled: true}), do: :ok
+
+  defp embed_enabled(_),
+    do:
+      {:error,
+       {:prototypes_disabled,
+        "scripted embeds need prototypes, which are turned off on this install " <>
+          "(an admin enables them at /admin/prototypes); edits to other nodes still work"}}
+
+  defp canvas_prototype(canvas_id, node_id) do
+    Repo.one(
+      from(p in Prototype, where: p.canvas_id == ^canvas_id and p.canvas_node_id == ^node_id)
+    )
+  end
+
+  # The newest live version whose entry file has `sha`. Versions are scanned
+  # in memory: a canvas-owned prototype has one single-file version per
+  # distinct HTML edit, and this runs only when the canvas server's cache of
+  # verified refs misses.
+  defp version_with_entry_sha(prototype_id, sha) do
+    from(v in Version,
+      where: v.prototype_id == ^prototype_id and is_nil(v.removed_at),
+      order_by: [desc: v.version]
+    )
+    |> Repo.all()
+    |> Enum.find(fn v -> match?(%{"sha256" => ^sha}, Version.file(v, v.entry_path)) end)
+  end
+
+  defp embed_ref(prototype_id, version, sha),
+    do: %{"prototype_id" => prototype_id, "version" => version, "sha256" => sha}
+
+  defp canvas_owned_error(%Prototype{id: id}),
+    do:
+      {:error,
+       {:canvas_owned,
+        "prototype #{id} runs a canvas embed (scripts: true); change it by patching " <>
+          "that embed's srcdoc, not with prototype_publish or prototype_rollback"}}
+
   # ── Rollback ───────────────────────────────────────────────────────────
 
   @doc """
@@ -376,6 +514,10 @@ defmodule Platform.Prototypes do
   as publishing. No bytes move.
   """
   @spec rollback(publisher(), Prototype.t(), integer()) :: {:ok, Prototype.t()} | error()
+  def rollback(_publisher, %Prototype{canvas_id: canvas_id} = prototype, _version)
+      when not is_nil(canvas_id),
+      do: canvas_owned_error(prototype)
+
   def rollback(publisher, %Prototype{} = prototype, version) when is_integer(version) do
     with :ok <- authorize_publish(Settings.get(), publisher, prototype.org_id) do
       case get_live_version(prototype.id, version) do

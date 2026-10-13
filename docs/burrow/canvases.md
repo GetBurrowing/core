@@ -20,7 +20,7 @@ A canvas is a tree of nodes. Each node has an `id`, a `type` (its kind) and `pro
 - **Media and code:** `image`, `code` and `mermaid` (diagrams).
 - **Structure:** `table`, plus `checklist` with its `checklist_item` children.
 - **Input:** `form` and `action_row`, for collecting answers and choices from people.
-- **Embed:** `embed` renders a full HTML document in a sandboxed frame with no scripts, forms, popups or navigation. The HTML may not contain a script tag and is capped at 256 KB. Width and height are declared, and the frame scales down to fit narrow screens.
+- **Embed:** `embed` renders a full HTML document in a sandboxed frame with no scripts, forms, popups or navigation. The HTML may not contain a script tag and is capped at 256 KB. Width and height are declared, and the frame scales down to fit narrow screens. Set `scripts: true` and the HTML may carry scripts: it then runs sealed, the same way a `prototype` does, with no network, no Suite cookies and no access to the page around it. Each edit of a scripted embed's HTML is kept as a version, so canvas history and restore show the HTML that was live then. Scripted embeds need prototypes turned on by an admin; while they are off, adding a scripted embed or changing its HTML is refused, and other edits to the canvas still work.
 - **Prototype:** `prototype` frames a published, versioned prototype: a clickable bundle of HTML, CSS, JavaScript and images. Unlike `embed`, its scripts run, sealed in a sandboxed frame with no network and no Suite access. Props: `prototype_id` (required), `version` (pin one; absent follows the latest), and the same `width`, `height` and `min_scale` as `embed`. It only frames a prototype of the same org as the space. A bar above the frame shows the title and the version stamp, which opens the version list.
 - **Game stream:** a playable stream of a task's review build. It comes from the optional Play module and exists only on installs where Play is enabled. Without Play, a document that holds one still opens, and that node shows a placeholder.
 
@@ -53,7 +53,7 @@ A prototype is published as a bundle: a zip, or a map of files, with an `index.h
 
 - **Presenting structured or visual work:** status boards, comparisons, diagrams, screenshots.
 - **Giving a reviewer evidence:** a canvas of screenshots with captions, attached to the task.
-- **Showing a design mockup:** an `embed` of the HTML and CSS.
+- **Showing a design mockup:** an `embed` of the HTML and CSS. Add `scripts: true` when one page needs a little JavaScript, such as a counter, a toggle or a tab switch.
 - **Letting people click through a design:** a `prototype`, when the mockup needs scripts, several pages or a deep link.
 - **Keeping one document current:** patch the same canvas instead of posting new messages.
 
@@ -72,7 +72,7 @@ A prototype is published as a bundle: a zip, or a map of files, with an `index.h
 - **Patching from memory.** A patch against an old revision is rebased or rejected. Read the canvas with `canvas.describe` first.
 - **Pointing an image at an outside URL or a data URI.** Both are rejected. Upload the bytes and use the attachment URL.
 - **Pasting a link the reader cannot open.** A canvas in an execution space opens only through its task. Attach it with `task_attach_canvas` before you share the link.
-- **Putting a script in an embed.** The embed is refused. Embeds are for static HTML and CSS. Publish a `prototype` when the design needs scripts.
+- **Putting a script in an embed without `scripts: true`.** The embed is refused. Set `scripts: true` for a single page with scripts, or publish a `prototype` when the design needs several files, several pages or a deep link.
 - **Framing another org's prototype.** The canvas shows "This prototype is not available". A prototype opens only in a space of its own org.
 - **Encoding a nested document as a JSON string.** Pass props, children and documents as objects and arrays.
 

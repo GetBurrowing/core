@@ -811,8 +811,12 @@ defmodule Platform.RepoLookupBoundaryTest do
     {"platform/federation/tool_surface.ex", :get, "~schema", 1, :safe_internal,
      "the single Repo.get inside get_by_uuid/2, the module's boundary-safe lookup helper: every id reaching it has already passed Platform.UUID.valid?/1. The load_agent/1, plan_approve, stage_complete, agent_home_org/1 and list_org_descendants/1 sites were all rewritten onto it"},
     # ── Prototypes (task 01a1316b-4e46 stage 1, ADR 0057) ─────────────
-    {"platform/prototypes.ex", :platform_uuid_guard, "-", 1, :safe_internal,
-     "get_prototype/1's predicate: the id arrives as a `/proto/:id/...` URL path segment and as the `prototype_id` MCP tool argument, so Platform.UUID.valid?/1 folds a malformed id into the nil (404 / not_found) an unknown id already returns"},
+    {"platform/prototypes.ex", :platform_uuid_guard, "-", 2, :safe_internal,
+     "get_prototype/1's predicate: the id arrives as a `/proto/:id/...` URL path segment and as the `prototype_id` MCP tool argument, so Platform.UUID.valid?/1 folds a malformed id into the nil (404 / not_found) an unknown id already returns. The second call (task 01a1316b-4e46 stage 2, counted here by 01a1316b-677a) is publisher_names/1's filter on the ids read out of `published_by` jsonb before `where: u.id in ^ids` / `a.id in ^ids`, so a malformed stored id is dropped rather than raising"},
+    {"platform/chat/canvas/kinds/prototype.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "validate_prototype_id/1 (task 01a1316b-4e46 stage 2, classified by 01a1316b-677a): the `prototype_id` node prop is agent-written, and the guard refuses a malformed one at validation, so no non-UUID ever reaches Prototypes.frame_view/3. No Repo call in this file"},
+    {"platform/chat/canvas/kinds/embed.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "scripted_src/1 (task 01a1316b-677a): `prototype_ref.prototype_id` is stamped by the server, but render does not trust it, so a malformed id renders the unavailable panel instead of a /proto URL. No Repo call in this file; render stays pure"},
     {"platform/prototypes.ex", :get, "Prototype", 1, :safe_internal,
      "the sole Repo.get sits inside get_prototype/1, behind the Platform.UUID.valid?/1 guard counted above; the two entries fail together if either is removed"},
     {"platform/prototypes/tools.ex", :platform_uuid_guard, "-", 1, :safe_internal,
@@ -1308,7 +1312,11 @@ defmodule Platform.RepoLookupBoundaryTest do
     # `lock_or_create/3` just locked or inserted) and an integer version the
     # controller has already parsed. No caller-supplied string reaches either
     # where clause.
-    "platform/prototypes.ex" => 2,
+    # Task 01a1316b-677a stage 1: 2 -> 3, triaged by hand. canvas_prototype/2
+    # pins `canvas_id` to the id of a loaded `%Canvas{}` (the canvas server's
+    # state, or the row the create Multi just inserted) and `canvas_node_id`,
+    # a `:string` column, so no cast and no CastError is reachable.
+    "platform/prototypes.ex" => 3,
     # Task 01a10882 stage 1: 0 -> 2, triaged by hand. `user_participant/2`
     # pins `p.space_id` and `p.participant_id` to ids read off the `%Space{}`
     # `Chat.get_space/1` returned and the bearer's loaded `%User{}`, so
