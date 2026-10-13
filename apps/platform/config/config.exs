@@ -132,6 +132,7 @@ config :platform, :meetings_triage_per_canvas_cap, 20
 config :platform, Platform.Chat.CanvasRoom,
   persist_debounce_ms: 500,
   idle_stop_ms: 60_000
+
 config :platform, :meetings_triage_dedup_threshold, 0.85
 
 # Meeting Producer runtime (task 019f2452). Supervisor gate: when

@@ -74,24 +74,6 @@ defmodule Platform.Chat.CanvasRoomTest do
     end
   end
 
-  defp eventually(fun, timeout \\ 2_000) do
-    deadline = System.monotonic_time(:millisecond) + timeout
-    do_eventually(fun, deadline)
-  end
-
-  defp do_eventually(fun, deadline) do
-    if fun.() do
-      true
-    else
-      if System.monotonic_time(:millisecond) > deadline do
-        flunk("condition not met before the deadline")
-      else
-        Process.sleep(10)
-        do_eventually(fun, deadline)
-      end
-    end
-  end
-
   defp viewer do
     spawn(fn ->
       receive do
@@ -148,8 +130,9 @@ defmodule Platform.Chat.CanvasRoomTest do
       for _ <- 1..3, do: assert({:ok, _} = increment(c.id, a))
       assert record(c.id) == nil
 
-      eventually(fn -> match?(%Record{seq: 3}, record(c.id)) end)
-      assert length(events(record(c.id))) == 3
+      rec = assert_eventually(fn -> record(c.id) end)
+      assert rec.seq == 3
+      assert length(events(rec)) == 3
     end
 
     test "a graceful stop inside the debounce window still persists, and a restart resumes",
@@ -171,7 +154,12 @@ defmodule Platform.Chat.CanvasRoomTest do
 
       rec = record(c.id)
       assert rec.seq == 2
-      assert rec.state == %{"keys" => %{"n" => 1}, "collections" => %{"notes" => [%{"t" => "x", "id" => id}]}}
+
+      assert rec.state == %{
+               "keys" => %{"n" => 1},
+               "collections" => %{"notes" => [%{"t" => "x", "id" => id}]}
+             }
+
       # A replay reproduces the add: the logged op carries the assigned id.
       assert [_, %Event{op: %{"type" => "collection.add", "id" => ^id}}] = events(rec)
 
@@ -204,14 +192,18 @@ defmodule Platform.Chat.CanvasRoomTest do
     end
 
     test "a missing canvas or a malformed id is refused", %{a: a} do
-      assert {:error, :canvas_not_found} = CanvasRoom.apply_op(Ecto.UUID.generate(), @node, a, inc())
+      assert {:error, :canvas_not_found} =
+               CanvasRoom.apply_op(Ecto.UUID.generate(), @node, a, inc())
+
       assert {:error, :invalid_canvas_id} = CanvasRoom.apply_op("not-a-uuid", @node, a, inc())
       assert {:error, :invalid_node_id} = CanvasRoom.apply_op(Ecto.UUID.generate(), "", a, inc())
     end
 
     test "an actor without a type and id is refused", %{canvas: c} do
       assert {:error, :invalid_actor} = CanvasRoom.apply_op(c.id, @node, %{id: "x"}, inc())
-      assert {:error, :invalid_actor} = CanvasRoom.join(c.id, @node, self(), %{type: "bot", id: "x"})
+
+      assert {:error, :invalid_actor} =
+               CanvasRoom.join(c.id, @node, self(), %{type: "bot", id: "x"})
     end
   end
 
@@ -309,7 +301,10 @@ defmodule Platform.Chat.CanvasRoomTest do
       assert Enum.sort(Enum.map(list, &{&1.id, &1.viewers})) == Enum.sort([{a.id, 1}, {b.id, 1}])
 
       send(v3, :stop)
-      assert_receive {:canvas_room_presence, ^cid, @node, [%{id: ^aid, viewers: 1, display_name: "A"}]}, 1_000
+
+      assert_receive {:canvas_room_presence, ^cid, @node,
+                      [%{id: ^aid, viewers: 1, display_name: "A"}]},
+                     1_000
     end
   end
 

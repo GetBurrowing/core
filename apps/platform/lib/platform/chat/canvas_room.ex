@@ -360,8 +360,8 @@ defmodule Platform.Chat.CanvasRoom do
     state = cancel(%{state | viewers: viewers}, :idle_stop)
     presence = broadcast_presence(state)
 
-    {:reply,
-     {:ok, %{seq: state.seq, state: state.data, presence: presence, room_pid: self()}}, state}
+    {:reply, {:ok, %{seq: state.seq, state: state.data, presence: presence, room_pid: self()}},
+     state}
   end
 
   def handle_call({:leave, viewer_pid}, _from, state) do
@@ -552,9 +552,7 @@ defmodule Platform.Chat.CanvasRoom do
   end
 
   defp load(canvas_id, node_id) do
-    case Repo.one(
-           from(r in Record, where: r.canvas_id == ^canvas_id and r.node_id == ^node_id)
-         ) do
+    case Repo.one(from(r in Record, where: r.canvas_id == ^canvas_id and r.node_id == ^node_id)) do
       %Record{} = record ->
         {:ok, record.id, Map.merge(Ops.empty(), record.state || %{}), record.seq}
 

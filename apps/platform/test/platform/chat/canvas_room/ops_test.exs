@@ -14,7 +14,10 @@ defmodule Platform.Chat.CanvasRoom.OpsTest do
 
   defp seeded do
     {s, _} = ok!(Ops.empty(), %{"type" => "state.set", "key" => "n", "value" => 3})
-    {s, %{"result" => id}} = ok!(s, %{"type" => "collection.add", "name" => "c", "item" => %{"a" => 1}})
+
+    {s, %{"result" => id}} =
+      ok!(s, %{"type" => "collection.add", "name" => "c", "item" => %{"a" => 1}})
+
     {s, id}
   end
 
@@ -22,7 +25,13 @@ defmodule Platform.Chat.CanvasRoom.OpsTest do
     test "sets and replaces a key" do
       {s, diff} = ok!(Ops.empty(), %{"type" => "state.set", "key" => "k", "value" => %{"x" => 1}})
       assert s["keys"] == %{"k" => %{"x" => 1}}
-      assert diff == %{"kind" => "key", "key" => "k", "value" => %{"x" => 1}, "result" => %{"x" => 1}}
+
+      assert diff == %{
+               "kind" => "key",
+               "key" => "k",
+               "value" => %{"x" => 1},
+               "result" => %{"x" => 1}
+             }
 
       {s, _} = ok!(s, %{"type" => "state.set", "key" => "k", "value" => "y"})
       assert s["keys"] == %{"k" => "y"}
@@ -69,7 +78,9 @@ defmodule Platform.Chat.CanvasRoom.OpsTest do
 
   describe "collections" do
     test "add assigns a UUIDv7 id and returns it" do
-      {s, diff} = ok!(Ops.empty(), %{"type" => "collection.add", "name" => "c", "item" => %{"a" => 1}})
+      {s, diff} =
+        ok!(Ops.empty(), %{"type" => "collection.add", "name" => "c", "item" => %{"a" => 1}})
+
       id = diff["result"]
       assert Platform.UUID.valid?(id)
       assert <<_::binary-size(14), "7", _::binary>> = id
@@ -111,12 +122,15 @@ defmodule Platform.Chat.CanvasRoom.OpsTest do
       assert {:error, :not_found} =
                run(s, %{"type" => "collection.update", "name" => "c", "id" => "x", "patch" => %{}})
 
-      assert {:error, :not_found} = run(s, %{"type" => "collection.remove", "name" => "zz", "id" => "x"})
+      assert {:error, :not_found} =
+               run(s, %{"type" => "collection.remove", "name" => "zz", "id" => "x"})
     end
 
     test "a non-map item or patch is invalid" do
       {s, id} = seeded()
-      assert {:error, :invalid_op} = run(s, %{"type" => "collection.add", "name" => "c", "item" => 1})
+
+      assert {:error, :invalid_op} =
+               run(s, %{"type" => "collection.add", "name" => "c", "item" => 1})
 
       assert {:error, :invalid_op} =
                run(s, %{"type" => "collection.update", "name" => "c", "id" => id, "patch" => [1]})
@@ -131,8 +145,12 @@ defmodule Platform.Chat.CanvasRoom.OpsTest do
 
     test "a missing or non-string key is :invalid_op" do
       assert {:error, :invalid_op} = run(Ops.empty(), %{"type" => "state.set", "value" => 1})
-      assert {:error, :invalid_op} = run(Ops.empty(), %{"type" => "state.set", "key" => 1, "value" => 1})
-      assert {:error, :invalid_op} = run(Ops.empty(), %{"type" => "state.set", "key" => "", "value" => 1})
+
+      assert {:error, :invalid_op} =
+               run(Ops.empty(), %{"type" => "state.set", "key" => 1, "value" => 1})
+
+      assert {:error, :invalid_op} =
+               run(Ops.empty(), %{"type" => "state.set", "key" => "", "value" => 1})
     end
   end
 
@@ -151,10 +169,18 @@ defmodule Platform.Chat.CanvasRoom.OpsTest do
       assert state == before
     end
 
-    test "a key over max_name_bytes is :too_large; at the cap it is accepted", %{state: s, caps: caps} do
+    test "a key over max_name_bytes is :too_large; at the cap it is accepted", %{
+      state: s,
+      caps: caps
+    } do
       at_cap = String.duplicate("k", caps.max_name_bytes)
       assert {:ok, _, _} = run(s, %{"type" => "state.set", "key" => at_cap, "value" => 1})
-      assert_refused(s, %{"type" => "state.set", "key" => at_cap <> "k", "value" => 1}, :too_large)
+
+      assert_refused(
+        s,
+        %{"type" => "state.set", "key" => at_cap <> "k", "value" => 1},
+        :too_large
+      )
     end
 
     test "a collection name over max_name_bytes is :too_large", %{state: s, caps: caps} do
@@ -171,9 +197,18 @@ defmodule Platform.Chat.CanvasRoom.OpsTest do
       assert {:ok, _, _} = run(s, %{"type" => "state.set", "key" => "k", "value" => fits})
     end
 
-    test "an item over max_value_bytes is :too_large on add and on update", %{state: s, id: id, caps: caps} do
+    test "an item over max_value_bytes is :too_large on add and on update", %{
+      state: s,
+      id: id,
+      caps: caps
+    } do
       big = String.duplicate("v", caps.max_value_bytes)
-      assert_refused(s, %{"type" => "collection.add", "name" => "c", "item" => %{"b" => big}}, :too_large)
+
+      assert_refused(
+        s,
+        %{"type" => "collection.add", "name" => "c", "item" => %{"b" => big}},
+        :too_large
+      )
 
       assert_refused(
         s,
@@ -193,7 +228,12 @@ defmodule Platform.Chat.CanvasRoom.OpsTest do
         end)
 
       assert byte_size(Jason.encode!(s)) <= caps.max_state_bytes
-      assert_refused(s, %{"type" => "state.set", "key" => "one_more", "value" => chunk}, :too_large)
+
+      assert_refused(
+        s,
+        %{"type" => "state.set", "key" => "one_more", "value" => chunk},
+        :too_large
+      )
     end
 
     test "the 51st collection is :too_many; adding to an existing one is not", %{caps: caps} do
