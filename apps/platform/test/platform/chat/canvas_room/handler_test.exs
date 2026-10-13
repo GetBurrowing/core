@@ -265,7 +265,11 @@ defmodule Platform.Chat.CanvasRoom.HandlerTest do
       assert keys(ctx) == %{"votes.a" => 1, "spins" => 1}
 
       events = flushed_events(ctx)
-      assert Enum.map(events, &{&1.seq, &1.op["via"]}) == [{1, "handler:vote"}, {2, "handler:spin"}]
+
+      assert Enum.map(events, &{&1.seq, &1.op["via"]}) == [
+               {1, "handler:vote"},
+               {2, "handler:spin"}
+             ]
     end
 
     test "an agent caller's runtime reaches its canvas.patch binding", ctx do
@@ -465,7 +469,11 @@ defmodule Platform.Chat.CanvasRoom.HandlerTest do
       # The check can fire: code mode does append the stack for this error.
       assert {:error, "forbidden", raw} =
                ScriptEngine.run(
-                 %{"name" => "mk", "engine" => "js", "source" => "(e, ctx) => suite.call('x', {})"},
+                 %{
+                   "name" => "mk",
+                   "engine" => "js",
+                   "source" => "(e, ctx) => suite.call('x', {})"
+                 },
                  %{"type" => "call", "args" => %{}},
                  %{"keys" => %{}, "collections" => %{}},
                  %{canvas_id: ctx.canvas.id, actor: ctx.b, now: 0}
@@ -484,7 +492,10 @@ defmodule Platform.Chat.CanvasRoom.HandlerTest do
     test "refusals before the engine runs are audited too", ctx do
       attach_script_run()
       assert {:error, %{kind: "unknown_handler"}} = call(ctx, ctx.a, "missing")
-      assert_receive {:script_run, _, %{result: "unknown_handler", code: "unknown_handler"} = meta}
+
+      assert_receive {:script_run, _,
+                      %{result: "unknown_handler", code: "unknown_handler"} = meta}
+
       refute Map.has_key?(meta, :script_sha256)
     end
   end

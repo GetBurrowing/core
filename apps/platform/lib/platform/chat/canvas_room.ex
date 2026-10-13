@@ -932,6 +932,11 @@ defmodule Platform.Chat.CanvasRoom do
     end
   end
 
+  defp plan_effect(%{"type" => "cancel", "name" => name}, _inv) when is_binary(name),
+    do: {:ok, {:cancel, "t:" <> name}}
+
+  defp plan_effect(%{"type" => type}, _inv), do: {:error, "#{type}: malformed effect"}
+
   # A timer fire skips the caller's token bucket, so an `after` scheduled
   # FROM a timer fire gets `every`'s 1 s floor (task 01a1316b-aab0 stage 4,
   # finding F4). It is clamped, not refused: a chain keeps running, at most
@@ -939,11 +944,6 @@ defmodule Platform.Chat.CanvasRoom do
   # so a two-handler ping-pong is held to it too.
   defp timer_floor("after", ms, %{trigger: "timer"}), do: max(ms, @timer_chain_floor_ms)
   defp timer_floor(_type, ms, _inv), do: ms
-
-  defp plan_effect(%{"type" => "cancel", "name" => name}, _inv) when is_binary(name),
-    do: {:ok, {:cancel, "t:" <> name}}
-
-  defp plan_effect(%{"type" => type}, _inv), do: {:error, "#{type}: malformed effect"}
 
   defp apply_timer_effect({:schedule, key, ms, msg}, state), do: schedule(state, key, ms, msg)
   defp apply_timer_effect({:cancel, key}, state), do: cancel(state, key)
