@@ -242,7 +242,10 @@ defmodule PlatformWeb.PrototypeControllerTest do
       tag = PrototypeController.bridge_tag()
       inner = tag |> String.replace_prefix(~s(<script data-suite-bridge="1">), "")
       refute inner |> String.replace_suffix("</script>", "") |> String.contains?("</script")
-      assert byte_size(inner) < 6 * 1024
+      # 6 KiB -> 8 KiB in the #1235 rollup: room scripts (01a1316b-aab0
+      # stage 2) added `suite.call` and its result envelope to suite.js
+      # (6098 -> 7419 bytes). The budget still bounds the per-page inline cost.
+      assert byte_size(inner) < 8 * 1024
     end
   end
 
