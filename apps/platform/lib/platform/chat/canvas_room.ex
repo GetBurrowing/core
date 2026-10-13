@@ -144,12 +144,18 @@ defmodule Platform.Chat.CanvasRoom do
   bound the handler AUTHOR's authority too, for example by acting as the
   intersection of author and clicker. That is the gate for the follow-up.
 
-  Measured in stage 3, not changed: room-state ops are NOT covered by that
-  argument. A read-only viewer may call a handler (`canvas_room_call` admits
-  read grants), and the handler's returned room ops land under the reader's
-  name, although the same reader's plain `canvas_room_op` is refused. See
-  `test/platform/canvas/script_engine/adversarial_test.exs`, the attack 5
-  `FINDING:` test.
+  Room-state ops are NOT covered by that argument: a handler's returned
+  room ops land under the CALLER's name. So a call is held to the same rule
+  as a plain op (stage 4, finding F1 from stage 3): the LiveView refuses
+  `canvas_room_call` from a viewer who may not write the room, with kind
+  `forbidden` and code `not_writable`, audited through `refuse_call/8`. The
+  room itself has no access check, for ops or calls; its callers hold the
+  viewer's access level.
+
+  **v1 limitation (stage 3 finding F5, not fixed):** a handler's
+  `ctx.patch` calls change the canvas DOCUMENT as they run, so when a run
+  then ends in `call_limit` (or any other error) the room ops are dropped
+  but the patches already applied stay.
 
   A call result is sent as `{:canvas_room_call_result, req, result}` to the
   `reply_to` pid, with `result` `{:ok, %{seq, applied}}` or
@@ -401,6 +407,40 @@ defmodule Platform.Chat.CanvasRoom do
       {:error, code} ->
         code = to_string(code)
         reply_call(reply_to, {:error, %{kind: code, code: code, message: code}})
+    end
+
+    :ok
+  end
+
+  @doc """
+  Refuse a handler call before it reaches the room, audited like a refusal
+  inside it (task 01a1316b-aab0 stage 4, finding F1). The caller (the
+  LiveView) holds the viewer's access level; a viewer who may not write the
+  room may not call its handlers either, because a handler's room ops land
+  under the CALLER's name. Never starts the room. Sends the usual
+  `{:canvas_room_call_result, req, {:error, %{kind, code, message}}}` to
+  `reply_to` and emits one `[:platform, :canvas, :script_run]` event with
+  that kind and code.
+  """
+  @spec refuse_call(binary(), binary(), map(), term(), String.t(), String.t(), String.t(), term()) ::
+          :ok
+  def refuse_call(canvas_id, node_id, actor, name, kind, code, message, reply_to) do
+    case normalize_actor(actor) do
+      {:ok, actor} ->
+        inv = %{
+          canvas_id: canvas_id,
+          node_id: node_id,
+          name: if(CanvasDocument.binding_name?(name), do: name, else: nil),
+          actor: actor,
+          reply_to: reply_to,
+          trigger: "call",
+          binding: nil
+        }
+
+        finish_invocation(inv, {:error, %{kind: kind, code: code, message: message}}, 0)
+
+      {:error, _} ->
+        reply_call(reply_to, {:error, %{kind: kind, code: code, message: message}})
     end
 
     :ok

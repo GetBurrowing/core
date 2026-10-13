@@ -482,7 +482,7 @@ defmodule Platform.Canvas.ScriptEngine.AdversarialTest do
       assert {"Forged", _} = heading(ctx.canvas.id)
     end
 
-    test "FINDING: a read-only viewer's handler call writes room state under its own name",
+    test "a read-only viewer's handler call is refused as not_writable, like its plain op",
          ctx do
       reader = create_user!(%{name: "Reader"})
       plain_member!(reader, ctx.org)
@@ -505,15 +505,34 @@ defmodule Platform.Canvas.ScriptEngine.AdversarialTest do
       assert_reply(view, %{ok: false, error: "forbidden"})
       assert keys(ctx.canvas) == %{}
 
-      # ...but the same write through any writer-authored handler lands.
+      # ...and so is the same write through a writer-authored handler (stage
+      # 3 finding F1, fixed in stage 4). The refusal is audited as the reader.
+      attach_script_run()
       lv_call(view, ids(ctx.canvas), "claim", %{})
       result_event = result_event(ctx.canvas)
-      assert_push_event(view, ^result_event, %{ok: true, seq: 1}, 8_000)
-      assert keys(ctx.canvas) == %{"owner" => "reader"}
 
-      assert [event] = flushed_events(ctx.canvas)
-      assert event.actor_id == reader.id
-      assert event.op["via"] == "handler:claim"
+      assert_push_event(
+        view,
+        ^result_event,
+        %{ok: false, kind: "forbidden", code: "not_writable"},
+        8_000
+      )
+
+      reader_id = reader.id
+
+      assert_receive {:script_run,
+                      %{caller_id: ^reader_id, result: "forbidden", code: "not_writable"}},
+                     2_000
+
+      assert keys(ctx.canvas) == %{}
+      assert flushed_events(ctx.canvas) == []
+
+      # Positive control: a writer's call through the same LiveView path lands.
+      writer_view = open(ctx.space, ctx.bob)
+      assert %{ok: true, writable: true} = join(writer_view, ctx.canvas)
+      lv_call(writer_view, ids(ctx.canvas), "claim", %{})
+      assert_push_event(writer_view, ^result_event, %{ok: true, seq: 1}, 8_000)
+      assert keys(ctx.canvas) == %{"owner" => "reader"}
     end
   end
 

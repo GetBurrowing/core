@@ -802,9 +802,12 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   # A handler call (task 01a1316b-aab0 stage 2). The room runs the handler
   # off its own process and sends `{:canvas_room_call_result, req, result}`
   # back here, so this replies nothing: a handler can run for seconds. The
-  # actor is this socket's session user, never a params value. A read-only
-  # viewer may call: a handler is code a canvas WRITER stored, and its
-  # `canvas.patch` binding still refuses a reader.
+  # actor is this socket's session user, never a params value. A call is
+  # held to EXACTLY the `canvas_room_op` rule, `writable: true` on the joined
+  # entry (task 01a1316b-aab0 stage 4, finding F1): a handler's room ops land
+  # under the caller's name, so a read-only viewer calling one would write
+  # room state its own plain op is refused. The refusal is kind `forbidden`,
+  # code `not_writable`, and is audited as a script_run by the room module.
   defp handle_event(
          "canvas_room_call",
          %{"canvas_id" => canvas_id, "node_id" => node_id, "name" => name} = params,
@@ -818,7 +821,7 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
       req: call_req(params)
     }
 
-    with %{} <- Map.get(socket.assigns.canvas_rooms, {canvas_id, node_id}),
+    with %{writable: true} <- Map.get(socket.assigns.canvas_rooms, {canvas_id, node_id}),
          {:ok, actor} <- room_actor(socket) do
       CanvasRoom.call_handler(
         canvas_id,
@@ -831,6 +834,9 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
 
       {:halt, socket}
     else
+      %{writable: false} ->
+        refuse_reader_call(socket, canvas_id, node_id, name, req)
+
       nil ->
         {:halt, push_call_result(socket, req, call_error("not_joined"))}
 
@@ -955,6 +961,34 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   defp call_req(_params), do: nil
 
   defp call_error(code), do: {:error, %{kind: code, code: code, message: code}}
+
+  defp refuse_reader_call(socket, canvas_id, node_id, name, req) do
+    message = "a read-only viewer may not call this canvas's handlers"
+
+    case room_actor(socket) do
+      {:ok, actor} ->
+        CanvasRoom.refuse_call(
+          canvas_id,
+          node_id,
+          actor,
+          name,
+          "forbidden",
+          "not_writable",
+          message,
+          {self(), req}
+        )
+
+        {:halt, socket}
+
+      {:error, _} ->
+        {:halt,
+         push_call_result(
+           socket,
+           req,
+           {:error, %{kind: "forbidden", code: "not_writable", message: message}}
+         )}
+    end
+  end
 
   defp push_call_result(socket, req, result) do
     payload =
