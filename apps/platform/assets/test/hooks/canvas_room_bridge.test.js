@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest"
 import CanvasRoomBridge, {
   validFrameMessage,
+  roomsSupported,
   MAX_MESSAGE_BYTES,
 } from "../../js/hooks/canvas_room_bridge.js"
 
@@ -38,13 +39,24 @@ function fakeIframe() {
   return iframe
 }
 
-function mountHook({ canvasId = "c-1", nodeId = "n-1" } = {}) {
+// A LiveView root container; `markerOwner` is the root the marker's own
+// closest("[data-phx-session]") resolves to (a nested child LiveView's root
+// when the marker belongs to the child).
+function fakeRoot({ marker = true, markerOwner = null } = {}) {
+  const root = {}
+  const markers = marker ? [{ closest: () => markerOwner || root }] : []
+  root.querySelectorAll = (sel) => (sel === "[data-canvas-rooms]" ? markers : [])
+  return root
+}
+
+function mountHook({ canvasId = "c-1", nodeId = "n-1", root = fakeRoot() } = {}) {
   const iframe = fakeIframe()
   const hook = Object.create(CanvasRoomBridge)
   hook.el = {
     id: "frame-test-room-v1",
     dataset: { canvasId, nodeId },
     querySelector: (sel) => (sel === "iframe" ? iframe : null),
+    closest: (sel) => (sel === "[data-phx-session]" ? root : null),
   }
   hook.pushes = []
   hook.handlers = {}
@@ -208,5 +220,31 @@ describe("CanvasRoomBridge: server events", () => {
     expect(first).toMatchObject({ type: "snapshot", seq: 4, connected: true })
     expect(first.ok).toBeUndefined()
     expect(second).toMatchObject({ type: "snapshot", connected: false, error: "forbidden" })
+  })
+})
+
+describe("CanvasRoomBridge: only under a LiveView that handles rooms", () => {
+  it("roomsSupported needs a marker owned by the element's own LiveView root", () => {
+    const el = (root) => ({ closest: () => root })
+    expect(roomsSupported(el(fakeRoot()))).toBe(true)
+    expect(roomsSupported(el(fakeRoot({ marker: false })))).toBe(false)
+    expect(roomsSupported(el(fakeRoot({ markerOwner: {} })))).toBe(false)
+    expect(roomsSupported(el(null))).toBe(false)
+  })
+
+  it("under any other LiveView it pushes nothing and tells the frame it is offline", () => {
+    const { hook, iframe } = mountHook({ root: fakeRoot({ marker: false }) })
+    const src = iframe.contentWindow
+
+    win.dispatch("message", { source: src, data: { suite: 1, type: "hello" } })
+    win.dispatch("message", { source: src, data: validOp })
+    iframe.dispatch("load", {})
+    hook.destroyed()
+
+    expect(hook.pushes).toEqual([])
+    expect(src.posted.map((p) => [p.msg.type, p.msg.connected])).toEqual([
+      ["snapshot", false],
+      ["snapshot", false],
+    ])
   })
 })

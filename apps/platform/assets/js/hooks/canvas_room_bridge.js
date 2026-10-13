@@ -30,6 +30,11 @@
  *
  * Joins on every iframe `load` and on every `hello` (the bridge's start-up
  * and seq-gap resync). Leaves on destroyed.
+ *
+ * Only a LiveView that renders a `[data-canvas-rooms]` marker (ChatLive)
+ * handles the `canvas_room_*` events; pushing one to any other LiveView
+ * would crash it on a missing clause. Under any other LiveView the hook
+ * pushes nothing and answers the frame's hello with `connected: false`.
  */
 
 export const OP_TYPES = new Set([
@@ -74,6 +79,20 @@ export function validFrameMessage(data) {
   return op.type.startsWith("state.") ? validName(op.key) : validName(op.name)
 }
 
+/**
+ * Does the LiveView that owns `el` answer the canvas_room_* events? True
+ * when that LiveView's own root (not a nested child LiveView's) contains a
+ * `[data-canvas-rooms]` marker.
+ */
+export function roomsSupported(el) {
+  const root = el && el.closest && el.closest("[data-phx-session]")
+  if (!root) return false
+  for (const marker of root.querySelectorAll("[data-canvas-rooms]")) {
+    if (marker.closest("[data-phx-session]") === root) return true
+  }
+  return false
+}
+
 function win() {
   return typeof window !== "undefined" ? window : globalThis
 }
@@ -84,6 +103,7 @@ export default {
     this.nodeId = this.el.dataset.nodeId
     this.hookId = this.el.id
     this.iframe = null
+    this.enabled = roomsSupported(this.el)
 
     this.onMessage = (event) => this.handleFrameMessage(event)
     this.onLoad = () => this.join()
@@ -107,7 +127,7 @@ export default {
     win().removeEventListener("message", this.onMessage)
     if (this.iframe) this.iframe.removeEventListener("load", this.onLoad)
     this.iframe = null
-    this.pushEvent("canvas_room_leave", this.ids())
+    if (this.enabled) this.pushEvent("canvas_room_leave", this.ids())
   },
 
   bindIframe() {
@@ -123,6 +143,10 @@ export default {
   },
 
   join() {
+    if (!this.enabled) {
+      this.toFrame({ suite: 1, type: "snapshot", connected: false, error: "unsupported" })
+      return
+    }
     this.pushEvent("canvas_room_join", this.ids(), (reply) => {
       if (reply && reply.ok) {
         const { ok: _ok, ...snapshot } = reply
@@ -142,6 +166,7 @@ export default {
     if (!this.iframe || event.source !== this.iframe.contentWindow) return
     const data = event.data
     if (!validFrameMessage(data)) return
+    if (!this.enabled && data.type !== "hello") return
 
     if (data.type === "hello") {
       this.join()

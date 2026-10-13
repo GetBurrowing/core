@@ -49,6 +49,12 @@
 >
 </div>
 <div :if={!@embedded} id="meeting-soundboard" phx-hook="MeetingSoundboard" class="hidden"></div>
+<%!-- Canvas rooms (task 01a1316b-84fa stage 2): this LiveView answers the
+     canvas_room_* events (CanvasHooks). A CanvasRoomBridge hook only talks
+     to its LiveView when that LiveView renders this marker, so a frame on a
+     surface without the handlers (task pages, the standalone canvas page,
+     a meeting's canvas tile) runs disconnected instead of crashing it. --%>
+<span hidden data-canvas-rooms></span>
 
 <.notification_banner
   :if={!@embedded}

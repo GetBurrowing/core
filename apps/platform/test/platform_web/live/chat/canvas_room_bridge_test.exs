@@ -105,6 +105,11 @@ defmodule PlatformWeb.ChatLive.CanvasRoomBridgeTest do
     Repo.all(from(e in Event, where: e.room_id == ^rec.id, order_by: e.seq))
   end
 
+  test "ChatLive renders the marker that lets the bridge hook talk to it", ctx do
+    view = open(ctx, ctx.alice)
+    assert render(view) =~ "data-canvas-rooms"
+  end
+
   test "join replies with the snapshot and the session's own identity", ctx do
     view = open(ctx, ctx.alice)
     reply = join!(view, ctx)
