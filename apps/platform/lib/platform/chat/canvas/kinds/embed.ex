@@ -57,6 +57,8 @@ defmodule Platform.Chat.Canvas.Kinds.Embed do
 
   use Platform.Chat.Canvas.Kind
 
+  alias Platform.Chat.CanvasRoom
+
   @max_srcdoc_bytes 256 * 1024
   @default_height 400
   @min_height 100
@@ -200,6 +202,7 @@ defmodule Platform.Chat.Canvas.Kinds.Embed do
 
   attr(:node, :map, required: true)
   attr(:dom_id_scope, :string, default: nil)
+  attr(:canvas_id, :string, default: nil)
 
   @impl Platform.Chat.Canvas.Kind
   def render(assigns) do
@@ -306,6 +309,7 @@ defmodule Platform.Chat.Canvas.Kinds.Embed do
     assigns =
       assigns
       |> assign(:src, scripted_src(props["prototype_ref"]))
+      |> assign(:room_attrs, CanvasRoom.frame_attrs(assigns[:canvas_id], assigns.node["id"]))
       |> assign(:declared_width, width)
       |> assign(:declared_height, height)
       |> assign(:min_scale, min_scale)
@@ -325,39 +329,42 @@ defmodule Platform.Chat.Canvas.Kinds.Embed do
     >
       Scripted embed unavailable
     </div>
-    <div
-      :if={@src}
-      id={@wrapper_id}
-      phx-hook="EmbedCanvasScale"
-      phx-update="ignore"
-      data-declared-width={@declared_width}
-      data-declared-height={@declared_height}
-      data-min-scale={@min_scale}
-      data-scripted-src={@src}
-      class="group relative overflow-hidden rounded-xl border border-edge"
-      style={@wrapper_style}
-    >
-      <iframe
-        src={@src}
-        sandbox="allow-scripts"
-        referrerpolicy="no-referrer"
-        title="Scripted embed"
-        style={@iframe_style}
+    <%!-- The room bridge (task 01a1316b-84fa) wraps the scale wrapper, as in
+         PrototypeFrame, because an element carries one phx-hook. --%>
+    <div :if={@src} id={"#{@wrapper_id}-room"} {@room_attrs}>
+      <div
+        id={@wrapper_id}
+        phx-hook="EmbedCanvasScale"
+        phx-update="ignore"
+        data-declared-width={@declared_width}
+        data-declared-height={@declared_height}
+        data-min-scale={@min_scale}
+        data-scripted-src={@src}
+        class="group relative overflow-hidden rounded-xl border border-edge"
+        style={@wrapper_style}
       >
-      </iframe>
-      <button
-        type="button"
-        data-embed-expand
-        aria-label="Expand canvas to full screen"
-        title="Expand"
-        class={
-          "absolute top-2 right-2 z-10 rounded-md bg-base-100/90 p-1.5 text-base-content/70 shadow-md " <>
-            "opacity-50 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 " <>
-            "hover:bg-base-100 hover:text-base-content"
-        }
-      >
-        <span class="hero-arrows-pointing-out size-4" aria-hidden="true"></span>
-      </button>
+        <iframe
+          src={@src}
+          sandbox="allow-scripts"
+          referrerpolicy="no-referrer"
+          title="Scripted embed"
+          style={@iframe_style}
+        >
+        </iframe>
+        <button
+          type="button"
+          data-embed-expand
+          aria-label="Expand canvas to full screen"
+          title="Expand"
+          class={
+            "absolute top-2 right-2 z-10 rounded-md bg-base-100/90 p-1.5 text-base-content/70 shadow-md " <>
+              "opacity-50 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 " <>
+              "hover:bg-base-100 hover:text-base-content"
+          }
+        >
+          <span class="hero-arrows-pointing-out size-4" aria-hidden="true"></span>
+        </button>
+      </div>
     </div>
     """
   end

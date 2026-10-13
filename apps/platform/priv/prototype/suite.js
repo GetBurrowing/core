@@ -35,8 +35,11 @@
     if (!suite.connected) return Promise.reject(new Error("not_connected"))
     var req = "r" + (++reqN)
     return new Promise(function (res, rej) {
+      var m = { type: "op", req: req, op: o, suite: 1 }
+      // The hook drops >64 KB unanswered
+      if (new TextEncoder().encode(JSON.stringify(m)).length > 65536) return rej(new Error("too_large"))
       pending[req] = { res: res, rej: rej }
-      post({ type: "op", req: req, op: o })
+      post(m)
     })
   }
 

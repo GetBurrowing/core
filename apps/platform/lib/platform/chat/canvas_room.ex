@@ -151,12 +151,14 @@ defmodule Platform.Chat.CanvasRoom do
   # ── Frame wiring (stage 2) ──────────────────────────────────────────────
 
   @doc """
-  The node types a room may be joined for. Today only `prototype`; the
-  scripted embed (`embed` with `scripts: true`, member 3) joins this list in
-  the same change that wires `frame_attrs/2` into `embed.ex`.
+  The node types a room may be joined for: `prototype`, and the scripted
+  embed (`embed` with `scripts: true`, task 01a1316b-677a), whose wrapper in
+  `embed.ex` carries `frame_attrs/2`. A plain embed runs under
+  `sandbox=""`, so it has no script to talk to a room and is refused.
   """
   @spec room_node?(map() | nil) :: boolean()
   def room_node?(%{"type" => "prototype"}), do: true
+  def room_node?(%{"type" => "embed", "props" => %{"scripts" => true}}), do: true
   def room_node?(_node), do: false
 
   @doc """

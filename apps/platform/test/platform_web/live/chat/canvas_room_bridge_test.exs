@@ -148,6 +148,49 @@ defmodule PlatformWeb.ChatLive.CanvasRoomBridgeTest do
     assert CanvasRoom.whereis(ctx.canvas.id, "words") == nil
   end
 
+  test "a scripts: true embed is a room node; a plain embed is still refused", ctx do
+    Platform.PrototypeFixtures.scratch_storage!("canvas_room_bridge_test")
+    Platform.PrototypeFixtures.set_settings!(%{enabled: true})
+    n = System.unique_integer([:positive])
+    org_id = Platform.TenancyFixtures.tenant_org_id("rooms-embed-#{n}")
+
+    {:ok, space} =
+      Chat.create_space(%{name: "Embeds #{n}", slug: "embeds-#{n}", kind: "channel", org_id: org_id})
+
+    author = participant!(space, ctx.alice)
+    html = "<!doctype html><html><body><script>1</script></body></html>"
+
+    {:ok, canvas} =
+      Chat.create_canvas(%{
+        "space_id" => space.id,
+        "created_by" => author.id,
+        "title" => "Embeds",
+        "document" => %{
+          "version" => 1,
+          "revision" => 1,
+          "root" => %{
+            "id" => "root",
+            "type" => "stack",
+            "children" => [
+              %{"id" => "live", "type" => "embed", "props" => %{"srcdoc" => html, "scripts" => true}},
+              %{"id" => "flat", "type" => "embed", "props" => %{"srcdoc" => "<p>x</p>"}}
+            ]
+          }
+        }
+      })
+
+    on_exit(fn -> CanvasRoom.stop(canvas.id, "live") end)
+    ectx = %{space: space, canvas: canvas}
+    view = open(ectx, ctx.alice)
+
+    render_hook(view, "canvas_room_join", ids(ectx, "live"))
+    assert_reply(view, %{ok: true, writable: true})
+
+    render_hook(view, "canvas_room_join", ids(ectx, "flat"))
+    assert_reply(view, %{ok: false, error: "not_a_room_node"})
+    assert CanvasRoom.whereis(canvas.id, "flat") == nil
+  end
+
   test "a non-participant cannot write: refused, or at most a read-only join", ctx do
     outsider = insert_user!("Outsider")
     n = System.unique_integer([:positive])

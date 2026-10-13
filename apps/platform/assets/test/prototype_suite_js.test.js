@@ -166,6 +166,19 @@ describe("suite.js promises", () => {
     await expect(p).rejects.toThrow("rate_limited")
   })
 
+  it("reject an op over the hook's 64 KB cap with too_large, without posting it", async () => {
+    const { suite, fromParent, sent } = boot()
+    fromParent(snapshot(0))
+    const before = sent().length
+    await expect(suite.state.set("big", "x".repeat(64 * 1024))).rejects.toThrow("too_large")
+    expect(sent().length).toBe(before)
+
+    // Under the cap it still posts: the check is on size, not on state.set.
+    suite.state.set("ok", "x".repeat(60 * 1024))
+    expect(sent().length).toBe(before + 1)
+    expect(new TextEncoder().encode(JSON.stringify(sent().at(-1))).length).toBeLessThanOrEqual(64 * 1024)
+  })
+
   it("reject with not_connected before any snapshot", async () => {
     const { suite } = boot()
     await expect(suite.state.set("label", "x")).rejects.toThrow("not_connected")
