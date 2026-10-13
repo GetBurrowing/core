@@ -810,6 +810,13 @@ defmodule Platform.RepoLookupBoundaryTest do
      "fetch_message/1's guard on the message id taken straight off the URL path segment"},
     {"platform/federation/tool_surface.ex", :get, "~schema", 1, :safe_internal,
      "the single Repo.get inside get_by_uuid/2, the module's boundary-safe lookup helper: every id reaching it has already passed Platform.UUID.valid?/1. The load_agent/1, plan_approve, stage_complete, agent_home_org/1 and list_org_descendants/1 sites were all rewritten onto it"}
+    # ── Prototypes (task 01a1316b-4e46 stage 1, ADR 0057) ─────────────
+    {"platform/prototypes.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "get_prototype/1's predicate: the id arrives as a `/proto/:id/...` URL path segment and as the `prototype_id` MCP tool argument, so Platform.UUID.valid?/1 folds a malformed id into the nil (404 / not_found) an unknown id already returns"},
+    {"platform/prototypes.ex", :get, "Prototype", 1, :safe_internal,
+     "the sole Repo.get sits inside get_prototype/1, behind the Platform.UUID.valid?/1 guard counted above; the two entries fail together if either is removed"},
+    {"platform/prototypes/tools.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "fetch_space/2's guard on the `space_id` MCP tool argument before Chat.get_space/1; a malformed id answers space_not_found instead of raising"},
   ]
 
   # `Repo.one/1` per file. Counted, not classified: its ids live inside
@@ -1294,6 +1301,14 @@ defmodule Platform.RepoLookupBoundaryTest do
     # binary computed here on a `:binary` column: no cast, so no CastError is
     # reachable whatever the bearer holds.
     "platform/push/relay_server.ex" => 2,
+    # Task 01a1316b-4e46 stage 1 (ADR 0057). Triaged by hand: both pin a
+    # prototype id taken off a loaded `%Prototype{}` (the controller, the
+    # tools and the purger only call `get_live_version/2` after
+    # `get_prototype/1` returned a row; `next_version/1` runs on the row
+    # `lock_or_create/3` just locked or inserted) and an integer version the
+    # controller has already parsed. No caller-supplied string reaches either
+    # where clause.
+    "platform/prototypes.ex" => 2,
     # Task 01a10882 stage 1: 0 -> 2, triaged by hand. `user_participant/2`
     # pins `p.space_id` and `p.participant_id` to ids read off the `%Space{}`
     # `Chat.get_space/1` returned and the bearer's loaded `%User{}`, so
