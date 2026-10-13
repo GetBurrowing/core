@@ -820,7 +820,10 @@ defmodule Platform.RepoLookupBoundaryTest do
     {"platform/prototypes.ex", :get, "Prototype", 1, :safe_internal,
      "the sole Repo.get sits inside get_prototype/1, behind the Platform.UUID.valid?/1 guard counted above; the two entries fail together if either is removed"},
     {"platform/prototypes/tools.ex", :platform_uuid_guard, "-", 1, :safe_internal,
-     "fetch_space/2's guard on the `space_id` MCP tool argument before Chat.get_space/1; a malformed id answers space_not_found instead of raising"}
+     "fetch_space/2's guard on the `space_id` MCP tool argument before Chat.get_space/1; a malformed id answers space_not_found instead of raising"},
+    # ── Canvas rooms (task 01a1316b-84fa stage 1) ─────────────────────
+    {"platform/chat/canvas_room.ex", :platform_uuid_guard, "-", 2, :safe_internal,
+     "(1) validate_key/2 guards the `canvas_id` every public CanvasRoom function takes (stage 2 passes it from a LiveView event's params) before the room's Registry key, its Repo.one on chat_canvas_rooms.canvas_id and Chat.get_canvas/1; a malformed id is {:error, :invalid_canvas_id}. (2) event_row/2 uses it as a BOOLEAN on the actor id before it becomes chat_canvas_room_events.actor_id (a uuid column); a non-UUID actor id is recorded as NULL rather than raising inside the flush transaction"}
   ]
 
   # `Repo.one/1` per file. Counted, not classified: its ids live inside
@@ -1317,6 +1320,11 @@ defmodule Platform.RepoLookupBoundaryTest do
     # state, or the row the create Multi just inserted) and `canvas_node_id`,
     # a `:string` column, so no cast and no CastError is reachable.
     "platform/prototypes.ex" => 3,
+    # Task 01a1316b-84fa stage 1: 0 -> 1, triaged by hand. `load/2` pins
+    # `r.canvas_id` and `r.node_id`; the canvas id passed `validate_key/2`'s
+    # Platform.UUID.valid?/1 guard before the room process was started (the
+    # only path into `init/1`), and node_id is a text column, so no cast.
+    "platform/chat/canvas_room.ex" => 1,
     # Task 01a10882 stage 1: 0 -> 2, triaged by hand. `user_participant/2`
     # pins `p.space_id` and `p.participant_id` to ids read off the `%Space{}`
     # `Chat.get_space/1` returned and the bearer's loaded `%User{}`, so
