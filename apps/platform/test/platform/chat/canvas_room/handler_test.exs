@@ -401,6 +401,10 @@ defmodule Platform.Chat.CanvasRoom.HandlerTest do
       assert_receive {:script_run, %{duration_ms: d}, meta}
       refute_received {:script_run, _, _}
 
+      # An ok run has no code: absent, never nil (which the audit handler
+      # would persist as the string "nil").
+      refute Map.has_key?(meta, :code)
+
       assert is_integer(d) and d >= 0
 
       assert %{
@@ -435,6 +439,8 @@ defmodule Platform.Chat.CanvasRoom.HandlerTest do
                )
 
       assert row.actor_id == ctx.alice.id
+      refute Map.has_key?(row.metadata, "code")
+      assert row.metadata["result"] == "ok"
     end
 
     test "a refused binding carries its code into the result and the audit row", ctx do
@@ -450,10 +456,36 @@ defmodule Platform.Chat.CanvasRoom.HandlerTest do
       assert meta.caller_id == ctx.bob.id
     end
 
+    test "the refusal message reaching the caller carries no sandbox stack trace", ctx do
+      bind!(ctx, "mk", "(e, ctx) => suite.call('tasks.create', {title: 'x'})")
+
+      assert {:error, %{kind: "forbidden", code: "binding_not_registered", message: message}} =
+               call(ctx, ctx.b, "mk")
+
+      # The check can fire: code mode does append the stack for this error.
+      assert {:error, "forbidden", raw} =
+               ScriptEngine.run(
+                 %{"name" => "mk", "engine" => "js", "source" => "(e, ctx) => suite.call('x', {})"},
+                 %{"type" => "call", "args" => %{}},
+                 %{"keys" => %{}, "collections" => %{}},
+                 %{canvas_id: ctx.canvas.id, actor: ctx.b, now: 0}
+               )
+
+      assert raw =~ "\n"
+      assert raw =~ "<prelude>"
+
+      assert message != ""
+      refute message =~ "\n"
+      refute message =~ "<prelude>"
+      refute message =~ " at "
+      assert byte_size(message) <= 300
+    end
+
     test "refusals before the engine runs are audited too", ctx do
       attach_script_run()
       assert {:error, %{kind: "unknown_handler"}} = call(ctx, ctx.a, "missing")
-      assert_receive {:script_run, _, %{result: "unknown_handler", script_sha256: nil}}
+      assert_receive {:script_run, _, %{result: "unknown_handler", code: "unknown_handler"} = meta}
+      refute Map.has_key?(meta, :script_sha256)
     end
   end
 end

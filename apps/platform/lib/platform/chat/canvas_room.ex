@@ -185,8 +185,11 @@ defmodule Platform.Chat.CanvasRoom do
   engine runs, emits `[:platform, :canvas, :script_run]` (registered in
   `Platform.Audit.TelemetryHandler`) and logs one line, with the canvas and
   node ids, handler name, the sha256 of its source, caller type and id,
-  engine, trigger, duration_ms and the result kind. Never the source, args,
-  state or result.
+  engine, trigger, duration_ms and the result kind, plus `code` on a
+  refusal (`code` and `script_sha256` are omitted, never nil, when there is
+  none). Never the source, args, state or result. The message sent to the
+  caller is cut to its first line (code mode appends the JS stack after it)
+  and 300 bytes.
   """
 
   use GenServer, restart: :temporary
@@ -223,6 +226,7 @@ defmodule Platform.Chat.CanvasRoom do
   @after_ms_range 100..86_400_000
   @every_ms_range 1_000..86_400_000
   @timer_chain_floor_ms 1_000
+  @max_client_message_bytes 300
   @max_call_args_bytes 16_384
   @handler_op_keys ~w(type key value by name item id patch)
 
@@ -948,9 +952,25 @@ defmodule Platform.Chat.CanvasRoom do
   defp handler_timer?(_name), do: false
 
   defp finish_invocation(inv, result, duration_ms) do
-    reply_call(inv.reply_to, result)
+    reply_call(inv.reply_to, client_result(result))
     audit(inv, result, duration_ms)
   end
+
+  # What reaches the frame: kind, code and a short message. Code mode appends
+  # the JS stack after the first newline (cm.c), which names the sandbox
+  # wrapper's internals, so only the first line is kept, capped.
+  defp client_result({:error, %{message: message} = error}) when is_binary(message) do
+    short =
+      message
+      |> String.split("\n", parts: 2)
+      |> hd()
+      |> String.trim()
+      |> String.slice(0, @max_client_message_bytes)
+
+    {:error, %{error | message: short}}
+  end
+
+  defp client_result(result), do: result
 
   defp reply_call({pid, req}, result) when is_pid(pid),
     do: send(pid, {:canvas_room_call_result, req, result})
@@ -992,11 +1012,15 @@ defmodule Platform.Chat.CanvasRoom do
       code: code
     }
 
+    # Omitted rather than nil: the audit handler stringifies atoms, so a nil
+    # would persist as the string "nil".
+    meta = meta |> Map.reject(fn {k, v} -> k in [:code, :script_sha256] and is_nil(v) end)
+
     :telemetry.execute([:platform, :canvas, :script_run], %{duration_ms: duration_ms}, meta)
 
     Logger.info(
       "canvas script_run canvas=#{meta.canvas_id} node=#{meta.node_id} handler=#{meta.handler} " <>
-        "sha256=#{meta.script_sha256} caller=#{meta.caller_type}:#{meta.caller_id} " <>
+        "sha256=#{sha} caller=#{meta.caller_type}:#{meta.caller_id} " <>
         "engine=#{meta.engine} trigger=#{meta.trigger} duration_ms=#{duration_ms} " <>
         "result=#{kind} code=#{code}"
     )
