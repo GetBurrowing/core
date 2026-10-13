@@ -823,7 +823,9 @@ defmodule Platform.RepoLookupBoundaryTest do
      "fetch_space/2's guard on the `space_id` MCP tool argument before Chat.get_space/1; a malformed id answers space_not_found instead of raising"},
     # ── Canvas rooms (task 01a1316b-84fa stage 1) ─────────────────────
     {"platform/chat/canvas_room.ex", :platform_uuid_guard, "-", 2, :safe_internal,
-     "(1) validate_key/2 guards the `canvas_id` every public CanvasRoom function takes (stage 2 passes it from a LiveView event's params) before the room's Registry key, its Repo.one on chat_canvas_rooms.canvas_id and Chat.get_canvas/1; a malformed id is {:error, :invalid_canvas_id}. (2) event_row/2 uses it as a BOOLEAN on the actor id before it becomes chat_canvas_room_events.actor_id (a uuid column); a non-UUID actor id is recorded as NULL rather than raising inside the flush transaction"}
+     "(1) validate_key/2 guards the `canvas_id` every public CanvasRoom function takes (stage 2 passes it from a LiveView event's params) before the room's Registry key, its Repo.one on chat_canvas_rooms.canvas_id and Chat.get_canvas/1; a malformed id is {:error, :invalid_canvas_id}. (2) event_row/2 uses it as a BOOLEAN on the actor id before it becomes chat_canvas_room_events.actor_id (a uuid column); a non-UUID actor id is recorded as NULL rather than raising inside the flush transaction"},
+    {"platform_web/live/chat/canvas_hooks.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "room_canvas/2 (task 01a1316b-84fa stage 2) guards the `canvas_id` a `canvas_room_*` LiveView event carries in its params before CanvasAccess.fetch_for_viewer/3; a malformed id folds into {:error, :not_found}, the reply an unknown canvas already gets"}
   ]
 
   # `Repo.one/1` per file. Counted, not classified: its ids live inside

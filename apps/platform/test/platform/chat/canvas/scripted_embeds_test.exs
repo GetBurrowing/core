@@ -398,7 +398,10 @@ defmodule Platform.Chat.Canvas.ScriptedEmbedsTest do
       assert location =~ ~r{^/proto/#{id}/1/g/[^/]+/index\.html$}
 
       served = get(build_conn(), location)
-      assert response(served, 200) == @counter_v1
+      # Every HTML response carries the canvas room bridge (task 01a1316b-84fa);
+      # the stored bytes are untouched.
+      assert response(served, 200) ==
+               PlatformWeb.PrototypeController.inject_bridge(@counter_v1)
       [csp] = get_resp_header(served, "content-security-policy")
       assert csp =~ "sandbox allow-scripts;"
       assert csp =~ "connect-src 'none'"

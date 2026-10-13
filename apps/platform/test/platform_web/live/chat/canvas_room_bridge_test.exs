@@ -155,7 +155,12 @@ defmodule PlatformWeb.ChatLive.CanvasRoomBridgeTest do
     org_id = Platform.TenancyFixtures.tenant_org_id("rooms-embed-#{n}")
 
     {:ok, space} =
-      Chat.create_space(%{name: "Embeds #{n}", slug: "embeds-#{n}", kind: "channel", org_id: org_id})
+      Chat.create_space(%{
+        name: "Embeds #{n}",
+        slug: "embeds-#{n}",
+        kind: "channel",
+        org_id: org_id
+      })
 
     author = participant!(space, ctx.alice)
     html = "<!doctype html><html><body><script>1</script></body></html>"
@@ -172,7 +177,11 @@ defmodule PlatformWeb.ChatLive.CanvasRoomBridgeTest do
             "id" => "root",
             "type" => "stack",
             "children" => [
-              %{"id" => "live", "type" => "embed", "props" => %{"srcdoc" => html, "scripts" => true}},
+              %{
+                "id" => "live",
+                "type" => "embed",
+                "props" => %{"srcdoc" => html, "scripts" => true}
+              },
               %{"id" => "flat", "type" => "embed", "props" => %{"srcdoc" => "<p>x</p>"}}
             ]
           }
