@@ -101,6 +101,8 @@ func choosePerson<I: AppIntent>(_ intent: I, name: String, people: [PersonEntity
 // Sending to a named space stays with the old SendMessageIntent and its
 // "Message <space> in Burrow" phrase. ConversationEntity is still adopted:
 // the message schema requires it.
+// The processor accepts the cases in any order; the entity cases come first
+// (see MessageDestination).
 
 @available(iOS 27, *)
 @AppIntent(schema: .messages.sendMessage)

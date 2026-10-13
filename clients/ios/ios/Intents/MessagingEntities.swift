@@ -69,14 +69,6 @@ struct PersonEntity {
             subtitle: IntentCopy.subtitle([lead, person.orgNames.first], install: env.disambiguator(host)))
     }
 
-    /// The schema person as exported to the system, through a key path the
-    /// metadata extractor can read (see transferRepresentation). Traced, so
-    /// an export shows up in the intent trace.
-    var exportedPerson: IntentPerson {
-        IntentLog.step("person.export", "kind=\(kind) identifier=\(PersonResolver.kind(of: person)) handle=\(person.handle != nil)")
-        return person
-    }
-
     static func intentPerson(id: String, name: String) -> IntentPerson {
         IntentPerson(
             identifier: .applicationDefined(id),
@@ -90,8 +82,11 @@ struct PersonEntity {
     /// reached Siri as a generic "there's a problem" with nothing logged.
     /// No match or several matches are carried to `perform` unresolved.
     ///
-    /// `exporting:` MUST stay a key path (to a property with a declared
-    /// IntentPerson type). Xcode 27's metadata extractor
+    /// `exporting:` MUST stay the key path to the STORED schema property
+    /// `person` (the one property Apple's own MessagePerson entities declare,
+    /// in ChatKit and SiriMessagesFlowTools), not a computed one: round 3's
+    /// traced `exportedPerson` is gone, so the export itself is untraced.
+    /// Xcode 27's metadata extractor
     /// reads this declaration as syntax and takes the IntentValue type from
     /// the key path only: with a closure it records NO exportable or
     /// importable type, Siri's structured-data fetch then logs "Failed to
@@ -101,7 +96,7 @@ struct PersonEntity {
     /// (PersonEntityMetadataTests pins it).
     static var transferRepresentation: some TransferRepresentation {
         IntentValueRepresentation(
-            exporting: \PersonEntity.exportedPerson,
+            exporting: \PersonEntity.person,
             importing: { (person: IntentPerson) in
                 if case .one(let found) = await PersonResolver.resolve(person, site: "person.import") { return found }
                 return PersonEntity(unresolved: person)
@@ -534,13 +529,22 @@ enum MessageReaction {
 
 // MARK: - Destination (send and draft)
 
-// Three cases, matching what the 27.0 SDK's metadata processor requires;
-// see the note above MessagesSendIntent on the missing `conversation` case.
+// Xcode 27.0's metadata processor requires these three cases
+// (`Array<Person> | Schema<MessagePerson> | Array<Schema<MessagePerson>>`;
+// it refused `messagePerson | messagePeople | conversation`), but not their
+// order. The ENTITY cases come first (task 01a111bb stage 7, round
+// 4), in the order Siri's own SiriMessagesFlowTools declares its send
+// destination in the iOS 27.0 runtime (MessagePersonEntity,
+// [MessagePersonEntity], ConversationEntity); ChatKit's is (conversation,
+// MessagePerson, [MessagePerson]). Neither has a `[Person]` case. While
+// `people([IntentPerson])` came first, Siri resolved Dalton to a
+// PersonEntity through PersonQuery, then failed converting him into this
+// union (FlowToolTransformationError Code=3) without calling the app.
 
 @available(iOS 27, *)
 @UnionValue
 enum MessageDestination {
-    case people([IntentPerson])
     case messagePerson(PersonEntity)
     case messagePeople([PersonEntity])
+    case people([IntentPerson])
 }
