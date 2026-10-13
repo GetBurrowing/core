@@ -51,6 +51,7 @@ defmodule PlatformWeb.ChatLive do
   alias PlatformWeb.ChatLive.NewConversationComponent
   alias PlatformWeb.ChatLive.PinHooks
   alias PlatformWeb.ChatLive.PresenceHooks
+  alias PlatformWeb.ChatLive.PrototypeUpload
   alias PlatformWeb.ChatLive.SearchHooks
   alias PlatformWeb.ChatLive.MembersComponent
   alias PlatformWeb.ChatLive.SettingsComponent
@@ -722,6 +723,11 @@ defmodule PlatformWeb.ChatLive do
         max_file_size: @max_upload_size,
         progress: &handle_upload_progress/3
       )
+      # The New canvas form's Prototype drop zone (task 01a1316b-4e46 stage
+      # 2). Hidden until `:can_publish_prototype?` (set by
+      # `assign_active_space/2`) says the install and this space's org admit
+      # the viewer; see `PrototypeUpload`.
+      |> PrototypeUpload.allow()
 
     # Pin-to-Chat stage 4: pinned task-exec spaces ride the same PubSub
     # subscribe loop as channels + DMs so unread counts + `:new_message`
@@ -2625,6 +2631,58 @@ defmodule PlatformWeb.ChatLive do
   end
 
   # Coordinator: create a canvas message, stream-insert it, open it.
+  # Keeps the New canvas form's Blank/Prototype choice and title across
+  # re-renders, and is the change event LiveView needs to validate the
+  # Prototype drop zone's upload.
+  def handle_event("canvas_new_change", params, socket) do
+    {:noreply, CanvasHooks.reset_new_form(socket, Map.get(params, "canvas", %{}))}
+  end
+
+  def handle_event(
+        "canvas_create",
+        %{"canvas" => %{"kind" => "prototype"} = canvas_params},
+        socket
+      ) do
+    with true <- socket.assigns.can_publish_prototype?,
+         space when not is_nil(space) <- socket.assigns.active_space,
+         participant when not is_nil(participant) <- socket.assigns.current_participant do
+      title = Map.get(canvas_params, "title")
+
+      with {:ok, published} <-
+             PrototypeUpload.publish(socket, space, socket.assigns.user_id, title),
+           {:ok, canvas, message} <-
+             Chat.create_canvas_with_message(
+               space.id,
+               participant.id,
+               PrototypeUpload.canvas_attrs(published, title)
+             ) do
+        {:noreply,
+         socket
+         |> CanvasHooks.put(canvas)
+         |> MessagesHooks.stream_insert_message(message)
+         |> CanvasHooks.set_active(canvas)
+         |> MessagesHooks.reset_thread_panel()
+         |> CanvasHooks.show_panel()
+         |> CanvasHooks.reset_new_form()
+         |> put_flash(:info, PrototypeUpload.success_message(published))}
+      else
+        {:error, message} when is_binary(message) ->
+          {:noreply,
+           socket
+           |> put_flash(:error, message)
+           |> CanvasHooks.reset_new_form(canvas_params)}
+
+        {:error, %Ecto.Changeset{} = changeset} ->
+          {:noreply, put_flash(socket, :error, CanvasHooks.changeset_error_summary(changeset))}
+
+        {:error, reason} ->
+          {:noreply, put_flash(socket, :error, "Failed to create canvas: #{inspect(reason)}")}
+      end
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
   def handle_event("canvas_create", %{"canvas" => canvas_params}, socket) do
     with space when not is_nil(space) <- socket.assigns.active_space,
          participant when not is_nil(participant) <- socket.assigns.current_participant do
@@ -5213,6 +5271,12 @@ defmodule PlatformWeb.ChatLive do
     socket
     |> assign(:active_space, space)
     |> assign(:active_space_scope, org_scope_of(org))
+    # Whether the New canvas form offers Prototype: the install switch and
+    # publish policy for THIS space's org, so it rides the space funnel.
+    |> assign(
+      :can_publish_prototype?,
+      PrototypeUpload.allowed?(space, Map.get(socket.assigns, :user_id))
+    )
     |> assign(:active_space_org, active_org_summary(org))
     # The agents goal panel (task 01a0b491 stage 4) rides the SAME funnel as
     # the scope atom and for the same reason: it is derived from the space,

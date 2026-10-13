@@ -47,6 +47,7 @@ defmodule Platform.Chat.Canvas.Server do
   alias Ecto.Multi
   alias Platform.Chat
   alias Platform.Chat.{Canvas, CanvasDocument, CanvasPatch, CanvasSearchIndex}
+  alias Platform.Chat.Canvas.ScriptedEmbeds
   alias Platform.Chat.Canvas.Versions, as: CanvasVersions
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Repo
@@ -71,7 +72,10 @@ defmodule Platform.Chat.Canvas.Server do
   defmodule State do
     @moduledoc false
     @enforce_keys [:canvas_id, :space_id, :document, :revision]
-    defstruct canvas_id: nil, space_id: nil, document: nil, revision: 1
+    # `embed_refs`: the scripted-embed refs this server has verified,
+    # `%{node_id => {sha256, ref}}` (`Platform.Chat.Canvas.ScriptedEmbeds`),
+    # so a patch that leaves a scripted embed alone costs no query.
+    defstruct canvas_id: nil, space_id: nil, document: nil, revision: 1, embed_refs: %{}
   end
 
   # ── Public API ──────────────────────────────────────────────────────────
@@ -223,38 +227,31 @@ defmodule Platform.Chat.Canvas.Server do
     # reason rather than an error tuple. So the callee is not missing an error
     # return — it has no error return by design, and the dead arm was removed
     # rather than the callee widened. An unexpected shape now raises
-    # `CaseClauseError` here instead of being reshaped into `{:error, _}`.
-    case apply_with_rebase(state, operations, base_revision) do
-      {:ok, new_document, new_revision} ->
-        persist_async(
-          state.canvas_id,
-          new_document,
-          new_revision,
-          operations,
-          written_by_attribution
-        )
+    # `WithClauseError` here instead of being reshaped into `{:error, _}`.
+    # The one `{:error, _}` arm below is the scripted-embed stamp's, which is
+    # a genuine refusal and not a rebase outcome (task 01a1316b-677a).
+    with {:ok, new_document, new_revision} <- apply_with_rebase(state, operations, base_revision),
+         # Task 01a1316b-677a: every embed's `prototype_ref` is (re)stamped
+         # here, before the write is persisted or broadcast, at the same
+         # revision. A refusal (`prototypes_disabled`, ...) is an
+         # `{:error, %{code, message}}` and leaves the state untouched.
+         {:ok, new_document, embed_refs} <-
+           ScriptedEmbeds.stamp(new_document, %{
+             canvas_id: state.canvas_id,
+             space_id: state.space_id,
+             actor: written_by_attribution,
+             verified: state.embed_refs
+           }) do
+      persist_and_announce(state, new_document, new_revision, operations, written_by_attribution)
 
-        ChatPubSub.broadcast_canvas(
-          state.canvas_id,
-          {:canvas_patched, state.canvas_id, new_revision, operations}
-        )
-
-        :telemetry.execute(
-          [:platform, :chat, :canvas_patched],
-          %{system_time: System.system_time()},
-          %{
-            canvas_id: state.canvas_id,
-            space_id: state.space_id,
-            revision: new_revision,
-            op_count: length(operations)
-          }
-        )
-
-        {:reply, {:ok, new_revision},
-         %State{state | document: new_document, revision: new_revision}}
-
+      {:reply, {:ok, new_revision},
+       %State{state | document: new_document, revision: new_revision, embed_refs: embed_refs}}
+    else
       {:conflict, payload} ->
         {:reply, {:conflict, payload}, state}
+
+      {:error, %{code: _} = error} ->
+        {:reply, {:error, error}, state}
     end
   end
 
@@ -267,6 +264,32 @@ defmodule Platform.Chat.Canvas.Server do
 
   def handle_call(:describe, _from, %State{} = state) do
     {:reply, {:ok, %{document: state.document, revision: state.revision}}, state}
+  end
+
+  defp persist_and_announce(state, new_document, new_revision, operations, written_by_attribution) do
+    persist_async(
+      state.canvas_id,
+      new_document,
+      new_revision,
+      operations,
+      written_by_attribution
+    )
+
+    ChatPubSub.broadcast_canvas(
+      state.canvas_id,
+      {:canvas_patched, state.canvas_id, new_revision, operations}
+    )
+
+    :telemetry.execute(
+      [:platform, :chat, :canvas_patched],
+      %{system_time: System.system_time()},
+      %{
+        canvas_id: state.canvas_id,
+        space_id: state.space_id,
+        revision: new_revision,
+        op_count: length(operations)
+      }
+    )
   end
 
   # ── Rebase-or-reject core ───────────────────────────────────────────────

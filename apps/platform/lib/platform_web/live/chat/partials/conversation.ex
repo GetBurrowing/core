@@ -1407,6 +1407,14 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
   attr(:canvas_archive_count, :integer, required: true)
   attr(:canvas_search_focus, :boolean, required: true)
 
+  # The New canvas form's Prototype choice (task 01a1316b-4e46 stage 2). The
+  # upload config is `@uploads.prototype_bundle` from ChatLive; nil (and
+  # `can_publish_prototype?` false) renders the form exactly as before.
+  # `ChatLive.PrototypeUpload.allowed?/2` decides the boolean once per space
+  # change, never here.
+  attr(:prototype_upload, :any, default: nil)
+  attr(:can_publish_prototype?, :boolean, default: false)
+
   @doc """
   The live-canvases drawer and its `#new-canvas-form`.
 
@@ -1422,6 +1430,17 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
   the viewer participates in rather than only the one they are standing in.
   """
   def canvases_drawer(assigns) do
+    assigns =
+      assign(
+        assigns,
+        :prototype_choice?,
+        prototype_choice?(
+          assigns.can_publish_prototype?,
+          assigns.prototype_upload,
+          assigns.new_canvas_form
+        )
+      )
+
     ~H"""
     <div
       :if={@show_canvases}
@@ -1625,6 +1644,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
           for={@new_canvas_form}
           id="new-canvas-form"
           phx-hook="ButtonLoading"
+          phx-change="canvas_new_change"
           phx-submit="canvas_create"
           class="space-y-3 rounded-2xl border border-edge bg-base-100 p-4"
         >
@@ -1635,24 +1655,108 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
             </p>
           </div>
 
+          <div
+            :if={@can_publish_prototype? and @prototype_upload}
+            role="radiogroup"
+            aria-label="Canvas type"
+            class="grid grid-cols-2 gap-1 rounded-field border border-edge p-1"
+            data-role="new-canvas-kind"
+          >
+            <label
+              :for={{value, label} <- [{"blank", "Blank"}, {"prototype", "Prototype"}]}
+              class={[
+                "flex min-h-9 cursor-pointer items-center justify-center rounded-field text-sm",
+                new_canvas_kind(@new_canvas_form) == value &&
+                  "bg-base-200 font-semibold text-base-content",
+                new_canvas_kind(@new_canvas_form) != value && "text-base-content/60"
+              ]}
+            >
+              <input
+                type="radio"
+                name={@new_canvas_form[:kind].name}
+                value={value}
+                checked={new_canvas_kind(@new_canvas_form) == value}
+                class="sr-only"
+                data-role={"new-canvas-kind-#{value}"}
+              />
+              {label}
+            </label>
+          </div>
+
           <.input
             field={@new_canvas_form[:title]}
             label="Title"
-            placeholder="Sprint planning board"
+            placeholder={if @prototype_choice?, do: "Checkout flow", else: "Sprint planning board"}
           />
 
+          <div :if={@prototype_choice?} class="space-y-2" data-role="prototype-drop">
+            <label
+              for={@prototype_upload.ref}
+              phx-drop-target={@prototype_upload.ref}
+              class="flex min-h-24 cursor-pointer flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-edge bg-base-200 px-3 py-4 text-center"
+            >
+              <span class="hero-arrow-up-tray size-5 text-neutral" aria-hidden="true"></span>
+              <span class="text-sm text-base-content">Drop a zip of the prototype</span>
+              <span class="text-xs text-base-content/50">
+                index.html at the top, with its CSS, JS and images beside it
+              </span>
+              <.live_file_input upload={@prototype_upload} class="sr-only" />
+            </label>
+            <div
+              :for={entry <- @prototype_upload.entries}
+              class="flex items-center gap-2 text-xs"
+              data-role="prototype-drop-entry"
+            >
+              <span class="hero-document size-4 shrink-0 text-neutral" aria-hidden="true"></span>
+              <span class="min-w-0 flex-1 truncate">{entry.client_name}</span>
+              <span class="shrink-0 font-mono text-neutral">{entry.progress}%</span>
+            </div>
+            <p
+              :for={err <- upload_errors(@prototype_upload)}
+              class="text-xs text-error"
+              role="alert"
+            >
+              {prototype_upload_error(err)}
+            </p>
+          </div>
+
           <button
+            :if={not @prototype_choice?}
             type="submit"
             class="btn btn-neutral w-full"
             disabled={is_nil(@current_participant)}
           >
             Create canvas
           </button>
+          <button
+            :if={@prototype_choice?}
+            type="submit"
+            class="btn btn-primary w-full"
+            disabled={is_nil(@current_participant) or @prototype_upload.entries == []}
+            data-role="prototype-publish"
+          >
+            Publish prototype
+          </button>
         </.form>
       </div>
     </div>
     """
   end
+
+  defp new_canvas_kind(form) do
+    case form[:kind].value do
+      "prototype" -> "prototype"
+      _ -> "blank"
+    end
+  end
+
+  defp prototype_choice?(can_publish?, upload, form),
+    do: can_publish? and not is_nil(upload) and new_canvas_kind(form) == "prototype"
+
+  defp prototype_upload_error(:too_large), do: "That zip is too large."
+  defp prototype_upload_error(:not_accepted), do: "Only a .zip can be published."
+  defp prototype_upload_error(:too_many_files), do: "Drop one zip."
+  defp prototype_upload_error(other), do: "Upload failed: #{other}"
 
   # `canvas_result_snippet/1` USED TO LIVE HERE. It moved, unchanged, to
   # `PlatformWeb.Components.Canvases.CanvasExplorer.explorer_row_snippet/1`

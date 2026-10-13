@@ -18,13 +18,14 @@ defmodule Platform.Chat.Canvas.SearchText do
 
   ## Known and accepted boundary
 
-  The exporter's `@skipped_kinds` are `form`, `action_row`, `embed`, `image` and
-  `mermaid`. Their text is therefore **not indexed**: `image.alt` / `image.caption`,
-  `form` titles and field labels, `action_row` button labels, `mermaid.source`
-  and `embed.srcdoc` do not appear in the output. That gap is inherited
+  The exporter's `@skipped_kinds` are `form`, `action_row`, `embed`, `image`,
+  `mermaid` and `prototype`. Their text is therefore **not indexed**:
+  `image.alt` / `image.caption`, `form` titles and field labels, `action_row`
+  button labels, `mermaid.source`, `embed.srcdoc` and a prototype's bundle (it
+  is bytes behind a URL, not document text) do not appear in the output. That gap is inherited
   deliberately from the one extractor rather than forked into a second, divergent
   one. `test/platform/chat/canvas/search_text_test.exs` pins the full
-  16-kind registry classification, so the boundary is a written decision that has
+  17-kind registry classification, so the boundary is a written decision that has
   to be revisited on purpose — not a silent hole.
   """
 

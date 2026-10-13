@@ -24,6 +24,36 @@ defmodule Platform.CodeMode.SlotsTest do
     assert %{total: 0} = Slots.held()
   end
 
+  # Task 01a1316b-aab0 stage 1: a second pool is the same module under a
+  # second name, with its own caps and its own count.
+  test "a named pool counts and caps independently of the agent pool" do
+    name = :"slots_test_pool_#{System.unique_integer([:positive])}"
+    start_supervised!(Supervisor.child_spec({Slots, name: name}, id: name))
+
+    limits = %{Limits.get() | per_runtime_concurrency: 1, global_concurrency: 1}
+    key = "pool-#{System.unique_integer([:positive])}"
+
+    assert {:ok, slot} = Slots.acquire(name, key, limits)
+    assert %{total: 1, by_runtime: %{^key => 1}} = Slots.held(name)
+    assert {:error, :runtime_busy} = Slots.acquire(name, key, limits)
+    assert {:error, :node_busy} = Slots.acquire(name, key <> "-2", limits)
+
+    # The default pool does not see it, and is not capped by it.
+    refute Map.has_key?(Slots.held().by_runtime, key)
+    assert {:ok, agent_slot} = Slots.acquire(key, limits)
+    Slots.release(agent_slot)
+
+    Slots.release(name, slot)
+    assert %{total: 0} = Slots.held(name)
+  end
+
+  test "the canvas handler pool is started under its own name" do
+    pool = Platform.Canvas.ScriptEngine.Slots
+    assert is_pid(Process.whereis(pool))
+    refute Process.whereis(pool) == Process.whereis(Slots)
+    assert %{total: _} = Slots.held(pool)
+  end
+
   test "a holder that dies mid-run keeps its slot until the Store is idle" do
     rt = "slots-#{System.unique_integer([:positive])}"
     test = self()

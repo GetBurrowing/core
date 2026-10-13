@@ -44,7 +44,8 @@ defmodule Platform.Chat.Canvas.Kinds do
     ActionRow,
     Checklist,
     ChecklistItem,
-    Table
+    Table,
+    Prototype
   }
 
   @modules [
@@ -63,7 +64,8 @@ defmodule Platform.Chat.Canvas.Kinds do
     ActionRow,
     Checklist,
     ChecklistItem,
-    Table
+    Table,
+    Prototype
   ]
 
   @doc "Returns all registered kind modules, including every extension kind."
@@ -140,7 +142,11 @@ defmodule Platform.Chat.Canvas.Kinds do
 
   defp describe("embed"),
     do:
-      "Sandboxed inline-HTML mockup. `srcdoc` carries a complete HTML document; rendered as an iframe with `sandbox=\"\"` (no JS execution)."
+      "Sandboxed inline-HTML mockup. `srcdoc` carries a complete HTML document; by default " <>
+        "rendered as an iframe with `sandbox=\"\"` (no JS execution). Set `scripts: true` for " <>
+        "interactive mockups and small widgets that need JS: the HTML then runs sealed " <>
+        "(`sandbox=\"allow-scripts\"`, no network, no Suite cookies, no access to the " <>
+        "surrounding page) and needs prototypes enabled by an admin."
 
   defp describe("table"), do: "Tabular data. `columns` + `rows` as props; no children."
   defp describe("form"), do: "Form with inline fields. Emits a `submitted` event on send."
@@ -150,6 +156,12 @@ defmodule Platform.Chat.Canvas.Kinds do
 
   defp describe("checklist"), do: "Titled checklist. Children must be `checklist_item` nodes."
   defp describe("checklist_item"), do: "Single checklist row."
+
+  defp describe("prototype"),
+    do:
+      "Published, versioned prototype bundle (from `prototype_publish`) in a sealed iframe " <>
+        "(`sandbox=\"allow-scripts\"`, no network, no Suite access). `prototype_id` required; " <>
+        "`version` pins one, absent follows latest. Same org as this space only."
 
   defp describe(_), do: ""
 

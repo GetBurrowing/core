@@ -23,7 +23,9 @@ defmodule Platform.Chat.Canvas.SearchTextTest do
     # none was. Both would be false, and a false pin is exactly the kind of
     # quietly-wrong guard this ticket exists to avoid.
     #
-    # Registering a 17th kind makes this map differ and this test fails until
+    # `prototype` (task 01a1316b-4e46 stage 2) is the 17th: its text is a
+    # bundle behind a URL, not document text, so it is a skipped marker.
+    # Registering an 18th kind makes this map differ and this test fails until
     # somebody decides, in writing, whether the new kind carries text.
     test "every registered kind's classification is pinned" do
       expected = %{
@@ -42,7 +44,8 @@ defmodule Platform.Chat.Canvas.SearchTextTest do
         "action_row" => :marker,
         "checklist" => :text,
         "checklist_item" => :text,
-        "table" => :empty
+        "table" => :empty,
+        "prototype" => :marker
       }
 
       actual =
@@ -51,14 +54,14 @@ defmodule Platform.Chat.Canvas.SearchTextTest do
         end)
 
       # Reachability: the guard must actually have visited the whole registry.
-      assert map_size(actual) == 16
+      assert map_size(actual) == 17
       assert map_size(actual) == length(Kinds.all())
 
       assert actual == expected
 
-      # The five kinds the exporter deliberately skips stay pinned as markers,
+      # The six kinds the exporter deliberately skips stay pinned as markers,
       # so the accepted indexing gap is a decision on the record.
-      for skipped <- ~w(form action_row embed image mermaid) do
+      for skipped <- ~w(form action_row embed image mermaid prototype) do
         assert expected[skipped] == :marker
       end
     end

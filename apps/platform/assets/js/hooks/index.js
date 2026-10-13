@@ -7,6 +7,7 @@ import extensionHooks from "@extensions"
 import AppBadge from "./app_badge"
 import ButtonLoading from "./button_loading"
 import CandidateClock, { SheetHandleClock } from "./candidate_clock"
+import CanvasRoomBridge from "./canvas_room_bridge"
 import CanvasSidebarResize from "./canvas_sidebar_resize"
 import ChannelMembershipDrag from "./channel_membership_drag"
 import ChannelPicker from "./channel_picker"
@@ -73,6 +74,7 @@ export default {
   AppBadge,
   ButtonLoading,
   CandidateClock,
+  CanvasRoomBridge,
   CanvasSidebarResize,
   ChannelMembershipDrag,
   ChannelPicker,

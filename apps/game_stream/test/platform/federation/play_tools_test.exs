@@ -45,8 +45,11 @@ defmodule Platform.Federation.PlayToolsTest do
   # stage 4).
   # 126 with `janitor_hand_back` after `stack_assign_agents` (task
   # 019fa1ac-6685 stage 3, carried into Play at the PR #1226 main merge).
+  # 129 with `prototype.publish`, `prototype.versions`, `prototype.rollback`
+  # (bundle `prototype`) last (task 01a1316b-4e46 stage 1).
   # 128 with `vault_fetch` and `vault_list` after `federation_status`
   # (task 01a131c5 stage 1).
+  # 131 with both (rollup merge of stack prototype-runtime onto main).
   @main_tool_names ~w(
     canvas.create canvas.patch canvas.describe canvas.list_kinds canvas.template canvas.versions
     canvas.restore send_media react project_list org_list_descendants project_update epic_list
@@ -73,7 +76,7 @@ defmodule Platform.Federation.PlayToolsTest do
     experiment_create experiment_variant_add experiment_start experiment_stop experiment_conclude
     experiment_results experiment_signals_list experiment_exclude experiment_goal_set
     experiment_goal_list experiment_promote dispatch_metrics_list code_mode_report suite_run
-    suite_run_describe
+    suite_run_describe prototype.publish prototype.versions prototype.rollback
   )
 
   @names ~w(play_session_start play_session_stop play_session_status)
@@ -124,8 +127,8 @@ defmodule Platform.Federation.PlayToolsTest do
   defp catalogue_names, do: Enum.map(ToolSurface.tool_definitions(), & &1.name)
 
   describe "GUARD: with GAME_STREAM_ENABLED unset the tool list is main's" do
-    test "tool_definitions/0 names equal main's 128, in order" do
-      assert length(@main_tool_names) == 128
+    test "tool_definitions/0 names equal main's 131, in order" do
+      assert length(@main_tool_names) == 131
       assert catalogue_names() == @main_tool_names
     end
 

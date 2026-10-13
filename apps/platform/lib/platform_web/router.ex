@@ -89,6 +89,17 @@ defmodule PlatformWeb.Router do
     plug(:put_secure_browser_headers)
   end
 
+  # Prototype bundles (task 01a1316b-4e46 stage 1, ADR 0057). No `:accepts`:
+  # a bundle's `<script src>`, stylesheet, image and font requests send their
+  # own Accept headers and every one must reach the controller. No root layout
+  # and no `protect_from_forgery`: every route is a GET that renders nothing.
+  # `put_secure_browser_headers` is LOAD-BEARING, as on `:blob_browser`: the
+  # controller's sandbox CSP APPENDS to its `frame-ancestors 'self'`.
+  pipeline :proto_browser do
+    plug(:fetch_session)
+    plug(:put_secure_browser_headers)
+  end
+
   pipeline :api do
     plug(:accepts, ["json"])
   end
@@ -770,6 +781,29 @@ defmodule PlatformWeb.Router do
     get("/files/blob/:id", FileBlobController, :show)
   end
 
+  # Prototype bundles (task 01a1316b-4e46 stage 1, ADR 0057 Decision 1). Two
+  # app-fenced scopes, both `:require_app_surface` LAST.
+  #
+  # The GRANT route carries no session by construction (requests from an
+  # opaque-origin frame are cross-site for SameSite=Lax), so it does NOT pipe
+  # through `:require_auth`: the controller verifies the grant in the path and
+  # re-checks org membership for the grant's user on every request. It is
+  # declared ABOVE the entry route, which would otherwise match it as a path.
+  scope "/", PlatformWeb do
+    pipe_through([:proto_browser, :require_app_surface])
+
+    get("/proto/:id/:version/g/:grant/*path", PrototypeController, :serve)
+  end
+
+  # Entry and latest: navigations a Suite page starts, so the session is sent.
+  # `latest` is declared above `:version` so it is not parsed as a number.
+  scope "/", PlatformWeb do
+    pipe_through([:proto_browser, :require_auth, :enforce_external_scope, :require_app_surface])
+
+    get("/proto/:id/latest/*path", PrototypeController, :latest)
+    get("/proto/:id/:version/*path", PrototypeController, :entry)
+  end
+
   # THE FENCED SCOPE. `:require_app_surface` is LAST in the pipeline on
   # purpose: an unauthenticated request must still redirect to login (via
   # `:require_auth`) rather than 404, which keeps existing auth behaviour on
@@ -925,6 +959,10 @@ defmodule PlatformWeb.Router do
       # `/admin/orgs` does, and `Platform.Branding` re-checks the actor on
       # both writes.
       live("/admin/branding", AdminBrandingLive, :index)
+      # Task 01a1316b-4e46 stage 2: prototype publishing switch and caps,
+      # install-wide for the same reason as branding. `Settings.update/2`
+      # re-checks root admin on the write.
+      live("/admin/prototypes", AdminPrototypesLive, :index)
       # Task 01a131c5 stage 2: shared secrets an admin grants to agents.
       # `Platform.Vault.Shared` re-checks the actor on every call, so this
       # live_session's gate is not load-bearing alone.

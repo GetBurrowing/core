@@ -272,8 +272,8 @@ defmodule Platform.Chat.Canvas.MarkdownExporterTest do
   end
 
   describe "skipped kinds" do
-    test "form, action_row, embed, image, mermaid render as HTML-comment stubs" do
-      for kind <- ~w(form action_row embed image mermaid) do
+    test "form, action_row, embed, image, mermaid, prototype render as HTML-comment stubs" do
+      for kind <- ~w(form action_row embed image mermaid prototype) do
         node = %{"id" => "n-#{kind}", "type" => kind, "props" => %{}}
         assert {:ok, out} = MarkdownExporter.export_markdown(node)
         assert out == "<!-- skipped: #{kind} id=n-#{kind} -->"
@@ -286,7 +286,7 @@ defmodule Platform.Chat.Canvas.MarkdownExporterTest do
       handled =
         ~w(stack row card heading text markdown badge checklist checklist_item table code)
 
-      skipped = ~w(form action_row embed image mermaid)
+      skipped = ~w(form action_row embed image mermaid prototype)
 
       assert Enum.sort(handled ++ skipped) == Enum.sort(Kinds.names())
     end

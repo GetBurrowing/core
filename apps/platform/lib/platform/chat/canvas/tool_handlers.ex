@@ -148,6 +148,11 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
                  recoverable: true
                }}
 
+            # A refused scripted embed (`prototypes_disabled`,
+            # `scripted_embed_requires_org`, ...; task 01a1316b-677a).
+            {:error, %{code: code, message: message}} ->
+              {:error, %{error: "canvas.create: #{message}", code: code, recoverable: true}}
+
             {:error, reason} ->
               {:error,
                %{
@@ -199,6 +204,9 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
              suggestion:
                "Use canvas.describe to fetch the current revision and tree, then retry with a corrected patch."
            }}
+
+        {:error, %{code: code, message: message}} ->
+          {:error, %{error: "canvas.patch: #{message}", code: code, recoverable: true}}
 
         {:error, reason} ->
           {:error, %{error: "canvas.patch failed: #{inspect(reason)}", recoverable: true}}
@@ -422,7 +430,17 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
     end
   end
 
-  defp parse_operations(list) do
+  @doc """
+  Parse `canvas.patch`'s wire operations (`[["set_props", id, props], ...]`)
+  into `Platform.Chat.CanvasPatch` operations. Returns `{:ok, ops}` or
+  `{:error, %{error: reason, recoverable: true}}` naming the first bad one.
+
+  Public so the canvas handler binding (`Platform.Canvas.ScriptEngine.Bindings`,
+  task 01a1316b-aab0 stage 1) parses exactly what this tool parses; there is
+  one parser, not two.
+  """
+  @spec parse_operations(list()) :: {:ok, list()} | {:error, map()}
+  def parse_operations(list) when is_list(list) do
     Enum.reduce_while(list, {:ok, []}, fn op, {:ok, acc} ->
       case parse_op(op) do
         {:ok, parsed} -> {:cont, {:ok, acc ++ [parsed]}}
@@ -458,6 +476,16 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
     case decode_if_string(doc) do
       d when is_map(d) -> {:ok, {:replace_document, d}}
       _ -> {:error, "replace_document: doc must be an object (got #{describe(doc)})"}
+    end
+  end
+
+  defp parse_op(["set_binding", name, nil]) when is_binary(name),
+    do: {:ok, {:set_binding, name, nil}}
+
+  defp parse_op(["set_binding", name, binding]) when is_binary(name) do
+    case decode_if_string(binding) do
+      b when is_map(b) -> {:ok, {:set_binding, name, b}}
+      _ -> {:error, "set_binding: binding must be an object or null (got #{describe(binding)})"}
     end
   end
 

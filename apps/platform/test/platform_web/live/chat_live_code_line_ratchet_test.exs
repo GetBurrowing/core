@@ -557,7 +557,14 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   # (01a116de +32 on the 2363 base); this branch adds +2 on that base.
   # 2395 + 2 = 2397, re-measured with the guard's counting rule over the
   # merged file.
-  @chat_live_code_line_count 2397
+  #
+  # Prototype hosting (task 01a1316b-4e46 stage 2, commit 32f23bcf4 on
+  # stack/prototype-runtime): +50, the New canvas form's Prototype tab
+  # (upload wiring and its handle_event clauses) in chat_live.ex. That commit
+  # did not move this pin, so the rollup tip failed here; task 01a1316b-677a
+  # stage 1 (which does not touch chat_live.ex) records it. Measured by the
+  # guard on moon: 2397 + 50 = 2447.
+  @chat_live_code_line_count 2447
 
   @doc """
   Count the CODE lines of a source file.

@@ -52,7 +52,11 @@ defmodule Platform.Org.BurrowDocsContentTest do
     # a validation KIND (docs/burrow/tasks.md), not a tool. It became
     # tool-shaped when `code_mode_report` (task 01a114a8 stage 4) made `code`
     # a tool-name prefix.
-    "code_review"
+    "code_review",
+    # the prototype frame's JS API (apps/platform/priv/prototype/suite.js)
+    # that runs a canvas handler (docs/burrow/canvases.md), not an MCP tool.
+    # It became tool-shaped with `suite_run_describe` making `suite` a prefix.
+    "suite.call"
   ]
 
   # ── The tool-token shape rule ─────────────────────────────────────────────

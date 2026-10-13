@@ -40,7 +40,7 @@ defmodule Platform.ExtensionsTest do
   alias Platform.Repo
   alias PlatformWeb.Components.IconRail
 
-  @core_kinds ~w(stack row card text markdown heading badge image code mermaid embed form action_row checklist checklist_item table)
+  @core_kinds ~w(stack row card text markdown heading badge image code mermaid embed form action_row checklist checklist_item table prototype)
 
   setup do
     on_exit(fn -> Application.delete_env(:platform, :fixture_extension_test_pid) end)
@@ -531,7 +531,10 @@ defmodule Platform.ExtensionsTest do
       {"dispatch_metrics_list", "experiments"},
       {"code_mode_report", "experiments"},
       {"suite_run", "code_mode"},
-      {"suite_run_describe", "code_mode"}
+      {"suite_run_describe", "code_mode"},
+      {"prototype.publish", "prototype"},
+      {"prototype.versions", "prototype"},
+      {"prototype.rollback", "prototype"}
     ]
 
     # Re-pinned by task 01a0fcfa stage 1: attachment.get_inline's `returns`
@@ -572,15 +575,35 @@ defmodule Platform.ExtensionsTest do
     # (c135cbe7, PR #1226): the stack's surface with main's Fabrikam-scrubbed tool
     # copy. Measured on moon at the merge.
     #
+    # Re-pinned by task 01a1316b-4e46 stage 1: the `prototype` bundle's three
+    # tools, last. Measured on moon at the stage's branch.
+    #
+    # Re-pinned by task 01a1316b-4e46 stage 2: the `prototype` canvas kind,
+    # last in the registry, which also enters canvas.create/patch's document
+    # schema. Measured on moon at the stage's branch.
+    #
+    # Re-pinned by task 01a1316b-677a stage 1: the `embed` kind's `scripts`
+    # and `prototype_ref` props and its srcdoc / list_kinds text, which also
+    # enter canvas.create/patch's document schema. Measured on moon at the
+    # stage's branch.
+    #
+    # Re-pinned by task 01a1316b-aab0 stage 2: canvas.patch's operation
+    # description names the new `set_binding` op (the MCP tool's text in
+    # tool_surface.ex and the canvas tool schema in canvas/tools.ex).
+    # Measured on moon at the stage's branch.
+    #
     # Re-pinned by task 01a131c5 stage 1: `vault_fetch` and `vault_list` in
     # the `federation` bundle, after `federation_status`. Measured on moon at
     # the stage's branch.
-    @main_tool_digest_off "42ab329bc2d2f2c65a8b8cf1d56664308e67e2f6de573c3c3f5897eb3b49382e"
-    @main_kinds_summaries_digest_off "4c060fb7a6914985f94857aaac9effbb519dd2b2170c7a9c0013d4db15a73ea4"
-    @main_kinds_tool_schemas_digest_off "e454cd9e2aeb1d821a70b74fe433e81ba98b94f7ae9f2d59c55f8cf5bf509af8"
+    #
+    # Re-pinned by the stack prototype-runtime rollup merge (#1235): both of the
+    # above. Measured on moon at the merge commit.
+    @main_tool_digest_off "5faf15579570a913f453f9951a5d9b5822afd125dd7423056c1807234fed39b1"
+    @main_kinds_summaries_digest_off "26c0704185201d0926a8bcb6db6be411b821c54fcba3269676c631969944df72"
+    @main_kinds_tool_schemas_digest_off "264902e4c54f3146fe5be6e658c4717aafc6382ea233523ca505607d848e0925"
     # main's lists minus exactly `play`.
-    @core_bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode)
-    @core_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode)
+    @core_bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode prototype)
+    @core_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode prototype)
     @main_rail [
       :chat,
       :tasks,

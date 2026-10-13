@@ -173,9 +173,9 @@ defmodule Platform.Federation.ToolSurfaceTest do
       # 124 as of task 01a114a8 stage 3: `suite_run_describe`, same bundle.
       # 125 as of task 01a114a8 stage 4: `code_mode_report` in `experiments`.
       # 126 as of task 019fa1ac-6685 stage 3: `janitor_hand_back` in `task`.
-      # 128 as of task 01a131c5 stage 1: `vault_fetch` and `vault_list` in
-      # `federation`.
-      assert length(tools) == 128
+      # 131 as of the stack prototype-runtime rollup: three `prototype.*` tools
+      # (01a1316b-4e46) plus `vault_fetch` and `vault_list` (01a131c5).
+      assert length(tools) == 131
 
       tool_names = Enum.map(tools, & &1.name)
       assert "task_close_as_delivered" in tool_names

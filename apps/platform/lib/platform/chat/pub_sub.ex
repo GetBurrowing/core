@@ -8,6 +8,9 @@ defmodule Platform.Chat.PubSub do
       pins, participant changes, canvas lifecycle events).
     * `"chat:canvas:{canvas_id}"` — per-canvas event stream (state updates,
       focused canvas subscribers).
+    * `"chat:canvas_room:{canvas_id}:{node_id}"` — one canvas room's
+      shared-state diffs, presence and ephemeral broadcasts
+      (`Platform.Chat.CanvasRoom`).
 
   ## Usage in LiveView
 
@@ -51,6 +54,15 @@ defmodule Platform.Chat.PubSub do
   @doc "Returns the PubSub topic for a specific canvas."
   @spec canvas_topic(binary()) :: String.t()
   def canvas_topic(canvas_id), do: "chat:canvas:#{canvas_id}"
+
+  @doc """
+  Returns the PubSub topic for one canvas room (`Platform.Chat.CanvasRoom`,
+  keyed by canvas id AND node id). Deliberately NOT `canvas_topic/1`: every
+  LiveView with the canvas's space open subscribes that one, so room traffic
+  (cursors included) on it would reach every viewer of the space.
+  """
+  @spec canvas_room_topic(binary(), binary()) :: String.t()
+  def canvas_room_topic(canvas_id, node_id), do: "chat:canvas_room:#{canvas_id}:#{node_id}"
 
   @doc """
   Returns the global topic for space-lifecycle events (creation, archival).
@@ -113,6 +125,18 @@ defmodule Platform.Chat.PubSub do
   @spec unsubscribe_canvas(binary()) :: :ok
   def unsubscribe_canvas(canvas_id) do
     Phoenix.PubSub.unsubscribe(@pubsub, canvas_topic(canvas_id))
+  end
+
+  @doc "Subscribe the calling process to one canvas room's topic."
+  @spec subscribe_canvas_room(binary(), binary()) :: :ok | {:error, term()}
+  def subscribe_canvas_room(canvas_id, node_id) do
+    Phoenix.PubSub.subscribe(@pubsub, canvas_room_topic(canvas_id, node_id))
+  end
+
+  @doc "Unsubscribe the calling process from one canvas room's topic."
+  @spec unsubscribe_canvas_room(binary(), binary()) :: :ok
+  def unsubscribe_canvas_room(canvas_id, node_id) do
+    Phoenix.PubSub.unsubscribe(@pubsub, canvas_room_topic(canvas_id, node_id))
   end
 
   @doc """
@@ -217,6 +241,12 @@ defmodule Platform.Chat.PubSub do
   @spec broadcast_canvas(binary(), term()) :: :ok
   def broadcast_canvas(canvas_id, event) do
     Phoenix.PubSub.broadcast(@pubsub, canvas_topic(canvas_id), event)
+  end
+
+  @doc "Broadcast an event to every subscriber of one canvas room."
+  @spec broadcast_canvas_room(binary(), binary(), term()) :: :ok
+  def broadcast_canvas_room(canvas_id, node_id, event) do
+    Phoenix.PubSub.broadcast(@pubsub, canvas_room_topic(canvas_id, node_id), event)
   end
 
   @doc "Broadcast a space-lifecycle event to every connected chat session."

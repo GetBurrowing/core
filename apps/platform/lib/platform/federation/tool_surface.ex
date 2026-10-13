@@ -83,7 +83,7 @@ defmodule Platform.Federation.ToolSurface do
   # Core's own bundles. The full list is these plus every extension bundle
   # (`Platform.Extensions.tool_bundle_names/0`), read per call: never widen
   # this attribute with an extension's name (ADR 0055).
-  @bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode)
+  @bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode prototype)
 
   # Per-message content cap (graphemes) for space_get_messages /
   # space_search_messages. Anything longer is sliced and flagged via the
@@ -276,6 +276,11 @@ defmodule Platform.Federation.ToolSurface do
   # Task 01a114a8 stage 2: `suite_run`. Grantable, never a default
   # (AgentRuntime's @default_allowed_bundles does not list it).
   defp tools_for_bundle("code_mode"), do: tag(code_mode_tools(), "code_mode")
+
+  # Task 01a1316b-4e46 stage 1 (ADR 0057): definitions in PrototypeTools,
+  # behaviour in Prototypes.Tools. Grantable, never a default.
+  defp tools_for_bundle("prototype"),
+    do: tag(Platform.Federation.PrototypeTools.definitions(), "prototype")
 
   # An extension's bundle (ADR 0055): its definitions as the extension lists
   # them at call time. An unknown name is skipped, as it always was.
@@ -1710,7 +1715,7 @@ defmodule Platform.Federation.ToolSurface do
             type: "array",
             required: true,
             description:
-              "Each op is [\"set_props\", id, props] | [\"replace_children\", id, children] | [\"append_child\", parent_id, child] | [\"delete_node\", id] | [\"replace_document\", doc]. Pass nested objects (props, children, child, doc) as objects/arrays, not JSON strings.",
+              "Each op is [\"set_props\", id, props] | [\"replace_children\", id, children] | [\"append_child\", parent_id, child] | [\"delete_node\", id] | [\"replace_document\", doc] | [\"set_binding\", name, binding | null] (a room handler {\"kind\": \"handler\", \"engine\": \"js\", \"source\": \"(event, ctx) => ...\"}; null deletes it). Pass nested objects (props, children, child, doc) as objects/arrays, not JSON strings.",
             schema: %{
               type: "array",
               minItems: 1,
@@ -7808,6 +7813,17 @@ defmodule Platform.Federation.ToolSurface do
   # Every `experiment_*` tool (task 01a0d415 stage 2); no other tool name has this prefix.
   def execute("experiment_" <> _ = tool, args, context),
     do: Platform.Experiments.Tools.execute(tool, args, context)
+
+  # Every `prototype.*` tool (task 01a1316b-4e46 stage 1); no other tool name
+  # has this prefix. The agent's home org is resolved here, by the same rule
+  # every tenant-scoped tool uses, and handed over in the context.
+  def execute("prototype." <> _ = tool, args, context),
+    do:
+      Platform.Prototypes.Tools.execute(
+        tool,
+        args,
+        Map.put(context, :agent_home_org, agent_home_org(load_agent(context)))
+      )
 
   # A tool an extension bundle owns (ADR 0055), listed or not: the extension
   # answers it, including any refusal it gives while switched off. Core's

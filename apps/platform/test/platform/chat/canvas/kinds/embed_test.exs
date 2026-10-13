@@ -334,4 +334,88 @@ defmodule Platform.Chat.Canvas.Kinds.EmbedTest do
       refute "min_scale" in schema["required"]
     end
   end
+
+  describe "scripts: true (task 01a1316b-677a)" do
+    @script_doc "<!doctype html><body><button id=inc>+</button><script>1</script></body>"
+    @ref %{
+      "prototype_id" => "01a1316b-677a-7001-b686-b8fd67455686",
+      "version" => 3,
+      "sha256" => "abc"
+    }
+
+    defp scripted_node(props) do
+      %{"id" => "s1", "type" => "embed", "props" => Map.merge(%{"scripts" => true}, props)}
+    end
+
+    test "<script is still rejected when scripts is false or absent" do
+      assert {:error, reason} = Embed.validate_props(%{"srcdoc" => @script_doc})
+      assert reason =~ "may not contain <script"
+
+      assert {:error, reason} =
+               Embed.validate_props(%{"srcdoc" => @script_doc, "scripts" => false})
+
+      assert reason =~ "may not contain <script"
+    end
+
+    test "<script is accepted when scripts is true" do
+      assert Embed.validate_props(%{"srcdoc" => @script_doc, "scripts" => true}) == :ok
+    end
+
+    test "the 256 KB cap still holds when scripts is true" do
+      big = "<script>" <> String.duplicate("a", 256 * 1024) <> "</script>"
+      assert {:error, reason} = Embed.validate_props(%{"srcdoc" => big, "scripts" => true})
+      assert reason =~ "256KB"
+    end
+
+    test "scripts must be a boolean and prototype_ref a map" do
+      assert {:error, _} = Embed.validate_props(%{"srcdoc" => "<p>x</p>", "scripts" => "yes"})
+
+      assert {:error, _} =
+               Embed.validate_props(%{"srcdoc" => "<p>x</p>", "prototype_ref" => "forged"})
+
+      assert Embed.validate_props(%{"srcdoc" => "<p>x</p>", "prototype_ref" => @ref}) == :ok
+    end
+
+    test "a scripted render frames /proto with sandbox allow-scripts and never srcdoc" do
+      html =
+        render_node(scripted_node(%{"srcdoc" => @script_doc, "prototype_ref" => @ref}))
+
+      doc = LazyHTML.from_fragment(html)
+      [iframe] = Enum.to_list(LazyHTML.query(doc, "iframe"))
+      src = "/proto/01a1316b-677a-7001-b686-b8fd67455686/3/"
+
+      assert LazyHTML.attribute(iframe, "src") == [src]
+      assert LazyHTML.attribute(iframe, "sandbox") == ["allow-scripts"]
+      assert LazyHTML.attribute(iframe, "referrerpolicy") == ["no-referrer"]
+      assert LazyHTML.attribute(iframe, "srcdoc") == []
+
+      [wrapper] = Enum.to_list(LazyHTML.query(doc, ~s([phx-hook="EmbedCanvasScale"])))
+      assert LazyHTML.attribute(wrapper, "data-scripted-src") == [src]
+      assert LazyHTML.attribute(wrapper, "data-srcdoc") == []
+      assert LazyHTML.attribute(wrapper, "id") == ["embed-canvas-scripted-s1"]
+
+      refute html =~ "allow-same-origin"
+      refute html =~ "srcdoc"
+      refute html =~ "<script"
+      refute html =~ "&lt;script"
+    end
+
+    test "a scripted node without a valid ref renders the panel and no iframe" do
+      for ref <- [
+            nil,
+            %{},
+            %{"prototype_id" => "nope", "version" => 1},
+            Map.put(@ref, "version", 0)
+          ] do
+        props = %{"srcdoc" => @script_doc}
+        props = if ref, do: Map.put(props, "prototype_ref", ref), else: props
+        html = render_node(scripted_node(props))
+
+        assert html =~ "Scripted embed unavailable", "ref #{inspect(ref)} framed something"
+        refute html =~ "<iframe"
+        refute html =~ "srcdoc"
+        assert html =~ "bg-base-200"
+      end
+    end
+  end
 end

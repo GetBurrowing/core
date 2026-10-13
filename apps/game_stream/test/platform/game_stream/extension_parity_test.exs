@@ -34,7 +34,7 @@ defmodule Platform.GameStream.ExtensionParityTest do
   alias Platform.Repo
   alias PlatformWeb.Components.IconRail
 
-  @core_kinds ~w(stack row card text markdown heading badge image code mermaid embed form action_row checklist checklist_item table)
+  @core_kinds ~w(stack row card text markdown heading badge image code mermaid embed form action_row checklist checklist_item table prototype)
 
   setup do
     previous_flag = Application.fetch_env(:game_stream, :enabled)
@@ -256,7 +256,10 @@ defmodule Platform.GameStream.ExtensionParityTest do
       {"dispatch_metrics_list", "experiments"},
       {"code_mode_report", "experiments"},
       {"suite_run", "code_mode"},
-      {"suite_run_describe", "code_mode"}
+      {"suite_run_describe", "code_mode"},
+      {"prototype.publish", "prototype"},
+      {"prototype.versions", "prototype"},
+      {"prototype.rollback", "prototype"}
     ]
 
     # sha256 of the canonical term of `tool_definitions/0` on main (see
@@ -303,19 +306,43 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # `janitor_hand_back` (task 019fa1ac-6685) on main's scrubbed copy. Both
     # values measured on moon at the merge; off equals extensions_test.exs.
     #
+    # Re-pinned by task 01a1316b-4e46 stage 1: the `prototype` bundle's three
+    # tools, after core's others. Both values measured on moon at the stage's
+    # branch; off equals extensions_test.exs.
+    #
+    # Re-pinned by task 01a1316b-4e46 stage 2: the `prototype` canvas kind,
+    # last in core's registry, which also enters canvas.create/patch's
+    # document schema. All six values measured on moon at the stage's branch;
+    # off equals extensions_test.exs.
+    #
+    # Re-pinned by task 01a1316b-677a stage 1: the `embed` kind's `scripts`
+    # and `prototype_ref` props and its srcdoc / list_kinds text, which also
+    # enter canvas.create/patch's document schema. All six values measured on
+    # moon at the stage's branch; off equals extensions_test.exs. The metrics
+    # catalog digest is unchanged.
+    #
+    # Re-pinned by task 01a1316b-aab0 stage 2: canvas.patch's operation
+    # description names the new `set_binding` op. Both values measured on
+    # moon at the stage's branch; off equals extensions_test.exs. The kinds
+    # and metrics digests are unchanged.
+    #
     # Re-pinned by task 01a131c5 (deploy fix-forward): `vault_fetch` and
     # `vault_list` in the `federation` bundle, after `federation_status`. Off
     # equals extensions_test.exs (stage 1's moon measurement); on measured by
     # main CI at this branch head.
-    @main_tool_digest_off "42ab329bc2d2f2c65a8b8cf1d56664308e67e2f6de573c3c3f5897eb3b49382e"
-    @main_tool_digest_on "09d229de4f1cd66cb0c22d39bf18c1304e90206b35d5f29d5080b94c3a74ce93"
-    @main_kinds_summaries_digest_off "4c060fb7a6914985f94857aaac9effbb519dd2b2170c7a9c0013d4db15a73ea4"
-    @main_kinds_summaries_digest_on "dbab62a1b3d154e23378f3a990b77deb17c5f50eb30adf0b055bc0df8ce6c1e3"
-    @main_kinds_tool_schemas_digest_off "e454cd9e2aeb1d821a70b74fe433e81ba98b94f7ae9f2d59c55f8cf5bf509af8"
-    @main_kinds_tool_schemas_digest_on "66a2afcec34a8e4b6275ab78f21f7bb124b671a12f690399556b2ad6f2b331ef"
+    #
+    # Re-pinned by the stack prototype-runtime rollup merge (#1235): both of the
+    # above. All six values measured on moon at the merge commit; off equals
+    # extensions_test.exs.
+    @main_tool_digest_off "5faf15579570a913f453f9951a5d9b5822afd125dd7423056c1807234fed39b1"
+    @main_tool_digest_on "470a7430fc29edfa88628b82ceca746cb13e6d56b15d9bae44bdd02eb94c61b6"
+    @main_kinds_summaries_digest_off "26c0704185201d0926a8bcb6db6be411b821c54fcba3269676c631969944df72"
+    @main_kinds_summaries_digest_on "f71832b549f7a8674c01fff90be91d869b6eea222c9cdd888723d5045ec3c450"
+    @main_kinds_tool_schemas_digest_off "264902e4c54f3146fe5be6e658c4717aafc6382ea233523ca505607d848e0925"
+    @main_kinds_tool_schemas_digest_on "cf59e8e3a7215086fa324ffa7c036b076527cd20b7dbdf5bf32eba51fb6cddbe"
     @main_metrics_catalog_digest "95805ed557855b482286544ea8d5ea6063b81e47ce1ee28268467a7df2848ee9"
-    @main_bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode play)
-    @main_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode play)
+    @main_bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode prototype play)
+    @main_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode prototype play)
     @main_rail [
       :chat,
       :tasks,

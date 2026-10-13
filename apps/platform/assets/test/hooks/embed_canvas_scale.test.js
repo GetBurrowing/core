@@ -183,3 +183,174 @@ describe("EmbedCanvasScale — updated() propagates srcdoc to iframe", () => {
     expect(iframe._srcdocWrites).toEqual(["B", "C"])
   })
 })
+
+// ── Scripted mode (task 01a1316b-677a) ─────────────────────────────────
+//
+// A `scripts: true` embed's wrapper carries `data-scripted-src` and NO
+// `data-srcdoc`. The hook must never touch `srcdoc` in that mode: srcdoc
+// wins over src, so script-bearing HTML written there would run under the
+// Suite page's CSP instead of the sealed /proto one.
+
+function fakeScriptedIframe(src) {
+  const iframe = fakeIframe(undefined)
+  iframe._src = src
+  iframe._srcWrites = []
+  Object.defineProperty(iframe, "src", {
+    get() {
+      return this._src
+    },
+    set(v) {
+      this._src = v
+      this._srcWrites.push(v)
+    },
+  })
+  return iframe
+}
+
+function fakeScriptedWrapper(src) {
+  const wrapper = fakeWrapper()
+  delete wrapper.dataset.srcdoc
+  wrapper.dataset.scriptedSrc = src
+  return wrapper
+}
+
+function fakeElement(tag) {
+  const el = {
+    tagName: tag.toUpperCase(),
+    style: {},
+    attributes: {},
+    children: [],
+    _srcdocWrites: [],
+    setAttribute(k, v) {
+      this.attributes[k] = v
+    },
+    getAttribute(k) {
+      return this.attributes[k]
+    },
+    appendChild(c) {
+      this.children.push(c)
+    },
+    addEventListener() {},
+    remove() {},
+  }
+  Object.defineProperty(el, "srcdoc", {
+    get() {
+      return this._srcdoc
+    },
+    set(v) {
+      this._srcdoc = v
+      this._srcdocWrites.push(v)
+    },
+  })
+  return el
+}
+
+describe("EmbedCanvasScale — scripted mode", () => {
+  let priorRO
+  let priorWindow
+  let priorDocument
+  let created
+
+  beforeEach(() => {
+    priorRO = globalThis.ResizeObserver
+    globalThis.ResizeObserver = class {
+      observe() {}
+      disconnect() {}
+    }
+    priorWindow = globalThis.window
+    globalThis.window = priorWindow || {}
+    priorDocument = globalThis.document
+    created = []
+    globalThis.document = {
+      createElement(tag) {
+        const el = fakeElement(tag)
+        created.push(el)
+        return el
+      },
+      addEventListener() {},
+      removeEventListener() {},
+      body: { appendChild() {} },
+    }
+  })
+
+  afterEach(() => {
+    globalThis.ResizeObserver = priorRO
+    globalThis.window = priorWindow
+    globalThis.document = priorDocument
+  })
+
+  it("updated() moves iframe.src to a new version and never writes srcdoc", () => {
+    const wrapper = fakeScriptedWrapper("/proto/p/1/")
+    const iframe = fakeScriptedIframe("/proto/p/1/")
+    wrapper._iframe = iframe
+
+    const hook = buildHook(wrapper)
+    hook.mounted()
+    expect(iframe._srcWrites).toEqual([])
+
+    // An unrelated re-render (dims only) reloads nothing.
+    wrapper.dataset.declaredWidth = "900"
+    hook.updated()
+    expect(iframe._srcWrites).toEqual([])
+
+    // The embed's HTML changed: the server stamped version 2.
+    wrapper.dataset.scriptedSrc = "/proto/p/2/"
+    hook.updated()
+    hook.updated()
+
+    expect(iframe._srcWrites).toEqual(["/proto/p/2/"])
+    expect(iframe._srcdocWrites).toEqual([])
+  })
+
+  it("ignores a data-srcdoc that appears on a scripted wrapper", () => {
+    const wrapper = fakeScriptedWrapper("/proto/p/1/")
+    const iframe = fakeScriptedIframe("/proto/p/1/")
+    wrapper._iframe = iframe
+
+    const hook = buildHook(wrapper)
+    hook.mounted()
+
+    // Belt and braces: even if a srcdoc reached this wrapper's dataset, the
+    // allow-scripts frame must never receive it.
+    wrapper.dataset.srcdoc = "<script>fetch('/api/me')</script>"
+    hook.updated()
+
+    expect(iframe._srcdocWrites).toEqual([])
+    expect(iframe._srcWrites).toEqual([])
+  })
+
+  it("the expand overlay frames the same src with sandbox allow-scripts", () => {
+    const wrapper = fakeScriptedWrapper("/proto/p/3/")
+    wrapper._iframe = fakeScriptedIframe("/proto/p/3/")
+
+    const hook = buildHook(wrapper)
+    hook.mounted()
+    hook.openExpand()
+
+    const frames = created.filter((el) => el.tagName === "IFRAME")
+    expect(frames.length).toBe(1)
+    const [frame] = frames
+    expect(frame.getAttribute("sandbox")).toBe("allow-scripts")
+    expect(frame.getAttribute("referrerpolicy")).toBe("no-referrer")
+    expect(frame.src).toBe("/proto/p/3/")
+    expect(frame._srcdocWrites).toEqual([])
+
+    hook.closeExpand()
+  })
+
+  it("the srcdoc expand overlay is unchanged: sandbox empty, srcdoc set", () => {
+    const wrapper = fakeWrapper({ srcdoc: "<p>static</p>" })
+    wrapper._iframe = fakeIframe("<p>static</p>")
+
+    const hook = buildHook(wrapper)
+    hook.mounted()
+    hook.openExpand()
+
+    const [frame] = created.filter((el) => el.tagName === "IFRAME")
+    expect(frame.getAttribute("sandbox")).toBe("")
+    expect(frame.srcdoc).toContain("<p>static</p>")
+    expect(frame.src).toBe(undefined)
+
+    hook.closeExpand()
+  })
+})

@@ -15,33 +15,65 @@ defmodule Platform.CodeMode.Slots do
   native call has returned. That call is bounded: Wasmex interrupts it at
   its deadline, and a host call whose Elixir process died fails at once
   (the callback token is dropped with the dead process's mailbox).
+
+  ## More than one pool
+
+  `start_link/1` takes a `:name` (default `__MODULE__`, the agent pool every
+  `suite_run` uses). Each function below has a variant taking the server as
+  its first argument, so a second pool shares this drain logic instead of
+  re-implementing it. Canvas handlers (task 01a1316b-aab0 stage 1) run in
+  their own pool, `Platform.Canvas.ScriptEngine.Slots`, keyed by canvas id
+  with the canvas limits, so a canvas can never hold an agent's slot or the
+  reverse. The one-argument forms are unchanged.
   """
 
   use GenServer
 
   alias Platform.CodeMode.Limits
 
-  def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+  def start_link(opts \\ []) do
+    {name, opts} = Keyword.pop(opts, :name, __MODULE__)
+    GenServer.start_link(__MODULE__, opts, name: name)
+  end
 
   @doc """
   Take a slot for `runtime_id` on behalf of the calling process. Returns
   `{:ok, slot}`, `{:error, :runtime_busy}` or `{:error, :node_busy}`.
+  `runtime_id` is the per-key cap's key: a runtime id in the agent pool, a
+  canvas id in the canvas pool.
   """
   @spec acquire(String.t(), Limits.t()) :: {:ok, reference()} | {:error, atom()}
-  def acquire(runtime_id, limits \\ Limits.get()),
-    do: GenServer.call(__MODULE__, {:acquire, runtime_id, self(), limits})
+  def acquire(runtime_id, limits \\ Limits.get()), do: acquire(__MODULE__, runtime_id, limits)
+
+  @doc "`acquire/2` on the pool `server`."
+  @spec acquire(GenServer.server(), String.t(), Limits.t()) ::
+          {:ok, reference()} | {:error, atom()}
+  def acquire(server, runtime_id, limits),
+    do: GenServer.call(server, {:acquire, runtime_id, self(), limits})
 
   @doc "Record the Store a slot's run executes in."
-  def attach_store(slot, store), do: GenServer.call(__MODULE__, {:attach_store, slot, store})
+  def attach_store(slot, store), do: attach_store(__MODULE__, slot, store)
+
+  @doc "`attach_store/2` on the pool `server`."
+  def attach_store(server, slot, store), do: GenServer.call(server, {:attach_store, slot, store})
 
   @doc "Free a slot whose native call has returned."
-  def release(slot), do: GenServer.cast(__MODULE__, {:release, slot})
+  def release(slot), do: release(__MODULE__, slot)
+
+  @doc "`release/1` on the pool `server`."
+  def release(server, slot), do: GenServer.cast(server, {:release, slot})
 
   @doc "Free a slot once its Store is idle (after a timeout)."
-  def release_when_idle(slot), do: GenServer.cast(__MODULE__, {:release_when_idle, slot})
+  def release_when_idle(slot), do: release_when_idle(__MODULE__, slot)
+
+  @doc "`release_when_idle/1` on the pool `server`."
+  def release_when_idle(server, slot), do: GenServer.cast(server, {:release_when_idle, slot})
 
   @doc "Slots held now: `%{total: n, by_runtime: %{runtime_id => n}}`."
-  def held, do: GenServer.call(__MODULE__, :held)
+  def held, do: held(__MODULE__)
+
+  @doc "`held/0` on the pool `server`."
+  def held(server), do: GenServer.call(server, :held)
 
   @impl true
   def init(_opts), do: {:ok, %{slots: %{}}}

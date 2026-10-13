@@ -1178,6 +1178,7 @@ defmodule PlatformWeb.ChatLive.Partials do
   attr(:show_versions_panel, :boolean, default: false)
   attr(:canvas_versions, :list, default: [])
   attr(:restore_confirm_revision, :integer, default: nil)
+  attr(:viewer, :any, default: nil)
 
   def canvas_overlay(assigns) do
     ~H"""
@@ -1223,7 +1224,7 @@ defmodule PlatformWeb.ChatLive.Partials do
         </button>
       </div>
       <div class="flex-1 overflow-y-auto px-4 py-4">
-        <.canvas_document canvas={@canvas} dom_id_base="chat-live-canvas-panel" />
+        <.canvas_document canvas={@canvas} dom_id_base="chat-live-canvas-panel" viewer={@viewer} />
       </div>
       <.canvas_versions_panel
         :if={@show_versions_panel}
@@ -1259,7 +1260,7 @@ defmodule PlatformWeb.ChatLive.Partials do
         </button>
       </header>
       <div class="flex-1 overflow-y-auto px-4 py-4">
-        <.canvas_document canvas={@canvas} dom_id_base="chat-live-canvas-overlay" />
+        <.canvas_document canvas={@canvas} dom_id_base="chat-live-canvas-overlay" viewer={@viewer} />
       </div>
       <.canvas_versions_panel
         :if={@show_versions_panel}

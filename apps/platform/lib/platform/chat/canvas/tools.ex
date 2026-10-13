@@ -316,7 +316,7 @@ defmodule Platform.Chat.Canvas.Tools do
   defp operation_schema do
     %{
       "description" =>
-        "One of: [\"set_props\", node_id, props] | [\"replace_children\", node_id, children] | [\"append_child\", parent_id, child] | [\"delete_node\", node_id] | [\"replace_document\", document].",
+        "One of: [\"set_props\", node_id, props] | [\"replace_children\", node_id, children] | [\"append_child\", parent_id, child] | [\"delete_node\", node_id] | [\"replace_document\", document] | [\"set_binding\", name, binding | null]. A binding is a room handler {\"kind\": \"handler\", \"engine\": \"js\", \"source\": \"(event, ctx) => ...\"}; null deletes it.",
       "type" => "array",
       "minItems" => 2,
       "maxItems" => 3

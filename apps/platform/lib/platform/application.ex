@@ -121,6 +121,13 @@ defmodule Platform.Application do
            # and its ephemeral ETS store (NonceCache shape). No DB, no
            # PubSub; both must exist before the Endpoint takes a tools/call.
            Platform.CodeMode.Slots,
+           # Canvas handlers' own slot pool (task 01a1316b-aab0 stage 1):
+           # the same module under a second name, so a busy canvas can never
+           # take an agent's suite_run slot or the reverse.
+           Supervisor.child_spec(
+             {Platform.CodeMode.Slots, name: Platform.Canvas.ScriptEngine.Slots},
+             id: Platform.Canvas.ScriptEngine.Slots
+           ),
            Platform.CodeMode.Store,
            # Push relay rate-limit counters (task 01a1261e stage 2). Pure ETS
            # lifecycle owner (NonceCache shape); must exist before the
@@ -232,6 +239,7 @@ defmodule Platform.Application do
       |> maybe_add_experiments_mail_subscriber()
       |> maybe_add_container_purger()
       |> maybe_add_file_purger()
+      |> maybe_add_prototype_purger()
       |> maybe_add_catalog_emitter()
       |> maybe_add_deploy_merge_reconciler()
       |> maybe_add_canvas_search_backfill()
@@ -480,6 +488,18 @@ defmodule Platform.Application do
     if Application.get_env(:platform, :start_file_purger, true) do
       idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
       List.insert_at(children, idx, Platform.Files.Purger)
+    else
+      children
+    end
+  end
+
+  # PrototypePurger (task 01a1316b-4e46 stage 1): daily retention for
+  # prototype versions (never a prototype's latest). Needs Repo. Disabled in
+  # config/test.exs — tests call `sweep/1` directly inside the sandbox.
+  defp maybe_add_prototype_purger(children) do
+    if Application.get_env(:platform, :start_prototype_purger, true) do
+      idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
+      List.insert_at(children, idx, Platform.Prototypes.Purger)
     else
       children
     end

@@ -813,7 +813,23 @@ defmodule Platform.RepoLookupBoundaryTest do
      :safe_internal,
      "fetch_message/1's guard on the message id taken straight off the URL path segment"},
     {"platform/federation/tool_surface.ex", :get, "~schema", 1, :safe_internal,
-     "the single Repo.get inside get_by_uuid/2, the module's boundary-safe lookup helper: every id reaching it has already passed Platform.UUID.valid?/1. The load_agent/1, plan_approve, stage_complete, agent_home_org/1 and list_org_descendants/1 sites were all rewritten onto it"}
+     "the single Repo.get inside get_by_uuid/2, the module's boundary-safe lookup helper: every id reaching it has already passed Platform.UUID.valid?/1. The load_agent/1, plan_approve, stage_complete, agent_home_org/1 and list_org_descendants/1 sites were all rewritten onto it"},
+    # ── Prototypes (task 01a1316b-4e46 stage 1, ADR 0057) ─────────────
+    {"platform/prototypes.ex", :platform_uuid_guard, "-", 2, :safe_internal,
+     "get_prototype/1's predicate: the id arrives as a `/proto/:id/...` URL path segment and as the `prototype_id` MCP tool argument, so Platform.UUID.valid?/1 folds a malformed id into the nil (404 / not_found) an unknown id already returns. The second call (task 01a1316b-4e46 stage 2, counted here by 01a1316b-677a) is publisher_names/1's filter on the ids read out of `published_by` jsonb before `where: u.id in ^ids` / `a.id in ^ids`, so a malformed stored id is dropped rather than raising"},
+    {"platform/chat/canvas/kinds/prototype.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "validate_prototype_id/1 (task 01a1316b-4e46 stage 2, classified by 01a1316b-677a): the `prototype_id` node prop is agent-written, and the guard refuses a malformed one at validation, so no non-UUID ever reaches Prototypes.frame_view/3. No Repo call in this file"},
+    {"platform/chat/canvas/kinds/embed.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "scripted_src/1 (task 01a1316b-677a): `prototype_ref.prototype_id` is stamped by the server, but render does not trust it, so a malformed id renders the unavailable panel instead of a /proto URL. No Repo call in this file; render stays pure"},
+    {"platform/prototypes.ex", :get, "Prototype", 1, :safe_internal,
+     "the sole Repo.get sits inside get_prototype/1, behind the Platform.UUID.valid?/1 guard counted above; the two entries fail together if either is removed"},
+    {"platform/prototypes/tools.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "fetch_space/2's guard on the `space_id` MCP tool argument before Chat.get_space/1; a malformed id answers space_not_found instead of raising"},
+    # ── Canvas rooms (task 01a1316b-84fa stage 1) ─────────────────────
+    {"platform/chat/canvas_room.ex", :platform_uuid_guard, "-", 2, :safe_internal,
+     "(1) validate_key/2 guards the `canvas_id` every public CanvasRoom function takes (stage 2 passes it from a LiveView event's params) before the room's Registry key, its Repo.one on chat_canvas_rooms.canvas_id and Chat.get_canvas/1; a malformed id is {:error, :invalid_canvas_id}. (2) event_row/2 uses it as a BOOLEAN on the actor id before it becomes chat_canvas_room_events.actor_id (a uuid column); a non-UUID actor id is recorded as NULL rather than raising inside the flush transaction"},
+    {"platform_web/live/chat/canvas_hooks.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "room_canvas/2 (task 01a1316b-84fa stage 2) guards the `canvas_id` a `canvas_room_*` LiveView event carries in its params before CanvasAccess.fetch_for_viewer/3; a malformed id folds into {:error, :not_found}, the reply an unknown canvas already gets"}
   ]
 
   # `Repo.one/1` per file. Counted, not classified: its ids live inside
@@ -1298,6 +1314,23 @@ defmodule Platform.RepoLookupBoundaryTest do
     # binary computed here on a `:binary` column: no cast, so no CastError is
     # reachable whatever the bearer holds.
     "platform/push/relay_server.ex" => 2,
+    # Task 01a1316b-4e46 stage 1 (ADR 0057). Triaged by hand: both pin a
+    # prototype id taken off a loaded `%Prototype{}` (the controller, the
+    # tools and the purger only call `get_live_version/2` after
+    # `get_prototype/1` returned a row; `next_version/1` runs on the row
+    # `lock_or_create/3` just locked or inserted) and an integer version the
+    # controller has already parsed. No caller-supplied string reaches either
+    # where clause.
+    # Task 01a1316b-677a stage 1: 2 -> 3, triaged by hand. canvas_prototype/2
+    # pins `canvas_id` to the id of a loaded `%Canvas{}` (the canvas server's
+    # state, or the row the create Multi just inserted) and `canvas_node_id`,
+    # a `:string` column, so no cast and no CastError is reachable.
+    "platform/prototypes.ex" => 3,
+    # Task 01a1316b-84fa stage 1: 0 -> 1, triaged by hand. `load/2` pins
+    # `r.canvas_id` and `r.node_id`; the canvas id passed `validate_key/2`'s
+    # Platform.UUID.valid?/1 guard before the room process was started (the
+    # only path into `init/1`), and node_id is a text column, so no cast.
+    "platform/chat/canvas_room.ex" => 1,
     # Task 01a10882 stage 1: 0 -> 2, triaged by hand. `user_participant/2`
     # pins `p.space_id` and `p.participant_id` to ids read off the `%Space{}`
     # `Chat.get_space/1` returned and the bearer's loaded `%User{}`, so
