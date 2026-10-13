@@ -430,7 +430,17 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
     end
   end
 
-  defp parse_operations(list) do
+  @doc """
+  Parse `canvas.patch`'s wire operations (`[["set_props", id, props], ...]`)
+  into `Platform.Chat.CanvasPatch` operations. Returns `{:ok, ops}` or
+  `{:error, %{error: reason, recoverable: true}}` naming the first bad one.
+
+  Public so the canvas handler binding (`Platform.Canvas.ScriptEngine.Bindings`,
+  task 01a1316b-aab0 stage 1) parses exactly what this tool parses; there is
+  one parser, not two.
+  """
+  @spec parse_operations(list()) :: {:ok, list()} | {:error, map()}
+  def parse_operations(list) when is_list(list) do
     Enum.reduce_while(list, {:ok, []}, fn op, {:ok, acc} ->
       case parse_op(op) do
         {:ok, parsed} -> {:cont, {:ok, acc ++ [parsed]}}

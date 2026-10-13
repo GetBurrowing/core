@@ -121,6 +121,13 @@ defmodule Platform.Application do
            # and its ephemeral ETS store (NonceCache shape). No DB, no
            # PubSub; both must exist before the Endpoint takes a tools/call.
            Platform.CodeMode.Slots,
+           # Canvas handlers' own slot pool (task 01a1316b-aab0 stage 1):
+           # the same module under a second name, so a busy canvas can never
+           # take an agent's suite_run slot or the reverse.
+           Supervisor.child_spec(
+             {Platform.CodeMode.Slots, name: Platform.Canvas.ScriptEngine.Slots},
+             id: Platform.Canvas.ScriptEngine.Slots
+           ),
            Platform.CodeMode.Store,
            # Push relay rate-limit counters (task 01a1261e stage 2). Pure ETS
            # lifecycle owner (NonceCache shape); must exist before the
