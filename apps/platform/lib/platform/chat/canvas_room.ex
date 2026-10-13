@@ -123,6 +123,25 @@ defmodule Platform.Chat.CanvasRoom do
   **Handlers run as the person who clicked.** The principal is the caller's
   session actor, never a value from the frame or the script.
 
+  ## Confused deputy (task 01a1316b-aab0 stage 3)
+
+  A handler is AUTHORED by any canvas writer and RUNS with the CLICKER's
+  authority. That is a confused-deputy shape: the author picks the code, the
+  clicker lends the permissions. v1 is safe because the only host binding is
+  `canvas.patch` on the OWNING canvas, which every writer already holds, so
+  an author can make a clicker do nothing to the document the author could
+  not do directly. Any write binding beyond that (`tasks.create`,
+  `chat.post_message`, anything that reaches past this canvas) must first
+  bound the handler AUTHOR's authority too, for example by acting as the
+  intersection of author and clicker. That is the gate for the follow-up.
+
+  Measured in stage 3, not changed: room-state ops are NOT covered by that
+  argument. A read-only viewer may call a handler (`canvas_room_call` admits
+  read grants), and the handler's returned room ops land under the reader's
+  name, although the same reader's plain `canvas_room_op` is refused. See
+  `test/platform/canvas/script_engine/adversarial_test.exs`, the attack 5
+  `FINDING:` test.
+
   A call result is sent as `{:canvas_room_call_result, req, result}` to the
   `reply_to` pid, with `result` `{:ok, %{seq, applied}}` or
   `{:error, %{kind, code, message}}`.
