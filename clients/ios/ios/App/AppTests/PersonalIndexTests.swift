@@ -145,11 +145,10 @@ final class PersonalIndexTests: XCTestCase {
         XCTAssertTrue(names.contains("Dalton A"))
         XCTAssertTrue(names.contains("Burrow Helper A"), "agents are people Siri can message")
         XCTAssertTrue(names.contains(where: { $0.hasPrefix("general") }), "the conversation is indexed: \(names)")
-        // Call persons (humans), one conversation, plus the legacy
-        // SpaceEntity and AgentEntity. The messages person is transient
-        // since task 01a111bb round 5 and is not indexed.
+        // Persons (message + call for humans), the agent once, one
+        // conversation, plus the legacy SpaceEntity and AgentEntity.
         let priya = items.filter { ($0.attributeSet.displayName ?? "") == "Priya A" }
-        XCTAssertEqual(priya.count, 1, "Priya as a call person only")
+        XCTAssertEqual(priya.count, 2, "Priya as a message person and as a call person")
         XCTAssertEqual(priya.first?.attributeSet.alternateNames?.contains("Priya"), true, "the given name is an alternate")
         XCTAssertEqual(memory.items(host: b).count, 0)
     }
@@ -288,17 +287,6 @@ final class PersonalIndexTests: XCTestCase {
         let carried = try await MessageDestination.messagePerson(PersonEntity(unresolved: siriPerson(.unknown, name: "Dalton A")))
             .resolvedBurrowDestination(site: "test", choose: noChoice)
         XCTAssertEqual(carried.entityID, EntityRef(host: a, uuid: daltonID).id)
-
-        // Round 5: a transient PersonEntity the system rebuilt (`init()`,
-        // then `person` set) carries only its person; perform resolves it
-        // by the person's Burrow id.
-        var rebuilt = PersonEntity()
-        rebuilt.person = PersonEntity.intentPerson(id: EntityRef(host: a, uuid: priyaID).id, name: "Priya A")
-        XCTAssertTrue(rebuilt.isUnresolved)
-        XCTAssertEqual(rebuilt.id, EntityRef(host: a, uuid: priyaID).id)
-        let fromSystem = try await MessageDestination.messagePeople([rebuilt])
-            .resolvedBurrowDestination(site: "test", choose: noChoice)
-        XCTAssertEqual(fromSystem.entityID, EntityRef(host: a, uuid: priyaID).id)
     }
 
     func testABareUuidResolvesOnTheInstallThatHasIt() async throws {
@@ -400,20 +388,5 @@ final class PersonEntityMetadataTests: XCTestCase {
         let properties = try XCTUnwrap(entity["properties"] as? [[String: Any]])
         let person = try XCTUnwrap(properties.first { $0["identifier"] as? String == "person" }, "PersonEntity has no `person` property")
         XCTAssertEqual(person["spotlightAttributeKey"] as? String, "primaryRecipients")
-    }
-
-    /// Round 5: declared like Apple's own MessagePerson adopters (ChatKit,
-    /// SiriMessagesFlowTools in the iOS 27.0 runtime): transient, no default
-    /// query, not Indexed or Syncable.
-    func testPersonEntityIsTransientWithNoQueryLikeApplesMessagePerson() throws {
-        let url = Bundle.main.bundleURL.appendingPathComponent("Metadata.appintents/extract.actionsdata")
-        let data = try Data(contentsOf: url)
-        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
-        let entities = try XCTUnwrap(root["entities"] as? [String: Any])
-        let entity = try XCTUnwrap(entities["PersonEntity"] as? [String: Any])
-        XCTAssertEqual(entity["transient"] as? Bool, true)
-        XCTAssertNil(entity["defaultQueryIdentifier"], "PersonEntity must not be query-backed")
-        let protocols = (entity["systemProtocolMetadata"] as? [Any] ?? []).compactMap { $0 as? String }
-        XCTAssertEqual(protocols, ["com.apple.appintents.entity.AssistantEntity"])
     }
 }
