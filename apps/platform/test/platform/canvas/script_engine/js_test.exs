@@ -222,7 +222,8 @@ defmodule Platform.Canvas.ScriptEngine.JSTest do
       assert kind in ["fuel", "timeout"]
       # wall_ms 1_000 plus the 500 ms native grace, plus slack for setup.
       assert elapsed < 1_000 + 500 + 1_000
-      assert %{total: 0} = Slots.held(@pool)
+      # A timed-out slot frees once its Store is idle, not at once.
+      wait_until(fn -> Slots.held(@pool).total == 0 end, 5_000)
     end
 
     test "a 24 MB allocation is stopped at the canvas 16 MB memory limit" do
