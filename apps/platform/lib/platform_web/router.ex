@@ -940,6 +940,10 @@ defmodule PlatformWeb.Router do
       # `/admin/orgs` does, and `Platform.Branding` re-checks the actor on
       # both writes.
       live("/admin/branding", AdminBrandingLive, :index)
+      # Task 01a1316b-4e46 stage 2: prototype publishing switch and caps,
+      # install-wide for the same reason as branding. `Settings.update/2`
+      # re-checks root admin on the write.
+      live("/admin/prototypes", AdminPrototypesLive, :index)
       live("/admin/prompts", AdminPromptsLive, :index)
       live("/admin/prompts/:slug", AdminPromptsLive, :edit)
       live("/admin/federation", AdminFederationLive, :index)

@@ -34,7 +34,7 @@ defmodule Platform.GameStream.ExtensionParityTest do
   alias Platform.Repo
   alias PlatformWeb.Components.IconRail
 
-  @core_kinds ~w(stack row card text markdown heading badge image code mermaid embed form action_row checklist checklist_item table)
+  @core_kinds ~w(stack row card text markdown heading badge image code mermaid embed form action_row checklist checklist_item table prototype)
 
   setup do
     previous_flag = Application.fetch_env(:game_stream, :enabled)
@@ -307,12 +307,17 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # Re-pinned by task 01a1316b-4e46 stage 1: the `prototype` bundle's three
     # tools, after core's others. Both values measured on moon at the stage's
     # branch; off equals extensions_test.exs.
-    @main_tool_digest_off "ff95f1f88a977407f31860021d3000047d793aaecd0439080c507fc909602e93"
-    @main_tool_digest_on "bd228b6819b15e0759c720b50717945f34dabe5776eabe666675c2c44745534c"
-    @main_kinds_summaries_digest_off "4c060fb7a6914985f94857aaac9effbb519dd2b2170c7a9c0013d4db15a73ea4"
-    @main_kinds_summaries_digest_on "dbab62a1b3d154e23378f3a990b77deb17c5f50eb30adf0b055bc0df8ce6c1e3"
-    @main_kinds_tool_schemas_digest_off "e454cd9e2aeb1d821a70b74fe433e81ba98b94f7ae9f2d59c55f8cf5bf509af8"
-    @main_kinds_tool_schemas_digest_on "66a2afcec34a8e4b6275ab78f21f7bb124b671a12f690399556b2ad6f2b331ef"
+    #
+    # Re-pinned by task 01a1316b-4e46 stage 2: the `prototype` canvas kind,
+    # last in core's registry, which also enters canvas.create/patch's
+    # document schema. All six values measured on moon at the stage's branch;
+    # off equals extensions_test.exs.
+    @main_tool_digest_off "180f6e8da608728ed792184c3aa348bc1f980600753cef42a157e618220beb2c"
+    @main_tool_digest_on "c81a5cd609e066f8f1dd871890d6550c0d551baaaf77e75f76b4a39d17dac7d4"
+    @main_kinds_summaries_digest_off "394dc7d23738eb9c9f99c3647bf488a96353bd3c98ce6857a7d5bbcb8f916486"
+    @main_kinds_summaries_digest_on "6545a2e20a40269cbb51785f2d935253c76e31cfab44b0f758a3ff0208c50e10"
+    @main_kinds_tool_schemas_digest_off "b1090427b0b4fffc83abc9ab6c004043d6747489a3876d1f3e9a49668a60f6ba"
+    @main_kinds_tool_schemas_digest_on "8cf9a172cc8e28b7be114f5685529ee21035c50d14feb4598fe07d8c0941b7e5"
     @main_metrics_catalog_digest "95805ed557855b482286544ea8d5ea6063b81e47ce1ee28268467a7df2848ee9"
     @main_bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode prototype play)
     @main_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode prototype play)

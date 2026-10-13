@@ -66,6 +66,93 @@ defmodule Platform.Prototypes do
   @spec url(binary(), integer()) :: String.t()
   def url(prototype_id, version), do: "/proto/#{prototype_id}/#{version}/"
 
+  @doc """
+  Everything the prototype canvas kind's bar needs, in one call (stage 2).
+
+  `requested` is the node's `version` prop (nil = follow latest).
+  `canvas_org_id` is the org of the space the canvas lives in: a prototype of
+  any OTHER org is `:unavailable`, exactly like an unknown id, so a canvas in
+  org X never frames, or reveals the existence of, a prototype of org Y. The
+  serve route's 404 is the backstop; this check means the frame is never
+  emitted at all. A nil `canvas_org_id` (the space could not be resolved) is
+  also `:unavailable`: fail closed.
+
+  Returns `{:ok, view}` where `view.state` is `:live` or `:removed` (the shown
+  version was deleted by retention), or `{:error, :unavailable}`.
+  """
+  @spec frame_view(term(), integer() | nil, binary() | nil) ::
+          {:ok, map()} | {:error, :unavailable}
+  def frame_view(prototype_id, requested, canvas_org_id) do
+    with %Prototype{org_id: org_id} = prototype when is_binary(org_id) <-
+           get_prototype(prototype_id),
+         true <- is_binary(canvas_org_id) and org_id == canvas_org_id,
+         versions when versions != [] <- list_versions(prototype),
+         shown = requested || prototype.latest_version,
+         %Version{} = row <- Enum.find(versions, &(&1.version == shown)) do
+      names = publisher_names(versions)
+
+      {:ok,
+       %{
+         prototype: prototype,
+         latest: prototype.latest_version,
+         shown: shown,
+         shown_at: row.inserted_at,
+         pinned?: is_integer(requested) and requested < prototype.latest_version,
+         state: if(row.removed_at, do: :removed, else: :live),
+         versions:
+           Enum.map(versions, fn v ->
+             %{
+               version: v.version,
+               inserted_at: v.inserted_at,
+               publisher: Map.get(names, publisher_key(v.published_by), "unknown"),
+               removed?: not is_nil(v.removed_at)
+             }
+           end)
+       }}
+    else
+      _ -> {:error, :unavailable}
+    end
+  end
+
+  # Display names for every publisher of `versions`: one query for users and
+  # one for agents, whatever the number of versions.
+  defp publisher_names(versions) do
+    keys = versions |> Enum.map(&publisher_key(&1.published_by)) |> Enum.uniq()
+    ids = fn kind -> for {^kind, id} <- keys, Platform.UUID.valid?(id), do: id end
+
+    users =
+      case ids.("user") do
+        [] ->
+          []
+
+        user_ids ->
+          Repo.all(
+            from(u in Platform.Accounts.User,
+              where: u.id in ^user_ids,
+              select: {u.id, u.name, u.email}
+            )
+          )
+          |> Enum.map(fn {id, name, email} -> {{"user", id}, name || email} end)
+      end
+
+    agents =
+      case ids.("agent") do
+        [] ->
+          []
+
+        agent_ids ->
+          Repo.all(
+            from(a in Platform.Agents.Agent, where: a.id in ^agent_ids, select: {a.id, a.name})
+          )
+          |> Enum.map(fn {id, name} -> {{"agent", id}, name} end)
+      end
+
+    Map.new(users ++ agents)
+  end
+
+  defp publisher_key(%{"kind" => kind, "id" => id}), do: {kind, id}
+  defp publisher_key(_), do: nil
+
   # ── Policy ─────────────────────────────────────────────────────────────
 
   @doc """

@@ -21,6 +21,7 @@ A canvas is a tree of nodes. Each node has an `id`, a `type` (its kind) and `pro
 - **Structure:** `table`, plus `checklist` with its `checklist_item` children.
 - **Input:** `form` and `action_row`, for collecting answers and choices from people.
 - **Embed:** `embed` renders a full HTML document in a sandboxed frame with no scripts, forms, popups or navigation. The HTML may not contain a script tag and is capped at 256 KB. Width and height are declared, and the frame scales down to fit narrow screens.
+- **Prototype:** `prototype` frames a published, versioned prototype: a clickable bundle of HTML, CSS, JavaScript and images. Unlike `embed`, its scripts run, sealed in a sandboxed frame with no network and no Suite access. Props: `prototype_id` (required), `version` (pin one; absent follows the latest), and the same `width`, `height` and `min_scale` as `embed`. It only frames a prototype of the same org as the space. A bar above the frame shows the title and the version stamp, which opens the version list.
 - **Game stream:** a playable stream of a task's review build. It comes from the optional Play module and exists only on installs where Play is enabled. Without Play, a document that holds one still opens, and that node shows a placeholder.
 
 Call `canvas.list_kinds` for the props and an example of every kind available on this install.
@@ -40,11 +41,20 @@ A canvas link opens only for someone who already has access:
 
 External users never reach the page. There are no share links, so a link cannot reach anyone beyond that list.
 
+### Publishing a prototype
+
+A prototype is published as a bundle: a zip, or a map of files, with an `index.html` entry. Publish with `prototype.publish`, or pick Prototype in the New canvas form and drop a zip there. Publishing has to be turned on by an install admin, who also sets who may publish, the size and file limits and how long old versions are kept. Agents need the `prototype` bundle granted.
+
+- **Versions:** every publish creates the next version, and an older version never changes. `prototype.versions` lists them, and `prototype.rollback` points latest back at an earlier one without copying anything. In the canvas, pick a version from the version list and pin it. Versions older than the retention period are removed, except the latest.
+- **What the sandbox blocks:** the bundle cannot read Suite cookies, reach the surrounding page or call any network address, Suite included, and forms cannot be submitted.
+- **What it does not block:** a script can still navigate its own frame to an outside page, so never type a password or anything secret into a prototype. The Open button opens one version in a new tab through a short-lived bearer link: anyone holding that link can view that one version until it expires, so do not paste it outside the org.
+
 ## When to use it
 
 - **Presenting structured or visual work:** status boards, comparisons, diagrams, screenshots.
 - **Giving a reviewer evidence:** a canvas of screenshots with captions, attached to the task.
 - **Showing a design mockup:** an `embed` of the HTML and CSS.
+- **Letting people click through a design:** a `prototype`, when the mockup needs scripts, several pages or a deep link.
 - **Keeping one document current:** patch the same canvas instead of posting new messages.
 
 ## How agents use it
@@ -62,7 +72,8 @@ External users never reach the page. There are no share links, so a link cannot 
 - **Patching from memory.** A patch against an old revision is rebased or rejected. Read the canvas with `canvas.describe` first.
 - **Pointing an image at an outside URL or a data URI.** Both are rejected. Upload the bytes and use the attachment URL.
 - **Pasting a link the reader cannot open.** A canvas in an execution space opens only through its task. Attach it with `task_attach_canvas` before you share the link.
-- **Putting a script in an embed.** The embed is refused. Embeds are for static HTML and CSS.
+- **Putting a script in an embed.** The embed is refused. Embeds are for static HTML and CSS. Publish a `prototype` when the design needs scripts.
+- **Framing another org's prototype.** The canvas shows "This prototype is not available". A prototype opens only in a space of its own org.
 - **Encoding a nested document as a JSON string.** Pass props, children and documents as objects and arrays.
 
 _Last verified at 837fba6e._

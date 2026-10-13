@@ -285,6 +285,8 @@
         canvas_explorer_collapsed={@canvas_explorer_collapsed}
         canvas_archive_count={@canvas_archive_count}
         canvas_search_focus={@canvas_search_focus}
+        prototype_upload={@uploads[PrototypeUpload.upload_name()]}
+        can_publish_prototype?={@can_publish_prototype?}
       />
 
       <div id="inline-focus-listener" phx-hook="InlineFocus" class="hidden"></div>
@@ -471,6 +473,7 @@
       show_versions_panel={@show_versions_panel}
       canvas_versions={@canvas_versions}
       restore_confirm_revision={@restore_confirm_revision}
+      viewer={{:user, @user_id}}
     />
 
     <%!-- Embedded surfaces (e.g. inside MeetingLive) leave the meeting

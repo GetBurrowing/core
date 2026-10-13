@@ -1008,8 +1008,11 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   # ── Internals ────────────────────────────────────────────────────────
 
   defp assign_new_form(socket, attrs \\ %{}) do
+    # `kind` is the New canvas form's Blank/Prototype choice (task 01a1316b
+    # stage 2); anything but "prototype" renders as Blank.
     params = %{
-      "title" => Map.get(attrs, "title", "")
+      "title" => Map.get(attrs, "title", ""),
+      "kind" => Map.get(attrs, "kind", "blank")
     }
 
     assign(socket, :new_canvas_form, to_form(params, as: :canvas))

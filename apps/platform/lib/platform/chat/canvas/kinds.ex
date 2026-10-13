@@ -44,7 +44,8 @@ defmodule Platform.Chat.Canvas.Kinds do
     ActionRow,
     Checklist,
     ChecklistItem,
-    Table
+    Table,
+    Prototype
   }
 
   @modules [
@@ -63,7 +64,8 @@ defmodule Platform.Chat.Canvas.Kinds do
     ActionRow,
     Checklist,
     ChecklistItem,
-    Table
+    Table,
+    Prototype
   ]
 
   @doc "Returns all registered kind modules, including every extension kind."
@@ -150,6 +152,12 @@ defmodule Platform.Chat.Canvas.Kinds do
 
   defp describe("checklist"), do: "Titled checklist. Children must be `checklist_item` nodes."
   defp describe("checklist_item"), do: "Single checklist row."
+
+  defp describe("prototype"),
+    do:
+      "Published, versioned prototype bundle (from `prototype_publish`) in a sealed iframe " <>
+        "(`sandbox=\"allow-scripts\"`, no network, no Suite access). `prototype_id` required; " <>
+        "`version` pins one, absent follows latest. Same org as this space only."
 
   defp describe(_), do: ""
 
