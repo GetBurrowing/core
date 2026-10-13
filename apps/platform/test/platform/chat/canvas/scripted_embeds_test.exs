@@ -105,6 +105,14 @@ defmodule Platform.Chat.Canvas.ScriptedEmbedsTest do
       Repo.all(from(v in Version, where: v.prototype_id == ^prototype_id, select: v.version))
       |> Enum.sort()
 
+  # `CanvasServer.stop/1` returns once the pid is dead, but the Registry drops
+  # its name asynchronously; a describe in that window finds the dead pid
+  # (`already_started`) and the call exits with :noproc. Wait the name out.
+  defp stop_cold!(canvas_id) do
+    CanvasServer.stop(canvas_id)
+    Platform.AsyncAssertions.assert_eventually(fn -> CanvasServer.whereis(canvas_id) == nil end)
+  end
+
   defp apply_ops(canvas_id, ops) do
     {:ok, %{revision: rev}} = CanvasServer.describe(canvas_id)
     CanvasServer.apply_patches(canvas_id, ops, rev, %{type: "agent", id: "a"})
@@ -152,7 +160,7 @@ defmodule Platform.Chat.Canvas.ScriptedEmbedsTest do
 
       # Same check after a server restart, when the verified-ref cache is
       # empty and the lookup has to go to the database.
-      CanvasServer.stop(canvas.id)
+      stop_cold!(canvas.id)
       assert {:ok, _} = apply_ops(canvas.id, [{:set_props, "e1", %{"height" => 300}}])
       assert ref(canvas.id, "e1")["version"] == 1
       assert versions(id) == [1]
@@ -177,7 +185,7 @@ defmodule Platform.Chat.Canvas.ScriptedEmbedsTest do
       assert ref(canvas.id, "e1") == own
 
       # Also on a cold server (no cache) and on create.
-      CanvasServer.stop(canvas.id)
+      stop_cold!(canvas.id)
       assert {:ok, _} = apply_ops(canvas.id, [{:set_props, "e1", %{"prototype_ref" => forged}}])
       assert ref(canvas.id, "e1") == own
 
@@ -266,7 +274,7 @@ defmodule Platform.Chat.Canvas.ScriptedEmbedsTest do
 
       # Unrelated node: fine, warm and cold.
       assert {:ok, _} = apply_ops(canvas.id, [{:set_props, "t", %{"value" => "edited"}}])
-      CanvasServer.stop(canvas.id)
+      stop_cold!(canvas.id)
       assert {:ok, _} = apply_ops(canvas.id, [{:set_props, "t", %{"value" => "again"}}])
       assert node_props(canvas.id, "t")["value"] == "again"
       assert ref(canvas.id, "e1")["version"] == 1
