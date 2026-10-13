@@ -14,6 +14,16 @@ defmodule Platform.Chat.CanvasPatch do
       {:append_child, node_id, child}
       {:delete_node, node_id}
       {:replace_document, document}
+      {:set_binding, name, binding | nil}
+
+  `set_binding` (task 01a1316b-aab0 stage 2) sets or, with `nil`, deletes
+  one entry of the document's `"bindings"` map. A binding is a canvas
+  handler, `%{"kind" => "handler", "engine" => "js", "source" => source}`
+  (`"engine"` defaults to `"js"`). The result is validated by
+  `CanvasDocument.binding_errors/1`, the same check `replace_document` runs
+  through `CanvasDocument.validate/1`, so neither op can store a handler the
+  other would refuse. It is a canvas write like every other op, so whoever
+  applies it already passed the writer gate.
 
   Rebase-or-reject concurrency is implemented in `Platform.Chat.Canvas.Server`,
   not here. This module is pure document transformation.
@@ -28,6 +38,7 @@ defmodule Platform.Chat.CanvasPatch do
           | {:append_child, binary(), map()}
           | {:delete_node, binary()}
           | {:replace_document, map()}
+          | {:set_binding, binary(), map() | nil}
 
   @doc "Apply a single operation to a document."
   @spec apply(CanvasDocument.document(), operation()) ::
@@ -102,6 +113,31 @@ defmodule Platform.Chat.CanvasPatch do
         {:ok, new_root} -> {:ok, bump(put_in(document["root"], new_root))}
         :not_found -> {:error, "delete_node: node \"#{node_id}\" not found"}
       end
+    end
+  end
+
+  def apply(document, {:set_binding, name, binding})
+      when is_binary(name) and (is_map(binding) or is_nil(binding)) do
+    bindings = Map.get(document, "bindings") || %{}
+
+    bindings =
+      case binding do
+        nil -> Map.delete(bindings, name)
+        %{} -> Map.put(bindings, name, Map.put_new(binding, "engine", "js"))
+      end
+
+    cond do
+      not is_nil(binding) and Map.get(binding, "kind") != "handler" ->
+        {:error, "set_binding: a binding must have \"kind\" \"handler\""}
+
+      not CanvasDocument.binding_name?(name) ->
+        {:error, "set_binding: name #{inspect(name)} must match ^[a-z][a-z0-9_.-]{0,63}$"}
+
+      (errors = CanvasDocument.binding_errors(bindings)) != [] ->
+        {:error, "set_binding: #{Enum.join(errors, "; ")}"}
+
+      true ->
+        {:ok, bump(Map.put(document, "bindings", bindings))}
     end
   end
 

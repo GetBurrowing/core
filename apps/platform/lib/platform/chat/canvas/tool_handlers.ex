@@ -479,6 +479,16 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
     end
   end
 
+  defp parse_op(["set_binding", name, nil]) when is_binary(name),
+    do: {:ok, {:set_binding, name, nil}}
+
+  defp parse_op(["set_binding", name, binding]) when is_binary(name) do
+    case decode_if_string(binding) do
+      b when is_map(b) -> {:ok, {:set_binding, name, b}}
+      _ -> {:error, "set_binding: binding must be an object or null (got #{describe(binding)})"}
+    end
+  end
+
   defp parse_op(other), do: {:error, "unrecognized operation: #{inspect(other)}"}
 
   # Some MCP clients (and some LLM providers) serialize nested object

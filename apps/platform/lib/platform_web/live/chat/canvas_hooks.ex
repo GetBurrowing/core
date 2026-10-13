@@ -18,10 +18,12 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
       `"canvas_explorer_expand"`, `"canvas_explorer_collapse"`, and the
       canvas-room relay `"canvas_room_join"`, `"canvas_room_op"`,
       `"canvas_room_ephemeral"`, `"canvas_room_leave"` (task 01a1316b-84fa
-      stage 2; see the comment above those clauses)
+      stage 2; see the comment above those clauses), and `"canvas_room_call"`
+      (task 01a1316b-aab0 stage 2)
     * Info:    `{:canvas_created, canvas}`, `{:canvas_updated, canvas}`, and
       the room's `{:canvas_room_diff | :canvas_room_presence |
-      :canvas_room_ephemeral, ...}` plus the room pid's `:DOWN`
+      :canvas_room_ephemeral, ...}` plus the room pid's `:DOWN`, and
+      `{:canvas_room_call_result, req, result}`
 
   ## The explorer's data (task `01a0740d` stage 3)
 
@@ -797,6 +799,46 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
     {:halt, socket}
   end
 
+  # A handler call (task 01a1316b-aab0 stage 2). The room runs the handler
+  # off its own process and sends `{:canvas_room_call_result, req, result}`
+  # back here, so this replies nothing: a handler can run for seconds. The
+  # actor is this socket's session user, never a params value. A read-only
+  # viewer may call: a handler is code a canvas WRITER stored, and its
+  # `canvas.patch` binding still refuses a reader.
+  defp handle_event(
+         "canvas_room_call",
+         %{"canvas_id" => canvas_id, "node_id" => node_id, "name" => name} = params,
+         socket
+       )
+       when is_binary(canvas_id) and is_binary(node_id) and is_binary(name) do
+    req = %{
+      canvas_id: canvas_id,
+      node_id: node_id,
+      hook_id: hook_id(params),
+      req: call_req(params)
+    }
+
+    with %{} <- Map.get(socket.assigns.canvas_rooms, {canvas_id, node_id}),
+         {:ok, actor} <- room_actor(socket) do
+      CanvasRoom.call_handler(
+        canvas_id,
+        node_id,
+        actor,
+        name,
+        Map.get(params, "args") || %{},
+        {self(), req}
+      )
+
+      {:halt, socket}
+    else
+      nil ->
+        {:halt, push_call_result(socket, req, call_error("not_joined"))}
+
+      {:error, code} ->
+        {:halt, push_call_result(socket, req, call_error(to_string(code)))}
+    end
+  end
+
   defp handle_event(
          "canvas_room_leave",
          %{"canvas_id" => canvas_id, "node_id" => node_id} = params,
@@ -908,6 +950,28 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   end
 
   defp room_event(canvas_id, node_id, kind), do: "canvas_room:#{canvas_id}:#{node_id}:#{kind}"
+
+  defp call_req(%{"req" => req}) when is_binary(req) and byte_size(req) <= 128, do: req
+  defp call_req(_params), do: nil
+
+  defp call_error(code), do: {:error, %{kind: code, code: code, message: code}}
+
+  defp push_call_result(socket, req, result) do
+    payload =
+      case result do
+        {:ok, %{seq: seq, applied: applied}} ->
+          %{ok: true, result: %{seq: seq, applied: applied}, seq: seq}
+
+        {:error, %{kind: kind, code: code, message: message}} ->
+          %{ok: false, kind: kind, code: code, message: message}
+      end
+
+    push_event(
+      socket,
+      room_event(req.canvas_id, req.node_id, "call_result"),
+      Map.merge(payload, %{req: req.req, hook_id: req.hook_id})
+    )
+  end
 
   defp tracked_room?(socket, canvas_id, node_id),
     do: Map.has_key?(Map.get(socket.assigns, :canvas_rooms, %{}), {canvas_id, node_id})
@@ -1204,6 +1268,10 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
 
   defp handle_info({:canvas_room_timer, _canvas_id, _node_id, _name, _msg}, socket),
     do: {:halt, socket}
+
+  # push_event only, like the rest of the room traffic.
+  defp handle_info({:canvas_room_call_result, %{canvas_id: _} = req, result}, socket),
+    do: {:halt, push_call_result(socket, req, result)}
 
   defp handle_info({:DOWN, ref, :process, _pid, _reason}, socket) do
     case Enum.find(Map.get(socket.assigns, :canvas_rooms, %{}), fn {_k, e} -> e.ref == ref end) do

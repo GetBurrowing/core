@@ -60,6 +60,18 @@ Every prototype is multiplayer with nothing to add: Suite puts a small script in
 - **Limits:** keys and list names up to 128 bytes, one value or item up to 16 KB, the whole state up to 512 KB, 50 lists of up to 1,000 items, and 20 writes a second per viewer. A write over a limit is rejected and nothing changes.
 - **Where it is off:** opened full-size with Open, or on a surface that only displays canvases, `connected` is false and writes are rejected.
 
+#### Handlers
+
+A canvas can also store small server-side programs, called handlers, that a prototype runs with `suite.call(name, args)`. Set one with the `canvas.patch` operation `["set_binding", name, {"kind": "handler", "engine": "js", "source": "(event, ctx) => { ctx.increment('votes.' + event.args.option) }"}]`, and delete it with `["set_binding", name, null]`. A name is lower case, starts with a letter and is at most 64 characters (`^[a-z][a-z0-9_.-]{0,63}$`). The source is at most 64 KB, and a canvas holds at most 32 handlers. Setting a handler is a canvas edit, so only people who can edit the canvas can set one.
+
+- **Handlers run as the person who clicked.** Every change a handler makes is saved and attributed to the viewer who called it, and its `ctx.patch` edits the canvas with that viewer's own permission. Someone who can only read the canvas can call a handler, but cannot edit the canvas through it.
+- **The `ctx` API:** `ctx.state` is a read-only copy of the shared state, `ctx.now` is the room's time (and `Date.now()` returns it), and `ctx.actor` is the caller. `ctx.set`, `ctx.increment`, `ctx.add`, `ctx.update` and `ctx.remove` change shared state, `ctx.after(ms, handler, args)`, `ctx.every(ms, handler, args)` and `ctx.cancel(handler)` set timers, and `ctx.patch(operations)` edits this canvas. No other Suite call is available: anything else, such as `tasks.create`, is rejected with kind `forbidden` and code `binding_not_registered`.
+- **Changes land together or not at all.** The handler's changes are applied when it finishes, on top of whatever other viewers changed meanwhile. If any one change is over a limit, none is applied.
+- **Results:** `suite.call` resolves with `{ok: true, result}` and rejects with an error carrying `kind` and `code`.
+- **Limits:** a handler run has 1 second, 16 MB of memory and 10 `ctx.patch` calls, and at most 50 changes and 16 timer requests. Each room runs one handler at a time and queues up to 16 more, then rejects with `busy`. A call counts against the viewer's 20 writes a second.
+- **Timers:** `after` waits 100 ms to 24 hours and fires once; `every` repeats at least 1 second apart. A room holds at most 16 named timers, and setting a timer with the same handler name replaces it. A timer fires as the person whose call set it. **Timers are not saved:** when the room stops, for example after everyone has left for a minute, its timers are gone.
+- **Audit:** every run is recorded with the handler name, a hash of its source, the caller, how long it took and how it ended, but never its source, arguments or state.
+
 ## When to use it
 
 - **Presenting structured or visual work:** status boards, comparisons, diagrams, screenshots.
@@ -72,7 +84,7 @@ Every prototype is multiplayer with nothing to add: Suite puts a small script in
 
 - `canvas.create` creates a canvas in a space from a full document and returns its `view_url`. `canvas.template` returns a starter document (empty, text, heading and text, checklist, table, form, code, dashboard) to adapt.
 - `canvas.describe` reads the current document and revision. Call it before every patch.
-- `canvas.patch` applies operations against a base revision. The operations are set props, replace children, append a child, delete a node and replace the whole document. A rejection names its reason: the target was deleted, the schema was violated, a child was not allowed there, or your revision was too stale. Describe again and retry.
+- `canvas.patch` applies operations against a base revision. The operations are set props, replace children, append a child, delete a node, replace the whole document, and set a handler binding. A rejection names its reason: the target was deleted, the schema was violated, a child was not allowed there, or your revision was too stale. Describe again and retry.
 - `canvas_list` lists a space's canvases, and `canvas_get` reads one by id.
 - `canvas.versions` and `canvas.restore` read and roll back history.
 - `task_attach_canvas` attaches a canvas to a task, so it rides along in every later dispatch for that task. `task_list_canvases` and `task_detach_canvas` read and remove those attachments.

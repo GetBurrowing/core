@@ -11,6 +11,7 @@
   var seq = null
   var reqN = 0
   var pending = {}
+  var calls = {}
   var held = []
   var subs = { change: [], presence: [], broadcast: [] }
   var markReady
@@ -41,6 +42,39 @@
       pending[req] = { res: res, rej: rej }
       post(m)
     })
+  }
+
+  // suite.call(name, args): run the canvas handler `name` in the room, as
+  // the signed-in viewer (task 01a1316b-aab0 stage 2). Resolves with
+  // {ok: true, result} once the mirror has the handler's ops; rejects with
+  // an Error carrying .kind and .code (e.g. forbidden / binding_not_registered).
+  function call(name, args) {
+    if (!suite.connected) return Promise.reject(coded({ kind: "not_connected" }))
+    var req = "c" + (++reqN)
+    return new Promise(function (res, rej) {
+      var m = { type: "call", req: req, name: name, args: args === undefined ? {} : args, suite: 1 }
+      if (new TextEncoder().encode(JSON.stringify(m.args)).length > 16384) return rej(coded({ kind: "too_large" }))
+      calls[req] = { res: res, rej: rej }
+      post(m)
+    })
+  }
+
+  function coded(m) {
+    var e = new Error(m.code || m.kind || "error")
+    e.name = "SuiteError"
+    e.kind = m.kind || "error"
+    e.code = m.code || e.kind
+    if (m.message) e.detail = m.message
+    return e
+  }
+
+  function onCallResult(m) {
+    var p = calls[m.req]
+    if (!p) return
+    delete calls[m.req]
+    if (!m.ok) { p.rej(coded(m)); return }
+    held.push({ seq: m.seq, result: { ok: true, result: m.result }, res: p.res })
+    release()
   }
 
   // An ack can beat its diff: hold it until the mirror reaches its seq.
@@ -118,6 +152,7 @@
     __bridge: 1,
     ready: ready,
     connected: false,
+    call: call,
     me: null,
     presence: [],
     state: {
@@ -157,6 +192,7 @@
     if (m.type === "snapshot") onSnapshot(m)
     else if (m.type === "diff") onDiff(m)
     else if (m.type === "ack") onAck(m)
+    else if (m.type === "call_result") onCallResult(m)
     else if (m.type === "presence") {
       suite.presence = m.presence || []
       emit("presence", copy(suite.presence))

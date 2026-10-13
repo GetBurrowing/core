@@ -207,3 +207,52 @@ describe("suite.js broadcast", () => {
     expect(got).toEqual([{ channel: "cursor", payload: { x: 1 }, actor: "u-2" }])
   })
 })
+
+describe("suite.call (task 01a1316b-aab0 stage 2)", () => {
+  it("posts a call and resolves with {ok, result} once the mirror reaches its seq", async () => {
+    const { suite, fromParent, sent } = boot()
+    fromParent(snapshot(0))
+
+    let resolved = null
+    suite.call("vote", { option: "a" }).then((r) => (resolved = r))
+    const m = sent().at(-1)
+    expect(m).toMatchObject({ type: "call", name: "vote", args: { option: "a" }, suite: 1 })
+
+    fromParent({ suite: 1, type: "call_result", req: m.req, ok: true, seq: 1, result: { seq: 1, applied: 1 } })
+    await Promise.resolve()
+    expect(resolved).toBe(null)
+
+    fromParent(keyDiff(1, "votes.a", 1, "u-1"))
+    await Promise.resolve()
+    expect(resolved).toEqual({ ok: true, result: { seq: 1, applied: 1 } })
+  })
+
+  it("rejects with an error carrying kind and code", async () => {
+    const { suite, fromParent, sent } = boot()
+    fromParent(snapshot(0))
+    const p = suite.call("mk", {})
+    const m = sent().at(-1)
+    fromParent({
+      suite: 1,
+      type: "call_result",
+      req: m.req,
+      ok: false,
+      kind: "forbidden",
+      code: "binding_not_registered",
+      message: "nope",
+    })
+    const err = await p.catch((e) => e)
+    expect(err.kind).toBe("forbidden")
+    expect(err.code).toBe("binding_not_registered")
+    expect(err.message).toBe("binding_not_registered")
+  })
+
+  it("rejects not_connected before a snapshot and too_large over 16 KB of args", async () => {
+    const { suite, fromParent, sent } = boot()
+    await expect(suite.call("vote", {})).rejects.toMatchObject({ kind: "not_connected" })
+    fromParent(snapshot(0))
+    const before = sent().length
+    await expect(suite.call("vote", { s: "x".repeat(16 * 1024) })).rejects.toMatchObject({ kind: "too_large" })
+    expect(sent().length).toBe(before)
+  })
+})

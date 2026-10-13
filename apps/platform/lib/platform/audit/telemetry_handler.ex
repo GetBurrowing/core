@@ -343,7 +343,19 @@ defmodule Platform.Audit.TelemetryHandler do
     # (default handle_event clause) so tests can assert the row immediately
     # after `fail_transcript/3` returns; `scope_check/2` falls through to
     # `:ok` for this namespace.
-    [:platform, :meetings, :transcription_failed]
+    [:platform, :meetings, :transcription_failed],
+    # Task 01a1316b-aab0 stage 2 — one canvas handler invocation (a call or
+    # a timer fire), emitted by `Platform.Chat.CanvasRoom` when the run ends
+    # or is refused before it starts. Metadata carries canvas_id, node_id,
+    # handler, script_sha256 (of the source), caller_type / caller_id,
+    # engine, trigger ("call" | "timer"), duration_ms, result (ok | an engine
+    # kind | busy | rate_limited | unknown_handler | an op error code) and
+    # code (the refusal code, e.g. binding_not_registered), plus
+    # resource_type "canvas" / resource_id / action "script_run" / actor_type
+    # / actor_id. Never the source, args, state or result. Sync (default
+    # handle_event clause). Registration here is load-bearing: an emit with
+    # no matching @events entry fails SILENTLY.
+    [:platform, :canvas, :script_run]
 
     # NOTE: `[:platform, :memory, :proposal_promoted]` is NOT registered
     # here. `Platform.Memory.Proposals.queue_promotion/1` (task 019f70e9

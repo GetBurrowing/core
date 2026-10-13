@@ -584,7 +584,12 @@ defmodule Platform.ExtensionsTest do
     # and `prototype_ref` props and its srcdoc / list_kinds text, which also
     # enter canvas.create/patch's document schema. Measured on moon at the
     # stage's branch.
-    @main_tool_digest_off "099906a5cef8f4dc183711b2c984fbd6757be4841c7191797c261636944ef9bc"
+    #
+    # Re-pinned by task 01a1316b-aab0 stage 2: canvas.patch's operation
+    # description names the new `set_binding` op (the MCP tool's text in
+    # tool_surface.ex and the canvas tool schema in canvas/tools.ex).
+    # Measured on moon at the stage's branch.
+    @main_tool_digest_off "745d5a4b0ebbaf2789c8f572fe206b469bc4dd21da7935fa4f89b15c240573c9"
     @main_kinds_summaries_digest_off "26c0704185201d0926a8bcb6db6be411b821c54fcba3269676c631969944df72"
     @main_kinds_tool_schemas_digest_off "264902e4c54f3146fe5be6e658c4717aafc6382ea233523ca505607d848e0925"
     # main's lists minus exactly `play`.

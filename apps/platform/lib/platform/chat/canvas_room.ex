@@ -89,11 +89,67 @@ defmodule Platform.Chat.CanvasRoom do
 
   ## The handler seam
 
-  Every op goes through the one private `run_event/3`, which today calls
-  `Ops.apply/3`. The next member (scripted handlers, 01a1316b-aab0) inserts
-  its engine behaviour there, as a pre/post hook around `Ops.apply/3`,
-  without changing the bridge, the op wire format, the diff broadcast or the
-  log.
+  Every op goes through the one private `run_event/3`, which calls
+  `Ops.apply/3` for a plain op.
+
+  ## Handlers (task 01a1316b-aab0 stage 2)
+
+  A canvas can store named HANDLERS in its document's `"bindings"`
+  (`["set_binding", name, %{"kind" => "handler", "engine" => "js", "source"
+  => src}]`, see `Platform.Chat.CanvasPatch`). `call_handler/6` is a CAST,
+  so neither the LiveView nor the room blocks for a handler's wall time. In
+  `run_event/3` a `%{"type" => "call"}` event:
+
+    1. charges the caller's durable token bucket (the same 20/s, burst 40 as
+       a plain op; `rate_limited`);
+    2. looks the handler up in the canvas's live document
+       (`Platform.Chat.Canvas.Server.describe/1`; `unknown_handler`);
+    3. queues behind a handler already in flight in this room (at most 16
+       queued, then `busy`);
+    4. runs the engine (`Platform.Canvas.ScriptEngine.run/5`) in
+       `Task.Supervisor.async_nolink(Platform.TaskSupervisor, ...)` with a
+       snapshot of the CURRENT state, `now` = the room's clock at dispatch,
+       the caller as principal and this room's canvas as the owning canvas.
+
+  The room keeps serving plain ops, ephemeral traffic and joins while the
+  handler runs. On the task's reply it applies the returned ops
+  ALL-OR-NOTHING to the then-current state, each through `run_event/3`:
+  one seq and one event row per op, the CALLER as actor, the logged op
+  tagged `"via" => "handler:<name>"`, and the normal diff broadcast. A
+  handler returns ops, never a state, so a plain op that landed during the
+  run is not clobbered. On any op error nothing is applied and the call
+  ends with that op's code. A crashed or killed task ends `script_error`.
+
+  **Handlers run as the person who clicked.** The principal is the caller's
+  session actor, never a value from the frame or the script.
+
+  A call result is sent as `{:canvas_room_call_result, req, result}` to the
+  `reply_to` pid, with `result` `{:ok, %{seq, applied}}` or
+  `{:error, %{kind, code, message}}`.
+
+  ## Handler timers
+
+  A handler's `ctx.after(ms, handler, args)` / `ctx.every(ms, handler,
+  args)` effect becomes `schedule("t:" <> handler, ms, {:fire, ...})`; a
+  fire runs that handler like a call, as the actor who scheduled it.
+  `ctx.cancel(handler)` removes it, and re-scheduling a name replaces it.
+  Caps: at most 16 named handler timers per room (`too_many_timers`),
+  `after` in 100..86_400_000 ms, `every` in 1_000..86_400_000 ms. Effects
+  are checked before any op is applied, so a refused effect applies
+  nothing.
+
+  **Timers are not persisted.** They live in the room process, and
+  `terminate/2` cancels them all, so a stopped room fires nothing, and a
+  restarted room has no timers until a handler schedules one again.
+
+  ## Audit
+
+  Every invocation (call or timer fire), including refusals before the
+  engine runs, emits `[:platform, :canvas, :script_run]` (registered in
+  `Platform.Audit.TelemetryHandler`) and logs one line, with the canvas and
+  node ids, handler name, the sha256 of its source, caller type and id,
+  engine, trigger, duration_ms and the result kind. Never the source, args,
+  state or result.
   """
 
   use GenServer, restart: :temporary
@@ -102,7 +158,11 @@ defmodule Platform.Chat.CanvasRoom do
 
   require Logger
 
+  alias Platform.Canvas.ScriptEngine
+  alias Platform.Canvas.ScriptEngine.Bindings, as: ScriptBindings
   alias Platform.Chat
+  alias Platform.Chat.Canvas.Server, as: CanvasServer
+  alias Platform.Chat.CanvasDocument
   alias Platform.Chat.CanvasRoom.{Event, Ops, Record}
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Repo
@@ -121,6 +181,13 @@ defmodule Platform.Chat.CanvasRoom do
   @max_ephemeral_bytes 2_048
   @max_node_id_bytes 128
 
+  @max_handler_queue 16
+  @max_handler_timers 16
+  @after_ms_range 100..86_400_000
+  @every_ms_range 1_000..86_400_000
+  @max_call_args_bytes 16_384
+  @handler_op_keys ~w(type key value by name item id patch)
+
   @type actor :: %{type: String.t(), id: String.t(), display_name: String.t() | nil}
 
   defmodule State do
@@ -134,7 +201,9 @@ defmodule Platform.Chat.CanvasRoom do
               buffer: [],
               viewers: %{},
               timers: %{},
-              buckets: %{}
+              buckets: %{},
+              inflight: nil,
+              queue: :queue.new()
   end
 
   @doc "The rate-limit and payload caps, for tests and docs."
@@ -144,7 +213,12 @@ defmodule Platform.Chat.CanvasRoom do
       op_burst: @op_burst,
       ephemeral_rate_per_s: @ephemeral_rate_per_s,
       ephemeral_burst: @ephemeral_burst,
-      max_ephemeral_bytes: @max_ephemeral_bytes
+      max_ephemeral_bytes: @max_ephemeral_bytes,
+      max_handler_queue: @max_handler_queue,
+      max_handler_timers: @max_handler_timers,
+      after_ms: @after_ms_range,
+      every_ms: @every_ms_range,
+      max_call_args_bytes: @max_call_args_bytes
     }
   end
 
@@ -277,6 +351,33 @@ defmodule Platform.Chat.CanvasRoom do
     :ok
   end
 
+  @doc """
+  Run the handler binding `name` as `actor` (task 01a1316b-aab0 stage 2).
+
+  A CAST: it returns `:ok` at once, and the result is sent later as
+  `{:canvas_room_call_result, req, result}` to `reply_to`, which is
+  `{pid, req}` or nil (no reply). `result` is `{:ok, %{seq, applied}}` or
+  `{:error, %{kind, code, message}}`. `actor` is the caller's own session
+  identity; an agent actor may carry its `%AgentRuntime{}` (or `%{id: pk}`)
+  under `:runtime`, which its `canvas.patch` binding calls need.
+  """
+  @spec call_handler(binary(), binary(), map(), term(), term(), {pid(), term()} | nil) :: :ok
+  def call_handler(canvas_id, node_id, actor, name, args, reply_to) do
+    runtime = runtime_ref(actor)
+
+    with {:ok, actor} <- normalize_actor(actor),
+         :ok <- validate_call(name, args),
+         {:ok, pid} <- start_room(canvas_id, node_id) do
+      GenServer.cast(pid, {:call, actor, runtime, name, args || %{}, reply_to})
+    else
+      {:error, code} ->
+        code = to_string(code)
+        reply_call(reply_to, {:error, %{kind: code, code: code, message: code}})
+    end
+
+    :ok
+  end
+
   @doc "The room's current seq, state and presence, starting it if needed."
   @spec snapshot(binary(), binary()) ::
           {:ok, %{seq: non_neg_integer(), state: map(), presence: list()}} | {:error, term()}
@@ -372,6 +473,9 @@ defmodule Platform.Chat.CanvasRoom do
   end
 
   @impl true
+  def handle_call({:op, _actor, %{"type" => "call"}}, _from, state),
+    do: {:reply, {:error, :unknown_op}, state}
+
   def handle_call({:op, actor, op}, _from, state) do
     case take_token(state, {:op, actor.id}, @op_rate_per_s, @op_burst) do
       {:error, state} ->
@@ -426,6 +530,20 @@ defmodule Platform.Chat.CanvasRoom do
   end
 
   @impl true
+  def handle_cast({:call, actor, runtime, name, args, reply_to}, state) do
+    event = %{
+      "type" => "call",
+      "name" => name,
+      "args" => args,
+      "trigger" => "call",
+      "runtime" => runtime,
+      "reply_to" => reply_to
+    }
+
+    {:dispatched, state} = run_event(state, event, actor)
+    {:noreply, state}
+  end
+
   def handle_cast({:ephemeral, actor, channel, payload}, state) do
     case take_token(state, {:ephemeral, actor.id}, @ephemeral_rate_per_s, @ephemeral_burst) do
       {:ok, state} ->
@@ -450,6 +568,20 @@ defmodule Platform.Chat.CanvasRoom do
     end
   end
 
+  def handle_info({ref, {outcome, code}}, %State{inflight: %{ref: ref}} = state) do
+    Process.demonitor(ref, [:flush])
+    {:noreply, finish_handler(state, outcome, code)}
+  end
+
+  def handle_info({:DOWN, ref, :process, _pid, reason}, %State{inflight: %{ref: ref}} = state) do
+    Logger.warning("CanvasRoom handler task exited: #{inspect(reason, limit: 5)}")
+
+    outcome =
+      {:error, "script_error", "the handler run exited before it returned a result"}
+
+    {:noreply, finish_handler(state, outcome, nil)}
+  end
+
   def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
     case Map.get(state.viewers, pid) do
       %{ref: ^ref} -> {:noreply, remove_viewer(state, pid)}
@@ -469,8 +601,338 @@ defmodule Platform.Chat.CanvasRoom do
 
   # ── Internals ───────────────────────────────────────────────────────────
 
-  # THE handler seam (moduledoc): every op passes through here.
+  # THE handler seam (moduledoc): every op passes through here. A plain op
+  # is `Ops.apply/3`; a `call` event dispatches a handler (stage 2).
+  defp run_event(state, %{"type" => "call"} = event, actor) do
+    inv = %{
+      canvas_id: state.canvas_id,
+      node_id: state.node_id,
+      name: event["name"],
+      args: event["args"],
+      actor: actor,
+      runtime: event["runtime"],
+      reply_to: event["reply_to"],
+      trigger: event["trigger"],
+      binding: nil
+    }
+
+    {:dispatched, dispatch_handler(state, inv)}
+  end
+
   defp run_event(state, op, actor), do: Ops.apply(state.data, op, actor)
+
+  # ── Handlers (task 01a1316b-aab0 stage 2) ─────────────────────────────
+
+  defp dispatch_handler(state, inv) do
+    case charge_call(state, inv) do
+      {:refused, state, kind, message} ->
+        refuse(state, inv, kind, message)
+
+      {:ok, state} ->
+        case lookup_handler(state.canvas_id, inv.name) do
+          {:error, message} ->
+            refuse(state, inv, "unknown_handler", message)
+
+          {:ok, binding} ->
+            inv = %{inv | binding: binding}
+
+            cond do
+              is_nil(state.inflight) ->
+                start_handler(state, inv)
+
+              :queue.len(state.queue) >= @max_handler_queue ->
+                refuse(
+                  state,
+                  inv,
+                  "busy",
+                  "this room already has #{@max_handler_queue} queued calls"
+                )
+
+              true ->
+                %{state | queue: :queue.in(inv, state.queue)}
+            end
+        end
+    end
+  end
+
+  # A timer fire is bounded by the timer caps, not the caller's bucket.
+  defp charge_call(state, %{trigger: "call", actor: actor}) do
+    case take_token(state, {:op, actor.id}, @op_rate_per_s, @op_burst) do
+      {:ok, state} -> {:ok, state}
+      {:error, state} -> {:refused, state, "rate_limited", "the caller is over its op rate"}
+    end
+  end
+
+  defp charge_call(state, _inv), do: {:ok, state}
+
+  defp lookup_handler(canvas_id, name) do
+    document =
+      case CanvasServer.describe(canvas_id) do
+        {:ok, %{document: document}} -> document
+        _ -> nil
+      end
+
+    case CanvasDocument.handler(document, name) do
+      %{"source" => source} = binding when is_binary(source) -> {:ok, binding}
+      _ -> {:error, "this canvas has no handler named #{inspect(name)}"}
+    end
+  catch
+    :exit, _ -> {:error, "the canvas is not available"}
+  end
+
+  defp refuse(state, inv, kind, message) do
+    finish_invocation(inv, {:error, %{kind: kind, code: kind, message: message}}, 0)
+    state
+  end
+
+  defp start_handler(state, inv) do
+    handler = Map.put(inv.binding, "name", inv.name)
+    event = %{"type" => inv.trigger, "name" => inv.name, "args" => inv.args}
+
+    bindings =
+      %{canvas_id: state.canvas_id, actor: inv.actor, now: System.system_time(:millisecond)}
+      |> then(fn b -> if inv.runtime, do: Map.put(b, :runtime, inv.runtime), else: b end)
+
+    snapshot = state.data
+    limits = ScriptEngine.limits()
+
+    task =
+      Task.Supervisor.async_nolink(Platform.TaskSupervisor, fn ->
+        run_handler(handler, event, snapshot, bindings, limits)
+      end)
+
+    %{state | inflight: %{ref: task.ref, inv: inv, started: System.monotonic_time(:millisecond)}}
+  end
+
+  # Runs in the supervised task. The refusal code is read in THIS process,
+  # where code mode called the host bindings.
+  defp run_handler(handler, event, snapshot, bindings, limits) do
+    _ = ScriptBindings.take_refusal_code()
+    outcome = ScriptEngine.run(handler, event, snapshot, bindings, limits)
+
+    code =
+      case outcome do
+        {:error, "forbidden", _} -> ScriptBindings.take_refusal_code()
+        _ -> nil
+      end
+
+    {outcome, code}
+  rescue
+    DBConnection.OwnershipError ->
+      {{:error, "script_error", "the handler ran outside the test's sandbox"}, nil}
+  end
+
+  defp finish_handler(%State{inflight: %{inv: inv, started: started}} = state, outcome, code) do
+    duration = System.monotonic_time(:millisecond) - started
+    state = %{state | inflight: nil}
+
+    {state, result} =
+      case outcome do
+        {:ok, ops, effects} ->
+          apply_handler_result(state, inv, ops, effects)
+
+        {:error, kind, message} ->
+          {state, {:error, %{kind: kind, code: code || kind, message: message}}}
+      end
+
+    finish_invocation(inv, result, duration)
+    next_handler(state)
+  end
+
+  defp next_handler(%State{inflight: nil} = state) do
+    case :queue.out(state.queue) do
+      {{:value, inv}, queue} -> start_handler(%{state | queue: queue}, inv)
+      {:empty, _} -> state
+    end
+  end
+
+  # All or nothing: the effects are checked against the current timers and
+  # every op is applied to a scratch copy of the CURRENT state before
+  # anything is accepted.
+  defp apply_handler_result(state, inv, ops, effects) do
+    with {:ok, timer_plan} <- plan_effects(state, inv, effects),
+         {:ok, steps} <- plan_ops(state, inv, ops) do
+      via = "handler:" <> inv.name
+
+      state =
+        Enum.reduce(steps, state, fn {op, data, diff}, acc ->
+          {acc, _seq} = accept(acc, Map.put(op, "via", via), inv.actor, data, diff)
+          acc
+        end)
+
+      state = Enum.reduce(timer_plan, state, &apply_timer_effect/2)
+      {state, {:ok, %{seq: state.seq, applied: length(steps)}}}
+    else
+      {:error, code, message} ->
+        {state, {:error, %{kind: code, code: code, message: message}}}
+    end
+  end
+
+  defp plan_ops(state, inv, ops) do
+    ops
+    |> Enum.reduce_while({:ok, state.data, []}, fn op, {:ok, data, acc} ->
+      op = Map.take(op, @handler_op_keys)
+
+      result =
+        case op do
+          %{"type" => "call"} -> {:error, :unknown_op}
+          _ -> run_event(%{state | data: data}, op, inv.actor)
+        end
+
+      case result do
+        {:ok, data, diff} -> {:cont, {:ok, data, [{op, data, diff} | acc]}}
+        {:error, code} -> {:halt, {:error, to_string(code), "a handler op was refused"}}
+      end
+    end)
+    |> case do
+      {:ok, _data, steps} -> {:ok, Enum.reverse(steps)}
+      error -> error
+    end
+  end
+
+  defp plan_effects(state, inv, effects) do
+    live = state.timers |> Map.keys() |> Enum.filter(&handler_timer?/1) |> MapSet.new()
+
+    effects
+    |> Enum.reduce_while({:ok, live, []}, fn effect, {:ok, names, acc} ->
+      case plan_effect(effect, inv) do
+        {:ok, {:cancel, key} = step} ->
+          {:cont, {:ok, MapSet.delete(names, key), [step | acc]}}
+
+        {:ok, {:schedule, key, _ms, _msg} = step} ->
+          names = MapSet.put(names, key)
+
+          if MapSet.size(names) > @max_handler_timers,
+            do:
+              {:halt,
+               {:error, "too_many_timers",
+                "a room may hold at most #{@max_handler_timers} handler timers"}},
+            else: {:cont, {:ok, names, [step | acc]}}
+
+        {:error, message} ->
+          {:halt, {:error, "invalid_effect", message}}
+      end
+    end)
+    |> case do
+      {:ok, _names, steps} -> {:ok, Enum.reverse(steps)}
+      error -> error
+    end
+  end
+
+  defp plan_effect(%{"type" => type, "ms" => ms, "handler" => handler} = effect, inv)
+       when type in ["after", "every"] do
+    range = if type == "after", do: @after_ms_range, else: @every_ms_range
+    args = Map.get(effect, "args") || %{}
+
+    cond do
+      not CanvasDocument.binding_name?(handler) ->
+        {:error, "#{type}: the handler name is invalid"}
+
+      not (is_integer(ms) and ms in range) ->
+        {:error, "#{type}: ms must be an integer in #{range.first}..#{range.last}"}
+
+      not is_map(args) ->
+        {:error, "#{type}: args must be an object"}
+
+      true ->
+        every = if type == "every", do: ms, else: nil
+        msg = {:fire, handler, args, inv.actor, inv.runtime, every}
+        {:ok, {:schedule, "t:" <> handler, ms, msg}}
+    end
+  end
+
+  defp plan_effect(%{"type" => "cancel", "name" => name}, _inv) when is_binary(name),
+    do: {:ok, {:cancel, "t:" <> name}}
+
+  defp plan_effect(%{"type" => type}, _inv), do: {:error, "#{type}: malformed effect"}
+
+  defp apply_timer_effect({:schedule, key, ms, msg}, state), do: schedule(state, key, ms, msg)
+  defp apply_timer_effect({:cancel, key}, state), do: cancel(state, key)
+
+  defp handler_timer?("t:" <> _), do: true
+  defp handler_timer?(_name), do: false
+
+  defp finish_invocation(inv, result, duration_ms) do
+    reply_call(inv.reply_to, result)
+    audit(inv, result, duration_ms)
+  end
+
+  defp reply_call({pid, req}, result) when is_pid(pid),
+    do: send(pid, {:canvas_room_call_result, req, result})
+
+  defp reply_call(_reply_to, _result), do: :ok
+
+  defp audit(inv, result, duration_ms) do
+    kind =
+      case result do
+        {:ok, _} -> "ok"
+        {:error, %{kind: kind}} -> kind
+      end
+
+    code =
+      case result do
+        {:error, %{code: code}} -> code
+        _ -> nil
+      end
+
+    source = inv.binding && inv.binding["source"]
+    sha = if is_binary(source), do: :crypto.hash(:sha256, source) |> Base.encode16(case: :lower)
+
+    meta = %{
+      actor_id: inv.actor.id,
+      actor_type: inv.actor.type,
+      resource_type: "canvas",
+      resource_id: inv.canvas_id,
+      action: "script_run",
+      canvas_id: inv.canvas_id,
+      node_id: inv.node_id,
+      handler: inv.name,
+      script_sha256: sha,
+      caller_type: inv.actor.type,
+      caller_id: inv.actor.id,
+      engine: (inv.binding && inv.binding["engine"]) || "js",
+      trigger: inv.trigger,
+      duration_ms: duration_ms,
+      result: kind,
+      code: code
+    }
+
+    :telemetry.execute([:platform, :canvas, :script_run], %{duration_ms: duration_ms}, meta)
+
+    Logger.info(
+      "canvas script_run canvas=#{meta.canvas_id} node=#{meta.node_id} handler=#{meta.handler} " <>
+        "sha256=#{meta.script_sha256} caller=#{meta.caller_type}:#{meta.caller_id} " <>
+        "engine=#{meta.engine} trigger=#{meta.trigger} duration_ms=#{duration_ms} " <>
+        "result=#{kind} code=#{code}"
+    )
+  end
+
+  defp validate_call(name, args) do
+    cond do
+      not CanvasDocument.binding_name?(name) ->
+        {:error, :invalid_handler}
+
+      not (is_nil(args) or is_map(args)) ->
+        {:error, :invalid_args}
+
+      byte_size(Jason.encode!(args || %{})) > @max_call_args_bytes ->
+        {:error, :too_large}
+
+      true ->
+        :ok
+    end
+  rescue
+    _ in [Jason.EncodeError, Protocol.UndefinedError] -> {:error, :invalid_args}
+  end
+
+  defp runtime_ref(actor) when is_map(actor) do
+    case Map.get(actor, :runtime) || Map.get(actor, "runtime") do
+      %{id: id} when is_binary(id) -> %{id: id}
+      _ -> nil
+    end
+  end
+
+  defp runtime_ref(_actor), do: nil
 
   defp accept(state, op, actor, data, diff) do
     seq = state.seq + 1
@@ -516,6 +978,25 @@ defmodule Platform.Chat.CanvasRoom do
     else
       {:noreply, state}
     end
+  end
+
+  defp fire_timer("t:" <> _ = key, {:fire, handler, args, actor, runtime, every}, state) do
+    state =
+      if every,
+        do: schedule(state, key, every, {:fire, handler, args, actor, runtime, every}),
+        else: state
+
+    event = %{
+      "type" => "call",
+      "name" => handler,
+      "args" => args,
+      "trigger" => "timer",
+      "runtime" => runtime,
+      "reply_to" => nil
+    }
+
+    {:dispatched, state} = run_event(state, event, actor)
+    {:noreply, state}
   end
 
   defp fire_timer(name, msg, state) do

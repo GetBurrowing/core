@@ -192,6 +192,7 @@ describe("CanvasRoomBridge: server events", () => {
     const { hook, iframe } = mountHook({ canvasId: "c", nodeId: "n" })
 
     expect(Object.keys(hook.handlers).sort()).toEqual([
+      "canvas_room:c:n:call_result",
       "canvas_room:c:n:diff",
       "canvas_room:c:n:ephemeral",
       "canvas_room:c:n:presence",
@@ -245,6 +246,67 @@ describe("CanvasRoomBridge: only under a LiveView that handles rooms", () => {
     expect(src.posted.map((p) => [p.msg.type, p.msg.connected])).toEqual([
       ["snapshot", false],
       ["snapshot", false],
+    ])
+  })
+})
+
+describe("CanvasRoomBridge: handler calls (task 01a1316b-aab0 stage 2)", () => {
+  const validCall = { suite: 1, type: "call", req: "c1", name: "vote", args: { option: "a" } }
+
+  it("pushes canvas_room_call with the element's ids, never the message's", () => {
+    const { hook, iframe } = mountHook({ canvasId: "mine", nodeId: "node-a" })
+    win.dispatch("message", {
+      source: iframe.contentWindow,
+      data: { ...validCall, canvas_id: "theirs", node_id: "z", actor: { id: "forged" } },
+    })
+
+    expect(hook.pushes).toHaveLength(1)
+    const { event, payload, reply } = hook.pushes[0]
+    expect(event).toBe("canvas_room_call")
+    expect(payload).toEqual({
+      canvas_id: "mine",
+      node_id: "node-a",
+      hook_id: "frame-test-room-v1",
+      req: "c1",
+      name: "vote",
+      args: { option: "a" },
+    })
+    expect(reply).toBeUndefined()
+  })
+
+  it("drops a call with a bad name, non-object args or args over 16 KB", () => {
+    const { hook, iframe } = mountHook()
+    const src = iframe.contentWindow
+    const bad = [
+      { ...validCall, name: "Vote" },
+      { ...validCall, name: "1vote" },
+      { ...validCall, name: "a".repeat(65) },
+      { ...validCall, name: 7 },
+      { ...validCall, args: [1] },
+      { ...validCall, args: "x" },
+      { ...validCall, args: { s: "x".repeat(16 * 1024) } },
+    ]
+    for (const data of bad) win.dispatch("message", { source: src, data })
+    expect(hook.pushes).toEqual([])
+
+    // Positive control: the same shape under every cap is pushed.
+    win.dispatch("message", { source: src, data: { ...validCall, name: "a".repeat(64) } })
+    win.dispatch("message", { source: src, data: { ...validCall, args: undefined } })
+    expect(hook.pushes.map((p) => p.payload.args)).toEqual([{ option: "a" }, {}])
+  })
+
+  it("forwards a call_result only for its own hook id", () => {
+    const { hook, iframe } = mountHook({ canvasId: "c", nodeId: "n" })
+    const handler = hook.handlers["canvas_room:c:n:call_result"]
+    handler({ req: "c1", ok: true, seq: 2, result: { seq: 2, applied: 1 }, hook_id: "other-render" })
+    expect(iframe.contentWindow.posted).toEqual([])
+
+    handler({ req: "c1", ok: true, seq: 2, result: { seq: 2, applied: 1 }, hook_id: "frame-test-room-v1" })
+    expect(iframe.contentWindow.posted).toEqual([
+      {
+        msg: { req: "c1", ok: true, seq: 2, result: { seq: 2, applied: 1 }, suite: 1, type: "call_result" },
+        target: "*",
+      },
     ])
   })
 })

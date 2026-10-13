@@ -13,7 +13,10 @@
  *      origin is the string "null", which every other opaque frame shares.
  *   2. It must then pass a fixed schema (`validFrameMessage/1`): a known
  *      type, an op type in the room's op set, string keys of at most 128
- *      bytes, and at most 64 KB serialised.
+ *      bytes, and at most 64 KB serialised. A `call` (task 01a1316b-aab0
+ *      stage 2) names a handler binding (`^[a-z][a-z0-9_.-]{0,63}$`) with
+ *      object args of at most 16 KB; its result comes back as the
+ *      `call_result` server push, for this hook id only.
  *   3. The canvas id and node id sent to the server come from this element's
  *      data attributes, NEVER from the message. The frame cannot name a room;
  *      the room is whichever iframe spoke. The server reads the actor from
@@ -44,9 +47,12 @@ export const OP_TYPES = new Set([
   "collection.update",
   "collection.remove",
 ])
-const FRAME_TYPES = new Set(["hello", "op", "ephemeral"])
+const FRAME_TYPES = new Set(["hello", "op", "ephemeral", "call"])
 export const MAX_NAME_BYTES = 128
 export const MAX_MESSAGE_BYTES = 64 * 1024
+export const MAX_CALL_ARGS_BYTES = 16 * 1024
+// The handler binding name (CanvasDocument.binding_name?/1).
+export const HANDLER_NAME = /^[a-z][a-z0-9_.-]{0,63}$/
 const KINDS = ["snapshot", "diff", "presence", "ephemeral"]
 
 function byteLength(s) {
@@ -72,11 +78,21 @@ export function validFrameMessage(data) {
 
   if (data.type === "hello") return true
   if (data.type === "ephemeral") return validName(data.channel)
+  if (data.type === "call") return validCall(data)
 
   if (!validName(String(data.req ?? "x"))) return false
   const op = data.op
   if (!op || typeof op !== "object" || !OP_TYPES.has(op.type)) return false
   return op.type.startsWith("state.") ? validName(op.key) : validName(op.name)
+}
+
+// A handler call: a binding name, args an object of at most 16 KB.
+function validCall(data) {
+  if (!validName(String(data.req ?? "x"))) return false
+  if (typeof data.name !== "string" || !HANDLER_NAME.test(data.name)) return false
+  const args = data.args ?? {}
+  if (!args || typeof args !== "object" || Array.isArray(args)) return false
+  return byteLength(JSON.stringify(args)) <= MAX_CALL_ARGS_BYTES
 }
 
 /**
@@ -115,6 +131,14 @@ export default {
         this.toFrame({ ...payload, suite: 1, type: kind }),
       )
     }
+
+    // A handler result is for one render of the node: the frame whose
+    // hook_id made the call.
+    this.handleEvent(prefix + "call_result", (payload) => {
+      if (!payload || payload.hook_id !== this.hookId) return
+      const { hook_id: _h, ...rest } = payload
+      this.toFrame({ ...rest, suite: 1, type: "call_result" })
+    })
 
     this.bindIframe()
   },
@@ -174,6 +198,13 @@ export default {
       this.pushEvent("canvas_room_op", { ...this.ids(), op: data.op }, (reply) =>
         this.toFrame({ ...(reply || { ok: false, error: "error" }), suite: 1, type: "ack", req: data.req }),
       )
+    } else if (data.type === "call") {
+      this.pushEvent("canvas_room_call", {
+        ...this.ids(),
+        req: data.req,
+        name: data.name,
+        args: data.args ?? {},
+      })
     } else if (data.type === "ephemeral") {
       this.pushEvent("canvas_room_ephemeral", {
         ...this.ids(),

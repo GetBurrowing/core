@@ -318,8 +318,13 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # enter canvas.create/patch's document schema. All six values measured on
     # moon at the stage's branch; off equals extensions_test.exs. The metrics
     # catalog digest is unchanged.
-    @main_tool_digest_off "099906a5cef8f4dc183711b2c984fbd6757be4841c7191797c261636944ef9bc"
-    @main_tool_digest_on "93f090489348985b55026c0107d9ff59035b0c737b238dd42ce99776d817a056"
+    #
+    # Re-pinned by task 01a1316b-aab0 stage 2: canvas.patch's operation
+    # description names the new `set_binding` op. Both values measured on
+    # moon at the stage's branch; off equals extensions_test.exs. The kinds
+    # and metrics digests are unchanged.
+    @main_tool_digest_off "745d5a4b0ebbaf2789c8f572fe206b469bc4dd21da7935fa4f89b15c240573c9"
+    @main_tool_digest_on "ee1bff6fca1dae49b286fa7abd142e2195475392d90f487d18cd81e034260d3f"
     @main_kinds_summaries_digest_off "26c0704185201d0926a8bcb6db6be411b821c54fcba3269676c631969944df72"
     @main_kinds_summaries_digest_on "f71832b549f7a8674c01fff90be91d869b6eea222c9cdd888723d5045ec3c450"
     @main_kinds_tool_schemas_digest_off "264902e4c54f3146fe5be6e658c4717aafc6382ea233523ca505607d848e0925"

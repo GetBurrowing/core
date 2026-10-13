@@ -287,4 +287,82 @@ defmodule PlatformWeb.ChatLive.CanvasRoomBridgeTest do
     render_hook(view, "canvas_room_leave", ids(ctx))
     {:ok, %{presence: []}} = CanvasRoom.snapshot(ctx.canvas.id, @node)
   end
+
+  defp call(view, ctx, name, args, extra \\ %{}) do
+    render_hook(
+      view,
+      "canvas_room_call",
+      ids(ctx) |> Map.merge(%{"req" => "c1", "name" => name, "args" => args}) |> Map.merge(extra)
+    )
+  end
+
+  describe "canvas_room_call (task 01a1316b-aab0 stage 2)" do
+    @vote "(event, ctx) => { ctx.increment('votes.' + event.args.option) }"
+
+    setup ctx do
+      assert {:ok, _} =
+               Chat.patch_canvas({:user, ctx.alice.id}, ctx.canvas, [
+                 {:set_binding, "vote", %{"kind" => "handler", "source" => @vote}}
+               ])
+
+      on_exit(fn -> Platform.Chat.Canvas.Server.stop(ctx.canvas.id) end)
+      :ok
+    end
+
+    test "a call reaches the other LiveView as a diff and the caller as a call_result", ctx do
+      a = open(ctx, ctx.alice)
+      b = open(ctx, ctx.bob)
+      join!(a, ctx)
+      join!(b, ctx)
+
+      call(a, ctx, "vote", %{"option" => "a"})
+
+      result_event = "canvas_room:#{ctx.canvas.id}:#{@node}:call_result"
+      assert_push_event(a, ^result_event, %{ok: true, req: "c1", hook_id: "h1", seq: 1}, 5_000)
+
+      diff_event = "canvas_room:#{ctx.canvas.id}:#{@node}:diff"
+      assert_push_event(b, ^diff_event, %{seq: 1, diff: diff, actor: actor})
+      assert diff["key"] == "votes.a" and diff["value"] == 1
+      assert actor == ctx.alice.id
+    end
+
+    test "a refused call pushes its kind and code", ctx do
+      view = open(ctx, ctx.alice)
+      join!(view, ctx)
+      call(view, ctx, "missing", %{})
+
+      result_event = "canvas_room:#{ctx.canvas.id}:#{@node}:call_result"
+
+      assert_push_event(
+        view,
+        ^result_event,
+        %{ok: false, kind: "unknown_handler", code: "unknown_handler", req: "c1"},
+        5_000
+      )
+    end
+
+    test "a call before a join is refused with not_joined", ctx do
+      view = open(ctx, ctx.alice)
+      call(view, ctx, "vote", %{"option" => "a"})
+      result_event = "canvas_room:#{ctx.canvas.id}:#{@node}:call_result"
+      assert_push_event(view, ^result_event, %{ok: false, code: "not_joined"})
+    end
+
+    test "the recorded actor is the session user even when params carry another", ctx do
+      view = open(ctx, ctx.alice)
+      join!(view, ctx)
+      forged = ctx.bob.id
+
+      call(view, ctx, "vote", %{"option" => "a"}, %{
+        "actor" => %{"type" => "user", "id" => forged, "display_name" => "Forged"}
+      })
+
+      result_event = "canvas_room:#{ctx.canvas.id}:#{@node}:call_result"
+      assert_push_event(view, ^result_event, %{ok: true, seq: 1}, 5_000)
+
+      assert [event] = flushed_events(ctx)
+      assert event.actor_id == ctx.alice.id
+      assert event.op["via"] == "handler:vote"
+    end
+  end
 end

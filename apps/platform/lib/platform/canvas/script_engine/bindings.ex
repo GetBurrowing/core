@@ -212,8 +212,23 @@ defmodule Platform.Canvas.ScriptEngine.Bindings do
 
   defp field(map, key), do: Map.get(map, key, Map.get(map, Atom.to_string(key)))
 
+  @refusal_key {__MODULE__, :refusal_code}
+
+  @doc """
+  Pop the code of the last refusal a binding returned in THIS process, or nil
+  (task 01a1316b-aab0 stage 2). The engine's `{:error, kind, message}` has no
+  code slot, so an uncaught `binding_not_registered` would otherwise survive
+  only as text in the message. Code mode calls the host in the calling
+  process (`Platform.CodeMode.Runtime.run/3`, `:host`), so the process that
+  ran the engine can read the code back once the run returns.
+  """
+  @spec take_refusal_code() :: String.t() | nil
+  def take_refusal_code, do: Process.delete(@refusal_key)
+
   # Every refusal is returned as the JSON response the script sees: a `with`
   # that hits one returns it as is.
-  defp fail(kind, message, code \\ nil),
-    do: Jason.encode!(%{ok: false, kind: kind, message: message, code: code})
+  defp fail(kind, message, code \\ nil) do
+    Process.put(@refusal_key, code || kind)
+    Jason.encode!(%{ok: false, kind: kind, message: message, code: code})
+  end
 end

@@ -126,9 +126,84 @@ defmodule Platform.Chat.CanvasDocument do
   defp check_theme(errors, %{} = doc) when not is_map_key(doc, "theme"), do: errors
   defp check_theme(errors, _), do: ["\"theme\" must be a map" | errors]
 
-  defp check_bindings(errors, %{"bindings" => b}) when is_map(b), do: errors
+  defp check_bindings(errors, %{"bindings" => b}) when is_map(b),
+    do: Enum.reverse(binding_errors(b)) ++ errors
+
   defp check_bindings(errors, %{} = doc) when not is_map_key(doc, "bindings"), do: errors
   defp check_bindings(errors, _), do: ["\"bindings\" must be a map" | errors]
+
+  # ── Handler bindings (task 01a1316b-aab0 stage 2) ──
+
+  @max_handlers 32
+  @max_handler_source_bytes 65_536
+
+  @doc """
+  The caps on handler bindings: an entry of `"bindings"` whose `"kind"` is
+  `"handler"` (`%{"kind" => "handler", "engine" => "js", "source" => src}`).
+  Its name matches `^[a-z][a-z0-9_.-]{0,63}$`, its engine is a registered
+  `Platform.Canvas.ScriptEngine` tag, its source is a non-empty string of at
+  most 64 KB, and a document holds at most 32 of them. Other entries of
+  `"bindings"` are left as they were (validated only as a map).
+  """
+  def handler_caps,
+    do: %{max_handlers: @max_handlers, max_source_bytes: @max_handler_source_bytes}
+
+  @doc "Does `name` match the handler binding name pattern?"
+  @spec binding_name?(term()) :: boolean()
+  def binding_name?(name) when is_binary(name),
+    do: Regex.match?(~r/\A[a-z][a-z0-9_.-]{0,63}\z/, name)
+
+  def binding_name?(_name), do: false
+
+  @doc """
+  The handler binding `name` in `document`, or nil. Only an entry whose
+  `"kind"` is `"handler"` counts.
+  """
+  @spec handler(document(), String.t()) :: map() | nil
+  def handler(%{"bindings" => %{} = bindings}, name) when is_binary(name) do
+    case Map.get(bindings, name) do
+      %{"kind" => "handler"} = binding -> binding
+      _ -> nil
+    end
+  end
+
+  def handler(_document, _name), do: nil
+
+  @doc "The errors in a bindings map's handler entries; `[]` when valid."
+  @spec binding_errors(map()) :: [binary()]
+  def binding_errors(bindings) when is_map(bindings) do
+    handlers = Enum.filter(bindings, fn {_name, b} -> handler_binding?(b) end)
+
+    count_errors =
+      if length(handlers) > @max_handlers,
+        do: ["bindings: at most #{@max_handlers} handlers per canvas"],
+        else: []
+
+    count_errors ++
+      Enum.flat_map(Enum.sort_by(handlers, &elem(&1, 0)), fn {name, b} ->
+        handler_errors(name, b)
+      end)
+  end
+
+  defp handler_binding?(%{"kind" => "handler"}), do: true
+  defp handler_binding?(_binding), do: false
+
+  defp handler_errors(name, binding) do
+    engine = Map.get(binding, "engine", "js")
+    source = Map.get(binding, "source")
+
+    [
+      {binding_name?(name),
+       "bindings: handler name #{inspect(name)} must match ^[a-z][a-z0-9_.-]{0,63}$"},
+      {match?({:ok, _}, Platform.Canvas.ScriptEngine.engine_for(engine)),
+       "bindings.#{name}: unknown engine #{inspect(engine)}"},
+      {is_binary(source) and source != "", "bindings.#{name}: source must be a non-empty string"},
+      {not is_binary(source) or byte_size(source) <= @max_handler_source_bytes,
+       "bindings.#{name}: source may be at most #{@max_handler_source_bytes} bytes"}
+    ]
+    |> Enum.reject(&elem(&1, 0))
+    |> Enum.map(&elem(&1, 1))
+  end
 
   defp check_meta(errors, %{"meta" => m}) when is_map(m), do: errors
   defp check_meta(errors, %{} = doc) when not is_map_key(doc, "meta"), do: errors

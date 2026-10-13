@@ -1684,7 +1684,7 @@ defmodule Platform.Federation.ToolSurface do
             type: "array",
             required: true,
             description:
-              "Each op is [\"set_props\", id, props] | [\"replace_children\", id, children] | [\"append_child\", parent_id, child] | [\"delete_node\", id] | [\"replace_document\", doc]. Pass nested objects (props, children, child, doc) as objects/arrays, not JSON strings.",
+              "Each op is [\"set_props\", id, props] | [\"replace_children\", id, children] | [\"append_child\", parent_id, child] | [\"delete_node\", id] | [\"replace_document\", doc] | [\"set_binding\", name, binding | null] (a room handler {\"kind\": \"handler\", \"engine\": \"js\", \"source\": \"(event, ctx) => ...\"}; null deletes it). Pass nested objects (props, children, child, doc) as objects/arrays, not JSON strings.",
             schema: %{
               type: "array",
               minItems: 1,
