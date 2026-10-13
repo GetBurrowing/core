@@ -42,6 +42,7 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
 
   alias Platform.Chat
   alias Platform.Chat.Canvas.Kinds.Prototype, as: Kind
+  alias Platform.Chat.CanvasRoom
   alias Platform.Prototypes
   alias Platform.Prototypes.Settings
 
@@ -335,28 +336,37 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
           </a>
         </div>
       <% else %>
-        <%!-- The id carries the version: the wrapper is phx-update="ignore"
+        <%!-- The room bridge (task 01a1316b-84fa stage 2) wraps the scale
+             wrapper because an element carries one phx-hook. Its id carries
+             the version too, so a pinned version mounts a fresh bridge on
+             the fresh iframe. --%>
+        <div
+          id={"#{@id}-room-v#{@view.shown}"}
+          {CanvasRoom.frame_attrs(@canvas_id, @node["id"])}
+        >
+          <%!-- The id carries the version: the wrapper is phx-update="ignore"
              (EmbedCanvasScale owns its inline styles), so a pinned version
              must replace the element rather than patch the iframe src. --%>
-        <div
-          id={"#{@id}-frame-v#{@view.shown}"}
-          phx-hook="EmbedCanvasScale"
-          phx-update="ignore"
-          data-declared-width={@width}
-          data-declared-height={@height}
-          data-min-scale={@min_scale}
-          class="relative overflow-hidden rounded-b-xl"
-          style={"height: #{@height}px;"}
-          data-role="prototype-frame"
-        >
-          <iframe
-            src={@url}
-            sandbox="allow-scripts"
-            referrerpolicy="no-referrer"
-            title={@view.prototype.name}
-            style={"width: #{@width}px; height: #{@height}px; border: 0; display: block;"}
+          <div
+            id={"#{@id}-frame-v#{@view.shown}"}
+            phx-hook="EmbedCanvasScale"
+            phx-update="ignore"
+            data-declared-width={@width}
+            data-declared-height={@height}
+            data-min-scale={@min_scale}
+            class="relative overflow-hidden rounded-b-xl"
+            style={"height: #{@height}px;"}
+            data-role="prototype-frame"
           >
-          </iframe>
+            <iframe
+              src={@url}
+              sandbox="allow-scripts"
+              referrerpolicy="no-referrer"
+              title={@view.prototype.name}
+              style={"width: #{@width}px; height: #{@height}px; border: 0; display: block;"}
+            >
+            </iframe>
+          </div>
         </div>
       <% end %>
     </div>

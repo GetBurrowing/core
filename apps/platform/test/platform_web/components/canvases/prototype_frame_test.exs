@@ -85,6 +85,24 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrameTest do
 
   defp find(html, selector), do: html |> LazyHTML.from_fragment() |> LazyHTML.query(selector)
 
+  describe "room bridge (task 01a1316b-84fa stage 2)" do
+    test "the iframe sits inside a CanvasRoomBridge element carrying the room key", ctx do
+      html = render_frame(proto_node(ctx.prototype.id), ctx.canvas.id)
+
+      [bridge] = Enum.to_list(find(html, ~s([phx-hook="CanvasRoomBridge"])))
+      assert LazyHTML.attribute(bridge, "data-canvas-id") == [ctx.canvas.id]
+      assert LazyHTML.attribute(bridge, "data-node-id") == ["proto"]
+      assert [id] = LazyHTML.attribute(bridge, "id")
+      assert id =~ "frame-test"
+      assert [_iframe] = Enum.to_list(LazyHTML.query(bridge, "iframe"))
+    end
+
+    test "with no canvas id there is no bridge", ctx do
+      html = render_frame(proto_node(ctx.prototype.id), nil)
+      assert Enum.to_list(find(html, ~s([phx-hook="CanvasRoomBridge"]))) == []
+    end
+  end
+
   describe "latest version" do
     test "frames the latest version with sandbox allow-scripts and nothing else", ctx do
       html = render_frame(proto_node(ctx.prototype.id), ctx.canvas.id)

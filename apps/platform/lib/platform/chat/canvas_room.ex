@@ -148,6 +148,39 @@ defmodule Platform.Chat.CanvasRoom do
     }
   end
 
+  # ── Frame wiring (stage 2) ──────────────────────────────────────────────
+
+  @doc """
+  The node types a room may be joined for. Today only `prototype`; the
+  scripted embed (`embed` with `scripts: true`, member 3) joins this list in
+  the same change that wires `frame_attrs/2` into `embed.ex`.
+  """
+  @spec room_node?(map() | nil) :: boolean()
+  def room_node?(%{"type" => "prototype"}), do: true
+  def room_node?(_node), do: false
+
+  @doc """
+  The attributes that mount the `CanvasRoomBridge` hook on a frame wrapper
+  (task 01a1316b-84fa stage 2). Every kind that frames a room-backed iframe
+  puts these on the element that CONTAINS the iframe, so the kinds cannot
+  drift apart. The element must carry its own DOM id (the hook uses it to
+  tell two renders of one node apart). With no canvas id (a read-only
+  surface that renders a document without one) it returns no attributes and
+  the frame runs with `suite.connected === false`.
+  """
+  @spec frame_attrs(binary() | nil, binary() | nil) :: map()
+  def frame_attrs(canvas_id, node_id)
+      when is_binary(canvas_id) and canvas_id != "" and is_binary(node_id) and node_id != "" do
+    %{
+      "phx-hook" => "CanvasRoomBridge",
+      "data-canvas-id" => canvas_id,
+      "data-node-id" => node_id,
+      "data-role" => "canvas-room-bridge"
+    }
+  end
+
+  def frame_attrs(_canvas_id, _node_id), do: %{}
+
   # ── Public API ──────────────────────────────────────────────────────────
 
   @doc "Start the room under the canvas supervisor, idempotent."

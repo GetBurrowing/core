@@ -12,7 +12,10 @@ defmodule PlatformWeb.PrototypeControllerTest do
 
   alias Platform.Prototypes
   alias Platform.Repo
+  alias Platform.Prototypes.Storage
+  alias Platform.Prototypes.Version
   alias Platform.Tenancy.OrgMembership
+  alias PlatformWeb.PrototypeController
   alias PlatformWeb.PrototypeGrant
 
   setup do
@@ -157,7 +160,10 @@ defmodule PlatformWeb.PrototypeControllerTest do
 
     test "a directory serves its index.html; without the slash it redirects", ctx do
       root = grant_root(grant_url(ctx, 1))
-      assert build_conn() |> get(root <> "sub/") |> response(200) == "<p>sub</p>"
+      # No head and no doctype: the bridge goes at the very start.
+      assert build_conn() |> get(root <> "sub/") |> response(200) ==
+               PrototypeController.bridge_tag() <> "<p>sub</p>"
+
       assert build_conn() |> get(root <> "sub") |> redirected_to(302) == root <> "sub/"
     end
 
@@ -171,6 +177,72 @@ defmodule PlatformWeb.PrototypeControllerTest do
 
       assert build_conn() |> get(grant_url(ctx, 1)) |> response(200) =~ "v1"
       assert build_conn() |> get(grant_url(ctx, 2)) |> response(200) =~ "v2"
+    end
+  end
+
+  describe "the room bridge (task 01a1316b-84fa stage 2)" do
+    defp bridge_count(body), do: length(String.split(body, "data-suite-bridge")) - 1
+
+    defp stored(ctx, version, path) do
+      row = Prototypes.get_live_version(ctx.prototype.id, version)
+      {:ok, bytes} = Storage.read(Version.file(row, path)["storage_key"])
+      bytes
+    end
+
+    test "every HTML response carries exactly one bridge script, after the doctype", ctx do
+      root = grant_root(grant_url(ctx, 1))
+
+      for path <- ["index.html", "b.html", "sub/"] do
+        body = build_conn() |> get(root <> path) |> response(200)
+        assert bridge_count(body) == 1, "#{path} carries #{bridge_count(body)} bridges"
+        assert body =~ "window"
+      end
+
+      # index.html starts with a doctype and has no head: the bridge goes
+      # right after the doctype, so standards mode is kept, and the rest of
+      # the stored bytes follow unchanged.
+      body = build_conn() |> get(root <> "index.html") |> response(200)
+      original = stored(ctx, 1, "index.html")
+      assert "<!doctype html>" <> rest = original
+      assert body == "<!doctype html>" <> PrototypeController.bridge_tag() <> rest
+    end
+
+    test "non-HTML files are byte-identical to storage", ctx do
+      root = grant_root(grant_url(ctx, 1))
+
+      for path <- ["app.js", "app.css"] do
+        body = build_conn() |> get(root <> path) |> response(200)
+        assert body == stored(ctx, 1, path)
+        assert bridge_count(body) == 0
+      end
+    end
+
+    test "the CSP is unchanged by the injection", ctx do
+      conn = get(build_conn(), grant_url(ctx, 1))
+      [csp] = get_resp_header(conn, "content-security-policy")
+      assert String.ends_with?(csp, PrototypeController.bundle_csp())
+      assert csp =~ "connect-src 'none'"
+      refute csp =~ "allow-same-origin"
+    end
+
+    test "inject_bridge/1 goes after the head tag, never inside a header tag" do
+      tag = PrototypeController.bridge_tag()
+
+      assert PrototypeController.inject_bridge(~s(<html><HEAD lang="en"><title>t</title>)) ==
+               ~s(<html><HEAD lang="en">) <> tag <> "<title>t</title>"
+
+      assert PrototypeController.inject_bridge("<header>x</header>") ==
+               tag <> "<header>x</header>"
+
+      assert PrototypeController.inject_bridge("<!DOCTYPE html>\n<p>x</p>") ==
+               "<!DOCTYPE html>" <> tag <> "\n<p>x</p>"
+    end
+
+    test "the bridge source is one inline script that cannot close itself early" do
+      tag = PrototypeController.bridge_tag()
+      inner = tag |> String.replace_prefix(~s(<script data-suite-bridge="1">), "")
+      refute inner |> String.replace_suffix("</script>", "") |> String.contains?("</script")
+      assert byte_size(inner) < 6 * 1024
     end
   end
 

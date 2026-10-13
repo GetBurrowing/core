@@ -49,6 +49,17 @@ A prototype is published as a bundle: a zip, or a map of files, with an `index.h
 - **What the sandbox blocks:** the bundle cannot read Suite cookies, reach the surrounding page or call any network address, Suite included, and forms cannot be submitted.
 - **What it does not block:** a script can still navigate its own frame to an outside page, so never type a password or anything secret into a prototype. The Open button opens one version in a new tab through a short-lived bearer link: anyone holding that link can view that one version until it expires, so do not paste it outside the org.
 
+### Shared by default
+
+Every prototype is multiplayer with nothing to add: Suite puts a small script into each HTML page of the bundle, and it gives the page a global `window.suite`. Everyone viewing the same prototype node sees the same shared state, and every change is saved and attributed to the person who made it.
+
+- **Shared state:** `state.get(key)` reads instantly; `state.set(key, value)` (a null value deletes) and `state.increment(key, by)` return a promise of the new value. Two people incrementing at once both count.
+- **Lists:** `collection(name)` gives `list()`, `add(item)` (resolves with the new item's id), `update(id, patch)` and `remove(id)`.
+- **Events:** `on("change", fn)` for every change, `on("presence", fn)` and the `presence` list for who is viewing, and `me` for the viewer. Wait for `ready` before the first read.
+- **Cursors and drags:** `broadcast(channel, payload)` with `on("broadcast", fn)` reaches the other viewers, at most 30 a second, and is never saved.
+- **Limits:** keys and list names up to 128 bytes, one value or item up to 16 KB, the whole state up to 512 KB, 50 lists of up to 1,000 items, and 20 writes a second per viewer. A write over a limit is rejected and nothing changes.
+- **Where it is off:** opened full-size with Open, or on a surface that only displays canvases, `connected` is false and writes are rejected.
+
 ## When to use it
 
 - **Presenting structured or visual work:** status boards, comparisons, diagrams, screenshots.

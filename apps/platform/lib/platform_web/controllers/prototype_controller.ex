@@ -48,6 +48,19 @@ defmodule PlatformWeb.PrototypeController do
       (member 2's review). `no-cache` makes every use revalidate, so
       revocation shows on the next navigation.
 
+  ## The room bridge (task 01a1316b-84fa stage 2)
+
+  Every `text/html` response gets `priv/prototype/suite.js` inserted as ONE
+  inline `<script data-suite-bridge>` right after the opening `<head>` tag
+  (or, with no head, after the doctype, else at the very start), by
+  `inject_bridge/1`. That is what makes a bundle multiplayer with no opt-in:
+  the entry page, an in-frame navigation to `b.html` and any other HTML file
+  served here all carry `window.suite`. Only the response is transformed:
+  the stored bytes and the manifest sha256 are untouched, and every
+  non-HTML file is sent byte-for-byte. The CSP is unchanged (it already
+  admits `'unsafe-inline'` script); the bridge talks to the parent page by
+  `postMessage` only, so `connect-src 'none'` still holds.
+
   ## Honest limits
 
     * The guarantee is no Suite cookies, no Suite DOM and no Suite API
@@ -83,8 +96,41 @@ defmodule PlatformWeb.PrototypeController do
   # Revalidate every time: see "Response headers" in the moduledoc.
   @cache_control "private, no-cache"
 
+  @suite_js_path Path.expand("../../../priv/prototype/suite.js", __DIR__)
+  @external_resource @suite_js_path
+  @suite_js File.read!(@suite_js_path)
+  @bridge_tag ~s(<script data-suite-bridge="1">) <> @suite_js <> "</script>"
+
   @doc false
   def bundle_csp, do: @bundle_csp
+
+  @doc false
+  # The exact tag `inject_bridge/1` inserts, for tests.
+  def bridge_tag, do: @bridge_tag
+
+  @doc """
+  Insert the room bridge (`priv/prototype/suite.js`) into an HTML document:
+  right after the first `<head ...>` tag; with no head tag, after a leading
+  doctype (so the document never drops into quirks mode); otherwise at the
+  very start. Kept as one small function of its own so a rebase against a
+  sibling change to `send_file/2` stays a one-line conflict.
+  """
+  @spec inject_bridge(binary()) :: binary()
+  def inject_bridge(html) when is_binary(html) do
+    at =
+      case Regex.run(~r/<head(?:\s[^>]*)?>/i, html, return: :index) do
+        [{start, len}] ->
+          start + len
+
+        nil ->
+          case Regex.run(~r/\A(?:\xEF\xBB\xBF)?\s*<!doctype[^>]*>/i, html, return: :index) do
+            [{start, len}] -> start + len
+            nil -> 0
+          end
+      end
+
+    binary_part(html, 0, at) <> @bridge_tag <> binary_part(html, at, byte_size(html) - at)
+  end
 
   def latest(conn, %{"id" => id} = params) do
     with %Prototype{} = prototype <- Prototypes.get_prototype(id),
@@ -163,6 +209,8 @@ defmodule PlatformWeb.PrototypeController do
   defp send_file(conn, %{"storage_key" => key, "content_type" => content_type}) do
     case Storage.read(key) do
       {:ok, bytes} ->
+        bytes = if html?(content_type), do: inject_bridge(bytes), else: bytes
+
         conn
         |> put_resp_header("content-type", with_charset(content_type))
         |> put_resp_header("x-content-type-options", "nosniff")
@@ -190,6 +238,11 @@ defmodule PlatformWeb.PrototypeController do
 
     put_resp_header(conn, "content-security-policy", String.trim(existing <> " " <> @bundle_csp))
   end
+
+  defp html?(content_type) when is_binary(content_type),
+    do: String.starts_with?(content_type, "text/html")
+
+  defp html?(_content_type), do: false
 
   defp with_charset("text/" <> _ = ct), do: ct <> "; charset=utf-8"
   defp with_charset("application/javascript" = ct), do: ct <> "; charset=utf-8"
