@@ -216,8 +216,9 @@ defmodule Platform.Chat.CanvasRoom.HandlerTest do
       refute_received {:canvas_room_diff, _, _, _, _, _}
     end
 
-    test "the room queues behind a handler in flight, up to 16, then busy", ctx do
+    test "the room runs 4 handlers at once, queues 16 more, then busy", ctx do
       Application.put_env(:platform, ScriptEngine, wall_ms: 4_000, max_wall_ms: 5_000)
+      assert ScriptEngine.limits().per_canvas_concurrency == 4
 
       bind!(ctx, "slow", """
       (e, ctx) => { const end = new Date().getTime() + 600; while (new Date().getTime() < end) {} }
@@ -225,14 +226,46 @@ defmodule Platform.Chat.CanvasRoom.HandlerTest do
 
       bind!(ctx, "noop", "(e, ctx) => { ctx.increment('n') }")
 
-      slow = call_async(ctx, ctx.a, "slow")
+      slow = for _ <- 1..4, do: call_async(ctx, ctx.a, "slow")
       queued = for _ <- 1..16, do: call_async(ctx, ctx.a, "noop")
       over = call_async(ctx, ctx.a, "noop")
 
       assert {:error, %{kind: "busy"}} = await_result(over, 500)
-      assert {:ok, _} = await_result(slow)
+      for ref <- slow, do: assert({:ok, _} = await_result(ref))
       for ref <- queued, do: assert({:ok, %{applied: 1}} = await_result(ref))
       assert keys(ctx) == %{"n" => 16}
+    end
+
+    test "a second handler starts and lands while a 900 ms handler is still running", ctx do
+      Application.put_env(:platform, ScriptEngine, wall_ms: 4_000, max_wall_ms: 5_000)
+
+      bind!(ctx, "spin", """
+      (e, ctx) => {
+        const end = new Date().getTime() + 900;
+        while (new Date().getTime() < end) {}
+        ctx.increment('spins');
+      }
+      """)
+
+      bind!(ctx, "vote", @vote)
+
+      spin = call_async(ctx, ctx.a, "spin")
+      Process.sleep(100)
+      started = System.monotonic_time(:millisecond)
+      vote = call_async(ctx, ctx.b, "vote", %{"option" => "a"})
+
+      # The vote returns while spin is still in flight, well inside spin's
+      # remaining ~800 ms, and its op takes the first seq.
+      assert {:ok, %{seq: 1, applied: 1}} = await_result(vote, 600)
+      assert System.monotonic_time(:millisecond) - started < 600
+      refute_received {:canvas_room_call_result, ^spin, _}
+      assert keys(ctx) == %{"votes.a" => 1}
+
+      assert {:ok, %{seq: 2, applied: 1}} = await_result(spin)
+      assert keys(ctx) == %{"votes.a" => 1, "spins" => 1}
+
+      events = flushed_events(ctx)
+      assert Enum.map(events, &{&1.seq, &1.op["via"]}) == [{1, "handler:vote"}, {2, "handler:spin"}]
     end
 
     test "an agent caller's runtime reaches its canvas.patch binding", ctx do

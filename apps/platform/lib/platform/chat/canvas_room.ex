@@ -104,12 +104,21 @@ defmodule Platform.Chat.CanvasRoom do
        a plain op; `rate_limited`);
     2. looks the handler up in the canvas's live document
        (`Platform.Chat.Canvas.Server.describe/1`; `unknown_handler`);
-    3. queues behind a handler already in flight in this room (at most 16
-       queued, then `busy`);
+    3. runs at once if this room has fewer than `per_canvas_concurrency`
+       (default 4, `Platform.Canvas.ScriptEngine`, read at call time)
+       handlers in flight; otherwise queues (at most 16 queued, then `busy`);
     4. runs the engine (`Platform.Canvas.ScriptEngine.run/5`) in
        `Task.Supervisor.async_nolink(Platform.TaskSupervisor, ...)` with a
        snapshot of the CURRENT state, `now` = the room's clock at dispatch,
        the caller as principal and this room's canvas as the owning canvas.
+
+  Up to 4 handlers run CONCURRENTLY per room (task 01a1316b-aab0 stage 4;
+  stage 2 ran one at a time). That is safe for state because each run's
+  result is applied as ops on the room's CURRENT state, all or nothing,
+  when it returns, so overlapping runs interleave like plain ops and none
+  clobbers another. Runs still return in any order, and each sees the
+  snapshot from its own dispatch. The node-wide cap (`global_concurrency`,
+  8) is the canvas slot pool's, and a pool refusal ends the call `busy`.
 
   The room keeps serving plain ops, ephemeral traffic and joins while the
   handler runs. On the task's reply it applies the returned ops
@@ -221,7 +230,7 @@ defmodule Platform.Chat.CanvasRoom do
               viewers: %{},
               timers: %{},
               buckets: %{},
-              inflight: nil,
+              inflight: %{},
               queue: :queue.new()
   end
 
@@ -587,18 +596,20 @@ defmodule Platform.Chat.CanvasRoom do
     end
   end
 
-  def handle_info({ref, {outcome, code}}, %State{inflight: %{ref: ref}} = state) do
+  def handle_info({ref, {outcome, code}}, %State{inflight: inflight} = state)
+      when is_reference(ref) and is_map_key(inflight, ref) do
     Process.demonitor(ref, [:flush])
-    {:noreply, finish_handler(state, outcome, code)}
+    {:noreply, finish_handler(state, ref, outcome, code)}
   end
 
-  def handle_info({:DOWN, ref, :process, _pid, reason}, %State{inflight: %{ref: ref}} = state) do
+  def handle_info({:DOWN, ref, :process, _pid, reason}, %State{inflight: inflight} = state)
+      when is_map_key(inflight, ref) do
     Logger.warning("CanvasRoom handler task exited: #{inspect(reason, limit: 5)}")
 
     outcome =
       {:error, "script_error", "the handler run exited before it returned a result"}
 
-    {:noreply, finish_handler(state, outcome, nil)}
+    {:noreply, finish_handler(state, ref, outcome, nil)}
   end
 
   def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
@@ -656,7 +667,7 @@ defmodule Platform.Chat.CanvasRoom do
             inv = %{inv | binding: binding}
 
             cond do
-              is_nil(state.inflight) ->
+              map_size(state.inflight) < handler_concurrency() ->
                 start_handler(state, inv)
 
               :queue.len(state.queue) >= @max_handler_queue ->
@@ -720,8 +731,14 @@ defmodule Platform.Chat.CanvasRoom do
         run_handler(handler, event, snapshot, bindings, limits)
       end)
 
-    %{state | inflight: %{ref: task.ref, inv: inv, started: System.monotonic_time(:millisecond)}}
+    run = %{inv: inv, started: System.monotonic_time(:millisecond)}
+    %{state | inflight: Map.put(state.inflight, task.ref, run)}
   end
+
+  # The room's bound on handler runs in flight at once. It is the canvas
+  # slot pool's per-canvas cap (`per_canvas_concurrency`), read at call time,
+  # so the room never starts a run the pool would refuse for this canvas.
+  defp handler_concurrency, do: max(ScriptEngine.limits().per_canvas_concurrency, 1)
 
   # Runs in the supervised task. The refusal code is read in THIS process,
   # where code mode called the host bindings.
@@ -741,9 +758,10 @@ defmodule Platform.Chat.CanvasRoom do
       {{:error, "script_error", "the handler ran outside the test's sandbox"}, nil}
   end
 
-  defp finish_handler(%State{inflight: %{inv: inv, started: started}} = state, outcome, code) do
+  defp finish_handler(%State{} = state, ref, outcome, code) do
+    {%{inv: inv, started: started}, inflight} = Map.pop!(state.inflight, ref)
     duration = System.monotonic_time(:millisecond) - started
-    state = %{state | inflight: nil}
+    state = %{state | inflight: inflight}
 
     {state, result} =
       case outcome do
@@ -758,10 +776,14 @@ defmodule Platform.Chat.CanvasRoom do
     next_handler(state)
   end
 
-  defp next_handler(%State{inflight: nil} = state) do
-    case :queue.out(state.queue) do
-      {{:value, inv}, queue} -> start_handler(%{state | queue: queue}, inv)
-      {:empty, _} -> state
+  defp next_handler(%State{} = state) do
+    if map_size(state.inflight) < handler_concurrency() do
+      case :queue.out(state.queue) do
+        {{:value, inv}, queue} -> next_handler(start_handler(%{state | queue: queue}, inv))
+        {:empty, _} -> state
+      end
+    else
+      state
     end
   end
 

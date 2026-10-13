@@ -54,8 +54,12 @@ defmodule Platform.Canvas.ScriptEngine do
         max_wall_ms: 5_000,
         memory_bytes: 16 * 1024 * 1024,
         max_calls: 10,
-        per_canvas_concurrency: 1,
+        per_canvas_concurrency: 4,
         global_concurrency: 8
+
+  `per_canvas_concurrency` is both the canvas pool's per-canvas slot cap and
+  the room's bound on handler runs in flight at once
+  (`Platform.Chat.CanvasRoom`); it was 1 until task 01a1316b-aab0 stage 4.
 
   `limits/0` merges that over the defaults above, and those over
   `Platform.CodeMode.Limits.defaults/0` (fuel per ms, log and result caps).
@@ -112,7 +116,7 @@ defmodule Platform.Canvas.ScriptEngine do
       max_wall_ms: 5_000,
       memory_bytes: 16 * 1024 * 1024,
       max_calls: 10,
-      per_canvas_concurrency: 1,
+      per_canvas_concurrency: 4,
       global_concurrency: 8
     }
   end

@@ -62,7 +62,8 @@ defmodule Platform.Canvas.ScriptEngine.JSTest do
       assert limits.max_wall_ms == 5_000
       assert limits.memory_bytes == 16 * 1024 * 1024
       assert limits.max_calls == 10
-      assert limits.per_runtime_concurrency == 1
+      assert limits.per_canvas_concurrency == 4
+      assert limits.per_runtime_concurrency == 4
       assert limits.global_concurrency == 8
       assert limits.fuel_per_ms == Limits.defaults().fuel_per_ms
 
@@ -256,19 +257,22 @@ defmodule Platform.Canvas.ScriptEngine.JSTest do
       wait_until(fn -> Slots.held(@pool).by_runtime[canvas_id] == nil end, 5_000)
     end
 
-    test "a second concurrent handler on one canvas is busy" do
+    test "a fifth concurrent handler on one canvas is busy" do
       canvas_id = Ecto.UUID.generate()
       b = bindings(%{canvas_id: canvas_id})
 
-      task = Task.async(fn -> run("(e, ctx) => { while (true) {} }", bindings: b) end)
-      wait_until(fn -> Slots.held(@pool).by_runtime[canvas_id] == 1 end, 5_000)
+      tasks =
+        for _ <- 1..4,
+            do: Task.async(fn -> run("(e, ctx) => { while (true) {} }", bindings: b) end)
+
+      wait_until(fn -> Slots.held(@pool).by_runtime[canvas_id] == 4 end, 5_000)
 
       assert {:error, "busy", message} = run("(e, ctx) => {}", bindings: b)
-      assert message =~ "canvas"
+      assert message =~ "canvas already has 4"
 
       # Another canvas is not affected.
       assert {:ok, [], []} = run("(e, ctx) => {}")
-      Task.await(task, 10_000)
+      Enum.each(tasks, &Task.await(&1, 10_000))
     end
 
     test "with every agent slot held, a canvas run still runs" do

@@ -558,7 +558,7 @@ defmodule Platform.Canvas.ScriptEngine.AdversarialTest do
       assert tocks >= 5, "tock ran #{tocks} times in 1.05 s"
     end
 
-    test "calls queue behind a handler in flight up to 16, then busy", ctx do
+    test "calls run 4 at once, queue 16 more, then busy", ctx do
       Application.put_env(:platform, ScriptEngine, wall_ms: 4_000, max_wall_ms: 5_000)
 
       bind!(ctx, "slow", """
@@ -567,12 +567,14 @@ defmodule Platform.Canvas.ScriptEngine.AdversarialTest do
 
       bind!(ctx, "noop", "(e, ctx) => { ctx.increment('n') }")
 
-      slow = call_async(ctx.canvas, ctx.a, "slow", %{})
+      slow = for _ <- 1..4, do: call_async(ctx.canvas, ctx.a, "slow", %{})
+      # The check can fire: the canvas pool holds 4 for this canvas.
+      wait_until(fn -> Slots.held(@pool).by_runtime[ctx.canvas.id] == 4 end, 3_000)
       queued = for _ <- 1..16, do: call_async(ctx.canvas, ctx.a, "noop", %{})
       over = call_async(ctx.canvas, ctx.a, "noop", %{})
 
       assert {:error, %{kind: "busy"}} = await_result(over, 500)
-      assert {:ok, _} = await_result(slow)
+      for ref <- slow, do: assert({:ok, _} = await_result(ref))
       for ref <- queued, do: assert({:ok, %{applied: 1}} = await_result(ref))
       assert keys(ctx.canvas) == %{"n" => 16}
     end
