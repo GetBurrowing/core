@@ -598,9 +598,9 @@ defmodule Platform.ExtensionsTest do
     #
     # Re-pinned by the stack prototype-runtime rollup merge (#1235): both of the
     # above. Measured on moon at the merge commit.
-    @main_tool_digest_off "REMEASURE"
-    @main_kinds_summaries_digest_off "REMEASURE"
-    @main_kinds_tool_schemas_digest_off "REMEASURE"
+    @main_tool_digest_off "5faf15579570a913f453f9951a5d9b5822afd125dd7423056c1807234fed39b1"
+    @main_kinds_summaries_digest_off "26c0704185201d0926a8bcb6db6be411b821c54fcba3269676c631969944df72"
+    @main_kinds_tool_schemas_digest_off "264902e4c54f3146fe5be6e658c4717aafc6382ea233523ca505607d848e0925"
     # main's lists minus exactly `play`.
     @core_bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode prototype)
     @core_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode prototype)

@@ -334,12 +334,12 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # Re-pinned by the stack prototype-runtime rollup merge (#1235): both of the
     # above. All six values measured on moon at the merge commit; off equals
     # extensions_test.exs.
-    @main_tool_digest_off "REMEASURE"
-    @main_tool_digest_on "REMEASURE"
-    @main_kinds_summaries_digest_off "REMEASURE"
-    @main_kinds_summaries_digest_on "REMEASURE"
-    @main_kinds_tool_schemas_digest_off "REMEASURE"
-    @main_kinds_tool_schemas_digest_on "REMEASURE"
+    @main_tool_digest_off "5faf15579570a913f453f9951a5d9b5822afd125dd7423056c1807234fed39b1"
+    @main_tool_digest_on "470a7430fc29edfa88628b82ceca746cb13e6d56b15d9bae44bdd02eb94c61b6"
+    @main_kinds_summaries_digest_off "26c0704185201d0926a8bcb6db6be411b821c54fcba3269676c631969944df72"
+    @main_kinds_summaries_digest_on "f71832b549f7a8674c01fff90be91d869b6eea222c9cdd888723d5045ec3c450"
+    @main_kinds_tool_schemas_digest_off "264902e4c54f3146fe5be6e658c4717aafc6382ea233523ca505607d848e0925"
+    @main_kinds_tool_schemas_digest_on "cf59e8e3a7215086fa324ffa7c036b076527cd20b7dbdf5bf32eba51fb6cddbe"
     @main_metrics_catalog_digest "95805ed557855b482286544ea8d5ea6063b81e47ce1ee28268467a7df2848ee9"
     @main_bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode prototype play)
     @main_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode prototype play)
