@@ -170,11 +170,19 @@ defmodule Platform.Chat.CanvasRoom do
     end
   end
 
-  @doc "The room's pid, or nil when it is not running."
+  @doc """
+  The room's pid, or nil when it is not running.
+
+  The Registry drops a dead owner's key asynchronously, so for a moment
+  after a room exits (idle stop, `stop/2`) the lookup can still name its
+  pid. That pid is reported as nil here: the Registry is node-local, so
+  `Process.alive?/1` is exact, and `start_room/2` then starts a fresh room
+  (the Registry replaces a dead owner's key on register).
+  """
   @spec whereis(binary(), binary()) :: pid() | nil
   def whereis(canvas_id, node_id) do
     case Registry.lookup(@registry, {:canvas_room, canvas_id, node_id}) do
-      [{pid, _}] -> pid
+      [{pid, _}] -> if Process.alive?(pid), do: pid, else: nil
       [] -> nil
     end
   end
