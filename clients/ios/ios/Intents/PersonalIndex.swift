@@ -96,7 +96,9 @@ enum PersonalIndex {
         guard #available(iOS 27, *) else { return }
         let entities = people.map { PersonEntity($0, host: host, env: env) }
         PeopleCache.shared.remember(entities)
-        SpotlightIndexer.index(entities, host: host)
+        // The messages person is transient since task 01a111bb round 5
+        // (as Apple's own MessagePerson adopters are), so it is no longer
+        // indexed; Siri matches a spoken name through its importer.
         // "Start a meeting with X" uses the phone schema's own person type;
         // agents cannot be called, so only humans are indexed for it.
         SpotlightIndexer.index(entities.filter { !$0.isAgent }.map(CallPersonEntity.init), host: host)

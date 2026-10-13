@@ -6,7 +6,7 @@ import XCTest
 /// Shortcuts run it, out of process against the installed Burrow. The
 /// simulator has no signed-in install, so these pin the contract that needs
 /// no server: the five schema intents and four entities are registered
-/// under their type names, the queries answer, and an id on a host that is
+/// under their type names, the conversation query answers, and an id on a host that is
 /// not a saved install resolves to nothing and acts on nothing.
 ///
 /// Run: install and launch the Debug build on an iOS 27 simulator FIRST
@@ -55,43 +55,34 @@ final class MessagesDomainSystemTests: XCTestCase {
         XCTAssertGreaterThan(installs.count, 0)
     }
 
-    func testPeopleAndConversationQueriesAnswerWithNoInstall() async throws {
-        let people = try await definitions.entities["PersonEntity"].entities(matching: "Priya")
-        XCTAssertEqual(people.count, 0, "no signed-in install, so nobody")
+    /// PersonEntity has no query since round 5 (transient, like Apple's
+    /// MessagePerson adopters); the conversation query still answers.
+    func testConversationQueryAnswersWithNoInstall() async throws {
         let suggested = try await definitions.entities["ConversationEntity"].suggestedEntities()
         XCTAssertEqual(suggested.count, 0)
-        let foreign = try await definitions.entities["PersonEntity"].entities(identifiers: ["evil.example.com|9e000000-0000-4000-8000-000000000001"])
-        XCTAssertEqual(foreign.count, 0, "an id on an unknown host resolves to nothing")
     }
 
-    /// Task 01a111bb stage 7, round 3: the device trace ended at
-    /// `person.query ids=1`, so Siri resolved the recipient by ID and the
-    /// system failed before perform. This drives that path: an entity
-    /// REFERENCE (id only) the system must resolve through PersonQuery,
-    /// then the send. The person is seeded in the people cache on a
-    /// `*.invalid` host, so the send itself never reaches a server.
-    func testSchemaSendResolvesAPersonReferenceAndReachesPerform() async throws {
+    /// Task 01a111bb stage 7, rounds 3 and 5: with PersonEntity transient,
+    /// Siri hands Burrow a person VALUE, not an entity reference. A seeded
+    /// person's Burrow id as the IntentPerson's application-defined id
+    /// must resolve and reach perform. The person is seeded in the people
+    /// cache on a `*.invalid` host, so the send itself never reaches a
+    /// server.
+    func testSchemaSendResolvesASeededPersonByIdAndReachesPerform() async throws {
         let id = "evidence.invalid|3e000000-0000-4000-8000-0000000000d1"
         await MainActor.run {
             let app = XCUIApplication()
             app.launchArguments += ["-SuiteEvidencePerson", "\(id)|Dalton Evidence|user"]
             app.launch()
         }
-        let entities = definitions.entities["PersonEntity"]
-        let resolved = try await entities.entities(identifiers: [id])
-        XCTAssertEqual(resolved.count, 1, "the seeded person resolves by id")
-        if let first = resolved.first {
-            let exported = try await first.exported(as: IntentPerson.self)
-            print("system-test export identifier=\(exported.identifier)")
-        }
-        let reference = entities.makeReference(identifier: id)
-        let intent = definitions.intents["MessagesSendIntent"].makeIntent(destination: reference, content: AttributedString("hi"))
+        let person = IntentPerson(identifier: .applicationDefined(id), name: .displayName("Dalton Evidence"), handle: nil)
+        let intent = definitions.intents["MessagesSendIntent"].makeIntent(destination: [person], content: AttributedString("hi"))
         do {
             let result = try await intent.run()
-            print("system-test ref-send result: \(result)")
+            print("system-test id-send result: \(result)")
         } catch {
             let text = String(describing: error)
-            print("system-test ref-send refused: \(text.prefix(600))")
+            print("system-test id-send refused: \(text.prefix(600))")
         }
     }
 

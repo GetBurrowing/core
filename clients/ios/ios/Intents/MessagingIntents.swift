@@ -116,8 +116,10 @@ struct MessagesSendIntent {
     var links: [URL]
     var scheduledDate: Date?
 
-    /// Burrow's own extra (Shortcuts only; Siri never fills it): narrows the
-    /// person suggestions to one install. A person names its own install.
+    /// Burrow's own extra (Shortcuts only; Siri never fills it). It narrowed
+    /// the person suggestions to one install while PersonEntity had a query
+    /// (before task 01a111bb round 5); kept so existing Shortcuts still
+    /// decode. A person names its own install.
     @Parameter(title: "Install")
     var install: InstallEntity?
 

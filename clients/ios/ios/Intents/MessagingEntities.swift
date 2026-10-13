@@ -18,13 +18,42 @@ import LinkPresentation
 
 // MARK: - Person
 
+// TRANSIENT (task 01a111bb stage 7, round 5), the way Apple's own
+// MessagePerson adopters are declared in the iOS 27.0 runtime (ChatKit
+// `MessagePerson`, SiriMessagesFlowTools `MessagePersonEntity`: both
+// `transient: true`, no `defaultQueryIdentifier`, not Indexed, not
+// Syncable, `person` the only property). While PersonEntity was a
+// query-backed, indexed, syncable entity, Siri resolved Dalton through
+// PersonQuery, hydrated him into the destination union, and Apple's
+// CreateDraftMessageTool then failed ("Type identifier conformance failed",
+// FlowToolTransformationError 2/3) before calling Burrow.
+//
+// With no query, Siri reaches a Burrow person through the `person` value
+// only: an IntentPerson it hands to the importer below (or to the
+// `people([IntentPerson])` destination case), which PersonResolver matches
+// by id, handle, then name. Only `person` survives a trip through the
+// system: `kind` and `subtitle` are this process's annotations, and a
+// PersonEntity rebuilt from `init()` reads as unresolved, so perform
+// resolves it again from `person`.
+//
+// PersonQuery stays as Burrow's own people lookup (PersonResolver,
+// CallPersonQuery, donations) but is no longer an EntityQuery. The
+// messages person is no longer indexed in Spotlight; CallPersonEntity
+// (the phone schema's person, humans only) still is.
 @available(iOS 27, *)
 @AppEntity(schema: .messages.messagePerson)
-struct PersonEntity {
-    static let defaultQuery = PersonQuery()
-
-    /// `<host>|<user or agent uuid>`.
-    let id: String
+struct PersonEntity: TransientAppEntity {
+    /// `<host>|<user or agent uuid>`: the `person`'s application-defined
+    /// identifier, so it survives the trip through the system. A system
+    /// person with no Burrow id reads as `unresolved|<contact or name>`.
+    var id: String {
+        switch person.identifier {
+        case .applicationDefined(let raw): return raw
+        case .contact(let contact): return Self.unresolvedKind + EntityRef.separator.description + "contact:" + contact
+        case .unknown: return Self.unresolvedKind + EntityRef.separator.description + "name:" + name
+        @unknown default: return Self.unresolvedKind + EntityRef.separator.description + "name:" + name
+        }
+    }
     /// The schema's person: the display name, and the `<host>|<uuid>` id as
     /// both identifier and handle. Nothing else (no email, no phone).
     ///
@@ -46,7 +75,8 @@ struct PersonEntity {
     /// A system person the import could not match to ONE Burrow person:
     /// carried to `perform`, which can ask which one or say who it couldn't
     /// find (an import can do neither).
-    var isUnresolved: Bool { kind == Self.unresolvedKind }
+    /// Also an entity the system rebuilt (`init()`, no annotations).
+    var isUnresolved: Bool { kind == Self.unresolvedKind || kind.isEmpty }
     static let unresolvedKind = "unresolved"
     var name: String {
         if let name = PersonResolver.spokenName(person) { return name }
@@ -57,8 +87,15 @@ struct PersonEntity {
         DisplayRepresentation(title: "\(name)", subtitle: "\(subtitle)", image: .init(systemName: isAgent ? "cpu" : "person.crop.circle"))
     }
 
+    /// TransientAppEntity's: what the system builds before setting `person`.
+    /// Unresolved until perform matches its `person` to a Burrow person.
+    init() {
+        self.kind = Self.unresolvedKind
+        self.subtitle = ""
+        self.person = IntentPerson(identifier: .unknown, name: .unknown, handle: nil)
+    }
+
     init(id: String, name: String, kind: String, subtitle: String) {
-        self.id = id
         self.kind = kind
         self.subtitle = subtitle
         self.person = Self.intentPerson(id: id, name: name)
@@ -66,7 +103,6 @@ struct PersonEntity {
 
     /// Wraps a system person that matched no single Burrow person.
     init(unresolved person: IntentPerson) {
-        self.id = Self.unresolvedKind + EntityRef.separator.description + UUID().uuidString
         self.kind = Self.unresolvedKind
         self.subtitle = ""
         self.person = person
@@ -117,47 +153,28 @@ struct PersonEntity {
 @available(iOS 27, *)
 extension PersonEntity: Transferable {}
 
-// Indexed (stage 4) under the host as the domain identifier, syncable (the
-// id is the server's) and `.shared` (a person in a workspace).
+// No IndexedEntity / SyncableEntity / OwnershipProvidingEntity (round 5):
+// Apple's transient MessagePerson adopters are none of these, and an
+// IndexedEntity needs a query. Stage 4 indexed PersonEntity under the host
+// as the domain identifier; that is gone on this branch, and Siri's
+// spoken-name match now runs through the importer and PersonResolver.
+
+/// Burrow's people lookup by id, search and recent collaborators. NOT an
+/// EntityQuery since round 5 (PersonEntity is transient, like Apple's own
+/// MessagePerson adopters): the system never calls it; PersonResolver,
+/// CallPersonQuery and the donation resolver do.
 @available(iOS 27, *)
-extension PersonEntity: IndexedEntity, SyncableEntity, OwnershipProvidingEntity {
-    var ownership: EntityOwnership { .shared }
-
-    /// The schema's mapping (`person` -> `primaryRecipients`, declared by
-    /// `@Property(indexingKey:)` on `person`), plus the name
-    /// as display name and the given name as an alternate, so "Dalton"
-    /// matches "Dalton Rourke" (task 01a111bb stage 7).
-    var attributeSet: CSSearchableItemAttributeSet {
-        let set = defaultAttributeSet
-        set.displayName = name
-        set.alternateNames = PersonalIndex.alternateNames(person: name, isAgent: isAgent)
-        return set
-    }
-}
-
-@available(iOS 27, *)
-struct PersonQuery: EntityStringQuery {
-    // Suggestions are scoped once the send's Install is chosen; unset still
-    // searches every install, which Siri needs to resolve a spoken name.
-    // The dependency's `install` reads as non-optional although the
-    // parameter is optional, hence `dep?.install.id`.
-    // MessagesSendIntent is App-only (BURROW_APP, see MessagingIntents.swift).
-    #if BURROW_APP
-        @IntentParameterDependency<MessagesSendIntent>(\.$install) var send
-    #endif
-
-    /// Set by tests in place of the dependency above.
+struct PersonQuery: Sendable {
+    /// Limits suggestions and search to one install; nil searches every
+    /// install, which resolving a spoken name needs. (It was also filled
+    /// from the send's Install parameter while this was the entity query.)
     var installScope: String?
 
     init() {}
 
     init(installScope: String?) { self.installScope = installScope }
 
-    #if BURROW_APP
-        private var scope: String? { installScope ?? send?.install.id }
-    #else
-        private var scope: String? { installScope }
-    #endif
+    private var scope: String? { installScope }
 
     /// Each id resolves on ITS host only: a person found earlier (search,
     /// suggestions or the index refresh) from the in-memory cache, otherwise
@@ -354,20 +371,8 @@ extension ConversationEntity: IndexedEntity, SyncableEntity, OwnershipProvidingE
 }
 
 // The system may ask for a reindex (iOS 27 `IndexedEntityQuery`): every
-// signed-in install's directory and conversations are fetched again, which
-// indexes them per host.
-
-@available(iOS 27, *)
-extension PersonQuery: IndexedEntityQuery {
-    func reindexEntities(for identifiers: [String], indexDescription: CSSearchableIndexDescription) async throws {
-        _ = try await entities(for: identifiers)
-    }
-
-    func reindexAllEntities(indexDescription: CSSearchableIndexDescription) async throws {
-        let catalog = EntityCatalog()
-        _ = await catalog.people(hosts: catalog.env.signedInHosts, directory: true)
-    }
-}
+// signed-in install's conversations are fetched again, which indexes them
+// per host. (People are not indexed as message persons since round 5.)
 
 @available(iOS 27, *)
 extension ConversationQuery: IndexedEntityQuery {
