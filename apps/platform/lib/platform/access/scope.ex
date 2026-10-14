@@ -293,7 +293,8 @@ defmodule Platform.Access.Scope do
   end
 
   # Same preload `Accounts.get_user/1` runs, so the two paths agree.
-  defp with_memberships(%_{org_memberships: _} = user), do: Repo.preload(user, org_memberships: :org)
+  defp with_memberships(%_{org_memberships: _} = user),
+    do: Repo.preload(user, org_memberships: :org)
 
   defp with_memberships(%{id: user_id} = user) do
     memberships = Repo.all(from(m in OrgMembership, where: m.user_id == ^user_id, preload: :org))
@@ -368,7 +369,9 @@ defmodule Platform.Access.Scope do
   defp merge(a, b) when is_list(a) and is_list(b), do: a ++ b
 
   defp normalize(:all), do: :all
-  defp normalize(ids) when is_list(ids), do: ids |> Enum.filter(&is_binary/1) |> Enum.uniq() |> Enum.sort()
+
+  defp normalize(ids) when is_list(ids),
+    do: ids |> Enum.filter(&is_binary/1) |> Enum.uniq() |> Enum.sort()
 
   defp participant_rule?(rule), do: Enum.any?(rule_list(rule), &(&1 in @participant_rules))
 

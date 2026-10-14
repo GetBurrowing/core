@@ -143,10 +143,20 @@ defmodule PlatformWeb.LiveAuthTest do
       socket = %Socket{endpoint: PlatformWeb.Endpoint, assigns: %{__changed__: %{}, flash: %{}}}
 
       {:cont, anon} =
-        LiveAuth.on_mount(:default, %{}, %{}, Phoenix.Component.assign(socket, :current_user_record, nil))
+        LiveAuth.on_mount(
+          :default,
+          %{},
+          %{},
+          Phoenix.Component.assign(socket, :current_user_record, nil)
+        )
 
       {:cont, legacy} =
-        LiveAuth.on_mount(:default, %{}, %{}, Phoenix.Component.assign(socket, :current_user, "Marlowe"))
+        LiveAuth.on_mount(
+          :default,
+          %{},
+          %{},
+          Phoenix.Component.assign(socket, :current_user, "Marlowe")
+        )
 
       assert anon.assigns.access_scope == %Scope{}
       assert legacy.assigns.access_scope == %Scope{}

@@ -53,7 +53,12 @@ defmodule Platform.Access.ScopeTest do
     n = System.unique_integer([:positive])
 
     %Space{}
-    |> Space.changeset(%{kind: kind, name: "s2-#{kind}-#{n}", slug: "s2-#{kind}-#{n}", org_id: org_id})
+    |> Space.changeset(%{
+      kind: kind,
+      name: "s2-#{kind}-#{n}",
+      slug: "s2-#{kind}-#{n}",
+      org_id: org_id
+    })
     |> Repo.insert!()
   end
 
@@ -225,7 +230,8 @@ defmodule Platform.Access.ScopeTest do
       assert_matches_today(user, scope)
     end
 
-    test "external ADMIN of the root org: root_admin?/1 is true today, install.admin is not", ctx do
+    test "external ADMIN of the root org: root_admin?/1 is true today, install.admin is not",
+         ctx do
       user = create_user!("ext-root-admin")
       external!(user, ctx.root, "admin")
       scope = Scope.for_user(loaded(user))
