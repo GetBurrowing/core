@@ -165,6 +165,7 @@ defmodule Platform.Access.RegistryTest do
       for role <- roles, role.builtin do
         changeset =
           Role.changeset(%Role{}, Map.take(Map.from_struct(role), [:key, :name, :permissions]))
+
         assert changeset.valid?, "#{role.key}: #{inspect(changeset.errors)}"
       end
     end
