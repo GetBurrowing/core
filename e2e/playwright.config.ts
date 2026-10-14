@@ -3,6 +3,14 @@ import { defineConfig, devices } from "@playwright/test"
 const BASE_URL = process.env.BASE_URL ?? "http://localhost:4000"
 
 const IPHONE_ONLY = /prototype_fullscreen_touch\.spec\.ts/
+// Task 01a1389f v2: the drag spec runs under the touch/device projects below
+// and its own desktop Chromium project, never under `chromium`, so that
+// project's test list is unchanged.
+const DRAG_ONLY = /prototype_fullscreen_drag\.spec\.ts/
+// iPadOS Safari's default desktop-class UA: it claims a Mac. The spec adds
+// navigator.maxTouchPoints = 5, which is what tells an iPad apart.
+const IPADOS_SAFARI_UA =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
 
 export default defineConfig({
   testDir: "./tests",
@@ -35,7 +43,7 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"] },
       // The iPhone touch spec is WebKit-only (task 01a1389f); every other
       // spec keeps running here exactly as before.
-      testIgnore: IPHONE_ONLY,
+      testIgnore: [IPHONE_ONLY, DRAG_ONLY],
     },
     {
       // Task 01a1389f: the prototype fullscreen overlay under a held press on
@@ -45,13 +53,41 @@ export default defineConfig({
       // mic/camera grants are reset here: WebKit refuses to launch with them.
       // No retry: the probes are deterministic geometry, a retry only repeats.
       name: "webkit-iphone",
-      testMatch: IPHONE_ONLY,
+      testMatch: [IPHONE_ONLY, DRAG_ONLY],
       retries: 0,
       use: {
         ...devices["iPhone 15"],
         launchOptions: { args: [] },
         permissions: [],
       },
+    },
+    {
+      // Task 01a1389f v2: an iPad, as Burrow iOS or the installed PWA sees
+      // it (the spec injects the marker / standalone per case). Drag spec only.
+      name: "webkit-ipad",
+      testMatch: DRAG_ONLY,
+      retries: 0,
+      use: {
+        ...devices["iPad Pro 11"],
+        userAgent: IPADOS_SAFARI_UA,
+        launchOptions: { args: [] },
+        permissions: [],
+      },
+    },
+    {
+      // Task 01a1389f v2: Android Chrome and Burrow Android, native path.
+      name: "chromium-android",
+      testMatch: DRAG_ONLY,
+      retries: 0,
+      use: { ...devices["Pixel 7"] },
+    },
+    {
+      // Task 01a1389f v2: desktop Chromium's native path under the drag spec,
+      // kept out of `chromium` so that project's test list does not change.
+      name: "chromium-desktop",
+      testMatch: DRAG_ONLY,
+      retries: 0,
+      use: { ...devices["Desktop Chrome"] },
     },
   ],
 })
