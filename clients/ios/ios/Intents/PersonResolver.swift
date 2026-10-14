@@ -20,8 +20,10 @@ import Foundation
 //      signed-in install. A full-name or given-name match wins over a
 //      substring match.
 //
-// One match is used. Several make the intent ask which (requestChoice). None
-// is said out loud with the name ("Burrow couldn't find anyone named …").
+// One match is used, unless someone on another signed-in install answers to
+// the same name (round 8, `confirmInstall`). Several make the intent ask
+// which (requestChoice). None is said out loud with the name ("Burrow
+// couldn't find anyone named …").
 
 /// What a system person matched among Burrow's people.
 @available(iOS 27, *)
@@ -124,13 +126,72 @@ enum PersonResolver {
     /// Exact full-name or given-name matches if there are any, otherwise
     /// people whose name contains `name`. Case- and accent-insensitive.
     static func best(_ people: [MessagePersonEntity], for name: String) -> [MessagePersonEntity] {
+        let exact = exact(people, for: name)
+        if !exact.isEmpty { return exact }
         let wanted = fold(name)
-        let exact = people.filter { person in
-            let full = fold(person.name)
-            return full == wanted || full.split(separator: " ").first.map(String.init) == wanted
-        }
-        if !exact.isEmpty { return unique(exact) }
         return unique(people.filter { fold($0.name).contains(wanted) })
+    }
+
+    /// Full-name or given-name matches only. Case- and accent-insensitive.
+    static func exact(_ people: [MessagePersonEntity], for name: String) -> [MessagePersonEntity] {
+        let wanted = fold(name)
+        return unique(
+            people.filter { person in
+                let full = fold(person.name)
+                return full == wanted || full.split(separator: " ").first.map(String.init) == wanted
+            })
+    }
+
+    // MARK: Same name on another install (round 8)
+    //
+    // Measured on Rowan's iPad (iOS 27.0.1, 2026-10-14), signed in to prod
+    // and suite-exp: "Message Harper" went to suite-exp's Harper, not prod's
+    // Harper Parker. Siri searched the index, took the FIRST of two indexed
+    // Jordans and handed Burrow that one entity (`.messagePerson`), which was
+    // used as is, so the "which one?" prompt never ran. Now a person found
+    // ANY way is checked against the other signed-in installs before it is
+    // used: a person there who answers to the same name makes the intent ask
+    // (the prompt's subtitles name the org and the install). A name nobody
+    // else answers to is never asked about.
+    //
+    // The name checked is what the person was called: the spoken name when
+    // Burrow has it; for an entity Siri resolved itself it is not passed on,
+    // so the entity's GIVEN name for a human (the index lists it as an
+    // alternate name, and it is how Siri matched "Harper" to both) and the
+    // full name for an agent. So "Harper" collides with "Harper Parker".
+    // "Harper Parker" spoken does not collide with "Harper Smith".
+
+    /// The name `person` was most likely called by, when Burrow was not told.
+    static func calledName(_ person: MessagePersonEntity) -> String {
+        guard !person.isAgent, let given = person.name.split(separator: " ").first.map(String.init), !given.isEmpty else { return person.name }
+        return given
+    }
+
+    /// People on the OTHER signed-in installs who answer to `spoken` (or,
+    /// without it, to `calledName(person)`): those already fetched in this
+    /// process, and the server's search on each of those installs.
+    static func namesakes(of person: MessagePersonEntity, spoken: String?, env: IntentEnvironment) async -> [MessagePersonEntity] {
+        guard let home = EntityRef(person.id)?.host else { return [] }
+        let hosts = env.signedInHosts.filter { $0 != home }
+        guard !hosts.isEmpty else { return [] }
+        let name = spoken ?? calledName(person)
+        let onHosts = { (entity: MessagePersonEntity) in EntityRef(entity.id).map { hosts.contains($0.host) } ?? false }
+        let cached = PeopleCache.shared.all().filter(onHosts)
+        let catalog = EntityCatalog(env: env)
+        let searched = PeopleCache.shared.remember(
+            await catalog.people(hosts: hosts, query: name).map { MessagePersonEntity($0.person, host: $0.host, env: env) })
+        return exact(cached + searched, for: name).filter { $0.id != person.id }
+    }
+
+    /// `person`, unless someone on another signed-in install answers to the
+    /// same name: then `choose` picks among them (this person first).
+    static func confirmInstall(
+        _ person: MessagePersonEntity, spoken: String?, site: String, env: IntentEnvironment = .current, choose: Choose
+    ) async throws -> MessagePersonEntity {
+        let others = await namesakes(of: person, spoken: spoken, env: env)
+        guard !others.isEmpty else { return person }
+        IntentLog.step(site, "matched=several_installs count=\(others.count + 1)")
+        return try await choose(spoken ?? calledName(person), Array(([person] + others).prefix(5)))
     }
 
     private static func fold(_ value: String) -> String {
@@ -142,12 +203,25 @@ enum PersonResolver {
         return people.filter { seen.insert($0.id).inserted }
     }
 
+    /// True when the identifier or handle is a `<host>|<uuid>` on a saved
+    /// install (resolution then never reads the name).
+    static func isBurrowID(_ person: IntentPerson, env: IntentEnvironment) -> Bool {
+        var raws: [String] = []
+        if case .applicationDefined(let raw) = person.identifier { raws.append(raw) }
+        if let handle = person.handle, case .applicationDefined(let raw) = handle.value { raws.append(raw) }
+        return raws.contains { raw in EntityRef(raw).map { env.install($0.host) != nil } ?? false }
+    }
+
     /// One Burrow person for `person`, asking `choose` when several match.
     /// Throws a spoken failure that names the person when none does.
     static func require(_ person: IntentPerson, site: String, env: IntentEnvironment = .current, choose: Choose) async throws -> MessagePersonEntity {
         switch await resolve(person, site: site, env: env) {
         case .one(let found):
-            return found
+            // A spoken name matched one person, perhaps from this process's
+            // cache of ONE install: the other installs are asked too. A
+            // Burrow id (identifier or handle) names its install already.
+            guard let name = spokenName(person), !isBurrowID(person, env: env) else { return found }
+            return try await confirmInstall(found, spoken: name, site: site, env: env, choose: choose)
         case .several(let people):
             return try await choose(spokenName(person) ?? "them", Array(people.prefix(5)))
         case .none(let name):

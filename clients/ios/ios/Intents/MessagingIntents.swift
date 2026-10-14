@@ -52,10 +52,17 @@ extension MessageDestination {
     }
 
     /// The one Burrow person this destination names (task 01a111bb stage
-    /// 7): a resolved entity as is; a system person or an unresolved entity
-    /// through PersonResolver, asking `choose` when several match. Throws a
-    /// spoken failure, never a bare one, and logs each step.
-    func resolvedBurrowDestination(site: String, choose: PersonResolver.Choose) async throws -> MessageDestinationRef {
+    /// 7): a system person or an unresolved entity through PersonResolver,
+    /// asking `choose` when several match. A resolved entity is the one Siri
+    /// picked from the index, which on two installs may be the wrong
+    /// namesake (round 8, "Message Harper"): unless `confirmsInstall` is
+    /// false (a Shortcut that set the Install), it is used only if no one
+    /// on another signed-in install answers to the same name, else `choose`
+    /// asks (PersonResolver.confirmInstall). Throws a spoken failure, never
+    /// a bare one, and logs each step.
+    func resolvedBurrowDestination(
+        site: String, env: IntentEnvironment = .current, confirmsInstall: Bool = true, choose: PersonResolver.Choose
+    ) async throws -> MessageDestinationRef {
         IntentLog.step(site, "destination=\(caseName)")
         let person: MessagePersonEntity
         switch self {
@@ -74,7 +81,14 @@ extension MessageDestination {
             }
             person = MessagePersonEntity(unresolved: people[0])
         }
-        let found = person.isUnresolved ? try await PersonResolver.require(person.person, site: site, choose: choose) : person
+        let found: MessagePersonEntity
+        if person.isUnresolved {
+            found = try await PersonResolver.require(person.person, site: site, env: env, choose: choose)
+        } else if confirmsInstall {
+            found = try await PersonResolver.confirmInstall(person, spoken: nil, site: site, env: env, choose: choose)
+        } else {
+            found = person
+        }
         return .person(id: found.id, name: found.name, isAgent: found.isAgent)
     }
 }
@@ -122,7 +136,8 @@ struct MessagesSendIntent {
     var install: InstallEntity?
 
     func perform() async throws -> some ReturnsValue<[MessageEntity]> & ProvidesDialog {
-        let target = try await destination.resolvedBurrowDestination(site: "send") { name, people in
+        // A Shortcut that set the Install chose the person within it.
+        let target = try await destination.resolvedBurrowDestination(site: "send", confirmsInstall: install == nil) { name, people in
             try await choosePerson(self, name: name, people: people)
         }
         let text = content.map { String($0.characters) } ?? ""

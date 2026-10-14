@@ -400,7 +400,41 @@ enum SpotlightIndexer {
     /// identifier, so `SpotlightIndex.removeAll(host:)` drops exactly them.
     static func index<E: IndexedEntity>(_ entities: [E], host: String, expires: Date? = nil) {
         guard IntentHooks.indexesSpotlight, !entities.isEmpty, !SpotlightIndex.isSuppressed(host) else { return }
+        SpotlightIndex.ledger.record(entities.map { "\($0.id)" }, host: host)
         SpotlightIndex.store.index(items(entities, host: host, expires: expires))
+    }
+
+    /// Deletes the app entities with these ids, of every type Burrow
+    /// indexes (an id names one type at most; the others ignore it).
+    static func deleteAppEntities(_ ids: [String]) async {
+        let index = CSSearchableIndex.default()
+        try? await index.deleteAppEntities(identifiedBy: ids, ofType: SpaceEntity.self)
+        try? await index.deleteAppEntities(identifiedBy: ids, ofType: TaskEntity.self)
+        try? await index.deleteAppEntities(identifiedBy: ids, ofType: ApprovalEntity.self)
+        try? await index.deleteAppEntities(identifiedBy: ids, ofType: MeetingEntity.self)
+        try? await index.deleteAppEntities(identifiedBy: ids, ofType: AgentEntity.self)
+        if #available(iOS 27, *) {
+            try? await index.deleteAppEntities(identifiedBy: ids, ofType: MessagePersonEntity.self)
+            try? await index.deleteAppEntities(identifiedBy: ids, ofType: CallPersonEntity.self)
+            try? await index.deleteAppEntities(identifiedBy: ids, ofType: ConversationEntity.self)
+        }
+    }
+
+    /// Deletes every entity of every type Burrow indexes today. A type that
+    /// no longer exists (PersonEntity, renamed in 0b5b5e85d) cannot be named
+    /// here; `deleteAllSearchableItems` is what reaches it.
+    static func deleteAllAppEntities() async {
+        let index = CSSearchableIndex.default()
+        try? await index.deleteAppEntities(ofType: SpaceEntity.self)
+        try? await index.deleteAppEntities(ofType: TaskEntity.self)
+        try? await index.deleteAppEntities(ofType: ApprovalEntity.self)
+        try? await index.deleteAppEntities(ofType: MeetingEntity.self)
+        try? await index.deleteAppEntities(ofType: AgentEntity.self)
+        if #available(iOS 27, *) {
+            try? await index.deleteAppEntities(ofType: MessagePersonEntity.self)
+            try? await index.deleteAppEntities(ofType: CallPersonEntity.self)
+            try? await index.deleteAppEntities(ofType: ConversationEntity.self)
+        }
     }
 
     /// Entities whose ids name their own host (`<host>|<uuid>`), indexed

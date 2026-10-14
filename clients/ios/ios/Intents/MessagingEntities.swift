@@ -26,7 +26,9 @@ import LinkPresentation
 // entity is named exactly `AssetEntity`, which looks like type-name
 // matching. It was `PersonEntity` before; Spotlight items indexed under
 // that name are orphaned (domain = host, dropped at sign-out) and the
-// next per-host refresh indexes this type. The query follows the SDK
+// next per-host refresh indexes this type; round 8's
+// SpotlightIndexMigration deletes them once (hydrating one failed on
+// Rowan's iPad). The query follows the SDK
 // documentation's `<Entity>Query` naming (MessagePerson ->
 // MessagePersonQuery); Apple's runtime adopters have no query.
 @available(iOS 27, *)
@@ -173,10 +175,13 @@ struct MessagePersonEntityQuery: EntityStringQuery {
     /// Each id resolves on ITS host only: a person found earlier (search,
     /// suggestions or the index refresh) from the in-memory cache, otherwise
     /// in that host's people directory (the set the device indexes). An
-    /// unknown host makes no request.
+    /// unknown host makes no request, and its ids are purged from Spotlight
+    /// (round 8: Siri kept handing back a removed install's people, whose
+    /// hydration could only fail).
     func entities(for identifiers: [String]) async throws -> [MessagePersonEntity] {
         IntentLog.step("person.query", "ids=\(identifiers.count)")
         let catalog = EntityCatalog()
+        SpotlightIndex.purge(ids: identifiers, env: catalog.env)
         let cache = PeopleCache.shared
         var missing: [String] = []
         var found: [String: MessagePersonEntity] = [:]
@@ -330,8 +335,11 @@ struct ConversationQuery: EntityStringQuery {
     /// Set by tests in place of an Install dependency.
     var installScope: String?
 
+    /// An id on an install that is no longer saved resolves to nothing and
+    /// is purged from Spotlight, as for a person.
     func entities(for identifiers: [String]) async throws -> [ConversationEntity] {
         let catalog = EntityCatalog()
+        SpotlightIndex.purge(ids: identifiers, env: catalog.env)
         return await catalog.resolve(identifiers) { host in
             await catalog.spaceRows(hosts: [host]).map { ConversationEntity($0.space, host: $0.host, env: catalog.env) }
         }

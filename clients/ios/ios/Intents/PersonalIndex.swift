@@ -89,6 +89,60 @@ struct PersonalIndexRefresh {
     }
 }
 
+/// A one-time rebuild of Burrow's Spotlight index, keyed on an index-schema
+/// version in UserDefaults (task 01a111bb stage 7, round 8).
+///
+/// Measured on Rowan's iPad (iOS 27.0.1, 2026-10-14): Siri still found items
+/// indexed by older builds under the OLD type name `PersonEntity` (renamed
+/// MessagePersonEntity in 0b5b5e85d), and hydrating them failed ("Entity
+/// hydration failed"), as it did for a removed install's people. On the
+/// first launch after an update that raises `currentVersion`, every Burrow
+/// item is deleted and every signed-in install is indexed afresh.
+///
+/// Why deleteAll and not a targeted delete: AppIntents deletes by entity
+/// TYPE (`deleteAppEntities(ofType:)`), and the stale type no longer exists
+/// in the binary, so it cannot be named. A delete by domain needs every
+/// domain ever used, and a removed install's host is no longer known (and
+/// the domain delete alone is what failed to clear the removed install).
+/// `deleteAllSearchableItems` is the one call that reaches all of them; it
+/// is scoped to this app's own items, and every entry it removes is
+/// re-created from the server right after (tasks, meetings and approvals
+/// on their next fetch). Raise `currentVersion` whenever an indexed type is
+/// renamed or its id shape changes.
+struct SpotlightIndexMigration {
+    static let currentVersion = 2
+    static let versionKey = "burrow.spotlight.index-schema-version"
+
+    var env: IntentEnvironment = .current
+    var defaults: UserDefaults = .standard
+    var refresh: PersonalIndexRefresh = PersonalIndexRefresh()
+
+    var isNeeded: Bool { defaults.integer(forKey: Self.versionKey) < Self.currentVersion }
+
+    /// Returns the hosts re-indexed, or nil when nothing was needed (or the
+    /// delete failed; the next launch tries again).
+    @discardableResult
+    func runIfNeeded() async -> [String]? {
+        guard isNeeded else { return nil }
+        do {
+            try await SpotlightIndex.store.deleteAll()
+        } catch {
+            IntentLog.step("index.migrate", "refused=delete_failed")
+            return nil
+        }
+        SpotlightIndex.ledger.removeAll()
+        defaults.set(Self.currentVersion, forKey: Self.versionKey)
+        // Unconditionally, not refreshStale: a foreground refresh that
+        // finished moments ago indexed into what was just deleted.
+        let hosts = env.signedInHosts
+        for host in hosts {
+            await refresh.refresh(host: host)
+        }
+        IntentLog.step("index.migrate", "version=\(Self.currentVersion) installs=\(hosts.count)")
+        return hosts
+    }
+}
+
 /// Indexing for the iOS 27 messages and phone entities, called from the
 /// catalog's fetch path. Below iOS 27 there is nothing to index here.
 enum PersonalIndex {

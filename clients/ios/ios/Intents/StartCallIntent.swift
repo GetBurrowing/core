@@ -97,14 +97,18 @@ struct CallPersonEntity {
 }
 
 /// A call's person as a Burrow person: a `<host>|<uuid>` id on a saved
-/// install as is, anything else through PersonResolver.
+/// install as is (unless another install has a namesake), anything else
+/// through PersonResolver.
 @available(iOS 27, *)
 enum CallPersonResolution {
     static func resolve(
         _ person: CallPersonEntity, env: IntentEnvironment = .current, choose: PersonResolver.Choose
     ) async throws -> MessagePersonEntity {
         if let ref = EntityRef(person.id), env.install(ref.host) != nil {
-            return MessagePersonEntity(id: person.id, name: person.name, kind: person.kind, subtitle: person.subtitle)
+            // Siri's pick from the index: asked about when another signed-in
+            // install has a namesake (round 8, as for a message).
+            let found = MessagePersonEntity(id: person.id, name: person.name, kind: person.kind, subtitle: person.subtitle)
+            return try await PersonResolver.confirmInstall(found, spoken: nil, site: "call", env: env, choose: choose)
         }
         return try await PersonResolver.require(person.person, site: "call", env: env, choose: choose)
     }
