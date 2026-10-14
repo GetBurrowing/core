@@ -191,9 +191,16 @@ struct IntentActions {
         let start = env.now()
         func finish(_ outcome: AskOutcome) -> AskOutcome {
             let seconds = Int(env.now().timeIntervalSince(start).rounded())
+            // The count line is info level, which a plain `log show` drops;
+            // the step line (notice) carries the same outcome so the device
+            // proof survives it (task 01a13c1d stage 1).
             switch outcome {
-            case .reply: IntentLog.count("ask_outcome.answered", host: ref.host, count: seconds)
-            case .timedOut: IntentLog.count("ask_outcome.timed_out", host: ref.host, count: seconds)
+            case .reply:
+                IntentLog.count("ask_outcome.answered", host: ref.host, count: seconds)
+                IntentLog.step("ask", "outcome=answered seconds=\(seconds)")
+            case .timedOut:
+                IntentLog.count("ask_outcome.timed_out", host: ref.host, count: seconds)
+                IntentLog.step("ask", "outcome=timed_out seconds=\(seconds)")
             }
             return outcome
         }

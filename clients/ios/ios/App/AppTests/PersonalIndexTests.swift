@@ -228,9 +228,14 @@ final class PersonalIndexTests: XCTestCase {
                     + Data(#"{"id":"m3","author_type":"agent","author_id":"\#(self.helperID)","content":"Green."}]}"#.utf8)
             )
         }
+        let lines = capturingSteps()
         let outcome = try await IntentActions(env: IntentEnvironment.current).awaitAgentReply(
             host: a, agentUUID: helperID, spaceID: space, after: "m1", window: AskAgent.longReplyWindow)
         XCTAssertEqual(outcome, .reply("Green."))
+        XCTAssertEqual(
+            lines.all.filter { $0.hasPrefix("step=ask ") }.map { $0.replacingOccurrences(of: #"\d+$"#, with: "N", options: .regularExpression) },
+            ["step=ask outcome=answered seconds=N"], "the outcome survives a plain `log show` (notice level)")
+        XCTAssertFalse(lines.all.contains { $0.contains("Green") }, "the reply is never logged")
         XCTAssertEqual(StubURLProtocol.requests.first?.url?.query, "after=m1", "polls after the sent message")
         XCTAssertEqual(Set(StubURLProtocol.requests.compactMap { $0.url?.host }), [a])
     }
@@ -399,7 +404,10 @@ final class PersonalIndexTests: XCTestCase {
     func testAPersonSiriPickedIsAskedAboutWhenAnotherInstallHasTheSameName() async throws {
         guard #available(iOS 27, *) else { throw XCTSkip("iOS 27") }
         jordans()
-        defer { PeopleCache.shared.removeAll(host: a); PeopleCache.shared.removeAll(host: b) }
+        defer {
+            PeopleCache.shared.removeAll(host: a)
+            PeopleCache.shared.removeAll(host: b)
+        }
         var asked: (String, [String])?
         let target = try await MessageDestination.messagePerson(entity(samOnA, on: a, name: "Sam"))
             .resolvedBurrowDestination(site: "test") { name, people in
@@ -430,17 +438,160 @@ final class PersonalIndexTests: XCTestCase {
     func testAPersonWhoseNameIsUniqueAcrossInstallsIsNotAskedAbout() async throws {
         guard #available(iOS 27, *) else { throw XCTSkip("iOS 27") }
         jordans()
-        defer { PeopleCache.shared.removeAll(host: a); PeopleCache.shared.removeAll(host: b) }
+        defer {
+            PeopleCache.shared.removeAll(host: a)
+            PeopleCache.shared.removeAll(host: b)
+        }
         let target = try await MessageDestination.messagePerson(entity(inesOnA, on: a, name: "Ines Alvarez"))
             .resolvedBurrowDestination(site: "test", choose: noChoice)
         XCTAssertEqual(target.entityID, EntityRef(host: a, uuid: inesOnA).id)
         XCTAssertFalse(requests(host: b, path: "/api/app/people").isEmpty, "positive control: the other install was searched")
     }
 
+    // MARK: Task 01a13c1d stage 1: the namesake check logs at notice level
+
+    /// Every `step=` line a run emits, through IntentLog's test observer.
+    private final class StepLines: @unchecked Sendable {
+        private let lock = NSLock()
+        private var lines: [String] = []
+        func add(_ line: String) {
+            lock.lock()
+            lines.append(line)
+            lock.unlock()
+        }
+        var all: [String] {
+            lock.lock()
+            defer { lock.unlock() }
+            return lines
+        }
+        func steps(_ site: String) -> [String] {
+            all.filter { $0.hasPrefix("step=\(site) ") }.map { String($0.dropFirst("step=\(site) ".count)) }
+        }
+    }
+
+    private func capturingSteps() -> StepLines {
+        let lines = StepLines()
+        IntentLog.observer = { line in lines.add(line) }
+        addTeardownBlock { IntentLog.observer = nil }
+        return lines
+    }
+
+    /// No step line names a fixture person or either install.
+    private func assertNoNamesOrHosts(_ lines: StepLines, file: StaticString = #filePath, line: UInt = #line) {
+        let steps = lines.all.filter { $0.hasPrefix("step=") }
+        XCTAssertFalse(steps.isEmpty, "positive control: steps were captured", file: file, line: line)
+        for entry in steps {
+            for banned in ["Jordan", "jordan", "Coombs", "Ines", "Alvarez", a, b, jordanOnA, jordanOnB, inesOnA] {
+                XCTAssertFalse(entry.contains(banned), "a step line names \(banned): \(entry)", file: file, line: line)
+            }
+        }
+    }
+
+    func testACollisionRunLogsTheNamesakeCountsAndSeveralInstalls() async throws {
+        guard #available(iOS 27, *) else { throw XCTSkip("iOS 27") }
+        jordans()
+        defer {
+            PeopleCache.shared.removeAll(host: a)
+            PeopleCache.shared.removeAll(host: b)
+        }
+        let lines = capturingSteps()
+        _ = try await MessageDestination.messagePerson(entity(jordanOnA, on: a, name: "Jordan"))
+            .resolvedBurrowDestination(site: "test") { _, people in people[0] }
+        XCTAssertEqual(
+            lines.steps(PersonResolver.namesakesSite),
+            [
+                "home=parsed", "hosts=2 others=1", "query_len=6 source=called kind=user", "load_errors=0 status=none",
+                "cached=0 searched=1 exact=1",
+            ])
+        XCTAssertEqual(lines.steps("test").last, "matched=several_installs count=2")
+        assertNoNamesOrHosts(lines)
+    }
+
+    func testANoCollisionRunLogsOneInstallAfterSearchingTheOther() async throws {
+        guard #available(iOS 27, *) else { throw XCTSkip("iOS 27") }
+        jordans()
+        defer {
+            PeopleCache.shared.removeAll(host: a)
+            PeopleCache.shared.removeAll(host: b)
+        }
+        let lines = capturingSteps()
+        _ = try await MessageDestination.messagePerson(entity(inesOnA, on: a, name: "Ines Alvarez"))
+            .resolvedBurrowDestination(site: "test", choose: noChoice)
+        XCTAssertEqual(
+            lines.steps(PersonResolver.namesakesSite),
+            [
+                "home=parsed", "hosts=2 others=1", "query_len=4 source=called kind=user", "load_errors=0 status=none",
+                "cached=0 searched=1 exact=0", "matched=one_install reason=no_namesake",
+            ])
+        XCTAssertFalse(lines.steps("test").contains { $0.hasPrefix("matched=several_installs") })
+        XCTAssertFalse(requests(host: b, path: "/api/app/people").isEmpty, "positive control: the other install was searched")
+        assertNoNamesOrHosts(lines)
+    }
+
+    func testASpokenNameLogsItsSourceAndLength() async throws {
+        guard #available(iOS 27, *) else { throw XCTSkip("iOS 27") }
+        jordans()
+        defer {
+            PeopleCache.shared.removeAll(host: a)
+            PeopleCache.shared.removeAll(host: b)
+        }
+        PeopleCache.shared.remember([entity(jordanOnA, on: a, name: "Jordan")])
+        let lines = capturingSteps()
+        _ = try await MessageDestination.people([siriPerson(.unknown, name: "Jordan")])
+            .resolvedBurrowDestination(site: "test") { _, people in people[0] }
+        XCTAssertTrue(lines.steps(PersonResolver.namesakesSite).contains("query_len=6 source=spoken kind=user"))
+        assertNoNamesOrHosts(lines)
+    }
+
+    func testAFailedLoadOnTheOtherInstallIsCountedNotReadAsNobody() async throws {
+        guard #available(iOS 27, *) else { throw XCTSkip("iOS 27") }
+        jordans()
+        defer {
+            PeopleCache.shared.removeAll(host: a)
+            PeopleCache.shared.removeAll(host: b)
+        }
+        let healthy = StubURLProtocol.respond
+        StubURLProtocol.respond = { [unowned self] request in
+            request.url?.host == self.b ? (503, Data()) : healthy(request)
+        }
+        let lines = capturingSteps()
+        let target = try await MessageDestination.messagePerson(entity(jordanOnA, on: a, name: "Jordan"))
+            .resolvedBurrowDestination(site: "test", choose: noChoice)
+        XCTAssertEqual(target.entityID, EntityRef(host: a, uuid: jordanOnA).id, "behaviour unchanged: no namesake to offer")
+        let steps = lines.steps(PersonResolver.namesakesSite)
+        XCTAssertTrue(steps.contains("load_errors=1 status=503"), "\(steps)")
+        XCTAssertTrue(steps.contains("cached=0 searched=0 exact=0"), "\(steps)")
+        assertNoNamesOrHosts(lines)
+    }
+
+    func testAnInstallWithNoOtherSignedInInstallLogsOneInstallWithoutSearching() async throws {
+        guard #available(iOS 27, *) else { throw XCTSkip("iOS 27") }
+        jordans()
+        defer {
+            PeopleCache.shared.removeAll(host: a)
+            PeopleCache.shared.removeAll(host: b)
+        }
+        // B is saved but holds no bearer: only A is signed in.
+        let shared = IntentEnvironment.current
+        let single = IntentEnvironment(
+            client: BurrowAPIClient(session: StubURLProtocol.session(), tokens: MemoryTokenStore(tokens: [a: "token-for-a"])),
+            installs: shared.installs, sleeper: VirtualClock(), now: shared.now, lastMeetingSpaces: shared.lastMeetingSpaces)
+        let lines = capturingSteps()
+        let others = await PersonResolver.namesakes(of: entity(jordanOnA, on: a, name: "Jordan"), spoken: nil, env: single)
+        XCTAssertTrue(others.isEmpty)
+        XCTAssertEqual(
+            lines.steps(PersonResolver.namesakesSite), ["home=parsed", "hosts=1 others=0", "matched=one_install reason=no_other_install"])
+        XCTAssertTrue(requests(host: b, path: "/api/app/people").isEmpty)
+        assertNoNamesOrHosts(lines)
+    }
+
     func testASpokenNameMatchedFromOneInstallsCacheIsCheckedOnTheOther() async throws {
         guard #available(iOS 27, *) else { throw XCTSkip("iOS 27") }
         jordans()
-        defer { PeopleCache.shared.removeAll(host: a); PeopleCache.shared.removeAll(host: b) }
+        defer {
+            PeopleCache.shared.removeAll(host: a)
+            PeopleCache.shared.removeAll(host: b)
+        }
         // Only A's people are in this process's cache.
         PeopleCache.shared.remember([entity(samOnA, on: a, name: "Sam")])
         var asked: [String] = []
@@ -460,8 +611,11 @@ final class PersonalIndexTests: XCTestCase {
         await indexer().didSignIn(host: b)
         XCTAssertFalse(SpotlightIndex.ledger.ids(host: a).isEmpty, "positive control: A's ids were recorded")
 
-        await IntentAppHooks.forget(host: a, donations: Donations(
-            manager: FakeDonationManager(), ledger: DonationLedger(defaults: defaults), resolver: FakeDonationResolver(), isSaved: { _ in true })).value
+        await IntentAppHooks.forget(
+            host: a,
+            donations: Donations(
+                manager: FakeDonationManager(), ledger: DonationLedger(defaults: defaults), resolver: FakeDonationResolver(), isSaved: { _ in true })
+        ).value
 
         let deleted = Set(memory.deletedEntityIDs)
         for uuid in [daltonID, priyaID, helperID] {
@@ -496,7 +650,8 @@ final class PersonalIndexTests: XCTestCase {
         guard #available(iOS 27, *) else { throw XCTSkip("iOS 27") }
         // An item from an older build (type PersonEntity) on an install
         // since removed, and a stale one on A.
-        let legacy = CSSearchableItem(uniqueIdentifier: "legacy-person", domainIdentifier: "gone.example.com", attributeSet: CSSearchableItemAttributeSet(contentType: .content))
+        let legacy = CSSearchableItem(
+            uniqueIdentifier: "legacy-person", domainIdentifier: "gone.example.com", attributeSet: CSSearchableItemAttributeSet(contentType: .content))
         let old = CSSearchableItem(uniqueIdentifier: "old-a", domainIdentifier: a, attributeSet: CSSearchableItemAttributeSet(contentType: .content))
         memory.seed(legacy)
         memory.seed(old)
