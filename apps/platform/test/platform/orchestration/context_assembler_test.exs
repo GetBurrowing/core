@@ -259,6 +259,9 @@ defmodule Platform.Orchestration.ContextAssemblerTest do
       assert entry.note == "first draft"
       assert entry.canvas_present == true
       assert %DateTime{} = entry.attached_at
+      # Task 01a13ae7 stage 1: the canonical page rides along for the
+      # design-canvases block in the dispatch body.
+      assert String.ends_with?(entry.view_url, "/canvases/" <> canvas.id)
     end
 
     test "soft-deleted canvas survives in :canvases with canvas_present: false",

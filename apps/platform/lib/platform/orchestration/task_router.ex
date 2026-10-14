@@ -2552,6 +2552,10 @@ defmodule Platform.Orchestration.TaskRouter do
     # solo tasks the key is absent and this defaults to `[]` so the planning
     # dispatch template renders no upstream-plans section.
     parent_plans = (context && Map.get(context, :parent_plans, [])) || []
+    # Task 01a13ae7 stage 1: attached canvases ride in `context`, which the
+    # Claude Code bridge drops — the rendered prompt is the only text such a
+    # runtime sees, so the canvases must reach `dispatch_prompt/4` too.
+    canvases = (context && Map.get(context, :canvases, [])) || []
 
     prompt =
       HeartbeatScheduler.dispatch_prompt(task, plan, stage,
@@ -2559,6 +2563,7 @@ defmodule Platform.Orchestration.TaskRouter do
         runtime: runtime,
         previous_rejection_reason: previous_rejection_reason,
         parent_plans: parent_plans,
+        canvases: canvases,
         # The execution space lives HERE, on the router's state — there is no
         # `execution_space_id` field on the task schema (task 019fa469 stage 3).
         # `dispatch.review_e2e` interpolates it, and without this opt the
