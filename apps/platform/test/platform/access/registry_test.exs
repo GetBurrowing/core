@@ -15,6 +15,23 @@ defmodule Platform.Access.RegistryTest do
   alias Platform.Repo
   alias PlatformWeb.Components.IconRail
 
+  # Email is the one env-gated destination (`Platform.Mail.Config.enabled?/0`);
+  # it is switched on here so the rail comparison sees every destination.
+  # The registry's own declaration is not env-gated (see the last core test).
+  setup do
+    previous = Application.fetch_env(:platform, :mail_enabled)
+    Application.put_env(:platform, :mail_enabled, true)
+
+    on_exit(fn ->
+      case previous do
+        {:ok, value} -> Application.put_env(:platform, :mail_enabled, value)
+        :error -> Application.delete_env(:platform, :mail_enabled)
+      end
+    end)
+
+    :ok
+  end
+
   defp rail_keys, do: Enum.map(IconRail.destinations(root_user: true), & &1.key)
   defp entry_keys, do: Enum.map(Registry.rail_entries(), & &1.key)
 
@@ -27,6 +44,12 @@ defmodule Platform.Access.RegistryTest do
     test "every rail destination has exactly one registry entry, and the reverse" do
       assert Enum.sort(rail_keys()) == Enum.sort(entry_keys())
       assert entry_keys() == Enum.uniq(entry_keys())
+    end
+
+    test "a disabled destination keeps its registry entry" do
+      Application.put_env(:platform, :mail_enabled, false)
+      refute :email in rail_keys()
+      assert Registry.rail_permission(:email) == "mail.use"
     end
 
     test "every rail entry requires a declared permission" do
@@ -140,7 +163,8 @@ defmodule Platform.Access.RegistryTest do
       assert Enum.sort(builtin) == ["admin", "guest", "member"]
 
       for role <- roles, role.builtin do
-        changeset = Role.changeset(%Role{}, Map.take(Map.from_struct(role), [:key, :name, :permissions]))
+        changeset =
+          Role.changeset(%Role{}, Map.take(Map.from_struct(role), [:key, :name, :permissions]))
         assert changeset.valid?, "#{role.key}: #{inspect(changeset.errors)}"
       end
     end
@@ -184,11 +208,17 @@ defmodule Platform.Access.RegistryTest do
     end
 
     test "the role changeset refuses an install-level permission, an unknown one and a bad rule" do
-      refute Role.changeset(%Role{}, %{key: "x", name: "X", permissions: %{"install.admin" => "all"}}).valid?
-      refute Role.changeset(%Role{}, %{key: "x", name: "X", permissions: %{"nope.read" => "all"}}).valid?
-      refute Role.changeset(%Role{}, %{key: "x", name: "X", permissions: %{"chat.read" => "everyone"}}).valid?
-      refute Role.changeset(%Role{}, %{key: "x", name: "X", permissions: %{"chat.read" => []}}).valid?
-      assert Role.changeset(%Role{}, %{key: "x", name: "X", permissions: %{"chat.read" => "all"}}).valid?
+      valid? = fn permissions ->
+        Role.changeset(%Role{}, %{key: "x", name: "X", permissions: permissions}).valid?
+      end
+
+      refute valid?.(%{"install.admin" => "all"})
+      refute valid?.(%{"nope.read" => "all"})
+      refute valid?.(%{"chat.read" => "everyone"})
+      refute valid?.(%{"chat.read" => []})
+      refute valid?.(%{"chat.read" => ["all", "all"]})
+      assert valid?.(%{"chat.read" => "all"})
+      assert valid?.(%{"canvas.read" => ["participant_spaces", "membership_org"]})
     end
   end
 end
