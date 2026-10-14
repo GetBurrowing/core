@@ -119,8 +119,8 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
   # in order to change the topic safely; the full payload-and-subscriber table
   # lives in the stage-2 classification posted to the task's execution space.
   #
-  # 26 global, 10 space, 6 user, 6 task, 2 project, 2 org, 1 runtime,
-  # 1 resource, 1 not-a-topic.
+  # 27 global, 10 space, 6 user, 6 task, 2 project, 2 org, 1 runtime,
+  # 4 resource, 1 not-a-topic.
   @topics [
     # ── space ──
     {"active_agent:<id>", :space},
@@ -182,6 +182,20 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
 
     # ── resource ──
     {"audit:<id>:<id>", :resource},
+    # Task 01a10322 stage 2. One-shot rendezvous for `AgentHost.logs/2`: the
+    # caller subscribes under a fresh random ref, the agent-host channel
+    # broadcasts the host's reply (journal lines of ONE native agent) there,
+    # and the caller unsubscribes. Only a caller of `logs/2` knows the ref.
+    {"agent_host:logs:<id>", :resource},
+    # Task 01a10322 stage 6. The same rendezvous for `AgentHost.recent_output/2`:
+    # one native agent's pane text, already withheld on a login screen and
+    # scrubbed by the host, redacted again by the caller. Only a caller of
+    # `recent_output/2` knows the ref.
+    {"agent_host:pane:<id>", :resource},
+    # Task 01a10322 stage 7. The same rendezvous for `AgentHost.check_auth/2`:
+    # "ok" | "rejected" | "unknown" for ONE native agent's API key, never the
+    # key. Only a caller of `check_auth/2` knows the ref.
+    {"agent_host:auth:<id>", :resource},
 
     # ── global ──
     {"audit:<id>", :global},
@@ -208,6 +222,10 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
     # the one subscriber is the supervised Experiments MailSubscriber, which
     # re-reads the row itself. A non-member learns that an inbound mail row
     # with that id exists in that org, and nothing of its content.
+    # Task 01a10322 stage 2. `{:agent_host_status, event}` where event is an
+    # atom or `{:agent, agent_id}`: an id, never a token or a log line.
+    # Receivers re-read observed state through `Platform.AgentHost.status/1`.
+    {"agent_host:status", :global},
     {"mail:inbound", :global},
     {"meeting:action_item_intent", :global},
     {"meeting:brief_worthy_intent", :global},

@@ -62,6 +62,7 @@ defmodule Platform.Chat.AttentionRouter do
   alias Platform.Chat
   alias Platform.Chat.{ActiveAgentStore, AgentResponder, Message, Participant, Presence, Space}
   alias Platform.Chat.MentionIdentity
+  alias Platform.Chat.ReplyFailure
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Repo
   alias Platform.Roles
@@ -243,6 +244,13 @@ defmodule Platform.Chat.AttentionRouter do
 
       # Execution spaces: log_only messages skip attention routing entirely
       space.kind == "execution" and message.log_only == true ->
+        return_empty()
+
+      # A reply-failure notice (task 01a10322 stage 1) is a system row about
+      # an agent that could not answer. It is never a turn: routing it would
+      # hand it to the active-agent mutex holder, which is usually the agent
+      # that just failed. See `Platform.Chat.ReplyFailure.notice?/1`.
+      ReplyFailure.notice?(message) ->
         return_empty()
 
       true ->

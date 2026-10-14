@@ -12,6 +12,7 @@ defmodule PlatformWeb.RuntimeChannel do
   alias Platform.Analytics.UsageEvent
   alias Platform.Chat
   alias Platform.Chat.ReplyContext
+  alias Platform.Chat.ReplyFailure
   alias Platform.Federation
   alias Platform.Federation.McpContent
   alias Platform.Federation.RuntimePresence
@@ -468,6 +469,8 @@ defmodule PlatformWeb.RuntimeChannel do
         socket
       ) do
     RuntimePresence.touch(socket.assigns.runtime_id)
+    # Turn activity for the no-reply watchdog (task 01a10322 stage 7).
+    ReplyFailure.Watchdog.activity(socket.assigns[:agent_id])
 
     case authorize_space_write(socket, space_id) do
       {:error, error_map} ->
@@ -496,6 +499,8 @@ defmodule PlatformWeb.RuntimeChannel do
   @impl true
   def handle_in("typing", %{"space_id" => space_id, "typing" => typing}, socket) do
     RuntimePresence.touch(socket.assigns.runtime_id)
+    # Turn activity for the no-reply watchdog (task 01a10322 stage 7).
+    ReplyFailure.Watchdog.activity(socket.assigns[:agent_id])
 
     case authorize_space_write(socket, space_id) do
       {:error, error_map} ->
@@ -531,6 +536,8 @@ defmodule PlatformWeb.RuntimeChannel do
     )
 
     RuntimePresence.touch(runtime_id)
+    # Turn activity for the no-reply watchdog (task 01a10322 stage 7).
+    ReplyFailure.Watchdog.activity(socket.assigns[:agent_id])
 
     case Federation.get_runtime(socket.assigns.runtime_pk) do
       # A vanished row denies. Fail closed, never fall through to execution.

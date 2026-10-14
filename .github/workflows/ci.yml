@@ -989,6 +989,71 @@ jobs:
             docker.io/example/suite-core:${{ github.sha }}
             docker.io/example/suite-core:${{ steps.vars.outputs.short_sha }}
 
+  build-and-push-agent-host:
+    # Native agents' host image, `contained` profile (task 01a10322 stage 3):
+    # docker.io/example/suite-agent-host:latest and :<sha>, from
+    # services/agent-host/Dockerfile. Pushed ONLY when a push to main changes
+    # services/agent-host/**, because every push restarts every agent on an
+    # AutoUpdate=registry host (fabrikam on moon). Independent of `test`: nothing in
+    # this image is built from the Elixir tree, and its own typecheck and unit
+    # tests gate the push. The full_machine profile copies the daemon out of the
+    # same image at first boot (deployment/installer/suite_install/agents.py).
+    name: Build and push agent-host image
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, linux, x64]
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Did services/agent-host change?
+        id: changed
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          # A new ref (all-zero BEFORE) or an unknown BEFORE counts as changed.
+          if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            echo "agent_host=true" >> "$GITHUB_OUTPUT"
+          elif git diff --quiet "$BEFORE" "$GITHUB_SHA" -- services/agent-host; then
+            echo "agent_host=false" >> "$GITHUB_OUTPUT"
+            echo "services/agent-host unchanged since $BEFORE; not pushing (each push restarts every agent)"
+          else
+            echo "agent_host=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Typecheck and unit-test the agent host
+        if: steps.changed.outputs.agent_host == 'true'
+        run: |
+          docker run --rm -v "$PWD/services/agent-host:/src:ro" docker.io/oven/bun:1 sh -c \
+            'cp -r /src /w && cd /w && bun install --frozen-lockfile && bunx tsc --noEmit && bun test test/unit.test.ts'
+
+      - uses: docker/login-action@v4
+        if: steps.changed.outputs.agent_host == 'true'
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v4
+        if: steps.changed.outputs.agent_host == 'true'
+
+      - name: Build and push agent-host
+        if: steps.changed.outputs.agent_host == 'true'
+        uses: docker/build-push-action@v7
+        with:
+          context: services/agent-host
+          file: services/agent-host/Dockerfile
+          push: true
+          cache-from: type=gha,scope=suite-agent-host
+          cache-to: type=gha,mode=max,scope=suite-agent-host
+          tags: |
+            docker.io/example/suite-agent-host:latest
+            docker.io/example/suite-agent-host:${{ github.sha }}
+
   # Install-manifest tooling (ADR 0053, task 01a0d69d): the validator and the
   # single-host renderer under deployment/installer. Python STANDARD LIBRARY
   # only, so the stock image needs no apt or pip step.

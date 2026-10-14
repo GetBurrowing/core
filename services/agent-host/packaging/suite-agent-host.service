@@ -1,0 +1,26 @@
+# Suite's agent host (core task 01a10322). The same unit in both capability
+# profiles: on full_machine it is a host service, on contained it runs under
+# the agent-host container's systemd.
+#
+# Configuration comes from /etc/suite-agent-host.env (full_machine: written by
+# suite_install, 0600 root) or, on contained, from the container's environment,
+# which PassEnvironment hands through from systemd. The image sets
+# AGENT_HOST_PROFILE=contained; Environment/EnvironmentFile win over it.
+[Unit]
+Description=Suite agent host
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+PassEnvironment=SUITE_CORE_URL AGENT_HOST_TOKEN AGENT_HOST_PROFILE
+EnvironmentFile=-/etc/suite-agent-host.env
+# Node and bun read only their bundled roots without this; the system bundle
+# carries an install's internal root CA once update-ca-certificates has run.
+Environment=NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
+ExecStart=/usr/local/bin/bun run /opt/suite/agent-host/src/main.ts
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

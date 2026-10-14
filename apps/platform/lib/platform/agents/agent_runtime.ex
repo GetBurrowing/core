@@ -14,6 +14,11 @@ defmodule Platform.Agents.AgentRuntime do
   @valid_statuses ~w(pending active suspended revoked)
   @valid_trust_levels ~w(viewer participant collaborator admin)
   @valid_transports ~w(websocket)
+  # Install-managed (native) runtimes, task 01a10322 stage 1. `managed_by` is
+  # nil for a federated runtime and "install" for one this install runs.
+  @valid_managed_by ~w(install)
+  @valid_harnesses ~w(claude_code codex)
+  @valid_desired_states ~w(running stopped)
   # Must equal `ToolSurface.all_bundles/0` as a set — a bundle the surface
   # registers but this list rejects cannot be persisted at all, so the full
   # surface could not be granted even deliberately (019ff110). Guarded by
@@ -65,6 +70,9 @@ defmodule Platform.Agents.AgentRuntime do
     field(:auth_token_hash, :string)
     field(:last_connected_at, :utc_datetime_usec)
     field(:metadata, :map, default: %{})
+    field(:managed_by, :string)
+    field(:harness, :string)
+    field(:desired_state, :string, default: "stopped")
 
     timestamps(type: :utc_datetime_usec)
   end
@@ -72,6 +80,13 @@ defmodule Platform.Agents.AgentRuntime do
   @doc "Every grantable bundle: core's, then every build-time module's, per call."
   def valid_bundles, do: @core_valid_bundles ++ Platform.Extensions.tool_bundle_names()
   def default_allowed_bundles, do: @default_allowed_bundles
+
+  @doc "The harnesses an install-managed runtime may run."
+  def valid_harnesses, do: @valid_harnesses
+
+  @doc "True when this install runs the runtime itself (a native agent)."
+  def install_managed?(%__MODULE__{managed_by: "install"}), do: true
+  def install_managed?(_), do: false
 
   def changeset(runtime, attrs) do
     runtime
@@ -86,14 +101,30 @@ defmodule Platform.Agents.AgentRuntime do
       :allowed_bundles,
       :auth_token_hash,
       :last_connected_at,
-      :metadata
+      :metadata,
+      :managed_by,
+      :harness,
+      :desired_state
     ])
     |> validate_required([:runtime_id, :owner_user_id])
     |> validate_inclusion(:status, @valid_statuses)
     |> validate_inclusion(:trust_level, @valid_trust_levels)
     |> validate_inclusion(:transport, @valid_transports)
+    |> validate_inclusion(:managed_by, @valid_managed_by)
+    |> validate_inclusion(:harness, @valid_harnesses)
+    |> validate_inclusion(:desired_state, @valid_desired_states)
+    |> validate_managed_harness()
     |> validate_added_bundles(runtime)
     |> unique_constraint(:runtime_id)
+  end
+
+  # An install-managed runtime must name the harness the install runs for it;
+  # a federated runtime (managed_by nil) never carries one.
+  defp validate_managed_harness(changeset) do
+    case get_field(changeset, :managed_by) do
+      "install" -> validate_required(changeset, [:harness])
+      _ -> changeset
+    end
   end
 
   # Validates only the bundles a change ADDS (ADR 0055 section 7). A bundle

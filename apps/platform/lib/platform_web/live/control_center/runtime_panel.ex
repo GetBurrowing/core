@@ -61,6 +61,9 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
   attr :agent, Agent, required: true
   attr :regenerated_token, :string, default: nil
   attr :federation_online?, :boolean, default: false
+  # Native (install-managed) agents: no token regeneration and no token
+  # display, because the token rotates on every start (task 01a10322 stage 4).
+  attr :managed?, :boolean, default: false
 
   def federation_connection_panel(assigns) do
     runtime = Federation.get_runtime(assigns.agent.runtime_id)
@@ -108,6 +111,18 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
           <span>Last connected</span>
           <span class="text-xs">{format_datetime(@fed_runtime.last_connected_at)}</span>
         </div>
+      </div>
+
+      <%!-- First-run note (task 01a10322 stage 4): the Pending slot, info fill
+           with info-content, above the bundles it explains. Copy verbatim
+           from canvas 01a10325-8f2d-7001-b858-b92639451ceb. --%>
+      <div
+        :if={first_agent_grant?(@fed_runtime)}
+        id="first-agent-note"
+        class="flex items-start gap-2 rounded-box bg-info px-4 py-3 text-sm text-info-content"
+      >
+        <span class="hero-information-circle mt-0.5 size-4 shrink-0" aria-hidden="true" />
+        <span>{@agent.name} is the first agent on this install, so it has every bundle.</span>
       </div>
 
       <%!-- Allowed bundles editor --%>
@@ -160,7 +175,7 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
 
       <%!-- Regenerated token display --%>
       <div
-        :if={@regenerated_token}
+        :if={@regenerated_token && !@managed?}
         class="rounded-2xl border border-warning/40 bg-warning/10 p-4 space-y-2"
       >
         <p class="text-sm font-semibold text-warning-content">
@@ -204,7 +219,7 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
           Revoke
         </button>
         <button
-          :if={@fed_runtime.status != "revoked"}
+          :if={@fed_runtime.status != "revoked" and !@managed?}
           type="button"
           phx-click="regenerate_federated_token"
           class="btn btn-ghost btn-sm"
@@ -222,4 +237,7 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
     </div>
     """
   end
+
+  defp first_agent_grant?(%{metadata: %{"first_agent_grant" => true}}), do: true
+  defp first_agent_grant?(_runtime), do: false
 end

@@ -82,6 +82,12 @@ ACCESS_CONTAINERS = {
     "tailscale": ("tailscale-primary", "tailscale-auth", "tailscale-livekit"),
 }
 
+# `[agents] profile = "contained"` adds this container (task 01a10322 stage 3).
+# `full_machine` adds none: its agent host is a service on the HOST, rendered
+# by the target layer (templates.py + agents.py).
+AGENT_HOST = "agent-host"
+AGENT_HOST_IMAGE = "docker.io/example/suite-agent-host:latest"
+
 # `[auth] mode` -> container it adds (None: the identity provider is external).
 AUTH_CONTAINERS = {
     "bundled-pocket-id": "pocket-id",
@@ -146,6 +152,7 @@ ALL_CONTAINERS = tuple(
         | {c for c in AUTH_CONTAINERS.values() if c}
         | {TRANSCRIBER}
         | {c for cs in ACCESS_CONTAINERS.values() for c in cs}
+        | {AGENT_HOST}
     )
 )
 
@@ -169,6 +176,8 @@ def enabled_containers(manifest):
     auth_container = AUTH_CONTAINERS[manifest["auth"]["mode"]]
     if auth_container:
         names.add(auth_container)
+    if manifest["agents"]["profile"] == "contained":
+        names.add(AGENT_HOST)
     if manifest["install"]["target"] == "mac":
         mode = manifest["access"]["mode"]
         if mode == "cloudflare-tunnel":
@@ -334,6 +343,13 @@ SECRETS = {
             "memory init SQL (psql \\getenv) and memory-service MEMORY_DATABASE_URL, "
             "src/memory_service/config.py:49",
         ),
+        Secret(
+            "AGENT_HOST_TOKEN",
+            _urlsafe(32),
+            "core apps/platform/config/runtime.exs AGENT_HOST_TOKEN (task 01a10322: "
+            "Plug.Crypto.secure_compare in PlatformWeb.AgentHostSocket) and the agent "
+            "host's own env (services/agent-host/src/main.ts). [agents] on only",
+        ),
     )
 }
 
@@ -358,6 +374,7 @@ class Ctx:
         # certificate chains to a public root, so there is no install CA.
         self.tls_internal = not self.mac and domain["tls"] == "internal"
         self.bundled_auth = manifest["auth"]["mode"] == "bundled-pocket-id"
+        self.agents = manifest["agents"]["profile"]
         self.enabled = set(enabled_containers(manifest))
 
 
@@ -390,6 +407,9 @@ class Service:
         ports=(),
         gpu=lambda ctx: False,
         healthcheck=None,
+        networks=lambda ctx: (),
+        systemd_init=False,
+        own_env_file=False,
     ):
         self.container = container
         self._image = image
@@ -414,6 +434,16 @@ class Service:
         self._ports = ports
         self.gpu = gpu
         self.healthcheck = healthcheck
+        # Named networks beyond the target's default one (task 01a10322): ()
+        # means "the default network only", which every service before the
+        # agent host was. A non-empty tuple lists EVERY network, default
+        # included if wanted.
+        self.networks = networks
+        # Runs systemd as PID 1 (the agent-host image).
+        self.systemd_init = systemd_init
+        # Its secret env goes in its OWN 0600 file holding only its lines, not
+        # in the shared secrets.env, which every other reader sees whole.
+        self.own_env_file = own_env_file
 
     def default_image(self, ctx):
         return self._image(ctx) if callable(self._image) else self._image
@@ -447,12 +477,53 @@ def _core_env(ctx):
         env["TRUST_PROXY_HEADERS"] = "true"
     for module in sorted(ctx.m["install"]["modules"]):
         env.update(MODULE_CORE_ENV.get(module, {}))
+    if ctx.agents != "off":
+        # Task 01a10322: without it core refuses every agent host.
+        env["AGENT_HOST_TOKEN"] = "{secret:AGENT_HOST_TOKEN}"
+    if ctx.agents == "contained":
+        # Agents in the agent-host container reach core on the agents network,
+        # not through the public URL (AgentHost.core_url/0's default).
+        env["AGENT_HOST_CORE_URL"] = AGENT_HOST_CORE_URL
     auth = ctx.m["auth"]
     if not ctx.bundled_auth:
         env["OIDC_ISSUER"] = auth["issuer"]
         env["OIDC_CLIENT_ID"] = auth["client_id"]
         env["OIDC_CLIENT_SECRET"] = f"{{customer:{auth['client_secret_ref']}}}"
     return env
+
+
+_CORE_SECRETS = (
+    "SECRET_KEY_BASE",
+    "VAULT_MASTER_KEY",
+    "ATTACHMENT_SIGNING_KEY",
+    "MEETING_GUEST_SIGNING_KEY",
+    "MEETING_CALENDAR_SIGNING_KEY",
+)
+
+
+def _core_secrets(ctx):
+    names = _CORE_SECRETS + (("AGENT_HOST_TOKEN",) if ctx.agents != "off" else ())
+    return [SECRETS[n] for n in names]
+
+
+def _core_networks(ctx):
+    # contained: core-platform is the ONLY service on both networks, so the
+    # agent host reaches it and nothing else (task 01a10322, architect note 2).
+    return ("default", AGENTS_NETWORK) if ctx.agents == "contained" else ()
+
+
+# The network the agent host and core-platform share, and the URL agents in
+# the agent-host container reach core at over it.
+AGENTS_NETWORK = "agents"
+AGENT_HOST_CORE_URL = "http://core-platform:4000"
+
+
+def _agent_host_env(ctx):
+    return {
+        "SUITE_CORE_URL": AGENT_HOST_CORE_URL,
+        "AGENT_HOST_PROFILE": "contained",
+        "AGENT_HOST_TOKEN": "{secret:AGENT_HOST_TOKEN}",
+    }
 
 
 def _core_mounts(ctx):
@@ -790,16 +861,8 @@ SERVICES = {
             core_image,
             private_image=True,
             env=_core_env,
-            secrets=[
-                SECRETS[n]
-                for n in (
-                    "SECRET_KEY_BASE",
-                    "VAULT_MASTER_KEY",
-                    "ATTACHMENT_SIGNING_KEY",
-                    "MEETING_GUEST_SIGNING_KEY",
-                    "MEETING_CALENDAR_SIGNING_KEY",
-                )
-            ],
+            secrets=_core_secrets,
+            networks=_core_networks,
             # One volume at /data/platform: the image creates that dir owned by
             # the app user (uid 1000), so a fresh named volume inherits it.
             # Mounting at its subdirs would create them root-owned.
@@ -960,6 +1023,22 @@ SERVICES = {
         _tailscale_service("primary"),
         _tailscale_service("auth"),
         _tailscale_service("livekit"),
+        # Native agents, `contained` profile (task 01a10322 stage 3): a
+        # systemd-init container on the agents network ONLY, so it reaches
+        # core-platform and the internet and not core-postgres or any other
+        # service. Agents are root inside it (sudo), never on the host.
+        # AGENT_HOST_TOKEN is owned by core-platform's secrets.
+        Service(
+            AGENT_HOST,
+            AGENT_HOST_IMAGE,
+            private_image=True,
+            env=_agent_host_env,
+            # Persistent homes; users are re-created over them on image update.
+            volumes={"agent-homes": "/home"},
+            networks=lambda ctx: (AGENTS_NETWORK,),
+            systemd_init=True,
+            own_env_file=True,
+        ),
     )
 }
 

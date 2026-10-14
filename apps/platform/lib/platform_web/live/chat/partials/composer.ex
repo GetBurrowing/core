@@ -167,6 +167,8 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
   attr(:mention_suggestions, :list, required: true)
   attr(:mention_source, :any, required: true)
   attr(:editing_message_id, :any, required: true)
+  # Task 01a10322 stage 4: who is reading, for the reply-failure row.
+  attr(:viewer_user_id, :string, default: nil)
 
   attr(:refused_summons, :map,
     default: %{},
@@ -293,6 +295,7 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
           read_only={@active_space != nil && @active_space.archived_at != nil}
           refused_summons={@refused_summons}
           space_kind={@active_space && @active_space.kind}
+          viewer_user_id={@viewer_user_id}
           mounted_inline_canvas_ids={@mounted_inline_canvas_ids}
         />
       </div>

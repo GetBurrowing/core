@@ -213,6 +213,8 @@ config :platform, :start_canvas_search_backfill, false
 # inside the DataCase sandbox. Left on at boot it would write burrow/page rows
 # into the real test database from outside every sandbox.
 config :platform, :start_burrow_docs_seed, false
+# Task 01a10322 stage 6: tests call Platform.Chat.DefaultSpace.ensure/0 directly.
+config :platform, :start_default_space_seed, false
 
 # ContainerPurger (task 019f4eaa stage 4): tests call `sweep/0` directly
 # inside the DataCase sandbox instead of racing a global daily ticker.
@@ -572,3 +574,7 @@ config :platform, :branch_provisioner, runner: Platform.Tasks.BranchProvisioner.
 # route the swallow opens is covered: a skeleton the mirror could not
 # fill is reaped `:unclassified` by `CandidateSweeper` (task 01a06638).
 config :platform, :intent_queue_mirror_fatal, true
+
+# Task 01a10322 stage 7: the native no-reply watchdog is off, so a watch armed
+# by one test never fires a verdict into a later one. Its tests turn it on.
+config :platform, :native_reply_watchdog_ms, false

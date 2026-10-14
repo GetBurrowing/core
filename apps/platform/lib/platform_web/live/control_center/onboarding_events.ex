@@ -180,6 +180,9 @@ defmodule PlatformWeb.ControlCenter.OnboardingEvents do
             |> assign(:onboarding_flow, :create)
             |> assign(:show_create_agent, true)
 
+          "native" ->
+            assign(socket, :onboarding_flow, :native)
+
           "external" ->
             socket
             |> assign(:onboarding_flow, :external)
@@ -291,21 +294,22 @@ defmodule PlatformWeb.ControlCenter.OnboardingEvents do
           runtime_type: "external"
         }
 
-        with {:ok, runtime} <- Federation.register_runtime(owner_id, runtime_attrs),
-             {:ok, agent} <- Federation.link_agent(runtime, agent_attrs),
-             {:ok, _runtime, raw_token} <- Federation.activate_runtime(runtime) do
-          ws_url = "wss://#{PlatformWeb.Endpoint.host()}/runtime/ws"
+        # One transaction: register, link, activate (task 01a10322 stage 1).
+        # A failed link or activation no longer leaves a pending runtime row.
+        case Federation.provision_agent_runtime(owner_id, agent_attrs, runtime_attrs) do
+          {:ok, agent, _runtime, raw_token} ->
+            ws_url = "wss://#{PlatformWeb.Endpoint.host()}/runtime/ws"
 
-          {:noreply,
-           socket
-           |> assign(:federate_result, %{
-             runtime_id: runtime_id,
-             token: raw_token,
-             ws_url: ws_url,
-             agent: agent
-           })
-           |> put_flash(:info, "Federated agent #{agent.name} created.")}
-        else
+            {:noreply,
+             socket
+             |> assign(:federate_result, %{
+               runtime_id: runtime_id,
+               token: raw_token,
+               ws_url: ws_url,
+               agent: agent
+             })
+             |> put_flash(:info, "Federated agent #{agent.name} created.")}
+
           {:error, %Ecto.Changeset{} = changeset} ->
             {:noreply, put_flash(socket, :error, changeset_error_summary(changeset))}
 

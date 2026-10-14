@@ -167,6 +167,151 @@ defmodule Platform.Federation do
     end
   end
 
+  # Constant key for `pg_advisory_xact_lock/1` around the first-agent grant
+  # (task 01a10322 stage 1). Arbitrary but fixed: every provisioning call on
+  # every node of this install serialises on it, so two concurrent creates on
+  # an empty install cannot both count zero agents.
+  @first_agent_grant_lock_key 0x01A1_0322_F1A6
+
+  @doc """
+  Provision an agent and the runtime that carries it, in ONE transaction:
+  `register_runtime/2`, then `link_agent/2`, then `activate_runtime/1`.
+
+  This is the single core composition of those three steps (task 01a10322
+  stage 1, shared with task 01a0d6b9's desktop pairing follow-up). Federated
+  onboarding (`PlatformWeb.ControlCenter.OnboardingEvents` "submit_federate")
+  and native agents (`Platform.Agents.NativeAgents.create/2`) both call it;
+  a second composition of the same steps elsewhere is ruled out.
+
+    * `owner_user_id` owns the runtime row.
+    * `agent_attrs` are the new agent's attrs, with ATOM keys (as
+      `link_agent/2` takes them). `runtime_type` and `runtime_id` are always
+      set by `link_agent/2`.
+    * `runtime_attrs` are the runtime's attrs, atom or string keys.
+      `status` starts "pending" and becomes "active" on activation.
+
+  ## First-agent grant
+
+  Under `pg_advisory_xact_lock(#{@first_agent_grant_lock_key})`, the call
+  counts agents with `runtime_type: "external"` and `status != "archived"`.
+  Federated and native agents both count; `built_in` agents do not. When the
+  count is zero, this agent is the first on the install and its runtime gets
+  `first_agent_bundles/0` (every grantable bundle by default, see
+  `FIRST_AGENT_BUNDLES`) and `metadata["first_agent_grant"] = true`. Otherwise
+  it gets `AgentRuntime.default_allowed_bundles/0`. A caller that passes
+  `allowed_bundles` explicitly decides for itself and the grant is skipped.
+
+  Returns `{:ok, agent, runtime, raw_token}`. The raw token is returned once
+  and never stored; a caller that does not need it discards it. Any failure
+  rolls the whole transaction back, so a failed link or activation leaves no
+  runtime row behind, and returns `{:error, changeset_or_reason}`.
+  """
+  @spec provision_agent_runtime(binary(), map(), map()) ::
+          {:ok, Agent.t(), AgentRuntime.t(), String.t()} | {:error, term()}
+  def provision_agent_runtime(owner_user_id, agent_attrs, runtime_attrs)
+      when is_map(agent_attrs) and is_map(runtime_attrs) do
+    # Atom keys: `register_runtime/2` merges an atom `owner_user_id` in, and a
+    # changeset refuses mixed keys.
+    runtime_attrs = Map.new(runtime_attrs, fn {k, v} -> {runtime_attr_key(k), v} end)
+
+    Repo.transaction(fn ->
+      Repo.query!("SELECT pg_advisory_xact_lock($1)", [@first_agent_grant_lock_key])
+
+      runtime_attrs =
+        runtime_attrs
+        |> Map.put_new(:status, "pending")
+        |> apply_first_agent_grant()
+
+      with {:ok, runtime} <- register_runtime(owner_user_id, runtime_attrs),
+           {:ok, agent} <- link_agent(runtime, agent_attrs),
+           {:ok, runtime, raw_token} <- activate_runtime(runtime) do
+        {agent, %{runtime | agent_id: agent.id}, raw_token}
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+    |> case do
+      {:ok, {agent, runtime, raw_token}} -> {:ok, agent, runtime, raw_token}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  The bundles the first agent on an install receives. Read per call from
+  `config :platform, :first_agent_bundles` (`FIRST_AGENT_BUNDLES` in
+  `config/runtime.exs`): `"all"` (the default) means
+  `AgentRuntime.valid_bundles/0`; otherwise a comma-separated list of bundle
+  names, of which only grantable ones are kept.
+  """
+  @spec first_agent_bundles() :: [String.t()]
+  def first_agent_bundles do
+    valid = AgentRuntime.valid_bundles()
+
+    case Application.get_env(:platform, :first_agent_bundles, "all") do
+      value when value in [nil, "", "all"] ->
+        valid
+
+      value when is_binary(value) ->
+        requested =
+          value
+          |> String.split(",", trim: true)
+          |> Enum.map(&String.trim/1)
+          |> Enum.reject(&(&1 == ""))
+          |> Enum.uniq()
+
+        {kept, dropped} = Enum.split_with(requested, &(&1 in valid))
+
+        if dropped != [] do
+          Logger.warning(
+            "[Federation] FIRST_AGENT_BUNDLES names bundles that are not grantable, ignored: #{inspect(dropped)}"
+          )
+        end
+
+        kept
+
+      list when is_list(list) ->
+        Enum.filter(list, &(&1 in valid))
+    end
+  end
+
+  # Runs inside the provisioning transaction, AFTER the advisory lock.
+  defp apply_first_agent_grant(%{allowed_bundles: bundles} = attrs) when is_list(bundles),
+    do: attrs
+
+  defp apply_first_agent_grant(attrs) do
+    existing =
+      Repo.aggregate(
+        from(a in Agent, where: a.runtime_type == "external" and a.status != "archived"),
+        :count
+      )
+
+    if existing == 0 do
+      metadata =
+        attrs
+        |> Map.get(:metadata, %{})
+        |> Map.new(fn {k, v} -> {to_string(k), v} end)
+        |> Map.put("first_agent_grant", true)
+
+      attrs
+      |> Map.put(:allowed_bundles, first_agent_bundles())
+      |> Map.put(:metadata, metadata)
+    else
+      Map.put(attrs, :allowed_bundles, AgentRuntime.default_allowed_bundles())
+    end
+  end
+
+  @runtime_attr_keys ~w(runtime_id display_name transport status trust_level allowed_bundles
+                        metadata managed_by harness desired_state agent_id)a
+
+  # Only the runtime's own castable fields, so an unknown string key is
+  # refused here rather than minting an atom.
+  defp runtime_attr_key(key) when is_atom(key), do: key
+
+  defp runtime_attr_key(key) when is_binary(key) do
+    Enum.find(@runtime_attr_keys, &(Atom.to_string(&1) == key)) ||
+      raise ArgumentError, "unknown runtime attribute #{inspect(key)}"
+  end
+
   defp short_suffix do
     :crypto.strong_rand_bytes(4) |> Base.encode16(case: :lower)
   end

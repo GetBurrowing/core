@@ -29,7 +29,7 @@ graph TB
   end
 
   subgraph Providers["Provider Layer"]
-    Router["Platform.Agents.Router<br/>primary → fallback model chain"]
+    Router["Platform.Agents.Config.model_chain/2<br/>primary → fallback model chain<br/>(Platform.Agents.Router deleted, task 01a10322)"]
     Behaviour["Provider behaviour<br/>chat/3 · stream/3 · models/1 · validate_credentials/1"]
     Anthropic["Providers.Anthropic<br/>OAuth Bearer<br/>anthropics-beta headers"]
     OpenAI["Providers.OpenAI<br/>API key from Vault"]

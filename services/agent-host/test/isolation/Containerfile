@@ -1,0 +1,11 @@
+# Throwaway systemd-init image for the agent host's isolation test
+# (task 01a10322 stage 2). Built and run on moon only, never on hive.
+FROM docker.io/library/debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      systemd systemd-sysv dbus tmux util-linux passwd procps curl ca-certificates unzip \
+    && rm -rf /var/lib/apt/lists/*
+RUN curl -fsSL https://bun.sh/install | BUN_INSTALL=/usr/local bash \
+    && chmod 755 /usr/local/bin/bun
+COPY suite-stub.sh /usr/local/bin/suite
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]

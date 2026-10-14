@@ -21,6 +21,7 @@ defmodule PlatformWeb.Components.ChatMessage do
   alias PlatformWeb.ChatLive.PresenceHooks
   alias PlatformWeb.ChatLive.CanvasHooks
   alias PlatformWeb.ChatLive.MessageContextHooks
+  alias PlatformWeb.Components.ReplyFailureRow
 
   attr(:dom_id, :string, required: true)
   attr(:msg, :map, required: true)
@@ -55,6 +56,34 @@ defmodule PlatformWeb.Components.ChatMessage do
   # (scrolled near the viewport), or `:all` to render every canvas directly.
   # See `PlatformWeb.Components.ChatInlineCanvas`.
   attr(:mounted_inline_canvas_ids, :any, default: :all)
+
+  # Task 01a10322 stage 4: the viewing user, for the reply-failure row's
+  # manager-only action.
+  attr(:viewer_user_id, :string, default: nil)
+
+  # A reply-failure notice is a system row, not a chat bubble: no avatar
+  # column, no hover toolbar, no reactions. The day separator still renders,
+  # so a notice that opens a day keeps its date line.
+  def chat_message(
+        %{msg: %{content_type: "system", metadata: %{"kind" => "reply_failure"}}} = assigns
+      ) do
+    ~H"""
+    <div id={@dom_id} data-message-id={@msg.id} data-participant-id={@msg.participant_id}>
+      <div
+        :if={Map.get(@msg, :day_label)}
+        class="js-date-separator flex items-center gap-3 my-4 -mx-2"
+        data-date={@msg.day_label}
+      >
+        <div class="flex-1 border-t border-edge"></div>
+        <span class="text-[11px] uppercase tracking-widest text-base-content/40 font-semibold px-2">
+          {format_day_label(@msg.day_label)}
+        </span>
+        <div class="flex-1 border-t border-edge"></div>
+      </div>
+      <ReplyFailureRow.row msg={@msg} viewer_user_id={@viewer_user_id} />
+    </div>
+    """
+  end
 
   def chat_message(assigns) do
     ~H"""

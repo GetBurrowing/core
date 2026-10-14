@@ -16,15 +16,17 @@ defmodule PlatformWeb.ControlCenter.AgentData do
   alias Platform.Agents.{
     Agent,
     AgentServer,
+    Config,
     ContextShare,
     Memory,
     MemoryContext,
-    Router,
     Session,
     WorkspaceBootstrap,
     WorkspaceFile
   }
 
+  alias Platform.AgentHost
+  alias Platform.Agents.NativeAgents
   alias Platform.Agents.AgentRuntime
   alias Platform.Chat.{ActiveAgentStore, Participant, Space}
   alias Platform.Federation
@@ -125,13 +127,40 @@ defmodule PlatformWeb.ControlCenter.AgentData do
     }
   end
 
+  # Federated and native (install-managed, task 01a10322 stage 4) agents are
+  # both `runtime_type: "external"`; a native one's runtime is
+  # `managed_by: "install"`, and its row reads what the agent host last
+  # observed (`Platform.AgentHost.status/1`) instead of socket presence.
   defp attach_runtime_status(%{agent: %Agent{runtime_type: "external"} = agent} = entry) do
     runtime = Federation.get_runtime_for_agent(agent)
     online? = runtime != nil && RuntimePresence.online?(runtime.runtime_id)
 
-    entry
-    |> Map.put(:runtime_status, if(online?, do: :running, else: :idle))
-    |> Map.put(:running?, online?)
+    case runtime do
+      %AgentRuntime{managed_by: "install"} ->
+        observed = AgentHost.status(agent)
+        running? = match?(%{state: :running}, observed)
+
+        entry
+        |> Map.put(:runtime_status, if(running?, do: :running, else: :idle))
+        |> Map.put(:running?, running?)
+        |> Map.put(:managed?, true)
+        |> Map.put(:harness, runtime.harness)
+        |> Map.put(:desired_state, runtime.desired_state)
+        |> Map.put(:observed, observed)
+        |> Map.put(
+          :restart_to_apply?,
+          NativeAgents.restart_to_apply?(NativeAgents.list_files(agent), observed)
+        )
+        |> Map.put(:host_connected?, AgentHost.connected?())
+        |> Map.put(:owner_user_id, runtime.owner_user_id)
+
+      _ ->
+        entry
+        |> Map.put(:runtime_status, if(online?, do: :running, else: :idle))
+        |> Map.put(:running?, online?)
+        |> Map.put(:managed?, false)
+        |> Map.put(:runtime_label, runtime && (runtime.display_name || runtime.runtime_id))
+    end
   end
 
   defp attach_runtime_status(%{agent: %Agent{} = agent} = entry) do
@@ -266,7 +295,7 @@ defmodule PlatformWeb.ControlCenter.AgentData do
   end
 
   defp providers_for_agent(%Agent{} = agent) do
-    case Router.model_chain(agent) do
+    case Config.model_chain(agent) do
       {:ok, chain} -> chain
       _ -> []
     end

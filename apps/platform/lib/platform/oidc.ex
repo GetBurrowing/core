@@ -183,6 +183,28 @@ defmodule Platform.OIDC do
 
   def http_adapter(configured), do: configured
 
+  @required_settings [
+    {:issuer, "OIDC_ISSUER"},
+    {:client_id, "OIDC_CLIENT_ID"},
+    {:client_secret, "OIDC_CLIENT_SECRET"}
+  ]
+
+  @doc """
+  The environment variables naming OIDC settings this install lacks, in a
+  fixed order (`OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`), or `[]`
+  when login is configured. `PlatformWeb.AuthController` answers `/auth/login`
+  with a readable 503 naming them, instead of letting `authorize_url/0` raise
+  (task 01a10322 stage 6).
+  """
+  @spec missing_settings() :: [String.t()]
+  def missing_settings do
+    for {key, env} <- @required_settings, blank?(config(key)), do: env
+  end
+
+  defp blank?(value) when is_binary(value), do: String.trim(value) == ""
+  defp blank?(nil), do: true
+  defp blank?(_), do: false
+
   defp config(key) do
     Application.get_env(:platform, :oidc, [])
     |> Keyword.get(key)

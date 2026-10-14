@@ -1,0 +1,57 @@
+# moon-equivalent with native agents, [agents] profile = "contained" (core task 01a10322 stage 3).
+# Differs from deployment/examples/moon-equivalent.install.toml in the [agents] table ONLY
+# (test_agents_render.py pins that). The comment below is the example's.
+#
+#
+# A safe, non-personal example (ADR 0003) with the same service set as a
+# production single-host install: core + postgres + files + memory + local
+# embeddings, bundled pocket-id for sign-in. It is the positive-control fixture
+# for the validator tests and the manifest booted by the throwaway-VM proof.
+#
+# Voice is off because the proof VM has no GPU. The [voice] table still says
+# cuda so that the gpu_required rule is one field away: turn services.voice on
+# only on a host that also sets host.gpu = true, or set accelerator = "cpu".
+#
+# There is deliberately no [[models.endpoints]] entry: an install has no model
+# endpoint unless its owner declares one (local, hosted or byo).
+
+schema_version = 1
+
+[install]
+name = "suite-01a0d69d"
+size_tier = "medium"
+
+[domain]
+primary = "suite-01a0d69d.test"
+tls = "internal"
+
+[host]
+gpu = false
+
+[services]
+files = true
+memory = true
+voice = false
+embeddings = true
+
+[voice]
+accelerator = "cuda"
+
+[embeddings]
+mode = "local"
+
+[auth]
+mode = "bundled-pocket-id"
+
+[backup]
+target = "none"
+
+[images]
+source = "preloaded"
+
+[day2]
+upgrade_channel = "stable"
+phone_home = false
+
+[agents]
+profile = "contained"

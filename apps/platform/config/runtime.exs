@@ -15,6 +15,89 @@ if System.get_env("PHX_SERVER") do
   config :platform, PlatformWeb.Endpoint, server: true
 end
 
+# ── Native agents: experiment surfaces (task 01a10322 stages 1 and 7) ─────────
+# All are read PER CALL from application env, so an install changes them with
+# an env var and a restart, never a code change.
+#
+#   FIRST_AGENT_BUNDLES  bundles the first agent on an install receives
+#                        (Platform.Federation.first_agent_bundles/0): "all"
+#                        (default, every grantable bundle) or a comma list.
+#   REPLY_FAILURE_NOTICE_DEDUPE_S  seconds within which an agent gets at most
+#                        one reply-failure notice (Platform.Chat.ReplyFailure),
+#                        default 300.
+#   NATIVE_REPLY_WATCHDOG_S  seconds a native agent has to reply, or show turn
+#                        activity, before its message gets a reply-failure
+#                        notice (Platform.Chat.ReplyFailure.Watchdog), default
+#                        45; 0 turns the watchdog off.
+#   NATIVE_REPLY_WATCHDOG_MAX_S  the longest turn activity can hold that notice
+#                        off, from delivery, default 600.
+case System.get_env("NATIVE_REPLY_WATCHDOG_S") do
+  nil ->
+    :ok
+
+  value ->
+    case Integer.parse(String.trim(value)) do
+      {0, ""} ->
+        config :platform, :native_reply_watchdog_ms, false
+
+      {seconds, ""} when seconds > 0 ->
+        config :platform, :native_reply_watchdog_ms, seconds * 1000
+
+      _ ->
+        :ok
+    end
+end
+
+case System.get_env("NATIVE_REPLY_WATCHDOG_MAX_S") do
+  nil ->
+    :ok
+
+  value ->
+    case Integer.parse(String.trim(value)) do
+      {seconds, ""} when seconds > 0 ->
+        config :platform, :native_reply_watchdog_max_ms, seconds * 1000
+
+      _ ->
+        :ok
+    end
+end
+
+case System.get_env("FIRST_AGENT_BUNDLES") do
+  nil -> :ok
+  value -> config :platform, :first_agent_bundles, String.trim(value)
+end
+
+case System.get_env("REPLY_FAILURE_NOTICE_DEDUPE_S") do
+  nil ->
+    :ok
+
+  value ->
+    case Integer.parse(String.trim(value)) do
+      {seconds, ""} when seconds >= 0 ->
+        config :platform, :reply_failure_notice_dedupe_s, seconds
+
+      _ ->
+        :ok
+    end
+end
+
+# ── Native agents: the agent host (task 01a10322 stage 2) ────────────────────
+#   AGENT_HOST_TOKEN     the shared secret the install's agent host presents on
+#                        /agent-host/websocket. Unset means NO host can connect.
+#   AGENT_HOST_CORE_URL  the URL native agents reach core at (sent in every
+#                        agent.start); defaults to the endpoint URL.
+case System.get_env("AGENT_HOST_TOKEN") do
+  nil -> :ok
+  "" -> :ok
+  value -> config :platform, :agent_host_token, String.trim(value)
+end
+
+case System.get_env("AGENT_HOST_CORE_URL") do
+  nil -> :ok
+  "" -> :ok
+  value -> config :platform, :agent_host_core_url, String.trim(value)
+end
+
 # ── Session cookie domain (cross-subdomain OIDC login fix) ────────────────────
 # The `_platform_session` cookie is host-only by default (no `Domain`), so a
 # login started on `chat.example.com` loses its OIDC `state` cookie when

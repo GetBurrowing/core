@@ -66,6 +66,10 @@ MAC_ERROR_CODES = (
     "stt_endpoint_unknown",
 )
 
+# The [agents] table is absent from every manifest written before task
+# 01a10322; absent means no native agents at all.
+AGENTS_ABSENT_PROFILE = "off"
+
 _NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
 _LABEL_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -416,6 +420,19 @@ def _rules(m, bad, errors, present=frozenset()):
         if ref is not None and not ref.strip():
             add("invalid_value", f"images.refs.{container}", "an image ref cannot be empty")
 
+    # [agents] (task 01a10322): packaged for single-host only in v1.
+    # An [agents] table that omits `profile` means full_machine, so it counts.
+    if (
+        mac
+        and m["agents"]["profile"] != AGENTS_ABSENT_PROFILE
+        and not _is_bad("agents.profile", bad)
+    ):
+        add(
+            "field_not_applicable",
+            "agents.profile",
+            'native agents are packaged for target = "single-host" only in v1',
+        )
+
 
 def _mac_local_embeddings(m, present):
     """Would this mac manifest run embeddings locally?
@@ -547,5 +564,7 @@ def validate(raw):
     bad = set()
     clean = _structure(raw, SCHEMA, "", errors, bad)
     normalized = normalize(clean)
+    if "agents" not in clean:
+        normalized["agents"]["profile"] = AGENTS_ABSENT_PROFILE
     _rules(normalized, bad, errors, _present(clean))
     return errors, (None if errors else normalized)

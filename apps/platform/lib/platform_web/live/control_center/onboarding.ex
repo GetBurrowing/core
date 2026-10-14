@@ -21,6 +21,9 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
   attr :role_templates, :list, required: true
   attr :roles, :list, default: []
   attr :role_assignments_by_key, :map, default: %{}
+  # "Run on this server" is offered only while an agent host is connected
+  # (task 01a10322 stage 4).
+  attr :agent_host_connected?, :boolean, default: false
 
   def overlay(assigns) do
     ~H"""
@@ -40,6 +43,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
                 @onboarding_flow == :import -> "Import from Workspace"
                 @onboarding_flow == :create -> "Create Custom Agent"
                 @onboarding_flow == :external -> "External Agent"
+                @onboarding_flow == :native -> "Run on this server"
                 true -> "Add Agent"
               end}
             </h2>
@@ -52,7 +56,12 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
             </button>
           </div>
 
-          <.chooser_cards :if={is_nil(@onboarding_flow)} />
+          <.chooser_cards
+            :if={is_nil(@onboarding_flow)}
+            agent_host_connected?={@agent_host_connected?}
+          />
+
+          <.native_flow :if={@onboarding_flow == :native} />
 
           <.template_flow
             :if={@onboarding_flow == :template}
@@ -92,9 +101,26 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
     """
   end
 
+  attr :agent_host_connected?, :boolean, default: false
+
   defp chooser_cards(assigns) do
     ~H"""
     <div class="mt-6 grid gap-4 sm:grid-cols-2">
+      <button
+        :if={@agent_host_connected?}
+        id="choose-native"
+        type="button"
+        phx-click="choose_onboarding"
+        phx-value-flow="native"
+        class="group flex flex-col items-center gap-3 rounded-2xl border border-edge bg-base-100 px-4 py-6 text-center transition hover:border-primary/40 hover:bg-primary/5 sm:col-span-2"
+      >
+        <span class="hero-server h-8 w-8 text-primary" />
+        <span class="text-sm font-semibold text-base-content">Run on this server</span>
+        <span class="text-xs text-base-content/60">
+          Claude Code on this server. Start, stop and restart it from this page.
+        </span>
+      </button>
+
       <button
         type="button"
         phx-click="choose_onboarding"
@@ -159,6 +185,59 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
         </span>
       </button>
     </div>
+    """
+  end
+
+  # Name and harness, nothing else: the token, the user and the unit are the
+  # install's job. Codex CLI stays disabled until suite-cli's `suite codex`
+  # has merged, and the server refuses it too
+  # (`NativeAgentEvents.available_harnesses/0`).
+  defp native_flow(assigns) do
+    ~H"""
+    <form id="native-agent-form" phx-submit="submit_native" class="mt-6 space-y-4">
+      <label class="form-control">
+        <span class="mb-1 text-sm font-semibold text-base-content">Name</span>
+        <input
+          type="text"
+          name="native[name]"
+          class="input input-bordered w-full"
+          placeholder="Ada"
+          autocomplete="off"
+          required
+          autofocus
+        />
+      </label>
+
+      <fieldset>
+        <legend class="mb-1 text-sm font-semibold text-base-content">Harness</legend>
+        <div class="grid gap-2 sm:grid-cols-2">
+          <label class="flex cursor-pointer items-center gap-3 rounded-field border border-edge px-3 py-3">
+            <input
+              type="radio"
+              name="native[harness]"
+              value="claude_code"
+              class="radio radio-sm"
+              checked
+            />
+            <span class="text-sm text-base-content">Claude Code</span>
+          </label>
+          <label class="flex items-center gap-3 rounded-field border border-edge px-3 py-3 opacity-60">
+            <input
+              type="radio"
+              name="native[harness]"
+              value="codex"
+              class="radio radio-sm"
+              disabled
+            />
+            <span class="text-sm text-base-content">
+              Codex CLI <span class="block text-xs text-base-content/60">Not available yet</span>
+            </span>
+          </label>
+        </div>
+      </fieldset>
+
+      <button type="submit" class="btn btn-primary w-full">Create and start</button>
+    </form>
     """
   end
 

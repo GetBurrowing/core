@@ -6,8 +6,9 @@ defmodule PlatformWeb.ControlCenter.WorkspaceEvents do
   import Phoenix.LiveView, only: [put_flash: 3]
   import PlatformWeb.ControlCenter.Helpers, only: [changeset_error_summary: 1]
 
-  alias Platform.Agents.{Agent, AgentServer, MemoryContext}
+  alias Platform.Agents.{Agent, AgentServer, MemoryContext, NativeAgents}
   alias PlatformWeb.ControlCenter.AgentData
+  alias PlatformWeb.ControlCenter.NativeFileEvents
 
   def handle("select_workspace_file", %{"file_key" => file_key}, socket) do
     {:noreply,
@@ -34,16 +35,34 @@ defmodule PlatformWeb.ControlCenter.WorkspaceEvents do
        AgentData.build_workspace_form(workspace_files, nil, %{
          "file_key" => AgentData.next_workspace_file_key(workspace_files)
        })
-     )}
+     )
+     |> NativeFileEvents.reset()}
   end
 
   def handle("new_workspace_file", _params, socket), do: {:noreply, socket}
 
+  # A native agent's files are root-equivalent to edit (stage 5 of task
+  # 01a10322), so this older event is not a way around NativeAgents.save_file/5:
+  # for a native agent it is the native save, with its can_manage? check.
   def handle(
         "save_workspace_file",
         %{"workspace_file" => params},
         %{assigns: %{selected_agent: %Agent{} = agent}} = socket
       ) do
+    if NativeAgents.managed?(agent) do
+      NativeFileEvents.handle(
+        "native_file_save",
+        %{"native_file" => params, "intent" => "save"},
+        socket
+      )
+    else
+      save_builtin(agent, params, socket)
+    end
+  end
+
+  def handle("save_workspace_file", _params, socket), do: {:noreply, socket}
+
+  defp save_builtin(agent, params, socket) do
     file_key =
       params["file_key"] ||
         (socket.assigns.selected_workspace_file &&
@@ -111,8 +130,6 @@ defmodule PlatformWeb.ControlCenter.WorkspaceEvents do
         end
     end
   end
-
-  def handle("save_workspace_file", _params, socket), do: {:noreply, socket}
 
   defp refresh_runtime_if_running(%Agent{} = agent) do
     case AgentServer.whereis(agent.id) do
