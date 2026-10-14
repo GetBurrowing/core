@@ -46,7 +46,14 @@ struct IntentActions {
     /// The entity's host, if it is a saved install. Anything else is
     /// not-found, before any request.
     func ref(_ id: String) throws -> EntityRef {
-        guard let ref = EntityRef(id), env.install(ref.host) != nil else { throw IntentFailure.notFound }
+        guard let ref = EntityRef(id) else {
+            IntentLog.step("entity", "refused=id_not_burrow")
+            throw IntentFailure.notFound
+        }
+        guard env.install(ref.host) != nil else {
+            IntentLog.step("entity", "refused=install_not_saved")
+            throw IntentFailure.notFound
+        }
         return ref
     }
 

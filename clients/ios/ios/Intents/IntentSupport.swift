@@ -123,6 +123,11 @@ enum IntentFailure: Error, Equatable, CustomLocalizedStringResourceConvertible {
     case cannotCallAgents
     /// 422 `too_many_invitees`.
     case tooManyInvitees
+    /// No Burrow person answers to the name Siri heard (task 01a111bb
+    /// stage 7). Spoken with the name; never logged.
+    case personNotFound(name: String?)
+    /// A schema send to several people: Burrow messages one at a time.
+    case onePersonAtATime
 
     var message: String {
         switch self {
@@ -138,6 +143,10 @@ enum IntentFailure: Error, Equatable, CustomLocalizedStringResourceConvertible {
         case .cannotMarkUnread: return "Burrow can't mark messages unread."
         case .cannotCallAgents: return "Burrow can't call agents yet."
         case .tooManyInvitees: return "That's too many people for one call."
+        case .personNotFound(let name):
+            guard let name else { return "Burrow couldn't tell who that is. Try their full name." }
+            return "Burrow couldn't find anyone named \(name). Try their full name."
+        case .onePersonAtATime: return "Burrow can message one person at a time."
         }
     }
 
@@ -173,10 +182,61 @@ enum IntentLog {
 
     static func route(_ name: String, host: String, status: Int) {
         logger.info("intent route=\(name, privacy: .public) host=\(host, privacy: .public) status=\(status)")
+        IntentTrace.append("route=\(name) host=\(host) status=\(status)")
     }
 
     static func count(_ name: String, host: String, count: Int) {
         logger.info("intent fetch=\(name, privacy: .public) host=\(host, privacy: .public) count=\(count)")
+        IntentTrace.append("fetch=\(name) host=\(host) count=\(count)")
+    }
+
+    /// A step inside an intent: where it is, and a fixed detail (a case
+    /// name, an identifier kind, a reason). Callers pass only constants and
+    /// counts: never a name, a handle, an id or text.
+    static func step(_ site: String, _ detail: String) {
+        logger.notice("intent step=\(site, privacy: .public) \(detail, privacy: .public)")
+        IntentTrace.append("step=\(site) \(detail)")
+    }
+}
+
+/// Debug builds only (task 01a111bb stage 7, round 3): every IntentLog line
+/// also goes to `Library/Caches/intent-trace.log` in the process's own
+/// container, with the pid, so a perform in ANY process (the system can
+/// launch a fresh background instance for an intent) is visible afterwards:
+/// `xcrun devicectl device copy from --domain-type appDataContainer
+/// --domain-identifier com.kobo-ai.burrow --source Library/Caches/intent-trace.log`.
+/// Same content as the os_log lines: constants, counts and hosts only.
+/// Release builds compile this to nothing.
+enum IntentTrace {
+    #if DEBUG
+        private static let lock = NSLock()
+        private static let url: URL? = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("intent-trace.log")
+        private static let stamp = ISO8601DateFormatter()
+    #endif
+
+    static func append(_ line: String) {
+        #if DEBUG
+            guard let url else { return }
+            lock.lock()
+            defer { lock.unlock() }
+            let entry = "\(stamp.string(from: Date())) pid=\(ProcessInfo.processInfo.processIdentifier) \(line)\n"
+            guard let data = entry.data(using: .utf8) else { return }
+            if let handle = try? FileHandle(forWritingTo: url) {
+                _ = try? handle.seekToEnd()
+                try? handle.write(contentsOf: data)
+                try? handle.close()
+            } else {
+                try? data.write(to: url)
+            }
+        #endif
+    }
+
+    /// The build's git sha (Info.plist `BurrowGitSHA`, set from the
+    /// `BURROW_GIT_SHA` build setting), or "unset".
+    static var buildSHA: String {
+        let value = Bundle.main.object(forInfoDictionaryKey: "BurrowGitSHA") as? String ?? ""
+        return value.isEmpty ? "unset" : value
     }
 }
 
@@ -222,6 +282,12 @@ enum IntentHooks {
 protocol SearchableIndexStore: AnyObject {
     func index(_ items: [CSSearchableItem])
     func deleteDomains(_ domains: [String])
+    /// Deletes the app entities with these ids, of every Burrow entity type
+    /// (task 01a111bb stage 7, round 8: see SpotlightIndex.removeAll).
+    func deleteEntities(_ ids: [String])
+    /// Deletes every item this app ever indexed (the one-time
+    /// SpotlightIndexMigration). Throws when the index refused.
+    func deleteAll() async throws
 }
 
 /// The system's default Spotlight index.
@@ -233,6 +299,19 @@ final class SystemSearchableIndex: SearchableIndexStore {
     func deleteDomains(_ domains: [String]) {
         CSSearchableIndex.default().deleteSearchableItems(withDomainIdentifiers: domains) { _ in }
     }
+
+    func deleteEntities(_ ids: [String]) {
+        guard !ids.isEmpty else { return }
+        // The plain item ids too: harmless where the system keys an
+        // entity's item by something else.
+        CSSearchableIndex.default().deleteSearchableItems(withIdentifiers: ids) { _ in }
+        if #available(iOS 18, *) { Task { await SpotlightIndexer.deleteAppEntities(ids) } }
+    }
+
+    func deleteAll() async throws {
+        try await CSSearchableIndex.default().deleteAllSearchableItems()
+        if #available(iOS 18, *) { await SpotlightIndexer.deleteAllAppEntities() }
+    }
 }
 
 /// Spotlight entries per install: the host is the domain identifier, so
@@ -241,14 +320,42 @@ final class SystemSearchableIndex: SearchableIndexStore {
 /// A host that was signed out of is SUPPRESSED until it signs in again
 /// (task 01a111bb stage 7): an index refresh still in flight when the person
 /// signs out must not put that install's people back after the delete.
+///
+/// Round 8 (Rowan's iPad, iOS 27.0.1, 2026-10-14): after the suite-exp
+/// install was removed, Siri still found its people, hydration of them
+/// failed ("Entity hydration failed") and the send broke. The domain delete
+/// alone did not take them out of what Siri searches: an item built with
+/// `CSSearchableItem(appEntity:)` is the app ENTITY's entry, and AppIntents'
+/// own way to drop one is `CSSearchableIndex.deleteAppEntities(identifiedBy:
+/// ofType:)`, which needs the ids. So every id indexed is recorded per host
+/// (IndexedIDLedger) and removal deletes them by id as well as by domain;
+/// and an id on an install that is no longer saved, met while hydrating,
+/// is purged on the spot (`purge(ids:)`), whichever way it outlived its
+/// install.
 enum SpotlightIndex {
     static var store: SearchableIndexStore = SystemSearchableIndex()
+    static var ledger = IndexedIDLedger()
     private static let lock = NSLock()
     private static var suppressed: Set<String> = []
 
     static func removeAll(host: String) {
         lock.withLock { _ = suppressed.insert(host) }
         store.deleteDomains([host])
+        store.deleteEntities(ledger.ids(host: host))
+        ledger.remove(host: host)
+    }
+
+    /// Ids Siri handed back for installs that are no longer saved: their
+    /// installs' entries go (as at removal), and these ids by id, in case
+    /// they were indexed before the ledger existed. App process only.
+    static func purge(ids: [String], env: IntentEnvironment) {
+        guard IntentHooks.indexesSpotlight else { return }
+        let stale = ids.filter { id in EntityRef(id).map { env.install($0.host) == nil } ?? false }
+        guard !stale.isEmpty else { return }
+        let hosts = Set(stale.compactMap { EntityRef($0)?.host })
+        IntentLog.step("index.purge", "ids=\(stale.count) installs=\(hosts.count)")
+        for host in hosts.sorted() { removeAll(host: host) }
+        store.deleteEntities(stale)
     }
 
     /// The install was signed in to (again): its entries may be indexed.
@@ -258,5 +365,45 @@ enum SpotlightIndex {
 
     static func isSuppressed(_ host: String) -> Bool {
         lock.withLock { suppressed.contains(host) }
+    }
+}
+
+/// The entity ids this app indexed, per host (task 01a111bb stage 7, round
+/// 8), so removing an install can delete its entities BY ID. Ids only
+/// (`<host>|<uuid>`), never a name. App process only; the extensions never
+/// index.
+final class IndexedIDLedger: @unchecked Sendable {
+    private static let prefix = "burrow.spotlight.indexed-ids.v1."
+    private let defaults: UserDefaults
+    private let lock = NSLock()
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
+
+    func record(_ ids: [String], host: String) {
+        guard !ids.isEmpty else { return }
+        lock.withLock {
+            let known = Set(defaults.stringArray(forKey: Self.prefix + host) ?? [])
+            let all = known.union(ids)
+            if all.count != known.count { defaults.set(all.sorted(), forKey: Self.prefix + host) }
+        }
+    }
+
+    func ids(host: String) -> [String] {
+        lock.withLock { defaults.stringArray(forKey: Self.prefix + host) ?? [] }
+    }
+
+    func remove(host: String) {
+        lock.withLock { defaults.removeObject(forKey: Self.prefix + host) }
+    }
+
+    /// Every host's record (after SpotlightIndexMigration deleted everything).
+    func removeAll() {
+        lock.withLock {
+            for key in defaults.dictionaryRepresentation().keys where key.hasPrefix(Self.prefix) {
+                defaults.removeObject(forKey: key)
+            }
+        }
     }
 }

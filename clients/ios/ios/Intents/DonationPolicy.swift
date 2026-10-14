@@ -1,6 +1,10 @@
 import AppIntents
 import Foundation
 
+// App target only (BURROW_APP): it names MessagesSendIntent; see the note
+// in MessagingIntents.swift.
+#if BURROW_APP
+
 // Personal-context donations (task 01a111bb stage 4).
 //
 // Rules this file keeps:
@@ -103,7 +107,7 @@ enum DonationValue {
 enum DonationIntents {
     /// The schema send to `recipients` with every content parameter unset.
     static func send(to recipients: [DonationPerson]) -> MessagesSendIntent {
-        let people = recipients.map { PersonEntity(id: $0.id, name: $0.name, kind: $0.kind, subtitle: "") }
+        let people = recipients.map { MessagePersonEntity(id: $0.id, name: $0.name, kind: $0.kind, subtitle: "") }
         var intent = MessagesSendIntent()
         intent.destination = people.count == 1 ? .messagePerson(people[0]) : .messagePeople(people)
         // Every non-optional parameter is set (empty), or reading it traps.
@@ -332,7 +336,7 @@ struct LiveDonationResolver: DonationResolving {
     func person(host: String, id: String, type: String) async -> DonationPerson? {
         guard #available(iOS 27, *) else { return nil }
         let ref = EntityRef(host: host, uuid: id).id
-        if let person = try? await PersonQuery().entities(for: [ref]).first {
+        if let person = try? await MessagePersonEntityQuery().entities(for: [ref]).first {
             return DonationPerson(id: person.id, name: person.name, kind: person.kind)
         }
         if type == "agent", let agent = try? await AgentQuery().entities(for: [ref]).first {
@@ -341,3 +345,4 @@ struct LiveDonationResolver: DonationResolving {
         return nil
     }
 }
+#endif

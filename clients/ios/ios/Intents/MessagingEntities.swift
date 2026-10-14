@@ -18,23 +18,51 @@ import LinkPresentation
 
 // MARK: - Person
 
+// Named MessagePersonEntity (task 01a111bb stage 7, round 6), exactly as
+// Siri's own SiriMessagesFlowTools names its `.messages.messagePerson`
+// entity in the iOS 27.0 runtime, whose CreateDraftMessageTool is the one
+// failing "Type identifier conformance" on our person. Apple forum thread
+// 844294 (FB24604095): `.photos.editAsset` only works when the asset
+// entity is named exactly `AssetEntity`, which looks like type-name
+// matching. It was `PersonEntity` before; Spotlight items indexed under
+// that name are orphaned (domain = host, dropped at sign-out) and the
+// next per-host refresh indexes this type; round 8's
+// SpotlightIndexMigration deletes them once (hydrating one failed on
+// Rowan's iPad). The query follows the SDK
+// documentation's `<Entity>Query` naming (MessagePerson ->
+// MessagePersonQuery); Apple's runtime adopters have no query.
 @available(iOS 27, *)
 @AppEntity(schema: .messages.messagePerson)
-struct PersonEntity {
-    static let defaultQuery = PersonQuery()
+struct MessagePersonEntity {
+    static let defaultQuery = MessagePersonEntityQuery()
 
     /// `<host>|<user or agent uuid>`.
     let id: String
     /// The schema's person: the display name, and the `<host>|<uuid>` id as
     /// both identifier and handle. Nothing else (no email, no phone).
+    ///
+    /// The indexing key is the schema's (`AppIntentSchemas.sqlite` declares
+    /// `person` with `indexingKey: primaryRecipients`), and it is what puts
+    /// `spotlightAttributeKey: primaryRecipients` on `person` in the built
+    /// Metadata.appintents, as ChatKit's MessagePerson and
+    /// SiriMessagesFlowTools' MessagePersonEntity carry it. Without it Siri's
+    /// planner failed converting MessagePersonEntity ("Type identifier conformance
+    /// failed", FlowToolTransformationError 3; iPadOS 27).
+    /// MessagePersonEntityMetadataTests pins it.
+    @Property(indexingKey: \.primaryRecipients)
     var person: IntentPerson
     /// `user` or `agent`. An agent's DM opens through `/agents/:id/dm`.
     var kind: String
     var subtitle: String
 
     var isAgent: Bool { kind == "agent" }
+    /// A system person the import could not match to ONE Burrow person:
+    /// carried to `perform`, which can ask which one or say who it couldn't
+    /// find (an import can do neither).
+    var isUnresolved: Bool { kind == Self.unresolvedKind }
+    static let unresolvedKind = "unresolved"
     var name: String {
-        if case .displayName(let name) = person.name { return name }
+        if let name = PersonResolver.spokenName(person) { return name }
         return "Someone"
     }
 
@@ -47,6 +75,14 @@ struct PersonEntity {
         self.kind = kind
         self.subtitle = subtitle
         self.person = Self.intentPerson(id: id, name: name)
+    }
+
+    /// Wraps a system person that matched no single Burrow person.
+    init(unresolved person: IntentPerson) {
+        self.id = Self.unresolvedKind + EntityRef.separator.description + UUID().uuidString
+        self.kind = Self.unresolvedKind
+        self.subtitle = ""
+        self.person = person
     }
 
     init(_ person: SuitePerson, host: String, env: IntentEnvironment) {
@@ -64,32 +100,44 @@ struct PersonEntity {
     }
 
     /// To and from the system's `IntentPerson`: out as the schema person;
-    /// in only when its identifier is one of Burrow's `<host>|<uuid>` ids
-    /// on a saved install (a contact from elsewhere is not a Burrow person).
+    /// in as the Burrow person it matches (PersonResolver: id, handle, then
+    /// name). The import NEVER throws (task 01a111bb stage 7): a throw here
+    /// reached Siri as a generic "there's a problem" with nothing logged.
+    /// No match or several matches are carried to `perform` unresolved.
+    ///
+    /// `exporting:` MUST stay the key path to the STORED schema property
+    /// `person` (the one property Apple's own MessagePerson entities declare,
+    /// in ChatKit and SiriMessagesFlowTools), not a computed one: round 3's
+    /// traced `exportedPerson` is gone, so the export itself is untraced.
+    /// Xcode 27's metadata extractor
+    /// reads this declaration as syntax and takes the IntentValue type from
+    /// the key path only: with a closure it records NO exportable or
+    /// importable type, Siri's structured-data fetch then logs "Failed to
+    /// extract Person for PersonEntity(...)" (its name then) and the send never starts
+    /// (iPadOS 27.0.1, "Message Dalton saying ..."). With `\MessagePersonEntity.person`
+    /// it records `com.apple.appintents.IntentPerson` both ways
+    /// (MessagePersonEntityMetadataTests pins it).
     static var transferRepresentation: some TransferRepresentation {
         IntentValueRepresentation(
-            exporting: { (entity: PersonEntity) in entity.person },
+            exporting: \MessagePersonEntity.person,
             importing: { (person: IntentPerson) in
-                guard case .applicationDefined(let id) = person.identifier else { throw IntentFailure.notFound }
-                // A cold process (Siri launching the app for one request) has
-                // an empty cache: resolve on the id's own host.
-                if let cached = PeopleCache.shared.entity(for: id) { return cached }
-                guard let found = try await PersonQuery().entities(for: [id]).first else { throw IntentFailure.notFound }
-                return found
+                if case .one(let found) = await PersonResolver.resolve(person, site: "person.import") { return found }
+                return MessagePersonEntity(unresolved: person)
             })
     }
 }
 
 @available(iOS 27, *)
-extension PersonEntity: Transferable {}
+extension MessagePersonEntity: Transferable {}
 
 // Indexed (stage 4) under the host as the domain identifier, syncable (the
 // id is the server's) and `.shared` (a person in a workspace).
 @available(iOS 27, *)
-extension PersonEntity: IndexedEntity, SyncableEntity, OwnershipProvidingEntity {
+extension MessagePersonEntity: IndexedEntity, SyncableEntity, OwnershipProvidingEntity {
     var ownership: EntityOwnership { .shared }
 
-    /// The schema's mapping (`person` -> `primaryRecipients`), plus the name
+    /// The schema's mapping (`person` -> `primaryRecipients`, declared by
+    /// `@Property(indexingKey:)` on `person`), plus the name
     /// as display name and the given name as an alternate, so "Dalton"
     /// matches "Dalton Rourke" (task 01a111bb stage 7).
     var attributeSet: CSSearchableItemAttributeSet {
@@ -101,12 +149,15 @@ extension PersonEntity: IndexedEntity, SyncableEntity, OwnershipProvidingEntity 
 }
 
 @available(iOS 27, *)
-struct PersonQuery: EntityStringQuery {
+struct MessagePersonEntityQuery: EntityStringQuery {
     // Suggestions are scoped once the send's Install is chosen; unset still
     // searches every install, which Siri needs to resolve a spoken name.
     // The dependency's `install` reads as non-optional although the
     // parameter is optional, hence `dep?.install.id`.
-    @IntentParameterDependency<MessagesSendIntent>(\.$install) var send
+    // MessagesSendIntent is App-only (BURROW_APP, see MessagingIntents.swift).
+    #if BURROW_APP
+        @IntentParameterDependency<MessagesSendIntent>(\.$install) var send
+    #endif
 
     /// Set by tests in place of the dependency above.
     var installScope: String?
@@ -115,45 +166,80 @@ struct PersonQuery: EntityStringQuery {
 
     init(installScope: String?) { self.installScope = installScope }
 
-    private var scope: String? { installScope ?? send?.install.id }
+    #if BURROW_APP
+        private var scope: String? { installScope ?? send?.install.id }
+    #else
+        private var scope: String? { installScope }
+    #endif
 
     /// Each id resolves on ITS host only: a person found earlier (search,
     /// suggestions or the index refresh) from the in-memory cache, otherwise
     /// in that host's people directory (the set the device indexes). An
-    /// unknown host makes no request.
-    func entities(for identifiers: [String]) async throws -> [PersonEntity] {
+    /// unknown host makes no request, and its ids are purged from Spotlight
+    /// (round 8: Siri kept handing back a removed install's people, whose
+    /// hydration could only fail).
+    func entities(for identifiers: [String]) async throws -> [MessagePersonEntity] {
+        IntentLog.step("person.query", "ids=\(identifiers.count)")
         let catalog = EntityCatalog()
+        SpotlightIndex.purge(ids: identifiers, env: catalog.env)
         let cache = PeopleCache.shared
         var missing: [String] = []
-        var found: [String: PersonEntity] = [:]
+        var found: [String: MessagePersonEntity] = [:]
         for id in identifiers {
             guard let ref = EntityRef(id), catalog.env.install(ref.host) != nil else { continue }
             if let hit = cache.entity(for: id) { found[id] = hit } else { missing.append(id) }
         }
         if !missing.isEmpty {
             let loaded = await catalog.resolve(missing) { host in
-                await catalog.people(hosts: [host], directory: true).map { PersonEntity($0.person, host: $0.host, env: catalog.env) }
+                await catalog.people(hosts: [host], directory: true).map { MessagePersonEntity($0.person, host: $0.host, env: catalog.env) }
             }
             for entity in loaded { found[entity.id] = entity }
         }
-        return identifiers.compactMap { found[$0] }
+        let result = identifiers.compactMap { found[$0] }
+        Self.trace(identifiers, result: result, cacheHits: identifiers.count - missing.count, env: catalog.env)
+        return result
+    }
+
+    /// The SHAPE of a lookup, for the trace (task 01a111bb stage 7, round
+    /// 3): counts and booleans only, never a uuid, a host or a name.
+    static func trace(_ identifiers: [String], result: [MessagePersonEntity], cacheHits: Int, env: IntentEnvironment) {
+        for id in identifiers {
+            let ref = EntityRef(id)
+            let segments = id.split(separator: EntityRef.separator, omittingEmptySubsequences: false).count
+            let installKnown = ref.map { env.install($0.host) != nil } ?? false
+            let uuidOK = ref.map { UUID(uuidString: $0.uuid) != nil } ?? false
+            IntentLog.step(
+                "person.query",
+                "req len=\(id.count) segments=\(segments) parsed=\(ref != nil) install=\(installKnown) uuid=\(uuidOK)")
+        }
+        let returned = result.map(\.id)
+        let match = returned == identifiers
+        let personIDsMatch = result.allSatisfy { entity in
+            if case .applicationDefined(let raw) = entity.person.identifier { return raw == entity.id }
+            return false
+        }
+        IntentLog.step(
+            "person.query",
+            "result count=\(result.count) cacheHits=\(cacheHits) idsMatch=\(match) personIdMatch=\(personIDsMatch) kinds=\(result.map(\.kind).joined(separator: ","))")
     }
 
     /// Recent collaborators: the people the person actually talks to. The
     /// fetch indexes them (EntityCatalog.people).
-    func suggestedEntities() async throws -> [PersonEntity] {
+    func suggestedEntities() async throws -> [MessagePersonEntity] {
+        IntentLog.step("person.query", "suggested")
         let catalog = EntityCatalog()
         return PeopleCache.shared.remember(
-            await catalog.people(hosts: catalog.hosts(scope: scope)).map { PersonEntity($0.person, host: $0.host, env: catalog.env) })
+            await catalog.people(hosts: catalog.hosts(scope: scope)).map { MessagePersonEntity($0.person, host: $0.host, env: catalog.env) })
     }
 
     /// The server's search (`?q=`), never a filter over the suggestions, so
     /// someone outside the recent set is still found by name.
-    func entities(matching string: String) async throws -> [PersonEntity] {
+    func entities(matching string: String) async throws -> [MessagePersonEntity] {
+        IntentLog.step("person.query", "matching")
         let catalog = EntityCatalog()
         return PeopleCache.shared.remember(
             await catalog.people(hosts: catalog.hosts(scope: scope), query: string)
-                .map { PersonEntity($0.person, host: $0.host, env: catalog.env) })
+                .map { MessagePersonEntity($0.person, host: $0.host, env: catalog.env) })
     }
 }
 
@@ -164,20 +250,26 @@ struct PersonQuery: EntityStringQuery {
 final class PeopleCache: @unchecked Sendable {
     static let shared = PeopleCache()
     private let lock = NSLock()
-    private var entities: [String: PersonEntity] = [:]
+    private var entities: [String: MessagePersonEntity] = [:]
 
     @discardableResult
-    func remember(_ list: [PersonEntity]) -> [PersonEntity] {
+    func remember(_ list: [MessagePersonEntity]) -> [MessagePersonEntity] {
         lock.lock()
         for entity in list { entities[entity.id] = entity }
         lock.unlock()
         return list
     }
 
-    func entity(for id: String) -> PersonEntity? {
+    func entity(for id: String) -> MessagePersonEntity? {
         lock.lock()
         defer { lock.unlock() }
         return entities[id]
+    }
+
+    func all() -> [MessagePersonEntity] {
+        lock.lock()
+        defer { lock.unlock() }
+        return Array(entities.values)
     }
 
     func removeAll(host: String) {
@@ -196,7 +288,7 @@ struct ConversationEntity {
 
     /// `<host>|<space uuid>`.
     let id: String
-    var recipients: [PersonEntity]
+    var recipients: [MessagePersonEntity]
     /// "general · Fabrikam": the org tells same-named spaces apart.
     var displayName: String
     var previewText: AttributedString
@@ -243,8 +335,11 @@ struct ConversationQuery: EntityStringQuery {
     /// Set by tests in place of an Install dependency.
     var installScope: String?
 
+    /// An id on an install that is no longer saved resolves to nothing and
+    /// is purged from Spotlight, as for a person.
     func entities(for identifiers: [String]) async throws -> [ConversationEntity] {
         let catalog = EntityCatalog()
+        SpotlightIndex.purge(ids: identifiers, env: catalog.env)
         return await catalog.resolve(identifiers) { host in
             await catalog.spaceRows(hosts: [host]).map { ConversationEntity($0.space, host: $0.host, env: catalog.env) }
         }
@@ -282,7 +377,7 @@ extension ConversationEntity: IndexedEntity, SyncableEntity, OwnershipProvidingE
 // indexes them per host.
 
 @available(iOS 27, *)
-extension PersonQuery: IndexedEntityQuery {
+extension MessagePersonEntityQuery: IndexedEntityQuery {
     func reindexEntities(for identifiers: [String], indexDescription: CSSearchableIndexDescription) async throws {
         _ = try await entities(for: identifiers)
     }
@@ -315,7 +410,7 @@ struct MessageEntity {
     /// `<host>|<message uuid>`.
     let id: String
     var messageType: MessageTypeEnum
-    var author: PersonEntity
+    var author: MessagePersonEntity
     var isRead: Bool
     var attributes: Set<MessageAttributeEnum>
     var conversation: ConversationEntity
@@ -337,7 +432,7 @@ struct MessageEntity {
         DisplayRepresentation(title: "Message", subtitle: "\(conversation.displayName)", image: .init(systemName: "text.bubble"))
     }
 
-    init(id: String, conversation: ConversationEntity, author: PersonEntity, date: Date = Date()) {
+    init(id: String, conversation: ConversationEntity, author: MessagePersonEntity, date: Date = Date()) {
         self.id = id
         self.messageType = .unspecified
         self.author = author
@@ -464,13 +559,22 @@ enum MessageReaction {
 
 // MARK: - Destination (send and draft)
 
-// Three cases, matching what the 27.0 SDK's metadata processor requires;
-// see the note above MessagesSendIntent on the missing `conversation` case.
+// Xcode 27.0's metadata processor requires these three cases
+// (`Array<Person> | Schema<MessagePerson> | Array<Schema<MessagePerson>>`;
+// it refused `messagePerson | messagePeople | conversation`), but not their
+// order. The ENTITY cases come first (task 01a111bb stage 7, round
+// 4), in the order Siri's own SiriMessagesFlowTools declares its send
+// destination in the iOS 27.0 runtime (MessagePersonEntity,
+// [MessagePersonEntity], ConversationEntity); ChatKit's is (conversation,
+// MessagePerson, [MessagePerson]). Neither has a `[Person]` case. While
+// `people([IntentPerson])` came first, Siri resolved Dalton to a
+// MessagePersonEntity through MessagePersonEntityQuery, then failed converting him into this
+// union (FlowToolTransformationError Code=3) without calling the app.
 
 @available(iOS 27, *)
 @UnionValue
 enum MessageDestination {
+    case messagePerson(MessagePersonEntity)
+    case messagePeople([MessagePersonEntity])
     case people([IntentPerson])
-    case messagePerson(PersonEntity)
-    case messagePeople([PersonEntity])
 }

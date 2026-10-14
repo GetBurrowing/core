@@ -5,6 +5,8 @@ The top `## v<version>` section is sent as the build's "What to Test" by
 MARKETING_VERSION, and it is capped at 4000 characters.
 
 ## v1.2
+New in build 8: Siri messaging. Say "Message <name> saying ..." and Siri sends it from Burrow after one confirmation. Messages to agents are sent and done: Siri does not wait, and the agent's reply arrives as a notification. If the same name exists on two of your installs, Siri asks which one. "Ask <agent>" still waits and reads the answer.
+
 New in build 7:
 1. One app, many installs. Burrow now gets notifications from every install you are signed in to. Each notification names its install, and unread counts are kept per install (the app icon badge adds them up). Tap a notification from another install and Burrow switches to it.
 2. Pictures on notifications. Notifications show the agent's or person's picture, or their initial if they have none.

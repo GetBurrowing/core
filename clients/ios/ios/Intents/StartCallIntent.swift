@@ -65,7 +65,7 @@ struct CallActions {
 // MARK: - iOS 27 schema types
 
 /// The phone schema's person: the same `<host>|<uuid>` people as the
-/// messages domain (PersonQuery), as a separate type because an entity has
+/// messages domain (MessagePersonEntityQuery), as a separate type because an entity has
 /// one schema.
 @available(iOS 27, *)
 @AppEntity(schema: .phone.phonePerson)
@@ -78,10 +78,7 @@ struct CallPersonEntity {
     var subtitle: String
 
     var isAgent: Bool { kind == "agent" }
-    var name: String {
-        if case .displayName(let name) = person.name { return name }
-        return "Someone"
-    }
+    var name: String { PersonResolver.spokenName(person) ?? "Someone" }
 
     var displayRepresentation: DisplayRepresentation {
         DisplayRepresentation(title: "\(name)", subtitle: "\(subtitle)", image: .init(systemName: isAgent ? "cpu" : "person.crop.circle"))
@@ -91,16 +88,34 @@ struct CallPersonEntity {
         self.id = id
         self.kind = kind
         self.subtitle = subtitle
-        self.person = PersonEntity.intentPerson(id: id, name: name)
+        self.person = MessagePersonEntity.intentPerson(id: id, name: name)
     }
 
-    init(_ entity: PersonEntity) {
+    init(_ entity: MessagePersonEntity) {
         self.init(id: entity.id, name: entity.name, kind: entity.kind, subtitle: entity.subtitle)
     }
 }
 
+/// A call's person as a Burrow person: a `<host>|<uuid>` id on a saved
+/// install as is (unless another install has a namesake), anything else
+/// through PersonResolver.
+@available(iOS 27, *)
+enum CallPersonResolution {
+    static func resolve(
+        _ person: CallPersonEntity, env: IntentEnvironment = .current, choose: PersonResolver.Choose
+    ) async throws -> MessagePersonEntity {
+        if let ref = EntityRef(person.id), env.install(ref.host) != nil {
+            // Siri's pick from the index: asked about when another signed-in
+            // install has a namesake (round 8, as for a message).
+            let found = MessagePersonEntity(id: person.id, name: person.name, kind: person.kind, subtitle: person.subtitle)
+            return try await PersonResolver.confirmInstall(found, spoken: nil, site: "call", env: env, choose: choose)
+        }
+        return try await PersonResolver.require(person.person, site: "call", env: env, choose: choose)
+    }
+}
+
 // Indexed per host (task 01a111bb stage 7) from the same people directory
-// as PersonEntity, humans only: Siri resolves "Start a meeting with Harper"
+// as MessagePersonEntity, humans only: Siri resolves "Start a meeting with Harper"
 // against the index, as it does a message recipient.
 @available(iOS 27, *)
 extension CallPersonEntity: IndexedEntity, SyncableEntity, OwnershipProvidingEntity {
@@ -117,15 +132,15 @@ extension CallPersonEntity: IndexedEntity, SyncableEntity, OwnershipProvidingEnt
 @available(iOS 27, *)
 struct CallPersonQuery: EntityStringQuery {
     func entities(for identifiers: [String]) async throws -> [CallPersonEntity] {
-        try await PersonQuery().entities(for: identifiers).map(CallPersonEntity.init)
+        try await MessagePersonEntityQuery().entities(for: identifiers).map(CallPersonEntity.init)
     }
 
     func suggestedEntities() async throws -> [CallPersonEntity] {
-        try await PersonQuery().suggestedEntities().map(CallPersonEntity.init)
+        try await MessagePersonEntityQuery().suggestedEntities().map(CallPersonEntity.init)
     }
 
     func entities(matching string: String) async throws -> [CallPersonEntity] {
-        try await PersonQuery().entities(matching: string).map(CallPersonEntity.init)
+        try await MessagePersonEntityQuery().entities(matching: string).map(CallPersonEntity.init)
     }
 }
 
@@ -145,6 +160,12 @@ enum CallDestination {
     case people([CallPersonEntity])
 }
 
+// BURROW_APP: set for the App target only (project.yml). Siri refuses a
+// schema intent that more than one bundle declares (ToolDiscoveryError 4,
+// "Multiple flow tools found"), and ../Intents is compiled into
+// SuiteWidgets and NotificationService too, so every schema intent and
+// everything that names one is App-only (task 01a111bb).
+#if BURROW_APP
 @available(iOS 27, *)
 @AppIntent(schema: .phone.startCall)
 struct StartCallIntent: AudioRecordingIntent, AudioStartingIntent {
@@ -160,15 +181,28 @@ struct StartCallIntent: AudioRecordingIntent, AudioStartingIntent {
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let target: CallTarget
         if let conversation {
+            IntentLog.step("call", "destination=conversation")
             target = .conversation(id: conversation.id, name: conversation.displayName)
         } else {
+            let person: CallPersonEntity
             switch destination {
-            case .person(let person):
-                target = .person(id: person.id, name: person.name, isAgent: person.isAgent)
+            case .person(let one):
+                IntentLog.step("call", "destination=person")
+                person = one
             case .people(let people):
-                guard people.count == 1, let person = people.first else { throw IntentFailure.notFound }
-                target = .person(id: person.id, name: person.name, isAgent: person.isAgent)
+                IntentLog.step("call", "destination=people(\(people.count))")
+                guard people.count == 1, let one = people.first else {
+                    IntentLog.step("call", "refused=several_recipients")
+                    throw IntentFailure.onePersonAtATime
+                }
+                person = one
             }
+            // A person whose id is not one of Burrow's (task 01a111bb stage
+            // 7) is matched by its IntentPerson, as a message recipient is.
+            let found = try await CallPersonResolution.resolve(person) { name, people in
+                try await choosePerson(self, name: name, people: people)
+            }
+            target = .person(id: found.id, name: found.name, isAgent: found.isAgent)
         }
         let text = try await CallActions().start(target, video: audioVisualMode == .video) { prompt in
             try await requestConfirmation(
@@ -179,3 +213,4 @@ struct StartCallIntent: AudioRecordingIntent, AudioStartingIntent {
         return .result(dialog: IntentDialog("\(text)"))
     }
 }
+#endif
