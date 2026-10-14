@@ -126,10 +126,11 @@ struct MessagesSendIntent {
             try await choosePerson(self, name: name, people: people)
         }
         let text = content.map { String($0.characters) } ?? ""
-        let sent = try await MessagingActions().send(to: target, text: text) { prompt in
-            try await requestConfirmation(
-                result: .result(dialog: spoken(prompt)), confirmationActionName: .send)
-        }
+        // No confirmation of our own: Siri already shows its "Send / Cancel"
+        // confirmation for this schema intent before calling perform(), and a
+        // second one made Rowan confirm the same message twice (iOS 27.0.1,
+        // 2026-10-14). The legacy SendMessageIntent still confirms.
+        let sent = try await MessagingActions().send(to: target, text: text) { _ in }
         let entity = MessagingIntentSupport.messageEntity(for: sent, destination: destination)
         MessageRegistry.shared.remember(entity)
         IntentHooks.didSucceed?(self)
