@@ -34,7 +34,18 @@ defmodule Platform.Access.Registry do
   are held only through the root-admin rule
   (`0058-rbac-v2-roles-scopes-and-agent-capping.md § Built-in roles`).
 
-  ## Two modules the ADR vocabulary does not name
+  ## Derived permissions
+
+  `orgs.read` is flagged `derived: true`. It is org visibility, the quantity
+  `Platform.Tenancy.visibility/1` answers, and it is produced only by the
+  root-org widening rule in `Platform.Access.Scope` (`:all` for a member of a
+  root org at any role, otherwise the membership org ids). It is code, not
+  role data (`0058-rbac-v2-roles-scopes-and-agent-capping.md § Built-in roles`,
+  "Two rules are code, not role data"), so no role may carry it. The ADR's
+  vocabulary has no name for org visibility; this one was added by task
+  `01a1386d-cb5c` stage 2 so the widening has a permission to land on.
+
+  ## Modules the ADR vocabulary does not name
 
   The ADR's table has no entry for the Inbox and Activity rail destinations,
   but each rail entry must name a required permission. They are declared here
@@ -53,7 +64,8 @@ defmodule Platform.Access.Registry do
           name: String.t(),
           module: String.t(),
           install_level: boolean(),
-          module_admin: boolean()
+          module_admin: boolean(),
+          derived: boolean()
         }
 
   @typedoc "A normalized rail entry: the destination key and the permission it requires."
@@ -125,6 +137,15 @@ defmodule Platform.Access.Registry do
   def module_admin_permissions,
     do: for(p <- permissions(), p.module_admin, do: p.name)
 
+  @doc "Permission names flagged `derived: true` (produced by a Scope rule, never by a role)."
+  @spec derived_permissions() :: [String.t()]
+  def derived_permissions,
+    do: for(p <- permissions(), p.derived, do: p.name)
+
+  @doc "Is `name` a derived permission?"
+  @spec derived?(String.t()) :: boolean()
+  def derived?(name), do: name in derived_permissions()
+
   @doc "Every rail entry with the permission it requires."
   @spec rail_entries() :: [rail_entry()]
   def rail_entries do
@@ -162,14 +183,15 @@ defmodule Platform.Access.Registry do
   end
 
   defp normalize_permission(name, module) when is_binary(name),
-    do: %{name: name, module: module, install_level: false, module_admin: false}
+    do: %{name: name, module: module, install_level: false, module_admin: false, derived: false}
 
   defp normalize_permission(%{name: name} = entry, module) do
     %{
       name: name,
       module: module,
       install_level: Map.get(entry, :install_level, false) == true,
-      module_admin: Map.get(entry, :module_admin, false) == true
+      module_admin: Map.get(entry, :module_admin, false) == true,
+      derived: Map.get(entry, :derived, false) == true
     }
   end
 
@@ -241,6 +263,7 @@ defmodule Platform.Access.Registry do
         rail: [%{key: :prompts, permission: "prompts.manage"}]
       },
       %{module: "access", permissions: ~w(access.manage)},
+      %{module: "orgs", permissions: [%{name: "orgs.read", derived: true}]},
       %{
         module: "install",
         permissions: [%{name: "install.admin", install_level: true}],

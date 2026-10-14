@@ -26,6 +26,7 @@ defmodule PlatformWeb.LiveAuth do
   import Phoenix.Component, only: [assign: 3]
   import Phoenix.LiveView, only: [push_navigate: 2, put_flash: 3]
 
+  alias Platform.Access.Scope
   alias Platform.Tenancy
 
   @doc """
@@ -41,7 +42,11 @@ defmodule PlatformWeb.LiveAuth do
     {:cont,
      socket
      |> assign(:current_user_org_membership, membership)
-     |> assign(:root_admin?, root_admin?)}
+     |> assign(:root_admin?, root_admin?)
+     # RBAC v2 shadow scope (task 01a1386d-cb5c stage 2): built and assigned
+     # only. Nothing reads it for a decision yet, and `:root_admin?` above is
+     # unchanged. `for_user/1` fails closed for nil and the legacy string shape.
+     |> assign(:access_scope, Scope.for_user(user))}
   end
 
   def on_mount(:ensure_admin, _params, _session, socket) do

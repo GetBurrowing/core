@@ -64,6 +64,9 @@ defmodule PlatformWeb.Plugs.RequireAuthTest do
 
       assert conn.assigns.current_user.id == user.id
       assert conn.assigns.root_admin? == true
+      # Task 01a1386d-cb5c stage 2: the shadow scope is assigned beside it.
+      assert %Platform.Access.Scope{} = conn.assigns.access_scope
+      assert Platform.Access.can?(conn.assigns.access_scope, "install.admin")
 
       assert %{role: :admin, org: %{slug: "acme"}} =
                conn.assigns.current_user_org_membership
@@ -101,6 +104,7 @@ defmodule PlatformWeb.Plugs.RequireAuthTest do
       refute Map.has_key?(conn.assigns, :current_user)
       refute Map.has_key?(conn.assigns, :current_user_org_membership)
       refute Map.has_key?(conn.assigns, :root_admin?)
+      refute Map.has_key?(conn.assigns, :access_scope)
     end
 
     test "stale session (user deleted) → drop session, redirect to login", %{conn: conn} do

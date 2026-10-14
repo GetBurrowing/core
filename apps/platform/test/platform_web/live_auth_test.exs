@@ -9,7 +9,11 @@ defmodule PlatformWeb.LiveAuthTest do
 
   use Platform.DataCase, async: true
 
+  import Platform.TenancyFixtures
+
   alias Phoenix.LiveView.Socket
+  alias Platform.Access
+  alias Platform.Access.Scope
   alias Platform.Accounts.User
   alias Platform.Repo
   alias Platform.Tenancy
@@ -88,6 +92,64 @@ defmodule PlatformWeb.LiveAuthTest do
 
       assert socket.assigns.root_admin? == false
       assert is_nil(socket.assigns.current_user_org_membership)
+    end
+  end
+
+  describe "on_mount(:default, ...) :access_scope (task 01a1386d-cb5c stage 2)" do
+    defp mount!(user) do
+      {:cont, socket} = LiveAuth.on_mount(:default, %{}, %{}, socket_with(user))
+      socket
+    end
+
+    test "root admin: scope assigned, :root_admin? unchanged (true)" do
+      user = create_user!()
+      create_membership!(user, Tenancy.get_org_by_slug!("acme"), "admin")
+      socket = mount!(Platform.Accounts.get_user(user.id))
+
+      assert %Scope{} = socket.assigns.access_scope
+      assert socket.assigns.access_scope.actor.id == user.id
+      assert socket.assigns.root_admin? == true
+      assert Access.can?(socket.assigns.access_scope, "install.admin")
+    end
+
+    test "sub-org admin: scope assigned, :root_admin? unchanged (false)" do
+      user = create_user!()
+      org = Tenancy.get_org!(tenant_org_id("rbac_s2_liveauth"))
+      create_membership!(user, org, "admin")
+      socket = mount!(Platform.Accounts.get_user(user.id))
+
+      assert socket.assigns.root_admin? == false
+      assert socket.assigns.access_scope.permissions["access.manage"] == [org.id]
+      refute Access.can?(socket.assigns.access_scope, "install.admin")
+    end
+
+    test "external root admin: :root_admin? unchanged (true), the scope holds no install.admin" do
+      user = create_user!()
+      acme = Tenancy.get_org_by_slug!("acme")
+
+      {:ok, _} =
+        Tenancy.mark_membership_external(%{user_id: user.id, org_id: acme.id, role: "admin"})
+
+      socket = mount!(Platform.Accounts.get_user(user.id))
+
+      # Today's assign is untouched: the ExternalUserScope plug, not this hook,
+      # holds this user off /admin. The shadow scope models it.
+      assert socket.assigns.root_admin? == true
+      assert Scope.guest?(socket.assigns.access_scope)
+      refute Access.can?(socket.assigns.access_scope, "install.admin")
+    end
+
+    test "anonymous and legacy string shapes get the empty, fail-closed scope" do
+      socket = %Socket{endpoint: PlatformWeb.Endpoint, assigns: %{__changed__: %{}, flash: %{}}}
+
+      {:cont, anon} =
+        LiveAuth.on_mount(:default, %{}, %{}, Phoenix.Component.assign(socket, :current_user_record, nil))
+
+      {:cont, legacy} =
+        LiveAuth.on_mount(:default, %{}, %{}, Phoenix.Component.assign(socket, :current_user, "Marlowe"))
+
+      assert anon.assigns.access_scope == %Scope{}
+      assert legacy.assigns.access_scope == %Scope{}
     end
   end
 

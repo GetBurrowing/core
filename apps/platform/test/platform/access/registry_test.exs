@@ -124,6 +124,12 @@ defmodule Platform.Access.RegistryTest do
       assert Registry.install_level_permissions() == ["install.admin"]
       assert Enum.sort(Registry.module_admin_permissions()) == ["prompts.manage", "tasks.manage"]
     end
+
+    test "org visibility is the one derived permission (stage 2)" do
+      assert Registry.derived_permissions() == ["orgs.read"]
+      refute Registry.install_level?("orgs.read")
+      refute "orgs.read" in Enum.map(Registry.rail_entries(), & &1.permission)
+    end
   end
 
   describe "build-time modules" do
@@ -171,7 +177,9 @@ defmodule Platform.Access.RegistryTest do
     end
 
     test "no built-in role carries an install-level or module-admin permission" do
-      forbidden = Registry.install_level_permissions() ++ Registry.module_admin_permissions()
+      forbidden =
+        Registry.install_level_permissions() ++
+          Registry.module_admin_permissions() ++ Registry.derived_permissions()
 
       for role <- Repo.all(Role), role.builtin, permission <- Map.keys(role.permissions) do
         refute permission in forbidden, "#{role.key} carries #{permission}"
@@ -214,6 +222,7 @@ defmodule Platform.Access.RegistryTest do
       end
 
       refute valid?.(%{"install.admin" => "all"})
+      refute valid?.(%{"orgs.read" => "all"})
       refute valid?.(%{"nope.read" => "all"})
       refute valid?.(%{"chat.read" => "everyone"})
       refute valid?.(%{"chat.read" => []})

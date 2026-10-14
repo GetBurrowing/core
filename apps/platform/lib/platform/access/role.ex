@@ -29,7 +29,8 @@ defmodule Platform.Access.Role do
   rule value.
 
   A role carries no deny, and no role may carry an install-level permission
-  (`Platform.Access.Registry.install_level_permissions/0`).
+  (`Platform.Access.Registry.install_level_permissions/0`) or a derived one
+  (`Platform.Access.Registry.derived_permissions/0`).
   """
 
   use Ecto.Schema
@@ -77,6 +78,9 @@ defmodule Platform.Access.Role do
 
           Registry.install_level?(permission) ->
             [permissions: "#{permission} is install-level and no role may carry it"]
+
+          Registry.derived?(permission) ->
+            [permissions: "#{permission} is derived by a Scope rule and no role may carry it"]
 
           not valid_rule?(rule) ->
             [permissions: "#{permission} has an invalid grant rule #{inspect(rule)}"]

@@ -59,6 +59,7 @@ defmodule PlatformWeb.Plugs.RequireAuth do
   import Phoenix.Controller
 
   alias Platform.Accounts
+  alias Platform.Access.Scope
   alias Platform.Tenancy
 
   def init(opts), do: opts
@@ -139,6 +140,9 @@ defmodule PlatformWeb.Plugs.RequireAuth do
     conn
     |> assign(:current_user_org_membership, membership)
     |> assign(:root_admin?, root_admin?)
+    # RBAC v2 shadow scope (task 01a1386d-cb5c stage 2): assigned only, no
+    # gate reads it yet. Resolves from the preloaded memberships above.
+    |> assign(:access_scope, Scope.for_user(user))
   end
 
   defp emit_access_blocked(conn, reason, actor_id) do
