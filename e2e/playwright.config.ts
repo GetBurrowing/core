@@ -2,6 +2,8 @@ import { defineConfig, devices } from "@playwright/test"
 
 const BASE_URL = process.env.BASE_URL ?? "http://localhost:4000"
 
+const IPHONE_ONLY = /prototype_fullscreen_touch\.spec\.ts/
+
 export default defineConfig({
   testDir: "./tests",
   timeout: 180_000,
@@ -31,6 +33,25 @@ export default defineConfig({
     {
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
+      // The iPhone touch spec is WebKit-only (task 01a1389f); every other
+      // spec keeps running here exactly as before.
+      testIgnore: IPHONE_ONLY,
+    },
+    {
+      // Task 01a1389f: the prototype fullscreen overlay under a held press on
+      // an iPhone. WebKit with the iPhone descriptor (hasTouch, isMobile,
+      // defaultBrowserType webkit). Scoped by testMatch so no Chromium-only
+      // spec ever runs under WebKit. The top-level Chromium media flags and
+      // mic/camera grants are reset here: WebKit refuses to launch with them.
+      // No retry: the probes are deterministic geometry, a retry only repeats.
+      name: "webkit-iphone",
+      testMatch: IPHONE_ONLY,
+      retries: 0,
+      use: {
+        ...devices["iPhone 15"],
+        launchOptions: { args: [] },
+        permissions: [],
+      },
     },
   ],
 })

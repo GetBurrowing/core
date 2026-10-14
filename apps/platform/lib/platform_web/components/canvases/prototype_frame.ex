@@ -120,8 +120,14 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
 
   # In-app fullscreen (iOS standalone PWA has no Fullscreen API for non-video
   # elements, and `target="_blank"` escapes to Safari with an address bar).
-  # Pure class/style toggle on the existing tree: the iframe and its
-  # CanvasRoomBridge element never move in the DOM, so nothing reloads.
+  # A class toggle on the existing tree, and the PrototypeFullscreen hook
+  # promotes the root to the browser TOP LAYER (popover="manual") where no
+  # native fullscreen is in effect. Promotion is a rendering change, not a
+  # DOM move: an ancestor's transform/scale (the chat row's
+  # `active:scale-[0.99]`, chat_message.ex) can no longer become the
+  # overlay's containing block, and the iframe and its CanvasRoomBridge
+  # element keep their browsing context. The render keeps every conditional
+  # sibling after the keyed room element so morphdom never re-appends it.
   def handle_event("fullscreen", %{"on" => on}, socket) when on in ~w(true false),
     do: {:noreply, assign(socket, fullscreen: on == "true", open: nil)}
 
@@ -186,7 +192,15 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
       class={
         if @fullscreen,
           do: [
-            "fixed inset-0 z-50 flex h-dvh flex-col bg-base-100",
+            "fixed inset-0 z-50 flex h-dvh flex-col bg-base-100 text-base-content",
+            # UA popover resets: PrototypeFullscreen promotes this element to
+            # the browser top layer with popover="manual", whose UA sheet
+            # centres a fit-content box with a border, padding, overflow:auto
+            # and CanvasText colour. Author classes beat the UA sheet, so
+            # these keep the top-layer box identical to the overlay. The
+            # safe-area longhands below still win over p-0 (Tailwind orders
+            # the shorthand first; checked in the served app.css, stage 2).
+            "m-0 w-dvw max-h-none max-w-none border-0 p-0 overflow-hidden",
             "pt-[env(safe-area-inset-top)] pr-[env(safe-area-inset-right)]",
             "pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)]"
           ],
@@ -195,14 +209,6 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
       data-role="prototype-canvas"
       data-fullscreen={to_string(@fullscreen)}
     >
-      <div
-        :if={@fullscreen}
-        phx-window-keydown="fullscreen"
-        phx-value-on="false"
-        phx-key="Escape"
-        phx-target={@myself}
-      >
-      </div>
       <%!-- The bar is its own size container (`@container`): every width
            rule below is keyed to the BAR, not the viewport. The inline
            preview (~330px) and the Live Canvas side panel (~350px) are that
@@ -296,73 +302,6 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
         </button>
       </div>
 
-      <button
-        :if={@open}
-        type="button"
-        class="fixed inset-0 z-40 cursor-default bg-base-content/20 sm:bg-transparent"
-        phx-click="close"
-        phx-target={@myself}
-        aria-label="Close"
-      >
-      </button>
-
-      <div
-        :if={@open}
-        role="dialog"
-        phx-target={@myself}
-        phx-window-keydown="close"
-        phx-key="Escape"
-        data-role={"prototype-#{@open}-panel"}
-        class={[
-          "fixed inset-x-0 bottom-0 z-50 rounded-t-2xl border-t border-edge bg-base-100 p-3 shadow-lg",
-          "pb-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px)+0.75rem)]",
-          "sm:absolute sm:inset-x-auto sm:bottom-auto sm:right-1 sm:top-11 sm:w-80 sm:rounded-xl sm:border sm:pb-3"
-        ]}
-      >
-        <%= if @open == :versions do %>
-          <p class="px-1 pb-2 text-xs font-semibold text-base-content/70">Versions</p>
-          <ul class="max-h-72 space-y-0.5 overflow-y-auto">
-            <li
-              :for={v <- @view.versions}
-              class={[
-                "flex min-h-11 items-center gap-2 rounded-field px-2 py-1 font-mono text-xs sm:min-h-9",
-                v.version == @view.shown && "bg-base-200"
-              ]}
-              data-role="prototype-version-row"
-              data-version={v.version}
-            >
-              <span class="w-8 shrink-0 text-base-content">v{v.version}</span>
-              <span class="shrink-0 whitespace-nowrap text-neutral">{short_time(v.inserted_at)}</span>
-              <span class="min-w-0 flex-1 truncate font-sans text-neutral">{v.publisher}</span>
-              <span :if={v.removed?} class="shrink-0 font-sans text-base-content/50">removed</span>
-              <span
-                :if={not v.removed? and v.version == @view.latest}
-                class="shrink-0 font-sans text-base-content/50"
-              >
-                latest
-              </span>
-              <button
-                :if={@can_pin? and not v.removed? and v.version != @view.shown}
-                type="button"
-                phx-click="pin"
-                phx-value-version={v.version}
-                phx-target={@myself}
-                class="btn btn-ghost btn-xs shrink-0 rounded-field font-sans"
-                data-role="prototype-pin"
-              >
-                Pin this version
-              </button>
-            </li>
-          </ul>
-          <p :if={@pin_error} class="px-1 pt-2 text-xs text-error" role="alert">{@pin_error}</p>
-        <% else %>
-          <p class="flex items-center gap-2 px-1 py-1 text-sm text-base-content/80">
-            <span class="hero-lock-closed size-4 shrink-0 text-neutral" aria-hidden="true"></span>
-            Sealed: no network, no Suite access
-          </p>
-        <% end %>
-      </div>
-
       <%= if @view.state == :removed do %>
         <div
           class="flex flex-wrap items-center justify-center gap-3 rounded-b-xl bg-base-200 px-4 py-8 text-center text-sm text-base-content/70"
@@ -436,6 +375,92 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
           </div>
         </div>
       <% end %>
+
+      <%!-- Everything conditional sits AFTER the room element, never before
+           it. The room element is keyed (it has an id) and its iframe is
+           phx-update="ignore"; an unkeyed node inserted ahead of it makes
+           morphdom detach and re-append it, which reloads the iframe and
+           re-joins the canvas room. That is what happened on every enter
+           and exit while the Escape listener below was the root's first
+           child (#1236; measured in task 01a1389f stage 1: iframe loads
+           1, 2, 3). The versions/menu panel and its backdrop were inserted
+           there too; prototype_frame_test.exs pins the order. --%>
+      <div
+        :if={@fullscreen}
+        phx-window-keydown="fullscreen"
+        phx-value-on="false"
+        phx-key="Escape"
+        phx-target={@myself}
+        data-role="prototype-fullscreen-escape"
+      >
+      </div>
+
+      <button
+        :if={@open}
+        type="button"
+        class="fixed inset-0 z-40 cursor-default bg-base-content/20 sm:bg-transparent"
+        phx-click="close"
+        phx-target={@myself}
+        aria-label="Close"
+      >
+      </button>
+
+      <div
+        :if={@open}
+        role="dialog"
+        phx-target={@myself}
+        phx-window-keydown="close"
+        phx-key="Escape"
+        data-role={"prototype-#{@open}-panel"}
+        class={[
+          "fixed inset-x-0 bottom-0 z-50 rounded-t-2xl border-t border-edge bg-base-100 p-3 shadow-lg",
+          "pb-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px)+0.75rem)]",
+          "sm:absolute sm:inset-x-auto sm:bottom-auto sm:right-1 sm:top-11 sm:w-80 sm:rounded-xl sm:border sm:pb-3"
+        ]}
+      >
+        <%= if @open == :versions do %>
+          <p class="px-1 pb-2 text-xs font-semibold text-base-content/70">Versions</p>
+          <ul class="max-h-72 space-y-0.5 overflow-y-auto">
+            <li
+              :for={v <- @view.versions}
+              class={[
+                "flex min-h-11 items-center gap-2 rounded-field px-2 py-1 font-mono text-xs sm:min-h-9",
+                v.version == @view.shown && "bg-base-200"
+              ]}
+              data-role="prototype-version-row"
+              data-version={v.version}
+            >
+              <span class="w-8 shrink-0 text-base-content">v{v.version}</span>
+              <span class="shrink-0 whitespace-nowrap text-neutral">{short_time(v.inserted_at)}</span>
+              <span class="min-w-0 flex-1 truncate font-sans text-neutral">{v.publisher}</span>
+              <span :if={v.removed?} class="shrink-0 font-sans text-base-content/50">removed</span>
+              <span
+                :if={not v.removed? and v.version == @view.latest}
+                class="shrink-0 font-sans text-base-content/50"
+              >
+                latest
+              </span>
+              <button
+                :if={@can_pin? and not v.removed? and v.version != @view.shown}
+                type="button"
+                phx-click="pin"
+                phx-value-version={v.version}
+                phx-target={@myself}
+                class="btn btn-ghost btn-xs shrink-0 rounded-field font-sans"
+                data-role="prototype-pin"
+              >
+                Pin this version
+              </button>
+            </li>
+          </ul>
+          <p :if={@pin_error} class="px-1 pt-2 text-xs text-error" role="alert">{@pin_error}</p>
+        <% else %>
+          <p class="flex items-center gap-2 px-1 py-1 text-sm text-base-content/80">
+            <span class="hero-lock-closed size-4 shrink-0 text-neutral" aria-hidden="true"></span>
+            Sealed: no network, no Suite access
+          </p>
+        <% end %>
+      </div>
     </div>
     """
   end

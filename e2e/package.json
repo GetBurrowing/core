@@ -4,7 +4,7 @@
   "private": true,
   "description": "End-to-end browser tests for Startup Suite core. Run against a local dev server.",
   "scripts": {
-    "install-browsers": "playwright install chromium chromium-headless-shell",
+    "install-browsers": "playwright install chromium chromium-headless-shell webkit",
     "test": "playwright test",
     "test:headed": "playwright test --headed",
     "test:meeting": "playwright test tests/meeting_av.spec.ts"
