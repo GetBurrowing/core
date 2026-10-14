@@ -55,13 +55,13 @@ import GeoToolbox
         /// 7): a system person or an unresolved entity through PersonResolver,
         /// asking `choose` when several match. A resolved entity is the one Siri
         /// picked from the index, which on two installs may be the wrong
-        /// namesake (round 8, "Message Sam"): unless `confirmsInstall` is
-        /// false (a Shortcut that set the Install), it is used only if no one
-        /// on another signed-in install answers to the same name, else `choose`
-        /// asks (PersonResolver.confirmInstall). Throws a spoken failure, never
-        /// a bare one, and logs each step.
+        /// namesake (round 8, "Message Sam"): it is used only if no one on
+        /// another signed-in install answers to the same name, else `choose`
+        /// asks (PersonResolver.confirmInstall). Always: task 01a13c1d stage 2
+        /// removed the opt-out a set Install gave, see MessagesSendIntent.
+        /// Throws a spoken failure, never a bare one, and logs each step.
         func resolvedBurrowDestination(
-            site: String, env: IntentEnvironment = .current, confirmsInstall: Bool = true, choose: PersonResolver.Choose
+            site: String, env: IntentEnvironment = .current, choose: PersonResolver.Choose
         ) async throws -> MessageDestinationRef {
             IntentLog.step(site, "destination=\(caseName)")
             let person: MessagePersonEntity
@@ -84,10 +84,8 @@ import GeoToolbox
             let found: MessagePersonEntity
             if person.isUnresolved {
                 found = try await PersonResolver.require(person.person, site: site, env: env, choose: choose)
-            } else if confirmsInstall {
-                found = try await PersonResolver.confirmInstall(person, spoken: nil, site: site, env: env, choose: choose)
             } else {
-                found = person
+                found = try await PersonResolver.confirmInstall(person, spoken: nil, site: site, env: env, choose: choose)
             }
             return .person(id: found.id, name: found.name, isAgent: found.isAgent)
         }
@@ -130,14 +128,25 @@ import GeoToolbox
         var links: [URL]
         var scheduledDate: Date?
 
-        /// Burrow's own extra (Shortcuts only; Siri never fills it): narrows the
-        /// person suggestions to one install. A person names its own install.
+        /// Burrow's own extra: narrows the person suggestions to one install.
+        /// A person names its own install.
+        ///
+        /// It is NOT a sign that someone chose an install. InstallQuery has a
+        /// `defaultResult()` (the selected install), and the system fills an
+        /// unset entity parameter from it: a system-run send given only a
+        /// destination (IntentsSystemTests, iOS 27 simulator) logged
+        /// `install=set`. Task 01a13c1d stage 2: until then a
+        /// set Install skipped the cross-install namesake check, and on Ryan's
+        /// iPad (2026-10-14 19:50:27Z, build 13e6b64d6) a Siri send to a name on
+        /// two installs went straight to the DM with no search of the other
+        /// install (the trace holds no `fetch=people` or `route=people` line
+        /// between `step=send` and `route=person_dm`). So the check runs
+        /// whatever this holds, and `install=set|unset` is logged.
         @Parameter(title: "Install")
         var install: InstallEntity?
 
         func perform() async throws -> some ReturnsValue<[MessageEntity]> & ProvidesDialog {
-            // A Shortcut that set the Install chose the person within it.
-            let target = try await destination.resolvedBurrowDestination(site: "send", confirmsInstall: install == nil) { name, people in
+            let target = try await resolvedTarget { name, people in
                 try await choosePerson(self, name: name, people: people)
             }
             let text = content.map { String($0.characters) } ?? ""
@@ -154,6 +163,14 @@ import GeoToolbox
             // for it showed Siri's progress bar for up to 90 s. Ask is the intent
             // that waits for and speaks a reply.
             return .result(value: [entity], dialog: spoken(IntentCopy.sent(space: target.name)))
+        }
+
+        /// The person this send goes to, through the shared namesake check
+        /// (PersonResolver.confirmInstall, as StartCallIntent uses), whatever
+        /// `install` holds.
+        func resolvedTarget(env: IntentEnvironment = .current, choose: PersonResolver.Choose) async throws -> MessageDestinationRef {
+            IntentLog.step("send", "install=\(install == nil ? "unset" : "set")")
+            return try await destination.resolvedBurrowDestination(site: "send", env: env, choose: choose)
         }
     }
 
