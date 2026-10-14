@@ -1287,6 +1287,13 @@ defmodule Platform.RepoLookupBoundaryTest do
     # that rescues and fails open. No boundary caller exists; one would need
     # `Platform.UUID.valid?/1`.
     "platform/orchestration/runtime_supervision.ex" => 6,
+    # 0 -> 1 for task 01a136c1 stage 1: `open_stack_deployer_blocked_event?/1`
+    # (the unstamped-member sweep's open-blocker check) takes the latest
+    # stack_deployer `execution.blocked` time with `select: max(...)`. Triaged
+    # by hand: the `where:` clause pins `e.task_id == ^task_id`, and that id is
+    # the `id` field of a `%Task{}` the sweep's own query just loaded (a
+    # `Platform.Types.UUIDv7` primary key), never a boundary value.
+    "platform/orchestration/task_router_watcher.ex" => 1,
     "platform/org/context.ex" => 4,
     "platform/org/preamble_builder.ex" => 3,
     "platform/org/tenants_summary.ex" => 2,

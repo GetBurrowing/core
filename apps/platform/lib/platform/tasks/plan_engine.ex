@@ -52,6 +52,7 @@ defmodule Platform.Tasks.PlanEngine do
   alias Platform.Tasks.EvidenceCarry
   alias Platform.Tasks.MemberReviewEntry
   alias Platform.Tasks.PlanCompletion
+  alias Platform.Tasks.PostCommit
   alias Platform.Tasks.ReviewDisposition
   alias Platform.Orchestration.ExecutionSpace
 
@@ -681,29 +682,52 @@ defmodule Platform.Tasks.PlanEngine do
         :ok
 
       %Task{} = task ->
-        _ = StackDeployer.handle_member_transition(task, :validation_passed, :in_review)
-
-        # TAIL-stall fix (2026-07-22), direction (2): advance the member
-        # `in_review -> deploying` ON this last-validation-pass event instead
-        # of waiting up to 15 min for the reconcile sweep. The merge
-        # re-trigger above runs FIRST so `merged_into_rollup_at` is stamped
-        # before the deploy-ready gate checks it; we reload to observe the
-        # fresh stamp. `advance_member_to_deploying/1` self-guards
-        # (returns `:noop` unless the member is deploy-ready) and
-        # log-and-swallows, so an async merge that has not stamped yet is a
-        # harmless no-op and the periodic sweep remains the backstop. This is
-        # the direct analog of the commencement fix's post-commit promote
-        # hook — promote on the triggering event, idempotent, never disturb
-        # the validation write.
-        task
-        |> Repo.reload!()
-        |> Stacks.advance_member_to_deploying()
-
+        # Task 01a136c1: deferred to AFTER the enclosing transaction commits.
+        # The merge child (`async: true`) reads through its own connection,
+        # so firing it here, before commit, showed it the validation this
+        # transaction just passed as still pending and it declined the merge
+        # as `{:stages_pending, n - 1, n}` with nothing to retry it. The
+        # deploy promote in `promote_member_to_deploying/1` reads the stamp
+        # the merge writes, so it is deferred too, queued right after it.
+        StackDeployer.handle_member_transition_after_commit(task, :validation_passed, :in_review)
+        PostCommit.run_after_commit(fn -> promote_member_to_deploying(task) end)
         :ok
     end
   rescue
     # The hook is best-effort — never crash evaluate_validation if the
-    # deployer-side lookup or dispatch fails.
+    # deployer-side lookup fails.
+    error ->
+      Logger.warning(
+        "[PlanEngine] stack-member merge re-trigger lookup failed: " <>
+          Exception.message(error)
+      )
+
+      :ok
+  end
+
+  # Queued AFTER the merge thunk above, so in `async: false` mode the stamp
+  # the merge writes is committed before this reload reads it.
+  defp promote_member_to_deploying(%Task{} = task) do
+    # TAIL-stall fix (2026-07-22), direction (2): advance the member
+    # `in_review -> deploying` ON this last-validation-pass event instead
+    # of waiting up to 15 min for the reconcile sweep. The merge
+    # re-trigger above runs FIRST so `merged_into_rollup_at` is stamped
+    # before the deploy-ready gate checks it; we reload to observe the
+    # fresh stamp. `advance_member_to_deploying/1` self-guards
+    # (returns `:noop` unless the member is deploy-ready) and
+    # log-and-swallows, so an async merge that has not stamped yet is a
+    # harmless no-op and the periodic sweep remains the backstop. This is
+    # the direct analog of the commencement fix's post-commit promote
+    # hook — promote on the triggering event, idempotent, never disturb
+    # the validation write.
+    task
+    |> Repo.reload!()
+    |> Stacks.advance_member_to_deploying()
+
+    :ok
+  rescue
+    # The hook is best-effort — never crash evaluate_validation if the
+    # deployer-side dispatch or the deploy promote fails.
     error ->
       Logger.warning(
         "[PlanEngine] stack-member merge re-trigger / deploy promote failed: " <>
@@ -2162,8 +2186,12 @@ defmodule Platform.Tasks.PlanEngine do
           #
           # Task 019e2be4 stage 1: fire the rollup-merge trigger here.
           # `handle_member_transition/3` is async-aware (config
-          # `:platform, :stack_deployer, async: true|false`) and
-          # idempotent: the deployer noops when the member's commit is
+          # `:platform, :stack_deployer, async: true|false`) and runs
+          # AFTER the enclosing transaction commits (task 01a136c1,
+          # `StackDeployer.handle_member_transition_after_commit/3`),
+          # because the async merge child reads through its own
+          # connection and cannot see this transaction's uncommitted
+          # stage and validation writes. It is idempotent: the deployer noops when the member's commit is
           # already on the rollup branch (`{:ok, :already_merged}`),
           # when the review-stage validations haven't all passed
           # (`{:ok, :not_ready}`), or when the task is not actually a
@@ -2189,10 +2217,20 @@ defmodule Platform.Tasks.PlanEngine do
           # deterministically flips the stack to `"deploying"` and emits
           # the `:dispatched` event; the downstream merge trigger then
           # opens the PR via `deploy_validations_ready?/1`'s
-          # `%Stack{status: "deploying"}` pass-through.
+          # `%Stack{status: "deploying"}` pass-through. The dispatch
+          # stays in-transaction (it is an in-DB compare-and-swap); only
+          # the merge trigger is deferred to post-commit, which keeps
+          # dispatch-before-merge.
           {:ok, completed} = complete_plan(plan, :stack_member)
           _ = Stacks.dispatch_stack_deploy(task.stack_id)
-          _ = StackDeployer.handle_member_transition(task, :plan_completed, :in_review)
+
+          _ =
+            StackDeployer.handle_member_transition_after_commit(
+              task,
+              :plan_completed,
+              :in_review
+            )
+
           Repo.preload(completed, stages_query())
 
         true ->
@@ -2511,29 +2549,36 @@ defmodule Platform.Tasks.PlanEngine do
   # instead of published. On commit the queue is flushed IN ORDER; on
   # rollback it is DISCARDED — a transition that did not commit must not be
   # announced, which the pre-commit emit could not honour either way.
+  #
+  # The same scope also opens a `Platform.Tasks.PostCommit` scope (task
+  # 01a136c1), so side effects queued with `PostCommit.run_after_commit/2`
+  # (the stack-member rollup-merge triggers) run from the same outermost
+  # commit point. Broadcasts flush first, then the post-commit thunks.
   defp deferring_broadcasts(fun) do
-    case Process.get(@deferred_broadcasts_key) do
-      # Already inside an outer scope — let the outermost one flush, so a
-      # nested transaction cannot publish before the outer commit.
-      nil ->
-        Process.put(@deferred_broadcasts_key, [])
+    PostCommit.scope(fn ->
+      case Process.get(@deferred_broadcasts_key) do
+        # Already inside an outer scope — let the outermost one flush, so a
+        # nested transaction cannot publish before the outer commit.
+        nil ->
+          Process.put(@deferred_broadcasts_key, [])
 
-        try do
-          result = fun.()
+          try do
+            result = fun.()
 
-          case result do
-            {:ok, _} -> flush_deferred_broadcasts()
-            _ -> :ok
+            case result do
+              {:ok, _} -> flush_deferred_broadcasts()
+              _ -> :ok
+            end
+
+            result
+          after
+            Process.delete(@deferred_broadcasts_key)
           end
 
-          result
-        after
-          Process.delete(@deferred_broadcasts_key)
-        end
-
-      _queued ->
-        fun.()
-    end
+        _queued ->
+          fun.()
+      end
+    end)
   end
 
   defp defer_broadcast(message) do

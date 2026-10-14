@@ -4967,7 +4967,8 @@ defmodule Platform.Tasks do
   defp maybe_advance_stack_planning(_), do: :ok
 
   # Decide whether the just-approved task can move into execution or has to
-  # park in `blocked` until its dependencies finish. Returns `{task, frozen}`
+  # park (`stack_pending` for a stack wait, `blocked` for a `done`-threshold
+  # dependency wait) until its dependencies finish. Returns `{task, frozen}`
   # where `task` is the post-write struct and `frozen` is the list of
   # messages frozen by Policy 2 (empty unless the task moved into
   # `:in_progress`). Broadcasting `frozen` is the caller's responsibility
@@ -4992,43 +4993,89 @@ defmodule Platform.Tasks do
   defp do_apply_dispatch_gate(%Task{} = task) do
     case Platform.Tasks.Stacks.CommencementGate.open?(task) do
       false ->
-        # A late member of a SHIPPED stack (ADR 0045 decision 7) is refused
-        # by `require_stack_not_shipped_for/2` inside the primitive. Roll
-        # the enclosing approval back with the structured refusal rather
-        # than crashing on a bare `{:ok, _}` match — the approver reads
-        # the ship-refusal message instead of a MatchError.
-        case transition_task_status(task, "stack_pending") do
-          {:ok, pending} ->
-            {pending, []}
-
-          {:error, :stack_already_shipped, detail} ->
-            Repo.rollback({:stack_already_shipped, detail})
-        end
+        park_stack_pending(task)
 
       true ->
-        case unmet_dependencies(task) do
-          [] ->
-            {:ok, updated} = transition_task_status(task, "in_progress")
-
-            case Platform.Chat.FreezePolicy.freeze_messages_for_task(updated) do
-              {:ok, frozen} ->
-                {updated, frozen}
-
-              {:error, reason} ->
-                Repo.rollback(reason)
-            end
-
-          unmet ->
-            {:ok, blocked} = transition_task_status(task, "blocked")
-            existing_metadata = blocked.metadata || %{}
-
-            merged_metadata =
-              Map.put(existing_metadata, "unmet_dependencies", Enum.map(unmet, & &1.id))
-
-            {:ok, with_metadata} = update_task(blocked, %{metadata: merged_metadata})
-            {with_metadata, []}
+        # Task 01a136c1 stage 2: an open commencement gate is not a licence
+        # to skip the stack's own DAG. A member whose in-stack dependencies
+        # have not landed on the rollup parks at `stack_pending`, which every
+        # in-stack promotion path (`Stacks.try_promote/1` via
+        # `sweep_stack_dependents/1`, `sweep_stack_pending_members/0` and
+        # `redrive_gate/1`) releases. Parking it at `blocked` instead (the
+        # pre-fix behaviour) waited on a `done` threshold that an in-stack
+        # dependency only reaches when the stack ships, which cannot happen
+        # while this member is unmerged: a deadlock.
+        #
+        # OUT OF SCOPE: a member with BOTH an unmet cross-stack dependency
+        # and an unlanded in-stack one takes this branch and parks at
+        # `stack_pending`, so `try_promote/1` releases it on in-stack
+        # clearance alone, with the cross-stack dependency still undone.
+        # The converse mixed case (in-stack landed, cross-stack unmet) goes
+        # `blocked` below, and `sweep_unblocked_dependents/1` re-checks it
+        # with the full `done`-threshold `unmet_dependencies/1`, in-stack ids
+        # included. Mixed-dependency handling is deliberately not built here.
+        #
+        # `unblocked_in_stack?/1` can shell out for sha reachability inside
+        # `approve_plan`'s transaction. `try_promote/1` already carries the
+        # same exposure inside `remove_dependency_edge`; accepted here too.
+        if is_binary(task.stack_id) and not Platform.Tasks.Stacks.unblocked_in_stack?(task) do
+          park_stack_pending(task)
+        else
+          gate_open_dispatch(task)
         end
     end
+  end
+
+  # A late member of a SHIPPED stack (ADR 0045 decision 7) is refused by
+  # `require_stack_not_shipped_for/2` inside the primitive. Roll the
+  # enclosing approval back with the structured refusal rather than
+  # crashing on a bare `{:ok, _}` match: the approver reads the
+  # ship-refusal message instead of a MatchError.
+  defp park_stack_pending(%Task{} = task) do
+    case transition_task_status(task, "stack_pending") do
+      {:ok, pending} ->
+        {pending, []}
+
+      {:error, :stack_already_shipped, detail} ->
+        Repo.rollback({:stack_already_shipped, detail})
+    end
+  end
+
+  # Gate open and, for a stack member, every in-stack dependency landed.
+  # In-stack dependencies are dropped from the unmet set because their
+  # threshold is the rollup-merge stamp (just satisfied), not `done`. A
+  # non-stack task's unmet set is `unmet_dependencies/1` unchanged.
+  defp gate_open_dispatch(%Task{} = task) do
+    case dispatch_gate_unmet_dependencies(task) do
+      [] ->
+        {:ok, updated} = transition_task_status(task, "in_progress")
+
+        case Platform.Chat.FreezePolicy.freeze_messages_for_task(updated) do
+          {:ok, frozen} ->
+            {updated, frozen}
+
+          {:error, reason} ->
+            Repo.rollback(reason)
+        end
+
+      unmet ->
+        {:ok, blocked} = transition_task_status(task, "blocked")
+        existing_metadata = blocked.metadata || %{}
+
+        merged_metadata =
+          Map.put(existing_metadata, "unmet_dependencies", Enum.map(unmet, & &1.id))
+
+        {:ok, with_metadata} = update_task(blocked, %{metadata: merged_metadata})
+        {with_metadata, []}
+    end
+  end
+
+  defp dispatch_gate_unmet_dependencies(%Task{stack_id: nil} = task),
+    do: unmet_dependencies(task)
+
+  defp dispatch_gate_unmet_dependencies(%Task{} = task) do
+    in_stack = MapSet.new(Platform.Tasks.Stacks.in_stack_dependency_ids(task))
+    Enum.reject(unmet_dependencies(task), &MapSet.member?(in_stack, &1.id))
   end
 
   @doc """
@@ -8050,11 +8097,21 @@ defmodule Platform.Tasks do
   # validations all `passed`) and idempotency, so this seam is
   # intentionally permissive: we always invoke when the trigger
   # condition fires and let the deployer decide whether to act.
+  #
+  # Task 01a136c1: routed through `PostCommit.run_after_commit/2` (via
+  # `StackDeployer.handle_member_transition_after_commit/3`). When
+  # this transition runs inside the plan engine's transaction (e.g.
+  # `MemberReviewEntry.maybe_enter_in_review/2` during
+  # `evaluate_validation/2`), the async merge child must not read before
+  # that transaction commits. Outside any `PostCommit` scope the call runs
+  # immediately, as it always did.
   defp maybe_merge_into_rollup(%Task{stack_id: nil}, _to), do: :ok
 
   defp maybe_merge_into_rollup(%Task{stack_id: stack_id} = task, to)
        when is_binary(stack_id) do
-    _ = Platform.Tasks.StackDeployer.handle_member_transition(task, :transitioned, to)
+    _ =
+      Platform.Tasks.StackDeployer.handle_member_transition_after_commit(task, :transitioned, to)
+
     :ok
   end
 

@@ -26,7 +26,7 @@ defmodule Platform.Tasks.ReviewRequests do
   alias Platform.Inbox
   alias Platform.Repo
   alias Platform.Tasks
-  alias Platform.Tasks.{PlanEngine, ReviewItem, ReviewRequest, Validation}
+  alias Platform.Tasks.{PlanEngine, PostCommit, ReviewItem, ReviewRequest, Validation}
 
   # ── PubSub ─────────────────────────────────────────────────────────────
 
@@ -468,66 +468,73 @@ defmodule Platform.Tasks.ReviewRequests do
   defp resolve_request(request) do
     now = DateTime.utc_now()
 
-    Repo.transaction(fn ->
-      # Mark the request itself as resolved
-      request
-      |> ReviewRequest.changeset(%{status: "resolved", resolved_at: now})
-      |> Repo.update!()
+    # Task 01a136c1: this is an OUTER transaction around
+    # `PlanEngine.evaluate_validation/2`. The plan engine's post-commit
+    # scope would otherwise flush the stack-member merge triggers at the
+    # INNER transaction's return, which is still uncommitted here. Opening
+    # the scope out here makes them run after THIS commit.
+    PostCommit.scope(fn ->
+      Repo.transaction(fn ->
+        # Mark the request itself as resolved
+        request
+        |> ReviewRequest.changeset(%{status: "resolved", resolved_at: now})
+        |> Repo.update!()
 
-      # Clear any sibling pending requests for the same validation so the UI
-      # only reflects the currently active manual-review gate.
-      resolve_sibling_requests(request, now)
+        # Clear any sibling pending requests for the same validation so the UI
+        # only reflects the currently active manual-review gate.
+        resolve_sibling_requests(request, now)
 
-      all_approved? = Enum.all?(request.items, &(&1.status == "approved"))
+        all_approved? = Enum.all?(request.items, &(&1.status == "approved"))
 
-      if all_approved? do
-        PlanEngine.evaluate_validation(request.validation_id, %{
-          status: "passed",
-          evidence: %{review_request_id: request.id},
-          evaluated_by: "review_gate"
-        })
-      else
-        # Collect feedback from rejected items
-        feedback_lines =
-          request.items
-          |> Enum.filter(&(&1.status == "needs_revision"))
-          |> Enum.map(fn item ->
-            feedback = item.feedback || "(no feedback provided)"
-            "**#{item.label}**: #{feedback}"
-          end)
-
-        consolidated =
-          "## Review Feedback\n\n" <>
-            rejected_by_line(request.items) <>
-            "The following items need revision:\n\n" <>
-            Enum.join(feedback_lines, "\n\n")
-
-        PlanEngine.evaluate_validation(request.validation_id, %{
-          status: "failed",
-          evidence: %{review_request_id: request.id, feedback: consolidated},
-          evaluated_by: "review_gate"
-        })
-
-        # Post consolidated feedback to the execution space. The reason a human
-        # typed is the single most load-bearing thing the next dispatched agent
-        # reads, so a missing execution space is worth a log line rather than a
-        # silent skip.
-        if request.execution_space_id do
-          Platform.Orchestration.ExecutionSpace.post_engagement(
-            request.execution_space_id,
-            consolidated
-          )
+        if all_approved? do
+          PlanEngine.evaluate_validation(request.validation_id, %{
+            status: "passed",
+            evidence: %{review_request_id: request.id},
+            evaluated_by: "review_gate"
+          })
         else
-          require Logger
+          # Collect feedback from rejected items
+          feedback_lines =
+            request.items
+            |> Enum.filter(&(&1.status == "needs_revision"))
+            |> Enum.map(fn item ->
+              feedback = item.feedback || "(no feedback provided)"
+              "**#{item.label}**: #{feedback}"
+            end)
 
-          Logger.warning(
-            "review request #{request.id} rejected with feedback but has no execution_space_id; " <>
-              "the reason reached the validation row only"
-          )
+          consolidated =
+            "## Review Feedback\n\n" <>
+              rejected_by_line(request.items) <>
+              "The following items need revision:\n\n" <>
+              Enum.join(feedback_lines, "\n\n")
+
+          PlanEngine.evaluate_validation(request.validation_id, %{
+            status: "failed",
+            evidence: %{review_request_id: request.id, feedback: consolidated},
+            evaluated_by: "review_gate"
+          })
+
+          # Post consolidated feedback to the execution space. The reason a human
+          # typed is the single most load-bearing thing the next dispatched agent
+          # reads, so a missing execution space is worth a log line rather than a
+          # silent skip.
+          if request.execution_space_id do
+            Platform.Orchestration.ExecutionSpace.post_engagement(
+              request.execution_space_id,
+              consolidated
+            )
+          else
+            require Logger
+
+            Logger.warning(
+              "review request #{request.id} rejected with feedback but has no execution_space_id; " <>
+                "the reason reached the validation row only"
+            )
+          end
+
+          maybe_return_task_to_in_progress(request.task_id)
         end
-
-        maybe_return_task_to_in_progress(request.task_id)
-      end
+      end)
     end)
 
     outcome = if Enum.all?(request.items, &(&1.status == "approved")), do: :passed, else: :failed
