@@ -14,7 +14,7 @@ defmodule PlatformWeb.Components.ChatMessage do
 
   alias Phoenix.LiveView.JS
 
-  import PlatformWeb.Chat.CanvasRenderer, only: [canvas_document: 1]
+  import PlatformWeb.Components.ChatInlineCanvas, only: [inline_canvas: 1]
   import PlatformWeb.AvatarComponents, only: [human_avatar: 1, agent_avatar: 1]
   import PlatformWeb.Components.ChatHelpers
 
@@ -51,6 +51,10 @@ defmodule PlatformWeb.Components.ChatMessage do
   attr(:refused_summons, :map, default: %{})
   # The active space's kind, which picks who the notice says can act.
   attr(:space_kind, :string, default: "channel")
+  # Task 01a13884 stage 4: message ids whose inline canvas has been mounted
+  # (scrolled near the viewport), or `:all` to render every canvas directly.
+  # See `PlatformWeb.Components.ChatInlineCanvas`.
+  attr(:mounted_inline_canvas_ids, :any, default: :all)
 
   def chat_message(assigns) do
     ~H"""
@@ -384,13 +388,13 @@ defmodule PlatformWeb.Components.ChatMessage do
             :if={@msg.content_type == "canvas"}
             class="mt-1"
           >
-            <div :if={Map.get(@canvases_by_id, @msg.canvas_id)} class="min-w-0 overflow-hidden">
-              <.canvas_document
-                canvas={Map.get(@canvases_by_id, @msg.canvas_id)}
-                inline={true}
-                dom_id_base="chat-message-inline"
-              />
-            </div>
+            <.inline_canvas
+              :if={Map.get(@canvases_by_id, @msg.canvas_id)}
+              msg={@msg}
+              canvas={Map.get(@canvases_by_id, @msg.canvas_id)}
+              title={CanvasHooks.message_canvas_title(@msg, @canvases_by_id)}
+              mounted_ids={@mounted_inline_canvas_ids}
+            />
 
             <div
               :if={is_nil(Map.get(@canvases_by_id, @msg.canvas_id))}

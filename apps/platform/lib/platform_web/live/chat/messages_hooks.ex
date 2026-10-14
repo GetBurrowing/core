@@ -41,6 +41,12 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
       messages whose `@[agent]` mention was refused (task 01a0fd62 stage 2).
       Author-only and ephemeral: it is fed by a direct `send/2` from
       `Platform.Chat` to the posting process, never by PubSub.
+    * `:mounted_inline_canvas_ids` — MapSet of message ids whose inline canvas
+      renders its document rather than a placeholder (task 01a13884 stage 4;
+      see `PlatformWeb.Components.ChatInlineCanvas`). Reset with every message
+      window; canvases that arrive live are mounted on insert.
+    * `:load_older_failed?` — the last `load_older_messages` raised, so the
+      top sentinel offers "Couldn't load earlier messages. Retry".
 
   ## Events
 
@@ -50,6 +56,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     * Threads: `"open_thread"`, `"close_thread"`, `"send_thread_message"`,
       `"toggle_inline_thread"`, `"send_inline_thread_message"`
     * Refused summons: `"dismiss_refused_summon"`
+    * Lazy canvases: `"inline_canvas_mount"` (`message_id` or `message_ids`)
 
   ## Info handled
 
@@ -156,6 +163,8 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     |> assign_compose("")
     |> assign_thread_compose("")
     |> assign(:refused_summons, %{})
+    |> assign(:mounted_inline_canvas_ids, MapSet.new())
+    |> assign(:load_older_failed?, false)
     |> stream(:messages, [])
     |> attach_hook(:messages_events, :handle_event, &handle_event/3)
     |> attach_hook(:messages_info, :handle_info, &handle_info/2)
@@ -358,8 +367,31 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     |> assign(:loading_newer, false)
     |> assign(:newest_evicted?, newest_evicted?)
     |> assign(:evicted_tail_message_ids, MapSet.new())
+    |> assign(:mounted_inline_canvas_ids, MapSet.new())
+    |> assign(:load_older_failed?, false)
     |> stream(:messages, labelled, reset: true)
     |> restore_draft(space.id)
+  end
+
+  @doc """
+  `load_older_messages/2` for the top sentinel: a raise clears
+  `:loading_older` and sets `:load_older_failed?` instead of crashing the
+  LiveView, so the sentinel can offer a retry (task 01a13884 stage 4). The
+  stream is untouched on failure, so the reading position is unchanged.
+  """
+  @spec try_load_older_messages(Phoenix.LiveView.Socket.t(), binary()) ::
+          Phoenix.LiveView.Socket.t()
+  def try_load_older_messages(socket, space_id) when is_binary(space_id) do
+    socket
+    |> load_older_messages(space_id)
+    |> assign(:load_older_failed?, false)
+  rescue
+    e ->
+      Logger.warning("load_older_messages failed: #{Exception.message(e)}")
+
+      socket
+      |> assign(:loading_older, false)
+      |> assign(:load_older_failed?, true)
   end
 
   @doc """
@@ -679,6 +711,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
       |> enrich_with_reactions(socket)
 
     socket
+    |> mount_live_canvas(enriched)
     |> stream_insert_with_day_label(enriched)
     |> put_attachment_map_entry(message.id, attachments)
   end
@@ -1020,6 +1053,18 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   # Author-only refused-summon notice (task 01a0fd62 stage 2). Dropping the
   # key and re-rendering the row is the whole of it: the notice was never
   # persisted, so there is nothing else to undo.
+  # Lazy inline canvases (task 01a13884 stage 4). The LazyInlineCanvas hook
+  # pushes the ids of placeholders that came within 600px of the viewport.
+  # Only a canvas message of the ACTIVE space that is already in this
+  # window is mounted: the id comes from the client, and
+  # `reinsert_stream_message/2`'s fetch is not space-scoped, so the same
+  # `same_active_space?/2` guard the `{:canvas_updated, _}` clause uses
+  # decides, and membership of `:rendered_message_ids` stops an id from
+  # appending a row the window never held.
+  defp handle_event("inline_canvas_mount", params, socket) do
+    {:halt, mount_inline_canvases(socket, inline_canvas_mount_ids(params))}
+  end
+
   defp handle_event("dismiss_refused_summon", %{"id" => msg_id}, socket) do
     {:halt,
      socket
@@ -1100,6 +1145,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
 
         {:halt,
          socket
+         |> mount_live_canvas(enriched)
          |> stream_insert_with_day_label(enriched)
          |> put_attachment_map_entry(msg.id, attachments)
          |> SearchHooks.maybe_refresh()}
@@ -1432,6 +1478,32 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     |> Enum.reverse()
   end
 
+  @inline_canvas_mount_cap 50
+
+  defp inline_canvas_mount_ids(%{"message_ids" => ids}) when is_list(ids),
+    do: ids |> Enum.filter(&is_binary/1) |> Enum.take(@inline_canvas_mount_cap)
+
+  defp inline_canvas_mount_ids(%{"message_id" => id}) when is_binary(id), do: [id]
+  defp inline_canvas_mount_ids(_params), do: []
+
+  defp mount_inline_canvases(socket, []), do: socket
+
+  defp mount_inline_canvases(socket, ids) do
+    mounted = socket.assigns[:mounted_inline_canvas_ids] || MapSet.new()
+    rendered = socket.assigns[:rendered_message_ids] || MapSet.new()
+
+    ids
+    |> Enum.uniq()
+    |> Enum.filter(&(MapSet.member?(rendered, &1) and not MapSet.member?(mounted, &1)))
+    |> Chat.get_messages_by_ids(scope: socket.assigns[:external_scope])
+    |> Enum.filter(&(&1.content_type == "canvas" and same_active_space?(socket, &1)))
+    |> Enum.reduce(socket, fn msg, acc ->
+      acc
+      |> update(:mounted_inline_canvas_ids, &MapSet.put(&1 || MapSet.new(), msg.id))
+      |> stream_reinsert_with_day_label(enrich_with_reactions(msg, acc))
+    end)
+  end
+
   @doc """
   Re-renders a single stream row by fetching the latest message from the DB
   and stream_inserting it (with day-label bookkeeping). Used when a row-level
@@ -1749,6 +1821,17 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
         stream_insert_with_day_label(socket, msg)
     end
   end
+
+  # Called from the two LIVE insert paths only (`{:new_message, _}` and
+  # `stream_insert_message/3`), never from `stream_insert_with_day_label/2`,
+  # which `load_newer_messages/2` also uses for a 50-message re-hydration.
+  # A canvas that arrives while the space is open (posted live, or created
+  # by this viewer) renders mounted: it lands at the reader's position, so a
+  # placeholder would only flash before the hook mounted it anyway.
+  defp mount_live_canvas(socket, %{content_type: "canvas", id: id}),
+    do: update(socket, :mounted_inline_canvas_ids, &MapSet.put(&1 || MapSet.new(), id))
+
+  defp mount_live_canvas(socket, _msg), do: socket
 
   defp drop_day_label(socket, msg_id) do
     update(socket, :msg_day_labels, &Map.delete(&1 || %{}, msg_id))

@@ -16,6 +16,7 @@ import MessageContextPopover from "./message_context_popover"
 import CodeBlock from "./code_block"
 import ComposeInput from "./compose_input"
 import CopyToClipboard from "./copy_to_clipboard"
+import DoneColumnState from "./done_column_state"
 import DragDropUpload from "./drag_drop_upload"
 import DrawerSearchFocus from "./drawer_search_focus"
 import EmbedCanvasScale from "./embed_canvas_scale"
@@ -29,6 +30,7 @@ import LargeUpload, { LargeUploadTimeline } from "./large_upload"
 import InlineFocus from "./inline_focus"
 import InlineThread from "./inline_thread"
 import KanbanDragDrop from "./kanban_drag_drop"
+import LazyInlineCanvas from "./lazy_inline_canvas"
 import LastProject from "./last_project"
 import LongpressMenu from "./longpress_menu"
 import MarkdownEditor from "./markdown_editor"
@@ -84,6 +86,7 @@ export default {
   CodeBlock,
   ComposeInput,
   CopyToClipboard,
+  DoneColumnState,
   DragDropUpload,
   DrawerSearchFocus,
   EmbedCanvasScale,
@@ -93,6 +96,7 @@ export default {
   HexField,
   InfiniteScroll,
   InlineEdit,
+  LazyInlineCanvas,
   LargeUpload,
   LargeUploadTimeline,
   InlineFocus,

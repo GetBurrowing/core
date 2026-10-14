@@ -1030,8 +1030,16 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
              — there's a ~34px gap where the panel ends above the nav's
              safe-area. Replaces PR #331's inner-scroller `pb-[calc(...)]`,
              which left visible dead space below content. --%>
+      <%!-- The mobile list under the panel is hidden by a class on that one
+           element, applied when the panel mounts and lifted when it is
+           removed (task 01a13884 stage 2). JS class ops are sticky across
+           patches, so BoardComponent takes no detail-panel attr and a
+           select or close never re-renders the board. --%>
       <div
         :if={@show_detail && @selected_task}
+        data-role="task-detail-panel"
+        phx-mounted={JS.add_class("max-lg:hidden", to: "#tasks-mobile-list")}
+        phx-remove={JS.remove_class("max-lg:hidden", to: "#tasks-mobile-list")}
         class="fixed top-0 bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))] right-0 z-30 flex w-full max-w-lg lg:max-w-[min(60vw,60rem)] flex-col border-l border-edge bg-base-100 shadow-xl safe-area-top"
       >
         <div class="flex items-center justify-between border-b border-edge px-4 py-3">

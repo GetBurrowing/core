@@ -158,6 +158,17 @@ defmodule PlatformWeb.TasksLiveBoardInvarianceTest do
 
   defp count_elements(view, selector), do: view |> query(selector) |> Enum.count()
 
+  # Done renders collapsed by default (task 01a13884 stage 3). The spread
+  # keeps a done card on purpose, so open the column before measuring.
+  defp open_done(view) do
+    _ =
+      render_click(with_target(view, "#tasks-board"), "board_toggle_done", %{
+        "expanded" => "true"
+      })
+
+    view
+  end
+
   describe "GUARD 1 — board invariance under zero ADR-0046 data" do
     test "a board of defaults renders today's board, and one recorded outcome changes that",
          %{conn: conn} do
@@ -175,7 +186,7 @@ defmodule PlatformWeb.TasksLiveBoardInvarianceTest do
       end
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
-      html = render(view)
+      html = view |> open_done() |> render()
 
       # PIN THE BOARD NON-EMPTY FIRST. Both assertions below are `refute
       # html =~ _`, and an empty board satisfies them perfectly — which is
@@ -206,7 +217,7 @@ defmodule PlatformWeb.TasksLiveBoardInvarianceTest do
       # stage 2's own test, and re-mounting keeps this guard a comparison of
       # two renders of the same board rather than a test of PubSub.
       {:ok, refreshed, _html} = live(conn, ~p"/tasks")
-      refreshed_html = render(refreshed)
+      refreshed_html = refreshed |> open_done() |> render()
 
       assert refreshed_html =~ "planning-step"
       assert refreshed_html =~ "rounded-t-none"
@@ -250,6 +261,7 @@ defmodule PlatformWeb.TasksLiveBoardInvarianceTest do
       set_outcomes(dragged, failed_architecture())
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
+      open_done(view)
 
       # PIN EVERY QUERY NON-EMPTY BEFORE ASSERTING OVER IT. `Enum.all?/2` and
       # `Enum.empty?/1` are both `true` on `[]`, so "every draggable card is
@@ -987,7 +999,13 @@ defmodule PlatformWeb.TasksLiveShellNonAccretionTest do
   # `Platform.Inbox.dismiss_sponsor_row_on_open/2`, not in the shell. 651 is
   # inside the 653 budget in `scripts/surface-budgets.txt`, which is not
   # raised.
-  @shell_line_count 651
+  #
+  # LOWERED 651 -> 650 (-1), task 01a13884 stage 2. ARITHMETIC: 651 - 1 =
+  # 650, the `|> BoardHooks.refresh_board()` line dropped from the
+  # `{:detail_closed}` clause. Closing the panel re-queried every task and
+  # re-sent the board; PubSub already keeps the board fresh (a delete
+  # broadcasts `{:task_deleted, _}`). Down, so the promise above holds.
+  @shell_line_count 650
 
   defp line_count(source), do: source |> :binary.matches("\n") |> length()
 
