@@ -876,6 +876,33 @@ final class MessagePersonEntityMetadataTests: XCTestCase {
         XCTAssertEqual(types("importableTypes"), ["com.apple.appintents.IntentPerson"], "Siri cannot hand an IntentPerson back to MessagePersonEntity")
     }
 
+    /// Task 01a13c1d stage 3: Siri reaches AskAgentIntent only through an
+    /// app-named App Shortcut phrase (it is not a schema intent, and a
+    /// phrase cannot carry the question). The BUILT metadata must list them.
+    func testAskAgentIntentPublishesTheAppNamedAskPhrases() throws {
+        let url = Bundle.main.bundleURL.appendingPathComponent("Metadata.appintents/extract.actionsdata")
+        let data = try Data(contentsOf: url)
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let shortcuts = try XCTUnwrap(root["autoShortcuts"] as? [[String: Any]])
+        let ask = try XCTUnwrap(shortcuts.first { $0["actionIdentifier"] as? String == "AskAgentIntent" }, "no Ask App Shortcut")
+        let phrases = ((ask["phraseTemplates"] as? [[String: Any]]) ?? []).compactMap { $0["key"] as? String }
+        XCTAssertEqual(
+            Set(phrases),
+            [
+                "Ask ${applicationName}",
+                "Ask ${applicationName} a question",
+                "Ask an agent in ${applicationName}",
+                "Ask ${agent} in ${applicationName}",
+                "Ask ${applicationName} ${agent}",
+                "Ask ${agent} a question in ${applicationName}",
+            ])
+        let actions = try XCTUnwrap(root["actions"] as? [String: Any])
+        let intent = try XCTUnwrap(actions["AskAgentIntent"] as? [String: Any])
+        let parameters = try XCTUnwrap(intent["parameters"] as? [[String: Any]])
+        let question = try XCTUnwrap(parameters.first { $0["name"] as? String == "question" })
+        XCTAssertEqual(question["isOptional"] as? Bool, true, "an app-named phrase must reach perform, which asks for the question")
+    }
+
     /// The iOS 27 schema declares MessagePerson's `person` with indexing key
     /// `primaryRecipients`; Apple's adopters carry it as
     /// `spotlightAttributeKey`, and without it Siri's planner fails

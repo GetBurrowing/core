@@ -32,6 +32,24 @@ final class CancellingClock: IntentSleeper {
 
 private struct Declined: Error {}
 
+/// Log lines captured through `IntentLog.observer`.
+private final class AskStepLines: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lines: [String] = []
+
+    func add(_ line: String) {
+        lock.lock()
+        lines.append(line)
+        lock.unlock()
+    }
+
+    var all: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return lines
+    }
+}
+
 final class IntentsTests: XCTestCase {
     private let a = "a.example.com"
     private let b = "b.example.com"
@@ -327,6 +345,70 @@ final class IntentsTests: XCTestCase {
         XCTAssertEqual(StubURLProtocol.requests.count, 2 + polls, "no request once the window has passed")
         XCTAssertEqual(clock.now.timeIntervalSince(start), AskAgent.replyWindow + AskAgent.pollInterval)
         XCTAssertEqual(IntentCopy.agentTimedOut(agent: "Saru"), "Saru is still working on it. Burrow will notify you.")
+    }
+
+    // MARK: Ask an agent with no question yet (task 01a13c1d stage 3)
+
+    /// "Ask Saru in Burrow" carries no question (a phrase cannot hold a
+    /// String), so the Ask asks for one by the agent's name, once, and then
+    /// posts the answer and waits for the reply.
+    func testAnAskWithNoQuestionAsksForOneByTheAgentsNameAndThenWaitsForTheReply() async throws {
+        let lines = AskStepLines()
+        IntentLog.observer = { lines.add($0) }
+        defer { IntentLog.observer = nil }
+        var prompts: [String] = []
+        let question = try await AskAgentIntent.resolvedQuestion(nil, agent: "Saru") { prompt in
+            prompts.append(prompt)
+            return "  Is the banner copy final?  "
+        }
+        XCTAssertEqual(prompts, ["What should I ask Saru?"], "asked once, by the agent's name")
+        XCTAssertEqual(question, "Is the banner copy final?")
+
+        let actions = IntentActions(env: env(tokens: [a: "token-for-a"], hosts: [a]))
+        StubURLProtocol.respond = askResponder(polls: [
+            #"[{"id":"m3","author_type":"agent","author_id":"\#(agentID)","content":"Yes, final."}]"#
+        ])
+        let outcome = try await actions.askAgent(agent(a), question: question)
+
+        XCTAssertEqual(outcome, .reply("Yes, final."))
+        let posts = StubURLProtocol.requests.filter { $0.httpMethod == "POST" && $0.url?.path == "/api/app/spaces/\(dmID)/messages" }
+        XCTAssertEqual(posts.count, 1, "the question is posted exactly once")
+        let steps = lines.all.filter { $0.hasPrefix("step=ask ") }.map {
+            $0.replacingOccurrences(of: #"\d+$"#, with: "N", options: .regularExpression)
+        }
+        XCTAssertEqual(steps, ["step=ask question=requested", "step=ask outcome=answered seconds=N"])
+        for line in lines.all {
+            for banned in ["banner", "final", "Saru"] {
+                XCTAssertFalse(line.contains(banned), "a log line carries the question, reply or name: \(line)")
+            }
+        }
+    }
+
+    func testAnAskThatAlreadyHasAQuestionDoesNotAskAgain() async throws {
+        var asked = 0
+        let question = try await AskAgentIntent.resolvedQuestion(" What's deployed? ", agent: "Saru") { _ in
+            asked += 1
+            return "other"
+        }
+        XCTAssertEqual(question, "What's deployed?")
+        XCTAssertEqual(asked, 0)
+    }
+
+    func testABlankQuestionIsAskedForAndABlankAnswerIsRefusedBeforeAnyRequest() async throws {
+        StubURLProtocol.respond = { _ in (500, Data()) }
+        var asked = 0
+        do {
+            _ = try await AskAgentIntent.resolvedQuestion("   ", agent: "Saru") { _ in
+                asked += 1
+                return " "
+            }
+            XCTFail("a blank answer must not become a question")
+        } catch IntentFailure.emptyMessage {
+        } catch {
+            XCTFail("unexpected \(error)")
+        }
+        XCTAssertEqual(asked, 1, "a blank question is asked for, once")
+        XCTAssertTrue(StubURLProtocol.requests.isEmpty)
     }
 
     // MARK: Ask an agent, iOS 27 long-running window (task 01a111bb stage 5)

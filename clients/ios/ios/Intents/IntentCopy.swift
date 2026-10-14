@@ -85,6 +85,9 @@ enum IntentCopy {
         return "\(agent) says: \(lead)\(end ? "" : ".")"
     }
 
+    /// Siri's follow-up when an Ask has no question yet.
+    static func whatShouldIAsk(agent: String) -> String { "What should I ask \(agent)?" }
+
     static func agentTimedOut(agent: String) -> String {
         "\(agent) is still working on it. Burrow will notify you."
     }
