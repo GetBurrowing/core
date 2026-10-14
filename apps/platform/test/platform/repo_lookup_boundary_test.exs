@@ -363,8 +363,8 @@ defmodule Platform.RepoLookupBoundaryTest do
     # ── Email module (task 01a0cf21-29ba-7001-8690-3c59d6cb17c6) ──────
     # Stages 1-3 landed these without classifying them; stage 4 records them
     # together with its own `mailbox.ex` / `email_live.ex` sites.
-    {"platform/mail.ex", :get, "Account", 3, :safe_internal,
-     "two sit behind Platform.UUID.valid?/1 on the same value in the same `with` (`get_account/2` checks org_id AND id; `fetch_account_by_id/1`, the first step of `resolve_sender/3`, checks account_id, which arrives from a draft row or an MCP/deploy payload); the third, `authorize_manage/2`, reads `id` off an `%Account{}` struct the caller already loaded through one of those guarded getters — a `mail_accounts` UUIDv7 PK"},
+    {"platform/mail.ex", :get, "Account", 4, :safe_internal,
+     "two sit behind Platform.UUID.valid?/1 on the same value in the same `with` (`get_account/2` checks org_id AND id; `fetch_account_by_id/1`, the first step of `resolve_sender/3`, checks account_id, which arrives from a draft row or an MCP/deploy payload); the third, `authorize_manage/2`, reads `id` off an `%Account{}` struct the caller already loaded through one of those guarded getters — a `mail_accounts` UUIDv7 PK; the fourth (task 01a13ba5 stage 1, `start_backfill/4`) re-reads the same struct's `id` AFTER `authorize_manage/2` passed, for a fresh eligibility check"},
     {"platform/mail.ex", :get_by, "Sender", 2, :safe_internal,
      "both keyed `account_id:` read off an already-loaded `%Account{}` struct (a `mail_accounts` PK) plus `key:`, a `:string` column that cannot raise a cast error; `fetch_sender/2` additionally requires `is_binary(key)` in its head"},
     {"platform/mail.ex", :platform_uuid_guard, "-", 4, :safe_internal,
@@ -391,6 +391,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "keyed `account_id:` off the loaded `%Account{}` being polled and `folder:`, a `:string` column holding the IMAP folder name"},
     {"platform/mail/inbound.ex", :get_by, "Participant", 1, :safe_internal,
      "`space_id` is off a `%Space{}` `usable_space/1` just loaded; `participant_id` is built by `email_participant_id/1` from a sha256 hex digest formatted 8-4-4-4-12, so it is uuid-shaped by construction; `participant_type` is the literal \"system\""},
+    {"platform/mail/inbound_access.ex", :platform_uuid_guard, "-", 5, :safe_internal,
+     "task 01a13ba5 stage 2's agent mail reads. Every id arrives from the `mail_inbound_list` / `mail_inbound_get` MCP payload (org_id, account_id, id) or off the caller's context (agent_id), and each is guarded before it reaches `where:`: `list/3` (agent_id, org_id, and account_id when given — three calls) and `get/2` (agent_id and id — two calls). A malformed value becomes the existing miss: `{[], 0}` for the list, `:not_found` for the get, which the tool returns as the one not-found envelope"},
     {"platform/mail/inbound/poller.ex", :get, "Account", 2, :safe_internal,
      "both calls (the timer tick and the `:poll_now` call) reload the poller's `account_id`, its start arg, and both starters pass an `%Account{}` PK: `Inbound.sync_poller/1` (`account.id`) and `start_all_pollers/0` (ids off `Repo.all` of `mail_accounts`)"},
     {"platform/mail/mailbox.ex", :platform_uuid_guard, "-", 10, :safe_internal,
@@ -875,6 +877,21 @@ defmodule Platform.RepoLookupBoundaryTest do
     # `fetch_org_project/2`, every pinned id behind Platform.UUID.valid?/1
     # (recorded in @inventory).
     "platform/mail/dispatch.ex" => 2,
+    # Task 01a13ba5 stage 1 (mail backfill). mail.ex: 0 -> 1 —
+    # `latest_backfill/2`, `where: r.account_id == ^account.id` with the id
+    # read off an `%Account{}` struct that `authorize_manage/2` has just
+    # re-loaded by PK. inbound/backfill.ex: 0 -> 1 — the folder-cursor read in
+    # `import_folder/5`, pinning `account.id` off the same kind of loaded
+    # struct and `folder`, a `:string` column that cannot raise a cast error.
+    # Neither pins a boundary-supplied id.
+    "platform/mail.ex" => 1,
+    "platform/mail/inbound/backfill.ex" => 1,
+    # Task 01a13ba5 stage 2: 0 -> 1, `InboundAccess.get/2`. Triaged by hand:
+    # the `where:` pins `m.id == ^id` (an MCP argument) and
+    # `p.participant_id == ^agent_id` (off the caller's context); both are
+    # behind Platform.UUID.valid?/1 in the same `with` (recorded in
+    # @inventory), so a malformed one is `:not_found`, never a raise.
+    "platform/mail/inbound_access.ex" => 1,
     # Task 01a11ec3 stage 2: 0 -> 1, `Feedback.Submission.existing/1`.
     # Triaged by hand: the `where:` pins `r.fingerprint == ^fingerprint`, a
     # `:string` column holding a sha256 hex digest the module computes itself

@@ -1092,6 +1092,151 @@
             </button>
           </div>
         </.form>
+        <%!-- IMPORT OLDER MAIL (task 01a13ba5-42a7-7000-8f2b-4c63003f3f92 stage 3).
+             Org admins only, and only for an account that reads mail:
+             otherwise the row is absent, never disabled. Its state is the
+             latest BackfillRun row, so a reload shows the same run. Outside
+             the account form for the same reason as Send test below. --%>
+        <div
+          :if={@is_admin and not is_nil(@form_account) and Inbound.eligible?(@form_account)}
+          class="flex flex-col gap-3 rounded-box border border-edge bg-base-100 p-3"
+          data-role="mail-backfill-row"
+          data-state={backfill_state(@backfill)}
+        >
+          <div class="flex flex-col gap-1">
+            <p class="text-base font-medium text-base-content">Import older mail</p>
+            <p
+              class="text-sm font-medium text-base-content/60"
+              data-role="mail-backfill-quiet"
+            >
+              Adds messages to the Inbox and agent context. Nothing is posted to chat.
+            </p>
+            <p
+              :if={is_nil(@form_account.inbound_space_id)}
+              class="text-sm text-base-content/60"
+              data-role="mail-backfill-no-channel"
+            >
+              Agents see imported mail only when this account posts to a channel. This one does not, so imported mail stays in the Inbox.
+            </p>
+          </div>
+
+          <%= case backfill_state(@backfill) do %>
+            <% "running" -> %>
+              <div class="flex flex-col gap-1.5" data-role="mail-backfill-progress">
+                <p class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 text-sm text-base-content">
+                  <span>
+                    Importing since
+                    <span class="font-mono text-xs">{backfill_day(@backfill.since_date)}</span>
+                  </span>
+                  <span class="font-mono text-xs text-info" data-role="mail-backfill-counter">
+                    {backfill_count(backfill_processed(@backfill))} of ~{backfill_count(
+                      @backfill.total
+                    )}
+                  </span>
+                </p>
+                <progress
+                  :if={@backfill.total > 0}
+                  class="progress progress-info w-full"
+                  value={backfill_processed(@backfill)}
+                  max={@backfill.total}
+                  aria-label="Import progress"
+                >
+                </progress>
+                <progress
+                  :if={@backfill.total == 0}
+                  class="progress progress-info w-full"
+                  aria-label="Import progress"
+                >
+                </progress>
+                <p class="text-xs text-base-content/60">You can leave this page.</p>
+              </div>
+            <% "done" -> %>
+              <div class="flex flex-col gap-1" data-role="mail-backfill-done">
+                <div class="flex flex-col gap-2 sm:flex-row sm:items-baseline sm:justify-between">
+                  <p class="text-sm text-base-content" data-role="mail-backfill-done-line">
+                    Imported
+                    <span class="font-mono text-xs">{backfill_count(@backfill.imported)}</span>
+                    {backfill_noun(@backfill.imported)} since <span class="font-mono text-xs">{backfill_day(@backfill.since_date)}</span>.
+                  </p>
+                  <.link
+                    patch={backfill_inbox_path(assigns, @form_account.id)}
+                    class="btn btn-ghost btn-sm min-h-11 w-full lg:min-h-8 sm:w-auto"
+                    data-role="mail-backfill-open-inbox"
+                  >
+                    <span class="hero-inbox size-4" aria-hidden="true"></span> Open Inbox
+                  </.link>
+                </div>
+                <p
+                  class="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-sm text-base-content/60"
+                  data-role="mail-backfill-already"
+                >
+                  <span>
+                    <span class="font-mono text-xs">
+                      {backfill_count(@backfill.already_present)}
+                    </span>
+                    {backfill_already_tail(@backfill.already_present)}
+                  </span>
+                  <span data-role="mail-backfill-last-run">
+                    Last run
+                    <span class="font-mono text-xs">
+                      {backfill_at(@backfill.finished_at || @backfill.updated_at)}
+                    </span>
+                  </span>
+                </p>
+                <p
+                  :if={@backfill.skipped_folders != []}
+                  class="text-xs text-base-content/60"
+                  data-role="mail-backfill-skipped"
+                >
+                  Not read: {Enum.join(@backfill.skipped_folders, ", ")}
+                </p>
+              </div>
+            <% "failed" -> %>
+              <p class="text-sm text-error" data-role="mail-backfill-error">
+                Import stopped after
+                <span class="font-mono text-xs">{backfill_count(@backfill.imported)}</span>
+                {backfill_noun(@backfill.imported)}: {@backfill.error || "unknown error"}. Nothing was lost.
+              </p>
+            <% _idle -> %>
+              <p class="text-sm text-base-content/60" data-role="mail-backfill-folders">
+                Folders
+                <span class="text-base-content">{backfill_folders_text(@form_account)}</span>
+              </p>
+          <% end %>
+
+          <form
+            :if={backfill_state(@backfill) != "running"}
+            id="mail-backfill-form"
+            phx-submit="start_backfill"
+            class="flex flex-col gap-2 sm:flex-row sm:items-end sm:gap-3"
+          >
+            <input type="hidden" name="account_id" value={@form_account.id} />
+            <label class="flex w-full flex-col gap-1 text-xs text-base-content/60 sm:w-auto">
+              Window
+              <select
+                name="window_days"
+                class="select select-bordered select-sm w-full text-base-content sm:w-32"
+                data-role="mail-backfill-window"
+              >
+                <option
+                  :for={days <- backfill_windows()}
+                  value={days}
+                  selected={days == backfill_default_window(@backfill)}
+                >
+                  {days} days
+                </option>
+              </select>
+            </label>
+            <button
+              type="submit"
+              class="btn btn-outline btn-sm min-h-11 w-full lg:min-h-8 sm:w-auto"
+              data-role="mail-backfill-start"
+            >
+              {backfill_button_label(@backfill)}
+            </button>
+          </form>
+        </div>
+
         <%!-- Outside the account form: a form nested in a form is dropped by
              the HTML parser, and its button would submit save_account. --%>
         <div :if={@form_account} class="flex flex-col gap-2 border-t border-edge pt-3">

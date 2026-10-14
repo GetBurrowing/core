@@ -161,7 +161,8 @@ defmodule Platform.Federation.ToolSurface do
     "task_list_canvases" => :canvases,
     "canvas.list_kinds" => :kinds,
     "task_delivery_candidate_list" => :candidates,
-    "vault_list" => :secrets
+    "vault_list" => :secrets,
+    "mail_inbound_list" => :messages
   }
 
   # List-returning tools outside task 01a04a7a's scope, each with the reason.
@@ -268,7 +269,7 @@ defmodule Platform.Federation.ToolSurface do
   defp tools_for_bundle("attachment"), do: tag(attachment_tools(), "attachment")
   defp tools_for_bundle("files"), do: tag(files_tools(), "files")
   defp tools_for_bundle("meetings"), do: tag(meetings_tools(), "meetings")
-  defp tools_for_bundle("mail"), do: tag(mail_draft_tools(), "mail")
+  defp tools_for_bundle("mail"), do: tag(mail_draft_tools() ++ mail_inbound_tools(), "mail")
   # Task 01a0d415 stage 2: definitions in ExperimentTools, behaviour in Experiments.Tools.
   defp tools_for_bundle("experiments"),
     do: tag(Platform.Federation.ExperimentTools.definitions(), "experiments")
@@ -1206,6 +1207,16 @@ defmodule Platform.Federation.ToolSurface do
   defp mail_draft_tools do
     if Platform.Mail.Config.enabled?(),
       do: Platform.Federation.MailDraftTools.definitions(),
+      else: []
+  end
+
+  # Read-only pull over stored inbound mail (task 01a13ba5 stage 2), defined
+  # in `Platform.Federation.MailInboundTools`; same flag, same bundle as the
+  # draft tools, re-checked by `execute/3`. Who may read a row is decided in
+  # `Platform.Mail.InboundAccess`.
+  defp mail_inbound_tools do
+    if Platform.Mail.Config.enabled?(),
+      do: Platform.Federation.MailInboundTools.definitions(),
       else: []
   end
 
@@ -7648,6 +7659,44 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
+  # ── Inbound mail reads (task 01a13ba5-42a7-7000-8f2b-4c63003f3f92 stage 2) ──
+  #
+  # Read-only. The participant check lives in `Mail.InboundAccess`; every
+  # `mail_inbound_get` miss returns ONE envelope (`mail_inbound_not_found/0`)
+  # so the tool is not an existence oracle.
+
+  def execute("mail_inbound_list", args, context) do
+    with :ok <- mail_enabled("mail_inbound_list"),
+         {:ok, agent} <- mail_agent(context, "mail_inbound_list"),
+         {:ok, org_id} <- require_string(args, "org_id", "mail_inbound_list"),
+         :ok <- authorize_mail_read_org(agent, org_id),
+         {:ok, since} <- mail_inbound_since(Map.get(args, "since")) do
+      limit = mail_int_arg(args, "limit", Platform.Mail.InboundAccess.limits().default)
+      offset = mail_int_arg(args, "offset", 0)
+
+      opts =
+        [limit: limit, offset: offset, since: since]
+        |> Keyword.put(:account_id, mail_optional_string(args, "account_id"))
+
+      {rows, total} = Platform.Mail.InboundAccess.list(agent.id, org_id, opts)
+      # Echo the page bounds `InboundAccess.list/3` actually applied.
+      %{max: max_limit} = Platform.Mail.InboundAccess.limits()
+      limit = limit |> max(1) |> min(max_limit)
+      offset = max(offset, 0)
+
+      {:ok, ResultBound.paged(:messages, rows, total, offset, %{limit: limit, offset: offset})}
+    end
+  end
+
+  def execute("mail_inbound_get", args, context) do
+    with :ok <- mail_enabled("mail_inbound_get"),
+         {:ok, agent} <- mail_agent(context, "mail_inbound_get"),
+         {:ok, id} <- require_string(args, "id", "mail_inbound_get"),
+         {:ok, row} <- mail_inbound_fetch(agent, id) do
+      {:ok, row}
+    end
+  end
+
   def execute("file_get_metadata", args, context) do
     with {:ok, file_id} <- require_string(args, "file_id", "file_get_metadata"),
          %Platform.Files.File{} = file <- Platform.Files.get_file(file_id),
@@ -13045,6 +13094,82 @@ defmodule Platform.Federation.ToolSurface do
       {:error, envelope} ->
         {:error,
          Map.put(envelope, :error, "unauthorized: draft is in an org you are not a member of")}
+    end
+  end
+
+  # The read tools' tenant pin: same rule as `authorize_mail_org/2`, worded
+  # for a read.
+  defp authorize_mail_read_org(agent, org_id) do
+    case authorize_org_filter(agent, org_id) do
+      :ok ->
+        :ok
+
+      {:error, envelope} ->
+        {:error,
+         Map.put(envelope, :error, "unauthorized: mail is in an org you are not a member of")}
+    end
+  end
+
+  # A tenant-pinned agent reading a sibling org's row gets the SAME not-found
+  # as an unknown id; so does every miss `InboundAccess.get/2` reports.
+  defp mail_inbound_fetch(agent, id) do
+    with {:ok, row} <- Platform.Mail.InboundAccess.get(agent.id, id),
+         :ok <- authorize_org_filter(agent, row.org_id) do
+      {:ok, row}
+    else
+      _ -> {:error, mail_inbound_not_found()}
+    end
+  end
+
+  defp mail_inbound_not_found do
+    %{
+      error: "mail_inbound_get: email not found",
+      code: :not_found,
+      recoverable: false,
+      suggestion:
+        "Use an id from mail_inbound_list. You can read only mail of accounts whose inbound space you participate in."
+    }
+  end
+
+  defp mail_inbound_since(nil), do: {:ok, nil}
+  defp mail_inbound_since(""), do: {:ok, nil}
+
+  defp mail_inbound_since(value) when is_binary(value) do
+    case Date.from_iso8601(value) do
+      {:ok, date} -> {:ok, date}
+      {:error, _} -> mail_inbound_since(:invalid)
+    end
+  end
+
+  defp mail_inbound_since(_) do
+    {:error,
+     %{
+       error: "mail_inbound_list: `since` must be an ISO 8601 date (YYYY-MM-DD)",
+       recoverable: true,
+       suggestion: "Pass e.g. \"2026-09-15\", or omit `since`."
+     }}
+  end
+
+  defp mail_int_arg(args, key, default) do
+    case Map.get(args, key) do
+      n when is_integer(n) ->
+        n
+
+      s when is_binary(s) ->
+        case Integer.parse(s) do
+          {n, ""} -> n
+          _ -> default
+        end
+
+      _ ->
+        default
+    end
+  end
+
+  defp mail_optional_string(args, key) do
+    case Map.get(args, key) do
+      s when is_binary(s) and s != "" -> s
+      _ -> nil
     end
   end
 

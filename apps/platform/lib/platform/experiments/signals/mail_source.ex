@@ -35,6 +35,14 @@ defmodule Platform.Experiments.Signals.MailSource do
   created, that has no signal row yet. Experiments carry no start timestamp,
   so `inserted_at` is the (wider) lower bound; a draft never matches, so the
   bound only matters for mail that arrived between creation and start.
+
+  Rows with `ingest_source == "backfill"` (task
+  01a13ba5-42a7-7000-8f2b-4c63003f3f92) are excluded. A backfilled row's
+  `inserted_at` is the moment of the import, not of the mail, so without the
+  exclusion the next reconcile would label every imported historical message
+  through the model-backed labeler: per-message agent work the quiet import
+  forbids, and signal data about mail no experiment variant ever caused. A
+  backfill never broadcasts, so `on_inbound/1` is not reached for one either.
   """
 
   import Ecto.Query
@@ -152,7 +160,8 @@ defmodule Platform.Experiments.Signals.MailSource do
               "EXISTS (SELECT 1 FROM unnest(?) AS a WHERE lower(a) = lower(?))",
               m.to_addresses,
               ^addr
-            ) and m.inserted_at >= ^experiment.inserted_at and not exists(signalled),
+            ) and m.inserted_at >= ^experiment.inserted_at and m.ingest_source != "backfill" and
+              not exists(signalled),
           order_by: [asc: m.inserted_at, asc: m.id]
         )
         |> inbound_org_matches(experiment.org_id)

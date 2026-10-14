@@ -14,7 +14,9 @@ defmodule Platform.Mail.ScriptedImapServer do
   had passed.
 
   Mailbox state is an Agent: folders in creation order, each with a
-  UIDVALIDITY and messages `{uid, raw, flags}`. A non-PEEK `BODY[]` fetch
+  UIDVALIDITY, messages `{uid, raw, flags}` and each message's internal date
+  (`deliver/4`'s `internaldate:`), which `UID SEARCH SINCE d-Mon-yyyy`
+  matches at day granularity. A non-PEEK `BODY[]` fetch
   sets `\\Seen`, as a real server does, so a test can tell. Every command
   line received is recorded (`commands/1`); literals sent by the client
   (`{n}` + bytes) are answered `+ OK` and recorded inline.
@@ -73,7 +75,12 @@ defmodule Platform.Mail.ScriptedImapServer do
       if List.keymember?(state.folders, name, 0) do
         state
       else
-        folder = %{uidvalidity: state.next_validity, next_uid: 1, messages: []}
+        folder = %{
+          uidvalidity: state.next_validity,
+          next_uid: 1,
+          messages: [],
+          internaldates: %{}
+        }
 
         %{
           state
@@ -84,8 +91,17 @@ defmodule Platform.Mail.ScriptedImapServer do
     end)
   end
 
-  @doc "Append `raw` to `folder`; returns its UID."
-  def deliver(%__MODULE__{agent: agent}, name, raw) do
+  @doc """
+  Append `raw` to `folder`; returns its UID. Options: `internaldate:` (a
+  `Date` or `DateTime`, default now), what `UID SEARCH SINCE` matches.
+  """
+  def deliver(%__MODULE__{agent: agent}, name, raw, opts \\ []) do
+    internaldate =
+      case Keyword.get(opts, :internaldate, DateTime.utc_now()) do
+        %Date{} = date -> date
+        %DateTime{} = datetime -> DateTime.to_date(datetime)
+      end
+
     Agent.get_and_update(agent, fn state ->
       {^name, folder} = List.keyfind(state.folders, name, 0)
       uid = folder.next_uid
@@ -93,7 +109,8 @@ defmodule Platform.Mail.ScriptedImapServer do
       folder = %{
         folder
         | next_uid: uid + 1,
-          messages: folder.messages ++ [{uid, raw, ["\\Recent"]}]
+          messages: folder.messages ++ [{uid, raw, ["\\Recent"]}],
+          internaldates: Map.put(folder.internaldates, uid, internaldate)
       }
 
       {uid, %{state | folders: List.keyreplace(state.folders, name, 0, {name, folder})}}
@@ -270,6 +287,18 @@ defmodule Platform.Mail.ScriptedImapServer do
         line = if uids == [], do: "* SEARCH\r\n", else: "* SEARCH #{Enum.join(uids, " ")}\r\n"
         {:reply, [line, "#{tag} OK SEARCH completed.\r\n"], selected}
 
+      match = Regex.run(~r/\ASEARCH SINCE (\d{1,2})-([A-Za-z]{3})-(\d{4})\z/i, sub) ->
+        [_, day, month, year] = match
+        since = since_date(day, month, year)
+
+        uids =
+          for {uid, _, _} <- f.messages,
+              Date.compare(Map.fetch!(f.internaldates, uid), since) != :lt,
+              do: uid
+
+        line = if uids == [], do: "* SEARCH\r\n", else: "* SEARCH #{Enum.join(uids, " ")}\r\n"
+        {:reply, [line, "#{tag} OK SEARCH completed.\r\n"], selected}
+
       match = Regex.run(~r/\AFETCH (\d+) \((BODY\.PEEK\[\]|BODY\[\]|FLAGS)\)\z/i, sub) ->
         [_, uid, item] = match
         fetch(server, tag, selected, f, String.to_integer(uid), String.upcase(item))
@@ -300,6 +329,13 @@ defmodule Platform.Mail.ScriptedImapServer do
 
         {:reply, [line, "#{tag} OK FETCH completed.\r\n"], selected}
     end
+  end
+
+  @months ~w(jan feb mar apr may jun jul aug sep oct nov dec)
+
+  defp since_date(day, month, year) do
+    month_number = Enum.find_index(@months, &(&1 == String.downcase(month))) + 1
+    Date.new!(String.to_integer(year), month_number, String.to_integer(day))
   end
 
   defp mark_seen(server, name, uid) do

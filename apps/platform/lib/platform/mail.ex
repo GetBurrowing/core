@@ -15,6 +15,10 @@ defmodule Platform.Mail do
     * `can_use?/2` — draft, send, read the module's Inbox/Sent/Refused. Any
       non-external member of the org.
 
+  `start_backfill/4` and `latest_backfill/2` (the one-off import of older
+  mail, task 01a13ba5-42a7-7000-8f2b-4c63003f3f92) use the manage gate, as
+  the Inbox Refresh does.
+
   Every mutating function here takes the actor and re-checks. A LiveView
   that hides a button is presentation; the check in this module is the
   authorization. An unauthorized call returns `{:error, :unauthorized}` and
@@ -40,6 +44,8 @@ defmodule Platform.Mail do
   import Ecto.Query
 
   alias Platform.Mail.Account
+  alias Platform.Mail.BackfillRun
+  alias Platform.Mail.Inbound.Backfill
   alias Platform.Mail.Sender
   alias Platform.Repo
   alias Platform.Tenancy
@@ -329,6 +335,164 @@ defmodule Platform.Mail do
     else
       {:error, :unauthorized}
     end
+  end
+
+  # ── Backfill (task 01a13ba5-42a7-7000-8f2b-4c63003f3f92) ───────────────
+
+  @backfill_max_days 30
+  @backfill_stale_seconds 600
+
+  @doc """
+  Import the last `window_days` days of `account`'s mail, quietly (see
+  `Platform.Mail.Inbound.Backfill`): rows land in the Inbox with
+  `ingest_source: "backfill"`, nothing is posted to chat, nothing is
+  broadcast on `"mail:inbound"`, and no folder cursor moves.
+
+  Refusals, in this order, each writing nothing:
+
+    * `:unauthorized` — `actor` may not manage the account's org
+      (`can_manage_accounts?/2`, the Refresh gate);
+    * `:not_eligible` — `Platform.Mail.Inbound.eligible?/1` is false;
+    * `:invalid_window` — `window_days` is not an integer in
+      1..#{@backfill_max_days} (refused, never clamped);
+    * `:already_running` — the account has a running backfill (the partial
+      unique index, so this holds across nodes).
+
+  A `running` row whose `updated_at` is more than #{div(@backfill_stale_seconds, 60)} minutes
+  old (a node restarted mid-run) is first marked `failed` with error
+  `"interrupted"`, so a crash never locks an account out.
+
+  Options: `:runner` — `:task` (default; the run proceeds under
+  `Platform.TaskSupervisor` and this returns the `running` row) or `:inline`
+  (the run completes in the caller and this returns the final row; tests);
+  `:client` — the IMAP client module.
+  """
+  @spec start_backfill(any(), Account.t(), any(), keyword()) ::
+          {:ok, BackfillRun.t()}
+          | {:error, :unauthorized | :not_eligible | :invalid_window | :already_running}
+  def start_backfill(actor, %Account{} = account, window_days \\ @backfill_max_days, opts \\ []) do
+    with :ok <- authorize_manage(actor, account),
+         %Account{} = account <- Repo.get(Account, account.id),
+         :ok <- backfill_eligible(account),
+         :ok <- valid_window(window_days) do
+      reap_stale_backfills(account.id)
+
+      %{
+        account_id: account.id,
+        org_id: account.org_id,
+        requested_by_user_id: actor_id(actor),
+        window_days: window_days,
+        since_date: Date.add(Date.utc_today(), -window_days),
+        started_at: DateTime.utc_now()
+      }
+      |> BackfillRun.start_changeset()
+      |> Repo.insert()
+      |> case do
+        {:ok, run} ->
+          launch_backfill(account, run, opts)
+
+        {:error, %Ecto.Changeset{errors: errors} = changeset} ->
+          if Keyword.has_key?(errors, :account_id),
+            do: {:error, :already_running},
+            else: raise(Ecto.InvalidChangesetError, action: :insert, changeset: changeset)
+      end
+    else
+      nil -> {:error, :unauthorized}
+      {:error, _} = error -> error
+    end
+  end
+
+  @doc """
+  The account's most recent backfill run, or nil. Org admins only (the
+  manage gate, not `can_use?/2`): any other actor gets nil, as if no run
+  existed. A stale `running` row is reaped first, so a run interrupted by a
+  restart reads as failed rather than running forever.
+  """
+  @spec latest_backfill(any(), Account.t()) :: BackfillRun.t() | nil
+  def latest_backfill(actor, %Account{} = account) do
+    case authorize_manage(actor, account) do
+      :ok ->
+        reap_stale_backfills(account.id)
+
+        Repo.one(
+          from(r in BackfillRun,
+            where: r.account_id == ^account.id,
+            order_by: [desc: r.inserted_at, desc: r.id],
+            limit: 1
+          )
+        )
+
+      {:error, _} ->
+        nil
+    end
+  end
+
+  @doc """
+  Subscribe the caller to `account_id`'s backfill progress:
+  `{:mail_backfill_progress, %{run_id, account_id}}` (IDs only; re-read the
+  row with `latest_backfill/2`).
+  """
+  @spec subscribe_backfill(binary()) :: :ok | {:error, term()}
+  def subscribe_backfill(account_id) when is_binary(account_id),
+    do: Phoenix.PubSub.subscribe(Platform.PubSub, Backfill.topic(account_id))
+
+  defp backfill_eligible(account),
+    do: if(Platform.Mail.Inbound.eligible?(account), do: :ok, else: {:error, :not_eligible})
+
+  defp valid_window(days) when is_integer(days) and days >= 1 and days <= @backfill_max_days,
+    do: :ok
+
+  defp valid_window(_), do: {:error, :invalid_window}
+
+  defp actor_id(%{id: id}) when is_binary(id), do: id
+  defp actor_id(_), do: nil
+
+  defp reap_stale_backfills(account_id) do
+    cutoff = DateTime.add(DateTime.utc_now(), -@backfill_stale_seconds, :second)
+    now = DateTime.utc_now()
+
+    from(r in BackfillRun,
+      where: r.account_id == ^account_id and r.status == "running" and r.updated_at < ^cutoff
+    )
+    |> Repo.update_all(
+      set: [status: "failed", error: "interrupted", finished_at: now, updated_at: now]
+    )
+
+    :ok
+  end
+
+  defp launch_backfill(account, run, opts) do
+    case Keyword.get(opts, :runner, :task) do
+      :inline ->
+        {:ok, Backfill.run(account, run, opts)}
+
+      :task ->
+        case Task.Supervisor.start_child(Platform.TaskSupervisor, fn ->
+               run_backfill_task(account, run, opts)
+             end) do
+          {:ok, _pid} ->
+            {:ok, run}
+
+          {:error, reason} ->
+            {:ok,
+             run
+             |> BackfillRun.progress_changeset(%{
+               status: "failed",
+               error: "could not start: #{inspect(reason)}",
+               finished_at: DateTime.utc_now()
+             })
+             |> Repo.update!()}
+        end
+    end
+  end
+
+  # The supervised child. `Backfill.run/3` handles every ordinary failure
+  # itself; an OwnershipError means a test's sandbox owner is gone and there
+  # is nothing left to record.
+  defp run_backfill_task(account, run, opts) do
+    Backfill.run(account, run, opts)
+  rescue
+    DBConnection.OwnershipError -> :ok
   end
 
   @doc "Archive an account. Idempotent for an already-archived account."

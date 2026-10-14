@@ -11,7 +11,8 @@ defmodule Platform.Mail.Imap.WireClient do
 
   Exactly these commands, and nothing else: `STARTTLS` (only for
   `tls: "starttls"`), `LOGIN`, `LIST "" "*"`, `EXAMINE`, `STATUS` (only when
-  EXAMINE did not report UIDVALIDITY / UIDNEXT), `UID SEARCH`,
+  EXAMINE did not report UIDVALIDITY / UIDNEXT), `UID SEARCH` (`UID n:*` for
+  the poller, `SINCE d-Mon-yyyy` for the backfill),
   `UID FETCH <uid> (BODY.PEEK[])` and `LOGOUT`. EXAMINE is the read-only
   select and `BODY.PEEK[]` is the non-marking form of `BODY[]`, so no command
   here can change a mailbox or set `\\Seen`.
@@ -119,6 +120,38 @@ defmodule Platform.Mail.Imap.WireClient do
         {:ok, uids}
       end
     end)
+  end
+
+  @impl true
+  def uids_since(%Conn{} = conn, %Date{} = date) do
+    guard(fn ->
+      with {:ok, untagged} <- command(conn, ["UID SEARCH SINCE ", imap_date(date)]) do
+        uids =
+          untagged
+          |> Enum.flat_map(fn line ->
+            case parse_untagged(line) do
+              {:search, numbers} -> numbers
+              _ -> []
+            end
+          end)
+          |> Enum.sort()
+          |> Enum.uniq()
+
+        {:ok, uids}
+      end
+    end)
+  end
+
+  @months ~w(Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec)
+
+  @doc false
+  # RFC 3501 `date`: `date-day "-" date-month "-" date-year`, the day without
+  # zero padding (1*2DIGIT) and the month as the English three-letter
+  # abbreviation, never a locale's. Public for tests.
+  @spec imap_date(Date.t()) :: String.t()
+  def imap_date(%Date{year: year, month: month, day: day}) do
+    year_text = year |> Integer.to_string() |> String.pad_leading(4, "0")
+    "#{day}-#{Enum.at(@months, month - 1)}-#{year_text}"
   end
 
   @impl true

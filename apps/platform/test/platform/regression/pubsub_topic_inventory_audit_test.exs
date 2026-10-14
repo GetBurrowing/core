@@ -119,7 +119,7 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
   # in order to change the topic safely; the full payload-and-subscriber table
   # lives in the stage-2 classification posted to the task's execution space.
   #
-  # 26 global, 10 space, 6 user, 6 task, 2 project, 1 org, 1 runtime,
+  # 26 global, 10 space, 6 user, 6 task, 2 project, 2 org, 1 runtime,
   # 1 resource, 1 not-a-topic.
   @topics [
     # ── space ──
@@ -170,6 +170,12 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
     # One topic, one subscriber (Org.Wiki.Indexer). Payload is page_id +
     # file_key, no body.
     {"org_wiki:index", :org},
+    # Task 01a13ba5-42a7-7000-8f2b-4c63003f3f92 stage 1. Keyed by a mail
+    # account id; an account belongs to one org. Payload is
+    # `{:mail_backfill_progress, %{run_id, account_id}}`, IDs only, and the
+    # subscriber (the Email settings LiveView) re-reads the run row through
+    # `Platform.Mail.latest_backfill/2`, which is org-admin gated.
+    {"mail:backfill:<id>", :org},
 
     # ── runtime ──
     {"runtime:<id>", :runtime},

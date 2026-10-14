@@ -39,6 +39,24 @@ defmodule Platform.Federation.ListEnvelopeContractTest do
 
   defp u, do: System.unique_integer([:positive])
 
+  # `mail_inbound_list` (task 01a13ba5 stage 2) is on the surface only while
+  # the Email module is on, and config/test.exs turns it off. With the flag
+  # off, the static guard could not see it and "every registered tool exists
+  # on the surface" would fail, so every test here runs with the module on.
+  setup do
+    previous = Application.fetch_env(:platform, :mail_enabled)
+    Application.put_env(:platform, :mail_enabled, true)
+
+    on_exit(fn ->
+      case previous do
+        {:ok, value} -> Application.put_env(:platform, :mail_enabled, value)
+        :error -> Application.delete_env(:platform, :mail_enabled)
+      end
+    end)
+
+    :ok
+  end
+
   # ── Static guard ─────────────────────────────────────────────────────────
 
   describe "static guard" do
@@ -73,10 +91,10 @@ defmodule Platform.Federation.ListEnvelopeContractTest do
 
     # 25 audited by task 01a04a7a, plus task_delivery_candidate_list (01a044b0),
     # dispatch_metrics_list (01a114a8 stage 1), code_mode_report (stage 4)
-    # and vault_list (01a131c5 stage 1).
-    test "the registry covers the 29 registered tools, each with an atom rows key" do
+    # vault_list (01a131c5 stage 1) and mail_inbound_list (01a13ba5 stage 2).
+    test "the registry covers the 30 registered tools, each with an atom rows key" do
       tools = ToolSurface.list_envelope_tools()
-      assert map_size(tools) == 29
+      assert map_size(tools) == 30
       assert Enum.all?(tools, fn {_name, key} -> is_atom(key) and not is_nil(key) end)
     end
 
@@ -1158,6 +1176,84 @@ defmodule Platform.Federation.ListEnvelopeContractTest do
 
       env = call("vault_list", %{}, %{agent_id: agent.id})
       assert_unbounded("vault_list", env, 3)
+    end
+  end
+
+  describe "runtime conformance: mail_inbound_list" do
+    test "truncated: limit 2 over 3 rows, then the whole corpus" do
+      org_id = Platform.Tenancy.get_org_by_slug!("soylent").id
+      n = u()
+
+      admin =
+        Platform.Repo.insert!(
+          Platform.Accounts.User.changeset(%Platform.Accounts.User{}, %{
+            email: "envelope-mail-#{n}@example.com",
+            name: "Envelope mail #{n}",
+            oidc_sub: "oidc-envelope-mail-#{n}"
+          })
+        )
+
+      Platform.Repo.insert!(
+        Platform.Tenancy.OrgMembership.changeset(%Platform.Tenancy.OrgMembership{}, %{
+          user_id: admin.id,
+          org_id: org_id,
+          role: "admin",
+          external: false
+        })
+      )
+
+      {:ok, space} =
+        Chat.create_space(%{
+          name: "Envelope mail #{u()}",
+          slug: "envelope-mail-#{u()}",
+          kind: "channel"
+        })
+
+      agent = tenant_agent!(org_id)
+
+      {:ok, _} =
+        Chat.add_participant(space.id, %{
+          participant_type: "agent",
+          participant_id: agent.id,
+          display_name: agent.name,
+          role: "member",
+          joined_at: DateTime.utc_now()
+        })
+
+      {:ok, account} =
+        Platform.Mail.create_account(
+          admin,
+          org_id,
+          %{
+            "name" => "envelope-#{u()}",
+            "smtp_host" => "smtp.envelope.test",
+            "inbound_space_id" => space.id
+          },
+          %{smtp: "pw"}
+        )
+
+      for i <- 1..3 do
+        raw =
+          "From: a@corp.test\r\nTo: ops@soylent.test\r\nSubject: s#{i}\r\n" <>
+            "Message-ID: <envelope-#{i}-#{u()}@corp.test>\r\n\r\nbody\r\n"
+
+        1 = Platform.Mail.Inbound.ingest(account, "INBOX", 1, i, raw, quiet: true)
+      end
+
+      ctx = %{agent_id: agent.id}
+      args = %{"org_id" => org_id, "account_id" => account.id}
+
+      assert_truncated(
+        "mail_inbound_list",
+        call("mail_inbound_list", Map.put(args, "limit", 2), ctx),
+        3
+      )
+
+      assert_whole(
+        "mail_inbound_list",
+        call("mail_inbound_list", Map.put(args, "limit", 50), ctx),
+        3
+      )
     end
   end
 

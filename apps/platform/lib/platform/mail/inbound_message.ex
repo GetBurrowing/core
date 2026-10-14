@@ -10,6 +10,13 @@ defmodule Platform.Mail.InboundMessage do
   `chat_message_id` is set once the channel post succeeds (nil when the
   account has no usable inbound space); `file_id` is set by the Inbox's
   "Add to files" (stage 4).
+
+  `ingest_source` is `"poll"` for a row the live poller wrote and
+  `"backfill"` for one `Platform.Mail.Inbound.Backfill` wrote (task
+  01a13ba5-42a7-7000-8f2b-4c63003f3f92). A backfill row is stored exactly as
+  a polled one but was never posted to chat (`chat_message_id` stays nil),
+  never broadcast on `"mail:inbound"`; a consumer that reconciles against
+  this table is expected to skip it. (Mail does not know its consumers.)
   """
   use Ecto.Schema
 
@@ -33,6 +40,7 @@ defmodule Platform.Mail.InboundMessage do
     field(:subject, :string)
     field(:text_body, :string)
     field(:received_at, :utc_datetime_usec)
+    field(:ingest_source, :string, default: "poll")
     belongs_to(:chat_message, Platform.Chat.Message)
     belongs_to(:file, Platform.Files.File)
 
