@@ -149,42 +149,11 @@ struct MessagesSendIntent {
         let entity = MessagingIntentSupport.messageEntity(for: sent, destination: destination)
         MessageRegistry.shared.remember(entity)
         IntentHooks.didSucceed?(self)
-        // A message to an AGENT is a question (task 01a111bb stage 7): "Message
-        // Burrow Helper saying what's the build status" waits for the reply
-        // like Ask does, for up to 90 s, and speaks it; past that, the reply
-        // arrives as a notification.
-        if case .person(_, let name, true) = target, let reply = try await awaitAgentReply(to: sent, agentID: target.entityID) {
-            switch reply {
-            case .reply(let text): return .result(value: [entity], dialog: spoken(IntentCopy.agentSays(agent: name, reply: text)))
-            case .timedOut: return .result(value: [entity], dialog: spoken(IntentCopy.agentReplyWillNotify(agent: name)))
-            }
-        }
+        // Fire and forget, to agents too (Rowan, 2026-10-14): the agent's reply
+        // arrives as a normal notification, not through this intent. Waiting
+        // for it showed Siri's progress bar for up to 90 s. Ask is the intent
+        // that waits for and speaks a reply.
         return .result(value: [entity], dialog: spoken(IntentCopy.sent(space: target.name)))
-    }
-}
-
-@available(iOS 27, *)
-extension MessagesSendIntent: LongRunningIntent, CancellableIntent {
-    /// The agent's reply to the message `sent`, or nil if the ids don't
-    /// parse. Cancellation (`.timeout`, `.userCancelled`) ends the wait.
-    func awaitAgentReply(to sent: SentMessageRef, agentID: String) async throws -> AskOutcome? {
-        guard let message = EntityRef(sent.id), let space = EntityRef(sent.conversationID), let agent = EntityRef(agentID) else { return nil }
-        let cancelled = AskCancelFlag()
-        let progress = progress
-        progress.totalUnitCount = 100
-        return try await performBackgroundTask(
-            operation: {
-                try await IntentActions().awaitAgentReply(
-                    host: message.host, agentUUID: agent.uuid, spaceID: space.uuid, after: message.uuid, window: AskAgent.longReplyWindow,
-                    isCancelled: { cancelled.isSet }
-                ) { fraction in
-                    progress.completedUnitCount = Int64(fraction * 100)
-                }
-            },
-            onCancel: { reason in
-                cancelled.set()
-                IntentLog.route(reason == .timeout ? "ask_cancel_timeout" : "ask_cancel_user", host: "-", status: 0)
-            })
     }
 }
 
