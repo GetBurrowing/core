@@ -146,7 +146,8 @@ defmodule Platform.Chat.ExternalScope do
   expressed as a set-returning subquery.
   """
   @spec member_space_ids(t() | Scope.t()) :: Ecto.Query.t()
-  def member_space_ids(%{__struct__: Scope} = scope), do: scope |> from_scope() |> member_space_ids()
+  def member_space_ids(%{__struct__: Scope} = scope),
+    do: scope |> from_scope() |> member_space_ids()
 
   def member_space_ids(%__MODULE__{user_id: user_id}) do
     from(p in Participant,
@@ -161,7 +162,8 @@ defmodule Platform.Chat.ExternalScope do
   """
   @spec scope_spaces(Ecto.Query.t() | module(), t() | Scope.t() | nil) ::
           Ecto.Query.t() | module()
-  def scope_spaces(query, %{__struct__: Scope} = scope), do: scope_spaces(query, from_scope(scope))
+  def scope_spaces(query, %{__struct__: Scope} = scope),
+    do: scope_spaces(query, from_scope(scope))
 
   def scope_spaces(query, %__MODULE__{external?: true} = scope) do
     where(query, [s], s.id in subquery(member_space_ids(scope)))

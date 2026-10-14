@@ -139,7 +139,9 @@ defmodule Platform.Chat.ExternalScopeViaAccessScopeTest do
 
   describe "from_scope/1" do
     test "marks exactly the participant-restricted users external", w do
-      assert %ExternalScope{external?: true, user_id: id} = ExternalScope.from_scope(Scope.for_user(w.ext))
+      assert %ExternalScope{external?: true, user_id: id} =
+               ExternalScope.from_scope(Scope.for_user(w.ext))
+
       assert id == w.ext.id
       assert ExternalScope.from_scope(Scope.for_user(w.ext2)).external?
       assert ExternalScope.from_scope(Scope.for_user(w.mixed)).external?
@@ -150,6 +152,7 @@ defmodule Platform.Chat.ExternalScopeViaAccessScopeTest do
     test "agrees with ExternalScope.for_user/1 for every world user", w do
       for key <- [:ext, :ext2, :int, :m, :n, :other, :mixed, :ext_root] do
         user = Map.fetch!(w, key)
+
         assert ExternalScope.from_scope(Scope.for_user(user)) == ExternalScope.for_user(user),
                "from_scope disagrees with for_user for #{key}"
       end
@@ -180,7 +183,8 @@ defmodule Platform.Chat.ExternalScopeViaAccessScopeTest do
         user = Map.fetch!(w, key)
 
         assert Repo.all(ExternalScope.member_space_ids(Scope.for_user(user))) |> Enum.sort() ==
-                 Repo.all(ExternalScope.member_space_ids(ExternalScope.for_user(user))) |> Enum.sort()
+                 Repo.all(ExternalScope.member_space_ids(ExternalScope.for_user(user)))
+                 |> Enum.sort()
       end
     end
   end
