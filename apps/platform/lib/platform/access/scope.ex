@@ -54,9 +54,11 @@ defmodule Platform.Access.Scope do
   query, so the two cannot disagree at build time. It is one query, issued only
   when a held rule needs it.
 
-  ## Three rules that are code, not role data
+  ## Rules that are code, not role data
 
-  Each is a named function so a mutation can target it:
+  Each is a named function so a mutation can target it (task `01a1386d-cb5c`
+  stage 4 added the last two, each to reproduce a row the equivalence test
+  found today's code answering differently):
 
     * `guest_dominates/1` — if ANY membership maps to `guest`, only the guest
       memberships contribute role permissions, and the root-admin rule never
@@ -75,6 +77,20 @@ defmodule Platform.Access.Scope do
       never part of the built-in `admin` role, so a sub-org admin never holds
       it, and guest dominance means an external root admin never holds it
       (`Tenancy.root_admin?/1` ignores `external`; this rule does not).
+    * `org_admin_per_membership/3` — the admin-only permissions (`admin` minus
+      `member`) come from EVERY internal `admin` membership on its own org,
+      after guest dominance. `Tenancy.org_admin?/2` reads one (user, org) row,
+      so a mixed user's internal admin row is an org admin today. Guest
+      dominance governs the chat / external-scope semantics and root admin,
+      not org admin.
+    * `no_membership_baseline/1` — a user with no membership is internal
+      today: every channel, the whole board. They get the built-in `member`
+      role's `chat.*` and `tasks.*` rules, reproduced as is (narrowing is
+      resource scoping, stack position 3).
+
+  Guest status for the ExternalScope bridge (`rules_for/2`) is read from the
+  same `guest_dominates/1` + `no_membership_baseline/1` sources the
+  permissions were built from, never recomputed beside them.
 
   ## Runtimes
 
@@ -84,6 +100,8 @@ defmodule Platform.Access.Scope do
   decision; `tool_names/1` reproduces `ToolAuthorization.effective_tools/1`'s
   composition, in `allowed_bundles` row order. An external-owned runtime's
   `role_keys` carry its owner's guest keys, which marks the scope external.
+  `chat.read` is the agent's roster (`Chat.list_spaces_for_agent/2`), a
+  build-time snapshot: a runtime's chat reach is its participation, as today.
   """
 
   import Ecto.Query, only: [from: 2]
@@ -107,6 +125,7 @@ defmodule Platform.Access.Scope do
         }
 
   @implicit_kinds ~w(channel system execution)
+  @baseline_permissions ~w(chat.read chat.write tasks.read tasks.write)
   @participant_rules ~w(participant_spaces implicit_or_participant)
 
   # ── Builders ────────────────────────────────────────────────────────────
@@ -123,11 +142,13 @@ defmodule Platform.Access.Scope do
     memberships = user.org_memberships
     rules = Access.builtin_role_rules()
     contributing = guest_dominates(memberships)
-    participants = participant_snapshot(user_id, contributing, rules)
+    sources = rule_sources(memberships, rules)
+    participants = participant_snapshot(user_id, sources)
 
     permissions =
-      contributing
-      |> role_permissions(rules, participants)
+      sources
+      |> role_permissions(participants)
+      |> org_admin_per_membership(memberships, rules)
       |> widen_root_org(memberships)
       |> grant_root_admin(memberships, contributing)
 
@@ -152,6 +173,8 @@ defmodule Platform.Access.Scope do
           permission = Registry.bundle_permission(bundle),
           into: %{},
           do: {permission, :all}
+
+    permissions = put_agent_roster(permissions, runtime)
 
     role_keys =
       if ToolAuthorization.external_principal?(runtime),
@@ -225,6 +248,17 @@ defmodule Platform.Access.Scope do
   read is participant-restricted (task `01a1386d-cb5c` stage 3).
   """
   @spec rules_for(t(), String.t()) :: [String.t()]
+  def rules_for(%__MODULE__{actor: %{org_memberships: memberships}}, permission)
+      when is_list(memberships) and is_binary(permission) do
+    memberships
+    |> rule_sources(Access.builtin_role_rules())
+    |> Enum.flat_map(fn {rule_map, _membership} -> rule_list(Map.get(rule_map, permission)) end)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
+
+  # A non-user actor (a runtime) has no memberships of its own: its base keys
+  # are its owner's guest keys, read from `role_keys`.
   def rules_for(%__MODULE__{role_keys: role_keys} = scope, permission)
       when is_binary(permission) do
     keys =
@@ -273,6 +307,43 @@ defmodule Platform.Access.Scope do
     case Enum.filter(memberships, &(role_key(&1) == "guest")) do
       [] -> memberships
       guests -> guests
+    end
+  end
+
+  @doc false
+  # No-membership baseline: a user with NO org membership is internal today
+  # (`Tenancy.external_user?/1` is false), so they see every channel through
+  # the pass-through ExternalScope and the whole, unscoped board. This
+  # returns the built-in `member` role's rules for the chat and task
+  # permissions for such a user, and nothing for anyone else. Reproduced as
+  # is; narrowing it belongs to resource scoping (stack position 3).
+  @spec no_membership_baseline([OrgMembership.t()]) :: map()
+  def no_membership_baseline([]) do
+    Access.builtin_role_rules()
+    |> Map.get("member", %{})
+    |> Map.take(@baseline_permissions)
+  end
+
+  def no_membership_baseline(_memberships), do: %{}
+
+  @doc false
+  # Org admin is per membership: every internal `admin` membership grants the
+  # admin-only permissions (the built-in `admin` role minus `member`) on its
+  # own org, whatever guest dominance did to the rest of the actor's role
+  # data. Reproduces `Tenancy.org_admin?/2`, which reads one (user, org) row
+  # and is true for a mixed user's internal admin row.
+  @spec org_admin_per_membership(map(), [OrgMembership.t()], map()) :: map()
+  def org_admin_per_membership(permissions, memberships, rules) do
+    admin = Map.get(rules, "admin", %{})
+    admin_only = Map.drop(admin, Map.keys(Map.get(rules, "member", %{})))
+
+    for membership <- memberships,
+        role_key(membership) == "admin",
+        {permission, rule} <- admin_only,
+        reduce: permissions do
+      acc ->
+        value = normalize(resolve(rule, membership, []))
+        Map.update(acc, permission, value, &normalize(merge(&1, value)))
     end
   end
 
@@ -352,13 +423,23 @@ defmodule Platform.Access.Scope do
     end)
   end
 
-  defp participant_snapshot(user_id, contributing, rules) do
+  # The role data that contributes to a user's permissions: each membership
+  # `guest_dominates/1` keeps, with its role's rules, plus the
+  # `no_membership_baseline/1` rules (membership `nil`). `for_user/1` and
+  # `rules_for/2` both read this, so the ExternalScope bridge takes guest
+  # status from the same path the permissions were built from.
+  defp rule_sources(memberships, rules) do
+    from_roles =
+      for membership <- guest_dominates(memberships),
+          do: {Map.get(rules, role_key(membership), %{}), membership}
+
+    from_roles ++ [{no_membership_baseline(memberships), nil}]
+  end
+
+  defp participant_snapshot(user_id, sources) do
     needed? =
-      Enum.any?(contributing, fn membership ->
-        rules
-        |> Map.get(role_key(membership), %{})
-        |> Map.values()
-        |> Enum.any?(&participant_rule?/1)
+      Enum.any?(sources, fn {rule_map, _membership} ->
+        rule_map |> Map.values() |> Enum.any?(&participant_rule?/1)
       end)
 
     if needed? do
@@ -371,9 +452,9 @@ defmodule Platform.Access.Scope do
     end
   end
 
-  defp role_permissions(memberships, rules, participants) do
-    for membership <- memberships,
-        {permission, rule} <- Map.get(rules, role_key(membership), %{}),
+  defp role_permissions(sources, participants) do
+    for {rule_map, membership} <- sources,
+        {permission, rule} <- rule_map,
         reduce: %{} do
       acc ->
         value = resolve(rule, membership, participants)
@@ -387,6 +468,7 @@ defmodule Platform.Access.Scope do
 
   defp resolve("all", _membership, _participants), do: :all
   defp resolve("membership_org", %OrgMembership{org_id: org_id}, _participants), do: [org_id]
+  defp resolve("membership_org", nil, _participants), do: []
   defp resolve("participant_spaces", _membership, participants), do: participants
   defp resolve("implicit_or_participant", _membership, participants), do: participants
   defp resolve(_unknown, _membership, _participants), do: []
@@ -432,6 +514,17 @@ defmodule Platform.Access.Scope do
       permission -> can?(scope, permission)
     end
   end
+
+  # A runtime's chat reach is its agent's participation, as today: the spaces
+  # `Chat.list_spaces_for_agent/2` returns, as a build-time snapshot. No owner
+  # cap (stack position 5).
+  defp put_agent_roster(permissions, %AgentRuntime{agent_id: agent_id})
+       when is_binary(agent_id) do
+    roster = agent_id |> Platform.Chat.list_spaces_for_agent() |> Enum.map(& &1.id)
+    Map.put(permissions, "chat.read", normalize(roster))
+  end
+
+  defp put_agent_roster(permissions, _runtime), do: permissions
 
   defp bundles(%AgentRuntime{allowed_bundles: bundles}) when is_list(bundles), do: bundles
   defp bundles(_runtime), do: []

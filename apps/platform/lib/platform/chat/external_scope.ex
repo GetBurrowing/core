@@ -120,13 +120,21 @@ defmodule Platform.Chat.ExternalScope do
   @doc """
   Convert a `%Platform.Access.Scope{}` to the `%ExternalScope{}` it filters as.
 
-  `external?: true` exactly when the actor is a user (a map carrying a binary
-  `:id`) and the Scope's contributing roles carry `chat.read` only through the
-  `participant_spaces` rule (`Scope.rules_for/2`). For the built-in roles that
-  is a guest-restricted user: an external member, external admin, external
-  root-org member, and a mixed user (guest dominates). Everything else
-  converts to a pass-through scope. The result carries no participant ids;
-  `member_space_ids/1` reads `chat_participants` live on every call.
+  `external?: true` exactly when the actor carries a binary `:id` and the
+  Scope's contributing roles carry `chat.read` only through the
+  `participant_spaces` rule (`Scope.rules_for/2`, which reads a user's
+  memberships through the same `Scope.guest_dominates/1` path `for_user/1`
+  builds from). For the built-in roles that is a guest-restricted user: an
+  external member, external admin, external root-org member, and a mixed user
+  (guest dominates). Everything else converts to a pass-through scope. The
+  result carries no participant ids; `member_space_ids/1` reads
+  `chat_participants` live on every call.
+
+  An `%AgentRuntime{}` also carries a binary `:id`, so an external-owned
+  runtime's Scope converts to `user_id: <runtime id>, external?: true` and
+  filters to nothing: no `participant_type: "user"` row carries a runtime id.
+  No caller passes a runtime Scope to a Chat read today (task `01a1386d-cb5c`
+  stage 4 pins this in `test/platform/access/equivalence_test.exs`).
   """
   @spec from_scope(Scope.t()) :: t()
   def from_scope(%{__struct__: Scope, actor: %{id: user_id}} = scope) when is_binary(user_id) do

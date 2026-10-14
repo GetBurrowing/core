@@ -249,10 +249,16 @@ defmodule Platform.Access.ScopeTest do
       join!(user, ctx.dm)
       scope = Scope.for_user(loaded(user))
 
-      # The internal admin row contributes NO role data: a per-membership
-      # union would widen this user's chat to every channel.
+      # The internal admin row contributes no member role data: a
+      # per-membership union would widen this user's chat to every channel.
+      # It does keep org admin on B, as `Tenancy.org_admin?/2` says today
+      # (`org_admin_per_membership/3`, task 01a1386d-cb5c stage 4).
       assert scope.permissions ==
-               Map.put(guest_map([ctx.dm.id]), "orgs.read", sorted([ctx.a, ctx.b]))
+               guest_map([ctx.dm.id])
+               |> Map.merge(admin_extra([ctx.b]))
+               |> Map.put("orgs.read", sorted([ctx.a, ctx.b]))
+
+      assert Tenancy.org_admin?(user, ctx.b)
 
       assert scope.role_keys == %{
                ctx.a => MapSet.new(["guest"]),
@@ -271,15 +277,28 @@ defmodule Platform.Access.ScopeTest do
 
       assert Tenancy.root_admin?(user)
       refute Access.can?(scope, "install.admin")
-      assert scope.permissions == Map.put(guest_map([]), "orgs.read", :all)
+
+      assert scope.permissions ==
+               guest_map([]) |> Map.merge(admin_extra([ctx.root])) |> Map.put("orgs.read", :all)
+
       assert_matches_today(user, scope)
     end
 
-    test "zero memberships: empty", _ctx do
+    test "zero memberships: the no-membership baseline, member chat and tasks only", ctx do
       user = create_user!("none")
+      join!(user, ctx.dm)
       scope = Scope.for_user(loaded(user))
 
-      assert scope.permissions == %{}
+      # Internal today: every channel and the whole board
+      # (`no_membership_baseline/1`, task 01a1386d-cb5c stage 4).
+      assert scope.permissions == %{
+               "chat.read" => [ctx.dm.id],
+               "chat.write" => [ctx.dm.id],
+               "tasks.read" => :all,
+               "tasks.write" => :all
+             }
+
+      assert Access.can?(scope, "chat.read", ctx.channel)
       assert scope.org == nil
       assert scope.role_keys == %{}
       assert_matches_today(user, scope)
@@ -358,9 +377,10 @@ defmodule Platform.Access.ScopeTest do
       assert scope.permissions["chat.read"] == [ctx.dm.id]
       assert sources == ["chat_participants"]
 
-      # A user whose rules reference no participant set issues none at all.
+      # A zero-membership user's baseline carries a participant rule too:
+      # still the one participant query, nothing else.
       nobody = loaded(create_user!("queries-none"))
-      assert {_, []} = count_queries(fn -> Scope.for_user(nobody) end)
+      assert {_, ["chat_participants"]} = count_queries(fn -> Scope.for_user(nobody) end)
     end
   end
 

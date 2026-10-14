@@ -19,7 +19,15 @@ defmodule Platform.Access.EquivalenceTest do
     5. MCP `tools/list` per runtime: names, the HTTP body hash, and the
        callable set the Scope's grants imply over the whole catalogue;
     6. `Tenancy.org_admin?/2` for every (actor, org) pair;
-    7. the rail, as rendered.
+    7. the rail, NARROWED: today's rail is ungated and rail gating is stack
+       position 4, so the claim is (a) the Scope's rail is a subset of the
+       rendered rail and (b) every rendered tile the Scope does not declare
+       is refused through the endpoint.
+
+  Rows added by the stack owner's decisions after the first red run (task
+  01a1386d-cb5c stage 4): agent runtimes read chat through their roster, a
+  zero-membership user gets the no-membership baseline, and a mixed user
+  with an internal admin row stays an org admin of that org.
 
   Quantity 8 (today's in-memory org fences, which the Scope does not replace)
   is `Platform.Access.OrgFencesTest`, a separate file so it can run unchanged
@@ -75,6 +83,14 @@ defmodule Platform.Access.EquivalenceTest do
 
     zero = human!(fn _u -> :ok end)
 
+    # Mixed with an INTERNAL admin row: org admin of B today
+    # (`Tenancy.org_admin?/2` is per membership).
+    mixed_admin =
+      human!(fn u ->
+        external!(u, org_a, "member")
+        member!(u, org_b, "admin")
+      end)
+
     # Spaces beyond the world's channels a (ext + int) and b (other): a DM
     # for ext with the allowlisted m, a group for mixed, an execution space,
     # and a channel in org B that mixed and ext_root participate in.
@@ -83,6 +99,10 @@ defmodule Platform.Access.EquivalenceTest do
     exec = space!("execution", org_b, [sub_admin])
     c = space!("channel", org_b, [mixed, ext_root, ext_admin])
     dm_admin = space!("dm", root, [root_admin, sub_admin])
+    # A channel in each external row's OWN org, so each guest has a chat page
+    # the ExternalUserScope plug admits (its slug lookup is org-scoped).
+    chan_a = space!("channel", org_a, [ext_admin, mixed_admin])
+    chan_root = space!("channel", root, [ext_root, ext_root_admin])
     _ = World.add_user!(w.a.id, mixed.id)
 
     # Projects and tasks in four orgs, including a foreign tenant no row is a
@@ -125,6 +145,7 @@ defmodule Platform.Access.EquivalenceTest do
       ext_root_member: ext_root,
       ext_root_admin: ext_root_admin,
       mixed: mixed,
+      mixed_internal_admin: mixed_admin,
       zero_membership: zero
     ]
 
@@ -134,7 +155,7 @@ defmodule Platform.Access.EquivalenceTest do
       humans: humans,
       runtimes: [default: rt_default, narrowed: rt_narrow, external_owned: rt_ext],
       rt_full: rt_full,
-      spaces: [w.a, w.b, dm_ext, group, exec, c, dm_admin],
+      spaces: [w.a, w.b, dm_ext, group, exec, c, dm_admin, chan_a, chan_root],
       projects: projects
     }
   end
@@ -184,10 +205,12 @@ defmodule Platform.Access.EquivalenceTest do
         for {row, rt} <- ctx.runtimes,
             today = rt.agent_id |> Chat.list_spaces_for_agent() |> ids(),
             scope = Scope.for_runtime(rt),
-            via_scope = for(s <- ctx.spaces, Scope.can?(scope, "chat.read", s), do: s.id),
-            today != Enum.sort(via_scope),
-            do: {row, today: today, scope: Enum.sort(via_scope)}
+            admitted = for(s <- ctx.spaces, Scope.can?(scope, "chat.read", s), do: s.id),
+            via_scope = {Enum.sort(admitted), Scope.permitted_ids(scope, "chat.read")},
+            {today, today} != via_scope,
+            do: {row, today: today, scope: via_scope}
 
+      assert Enum.all?(ctx.runtimes, fn {_, rt} -> Chat.list_spaces_for_agent(rt.agent_id) != [] end)
       assert diffs == []
     end
 
@@ -339,23 +362,32 @@ defmodule Platform.Access.EquivalenceTest do
   # ── 7. Rail ─────────────────────────────────────────────────────────────
 
   describe "quantity 7: rail" do
-    test "the rendered rail vs the registry entries whose permission the Scope holds", ctx do
-      installed = IconRail.destinations(root_user: true) |> Enum.map(& &1.key)
+    # Today's rail is ungated: it renders tiles an actor cannot open. Rail
+    # gating is stack position 4, so the Scope does not reproduce today's
+    # tiles. The claim is narrowed to two checkable halves: (a) every tile the
+    # Scope declares is on today's rendered rail, and (b) every tile on
+    # today's rail that the Scope does not declare opens to a refusal for
+    # that actor, through the full endpoint.
+    test "(a) the Scope's rail is a subset of today's rendered rail", ctx do
+      diffs =
+        for {row, user} <- ctx.humans,
+            today = rendered_rail(user, ctx),
+            via_scope = scope_rail(user),
+            via_scope -- today != [],
+            do: {row, not_rendered_today: via_scope -- today}
+
+      assert diffs == []
+    end
+
+    test "(b) every tile today renders but the Scope does not declare is refused", ctx do
+      paths = Map.new(IconRail.destinations(root_user: true), &{&1.key, &1.path})
 
       diffs =
         for {row, user} <- ctx.humans,
-            scope = Scope.for_user(loaded(user)),
-            today = rendered_rail(user, ctx),
-            via_scope =
-              for(
-                e <- Registry.rail_entries(),
-                e.key in installed,
-                Scope.can?(scope, e.permission),
-                do: e.key
-              )
-              |> Enum.sort(),
-            today != via_scope,
-            do: {row, today: today, scope: via_scope}
+            key <- rendered_rail(user, ctx) -- scope_rail(user),
+            outcome = request_outcome(user, Map.fetch!(paths, key)),
+            outcome not in [:forbidden, :denied_admin, {:redirect, "/"}, :login],
+            do: {row, key, Map.fetch!(paths, key), outcome}
 
       assert diffs == []
     end
@@ -423,36 +455,50 @@ defmodule Platform.Access.EquivalenceTest do
     {Enum.map(body["result"]["tools"], & &1["name"]), body}
   end
 
+  # Today's rail as rendered on the first page this actor can actually load:
+  # `/tasks` for an internal user; for a guest, each of their chat spaces in
+  # turn (the plug's slug lookup is org-scoped, so not every participant
+  # space loads), then `/chat`. A row with no loadable page fails the test
+  # rather than reading as an empty rail.
   defp rendered_rail(user, ctx) do
-    path =
+    candidates =
       if Tenancy.external_user?(user) do
-        # A guest's surface is its own chat space; every other app route 403s.
-        case listed_spaces(user, ExternalScope.for_user(user)) |> spaces_of(ctx) do
-          [space | _] -> "/chat/#{space.slug}"
-          [] -> "/chat"
-        end
+        spaces = listed_spaces(user, ExternalScope.for_user(user)) |> spaces_of(ctx)
+        Enum.map(spaces, &"/chat/#{&1.slug}") ++ ["/chat"]
       else
-        "/tasks"
+        ["/tasks"]
       end
 
-    conn = authed(user) |> get(path)
+    html =
+      Enum.find_value(candidates, fn path ->
+        conn = authed(user) |> get(path)
+        if conn.status == 200, do: html_response(conn, 200)
+      end)
 
-    case conn.status do
-      200 ->
-        conn
-        |> html_response(200)
-        |> LazyHTML.from_document()
-        |> LazyHTML.query("[data-icon-rail] .icon-rail-tab:not(.icon-rail-tab--child)")
-        |> LazyHTML.attribute("data-destination")
-        |> Enum.map(&String.to_existing_atom/1)
-        |> Enum.sort()
+    assert html, "no page in #{inspect(candidates)} loads for #{user.id}"
 
-      _ ->
-        []
-    end
+    html
+    |> LazyHTML.from_document()
+    |> LazyHTML.query("[data-icon-rail] .icon-rail-tab:not(.icon-rail-tab--child)")
+    |> LazyHTML.attribute("data-destination")
+    |> Enum.map(&String.to_existing_atom/1)
+    |> Enum.sort()
   end
 
   # ── The Scope's side ────────────────────────────────────────────────────
+
+  defp scope_rail(user) do
+    scope = Scope.for_user(loaded(user))
+    installed = IconRail.destinations(root_user: true) |> Enum.map(& &1.key)
+
+    for(
+      e <- Registry.rail_entries(),
+      e.key in installed,
+      Scope.can?(scope, e.permission),
+      do: e.key
+    )
+    |> Enum.sort()
+  end
 
   defp predict_board(scope) do
     cond do
