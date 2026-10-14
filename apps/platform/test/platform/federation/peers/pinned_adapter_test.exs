@@ -26,7 +26,9 @@ defmodule Platform.Federation.Peers.PinnedAdapterTest.PeerPlug do
   def call(%{request_path: "/trickle"} = conn, _opts) do
     conn = send_chunked(conn, 200)
 
-    Enum.reduce_while(1..40, conn, fn _, conn ->
+    # 200 chunks 50 ms apart: the whole body takes 10 s, so no host is slow
+    # enough for it to complete inside the test's 300 ms deadline.
+    Enum.reduce_while(1..200, conn, fn _, conn ->
       Process.sleep(50)
 
       case chunk(conn, "x") do
@@ -89,25 +91,21 @@ defmodule Platform.Federation.Peers.PinnedAdapterTest do
   end
 
   test "the receive deadline holds against a server that never answers in time", %{base: base} do
-    started = System.monotonic_time(:millisecond)
-
+    # The error kind is the evidence: without the deadline the server's 2 s
+    # reply arrives and this is {:ok, "late"}. No wall-clock bound, which
+    # measured the host's load, not the adapter (task 01a13aac).
     assert {:error, %Mint.TransportError{reason: :timeout}} =
              get(base <> "/slow", nil, receive_timeout: 200)
-
-    assert System.monotonic_time(:millisecond) - started < 1_500
   end
 
   test "ONE deadline for the whole response: a trickling server cannot extend it", %{
     base: base
   } do
-    started = System.monotonic_time(:millisecond)
-
     # every chunk arrives well inside 300 ms of the last one; the whole body
-    # takes 2 s. A per-read timeout would never fire here.
+    # takes 10 s. A per-read timeout would never fire here, so the body would
+    # complete and this would be {:ok, _}: the error kind is the evidence.
     assert {:error, %Mint.TransportError{reason: :timeout}} =
              get(base <> "/trickle", nil, receive_timeout: 300)
-
-    assert System.monotonic_time(:millisecond) - started < 1_500
   end
 
   test "a body over the cap is abandoned and flagged", %{base: base} do

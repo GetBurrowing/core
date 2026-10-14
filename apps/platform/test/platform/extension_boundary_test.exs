@@ -52,6 +52,11 @@ defmodule Platform.ExtensionBoundaryTest do
 
   use ExUnit.Case, async: true
 
+  # Headroom, not the fix: the scan is one prefilter pass per file (see
+  # `compile/1`). It reads every file under five roots, so a slow CI host
+  # gets more than ExUnit's default 60 s.
+  @moduletag timeout: 300_000
+
   @platform_root Path.expand("../..", __DIR__)
   @apps_root Path.expand("..", @platform_root)
   @scan_roots ~w(lib config assets/js assets/css test)
@@ -155,8 +160,23 @@ defmodule Platform.ExtensionBoundaryTest do
       Enum.map(env_var_names(), &{:env_var, &1})
   end
 
-  defp compile(needles),
-    do: Enum.map(needles, fn {kind, text} -> {kind, text, ~r/\b#{Regex.escape(text)}\b/} end)
+  # A needle can only match a line that contains it as a plain substring, so
+  # every needle is first folded into ONE `:binary` pattern: a file or line
+  # that contains none of them is passed over in a single pass, and the
+  # per-needle word-boundary regexes run only on the few lines that do. That
+  # gives exactly the hits a regex per (needle x line) gives, without the
+  # cost: one regex per needle per line of apps/platform took the test past
+  # ExUnit's 60 s timeout four times in CI (task 01a13aac).
+  defp compile(needles) do
+    %{
+      prefilter: needles |> Enum.map(&elem(&1, 1)) |> Enum.uniq() |> :binary.compile_pattern(),
+      regexes:
+        Enum.map(needles, fn {kind, text} -> {kind, text, ~r/\b#{Regex.escape(text)}\b/} end)
+    }
+  end
+
+  defp mentions_any?(text, %{prefilter: prefilter}),
+    do: :binary.match(text, prefilter) != :nomatch
 
   # ── Scan ─────────────────────────────────────────────────────────────
 
@@ -169,14 +189,19 @@ defmodule Platform.ExtensionBoundaryTest do
   end
 
   defp scan_text(text, label, compiled) do
-    text
-    |> String.split("\n")
-    |> Enum.with_index(1)
-    |> Enum.flat_map(fn {line, n} ->
-      for {kind, needle, re} <- compiled,
-          Regex.match?(re, line),
-          do: "#{label}:#{n}: #{kind} #{needle}: #{String.trim(line)}"
-    end)
+    if mentions_any?(text, compiled) do
+      text
+      |> String.split("\n")
+      |> Enum.with_index(1)
+      |> Enum.filter(fn {line, _n} -> mentions_any?(line, compiled) end)
+      |> Enum.flat_map(fn {line, n} ->
+        for {kind, needle, re} <- compiled.regexes,
+            Regex.match?(re, line),
+            do: "#{label}:#{n}: #{kind} #{needle}: #{String.trim(line)}"
+      end)
+    else
+      []
+    end
   end
 
   defp scan(roots, compiled) do

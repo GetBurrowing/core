@@ -56,6 +56,15 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
                                       "priv/repo/migrations/20260911181500_force_update_deploying_template_auto_merge_conditional.exs"
                                     ])
 
+  @retire_known_flakes_migration Path.join([
+                                   __ENV__.file
+                                   |> Path.dirname()
+                                   |> Path.dirname()
+                                   |> Path.dirname()
+                                   |> Path.dirname(),
+                                   "priv/repo/migrations/20261014160000_force_update_deploying_template_retire_known_flakes.exs"
+                                 ])
+
   @browser_session_migration Path.join([
                                __ENV__.file
                                |> Path.dirname()
@@ -70,6 +79,7 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
     Code.require_file(@deploying_branch_recovery_migration)
     Code.require_file(@browser_session_migration)
     Code.require_file(@auto_merge_conditional_migration)
+    Code.require_file(@retire_known_flakes_migration)
     :ok
   end
 
@@ -639,7 +649,20 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
 
       assert content =~ "ANNOTATIONS", "the retry-sentinel rule was lost"
       assert content =~ "initial mix test failed"
-      assert content =~ "ProofOfLifeTest", "the known-flake list was lost"
+
+      # Task 01a13aac stage 4 retired the known-flake list: the four names it
+      # carried had 0 retry-green occurrences in 320 CI runs. A retry-green is
+      # now a red run. Pin both halves: the list is gone, and the replacement
+      # rule is present (refuting the names alone passes on an empty body).
+      for name <-
+            ~w(ProofOfLifeTest SandboxHelpersScopedDrainTest conn_case_supervised_orphan_test) do
+        refute content =~ name, "the retired known-flake list is back (#{name})"
+      end
+
+      refute content =~ "LocalRunnerTest force_stop"
+      refute content =~ "may be merged past"
+      assert content =~ "There is no known-flake list", "the no-known-flakes rule was lost"
+      assert content =~ "a test the retry greened is a red run"
       assert content =~ "mergedAt", "the verify-the-field rule was lost"
 
       # Added by the rewrite: a merged `--delete-branch` from a worktree skips
@@ -691,6 +714,31 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
              "the migration must write the descriptor body verbatim"
 
       refute repaired =~ "must NOT arm it yet"
+    end
+
+    test "the retire-known-flakes migration rewrites a row that still carries the list" do
+      # Task 01a13aac stage 4. Fresh test DBs already hold the descriptor, so
+      # make the row stale first or `up/0` would pass as a no-op.
+      stale =
+        "Known flakes (ProofOfLifeTest, LocalRunnerTest force_stop) may be merged past"
+
+      template = PromptTemplates.get_template_by_slug("dispatch.deploying")
+      assert template, "dispatch.deploying row must exist for this test to mean anything"
+
+      {:ok, _} = PromptTemplates.update_template(template, %{content: stale})
+
+      assert PromptTemplates.get_template_by_slug("dispatch.deploying").content == stale,
+             "precondition failed: the row was not actually made stale"
+
+      :ok = Platform.Repo.Migrations.ForceUpdateDeployingTemplateRetireKnownFlakes.up()
+
+      repaired = PromptTemplates.get_template_by_slug("dispatch.deploying").content
+
+      assert repaired == PromptTemplates.default_content_for_slug("dispatch.deploying"),
+             "the migration must write the descriptor body verbatim"
+
+      refute repaired =~ "ProofOfLifeTest"
+      assert repaired =~ "There is no known-flake list"
     end
   end
 

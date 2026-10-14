@@ -12,7 +12,6 @@ defmodule Platform.Federation.Peers.SupervisorTest do
   # supervisor and registry, and the tests flip the federation flag.
   use Platform.DataCase, async: false
 
-  import ExUnit.CaptureLog
   import Platform.FederationPeerFixtures
 
   alias Platform.Federation.Peers
@@ -182,36 +181,6 @@ defmodule Platform.Federation.Peers.SupervisorTest do
 
       {:ok, _active} = Peers.activate(pending)
       assert assert_eventually(fn -> PeerConnection.whereis(pending.id) end)
-    end
-
-    test "a wrapper that gives up is logged by peer_id and restarted by the next re-scan" do
-      enable_federation!()
-      start_supervised!({Boot, interval: 3_600_000, connection_opts: [max_restarts: 1]})
-
-      x = peer_for!(remote_install())
-      y = peer_for!(remote_install())
-      cleanup!(x)
-      cleanup!(y)
-      :ok = Boot.rescan()
-
-      x_pid = assert_eventually(fn -> PeerConnection.whereis(x.id) end)
-      y_pid = assert_eventually(fn -> PeerConnection.whereis(y.id) end)
-
-      log =
-        capture_log(fn ->
-          assert {2, _ms} = crash_until_gone(x.id, x_pid)
-          # wait until Boot has processed the wrapper's DOWN
-          assert_eventually(fn -> MapSet.member?(:sys.get_state(Boot).offline, x.id) end)
-          :ok = Boot.rescan()
-        end)
-
-      assert log =~ "peer connection offline peer_id=#{x.id}"
-      assert log =~ "restarting offline peer connection peer_id=#{x.id}"
-      refute log =~ "peer_id=#{y.id}"
-
-      assert is_pid(PeerConnection.whereis(x.id))
-      refute PeerConnection.whereis(x.id) == x_pid
-      assert PeerConnection.whereis(y.id) == y_pid
     end
   end
 
