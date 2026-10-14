@@ -192,7 +192,7 @@ closed later by deliberate changes, never by the mapping.
 | 6 | **External admin** (`role: admin`, `external: true`) | On a tenant org, `org_admin?/2` is false (`:1193`), so the admin role grants nothing beyond row 5. On the **root** org, `root_admin?/1` returns **true** (`tenancy.ex:1106-1116` ignores `external`). The only thing holding this user off `/admin` and the other app routes is the `ExternalUserScope` plug, not `:ensure_admin`. | **`guest`**, exactly as row 5. The `admin` role on an external row maps to no permission, and **root-admin bypass is never derived for a user with any external row**, so the plug-only defence becomes a modelled rule. This row is the one place where the stored role and the mapped role differ, and it does so on purpose. |
 | 7 | **Agent** | Tools: `allowed_bundles` through `ToolAuthorization.authorize/2` (`tool_authorization.ex:106`). Space reads: participation (`assert_agent_in_space/2`, `tool_surface.ex:15431`). Page writes: the Historian pin only (`routing.ex:294`). Owner: `agent_runtimes.owner_user_id` for federated agents (`agent_runtime.ex:58`). None for `built_in` (`agent.ex:85`). | Effective set = the agent's own grants ∩ its owner's, inheriting the owner's by default. On day one, an agent's own grants are the translation of its current bundles, so every runtime's `tools/list` is unchanged. The current Historian keeps its page-write reach. The ownerless built-in case is decided in § Agents. |
 | 8 | **Meeting invitee** (unauthenticated) | The `meet.` host, `:guest_browser` pipeline (`router.ex:83-90`, no `:require_auth`), and the `:guest_meeting` live_session (`router.ex:760`). The bearer is a slug+token pair checked by `Meetings.resolve_guest_invite/2` (`lib/platform/meetings.ex:1701`), and the token lives 30 minutes (`meetings.ex:4281`). There is no user row and no membership. | **No role and no `%Scope{}`.** This actor is not a principal in RBAC v2. It stays a token capability for one meeting room. |
-| 9 | **Zero-membership user** (a user row, no `org_memberships`) | `external_user?/1` is false, so the user is treated as internal: the channel rail is the unfenced `Chat.list_spaces(kind: "channel", scope: nil)` list and `/tasks` renders the whole, unscoped board. `visibility/1` gives `:none`, so no projects. | **No role.** Reproduced as is by the named rule `no_membership_baseline/1`: the built-in `member` role's `chat.read`, `chat.write`, `tasks.read` and `tasks.write` rules, nothing else (task `01a1386d-cb5c` stage 4). Narrowing it is resource scoping's decision (§ Open questions). |
+| 9 | **Zero-membership user** (a user row, no `org_memberships`) | `external_user?/1` is false, so the user is treated as internal: the channel rail is the unfenced `Chat.list_spaces(kind: "channel", scope: nil)` list and `/tasks` renders the whole, unscoped board. `visibility/1` gives `:none`, so no projects. | **No role.** Reproduced as is by the named rule `no_membership_baseline/1`: the whole built-in `member` role with its own rules (task `01a1386d-cb5c` stage 4). With no org, every `membership_org` rule resolves to nothing, so org-fenced reads such as `/files` stay empty, as today. Narrowing it is resource scoping's decision (§ Open questions). |
 
 **"Guest" means two things, so the meeting actor gets a different name.** The built-in role
 **guest** (row 5) is a signed-in user with a user row, an org membership and space grants. The
@@ -345,7 +345,10 @@ gets one ruling. None of them gains a second gate:
 non-root tile for any signed-in user, including tiles a guest cannot open. Member 2's equivalence
 test claims only that the Scope's rail is a subset of today's rendered rail, and that every
 rendered tile the Scope does not declare is refused through the endpoint for that actor (task
-`01a1386d-cb5c` stage 4).
+`01a1386d-cb5c` stage 4). **A tile is declared when the Scope CARRIES its rail permission at all**
+(`Scope.carries?/2`, `Scope.declared_rail/1`), including a `membership_org` rule that resolves to
+no org: a tile means "you may open this module", and which rows inside it are visible is resource
+scoping (member 3).
 
 **Rail rule.** The rail shows a module when the actor holds that module's rail permission
 *anywhere*: `permitted_ids/2` is `:all`, or its allow set minus its deny set is non-empty
@@ -1100,7 +1103,8 @@ falsifier.
    writes the `guest` role. The code identifiers that already say "guest" for meeting invitees
    are not renamed in this stack.
 8. **Resource scoping (member 3): a user with no org membership sees every channel and the whole
-   board today; member 3 decides.** Member 2 reproduces it as is (mapping row 9).
+   board today, and opens every internal module page; member 3 decides.** Member 2 reproduces it as
+is (mapping row 9).
 9. **The live security gap in Control Center is not this ADR's to fix.** `control_center/runtime_events.ex:58-83`
    lets any internal user regenerate another user's agent token and shows it to them. Member 5
    closes it in its stage 3; the architect recommended a hotfix on main ahead of the stack.

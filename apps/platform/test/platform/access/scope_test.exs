@@ -284,19 +284,20 @@ defmodule Platform.Access.ScopeTest do
       assert_matches_today(user, scope)
     end
 
-    test "zero memberships: the no-membership baseline, member chat and tasks only", ctx do
+    test "zero memberships: the no-membership baseline, the whole member role", ctx do
       user = create_user!("none")
       join!(user, ctx.dm)
       scope = Scope.for_user(loaded(user))
 
-      # Internal today: every channel and the whole board
-      # (`no_membership_baseline/1`, task 01a1386d-cb5c stage 4).
-      assert scope.permissions == %{
-               "chat.read" => [ctx.dm.id],
-               "chat.write" => [ctx.dm.id],
-               "tasks.read" => :all,
-               "tasks.write" => :all
-             }
+      # Internal today: every channel, the whole board, every internal module
+      # (`no_membership_baseline/1`, task 01a1386d-cb5c stage 4). With no org,
+      # each `membership_org` rule resolves to nothing.
+      assert scope.permissions == member_map([], [ctx.dm.id])
+      refute Access.can?(scope, "files.read")
+      # Carried, though it resolves to nothing: the rail declares the module.
+      assert Scope.carries?(scope, "files.read")
+      assert :files in Scope.declared_rail(scope)
+      refute Scope.carries?(scope, "install.admin")
 
       assert Access.can?(scope, "chat.read", ctx.channel)
       assert scope.org == nil

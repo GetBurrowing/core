@@ -391,6 +391,21 @@ defmodule Platform.Access.EquivalenceTest do
 
       assert diffs == []
     end
+
+    # The rail rule is "carries", not "resolves non-empty": the zero-membership
+    # user carries `files.read` through a `membership_org` rule that resolves
+    # to no org. Measured, not assumed: today's /files page lists no project
+    # for them, and does list projects for a positive control.
+    test "zero-membership: /files is declared and today's page lists no project", ctx do
+      zero = ctx.humans[:zero_membership]
+      scope = Scope.for_user(loaded(zero))
+
+      assert :files in Scope.declared_rail(scope)
+      refute Scope.can?(scope, "files.read")
+      assert Scope.permitted_ids(scope, "files.read") == []
+      assert files_page_projects(zero) == []
+      assert files_page_projects(ctx.humans[:root_member]) != []
+    end
   end
 
   # ── Today's side ────────────────────────────────────────────────────────
@@ -485,18 +500,21 @@ defmodule Platform.Access.EquivalenceTest do
     |> Enum.sort()
   end
 
+  defp files_page_projects(user) do
+    {:ok, view, _html} = live(authed(user), "/files")
+    :sys.get_state(view.pid).socket.assigns.projects |> ids()
+  end
+
   # ── The Scope's side ────────────────────────────────────────────────────
 
   defp scope_rail(user) do
-    scope = Scope.for_user(loaded(user))
     installed = IconRail.destinations(root_user: true) |> Enum.map(& &1.key)
 
-    for(
-      e <- Registry.rail_entries(),
-      e.key in installed,
-      Scope.can?(scope, e.permission),
-      do: e.key
-    )
+    user
+    |> loaded()
+    |> Scope.for_user()
+    |> Scope.declared_rail()
+    |> Enum.filter(&(&1 in installed))
     |> Enum.sort()
   end
 

@@ -84,9 +84,9 @@ defmodule Platform.Access.Scope do
       dominance governs the chat / external-scope semantics and root admin,
       not org admin.
     * `no_membership_baseline/1` — a user with no membership is internal
-      today: every channel, the whole board. They get the built-in `member`
-      role's `chat.*` and `tasks.*` rules, reproduced as is (narrowing is
-      resource scoping, stack position 3).
+      today: every channel, the whole board, every internal module page. They
+      get the whole built-in `member` role, with its own rules, reproduced as
+      is (narrowing is resource scoping, stack position 3).
 
   Guest status for the ExternalScope bridge (`rules_for/2`) is read from the
   same `guest_dominates/1` + `no_membership_baseline/1` sources the
@@ -125,7 +125,6 @@ defmodule Platform.Access.Scope do
         }
 
   @implicit_kinds ~w(channel system execution)
-  @baseline_permissions ~w(chat.read chat.write tasks.read tasks.write)
   @participant_rules ~w(participant_spaces implicit_or_participant)
 
   # ── Builders ────────────────────────────────────────────────────────────
@@ -233,6 +232,31 @@ defmodule Platform.Access.Scope do
     end
   end
 
+  @doc """
+  Does the scope CARRY `permission` at all, whatever it resolves to? A
+  `membership_org` rule that resolves to `[]` for a user with no org is
+  carried. This is the module-level question the rail asks ("may you open
+  this module"); which rows inside it are visible is a `can?/3` question.
+  """
+  @spec carries?(t(), String.t()) :: boolean()
+  def carries?(%__MODULE__{actor: :system}, _permission), do: true
+
+  def carries?(%__MODULE__{permissions: permissions}, permission) when is_binary(permission),
+    do: Map.has_key?(permissions, permission)
+
+  def carries?(_scope, _permission), do: false
+
+  @doc """
+  The rail destination keys this scope declares: every registry rail entry
+  whose required permission the scope `carries?/2`. Declared only; nothing
+  gates the rail on it yet (rail gating is stack position 4). Callers
+  intersect with the destinations actually installed.
+  """
+  @spec declared_rail(t()) :: [atom()]
+  def declared_rail(%__MODULE__{} = scope) do
+    for entry <- Registry.rail_entries(), carries?(scope, entry.permission), do: entry.key
+  end
+
   @doc "Does the scope carry the guest restriction (any base role key `guest`)?"
   @spec guest?(t()) :: boolean()
   def guest?(%__MODULE__{role_keys: role_keys}),
@@ -313,15 +337,15 @@ defmodule Platform.Access.Scope do
   @doc false
   # No-membership baseline: a user with NO org membership is internal today
   # (`Tenancy.external_user?/1` is false), so they see every channel through
-  # the pass-through ExternalScope and the whole, unscoped board. This
-  # returns the built-in `member` role's rules for the chat and task
-  # permissions for such a user, and nothing for anyone else. Reproduced as
+  # the pass-through ExternalScope, the whole, unscoped board, and every
+  # internal module page. This returns the built-in `member` role's rules,
+  # all of them and with their own rule values, for such a user, and nothing
+  # for anyone else. With no membership a `membership_org` rule resolves to
+  # no org, so org-fenced reads stay empty as they are today. Reproduced as
   # is; narrowing it belongs to resource scoping (stack position 3).
   @spec no_membership_baseline([OrgMembership.t()]) :: map()
   def no_membership_baseline([]) do
-    Access.builtin_role_rules()
-    |> Map.get("member", %{})
-    |> Map.take(@baseline_permissions)
+    Map.get(Access.builtin_role_rules(), "member", %{})
   end
 
   def no_membership_baseline(_memberships), do: %{}
