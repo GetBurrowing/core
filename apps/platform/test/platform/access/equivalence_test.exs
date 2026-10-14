@@ -210,7 +210,10 @@ defmodule Platform.Access.EquivalenceTest do
             {today, today} != via_scope,
             do: {row, today: today, scope: via_scope}
 
-      assert Enum.all?(ctx.runtimes, fn {_, rt} -> Chat.list_spaces_for_agent(rt.agent_id) != [] end)
+      assert Enum.all?(ctx.runtimes, fn {_, rt} ->
+               Chat.list_spaces_for_agent(rt.agent_id) != []
+             end)
+
       assert diffs == []
     end
 
@@ -254,8 +257,8 @@ defmodule Platform.Access.EquivalenceTest do
               all_tasks |> Enum.filter(&Scope.can?(scope, "tasks.read", &1.id)) |> ids(),
             {status, today_tasks} != {scope_status, scope_tasks},
             do:
-              {row, today: {status, length(today_tasks)},
-               scope: {scope_status, length(scope_tasks)}}
+              {row,
+               today: {status, length(today_tasks)}, scope: {scope_status, length(scope_tasks)}}
 
       assert length(all_tasks) >= 4
       assert diffs == []
@@ -293,7 +296,8 @@ defmodule Platform.Access.EquivalenceTest do
 
       diffs =
         for {row, user} <- rows,
-            scope = if(user, do: Scope.for_user(loaded(user)), else: Scope.for_meeting_invitee(nil)),
+            scope =
+              if(user, do: Scope.for_user(loaded(user)), else: Scope.for_meeting_invitee(nil)),
             {session, path} <- routes,
             today = request_outcome(user, path),
             via_scope = predict_admin(scope, session, user),

@@ -151,7 +151,8 @@ defmodule Platform.Access.OrgFencesTest do
 
       for {org, tag} <- [{sxi, "home"}, {sibling, "sibling"}, {root, "root"}] do
         {:ok, _} =
-          Journal.append(%{content: "fence marker #{tag}-entry", date: Date.utc_today(), org_id: org},
+          Journal.append(
+            %{content: "fence marker #{tag}-entry", date: Date.utc_today(), org_id: org},
             namespace: "org"
           )
       end
