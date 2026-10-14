@@ -48,7 +48,7 @@ defmodule PlatformWeb.ChatLiveSectionLabelFollowsOrgTest do
     %OrgMembership{}
     |> OrgMembership.changeset(%{
       user_id: user.id,
-      org_id: Tenancy.get_org_by_slug!("fabrikam").id,
+      org_id: Tenancy.get_org_by_slug!("acme").id,
       role: "admin"
     })
     |> Repo.insert!()
@@ -78,13 +78,13 @@ defmodule PlatformWeb.ChatLiveSectionLabelFollowsOrgTest do
     space
   end
 
-  defp fabrikam_channel! do
+  defp acme_channel! do
     n = System.unique_integer([:positive])
 
     {:ok, space} =
-      Chat.create_space(%{name: "Fabrikamchan#{n}", slug: "fabrikamchan#{n}", kind: "channel"})
+      Chat.create_space(%{name: "Acmechan#{n}", slug: "acmechan#{n}", kind: "channel"})
 
-    {:ok, space} = Chat.assign_space_org(space, Tenancy.get_org_by_slug!("fabrikam").id)
+    {:ok, space} = Chat.assign_space_org(space, Tenancy.get_org_by_slug!("acme").id)
     space
   end
 
@@ -305,21 +305,21 @@ defmodule PlatformWeb.ChatLiveSectionLabelFollowsOrgTest do
       org = create_org!(admin, "Oldclient")
       _ = channel_in!(org)
       section_id = section_id!(org)
-      fabrikam = fabrikam_channel!()
+      acme = acme_channel!()
       rename_org!(org, "Newclient")
 
       {:ok, view, _html} = mount!(admin)
 
       view
-      |> element(~s(button[data-role="row-actions-trigger"][data-space-id="#{fabrikam.id}"]))
+      |> element(~s(button[data-role="row-actions-trigger"][data-space-id="#{acme.id}"]))
       |> render_click()
 
       view
-      |> element(~s(button[data-role="move-to-org-trigger"][phx-value-channel_id="#{fabrikam.id}"]))
+      |> element(~s(button[data-role="move-to-org-trigger"][phx-value-channel_id="#{acme.id}"]))
       |> render_click()
 
       destination =
-        ~s([data-role="move-to-org-destination"][phx-value-channel_id="#{fabrikam.id}"][data-section-id="#{section_id}"])
+        ~s([data-role="move-to-org-destination"][phx-value-channel_id="#{acme.id}"][data-section-id="#{section_id}"])
 
       assert has_element?(view, destination, "Newclient")
     end

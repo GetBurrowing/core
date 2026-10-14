@@ -33,14 +33,15 @@ defmodule Platform.LegacyFabrikamRootOrgTest do
   ## What this proves that `root_org_slug_test.exs` does not
 
   `root_org_slug_test.exs` covers a root org that keeps the seeded
-  `"fabrikam"` slug OR gets renamed away from it, always through the test
+  fixture slug (`"acme"` since task 01a116de stage 4) OR gets renamed away
+  from it, always through the test
   DB's own boot-time seed. This file starts from a **from-scratch legacy
   shape** and checks that `get_root_org/0` and the structurally-migrated
   call sites need zero special-casing to keep operating on it — including
   a login for an EXISTING `@example.com` user (no email change), which
   exercises `find_or_create_from_oidc/1`'s idempotent-refresh path rather
   than the first-INSERT path the other e2e files cover. Nothing here is
-  tenant-priority ordering, display labels, or `fabrikam_admin?`-style
+  tenant-priority ordering, display labels, or `root_admin?`-style
   naming — those are a different, cosmetic concern from the structural
   root-resolution bug this task fixes and are out of scope for this
   stage's audit.
@@ -86,6 +87,16 @@ defmodule Platform.LegacyFabrikamRootOrgTest do
     # `up/0` body inserted, before task 01a068f6 stage 2 rewrote it, plus
     # real pre-existing membership history.
     Ecto.Adapters.SQL.query!(Repo, "TRUNCATE orgs CASCADE")
+
+    # The legacy install also configures its own admin domain. The test
+    # environment's pin is the neutral `acme.test` (task 01a116de stage 4),
+    # so the legacy shape sets it here and restores it afterwards.
+    previous_domain = Application.get_env(:platform, :root_org_admin_email_domain)
+    Application.put_env(:platform, :root_org_admin_email_domain, "example.com")
+
+    on_exit(fn ->
+      Application.put_env(:platform, :root_org_admin_email_domain, previous_domain)
+    end)
 
     fabrikam = insert_org!(%{name: "Fabrikam", slug: "fabrikam", parent_org_id: nil})
     soylent = insert_org!(%{name: "Soylent", slug: "soylent", parent_org_id: fabrikam.id})

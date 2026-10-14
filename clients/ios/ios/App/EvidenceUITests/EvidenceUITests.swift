@@ -133,4 +133,152 @@ final class EvidenceUITests: XCTestCase {
         shot("notification-expanded")
         _ = app
     }
+
+    /// Task 01a1261e review round 2: what iOS RENDERS for a chat push from
+    /// one of two signed-in installs. The harness first copies each payload
+    /// named in $COMM_FILES (comma-separated) into the App Group container;
+    /// each runs through the DEBUG `-SuiteDebugLocalPush` seam (the Notification
+    /// Service Extension's own two calls). Writes every Notification Center
+    /// cell's accessibility label to `<tag>-nc-cells.txt`.
+    func testCommunicationNotificationLabels() {
+        let env = ProcessInfo.processInfo.environment
+        let tag = env["COMM_TAG"] ?? "comm"
+        let files = (env["COMM_FILES"] ?? "").split(separator: ",").map(String.init)
+        let extra = (env["COMM_ARGS"] ?? "").split(separator: " ").map(String.init)
+        var app = launch(["-SuiteRequestPush", "YES"])
+        let allow = springboard.buttons["Allow"]
+        if allow.waitForExistence(timeout: 8) { allow.tap() }
+        sleep(2)
+        app.terminate()
+        for file in files {
+            app = launch(["-SuiteDebugLocalPush", file] + extra)
+            sleep(2)
+            XCUIDevice.shared.press(.home)
+            sleep(5)
+        }
+        let cells = springboard.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier == 'NotificationShortLookView' OR identifier == 'NotificationCell'"))
+        // Pull down Notification Center from the top left; retry, since the
+        // first drag can land while springboard is still animating.
+        for _ in 0..<4 where cells.count == 0 {
+            let start = springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.0))
+            start.press(forDuration: 0.1, thenDragTo: springboard.coordinate(withNormalizedOffset: CGVector(dx: 0.25, dy: 0.8)))
+            sleep(4)
+        }
+        var labels: [String] = []
+        for index in 0..<min(cells.count, 30) { labels.append(cells.element(boundBy: index).label) }
+        note("\(tag)-nc-cells", labels.joined(separator: "\n---\n"))
+        shot("\(tag)-nc")
+        XCUIDevice.shared.press(.home)
+    }
+
+    /// Task 01a1261e review round 2: the picker as it renders, after the
+    /// harness set up the installs. Writes the row labels and a screenshot.
+    func testPickerRows() {
+        let env = ProcessInfo.processInfo.environment
+        let tag = env["COMM_TAG"] ?? "picker"
+        let extra = (env["COMM_ARGS"] ?? "").split(separator: " ").map(String.init)
+        let app = launch(extra)
+        let title = app.staticTexts["Choose a Burrow install"]
+        if !title.waitForExistence(timeout: 20) { shot("\(tag)-no-picker") }
+        sleep(12)
+        let rows = app.descendants(matching: .any).allElementsBoundByIndex.prefix(300).map(\.label).filter { !$0.isEmpty }
+        note("\(tag)-rows", rows.joined(separator: "\n"))
+        shot("\(tag)-picker")
+    }
+
+    /// Task 01a120be stage 4: the "Sent to #<space>" notification a finished
+    /// background upload posts, drawn by the system.
+    func test4UploadSentNotification() {
+        let app = launch(["-SuiteEvidenceSentNotification", "design-review"])
+        for _ in 0..<3 {
+            let allow = springboard.buttons["Allow"]
+            if allow.waitForExistence(timeout: 5) { allow.tap() }
+            let cancel = consentButton(app, "Cancel")
+            if cancel.waitForExistence(timeout: 3) { cancel.tap() }
+        }
+        XCUIDevice.shared.press(.home)
+        let banner = springboard.otherElements["NotificationShortLookView"].firstMatch
+        guard banner.waitForExistence(timeout: 60) else {
+            shot("upload-sent-missing")
+            return
+        }
+        shot("upload-sent-notification")
+    }
+
+    // MARK: Add your install (task 01a12787 stage 2)
+
+    /// File name prefix, so a light and a dark run can share a directory
+    /// (TEST_RUNNER_EVIDENCE_PREFIX=dark-).
+    private var prefix: String { ProcessInfo.processInfo.environment["EVIDENCE_PREFIX"] ?? "" }
+
+    private func freshAddFlow(_ extra: [String] = []) -> XCUIApplication {
+        let app = launch(["-SuiteEvidenceReset", "YES"] + extra)
+        XCTAssertTrue(app.staticTexts["Add your install"].waitForExistence(timeout: 20))
+        return app
+    }
+
+    private func type(_ app: XCUIApplication, _ text: String) {
+        let field = app.textFields["install-address"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        field.tap()
+        field.typeText(text)
+    }
+
+    func test9AddYourInstall() {
+        // Step 1 at first launch, keyboard up.
+        var app = freshAddFlow()
+        sleep(2)
+        shot("\(prefix)add-1-first-launch")
+
+        // Checking: a host that never answers holds the probe for its 10 s timeout.
+        type(app, "10.255.255.1")
+        app.buttons["Continue"].tap()
+        XCTAssertTrue(app.buttons["Checking..."].waitForExistence(timeout: 5))
+        shot("\(prefix)add-2-checking")
+        app.terminate()
+
+        // The confirmation card against a live install: its own logo, name and host.
+        app = freshAddFlow()
+        type(app, "https://suite-exp.example.com/chat ")
+        app.buttons["Continue"].tap()
+        XCTAssertTrue(app.buttons["Continue to sign in"].waitForExistence(timeout: 20))
+        // The install's logo loads after the card appears.
+        sleep(8)
+        shot("\(prefix)add-3-confirm-card")
+        app.buttons["Not this one? Change address"].tap()
+        XCTAssertTrue(app.textFields["install-address"].waitForExistence(timeout: 5))
+        sleep(1)
+        shot("\(prefix)add-4-change-address-keeps-text")
+        app.terminate()
+
+        // Not found: a host that does not resolve.
+        app = freshAddFlow()
+        type(app, "acme.burow.app")
+        app.buttons["Continue"].tap()
+        XCTAssertTrue(
+            app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH 'No Burrow install answered'")).firstMatch
+                .waitForExistence(timeout: 20))
+        sleep(1)
+        shot("\(prefix)add-5-not-found")
+        app.terminate()
+
+        // Offline, through the DEBUG probe seam.
+        app = freshAddFlow(["-SuiteAddInstallProbe", "offline"])
+        type(app, "acme.burrow.app")
+        app.buttons["Continue"].tap()
+        XCTAssertTrue(app.staticTexts["You're offline. Connect and try again."].waitForExistence(timeout: 10))
+        sleep(1)
+        shot("\(prefix)add-6-offline")
+        app.terminate()
+
+        // The switcher's Add install sheet: the same flow.
+        app = launch(["-SuiteEvidenceReset", "YES", "-SuiteExtraInstall", "suite-exp.example.com"])
+        XCTAssertTrue(app.staticTexts["Choose a Burrow install"].waitForExistence(timeout: 20))
+        app.buttons["Add an install"].tap()
+        XCTAssertTrue(app.staticTexts["Add your install"].waitForExistence(timeout: 5))
+        sleep(2)
+        shot("\(prefix)add-7-switcher-sheet")
+        app.terminate()
+    }
 }

@@ -139,7 +139,7 @@ defmodule PlatformWeb.AgentInitiatedDmTest do
         name: "Agent DM Channel #{n}",
         slug: "agentdm-channel-#{n}",
         kind: "channel",
-        org_id: Tenancy.get_org_by_slug!("fabrikam").id
+        org_id: Tenancy.get_org_by_slug!("acme").id
       })
 
     ch
@@ -404,7 +404,7 @@ defmodule PlatformWeb.AgentInitiatedDmTest do
   describe "reachability" do
     test "an external (guest) user is refused, and no DM space is written" do
       agent = insert_agent()
-      org = Tenancy.get_org_by_slug!("fabrikam")
+      org = Tenancy.get_org_by_slug!("acme")
       guest = insert_user()
       {:ok, _} = Tenancy.mark_membership_external(%{user_id: guest.id, org_id: org.id})
       assert Tenancy.external_user?(%{id: guest.id})

@@ -821,7 +821,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooksTest do
       |> Platform.Tasks.Project.changeset(%{
         name: "Quickmeet Project #{System.unique_integer([:positive])}",
         slug: "quickmeet-project-#{System.unique_integer([:positive])}",
-        org_id: Platform.TenancyFixtures.fabrikam_org_id()
+        org_id: Platform.TenancyFixtures.acme_org_id()
       })
       |> Platform.Repo.insert()
 

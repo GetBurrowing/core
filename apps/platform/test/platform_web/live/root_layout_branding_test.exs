@@ -9,12 +9,12 @@ defmodule PlatformWeb.RootLayoutBrandingTest do
   CURRENT PAGE'S `<head>` at Add-to-Home-Screen time; Android reads the
   manifest. A test that moves only one of the two cannot catch the
   half-wired state where the manifest reads "SENTINEL-XYZ" and the
-  home-screen label still says "Suite" — so one upload + one rename is
+  home-screen label still says "Burrow" — so one upload + one rename is
   followed by assertions on the rendered head AND `/manifest.json` in the
   SAME test, including that the `/branding/<version>/` segment is identical
   across both.
 
-  The page rendered is `/admin/branding` as a Fabrikam admin: it is the one
+  The page rendered is `/admin/branding` as an Acme admin: it is the one
   page whose fixture this test already needs, and it goes through the
   `:browser` pipeline and the root layout like every other app page.
   """
@@ -62,7 +62,7 @@ defmodule PlatformWeb.RootLayoutBrandingTest do
     %OrgMembership{}
     |> OrgMembership.changeset(%{
       user_id: user.id,
-      org_id: Tenancy.get_org_by_slug!("fabrikam").id,
+      org_id: Tenancy.get_org_by_slug!("acme").id,
       role: "admin"
     })
     |> Repo.insert!()
@@ -128,12 +128,12 @@ defmodule PlatformWeb.RootLayoutBrandingTest do
   end
 
   describe "default render (no upload)" do
-    test "carries Suite, dark base-100 and the /images/ paths, with no framework suffix",
+    test "carries Burrow, dark base-100 and the /images/ paths, with no framework suffix",
          %{conn: conn} do
       head = render_head(conn, admin!())
 
-      assert meta(head, "apple-mobile-web-app-title") == "Suite"
-      assert meta(head, "theme-color") == "#171b25"
+      assert meta(head, "apple-mobile-web-app-title") == "Burrow"
+      assert meta(head, "theme-color") == "#191b20"
       refute meta(head, "theme-color") == "#000000"
 
       assert link_href(head, [~s(rel="icon"), ~s(type="image/x-icon")]) == "/images/favicon.ico"
@@ -149,7 +149,7 @@ defmodule PlatformWeb.RootLayoutBrandingTest do
 
     test "the title falls back to the app name, not the framework scaffold", %{conn: conn} do
       head = render_head(conn, admin!())
-      assert head =~ ~s(data-default="Suite")
+      assert head =~ ~s(data-default="Burrow")
       refute head =~ "data-suffix"
     end
 
@@ -160,7 +160,7 @@ defmodule PlatformWeb.RootLayoutBrandingTest do
       # <html> is from the first parsed byte. This pins that the value is the
       # seeded dark base-100 from the branding row.
       tag = html_tag(render_page(conn, admin!()))
-      assert tag =~ ~s(style="background-color: #171b25")
+      assert tag =~ ~s(style="background-color: #191b20")
     end
   end
 
@@ -171,7 +171,7 @@ defmodule PlatformWeb.RootLayoutBrandingTest do
 
       tag = html_tag(render_page(conn, admin))
       assert tag =~ ~s(style="background-color: #0a0b0c")
-      refute tag =~ "#171b25"
+      refute tag =~ "#191b20"
     end
   end
 
@@ -204,7 +204,7 @@ defmodule PlatformWeb.RootLayoutBrandingTest do
       assert link_href(head, [~s(rel="apple-touch-icon")]) ==
                "/branding/#{version}/apple_touch"
 
-      refute head =~ ~s(content="Suite")
+      refute head =~ ~s(content="Burrow")
       refute head =~ "/images/favicon"
       refute head =~ "/images/apple-touch-icon"
 
@@ -254,9 +254,9 @@ defmodule PlatformWeb.RootLayoutBrandingTest do
         })
 
       assert html =~ ~s(data-suffix=" · SENTINEL-XYZ")
-      assert html_tag(html) =~ ~s(style="background-color: #171b25")
+      assert html_tag(html) =~ ~s(style="background-color: #191b20")
       assert html =~ ~s(href="/images/favicon.ico")
-      assert html =~ ~s(content="#171b25")
+      assert html =~ ~s(content="#191b20")
       refute html =~ "Phoenix Framework"
     end
   end

@@ -34,7 +34,7 @@ defmodule Platform.GameStream.ExtensionParityTest do
   alias Platform.Repo
   alias PlatformWeb.Components.IconRail
 
-  @core_kinds ~w(stack row card text markdown heading badge image code mermaid embed form action_row checklist checklist_item table)
+  @core_kinds ~w(stack row card text markdown heading badge image code mermaid embed form action_row checklist checklist_item table prototype)
 
   setup do
     previous_flag = Application.fetch_env(:game_stream, :enabled)
@@ -176,6 +176,7 @@ defmodule Platform.GameStream.ExtensionParityTest do
       {"stack_retry_member_merge", "task"},
       {"stack_start_planning", "task"},
       {"stack_assign_agents", "task"},
+      {"janitor_hand_back", "task"},
       {"plan_create", "plan"},
       {"plan_update", "plan"},
       {"plan_get", "plan"},
@@ -210,6 +211,8 @@ defmodule Platform.GameStream.ExtensionParityTest do
       {"canvas_get", "context_read"},
       {"principal_search", "context_read"},
       {"federation_status", "federation"},
+      {"vault_fetch", "federation"},
+      {"vault_list", "federation"},
       {"memory_view", "memory"},
       {"memory_create", "memory"},
       {"memory_str_replace", "memory"},
@@ -249,7 +252,14 @@ defmodule Platform.GameStream.ExtensionParityTest do
       {"experiment_exclude", "experiments"},
       {"experiment_goal_set", "experiments"},
       {"experiment_goal_list", "experiments"},
-      {"experiment_promote", "experiments"}
+      {"experiment_promote", "experiments"},
+      {"dispatch_metrics_list", "experiments"},
+      {"code_mode_report", "experiments"},
+      {"suite_run", "code_mode"},
+      {"suite_run_describe", "code_mode"},
+      {"prototype.publish", "prototype"},
+      {"prototype.versions", "prototype"},
+      {"prototype.rollback", "prototype"}
     ]
 
     # sha256 of the canonical term of `tool_definitions/0` on main (see
@@ -260,15 +270,79 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # the only tool-definition change. The off digest equals the one
     # apps/platform/test/platform/extensions_test.exs already pins for the
     # same change; both values were measured by main CI at ccff9306b.
-    @main_tool_digest_off "aeed155fe1eddc517699538d9ec4a22f158c25fb87ac83672892de7adf56fb68"
-    @main_tool_digest_on "396ffdd2b405d9601d1245485c7fef9be1f59553af12ed483b4f2b0fad56c997"
-    @main_kinds_summaries_digest_off "4c060fb7a6914985f94857aaac9effbb519dd2b2170c7a9c0013d4db15a73ea4"
-    @main_kinds_summaries_digest_on "dbab62a1b3d154e23378f3a990b77deb17c5f50eb30adf0b055bc0df8ce6c1e3"
-    @main_kinds_tool_schemas_digest_off "e454cd9e2aeb1d821a70b74fe433e81ba98b94f7ae9f2d59c55f8cf5bf509af8"
-    @main_kinds_tool_schemas_digest_on "66a2afcec34a8e4b6275ab78f21f7bb124b671a12f690399556b2ad6f2b331ef"
+    #
+    # Re-pinned by task 01a114a8 stage 1: `dispatch_metrics_list` joins the
+    # `experiments` bundle. Both values measured on moon at the stage's
+    # branch; the off digest equals the one extensions_test.exs pins.
+    #
+    # Re-pinned by task 01a114a8 stage 2: `suite_run` in the new `code_mode`
+    # bundle. Both values measured on moon at the stage's branch; the off
+    # digest equals the one extensions_test.exs pins.
+    #
+    # Re-pinned by task 01a114a8 stage 3: `suite_run_describe`, the
+    # `returns_schema` key on 12 definitions, federation_status's filters and
+    # the suite_run primer. Measured on moon; off equals extensions_test.exs.
+    #
+    # Re-pinned by task 01a114a8 stage 4: `code_mode_report` in `experiments`
+    # and experiment_create doc text. Measured on moon; off equals
+    # extensions_test.exs.
+    #
+    # Re-pinned by task 01a115b5 stage 2: suite_run_describe's `detail`
+    # parameter and description text. Both values measured on moon at the
+    # stage's branch; off equals extensions_test.exs.
+    #
+    # Re-pinned by task 01a116de stage 2: two description strings stop naming
+    # one install's root org ("Use the root org id", "root-org admin"). Both
+    # values measured on moon at the stage's branch; off equals
+    # extensions_test.exs.
+    #
+    # Re-pinned by task 019fa1ac at the rebased tip (after the Fabrikam scrub
+    # and Burrow rebrand landed on main): task_create/task_update expose the
+    # kind taxonomy and task read/write docs name kind. Both values measured
+    # by main CI at this branch head; off equals extensions_test.exs.
+    #
+    # Re-pinned at the stack/feedback-intake-boundary merge of origin/main
+    # (PR #1226): the stack's kind, external-feedback provenance and
+    # `janitor_hand_back` (task 019fa1ac-6685) on main's scrubbed copy. Both
+    # values measured on moon at the merge; off equals extensions_test.exs.
+    #
+    # Re-pinned by task 01a1316b-4e46 stage 1: the `prototype` bundle's three
+    # tools, after core's others. Both values measured on moon at the stage's
+    # branch; off equals extensions_test.exs.
+    #
+    # Re-pinned by task 01a1316b-4e46 stage 2: the `prototype` canvas kind,
+    # last in core's registry, which also enters canvas.create/patch's
+    # document schema. All six values measured on moon at the stage's branch;
+    # off equals extensions_test.exs.
+    #
+    # Re-pinned by task 01a1316b-677a stage 1: the `embed` kind's `scripts`
+    # and `prototype_ref` props and its srcdoc / list_kinds text, which also
+    # enter canvas.create/patch's document schema. All six values measured on
+    # moon at the stage's branch; off equals extensions_test.exs. The metrics
+    # catalog digest is unchanged.
+    #
+    # Re-pinned by task 01a1316b-aab0 stage 2: canvas.patch's operation
+    # description names the new `set_binding` op. Both values measured on
+    # moon at the stage's branch; off equals extensions_test.exs. The kinds
+    # and metrics digests are unchanged.
+    #
+    # Re-pinned by task 01a131c5 (deploy fix-forward): `vault_fetch` and
+    # `vault_list` in the `federation` bundle, after `federation_status`. Off
+    # equals extensions_test.exs (stage 1's moon measurement); on measured by
+    # main CI at this branch head.
+    #
+    # Re-pinned by the stack prototype-runtime rollup merge (#1235): both of the
+    # above. All six values measured on moon at the merge commit; off equals
+    # extensions_test.exs.
+    @main_tool_digest_off "5faf15579570a913f453f9951a5d9b5822afd125dd7423056c1807234fed39b1"
+    @main_tool_digest_on "470a7430fc29edfa88628b82ceca746cb13e6d56b15d9bae44bdd02eb94c61b6"
+    @main_kinds_summaries_digest_off "26c0704185201d0926a8bcb6db6be411b821c54fcba3269676c631969944df72"
+    @main_kinds_summaries_digest_on "f71832b549f7a8674c01fff90be91d869b6eea222c9cdd888723d5045ec3c450"
+    @main_kinds_tool_schemas_digest_off "264902e4c54f3146fe5be6e658c4717aafc6382ea233523ca505607d848e0925"
+    @main_kinds_tool_schemas_digest_on "cf59e8e3a7215086fa324ffa7c036b076527cd20b7dbdf5bf32eba51fb6cddbe"
     @main_metrics_catalog_digest "95805ed557855b482286544ea8d5ea6063b81e47ce1ee28268467a7df2848ee9"
-    @main_bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments play)
-    @main_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments play)
+    @main_bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode prototype play)
+    @main_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode prototype play)
     @main_rail [
       :chat,
       :tasks,
@@ -294,8 +368,10 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # Task 01a10a44 adds dispatch.product_docs_preamble, a core surface appended
     # after the classifier in core's list, so it precedes the Play keys. It is
     # new, so both pins gain it the same way game_stream.touch was added.
-    @main_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary game_stream.encoder_preset game_stream.roster meetings.open_question_classifier game_stream.touch dispatch.product_docs_preamble)
-    @branch_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.open_question_classifier dispatch.product_docs_preamble game_stream.encoder_preset game_stream.roster game_stream.touch)
+    # Task 01a114a8 stage 4 adds dispatch.code_mode, a core surface appended
+    # after dispatch.product_docs_preamble, so it too precedes the Play keys.
+    @main_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary game_stream.encoder_preset game_stream.roster meetings.open_question_classifier game_stream.touch dispatch.product_docs_preamble dispatch.code_mode)
+    @branch_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.open_question_classifier dispatch.product_docs_preamble dispatch.code_mode game_stream.encoder_preset game_stream.roster game_stream.touch)
 
     defp canon(%_{} = s), do: canon(Map.from_struct(s))
 
@@ -347,7 +423,7 @@ defmodule Platform.GameStream.ExtensionParityTest do
         assert AgentRuntime.valid_bundles() == @main_valid_bundles
         assert Metrics.known_metrics() == @main_metrics
         assert digest(Metrics.catalog()) == @main_metrics_catalog_digest
-        assert Enum.map(IconRail.destinations(is_fabrikam_user: true), & &1.key) == @main_rail
+        assert Enum.map(IconRail.destinations(root_user: true), & &1.key) == @main_rail
       end
 
       Application.delete_env(:game_stream, :enabled)

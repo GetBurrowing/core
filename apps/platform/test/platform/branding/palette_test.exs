@@ -51,15 +51,17 @@ defmodule Platform.Branding.PaletteTest do
       end
     end
 
+    # Since the Burrow recolor (task 01a120c5) the status tokens are hex
+    # literals, and light and dark carry different ones a few degrees apart
+    # in hue, so the declared hue is computed, and pinned within 3 degrees.
     test "the guarded status hues are the hues app.css declares, in both themes", ctx do
       for mode <- [:light, :dark], {status, hue} <- Palette.status_hues() do
         value = decl!(Map.fetch!(ctx, mode), "--color-#{status}")
+        {_l, _c, declared} = value |> W.parse!() |> W.to_hex() |> C.to_oklch()
 
-        [_, declared] =
-          Regex.run(~r/^oklch\(\s*[\d.]+%\s+[\d.]+\s+([\d.]+)\s*\)$/, value) ||
-            flunk("#{mode} --color-#{status} is not oklch(): #{value}")
-
-        assert String.to_integer(declared) == hue, "#{mode} #{status} hue drifted"
+        assert C.hue_distance(declared, hue) <= 3.0,
+               "#{mode} #{status} hue drifted: #{value} is #{Float.round(declared, 1)} degrees, " <>
+                 "Palette guards #{hue}"
       end
     end
   end
@@ -72,27 +74,32 @@ defmodule Platform.Branding.PaletteTest do
       end
     end
 
-    test "light cyan legitimately warns at 1.79:1, which is why the focus ring is split" do
-      [warn] = Enum.filter(Palette.checks(:light, %{}), &(&1.id == :action_visibility))
-      assert warn.level == :warn
-      assert Float.round(warn.ratio, 4) == 1.7875
-      assert warn.message =~ "Buttons will be hard to see as outlines"
+    test "the light Burrow orange passes visibility at 5.32:1 and rings with itself" do
+      [vis] = Enum.filter(Palette.checks(:light, %{}), &(&1.id == :action_visibility))
+      assert vis.level == :pass
+      assert Float.round(vis.ratio, 4) == 5.3202
 
       tokens = Palette.derive(:light, %{})
-      refute tokens["--focus-ring"] == tokens["--color-primary"]
+      assert tokens["--focus-ring"] == "#ad4b07"
     end
 
-    test "dark rings with the action colour itself, as app.css does" do
-      tokens = Palette.derive(:dark, %{})
-      assert tokens["--focus-ring"] == "#06d5ed"
+    test "derived base-content is each theme's own, and dark rings with the action" do
+      light = Palette.derive(:light, %{})
+      dark = Palette.derive(:dark, %{})
+
+      assert light["--color-base-content"] == "#000000"
+      assert dark["--color-base-content"] == "#eeeff1"
+      assert dark["--focus-ring"] == "#f47721"
     end
 
-    test "light base-200 and base-300 step to exactly today's #f2f2f2 and #d7d7d7", %{
-      light: light
-    } do
-      tokens = Palette.derive(:light, %{})
-      assert tokens["--color-base-200"] == hex_of!(light, "--color-base-200")
-      assert tokens["--color-base-300"] == hex_of!(light, "--color-base-300")
+    # The lightness steps were deliberately NOT retuned by the Burrow recolor:
+    # they shape the greys derived for an admin-chosen surface, and moving them
+    # would repaint installs that already saved a palette. A white surface
+    # still steps to exactly the pre-Burrow light greys.
+    test "a white surface still steps to exactly #f2f2f2 and #d7d7d7" do
+      tokens = Palette.derive(:light, %{surface: "#ffffff"})
+      assert tokens["--color-base-200"] == "#f2f2f2"
+      assert tokens["--color-base-300"] == "#d7d7d7"
     end
   end
 
@@ -179,7 +186,7 @@ defmodule Platform.Branding.PaletteTest do
         assert body.ratio < 4.5
 
         assert body.message ==
-                 "Body text on this surface is 4.2:1. It needs 4.5:1 to be readable."
+                 "Body text on this surface is 4.3:1. It needs 4.5:1 to be readable."
 
         assert Palette.blocked?(mode, %{surface: "#707070"})
       end

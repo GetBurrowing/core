@@ -49,8 +49,8 @@ defmodule PlatformWeb.UserAccessLiveTest do
   end
 
   defp promote_to_admin!(user) do
-    fabrikam = Tenancy.get_org_by_slug!("fabrikam")
-    create_membership!(user, fabrikam, "admin")
+    acme = Tenancy.get_org_by_slug!("acme")
+    create_membership!(user, acme, "admin")
     user
   end
 
@@ -63,8 +63,8 @@ defmodule PlatformWeb.UserAccessLiveTest do
   describe "admin gate" do
     test "non-admin (member) is redirected away from /admin/users", %{conn: conn} do
       user = create_user!()
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
-      create_membership!(user, fabrikam, "member")
+      acme = Tenancy.get_org_by_slug!("acme")
+      create_membership!(user, acme, "member")
 
       assert {:error, {:live_redirect, %{to: "/", flash: flash}}} =
                conn |> authenticated_conn(user) |> live(~p"/admin/users")

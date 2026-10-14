@@ -40,7 +40,7 @@ defmodule Platform.ExtensionsTest do
   alias Platform.Repo
   alias PlatformWeb.Components.IconRail
 
-  @core_kinds ~w(stack row card text markdown heading badge image code mermaid embed form action_row checklist checklist_item table)
+  @core_kinds ~w(stack row card text markdown heading badge image code mermaid embed form action_row checklist checklist_item table prototype)
 
   setup do
     on_exit(fn -> Application.delete_env(:platform, :fixture_extension_test_pid) end)
@@ -232,7 +232,7 @@ defmodule Platform.ExtensionsTest do
       refute Enum.any?(ToolSurface.tool_definitions(), &String.starts_with?(&1.name, "play_"))
       refute Enum.any?(Surfaces.list(), &String.starts_with?(&1.key(), "game_stream."))
       refute Enum.any?(Metrics.known_metrics(), &String.starts_with?(&1, "game_stream"))
-      refute :fixture in Enum.map(IconRail.destinations(is_fabrikam_user: true), & &1.key)
+      refute :fixture in Enum.map(IconRail.destinations(root_user: true), & &1.key)
       assert Extensions.migrations_paths() == []
       assert Platform.MixSupport.extension_migration_args() == []
       assert Extensions.live_hooks() == []
@@ -451,6 +451,7 @@ defmodule Platform.ExtensionsTest do
       {"stack_retry_member_merge", "task"},
       {"stack_start_planning", "task"},
       {"stack_assign_agents", "task"},
+      {"janitor_hand_back", "task"},
       {"plan_create", "plan"},
       {"plan_update", "plan"},
       {"plan_get", "plan"},
@@ -485,6 +486,8 @@ defmodule Platform.ExtensionsTest do
       {"canvas_get", "context_read"},
       {"principal_search", "context_read"},
       {"federation_status", "federation"},
+      {"vault_fetch", "federation"},
+      {"vault_list", "federation"},
       {"memory_view", "memory"},
       {"memory_create", "memory"},
       {"memory_str_replace", "memory"},
@@ -524,18 +527,83 @@ defmodule Platform.ExtensionsTest do
       {"experiment_exclude", "experiments"},
       {"experiment_goal_set", "experiments"},
       {"experiment_goal_list", "experiments"},
-      {"experiment_promote", "experiments"}
+      {"experiment_promote", "experiments"},
+      {"dispatch_metrics_list", "experiments"},
+      {"code_mode_report", "experiments"},
+      {"suite_run", "code_mode"},
+      {"suite_run_describe", "code_mode"},
+      {"prototype.publish", "prototype"},
+      {"prototype.versions", "prototype"},
+      {"prototype.rollback", "prototype"}
     ]
 
     # Re-pinned by task 01a0fcfa stage 1: attachment.get_inline's `returns`
     # and `limitations` text now document the MCP image content block. That
     # is the only tool-definition change; names and bundles are unchanged.
-    @main_tool_digest_off "aeed155fe1eddc517699538d9ec4a22f158c25fb87ac83672892de7adf56fb68"
-    @main_kinds_summaries_digest_off "4c060fb7a6914985f94857aaac9effbb519dd2b2170c7a9c0013d4db15a73ea4"
-    @main_kinds_tool_schemas_digest_off "e454cd9e2aeb1d821a70b74fe433e81ba98b94f7ae9f2d59c55f8cf5bf509af8"
+    #
+    # Re-pinned by task 01a114a8 stage 1: `dispatch_metrics_list` joins the
+    # `experiments` bundle. Measured on moon at the stage's branch.
+    #
+    # Re-pinned by task 01a114a8 stage 2: `suite_run` in the new `code_mode`
+    # bundle, last. Measured on moon at the stage's branch.
+    #
+    # Re-pinned by task 01a114a8 stage 3: `suite_run_describe`, the
+    # `returns_schema` key on 12 definitions, federation_status's filter
+    # parameters and the suite_run primer. Measured on moon.
+    #
+    # Re-pinned by task 01a114a8 stage 4: `code_mode_report` in `experiments`,
+    # plus doc text on experiment_create (dispatch_usage, agent_id cohort,
+    # dispatch.code_mode target). Measured on moon at the stage's branch.
+    #
+    # Re-pinned by task 01a115b5 stage 2: suite_run_describe's `detail`
+    # parameter and description text. Measured on moon at the stage's branch.
+    #
+    # Re-pinned by task 019fa1ac stage 1: task_create/task_update expose the
+    # first-class kind taxonomy and task read/write docs now name kind.
+    # Measured on moon at the stage's branch (recomputed at the rebased tip
+    # after main's Fabrikam scrub landed; see task 019fa1ac PR).
+    #
+    # Re-pinned by task 01a11ec3 stage 1: task_create/task_update expose
+    # origin, trust and external repository/issue provenance alongside the
+    # independent kind taxonomy. Measured on moon at the stage's branch.
+    #
+    # Re-pinned by task 019fa1ac-6685 stage 3: `janitor_hand_back` in the
+    # `task` bundle, after `stack_assign_agents`. Measured on moon at the
+    # stage's branch.
+    #
+    # Re-pinned at the stack/feedback-intake-boundary merge of origin/main
+    # (c135cbe7, PR #1226): the stack's surface with main's Fabrikam-scrubbed tool
+    # copy. Measured on moon at the merge.
+    #
+    # Re-pinned by task 01a1316b-4e46 stage 1: the `prototype` bundle's three
+    # tools, last. Measured on moon at the stage's branch.
+    #
+    # Re-pinned by task 01a1316b-4e46 stage 2: the `prototype` canvas kind,
+    # last in the registry, which also enters canvas.create/patch's document
+    # schema. Measured on moon at the stage's branch.
+    #
+    # Re-pinned by task 01a1316b-677a stage 1: the `embed` kind's `scripts`
+    # and `prototype_ref` props and its srcdoc / list_kinds text, which also
+    # enter canvas.create/patch's document schema. Measured on moon at the
+    # stage's branch.
+    #
+    # Re-pinned by task 01a1316b-aab0 stage 2: canvas.patch's operation
+    # description names the new `set_binding` op (the MCP tool's text in
+    # tool_surface.ex and the canvas tool schema in canvas/tools.ex).
+    # Measured on moon at the stage's branch.
+    #
+    # Re-pinned by task 01a131c5 stage 1: `vault_fetch` and `vault_list` in
+    # the `federation` bundle, after `federation_status`. Measured on moon at
+    # the stage's branch.
+    #
+    # Re-pinned by the stack prototype-runtime rollup merge (#1235): both of the
+    # above. Measured on moon at the merge commit.
+    @main_tool_digest_off "5faf15579570a913f453f9951a5d9b5822afd125dd7423056c1807234fed39b1"
+    @main_kinds_summaries_digest_off "26c0704185201d0926a8bcb6db6be411b821c54fcba3269676c631969944df72"
+    @main_kinds_tool_schemas_digest_off "264902e4c54f3146fe5be6e658c4717aafc6382ea233523ca505607d848e0925"
     # main's lists minus exactly `play`.
-    @core_bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments)
-    @core_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments)
+    @core_bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode prototype)
+    @core_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode prototype)
     @main_rail [
       :chat,
       :tasks,
@@ -552,7 +620,7 @@ defmodule Platform.ExtensionsTest do
     # main's lists minus exactly Play's two metric slugs and two surface keys,
     # in main's order.
     @core_metrics ~w(cycle_time manual_gate_rejection_rate overscoped_gate_count plan_revision_count stages_per_plan time_in_phase validation_failure_rate)
-    @core_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.open_question_classifier dispatch.product_docs_preamble)
+    @core_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.open_question_classifier dispatch.product_docs_preamble dispatch.code_mode)
 
     defp canon(%_{} = s), do: canon(Map.from_struct(s))
 
@@ -588,7 +656,7 @@ defmodule Platform.ExtensionsTest do
       assert Metrics.known_metrics() == @core_metrics
       assert Enum.map(Metrics.catalog(), & &1.slug) |> Enum.sort() == Enum.sort(@core_metrics)
       assert Enum.map(Surfaces.list(), & &1.key()) == @core_surfaces
-      assert Enum.map(IconRail.destinations(is_fabrikam_user: true), & &1.key) == @main_rail
+      assert Enum.map(IconRail.destinations(root_user: true), & &1.key) == @main_rail
       assert Kinds.names() == @core_kinds
       assert digest(Kinds.summaries()) == @main_kinds_summaries_digest_off
       assert digest(Kinds.tool_schemas()) == @main_kinds_tool_schemas_digest_off

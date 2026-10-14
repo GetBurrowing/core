@@ -46,7 +46,22 @@ defmodule Platform.Agents.AvatarStorage do
   picker hint and is trivially bypassed.
   """
 
+  alias Platform.Chat.AttachmentStorage
+  alias Vix.Vips.Image, as: VImage
+  alias Vix.Vips.Operation
+
+  require Logger
+
   @namespace "agent-avatars"
+
+  # The native app's avatar route serves a thumbnail of at most this many
+  # pixels a side (`app_variant/1`). 192 is the size both Burrow apps decode
+  # to (`MAX_PX` on Android, `maxPixels` on iOS).
+  @thumbnail_px 192
+
+  # Originals at or under this size are served to the app unchanged: half the
+  # apps' 256 KB cap, so anything that passes through is comfortably inside it.
+  @thumbnail_passthrough_bytes 128 * 1024
 
   # The AttachmentStorage safe-override list minus application/pdf. See the
   # moduledoc: SVG and text/* are deliberately absent, not forgotten.
@@ -143,7 +158,114 @@ defmodule Platform.Agents.AvatarStorage do
   `agents.avatar_url` on the row.
   """
   @spec delete(String.t()) :: :ok
-  def delete(storage_key) when is_binary(storage_key), do: adapter().delete(storage_key)
+  def delete(storage_key) when is_binary(storage_key) do
+    # The app thumbnail is derived from this blob and named after it, so it
+    # goes with it. Deleting a thumbnail that was never generated is a no-op.
+    _ = adapter().delete(thumbnail_key(storage_key))
+    adapter().delete(storage_key)
+  end
+
+  @doc """
+  The file the native app's avatar route serves for `storage_key`, as
+  `{:ok, path, content_type}`, or `{:error, :not_found}` when the blob is
+  missing.
+
+  Both Burrow apps drop an avatar body over 256 KB (`MAX_BYTES` in the
+  Android `AvatarFetcher.kt`, `maxBytes` in the iOS `AvatarFetcher.swift`)
+  and draw the letter disc instead, while uploads allow 5 MB and are stored
+  unresized. So:
+
+    * an original of at most 128 KB is served as-is (it
+      already fits, and re-encoding it gains nothing);
+    * anything larger is served as a PNG thumbnail of at most
+      192 px on a side. A 192 x 192 RGBA image is 147,456 bytes raw, so
+      the PNG stays well under the 256 KB cap whatever the source.
+
+  The thumbnail is generated on first request and cached next to the
+  original under `thumbnail_key/1`. Because the original's key carries a
+  random uuid that changes on every replacement, the cached thumbnail can
+  never go stale, and avatars that existed before this function did get
+  theirs on their first fetch: no backfill, no migration.
+
+  If the original cannot be thumbnailed (a format this libvips build does
+  not read), the original is served, which is exactly the behaviour before
+  thumbnails existed. The content type always describes the bytes at the
+  returned path.
+
+  Local-disk-specific, like the serving controller (`AttachmentStorage.path_for/1`).
+  """
+  @spec app_variant(String.t()) ::
+          {:ok, Path.t(), String.t()} | {:error, :not_found}
+  def app_variant(storage_key) when is_binary(storage_key) do
+    path = AttachmentStorage.path_for(storage_key)
+
+    case File.stat(path) do
+      {:ok, %File.Stat{type: :regular, size: size}} when size <= @thumbnail_passthrough_bytes ->
+        {:ok, path, content_type_for_key(storage_key)}
+
+      {:ok, %File.Stat{type: :regular}} ->
+        case ensure_thumbnail(storage_key, path) do
+          {:ok, thumb_path} ->
+            {:ok, thumb_path, "image/png"}
+
+          {:error, reason} ->
+            Logger.warning(
+              "[agents.avatar_storage] thumbnail failed, serving original: reason=#{inspect(reason)}"
+            )
+
+            {:ok, path, content_type_for_key(storage_key)}
+        end
+
+      _ ->
+        {:error, :not_found}
+    end
+  end
+
+  @doc """
+  The storage key of the app thumbnail derived from `storage_key`:
+  `<key without extension>.thumb192.png`, beside the original.
+  """
+  @spec thumbnail_key(String.t()) :: String.t()
+  def thumbnail_key(storage_key) when is_binary(storage_key) do
+    Path.rootname(storage_key) <> ".thumb#{@thumbnail_px}.png"
+  end
+
+  defp ensure_thumbnail(storage_key, source_path) do
+    thumb_path = AttachmentStorage.path_for(thumbnail_key(storage_key))
+
+    if File.regular?(thumb_path) do
+      {:ok, thumb_path}
+    else
+      generate_thumbnail(source_path, thumb_path)
+    end
+  end
+
+  # `Operation.thumbnail/3` opens the FILE itself, so libvips can shrink on
+  # load (a large JPEG never decodes at full size) and reads only the first
+  # frame of an animated GIF. `:VIPS_SIZE_DOWN` never upscales.
+  #
+  # Written to a sibling temp file and renamed into place, so a concurrent
+  # request for the same avatar never serves a half-written PNG; two racing
+  # generators each rename a complete file, and either one is correct.
+  defp generate_thumbnail(source_path, thumb_path) do
+    tmp = thumb_path <> ".#{System.unique_integer([:positive])}.tmp"
+
+    with {:ok, image} <-
+           Operation.thumbnail(source_path, @thumbnail_px,
+             height: @thumbnail_px,
+             size: :VIPS_SIZE_DOWN
+           ),
+         {:ok, bytes} <- VImage.write_to_buffer(image, ".png"),
+         :ok <- File.mkdir_p(Path.dirname(thumb_path)),
+         :ok <- File.write(tmp, bytes),
+         :ok <- File.rename(tmp, thumb_path) do
+      {:ok, thumb_path}
+    else
+      error ->
+        _ = File.rm(tmp)
+        {:error, error}
+    end
+  end
 
   @doc """
   Builds the canonical storage key for an agent avatar.

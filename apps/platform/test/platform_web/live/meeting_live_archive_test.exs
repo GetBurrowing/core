@@ -64,12 +64,12 @@ defmodule PlatformWeb.MeetingLiveArchiveTest do
         oidc_sub: "oidc-archive-viewer-#{n}"
       })
 
-    # A plain member, not "admin": `Tenancy.fabrikam_admin?/1` reads admin as
+    # A plain member, not "admin": `Tenancy.root_admin?/1` reads admin as
     # "sees every org", which would make the archive's org scoping untested.
     %OrgMembership{}
     |> OrgMembership.changeset(%{
       user_id: user.id,
-      org_id: Platform.TenancyFixtures.fabrikam_org_id(),
+      org_id: Platform.TenancyFixtures.acme_org_id(),
       role: "member"
     })
     |> Repo.insert!()
@@ -85,7 +85,7 @@ defmodule PlatformWeb.MeetingLiveArchiveTest do
     {:ok, project} =
       Tasks.create_project(%{
         name: name,
-        org_id: Platform.TenancyFixtures.fabrikam_org_id()
+        org_id: Platform.TenancyFixtures.acme_org_id()
       })
 
     project
@@ -299,7 +299,7 @@ defmodule PlatformWeb.MeetingLiveArchiveTest do
       retro: retro,
       workshop: workshop,
       rowan: rowan,
-      org_name: Tenancy.get_org_by_slug!("fabrikam").name
+      org_name: Tenancy.get_org_by_slug!("acme").name
     }
   end
 
@@ -624,7 +624,7 @@ defmodule PlatformWeb.MeetingLiveArchiveTest do
       loud_dalton = participant!(loud, "Dalton")
       loud = cancelled_by!(loud, loud_dalton, at("2026-07-20T10:00:00Z"), true)
 
-      org_name = Tenancy.get_org_by_slug!("fabrikam").name
+      org_name = Tenancy.get_org_by_slug!("acme").name
       conn = login(conn, viewer)
 
       {:ok, view, _html} = live(conn, ~p"/meetings?view=archive")
@@ -652,7 +652,7 @@ defmodule PlatformWeb.MeetingLiveArchiveTest do
       orphan = meeting!(project, "Orphaned cancellation")
       orphan = cancelled_by!(orphan, %{id: nil}, at("2026-07-19T10:00:00Z"), true)
 
-      org_name = Tenancy.get_org_by_slug!("fabrikam").name
+      org_name = Tenancy.get_org_by_slug!("acme").name
       conn = login(conn, viewer)
 
       {:ok, view, _html} = live(conn, ~p"/meetings?view=archive")

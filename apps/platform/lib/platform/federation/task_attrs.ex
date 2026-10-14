@@ -81,6 +81,11 @@ defmodule Platform.Federation.TaskAttrs do
     description
     status
     priority
+    kind
+    origin
+    trust
+    external_repository_identity
+    external_issue_number
     epic_id
     project_id
     assignee_id
@@ -160,7 +165,9 @@ defmodule Platform.Federation.TaskAttrs do
     * `{:ok, flat_attrs, phase_attrs}` where `phase_attrs` may be `nil`.
     * `{:error, reason}` on shape violations (e.g. `auto_route` opted
       in without a `current_phase`, or `phase_assignees` supplied with
-      an unknown phase key).
+      an unknown phase key), and `{:error, {:external_trust_not_grantable,
+      trust}}` when a `:create` asks for an `external_feedback` row with
+      any trust other than `quarantined`.
   """
   @spec build_task_attrs(map(), mode(), keyword()) ::
           {:ok, flat_attrs(), phase_attrs() | nil} | {:error, term()}
@@ -169,7 +176,8 @@ defmodule Platform.Federation.TaskAttrs do
     args = stringify_keys(args)
     existing_phase_assignees = Keyword.get(opts, :existing_phase_assignees)
 
-    with {:ok, phase_attrs_from_struct} <- extract_phase_assignees(args),
+    with :ok <- refuse_transport_granted_external_trust(args, mode),
+         {:ok, phase_attrs_from_struct} <- extract_phase_assignees(args),
          {:ok, current_phase} <- resolve_current_phase(opts, args),
          {:ok, auto_route} <- resolve_auto_route(opts, current_phase),
          {:ok, flat_attrs, phase_attrs_from_flat} <-
@@ -186,6 +194,32 @@ defmodule Platform.Federation.TaskAttrs do
        )}
     end
   end
+
+  # ── External-feedback trust (task 01a11ec3 stage 1) ────────────────────
+  #
+  # Both transports that build task attrs here (MCP `task_create` and the
+  # board's new-task form) are reachable by callers who are not the intake
+  # policy. They may record that a task is external feedback, but they may
+  # not MINT it trusted: a transport-created `external_feedback` row stamped
+  # `trusted` would pre-claim that repository+issue identity, so a later
+  # intake retry would deduplicate into a row nobody quarantined. Trust for
+  # external work comes only from the intake policy (which calls
+  # `Platform.Tasks.create_task/1` directly) or from
+  # `Platform.Tasks.promote_from_quarantine/3`. Omitted trust is not refused;
+  # `Task.changeset/2` defaults a new external row to `quarantined`.
+  # `:update` is not checked here because `Task.changeset/2` refuses every
+  # change to persisted trust/origin/identity outright.
+  defp refuse_transport_granted_external_trust(args, :create) do
+    case {Map.get(args, "origin"), Map.get(args, "trust")} do
+      {"external_feedback", trust} when trust not in [nil, "quarantined"] ->
+        {:error, {:external_trust_not_grantable, trust}}
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp refuse_transport_granted_external_trust(_args, _mode), do: :ok
 
   # ── Phase-assignees extraction ──────────────────────────────────────────
 

@@ -55,6 +55,7 @@ defmodule Platform.Memory.Proposals do
   alias Platform.Memory.MemoryProposal
   alias Platform.Org.Context, as: OrgContext
   alias Platform.Org.Wiki
+  alias Platform.Org.Wiki.Journal
   alias Platform.Repo
 
   @default_pending_limit 50
@@ -186,9 +187,10 @@ defmodule Platform.Memory.Proposals do
 
   Returns `{:ok, proposal}` on success. The caller (`OrgMemoryLive`'s
   `handle_event("approve_proposal", …)`) is responsible for the
-  follow-through — promoting the proposal body into a page and stripping
-  the block from the source journal. This function only flips the
-  status.
+  follow-through via `queue_promotion/1` — promoting the proposal body
+  into a page and, where the source journal is page-backed, stripping
+  the block from it (see `queue_promotion/1` step 3 for when the block
+  is retained instead). This function only flips the status.
   """
   @spec approve(MemoryProposal.t(), keyword()) :: {:ok, MemoryProposal.t()} | {:error, term()}
   def approve(%MemoryProposal{} = proposal, _opts \\ []) do
@@ -214,18 +216,30 @@ defmodule Platform.Memory.Proposals do
        overwrite. This is deliberately additive: Rowan approved this
        body, so it becomes canon on the page.
 
-    3. **Strip the `<synthesis-proposal>` block from the source
-       journal** via `OrgContext.upsert_context_file/3`. Located by
-       `block_hash`, so if multiple blocks share the journal only the
-       promoted one is removed. The stripped upsert re-runs the journal
-       sweep hook — which finds no proposal blocks (this one is gone,
-       the others were already ingested + deduped by unique index),
-       so it's a safe no-op.
+    3. **Resolve the source journal block**, recording the outcome as
+       a `journal_block_disposition`. The strip is NOT unconditional:
+
+       * `"stripped"` — the journal is page-backed (an `org_wiki_pages`
+         row written via `OrgContext.upsert_context_file/3`) and held
+         the block. It is removed by `block_hash`, so if multiple blocks
+         share the journal only the promoted one goes. The stripped
+         upsert re-runs the journal sweep hook, which finds no new
+         blocks, so it is a safe no-op.
+       * `"retained_append_only"` — the journal lives only in
+         `org_wiki_journal_entries` (the `Journal.append/2` +
+         `JournalSweep` / `memory_create` path), and an entry for that
+         day still holds the block. Journal entries are append-only by
+         design, so the block STAYS in the journal text. It cannot be
+         re-proposed: the `duplicate?/2` dedup probe matches the
+         `block_hash` regardless of status.
+       * `"not_found"` — neither of the above (block already stripped,
+         journal edited or deleted, or an unparsable path).
 
     4. **Record an audit event** via `Platform.Audit.record/1` with
        `event_type: "platform.memory.proposal_promoted"`,
        `actor_type: "agent"`, and metadata carrying `proposal_id`,
-       `target_page_key`, `source_journal_path`, `block_hash`, plus
+       `target_page_key`, `source_journal_path`, `block_hash`,
+       `journal_block_disposition`, plus
        `actor_slug: "historian.dreaming"`. Called directly (not via
        telemetry) so the audit row is durable regardless of whether
        `Platform.Audit.TelemetryHandler` is attached in the caller's
@@ -235,9 +249,10 @@ defmodule Platform.Memory.Proposals do
   Returns `:ok` on success (all four steps landed). Returns
   `{:error, reason}` if the page write, journal write, or audit persist
   fails — the caller surfaces the error via `put_flash(:error, …)`.
-  Step 3 failing to *find* the block is not an error: the block may
-  already have been stripped by a prior approve, or the journal may
-  have been edited independently.
+  Step 3 not stripping the block is not an error: the block may already
+  have been stripped by a prior approve, the journal may have been
+  edited independently, or the journal may be append-only. The
+  disposition in the audit row says which.
 
   Lives on the `Proposals` context (not `HistorianDispatcher`) so the
   promotion lifecycle stays inside the T7 module boundary — the T6
@@ -258,8 +273,8 @@ defmodule Platform.Memory.Proposals do
       end
 
     with {:ok, _page} <- append_to_target_page(target_key, proposal, workspace_opts),
-         :ok <- strip_journal_block(proposal, workspace_opts),
-         :ok <- emit_promoted_event(proposal, target_key) do
+         {:ok, disposition} <- strip_journal_block(proposal, workspace_opts),
+         :ok <- emit_promoted_event(proposal, target_key, disposition) do
       :ok
     else
       {:error, reason} ->
@@ -345,18 +360,26 @@ defmodule Platform.Memory.Proposals do
     Wiki.upsert_page(target_key, %{content: new_content}, workspace_opts)
   end
 
+  # Returns `{:ok, disposition}` — see `queue_promotion/1` step 3 for
+  # the three values — or `{:error, reason}` when the page-backed
+  # rewrite fails. Never mutates `org_wiki_journal_entries`: that table
+  # is append-only by design (`tool_surface_t5_e2e_test.exs` forbids
+  # `Journal.update_entry` / `delete_entry`).
   defp strip_journal_block(%MemoryProposal{} = proposal, workspace_opts) do
     case OrgContext.get_file(proposal.journal_path, workspace_opts) do
       nil ->
-        # Journal missing — nothing to strip. Not an error: the block
-        # may have been removed by a prior approve, or the journal
-        # may have been manually deleted. Log and move on.
-        Logger.debug(
-          "[memory.proposals] strip_journal_block: journal not found " <>
-            "journal_path=#{proposal.journal_path} proposal_id=#{proposal.id}"
+        disposition = entry_only_disposition(proposal, workspace_opts)
+
+        # No page row for the journal. Not an error, but no longer
+        # silent: the entry-only path is the common prod shape, and the
+        # block staying put is an outcome a reader of the logs needs.
+        Logger.info(
+          "[memory.proposals] strip_journal_block: no page-backed journal " <>
+            "journal_path=#{proposal.journal_path} proposal_id=#{proposal.id} " <>
+            "journal_block_disposition=#{disposition}"
         )
 
-        :ok
+        {:ok, disposition}
 
       %{content: content} = _file ->
         stripped = strip_block_by_hash(content || "", proposal.block_hash)
@@ -364,19 +387,41 @@ defmodule Platform.Memory.Proposals do
         if stripped == content do
           # No matching block found — either already stripped or the
           # block was rewritten. Not an error; audit row still fires.
-          :ok
+          {:ok, "not_found"}
         else
           case OrgContext.upsert_context_file(
                  proposal.journal_path,
                  %{content: stripped, updated_by: nil},
                  workspace_opts
                ) do
-            {:ok, _file} -> :ok
+            {:ok, _file} -> {:ok, "stripped"}
             {:error, reason} -> {:error, {:journal_upsert_failed, reason}}
           end
         end
     end
   end
+
+  # The journal has no page row. If an append-only entry for that day
+  # still carries the block, report it as retained; otherwise not found.
+  defp entry_only_disposition(%MemoryProposal{} = proposal, workspace_opts) do
+    with {:ok, %{namespace: ns, date: date}} <- Journal.parse_virtual_path(proposal.journal_path),
+         [_ | _] = entries <-
+           Journal.get_for_date(date,
+             namespace: ns,
+             workspace_id: Keyword.get(workspace_opts, :workspace_id)
+           ),
+         true <- Enum.any?(entries, &holds_block?(&1.content, proposal.block_hash)) do
+      "retained_append_only"
+    else
+      _ -> "not_found"
+    end
+  end
+
+  defp holds_block?(content, block_hash) when is_binary(content) do
+    strip_block_by_hash(content, block_hash) != content
+  end
+
+  defp holds_block?(_content, _block_hash), do: false
 
   # Walk every `<synthesis-proposal>` block and rewrite it as empty
   # ONLY when its trimmed-body hash matches `target_hash`. Non-matching
@@ -388,7 +433,7 @@ defmodule Platform.Memory.Proposals do
     end)
   end
 
-  defp emit_promoted_event(%MemoryProposal{} = proposal, target_key) do
+  defp emit_promoted_event(%MemoryProposal{} = proposal, target_key, disposition) do
     attrs = %{
       event_type: "platform.memory.proposal_promoted",
       actor_type: "agent",
@@ -402,6 +447,7 @@ defmodule Platform.Memory.Proposals do
         "target_page_key" => target_key,
         "source_journal_path" => proposal.journal_path,
         "block_hash" => proposal.block_hash,
+        "journal_block_disposition" => disposition,
         "workspace_id" => proposal.workspace_id,
         "category" => proposal.category
       }

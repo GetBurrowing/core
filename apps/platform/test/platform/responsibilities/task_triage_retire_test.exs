@@ -46,7 +46,7 @@ defmodule Platform.Responsibilities.TaskTriageRetireTest do
   # A Monday, 09:00:00Z — exactly an instant `0 9 * * 1-5` fires at.
   @monday_nine ~U[2026-09-28 09:00:00Z]
 
-  # The metadata Fabrikam prod carries today, before this task's deploy.
+  # The metadata production carried, before this task's deploy.
   @old_prod_metadata %{
     "role" => "triage_officer",
     "owner" => "platform.tasks",
@@ -180,7 +180,7 @@ defmodule Platform.Responsibilities.TaskTriageRetireTest do
     end
   end
 
-  # Writes the row the way Fabrikam prod has it today: the real spec, but with
+  # Writes the row the way production had it: the real spec, but with
   # the pre-fix metadata and enabled=true. Goes through the same upsert so
   # a row the test DB may already hold is overwritten rather than duplicated;
   # `enabled` is set explicitly because upsert deliberately preserves it.

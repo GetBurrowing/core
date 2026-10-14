@@ -58,21 +58,21 @@ defmodule PlatformWeb.ShellLivePushRegistrationTest do
         oidc_sub: "oidc-push-reg-#{n}"
       })
 
-    fabrikam = Tenancy.get_org_by_slug!("fabrikam")
-    Repo.insert!(%OrgMembership{user_id: user.id, org_id: fabrikam.id, role: "member"})
+    acme = Tenancy.get_org_by_slug!("acme")
+    Repo.insert!(%OrgMembership{user_id: user.id, org_id: acme.id, role: "member"})
 
     user
   end
 
   defp channel_with!(user) do
-    fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+    acme = Tenancy.get_org_by_slug!("acme")
 
     {:ok, space} =
       Chat.create_space(%{
         name: "Push Reg Chan",
         slug: "push-reg-#{System.unique_integer([:positive])}",
         kind: "channel",
-        org_id: fabrikam.id
+        org_id: acme.id
       })
 
     {:ok, participant} =

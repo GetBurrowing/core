@@ -1,6 +1,6 @@
 <div class="flex h-full min-h-0 w-full">
   <%!-- LEFT: org-grouped project picker (desktop only).
-       Mirrors the Tasks sidebar — Fabrikam first, then tenant orgs in
+       Mirrors the Tasks sidebar — the root org first, then tenant orgs in
        canonical priority order. Hidden on mobile; the mobile sheet
        trigger lives in the center header below. --%>
   <aside class="hidden md:flex w-64 shrink-0 flex-col border-r border-edge bg-base-100">
@@ -28,7 +28,11 @@
         data-org-slug={org_slug}
       >
         <summary class="flex items-center gap-2 px-3 py-2 text-xs font-semibold uppercase tracking-widest text-base-content/60 hover:bg-base-200 cursor-pointer select-none">
-          <span class={"size-2 rounded-full bg-current #{Tenancy.scope_color(org_slug)}"}></span>
+          <span
+            class={"size-2 rounded-full scope-dot-current #{Tenancy.scope_color(org_slug)}"}
+            data-scope={org_slug}
+          >
+          </span>
           <span>{Tenancy.scope_label(org_slug)}</span>
           <span class="ml-auto text-[10px] tracking-normal text-base-content/40">
             {length(org_projects)}

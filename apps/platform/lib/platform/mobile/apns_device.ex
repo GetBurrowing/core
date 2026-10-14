@@ -24,6 +24,9 @@ defmodule Platform.Mobile.ApnsDevice do
     field(:token, :string, redact: true)
     field(:environment, :string)
     field(:bundle_id, :string)
+    # The install's X25519 public key for sealed previews (task 01a1261e),
+    # base64url without padding. Optional: nil means no sealed preview.
+    field(:push_public_key, :string)
     field(:last_registered_at, :utc_datetime_usec)
 
     timestamps(type: :utc_datetime_usec)
@@ -42,7 +45,8 @@ defmodule Platform.Mobile.ApnsDevice do
       :token,
       :environment,
       :bundle_id,
-      :last_registered_at
+      :last_registered_at,
+      :push_public_key
     ])
     |> validate_required([
       :user_id,
@@ -56,6 +60,7 @@ defmodule Platform.Mobile.ApnsDevice do
     |> validate_inclusion(:environment, @environments)
     |> validate_format(:token, ~r/\A[0-9A-Fa-f]{16,200}\z/)
     |> validate_length(:app_install_id, max: 200)
+    |> Platform.Mobile.PushPublicKey.validate()
     |> validate_length(:bundle_id, max: 200)
     |> unique_constraint(:token)
     |> unique_constraint([:user_id, :app_install_id])

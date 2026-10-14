@@ -145,12 +145,15 @@ enum SuiteAPI {
     }
 
     static func registerDevice(host: String, token: Data, completion: @escaping (Result<Void, Error>) -> Void) {
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "token": PushRegistrar.hex(token),
             "environment": pushEnvironment,
             "bundle_id": Bundle.main.bundleIdentifier ?? "com.kobo-ai.burrow",
             "app_install_id": InstallStore.shared.appInstallID
         ]
+        // Task 01a1261e: this install's sealed-preview public key. No key
+        // (Keychain refused) registers exactly as before: no preview.
+        if let key = PushKeyStore.shared.publicKey(for: host) { body["push_public_key"] = key }
         post(host: host, path: "/api/app/devices", json: body) { result in
             completion(result.map { _ in () })
         }
@@ -183,6 +186,8 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
                                 withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
         let content = notification.request.content
         completionHandler(Self.presentation(forCategory: content.categoryIdentifier))
+        // The NSE already wrote this push's unread count: refresh the dot.
+        NotificationCenter.default.post(name: .burrowInstallBadgesChanged, object: nil)
         if content.categoryIdentifier == SuiteNotificationCategory.ringWaiting {
             showRingWaiting(content.userInfo)
         }
@@ -271,6 +276,7 @@ public class SuiteNativePlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "enablePush", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "switchInstall", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "donate", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "installBadges", returnType: CAPPluginReturnPromise),
     ]
 
     /// The shell's navigation policy, consulted for every web view
@@ -346,6 +352,17 @@ public class SuiteNativePlugin: CAPPlugin, CAPBridgedPlugin {
         }
         Donations.shared.donate(event)
         call.resolve(["donated": true])
+    }
+
+    /// `{others_unread: Bool}`: whether any signed-in install OTHER than the
+    /// one showing has unread (task 01a1261e; the web shell's switcher dot,
+    /// contract owned by stage 3). Re-asked on `burrowInstallBadges`.
+    @objc func installBadges(_ call: CAPPluginCall) {
+        call.resolve(["others_unread": Self.othersUnread()])
+    }
+
+    static func othersUnread(store: InstallUnreadStore = .shared, selectedHost: String? = InstallStore.shared.selectedHost) -> Bool {
+        store.othersUnread(selectedHost: selectedHost)
     }
 
     static func state(_ status: UNAuthorizationStatus) -> String {

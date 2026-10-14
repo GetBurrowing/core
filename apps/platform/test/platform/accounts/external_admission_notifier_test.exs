@@ -6,7 +6,7 @@ defmodule Platform.Accounts.ExternalAdmissionNotifierTest do
 
     * a `"holding"` event broadcasts `{:external_admission_holding, _}` on
       `admin_admissions_topic/0`;
-    * a Fabrikam root-org admin is resolved as a recipient and the notification
+    * an Acme root-org admin is resolved as a recipient and the notification
       seam (`fan_out_to_humans/3`) is invoked with the `/admin/external-logins`
       url;
     * `"full"` / `"recovered"` produce NO admin broadcast/push;
@@ -67,12 +67,12 @@ defmodule Platform.Accounts.ExternalAdmissionNotifierTest do
     %User{} |> User.changeset(attrs) |> Repo.insert!()
   end
 
-  defp create_fabrikam_admin! do
+  defp create_acme_admin! do
     user = create_user!()
-    fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+    acme = Tenancy.get_org_by_slug!("acme")
 
     %OrgMembership{}
-    |> OrgMembership.changeset(%{user_id: user.id, org_id: fabrikam.id, role: "admin"})
+    |> OrgMembership.changeset(%{user_id: user.id, org_id: acme.id, role: "admin"})
     |> Repo.insert!()
 
     user
@@ -104,8 +104,8 @@ defmodule Platform.Accounts.ExternalAdmissionNotifierTest do
     assert payload.email == user.email
   end
 
-  test "a Fabrikam admin is resolved and the notification seam is invoked" do
-    admin = create_fabrikam_admin!()
+  test "an Acme admin is resolved and the notification seam is invoked" do
+    admin = create_acme_admin!()
     user = create_user!()
 
     emit("holding", %{
@@ -123,7 +123,7 @@ defmodule Platform.Accounts.ExternalAdmissionNotifierTest do
   end
 
   test "full and recovered actions produce no admin broadcast or push" do
-    admin = create_fabrikam_admin!()
+    admin = create_acme_admin!()
     _ = admin
     user = create_user!()
     Phoenix.PubSub.subscribe(Platform.PubSub, ExternalAdmissionNotifier.admin_admissions_topic())

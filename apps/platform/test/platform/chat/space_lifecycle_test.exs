@@ -5,7 +5,7 @@ defmodule Platform.Chat.SpaceLifecycleTest do
 
   Two invariants under test:
 
-    1. `archive_space/2` / `unarchive_space/2` allow only Fabrikam admins and
+    1. `archive_space/2` / `unarchive_space/2` allow only Acme admins and
        the space's creator — enforced in the context layer, not the UI.
     2. Every public write path returns `{:error, :space_archived}` against
        an archived space, for humans and agents alike. Execution spaces are
@@ -43,7 +43,7 @@ defmodule Platform.Chat.SpaceLifecycleTest do
     %OrgMembership{}
     |> OrgMembership.changeset(%{
       user_id: user.id,
-      org_id: Tenancy.get_org_by_slug!("fabrikam").id,
+      org_id: Tenancy.get_org_by_slug!("acme").id,
       role: role
     })
     |> Repo.insert!()
@@ -114,7 +114,7 @@ defmodule Platform.Chat.SpaceLifecycleTest do
   # ── archive_space/2 + unarchive_space/2 authorization ──────────────────
 
   describe "archive_space/2 authorization" do
-    test "fabrikam admin can archive any channel" do
+    test "acme admin can archive any channel" do
       admin = admin_user!()
       space = channel!()
 
@@ -210,7 +210,7 @@ defmodule Platform.Chat.SpaceLifecycleTest do
       # (archived_cascade_org_id) and its own deletion clock. Restoring the
       # single child directly must clear BOTH — a live space that keeps a
       # stale marker would be wrongly re-matched on a later org restore.
-      cascade_org_id = Tenancy.get_org_by_slug!("fabrikam").id
+      cascade_org_id = Tenancy.get_org_by_slug!("acme").id
       now = DateTime.utc_now()
 
       space =
@@ -255,7 +255,7 @@ defmodule Platform.Chat.SpaceLifecycleTest do
 
   describe "unarchive_space/1 (system path)" do
     test "clears archived_at, deletion_scheduled_at and archived_cascade_org_id" do
-      cascade_org_id = Tenancy.get_org_by_slug!("fabrikam").id
+      cascade_org_id = Tenancy.get_org_by_slug!("acme").id
       now = DateTime.utc_now()
 
       space =

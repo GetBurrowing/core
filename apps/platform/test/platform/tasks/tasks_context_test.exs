@@ -1550,7 +1550,7 @@ defmodule Platform.Tasks.TasksContextTest do
   describe "count_by_scope/0 — sub-org scope counts (Tasks v2 stage 3)" do
     # Stage 3 of task 019e389c-1f65-7018-bb54-e256ba29fd59 (2026-05-19): the
     # desktop scope-filter rail pulls counts from `count_by_scope/0`. The
-    # today-state contract is to fold every non-deleted task under "fabrikam" and
+    # today-state contract is to fold every non-deleted task under "acme" and
     # return 0 for every other org, because `tasks` has no `org_id`
     # column yet — once MT/RBAC lands the body of the helper becomes a real
     # GROUP BY org_id but the public API stays unchanged.
@@ -1570,14 +1570,14 @@ defmodule Platform.Tasks.TasksContextTest do
       # An org created at runtime, whose slug was never compiled as an atom —
       # the shape the old `@scope_keys`-keyed implementation could not
       # produce a bucket for at all.
-      # Parented under fabrikam: `orgs_single_root` refuses a second parentless
+      # Parented under acme: `orgs_single_root` refuses a second parentless
       # org, and that constraint error reads nothing like this test.
       runtime_org =
         %Platform.Tenancy.Org{}
         |> Platform.Tenancy.Org.changeset(%{
           name: "Counted Runtime Org",
           slug: "counted-runtime-org",
-          parent_org_id: Platform.Tenancy.get_org_by_slug!("fabrikam").id
+          parent_org_id: Platform.Tenancy.get_org_by_slug!("acme").id
         })
         |> Repo.insert!()
 
@@ -1603,34 +1603,34 @@ defmodule Platform.Tasks.TasksContextTest do
       assert Tasks.scope_keys() == PlatformWeb.Components.ScopePill.scopes()
     end
 
-    test ~s(today-state: all tasks fold under "fabrikam", other sub-orgs are 0), %{project: project} do
+    test ~s(today-state: all tasks fold under "acme", other sub-orgs are 0), %{project: project} do
       # Seed three tasks across different statuses. Since `tasks.org_id`
-      # doesn't exist yet, every one of them must land under :fabrikam.
+      # doesn't exist yet, every one of them must land under :acme.
       {:ok, _} = Tasks.create_task(%{project_id: project.id, title: "B", status: "backlog"})
       {:ok, _} = Tasks.create_task(%{project_id: project.id, title: "I", status: "in_progress"})
       {:ok, _} = Tasks.create_task(%{project_id: project.id, title: "D", status: "done"})
 
       counts = Tasks.count_by_scope()
 
-      assert counts["fabrikam"] >= 3
+      assert counts["acme"] >= 3
       assert counts["soylent"] == 0
       assert counts["wayne_tech"] == 0
       assert counts["sxi"] == 0
       assert counts["paragon"] == 0
     end
 
-    test ~s(soft-deleted tasks are excluded from the "fabrikam" count), %{project: project} do
+    test ~s(soft-deleted tasks are excluded from the "acme" count), %{project: project} do
       {:ok, task} =
         Tasks.create_task(%{project_id: project.id, title: "To delete", status: "backlog"})
 
-      before_count = Tasks.count_by_scope()["fabrikam"]
+      before_count = Tasks.count_by_scope()["acme"]
 
       # Soft-delete via the same deleted_at column the rest of the board reads.
       task
       |> Ecto.Changeset.change(deleted_at: DateTime.utc_now())
       |> Repo.update!()
 
-      after_count = Tasks.count_by_scope()["fabrikam"]
+      after_count = Tasks.count_by_scope()["acme"]
 
       assert after_count == before_count - 1
     end

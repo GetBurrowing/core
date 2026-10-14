@@ -14,7 +14,7 @@ defmodule Platform.Federation.ToolSurfaceCloseAsDeliveredTest do
   """
   use Platform.DataCase, async: false
 
-  import Platform.TenancyFixtures, only: [fabrikam_org_id: 0]
+  import Platform.TenancyFixtures, only: [acme_org_id: 0]
 
   alias Platform.Accounts.User
   alias Platform.Agents.AgentRuntime
@@ -86,8 +86,8 @@ defmodule Platform.Federation.ToolSurfaceCloseAsDeliveredTest do
     user =
       %User{}
       |> User.changeset(%{
-        # Deliberately NOT an @example.com address — `Platform.Accounts`
-        # derives `:admin` from that domain, and a kobo-ai email would
+        # Deliberately NOT an @acme.test address — `Platform.Accounts`
+        # derives `:admin` from that domain, and an acme.test email would
         # make the authorization tests pass for a reason unrelated to the
         # membership row under test.
         email: "delivered-#{n}@example.com",
@@ -97,7 +97,7 @@ defmodule Platform.Federation.ToolSurfaceCloseAsDeliveredTest do
       |> Repo.insert!()
 
     %OrgMembership{}
-    |> OrgMembership.changeset(%{user_id: user.id, org_id: fabrikam_org_id(), role: role})
+    |> OrgMembership.changeset(%{user_id: user.id, org_id: acme_org_id(), role: role})
     |> Repo.insert!()
 
     user
@@ -119,14 +119,14 @@ defmodule Platform.Federation.ToolSurfaceCloseAsDeliveredTest do
 
   defp admin_context(opts \\ []) do
     admin = user!("admin")
-    assert Tenancy.fabrikam_admin?(admin)
+    assert Tenancy.root_admin?(admin)
     runtime = runtime!(admin)
     {admin, %{runtime_id: runtime.runtime_id, agent_id: Keyword.get(opts, :agent_id)}}
   end
 
   defp member_context do
     member = user!("member")
-    refute Tenancy.fabrikam_admin?(member)
+    refute Tenancy.root_admin?(member)
     runtime = runtime!(member)
     {member, %{runtime_id: runtime.runtime_id}}
   end
@@ -326,7 +326,7 @@ defmodule Platform.Federation.ToolSurfaceCloseAsDeliveredTest do
 
   # ── the permission decision ───────────────────────────────────────────
 
-  describe "the runtime owner must be a Fabrikam admin" do
+  describe "the runtime owner must be an Acme admin" do
     test "a non-admin-owned runtime is refused, and the refusal discloses no task state",
          %{project: project} do
       backlog = task!(project, "backlog")

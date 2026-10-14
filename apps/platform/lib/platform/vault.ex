@@ -26,8 +26,19 @@ defmodule Platform.Vault do
 
   ## Scopes
 
-  `scope_type` is one of `"platform"`, `"agent"`, `"integration"` or
-  `"workspace"`. **New credentials should use `platform` or `agent` scope.**
+  `scope_type` is one of `"platform"`, `"agent"`, `"integration"`,
+  `"shared"` or `"workspace"`. **New credentials should use `platform`,
+  `agent` or `shared` scope.**
+
+  `"shared"` scope holds secrets a human pasted in for named agents (the
+  admin vault, `Platform.Vault.Shared`). It is the opposite of `platform`
+  for reads: `:use` is granted ONLY by an explicit `AccessGrant` listing
+  `"use"`, with no privileged bypass — `{:system, _}` and `{:platform, _}`
+  cannot read a shared secret without a grant either. `:rotate` and
+  `:revoke` follow the platform rule: a privileged accessor, or a grant
+  carrying that permission. Who may read is decided by `scope_type` plus
+  grant rows and never by `metadata`, which is a free-form map: wiping or
+  rewriting it cannot widen access, because no clause reads it.
 
   `"workspace"` scope is deny-by-default for every permission, including `:use`
   and including the `{:system, _}` accessor. The only open path is an explicit
@@ -70,6 +81,14 @@ defmodule Platform.Vault do
 
   require Logger
 
+  # Ecto's query log (level :debug) renders `cast_params`, which for the
+  # Cloak-typed `encrypted_data` field is the PLAINTEXT secret
+  # (ecto_sql `Ecto.Adapters.SQL.log/4`: `opts[:cast_params] || params`).
+  # Prod logs at :info so it is not emitted there, but dev, a debug-level
+  # prod, and any test that lowers the level would write the value to the
+  # server log. Every write carrying `encrypted_data` passes this.
+  @no_query_log [log: false]
+
   alias Platform.Repo
   alias Platform.Vault.AccessGrant
   alias Platform.Vault.AccessLog
@@ -108,12 +127,16 @@ defmodule Platform.Vault do
       scope_id: scope_id,
       name: Keyword.get(opts, :name, slug),
       provider: Keyword.get(opts, :provider),
-      metadata: Keyword.get(opts, :metadata, %{}),
+      metadata: with_fingerprint(Keyword.get(opts, :metadata, %{}), value),
       expires_at: Keyword.get(opts, :expires_at),
       workspace_id: Keyword.get(opts, :workspace_id)
     }
 
-    with {:ok, credential} <- %Credential{} |> Credential.changeset(attrs) |> Repo.insert() do
+    # `log: false` on every write that carries `encrypted_data`: Ecto's :debug
+    # query log prints CAST params, i.e. the plaintext, not the ciphertext
+    # (task 01a131c5 stage 2 measured it on the dev rig). See @no_query_log.
+    with {:ok, credential} <-
+           %Credential{} |> Credential.changeset(attrs) |> Repo.insert(@no_query_log) do
       :telemetry.execute(
         [:platform, :vault, :credential_created],
         %{system_time: System.system_time()},
@@ -170,18 +193,23 @@ defmodule Platform.Vault do
               scope_type: "platform",
               scope_id: nil,
               name: vault_key,
-              provider: "external_agent"
+              provider: "external_agent",
+              metadata: with_fingerprint(%{}, secret)
             }
 
-            case %Credential{} |> Credential.changeset(attrs) |> Repo.insert() do
+            case %Credential{} |> Credential.changeset(attrs) |> Repo.insert(@no_query_log) do
               {:ok, inserted} -> {:inserted, inserted}
               {:error, changeset} -> Repo.rollback(changeset)
             end
 
           existing ->
             case existing
-                 |> Credential.changeset(%{encrypted_data: secret, rotated_at: now})
-                 |> Repo.update() do
+                 |> Credential.changeset(%{
+                   encrypted_data: secret,
+                   rotated_at: now,
+                   metadata: with_fingerprint(existing.metadata, secret)
+                 })
+                 |> Repo.update(@no_query_log) do
               {:ok, updated} -> {:updated, updated}
               {:error, changeset} -> Repo.rollback(changeset)
             end
@@ -228,6 +256,9 @@ defmodule Platform.Vault do
                         and a slug living at two scopes is refused — see
                         `rotate/3`.
     * `:workspace_id` - workspace context (used to narrow the lookup)
+    * `:log_metadata` - map merged into the access-log row this call writes
+                        on success (e.g. which fetch ticket redeemed it).
+                        Default `%{}`. Never put a value in it.
   """
   @spec get(String.t(), keyword()) ::
           {:ok, binary()} | {:error, :not_found | :ambiguous_slug | :access_denied}
@@ -237,7 +268,7 @@ defmodule Platform.Vault do
     case resolve_one_by_slug(slug, opts) do
       {:error, :not_found} -> {:error, :not_found}
       {:error, :ambiguous_slug} -> refuse_ambiguous(slug, opts, "read")
-      {:ok, cred} -> use_credential(cred, slug, accessor)
+      {:ok, cred} -> use_credential(cred, slug, accessor, Keyword.get(opts, :log_metadata, %{}))
     end
   end
 
@@ -269,13 +300,13 @@ defmodule Platform.Vault do
     case resolve_one_by_slug(slug, opts) do
       {:error, :not_found} -> {:error, :not_found}
       {:error, :ambiguous_slug} -> refuse_ambiguous(slug, opts, "read")
-      {:ok, cred} -> use_credential(cred, slug, accessor)
+      {:ok, cred} -> use_credential(cred, slug, accessor, Keyword.get(opts, :log_metadata, %{}))
     end
   end
 
   # The granted/denied tail shared by get/2 and get_unique/2. Target selection
   # is the caller's; everything after it must stay identical between the two.
-  defp use_credential(%Credential{} = cred, slug, accessor) do
+  defp use_credential(%Credential{} = cred, slug, accessor, log_metadata) do
     case check_access(cred, accessor, :use) do
       :ok ->
         now = DateTime.utc_now()
@@ -291,7 +322,7 @@ defmodule Platform.Vault do
           %{credential_id: cred.id, slug: slug, accessor: accessor}
         )
 
-        log_access(cred, accessor, "use", %{})
+        log_access(cred, accessor, "use", log_metadata)
 
         {:ok, updated.encrypted_data}
 
@@ -299,6 +330,72 @@ defmodule Platform.Vault do
         deny(cred, slug, accessor)
     end
   end
+
+  @doc """
+  Decide whether `accessor` holds `permission` on the credential at `slug`,
+  without returning its value.
+
+  Same resolution as `get/2` (pass `:scope` to name the credential exactly;
+  an ambiguous slug is refused) and the same `check_access/3` decision. A
+  refusal emits `[:platform, :vault, :access_denied]` and writes a `"denied"`
+  access-log row, exactly like a refused `get/2`. A grant writes NO log row
+  and bumps nothing — the caller records what it did with the decision via
+  `record_access/4`.
+
+  Returns the credential with `encrypted_data` stripped. The row is loaded
+  through the schema, so Cloak does decrypt it in memory on load; it is
+  dropped before this function returns.
+  """
+  @spec authorize(String.t(), term(), :use | :rotate | :revoke, keyword()) ::
+          {:ok, Credential.t()} | {:error, :not_found | :ambiguous_slug | :access_denied}
+  def authorize(slug, accessor, permission, opts \\ [])
+      when permission in [:use, :rotate, :revoke] do
+    case resolve_one_by_slug(slug, opts) do
+      {:error, :not_found} ->
+        {:error, :not_found}
+
+      {:error, :ambiguous_slug} ->
+        refuse_ambiguous(slug, opts, to_string(permission))
+
+      {:ok, cred} ->
+        case check_access(cred, accessor, permission) do
+          :ok -> {:ok, strip_encrypted(cred)}
+          {:error, :access_denied} -> deny(cred, slug, accessor)
+        end
+    end
+  end
+
+  @doc """
+  Append one access-log row for `credential`. No authorization: the caller
+  has already made the decision this row records (a ticket issued after
+  `authorize/4`, a grant added by a root admin). `action` must be one of the
+  strings documented on `Platform.Vault.AccessLog`. `metadata` must never
+  carry a value.
+  """
+  @spec record_access(Credential.t(), term(), String.t(), map()) ::
+          {:ok, AccessLog.t()} | {:error, term()}
+  def record_access(%Credential{} = credential, accessor, action, metadata)
+      when action in ~w(use read create update rotate revoke denied) and is_map(metadata) do
+    log_access(credential, accessor, action, metadata)
+  end
+
+  @doc """
+  The display fingerprint of a value: `"sha256 .."` plus the last four hex
+  digits of its SHA-256. Display-only — it plays no part in access control.
+  Stored as `metadata["fingerprint"]` by `put/4`, `put_inline/2` and
+  `rotate/3`.
+  """
+  @spec fingerprint(binary()) :: String.t()
+  def fingerprint(value) when is_binary(value) do
+    hex = :sha256 |> :crypto.hash(value) |> Base.encode16(case: :lower)
+    "sha256 .." <> binary_part(hex, byte_size(hex) - 4, 4)
+  end
+
+  defp with_fingerprint(metadata, value) when is_binary(value) do
+    Map.put(metadata || %{}, "fingerprint", fingerprint(value))
+  end
+
+  defp with_fingerprint(metadata, _value), do: metadata
 
   @doc """
   Atomically replace a credential's encrypted value.
@@ -419,8 +516,12 @@ defmodule Platform.Vault do
     result =
       Repo.transaction(fn ->
         case credential
-             |> Credential.changeset(%{encrypted_data: new_value, rotated_at: now})
-             |> Repo.update() do
+             |> Credential.changeset(%{
+               encrypted_data: new_value,
+               rotated_at: now,
+               metadata: with_fingerprint(credential.metadata, new_value)
+             })
+             |> Repo.update(@no_query_log) do
           {:ok, updated} -> updated
           {:error, changeset} -> Repo.rollback(changeset)
         end
@@ -709,6 +810,33 @@ defmodule Platform.Vault do
   # {:system, nil} must be stated to be honoured, it is not the default.
   defp check_access(
          %Credential{scope_type: "platform"} = cred,
+         {accessor_type, accessor_id},
+         permission
+       )
+       when permission in [:rotate, :revoke] do
+    if to_string(accessor_type) in @privileged_accessor_types do
+      :ok
+    else
+      check_explicit_grant(cred, to_string(accessor_type), accessor_id, permission)
+    end
+  end
+
+  # Shared-scoped reads: an explicit "use" grant, and nothing else. There is
+  # deliberately NO privileged bypass — {:system, _} and {:platform, _} cannot
+  # read a shared secret without a grant (the admin page never reads values).
+  # Nothing here reads `metadata`, so no metadata write can widen this. A nil
+  # or shapeless accessor does not match and falls to the deny-all below.
+  defp check_access(
+         %Credential{scope_type: "shared"} = cred,
+         {accessor_type, accessor_id},
+         :use
+       ) do
+    check_explicit_grant(cred, to_string(accessor_type), accessor_id, :use)
+  end
+
+  # Shared-scoped writes: same rule as the platform write clause above.
+  defp check_access(
+         %Credential{scope_type: "shared"} = cred,
          {accessor_type, accessor_id},
          permission
        )

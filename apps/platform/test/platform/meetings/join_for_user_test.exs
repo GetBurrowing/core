@@ -72,7 +72,7 @@ defmodule Platform.Meetings.JoinForUserTest do
       |> Org.changeset(%{
         name: "JFU Tenant #{n}",
         slug: "tenant_jfu_#{n}",
-        parent_org_id: Tenancy.get_org_by_slug!("fabrikam").id
+        parent_org_id: Tenancy.get_org_by_slug!("acme").id
       })
       |> Repo.insert!()
 

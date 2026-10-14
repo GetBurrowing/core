@@ -99,6 +99,50 @@ final class ExtensionRenderTests: XCTestCase {
             }, size: size)
     }
 
+    // MARK: Large files (task 01a120be stage 4)
+
+    /// A sparse file of `bytes` (no disk is used for the zeros).
+    private func sparseFile(_ name: String, bytes: Int64) throws -> MultipartForm.FilePart {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent(name)
+        FileManager.default.createFile(atPath: url.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: url)
+        try handle.truncate(atOffset: UInt64(bytes))
+        try handle.close()
+        return MultipartForm.FilePart(filename: name, mimeType: "video/quicktime", url: url)
+    }
+
+    func testLargeFileShareStates() throws {
+        let size = CGSize(width: 402, height: 560)
+        let config = UploadConfig(maxUploadBytes: 1_073_741_824, maxUploadLabel: "1 GB", chunkBytes: 33_554_432, multipartMaxBytes: 8_000_000)
+        let big = try sparseFile("launch-walkthrough.mov", bytes: 900_000_000)
+        let tooBig = try sparseFile("quarterly-raw.mov", bytes: 1_153_433_600)
+        try snapshot(
+            "share-large-900mb",
+            sheet {
+                $0.debugSet(phase: .ready, spaces: spaces, uploadConfig: config)
+                $0.payload = .file(big)
+                $0.selectedSpaceID = "s1"
+                $0.message = "Launch walkthrough, final cut"
+            }, size: size)
+        try snapshot(
+            "share-too-large",
+            sheet {
+                $0.debugSet(phase: .ready, spaces: spaces, uploadConfig: config)
+                $0.payload = .file(tooBig)
+                $0.selectedSpaceID = "s1"
+            }, size: size)
+        try snapshot(
+            "share-handed-off",
+            sheet {
+                $0.debugSet(phase: .ready, spaces: spaces, uploadConfig: config)
+                $0.payload = .file(big)
+                $0.selectedSpaceID = "s1"
+                $0.debugSet(phase: .handedOff)
+            }, size: size)
+    }
+
     // MARK: iPad (task 01a10db6 stage 2)
 
     /// iPad Pro 13-inch (M5), in points.
@@ -481,5 +525,79 @@ final class ExtensionRenderTests: XCTestCase {
         try callSnapshot(
             "call-ax5-long-agent-name", call(.connected, [long, person("user:ada", "Ada Okafor")], typeSize: .accessibility5),
             size: phone)
+    }
+
+    // MARK: Per-install unread pills and the switch banner (task 01a1261e stage 4)
+
+    /// Answers the picker's probes for the two rig hosts so their rows read
+    /// as reachable: `/health` ok, `/manifest.json` named `Acme` / `B launch`.
+    /// Icons 404, so the rows show their letter.
+    private final class RigHosts: URLProtocol {
+        static let names = ["suite-a.localhost": "Acme", "suite-b.localhost": "B launch"]
+
+        override class func canInit(with request: URLRequest) -> Bool {
+            names.keys.contains(request.url?.host ?? "")
+        }
+
+        override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+        override func startLoading() {
+            let url = request.url!
+            let (status, body): (Int, String) =
+                switch url.path {
+                case "/health": (200, #"{"status":"ok"}"#)
+                case "/manifest.json": (200, #"{"name":"\#(Self.names[url.host!]!)"}"#)
+                default: (404, "")
+                }
+            let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: nil)!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: Data(body.utf8))
+            client?.urlProtocolDidFinishLoading(self)
+        }
+
+        override func stopLoading() {}
+    }
+
+    private func unreadPicker(_ counts: [String: (Int, Bool)], dark: Bool = false) -> some View {
+        let defaults = UserDefaults(suiteName: "ExtensionRenderTests.unread.\(UUID().uuidString)")!
+        let store = InstallStore(defaults: defaults)
+        for host in ["suite.example.com", "suite.example.com", "suite.milv.life"] { store.remove(host: host) }
+        store.add(host: "suite-a.localhost", name: "Acme")
+        store.add(host: "suite-b.localhost", name: "B launch")
+        store.select("suite-a.localhost")
+        let unread = InstallUnreadStore(defaults: defaults)
+        for (host, (count, stale)) in counts {
+            unread.write(count: count, asOf: Date(), for: host)
+            if stale { unread.markStale(host) }
+        }
+        return InstallPickerView(model: InstallPickerModel(store: store, unreadStore: unread), onContinue: { _ in })
+            .environment(\.horizontalSizeClass, .compact)
+            .environment(\.colorScheme, dark ? .dark : .light)
+    }
+
+    func testInstallPickerUnreadPills() throws {
+        URLProtocol.registerClass(RigHosts.self)
+        defer { URLProtocol.unregisterClass(RigHosts.self) }
+        try snapshot("unread-b3-a-none", unreadPicker(["suite-b.localhost": (3, false)]), size: phone, settle: 1.5)
+        try snapshot(
+            "unread-both", unreadPicker(["suite-a.localhost": (2, false), "suite-b.localhost": (3, false)]), size: phone,
+            settle: 1.5)
+        try snapshot(
+            "unread-both-dark", unreadPicker(["suite-a.localhost": (2, false), "suite-b.localhost": (3, false)], dark: true),
+            size: phone, settle: 1.5)
+        try snapshot("unread-99plus", unreadPicker(["suite-b.localhost": (122, false)]), size: phone, settle: 1.5)
+        try snapshot(
+            "unread-stale", unreadPicker(["suite-a.localhost": (1, false), "suite-b.localhost": (2, true)]), size: phone,
+            settle: 1.5)
+    }
+
+    func testSwitchBanner() throws {
+        for dark in [false, true] {
+            let view = ZStack(alignment: .top) {
+                SuiteColor.surfaceMuted.color
+                SwitchBannerView(text: SwitchBanner.message("B launch")).padding(.top, 60)
+            }
+            try save(dark ? "switch-banner-dark" : "switch-banner-light", view, size: CGSize(width: 402, height: 160), dark: dark)
+        }
     }
 }

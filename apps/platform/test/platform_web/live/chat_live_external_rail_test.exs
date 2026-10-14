@@ -5,7 +5,7 @@ defmodule PlatformWeb.ChatLiveExternalRailTest do
   On the `chat.` host M4's `:external_chat` live_session merges
   `chat_mode: "external"` into the connect session; ChatLive then renders the
   external branch: a single flat allowlisted-space list (scoped by M7's
-  `ExternalScope`) with the Fabrikam branding + identity chip + logout, and NONE of
+  `ExternalScope`) with the Acme branding + identity chip + logout, and NONE of
   the internal discovery chrome (sub-org section headers, admin entry,
   new-channel, scope-pills, archived / pinned-task sections).
 
@@ -52,7 +52,7 @@ defmodule PlatformWeb.ChatLiveExternalRailTest do
     |> Org.changeset(%{
       name: "Tenant #{n}",
       slug: "tenant_rail_#{n}",
-      parent_org_id: Tenancy.get_org_by_slug!("fabrikam").id
+      parent_org_id: Tenancy.get_org_by_slug!("acme").id
     })
     |> Repo.insert!()
   end
@@ -114,7 +114,10 @@ defmodule PlatformWeb.ChatLiveExternalRailTest do
 
       # Branding + identity chip + logout are KEPT (M4's :external layout is
       # chrome-less, so ChatLive renders them).
-      assert html =~ "Fabrikam"
+      # The brand chip names the install's app from the branding row, not a
+      # compiled product name (task 01a116de stage 3).
+      assert html =~ ~s(alt="#{Platform.Branding.app_name()}")
+      refute html =~ ~s(alt="Fabrikam")
       assert html =~ ~s(data-role="external-identity")
       assert html =~ ext.name
       assert html =~ ~p"/auth/logout"
@@ -241,7 +244,7 @@ defmodule PlatformWeb.ChatLiveExternalRailTest do
   # The reported defect: an external user served on the SUITE (default) host
   # under the internal `:authenticated` live_session — which carries NO
   # `chat_mode` session key — was scoped `nil` and saw EVERY channel workspace-
-  # wide (the reporter, granted only Orion, saw the Fabrikam-internal General).
+  # wide (the reporter, granted only Orion, saw the Acme-internal General).
   # Stage 1 derives the scope from IDENTITY, so the leak cannot happen on ANY
   # host / live_session. These cases pin that: NO `chat_mode`, NO `chat.` host.
   describe "suite-host identity-derived scope (no chat_mode leak — task 019f9257)" do
@@ -251,7 +254,7 @@ defmodule PlatformWeb.ChatLiveExternalRailTest do
 
       # The external user is a participant of exactly ONE channel (their grant).
       granted = channel!("Orion", org_id: org.id) |> join!(ext)
-      # A Fabrikam-internal channel the external user has NO participant row for.
+      # An Acme-internal channel the external user has NO participant row for.
       off_limits = channel!("General")
 
       %{conn: conn, ext: ext, granted: granted, off_limits: off_limits}
@@ -370,7 +373,8 @@ defmodule PlatformWeb.ChatLiveExternalRailTest do
       refute overlay =~ off_limits.name
 
       # Brand + identity + logout move into the overlay header (chrome-less layout).
-      assert overlay =~ "Fabrikam"
+      assert overlay =~ ~s(alt="#{Platform.Branding.app_name()}")
+      refute overlay =~ ~s(alt="Fabrikam")
       assert overlay =~ ext.name
       assert overlay =~ ~p"/auth/logout"
       assert overlay =~ "New conversation"
@@ -436,7 +440,7 @@ defmodule PlatformWeb.ChatLiveExternalRailTest do
       ext = external_user!(org)
 
       allowed = channel!("Client Room", org_id: org.id) |> join!(ext)
-      off_limits = channel!("Fabrikam Internal Ops")
+      off_limits = channel!("Acme Internal Ops")
 
       %{conn: conn, ext: ext, org: org, allowed: allowed, off_limits: off_limits}
     end

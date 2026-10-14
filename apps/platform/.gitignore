@@ -32,6 +32,12 @@ platform-*.tar
 /priv/static/*-*.ico
 /priv/static/*-*.txt
 /priv/static/images/*-*.svg
+# ...but the Burrow brand SVGs are SOURCE files whose names happen to match
+# the digest pattern above (task 01a120c5). Exact names, so their digested
+# copies (burrow-mark-<hash>.svg) stay ignored.
+!/priv/static/images/burrow-mark.svg
+!/priv/static/images/burrow-lockup.svg
+!/priv/static/images/burrow-lockup-darktext.svg
 
 # Ignore digested assets cache.
 /priv/static/cache_manifest.json

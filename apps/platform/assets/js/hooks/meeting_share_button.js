@@ -1,9 +1,10 @@
+import { toggleScreenShare } from "./lib/screen_share_policy"
+
 /**
  * MeetingShareButton hook — toggles screen-share with the click gesture
  * preserved end-to-end (task 019e420f stage 2).
  *
- * Why this exists: `getDisplayMedia()` (which `setScreenShareEnabled(true)`
- * eventually calls) is gated by the browser's "user activation" flag —
+ * Why this exists: `getDisplayMedia()` (which the shared `toggleScreenShare()` helper calls) is gated by the browser's "user activation" flag —
  * the API only succeeds while the call stack is rooted in a user gesture
  * (click, keydown, etc.). The previous wiring routed the click through
  * `phx-click="meeting_toggle_screen_share"`, which pushed a `toggle-screen-
@@ -12,7 +13,7 @@
  * silently denied the permission prompt with `NotAllowedError`.
  *
  * This hook binds the click client-side, calls
- * `room.localParticipant.setScreenShareEnabled(...)` synchronously inside
+ * `toggleScreenShare(room)` synchronously inside
  * the click handler, then pushes a `meeting_screen_share_state` event to
  * mirror the new state to the server (for the button's tinted "sharing"
  * treatment).
@@ -48,13 +49,11 @@ const MeetingShareButton = {
       return
     }
 
-    const wasEnabled = !!room.localParticipant.isScreenShareEnabled
-
     try {
       // CRITICAL: this MUST run inside the click handler (no awaited
       // server round-trip first). The browser's user-activation flag is
       // gone the moment we yield to the WebSocket. See the moduledoc.
-      await room.localParticipant.setScreenShareEnabled(!wasEnabled)
+      await toggleScreenShare(room)
 
       const nowEnabled = !!room.localParticipant.isScreenShareEnabled
       this.pushEvent("meeting_screen_share_state", { enabled: nowEnabled })

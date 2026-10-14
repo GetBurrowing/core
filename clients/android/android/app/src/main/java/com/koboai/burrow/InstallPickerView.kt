@@ -4,18 +4,16 @@ import android.annotation.SuppressLint
 import android.app.AlertDialog
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
 import android.os.Handler
 import android.os.Looper
-import android.text.InputType
 import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
-import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -28,6 +26,7 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.isVisible
 import androidx.core.view.updatePadding
+import com.koboai.burrow.push.InstallUnread
 import java.util.concurrent.Executors
 
 /**
@@ -42,6 +41,10 @@ import java.util.concurrent.Executors
 class InstallPickerView(
     context: Context,
     private val store: InstallStore,
+    /** Removes the host's conversation shortcuts (ConversationShortcuts.removeForHost). */
+    private val removeShortcuts: (String) -> Unit,
+    /** Per-install unread for the signed-in installs (UnreadStore.entries), read on [refreshUnread]. */
+    private val unread: () -> Map<String, InstallUnread> = { emptyMap() },
     private val onContinue: (Install) -> Unit,
 ) : FrameLayout(context) {
     private enum class Reachability { UNKNOWN, REACHABLE, UNREACHABLE }
@@ -57,15 +60,15 @@ class InstallPickerView(
     private val continueSpinner = ProgressBar(context)
     private val cantReach = LinearLayout(context)
     private val cantReachTitle = text("", 28f, 800, R.color.burrow_on_surface)
-    private val addScreen = LinearLayout(context)
-    private val addressField = EditText(context)
-    private val addError = LinearLayout(context)
-    private val addButton: FrameLayout
-    private val addButtonLabel: TextView
-    private val addSpinner = ProgressBar(context)
 
     private var checking = false
     private var continuing = false
+
+    /**
+     * The last unread counts read. Replaced whole on [refreshUnread], never
+     * cleared first, so a refresh never flashes the pills empty.
+     */
+    private var counts: Map<String, InstallUnread> = emptyMap()
 
     init {
         setBackgroundColor(color(R.color.burrow_surface))
@@ -75,7 +78,14 @@ class InstallPickerView(
                 insets.getInsets(
                     WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout() or WindowInsetsCompat.Type.ime(),
                 )
-            view.updatePadding(left = bars.left, top = bars.top, right = bars.right, bottom = bars.bottom)
+            // The window may already have resized above the keyboard (the
+            // bridge's layout does): pad only for the part of the keyboard or
+            // navigation bar that still overlaps this view, never twice.
+            // The frame relative to the root view (the decor, at the window's origin).
+            val frame = Rect(0, 0, view.width, view.height)
+            (view.rootView as? ViewGroup)?.takeIf { it !== view }?.offsetDescendantRectToMyCoords(view, frame)
+            val bottom = PickerInsets.bottomPadding(bars.bottom, view.rootView.height, frame.top, view.height)
+            view.updatePadding(left = bars.left, top = bars.top, right = bars.right, bottom = bottom)
             insets
         }
 
@@ -132,67 +142,6 @@ class InstallPickerView(
         cantReach.addView(button(R.string.choose_another, primary = false) { showList() })
         cantReach.isVisible = false
         addView(cantReach, LayoutParams(MATCH, MATCH))
-
-        // Add screen
-        addScreen.orientation = LinearLayout.VERTICAL
-        addScreen.setPadding(dp(16), dp(32), dp(16), dp(16))
-        addScreen.setBackgroundColor(color(R.color.burrow_surface))
-        addScreen.isClickable = true
-        addScreen.addView(text(R.string.add_title, 28f, 800, R.color.burrow_on_surface))
-        addScreen.addView(text(R.string.add_subtitle, 15f, 400, R.color.burrow_muted), margins(top = 4, bottom = 12))
-        addScreen.addView(text(R.string.add_address_label, 13f, 400, R.color.burrow_muted), margins(top = 12, bottom = 6))
-        val field =
-            LinearLayout(context).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(12), 0, dp(12), 0)
-                background = box(R.color.burrow_surface, RADIUS_FIELD)
-            }
-        field.addView(text("https://", 17f, 400, R.color.burrow_muted).apply { importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO })
-        addressField.apply {
-            typeface = font()
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
-            setTextColor(color(R.color.burrow_on_surface))
-            setHintTextColor(color(R.color.burrow_muted))
-            setHint(R.string.add_address_hint)
-            background = null
-            setPadding(dp(2), 0, 0, 0)
-            isSingleLine = true
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
-            imeOptions = EditorInfo.IME_ACTION_GO
-            contentDescription = context.getString(R.string.add_address_label)
-            setOnEditorActionListener { _, action, _ ->
-                if (action == EditorInfo.IME_ACTION_GO) {
-                    checkAndAdd()
-                    true
-                } else {
-                    false
-                }
-            }
-        }
-        field.addView(addressField, LinearLayout.LayoutParams(0, MATCH, 1f))
-        addScreen.addView(field, LinearLayout.LayoutParams(MATCH, dp(48)))
-        addError.orientation = LinearLayout.HORIZONTAL
-        addError.addView(
-            ImageView(context).apply {
-                setImageResource(R.drawable.ic_warning)
-                importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
-            },
-            LinearLayout.LayoutParams(dp(16), dp(16)).apply {
-                topMargin = dp(2)
-                marginEnd = dp(6)
-            },
-        )
-        addError.addView(text(R.string.add_not_burrow, 13f, 400, R.color.burrow_on_surface), LinearLayout.LayoutParams(0, WRAP, 1f))
-        addError.isVisible = false
-        addScreen.addView(addError, margins(top = 8))
-        addScreen.addView(View(context), LinearLayout.LayoutParams(MATCH, 0, 1f))
-        addButton = button(R.string.add_check, primary = true) { checkAndAdd() }
-        addButtonLabel = addButton.getChildAt(0) as TextView
-        addButton.addView(addSpinner.apply { isVisible = false }, LayoutParams(dp(24), dp(24), Gravity.CENTER))
-        addScreen.addView(addButton)
-        addScreen.isVisible = false
-        addView(addScreen, LayoutParams(MATCH, MATCH))
     }
 
     override fun onDetachedFromWindow() {
@@ -200,8 +149,8 @@ class InstallPickerView(
         super.onDetachedFromWindow()
     }
 
-    /** True while a sub-screen (add, can't reach) is up: back closes it. */
-    val hasSubScreen: Boolean get() = addScreen.isVisible || cantReach.isVisible
+    /** True while a sub-screen (add, can't reach, the first-launch card) is up: back closes it. */
+    val hasSubScreen: Boolean get() = addFlow != null || cantReach.isVisible || firstLaunch?.isConfirming == true
 
     /** Back: close a sub-screen. False when there is none. */
     fun handleBack(): Boolean {
@@ -211,8 +160,15 @@ class InstallPickerView(
     }
 
     fun reload() {
+        counts = unread()
         renderRows()
         store.installs.forEach { refresh(it.host) }
+    }
+
+    /** Re-reads the unread counts (after a reconcile or a push) and redraws the rows in place. */
+    fun refreshUnread() {
+        counts = unread()
+        renderRows()
     }
 
     // Rows
@@ -232,6 +188,7 @@ class InstallPickerView(
         }
         continueButton.isEnabled = selected != null
         continueButton.alpha = if (selected != null) 1f else 0.4f
+        renderFirstLaunch()
     }
 
     private fun row(
@@ -260,6 +217,8 @@ class InstallPickerView(
 
         val texts = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
         texts.addView(text(install.displayName, 17f, 600, R.color.burrow_on_surface).apply { singleLine() })
+        val entry = counts[install.host]
+        val stale = entry?.stale == true
         if (reachability[install.host] == Reachability.UNREACHABLE) {
             // The status replaces the host line so it never takes width from
             // the name (canvas self-critique).
@@ -268,8 +227,17 @@ class InstallPickerView(
                 View(context).apply { background = circle(R.color.burrow_error) },
                 LinearLayout.LayoutParams(dp(8), dp(8)).apply { marginEnd = dp(6) },
             )
-            status.addView(text(R.string.row_unreachable, 13f, 400, R.color.burrow_on_surface).apply { singleLine() })
+            // An install whose cached count is stale reads the plan's
+            // "Could not update" (the count beside it is the last known);
+            // without a cached count it is today's "Can't reach. Tap to
+            // retry." Either way the dot is red and a tap retries.
+            val label = if (stale) R.string.row_could_not_update else R.string.row_unreachable
+            status.addView(text(label, 13f, 400, R.color.burrow_on_surface).apply { singleLine() })
             texts.addView(status, margins(top = 2))
+        } else if (stale) {
+            // The last refresh of this install's counts failed: its count
+            // stays, dimmed, and the host line says so.
+            texts.addView(text(R.string.row_could_not_update, 13f, 400, R.color.burrow_muted).apply { singleLine() }, margins(top = 2))
         } else {
             texts.addView(
                 text(install.host, 13f, 400, R.color.burrow_muted).apply {
@@ -280,8 +248,22 @@ class InstallPickerView(
             )
         }
         row.addView(texts, LinearLayout.LayoutParams(0, WRAP, 1f))
+        val pillText = UnreadPill.text(entry?.count ?: 0, context.getString(R.string.unread_pill_cap))
+        if (pillText != null) {
+            row.addView(
+                pill(pillText).apply { if (stale) alpha = STALE_ALPHA },
+                LinearLayout.LayoutParams(WRAP, dp(20)).apply { marginStart = dp(8) },
+            )
+        }
+        if (stale) texts.alpha = STALE_ALPHA
         row.addView(selectionMark(selected), LinearLayout.LayoutParams(dp(24), dp(24)).apply { marginStart = dp(8) })
-        row.contentDescription = install.displayName + if (selected) ", " + context.getString(R.string.selected) else ""
+        row.contentDescription =
+            listOfNotNull(
+                install.displayName,
+                entry?.count?.takeIf { it > 0 }?.let { resources.getQuantityString(R.plurals.unread_pill_description, it, it) },
+                if (stale) context.getString(R.string.row_could_not_update) else null,
+                if (selected) context.getString(R.string.selected) else null,
+            ).joinToString(", ")
         return row
     }
 
@@ -308,6 +290,21 @@ class InstallPickerView(
         return tile
     }
 
+    /** The count pill: burrow_primary fill, on-primary 12sp tabular digits (the chat rail's unread pill). */
+    private fun pill(value: String): TextView =
+        text(value, 12f, 700, R.color.burrow_on_primary).apply {
+            fontFeatureSettings = "tnum"
+            gravity = Gravity.CENTER
+            minWidth = dp(20)
+            setPadding(dp(6), 0, dp(6), 0)
+            background =
+                GradientDrawable().apply {
+                    cornerRadius = dp(10).toFloat()
+                    setColor(color(R.color.burrow_primary))
+                }
+            importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+
     private fun selectionMark(selected: Boolean): View {
         val mark = FrameLayout(context)
         if (selected) {
@@ -330,6 +327,7 @@ class InstallPickerView(
             .setMessage(context.getString(R.string.remove_confirm, install.displayName))
             .setPositiveButton(R.string.remove) { _, _ ->
                 store.remove(install.host)
+                removeShortcuts(install.host)
                 renderRows()
             }.setNegativeButton(R.string.cancel, null)
             .show()
@@ -376,53 +374,55 @@ class InstallPickerView(
         }
     }
 
-    // Add
+    // Add (task 01a12787 stage 4: the add-your-install flow)
+
+    init {
+        // The inset listener reads this view's frame: re-run it once a
+        // keyboard resize has moved the frame, so the padding follows.
+        addOnLayoutChangeListener { view, _, top, _, bottom, _, oldTop, _, oldBottom ->
+            if (bottom - top != oldBottom - oldTop) ViewCompat.requestApplyInsets(view)
+        }
+    }
+
+    /** The switcher's Add install sheet, while it is up. */
+    private var addFlow: AddInstallFlow? = null
+
+    /** The first-launch flow, shown in place of the list while there are no installs. */
+    private var firstLaunch: AddInstallFlow? = null
+
+    private fun newFlow() =
+        AddInstallFlow(context, store) { install ->
+            showList()
+            onContinue(install)
+        }
+
+    /** No installs: the add-your-install flow IS the picker. Otherwise the list. */
+    private fun renderFirstLaunch() {
+        val empty = store.installs.isEmpty()
+        if (empty && firstLaunch == null) {
+            firstLaunch = newFlow().also { addView(it, LayoutParams(MATCH, MATCH)) }
+        } else if (!empty && firstLaunch != null) {
+            removeView(firstLaunch)
+            firstLaunch = null
+        }
+        listScreen.isVisible = !empty && !cantReach.isVisible
+    }
 
     private fun showAdd() {
-        addressField.setText("")
-        addError.isVisible = false
-        addScreen.isVisible = true
-        addressField.requestFocus()
-        context.getSystemService(InputMethodManager::class.java)?.showSoftInput(addressField, InputMethodManager.SHOW_IMPLICIT)
+        if (addFlow != null) return
+        addFlow = newFlow().also { addView(it, LayoutParams(MATCH, MATCH)) }
         (context as? MainActivity)?.updateBackState()
     }
 
     private fun showList() {
-        addScreen.isVisible = false
+        addFlow?.let { removeView(it) }
+        addFlow = null
+        firstLaunch?.handleBack()
         cantReach.isVisible = false
         listScreen.isVisible = true
         context.getSystemService(InputMethodManager::class.java)?.hideSoftInputFromWindow(windowToken, 0)
+        renderFirstLaunch()
         (context as? MainActivity)?.updateBackState()
-    }
-
-    private fun checkAndAdd() {
-        if (checking) return
-        val typed = addressField.text.toString()
-        val host = InstallStore.normalizeHost(typed)
-        if (host == null) {
-            addError.isVisible = true
-            return
-        }
-        checking = true
-        addError.isVisible = false
-        addButtonLabel.setText(R.string.add_checking)
-        setBusy(addButton, addSpinner, true)
-        io.execute {
-            val result = InstallProbe.probe(host)
-            main.post {
-                checking = false
-                addButtonLabel.setText(R.string.add_check)
-                setBusy(addButton, addSpinner, false)
-                if (result == null) {
-                    addError.isVisible = true
-                } else {
-                    store.add(host, result.name)
-                    reachability[host] = Reachability.REACHABLE
-                    showList()
-                    reload()
-                }
-            }
-        }
     }
 
     // Building blocks
@@ -525,5 +525,6 @@ class InstallPickerView(
         private const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
         private const val RADIUS_FIELD = 10
         private const val RADIUS_BOX = 14
+        private const val STALE_ALPHA = 0.5f
     }
 }

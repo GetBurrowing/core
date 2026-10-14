@@ -431,6 +431,19 @@ defmodule Platform.Tasks.Stacks do
     do: {:error, :invalid_stack_status}
 
   def start_stack(%Stack{} = stack) do
+    with :ok <- require_stack_members_not_quarantined(stack) do
+      do_start_stack_gate(stack)
+    end
+  end
+
+  def start_stack(stack_id) when is_binary(stack_id) do
+    case Repo.get(Stack, stack_id) do
+      %Stack{} = stack -> start_stack(stack)
+      nil -> {:error, :stack_not_found}
+    end
+  end
+
+  defp do_start_stack_gate(%Stack{} = stack) do
     # ADR 0042 Decision 4: the commencement gate short-circuits the cascade
     # entirely when any member is still missing an approved plan. We check
     # BEFORE mutating anything so the stack is left untouched — a partial
@@ -444,14 +457,13 @@ defmodule Platform.Tasks.Stacks do
     end
   end
 
-  def start_stack(stack_id) when is_binary(stack_id) do
-    case Repo.get(Stack, stack_id) do
-      %Stack{} = stack -> start_stack(stack)
-      nil -> {:error, :stack_not_found}
+  defp do_start_stack(%Stack{} = stack) do
+    with :ok <- require_stack_members_not_quarantined(stack) do
+      do_start_stack_allowed(stack)
     end
   end
 
-  defp do_start_stack(%Stack{} = stack) do
+  defp do_start_stack_allowed(%Stack{} = stack) do
     # ADR 0045 Decision 2 (task 01a05392 stage 1): the rollup branch MUST be
     # live on origin BEFORE any member is promoted to `in_progress`, because
     # the HeartbeatScheduler cuts a member branch from `origin/<rollup_branch>`
@@ -1314,13 +1326,8 @@ defmodule Platform.Tasks.Stacks do
   def start_planning(%Stack{} = stack) do
     members = members(stack)
 
-    if any_member_past_backlog?(members) do
-      Logger.info("[Stacks.start_planning] noop for stack=#{stack.id}: already_in_flight")
-      emit_planning_noop_telemetry(stack.id, :already_in_flight)
-
-      {:noop, :already_in_flight}
-    else
-      do_start_planning(stack, members)
+    with :ok <- require_members_not_quarantined(members) do
+      do_start_planning_gate(stack, members)
     end
   end
 
@@ -1328,6 +1335,17 @@ defmodule Platform.Tasks.Stacks do
     case Repo.get(Stack, stack_id) do
       %Stack{} = stack -> start_planning(stack)
       nil -> {:error, :stack_not_found}
+    end
+  end
+
+  defp do_start_planning_gate(%Stack{} = stack, members) do
+    if any_member_past_backlog?(members) do
+      Logger.info("[Stacks.start_planning] noop for stack=#{stack.id}: already_in_flight")
+      emit_planning_noop_telemetry(stack.id, :already_in_flight)
+
+      {:noop, :already_in_flight}
+    else
+      do_start_planning(stack, members)
     end
   end
 
@@ -1643,6 +1661,19 @@ defmodule Platform.Tasks.Stacks do
           | {:error, :cross_stack_dep, %{from: Task.t(), to_task_id: String.t()}}
           | {:error, :stack_not_found}
   def advance_planning_waves(%Stack{} = stack) do
+    with :ok <- require_stack_members_not_quarantined(stack) do
+      do_advance_planning_waves(stack)
+    end
+  end
+
+  def advance_planning_waves(stack_id) when is_binary(stack_id) do
+    case Repo.get(Stack, stack_id) do
+      %Stack{} = stack -> advance_planning_waves(stack)
+      nil -> {:error, :stack_not_found}
+    end
+  end
+
+  defp do_advance_planning_waves(%Stack{} = stack) do
     case planning_waves(stack) do
       {:error, _reason, _detail} = err ->
         err
@@ -1676,13 +1707,6 @@ defmodule Platform.Tasks.Stacks do
           true ->
             advance_specific_wave(stack, Enum.at(waves, next_index), next_index)
         end
-    end
-  end
-
-  def advance_planning_waves(stack_id) when is_binary(stack_id) do
-    case Repo.get(Stack, stack_id) do
-      %Stack{} = stack -> advance_planning_waves(stack)
-      nil -> {:error, :stack_not_found}
     end
   end
 
@@ -2847,19 +2871,40 @@ defmodule Platform.Tasks.Stacks do
         # preload here keeps the board view (only caller) consistent with
         # the desktop stack-detail panel, which already preloads `:plans`
         # via `load_stack_member_panel_data/1` in TasksLive.
+        kind = Map.get(filters, :kind)
+        origin = Map.get(filters, :origin)
+
         members_by_stack =
           Task
           |> where([t], t.stack_id in ^stack_ids and is_nil(t.deleted_at))
+          |> filter_members_by_kind(kind)
+          |> filter_members_by_origin(origin)
           |> order_by([t], asc: t.stack_position)
           |> preload(:plans)
           |> Repo.all()
           |> Enum.group_by(& &1.stack_id)
 
-        Enum.map(stacks, fn stack ->
+        stacks
+        |> Enum.map(fn stack ->
           members = Map.get(members_by_stack, stack.id, [])
           {stack, build_board_data(members)}
         end)
+        |> maybe_drop_stacks_without_kind_members(kind || origin)
     end
+  end
+
+  # External Feedback lane (task 01a11ec3 stage 4): the persisted origin
+  # column, exactly as the kind filter above uses the persisted kind.
+  defp filter_members_by_origin(query, nil), do: query
+  defp filter_members_by_origin(query, origin), do: where(query, [t], t.origin == ^origin)
+
+  defp filter_members_by_kind(query, nil), do: query
+  defp filter_members_by_kind(query, kind), do: where(query, [t], t.kind == ^kind)
+
+  defp maybe_drop_stacks_without_kind_members(entries, nil), do: entries
+
+  defp maybe_drop_stacks_without_kind_members(entries, _kind) do
+    Enum.reject(entries, fn {_stack, board_data} -> board_data.member_count == 0 end)
   end
 
   # Public-ish (private) helper exposed for tests that want to build the
@@ -4029,21 +4074,7 @@ defmodule Platform.Tasks.Stacks do
   def unblocked_in_stack?(%Task{stack_id: nil}), do: false
 
   def unblocked_in_stack?(%Task{stack_id: stack_id} = task) when is_binary(stack_id) do
-    member_ids =
-      Task
-      |> where([t], t.stack_id == ^stack_id and is_nil(t.deleted_at))
-      |> select([t], t.id)
-      |> Repo.all()
-      |> MapSet.new()
-
-    in_stack_dep_ids =
-      task
-      |> Tasks.dependency_task_ids()
-      |> Enum.reject(&(&1 == task.id))
-      |> Enum.uniq()
-      |> Enum.filter(&MapSet.member?(member_ids, &1))
-
-    case in_stack_dep_ids do
+    case in_stack_dependency_ids(task) do
       [] ->
         true
 
@@ -4068,6 +4099,33 @@ defmodule Platform.Tasks.Stacks do
           Enum.all?(deps, &MemberSet.dependency_satisfied?/1) and
           all_dep_shas_reachable?(Enum.reject(deps, &(&1.status == "cancelled")), stack_id)
     end
+  end
+
+  @doc """
+  The task's declared dependency ids that point at a non-deleted member of
+  its OWN stack, self-references and duplicates removed. `[]` for a task
+  with no `stack_id`.
+
+  The partition `unblocked_in_stack?/1` gates on (rollup-merge threshold),
+  and the set `Tasks.apply_dispatch_gate` drops from its `done`-threshold
+  unmet-dependency check (task 01a136c1 stage 2).
+  """
+  @spec in_stack_dependency_ids(Task.t()) :: [String.t()]
+  def in_stack_dependency_ids(%Task{stack_id: nil}), do: []
+
+  def in_stack_dependency_ids(%Task{stack_id: stack_id} = task) when is_binary(stack_id) do
+    member_ids =
+      Task
+      |> where([t], t.stack_id == ^stack_id and is_nil(t.deleted_at))
+      |> select([t], t.id)
+      |> Repo.all()
+      |> MapSet.new()
+
+    task
+    |> Tasks.dependency_task_ids()
+    |> Enum.reject(&(&1 == task.id))
+    |> Enum.uniq()
+    |> Enum.filter(&MapSet.member?(member_ids, &1))
   end
 
   # Bug #2 (task 019f708f): after `threshold_cleared?/1` confirms a stamp
@@ -4205,6 +4263,21 @@ defmodule Platform.Tasks.Stacks do
   def try_promote(%Task{stack_id: nil}), do: :noop
 
   def try_promote(%Task{status: "stack_pending"} = task) do
+    with :ok <- Tasks.require_not_quarantined(task) do
+      do_try_promote(task)
+    end
+  end
+
+  def try_promote(%Task{}), do: :noop
+
+  def try_promote(task_id) when is_binary(task_id) do
+    case Repo.get(Task, task_id) do
+      %Task{} = task -> try_promote(task)
+      nil -> {:error, :task_not_found}
+    end
+  end
+
+  defp do_try_promote(%Task{} = task) do
     if unblocked_in_stack?(task) do
       # `transition_task/2` returns a 3-tuple
       # `{:error, :stack_plans_pending, %{stack_id, waiting_on}}` when the
@@ -4221,12 +4294,16 @@ defmodule Platform.Tasks.Stacks do
     end
   end
 
-  def try_promote(%Task{}), do: :noop
+  defp require_stack_members_not_quarantined(%Stack{} = stack) do
+    stack
+    |> members()
+    |> require_members_not_quarantined()
+  end
 
-  def try_promote(task_id) when is_binary(task_id) do
-    case Repo.get(Task, task_id) do
-      %Task{} = task -> try_promote(task)
-      nil -> {:error, :task_not_found}
+  defp require_members_not_quarantined(members) when is_list(members) do
+    case Enum.find(members, &Tasks.quarantined?/1) do
+      nil -> :ok
+      %Task{} = task -> Tasks.require_not_quarantined(task)
     end
   end
 

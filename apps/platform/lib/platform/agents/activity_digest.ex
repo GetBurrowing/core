@@ -17,12 +17,12 @@ defmodule Platform.Agents.ActivityDigest do
   BOTH directions, threaded via the `:scope` opt on the underlying queries:
 
     * `:internal` (the default for `build/2`, `build/3` and `build_windowed/1`)
-      — OMITS any external-user space/DM (and mixed Fabrikam+external spaces) from
-      the Fabrikam-internal digest. With zero external users this is a no-op, so
+      — OMITS any external-user space/DM (and mixed internal+external spaces) from
+      the internal digest. With zero external users this is a no-op, so
       an all-internal org's output is byte-for-byte unchanged.
     * `build_external/3` — the mirror direction: builds a summary restricted to
       one external user's allowlisted spaces (`{:external_spaces, ids}`), which
-      intrinsically OMITS Fabrikam-internal content.
+      intrinsically OMITS internal content.
 
   Pages, journal, and task corpora have no space dimension, so scope does not
   apply to them; `build_external/3` therefore covers only chat + meetings.
@@ -195,7 +195,7 @@ defmodule Platform.Agents.ActivityDigest do
   `Chat.participant_space_ids_for_user/1` and scopes the chat + meeting
   corpora to exactly those spaces (`scope: {:external_spaces, ids}`). Because
   an external user only ever participates in their allowlisted spaces, this
-  intrinsically OMITS all Fabrikam-internal content. Pages, journal and task
+  intrinsically OMITS all internal content. Pages, journal and task
   events are org-scoped (not space-scoped) and are therefore left out of the
   external summary entirely.
 

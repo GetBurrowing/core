@@ -61,7 +61,7 @@ defmodule Platform.Security.ExternalPushPreviewTest do
 
   defp internal_participant do
     user = World.create_user!(%{name: "Ian Internal"})
-    World.plain_member!(user, Tenancy.get_org_by_slug!("fabrikam"))
+    World.plain_member!(user, Tenancy.get_org_by_slug!("acme"))
     space = World.channel!()
     {p, _} = user_participant(space.id, user)
     p
@@ -71,7 +71,7 @@ defmodule Platform.Security.ExternalPushPreviewTest do
     user = World.create_user!(%{name: "Zoe Archived"})
 
     {:ok, _} =
-      Tenancy.mark_membership_external(%{user_id: user.id, org_id: TenancyFixtures.fabrikam_org_id()})
+      Tenancy.mark_membership_external(%{user_id: user.id, org_id: TenancyFixtures.acme_org_id()})
 
     space = World.channel!()
     {p, _} = user_participant(space.id, user)
@@ -100,7 +100,7 @@ defmodule Platform.Security.ExternalPushPreviewTest do
     user = World.create_user!(%{name: name})
 
     {:ok, _} =
-      Tenancy.mark_membership_external(%{user_id: user.id, org_id: TenancyFixtures.fabrikam_org_id()})
+      Tenancy.mark_membership_external(%{user_id: user.id, org_id: TenancyFixtures.acme_org_id()})
 
     user
   end
@@ -247,7 +247,7 @@ defmodule Platform.Security.ExternalPushPreviewTest do
 
     test "internal recipient's payload is byte-identical on the user-scoped path" do
       user = World.create_user!(%{name: "Ian Internal"})
-      World.plain_member!(user, Tenancy.get_org_by_slug!("fabrikam"))
+      World.plain_member!(user, Tenancy.get_org_by_slug!("acme"))
 
       ref = attach([:platform, :push, :external_safe_preview], :safe_preview)
 

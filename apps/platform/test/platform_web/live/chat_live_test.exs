@@ -63,7 +63,7 @@ defmodule PlatformWeb.ChatLiveTest do
     })
   end
 
-  defp insert_chat_agent(attrs \\ %{}) do
+  defp insert_chat_agent(attrs) do
     Repo.insert!(%Agent{
       slug: Map.get(attrs, :slug, "agent-#{System.unique_integer([:positive, :monotonic])}"),
       name: Map.get(attrs, :name, "Agent #{System.unique_integer([:positive, :monotonic])}"),
@@ -194,7 +194,9 @@ defmodule PlatformWeb.ChatLiveTest do
     # chat plan v2 Stage 2 (Pinned / Direct Messages / sub-org sections);
     # the DMs label is the cheapest stable hook on the desktop sidebar.
     assert html =~ "Direct Messages"
-    assert html =~ "Startup Suite"
+    # The rail label is the install's app name, "Burrow" on a migrated DB
+    # (task 01a120c5 stage 3).
+    assert html =~ "Burrow"
   end
 
   test "shell sidebar is rendered on /chat", %{conn: conn} do
@@ -202,7 +204,9 @@ defmodule PlatformWeb.ChatLiveTest do
     {:ok, _view, html} = live(conn, ~p"/chat")
 
     # Shell nav and top bar present
-    assert html =~ "Startup Suite"
+    # The rail label is the install's app name, "Burrow" on a migrated DB
+    # (task 01a120c5 stage 3).
+    assert html =~ "Burrow"
     assert html =~ "/chat"
     assert html =~ "/control"
   end
@@ -3048,7 +3052,7 @@ defmodule PlatformWeb.ChatLiveTest do
       # ADR 0027: Agent Attention Mode removed
       refute html =~ "Agent Attention Mode"
       # Task 019e95ea stage 4: the Danger Zone is permission-gated — this
-      # user is neither a Fabrikam admin nor the channel's creator, so no
+      # user is neither an Acme admin nor the channel's creator, so no
       # Archive button renders. Visibility cases live in the "channel
       # deletion" describe block below.
       refute html =~ "Archive Channel"
@@ -3090,7 +3094,7 @@ defmodule PlatformWeb.ChatLiveTest do
       user = insert_chat_user()
       conn = init_test_session(conn, current_user_id: user.id)
 
-      # Task 019e95ea: archive is authorized in the context layer for Fabrikam
+      # Task 019e95ea: archive is authorized in the context layer for Acme
       # admins and the channel creator — make the mounted user the creator.
       {:ok, _space} =
         Chat.create_channel(%{
@@ -3327,22 +3331,22 @@ defmodule PlatformWeb.ChatLiveTest do
     archived
   end
 
-  # Fabrikam-admin fixture (task 019e95ea stage 4) — same OrgMembership-on-the-
-  # fabrikam-org pattern as test/platform/chat/space_deletion_test.exs.
-  defp insert_fabrikam_admin! do
+  # Acme-admin fixture (task 019e95ea stage 4) — same OrgMembership-on-the-
+  # acme-org pattern as test/platform/chat/space_deletion_test.exs.
+  defp insert_acme_admin! do
     n = System.unique_integer([:positive])
 
     user =
       insert_chat_user(%{
-        email: "fabrikam-admin-#{n}@example.com",
-        oidc_sub: "oidc-fabrikam-admin-#{n}",
-        name: "Fabrikam Admin #{n}"
+        email: "acme-admin-#{n}@example.com",
+        oidc_sub: "oidc-acme-admin-#{n}",
+        name: "Acme Admin #{n}"
       })
 
     %OrgMembership{}
     |> OrgMembership.changeset(%{
       user_id: user.id,
-      org_id: Tenancy.get_org_by_slug!("fabrikam").id,
+      org_id: Tenancy.get_org_by_slug!("acme").id,
       role: "admin"
     })
     |> Repo.insert!()
@@ -3478,7 +3482,7 @@ defmodule PlatformWeb.ChatLiveTest do
   # ── Channel deletion (task 019e95ea stage 4) ───────────────────────────────
   #
   # NOTE on navigation: these tests mount via `/chat/#{space.id}` (UUID),
-  # not the slug. Fabrikam-admin fixtures carry an org membership, so LiveAuth
+  # not the slug. Acme-admin fixtures carry an org membership, so LiveAuth
   # resolves an active org and `get_space_by_slug/2` becomes org-scoped —
   # the org-less fixture channels would miss and `bootstrap_space/2` would
   # silently create a fresh duplicate. The UUID path (`Chat.get_space/1`)
@@ -3486,7 +3490,7 @@ defmodule PlatformWeb.ChatLiveTest do
 
   describe "channel deletion (task 019e95ea stage 4)" do
     test "admin sees both Archive and Delete sections in settings", %{conn: conn} do
-      admin = insert_fabrikam_admin!()
+      admin = insert_acme_admin!()
       space = insert_channel()
       conn = init_test_session(conn, current_user_id: admin.id)
 
@@ -3532,7 +3536,7 @@ defmodule PlatformWeb.ChatLiveTest do
 
     test "delete with a mismatched name flashes an error and does not flag the space",
          %{conn: conn} do
-      admin = insert_fabrikam_admin!()
+      admin = insert_acme_admin!()
       space = insert_channel()
       conn = init_test_session(conn, current_user_id: admin.id)
 
@@ -3552,7 +3556,7 @@ defmodule PlatformWeb.ChatLiveTest do
 
     test "delete with the exact name as admin flags the space and navigates to /chat",
          %{conn: conn} do
-      admin = insert_fabrikam_admin!()
+      admin = insert_acme_admin!()
       space = insert_channel()
       conn = init_test_session(conn, current_user_id: admin.id)
 
@@ -3599,7 +3603,7 @@ defmodule PlatformWeb.ChatLiveTest do
 
     test "deletion-scheduled channel shows the deletion banner with purge date; admin sees Cancel",
          %{conn: conn} do
-      admin = insert_fabrikam_admin!()
+      admin = insert_acme_admin!()
       space = insert_channel()
       {:ok, scheduled} = Chat.schedule_space_deletion(admin, space)
       conn = init_test_session(conn, current_user_id: admin.id)
@@ -3619,7 +3623,7 @@ defmodule PlatformWeb.ChatLiveTest do
     end
 
     test "non-admin sees the deletion banner without the Cancel button", %{conn: conn} do
-      admin = insert_fabrikam_admin!()
+      admin = insert_acme_admin!()
       space = insert_channel()
       {:ok, _scheduled} = Chat.schedule_space_deletion(admin, space)
       conn = authenticated_conn(conn)
@@ -3634,7 +3638,7 @@ defmodule PlatformWeb.ChatLiveTest do
 
     test "cancelling the deletion clears the flag and the archive banner returns",
          %{conn: conn} do
-      admin = insert_fabrikam_admin!()
+      admin = insert_acme_admin!()
       space = insert_channel()
       {:ok, _scheduled} = Chat.schedule_space_deletion(admin, space)
       conn = init_test_session(conn, current_user_id: admin.id)
@@ -4006,17 +4010,17 @@ defmodule PlatformWeb.ChatLiveTest do
   # sit outside the viewer's org (pre-backfill `org_id = NULL`, or an
   # intentional cross-org access like an @-mentioned bystander opening
   # the sponsor's exec space). Non-reserved slugs are UNTOUCHED — the
-  # ADR-0042 per-org channel-slug scoping (`#general` in Fabrikam vs SXI)
+  # ADR-0042 per-org channel-slug scoping (`#general` in Acme vs SXI)
   # must not be weakened.
   describe "system_prefix_fallback slug resolution" do
     defp insert_org!(slug \\ nil) do
       n = System.unique_integer([:positive])
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+      acme = Tenancy.get_org_by_slug!("acme")
 
       Repo.insert!(%Platform.Tenancy.Org{
         name: "Fallback Org #{n}",
         slug: slug || "fallback-org-#{n}",
-        parent_org_id: fabrikam.id
+        parent_org_id: acme.id
       })
     end
 
@@ -4032,7 +4036,7 @@ defmodule PlatformWeb.ChatLiveTest do
          %{conn: conn} do
       # Legacy exec-space row: `find_or_create/1` created it before the
       # stage-2 org_id stamp shipped, so `org_id = NULL`. The viewer sits
-      # inside an org (e.g. Fabrikam), so the org-scoped `get_space_by_slug/2`
+      # inside an org (e.g. Acme), so the org-scoped `get_space_by_slug/2`
       # branch filters this row out. Without the safety net, handle_params
       # push_navigates back to `/chat`.
       org = insert_org!()
@@ -4162,26 +4166,26 @@ defmodule PlatformWeb.ChatLiveTest do
 
     test "sponsor opens pinned backlog exec space via rail row navigation",
          %{conn: conn} do
-      # Sponsor is a Fabrikam member. `Tasks.create_project` defaults project
-      # org_id to Fabrikam (see default_org_id/1), and stage 2's `find_or_create`
+      # Sponsor is an Acme member. `Tasks.create_project` defaults project
+      # org_id to Acme (see default_org_id/1), and stage 2's `find_or_create`
       # now stamps the exec space with `task → project.org_id`. So the
       # org-scoped `get_space_by_slug/2` branch resolves directly — no
       # safety-net fallback needed for the happy path.
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+      acme = Tenancy.get_org_by_slug!("acme")
 
       sponsor =
         insert_chat_user(%{
           email: "pin-open-sponsor-#{System.unique_integer([:positive])}@example.com",
           oidc_sub: "oidc-pin-open-sponsor-#{System.unique_integer([:positive])}"
         })
-        |> put_membership!(fabrikam)
+        |> put_membership!(acme)
 
       %{task: task, space: exec} = seed_pin_for(sponsor, title: "Opens via rail row")
 
-      # Stage-2 postcondition: the exec space carries an org_id (Fabrikam).
+      # Stage-2 postcondition: the exec space carries an org_id (Acme).
       # If this assertion regresses, the whole open path collapses back
       # to the bug this task fixes.
-      assert exec.org_id == fabrikam.id
+      assert exec.org_id == acme.id
 
       conn = init_test_session(conn, current_user_id: sponsor.id)
 
@@ -4203,27 +4207,27 @@ defmodule PlatformWeb.ChatLiveTest do
     test "mentioned bystander opens pinned exec space via rail row",
          %{conn: conn} do
       # Sponsor pins a task (stage 2 materialises the exec space with
-      # sponsor's Fabrikam org_id + a pin row for the sponsor). Stage 3 of
+      # sponsor's Acme org_id + a pin row for the sponsor). Stage 3 of
       # PR #548 propagates a pin to every @-mentioned participant via
       # `Platform.Chat.reinvite_and_pin_mentioned/1` — that's a private
       # helper triggered from `post_message`, but both code paths write
       # via `ChatPins.pin/3`, so we call it directly to seed the bystander
       # pin without touching the message pipeline.
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+      acme = Tenancy.get_org_by_slug!("acme")
 
       sponsor =
         insert_chat_user(%{
           email: "mention-sponsor-#{System.unique_integer([:positive])}@example.com",
           oidc_sub: "oidc-mention-sponsor-#{System.unique_integer([:positive])}"
         })
-        |> put_membership!(fabrikam)
+        |> put_membership!(acme)
 
       bystander =
         insert_chat_user(%{
           email: "mention-bystander-#{System.unique_integer([:positive])}@example.com",
           oidc_sub: "oidc-mention-bystander-#{System.unique_integer([:positive])}"
         })
-        |> put_membership!(fabrikam)
+        |> put_membership!(acme)
 
       %{task: task, space: exec} = seed_pin_for(sponsor, title: "Bystander opens too")
 
@@ -4249,22 +4253,22 @@ defmodule PlatformWeb.ChatLiveTest do
 
     test "cross-org channel slug scoping preserved (ADR-0042 regression fence)",
          %{conn: conn} do
-      # Two orgs (fabrikam-flavoured + sxi-flavoured sub-orgs), each with its
-      # own `#general` channel. Viewer in the fabrikam-flavoured org must
+      # Two orgs (acme-flavoured + sxi-flavoured sub-orgs), each with its
+      # own `#general` channel. Viewer in the acme-flavoured org must
       # land on THEIR `#general`, not the sxi-flavoured one. `general`
       # is not a reserved system-managed prefix (`task-exec-`, `meeting-`,
       # `dm-`, `group-`), so the stage-3 safety-net MUST NOT fire — the
       # org-scoped lookup wins, and ADR-0042 per-org channel-slug scoping
       # stays intact.
-      fabrikam_side = insert_org!("fabrikam-nav-#{System.unique_integer([:positive])}")
+      acme_side = insert_org!("acme-nav-#{System.unique_integer([:positive])}")
       sxi_side = insert_org!("sxi-nav-#{System.unique_integer([:positive])}")
 
-      {:ok, fabrikam_general} =
+      {:ok, acme_general} =
         Chat.create_space(%{
           name: "General",
           slug: "general",
           kind: "channel",
-          org_id: fabrikam_side.id
+          org_id: acme_side.id
         })
 
       {:ok, sxi_general} =
@@ -4280,33 +4284,33 @@ defmodule PlatformWeb.ChatLiveTest do
           email: "cross-org-nav-#{System.unique_integer([:positive])}@example.com",
           oidc_sub: "oidc-cross-org-nav-#{System.unique_integer([:positive])}"
         })
-        |> put_membership!(fabrikam_side)
+        |> put_membership!(acme_side)
 
       conn = init_test_session(conn, current_user_id: user.id)
       {:ok, view, _html} = live(conn, ~p"/chat/general")
 
       active_space = :sys.get_state(view.pid).socket.assigns.active_space
-      assert active_space.id == fabrikam_general.id
+      assert active_space.id == acme_general.id
       refute active_space.id == sxi_general.id
-      assert active_space.org_id == fabrikam_side.id
+      assert active_space.org_id == acme_side.id
     end
 
     test "exec space with NULL org_id still resolvable via safety-net fallback",
          %{conn: conn} do
       # Simulates a legacy/pre-backfill exec-space row (or a race-created
       # duplicate where the backfill couldn't derive an org_id because the
-      # task or project was also orphaned). Viewer sits inside Fabrikam, so
-      # `active_org_id = fabrikam.id`; the org-scoped `get_space_by_slug/2`
+      # task or project was also orphaned). Viewer sits inside Acme, so
+      # `active_org_id = acme.id`; the org-scoped `get_space_by_slug/2`
       # misses (exec.org_id IS NULL). The `system_prefix_fallback/1`
       # clause catches it because the slug starts with `task-exec-`.
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+      acme = Tenancy.get_org_by_slug!("acme")
 
       user =
         insert_chat_user(%{
           email: "null-org-nav-#{System.unique_integer([:positive])}@example.com",
           oidc_sub: "oidc-null-org-nav-#{System.unique_integer([:positive])}"
         })
-        |> put_membership!(fabrikam)
+        |> put_membership!(acme)
 
       short_id =
         Ecto.UUID.generate() |> String.replace("-", "") |> String.slice(0, 12)

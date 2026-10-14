@@ -75,9 +75,14 @@ defmodule Platform.Push.Notification do
             author_name: nil,
             author_id: nil,
             author_type: nil,
+            author_avatar_url: nil,
+            author_avatar_tone: nil,
             space_name: nil,
+            space_kind: nil,
             meeting_id: nil,
-            ring_id: nil
+            ring_id: nil,
+            unread_count: nil,
+            unread_as_of: nil
 
   @type t :: %__MODULE__{
           kind: String.t(),
@@ -95,9 +100,14 @@ defmodule Platform.Push.Notification do
           author_name: String.t() | nil,
           author_id: String.t() | nil,
           author_type: String.t() | nil,
+          author_avatar_url: String.t() | nil,
+          author_avatar_tone: String.t() | nil,
           space_name: String.t() | nil,
+          space_kind: String.t() | nil,
           meeting_id: String.t() | nil,
-          ring_id: String.t() | nil
+          ring_id: String.t() | nil,
+          unread_count: non_neg_integer() | nil,
+          unread_as_of: DateTime.t() | nil
         }
 
   @doc "The iOS category for a kind, or nil (tap opens)."
@@ -199,7 +209,7 @@ defmodule Platform.Push.Notification do
 
     new(%{
       kind: kind,
-      title: chat_title(attrs[:author], attrs[:space_name], attrs[:reason]),
+      title: chat_title(attrs[:author], attrs[:space_name], attrs[:reason], attrs[:app_name]),
       body: body_text(attrs[:content], attrs[:attachments] || []),
       url: chat_url(attrs[:space_path], attrs[:message_id]),
       space_id: attrs[:space_id],
@@ -214,27 +224,63 @@ defmodule Platform.Push.Notification do
       # communication notification.
       author_id: presence(attrs[:author_id]),
       author_type: presence(attrs[:author_type]),
+      # The sender's picture and letter-disc colour (task 01a12773), so the
+      # apps draw the sender's real avatar on the notification. The url is
+      # ABSOLUTE: `https://<install_host>/api/app/agents/<id>/avatar?v=...`
+      # for an agent (bearer-gated on the install's own host), or a user's
+      # external https picture (fetched with no bearer). The tone is
+      # `"agent"` or the in-app palette index `"0".."7"`
+      # (`Platform.Avatars.fallback_tone/1`). FCM data and the APNs body
+      # carry both, so on the relay path they travel only inside the sealed
+      # blob; web push carries neither, and redact/2 drops both.
+      author_avatar_url: presence(attrs[:author_avatar_url]),
+      author_avatar_tone: presence(attrs[:author_avatar_tone]),
       # `conversation_name` is the recipient's label for the space (a DM or
       # unnamed group has a NULL `chat_spaces.name`; the web sidebar shows the
       # other participant). It falls back to the space's own name. The TITLE
       # keeps `space_name` so APNs and web push read exactly as before.
-      space_name: presence(attrs[:conversation_name]) || presence(attrs[:space_name])
+      space_name: presence(attrs[:conversation_name]) || presence(attrs[:space_name]),
+      # The space's kind ("channel" | "dm" | "group" | ...), FCM only (task
+      # 01a116c4): Android's MessagingStyle marks a dm as a one-to-one
+      # conversation. redact/2 builds a fresh struct, so it is cleared there.
+      space_kind: presence(attrs[:space_kind])
     })
   end
 
-  @doc "Mention title: `{Author} in {Space}` (`@here` variant for a broadcast)."
-  @spec chat_title(String.t() | nil, String.t() | nil, atom() | nil) :: String.t()
-  def chat_title(author, space_name, :here),
-    do: "#{presence(author) || "Someone"} @here in #{presence(space_name) || "Suite"}"
+  @doc """
+  Mention title: `{Author} in {Space}` (`@here` variant for a broadcast).
 
-  def chat_title(author, space_name, _reason),
-    do: "#{presence(author) || "Someone"} in #{presence(space_name) || "Suite"}"
+  A space with no name (a DM or unnamed group) reads `{Author} in {App}`,
+  where `app_name` is the install's product name. It is passed IN by the
+  caller (`Platform.Chat.AttentionRouter.push_notification/6` reads
+  `Platform.Branding.app_name/0` once at that boundary), so this stays a
+  pure function. Task 01a120c5 stage 3 replaced the compiled `"Suite"`
+  fallback. With neither a space name nor an app name the title is just
+  `{Author}` (or `{Author} @here`): no compiled product name, ever.
+  """
+  @spec chat_title(String.t() | nil, String.t() | nil, atom() | nil, String.t() | nil) ::
+          String.t()
+  def chat_title(author, space_name, reason, app_name \\ nil)
+
+  def chat_title(author, space_name, :here, app_name),
+    do: "#{presence(author) || "Someone"} @here" <> place(space_name, app_name)
+
+  def chat_title(author, space_name, _reason, app_name),
+    do: (presence(author) || "Someone") <> place(space_name, app_name)
+
+  defp place(space_name, app_name) do
+    case presence(space_name) || presence(app_name) do
+      nil -> ""
+      name -> " in " <> name
+    end
+  end
 
   @doc """
   The redacted copy an external recipient gets on EVERY transport. Every
   identifying field (space, message, task, inbox ids and the grouping and
   category derived from them) is cleared, and so are `author_name`,
-  `author_id`, `author_type` and `space_name`; only the kind and install
+  `author_id`, `author_type`, `author_avatar_url`, `author_avatar_tone`
+  and `space_name`; only the kind and install
   survive. It builds a FRESH struct, so a field added later is dropped unless
   it is copied here on purpose.
   """
@@ -290,7 +336,7 @@ defmodule Platform.Push.Notification do
         "alert" => drop_nils(%{"title" => n.title, "body" => n.body}),
         "sound" => "default",
         "category" => n.category,
-        "thread-id" => n.thread_id,
+        "thread-id" => apns_thread_id(n),
         "mutable-content" => if(n.kind in @mutable_kinds, do: 1)
       }
       |> drop_nils()
@@ -312,7 +358,18 @@ defmodule Platform.Push.Notification do
       # INPerson and conversation the NSE builds (task 01a111bb stage 4).
       # Both are already in the title; redact/2 clears them.
       "author_name" => n.author_name,
-      "space_name" => n.space_name
+      "space_name" => n.space_name,
+      # The sender's picture url and letter-disc tone for the NSE's INPerson
+      # image (task 01a12773), DIRECT path only: a relayed push carries
+      # these inside the sealed FCM data map instead. redact/2 clears both.
+      "author_avatar_url" => n.author_avatar_url,
+      "author_avatar_tone" => n.author_avatar_tone,
+      # The recipient's chat unread total on THIS install and when it was
+      # read (task 01a1261e), so the app can keep a per-install count and
+      # sum the icon badge across installs. Additive: an older build ignores
+      # unknown keys.
+      "unread_count" => n.unread_count,
+      "unread_as_of" => iso8601(n.unread_as_of)
     }
     |> drop_nils()
   end
@@ -347,7 +404,12 @@ defmodule Platform.Push.Notification do
         "author_name" => n.author_name,
         "author_id" => n.author_id,
         "author_type" => n.author_type,
-        "space_name" => n.space_name
+        "author_avatar_url" => n.author_avatar_url,
+        "author_avatar_tone" => n.author_avatar_tone,
+        "space_name" => n.space_name,
+        "space_kind" => n.space_kind,
+        "unread_count" => n.unread_count,
+        "unread_as_of" => iso8601(n.unread_as_of)
       }
       |> Enum.reject(fn {_k, v} -> is_nil(v) or v == "" end)
       |> Map.new(fn {k, v} -> {k, to_string(v)} end)
@@ -430,6 +492,25 @@ defmodule Platform.Push.Notification do
 
   defp default_thread_id(kind, _n) when kind in @approval_kinds, do: @approvals_thread
   defp default_thread_id(_kind, %__MODULE__{space_id: space_id}), do: space_id
+
+  # The APNs `thread-id` is `<install_host>:<thread>` (task 01a1261e), so one
+  # device signed in to several installs stacks each install's conversations
+  # (and its Approvals group) separately. Only the APNs serialisation carries
+  # the prefix: `thread_id` itself stays the bare space id / `approvals`,
+  # which web push, FCM `data` (Android group keys already include the host)
+  # and the sealed inner map read. Prefixing here rather than in
+  # `default_thread_id/2` also covers chat notifications, which pass their
+  # `thread_id` explicitly and never reach the default.
+  defp apns_thread_id(%__MODULE__{thread_id: thread}) when thread in [nil, ""], do: nil
+
+  defp apns_thread_id(%__MODULE__{thread_id: thread, install_host: host})
+       when is_binary(host) and host != "",
+       do: host <> ":" <> thread
+
+  defp apns_thread_id(%__MODULE__{thread_id: thread}), do: thread
+
+  defp iso8601(%DateTime{} = at), do: DateTime.to_iso8601(at)
+  defp iso8601(_), do: nil
 
   defp chat_url(path, message_id) when is_binary(path) and path != "" do
     if is_binary(message_id) and message_id != "",

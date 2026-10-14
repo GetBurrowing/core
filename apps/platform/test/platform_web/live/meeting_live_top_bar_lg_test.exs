@@ -60,7 +60,7 @@ defmodule PlatformWeb.MeetingLiveTopBarLgTest do
     %OrgMembership{}
     |> OrgMembership.changeset(%{
       user_id: viewer.id,
-      org_id: Platform.TenancyFixtures.fabrikam_org_id(),
+      org_id: Platform.TenancyFixtures.acme_org_id(),
       role: "member"
     })
     |> Repo.insert!()
@@ -83,7 +83,7 @@ defmodule PlatformWeb.MeetingLiveTopBarLgTest do
       |> Project.changeset(%{
         name: "Top Bar Lg Project #{n}",
         slug: "top-bar-lg-project-#{n}",
-        org_id: Platform.TenancyFixtures.fabrikam_org_id()
+        org_id: Platform.TenancyFixtures.acme_org_id()
       })
       |> Repo.insert()
 

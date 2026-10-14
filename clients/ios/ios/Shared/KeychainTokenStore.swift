@@ -14,6 +14,13 @@ protocol MutableTokenStore: TokenStore {
     func remove(for host: String)
 }
 
+/// Lists the install hosts that hold a bearer, without reading any bearer.
+/// `InstallStore` uses it to carry signed-in installs across the upgrade
+/// that removed the built-in install list.
+protocol TokenHostListing {
+    func storedHosts() -> [String]
+}
+
 /// The app's bearer tokens, one per install, in the Keychain ONLY.
 ///
 /// - account = the install host, so each install keeps its own session;
@@ -25,7 +32,7 @@ protocol MutableTokenStore: TokenStore {
 ///
 /// The access group carries the team prefix, which only the build knows, so
 /// each target's Info.plist passes it in as `SuiteKeychainAccessGroup`.
-struct KeychainTokenStore: MutableTokenStore {
+struct KeychainTokenStore: MutableTokenStore, TokenHostListing {
     static let service = "com.kobo-ai.burrow.session"
     static let accessGroupSuffix = "com.kobo-ai.burrow.shared"
     static let infoPlistKey = "SuiteKeychainAccessGroup"
@@ -37,8 +44,9 @@ struct KeychainTokenStore: MutableTokenStore {
     /// fall back to a private keychain the other targets cannot read.
     static var bundleAccessGroup: String {
         let value = Bundle.main.object(forInfoDictionaryKey: infoPlistKey) as? String ?? ""
-        assert(value.hasSuffix(accessGroupSuffix) && value.count > accessGroupSuffix.count,
-               "\(infoPlistKey) must be $(AppIdentifierPrefix)\(accessGroupSuffix)")
+        assert(
+            value.hasSuffix(accessGroupSuffix) && value.count > accessGroupSuffix.count,
+            "\(infoPlistKey) must be $(AppIdentifierPrefix)\(accessGroupSuffix)")
         return value
     }
 
@@ -54,7 +62,8 @@ struct KeychainTokenStore: MutableTokenStore {
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var item: CFTypeRef?
         guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-              let data = item as? Data else { return nil }
+            let data = item as? Data
+        else { return nil }
         return String(data: data, encoding: .utf8)
     }
 
@@ -63,7 +72,7 @@ struct KeychainTokenStore: MutableTokenStore {
         let update: [String: Any] = [
             kSecValueData as String: Data(token.utf8),
             // The widgets refresh in the background on a locked phone.
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
         ]
         let status = SecItemUpdate(baseQuery(host) as CFDictionary, update as CFDictionary)
         if status == errSecSuccess { return true }
@@ -77,12 +86,30 @@ struct KeychainTokenStore: MutableTokenStore {
         SecItemDelete(baseQuery(host) as CFDictionary)
     }
 
+    /// Every account (install host) with a bearer in this service and access
+    /// group. Asks for attributes ONLY: the query never sets
+    /// `kSecReturnData`, so no bearer is read, and nothing is logged.
+    func storedHosts() -> [String] {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.service,
+            kSecAttrAccessGroup as String: accessGroup,
+            kSecMatchLimit as String: kSecMatchLimitAll,
+            kSecReturnAttributes as String: true,
+        ]
+        var items: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &items) == errSecSuccess,
+            let attributes = items as? [[String: Any]]
+        else { return [] }
+        return attributes.compactMap { $0[kSecAttrAccount as String] as? String }
+    }
+
     private func baseQuery(_ host: String) -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: Self.service,
             kSecAttrAccount as String: host,
-            kSecAttrAccessGroup as String: accessGroup
+            kSecAttrAccessGroup as String: accessGroup,
         ]
     }
 }

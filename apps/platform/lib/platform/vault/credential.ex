@@ -32,7 +32,7 @@ defmodule Platform.Vault.Credential do
   @foreign_key_type :binary_id
 
   @credential_types ~w(api_key oauth2 token keypair custom)
-  @scope_types ~w(platform workspace agent integration)
+  @scope_types ~w(platform workspace agent integration shared)
 
   schema "vault_credentials" do
     field(:workspace_id, Ecto.UUID)
@@ -71,5 +71,6 @@ defmodule Platform.Vault.Credential do
     |> validate_inclusion(:credential_type, @credential_types)
     |> validate_inclusion(:scope_type, @scope_types)
     |> unique_constraint(:slug, name: :vault_credentials_unique_slug_per_scope)
+    |> unique_constraint(:slug, name: :vault_credentials_unique_shared_slug)
   end
 end

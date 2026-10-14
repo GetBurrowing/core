@@ -38,7 +38,7 @@ defmodule Platform.Meetings.GuestHostGateTest do
     {:ok, project} =
       Platform.Tasks.create_project(%{
         name: "Guest Host Gate Project #{System.unique_integer([:positive])}",
-        org_id: Platform.TenancyFixtures.fabrikam_org_id()
+        org_id: Platform.TenancyFixtures.acme_org_id()
       })
 
     {:ok, meeting} =

@@ -231,10 +231,10 @@ struct ApprovalsEntry: TimelineEntry {
     }
 
     static let preview = ApprovalsEntry(
-        date: Date(), host: "suite.example.com", installName: nil, signedIn: true, fetchedAt: Date(),
+        date: Date(), host: "yourteam.example.com", installName: nil, signedIn: true, fetchedAt: Date(),
         rows: [
             Row(
-                id: "suite.example.com|preview-1",
+                id: "yourteam.example.com|preview-1",
                 approval: SuiteApproval(
                     id: "preview-1", kind: "plan", title: "Burrow iOS intents plan", spaceName: "Burrow iOS", spacePathSegment: nil, taskID: nil,
                     insertedAt: nil, summary: nil),

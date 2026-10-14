@@ -12,7 +12,7 @@ defmodule PlatformWeb.Components.InheritancePill do
   Many Suite surfaces show values (skills, context, memory, prompts) that
   may be defined at the root org level and inherited by tenant orgs, or
   defined locally on a tenant. This pill is the affordance that tells the
-  user which case they're looking at — and (for Fabrikam admins) the click
+  user which case they're looking at — and (for root-org admins) the click
   target to open the override dialog.
 
   Reads state from `Platform.Tenancy.effective_value/4` (the inheritance
@@ -20,7 +20,7 @@ defmodule PlatformWeb.Components.InheritancePill do
 
   ## Three visual states
 
-    * `Inherited from Fabrikam` — muted text, no accent (`:inherited`).
+    * `Inherited from <root org name>` — muted text, no accent (`:inherited`).
     * `Defined here` — accent color matching the sub-org scope
       (`:defined_here`).
     * `Overridden` — accent color + bold + subtle "shadowed parent"
@@ -32,13 +32,13 @@ defmodule PlatformWeb.Components.InheritancePill do
   — not yet shipped) when ALL of the following are true:
 
     * the resolved state is `:inherited`
-    * the caller's `@fabrikam_admin?` assign is `true`
+    * the caller's `@root_admin?` assign is `true`
 
-  Non-admin click: no-op + tooltip `"Only Fabrikam admins can override"`.
+  Non-admin click: no-op + tooltip `"Only root-org admins can override"`.
   Non-inherited states render as a non-interactive `<span>` (there's
   nothing to override on a value that's already local).
 
-  The `@fabrikam_admin?` assign is set by `PlatformWeb.LiveAuth.on_mount(:default)`
+  The `@root_admin?` assign is set by `PlatformWeb.LiveAuth.on_mount(:default)`
   (already shipped — see PR #396 / commit 2cde6ec).
 
   ## Accessibility
@@ -57,7 +57,7 @@ defmodule PlatformWeb.Components.InheritancePill do
         record_key={:my_skill}
         default={nil}
         lookup_fn={&Skills.lookup_for_org/2}
-        fabrikam_admin?={@fabrikam_admin?}
+        root_admin?={@root_admin?}
       />
 
   """
@@ -74,11 +74,10 @@ defmodule PlatformWeb.Components.InheritancePill do
       "The `%Platform.Tenancy.Org{}` whose perspective we are rendering. Passed to `effective_value/4`."
   )
 
-  attr(:scope, :atom,
+  attr(:scope, :any,
     required: true,
-    values: [:fabrikam, :soylent, :wayne_tech, :sxi, :paragon, :cyberdyne],
     doc:
-      "The sub-org scope slug. Drives the accent color in the `:defined_here` and `:overridden` states (no accent for `:inherited`)."
+      "The sub-org scope: one of `ScopePill.scopes/0`, or an org slug string (the root org has no compiled atom). Drives the accent color in the `:defined_here` and `:overridden` states (no accent for `:inherited`)."
   )
 
   attr(:record_key, :any,
@@ -98,7 +97,7 @@ defmodule PlatformWeb.Components.InheritancePill do
       "2-arity function `(org, key) -> {:ok, value} | :error` over the caller's storage. Passed straight to `Tenancy.effective_value/4`."
   )
 
-  attr(:fabrikam_admin?, :boolean,
+  attr(:root_admin?, :boolean,
     default: false,
     doc:
       "When true and the state is `:inherited`, renders the override click-target. When false, the click is a no-op showing a permission tooltip."
@@ -119,8 +118,8 @@ defmodule PlatformWeb.Components.InheritancePill do
       |> assign(:parent_scope, parent_scope)
       |> assign(:label, label_for(state, parent_scope))
       |> assign(:aria_label, aria_label_for(state, parent_scope))
-      |> assign(:override_click_target?, state == :inherited and assigns.fabrikam_admin?)
-      |> assign(:non_admin_inherited?, state == :inherited and not assigns.fabrikam_admin?)
+      |> assign(:override_click_target?, state == :inherited and assigns.root_admin?)
+      |> assign(:non_admin_inherited?, state == :inherited and not assigns.root_admin?)
 
     ~H"""
     <%= cond do %>
@@ -148,8 +147,8 @@ defmodule PlatformWeb.Components.InheritancePill do
             "cursor-not-allowed"
           ]}
           aria-label={@aria_label}
-          title="Only Fabrikam admins can override"
-          data-tooltip="Only Fabrikam admins can override"
+          title="Only root-org admins can override"
+          data-tooltip="Only root-org admins can override"
         >
           {pill_inner(assigns)}
         </span>
@@ -180,56 +179,50 @@ defmodule PlatformWeb.Components.InheritancePill do
   # ── State resolution ──────────────────────────────────────────────────
 
   # Calls `Tenancy.effective_value/4` and maps its tagged-tuple return
-  # shape onto the 3-state UI vocabulary plus the optional `parent_scope`
-  # slug used for `aria-label` text.
+  # shape onto the 3-state UI vocabulary plus the optional `parent_scope`,
+  # the source org's NAME as stored on its row, used for the label and
+  # `aria-label` text. No org name is compiled in: the root org is whatever
+  # row the install seeded.
   defp resolve_state(%{org: org, record_key: key, default: default, lookup_fn: lookup_fn}) do
     case Tenancy.effective_value(org, key, default, lookup_fn: lookup_fn) do
       {:defined_here, _value} ->
         {:defined_here, nil}
 
       {:overridden, _value, _parent_value} ->
-        # The parent value comes from the nearest defining ancestor; for
-        # the two-tier Fabrikam/tenant hierarchy that's always Fabrikam.
-        {:overridden, :fabrikam}
+        # `effective_value/4` names the defining ancestor only for the
+        # inherited case. In the two-tier root/tenant hierarchy the parent
+        # of a tenant is the root org, so the label reads the root org's
+        # own row (`Tenancy.get_root_org/0`, structural: parent_org_id IS
+        # NULL), never a compiled name.
+        {:overridden, org_name(Tenancy.get_root_org())}
 
       {:inherited, source_org, _value} ->
-        {:inherited, scope_from_org(source_org)}
+        {:inherited, org_name(source_org) || org_name(Tenancy.get_root_org())}
     end
   end
 
-  # Convert an `Org` struct to its scope-slug atom. The DB slugs match
-  # the scope atoms 1:1 (see `priv/repo/migrations/20260519143620_seed_root_orgs.exs`).
-  # Falls back to `:fabrikam` (the inheritance source for tenants) for any
-  # unknown shape so the pill stays renderable on partially-loaded data.
-  defp scope_from_org(%{slug: slug}) when is_binary(slug) do
-    case slug do
-      "fabrikam" -> :fabrikam
-      "soylent" -> :soylent
-      "wayne_tech" -> :wayne_tech
-      "sxi" -> :sxi
-      "paragon" -> :paragon
-      "cyberdyne" -> :cyberdyne
-      _ -> :fabrikam
-    end
-  end
-
-  defp scope_from_org(_), do: :fabrikam
+  # The org's display name as stored on its row. `nil` for anything that
+  # is not a loaded org, so the caller can fall back to the root row and
+  # the pill stays renderable on partially-loaded data.
+  defp org_name(%{name: name}) when is_binary(name) and name != "", do: name
+  defp org_name(_), do: nil
 
   # ── Labels ────────────────────────────────────────────────────────────
 
-  defp label_for(:inherited, parent_scope),
-    do: "Inherited from #{Tenancy.scope_label(parent_scope)}"
+  # `parent_name` is nil only when no root org row exists at all.
+  defp label_for(:inherited, parent_name),
+    do: "Inherited from #{parent_name || "the root org"}"
 
   defp label_for(:defined_here, _), do: "Defined here"
   defp label_for(:overridden, _), do: "Overridden"
 
-  defp aria_label_for(:inherited, parent_scope),
-    do: "Inherited from #{Tenancy.scope_label(parent_scope)}"
+  defp aria_label_for(:inherited, parent_name),
+    do: "Inherited from #{parent_name || "the root org"}"
 
   defp aria_label_for(:defined_here, _), do: "Defined here"
 
-  defp aria_label_for(:overridden, parent_scope),
-    do: "Overridden from #{Tenancy.scope_label(parent_scope)}"
+  defp aria_label_for(:overridden, parent_name),
+    do: "Overridden from #{parent_name || "the root org"}"
 
   # ── Class mapping ─────────────────────────────────────────────────────
 

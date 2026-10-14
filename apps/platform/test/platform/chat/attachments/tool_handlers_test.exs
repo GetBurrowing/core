@@ -203,6 +203,10 @@ defmodule Platform.Chat.Attachments.ToolHandlersTest do
       assert row.state == "pending"
       assert row.space_id == space.id
       assert row.byte_size == 1_000_000
+      # Task 01a120be: `pending_message` makes finalize skip dedup and post a
+      # message, so an agent reservation must never carry it.
+      refute Map.has_key?(row.metadata || %{}, "pending_message")
+      assert row.uploaded_by_user_id == nil
     end
 
     test "rejects when declared byte_size exceeds upload_max_bytes" do

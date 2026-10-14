@@ -26,11 +26,18 @@ defmodule Platform.Chat.Canvas.Renderer do
   emit (`canvas_action_click`, `canvas_form_submit`). nil leaves them
   untargeted, so they reach the parent LiveView. Container kinds pass it down
   to their children.
+
+  `viewer` is an optional `t:Platform.Chat.CanvasAccess.actor/0` (`{:user,
+  id}`) for kinds whose own controls write the document. Only the `prototype`
+  kind reads it (its "Pin this version" goes through `Chat.patch_canvas/3`,
+  which re-checks membership). nil hides such controls. Container kinds pass
+  it down like `event_target`.
   """
   attr :node, :map, required: true
   attr :dom_id_scope, :string, default: nil
   attr :canvas_id, :string, default: nil
   attr :event_target, :any, default: nil
+  attr :viewer, :any, default: nil
 
   def render_node(assigns) do
     node = assigns.node

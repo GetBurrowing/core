@@ -559,14 +559,15 @@ defmodule PlatformWeb.CanvasLiveTest do
       assert place =~ space.name
     end
 
-    test "says 'a space in Fabrikam' to everyone else", %{conn: conn, org: org} do
+    test "says 'a private space' to everyone else", %{conn: conn, org: org} do
       {conn, canvas, space} = forbidden_other_org(conn, org)
 
       {:ok, view, _html} = live(conn, ~p"/canvases/#{canvas.id}")
 
       # The denial page must not be walkable as a directory of spaces.
       place = element_html(view, "canvas-forbidden-place")
-      assert place =~ "a space in Fabrikam"
+      assert place =~ "a private space"
+      refute place =~ ~r/fabrikam/i
       refute place =~ space.name
       refute place =~ org.name
     end

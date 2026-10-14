@@ -77,7 +77,7 @@ defmodule Platform.Meetings.MeetingChatSpaceOrgIdTest do
   # carries a hardcoded default org" are the same assertion.
   defp non_default_org! do
     n = System.unique_integer([:positive])
-    root = Tenancy.get_org_by_slug("fabrikam")
+    root = Tenancy.get_org_by_slug("acme")
 
     {:ok, org} =
       %Org{}
@@ -136,7 +136,7 @@ defmodule Platform.Meetings.MeetingChatSpaceOrgIdTest do
       project = project_with_org(%{org_id: org.id})
       assert project.org_id == org.id
 
-      default_org = Tenancy.get_org_by_slug("fabrikam")
+      default_org = Tenancy.get_org_by_slug("acme")
 
       refute is_nil(default_org),
              "fixture is vacuous: without the seeded root org there is no " <>

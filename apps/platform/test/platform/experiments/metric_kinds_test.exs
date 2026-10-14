@@ -28,7 +28,7 @@ defmodule Platform.Experiments.MetricKindsTest do
 
   defp unique, do: System.unique_integer([:positive])
 
-  defp experiment!(attrs \\ %{}) do
+  defp experiment!(attrs) do
     {:ok, experiment} =
       Experiments.create_experiment(
         Map.merge(%{slug: "mk-#{unique()}", name: "Metric kinds"}, attrs)

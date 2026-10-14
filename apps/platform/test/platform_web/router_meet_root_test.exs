@@ -88,7 +88,7 @@ defmodule PlatformWeb.RouterMeetRootTest do
     %OrgMembership{}
     |> OrgMembership.changeset(%{
       user_id: user.id,
-      org_id: Platform.TenancyFixtures.fabrikam_org_id(),
+      org_id: Platform.TenancyFixtures.acme_org_id(),
       role: "member",
       external: external?
     })
@@ -215,7 +215,7 @@ defmodule PlatformWeb.RouterMeetRootTest do
   # so only the missing invite can deny it. Mirrors the fixture in
   # `router_meet_index_routed_test.exs`.
   defp uninvited_meeting! do
-    org_id = Platform.TenancyFixtures.fabrikam_org_id()
+    org_id = Platform.TenancyFixtures.acme_org_id()
 
     {:ok, project} =
       Tasks.create_project(%{

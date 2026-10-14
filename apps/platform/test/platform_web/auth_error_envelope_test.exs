@@ -69,7 +69,7 @@ defmodule PlatformWeb.AuthErrorEnvelopeTest do
       })
 
     %OrgMembership{}
-    |> OrgMembership.changeset(%{user_id: user.id, org_id: fabrikam_org_id(), role: "member"})
+    |> OrgMembership.changeset(%{user_id: user.id, org_id: acme_org_id(), role: "member"})
     |> Repo.insert!()
 
     user
@@ -80,7 +80,7 @@ defmodule PlatformWeb.AuthErrorEnvelopeTest do
       Tasks.create_project(%{
         name: "Envelope Project #{System.unique_integer([:positive])}",
         slug: "envelope-project-#{System.unique_integer([:positive])}",
-        org_id: fabrikam_org_id()
+        org_id: acme_org_id()
       })
 
     storage_key = "files/#{project.id}/#{Ecto.UUID.generate()}/preview.bin"

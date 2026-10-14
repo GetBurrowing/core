@@ -33,6 +33,9 @@ defmodule Platform.Mobile.FcmDevice do
     field(:app_install_id, :string)
     field(:token, :string, redact: true)
     field(:package_name, :string)
+    # The install's X25519 public key for sealed previews (task 01a1261e),
+    # base64url without padding. Optional: nil means no sealed preview.
+    field(:push_public_key, :string)
     field(:last_registered_at, :utc_datetime_usec)
 
     timestamps(type: :utc_datetime_usec)
@@ -57,7 +60,8 @@ defmodule Platform.Mobile.FcmDevice do
       :app_install_id,
       :token,
       :package_name,
-      :last_registered_at
+      :last_registered_at,
+      :push_public_key
     ])
     |> validate_required([
       :user_id,
@@ -70,6 +74,7 @@ defmodule Platform.Mobile.FcmDevice do
     |> validate_format(:token, @token_format)
     |> validate_inclusion(:package_name, allowed_packages())
     |> validate_length(:app_install_id, max: 200)
+    |> Platform.Mobile.PushPublicKey.validate()
     |> unique_constraint(:token)
     |> unique_constraint([:user_id, :app_install_id])
     |> foreign_key_constraint(:user_id)

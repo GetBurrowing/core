@@ -1,6 +1,7 @@
 package com.koboai.burrow.push
 
 import com.koboai.burrow.InstallStore
+import com.koboai.burrow.shortcuts.ConversationShortcuts
 
 /**
  * One push, parsed from the FCM `message.data` map the server builds in
@@ -23,12 +24,40 @@ data class PushPayload(
     val installHost: String?,
     val authorName: String?,
     val spaceName: String?,
+    /** The space's kind (`dm`, `group`, `channel`, ...); FCM only (task 01a116c4). */
+    val spaceKind: String? = null,
+    /** The author participant's id (task 01a111bb), id-shaped or null. */
+    val authorId: String? = null,
+    /** `user` or `agent`; anything else is null. */
+    val authorType: String? = null,
+    /**
+     * The sender's picture (task 01a12773): an absolute https url, or null.
+     * On the install's own host it takes the bearer; anywhere else it is
+     * fetched with none (push/AvatarFetcher.kt).
+     */
+    val authorAvatarUrl: String? = null,
+    /** The letter disc's colour: `agent`, or the in-app palette index `0`..`7`; else null. */
+    val authorAvatarTone: String? = null,
 ) {
     val isMention: Boolean get() = kind == KIND_MENTION
+
+    /**
+     * A chat message: a mention, or any other message the server pushes
+     * (`chat_message`, for the `:all`, `:active` and `:here` reasons). Both
+     * are conversations with a sender and a Reply.
+     */
+    val isChat: Boolean get() = kind in CHAT_KINDS
     val isApproval: Boolean get() = kind in APPROVAL_KINDS
 
     /** Reply needs a host to post to, a space and the message replied to. */
-    val canReply: Boolean get() = isMention && installHost != null && spaceId != null && messageId != null
+    val canReply: Boolean get() = isChat && installHost != null && spaceId != null && messageId != null
+
+    /**
+     * The conversation shortcut's id (`<host>|<spaceId>`), for a chat push
+     * that names both. A redacted push has no space_id, so it has none.
+     */
+    val shortcutId: String?
+        get() = if (isChat && installHost != null && spaceId != null) ConversationShortcuts.shortcutId(installHost, spaceId) else null
 
     /** The path Open loads: the server-built url when it is local, else `/`. */
     val openPath: String get() = safePath(url)
@@ -40,7 +69,7 @@ data class PushPayload(
     val groupKey: String?
         get() =
             when {
-                isMention && spaceId != null -> "mentions:${installHost.orEmpty()}:$spaceId"
+                isChat && spaceId != null -> "mentions:${installHost.orEmpty()}:$spaceId"
                 isApproval -> "approvals:${installHost.orEmpty()}"
                 else -> null
             }
@@ -66,6 +95,11 @@ data class PushPayload(
             "install_host" to installHost,
             "author_name" to authorName,
             "space_name" to spaceName,
+            "space_kind" to spaceKind,
+            "author_id" to authorId,
+            "author_type" to authorType,
+            "author_avatar_url" to authorAvatarUrl,
+            "author_avatar_tone" to authorAvatarTone,
         ).mapNotNull { (k, v) -> v?.let { k to it } }.toMap()
 
     /** Field names and the kind only: a body or title can be private. */
@@ -73,11 +107,19 @@ data class PushPayload(
 
     companion object {
         const val KIND_MENTION = "chat_mention"
+        const val KIND_MESSAGE = "chat_message"
+        val CHAT_KINDS = setOf(KIND_MENTION, KIND_MESSAGE)
+        val AUTHOR_TYPES = setOf("user", "agent")
+        val AVATAR_TONES = setOf("agent") + (0..7).map { it.toString() }
+        private const val MAX_URL = 2_048
         val APPROVAL_KINDS = setOf("task_plan_review", "review_request_pending")
 
         // Ids go into a request path (`/api/app/spaces/<space_id>/messages`):
         // anything but an id-shaped value is dropped, never interpolated.
         private val ID = Regex("^[A-Za-z0-9_-]{1,128}$")
+
+        /** An absolute https url of sane length; anything else is no picture. */
+        private fun isAvatarUrl(url: String): Boolean = url.startsWith("https://", ignoreCase = true) && url.length <= MAX_URL
 
         /** Parses an FCM data map. A blank value counts as missing. */
         fun from(data: Map<String, String?>): PushPayload {
@@ -94,6 +136,11 @@ data class PushPayload(
                 installHost = value("install_host")?.let { InstallStore.normalizeHost(it) },
                 authorName = value("author_name"),
                 spaceName = value("space_name"),
+                spaceKind = value("space_kind"),
+                authorId = value("author_id")?.takeIf { ID.matches(it) },
+                authorType = value("author_type")?.takeIf { it in AUTHOR_TYPES },
+                authorAvatarUrl = value("author_avatar_url")?.takeIf { isAvatarUrl(it) },
+                authorAvatarTone = value("author_avatar_tone")?.takeIf { it in AVATAR_TONES },
             )
         }
 

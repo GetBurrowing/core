@@ -243,7 +243,7 @@ defmodule Platform.Responsibilities do
   Operator write of a cron responsibility's cadence.
 
   Admin-only, enforced HERE so every caller is gated:
-  `Platform.Tenancy.fabrikam_admin?/1` or `{:error, :forbidden}`. `opts[:hour_utc]`
+  `Platform.Tenancy.root_admin?/1` or `{:error, :forbidden}`. `opts[:hour_utc]`
   is required for `:daily`.
 
   Inside one transaction the row is locked `FOR UPDATE`, the current
@@ -299,7 +299,7 @@ defmodule Platform.Responsibilities do
   end
 
   defp authorize_cadence_write(actor) do
-    if Tenancy.fabrikam_admin?(actor), do: :ok, else: {:error, :forbidden}
+    if Tenancy.root_admin?(actor), do: :ok, else: {:error, :forbidden}
   end
 
   defp write_cadence(actor, %Responsibility{} = row, cadence, hour_utc) do

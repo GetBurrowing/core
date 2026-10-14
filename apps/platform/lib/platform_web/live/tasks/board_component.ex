@@ -23,18 +23,34 @@ defmodule PlatformWeb.Tasks.BoardComponent do
 
   ## Ownership
 
-  Owns `:open_task_actions_id` (which row's action sheet is showing) and
-  nothing else. Every board data map arrives as a read-only attr written by
-  `BoardHooks`; the component never assigns one and never re-queries. Two
+  Owns `:open_task_actions_id` (which row's action sheet is showing) and the
+  Done column's render window, `:done_expanded?` and `:done_limit` (task
+  01a13884 stage 3), and nothing else. Every board data map arrives as a
+  read-only attr written by `BoardHooks`; the component never assigns one
+  and never re-queries. Two
   outcomes are reported up rather than written:
 
     * `{:board_refresh_requested}` — after a drop or a promote
     * `{:board_flash, kind, message}` — every user-visible message
 
-  ## Four events, and the count is four
+  ## Events
 
   `board_drop`, `board_promote_task`, `board_open_task_actions`,
-  `board_close_task_actions`. All four are targeted at `#tasks-board`.
+  `board_close_task_actions`, plus the Done window's `board_toggle_done` and
+  `board_done_more` (task 01a13884 stage 3). All are targeted at
+  `#tasks-board`.
+
+  ## The Done window (task 01a13884 stage 3)
+
+  Done (which folds in cancelled) is most of a long-lived board: 1,150 of the
+  1,363 tasks in the perf seed, and ~25 DOM nodes per card. It renders
+  collapsed by default, at full column width with its full count in the
+  header, and when opened shows the 20 most recently updated (there is no
+  `completed_at` column), growing by 50 per "Show 50 more". Only the RENDER
+  is windowed: the data assigns arrive whole, so counts, search and drops
+  keep reading the full lists. An active search opens Done, so a found task
+  is never behind the collapse. The `DoneColumnState` hook remembers the
+  expansion per viewer through `client_state.js`.
 
   `select_task` and `select_task_and_delete` deliberately did NOT move.
   Both are pure navigation (`push_patch/2`), which the stage contract keeps
@@ -63,6 +79,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
   alias Platform.Tasks
   alias Platform.Tasks.{Stack, Task}
   alias PlatformWeb.Tasks.BoardData
+  alias PlatformWeb.Tasks.ExternalFeedbackComponents
   alias PlatformWeb.Tasks.SortControl
 
   import PlatformWeb.Tasks.StackStyles,
@@ -73,6 +90,11 @@ defmodule PlatformWeb.Tasks.BoardComponent do
   import Platform.Tasks.StackGraph, only: [dep_annotation_text: 2, stack_position_glyph: 1]
 
   alias PlatformWeb.Tasks.TaskDisplay
+
+  # The Done column's render window (task 01a13884 stage 3): first page and
+  # step of "Show 50 more".
+  @done_initial_limit 20
+  @done_page_size 50
 
   import PlatformWeb.Tasks.TaskDisplay,
     only: [
@@ -85,10 +107,34 @@ defmodule PlatformWeb.Tasks.BoardComponent do
     ]
 
   @impl true
-  def mount(socket), do: {:ok, assign(socket, :open_task_actions_id, nil)}
+  def mount(socket) do
+    {:ok,
+     assign(socket,
+       open_task_actions_id: nil,
+       done_expanded?: false,
+       done_limit: @done_initial_limit
+     )}
+  end
 
   @impl true
-  def update(assigns, socket), do: {:ok, assign(socket, assigns)}
+  def update(assigns, socket) do
+    socket = assign(socket, assigns)
+
+    # The all-tasks scope is the ROOT org's slug, read once per component
+    # from config or the root row (task 01a116de stage 3; a literal before).
+    # `@board_scope` is what the column filters take: the root's chip is
+    # the unfiltered board, so it maps onto `:all`.
+    socket = assign_new(socket, :root_org_slug, fn -> Platform.Tenancy.root_org_slug() end)
+
+    {:ok, assign(socket, :board_scope, board_scope(socket.assigns))}
+  end
+
+  defp board_scope(%{scope_filter: scope, root_org_slug: root})
+       when is_binary(root) and scope == root,
+       do: :all
+
+  defp board_scope(%{scope_filter: scope}), do: scope
+  defp board_scope(_assigns), do: :all
 
   # ── Events ─────────────────────────────────────────────────────────────
 
@@ -101,6 +147,32 @@ defmodule PlatformWeb.Tasks.BoardComponent do
 
   def handle_event("board_close_task_actions", _params, socket) do
     {:noreply, assign(socket, :open_task_actions_id, nil)}
+  end
+
+  # Done window (task 01a13884 stage 3). `"expanded"` sets the state
+  # explicitly (the Show/Hide buttons and the `DoneColumnState` replay send
+  # it); without it the event toggles. A change resets the window to its
+  # first page and is pushed to the hook, which stores it per viewer.
+  def handle_event("board_toggle_done", params, socket) do
+    expanded? =
+      case Map.get(params, "expanded") do
+        value when value in [true, "true"] -> true
+        value when value in [false, "false"] -> false
+        _ -> not socket.assigns.done_expanded?
+      end
+
+    if expanded? == socket.assigns.done_expanded? do
+      {:noreply, socket}
+    else
+      {:noreply,
+       socket
+       |> assign(done_expanded?: expanded?, done_limit: @done_initial_limit)
+       |> push_event("done_column_changed", %{expanded: expanded?})}
+    end
+  end
+
+  def handle_event("board_done_more", _params, socket) do
+    {:noreply, assign(socket, :done_limit, socket.assigns.done_limit + @done_page_size)}
   end
 
   # Meeting-triage promotion (task 019f5e2b-8d29 stage 2 + M5b/019f6e2c
@@ -211,6 +283,18 @@ defmodule PlatformWeb.Tasks.BoardComponent do
   def render(assigns) do
     ~H"""
     <div id={@id} class="contents">
+      <%!-- Done-column memory (task 01a13884 stage 3): replays a stored
+           expansion on mount and stores every server-side change. --%>
+      <div
+        id="done-column-state"
+        phx-hook="DoneColumnState"
+        data-expanded={to_string(@done_expanded?)}
+        hidden
+      >
+      </div>
+      <%!-- External Feedback lane (task 01a11ec3 stage 4): a visible header
+           while the board is narrowed to the persisted external origin. --%>
+      <ExternalFeedbackComponents.lane_banner :if={@origin_filter == "external_feedback"} />
       <%!-- Epics above board --%>
       <div :if={@selected_project_id && @epics != []} class="px-4 pt-3" id="epics-section">
         <div class="flex items-center justify-between mb-2">
@@ -288,9 +372,18 @@ defmodule PlatformWeb.Tasks.BoardComponent do
          flush with the bottom-nav. The outer wrapper used to also carry
          pb-24 (pre-PR #334, when the shell wasn't properly bounded);
          that's now redundant and shows up as ~96px of empty space below
-         the scroller. --%>
+         the scroller.
+
+         Hidden below `lg` while the detail panel is open by the panel's own
+         `phx-mounted` / `phx-remove` JS commands in TaskDetailComponent
+         (task 01a13884 stage 2), a class on THIS element only. It used to be
+         `:if={!(@show_detail && @selected_task)}`, which unmounted the list
+         on every click and re-sent all of it on close (57 KB on the seeded
+         rig) and made every select and close re-render this component. A
+         `data-*` attribute on the shell root with a `group-data-*` variant
+         was measured first and rejected: toggling it cost ~140 ms of style
+         recalculation per click on the 33,892-node board. --%>
       <div
-        :if={!(@show_detail && @selected_task)}
         id="tasks-mobile-list"
         class="lg:hidden flex flex-1 flex-col overflow-hidden"
       >
@@ -354,6 +447,8 @@ defmodule PlatformWeb.Tasks.BoardComponent do
             sponsor_filter={@sponsor_filter}
             task_search_query={@task_search_query}
             scope_filter={@scope_filter}
+            kind_filter={@kind_filter}
+            origin_filter={@origin_filter}
             mobile?={true}
             class="inline-flex shrink-0"
           />
@@ -374,388 +469,38 @@ defmodule PlatformWeb.Tasks.BoardComponent do
             :if={@active_status_filter == col_key && Map.get(@board_items, col_key, []) != []}
             class="mt-4 first:mt-2"
           >
-            <h2 class="text-xs font-semibold uppercase tracking-widest text-base-content/50 mb-2 px-1">
-              {col_label} · {length(Map.get(@board_items, col_key, []))}
+            <h2 class="text-xs font-semibold uppercase tracking-widest text-base-content/50 mb-2 px-1 tabular-nums">
+              {col_label} · {format_count(length(Map.get(@board_items, col_key, [])))}
             </h2>
             <div class="flex flex-col gap-2">
-              <% column_items = Map.get(@board_items, col_key, []) %>
-              <%= for item <- column_items do %>
-                <%= case item.__struct__ do %>
-                  <% Platform.Tasks.Stack -> %>
-                    <% board_data =
-                      Map.get(@stack_board_data, item.id, %{
-                        member_count: 0,
-                        dep_edge_count: 0,
-                        ready_count: 0,
-                        members: []
-                      }) %>
-                    <div
-                      data-stack-card="true"
-                      data-stack-id={item.id}
-                      data-expanded={
-                        if(MapSet.member?(@expanded_stacks, item.id), do: "true", else: "false")
-                      }
-                      class="flex flex-col rounded-box border-l-4 border-violet-500 border border-edge bg-base-100"
-                    >
-                      <%!-- T8 stage 1: header opens the stack detail
-                         panel. Chevron is split into its own sibling
-                         button so the inline-expansion toggle remains
-                         reachable without bubbling through the panel
-                         opener (Discord "click thread to enter" pattern,
-                         Option A in the T8 dispatch). --%>
-                      <div class="relative flex min-w-0 items-stretch">
-                        <button
-                          type="button"
-                          phx-click="stack_open_detail"
-                          phx-target="#tasks-stacks"
-                          phx-value-id={item.id}
-                          data-role="stack-header"
-                          class="flex min-w-0 flex-1 flex-col gap-1.5 p-3 text-left transition-colors hover:bg-base-200/60 focus-visible-ring min-h-[44px]"
-                        >
-                          <div class="flex min-w-0 items-center gap-2 pr-7">
-                            <span
-                              class="hero-rectangle-stack size-4 shrink-0 text-violet-300"
-                              aria-hidden="true"
-                            >
-                            </span>
-                            <span class="text-[9px] font-semibold uppercase tracking-wider text-violet-300 shrink-0">
-                              Stack
-                            </span>
-                            <span class="ml-auto text-[10px] text-base-content/50 font-medium whitespace-nowrap shrink-0">
-                              {board_data.ready_count}/{board_data.member_count} ready
-                            </span>
-                          </div>
-                          <h3 class="text-sm font-medium leading-snug truncate min-w-0">
-                            {item.name}
-                          </h3>
-                          <% mobile_stack_sponsor = sponsor_identity(item, @users_by_id) %>
-                          <div class="flex min-w-0 items-center gap-1.5 text-[10px] text-base-content/60">
-                            <span class="bg-base-200 px-1.5 py-0.5 rounded whitespace-nowrap shrink-0">
-                              {board_data.member_count} tasks
-                            </span>
-                            <span class="bg-base-200 px-1.5 py-0.5 rounded whitespace-nowrap shrink-0">
-                              {board_data.dep_edge_count} dep edges
-                            </span>
-                            <%!-- Stage 4 of task 019f487e (ADR-0042 Decision 8):
-                               sponsor avatar mirrors desktop stack card. Absent
-                               sponsor renders nothing. No own-sponsorship ring
-                               affordance — Rowan rejected it as always wrong. --%>
-                            <.human_avatar
-                              :if={mobile_stack_sponsor}
-                              name={mobile_stack_sponsor.name}
-                              avatar_url={mobile_stack_sponsor.avatar_url}
-                              seed={mobile_stack_sponsor.seed}
-                              size="xs"
-                              class="ml-auto size-4 shrink-0"
-                              title={"Sponsored by " <> mobile_stack_sponsor.name}
-                              data-role="stack-sponsor-avatar"
-                            />
-                          </div>
-                        </button>
-                        <button
-                          type="button"
-                          phx-click="stack_toggle_expand"
-                          phx-target="#tasks-stacks"
-                          phx-value-id={item.id}
-                          data-role="stack-chevron"
-                          aria-label="Toggle stack expansion"
-                          aria-expanded={
-                            if(MapSet.member?(@expanded_stacks, item.id), do: "true", else: "false")
-                          }
-                          class="absolute right-0 top-0 flex h-11 w-9 items-center justify-center text-violet-300 transition-colors hover:bg-base-200/60 focus-visible-ring"
-                        >
-                          <span
-                            class={[
-                              "hero-chevron-down size-3 transition-transform",
-                              MapSet.member?(@expanded_stacks, item.id) && "rotate-180"
-                            ]}
-                            aria-hidden="true"
-                          >
-                          </span>
-                        </button>
-                      </div>
-                      <div
-                        :if={MapSet.member?(@expanded_stacks, item.id)}
-                        data-role="stack-members"
-                        data-stack-id={item.id}
-                        class="flex flex-col gap-1.5 px-3 pb-3 pl-4"
-                      >
-                        <%= for member <- Enum.sort_by(board_data.members, & &1.stack_position) do %>
-                          <% member_dep_text = dep_annotation_text(member, board_data.members) %>
-                          <%!-- Task 01a06df3 stage 3. Derived from data already in
-                             hand — `member.status` plus the dep annotation computed
-                             on the line above — so this adds no query and no preload.
-                             Mutually exclusive with the dep annotation by
-                             construction: `member_parked_reason/2` returns nil
-                             whenever `member_dep_text` is non-nil, so a member with
-                             real in-stack predecessors still renders the dep line and
-                             only that. --%>
-                          <% member_parked_text =
-                            member_parked_reason(member.status, member_dep_text) %>
-                          <%!-- Badges-for-tasks-that-need-feedback (task
-                             019e2c25 stage 4): mobile stack-member rows
-                             mirror the desktop stack-detail badge from
-                             stage 2 / mobile solo card from stage 3.
-                             Reuses `@review_counts` (the board-wide
-                             review_request count map populated in
-                             refresh_board/1, which already covers stack
-                             members because list_all_tasks/1 returns
-                             them) — same source as the mobile solo card.
-                             `:plans` is preloaded on members via
-                             list_stacks_with_members/1 so the
-                             `:plan_pending_review` branch resolves. --%>
-                          <% member_review_count = Map.get(@review_counts, member.id, 0) %>
-                          <% member_action_reason =
-                            Tasks.needs_human_action_reason(member, member_review_count) %>
-                          <%!-- One decider (task 01a01a4a stage 5): the status
-                             chip is keyed on the SAME resolved reason the
-                             action chip is, so the merge gate cannot be shown
-                             by one site while precedence has demoted it for
-                             the other. --%>
-                          <% {member_status_label, member_status_class} =
-                            task_display_status(member, member_action_reason) %>
-                          <%!-- Post-rejection fix (stage 4): use
-                             `mobile_action_label/1` instead of
-                             `stack_member_action_label/1` so the
-                             `:plan_pending_review` branch does NOT
-                             render an action chip — the adjacent
-                             `task_display_status/2` "Plan Ready" status
-                             chip is the single signal. Other reasons
-                             still render the action chip. --%>
-                          <% {member_action_label, member_action_reason_attr} =
-                            mobile_stack_member_action_label(member_action_reason) %>
-                          <button
-                            type="button"
-                            id={"stack-member-mobile-#{member.id}"}
-                            data-stack-member="true"
-                            data-member-id={member.id}
-                            data-stack-position={member.stack_position}
-                            phx-click="select_task"
-                            phx-value-id={member.id}
-                            class="relative rounded border border-base-200/60 bg-base-100 py-3 pl-8 pr-2 text-left transition-colors hover:bg-base-200/60 min-h-[44px]"
-                          >
-                            <span class={[
-                              "absolute left-1 top-3 inline-flex size-5 items-center justify-center rounded-full text-[10px] font-semibold",
-                              member_node_class(member.status)
-                            ]}>
-                              {stack_position_glyph(member.stack_position)}
-                            </span>
-                            <div class="flex min-w-0 flex-col gap-1">
-                              <%!-- Task 01a08e0d stage 3, mobile half. Mirrors stage
-                                 2's desktop restructure: the title used to share a
-                                 `flex flex-wrap items-center gap-2` row with three
-                                 shrink-0 siblings (the action badge, the
-                                 planning-step marker and the status badge), so under
-                                 `frontend/ui-ux.md`'s truncation rule the title
-                                 (`flex-1 min-w-0 truncate`) yielded to them. Pulling
-                                 the title onto its own full-width line and moving
-                                 the three siblings into a second "meta" row beneath
-                                 it stops them from competing with the title for
-                                 space. `block w-full` replaces `flex-1` on the span
-                                 because it is no longer a flex item — `truncate`
-                                 needs a block-level box, which the flex-item context
-                                 used to provide for free. Mobile carries one more
-                                 shrink-0 sibling than desktop (the action badge),
-                                 but every element on this line stays a `<span>`: this
-                                 row IS a `<button>` on mobile, and a nested button is
-                                 invalid HTML that browsers reparent. --%>
-                              <span
-                                class="block w-full min-w-0 truncate text-xs leading-snug"
-                                title={member.title}
-                              >
-                                {member.title}
-                              </span>
-                              <div class="flex flex-wrap items-center gap-2">
-                                <span
-                                  :if={member_action_label}
-                                  class="badge badge-warning badge-xs gap-1 whitespace-nowrap shrink-0"
-                                  data-role="stack-member-mobile-action"
-                                  data-action-reason={member_action_reason_attr}
-                                >
-                                  <span class="hero-eye size-3"></span>
-                                  {member_action_label}
-                                </span>
-                                <%!-- ADR-0046 member 8 (019f9b29-9c47) stage 3, mobile half.
-                                   Same compact marker as the desktop member row; the
-                                   `data-role` MUST differ because the two boards share
-                                   ONE DOM (`lg:hidden` / `hidden lg:grid` — CSS
-                                   visibility, not presence), so a shared value
-                                   double-matches every selector. The component emits no
-                                   `id` at all, so `data-role` is the only thing to
-                                   split.
-                                   It renders as a `<span>`, never a `<button>`: this
-                                   row IS a `<button>` on mobile, and a nested button is
-                                   invalid HTML that browsers reparent. --%>
-                                <.planning_step_extension
-                                  task={member}
-                                  variant={:compact}
-                                  data_role="mobile-stack-member-planning-step"
-                                />
-                                <span class={"#{member_status_class} badge-xs whitespace-nowrap shrink-0"}>
-                                  {member_status_label}
-                                </span>
-                              </div>
-                            </div>
-                            <div
-                              :if={member_dep_text}
-                              data-role="dep-annotation"
-                              class="mt-1 text-[10px] text-base-content/50"
-                            >
-                              <span class="text-violet-400" aria-hidden="true">↑</span>
-                              {member_dep_text}
-                            </div>
-                            <%!-- Task 01a06df3 stage 3, mobile half. Shares ONE
-                               `data-role` with the desktop row below, matching the
-                               `dep-annotation` sibling directly above it rather than
-                               the planning-step marker's split-role convention: that
-                               component emits no `id`, whereas these rows do
-                               (`stack-member-mobile-<id>` vs `stack-member-<id>`), so a
-                               test can pin a surface through the row id and the two
-                               boards sharing one DOM costs nothing here.
-                               It is a `<div>` holding a `<span>`, never a `<button>`:
-                               this row IS a `<button>` on mobile, and a nested button
-                               is invalid HTML that browsers reparent. --%>
-                            <div
-                              :if={member_parked_text}
-                              data-role="stack-member-parked-reason"
-                              class="mt-1 text-[10px] text-base-content/50"
-                            >
-                              <span class="hero-clock size-2.5 align-[-1px]" aria-hidden="true">
-                              </span>
-                              {member_parked_text}
-                            </div>
-                          </button>
-                        <% end %>
-                      </div>
-                    </div>
-                  <% _ -> %>
-                    <% task = item %>
-                    <% assignee = assignee_identity(task, @users_by_id, @agents_by_id) %>
-                    <% mobile_review_count = Map.get(@review_counts, task.id, 0) %>
-                    <% mobile_action_reason =
-                      Tasks.needs_human_action_reason(task, mobile_review_count) %>
-                    <%!-- Post-rejection fix (stage 4): same doubled-chip
-                       pattern as the mobile stack-member row above —
-                       the `task_display_status/2` "Plan Ready" badge
-                       below already covers `:plan_pending_review`, so
-                       suppress the action chip there. --%>
-                    <% {mobile_action_label, mobile_action_reason_attr} =
-                      mobile_stack_member_action_label(mobile_action_reason) %>
-                    <% {mobile_status_label, mobile_status_class} =
-                      task_display_status(task, mobile_action_reason) %>
-                    <%!-- ADR-0046 member 8 (019f9b29-9c47) stage 2, mobile half.
-                       Same wrapper shape as the desktop card. The `data-role`
-                       values MUST differ from the desktop ones: `frontend/ui-ux.md`
-                       records that the two boards share ONE DOM (`lg:hidden` /
-                       `hidden lg:grid` — CSS visibility, not presence), so a shared
-                       value double-matches every selector. The component emits no
-                       `id` at all, so only `data-role` needs splitting.
-                       The extension is a SIBLING of the card here too, which is what
-                       keeps it out of the mobile card's own `<button>` — a `<button>`
-                       inside a `<button>` is invalid HTML and browsers reparent it. --%>
-                    <div class="flex flex-col" data-role="mobile-task-card-group">
-                      <.planning_step_extension
-                        task={task}
-                        data_role="mobile-planning-step-extension"
-                        class="min-h-[44px]"
-                      />
-                      <button
-                        type="button"
-                        phx-click="select_task"
-                        phx-value-id={task.id}
-                        class={[
-                          "flex flex-col gap-1.5 rounded-box border border-edge bg-base-100 p-3 text-left transition-colors hover:bg-base-200/60 focus-visible-ring",
-                          PlanningStepExtension.visible?(task) && "rounded-t-none"
-                        ]}
-                        data-task-id={task.id}
-                      >
-                        <div class="flex items-start gap-2">
-                          <span
-                            class={[
-                              "mt-1.5 size-2 shrink-0 rounded-full",
-                              status_dot_class(col_key)
-                            ]}
-                            aria-hidden="true"
-                          >
-                          </span>
-                          <span class="text-sm font-medium leading-snug flex-1">{task.title}</span>
-                        </div>
-                        <div class="flex flex-wrap items-center gap-1.5 pl-4 text-xs text-base-content/60">
-                          <%= if assignee do %>
-                            <%= if assignee.type == :user do %>
-                              <.human_avatar
-                                name={assignee.name}
-                                avatar_url={assignee.avatar_url}
-                                seed={assignee.seed}
-                                size="xs"
-                                class="size-4 shrink-0"
-                              />
-                            <% else %>
-                              <%!-- Mobile twin of the desktop assignee chip. Same
-                                 `size-4` wrapper the human branch beside it
-                                 uses. --%>
-                              <.agent_avatar
-                                name={assignee.name}
-                                avatar_url={assignee.avatar_url}
-                                size="xs"
-                                class="size-4 shrink-0"
-                              />
-                            <% end %>
-                            <span class="truncate">{assignee.name}</span>
-                            <span aria-hidden="true">·</span>
-                          <% end %>
-                          <%!-- Sponsor chip (ADR 0042 stage 1). Only renders when
-                           `sponsor_user_id` is set — an absent sponsor is
-                           silent, not a noisy "Unsponsored" pill. No own-
-                           sponsorship ring affordance — Rowan rejected it as
-                           always wrong (stage 4 rework). --%>
-                          <% sponsor = sponsor_identity(task, @users_by_id) %>
-                          <%= if sponsor do %>
-                            <.human_avatar
-                              name={sponsor.name}
-                              avatar_url={sponsor.avatar_url}
-                              seed={sponsor.seed}
-                              size="xs"
-                              class="size-4 shrink-0"
-                              title={"Sponsored by " <> sponsor.name}
-                              data-role="sponsor-avatar"
-                            />
-                            <span class="truncate">{sponsor.name}</span>
-                            <span aria-hidden="true">·</span>
-                          <% end %>
-                          <span :if={task.inserted_at} class="whitespace-nowrap">
-                            {relative_time(task.inserted_at)}
-                          </span>
-                          <%!-- Badges-for-tasks-that-need-feedback (task
-                           019e2c25 stage 3): mobile solo task cards now
-                           render the same warning chip the stack-detail
-                           rows + desktop kanban surface. The status badge
-                           `task_display_status/2` is also rendered for the
-                           four "interesting" statuses so "Plan Ready"
-                           appears on mobile (previously hidden — that's
-                           why a pending-review plan was invisible on the
-                           mobile board). Mirrors the desktop kanban
-                           gating in tasks_live.html.heex line ~717-723. --%>
-                          <span
-                            :if={task.status in ~w(blocked planning in_review deploying)}
-                            class={"#{mobile_status_class} badge-xs"}
-                          >
-                            {mobile_status_label}
-                          </span>
-                          <span
-                            :if={mobile_action_label}
-                            class="badge badge-warning badge-xs gap-1"
-                            data-role="mobile-task-action"
-                            data-action-reason={mobile_action_reason_attr}
-                          >
-                            <span class="hero-eye size-3"></span>
-                            {mobile_action_label}
-                          </span>
-                        </div>
-                      </button>
-                    </div>
-                <% end %>
-              <% end %>
+              <.mobile_board_item
+                :for={
+                  item <-
+                    windowed_items(
+                      Map.get(@board_items, col_key, []),
+                      col_key,
+                      true,
+                      @done_limit,
+                      @stack_board_data
+                    )
+                }
+                :key={item.id}
+                item={item}
+                col_key={col_key}
+                review_count={Map.get(@review_counts, item.id, 0)}
+                assignee={assignee_identity(item, @users_by_id, @agents_by_id)}
+                sponsor={sponsor_identity(item, @users_by_id)}
+                data={stack_data(@stack_board_data, item)}
+                member_review_counts={member_review_counts(@stack_board_data, item, @review_counts)}
+                expanded?={MapSet.member?(@expanded_stacks, item.id)}
+              />
+              <.done_more_button
+                :if={col_key == "done"}
+                total={length(Map.get(@board_items, col_key, []))}
+                limit={@done_limit}
+                myself={@myself}
+                role="done-more-mobile"
+              />
             </div>
           </div>
 
@@ -827,7 +572,8 @@ defmodule PlatformWeb.Tasks.BoardComponent do
 
          Stage 3 (2026-05-19): `desktop_column_items_for_scope/6`
          wraps `desktop_column_items/5` with the active scope-rail
-         selection — `:all` and `:fabrikam` are passthrough today; the
+         selection (`@board_scope`) — `:all` and the root org's slug
+         are passthrough today; the
          other four scopes render empty until `tasks.org_id` lands. --%>
       <%!-- Stage-2 of task 019f3f22 (ADR-0042 sponsor visibility):
          board-level custom empty state — shown ONLY when the
@@ -855,7 +601,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                 @kanban_columns,
                 @columns,
                 @desktop_stacks_by_column,
-                @scope_filter
+                @board_scope
               )
           }
           data-role="search-empty-state"
@@ -888,7 +634,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                 @kanban_columns,
                 @columns,
                 @desktop_stacks_by_column,
-                @scope_filter
+                @board_scope
               )
           }
           data-role="sponsor-filter-empty-state"
@@ -906,7 +652,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                      @kanban_columns,
                      @columns,
                      @desktop_stacks_by_column,
-                     @scope_filter
+                     @board_scope
                    ))
           }
           id={"column-#{col_key}"}
@@ -918,18 +664,39 @@ defmodule PlatformWeb.Tasks.BoardComponent do
             <h2 class={"text-xs font-semibold uppercase tracking-wider #{column_header_class(col_key)}"}>
               {col_label}
             </h2>
-            <span class="badge badge-ghost badge-xs">
-              {length(
-                desktop_column_items_for_scope(
-                  @columns,
-                  @desktop_stacks_by_column,
-                  col_key,
-                  @scope_filter,
-                  @board_sort,
-                  @stack_board_data
-                )
-              )}
-            </span>
+            <div class="flex items-center gap-1">
+              <button
+                :if={
+                  col_key == "done" and @done_expanded? and
+                    not search_active?(@task_search_query)
+                }
+                type="button"
+                phx-click="board_toggle_done"
+                phx-value-expanded="false"
+                phx-target={@myself}
+                class="btn btn-ghost btn-xs"
+                data-role="done-hide"
+              >
+                Hide
+              </button>
+              <span
+                class="badge badge-ghost badge-xs tabular-nums"
+                data-role={"column-count-#{col_key}"}
+              >
+                {format_count(
+                  length(
+                    desktop_column_items_for_scope(
+                      @columns,
+                      @desktop_stacks_by_column,
+                      col_key,
+                      @board_scope,
+                      @board_sort,
+                      @stack_board_data
+                    )
+                  )
+                )}
+              </span>
+            </div>
           </div>
 
           <%!-- Board items (task cards + collapsed stack cards).
@@ -940,496 +707,82 @@ defmodule PlatformWeb.Tasks.BoardComponent do
              only tasks carry `draggable="true"` and the KanbanDragDrop
              hook's drag handlers. --%>
           <div class="flex flex-1 flex-col gap-2 overflow-y-auto px-2 pb-2">
-            <%= for item <- desktop_column_items_for_scope(@columns, @desktop_stacks_by_column, col_key, @scope_filter, @board_sort, @stack_board_data) do %>
-              <%= case item.__struct__ do %>
-                <% Platform.Tasks.Stack -> %>
-                  <% board_data =
-                    Map.get(@stack_board_data, item.id, %{
-                      member_count: 0,
-                      dep_edge_count: 0,
-                      ready_count: 0
-                    }) %>
-                  <%!-- Collapsed stack card. Purple violet-500 left border
-                     accent matches mock canvas 019e1a16 rev 2
-                     (`--stk: #7b5cff`). Clicking the HEADER toggles
-                     `:expanded_stacks` MapSet membership; the
-                     expansion render is a sibling block so member
-                     clicks do NOT bubble back into the toggle handler
-                     (stage 3 §5). --%>
-                  <div
-                    id={"stack-card-#{item.id}"}
-                    data-stack-card="true"
-                    data-stack-id={item.id}
-                    data-expanded={
-                      if(MapSet.member?(@expanded_stacks, item.id), do: "true", else: "false")
-                    }
-                    class="group card card-compact border-l-4 border-violet-500 border border-edge bg-base-100 shadow-sm transition-all hover:shadow-md"
-                  >
-                    <%!-- T8 stage 1: header opens the stack detail panel.
-                       Chevron is split into its own SIBLING button so
-                       the inline-expansion toggle remains reachable
-                       without bubbling through the panel opener
-                       (Discord "click thread to enter" pattern, Option A
-                       in the T8 dispatch).
-
-                       The separation is structural, not defensive: the
-                       chevron and `[data-role=stack-header]` are both
-                       direct children of the `div.relative` below, so a
-                       chevron click never traverses the header at all.
-                       No ancestor of the chevron carries a phx-click or
-                       any JS click/pointer listener (KanbanDragDrop
-                       binds drag events only; nothing in assets/js
-                       references stack-card / stack-header /
-                       stack-chevron).
-
-                       Do NOT "protect" the chevron with an inline
-                       `onclick="event.stopPropagation()"`. There is
-                       nothing to protect it from, and the two cannot
-                       coexist: LiveView binds its click handler in the
-                       BUBBLE phase on `window` (live_socket.js
-                       bindClick/2), so an inline onclick — which runs at
-                       TARGET phase — stops the event before LiveView
-                       ever sees it and silently kills this phx-click.
-                       That is exactly what shipped here and went
-                       unnoticed for two months (task 019fa298); the
-                       mobile chevron, which never had one, kept working.
-                       Guarded by test/platform_web/inline_onclick_guard_test.exs. --%>
-                    <div class="relative">
-                      <div
-                        class="card-body cursor-pointer gap-1.5 p-3 pr-9"
-                        phx-click="stack_open_detail"
-                        phx-target="#tasks-stacks"
-                        phx-value-id={item.id}
-                        data-role="stack-header"
-                      >
-                        <%!-- Header row: icon + STACK tag + rollup progress --%>
-                        <div class="flex min-w-0 items-center gap-1.5">
-                          <span
-                            class="hero-rectangle-stack size-4 shrink-0 text-violet-300"
-                            aria-hidden="true"
-                          >
-                          </span>
-                          <span class="text-[9px] font-semibold uppercase tracking-wider text-violet-300 shrink-0">
-                            Stack
-                          </span>
-                          <span class="ml-auto text-[10px] text-base-content/50 font-medium whitespace-nowrap shrink-0">
-                            {board_data.ready_count}/{board_data.member_count} ready
-                          </span>
-                        </div>
-
-                        <%!-- Title row --%>
-                        <h3 class="text-sm font-medium leading-snug truncate min-w-0">
-                          {item.name}
-                        </h3>
-
-                        <%!-- Pills row: member count + dep edge count + optional
-                           sponsor avatar (Stage 4 of task 019f487e —
-                           ADR-0042 Decision 8). Mirrors the task-card
-                           sponsor chip: absent sponsor renders nothing.
-                           No own-sponsorship ring affordance — Rowan
-                           rejected it as always wrong (stage 4 rework). --%>
-                        <% stack_sponsor = sponsor_identity(item, @users_by_id) %>
-                        <div class="flex min-w-0 items-center gap-1.5 text-[10px] text-base-content/60">
-                          <span class="bg-base-200 px-1.5 py-0.5 rounded font-medium whitespace-nowrap shrink-0">
-                            {board_data.member_count} tasks
-                          </span>
-                          <span class="bg-base-200 px-1.5 py-0.5 rounded font-medium whitespace-nowrap shrink-0">
-                            {board_data.dep_edge_count} dep edges
-                          </span>
-                          <.human_avatar
-                            :if={stack_sponsor}
-                            name={stack_sponsor.name}
-                            avatar_url={stack_sponsor.avatar_url}
-                            seed={stack_sponsor.seed}
-                            size="xs"
-                            class="ml-auto size-4 shrink-0"
-                            title={"Sponsored by " <> stack_sponsor.name}
-                            data-role="stack-sponsor-avatar"
-                          />
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        phx-click="stack_toggle_expand"
-                        phx-target="#tasks-stacks"
-                        phx-value-id={item.id}
-                        data-role="stack-chevron"
-                        aria-label="Toggle stack expansion"
-                        aria-expanded={
-                          if(MapSet.member?(@expanded_stacks, item.id), do: "true", else: "false")
-                        }
-                        class="absolute right-1 top-2 flex h-9 w-7 items-center justify-center text-violet-300 hover:bg-base-200 rounded transition-colors focus-visible-ring"
-                      >
-                        <span
-                          class={[
-                            "hero-chevron-down size-3 transition-transform",
-                            MapSet.member?(@expanded_stacks, item.id) && "rotate-180"
-                          ]}
-                          aria-hidden="true"
-                        >
-                        </span>
-                      </button>
-                    </div>
-
-                    <%!-- Inline expansion — members rendered indented
-                       below the header when this stack id is in
-                       `:expanded_stacks`. Each row is its own
-                       `phx-click="select_task"` target reusing the
-                       task detail-panel handler (T8 will later add a
-                       stack-level detail panel for header clicks). --%>
-                    <div
-                      :if={MapSet.member?(@expanded_stacks, item.id)}
-                      data-role="stack-members"
-                      data-stack-id={item.id}
-                      class="flex flex-col gap-1.5 px-3 pb-3 pl-4"
-                    >
-                      <%= for member <- Enum.sort_by(board_data.members, & &1.stack_position) do %>
-                        <%!-- One decider (task 01a01a4a stage 5): resolve the
-                           human-action reason from `@review_counts` — the same
-                           map the review badge reads — and key the status chip
-                           on it, so a member whose merge gate is outranked by a
-                           live review request shows the review mark only. --%>
-                        <% {status_label, status_class} =
-                          task_display_status(
-                            member,
-                            Tasks.needs_human_action_reason(
-                              member,
-                              Map.get(@review_counts, member.id, 0)
-                            )
-                          ) %>
-                        <% dep_text =
-                          dep_annotation_text(member, board_data.members) %>
-                        <%!-- Task 01a06df3 stage 3, desktop half. Same derivation as
-                           the mobile row: status + the dep annotation already computed
-                           on the line above, no extra query. --%>
-                        <% parked_text = member_parked_reason(member.status, dep_text) %>
-                        <div
-                          id={"stack-member-#{member.id}"}
-                          data-stack-member="true"
-                          data-member-id={member.id}
-                          data-stack-position={member.stack_position}
-                          phx-click="select_task"
-                          phx-value-id={member.id}
-                          class="relative cursor-pointer rounded border border-base-200/60 bg-base-100 py-2 pl-8 pr-2 transition-colors hover:bg-base-200/60 min-h-[44px]"
-                        >
-                          <span class={[
-                            "absolute left-1 top-2 inline-flex size-5 items-center justify-center rounded-full text-[10px] font-semibold",
-                            member_node_class(member.status)
-                          ]}>
-                            {stack_position_glyph(member.stack_position)}
-                          </span>
-                          <div class="flex min-w-0 flex-col gap-1">
-                            <%!-- Task 01a08e0d stage 2, desktop half. The title used to
-                               share a `flex items-center gap-2` row with the compact
-                               planning-step marker and the status badge — both
-                               `shrink-0`, so under `frontend/ui-ux.md`'s truncation
-                               rule the title (`flex-1 min-w-0 truncate`) yielded to
-                               them and a long title rendered as ~38px of usable width,
-                               a redaction rather than a truncation. Pulling the title
-                               onto its own full-width line and moving the marker +
-                               badge into a second "meta" row beneath it stops the
-                               shrink-0 siblings from competing with the title for
-                               space. `block w-full` replaces `flex-1` on the span
-                               because it is no longer a flex item — `truncate`
-                               (overflow:hidden + text-overflow:ellipsis) needs a
-                               block-level box to take effect, which the flex-item
-                               context used to provide for free. --%>
-                            <span
-                              class="block w-full min-w-0 truncate text-xs leading-snug"
-                              title={member.title}
-                            >
-                              {member.title}
-                            </span>
-                            <div class="flex items-center gap-2">
-                              <%!-- ADR-0046 member 8 (019f9b29-9c47) stage 3, desktop half.
-                                 COMPACT, not the fused strip: this row is a ~44px line
-                                 already carrying a position glyph, a truncated title, a
-                                 status badge and a dependency annotation, so the marker
-                                 is a single icon INSIDE the badge cluster rather than a
-                                 band above the row (a band would overlap the absolutely
-                                 positioned glyph at `left-1 top-2`).
-                                 `variant={:compact}` is failure-only — `failed` and
-                                 member 7's `no_ui_surface_contradicted`. `complete` and
-                                 the active cursor are suppressed here and remain on the
-                                 member's own detail panel; a fifth chip on every row of
-                                 every expanded stack is the noise that gets a feature
-                                 turned off. --%>
-                              <.planning_step_extension
-                                task={member}
-                                variant={:compact}
-                                data_role="stack-member-planning-step"
-                              />
-                              <span class={"#{status_class} badge-xs whitespace-nowrap shrink-0"}>
-                                {status_label}
-                              </span>
-                            </div>
-                          </div>
-                          <div
-                            :if={dep_text}
-                            data-role="dep-annotation"
-                            class="mt-1 text-[10px] text-base-content/50"
-                          >
-                            <span class="text-violet-400" aria-hidden="true">↑</span> {dep_text}
-                          </div>
-                          <%!-- Task 01a06df3 stage 3, desktop half. See the mobile
-                             row for why the `data-role` is shared across surfaces. --%>
-                          <div
-                            :if={parked_text}
-                            data-role="stack-member-parked-reason"
-                            class="mt-1 text-[10px] text-base-content/50"
-                          >
-                            <span class="hero-clock size-2.5 align-[-1px]" aria-hidden="true"></span>
-                            {parked_text}
-                          </div>
-                        </div>
-                      <% end %>
-                    </div>
-                  </div>
-                <% _ -> %>
-                  <% task = item %>
-                  <%!-- ADR-0046 member 8 (019f9b29-9c47) stage 2: the planning-step
-                     extension is a SIBLING of the card inside a zero-gap
-                     `flex flex-col` wrapper, not a child of it. Two reasons, both
-                     load-bearing:
-                     1. The column container is `flex flex-1 flex-col gap-2`, so an
-                        unwrapped sibling would sit 0.5rem above the card and read as
-                        a separate object. The wrapper makes that gap structurally
-                        zero without a `-mb-2` magic number coupled to the column's
-                        spacing token.
-                     2. The wrapper carries NO `data-task-id`. `kanban_drag_drop.js`
-                        resolves the drag source with `e.target.closest("[data-task-id]")`;
-                        the card keeps the attribute and stays the drag source, and a
-                        drag begun on the extension resolves to `null` so the hook
-                        no-ops. Putting `data-task-id` here would fade the wrong
-                        element on drag.
-                     `rounded-t-none` is conditional on `visible?/1` so a task with
-                     nothing to show renders a byte-identical card to before. --%>
-                  <div class="flex flex-col" data-role="task-card-group">
-                    <.planning_step_extension task={task} data_role="planning-step-extension" />
-                    <div
-                      id={"task-card-#{task.id}"}
-                      data-task-id={task.id}
-                      draggable="true"
-                      class={[
-                        "group card card-compact cursor-grab border border-edge bg-base-100 shadow-sm transition-all hover:shadow-md active:cursor-grabbing",
-                        PlanningStepExtension.visible?(task) && "rounded-t-none"
-                      ]}
-                      phx-click="select_task"
-                      phx-value-id={task.id}
-                    >
-                      <div class="card-body gap-1 p-3">
-                        <%!-- Project name --%>
-                        <p
-                          :if={task.project}
-                          class="text-[10px] font-medium uppercase tracking-wider text-base-content/40"
-                        >
-                          {task.project.name}
-                        </p>
-
-                        <%!-- Title row --%>
-                        <%!--
-                v2 stage 3: kanban-card title is plain text. Clicking it
-                bubbles to the card's outer `phx-click="select_task"` and
-                opens the detail panel, where the title can be edited via
-                the explicit edit-mode toggle.
-              --%>
-                        <div class="flex items-start justify-between gap-2">
-                          <h3
-                            id={"card-title-#{task.id}"}
-                            class="text-sm font-medium leading-snug flex-1"
-                            data-role="card-title"
-                          >
-                            {task.title}
-                          </h3>
-                          <div class="flex items-center gap-1 flex-shrink-0">
-                            <%!-- Assignee --%>
-                            <% assignee = assignee_identity(task, @users_by_id, @agents_by_id) %>
-                            <%= if assignee do %>
-                              <%= if assignee.type == :user do %>
-                                <.human_avatar
-                                  name={assignee.name}
-                                  avatar_url={assignee.avatar_url}
-                                  seed={assignee.seed}
-                                  size="xs"
-                                  class="shrink-0"
-                                  title={assignee.name}
-                                />
-                              <% else %>
-                                <%!-- An agent assigned to a task is an agent
-                                   appearing, so it gets the same face it has in
-                                   chat and in meetings. The accent ring rides on
-                                   the component's outer wrapper, which is
-                                   `rounded-full`, so it survives an image
-                                   avatar exactly as `.msg-agent-avatar` does. --%>
-                                <.agent_avatar
-                                  name={assignee.name}
-                                  avatar_url={assignee.avatar_url}
-                                  size="xs"
-                                  class="shrink-0 ring-1 ring-accent/20"
-                                  title={assignee.name}
-                                />
-                              <% end %>
-                            <% end %>
-                            <%!-- Sponsor chip (ADR 0042 stage 1). Absent sponsor
-                             renders nothing. No own-sponsorship ring
-                             affordance — Rowan rejected it as always wrong
-                             (stage 4 rework). Mirrors the mobile chip shape. --%>
-                            <% sponsor = sponsor_identity(task, @users_by_id) %>
-                            <.human_avatar
-                              :if={sponsor}
-                              name={sponsor.name}
-                              avatar_url={sponsor.avatar_url}
-                              seed={sponsor.seed}
-                              size="xs"
-                              class="shrink-0"
-                              title={"Sponsored by " <> sponsor.name}
-                              data-role="sponsor-avatar"
-                            />
-                            <%!-- Three-dot menu — opens a bottom sheet on mobile + a centered
-                       sheet on desktop. Replaced the inert DaisyUI dropdown
-                       (task 019e0d4b stage 2). The icon stays opacity-0 / hover-
-                       reveal on desktop; on mobile it's always visible since
-                       there's no hover signal.  --%>
-                            <button
-                              :if={deletable_task?(task)}
-                              type="button"
-                              phx-click="board_open_task_actions"
-                              phx-target={@myself}
-                              phx-value-id={task.id}
-                              aria-label="Task actions"
-                              title="Task actions"
-                              class="btn btn-ghost btn-xs btn-square opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity"
-                            >
-                              <span class="hero-ellipsis-vertical size-4"></span>
-                            </button>
-                          </div>
-                        </div>
-
-                        <%!-- Author + assignee + date --%>
-                        <div
-                          :if={
-                            task.reported_by || assignee_name(task, @agent_names) ||
-                              task.inserted_at
-                          }
-                          class="mt-1 flex items-center gap-1.5 text-[10px] text-base-content/40"
-                        >
-                          <span
-                            :if={task.reported_by}
-                            class="truncate max-w-[100px]"
-                            title={"Reported by " <> task.reported_by}
-                          >
-                            {task.reported_by}
-                          </span>
-                          <span :if={
-                            task.reported_by &&
-                              (assignee_name(task, @agent_names) || task.inserted_at)
-                          }>
-                            ·
-                          </span>
-                          <span
-                            :if={assignee_name(task, @agent_names)}
-                            class="truncate max-w-[100px]"
-                          >
-                            → {assignee_name(task, @agent_names)}
-                          </span>
-                          <span :if={assignee_name(task, @agent_names) && task.inserted_at}>·</span>
-                          <span :if={task.inserted_at} class="whitespace-nowrap">
-                            {relative_time(task.inserted_at)}
-                          </span>
-                        </div>
-
-                        <%!-- Bottom row: priority + progress --%>
-                        <div class="mt-1 flex items-center gap-2">
-                          <span :if={task.priority} class={priority_badge_class(task.priority)}>
-                            {task.priority}
-                          </span>
-                          <%!-- One decider (task 01a01a4a stage 5): this card's
-                             review badge below is driven by `@review_counts`,
-                             so the status chip resolves its reason from the
-                             same count. When a pending review outranks the
-                             merge gate the badge is the only "needs you" mark. --%>
-                          <% {status_badge_label, status_badge_class} =
-                            task_display_status(
-                              task,
-                              Tasks.needs_human_action_reason(
-                                task,
-                                Map.get(@review_counts, task.id, 0)
-                              )
-                            ) %>
-                          <span
-                            :if={task.status in ~w(blocked planning in_review deploying)}
-                            class={"#{status_badge_class} badge-xs"}
-                          >
-                            {status_badge_label}
-                          </span>
-
-                          <%!-- Blocked-by-deps badge: only when status="blocked" AND
-                     metadata["unmet_dependencies"] is non-empty. Count is
-                     read straight from metadata (no per-card DB hit). --%>
-                          <span
-                            :if={task.status == "blocked" and unmet_dependency_count(task) > 0}
-                            class="badge badge-error badge-xs"
-                            title="Waiting on dependencies"
-                          >
-                            Blocked · {unmet_dependency_count(task)}
-                          </span>
-
-                          <%!-- Review badge --%>
-                          <span
-                            :if={Map.get(@review_counts, task.id, 0) > 0}
-                            class="badge badge-warning badge-xs gap-1"
-                          >
-                            <span class="hero-eye size-3"></span>
-                            {Map.get(@review_counts, task.id)} review
-                          </span>
-
-                          <%!-- Meeting-triage `needs_promotion` badge (task
-                     019f5e2b-8d29 stage 2, tooltip + icon polished in
-                     task 019f6e2c stage 3). Rendered only for backlog
-                     tasks flagged by the triage filer; clicking dispatches
-                     `promote_task` which clears the flag AND atomically
-                     transitions status → planning via `Platform.Tasks.promote/1`.
-                     Mirrors the review-badge shape (badge-warning +
-                     badge-xs). Backlog-scoped because promotion only
-                     makes sense before the task leaves the entry column.
-                     Browser-native `title=` tooltip — a Tippy hook per
-                     kanban card is overkill for a single-line message. --%>
-                          <button
-                            :if={task.status == "backlog" and task.needs_promotion}
-                            type="button"
-                            class="badge badge-warning badge-xs gap-1 cursor-pointer"
-                            phx-click="board_promote_task"
-                            phx-target={@myself}
-                            phx-value-id={task.id}
-                            data-role="needs-promotion-badge"
-                            title="Filed from a meeting canvas. Click to promote."
-                          >
-                            <span class="hero-arrow-up-circle size-3"></span> Needs promotion
-                          </button>
-
-                          <%!-- Plan stage progress --%>
-                          <% progress = plan_progress(task) %>
-                          <div :if={progress} class="flex flex-1 items-center gap-1">
-                            <progress
-                              class="progress progress-primary h-1 flex-1"
-                              value={elem(progress, 0)}
-                              max={elem(progress, 1)}
-                            />
-                            <span class="text-[10px] text-base-content/40">
-                              {elem(progress, 0)}/{elem(progress, 1)}
-                            </span>
-                          </div>
-                        </div>
-
-                        <%!-- Per ADR 0029, plan approval is the only start signal.
-                   No separate manual "Start" button on the card. The user
-                   approves a plan from the detail panel, and the task
-                   transitions automatically. --%>
-                      </div>
-                    </div>
-                  </div>
-              <% end %>
-            <% end %>
+            <%!-- Done, collapsed (task 01a13884 stage 3): no cards in the
+               DOM, only the opener. The column div above keeps
+               `data-column`, so a drop onto it still lands. --%>
+            <div
+              :if={
+                col_key == "done" and not done_open?(@done_expanded?, @task_search_query) and
+                  desktop_column_items_for_scope(
+                    @columns,
+                    @desktop_stacks_by_column,
+                    col_key,
+                    @board_scope,
+                    @board_sort,
+                    @stack_board_data
+                  ) != []
+              }
+              class="flex flex-1 flex-col items-center rounded-box bg-base-200 p-3"
+              data-role="done-collapsed"
+            >
+              <button
+                type="button"
+                phx-click="board_toggle_done"
+                phx-value-expanded="true"
+                phx-target={@myself}
+                class="btn btn-ghost btn-sm text-base-content"
+                data-role="done-show"
+              >
+                Show done tasks
+              </button>
+            </div>
+            <.desktop_board_item
+              :for={
+                item <-
+                  windowed_items(
+                    desktop_column_items_for_scope(
+                      @columns,
+                      @desktop_stacks_by_column,
+                      col_key,
+                      @board_scope,
+                      @board_sort,
+                      @stack_board_data
+                    ),
+                    col_key,
+                    done_open?(@done_expanded?, @task_search_query),
+                    @done_limit,
+                    @stack_board_data
+                  )
+              }
+              :key={item.id}
+              item={item}
+              review_count={Map.get(@review_counts, item.id, 0)}
+              assignee={assignee_identity(item, @users_by_id, @agents_by_id)}
+              assignee_name={assignee_name(item, @agent_names)}
+              sponsor={sponsor_identity(item, @users_by_id)}
+              data={stack_data(@stack_board_data, item)}
+              member_review_counts={member_review_counts(@stack_board_data, item, @review_counts)}
+              expanded?={MapSet.member?(@expanded_stacks, item.id)}
+              myself={@myself}
+            />
+            <.done_more_button
+              :if={col_key == "done" and done_open?(@done_expanded?, @task_search_query)}
+              total={
+                length(
+                  desktop_column_items_for_scope(
+                    @columns,
+                    @desktop_stacks_by_column,
+                    col_key,
+                    @board_scope,
+                    @board_sort,
+                    @stack_board_data
+                  )
+                )
+              }
+              limit={@done_limit}
+              myself={@myself}
+              role="done-more"
+            />
 
             <%!-- Per-column empty state. SPEC DEVIATION: spec §5.3 says
                :conversational with chips, but that's per-COLUMN here on a
@@ -1445,7 +798,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
                   @columns,
                   @desktop_stacks_by_column,
                   col_key,
-                  @scope_filter,
+                  @board_scope,
                   @board_sort,
                   @stack_board_data
                 ) == []
@@ -1485,6 +838,1105 @@ defmodule PlatformWeb.Tasks.BoardComponent do
           </button>
         </div>
       </.sheet>
+    </div>
+    """
+  end
+
+  # ── Done window (task 01a13884 stage 3) ─────────────────────────────────
+
+  # "Show 50 more (N older)" under an open Done list; renders nothing once
+  # the window covers the whole column.
+  attr :total, :integer, required: true
+  attr :limit, :integer, required: true
+  attr :myself, :any, required: true
+  attr :role, :string, required: true
+
+  defp done_more_button(assigns) do
+    assigns = assign(assigns, :step, min(assigns.total - assigns.limit, @done_page_size))
+
+    ~H"""
+    <button
+      :if={@total > @limit}
+      type="button"
+      phx-click="board_done_more"
+      phx-target={@myself}
+      class="btn btn-ghost btn-sm text-base-content"
+      data-role={@role}
+    >
+      Show {@step} more ({format_count(@total - @limit)} older)
+    </button>
+    """
+  end
+
+  # A search opens Done: a found task must not sit behind the collapse.
+  defp done_open?(expanded?, query), do: expanded? or search_active?(query)
+
+  # Done renders most recently updated first, whatever `@board_sort` says,
+  # and only `limit` of them; closed, it renders none. Other columns pass
+  # through untouched.
+  defp windowed_items(_items, "done", false, _limit, _stack_board_data), do: []
+
+  defp windowed_items(items, "done", true, limit, stack_board_data) do
+    items
+    |> BoardData.sort_items(:updated, stack_board_data)
+    |> Enum.take(limit)
+  end
+
+  defp windowed_items(items, _col_key, _open?, _limit, _stack_board_data), do: items
+
+  # 1150 -> "1,150", for the tabular-nums column counts.
+  defp format_count(n) when is_integer(n) and n >= 1000 do
+    n
+    |> Integer.to_string()
+    |> String.reverse()
+    |> String.to_charlist()
+    |> Enum.chunk_every(3)
+    |> Enum.join(",")
+    |> String.reverse()
+  end
+
+  defp format_count(n), do: to_string(n)
+
+  # ── Board cards (task 01a13884 stage 2) ─────────────────────────────────
+  #
+  # Each card body is a function component fed explicit, per-card attrs that
+  # the `:for` generator computes, and the loops that render them are keyed
+  # (`:key={item.id}`). Two measured reasons (stage 1 baseline, dad993a9):
+  #
+  #   * the desktop comprehension was tracked by INDEX, so a PubSub refresh
+  #     that inserted a card into Done re-sent every Done card after the
+  #     insertion point (1,756 KB of a 1,837 KB frame on the 1,363-task
+  #     seed). Keyed, an insert sends the new entry plus moved indexes.
+  #   * the mobile loop iterated a template local (`column_items`), which
+  #     taints the comprehension, so every refresh re-sent the whole section
+  #     (52 KB for a one-title rename).
+  #
+  # Nothing in these bodies binds a `<% x = ... %>` local: derived values are
+  # computed in the component function, which only runs when one of the
+  # card's own attrs changed.
+
+  attr :item, :any, required: true
+  attr :col_key, :string, required: true
+  attr :review_count, :integer, default: 0
+  attr :assignee, :any, default: nil
+  attr :sponsor, :any, default: nil
+  attr :data, :any, default: nil
+  attr :member_review_counts, :map, default: %{}
+  attr :expanded?, :boolean, default: false
+
+  defp mobile_board_item(%{item: %Stack{}} = assigns) do
+    ~H"""
+    <.mobile_stack_card
+      stack={@item}
+      data={@data}
+      sponsor={@sponsor}
+      expanded?={@expanded?}
+      member_review_counts={@member_review_counts}
+    />
+    """
+  end
+
+  defp mobile_board_item(assigns) do
+    ~H"""
+    <.mobile_task_card
+      task={@item}
+      col_key={@col_key}
+      review_count={@review_count}
+      assignee={@assignee}
+      sponsor={@sponsor}
+    />
+    """
+  end
+
+  attr :item, :any, required: true
+  attr :review_count, :integer, default: 0
+  attr :assignee, :any, default: nil
+  attr :assignee_name, :string, default: nil
+  attr :sponsor, :any, default: nil
+  attr :data, :any, default: nil
+  attr :member_review_counts, :map, default: %{}
+  attr :expanded?, :boolean, default: false
+  attr :myself, :any, required: true
+
+  defp desktop_board_item(%{item: %Stack{}} = assigns) do
+    ~H"""
+    <.desktop_stack_card
+      stack={@item}
+      data={@data}
+      sponsor={@sponsor}
+      expanded?={@expanded?}
+      member_review_counts={@member_review_counts}
+    />
+    """
+  end
+
+  defp desktop_board_item(assigns) do
+    ~H"""
+    <.desktop_task_card
+      task={@item}
+      review_count={@review_count}
+      assignee={@assignee}
+      assignee_name={@assignee_name}
+      sponsor={@sponsor}
+      myself={@myself}
+    />
+    """
+  end
+
+  @empty_stack_data %{member_count: 0, dep_edge_count: 0, ready_count: 0, members: []}
+
+  defp stack_data(stack_board_data, %Stack{id: id}),
+    do: Map.get(stack_board_data, id, @empty_stack_data)
+
+  defp stack_data(_stack_board_data, _task), do: nil
+
+  # Only the counts a stack's member rows read, so a review on an unrelated
+  # task does not re-render every stack card.
+  defp member_review_counts(stack_board_data, %Stack{id: id}, review_counts) do
+    ids = stack_board_data |> Map.get(id, @empty_stack_data) |> Map.get(:members, [])
+    Map.take(review_counts, Enum.map(ids, & &1.id))
+  end
+
+  defp member_review_counts(_stack_board_data, _task, _review_counts), do: %{}
+
+  attr :stack, Stack, required: true
+  attr :data, :map, required: true
+  attr :sponsor, :any, default: nil
+  attr :expanded?, :boolean, default: false
+  attr :member_review_counts, :map, default: %{}
+
+  defp mobile_stack_card(assigns) do
+    ~H"""
+    <div
+      data-stack-card="true"
+      data-stack-id={@stack.id}
+      data-expanded={if(@expanded?, do: "true", else: "false")}
+      class="flex flex-col rounded-box border-l-4 border-violet-500 border border-edge bg-base-100"
+    >
+      <%!-- T8 stage 1: header opens the stack detail
+         panel. Chevron is split into its own sibling
+         button so the inline-expansion toggle remains
+         reachable without bubbling through the panel
+         opener (Discord "click thread to enter" pattern,
+         Option A in the T8 dispatch). --%>
+      <div class="relative flex min-w-0 items-stretch">
+        <button
+          type="button"
+          phx-click="stack_open_detail"
+          phx-target="#tasks-stacks"
+          phx-value-id={@stack.id}
+          data-role="stack-header"
+          class="flex min-w-0 flex-1 flex-col gap-1.5 p-3 text-left transition-colors hover:bg-base-200/60 focus-visible-ring min-h-[44px]"
+        >
+          <div class="flex min-w-0 items-center gap-2 pr-7">
+            <span
+              class="hero-rectangle-stack size-4 shrink-0 text-violet-300"
+              aria-hidden="true"
+            >
+            </span>
+            <span class="text-[9px] font-semibold uppercase tracking-wider text-violet-300 shrink-0">
+              Stack
+            </span>
+            <span class="ml-auto text-[10px] text-base-content/50 font-medium whitespace-nowrap shrink-0">
+              {@data.ready_count}/{@data.member_count} ready
+            </span>
+          </div>
+          <h3 class="text-sm font-medium leading-snug truncate min-w-0">
+            {@stack.name}
+          </h3>
+          <div class="flex min-w-0 items-center gap-1.5 text-[10px] text-base-content/60">
+            <span class="bg-base-200 px-1.5 py-0.5 rounded whitespace-nowrap shrink-0">
+              {@data.member_count} tasks
+            </span>
+            <span class="bg-base-200 px-1.5 py-0.5 rounded whitespace-nowrap shrink-0">
+              {@data.dep_edge_count} dep edges
+            </span>
+            <%!-- Stage 4 of task 019f487e (ADR-0042 Decision 8):
+               sponsor avatar mirrors desktop stack card. Absent
+               sponsor renders nothing. No own-sponsorship ring
+               affordance — Rowan rejected it as always wrong. --%>
+            <.human_avatar
+              :if={@sponsor}
+              name={@sponsor.name}
+              avatar_url={@sponsor.avatar_url}
+              seed={@sponsor.seed}
+              size="xs"
+              class="ml-auto size-4 shrink-0"
+              title={"Sponsored by " <> @sponsor.name}
+              data-role="stack-sponsor-avatar"
+            />
+          </div>
+        </button>
+        <button
+          type="button"
+          phx-click="stack_toggle_expand"
+          phx-target="#tasks-stacks"
+          phx-value-id={@stack.id}
+          data-role="stack-chevron"
+          aria-label="Toggle stack expansion"
+          aria-expanded={if(@expanded?, do: "true", else: "false")}
+          class="absolute right-0 top-0 flex h-11 w-9 items-center justify-center text-violet-300 transition-colors hover:bg-base-200/60 focus-visible-ring"
+        >
+          <span
+            class={[
+              "hero-chevron-down size-3 transition-transform",
+              @expanded? && "rotate-180"
+            ]}
+            aria-hidden="true"
+          >
+          </span>
+        </button>
+      </div>
+      <div
+        :if={@expanded?}
+        data-role="stack-members"
+        data-stack-id={@stack.id}
+        class="flex flex-col gap-1.5 px-3 pb-3 pl-4"
+      >
+        <.mobile_stack_member
+          :for={member <- Enum.sort_by(@data.members, & &1.stack_position)}
+          :key={member.id}
+          member={member}
+          members={@data.members}
+          review_count={Map.get(@member_review_counts, member.id, 0)}
+        />
+      </div>
+    </div>
+    """
+  end
+
+  attr :member, Task, required: true
+  attr :members, :list, required: true
+  attr :review_count, :integer, default: 0
+
+  defp mobile_stack_member(assigns) do
+    reason = Tasks.needs_human_action_reason(assigns.member, assigns.review_count)
+    dep_text = dep_annotation_text(assigns.member, assigns.members)
+    {status_label, status_class} = task_display_status(assigns.member, reason)
+    {action_label, action_reason_attr} = mobile_stack_member_action_label(reason)
+
+    assigns =
+      assign(assigns,
+        dep_text: dep_text,
+        parked_text: member_parked_reason(assigns.member.status, dep_text),
+        status_label: status_label,
+        status_class: status_class,
+        action_label: action_label,
+        action_reason_attr: action_reason_attr
+      )
+
+    ~H"""
+    <%!-- Task 01a06df3 stage 3. Derived from data already in
+       hand — `@member.status` plus the dep annotation computed
+       on the line above — so this adds no query and no preload.
+       Mutually exclusive with the dep annotation by
+       construction: `member_parked_reason/2` returns nil
+       whenever `@dep_text` is non-nil, so a member with
+       real in-stack predecessors still renders the dep line and
+       only that. --%>
+    <%!-- Badges-for-tasks-that-need-feedback (task
+       019e2c25 stage 4): mobile stack-member rows
+       mirror the desktop stack-detail badge from
+       stage 2 / mobile solo card from stage 3.
+       Reuses `@review_counts` (the board-wide
+       review_request count map populated in
+       refresh_board/1, which already covers stack
+       members because list_all_tasks/1 returns
+       them) — same source as the mobile solo card.
+       `:plans` is preloaded on members via
+       list_stacks_with_members/1 so the
+       `:plan_pending_review` branch resolves. --%>
+    <%!-- One decider (task 01a01a4a stage 5): the status
+       chip is keyed on the SAME resolved reason the
+       action chip is, so the merge gate cannot be shown
+       by one site while precedence has demoted it for
+       the other. --%>
+    <%!-- Post-rejection fix (stage 4): use
+       `mobile_action_label/1` instead of
+       `stack_member_action_label/1` so the
+       `:plan_pending_review` branch does NOT
+       render an action chip — the adjacent
+       `task_display_status/2` "Plan Ready" status
+       chip is the single signal. Other reasons
+       still render the action chip. --%>
+    <button
+      type="button"
+      id={"stack-member-mobile-#{@member.id}"}
+      data-stack-member="true"
+      data-member-id={@member.id}
+      data-stack-position={@member.stack_position}
+      phx-click="select_task"
+      phx-value-id={@member.id}
+      class="relative rounded border border-base-200/60 bg-base-100 py-3 pl-8 pr-2 text-left transition-colors hover:bg-base-200/60 min-h-[44px]"
+    >
+      <span class={[
+        "absolute left-1 top-3 inline-flex size-5 items-center justify-center rounded-full text-[10px] font-semibold",
+        member_node_class(@member.status)
+      ]}>
+        {stack_position_glyph(@member.stack_position)}
+      </span>
+      <div class="flex min-w-0 flex-col gap-1">
+        <%!-- Task 01a08e0d stage 3, mobile half. Mirrors stage
+           2's desktop restructure: the title used to share a
+           `flex flex-wrap items-center gap-2` row with three
+           shrink-0 siblings (the action badge, the
+           planning-step marker and the status badge), so under
+           `frontend/ui-ux.md`'s truncation rule the title
+           (`flex-1 min-w-0 truncate`) yielded to them. Pulling
+           the title onto its own full-width line and moving
+           the three siblings into a second "meta" row beneath
+           it stops them from competing with the title for
+           space. `block w-full` replaces `flex-1` on the span
+           because it is no longer a flex item — `truncate`
+           needs a block-level box, which the flex-item context
+           used to provide for free. Mobile carries one more
+           shrink-0 sibling than desktop (the action badge),
+           but every element on this line stays a `<span>`: this
+           row IS a `<button>` on mobile, and a nested button is
+           invalid HTML that browsers reparent. --%>
+        <span
+          class="block w-full min-w-0 truncate text-xs leading-snug"
+          title={@member.title}
+        >
+          {@member.title}
+        </span>
+        <div class="flex flex-wrap items-center gap-2">
+          <span
+            class="badge badge-ghost badge-xs capitalize"
+            data-role="task-kind-badge"
+            data-task-kind={@member.kind}
+          >
+            {@member.kind}
+          </span>
+          <ExternalFeedbackComponents.trust_badge task={@member} />
+          <span
+            :if={@action_label}
+            class="badge badge-warning badge-xs gap-1 whitespace-nowrap shrink-0"
+            data-role="stack-member-mobile-action"
+            data-action-reason={@action_reason_attr}
+          >
+            <span class="hero-eye size-3"></span>
+            {@action_label}
+          </span>
+          <%!-- ADR-0046 member 8 (019f9b29-9c47) stage 3, mobile half.
+             Same compact marker as the desktop member row; the
+             `data-role` MUST differ because the two boards share
+             ONE DOM (`lg:hidden` / `hidden lg:grid` — CSS
+             visibility, not presence), so a shared value
+             double-matches every selector. The component emits no
+             `id` at all, so `data-role` is the only thing to
+             split.
+             It renders as a `<span>`, never a `<button>`: this
+             row IS a `<button>` on mobile, and a nested button is
+             invalid HTML that browsers reparent. --%>
+          <.planning_step_extension
+            task={@member}
+            variant={:compact}
+            data_role="mobile-stack-member-planning-step"
+          />
+          <span class={"#{@status_class} badge-xs whitespace-nowrap shrink-0"}>
+            {@status_label}
+          </span>
+        </div>
+      </div>
+      <div
+        :if={@dep_text}
+        data-role="dep-annotation"
+        class="mt-1 text-[10px] text-base-content/50"
+      >
+        <span class="text-violet-400" aria-hidden="true">↑</span>
+        {@dep_text}
+      </div>
+      <%!-- Task 01a06df3 stage 3, mobile half. Shares ONE
+         `data-role` with the desktop row below, matching the
+         `dep-annotation` sibling directly above it rather than
+         the planning-step marker's split-role convention: that
+         component emits no `id`, whereas these rows do
+         (`stack-member-mobile-<id>` vs `stack-member-<id>`), so a
+         test can pin a surface through the row id and the two
+         boards sharing one DOM costs nothing here.
+         It is a `<div>` holding a `<span>`, never a `<button>`:
+         this row IS a `<button>` on mobile, and a nested button
+         is invalid HTML that browsers reparent. --%>
+      <div
+        :if={@parked_text}
+        data-role="stack-member-parked-reason"
+        class="mt-1 text-[10px] text-base-content/50"
+      >
+        <span class="hero-clock size-2.5 align-[-1px]" aria-hidden="true"></span>
+        {@parked_text}
+      </div>
+    </button>
+    """
+  end
+
+  attr :task, Task, required: true
+  attr :col_key, :string, required: true
+  attr :review_count, :integer, default: 0
+  attr :assignee, :any, default: nil
+  attr :sponsor, :any, default: nil
+
+  defp mobile_task_card(assigns) do
+    reason = Tasks.needs_human_action_reason(assigns.task, assigns.review_count)
+    {status_label, status_class} = task_display_status(assigns.task, reason)
+    {action_label, action_reason_attr} = mobile_stack_member_action_label(reason)
+
+    assigns =
+      assign(assigns,
+        status_label: status_label,
+        status_class: status_class,
+        action_label: action_label,
+        action_reason_attr: action_reason_attr
+      )
+
+    ~H"""
+    <%!-- Post-rejection fix (stage 4): same doubled-chip
+       pattern as the mobile stack-member row above —
+       the `task_display_status/2` "Plan Ready" badge
+       below already covers `:plan_pending_review`, so
+       suppress the action chip there. --%>
+    <%!-- ADR-0046 member 8 (019f9b29-9c47) stage 2, mobile half.
+       Same wrapper shape as the desktop card. The `data-role`
+       values MUST differ from the desktop ones: `frontend/ui-ux.md`
+       records that the two boards share ONE DOM (`lg:hidden` /
+       `hidden lg:grid` — CSS visibility, not presence), so a shared
+       value double-matches every selector. The component emits no
+       `id` at all, so only `data-role` needs splitting.
+       The extension is a SIBLING of the card here too, which is what
+       keeps it out of the mobile card's own `<button>` — a `<button>`
+       inside a `<button>` is invalid HTML and browsers reparent it. --%>
+    <div class="flex flex-col" data-role="mobile-task-card-group">
+      <.planning_step_extension
+        task={@task}
+        data_role="mobile-planning-step-extension"
+        class="min-h-[44px]"
+      />
+      <button
+        type="button"
+        phx-click="select_task"
+        phx-value-id={@task.id}
+        class={[
+          "flex flex-col gap-1.5 rounded-box border border-edge bg-base-100 p-3 text-left transition-colors hover:bg-base-200/60 focus-visible-ring",
+          PlanningStepExtension.visible?(@task) && "rounded-t-none"
+        ]}
+        data-task-id={@task.id}
+      >
+        <div class="flex items-start gap-2">
+          <span
+            class={[
+              "mt-1.5 size-2 shrink-0 rounded-full",
+              status_dot_class(@col_key)
+            ]}
+            aria-hidden="true"
+          >
+          </span>
+          <span class="text-sm font-medium leading-snug flex-1">{@task.title}</span>
+        </div>
+        <div class="flex flex-wrap items-center gap-1.5 pl-4 text-xs text-base-content/60">
+          <%= if @assignee do %>
+            <%= if @assignee.type == :user do %>
+              <.human_avatar
+                name={@assignee.name}
+                avatar_url={@assignee.avatar_url}
+                seed={@assignee.seed}
+                size="xs"
+                class="size-4 shrink-0"
+              />
+            <% else %>
+              <%!-- Mobile twin of the desktop assignee chip. Same
+                 `size-4` wrapper the human branch beside it
+                 uses. --%>
+              <.agent_avatar
+                name={@assignee.name}
+                avatar_url={@assignee.avatar_url}
+                size="xs"
+                class="size-4 shrink-0"
+              />
+            <% end %>
+            <span class="truncate">{@assignee.name}</span>
+            <span aria-hidden="true">·</span>
+          <% end %>
+          <%!-- Sponsor chip (ADR 0042 stage 1). Only renders when
+             `sponsor_user_id` is set — an absent sponsor is
+             silent, not a noisy "Unsponsored" pill. No own-
+             sponsorship ring affordance — Rowan rejected it as
+             always wrong (stage 4 rework). --%>
+          <%= if @sponsor do %>
+            <.human_avatar
+              name={@sponsor.name}
+              avatar_url={@sponsor.avatar_url}
+              seed={@sponsor.seed}
+              size="xs"
+              class="size-4 shrink-0"
+              title={"Sponsored by " <> @sponsor.name}
+              data-role="sponsor-avatar"
+            />
+            <span class="truncate">{@sponsor.name}</span>
+            <span aria-hidden="true">·</span>
+          <% end %>
+          <span :if={@task.inserted_at} class="whitespace-nowrap">
+            {relative_time(@task.inserted_at)}
+          </span>
+          <span
+            class="badge badge-ghost badge-xs capitalize"
+            data-role="task-kind-badge"
+            data-task-kind={@task.kind}
+          >
+            {@task.kind}
+          </span>
+          <ExternalFeedbackComponents.trust_badge task={@task} />
+          <%!-- Badges-for-tasks-that-need-feedback (task
+             019e2c25 stage 3): mobile solo task cards now
+             render the same warning chip the stack-detail
+             rows + desktop kanban surface. The status badge
+             `task_display_status/2` is also rendered for the
+             four "interesting" statuses so "Plan Ready"
+             appears on mobile (previously hidden — that's
+             why a pending-review plan was invisible on the
+             mobile board). Mirrors the desktop kanban
+             gating in tasks_live.html.heex line ~717-723. --%>
+          <span
+            :if={@task.status in ~w(blocked planning in_review deploying)}
+            class={"#{@status_class} badge-xs"}
+          >
+            {@status_label}
+          </span>
+          <span
+            :if={@action_label}
+            class="badge badge-warning badge-xs gap-1"
+            data-role="mobile-task-action"
+            data-action-reason={@action_reason_attr}
+          >
+            <span class="hero-eye size-3"></span>
+            {@action_label}
+          </span>
+        </div>
+      </button>
+    </div>
+    """
+  end
+
+  attr :stack, Stack, required: true
+  attr :data, :map, required: true
+  attr :sponsor, :any, default: nil
+  attr :expanded?, :boolean, default: false
+  attr :member_review_counts, :map, default: %{}
+
+  defp desktop_stack_card(assigns) do
+    ~H"""
+    <%!-- Collapsed stack card. Purple violet-500 left border
+       accent matches mock canvas 019e1a16 rev 2
+       (`--stk: #7b5cff`). Clicking the HEADER toggles
+       `:expanded_stacks` MapSet membership; the
+       expansion render is a sibling block so member
+       clicks do NOT bubble back into the toggle handler
+       (stage 3 §5). --%>
+    <div
+      id={"stack-card-#{@stack.id}"}
+      data-stack-card="true"
+      data-stack-id={@stack.id}
+      data-expanded={if(@expanded?, do: "true", else: "false")}
+      class="group card card-compact border-l-4 border-violet-500 border border-edge bg-base-100 shadow-sm transition-all hover:shadow-md"
+    >
+      <%!-- T8 stage 1: header opens the stack detail panel.
+         Chevron is split into its own SIBLING button so
+         the inline-expansion toggle remains reachable
+         without bubbling through the panel opener
+         (Discord "click thread to enter" pattern, Option A
+         in the T8 dispatch).
+
+         The separation is structural, not defensive: the
+         chevron and `[data-role=stack-header]` are both
+         direct children of the `div.relative` below, so a
+         chevron click never traverses the header at all.
+         No ancestor of the chevron carries a phx-click or
+         any JS click/pointer listener (KanbanDragDrop
+         binds drag events only; nothing in assets/js
+         references stack-card / stack-header /
+         stack-chevron).
+
+         Do NOT "protect" the chevron with an inline
+         `onclick="event.stopPropagation()"`. There is
+         nothing to protect it from, and the two cannot
+         coexist: LiveView binds its click handler in the
+         BUBBLE phase on `window` (live_socket.js
+         bindClick/2), so an inline onclick — which runs at
+         TARGET phase — stops the event before LiveView
+         ever sees it and silently kills this phx-click.
+         That is exactly what shipped here and went
+         unnoticed for two months (task 019fa298); the
+         mobile chevron, which never had one, kept working.
+         Guarded by test/platform_web/inline_onclick_guard_test.exs. --%>
+      <div class="relative">
+        <div
+          class="card-body cursor-pointer gap-1.5 p-3 pr-9"
+          phx-click="stack_open_detail"
+          phx-target="#tasks-stacks"
+          phx-value-id={@stack.id}
+          data-role="stack-header"
+        >
+          <%!-- Header row: icon + STACK tag + rollup progress --%>
+          <div class="flex min-w-0 items-center gap-1.5">
+            <span
+              class="hero-rectangle-stack size-4 shrink-0 text-violet-300"
+              aria-hidden="true"
+            >
+            </span>
+            <span class="text-[9px] font-semibold uppercase tracking-wider text-violet-300 shrink-0">
+              Stack
+            </span>
+            <span class="ml-auto text-[10px] text-base-content/50 font-medium whitespace-nowrap shrink-0">
+              {@data.ready_count}/{@data.member_count} ready
+            </span>
+          </div>
+
+          <%!-- Title row --%>
+          <h3 class="text-sm font-medium leading-snug truncate min-w-0">
+            {@stack.name}
+          </h3>
+
+          <%!-- Pills row: member count + dep edge count + optional
+             sponsor avatar (Stage 4 of task 019f487e —
+             ADR-0042 Decision 8). Mirrors the task-card
+             sponsor chip: absent sponsor renders nothing.
+             No own-sponsorship ring affordance — Rowan
+             rejected it as always wrong (stage 4 rework). --%>
+          <div class="flex min-w-0 items-center gap-1.5 text-[10px] text-base-content/60">
+            <span class="bg-base-200 px-1.5 py-0.5 rounded font-medium whitespace-nowrap shrink-0">
+              {@data.member_count} tasks
+            </span>
+            <span class="bg-base-200 px-1.5 py-0.5 rounded font-medium whitespace-nowrap shrink-0">
+              {@data.dep_edge_count} dep edges
+            </span>
+            <.human_avatar
+              :if={@sponsor}
+              name={@sponsor.name}
+              avatar_url={@sponsor.avatar_url}
+              seed={@sponsor.seed}
+              size="xs"
+              class="ml-auto size-4 shrink-0"
+              title={"Sponsored by " <> @sponsor.name}
+              data-role="stack-sponsor-avatar"
+            />
+          </div>
+        </div>
+        <button
+          type="button"
+          phx-click="stack_toggle_expand"
+          phx-target="#tasks-stacks"
+          phx-value-id={@stack.id}
+          data-role="stack-chevron"
+          aria-label="Toggle stack expansion"
+          aria-expanded={if(@expanded?, do: "true", else: "false")}
+          class="absolute right-1 top-2 flex h-9 w-7 items-center justify-center text-violet-300 hover:bg-base-200 rounded transition-colors focus-visible-ring"
+        >
+          <span
+            class={[
+              "hero-chevron-down size-3 transition-transform",
+              @expanded? && "rotate-180"
+            ]}
+            aria-hidden="true"
+          >
+          </span>
+        </button>
+      </div>
+
+      <%!-- Inline expansion — members rendered indented
+         below the header when this stack id is in
+         `:expanded_stacks`. Each row is its own
+         `phx-click="select_task"` target reusing the
+         task detail-panel handler (T8 will later add a
+         stack-level detail panel for header clicks). --%>
+      <div
+        :if={@expanded?}
+        data-role="stack-members"
+        data-stack-id={@stack.id}
+        class="flex flex-col gap-1.5 px-3 pb-3 pl-4"
+      >
+        <.desktop_stack_member
+          :for={member <- Enum.sort_by(@data.members, & &1.stack_position)}
+          :key={member.id}
+          member={member}
+          members={@data.members}
+          review_count={Map.get(@member_review_counts, member.id, 0)}
+        />
+      </div>
+    </div>
+    """
+  end
+
+  attr :member, Task, required: true
+  attr :members, :list, required: true
+  attr :review_count, :integer, default: 0
+
+  defp desktop_stack_member(assigns) do
+    reason = Tasks.needs_human_action_reason(assigns.member, assigns.review_count)
+    dep_text = dep_annotation_text(assigns.member, assigns.members)
+    {status_label, status_class} = task_display_status(assigns.member, reason)
+
+    assigns =
+      assign(assigns,
+        dep_text: dep_text,
+        parked_text: member_parked_reason(assigns.member.status, dep_text),
+        status_label: status_label,
+        status_class: status_class
+      )
+
+    ~H"""
+    <%!-- One decider (task 01a01a4a stage 5): resolve the
+       human-action reason from `@review_counts` — the same
+       map the review badge reads — and key the status chip
+       on it, so a member whose merge gate is outranked by a
+       live review request shows the review mark only. --%>
+    <%!-- Task 01a06df3 stage 3, desktop half. Same derivation as
+       the mobile row: status + the dep annotation already computed
+       on the line above, no extra query. --%>
+    <div
+      id={"stack-member-#{@member.id}"}
+      data-stack-member="true"
+      data-member-id={@member.id}
+      data-stack-position={@member.stack_position}
+      phx-click="select_task"
+      phx-value-id={@member.id}
+      class="relative cursor-pointer rounded border border-base-200/60 bg-base-100 py-2 pl-8 pr-2 transition-colors hover:bg-base-200/60 min-h-[44px]"
+    >
+      <span class={[
+        "absolute left-1 top-2 inline-flex size-5 items-center justify-center rounded-full text-[10px] font-semibold",
+        member_node_class(@member.status)
+      ]}>
+        {stack_position_glyph(@member.stack_position)}
+      </span>
+      <div class="flex min-w-0 flex-col gap-1">
+        <%!-- Task 01a08e0d stage 2, desktop half. The title used to
+           share a `flex items-center gap-2` row with the compact
+           planning-step marker and the status badge — both
+           `shrink-0`, so under `frontend/ui-ux.md`'s truncation
+           rule the title (`flex-1 min-w-0 truncate`) yielded to
+           them and a long title rendered as ~38px of usable width,
+           a redaction rather than a truncation. Pulling the title
+           onto its own full-width line and moving the marker +
+           badge into a second "meta" row beneath it stops the
+           shrink-0 siblings from competing with the title for
+           space. `block w-full` replaces `flex-1` on the span
+           because it is no longer a flex item — `truncate`
+           (overflow:hidden + text-overflow:ellipsis) needs a
+           block-level box to take effect, which the flex-item
+           context used to provide for free. --%>
+        <span
+          class="block w-full min-w-0 truncate text-xs leading-snug"
+          title={@member.title}
+        >
+          {@member.title}
+        </span>
+        <div class="flex items-center gap-2">
+          <span
+            class="badge badge-ghost badge-xs capitalize"
+            data-role="task-kind-badge"
+            data-task-kind={@member.kind}
+          >
+            {@member.kind}
+          </span>
+          <ExternalFeedbackComponents.trust_badge task={@member} />
+          <%!-- ADR-0046 member 8 (019f9b29-9c47) stage 3, desktop half.
+             COMPACT, not the fused strip: this row is a ~44px line
+             already carrying a position glyph, a truncated title, a
+             status badge and a dependency annotation, so the marker
+             is a single icon INSIDE the badge cluster rather than a
+             band above the row (a band would overlap the absolutely
+             positioned glyph at `left-1 top-2`).
+             `variant={:compact}` is failure-only — `failed` and
+             member 7's `no_ui_surface_contradicted`. `complete` and
+             the active cursor are suppressed here and remain on the
+             member's own detail panel; a fifth chip on every row of
+             every expanded stack is the noise that gets a feature
+             turned off. --%>
+          <.planning_step_extension
+            task={@member}
+            variant={:compact}
+            data_role="stack-member-planning-step"
+          />
+          <span class={"#{@status_class} badge-xs whitespace-nowrap shrink-0"}>
+            {@status_label}
+          </span>
+        </div>
+      </div>
+      <div
+        :if={@dep_text}
+        data-role="dep-annotation"
+        class="mt-1 text-[10px] text-base-content/50"
+      >
+        <span class="text-violet-400" aria-hidden="true">↑</span> {@dep_text}
+      </div>
+      <%!-- Task 01a06df3 stage 3, desktop half. See the mobile
+         row for why the `data-role` is shared across surfaces. --%>
+      <div
+        :if={@parked_text}
+        data-role="stack-member-parked-reason"
+        class="mt-1 text-[10px] text-base-content/50"
+      >
+        <span class="hero-clock size-2.5 align-[-1px]" aria-hidden="true"></span>
+        {@parked_text}
+      </div>
+    </div>
+    """
+  end
+
+  attr :task, Task, required: true
+  attr :review_count, :integer, default: 0
+  attr :assignee, :any, default: nil
+  attr :assignee_name, :string, default: nil
+  attr :sponsor, :any, default: nil
+  attr :myself, :any, required: true
+
+  defp desktop_task_card(assigns) do
+    reason = Tasks.needs_human_action_reason(assigns.task, assigns.review_count)
+    {status_label, status_class} = task_display_status(assigns.task, reason)
+
+    assigns =
+      assign(assigns,
+        status_label: status_label,
+        status_class: status_class,
+        progress: plan_progress(assigns.task)
+      )
+
+    ~H"""
+    <%!-- ADR-0046 member 8 (019f9b29-9c47) stage 2: the planning-step
+       extension is a SIBLING of the card inside a zero-gap
+       `flex flex-col` wrapper, not a child of it. Two reasons, both
+       load-bearing:
+       1. The column container is `flex flex-1 flex-col gap-2`, so an
+       unwrapped sibling would sit 0.5rem above the card and read as
+       a separate object. The wrapper makes that gap structurally
+       zero without a `-mb-2` magic number coupled to the column's
+       spacing token.
+       2. The wrapper carries NO `data-task-id`. `kanban_drag_drop.js`
+       resolves the drag source with `e.target.closest("[data-task-id]")`;
+       the card keeps the attribute and stays the drag source, and a
+       drag begun on the extension resolves to `null` so the hook
+       no-ops. Putting `data-task-id` here would fade the wrong
+       element on drag.
+       `rounded-t-none` is conditional on `visible?/1` so a task with
+       nothing to show renders a byte-identical card to before. --%>
+    <div class="flex flex-col" data-role="task-card-group">
+      <.planning_step_extension task={@task} data_role="planning-step-extension" />
+      <div
+        id={"task-card-#{@task.id}"}
+        data-task-id={@task.id}
+        draggable="true"
+        class={[
+          "group card card-compact cursor-grab border border-edge bg-base-100 shadow-sm transition-all hover:shadow-md active:cursor-grabbing",
+          PlanningStepExtension.visible?(@task) && "rounded-t-none"
+        ]}
+        phx-click="select_task"
+        phx-value-id={@task.id}
+      >
+        <div class="card-body gap-1 p-3">
+          <%!-- Project name --%>
+          <p
+            :if={@task.project}
+            class="text-[10px] font-medium uppercase tracking-wider text-base-content/40"
+          >
+            {@task.project.name}
+          </p>
+
+          <%!-- Title row --%>
+          <%!--
+             v2 stage 3: kanban-card title is plain text. Clicking it
+             bubbles to the card's outer `phx-click="select_task"` and
+             opens the detail panel, where the title can be edited via
+             the explicit edit-mode toggle.
+             --%>
+          <div class="flex items-start justify-between gap-2">
+            <h3
+              id={"card-title-#{@task.id}"}
+              class="text-sm font-medium leading-snug flex-1"
+              data-role="card-title"
+            >
+              {@task.title}
+            </h3>
+            <div class="flex items-center gap-1 flex-shrink-0">
+              <%!-- Assignee --%>
+              <%= if @assignee do %>
+                <%= if @assignee.type == :user do %>
+                  <.human_avatar
+                    name={@assignee.name}
+                    avatar_url={@assignee.avatar_url}
+                    seed={@assignee.seed}
+                    size="xs"
+                    class="shrink-0"
+                    title={@assignee.name}
+                  />
+                <% else %>
+                  <%!-- An agent assigned to a task is an agent
+                     appearing, so it gets the same face it has in
+                     chat and in meetings. The accent ring rides on
+                     the component's outer wrapper, which is
+                     `rounded-full`, so it survives an image
+                     avatar exactly as `.msg-agent-avatar` does. --%>
+                  <.agent_avatar
+                    name={@assignee.name}
+                    avatar_url={@assignee.avatar_url}
+                    size="xs"
+                    class="shrink-0 ring-1 ring-accent/20"
+                    title={@assignee.name}
+                  />
+                <% end %>
+              <% end %>
+              <%!-- Sponsor chip (ADR 0042 stage 1). Absent sponsor
+                 renders nothing. No own-sponsorship ring
+                 affordance — Rowan rejected it as always wrong
+                 (stage 4 rework). Mirrors the mobile chip shape. --%>
+              <.human_avatar
+                :if={@sponsor}
+                name={@sponsor.name}
+                avatar_url={@sponsor.avatar_url}
+                seed={@sponsor.seed}
+                size="xs"
+                class="shrink-0"
+                title={"Sponsored by " <> @sponsor.name}
+                data-role="sponsor-avatar"
+              />
+              <%!-- Three-dot menu — opens a bottom sheet on mobile + a centered
+                 sheet on desktop. Replaced the inert DaisyUI dropdown
+                 (task 019e0d4b stage 2). The icon stays opacity-0 / hover-
+                 reveal on desktop; on mobile it's always visible since
+                 there's no hover signal.  --%>
+              <button
+                :if={deletable_task?(@task)}
+                type="button"
+                phx-click="board_open_task_actions"
+                phx-target={@myself}
+                phx-value-id={@task.id}
+                aria-label="Task actions"
+                title="Task actions"
+                class="btn btn-ghost btn-xs btn-square opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity"
+              >
+                <span class="hero-ellipsis-vertical size-4"></span>
+              </button>
+            </div>
+          </div>
+
+          <%!-- Author + assignee + date --%>
+          <div
+            :if={
+              @task.reported_by || @assignee_name ||
+                @task.inserted_at
+            }
+            class="mt-1 flex items-center gap-1.5 text-[10px] text-base-content/40"
+          >
+            <span
+              :if={@task.reported_by}
+              class="truncate max-w-[100px]"
+              title={"Reported by " <> @task.reported_by}
+            >
+              {@task.reported_by}
+            </span>
+            <span :if={
+              @task.reported_by &&
+                (@assignee_name || @task.inserted_at)
+            }>
+              ·
+            </span>
+            <span
+              :if={@assignee_name}
+              class="truncate max-w-[100px]"
+            >
+              → {@assignee_name}
+            </span>
+            <span :if={@assignee_name && @task.inserted_at}>·</span>
+            <span :if={@task.inserted_at} class="whitespace-nowrap">
+              {relative_time(@task.inserted_at)}
+            </span>
+          </div>
+
+          <%!-- Bottom row: priority + progress --%>
+          <div class="mt-1 flex items-center gap-2">
+            <span
+              class="badge badge-ghost badge-sm capitalize"
+              data-role="task-kind-badge"
+              data-task-kind={@task.kind}
+            >
+              {@task.kind}
+            </span>
+            <ExternalFeedbackComponents.trust_badge task={@task} />
+            <span :if={@task.priority} class={priority_badge_class(@task.priority)}>
+              {@task.priority}
+            </span>
+            <%!-- One decider (task 01a01a4a stage 5): this card's
+               review badge below is driven by `@review_counts`,
+               so the status chip resolves its reason from the
+               same count. When a pending review outranks the
+               merge gate the badge is the only "needs you" mark. --%>
+            <span
+              :if={@task.status in ~w(blocked planning in_review deploying)}
+              class={"#{@status_class} badge-xs"}
+            >
+              {@status_label}
+            </span>
+
+            <%!-- Blocked-by-deps badge: only when status="blocked" AND
+               metadata["unmet_dependencies"] is non-empty. Count is
+               read straight from metadata (no per-card DB hit). --%>
+            <span
+              :if={@task.status == "blocked" and unmet_dependency_count(@task) > 0}
+              class="badge badge-error badge-xs"
+              title="Waiting on dependencies"
+            >
+              Blocked · {unmet_dependency_count(@task)}
+            </span>
+
+            <%!-- Review badge --%>
+            <span
+              :if={@review_count > 0}
+              class="badge badge-warning badge-xs gap-1"
+            >
+              <span class="hero-eye size-3"></span>
+              {@review_count} review
+            </span>
+
+            <%!-- Meeting-triage `needs_promotion` badge (task
+               019f5e2b-8d29 stage 2, tooltip + icon polished in
+               task 019f6e2c stage 3). Rendered only for backlog
+               tasks flagged by the triage filer; clicking dispatches
+               `promote_task` which clears the flag AND atomically
+               transitions status → planning via `Platform.Tasks.promote/1`.
+               Mirrors the review-badge shape (badge-warning +
+               badge-xs). Backlog-scoped because promotion only
+               makes sense before the task leaves the entry column.
+               Browser-native `title=` tooltip — a Tippy hook per
+               kanban card is overkill for a single-line message. --%>
+            <button
+              :if={@task.status == "backlog" and @task.needs_promotion}
+              type="button"
+              class="badge badge-warning badge-xs gap-1 cursor-pointer"
+              phx-click="board_promote_task"
+              phx-target={@myself}
+              phx-value-id={@task.id}
+              data-role="needs-promotion-badge"
+              title="Filed from a meeting canvas. Click to promote."
+            >
+              <span class="hero-arrow-up-circle size-3"></span> Needs promotion
+            </button>
+
+            <%!-- Plan stage progress --%>
+            <div :if={@progress} class="flex flex-1 items-center gap-1">
+              <progress
+                class="progress progress-primary h-1 flex-1"
+                value={elem(@progress, 0)}
+                max={elem(@progress, 1)}
+              />
+              <span class="text-[10px] text-base-content/40">
+                {elem(@progress, 0)}/{elem(@progress, 1)}
+              </span>
+            </div>
+          </div>
+
+          <%!-- Per ADR 0029, plan approval is the only start signal.
+             No separate manual "Start" button on the card. The user
+             approves a plan from the detail panel, and the task
+             transitions automatically. --%>
+        </div>
+      </div>
     </div>
     """
   end
@@ -1635,8 +2087,9 @@ defmodule PlatformWeb.Tasks.BoardComponent do
   end
 
   # Stage-3 wrapper: filters `desktop_column_items/5` through the active
-  # scope-rail selection. `:all` is the unfiltered passthrough. `"fabrikam"` also
-  # returns the full list today because every task folds under :fabrikam until
+  # scope-rail selection, as `@board_scope`. `:all` is the unfiltered
+  # passthrough, and the root org's chip arrives as `:all` too (see
+  # `board_scope/1`), because every task folds under the root org until
   # `tasks.org_id` lands (the same contract `count_by_scope/0` encodes). The
   # other scopes return an empty list today; once MT/RBAC ships this helper
   # becomes the single seam to swap in real per-task scope filtering.
@@ -1644,17 +2097,12 @@ defmodule PlatformWeb.Tasks.BoardComponent do
     desktop_column_items(columns, stacks_by_column, col_key, sort, data)
   end
 
-  defp desktop_column_items_for_scope(columns, stacks_by_column, col_key, scope, sort, data)
-       when scope in [:fabrikam, "fabrikam"] do
-    desktop_column_items(columns, stacks_by_column, col_key, sort, data)
-  end
-
   # Any OTHER org — not just the five that used to be listed here by atom.
   # Task 01a09287 stage 2 turned `@scope_filter` into an org slug string and
   # removed the fixed enum, so this has to be keyed on "is a scope that is
-  # not fabrikam" rather than on a membership list that a new tenant falls out
-  # of. Falling out of it silently returned the FULL board under the other
-  # clause below, i.e. a new org's chip would have shown every Fabrikam task.
+  # not the root" rather than on a membership list that a new tenant falls
+  # out of. Falling out of it silently returned the FULL board under the
+  # other clause below, i.e. a new org's chip would have shown every task.
   defp desktop_column_items_for_scope(_columns, _stacks_by_column, _col_key, scope, _sort, _data)
        when is_binary(scope) or scope in [:soylent, :wayne_tech, :sxi, :paragon, :cyberdyne] do
     []

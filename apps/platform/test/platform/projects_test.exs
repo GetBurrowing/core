@@ -51,21 +51,21 @@ defmodule Platform.ProjectsTest do
   describe "group_by_org/1" do
     test "buckets active projects under their owning org in tenant-priority order" do
       {:ok, _} = Tasks.create_project(%{name: "Soylent Tool", org_id: tenant_org_id("soylent")})
-      {:ok, _} = Tasks.create_project(%{name: "Fabrikam Tool", org_id: fabrikam_org_id()})
+      {:ok, _} = Tasks.create_project(%{name: "Acme Tool", org_id: acme_org_id()})
 
       slugs =
         Tasks.list_projects_unscoped(preload: :org)
         |> Projects.group_by_org()
         |> Enum.map(fn {slug, _name, _ps} -> slug end)
 
-      # Fabrikam (priority 0) sorts ahead of Soylent (priority 1) regardless
-      # of insertion order.
-      assert slugs == ["fabrikam", "soylent"]
+      # The root (parent_org_id nil) sorts ahead of every tenant regardless
+      # of insertion order; root_org_slug_test.exs covers a non-acme slug.
+      assert slugs == ["acme", "soylent"]
     end
 
     test "excludes an archived project but keeps its active siblings" do
-      {:ok, _active} = Tasks.create_project(%{name: "Active One", org_id: fabrikam_org_id()})
-      {:ok, archived} = Tasks.create_project(%{name: "Archived One", org_id: fabrikam_org_id()})
+      {:ok, _active} = Tasks.create_project(%{name: "Active One", org_id: acme_org_id()})
+      {:ok, archived} = Tasks.create_project(%{name: "Archived One", org_id: acme_org_id()})
       archive_project!(archived)
 
       names = grouped_project_names()
@@ -75,7 +75,7 @@ defmodule Platform.ProjectsTest do
     end
 
     test "excludes a deletion-scheduled project (scheduling stamps archived_at)" do
-      {:ok, project} = Tasks.create_project(%{name: "Scheduled One", org_id: fabrikam_org_id()})
+      {:ok, project} = Tasks.create_project(%{name: "Scheduled One", org_id: acme_org_id()})
 
       project
       |> Project.changeset(%{
@@ -100,7 +100,7 @@ defmodule Platform.ProjectsTest do
     end
 
     test "regression: Tasks.list_projects_unscoped/1 STILL returns archived projects for all-rows callers" do
-      {:ok, archived} = Tasks.create_project(%{name: "Archived For Subs", org_id: fabrikam_org_id()})
+      {:ok, archived} = Tasks.create_project(%{name: "Archived For Subs", org_id: acme_org_id()})
       archive_project!(archived)
 
       all_names = Tasks.list_projects_unscoped() |> Enum.map(& &1.name)
@@ -113,7 +113,7 @@ defmodule Platform.ProjectsTest do
       # No projects at all — every seeded org still gets a header.
       slugs = active_section_slugs()
 
-      assert "fabrikam" in slugs
+      assert "acme" in slugs
       assert "soylent" in slugs
       assert "sxi" in slugs
       assert "wayne_tech" in slugs
@@ -150,13 +150,13 @@ defmodule Platform.ProjectsTest do
       refute "sxi" in slugs
     end
 
-    test "leads with Fabrikam and preserves tenant-priority order regardless of insertion order" do
+    test "leads with Acme and preserves tenant-priority order regardless of insertion order" do
       {:ok, _} = Tasks.create_project(%{name: "A", org_id: tenant_org_id("paragon")})
-      {:ok, _} = Tasks.create_project(%{name: "B", org_id: fabrikam_org_id()})
+      {:ok, _} = Tasks.create_project(%{name: "B", org_id: acme_org_id()})
 
-      # Fabrikam first; then canonical tenant priority (excludes the trailing
+      # Acme first; then canonical tenant priority (excludes the trailing
       # _unassigned bucket, which only appears for org-less projects).
-      assert active_section_slugs() == ["fabrikam", "soylent", "wayne_tech", "sxi", "paragon"]
+      assert active_section_slugs() == ["acme", "soylent", "wayne_tech", "sxi", "paragon"]
     end
 
     test "folds org-less projects into a trailing _unassigned bucket" do

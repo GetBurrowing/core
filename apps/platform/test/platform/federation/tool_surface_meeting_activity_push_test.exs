@@ -56,7 +56,7 @@ defmodule Platform.Federation.ToolSurfaceMeetingActivityPushTest do
       |> Project.changeset(%{
         name: "Activity Push Project #{n}",
         slug: "activity-push-project-#{n}",
-        org_id: Platform.TenancyFixtures.fabrikam_org_id()
+        org_id: Platform.TenancyFixtures.acme_org_id()
       })
       |> Repo.insert()
 

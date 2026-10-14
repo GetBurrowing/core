@@ -517,7 +517,7 @@ defmodule Platform.Meetings.IntentQueue.ServerPersistenceTest do
     {:ok, project} =
       Platform.Tasks.create_project(%{
         name: "Mirror Route Project #{n}",
-        org_id: Platform.Tenancy.get_org_by_slug!("fabrikam").id
+        org_id: Platform.Tenancy.get_org_by_slug!("acme").id
       })
 
     {:ok, meeting} =

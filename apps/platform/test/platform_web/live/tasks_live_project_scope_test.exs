@@ -28,7 +28,7 @@ defmodule PlatformWeb.TasksLiveProjectScopeTest do
   alias Platform.Tenancy.OrgMembership
 
   # `@example.com` keeps `Tenancy.derive_role_from_email/1` at `:member`;
-  # a `@example.com` address would derive admin and blanket-bypass the very
+  # a `@acme.test` address would derive admin and blanket-bypass the very
   # scope these tests pin.
   defp user!(role, org_id) do
     user =
@@ -99,23 +99,23 @@ defmodule PlatformWeb.TasksLiveProjectScopeTest do
   end
 
   defp seed do
-    fabrikam_org_id = Platform.TenancyFixtures.fabrikam_org_id()
+    acme_org_id = Platform.TenancyFixtures.acme_org_id()
     tenant_org_id = Platform.TenancyFixtures.tenant_org_id("sxi")
 
-    own = project!(fabrikam_org_id, "Own Fabrikam Project #{System.unique_integer([:positive])}")
+    own = project!(acme_org_id, "Own Acme Project #{System.unique_integer([:positive])}")
     foreign = project!(tenant_org_id, "Foreign Project #{System.unique_integer([:positive])}")
 
-    %{fabrikam_org_id: fabrikam_org_id, own: own, foreign: foreign}
+    %{acme_org_id: acme_org_id, own: own, foreign: foreign}
   end
 
   describe "mount" do
     test "a plain member does not see a foreign org's project name", %{conn: conn} do
-      %{fabrikam_org_id: fabrikam_org_id, own: own, foreign: foreign} = seed()
-      user = user!("member", fabrikam_org_id)
+      %{acme_org_id: acme_org_id, own: own, foreign: foreign} = seed()
+      user = user!("member", acme_org_id)
 
       # Precondition: an admin viewer bypasses the scope by design, which
       # would make a broken filter look correct.
-      refute Tenancy.fabrikam_admin?(user)
+      refute Tenancy.root_admin?(user)
 
       conn = init_test_session(conn, current_user_id: user.id)
       {:ok, _view, html} = live(conn, "/tasks")
@@ -127,11 +127,11 @@ defmodule PlatformWeb.TasksLiveProjectScopeTest do
       refute sidebar =~ foreign.name
     end
 
-    test "a Fabrikam root admin sees both orgs' projects", %{conn: conn} do
-      %{fabrikam_org_id: fabrikam_org_id, own: own, foreign: foreign} = seed()
-      admin = user!("admin", fabrikam_org_id)
+    test "an Acme root admin sees both orgs' projects", %{conn: conn} do
+      %{acme_org_id: acme_org_id, own: own, foreign: foreign} = seed()
+      admin = user!("admin", acme_org_id)
 
-      assert Tenancy.fabrikam_admin?(admin) == true
+      assert Tenancy.root_admin?(admin) == true
 
       conn = init_test_session(conn, current_user_id: admin.id)
       {:ok, _view, html} = live(conn, "/tasks")
@@ -150,28 +150,28 @@ defmodule PlatformWeb.TasksLiveProjectScopeTest do
     # viewer-scoped too.
 
     test "a member of exactly two orgs sees exactly those two sections", %{conn: conn} do
-      fabrikam_org_id = Platform.TenancyFixtures.fabrikam_org_id()
+      acme_org_id = Platform.TenancyFixtures.acme_org_id()
       soylent_org_id = Platform.TenancyFixtures.tenant_org_id("soylent")
       sxi_org_id = Platform.TenancyFixtures.tenant_org_id("sxi")
 
-      own = project!(fabrikam_org_id, "Own Fabrikam Project #{System.unique_integer([:positive])}")
+      own = project!(acme_org_id, "Own Acme Project #{System.unique_integer([:positive])}")
 
       soylent =
         project!(soylent_org_id, "Soylent Work #{System.unique_integer([:positive])}")
 
       foreign = project!(sxi_org_id, "Foreign Project #{System.unique_integer([:positive])}")
 
-      user = user!("member", fabrikam_org_id) |> member_of!(soylent_org_id)
-      refute Tenancy.fabrikam_admin?(user)
+      user = user!("member", acme_org_id) |> member_of!(soylent_org_id)
+      refute Tenancy.root_admin?(user)
 
       conn = init_test_session(conn, current_user_id: user.id)
       {:ok, _view, html} = live(conn, "/tasks")
 
       # Positive control — an implementation rendering ZERO sections must fail.
-      assert section_slugs(html) == ["soylent", "fabrikam"]
+      assert section_slugs(html) == ["acme", "soylent"]
 
       headers = section_header_text(html)
-      assert headers =~ Tenancy.scope_label("fabrikam")
+      assert headers =~ Tenancy.scope_label("acme")
       assert headers =~ Tenancy.scope_label("soylent")
 
       for absent <- ["wayne_tech", "sxi", "paragon"] do
@@ -184,10 +184,10 @@ defmodule PlatformWeb.TasksLiveProjectScopeTest do
       refute sidebar =~ foreign.name
     end
 
-    test "a Fabrikam root admin still sees every active org's section", %{conn: conn} do
-      fabrikam_org_id = Platform.TenancyFixtures.fabrikam_org_id()
-      admin = user!("admin", fabrikam_org_id)
-      assert Tenancy.fabrikam_admin?(admin) == true
+    test "an Acme root admin still sees every active org's section", %{conn: conn} do
+      acme_org_id = Platform.TenancyFixtures.acme_org_id()
+      admin = user!("admin", acme_org_id)
+      assert Tenancy.root_admin?(admin) == true
 
       conn = init_test_session(conn, current_user_id: admin.id)
       {:ok, _view, html} = live(conn, "/tasks")
@@ -202,23 +202,23 @@ defmodule PlatformWeb.TasksLiveProjectScopeTest do
     test "the refresh path keeps the section list scoped", %{conn: conn} do
       # `create_project` re-runs `project_sections/2` outside `mount/3`; a
       # viewer-less read there re-leaks the headers after any sidebar refresh.
-      fabrikam_org_id = Platform.TenancyFixtures.fabrikam_org_id()
+      acme_org_id = Platform.TenancyFixtures.acme_org_id()
       soylent_org_id = Platform.TenancyFixtures.tenant_org_id("soylent")
 
-      user = user!("member", fabrikam_org_id) |> member_of!(soylent_org_id)
-      refute Tenancy.fabrikam_admin?(user)
+      user = user!("member", acme_org_id) |> member_of!(soylent_org_id)
+      refute Tenancy.root_admin?(user)
 
       conn = init_test_session(conn, current_user_id: user.id)
       {:ok, view, _html} = live(conn, "/tasks")
 
-      new_name = "Created Fabrikam Project #{System.unique_integer([:positive])}"
+      new_name = "Created Acme Project #{System.unique_integer([:positive])}"
 
       html =
         sidebar_submit(view, "sidebar_create_project", %{
-          "project" => %{"name" => new_name, "slug" => "", "org_id" => fabrikam_org_id}
+          "project" => %{"name" => new_name, "slug" => "", "org_id" => acme_org_id}
         })
 
-      assert section_slugs(html) == ["soylent", "fabrikam"]
+      assert section_slugs(html) == ["acme", "soylent"]
       assert sidebar_text(html) =~ new_name
     end
   end
@@ -229,18 +229,18 @@ defmodule PlatformWeb.TasksLiveProjectScopeTest do
     # though the initial render looked correct.
 
     test "the create_project re-fetch stays scoped", %{conn: conn} do
-      %{fabrikam_org_id: fabrikam_org_id, own: own, foreign: foreign} = seed()
-      user = user!("member", fabrikam_org_id)
-      refute Tenancy.fabrikam_admin?(user)
+      %{acme_org_id: acme_org_id, own: own, foreign: foreign} = seed()
+      user = user!("member", acme_org_id)
+      refute Tenancy.root_admin?(user)
 
       conn = init_test_session(conn, current_user_id: user.id)
       {:ok, view, _html} = live(conn, "/tasks")
 
-      new_name = "Created Fabrikam Project #{System.unique_integer([:positive])}"
+      new_name = "Created Acme Project #{System.unique_integer([:positive])}"
 
       html =
         sidebar_submit(view, "sidebar_create_project", %{
-          "project" => %{"name" => new_name, "slug" => "", "org_id" => fabrikam_org_id}
+          "project" => %{"name" => new_name, "slug" => "", "org_id" => acme_org_id}
         })
 
       sidebar = sidebar_text(html)
@@ -253,16 +253,16 @@ defmodule PlatformWeb.TasksLiveProjectScopeTest do
     end
 
     test "the archive re-fetch (refresh_containers/1) reads through a viewer", %{conn: conn} do
-      # `archive_container` is Fabrikam-admin-only (re-authorized in
+      # `archive_container` is Acme-admin-only (re-authorized in
       # `Platform.Tenancy.Lifecycle`), so a plain member cannot reach
       # `refresh_containers/1` at all. What this pins is that the re-fetch
       # passes a real viewer through: a `nil` or missing assign there empties
       # the sidebar for everyone, including the admin, and this goes red.
-      %{fabrikam_org_id: fabrikam_org_id, own: own, foreign: foreign} = seed()
-      admin = user!("admin", fabrikam_org_id)
-      assert Tenancy.fabrikam_admin?(admin) == true
+      %{acme_org_id: acme_org_id, own: own, foreign: foreign} = seed()
+      admin = user!("admin", acme_org_id)
+      assert Tenancy.root_admin?(admin) == true
 
-      doomed = project!(fabrikam_org_id, "Doomed Project #{System.unique_integer([:positive])}")
+      doomed = project!(acme_org_id, "Doomed Project #{System.unique_integer([:positive])}")
 
       conn = init_test_session(conn, current_user_id: admin.id)
       {:ok, view, html} = live(conn, "/tasks")

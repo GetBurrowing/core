@@ -55,7 +55,9 @@ defmodule Platform.Experiments.MetricKind do
   @kinds [
     Platform.Experiments.MetricKinds.Registered,
     Platform.Experiments.MetricKinds.OutcomeRate,
-    Platform.Experiments.MetricKinds.DurationBetween
+    Platform.Experiments.MetricKinds.DurationBetween,
+    # Task 01a114a8 stage 4: per-dispatch usage from DispatchMetrics.
+    Platform.Experiments.MetricKinds.DispatchUsage
   ]
 
   @doc "Every registered metric kind module."

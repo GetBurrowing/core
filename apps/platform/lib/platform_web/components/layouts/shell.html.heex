@@ -94,17 +94,18 @@
   </div>
   <%!-- Desktop icon-rail (lg+ width). Single-source-of-truth destination
        list lives in PlatformWeb.Components.IconRail.destinations/1; the
-       template here just hands off current_path / is_fabrikam_user /
+       template here just hands off current_path / root_user /
        sidebar_collapsed and lets the component own the rendering. Mobile
        gets the matching `<.bottom_rail>` below. Admin tiles are gated by
-       `is_fabrikam_user` and never render in the DOM for non-Fabrikam users (task
+       `root_user` and never render in the DOM for non-root users (task
        019e389b Stage 3 — replaces the inline 11-link sidebar). --%>
   <.icon_rail
     current_path={@current_path}
-    is_fabrikam_user={@is_fabrikam_user}
+    root_user={@root_user}
     sidebar_collapsed={@sidebar_collapsed}
     inbox_unread_count={@inbox_unread_count}
     chat_unread_count={@chat_unread_count}
+    brand_name={@brand_name}
   />
 
   <%!-- Main content area. min-w-0 + min-h-0: this column is flex-1 inside
@@ -124,17 +125,55 @@
       id="utility-bar"
       class="relative flex h-10 items-center justify-between border-b border-edge bg-base-200/60 px-4"
     >
-      <div class="flex items-center gap-2">
+      <%!-- min-w-0 + flex-1 here and shrink-0 on the right cluster (task
+           01a1261e stage 3): when the native install switcher shows at
+           375px, the LEFT side truncates; the roster and user controls
+           never squeeze or wrap. --%>
+      <div class="flex min-w-0 flex-1 items-center gap-2">
         <%!-- Mobile primary nav is the bottom-nav from #13; the original
              hamburger + drawer pattern was deleted in task 019e0d4b Stage 2. --%>
         <%!-- Active module name — desktop too since task 019f575e stage 3:
              the brand moved into the rail header, so the bar carries the
              current-module context instead of a second brand mark. --%>
-        <span class="text-sm font-semibold">
+        <%!-- Native install switcher (task 01a1261e stage 3). Rendered
+             `hidden` for EVERY client; only the NativeInstallSwitch hook
+             reveals it, and only inside the Burrow app on a build whose
+             SuiteNative plugin has `installBadges` (desktop, PWA and older
+             app builds see no change). Tapping opens the app's install
+             picker. The dot (no number) means another signed-in install has
+             unread; slot `bg-primary`, the chat rail's
+             `.channel-row-unread-pill` slot in dot form. The logo resolves
+             through `/branding/current/apple_touch`, which redirects to the
+             shipped Burrow mark when the install has uploaded none. --%>
+        <button
+          id="native-install-switch"
+          type="button"
+          data-role="native-install-switch"
+          phx-hook="NativeInstallSwitch"
+          aria-label={"Switch install, current: #{@brand_name}"}
+          class="hidden -ml-1 shrink-0 items-center gap-1.5 rounded-md px-1 py-0.5 hover:bg-base-300/60"
+        >
+          <img
+            src="/branding/current/apple_touch"
+            alt=""
+            class="size-5 shrink-0 rounded"
+            data-role="install-logo"
+          />
+          <span class="max-w-[7rem] truncate text-sm font-semibold">{@brand_name}</span>
+          <span class="hero-chevron-down size-4 shrink-0 text-base-content/60" aria-hidden="true">
+          </span>
+          <span
+            data-role="install-unread-dot"
+            class="hidden size-2 shrink-0 rounded-full bg-primary"
+            aria-hidden="true"
+          >
+          </span>
+        </button>
+        <span class="min-w-0 truncate text-sm font-semibold">
           {@active_module}
         </span>
       </div>
-      <div class="flex items-center gap-2">
+      <div class="flex shrink-0 items-center gap-2">
         <%!-- Roster presence indicator. Wrapped in <.async_result> so the
              initial assign_async load shows a spinner without blocking page
              paint. After PubSub-driven refreshes (refresh_roster/2) the
@@ -413,18 +452,75 @@
           <span data-icon="moon" class="hero-moon size-4"></span>
         </button>
 
-        <span class="text-xs text-base-content/50">{@current_user}</span>
-        <.link
-          href="/auth/logout"
-          class="text-xs text-base-content/40 hover:text-base-content/70 transition-colors"
-          title="Log out"
+        <%!-- Account menu: one avatar button on every width (the burrow switcher
+              took the top bar's spare room on mobile). Log out keeps the exact
+              control it replaced: a plain GET link to /auth/logout. --%>
+        <div
+          id="account-menu"
+          class="relative"
+          phx-click-away={
+            JS.hide(to: "#account-menu-list")
+            |> JS.set_attribute({"aria-expanded", "false"}, to: "#account-menu-trigger")
+          }
+          phx-window-keydown={
+            JS.hide(to: "#account-menu-list")
+            |> JS.set_attribute({"aria-expanded", "false"}, to: "#account-menu-trigger")
+          }
+          phx-key="Escape"
         >
-          <span class="hero-arrow-right-on-rectangle size-4"></span>
-        </.link>
+          <button
+            id="account-menu-trigger"
+            type="button"
+            aria-label="Account menu"
+            aria-haspopup="menu"
+            aria-expanded="false"
+            aria-controls="account-menu-list"
+            phx-click={
+              JS.toggle(to: "#account-menu-list", display: "flex")
+              |> JS.toggle_attribute({"aria-expanded", "true", "false"})
+            }
+            class="flex items-center rounded-full focus-visible-ring"
+          >
+            <.human_avatar
+              name={@current_user}
+              avatar_url={Map.get(assigns[:current_user_record] || %{}, :avatar_url)}
+              seed={Map.get(assigns[:current_user_record] || %{}, :id) || @current_user}
+              size="sm"
+            />
+          </button>
+          <div
+            id="account-menu-list"
+            role="menu"
+            aria-label="Account"
+            class="absolute right-0 top-full z-50 mt-1 hidden w-56 max-w-[calc(100vw-1rem)] flex-col rounded-field border border-edge bg-base-100 p-1 shadow-lg"
+          >
+            <div class="min-w-0 px-2.5 py-2">
+              <p class="truncate text-sm font-medium text-base-content">{@current_user}</p>
+              <p
+                :if={
+                  is_binary(Map.get(assigns[:current_user_record] || %{}, :email)) &&
+                    @current_user_record.email != @current_user
+                }
+                class="truncate text-xs text-base-content/50"
+              >
+                {@current_user_record.email}
+              </p>
+            </div>
+            <.link
+              href="/auth/logout"
+              role="menuitem"
+              data-role="account-menu-logout"
+              class="flex min-h-11 items-center gap-2 rounded-field px-2.5 text-sm text-base-content/80 hover:bg-base-200 sm:min-h-8"
+            >
+              <span class="hero-arrow-right-on-rectangle size-4" aria-hidden="true"></span>
+              <span>Log out</span>
+            </.link>
+          </div>
+        </div>
       </div>
     </header>
     <%!-- Flash messages --%>
-    <.flash_group flash={@flash} />
+    <.flash_group flash={@flash} connection_status={false} />
     <%!-- Surface. `flex-1` claims the remaining vertical space inside
          the inner column; `overflow-hidden` keeps the surface itself
          from scrolling (per-LiveView panels supply their own
@@ -444,19 +540,22 @@
          (#message-list etc.) can scroll on their own. --%>
     <main
       data-scroll-container
-      class="flex-1 min-h-0 overflow-hidden overscroll-contain"
+      class="relative flex-1 min-h-0 overflow-hidden overscroll-contain"
     >
+      <%!-- Quiet reconnect slot (task 01a12b10): pinned to the top edge of
+           the main pane, below the header, as an overlay. --%>
+      <.connection_status variant={:pane} />
       {@inner_content}
     </main>
 
     <%!-- Mobile bottom-rail (task 019e389b Stage 3) — keys off `current_path`
-         + `is_fabrikam_user` from the same single source of truth as the desktop
+         + `root_user` from the same single source of truth as the desktop
          icon-rail above. lg:hidden inside the component itself so desktop
          continues to use the icon-rail. Tasks-badge wiring is parked: the
          old `<.bottom_nav>` rendered it; the icon-rail rev re-introduces
          badge support in a later stage (badge data assign `@tasks_count`
          still computed in `shell_live.ex` for the future). --%>
-    <.bottom_rail current_path={@current_path} is_fabrikam_user={@is_fabrikam_user} />
+    <.bottom_rail current_path={@current_path} root_user={@root_user} />
 
     <%!-- Mobile More sheet (task 019e1322 Stage 2) — bottom sheet that surfaces
          the long-tail destinations (Skills, Changelog, Agent Resources, Org
@@ -466,7 +565,7 @@
     <.more_sheet
       open={@more_sheet_open}
       current_user={@current_user}
-      is_fabrikam_user={@is_fabrikam_user}
+      root_user={@root_user}
     />
 
     <%!-- Persistent meeting bar (survives navigation) --%>

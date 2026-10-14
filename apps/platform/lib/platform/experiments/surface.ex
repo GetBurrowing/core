@@ -80,8 +80,10 @@ defmodule Platform.Experiments.Surface do
   The payload as the plain-text body of a dispatch directive block, or nil
   for "no block". Optional; only a surface whose payload is appended to a
   dispatch prompt (see `HeartbeatScheduler.append_experiment_directive/4`)
-  implements it. A control payload renders nil, so the control arm's prompt
-  is the unexperimented prompt.
+  implements it. A control payload usually renders nil, so the control arm's
+  prompt is the unexperimented prompt. `dispatch.code_mode` is the
+  deliberate exception: its control renders a "do not call suite_run" line
+  (see `Platform.Experiments.Surfaces.CodeMode`).
   """
   @callback render_directive(payload :: map()) :: String.t() | nil
 

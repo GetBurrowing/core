@@ -15,8 +15,15 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
       `"canvas_open_mobile"`, `"canvas_patch"`, `"canvas_action_click"`,
       `"canvas_form_submit"`, `"canvas_search"`,
       `"canvas_explorer_toggle_group"`, `"canvas_explorer_page"`,
-      `"canvas_explorer_expand"`, `"canvas_explorer_collapse"`
-    * Info:    `{:canvas_created, canvas}`, `{:canvas_updated, canvas}`
+      `"canvas_explorer_expand"`, `"canvas_explorer_collapse"`, and the
+      canvas-room relay `"canvas_room_join"`, `"canvas_room_op"`,
+      `"canvas_room_ephemeral"`, `"canvas_room_leave"` (task 01a1316b-84fa
+      stage 2; see the comment above those clauses), and `"canvas_room_call"`
+      (task 01a1316b-aab0 stage 2)
+    * Info:    `{:canvas_created, canvas}`, `{:canvas_updated, canvas}`, and
+      the room's `{:canvas_room_diff | :canvas_room_presence |
+      :canvas_room_ephemeral, ...}` plus the room pid's `:DOWN`, and
+      `{:canvas_room_call_result, req, result}`
 
   ## The explorer's data (task `01a0740d` stage 3)
 
@@ -48,12 +55,14 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   require Logger
 
   import Phoenix.Component, only: [assign: 3, to_form: 2]
-  import Phoenix.LiveView, only: [attach_hook: 4, put_flash: 3]
+  import Phoenix.LiveView, only: [attach_hook: 4, put_flash: 3, push_event: 3]
 
   alias Platform.Chat
   alias Platform.Chat.Canvas.Server, as: CanvasServer
   alias Platform.Chat.Canvas.Versions, as: CanvasVersions
   alias Platform.Chat.CanvasAccess
+  alias Platform.Chat.CanvasDocument
+  alias Platform.Chat.CanvasRoom
   alias Platform.Chat.CanvasSearchIndex
   alias Platform.Chat.Presence
   alias Platform.Chat.PubSub, as: ChatPubSub
@@ -73,6 +82,10 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   # pager offer a next page that repeats rows already shown. If either moves,
   # both move.
   @canvas_explorer_page_size 20
+
+  # Canvas rooms: only the op set's own argument keys reach the room and its
+  # event log (task 01a1316b-84fa stage 2).
+  @room_op_keys ~w(type key value by name item id patch)
 
   # The allow-list IS the parse. `String.to_existing_atom/1` on a client-supplied
   # string would still admit any atom the VM happens to have loaded, which is
@@ -128,6 +141,7 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
     |> assign(:show_versions_panel, false)
     |> assign(:canvas_versions, [])
     |> assign(:restore_confirm_revision, nil)
+    |> assign(:canvas_rooms, %{})
     |> assign_new_form()
     |> attach_hook(:canvas_events, :handle_event, &handle_event/3)
     |> attach_hook(:canvas_info, :handle_info, &handle_info/2)
@@ -296,7 +310,7 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
 
   Not fixed here. Deliberately left for the stage that owns canvas READ
   surfaces (task 019e2c4b stage 3/4), because closing it means deciding
-  whether Fabrikam admins keep their current de-facto global canvas read — a
+  whether root-org admins keep their current de-facto global canvas read — a
   policy question, not a refactor. Recorded so the next person does not have
   to rediscover it.
 
@@ -713,7 +727,314 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
     end
   end
 
+  # ── Canvas rooms (task 01a1316b-84fa stage 2) ─────────────────────────
+  #
+  # The `CanvasRoomBridge` hook relays a sealed frame's `window.suite` here.
+  # canvas_id / node_id come from the hook element's data attributes (never
+  # from the frame), and the ACTOR comes from this socket's session assigns:
+  # any `actor` key in params is ignored. `:canvas_rooms` is keyed by
+  # `{canvas_id, node_id}` and holds the room pid and its monitor, whether the
+  # viewer may write, and the set of hook ids rendering it (one node can be
+  # rendered twice in one LiveView: chat panel plus mobile overlay). Nothing
+  # in a template reads it, so changing it does not re-render.
+  defp handle_event(
+         "canvas_room_join",
+         %{"canvas_id" => canvas_id, "node_id" => node_id} = params,
+         socket
+       )
+       when is_binary(canvas_id) and is_binary(node_id) do
+    with {:ok, actor} <- room_actor(socket),
+         {:ok, canvas, level} <- room_canvas(socket, canvas_id),
+         :ok <- room_node(canvas, node_id),
+         {:ok, snap} <- CanvasRoom.join(canvas.id, node_id, self(), actor) do
+      socket =
+        track_room(socket, {canvas.id, node_id}, hook_id(params), snap.room_pid, level == :member)
+
+      {:halt,
+       %{
+         ok: true,
+         seq: snap.seq,
+         state: snap.state,
+         presence: snap.presence,
+         me: %{id: actor.id, display_name: actor.display_name},
+         writable: level == :member
+       }, socket}
+    else
+      {:error, code} -> {:halt, %{ok: false, error: to_string(code)}, socket}
+    end
+  end
+
+  defp handle_event(
+         "canvas_room_op",
+         %{"canvas_id" => canvas_id, "node_id" => node_id, "op" => op},
+         socket
+       )
+       when is_binary(canvas_id) and is_binary(node_id) and is_map(op) do
+    reply =
+      with %{writable: true} <- Map.get(socket.assigns.canvas_rooms, {canvas_id, node_id}),
+           {:ok, actor} <- room_actor(socket),
+           {:ok, %{seq: seq, result: result}} <-
+             CanvasRoom.apply_op(canvas_id, node_id, actor, Map.take(op, @room_op_keys)) do
+        %{ok: true, seq: seq, result: result}
+      else
+        %{writable: false} -> %{ok: false, error: "forbidden"}
+        nil -> %{ok: false, error: "not_joined"}
+        {:error, code} -> %{ok: false, error: to_string(code)}
+      end
+
+    {:halt, reply, socket}
+  end
+
+  defp handle_event(
+         "canvas_room_ephemeral",
+         %{"canvas_id" => canvas_id, "node_id" => node_id, "channel" => channel} = params,
+         socket
+       )
+       when is_binary(canvas_id) and is_binary(node_id) and is_binary(channel) do
+    with %{} <- Map.get(socket.assigns.canvas_rooms, {canvas_id, node_id}),
+         {:ok, actor} <- room_actor(socket) do
+      CanvasRoom.ephemeral(canvas_id, node_id, actor, channel, Map.get(params, "payload"))
+    end
+
+    {:halt, socket}
+  end
+
+  # A handler call (task 01a1316b-aab0 stage 2). The room runs the handler
+  # off its own process and sends `{:canvas_room_call_result, req, result}`
+  # back here, so this replies nothing: a handler can run for seconds. The
+  # actor is this socket's session user, never a params value. A call is
+  # held to EXACTLY the `canvas_room_op` rule, `writable: true` on the joined
+  # entry (task 01a1316b-aab0 stage 4, finding F1): a handler's room ops land
+  # under the caller's name, so a read-only viewer calling one would write
+  # room state its own plain op is refused. The refusal is kind `forbidden`,
+  # code `not_writable`, and is audited as a script_run by the room module.
+  defp handle_event(
+         "canvas_room_call",
+         %{"canvas_id" => canvas_id, "node_id" => node_id, "name" => name} = params,
+         socket
+       )
+       when is_binary(canvas_id) and is_binary(node_id) and is_binary(name) do
+    req = %{
+      canvas_id: canvas_id,
+      node_id: node_id,
+      hook_id: hook_id(params),
+      req: call_req(params)
+    }
+
+    with %{writable: true} <- Map.get(socket.assigns.canvas_rooms, {canvas_id, node_id}),
+         {:ok, actor} <- room_actor(socket) do
+      CanvasRoom.call_handler(
+        canvas_id,
+        node_id,
+        actor,
+        name,
+        Map.get(params, "args") || %{},
+        {self(), req}
+      )
+
+      {:halt, socket}
+    else
+      %{writable: false} ->
+        refuse_reader_call(socket, canvas_id, node_id, name, req)
+
+      nil ->
+        {:halt, push_call_result(socket, req, call_error("not_joined"))}
+
+      {:error, code} ->
+        {:halt, push_call_result(socket, req, call_error(to_string(code)))}
+    end
+  end
+
+  defp handle_event(
+         "canvas_room_leave",
+         %{"canvas_id" => canvas_id, "node_id" => node_id} = params,
+         socket
+       )
+       when is_binary(canvas_id) and is_binary(node_id) do
+    {:halt, untrack_room(socket, {canvas_id, node_id}, hook_id(params))}
+  end
+
+  # A malformed room event is refused here rather than falling through to a
+  # LiveView with no clause for it.
+  defp handle_event("canvas_room_" <> _event, _params, socket),
+    do: {:halt, %{ok: false, error: "invalid"}, socket}
+
   defp handle_event(_event, _params, socket), do: {:cont, socket}
+
+  defp hook_id(%{"hook_id" => id}) when is_binary(id) and byte_size(id) <= 256, do: id
+  defp hook_id(_params), do: "default"
+
+  # The writer is the signed-in user of THIS socket. The participant's
+  # display name is preferred, as everywhere else in the space.
+  defp room_actor(socket) do
+    case current_user_id(socket) do
+      id when is_binary(id) ->
+        name =
+          case socket.assigns do
+            %{current_participant: %{display_name: n}} when is_binary(n) and n != "" -> n
+            %{current_user_record: %{name: n}} when is_binary(n) -> n
+            %{current_user: %{name: n}} when is_binary(n) -> n
+            _ -> nil
+          end
+
+        {:ok, %{type: "user", id: id, display_name: name}}
+
+      _ ->
+        {:error, :forbidden}
+    end
+  end
+
+  # `find/2` resolves canvases the viewer has no claim on (its KNOWN GAP), so
+  # the room resolves through `CanvasAccess` instead: a read grant joins, and
+  # only space participation (`:member`) writes.
+  defp room_canvas(socket, canvas_id) do
+    with true <- Platform.UUID.valid?(canvas_id),
+         {:ok, %{deleted_at: nil} = canvas, level} <-
+           CanvasAccess.fetch_for_viewer(canvas_id, viewer(socket), audit: false) do
+      {:ok, canvas, level}
+    else
+      {:error, code} -> {:error, code}
+      _ -> {:error, :not_found}
+    end
+  end
+
+  # The live document first: `Canvas.Server` is ahead of the row during its
+  # async persist, so a node added a moment ago is already joinable.
+  defp room_node(canvas, node_id) do
+    document =
+      case CanvasServer.describe(canvas.id) do
+        {:ok, %{document: document}} -> document
+        _ -> canvas.document
+      end
+
+    if CanvasRoom.room_node?(CanvasDocument.get_node(document, node_id)),
+      do: :ok,
+      else: {:error, :not_a_room_node}
+  end
+
+  defp track_room(socket, key, hook_id, pid, writable) do
+    rooms = socket.assigns.canvas_rooms
+
+    entry =
+      case Map.get(rooms, key) do
+        nil ->
+          {canvas_id, node_id} = key
+          ChatPubSub.subscribe_canvas_room(canvas_id, node_id)
+          %{pid: pid, ref: Process.monitor(pid), hooks: MapSet.new()}
+
+        %{pid: ^pid} = entry ->
+          entry
+
+        %{ref: ref} = entry ->
+          Process.demonitor(ref, [:flush])
+          %{entry | pid: pid, ref: Process.monitor(pid)}
+      end
+
+    entry = entry |> Map.put(:writable, writable) |> Map.update!(:hooks, &MapSet.put(&1, hook_id))
+    assign(socket, :canvas_rooms, Map.put(rooms, key, entry))
+  end
+
+  defp untrack_room(socket, {canvas_id, node_id} = key, hook_id) do
+    rooms = socket.assigns.canvas_rooms
+
+    case Map.get(rooms, key) do
+      nil ->
+        socket
+
+      entry ->
+        hooks = MapSet.delete(entry.hooks, hook_id)
+
+        if MapSet.size(hooks) == 0 do
+          Process.demonitor(entry.ref, [:flush])
+          ChatPubSub.unsubscribe_canvas_room(canvas_id, node_id)
+          CanvasRoom.leave(canvas_id, node_id, self())
+          assign(socket, :canvas_rooms, Map.delete(rooms, key))
+        else
+          assign(socket, :canvas_rooms, Map.put(rooms, key, %{entry | hooks: hooks}))
+        end
+    end
+  end
+
+  defp room_event(canvas_id, node_id, kind), do: "canvas_room:#{canvas_id}:#{node_id}:#{kind}"
+
+  defp call_req(%{"req" => req}) when is_binary(req) and byte_size(req) <= 128, do: req
+  defp call_req(_params), do: nil
+
+  defp call_error(code), do: {:error, %{kind: code, code: code, message: code}}
+
+  defp refuse_reader_call(socket, canvas_id, node_id, name, req) do
+    message = "a read-only viewer may not call this canvas's handlers"
+
+    case room_actor(socket) do
+      {:ok, actor} ->
+        CanvasRoom.refuse_call(
+          canvas_id,
+          node_id,
+          actor,
+          name,
+          "forbidden",
+          "not_writable",
+          message,
+          {self(), req}
+        )
+
+        {:halt, socket}
+
+      {:error, _} ->
+        {:halt,
+         push_call_result(
+           socket,
+           req,
+           {:error, %{kind: "forbidden", code: "not_writable", message: message}}
+         )}
+    end
+  end
+
+  defp push_call_result(socket, req, result) do
+    payload =
+      case result do
+        {:ok, %{seq: seq, applied: applied}} ->
+          %{ok: true, result: %{seq: seq, applied: applied}, seq: seq}
+
+        {:error, %{kind: kind, code: code, message: message}} ->
+          %{ok: false, kind: kind, code: code, message: message}
+      end
+
+    push_event(
+      socket,
+      room_event(req.canvas_id, req.node_id, "call_result"),
+      Map.merge(payload, %{req: req.req, hook_id: req.hook_id})
+    )
+  end
+
+  defp tracked_room?(socket, canvas_id, node_id),
+    do: Map.has_key?(Map.get(socket.assigns, :canvas_rooms, %{}), {canvas_id, node_id})
+
+  # The room went down (stop/2, a crash, a kill). Rejoin, which starts a
+  # fresh room from its last flush, and push the snapshot so every frame on
+  # this page re-syncs without a reload.
+  defp rejoin_room(socket, {canvas_id, node_id} = key, entry) do
+    rooms = socket.assigns.canvas_rooms
+
+    with {:ok, actor} <- room_actor(socket),
+         {:ok, snap} <- CanvasRoom.join(canvas_id, node_id, self(), actor) do
+      entry = %{entry | pid: snap.room_pid, ref: Process.monitor(snap.room_pid)}
+
+      socket
+      |> assign(:canvas_rooms, Map.put(rooms, key, entry))
+      |> push_event(room_event(canvas_id, node_id, "snapshot"), %{
+        seq: snap.seq,
+        state: snap.state,
+        presence: snap.presence,
+        me: %{id: actor.id, display_name: actor.display_name},
+        writable: entry.writable
+      })
+    else
+      _ ->
+        ChatPubSub.unsubscribe_canvas_room(canvas_id, node_id)
+        assign(socket, :canvas_rooms, Map.delete(rooms, key))
+    end
+  end
 
   # `junk_batch:<canvas_id>` — opens the confirmation modal owned by
   # `PlatformWeb.ChatLive` (M5b/019f6e2c stage 4). M5a's Stage 5 shipped
@@ -768,7 +1089,7 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   defp handle_canvas_action_value(_value, _canvas, socket), do: {:halt, socket}
 
   # Authorization for junk_batch: allow the source canvas's creator (by
-  # participant id) OR any Fabrikam root admin. `current_user` may be
+  # participant id) OR any root-org admin. `current_user` may be
   # absent in test/system paths — in that case, admin check falls
   # through to false and only the participant path can succeed.
   defp authorize_junk_batch(socket, canvas) do
@@ -788,22 +1109,22 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
 
   defp canvas_owner?(_socket, _canvas), do: false
 
-  # Prefer the `:fabrikam_admin?` assign that `PlatformWeb.LiveAuth`'s
+  # Prefer the `:root_admin?` assign that `PlatformWeb.LiveAuth`'s
   # `:default` on_mount populates — it's a pure derivation on the
   # preloaded `:current_user_record` and avoids a per-click DB hit. Fall
-  # back to a live `Tenancy.fabrikam_admin?/1` lookup for sockets that
+  # back to a live `Tenancy.root_admin?/1` lookup for sockets that
   # didn't ride that on_mount chain (embedded mounts, tests that stub
   # in a bare user).
   defp admin_user?(socket) do
     case socket.assigns do
-      %{fabrikam_admin?: true} ->
+      %{root_admin?: true} ->
         true
 
       %{current_user_record: %{} = user} ->
-        Platform.Tenancy.fabrikam_admin?(user)
+        Platform.Tenancy.root_admin?(user)
 
       %{current_user: %{} = user} ->
-        Platform.Tenancy.fabrikam_admin?(user)
+        Platform.Tenancy.root_admin?(user)
 
       _ ->
         false
@@ -938,6 +1259,61 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
      |> put_flash(:info, flash_for(event))}
   end
 
+  # Room traffic is push_event ONLY: no assign changes, so a cursor stream
+  # never re-renders the LiveView.
+  defp handle_info({:canvas_room_diff, canvas_id, node_id, seq, diff, actor_id}, socket) do
+    if tracked_room?(socket, canvas_id, node_id) do
+      {:halt,
+       push_event(socket, room_event(canvas_id, node_id, "diff"), %{
+         seq: seq,
+         diff: diff,
+         actor: actor_id
+       })}
+    else
+      {:halt, socket}
+    end
+  end
+
+  defp handle_info({:canvas_room_presence, canvas_id, node_id, list}, socket) do
+    if tracked_room?(socket, canvas_id, node_id) do
+      {:halt, push_event(socket, room_event(canvas_id, node_id, "presence"), %{presence: list})}
+    else
+      {:halt, socket}
+    end
+  end
+
+  defp handle_info(
+         {:canvas_room_ephemeral, canvas_id, node_id, channel, payload, actor_id},
+         socket
+       ) do
+    own? = current_user_id(socket) == actor_id
+
+    if tracked_room?(socket, canvas_id, node_id) and not own? do
+      {:halt,
+       push_event(socket, room_event(canvas_id, node_id, "ephemeral"), %{
+         channel: channel,
+         payload: payload,
+         actor: actor_id
+       })}
+    else
+      {:halt, socket}
+    end
+  end
+
+  defp handle_info({:canvas_room_timer, _canvas_id, _node_id, _name, _msg}, socket),
+    do: {:halt, socket}
+
+  # push_event only, like the rest of the room traffic.
+  defp handle_info({:canvas_room_call_result, %{canvas_id: _} = req, result}, socket),
+    do: {:halt, push_call_result(socket, req, result)}
+
+  defp handle_info({:DOWN, ref, :process, _pid, _reason}, socket) do
+    case Enum.find(Map.get(socket.assigns, :canvas_rooms, %{}), fn {_k, e} -> e.ref == ref end) do
+      {key, entry} -> {:halt, rejoin_room(socket, key, entry)}
+      nil -> {:cont, socket}
+    end
+  end
+
   defp handle_info(_msg, socket), do: {:cont, socket}
 
   @recent_events_cap 20
@@ -1008,8 +1384,11 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   # ── Internals ────────────────────────────────────────────────────────
 
   defp assign_new_form(socket, attrs \\ %{}) do
+    # `kind` is the New canvas form's Blank/Prototype choice (task 01a1316b
+    # stage 2); anything but "prototype" renders as Blank.
     params = %{
-      "title" => Map.get(attrs, "title", "")
+      "title" => Map.get(attrs, "title", ""),
+      "kind" => Map.get(attrs, "kind", "blank")
     }
 
     assign(socket, :new_canvas_form, to_form(params, as: :canvas))

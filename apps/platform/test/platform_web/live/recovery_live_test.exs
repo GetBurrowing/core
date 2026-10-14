@@ -3,7 +3,7 @@ defmodule PlatformWeb.RecoveryLiveTest do
   The Recovery hub (task 019f7600 stage 4): lists archived + deletion-scheduled
   orgs, projects, AND channels from the unified recoverable inventory; groups
   cascade children under their org; and restores them via selection (leaves) or
-  "Restore all" (containers), with an act-then-confirm success toast. Fabrikam-admin
+  "Restore all" (containers), with an act-then-confirm success toast. Acme-admin
   only.
   """
   use PlatformWeb.ConnCase, async: false
@@ -28,13 +28,13 @@ defmodule PlatformWeb.RecoveryLiveTest do
     })
   end
 
-  defp fabrikam_admin_conn(conn) do
+  defp acme_admin_conn(conn) do
     user = insert_user()
 
     %OrgMembership{}
     |> OrgMembership.changeset(%{
       user_id: user.id,
-      org_id: Tenancy.get_org_by_slug!("fabrikam").id,
+      org_id: Tenancy.get_org_by_slug!("acme").id,
       role: "admin"
     })
     |> Repo.insert!()
@@ -47,7 +47,7 @@ defmodule PlatformWeb.RecoveryLiveTest do
     {init_test_session(conn, current_user_id: user.id), user}
   end
 
-  # A fresh tenant org parented to Fabrikam — isolated so archiving it can't perturb
+  # A fresh tenant org parented to Acme — isolated so archiving it can't perturb
   # a seeded tenant.
   defp tenant_org!(attrs \\ %{}) do
     n = System.unique_integer([:positive])
@@ -55,7 +55,7 @@ defmodule PlatformWeb.RecoveryLiveTest do
     default = %{
       name: "Tenant #{n}",
       slug: "tenant_#{n}",
-      parent_org_id: Tenancy.get_org_by_slug!("fabrikam").id
+      parent_org_id: Tenancy.get_org_by_slug!("acme").id
     }
 
     %Org{} |> Org.changeset(Map.merge(default, attrs)) |> Repo.insert!()
@@ -80,11 +80,11 @@ defmodule PlatformWeb.RecoveryLiveTest do
 
   defp row(type, id), do: "[data-role=recovery-row][data-type=#{type}][data-id='#{id}']"
 
-  # ── Fabrikam admin ─────────────────────────────────────────────────────────
+  # ── Acme admin ─────────────────────────────────────────────────────────
 
-  describe "fabrikam admin" do
+  describe "acme admin" do
     test "empty state renders when nothing is archived", %{conn: conn} do
-      {conn, _user} = fabrikam_admin_conn(conn)
+      {conn, _user} = acme_admin_conn(conn)
 
       {:ok, _view, html} = live(conn, ~p"/admin/recovery")
 
@@ -92,7 +92,7 @@ defmodule PlatformWeb.RecoveryLiveTest do
     end
 
     test "an independently-archived channel renders as its own row", %{conn: conn} do
-      {conn, admin} = fabrikam_admin_conn(conn)
+      {conn, admin} = acme_admin_conn(conn)
       org = tenant_org!()
       channel = channel!(org, %{name: "Announcements"})
       {:ok, _} = Chat.archive_space(admin, channel)
@@ -104,7 +104,7 @@ defmodule PlatformWeb.RecoveryLiveTest do
     end
 
     test "an archived org groups its cascade children — revealed on expand", %{conn: conn} do
-      {conn, admin} = fabrikam_admin_conn(conn)
+      {conn, admin} = acme_admin_conn(conn)
       org = tenant_org!(%{name: "Soylent"})
       project = project!(org, %{name: "Discovery"})
       channel = channel!(org, %{name: "Standup"})
@@ -128,7 +128,7 @@ defmodule PlatformWeb.RecoveryLiveTest do
     end
 
     test "the selection bar appears only once a leaf row is checked", %{conn: conn} do
-      {conn, admin} = fabrikam_admin_conn(conn)
+      {conn, admin} = acme_admin_conn(conn)
       org = tenant_org!()
       project = project!(org)
       {:ok, _} = Tasks.archive_project(admin, project)
@@ -144,7 +144,7 @@ defmodule PlatformWeb.RecoveryLiveTest do
     end
 
     test "the row selector is a checkbox, not a radio", %{conn: conn} do
-      {conn, admin} = fabrikam_admin_conn(conn)
+      {conn, admin} = acme_admin_conn(conn)
       org = tenant_org!()
       project = project!(org)
       {:ok, _} = Tasks.archive_project(admin, project)
@@ -163,7 +163,7 @@ defmodule PlatformWeb.RecoveryLiveTest do
     end
 
     test "Restore selected brings back a leaf and shows the success toast", %{conn: conn} do
-      {conn, admin} = fabrikam_admin_conn(conn)
+      {conn, admin} = acme_admin_conn(conn)
       org = tenant_org!()
       project = project!(org, %{name: "Roadmap"})
       {:ok, _} = Tasks.archive_project(admin, project)
@@ -185,7 +185,7 @@ defmodule PlatformWeb.RecoveryLiveTest do
     # HTML — Phoenix renders attributes in a non-deterministic order.
 
     test "the toast View link points at the restored project's files", %{conn: conn} do
-      {conn, admin} = fabrikam_admin_conn(conn)
+      {conn, admin} = acme_admin_conn(conn)
       org = tenant_org!()
       project = project!(org, %{name: "Roadmap"})
       {:ok, _} = Tasks.archive_project(admin, project)
@@ -200,7 +200,7 @@ defmodule PlatformWeb.RecoveryLiveTest do
     end
 
     test "the toast View link opens the restored channel in chat", %{conn: conn} do
-      {conn, admin} = fabrikam_admin_conn(conn)
+      {conn, admin} = acme_admin_conn(conn)
       org = tenant_org!()
       channel = channel!(org, %{name: "Standup", slug: "standup-view"})
       {:ok, _} = Chat.archive_space(admin, channel)
@@ -215,7 +215,7 @@ defmodule PlatformWeb.RecoveryLiveTest do
     end
 
     test "a multi-item restore shows the toast but no View link", %{conn: conn} do
-      {conn, admin} = fabrikam_admin_conn(conn)
+      {conn, admin} = acme_admin_conn(conn)
       org = tenant_org!()
       alpha = project!(org, %{name: "Alpha"})
       beta = project!(org, %{name: "Beta"})
@@ -234,7 +234,7 @@ defmodule PlatformWeb.RecoveryLiveTest do
     end
 
     test "restoring a cascade child names the org reactivated as a side-effect", %{conn: conn} do
-      {conn, admin} = fabrikam_admin_conn(conn)
+      {conn, admin} = acme_admin_conn(conn)
       org = tenant_org!(%{name: "Soylent"})
       project = project!(org, %{name: "Discovery"})
 
@@ -256,7 +256,7 @@ defmodule PlatformWeb.RecoveryLiveTest do
     end
 
     test "container Restore all brings back the whole subtree", %{conn: conn} do
-      {conn, admin} = fabrikam_admin_conn(conn)
+      {conn, admin} = acme_admin_conn(conn)
       org = tenant_org!()
       project = project!(org)
       channel = channel!(org)
@@ -275,7 +275,7 @@ defmodule PlatformWeb.RecoveryLiveTest do
     end
 
     test "a deletion-scheduled row shows the Scheduled status", %{conn: conn} do
-      {conn, admin} = fabrikam_admin_conn(conn)
+      {conn, admin} = acme_admin_conn(conn)
       org = tenant_org!()
       project = project!(org)
       {:ok, _} = Tasks.schedule_project_deletion(admin, project)
@@ -287,7 +287,7 @@ defmodule PlatformWeb.RecoveryLiveTest do
     end
 
     test "Undo re-archives just the restored leaf", %{conn: conn} do
-      {conn, admin} = fabrikam_admin_conn(conn)
+      {conn, admin} = acme_admin_conn(conn)
       org = tenant_org!()
       project = project!(org)
       {:ok, _} = Tasks.archive_project(admin, project)
@@ -310,7 +310,7 @@ defmodule PlatformWeb.RecoveryLiveTest do
 
   describe "restore all warning modal" do
     test "an org with plain-archived children restores straight away (no warning)", %{conn: conn} do
-      {conn, admin} = fabrikam_admin_conn(conn)
+      {conn, admin} = acme_admin_conn(conn)
       org = tenant_org!()
       project = project!(org)
       # Plain archive → children hidden with NO countdown → nothing to warn about.
@@ -326,7 +326,7 @@ defmodule PlatformWeb.RecoveryLiveTest do
     end
 
     test "an org with scheduled children opens the warning instead of restoring", %{conn: conn} do
-      {conn, admin} = fabrikam_admin_conn(conn)
+      {conn, admin} = acme_admin_conn(conn)
       org = tenant_org!(%{name: "Soylent"})
       project = project!(org, %{name: "Discovery"})
       {:ok, _} = Tenancy.schedule_org_deletion(admin, org)
@@ -346,7 +346,7 @@ defmodule PlatformWeb.RecoveryLiveTest do
     test "confirming with the default restores the subtree and cancels the countdowns", %{
       conn: conn
     } do
-      {conn, admin} = fabrikam_admin_conn(conn)
+      {conn, admin} = acme_admin_conn(conn)
       org = tenant_org!()
       project = project!(org)
       channel = channel!(org)
@@ -374,7 +374,7 @@ defmodule PlatformWeb.RecoveryLiveTest do
     test "keeping a child scheduled restores the org but leaves that child counting down", %{
       conn: conn
     } do
-      {conn, admin} = fabrikam_admin_conn(conn)
+      {conn, admin} = acme_admin_conn(conn)
       org = tenant_org!()
       kept = project!(org)
       revived = project!(org)
@@ -406,7 +406,7 @@ defmodule PlatformWeb.RecoveryLiveTest do
     end
 
     test "Cancel closes the warning without restoring", %{conn: conn} do
-      {conn, admin} = fabrikam_admin_conn(conn)
+      {conn, admin} = acme_admin_conn(conn)
       org = tenant_org!()
       project = project!(org)
       {:ok, _} = Tenancy.schedule_org_deletion(admin, org)

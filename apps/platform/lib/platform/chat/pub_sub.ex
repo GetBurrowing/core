@@ -8,6 +8,9 @@ defmodule Platform.Chat.PubSub do
       pins, participant changes, canvas lifecycle events).
     * `"chat:canvas:{canvas_id}"` — per-canvas event stream (state updates,
       focused canvas subscribers).
+    * `"chat:canvas_room:{canvas_id}:{node_id}"` — one canvas room's
+      shared-state diffs, presence and ephemeral broadcasts
+      (`Platform.Chat.CanvasRoom`).
 
   ## Usage in LiveView
 
@@ -53,6 +56,15 @@ defmodule Platform.Chat.PubSub do
   def canvas_topic(canvas_id), do: "chat:canvas:#{canvas_id}"
 
   @doc """
+  Returns the PubSub topic for one canvas room (`Platform.Chat.CanvasRoom`,
+  keyed by canvas id AND node id). Deliberately NOT `canvas_topic/1`: every
+  LiveView with the canvas's space open subscribes that one, so room traffic
+  (cursors included) on it would reach every viewer of the space.
+  """
+  @spec canvas_room_topic(binary(), binary()) :: String.t()
+  def canvas_room_topic(canvas_id, node_id), do: "chat:canvas_room:#{canvas_id}:#{node_id}"
+
+  @doc """
   Returns the global topic for space-lifecycle events (creation, archival).
 
   Subscribers receive `{:space_created, space}` and `{:space_archived, space}`.
@@ -75,7 +87,7 @@ defmodule Platform.Chat.PubSub do
   Returns the shared topic for org-DEFAULT sidebar changes (Stage 6).
 
   Subscribers receive `:sidebar_defaults_changed` and recompute their
-  resolved sidebar sections. Used so a Fabrikam-admin curation write (rename /
+  resolved sidebar sections. Used so a root-admin curation write (rename /
   recolor / reorder / reassign of the org-default layer) propagates to ALL
   connected sessions, not just the acting admin's tab. Distinct from the
   per-user `sidebar_topic/1` (personal arrangement changes) because an admin
@@ -113,6 +125,18 @@ defmodule Platform.Chat.PubSub do
   @spec unsubscribe_canvas(binary()) :: :ok
   def unsubscribe_canvas(canvas_id) do
     Phoenix.PubSub.unsubscribe(@pubsub, canvas_topic(canvas_id))
+  end
+
+  @doc "Subscribe the calling process to one canvas room's topic."
+  @spec subscribe_canvas_room(binary(), binary()) :: :ok | {:error, term()}
+  def subscribe_canvas_room(canvas_id, node_id) do
+    Phoenix.PubSub.subscribe(@pubsub, canvas_room_topic(canvas_id, node_id))
+  end
+
+  @doc "Unsubscribe the calling process from one canvas room's topic."
+  @spec unsubscribe_canvas_room(binary(), binary()) :: :ok
+  def unsubscribe_canvas_room(canvas_id, node_id) do
+    Phoenix.PubSub.unsubscribe(@pubsub, canvas_room_topic(canvas_id, node_id))
   end
 
   @doc """
@@ -154,7 +178,7 @@ defmodule Platform.Chat.PubSub do
   Subscribe the calling process to the shared org-default sidebar topic.
 
   Used by ChatLive in `mount/3` so a `:sidebar_defaults_changed` broadcast
-  (fired by Stage 6 Fabrikam-admin curation writes) prompts a resolver recompute
+  (fired by Stage 6 root-admin curation writes) prompts a resolver recompute
   in every connected session — an admin default change is visible to all
   users, not just the acting admin.
   """
@@ -219,6 +243,12 @@ defmodule Platform.Chat.PubSub do
     Phoenix.PubSub.broadcast(@pubsub, canvas_topic(canvas_id), event)
   end
 
+  @doc "Broadcast an event to every subscriber of one canvas room."
+  @spec broadcast_canvas_room(binary(), binary(), term()) :: :ok
+  def broadcast_canvas_room(canvas_id, node_id, event) do
+    Phoenix.PubSub.broadcast(@pubsub, canvas_room_topic(canvas_id, node_id), event)
+  end
+
   @doc "Broadcast a space-lifecycle event to every connected chat session."
   @spec broadcast_space_event(term()) :: :ok
   def broadcast_space_event(event) do
@@ -254,7 +284,7 @@ defmodule Platform.Chat.PubSub do
 
   @doc """
   Broadcast a `:sidebar_defaults_changed` invalidation to every connected
-  session (Stage 6 Fabrikam-admin curation write).
+  session (Stage 6 root-admin curation write).
 
   Fired by `broadcast_from/3` from the acting admin's pid: the admin handler
   recomputes its own `@sidebar_sections` synchronously, so it must not also

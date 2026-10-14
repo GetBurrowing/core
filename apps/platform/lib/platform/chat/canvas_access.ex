@@ -42,7 +42,7 @@ defmodule Platform.Chat.CanvasAccess do
   **Agents get no ORG-derived grant.** They never reach `:task_reader` or
   `:org_reader`, and this is not a policy preference — it is the only
   well-typed answer. `Tenancy.member_of?/2`, `external_user?/1` and
-  `fabrikam_admin?/1` all query `org_memberships.user_id`; an agent id passed to
+  `root_admin?/1` all query `org_memberships.user_id`; an agent id passed to
   them is not "denied", it is meaningless. Do not "fix" this by adding an org
   path for agents without first giving agents org membership.
 
@@ -86,7 +86,7 @@ defmodule Platform.Chat.CanvasAccess do
     4. `:org_reader` — USER principals only. The parent space passes
        `Chat.space_accessible?/1` (exists, not archived, not an execution
        space) AND `kind == "channel"` AND `org_id` is non-nil AND the viewer is
-       `Tenancy.fabrikam_admin?/1` or `Tenancy.member_of?/2` that org.
+       `Tenancy.root_admin?/1` or `Tenancy.member_of?/2` that org.
 
   ## Deliberate inversions and exclusions
 
@@ -100,10 +100,10 @@ defmodule Platform.Chat.CanvasAccess do
   **No `parent_org_id` walk.** Nothing in `apps/platform/lib` walks
   `parent_org_id` for authorization. Root-org membership implying descendant-org
   reach would be a brand-new privilege granted as a side effect of a share-link
-  route, so `:org_reader` copies the existing `fabrikam_admin? or member_of?` shape
+  route, so `:org_reader` copies the existing `root_admin? or member_of?` shape
   at `file_blob_controller.ex:83-103` — the closest analogue in the tree.
 
-  **`fabrikam_admin?/1` appears in `:org_reader` only, not `:task_reader`.** A Fabrikam
+  **`root_admin?/1` appears in `:org_reader` only, not `:task_reader`.** A root-org
   admin therefore does NOT get a blanket read of execution-space canvases via
   the task path; `:task_reader` is strict org membership, per plan. Execution
   spaces stay closed by every route.
@@ -444,7 +444,7 @@ defmodule Platform.Chat.CanvasAccess do
   # ── 3. :task_reader ───────────────────────────────────────────────────────
   #
   # Attached to a live task whose project org the viewer belongs to. Strict
-  # `member_of?/2` — see the moduledoc on why `fabrikam_admin?/1` is not here.
+  # `member_of?/2` — see the moduledoc on why `root_admin?/1` is not here.
   # `list_canvas_tasks/1` already drops soft-deleted tasks to `task: nil`, so a
   # grant cannot outlive the task that conferred it.
 
@@ -485,7 +485,7 @@ defmodule Platform.Chat.CanvasAccess do
       # Channels only, and only channels that carry an org. A null org_id is
       # every DM and every group conversation — see the moduledoc.
       {"channel", org_id} when is_binary(org_id) ->
-        Tenancy.fabrikam_admin?(viewer) or Tenancy.member_of?(viewer, org_id)
+        Tenancy.root_admin?(viewer) or Tenancy.member_of?(viewer, org_id)
 
       _ ->
         false

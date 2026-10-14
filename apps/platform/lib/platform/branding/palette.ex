@@ -32,8 +32,12 @@ defmodule Platform.Branding.Palette do
     * `--focus-ring` is the theme-split slot from task 01a0833d (WCAG 2.2
       SC 1.4.11, 3:1 against every ground it is drawn on). It is the action
       colour when that clears 3:1 on base-100, base-200 AND base-300, else the
-      interactive colour pushed further until it does. That mirrors why
-      today's light theme rings with #087f93 and the dark theme with #06d5ed.
+      interactive colour pushed further until it does. With the Burrow
+      defaults both modes ring with the action colour (#ad4b07 light, #f47721
+      dark), because both clear 3:1 on every derived ground. `app.css` itself
+      still rings light with its hand-tuned `--color-interactive` (#8b3b04)
+      and dark with `--color-primary`; a fully-nil mode emits nothing and
+      lets that stand.
     * `--color-base-200` / `--color-base-300` step the surface in OKLCH
       lightness the way today's themes do: light steps darker for both; dark
       puts base-200 darker (the sidebar ground) and base-300 raised.
@@ -42,7 +46,7 @@ defmodule Platform.Branding.Palette do
       1.2:1 against the surface. A surface too dark (light mode) or too light
       (dark mode) to have an edge in that direction gets one in the other.
 
-  ## A nil is "Suite default", and derivation of the defaults is not app.css
+  ## A nil is the default ("Burrow default"), and derivation of the defaults is not app.css
 
   `derive/2` resolves a nil slot to `suite_defaults/0` so it always has three
   colours to work with. It does NOT reproduce `app.css` byte for byte (today's
@@ -60,22 +64,28 @@ defmodule Platform.Branding.Palette do
   candidates are today's light and dark `--color-base-content`, read from
   `app.css` and pinned there by `palette_test.exs` (`body_text/0`).
 
-  Measured when the decision was applied: the light theme's base-content is
-  `oklch(0% 0 0)`, which IS #000000, so the rule did not move any outcome.
-  In particular #777777 as a light surface still passes, 4.69:1 against the
-  light base-content (#eeeeee on it is 3.86:1). The stage-5 gate that
+  Measured when the decision was applied: the light theme's base-content was
+  `oklch(0% 0 0)`, which IS #000000, so the rule did not move any outcome
+  then; #777777 as a light surface passed at 4.69:1. The stage-5 gate that
   expected #777777 to block was taken back to the orchestrator rather than
   met with an invented rule. Button labels (`--color-primary-content`) are
   unaffected: they still choose black or white.
+
+  The Burrow spec (task 01a120c5) asked for a warm near-black #221f1b, which
+  would have moved outcomes (#777777 blocking at 3.66:1). Stage 4 kept main's
+  black instead, because secondary text paints base-content at 55-60% and the
+  spec ink failed AA there on the warm grounds. So the outcomes are main's
+  again: #777777 passes at 4.6895:1 against black.
 
   ## Why body text can block at all
 
   For ANY surface, one of pure black or pure white clears at least
   sqrt(21) = 4.58:1, so a black-or-white choice could never fail. Body text
-  here chooses between the light base-content (#000000) and the dark one
-  (#eeeeee, luminance 0.857), so a mid-grey surface with luminance between
-  roughly 0.152 and 0.175 (#6c6c6c to #737373) has NO body text colour that
-  reads, and that is a BLOCK. #707070 measures 4.24:1 and 4.27:1.
+  here chooses between the light base-content (#000000, luminance 0)
+  and the dark one (#eeeff1, luminance 0.863), so a mid-grey surface with
+  luminance between roughly 0.153 and 0.175 (#6d6d6d to #747474 for
+  neutral greys) has NO body text colour that reads, and that is a BLOCK.
+  #707070 measures 4.2406:1 and 4.3042:1.
   """
 
   alias Platform.Branding.Contrast
@@ -93,34 +103,42 @@ defmodule Platform.Branding.Palette do
           message: String.t()
         }
 
-  # Today's app.css values, lowercase. palette_test.exs parses app.css and
-  # asserts these equal the declarations, so they cannot drift.
+  # Today's app.css values (the Burrow palette, task 01a120c5), lowercase.
+  # palette_test.exs parses app.css and asserts these equal the
+  # declarations, so they cannot drift.
   @suite_defaults %{
-    light: %{action: "#06d5ed", surface: "#ffffff", accent: "#06d5ed"},
-    dark: %{action: "#06d5ed", surface: "#171b25", accent: "#06d5ed"}
+    light: %{action: "#ad4b07", surface: "#fbfaf9", accent: "#ad4b07"},
+    dark: %{action: "#f47721", surface: "#191b20", accent: "#f47721"}
   }
 
   @black "#000000"
   @white "#ffffff"
 
-  # Today's --color-base-content per theme: light oklch(0% 0 0), dark
-  # oklch(95% 0 0). Pinned against app.css by palette_test.exs.
-  @body_text %{light: "#000000", dark: "#eeeeee"}
+  # Today's --color-base-content per theme: light #000000, dark #eeeff1.
+  # Pinned against app.css by palette_test.exs.
+  @body_text %{light: "#000000", dark: "#eeeff1"}
   @near_white @body_text.dark
 
   @text_floor 4.5
   @non_text_floor 3.0
   @edge_floor 1.2
 
-  # OKLCH hues of the status tokens, as app.css declares them in BOTH themes
-  # (palette_test.exs reads them back out of app.css).
-  @status_hues [success: 162, warning: 70, error: 25, info: 255]
+  # OKLCH hues of the status tokens. Since the Burrow recolor (task 01a120c5)
+  # light and dark declare different hexes, a degree or two apart in hue:
+  # success 146.4 / 147.9, warning 69.7 / 74.3, info 211.1 / 211.5, error 25
+  # in both. palette_test.exs reads each theme's value back out of app.css and
+  # asserts it is within 3 degrees of the hue here.
+  @status_hues [success: 147, warning: 72, error: 25, info: 211]
   @hue_window 25.0
   # Below this OKLCH chroma a colour reads as grey, whatever its nominal hue.
   @collision_chroma 0.06
 
-  # OKLCH lightness steps, taken from today's themes: light 100 -> 96 -> 88;
-  # dark base-100 ~22 -> base-200 9 (darker ground). base-300 raised.
+  # OKLCH lightness steps, taken from the PRE-Burrow themes: light 100 -> 96
+  # -> 88; dark base-100 ~22 -> base-200 9 (darker ground), base-300 raised.
+  # Deliberately left alone by the Burrow recolor (task 01a120c5): these only
+  # shape the greys derived for an ADMIN-chosen surface, and moving them would
+  # repaint installs that already saved a palette. The Burrow app.css greys
+  # are hand-set, as the pre-Burrow ones were.
   @light_steps %{base_200: -0.04, base_300: -0.12}
   @dark_steps %{base_200: -0.13, base_300: 0.05}
 
@@ -141,7 +159,7 @@ defmodule Platform.Branding.Palette do
   @spec body_text() :: %{light: String.t(), dark: String.t()}
   def body_text, do: @body_text
 
-  @doc "The near-white body text colour, `oklch(95% 0 0)`."
+  @doc "The near-white body text colour, the dark theme's `--color-base-content`."
   @spec near_white() :: String.t()
   def near_white, do: @near_white
 

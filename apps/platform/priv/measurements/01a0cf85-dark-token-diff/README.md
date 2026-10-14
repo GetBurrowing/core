@@ -8,6 +8,10 @@ this task; this directory is the instrument and its record.
   screenshots, reads each swatch back as bytes.
 - `cdp.mjs`, `png.mjs`: a minimal CDP driver and a PNG decoder (no deps).
 - `results.json`: the run the fixture was pasted from.
+- `results-burrow-01a120c5.json`: the live-side re-measure after the Burrow
+  recolor (task 01a120c5). The fixture is kept as the pre-Burrow record and
+  marked superseded; the staleness guard holds the current dark block to
+  this run.
 - The pasted copy the tests read is
   `test/support/dark_token_painted_fixture.ex`, guarded by
   `test/platform/design/dark_token_diff_test.exs`.

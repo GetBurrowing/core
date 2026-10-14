@@ -24,6 +24,9 @@ defmodule PlatformWeb.Plugs.RawBodyPaths do
   the property we want is "this ROUTE owns its body", which must hold for
   every content type a client might send, including ones no parser claims
   today.
+
+  It is also method-agnostic, so the resumable chunked `PATCH` on the same
+  path (task 01a120be) bypasses the parsers too; a test pins that.
   """
 
   @behaviour Plug

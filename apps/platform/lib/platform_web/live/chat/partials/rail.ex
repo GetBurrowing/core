@@ -94,7 +94,7 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
   attr(:sidebar_edit, :boolean, required: true)
   attr(:sidebar_admin_edit, :boolean, required: true)
   attr(:sidebar_menu_open, :boolean, required: true)
-  attr(:fabrikam_admin?, :boolean, required: true)
+  attr(:root_admin?, :boolean, required: true)
   attr(:mask_names?, :boolean, required: true)
   attr(:revealed_section_ids, :any, required: true)
   attr(:sidebar_sections, :list, required: true)
@@ -134,7 +134,7 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
         sidebar_edit={@sidebar_edit}
         sidebar_admin_edit={@sidebar_admin_edit}
         sidebar_menu_open={@sidebar_menu_open}
-        fabrikam_admin?={@fabrikam_admin?}
+        root_admin?={@root_admin?}
         mask_names?={@mask_names?}
         revealed_section_ids={@revealed_section_ids}
       />
@@ -175,7 +175,7 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
           sidebar_admin_edit={@sidebar_admin_edit}
           active_space={@active_space}
           unread_counts={@unread_counts}
-          fabrikam_admin?={@fabrikam_admin?}
+          root_admin?={@root_admin?}
           tenant_org_ids={@tenant_org_ids}
           lifecycle_menu_key={@lifecycle_menu_key}
         />
@@ -243,7 +243,7 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
   attr(:sidebar_edit, :boolean, required: true)
   attr(:sidebar_admin_edit, :boolean, required: true)
   attr(:sidebar_menu_open, :boolean, required: true)
-  attr(:fabrikam_admin?, :boolean, required: true)
+  attr(:root_admin?, :boolean, required: true)
   attr(:mask_names?, :boolean, required: true)
   attr(:revealed_section_ids, :any, required: true)
 
@@ -393,11 +393,11 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
               >
                 Edit my layout
               </button>
-              <%!-- Admin-only entry point. Rendered ONLY for Fabrikam admins; the
-                   handler re-checks @fabrikam_admin? as the real gate. Admin accent
+              <%!-- Admin-only entry point. Rendered ONLY for root-org admins; the
+                   handler re-checks @root_admin? as the real gate. Admin accent
                    so it reads as a company-wide action, not a personal one. --%>
               <button
-                :if={@fabrikam_admin?}
+                :if={@root_admin?}
                 type="button"
                 role="menuitem"
                 phx-click="toggle_sidebar_admin_edit"
@@ -482,13 +482,14 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
   glyphs; a face in it says someone is accountable with no label and no
   added height, and the ring is the only chroma on this surface.
 
-  The ring was `ring-primary` until task 01a0ca8b stage 2, and #06D5ED
-  painted 1.5956:1 against the light rail: the one device the block spends
-  its boldness on was close to invisible in light. `--focus-ring` is the
-  existing theme-split slot minted for exactly this job (a non-text
-  indicator that must clear 3:1 on every ground): painted in Chrome it
-  measures 4.199:1 on the light rail (#087F93) and 11.5672:1 on the dark
-  rail, where it IS #06D5ED, so dark renders the same ring as before.
+  The ring was `ring-primary` until task 01a0ca8b stage 2, and the
+  pre-Burrow cyan painted 1.5956:1 against the light rail: the one device the
+  block spends its boldness on was close to invisible in light. `--focus-ring`
+  is the existing theme-split slot minted for exactly this job (a non-text
+  indicator that must clear 3:1 on every ground). On the Burrow tokens (task
+  01a120c5), computed from app.css against the rail's `bg-base-200`, it is
+  #8b3b04 at 7.0195:1 in light and #f47721 (the dark primary) at 6.7002:1 in
+  dark.
   `focus_ring_slot_test.exs` pins the slot's ratios, so a retune that
   breaks the floor reds there first. The avatar is not focusable, so the
   ring cannot be mistaken for a focus state on this element.
@@ -952,7 +953,7 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
   attr(:sidebar_admin_edit, :boolean, required: true)
   attr(:active_space, :any, required: true)
   attr(:unread_counts, :map, required: true)
-  attr(:fabrikam_admin?, :boolean, required: true)
+  attr(:root_admin?, :boolean, required: true)
   attr(:tenant_org_ids, :any, required: true)
   attr(:lifecycle_menu_key, :any, required: true)
 
@@ -1160,8 +1161,8 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
                  (rendered above / in the rename input); this dot communicates
                  the section's COLOR and nothing else. Previously this slot held
                  a `<.scope_pill>` whose VISIBLE TEXT was derived from the color
-                 token via the scope enum, so recoloring a section (e.g. Fabrikam →
-                 yellow) silently relabeled the chip to "Paragon". Decoupling:
+                 token via the scope enum, so recoloring a section (e.g. the
+                 root org → yellow) silently relabeled the chip to "Paragon". Decoupling:
                  a recolor now changes ONLY this dot, never any name/label. The
                  dot is decorative (aria-hidden) — `section.name` beside it is
                  the text identity. --%>
@@ -1175,13 +1176,27 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
                  org the one that looks broken; so the slot is reserved and the
                  dot is drawn hollow instead. `aria-hidden` in BOTH branches —
                  the dot is decorative either way, `section.name` is the text
-                 identity. --%>
+                 identity.
+
+                 A section wearing its OWN org's colour with no compiled class
+                 (the root org on every install, and any org created at
+                 runtime) also carries `data-scope` = its org slug, so the
+                 slug-agnostic var path fills the hollow ring from the org's
+                 row (task 01a116de stage 3). An org with no `color_hue`
+                 emits no rule and stays hollow. Suppressed while the section
+                 is masked: the slug is a spelling of the org's name. --%>
           <span
             class={[
               "channel-section-color-dot",
               PlatformWeb.ChatLive.section_dot_class(section.color) ||
                 "channel-section-color-dot--unassigned"
             ]}
+            data-scope={
+              if(@mask_names? and not revealed?,
+                do: nil,
+                else: PlatformWeb.ChatLive.section_dot_scope(section)
+              )
+            }
             aria-hidden="true"
           >
           </span>
@@ -1229,10 +1244,10 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
             ☰
           </button>
           <%!-- Org archive / schedule-deletion (task 019f4eaa stage 6).
-                 Fabrikam-admin only, and only for tenant orgs — the root org's
+                 root-admin only, and only for tenant orgs — the root org's
                  section is never offered (the lifecycle refuses it). --%>
           <.lifecycle_menu
-            :if={@fabrikam_admin? and MapSet.member?(@tenant_org_ids, section.org_id)}
+            :if={@root_admin? and MapSet.member?(@tenant_org_ids, section.org_id)}
             key={"org:#{section.org_id}"}
             open={@lifecycle_menu_key == "org:#{section.org_id}"}
             type="org"
@@ -1270,11 +1285,15 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
             Use organisation name
           </button>
         </p>
-        <%!-- Admin-edit (Stage 6): compact recolor palette — the 5 scope
-               tokens ARE the palette (no free-form color picker). Each swatch
+        <%!-- Admin-edit (Stage 6): compact recolor palette — the five
+               sibling scope tokens plus the section's OWN org token ARE the
+               palette (no free-form color picker). The own-org swatch is
+               coloured through `data-scope` from the org's row, which is how
+               the root org gets a swatch with no compiled colour class (task
+               01a116de stage 3); it is omitted while the section is masked. Each swatch
                posts `recolor_section_default` with the section id + token; the
                active token is marked so the admin sees the current color. The
-               server whitelist-validates the token and re-checks fabrikam_admin?
+               server whitelist-validates the token and re-checks root_admin?
                before writing `channel_sections.color`. --%>
         <div
           :if={@sidebar_admin_edit}
@@ -1282,8 +1301,31 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
           role="group"
           aria-label={"Set color for #{display_name} section"}
         >
+          <% own_token = PlatformWeb.ChatLive.section_own_token(section)
+
+          own_swatch? =
+            is_binary(own_token) and
+              own_token not in PlatformWeb.ChatLive.sibling_scope_tokens() and
+              not (@mask_names? and not revealed?) %>
           <button
-            :for={token <- ~w(fabrikam soylent wayne-tech sxi paragon cyberdyne)}
+            :if={own_swatch?}
+            type="button"
+            phx-click="recolor_section_default"
+            phx-value-section_id={section.id}
+            phx-value-color={own_token}
+            data-scope={section.org_slug}
+            class={[
+              "channel-section-swatch",
+              "channel-section-swatch--own",
+              section.color == own_token && "channel-section-swatch--active"
+            ]}
+            aria-pressed={to_string(section.color == own_token)}
+            aria-label={"Color: #{own_token}"}
+            title={own_token}
+          >
+          </button>
+          <button
+            :for={token <- PlatformWeb.ChatLive.sibling_scope_tokens()}
             type="button"
             phx-click="recolor_section_default"
             phx-value-section_id={section.id}
@@ -1610,7 +1652,7 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
     </div>
 
     <%!-- Move confirmation (task 019ffcad stage 4, from the design canvas).
-         Says what just happened after a Fabrikam admin files a channel into
+         Says what just happened after a root-org admin files a channel into
          another organisation. Stages 1 to 3 put the row in its new section
          and make it visible there; the admin is looking at the section it
          LEFT, where the only observable event is a row disappearing.

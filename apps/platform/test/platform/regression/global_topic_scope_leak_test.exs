@@ -97,7 +97,7 @@ defmodule Platform.Regression.GlobalTopicScopeLeakTest do
     |> Org.changeset(%{
       name: "Leak Tenant #{n}",
       slug: "leak_tenant_#{n}",
-      parent_org_id: Tenancy.get_org_by_slug!("fabrikam").id
+      parent_org_id: Tenancy.get_org_by_slug!("acme").id
     })
     |> Repo.insert!()
   end

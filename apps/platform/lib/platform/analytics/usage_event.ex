@@ -58,6 +58,7 @@ defmodule Platform.Analytics.UsageEvent do
     |> cast(attrs, @required_fields ++ @optional_fields)
     |> validate_required(@required_fields)
     |> validate_uuid_fields()
+    |> normalize_dispatch_metadata()
     |> compute_total_tokens()
     |> compute_cost()
   end
@@ -87,6 +88,66 @@ defmodule Platform.Analytics.UsageEvent do
       end
     end)
   end
+
+  # Task 01a114a8 stage 1: the dispatch keys a client may report in
+  # `metadata`, read by `Platform.Orchestration.DispatchMetrics`. Each is
+  # kept (under its string key) only when well-formed and DROPPED otherwise.
+  # A malformed key never rejects the event: the tokens are still worth
+  # recording. No new columns; `metadata.stage_id` is expression-indexed.
+  @dispatch_integer_keys ~w(turns wall_ms client_tool_calls)
+  @max_harness_length 64
+
+  @doc "The `metadata` keys DispatchMetrics reads."
+  def dispatch_metadata_keys, do: ["stage_id", "harness" | @dispatch_integer_keys]
+
+  defp normalize_dispatch_metadata(changeset) do
+    case get_change(changeset, :metadata) do
+      %{} = metadata ->
+        put_change(
+          changeset,
+          :metadata,
+          Enum.reduce(dispatch_metadata_keys(), metadata, &normalize_dispatch_key/2)
+        )
+
+      _ ->
+        changeset
+    end
+  end
+
+  # Literal atoms, so an internal caller's atom-keyed map is read too and no
+  # atom is ever minted from input.
+  @dispatch_atom_keys %{
+    "stage_id" => :stage_id,
+    "harness" => :harness,
+    "turns" => :turns,
+    "wall_ms" => :wall_ms,
+    "client_tool_calls" => :client_tool_calls
+  }
+
+  defp normalize_dispatch_key(key, metadata) do
+    atom_key = Map.fetch!(@dispatch_atom_keys, key)
+    value = Map.get(metadata, key, Map.get(metadata, atom_key))
+    metadata = Map.drop(metadata, [key, atom_key])
+
+    case dispatch_value(key, value) do
+      {:ok, normalized} -> Map.put(metadata, key, normalized)
+      :drop -> metadata
+    end
+  end
+
+  defp dispatch_value(_key, nil), do: :drop
+
+  defp dispatch_value("stage_id", value) when is_binary(value),
+    do: if(valid_uuid?(value), do: {:ok, value}, else: :drop)
+
+  defp dispatch_value("harness", value) when is_binary(value) and value != "",
+    do: {:ok, String.slice(value, 0, @max_harness_length)}
+
+  defp dispatch_value(key, value)
+       when key in @dispatch_integer_keys and is_integer(value) and value >= 0,
+       do: {:ok, value}
+
+  defp dispatch_value(_key, _value), do: :drop
 
   # Always recompute total_tokens from components (ignore caller-provided value)
   defp compute_total_tokens(changeset) do

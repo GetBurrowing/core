@@ -115,6 +115,13 @@ defmodule Platform.Responsibilities.ClosedRosterTemplateCoverageTest do
     # Task 01a0d415 stage 5: `experiments.scientist` (the goal loop), seeded
     # by `20260924210000_seed_experiments_scientist_prompt.exs`.
     "experiments.scientist.v1",
+    # Task 01a11ec3 stage 3: `feedback.intake` (triage officer) points at
+    # this slug, seeded by `20261010160100_seed_feedback_intake_prompt.exs`.
+    "feedback.intake.v1",
+    # Task 019fa1ac-6685 stage 1: `janitor.cron_drain` (janitor role) points
+    # at this slug; descriptor in `default_templates/0`, row seeded by
+    # `20261009060918_add_janitor_role.exs`.
+    "janitor.cron_drain.v1",
     "meetings.action_items.v1",
     "meetings.attendance_followup.v1",
     "meetings.brief_worthy.v1",

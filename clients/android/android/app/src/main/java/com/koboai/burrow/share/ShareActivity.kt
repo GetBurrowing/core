@@ -1,5 +1,6 @@
 package com.koboai.burrow.share
 
+import android.content.Context
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
@@ -24,6 +25,7 @@ import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.content.res.ResourcesCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
@@ -33,6 +35,7 @@ import androidx.core.view.updatePadding
 import com.koboai.burrow.MainActivity
 import com.koboai.burrow.R
 import com.koboai.burrow.push.BurrowPush
+import com.koboai.burrow.shortcuts.ConversationShortcuts
 import java.util.concurrent.Executors
 
 /**
@@ -76,18 +79,53 @@ class ShareActivity : AppCompatActivity() {
                 }
             },
         )
-        val host = BurrowPush.installs(this).selectedInstall?.host
+        val selected = BurrowPush.installs(this).selectedInstall?.host
         val client = AppShareClient(BurrowPush.client(this))
         val shareIntent = intent
+        val app = applicationContext
         io.execute {
             val shared = ShareIntents.parse(contentResolver, shareIntent)
-            val m = ShareSheetModel(host, client, shared.files, shared.text)
+            // A direct-share target (conversation shortcut) names its install and space.
+            val (host, preselect) =
+                ShareSheetModel.target(
+                    shareIntent.getStringExtra(ShortcutManagerCompat.EXTRA_SHORTCUT_ID),
+                    selected,
+                    client::isSignedIn,
+                )
+            val m =
+                ShareSheetModel(
+                    host,
+                    client,
+                    shared.files,
+                    shared.text,
+                    preselect,
+                    onSent = { h, space -> noteShared(app, h, space) },
+                    // Large files (task 01a120be): copied into app storage while
+                    // the share grant is live, then uploaded by WorkManager.
+                    enqueuer = WorkManagerLargeUploadEnqueuer(app),
+                )
             m.start()
             main.post {
                 model = m
                 render()
             }
         }
+    }
+
+    /** A share that was sent: its conversation was used. */
+    private fun noteShared(
+        app: Context,
+        host: String,
+        space: ShareSpace,
+    ) {
+        ConversationShortcuts.forContext(app).noteUsed(
+            host = host,
+            spaceId = space.id,
+            name = space.name,
+            path = "/chat/${space.pathSegment ?: space.id}",
+            persons = emptyList(),
+            isGroup = space.kind != "dm",
+        )
     }
 
     override fun onDestroy() {
@@ -98,7 +136,8 @@ class ShareActivity : AppCompatActivity() {
     /** Back, the X and a tap outside: close, unless something is typed. */
     private fun close() {
         val m = model
-        if (m != null && m.hasTypedText && m.phase != ShareSheetModel.Phase.SENT) {
+        val done = m?.phase == ShareSheetModel.Phase.SENT || m?.phase == ShareSheetModel.Phase.HANDED_OFF
+        if (m != null && m.hasTypedText && !done) {
             AlertDialog
                 .Builder(this)
                 .setMessage(R.string.share_discard_title)
@@ -155,10 +194,11 @@ class ShareActivity : AppCompatActivity() {
         body.isVisible = !notSignedIn && m.phase != ShareSheetModel.Phase.LOADING_SPACES
         sendButton.isVisible = !notSignedIn
         title.text =
-            if (m.phase == ShareSheetModel.Phase.SENT) {
-                getString(R.string.share_sent_to, m.selectedSpace?.name.orEmpty())
-            } else {
-                getString(R.string.share_title)
+            when (m.phase) {
+                ShareSheetModel.Phase.SENT -> getString(R.string.share_sent_to, m.selectedSpace?.name.orEmpty())
+                // The sheet closes at once; the upload carries on in WorkManager.
+                ShareSheetModel.Phase.HANDED_OFF -> getString(R.string.share_handed_off)
+                else -> getString(R.string.share_title)
             }
 
         val size = m.size
@@ -173,7 +213,7 @@ class ShareActivity : AppCompatActivity() {
         notice.isVisible = size.notice != null
         noticeText.text = size.notice
         bannerText.isVisible = m.banner != null
-        bannerText.text = m.banner?.text
+        bannerText.text = m.bannerText
 
         spaceValue.text = m.selectedSpace?.name ?: getString(R.string.share_choose_space)
         agents.removeAllViews()
@@ -189,7 +229,10 @@ class ShareActivity : AppCompatActivity() {
         }
         agents.isVisible = agents.isNotEmpty()
 
-        val locked = m.phase == ShareSheetModel.Phase.SENDING || m.phase == ShareSheetModel.Phase.SENT
+        val locked =
+            m.phase == ShareSheetModel.Phase.SENDING ||
+                m.phase == ShareSheetModel.Phase.SENT ||
+                m.phase == ShareSheetModel.Phase.HANDED_OFF
         messageField.isEnabled = !locked
         sendLabel.text = m.sendLabel
         sendLabel.isVisible = m.phase != ShareSheetModel.Phase.SENDING
@@ -374,7 +417,7 @@ class ShareActivity : AppCompatActivity() {
     ): View {
         val line =
             text(
-                "${file.name} · ${ShareSheetModel.rowSize(file.size)}",
+                "${file.name} · ${ByteLabel.format(file.size)}",
                 15f,
                 400,
                 R.color.burrow_on_surface,

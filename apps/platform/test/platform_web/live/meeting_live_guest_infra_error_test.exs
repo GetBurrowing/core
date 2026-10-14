@@ -108,7 +108,7 @@ defmodule PlatformWeb.MeetingLiveGuestInfraErrorTest do
   defp unconfigure_livekit, do: put_livekit_env([])
 
   defp create_meeting do
-    org_id = Platform.TenancyFixtures.fabrikam_org_id()
+    org_id = Platform.TenancyFixtures.acme_org_id()
 
     {:ok, project} =
       Tasks.create_project(%{

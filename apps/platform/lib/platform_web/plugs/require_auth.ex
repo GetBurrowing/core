@@ -134,11 +134,11 @@ defmodule PlatformWeb.Plugs.RequireAuth do
   # having to re-derive.
   defp assign_membership(conn, user) do
     membership = Tenancy.load_membership(user)
-    fabrikam_admin? = Tenancy.fabrikam_admin_preloaded?(user)
+    root_admin? = Tenancy.root_admin_preloaded?(user)
 
     conn
     |> assign(:current_user_org_membership, membership)
-    |> assign(:fabrikam_admin?, fabrikam_admin?)
+    |> assign(:root_admin?, root_admin?)
   end
 
   defp emit_access_blocked(conn, reason, actor_id) do

@@ -80,6 +80,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
   alias Platform.Tasks.PayloadAmendmentChanges
   alias Platform.Tasks.PlanRejection
   alias Platform.Tasks.{Plan, Task}
+  alias PlatformWeb.Tasks.ExternalFeedbackComponents
 
   import PlatformWeb.Tasks.StatusLabels, only: [status_label: 1, phase_label: 1]
 
@@ -120,7 +121,30 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
         socket
       end
 
-    {:ok, socket}
+    {:ok, assign_can_promote(socket)}
+  end
+
+  # The promote handler re-reads the row by id; a malformed id is "not found"
+  # rather than an Ecto cast raise.
+  defp promotable_task(task_id) when is_binary(task_id) do
+    if Platform.UUID.valid?(task_id), do: Tasks.get_task_record(task_id), else: nil
+  end
+
+  defp promotable_task(_task_id), do: nil
+
+  # Whether to RENDER the promote control (task 01a11ec3 stage 4). Display
+  # only: `detail_promote_from_quarantine` re-asks the same predicate against
+  # a freshly read row before it writes anything. Only a quarantined external
+  # task pays for the lookup.
+  defp assign_can_promote(socket) do
+    task = socket.assigns[:selected_task]
+    user_id = socket.assigns[:current_user_id]
+
+    can_promote? =
+      match?(%Task{origin: "external_feedback", trust: "quarantined"}, task) and
+        Tasks.can_promote_from_quarantine?(%{id: user_id}, task)
+
+    assign(socket, :can_promote_quarantine?, can_promote?)
   end
 
   # Local (component-owned) state is reset whenever the shell signals a new
@@ -419,6 +443,51 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
       end
     else
       flash(:error, "Task not found.")
+    end
+
+    {:noreply, socket}
+  end
+
+  # ── External feedback promotion (task 01a11ec3 stage 4) ────────────────
+  #
+  # THIS HANDLER IS THE AUTHORIZATION BOUNDARY for the human path.
+  # `Tasks.promote_from_quarantine/3` checks no permission (it also serves
+  # `:system` and agent callers), and the button's `:if` is display only, so
+  # a forged `pushEvent` from any viewer of /tasks lands here. The row is
+  # re-read by id, never taken from socket state, and only a non-external
+  # admin of the project's org or a root admin
+  # (`Tasks.can_promote_from_quarantine?/2`) reaches the write. The actor is
+  # always the session's human, so the audit row names them.
+  def handle_event("detail_promote_from_quarantine", %{"id" => task_id}, socket) do
+    user_id = socket.assigns[:current_user_id]
+
+    with {:task, %Task{} = task} <- {:task, promotable_task(task_id)},
+         {:external, true} <- {:external, task.origin == "external_feedback"},
+         {:authorized, true} <-
+           {:authorized, Tasks.can_promote_from_quarantine?(%{id: user_id}, task)},
+         {:ok, _promoted} <-
+           Tasks.promote_from_quarantine(task, {:user, user_id}, via: "tasks_ui") do
+      flash(:info, "Promoted to trusted. This task can now be planned and executed.")
+      request_refresh()
+    else
+      {:task, nil} ->
+        flash(:error, "Task not found.")
+
+      {:external, false} ->
+        flash(:error, "Only external feedback can be promoted out of quarantine.")
+
+      {:authorized, false} ->
+        Logger.warning(
+          "[TaskDetailComponent] refused quarantine promotion task_id=#{task_id} user_id=#{inspect(user_id)}"
+        )
+
+        flash(
+          :error,
+          "You are not allowed to promote this task. An admin of its project's org must promote it."
+        )
+
+      {:error, reason} ->
+        flash(:error, "Promotion failed: #{inspect(reason)}")
     end
 
     {:noreply, socket}
@@ -961,8 +1030,16 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
              — there's a ~34px gap where the panel ends above the nav's
              safe-area. Replaces PR #331's inner-scroller `pb-[calc(...)]`,
              which left visible dead space below content. --%>
+      <%!-- The mobile list under the panel is hidden by a class on that one
+           element, applied when the panel mounts and lifted when it is
+           removed (task 01a13884 stage 2). JS class ops are sticky across
+           patches, so BoardComponent takes no detail-panel attr and a
+           select or close never re-renders the board. --%>
       <div
         :if={@show_detail && @selected_task}
+        data-role="task-detail-panel"
+        phx-mounted={JS.add_class("max-lg:hidden", to: "#tasks-mobile-list")}
+        phx-remove={JS.remove_class("max-lg:hidden", to: "#tasks-mobile-list")}
         class="fixed top-0 bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))] right-0 z-30 flex w-full max-w-lg lg:max-w-[min(60vw,60rem)] flex-col border-l border-edge bg-base-100 shadow-xl safe-area-top"
       >
         <div class="flex items-center justify-between border-b border-edge px-4 py-3">
@@ -1147,6 +1224,25 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
               / {@selected_task.epic.name || "—"}
             </span>
           </div>
+
+          <%!-- External feedback provenance + promotion (task 01a11ec3 stage 4).
+               The button's `:if` is display only; the handler re-checks. --%>
+          <ExternalFeedbackComponents.provenance task={@selected_task}>
+            <:actions>
+              <button
+                :if={@selected_task.trust == "quarantined" and @can_promote_quarantine?}
+                type="button"
+                phx-click="detail_promote_from_quarantine"
+                phx-target={@myself}
+                phx-value-id={@selected_task.id}
+                data-role="detail-promote-from-quarantine"
+                data-confirm="Promote this external report to trusted? It can then be planned and executed."
+                class="btn btn-primary btn-sm max-sm:min-h-[44px] gap-1"
+              >
+                <span class="hero-shield-check size-4" aria-hidden="true"></span> Promote to trusted
+              </button>
+            </:actions>
+          </ExternalFeedbackComponents.provenance>
 
           <%!-- Why this is blocked (task 01a004ad stage 3).
 

@@ -10,7 +10,7 @@ defmodule Platform.Chat.SidebarOrgFallbackTest do
   `Platform.Tenancy.Lifecycle.create_org/2` inserts an `Org` and stops. So an
   org created after that date has no section, and `default_section_id/3` falls
   through `fallback_section_id/1` to the LOWEST-`position` section — which in
-  production is Fabrikam.
+  production is Acme.
 
   Fixture A below is expected to FAIL against unmodified main and to pass once
   stage 2 creates the section row at org-creation time. Fixture B is the
@@ -50,7 +50,7 @@ defmodule Platform.Chat.SidebarOrgFallbackTest do
     %OrgMembership{}
     |> OrgMembership.changeset(%{
       user_id: user.id,
-      org_id: Tenancy.get_org_by_slug!("fabrikam").id,
+      org_id: Tenancy.get_org_by_slug!("acme").id,
       role: "admin"
     })
     |> Repo.insert!()

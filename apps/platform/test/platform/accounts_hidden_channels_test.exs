@@ -78,13 +78,13 @@ defmodule Platform.AccountsHiddenChannelsTest do
       user = insert_user("coexist")
 
       {:ok, _} =
-        Accounts.update_user_preference(user.id, :chat_section_order, ["Fabrikam", "Paragon"])
+        Accounts.update_user_preference(user.id, :chat_section_order, ["Acme", "Paragon"])
 
       space_id = Ecto.UUID.generate()
       assert {:ok, _} = Accounts.hide_channel(user.id, space_id)
 
       reloaded = Repo.get!(User, user.id)
-      assert reloaded.preferences["chat_section_order"] == ["Fabrikam", "Paragon"]
+      assert reloaded.preferences["chat_section_order"] == ["Acme", "Paragon"]
       assert reloaded.preferences["hidden_channel_ids"] == [space_id]
     end
 

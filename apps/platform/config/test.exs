@@ -44,30 +44,35 @@ config :platform, Platform.Repo,
 
 # Auto-admin email domain (task 01a068f6 stage 1): `config/config.exs`
 # deliberately carries no default for `:root_org_admin_email_domain` (a
-# fresh production install must not implicitly inherit Fabrikam's domain). This
-# is a test-only convenience pin so the existing `@example.com` fixtures
-# throughout the suite (`tenancy_test.exs` et al.) keep deriving `:admin`
-# exactly like they did before that change.
-config :platform, :root_org_admin_email_domain, "example.com"
+# fresh production install must not implicitly inherit any one install's
+# domain). This is a test-only pin so the suite's `@acme.test` fixtures
+# (`tenancy_test.exs` et al.) derive `:admin` from the email domain. The
+# `.test` TLD is reserved (RFC 2606), so it can never name a real install.
+config :platform, :root_org_admin_email_domain, "acme.test"
 
-# Root org identity (task 01a068f6 stage 2): `20260519143620_seed_root_orgs`
-# now reads `ROOT_ORG_SLUG`/`ROOT_ORG_NAME` from the OS environment directly
-# (a migration can't assume `config/runtime.exs` ran — see that file's
-# moduledoc) and defaults to "root"/"Root Org" when neither is set, so a
-# genuinely fresh PRODUCTION install stops coming up owned by "Fabrikam". This
-# repo's test suite still asserts against the literal "fabrikam" slug in well
-# over a hundred places (`Tenancy.get_org_by_slug!("fabrikam")` and friends,
-# plus migrations like `20260921190000_add_color_lightness_to_orgs` that
-# pin colours by that exact slug) — CI's Postgres service container is
-# empty on every job, so without this pin `mix test`'s own
-# `ecto.create`/`ecto.migrate` would seed "root" instead and every one of
-# those assertions would start raising `Ecto.NoResultsError`. `System.put_env/2`
-# here runs in the SAME OS process that later executes the migration's
-# `System.get_env/2` read (Mix loads config before running `ecto.migrate`),
-# so this keeps a fresh test database seeding "Fabrikam"/"fabrikam" exactly as it
-# did before this task.
-System.put_env("ROOT_ORG_SLUG", "fabrikam")
-System.put_env("ROOT_ORG_NAME", "Fabrikam")
+# Root org identity (task 01a068f6 stage 2; renamed to a neutral fixture in
+# task 01a116de stage 4): `20260519143620_seed_root_orgs` reads
+# `ROOT_ORG_SLUG`/`ROOT_ORG_NAME` from the OS environment directly (a
+# migration can't assume `config/runtime.exs` ran, see that file's
+# moduledoc) and defaults to "root"/"Root Org" when neither is set. The test
+# suite asserts against a fixed root slug in a few hundred places
+# (`Tenancy.get_org_by_slug!("acme")`, `TenancyFixtures.acme_org_id/0` and
+# friends). CI's Postgres service container is empty on every job, so
+# without this pin `mix test`'s own `ecto.create`/`ecto.migrate` would seed
+# "root" and every one of those lookups would raise `Ecto.NoResultsError`.
+# `System.put_env/2` here runs in the SAME OS process that later executes
+# the migration's `System.get_env/2` read (Mix loads config before running
+# `ecto.migrate`), so a fresh test database seeds "Acme"/"acme".
+# `test/platform/test_root_org_identity_test.exs` asserts the seeded row, so
+# a database migrated under an older pin fails loudly instead of passing on
+# a stale root.
+#
+# Migrations that pin values by a literal historical slug (the shipped org
+# colours in `20260911220000_add_color_to_orgs` and
+# `20260921190000_add_color_lightness_to_orgs`) do not touch this root;
+# their tests insert the slug they exercise.
+System.put_env("ROOT_ORG_SLUG", "acme")
+System.put_env("ROOT_ORG_NAME", "Acme")
 
 config :platform, :oidc,
   client_id: "test-client-id",
@@ -222,6 +227,10 @@ config :platform, :start_deploy_merge_reconciler, false
 # inside the DataCase sandbox instead of racing a global daily ticker.
 config :platform, :start_file_purger, false
 
+# PrototypePurger (task 01a1316b-4e46 stage 1): tests call `sweep/1` directly
+# inside the DataCase sandbox instead of racing a global daily ticker.
+config :platform, :start_prototype_purger, false
+
 # CatalogEmitter (task 01a0008c stage 3): a globally-booted instance would
 # subscribe to `[:platform, :files, :ingested, :stop]` for the whole suite
 # and then run Repo queries from a process that owns no sandbox
@@ -295,6 +304,29 @@ config :platform, :meetings_enabled, false
 # with `Application.put_env` + `on_exit` restore in async: false modules.
 config :platform, :mail_enabled, false
 
+# External feedback (task 01a11ec3 stage 2). Pinned off so the suite is not a
+# function of the host's FEEDBACK_POLICY (config/runtime.exs skips the key
+# under :test). Both publisher adapters go to `Req.Test` stubs named after
+# their modules, so no test can reach a broker or GitHub. Tests that need the
+# capability flip `:feedback_policy` per-test and restore it on exit.
+config :platform, :feedback_policy, "disabled"
+
+config :platform, Platform.Feedback.GithubPublisher,
+  adapter: Platform.Feedback.GithubPublisher.Broker,
+  repository: "Startup-Suite/core",
+  broker_url: "https://feedback-broker.test",
+  github_api_url: "https://github-api.test"
+
+config :platform, :feedback_broker_req_options,
+  plug: {Req.Test, Platform.Feedback.GithubPublisher.Broker}
+
+config :platform, :feedback_github_req_options,
+  plug: {Req.Test, Platform.Feedback.GithubPublisher.GithubApp}
+
+# Intake (task 01a11ec3 stage 3): dispositions off by default so no test
+# reaches the broker stub unless it opts in with a fake adapter.
+config :platform, Platform.Feedback.Intake, disposition_mode: "none"
+
 # Install-to-install federation master switch (task 01a0d90f stage 2, ADR
 # 0054). Same reasoning as :mail_enabled above: without the injected key
 # `Federation.Peers.Config.enabled?/0` reads `PEER_FEDERATION_ENABLED` from
@@ -311,6 +343,12 @@ config :platform, :peer_federation_req_options, plug: {Req.Test, Platform.Federa
 
 config :platform, :peer_federation_resolver, %{}
 
+# Member avatar fetches for the app route (`Platform.Accounts.UserAvatarCache`):
+# every request goes to the `Req.Test` stub of that name, and no host resolves
+# unless a test stubs it, so nothing reaches the network.
+config :platform, :user_avatar_req_options, plug: {Req.Test, Platform.Accounts.UserAvatarCache}
+config :platform, :user_avatar_resolver, %{}
+
 # APNs never reaches Apple in tests (task 01a10882 stage 2): every
 # `Platform.Push.APNs` request goes to the `Req.Test` stub of that name.
 config :platform, :apns_req_options, plug: {Req.Test, Platform.Push.APNs}
@@ -324,6 +362,21 @@ config :platform, :apns_retry_backoff_ms, [0, 0, 0]
 # `Platform.Push.FCM`, and the transport-error retry schedule does not sleep.
 config :platform, :fcm_req_options, plug: {Req.Test, Platform.Push.FCM}
 config :platform, :fcm_retry_backoff_ms, [0, 0, 0]
+
+# Push relay (task 01a1261e stage 2): every install-side relay request goes to
+# the `Req.Test` stub named `Platform.Push.Relay`, and its transport-error
+# retry schedule does not sleep.
+config :platform, :push_relay_req_options, plug: {Req.Test, Platform.Push.Relay}
+config :platform, :push_relay_retry_backoff_ms, [0, 0, 0]
+
+# Sign-in users page (task 01a113ea stage 1). Same reasoning as :mail_enabled
+# above: without the injected key `SignInAdmin.Config.enabled?/0` reads
+# `POCKET_ID_ADMIN_ENABLED` from the host. And pocket-id is never reached in
+# tests: every `SignInAdmin.PocketId` request goes to the `Req.Test` stub of
+# that name. Tests that need the page on flip the switch (and inject
+# :sign_in_admin_url / :sign_in_admin_api_key) and restore them on exit.
+config :platform, :sign_in_admin_enabled, false
+config :platform, :pocket_id_req_options, plug: {Req.Test, Platform.SignInAdmin.PocketId}
 
 # Email send path (task 01a0cf21 stage 2): tests never reach SMTP. The
 # recording adapter sends `{:mail_test_adapter, email, config}` to the calling
@@ -400,6 +453,11 @@ config :platform, :stack_deployer,
 # Canvas server persists synchronously in tests so the SQL sandbox owns the
 # write and teardown doesn't race with background Task.Supervisor children.
 config :platform, :canvas_persist_sync, true
+
+# The tool-call ledger (task 01a114a8 stage 1) writes inline in tests, under
+# the sandbox owner, instead of in a Platform.TaskSupervisor child. The
+# body is identical and still rescues everything; see ToolCallLedger.
+config :platform, :tool_call_ledger_sync, true
 
 # T2 (ADR-0041, task 019e41d9-8b50-7f11-bfd0-b667b453c8f2) ships a
 # scope-creep guard that asserts Platform.Org.Context has not changed

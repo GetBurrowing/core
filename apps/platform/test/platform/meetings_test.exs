@@ -1000,7 +1000,7 @@ defmodule Platform.MeetingsTest do
     # racing other tests that mutate the livekit config.
 
     defp create_project! do
-      org_id = Platform.TenancyFixtures.fabrikam_org_id()
+      org_id = Platform.TenancyFixtures.acme_org_id()
 
       {:ok, project} =
         Tasks.create_project(%{
@@ -1645,7 +1645,7 @@ defmodule Platform.MeetingsTest do
     alias Platform.Tasks
 
     defp create_bundle_meeting! do
-      org_id = Platform.TenancyFixtures.fabrikam_org_id()
+      org_id = Platform.TenancyFixtures.acme_org_id()
 
       {:ok, project} =
         Tasks.create_project(%{
@@ -1692,7 +1692,7 @@ defmodule Platform.MeetingsTest do
     alias Platform.Tasks
 
     defp create_payload_meeting! do
-      org_id = Platform.TenancyFixtures.fabrikam_org_id()
+      org_id = Platform.TenancyFixtures.acme_org_id()
 
       {:ok, project} =
         Tasks.create_project(%{
@@ -2436,7 +2436,7 @@ defmodule Platform.MeetingsTest do
       {:ok, project} =
         Platform.Tasks.create_project(%{
           name: "Live Predicate #{System.unique_integer([:positive])}",
-          org_id: Platform.TenancyFixtures.fabrikam_org_id()
+          org_id: Platform.TenancyFixtures.acme_org_id()
         })
 
       {:ok, meeting} =

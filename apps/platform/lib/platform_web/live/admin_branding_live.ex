@@ -13,7 +13,7 @@ defmodule PlatformWeb.AdminBrandingLive do
 
   An org in Suite is a CLIENT, not a deployment. One install serves many
   orgs and they all get the same home-screen icon, so branding is an
-  install-wide setting behind the Fabrikam-admin tier — the same
+  install-wide setting behind the root-admin tier — the same
   `live_session :admin` gate `/admin/orgs` and `/admin/users` sit behind.
   There is deliberately no branding column on `orgs`.
 
@@ -31,9 +31,9 @@ defmodule PlatformWeb.AdminBrandingLive do
     * The route is in the `:admin` `live_session`, whose
       `PlatformWeb.LiveAuth.on_mount(:ensure_admin, ...)` hook
       halt-redirects a non-admin mount (`live_auth.ex`, the
-      `socket.assigns[:fabrikam_admin?]` branch).
+      `socket.assigns[:root_admin?]` branch).
     * AND both writes re-check: `Branding.update_identity/2` and
-      `Branding.put_source/3` run `Tenancy.fabrikam_admin?/1` on the actor we
+      `Branding.put_source/3` run `Tenancy.root_admin?/1` on the actor we
       thread in from `@current_user_record`. Neither check is load-bearing
       alone.
 
@@ -401,7 +401,7 @@ defmodule PlatformWeb.AdminBrandingLive do
       {:ok, %InstallBranding{}} ->
         {:noreply,
          socket
-         |> put_flash(:info, "App colours reset to the Suite default.")
+         |> put_flash(:info, "App colours reset to the Burrow default.")
          |> redirect(to: ~p"/admin/branding")}
 
       {:error, %Ecto.Changeset{} = changeset} ->

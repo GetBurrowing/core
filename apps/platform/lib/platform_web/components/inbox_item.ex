@@ -8,56 +8,59 @@ defmodule PlatformWeb.Components.InboxItem do
     * the **select** checkbox (`phx-click="toggle_select"`), leftmost, present
       only when `selectable`.
     * the **open** control (`phx-click="open"`) fills the row and carries the
-      item's `id` + `url`; clicking it marks the item read and navigates to
-      `item.url`.
+      item's `id` + `url`; clicking it acknowledges the item
+      (`Platform.Inbox.open_item/2`) and navigates to `item.url`.
     * the **dismiss** affordance (`phx-click="dismiss"`) is a right-aligned X.
 
   All three are SIBLINGS, never descendants of one another, so a click on the
   X fires only `dismiss` and a click on the checkbox fires only
   `toggle_select` — neither ever bubbles into `open`. This is the rule the
-  whole row layout exists to protect: `open` marks the item read and navigates
+  whole row layout exists to protect: `open` acknowledges the item and navigates
   away, so any control that accidentally nests inside it becomes a trapdoor.
 
   The dismiss X is always tappable on mobile (the touch equivalent of the
   desktop swipe-left / hover-reveal), and hover-revealed on desktop
   (`md:opacity-0 md:group-hover:opacity-100`) so the resting row stays calm.
 
-  ## The checkbox REPLACES the unread dot (task 01a00108 stage 2)
+  ## Read state: one marker per row (task 01a11703 stage 2)
 
-  The dot used to hold the leftmost slot, inside the open button. The checkbox
-  cannot live there — see the sibling rule above — so it has to claim that slot
-  from outside the button, and the two cannot share it without stacking two
-  small primary-toned marks a few pixels apart.
+  The leftmost slot belongs to the select checkbox. The unread dot does NOT
+  share it: the dot sits at the RIGHT end of the meta line (`ml-auto`), so the
+  checkbox and the dot are never two small primary-toned marks stacked a few
+  pixels apart. The dot keys on `is_nil(@item.read_at)` and nothing else.
 
-  The dot loses. It renders unconditionally — it has never read `read_at` — so
-  it is true of every row at once and discriminates nothing, while the checkbox
-  in the same slot carries real per-row state and is actionable. The
-  `bg-primary` signature survives as `checkbox-primary`. When `selectable` is
-  false the dot still renders, so a non-selecting caller keeps today's row
-  verbatim.
+  A row carries exactly one of three markers:
 
-  ## The premise moved (task 01a00108 stage 4)
+    * **Unread** (`read_at` nil, any kind): the `bg-primary` dot plus an
+      `sr-only` "Unread", and a `font-semibold` title. The dot is a fill, not
+      text, and cyan on base-100 is below 3:1, so the weight step and the
+      screen-reader text carry the meaning; the dot is a redundant cue.
+    * **Seen, awaiting your action** (`read_at` set and the kind is in
+      `Platform.Inbox.action_kinds/0`): a `font-normal` title and an outlined
+      "Needs your review" tag (`text-info` on `border-info/40`, transparent
+      fill) inside the meta line, after the kind label. Opening an action row
+      stamps `read_at` only, so the row stays listed until the review is acted
+      on.
+    * **Nothing**: a read row outside `action_kinds/0`. Opening such a row
+      dismisses it, so on this surface it appears only after an Undo restores
+      it; it renders at normal weight with no dot and no tag.
 
-  The paragraph above originally justified the dot's removal by saying every
-  rendered row was unread BY CONSTRUCTION, because `InboxLive` rendered only
-  `Inbox.unread_scope/1` and that scope excluded read rows. Stage 4 retired
-  read-as-cleared, so the surface now renders read and unread rows side by side
-  and that premise is false.
+  The dot and the tag are mutually exclusive by construction: the dot needs
+  `read_at` nil and the tag needs it set.
 
-  The decision survives it, because the dot never keyed on `read_at` in the
-  first place — an unconditional mark discriminates nothing regardless of what
-  is on the list. But note what is now true and was not: read vs. unread is a
-  REAL distinction on this surface, and no affordance expresses it. Reviving
-  the dot as a genuine `is_nil(@item.read_at)` indicator is a live design
-  question, deliberately left to a later stage rather than smuggled into a
-  semantics change.
+  At 375px the meta line's existing `flex-wrap` drops the tag under the kind
+  label, and `ml-auto` keeps the dot on the first meta line.
 
   The dom id (`inbox-item-<id>`) is supplied by the caller so it matches the
   stream `dom_id` and `stream_delete_by_dom_id/3` target exactly.
 
-  Styling reads only from semantic DaisyUI token slots (primary / base-* /
-  error) per `docs/design-system/01-foundations.md` — no raw hex. The kind
-  badge and the per-item space label give each row its taxonomy at a glance.
+  Styling reads only from semantic DaisyUI token slots per
+  `docs/design-system/01-foundations.md`, no raw hex: `bg-primary` (unread
+  dot), `text-info` + `border-info/40` (Needs-your-review tag), `base-100` +
+  `border-edge` (row ground), `text-base-content/70` (body), and `error` (the
+  dismiss X hover). The rail count stays `badge-error` in `IconRail`; this
+  component does not render it. The kind badge and the per-item space label
+  give each row its taxonomy at a glance.
   """
 
   use Phoenix.Component
@@ -75,7 +78,7 @@ defmodule PlatformWeb.Components.InboxItem do
 
   attr :selectable, :boolean,
     default: false,
-    doc: "Render the leftmost select checkbox in place of the unread dot."
+    doc: "Render the leftmost select checkbox."
 
   attr :selected, :boolean, default: false, doc: "Checked state of the select checkbox."
 
@@ -112,16 +115,6 @@ defmodule PlatformWeb.Components.InboxItem do
         ]}
         data-role="inbox-item-open"
       >
-        <%!-- Signature element: the unread dot. Yields the slot to the
-             checkbox when the row is selectable (see moduledoc). --%>
-        <span
-          :if={not @selectable}
-          class="mt-1.5 size-2 shrink-0 rounded-full bg-primary"
-          data-role="inbox-item-unread-dot"
-          aria-hidden="true"
-        >
-        </span>
-
         <span class="min-w-0 flex-1">
           <span class="flex flex-wrap items-center gap-2">
             <span
@@ -138,9 +131,32 @@ defmodule PlatformWeb.Components.InboxItem do
             >
               {@space_label}
             </span>
+            <%!-- Seen, awaiting action: read action rows only (see moduledoc). --%>
+            <span
+              :if={needs_action?(@item)}
+              data-role="inbox-item-needs-action"
+              class="inline-flex items-center rounded-full border border-info/40 px-2 py-0.5 text-[11px] font-medium text-info"
+            >
+              Needs your review
+            </span>
+            <%!-- Unread: the dot sits at the right end of the meta line. --%>
+            <span
+              :if={unread?(@item)}
+              class="ml-auto size-2 shrink-0 rounded-full bg-primary"
+              data-role="inbox-item-unread-dot"
+              aria-hidden="true"
+            >
+            </span>
+            <span :if={unread?(@item)} class="sr-only">Unread</span>
           </span>
 
-          <span class="mt-1 block truncate text-sm font-semibold text-base-content">
+          <span
+            class={[
+              "mt-1 block truncate text-sm text-base-content",
+              if(unread?(@item), do: "font-semibold", else: "font-normal")
+            ]}
+            data-role="inbox-item-title"
+          >
             {@item.title}
           </span>
 
@@ -199,6 +215,12 @@ defmodule PlatformWeb.Components.InboxItem do
   def kind_icon(_), do: "hero-bell"
 
   # ── Helpers ────────────────────────────────────────────────────────────
+
+  defp unread?(%Item{read_at: nil}), do: true
+  defp unread?(%Item{}), do: false
+
+  defp needs_action?(%Item{read_at: nil}), do: false
+  defp needs_action?(%Item{kind: kind}), do: kind in Platform.Inbox.action_kinds()
 
   defp present?(value) when is_binary(value), do: String.trim(value) != ""
   defp present?(_), do: false

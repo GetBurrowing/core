@@ -13,16 +13,16 @@ defmodule Platform.TenancyFixtures do
 
       import Platform.TenancyFixtures
 
-      attrs = %{actor_org_id: fabrikam_org_id(), …}
+      attrs = %{actor_org_id: acme_org_id(), …}
 
   ## Get-or-create, not "rely on the seed migration" (task 01a068f6 stage 2)
 
-  `fabrikam_org_id/0` and `tenant_org_id/1` used to hard-rely on
+  `acme_org_id/0` and `tenant_org_id/1` used to hard-rely on
   `20260519143620_seed_root_orgs.exs` having seeded exactly those five
   named orgs as part of `mix ecto.migrate`, via `get_org_by_slug!/1` —
   which RAISES if the row is absent. That migration no longer seeds
   tenant orgs at all, and only seeds a root org named/slugged from
-  `ROOT_ORG_NAME`/`ROOT_ORG_SLUG` (see its moduledoc) — "fabrikam" only
+  `ROOT_ORG_NAME`/`ROOT_ORG_SLUG` (see its moduledoc) — "acme" only
   because `config/test.exs` pins those env vars for this environment.
 
   Both functions now get-or-create: look up by slug first (the common
@@ -46,16 +46,16 @@ defmodule Platform.TenancyFixtures do
   }
 
   @doc """
-  Return the id of this install's root (Fabrikam) org, creating one on demand.
+  Return the id of this install's root (Acme) org, creating one on demand.
 
   Structural fallback, not slug-blind: if a root org already exists under
-  ANY slug (e.g. a caller that migrated without the "fabrikam" env pin), that
+  ANY slug (e.g. a caller that migrated without the "acme" env pin), that
   row is reused — inserting a second `parent_org_id: nil` row would trip
   the `orgs_single_root` partial unique index.
   """
-  @spec fabrikam_org_id() :: binary()
-  def fabrikam_org_id do
-    case Tenancy.get_org_by_slug("fabrikam") do
+  @spec acme_org_id() :: binary()
+  def acme_org_id do
+    case Tenancy.get_org_by_slug("acme") do
       %Org{id: id} -> id
       nil -> (Tenancy.get_root_org() || create_root_org!()).id
     end
@@ -79,7 +79,7 @@ defmodule Platform.TenancyFixtures do
 
   defp create_root_org! do
     %Org{}
-    |> Org.changeset(%{name: "Fabrikam", slug: "fabrikam", parent_org_id: nil})
+    |> Org.changeset(%{name: "Acme", slug: "acme", parent_org_id: nil})
     |> Repo.insert!()
   end
 
@@ -96,9 +96,9 @@ defmodule Platform.TenancyFixtures do
     end
   end
 
-  # `Tenancy.create_org/2` is Fabrikam-admin-only (see
+  # `Tenancy.create_org/2` is Acme-admin-only (see
   # `Platform.Tenancy.Lifecycle`) — there is no system/unauthenticated path.
-  # A throwaway admin, scoped to whichever org `fabrikam_org_id/0` resolves as
+  # A throwaway admin, scoped to whichever org `acme_org_id/0` resolves as
   # root, is cheaper than threading a real admin actor through every
   # `tenant_org_id/1` call site.
   defp root_admin! do
@@ -114,7 +114,7 @@ defmodule Platform.TenancyFixtures do
       |> Repo.insert!()
 
     %OrgMembership{}
-    |> OrgMembership.changeset(%{user_id: user.id, org_id: fabrikam_org_id(), role: "admin"})
+    |> OrgMembership.changeset(%{user_id: user.id, org_id: acme_org_id(), role: "admin"})
     |> Repo.insert!()
 
     user

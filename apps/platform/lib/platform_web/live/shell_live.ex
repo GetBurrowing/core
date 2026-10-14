@@ -40,15 +40,15 @@ defmodule PlatformWeb.ShellLive do
       end
 
     # MT/RBAC stack 2 (task 019e3c4a): admin nav is now gated on real
-    # Fabrikam-root admin membership, not the legacy `Accounts.is_fabrikam_user?/1`
+    # root-org admin membership, not the legacy `Accounts.root_user?/1`
     # stub which returned `true` for every user. We use the *pure*
-    # `fabrikam_admin_preloaded?/1` variant so this lookup costs zero extra
+    # `root_admin_preloaded?/1` variant so this lookup costs zero extra
     # Repo queries — `Accounts.get_user/1` (called a few lines above)
     # preloaded `:org_memberships` with the nested `:org`.
     # Both assigns are kept so existing components (icon_rail, bottom_rail,
-    # more_sheet) that read `is_fabrikam_user` continue to render correctly
-    # while new code adopts `fabrikam_admin?` via the LiveAuth hook.
-    is_fabrikam_user = Platform.Tenancy.fabrikam_admin_preloaded?(user_record)
+    # more_sheet) that read `root_user` continue to render correctly
+    # while new code adopts `root_admin?` via the LiveAuth hook.
+    root_user = Platform.Tenancy.root_admin_preloaded?(user_record)
 
     # Resolve org visibility ONCE and thread it (Tenancy moduledoc). The
     # preloaded clause costs zero queries because `Accounts.get_user/1`
@@ -172,7 +172,11 @@ defmodule PlatformWeb.ShellLive do
       |> assign(:more_sheet_open, false)
       |> assign(:sidebar_collapsed, false)
       |> assign(:active_module, active_module)
-      |> assign(:is_fabrikam_user, is_fabrikam_user)
+      |> assign(:root_user, root_user)
+      # The install's app name, read once per mount from the branding row:
+      # the alt text of the Burrow mark (task 01a120c5 stage 2) and the label
+      # text (stage 3) in the rail header, never a compiled product name.
+      |> assign(:brand_name, Platform.Branding.app_name())
       |> assign(:tasks_count, compute_tasks_count(raw_user_id))
       |> assign(:inbox_unread_count, compute_inbox_count(raw_user_id))
       # Task 01a01b29 stage 1: one chat-unread total for the whole viewer, so
@@ -594,8 +598,12 @@ defmodule PlatformWeb.ShellLive do
       # the Tasks badge (`compute_tasks_count`). The old running +1 / -1 counter
       # drifted: it only reacted to add/dismiss, so a `mark_read` or a
       # `dismiss_by_source` rollup dismissal (now broadcast as `:inbox_changed`)
-      # silently desynced the badge from the list. Recomputing from the shared
-      # `unread_scope/1` is the single source of truth, so badge and list agree.
+      # silently desynced the badge from the list. The count is
+      # `Inbox.reachable_badge_scope/1`, which composes on the list's
+      # `unread_scope/1` and adds `is_nil(read_at)`: the badge is the list's
+      # unopened subset (task 01a11703), so every counted row is listed, and a
+      # read action row is listed without being counted. Opening a row from
+      # /inbox (`Inbox.open_item/2`) broadcasts, so the badge moves live.
       # We stay `:cont` so InboxLive's own `handle_info` still runs on `/inbox`.
       |> attach_hook(:inbox_count_refresh, :handle_info, fn
         {evt, _payload}, socket
@@ -1335,6 +1343,12 @@ defmodule PlatformWeb.ShellLive do
       PlatformWeb.AdminOrgsLive ->
         "Admin"
 
+      PlatformWeb.AdminSignInUsersLive ->
+        "Admin"
+
+      PlatformWeb.AdminVaultLive ->
+        "Admin"
+
       _ ->
         view
         |> Module.split()
@@ -1419,8 +1433,7 @@ defmodule PlatformWeb.ShellLive do
   # one — a count never includes something the viewer has no way to act on.
   # BOTH the mount assign and the `:inbox_count_refresh` recompute go through
   # here, so the first paint and the live badge can never disagree about what
-  # is being counted. Internal users are unaffected (identical to
-  # `Inbox.unread_count/1`).
+  # is being counted. For an internal user it equals `Inbox.unread_count/1`.
   defp compute_inbox_count(user_id) when is_binary(user_id) do
     Inbox.reachable_unread_count(user_id)
   rescue

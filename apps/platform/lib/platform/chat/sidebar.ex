@@ -3,13 +3,13 @@ defmodule Platform.Chat.Sidebar do
   Sidebar shape: the admin-curated org default + (Stage 3) per-user overrides.
 
   This module (Stage 2) covers the **default** layer — reading the ordered
-  section list and the Fabrikam-admin-gated curation writes. The split between
+  section list and the root-admin-gated curation writes. The split between
   channel *identity* (`chat_spaces.org_id`, global, admin) and per-user
   *arrangement* (Stage 3, `users.preferences`) is the core design decision:
-  a regular user rearranges their own view; only a Fabrikam admin changes what
+  a regular user rearranges their own view; only a root-org admin changes what
   everyone sees by default.
 
-  Every write is authorized through `Platform.Tenancy.fabrikam_admin?/1` —
+  Every write is authorized through `Platform.Tenancy.root_admin?/1` —
   the controls in the LiveView (Stage 6) are an affordance, not the gate.
   """
   import Ecto.Query
@@ -58,7 +58,7 @@ defmodule Platform.Chat.Sidebar do
       from(s in Section,
         join: o in Platform.Tenancy.Org,
         on: o.id == s.org_id,
-        select_merge: %{org_name: o.name},
+        select_merge: %{org_name: o.name, org_slug: o.slug, org_is_root: is_nil(o.parent_org_id)},
         order_by: [asc: s.position, asc: fragment("coalesce(?, ?)", s.name, o.name)]
       )
     )
@@ -89,7 +89,7 @@ defmodule Platform.Chat.Sidebar do
         join: o in Platform.Tenancy.Org,
         on: o.id == s.org_id,
         where: is_nil(o.archived_at),
-        select_merge: %{org_name: o.name},
+        select_merge: %{org_name: o.name, org_slug: o.slug, org_is_root: is_nil(o.parent_org_id)},
         order_by: [asc: s.position, asc: fragment("coalesce(?, ?)", s.name, o.name)]
       )
     )
@@ -123,7 +123,7 @@ defmodule Platform.Chat.Sidebar do
   `position` is `max(position) + 1`. Two concurrent creates can read the same
   max and land on the same position; `org_id` is what's unique, so the conflict
   target does not catch it. Accepted deliberately — org creation is rare and
-  Fabrikam-admin-gated, ties only make the render order of two brand-new sections
+  root-admin-gated, ties only make the render order of two brand-new sections
   nondeterministic, and an admin reorder renumbers them. Serializing this
   behind an advisory lock would buy strictness nothing reads.
   """
@@ -147,8 +147,17 @@ defmodule Platform.Chat.Sidebar do
       # than a phantom carrying an id no row has.
       {:ok, %Section{}} ->
         case Repo.get_by(Section, org_id: org.id) do
-          %Section{} = section -> {:ok, %{section | org_name: org.name}}
-          nil -> {:ok, nil}
+          %Section{} = section ->
+            {:ok,
+             %{
+               section
+               | org_name: org.name,
+                 org_slug: org.slug,
+                 org_is_root: is_nil(org.parent_org_id)
+             }}
+
+          nil ->
+            {:ok, nil}
         end
 
       other ->
@@ -157,7 +166,7 @@ defmodule Platform.Chat.Sidebar do
   end
 
   @doc """
-  Set an org-default section's sidebar label (Fabrikam admin only).
+  Set an org-default section's sidebar label (root-admin only).
 
   `name` is a label OVERRIDE (task 01a08212). A blank or whitespace `name`
   CLEARS it to nil, so the header follows the org's name again;
@@ -171,7 +180,7 @@ defmodule Platform.Chat.Sidebar do
     with_admin(actor, fn -> update_section(section_id, %{name: name}) end)
   end
 
-  @doc "Recolor an org-default section (Fabrikam admin only). `color` is a scope token, e.g. \"sxi\"."
+  @doc "Recolor an org-default section (root-admin only). `color` is a scope token, e.g. \"sxi\"."
   @spec recolor_section(map(), binary(), String.t()) ::
           {:ok, Section.t()} | {:error, :unauthorized | :not_found | Ecto.Changeset.t()}
   def recolor_section(actor, section_id, color) when is_binary(color) do
@@ -180,7 +189,7 @@ defmodule Platform.Chat.Sidebar do
 
   @doc """
   Set the admin default section order from an ordered list of section ids
-  (Fabrikam admin only). Unknown ids are skipped (skip-unknown robustness).
+  (root-admin only). Unknown ids are skipped (skip-unknown robustness).
   Returns `{:ok, updated_count}`.
   """
   @spec reorder_sections(map(), [binary()]) ::
@@ -208,7 +217,7 @@ defmodule Platform.Chat.Sidebar do
 
   @doc """
   Globally reassign a channel to another section by setting its identity
-  `chat_spaces.org_id` (Fabrikam admin only). This is the "everyone sees it
+  `chat_spaces.org_id` (root-admin only). This is the "everyone sees it
   there" action.
 
   Personal arrangement is NOT touched. Design decision 1a (prune the channel
@@ -693,7 +702,10 @@ defmodule Platform.Chat.Sidebar do
   end
 
   # A channel's default section is the one owned by its org; channels with no
-  # matching section (nil/unknown org_id) fall back to the first section.
+  # matching section (nil/unknown org_id) fall back to the ROOT org's section
+  # when it is present (structural: its org has no parent; task 01a116de
+  # stage 3, so an unscoped channel sits under the root org's own name on
+  # every install), else to the first section by position.
   defp default_section_id(%{org_id: org_id}, org_to_section, fallback_id) do
     Map.get(org_to_section, org_id, fallback_id)
   end
@@ -701,7 +713,13 @@ defmodule Platform.Chat.Sidebar do
   defp fallback_section_id([]), do: nil
 
   defp fallback_section_id(sections) do
-    sections |> Enum.min_by(& &1.position, fn -> hd(sections) end) |> Map.get(:id)
+    case Enum.find(sections, &(Map.get(&1, :org_is_root) == true)) do
+      %{id: id} ->
+        id
+
+      nil ->
+        sections |> Enum.min_by(& &1.position, fn -> hd(sections) end) |> Map.get(:id)
+    end
   end
 
   # `section_id` is a `phx-value-` param off the sidebar rename/recolor events.
@@ -718,7 +736,7 @@ defmodule Platform.Chat.Sidebar do
   end
 
   defp with_admin(actor, fun) do
-    if Tenancy.fabrikam_admin?(actor), do: fun.(), else: {:error, :unauthorized}
+    if Tenancy.root_admin?(actor), do: fun.(), else: {:error, :unauthorized}
   end
 
   # ── Agents goal surface (task 01a0b491, stage 4) ───────────────────────────

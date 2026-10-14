@@ -41,15 +41,15 @@ defmodule PlatformWeb.FilesLiveTest do
     init_test_session(conn, current_user_id: user.id)
   end
 
-  defp tenant_or_fabrikam_org_id("fabrikam"), do: fabrikam_org_id()
-  defp tenant_or_fabrikam_org_id(slug), do: tenant_org_id(slug)
+  defp tenant_or_acme_org_id("acme"), do: acme_org_id()
+  defp tenant_or_acme_org_id(slug), do: tenant_org_id(slug)
 
   defp seed_project(org_slug, name) do
     {:ok, project} =
       Tasks.create_project(%{
         name: name,
         slug: name |> String.downcase() |> String.replace(~r/[^a-z0-9]+/, "-"),
-        org_id: tenant_or_fabrikam_org_id(org_slug)
+        org_id: tenant_or_acme_org_id(org_slug)
       })
 
     project
@@ -78,14 +78,14 @@ defmodule PlatformWeb.FilesLiveTest do
     test "renders project picker grouped by org (ADR 0042 shape)", %{conn: conn} do
       conn = authenticated_conn(conn)
 
-      _fabrikam = seed_project("fabrikam", "Files Mount Fabrikam")
+      _acme = seed_project("acme", "Files Mount Acme")
       _gen = seed_project("soylent", "Files Mount Gen")
 
       {:ok, _view, html} = live(conn, ~p"/files")
 
-      assert html =~ ~s(data-role="files-project-group" data-org-slug="fabrikam")
+      assert html =~ ~s(data-role="files-project-group" data-org-slug="acme")
       assert html =~ ~s(data-role="files-project-group" data-org-slug="soylent")
-      assert html =~ "Files Mount Fabrikam"
+      assert html =~ "Files Mount Acme"
       assert html =~ "Files Mount Gen"
     end
 
@@ -126,11 +126,11 @@ defmodule PlatformWeb.FilesLiveTest do
     end
 
     test "a plain member does not see a foreign org's project name", %{conn: conn} do
-      own = seed_project("fabrikam", "Own Files Project #{System.unique_integer([:positive])}")
+      own = seed_project("acme", "Own Files Project #{System.unique_integer([:positive])}")
       foreign = seed_project("sxi", "Foreign Project #{System.unique_integer([:positive])}")
 
-      user = scoped_user!("member", fabrikam_org_id())
-      refute Tenancy.fabrikam_admin?(user)
+      user = scoped_user!("member", acme_org_id())
+      refute Tenancy.root_admin?(user)
 
       conn = init_test_session(conn, current_user_id: user.id)
       {:ok, _view, html} = live(conn, ~p"/files")
@@ -141,12 +141,12 @@ defmodule PlatformWeb.FilesLiveTest do
       refute picker =~ foreign.name
     end
 
-    test "a Fabrikam root admin sees both orgs' projects", %{conn: conn} do
-      own = seed_project("fabrikam", "Own Files Project #{System.unique_integer([:positive])}")
+    test "an Acme root admin sees both orgs' projects", %{conn: conn} do
+      own = seed_project("acme", "Own Files Project #{System.unique_integer([:positive])}")
       foreign = seed_project("sxi", "Foreign Project #{System.unique_integer([:positive])}")
 
-      admin = scoped_user!("admin", fabrikam_org_id())
-      assert Tenancy.fabrikam_admin?(admin) == true
+      admin = scoped_user!("admin", acme_org_id())
+      assert Tenancy.root_admin?(admin) == true
 
       conn = init_test_session(conn, current_user_id: admin.id)
       {:ok, _view, html} = live(conn, ~p"/files")
@@ -171,11 +171,11 @@ defmodule PlatformWeb.FilesLiveTest do
     end
 
     test "a member of exactly two orgs sees exactly those two sections", %{conn: conn} do
-      own = seed_project("fabrikam", "Own Files Project #{System.unique_integer([:positive])}")
+      own = seed_project("acme", "Own Files Project #{System.unique_integer([:positive])}")
       gen = seed_project("soylent", "Soylent Files #{System.unique_integer([:positive])}")
       foreign = seed_project("sxi", "Foreign Project #{System.unique_integer([:positive])}")
 
-      user = scoped_user!("member", fabrikam_org_id())
+      user = scoped_user!("member", acme_org_id())
 
       %OrgMembership{}
       |> OrgMembership.changeset(%{
@@ -185,13 +185,13 @@ defmodule PlatformWeb.FilesLiveTest do
       })
       |> Repo.insert!()
 
-      refute Tenancy.fabrikam_admin?(user)
+      refute Tenancy.root_admin?(user)
 
       conn = init_test_session(conn, current_user_id: user.id)
       {:ok, _view, html} = live(conn, ~p"/files")
 
       # Positive control — rendering ZERO sections must fail this.
-      assert files_section_slugs(html) == ["soylent", "fabrikam"]
+      assert files_section_slugs(html) == ["acme", "soylent"]
 
       picker = picker_text(html)
 
@@ -204,9 +204,9 @@ defmodule PlatformWeb.FilesLiveTest do
       refute picker =~ foreign.name
     end
 
-    test "a Fabrikam root admin still sees every active org's section", %{conn: conn} do
-      admin = scoped_user!("admin", fabrikam_org_id())
-      assert Tenancy.fabrikam_admin?(admin) == true
+    test "an Acme root admin still sees every active org's section", %{conn: conn} do
+      admin = scoped_user!("admin", acme_org_id())
+      assert Tenancy.root_admin?(admin) == true
 
       conn = init_test_session(conn, current_user_id: admin.id)
       {:ok, _view, html} = live(conn, ~p"/files")
@@ -222,7 +222,7 @@ defmodule PlatformWeb.FilesLiveTest do
   describe "select project" do
     test "loading a project URL renders its file list", %{conn: conn} do
       conn = authenticated_conn(conn)
-      project = seed_project("fabrikam", "Project Alpha")
+      project = seed_project("acme", "Project Alpha")
       file = seed_file(project, %{name: "alpha-readme.txt"})
 
       {:ok, _view, html} = live(conn, ~p"/files/#{project.id}")
@@ -238,7 +238,7 @@ defmodule PlatformWeb.FilesLiveTest do
 
     test "without a selected project the dropzone shows the empty state", %{conn: conn} do
       conn = authenticated_conn(conn)
-      _project = seed_project("fabrikam", "Project Empty Picker")
+      _project = seed_project("acme", "Project Empty Picker")
 
       {:ok, _view, html} = live(conn, ~p"/files")
 
@@ -253,7 +253,7 @@ defmodule PlatformWeb.FilesLiveTest do
     # empty and non-empty projects.
     test "non-empty project still renders the persistent upload control", %{conn: conn} do
       conn = authenticated_conn(conn)
-      project = seed_project("fabrikam", "Project With Files")
+      project = seed_project("acme", "Project With Files")
       _file = seed_file(project, %{name: "existing.txt"})
 
       {:ok, _view, html} = live(conn, ~p"/files/#{project.id}")
@@ -269,7 +269,7 @@ defmodule PlatformWeb.FilesLiveTest do
 
     test "empty project renders the persistent upload control", %{conn: conn} do
       conn = authenticated_conn(conn)
-      project = seed_project("fabrikam", "Project No Files")
+      project = seed_project("acme", "Project No Files")
 
       {:ok, _view, html} = live(conn, ~p"/files/#{project.id}")
 
@@ -282,7 +282,7 @@ defmodule PlatformWeb.FilesLiveTest do
   describe "PubSub: ingest_status flips on broadcast" do
     test "file_ingested message updates the row's status badge", %{conn: conn} do
       conn = authenticated_conn(conn)
-      project = seed_project("fabrikam", "Live Refresh Project")
+      project = seed_project("acme", "Live Refresh Project")
       file = seed_file(project, %{name: "live-doc.txt"})
 
       {:ok, view, html} = live(conn, ~p"/files/#{project.id}")
@@ -303,7 +303,7 @@ defmodule PlatformWeb.FilesLiveTest do
 
     test "file_ingest_failed message flips status to Failed", %{conn: conn} do
       conn = authenticated_conn(conn)
-      project = seed_project("fabrikam", "Failure Refresh Project")
+      project = seed_project("acme", "Failure Refresh Project")
       file = seed_file(project, %{name: "failing-doc.txt"})
 
       {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
@@ -317,7 +317,7 @@ defmodule PlatformWeb.FilesLiveTest do
 
     test "file_deleted message drops the row from the LV", %{conn: conn} do
       conn = authenticated_conn(conn)
-      project = seed_project("fabrikam", "Delete Refresh Project")
+      project = seed_project("acme", "Delete Refresh Project")
       file = seed_file(project, %{name: "going-away.txt"})
 
       {:ok, view, html} = live(conn, ~p"/files/#{project.id}")
@@ -337,7 +337,7 @@ defmodule PlatformWeb.FilesLiveTest do
   describe "FAB + dropzone markers" do
     test "mobile FAB carries the canonical data-role marker", %{conn: conn} do
       conn = authenticated_conn(conn)
-      _ = seed_project("fabrikam", "FAB Project")
+      _ = seed_project("acme", "FAB Project")
 
       {:ok, _view, html} = live(conn, ~p"/files")
 
@@ -349,7 +349,7 @@ defmodule PlatformWeb.FilesLiveTest do
 
     test "dropzone carries the namespaced marker (not chat's)", %{conn: conn} do
       conn = authenticated_conn(conn)
-      _ = seed_project("fabrikam", "Dropzone Project")
+      _ = seed_project("acme", "Dropzone Project")
 
       {:ok, _view, html} = live(conn, ~p"/files")
 
@@ -368,7 +368,7 @@ defmodule PlatformWeb.FilesLiveTest do
 
     setup %{conn: conn} do
       conn = authenticated_conn(conn)
-      project = seed_project("fabrikam", "Detail Pane Project")
+      project = seed_project("acme", "Detail Pane Project")
       {:ok, conn: conn, project: project}
     end
 
@@ -541,7 +541,7 @@ defmodule PlatformWeb.FilesLiveTest do
 
     test "single-entry upload does not flash an error on success", %{conn: conn} do
       conn = authenticated_conn(conn)
-      project = seed_project("fabrikam", "Upload Happy Single")
+      project = seed_project("acme", "Upload Happy Single")
 
       {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
 
@@ -571,7 +571,7 @@ defmodule PlatformWeb.FilesLiveTest do
 
     test "bulk-entry upload stores each entry's own filename + content_type", %{conn: conn} do
       conn = authenticated_conn(conn)
-      project = seed_project("fabrikam", "Upload Happy Bulk")
+      project = seed_project("acme", "Upload Happy Bulk")
 
       {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
 
@@ -628,7 +628,7 @@ defmodule PlatformWeb.FilesLiveTest do
       # `role="alert"` from CoreComponents' `<.flash>`; the info variant
       # is keyed with `id="flash-info"` in the shell layout.
       conn = authenticated_conn(conn)
-      project = seed_project("fabrikam", "Upload Info Flash Single")
+      project = seed_project("acme", "Upload Info Flash Single")
 
       {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
 
@@ -661,7 +661,7 @@ defmodule PlatformWeb.FilesLiveTest do
       # (which resets the batch) is NOT triggered by `file_input` in tests,
       # so the running count survives across the three inputs.
       conn = authenticated_conn(conn)
-      project = seed_project("fabrikam", "Upload Info Flash Bulk")
+      project = seed_project("acme", "Upload Info Flash Bulk")
 
       {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
 
@@ -694,7 +694,7 @@ defmodule PlatformWeb.FilesLiveTest do
       # parenthetically so users understand nothing new landed for that
       # one, but nothing failed either.
       conn = authenticated_conn(conn)
-      project = seed_project("fabrikam", "Upload Info Flash Mixed")
+      project = seed_project("acme", "Upload Info Flash Mixed")
 
       unique = System.unique_integer([:positive])
       dup_body = "%PDF-dup-body-#{unique}"
@@ -757,7 +757,7 @@ defmodule PlatformWeb.FilesLiveTest do
       end)
 
       conn = authenticated_conn(conn)
-      project = seed_project("fabrikam", "Upload Error Path")
+      project = seed_project("acme", "Upload Error Path")
 
       {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
 
@@ -811,7 +811,7 @@ defmodule PlatformWeb.FilesLiveTest do
 
     setup %{conn: conn} do
       conn = authenticated_conn(conn)
-      project = seed_project("fabrikam", "HTML Preview Project")
+      project = seed_project("acme", "HTML Preview Project")
       {:ok, conn: conn, project: project}
     end
 
@@ -966,7 +966,7 @@ defmodule PlatformWeb.FilesLiveTest do
   describe "interactive prototype flag + attribution bar (task 01a06a20 stage 3)" do
     setup %{conn: conn} do
       conn = authenticated_conn(conn)
-      project = seed_project("fabrikam", "Interactive Prototype Project")
+      project = seed_project("acme", "Interactive Prototype Project")
       {:ok, conn: conn, project: project}
     end
 
@@ -1300,7 +1300,7 @@ defmodule PlatformWeb.FilesLiveTest do
 
   describe "filtered_and_sorted helper" do
     test "filter narrows by case-insensitive substring", %{conn: _conn} do
-      project = seed_project("fabrikam", "Filter Helper Project")
+      project = seed_project("acme", "Filter Helper Project")
       a = seed_file(project, %{name: "Alpha.txt"})
       b = seed_file(project, %{name: "Beta.txt"})
 
@@ -1309,7 +1309,7 @@ defmodule PlatformWeb.FilesLiveTest do
     end
 
     test "name_asc sorts alphabetically case-insensitively", %{conn: _conn} do
-      project = seed_project("fabrikam", "Sort Helper Project")
+      project = seed_project("acme", "Sort Helper Project")
       a = seed_file(project, %{name: "zeta.txt"})
       b = seed_file(project, %{name: "Alpha.txt"})
 
@@ -1321,7 +1321,7 @@ defmodule PlatformWeb.FilesLiveTest do
   describe "delete + undo (stage 5)" do
     setup %{conn: conn} do
       conn = authenticated_conn(conn)
-      project = seed_project("fabrikam", "Delete Undo Project")
+      project = seed_project("acme", "Delete Undo Project")
       {:ok, conn: conn, project: project}
     end
 
@@ -1578,7 +1578,7 @@ defmodule PlatformWeb.FilesLiveTest do
 
     test "toggle reflects the selected file's intent, per selection", %{conn: conn} do
       conn = authenticated_conn(conn)
-      project = seed_project("fabrikam", "Audience Toggle Project")
+      project = seed_project("acme", "Audience Toggle Project")
       {attempt_a, attempt_b, human_a, human_b} = seed_audience_fixture(project)
 
       {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
@@ -1602,7 +1602,7 @@ defmodule PlatformWeb.FilesLiveTest do
 
     test "the withdrawing direction confirms, the restoring direction does not", %{conn: conn} do
       conn = authenticated_conn(conn)
-      project = seed_project("fabrikam", "Audience Confirm Project")
+      project = seed_project("acme", "Audience Confirm Project")
       {attempt_a, _attempt_b, human_a, _human_b} = seed_audience_fixture(project)
 
       {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
@@ -1616,7 +1616,7 @@ defmodule PlatformWeb.FilesLiveTest do
 
     test "clicking the toggle flips the row's intent both ways, no reload", %{conn: conn} do
       conn = authenticated_conn(conn)
-      project = seed_project("fabrikam", "Audience Flip Project")
+      project = seed_project("acme", "Audience Flip Project")
       {attempt_a, attempt_b, _human_a, _human_b} = seed_audience_fixture(project)
 
       {:ok, view, html} = live(conn, ~p"/files/#{project.id}")
@@ -1646,7 +1646,7 @@ defmodule PlatformWeb.FilesLiveTest do
 
     test "a not_attempted file renders People only, not Ingesting", %{conn: conn} do
       conn = authenticated_conn(conn)
-      project = seed_project("fabrikam", "Audience Badge Project")
+      project = seed_project("acme", "Audience Badge Project")
       {_attempt_a, _attempt_b, human_a, human_b} = seed_audience_fixture(project)
 
       {:ok, _view, html} = live(conn, ~p"/files/#{project.id}")
@@ -1685,7 +1685,7 @@ defmodule PlatformWeb.FilesLiveTest do
 
     test "unchecking the box uploads the file as human_only", %{conn: conn} do
       conn = authenticated_conn(conn)
-      project = seed_project("fabrikam", "Upload Audience Off")
+      project = seed_project("acme", "Upload Audience Off")
 
       {:ok, view, html} = live(conn, ~p"/files/#{project.id}")
 
@@ -1724,7 +1724,7 @@ defmodule PlatformWeb.FilesLiveTest do
 
     test "leaving the box checked does not force attempt on an unsupported type", %{conn: conn} do
       conn = authenticated_conn(conn)
-      project = seed_project("fabrikam", "Upload Audience On")
+      project = seed_project("acme", "Upload Audience On")
 
       {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
 
@@ -1745,7 +1745,7 @@ defmodule PlatformWeb.FilesLiveTest do
 
     test "checked box leaves a supported type on the attempt default", %{conn: conn} do
       conn = authenticated_conn(conn)
-      project = seed_project("fabrikam", "Upload Audience Default")
+      project = seed_project("acme", "Upload Audience Default")
 
       {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
 
@@ -1768,7 +1768,7 @@ defmodule PlatformWeb.FilesLiveTest do
   describe "failed-ingest summary line (task 01a0008b stage 4)" do
     test "renders with the project-wide count when files failed", %{conn: conn} do
       conn = authenticated_conn(conn)
-      project = seed_project("fabrikam", "Summary Count Project")
+      project = seed_project("acme", "Summary Count Project")
 
       seed_failed_file(project, %{name: "broken-one.txt"}, 1)
       seed_failed_file(project, %{name: "broken-two.txt"}, 1)
@@ -1787,7 +1787,7 @@ defmodule PlatformWeb.FilesLiveTest do
     # people to stop reading it.
     test "does not render AT ALL for a project with no failed ingests", %{conn: conn} do
       conn = authenticated_conn(conn)
-      project = seed_project("fabrikam", "Summary Clean Project")
+      project = seed_project("acme", "Summary Clean Project")
 
       seed_file(project, %{name: "fine-one.txt", ingest_status: "ingested"})
       seed_file(project, %{name: "fine-two.txt", ingest_status: "ingested"})
@@ -1809,7 +1809,7 @@ defmodule PlatformWeb.FilesLiveTest do
     # this line exists to remove.
     test "a human_only / not_attempted file produces NO summary line", %{conn: conn} do
       conn = authenticated_conn(conn)
-      project = seed_project("fabrikam", "Summary Human Only Project")
+      project = seed_project("acme", "Summary Human Only Project")
 
       seed_file(project, %{name: "readable.txt", ingest_status: "ingested"})
 
@@ -1832,7 +1832,7 @@ defmodule PlatformWeb.FilesLiveTest do
     test "a file at the repeat-failure threshold re-diagnoses and withdraws the action",
          %{conn: conn} do
       conn = authenticated_conn(conn)
-      project = seed_project("fabrikam", "Summary Exhausted Project")
+      project = seed_project("acme", "Summary Exhausted Project")
 
       threshold = Files.repeat_failure_threshold()
       exhausted = seed_failed_file(project, %{name: "corrupt.pdf"}, threshold)
@@ -1864,7 +1864,7 @@ defmodule PlatformWeb.FilesLiveTest do
     test "both populations: retry-all stays, and the note accounts for the withheld ones",
          %{conn: conn} do
       conn = authenticated_conn(conn)
-      project = seed_project("fabrikam", "Summary Mixed Project")
+      project = seed_project("acme", "Summary Mixed Project")
 
       threshold = Files.repeat_failure_threshold()
       seed_failed_file(project, %{name: "fresh.txt"}, 1)
@@ -1889,7 +1889,7 @@ defmodule PlatformWeb.FilesLiveTest do
     test "the withheld note names the AUTOMATIC path and points at the per-file retry",
          %{conn: conn} do
       conn = authenticated_conn(conn)
-      project = seed_project("fabrikam", "Summary Withheld Copy Project")
+      project = seed_project("acme", "Summary Withheld Copy Project")
 
       threshold = Files.repeat_failure_threshold()
       seed_failed_file(project, %{name: "fresh.txt"}, 1)
@@ -1939,7 +1939,7 @@ defmodule PlatformWeb.FilesLiveTest do
     test "retry-all flips the failed rows and the summary disappears", %{conn: conn} do
       conn = authenticated_conn(conn)
       root = attachments_root()
-      project = seed_project("fabrikam", "Summary Retry Project")
+      project = seed_project("acme", "Summary Retry Project")
 
       one = seed_readable_failed_file(project, root, "first recoverable body", "one.txt")
       two = seed_readable_failed_file(project, root, "second recoverable body", "two.txt")
@@ -1981,7 +1981,7 @@ defmodule PlatformWeb.FilesLiveTest do
 
     test "the summary is recomputed when a single row fails over PubSub", %{conn: conn} do
       conn = authenticated_conn(conn)
-      project = seed_project("fabrikam", "Summary Recompute Project")
+      project = seed_project("acme", "Summary Recompute Project")
       file = seed_file(project, %{name: "will-break.txt"})
 
       {:ok, view, html} = live(conn, ~p"/files/#{project.id}")
@@ -2001,7 +2001,7 @@ defmodule PlatformWeb.FilesLiveTest do
     test "appears for a failed file and drives request_ingest/2", %{conn: conn} do
       conn = authenticated_conn(conn)
       root = attachments_root()
-      project = seed_project("fabrikam", "Detail Retry Project")
+      project = seed_project("acme", "Detail Retry Project")
 
       file = seed_readable_failed_file(project, root, "detail panel body", "detail.txt")
 
@@ -2023,7 +2023,7 @@ defmodule PlatformWeb.FilesLiveTest do
 
     test "does not appear for an ingested file", %{conn: conn} do
       conn = authenticated_conn(conn)
-      project = seed_project("fabrikam", "Detail No Retry Project")
+      project = seed_project("acme", "Detail No Retry Project")
       file = seed_file(project, %{name: "healthy.txt", ingest_status: "ingested"})
 
       {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
@@ -2046,7 +2046,7 @@ defmodule PlatformWeb.FilesLiveTest do
     # cannot pass.
     test "is honoured far past the sweep threshold, twice over", %{conn: conn} do
       conn = authenticated_conn(conn)
-      project = seed_project("fabrikam", "Detail Unbounded Project")
+      project = seed_project("acme", "Detail Unbounded Project")
 
       # No bytes on disk, so every attempt fails deterministically and we
       # can sync on the failure rather than sleeping.
@@ -2102,7 +2102,7 @@ defmodule PlatformWeb.FilesLiveTest do
     # with no button on the page at all.
     test "a replayed retry_file event at count 5 is honoured", %{conn: conn} do
       conn = authenticated_conn(conn)
-      project = seed_project("fabrikam", "Replayed Retry Project")
+      project = seed_project("acme", "Replayed Retry Project")
 
       file = seed_failed_file(project, %{name: "replayed.pdf"}, 1)
       file = force_failure_count(file, 5)
@@ -2132,7 +2132,7 @@ defmodule PlatformWeb.FilesLiveTest do
     # away: a human_only row was withheld by a person, not by a bound.
     test "a replayed retry_file event on a human_only row is still refused", %{conn: conn} do
       conn = authenticated_conn(conn)
-      project = seed_project("fabrikam", "Replayed Human Only Project")
+      project = seed_project("acme", "Replayed Human Only Project")
 
       file =
         seed_file(project, %{
@@ -2165,7 +2165,7 @@ defmodule PlatformWeb.FilesLiveTest do
     test "renders the stage prefix AND the verbatim detail in the list, without selecting the file",
          %{conn: conn} do
       conn = authenticated_conn(conn)
-      project = seed_project("fabrikam", "Strip Embed Project")
+      project = seed_project("acme", "Strip Embed Project")
 
       seed_failed_file_with_reason(
         project,
@@ -2196,7 +2196,7 @@ defmodule PlatformWeb.FilesLiveTest do
 
     test "a healthy or in-flight row renders no strip at all", %{conn: conn} do
       conn = authenticated_conn(conn)
-      project = seed_project("fabrikam", "Strip Absent Project")
+      project = seed_project("acme", "Strip Absent Project")
 
       seed_file(project, %{name: "ready.txt", ingest_status: "ingested"})
       seed_file(project, %{name: "working.txt", ingest_status: "pending"})
@@ -2215,7 +2215,7 @@ defmodule PlatformWeb.FilesLiveTest do
 
     test "a legacy row with no recorded reason still says something", %{conn: conn} do
       conn = authenticated_conn(conn)
-      project = seed_project("fabrikam", "Strip Legacy Project")
+      project = seed_project("acme", "Strip Legacy Project")
 
       # No opts — exactly the shape of the rows that failed before the
       # reason columns existed.
@@ -2233,7 +2233,7 @@ defmodule PlatformWeb.FilesLiveTest do
 
     test "below the threshold the row carries NO sweep-skipped clause", %{conn: conn} do
       conn = authenticated_conn(conn)
-      project = seed_project("fabrikam", "Strip Under Threshold")
+      project = seed_project("acme", "Strip Under Threshold")
 
       under = Files.repeat_failure_threshold() - 1
 
@@ -2256,7 +2256,7 @@ defmodule PlatformWeb.FilesLiveTest do
 
     test "at the threshold the row says it was not retried AUTOMATICALLY", %{conn: conn} do
       conn = authenticated_conn(conn)
-      project = seed_project("fabrikam", "Strip At Threshold")
+      project = seed_project("acme", "Strip At Threshold")
 
       threshold = Files.repeat_failure_threshold()
 
@@ -2295,7 +2295,7 @@ defmodule PlatformWeb.FilesLiveTest do
 
     test "a legacy row can also carry the sweep-skipped clause; they compose", %{conn: conn} do
       conn = authenticated_conn(conn)
-      project = seed_project("fabrikam", "Strip Legacy Skipped")
+      project = seed_project("acme", "Strip Legacy Skipped")
 
       seed_failed_file(project, %{name: "old-and-stuck.txt"}, Files.repeat_failure_threshold())
 
@@ -2309,7 +2309,7 @@ defmodule PlatformWeb.FilesLiveTest do
 
     test "the strip emits no title attribute — it is text, never a tooltip", %{conn: conn} do
       conn = authenticated_conn(conn)
-      project = seed_project("fabrikam", "Strip No Tooltip")
+      project = seed_project("acme", "Strip No Tooltip")
 
       seed_failed_file_with_reason(
         project,
@@ -2333,7 +2333,7 @@ defmodule PlatformWeb.FilesLiveTest do
 
     test "the strip disappears on a later success without a page reload", %{conn: conn} do
       conn = authenticated_conn(conn)
-      project = seed_project("fabrikam", "Strip Clears Project")
+      project = seed_project("acme", "Strip Clears Project")
 
       file =
         seed_failed_file_with_reason(

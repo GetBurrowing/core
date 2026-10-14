@@ -7,24 +7,36 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.Person
 import androidx.core.app.RemoteInput
 import androidx.core.content.ContextCompat
+import androidx.core.content.LocusIdCompat
 import com.koboai.burrow.MainActivity
 import com.koboai.burrow.R
+import com.koboai.burrow.shortcuts.ConversationShortcuts
+import com.koboai.burrow.shortcuts.Monogram
 
 /**
  * Builds and posts every Burrow notification from a data-only FCM payload
  * (canvas 01a10d91, "Notifications"):
  *
- * - `chat_mention`: MessagingStyle (conversation = the space, sender = the
- *   author) in Mentions, grouped per install and space, with Reply (inline
- *   RemoteInput) and Open;
+ * - `chat_mention` and `chat_message`: MessagingStyle (conversation = the
+ *   space, sender = the author as a [Person] with a stable key and their
+ *   avatar, or the in-app letter disc when there is none; task 01a12773)
+ *   in Mentions, grouped per install and space, with Reply
+ *   (inline RemoteInput) and Open. The conversation shortcut
+ *   ([ConversationShortcuts]) is published BEFORE the notification is
+ *   posted, and the notification names it by shortcutId and locusId, so
+ *   Android shows it as a conversation. A dm is a one-to-one conversation,
+ *   anything else a group. No bubble;
  * - `task_plan_review`, `review_request_pending`: the standard layout in
  *   Approvals, grouped per install, Open only;
  * - anything else: a tap opens it.
@@ -47,19 +59,32 @@ object NotificationPresenter {
     const val EXTRA_PATH = "com.koboai.burrow.push.PATH"
     const val EXTRA_TAG = "com.koboai.burrow.push.TAG"
 
-    /** Entry point for FCM and the debug replay receiver. */
+    /**
+     * Entry point for FCM and the debug replay receiver. A relayed push is
+     * opened first ([PushContentPreparer]): its inner data map then takes
+     * the same path as a direct push's, unchanged.
+     */
     fun present(
         context: Context,
         data: Map<String, String?>,
     ) {
-        val payload = PushPayload.from(data)
+        val prepared = BurrowPush.preparer(context).prepare(data)
+        val payload = PushPayload.from(prepared.data)
         if (payload.installHost == null) {
             NotificationChannels.ensure(context, listOf(null))
         } else {
             BurrowPush.ensureChannels(context, payload.installHost)
         }
-        post(context, payload.tag, build(context, payload))
-        payload.groupKey?.let { postSummary(context, payload, it) }
+        // The sender's picture, fetched (bounded, AvatarFetcher) BEFORE the
+        // notification is built. This runs on the FCM worker thread, never
+        // main. Null on any failure: the letter disc is drawn instead.
+        val avatar = if (payload.isChat) BurrowPush.avatars(context).fetch(payload.authorAvatarUrl, payload.installHost) else null
+        // Published before notify: a conversation notification must name a
+        // shortcut that already exists.
+        val shortcutId = payload.shortcutId?.let { publishShortcut(context, payload, avatar) }
+        post(context, payload.tag, build(context, payload, shortcutId = shortcutId, subText = prepared.subText, avatar = avatar))
+        payload.groupKey?.let { postSummary(context, payload, it, prepared) }
+        if (prepared.installUnread != null) BurrowPush.unreadChanged?.let { notify -> Handler(Looper.getMainLooper()).post { notify() } }
     }
 
     /** After a Reply: `You: {reply}` appended to the conversation, alerting nobody. */
@@ -113,18 +138,25 @@ object NotificationPresenter {
         history: NotificationCompat.MessagingStyle? = null,
         sent: String? = null,
         alert: Boolean = sent == null,
+        shortcutId: String? = payload.shortcutId,
+        subText: String? = null,
+        // Cache only by default: the reply and restore paths never fetch.
+        avatar: Bitmap? = cachedAvatar(context, payload),
     ): Notification {
         val builder = base(context, payload).setContentIntent(openIntent(context, payload))
+        // Two or more installs signed in: Android draws `Burrow • <install>`.
+        subText?.let { builder.setSubText(it) }
         if (!alert) builder.setOnlyAlertOnce(true).setSilent(true)
         when {
-            payload.isMention -> {
-                val style = history ?: mentionStyle(context, payload)
+            payload.isChat -> {
+                val style = history ?: chatStyle(context, payload, subText, avatar)
                 if (sent != null) style.addMessage(sent, System.currentTimeMillis(), null as Person?)
                 builder
                     .setStyle(style)
                     .setCategory(NotificationCompat.CATEGORY_MESSAGE)
-                    .setContentTitle(payload.spaceName ?: payload.title)
+                    .setContentTitle(history?.conversationTitle?.toString() ?: conversationTitle(payload, subText) ?: payload.title)
                     .setContentText(sent?.let { context.getString(R.string.reply_you, it) } ?: payload.body)
+                shortcutId?.let { builder.setShortcutId(it).setLocusId(LocusIdCompat(it)) }
                 if (payload.canReply) builder.addAction(replyAction(context, payload))
                 builder.addAction(0, context.getString(R.string.action_open), openIntent(context, payload))
             }
@@ -149,10 +181,19 @@ object NotificationPresenter {
         payload: PushPayload,
         groupKey: String,
         count: Int,
+        subText: String? = null,
+        installUnread: Int? = null,
     ): Notification {
         val text = PushPayload.summaryText(payload, count)
-        return NotificationCompat
-            .Builder(context, NotificationChannels.channelFor(payload))
+        val builder =
+            NotificationCompat
+                .Builder(context, NotificationChannels.channelFor(payload))
+        subText?.let { builder.setSubText(it) }
+        // Best effort only: the launcher draws the icon badge from active
+        // notifications (README, "Relayed pushes and unread badges"), so no app can set it to
+        // an exact sum. A launcher that reads `number` sees the install's count.
+        installUnread?.takeIf { it > 0 }?.let { builder.setNumber(it) }
+        return builder
             .setSmallIcon(R.drawable.ic_stat_burrow)
             .setContentTitle(text)
             .setContentText(text)
@@ -180,17 +221,118 @@ object NotificationPresenter {
         return builder
     }
 
-    private fun mentionStyle(
+    /**
+     * The conversation's title. With two or more installs signed in
+     * ([installName] set) it names the install too, e.g. `launch · B` (a dm
+     * with no space name: `<sender> · B`). Android 11+ draws a conversation
+     * notification's header from this title and the app name, and does NOT
+     * draw setSubText there (measured on API 35, task 01a1261e), so the title
+     * is the one place the install can show. With one install it is the
+     * space name alone, as before.
+     */
+    internal fun conversationTitle(
+        payload: PushPayload,
+        installName: String?,
+    ): String? {
+        if (installName == null) return payload.spaceName
+        val base = payload.spaceName ?: payload.authorName ?: return installName
+        return "$base · $installName"
+    }
+
+    private fun chatStyle(
         context: Context,
         payload: PushPayload,
+        installName: String?,
+        avatar: Bitmap?,
     ): NotificationCompat.MessagingStyle {
         val you = Person.Builder().setName(context.getString(R.string.reply_you_name)).build()
-        val author = Person.Builder().setName(payload.authorName ?: context.getString(R.string.someone)).build()
         return NotificationCompat
             .MessagingStyle(you)
-            .setConversationTitle(payload.spaceName)
-            .setGroupConversation(true)
-            .addMessage(payload.body ?: payload.title.orEmpty(), System.currentTimeMillis(), author)
+            .setConversationTitle(conversationTitle(payload, installName))
+            .setGroupConversation(payload.spaceKind != "dm")
+            .addMessage(payload.body ?: payload.title.orEmpty(), System.currentTimeMillis(), sender(context, payload, avatar))
+    }
+
+    /**
+     * The author: keyed `<host>|<authorType>:<authorId>`, or
+     * `<host>|name:<authorName>` when the server sent no id (a bare-name
+     * sender), so Android can tell people apart across installs. The icon
+     * is the sender's picture ([avatar], from `author_avatar_url`) on an
+     * opaque fill, else the in-app letter disc in the `author_avatar_tone`
+     * colour ([Monogram]).
+     */
+    internal fun sender(
+        context: Context,
+        payload: PushPayload,
+        avatar: Bitmap? = cachedAvatar(context, payload),
+    ): Person {
+        val name = payload.authorName ?: context.getString(R.string.someone)
+        val host = payload.installHost
+        val key =
+            when {
+                host == null -> null
+                payload.authorId != null && payload.authorType != null -> "$host|${payload.authorType}:${payload.authorId}"
+                payload.authorName != null -> "$host|name:${payload.authorName}"
+                else -> null
+            }
+        return Person
+            .Builder()
+            .setName(name)
+            .setKey(key)
+            .setIcon(Monogram.personIcon(name, tone(payload), avatar, Monogram.theme(context)))
+            .build()
+    }
+
+    /** The letter disc's colour: the server's tone, else `agent` for an agent author. */
+    internal fun tone(payload: PushPayload): String? =
+        payload.authorAvatarTone ?: Monogram.AGENT_TONE.takeIf { payload.authorType == "agent" }
+
+    /** The sender's picture if this process or the disk cache has it; never the network. */
+    private fun cachedAvatar(
+        context: Context,
+        payload: PushPayload,
+    ): Bitmap? = if (payload.isChat) BurrowPush.avatars(context).cached(payload.authorAvatarUrl) else null
+
+    /** The conversation shortcut, published for [payload]; its id, or null. */
+    private fun publishShortcut(
+        context: Context,
+        payload: PushPayload,
+        avatar: Bitmap?,
+    ): String? = conversation(context, payload, reportUse = false, avatar = avatar)
+
+    /** After a Reply the server took: re-publish [payload]'s conversation and report the use. */
+    fun noteConversationUsed(
+        context: Context,
+        payload: PushPayload,
+    ): String? = if (payload.shortcutId == null) null else conversation(context, payload, reportUse = true)
+
+    private fun conversation(
+        context: Context,
+        payload: PushPayload,
+        reportUse: Boolean,
+        avatar: Bitmap? = cachedAvatar(context, payload),
+    ): String? {
+        val host = payload.installHost ?: return null
+        val spaceId = payload.spaceId ?: return null
+        val name = payload.spaceName ?: payload.authorName ?: context.getString(R.string.app_name)
+        val shortcuts = ConversationShortcuts.forContext(context)
+        val path = ConversationShortcuts.conversationPath(payload.url, spaceId)
+        val persons = listOf(sender(context, payload, avatar))
+        val isGroup = payload.spaceKind != "dm"
+        // A DM's shortcut is the other person's face. A channel or group
+        // keeps the space-name monogram: never the latest sender's face
+        // (canvas 01a12774), which would change with every message.
+        val icon =
+            if (isGroup) {
+                null
+            } else {
+                Monogram.personShortcutIcon(payload.authorName ?: name, tone(payload), avatar, Monogram.theme(context))
+            }
+        return if (reportUse) {
+            shortcuts.noteUsed(host, spaceId, name, path, persons, isGroup, icon)
+        } else {
+            shortcuts.publish(host, spaceId, name, path, persons, isGroup, icon)
+        }
     }
 
     private fun replyAction(
@@ -287,6 +429,7 @@ object NotificationPresenter {
         context: Context,
         payload: PushPayload,
         groupKey: String,
+        prepared: PushContentPreparer.Prepared,
     ) {
         val children =
             manager(context)
@@ -295,7 +438,12 @@ object NotificationPresenter {
                 .map { it.tag }
         val count = groupCount(children, payload.tag)
         if (count < 2) return
-        post(context, "summary:$groupKey", buildSummary(context, payload, groupKey, count), SUMMARY_ID)
+        post(
+            context,
+            "summary:$groupKey",
+            buildSummary(context, payload, groupKey, count, prepared.subText, prepared.installUnread),
+            SUMMARY_ID,
+        )
     }
 
     private fun active(

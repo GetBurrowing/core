@@ -26,3 +26,7 @@ rollback, verification.
   — Roll the `system_event` envelope fix onto a `claude_channel` bridge, and
   read `mix platform.runtime_wake_report` (`proven` / `unproven` / `revoked`)
   without mistaking `unproven` for a defect count.
+- [`code-mode-experiment-rollout.md`](code-mode-experiment-rollout.md)
+  — After the task `01a114a8` deploy: grant `code_mode`, create and start the
+  `dispatch.code_mode` experiment for five agents, install the usage hook per
+  host, the dsh and Oddjob follow-ups, and how to read `code_mode_report`.

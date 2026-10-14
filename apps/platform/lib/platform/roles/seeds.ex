@@ -26,6 +26,9 @@ defmodule Platform.Roles.Seeds do
       classifies intent and delegates to specialist agents
     * `meeting_scribe` — capture, summarize, follow up after meetings
     * `triage_officer` — task hygiene: sort, unblock, weekly rollup
+    * `janitor` — weekly drain of small internal chores (added in task
+      `019fa1ac-6685` stage 1). Its one bundle key, `janitor.cron_drain`,
+      is a Router cron responsibility. No assignment is seeded.
     * `security_guard` — periodic scans for CVEs, code patterns,
       deploy config drift, and leaked secrets (see ADR-0043 for the
       runtime design; the four bundled keys register as placeholders
@@ -138,7 +141,13 @@ defmodule Platform.Roles.Seeds do
         "tasks.weekly_review",
         # Mid-meeting intent key (2026-07-31) — an unanswered question
         # surfacing live is triage work before it is anybody's task.
-        "meetings.open_question"
+        "meetings.open_question",
+        # Task 01a11ec3 stage 3: external-feedback intake. The bundle row
+        # names only whose MODEL classifies an issue; the classifier is a
+        # tool-less call, so this agent's runtime bundles are never used
+        # for it. Existing DBs pick it up from
+        # `20261010160200_seed_feedback_intake_bundle.exs`.
+        "feedback.intake"
       ]
     },
     %{
@@ -186,6 +195,23 @@ defmodule Platform.Roles.Seeds do
       bundle: [
         "experiments.label_signal",
         "experiments.scientist"
+      ]
+    },
+    %{
+      key: "janitor",
+      name: "Janitor",
+      description:
+        "Weekly drain of small internal chores, including the architect sweep's findings",
+      icon: "hero-wrench-screwdriver",
+      # Task 019fa1ac-6685 stage 1. `janitor.cron_drain` fires Mondays 06:00
+      # UTC, two hours after `architecture.cron_sweep`, so the sweep's capped
+      # findings exist before the drain reads the backlog. Existing DBs pick
+      # the role and bundle up from
+      # `20261009060918_add_janitor_role.exs`, which also extends
+      # `roles_key_check`. NO ASSIGNMENT IS SEEDED: until an agent is pinned
+      # to this role the Router resolves no assignee and the fire is a no-op.
+      bundle: [
+        "janitor.cron_drain"
       ]
     }
   ]

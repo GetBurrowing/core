@@ -64,7 +64,7 @@ defmodule PlatformWeb.Plugs.ExternalUserScopeTest do
     |> Org.changeset(%{
       name: "Tenant #{n}",
       slug: "tenant_scope_#{n}",
-      parent_org_id: Tenancy.get_org_by_slug!("fabrikam").id
+      parent_org_id: Tenancy.get_org_by_slug!("acme").id
     })
     |> Repo.insert!()
   end

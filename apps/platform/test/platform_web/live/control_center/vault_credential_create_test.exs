@@ -65,7 +65,7 @@ defmodule PlatformWeb.ControlCenter.VaultCredentialCreateTest do
 
   defp admin_conn(conn) do
     user = user!("vault-admin")
-    org = Tenancy.get_org_by_slug!("fabrikam")
+    org = Tenancy.get_org_by_slug!("acme")
 
     %OrgMembership{}
     |> OrgMembership.changeset(%{user_id: user.id, org_id: org.id, role: "admin"})

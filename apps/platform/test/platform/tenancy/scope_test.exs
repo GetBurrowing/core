@@ -4,7 +4,7 @@ defmodule Platform.Tenancy.ScopeTest do
   choke point — and the root-member / root-admin distinction they rest on.
 
   Fixture users get `@example.com` addresses on purpose:
-  `Tenancy.derive_role_from_email/1` returns `:admin` for `@example.com`,
+  `Tenancy.derive_role_from_email/1` returns `:admin` for `@acme.test`,
   which would blanket-bypass the very check under test.
   """
   use Platform.DataCase, async: true
@@ -51,24 +51,24 @@ defmodule Platform.Tenancy.ScopeTest do
 
       # Precondition: this user must NOT be a root admin, or the assertion
       # below would pass for the wrong reason.
-      refute Tenancy.fabrikam_admin?(user)
+      refute Tenancy.root_admin?(user)
 
       assert Tenancy.visibility(user) == {:orgs, [sxi]}
     end
 
-    test "a root-org member (role: member) is :root_all but NOT a fabrikam admin" do
-      user = user!() |> member!(fabrikam_org_id(), "member")
+    test "a root-org member (role: member) is :root_all but NOT a acme admin" do
+      user = user!() |> member!(acme_org_id(), "member")
 
       assert Tenancy.root_member?(user)
-      refute Tenancy.fabrikam_admin?(user)
+      refute Tenancy.root_admin?(user)
       assert Tenancy.visibility(user) == :root_all
     end
 
-    test "a root-org admin is :root_all AND a fabrikam admin" do
-      user = user!() |> member!(fabrikam_org_id(), "admin")
+    test "a root-org admin is :root_all AND a acme admin" do
+      user = user!() |> member!(acme_org_id(), "admin")
 
       assert Tenancy.root_member?(user)
-      assert Tenancy.fabrikam_admin?(user)
+      assert Tenancy.root_admin?(user)
       assert Tenancy.visibility(user) == :root_all
     end
 
@@ -92,7 +92,7 @@ defmodule Platform.Tenancy.ScopeTest do
 
     test "the preloaded and non-preloaded resolution paths agree" do
       plain = user!() |> member!(tenant_org_id("sxi"))
-      root = user!() |> member!(fabrikam_org_id(), "member")
+      root = user!() |> member!(acme_org_id(), "member")
       orphan = user!()
 
       for user <- [plain, root, orphan] do
@@ -167,15 +167,15 @@ defmodule Platform.Tenancy.ScopeTest do
   end
 
   describe "root_member_preloaded?/1" do
-    test "mirrors root_member?/1 and stays distinct from fabrikam_admin_preloaded?/1" do
-      root_member = user!() |> member!(fabrikam_org_id(), "member") |> with_preloads()
+    test "mirrors root_member?/1 and stays distinct from root_admin_preloaded?/1" do
+      root_member = user!() |> member!(acme_org_id(), "member") |> with_preloads()
       tenant_member = user!() |> member!(tenant_org_id("sxi")) |> with_preloads()
 
       assert Tenancy.root_member_preloaded?(root_member)
-      refute Tenancy.fabrikam_admin_preloaded?(root_member)
+      refute Tenancy.root_admin_preloaded?(root_member)
 
       refute Tenancy.root_member_preloaded?(tenant_member)
-      refute Tenancy.fabrikam_admin_preloaded?(tenant_member)
+      refute Tenancy.root_admin_preloaded?(tenant_member)
 
       refute Tenancy.root_member_preloaded?(nil)
       refute Tenancy.root_member_preloaded?(%{})

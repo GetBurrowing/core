@@ -6,7 +6,7 @@ defmodule Platform.BrandingTest do
   What these tests are for:
 
     1. DEFAULTS ARE PINNED. A migrated database with no upload answers with
-       Fabrikam's identity and the repo's own static asset paths. Those must not
+       Acme's identity and the repo's own static asset paths. Those must not
        move silently.
     2. THE VALUE CHANGES WITHOUT A RESTART. `update_identity/2` then
        `app_name/0` reads it back in the same process, with no
@@ -46,7 +46,7 @@ defmodule Platform.BrandingTest do
     %OrgMembership{}
     |> OrgMembership.changeset(%{
       user_id: user.id,
-      org_id: Tenancy.get_org_by_slug!("fabrikam").id,
+      org_id: Tenancy.get_org_by_slug!("acme").id,
       role: role
     })
     |> Repo.insert!()
@@ -60,15 +60,17 @@ defmodule Platform.BrandingTest do
   # ── Defaults ───────────────────────────────────────────────────────────
 
   describe "defaults on a migrated database" do
-    test "identity fields are Fabrikam's, and the colours are dark base-100" do
-      assert Branding.app_name() == "Suite"
+    test "identity fields are Acme's, and the colours are dark base-100" do
+      # Seeded as ('Suite', '#171b25', '#171b25') by the create migration and
+      # moved to Burrow by 20261009150000 (task 01a120c5 stage 3).
+      assert Branding.app_name() == "Burrow"
 
       # The one place a raw hex is allowed to live in the shipped change is
-      # the migration's default row. It is repeated HERE, and only here,
+      # the migrations' default row. It is repeated HERE, and only here,
       # because a defaults test that reads the value back from the code under
       # test would pin nothing.
-      assert Branding.theme_color() == "#171b25"
-      assert Branding.background_color() == "#171b25"
+      assert Branding.theme_color() == "#191b20"
+      assert Branding.background_color() == "#191b20"
     end
 
     test "no upload means the seven variants resolve to the repo's static assets" do
@@ -437,7 +439,9 @@ defmodule Platform.BrandingTest do
                Branding.update_colors(admin, %{light_surface: "#707070"})
 
       assert {message, opts} = cs.errors[:light_surface]
-      assert message =~ "Body text on this surface is 4.2:1. It needs 4.5:1"
+      # 4.3 since the Burrow recolor (task 01a120c5): the near-white candidate
+      # is #eeeff1, 4.30:1 on #707070 (#eeeeee read 4.27:1).
+      assert message =~ "Body text on this surface is 4.3:1. It needs 4.5:1"
       assert opts[:check] == :body_text
       assert opts[:mode] == :light
 

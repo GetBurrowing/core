@@ -9,14 +9,14 @@ defmodule PlatformWeb.LiveAuth do
     * `:default` — installed on every authenticated `live_session`. Reads
       `:current_user` (already assigned by the `ShellLive` mount) and
       pure-functionally derives `:current_user_org_membership` and
-      `:fabrikam_admin?`. **No DB call**: relies on
+      `:root_admin?`. **No DB call**: relies on
       `Platform.Accounts.get_user/1` preloading `:org_memberships` so
       this hook is a free assign-shuffle. Falls back to `nil` /
       `false` for anonymous mounts (LV mounts that somehow reach here
       without an authenticated session).
 
     * `:ensure_admin` — gate for the `/admin/*` surfaces. Halts and
-      redirects to `/` with a flash error when the user is not a Fabrikam
+      redirects to `/` with a flash error when the user is not a root-org
       admin.
 
   Adding a new hook? Mirror the existing pattern: read assigns,
@@ -36,16 +36,16 @@ defmodule PlatformWeb.LiveAuth do
   def on_mount(:default, _params, _session, socket) do
     user = socket.assigns[:current_user_record] || socket.assigns[:current_user]
     membership = load_membership_safely(user)
-    fabrikam_admin? = fabrikam_admin_safely(user)
+    root_admin? = root_admin_safely(user)
 
     {:cont,
      socket
      |> assign(:current_user_org_membership, membership)
-     |> assign(:fabrikam_admin?, fabrikam_admin?)}
+     |> assign(:root_admin?, root_admin?)}
   end
 
   def on_mount(:ensure_admin, _params, _session, socket) do
-    if socket.assigns[:fabrikam_admin?] do
+    if socket.assigns[:root_admin?] do
       {:cont, socket}
     else
       {:halt,
@@ -62,6 +62,6 @@ defmodule PlatformWeb.LiveAuth do
   defp load_membership_safely(%_{} = user), do: Tenancy.load_membership(user)
   defp load_membership_safely(_), do: nil
 
-  defp fabrikam_admin_safely(%_{} = user), do: Tenancy.fabrikam_admin_preloaded?(user)
-  defp fabrikam_admin_safely(_), do: false
+  defp root_admin_safely(%_{} = user), do: Tenancy.root_admin_preloaded?(user)
+  defp root_admin_safely(_), do: false
 end

@@ -182,6 +182,14 @@ defmodule Platform.Regression.SpawnPrimitiveInventoryAuditTest do
       primitive: :task_async,
       justification: "shell_exec branch: Task.async wrapping System.cmd/3 — no Repo touch."
     },
+    %{
+      path: "lib/platform/code_mode/slots.ex",
+      primitive: :task_start,
+      justification:
+        "drain/2 (task 01a114a8 stage 2): the spawned probe only calls " <>
+          "Wasmex.StoreOrCaller.get_fuel/1 on a run's wasm Store (it returns once the Store " <>
+          "is idle) and then send/2 to the Slots server — no Repo call in the spawned process."
+    },
 
     # ── Safe: pinned exemptions, must not be supervised away ──
     %{
@@ -266,6 +274,17 @@ defmodule Platform.Regression.SpawnPrimitiveInventoryAuditTest do
           "which would convert even a raised OwnershipError into a dead-channel result rather " <>
           "than crashing the test — but the empirical run shows that catch clause never fires " <>
           "for sandbox reasons, because $callers propagation already works."
+    },
+    %{
+      path: "lib/platform/sign_in_admin.ex",
+      primitive: :task_async_stream,
+      justification:
+        "passkey_counts/1 (task 01a113ea stage 2): Task.async_stream over " <>
+          "PocketId.passkey_count/1, an HTTP GET to pocket-id and nothing else — no Repo call " <>
+          "inside the spawned task (the Suite users are read by the caller before the stream). " <>
+          "In test env the request goes to the Req.Test stub, which resolves the owner through " <>
+          "$callers, set by Task.async_stream; exercised by test/platform/sign_in_admin_test.exs " <>
+          "\"list_users/1\" (statuses and the :unreachable path)."
     }
   ]
 

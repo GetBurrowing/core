@@ -96,7 +96,7 @@ defmodule Platform.Meetings.MeetingSaySpeakingTest do
       |> Platform.Tasks.Project.changeset(%{
         name: "Say Speaking Project #{n}",
         slug: "say-speaking-project-#{n}",
-        org_id: Platform.TenancyFixtures.fabrikam_org_id()
+        org_id: Platform.TenancyFixtures.acme_org_id()
       })
       |> Repo.insert()
 

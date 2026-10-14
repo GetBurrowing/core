@@ -414,6 +414,71 @@ defmodule Platform.Meetings.MeetingNotifierTest do
     end
   end
 
+  # ── Resume (task 01a1265f stage 2) ─────────────────────────────────────────
+  #
+  # Rejoining an ended meeting from its own page resumes it. That must never
+  # announce the meeting again, or ring anyone: opening a past meeting is not
+  # starting one.
+
+  describe "resume does not re-notify" do
+    test "start, end, resume: one fan-out, from the start only" do
+      project = create_project("Resume Project")
+      _pid = start_notifier!()
+
+      meeting = create_meeting(project, name: "Resumed")
+      _host = add_user_participant(meeting, display_name: "Rhea")
+
+      {:ok, live} = Meetings.start_meeting(meeting)
+      assert_receive {:notif, _, %{body: "Resumed"}, _}, 2_000
+
+      {:ok, ended} = Meetings.end_meeting(live)
+      {:ok, resumed} = Meetings.resume_meeting(ended)
+      assert resumed.status == "live"
+
+      refute_receive {:notif, _, _, _}, 250
+      refute_receive {:notif_user, _, _}, 50
+    end
+
+    # The case the distinct `{:meeting_resumed, _}` tag exists for. A row
+    # whose `notified_at` is nil (the notifier was not running when it first
+    # started) has nothing for `mark_notified/1`'s CAS to refuse on. Reusing
+    # `:meeting_started` would announce it now; the control at the end shows
+    # that, and that this recorder would have seen it.
+    test "an ended meeting that was never notified is still not announced on resume" do
+      project = create_project("Unnotified Resume Project")
+      _pid = start_notifier!()
+
+      meeting = create_meeting(project, name: "NeverAnnounced")
+      _host = add_user_participant(meeting, display_name: "Ivo")
+
+      now = DateTime.utc_now()
+
+      ended =
+        meeting
+        |> Ecto.Changeset.change(
+          status: "ended",
+          started_at: DateTime.add(now, -7200, :second),
+          ended_at: DateTime.add(now, -3600, :second)
+        )
+        |> Platform.Repo.update!()
+
+      assert is_nil(ended.notified_at)
+
+      {:ok, resumed} = Meetings.resume_meeting(ended)
+      refute_receive {:notif, _, _, _}, 250
+      refute_receive {:notif_user, _, _}, 50
+
+      # Positive control: the same row, announced the old way, DOES fan out.
+      Phoenix.PubSub.broadcast(
+        Platform.PubSub,
+        Meetings.project_meetings_topic(project.id),
+        {:meeting_started, resumed}
+      )
+
+      assert_receive {:notif, _, %{body: "NeverAnnounced"}, _}, 2_000
+    end
+  end
+
   # ── Noise tolerance ───────────────────────────────────────────────────────
 
   describe "noise tolerance" do

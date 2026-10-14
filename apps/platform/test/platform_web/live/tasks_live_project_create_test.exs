@@ -45,7 +45,7 @@ defmodule PlatformWeb.TasksLiveProjectCreateTest do
       assert html =~ ~s(data-role="project-create-org-select")
       assert html =~ "New Project"
 
-      # The org select is populated from `Tenancy.list_orgs/0` — Fabrikam +
+      # The org select is populated from `Tenancy.list_orgs/0` — Acme +
       # the four tenant orgs that the seed migration installs. Options
       # carry the canonical scope labels from `Tenancy.scope_label/1`.
       select_html =
@@ -56,7 +56,7 @@ defmodule PlatformWeb.TasksLiveProjectCreateTest do
         |> List.first()
 
       assert select_html, "expected org select to render in opened sheet"
-      assert select_html =~ "Fabrikam"
+      assert select_html =~ "Acme"
       assert select_html =~ "Soylent"
       assert select_html =~ "Wayne-Tech"
       assert select_html =~ "SXI"

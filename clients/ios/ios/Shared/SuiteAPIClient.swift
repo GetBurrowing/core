@@ -99,7 +99,13 @@ struct SuiteAPIClient {
     /// Plug.Parsers' default multipart `:length`, 8_000_000 bytes for the
     /// WHOLE request body. The server's endpoint does not raise it, so a
     /// larger body gets a 413 before the controller runs, even though chat
-    /// itself allows 15 MB per file. The share sheet refuses past this.
+    /// itself allows 15 MB per file.
+    ///
+    /// This is the MULTIPART TRANSPORT threshold only, not the per-file
+    /// limit (task 01a120be): the share sheet reads the install's limit and
+    /// the threshold itself from `GET /api/app/upload_config` and sends a
+    /// larger file as a chunked background upload. This constant applies
+    /// only against a server that predates that endpoint.
     static let maxRequestBytes: Int64 = 8_000_000
 
     static let shared = SuiteAPIClient()
@@ -146,13 +152,23 @@ struct SuiteAPIClient {
         struct Body: Decodable {
             let approvals: Int
             let tasks: Int
+            // Task 01a1261e: absent on an older server.
+            let unread: Int?
+            let asOf: String?
+
+            enum CodingKeys: String, CodingKey {
+                case approvals, tasks, unread
+                case asOf = "as_of"
+            }
         }
         get(host: host, path: "/api/app/counts") { result in
             completion(
                 result.flatMap { data in
                     Result {
                         let body = try JSONDecoder().decode(Body.self, from: data)
-                        return SuiteCounts(approvals: body.approvals, tasks: body.tasks, fetchedAt: now())
+                        return SuiteCounts(
+                            approvals: body.approvals, tasks: body.tasks, fetchedAt: now(), unread: body.unread,
+                            asOf: InstallUnreadStore.parseDate(body.asOf))
                     }.mapError { _ in Failure.badResponse }
                 })
         }

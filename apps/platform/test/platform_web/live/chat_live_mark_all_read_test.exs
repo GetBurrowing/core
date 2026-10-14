@@ -34,7 +34,7 @@ defmodule PlatformWeb.ChatLiveMarkAllReadTest do
         oidc_sub: "oidc-mark-all-read-#{n}"
       })
 
-    root = Tenancy.get_org_by_slug!("fabrikam")
+    root = Tenancy.get_org_by_slug!("acme")
 
     %OrgMembership{}
     |> OrgMembership.changeset(%{user_id: user.id, org_id: root.id, role: "member"})

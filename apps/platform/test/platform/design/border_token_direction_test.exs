@@ -36,6 +36,15 @@ defmodule Platform.Design.BorderTokenDirectionTest do
       is trusted for anything (test (a)). A wrong converter would make every
       assertion below pass for the wrong reason.
 
+  ## Burrow (task 01a120c5)
+
+  The Burrow palette replaced every value named above: dark base-100 is
+  #191b20, base-200 #111214, base-300 #25272b (now LIGHTER than the panel) and
+  --edge #383b42 (1.5361:1). Light base-100 is #fbfaf9 and light --edge is its
+  own warm grey, #d9d3c9, no longer a copy of base-300 (#efebe7 is only
+  1.1376:1 on the surface). The directions this file pins are unchanged. The
+  history below is the pre-Burrow record.
+
   ## Light is the opposite direction, on purpose
 
   Light `--color-base-100` is pure white, so a LIGHTER edge is arithmetically
@@ -84,8 +93,9 @@ defmodule Platform.Design.BorderTokenDirectionTest do
 
   @css_path Path.expand("../../../assets/css/app.css", __DIR__)
 
-  # The floor is set just under the shipped 1.1966:1 so a re-tune has a little
-  # room, and well above the 1.0478:1 defect so the defect cannot creep back.
+  # The floor was set just under the pre-Burrow 1.1966:1 so a re-tune has a
+  # little room, and well above the 1.0478:1 defect so the defect cannot creep
+  # back. The Burrow edge clears it at 1.5361:1 (task 01a120c5).
   @min_dark_edge_ratio 1.15
 
   @app_root Path.expand("../../..", __DIR__)
@@ -198,17 +208,18 @@ defmodule Platform.Design.BorderTokenDirectionTest do
   # ── (c) light does not move ───────────────────────────────────────────────
 
   describe "(c) light theme: unchanged, and deliberately the other direction" do
-    test "light --edge is declared byte-identically to light --color-base-300", %{light: light} do
-      edge = declaration(light, "--edge")
-      base_300 = declaration(light, "--color-base-300")
+    # Was "declared byte-identically to light --color-base-300". The Burrow
+    # spec (task 01a120c5) gives light its own edge, because Burrow base-300 is
+    # too faint against the surface to be one. What is pinned now is that the
+    # light edge is at least as visible as base-300 would have been.
+    test "light --edge is darker than light --color-base-300, a stronger edge", %{light: light} do
+      edge_lum = luminance(declaration(light, "--edge"))
+      base_300_lum = luminance(declaration(light, "--color-base-300"))
 
-      assert edge == base_300,
-             "light --edge is #{inspect(edge)} but light --color-base-300 is " <>
-               "#{inspect(base_300)}. They must be the same declaration TEXT, not " <>
-               "merely the same colour: transcribing the oklch to a hex lets a " <>
-               "rounding difference between a converter and the browser shift the " <>
-               "light edge by a hair, and this ticket is dark-theme only. Light " <>
-               "must stay pixel-identical to what shipped."
+      assert edge_lum < base_300_lum,
+             "light --edge (luminance #{edge_lum}) is not darker than light " <>
+               "--color-base-300 (luminance #{base_300_lum}); an edge fainter than " <>
+               "the raised fill does not separate anything."
     end
 
     test "light --edge is DARKER than light --color-base-100, the opposite of dark", %{
@@ -220,9 +231,8 @@ defmodule Platform.Design.BorderTokenDirectionTest do
       assert edge_lum < surface_lum,
              "light --edge (luminance #{edge_lum}) is not darker than light " <>
                "--color-base-100 (luminance #{surface_lum}). Light base-100 is " <>
-               "pure white, so a lighter edge is impossible; the direction is " <>
-               "inverted between themes on purpose and the light side is already " <>
-               "1.4393:1, a visible edge."
+               "near-white, so a lighter edge is barely possible; the direction is " <>
+               "inverted between themes on purpose."
     end
   end
 

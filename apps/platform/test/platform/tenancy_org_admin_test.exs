@@ -1,7 +1,7 @@
 defmodule Platform.TenancyOrgAdminTest do
   @moduledoc """
   `Platform.Tenancy.org_admin?/2` and `internal_member?/2` (task 01a0cf21
-  stage 1). Relies on the seeded orgs (Fabrikam root + tenants).
+  stage 1). Relies on the seeded orgs (Acme root + tenants).
   """
   use Platform.DataCase, async: true
 
@@ -36,7 +36,7 @@ defmodule Platform.TenancyOrgAdminTest do
     %{
       org_id: Tenancy.get_org_by_slug!("soylent").id,
       other_org_id: Tenancy.get_org_by_slug!("sxi").id,
-      fabrikam_id: Tenancy.get_org_by_slug!("fabrikam").id
+      acme_id: Tenancy.get_org_by_slug!("acme").id
     }
   end
 
@@ -68,15 +68,15 @@ defmodule Platform.TenancyOrgAdminTest do
     refute Tenancy.internal_member?(user, ctx.org_id)
   end
 
-  test "a Fabrikam root admin with no admin row in the org gets no bypass", ctx do
+  test "an Acme root admin with no admin row in the org gets no bypass", ctx do
     user = user!()
-    member!(user, ctx.fabrikam_id, "admin")
+    member!(user, ctx.acme_id, "admin")
     member!(user, ctx.org_id, "member")
 
     # Control: the user really is a root admin, so the refusal is not vacuous.
-    assert Tenancy.fabrikam_admin?(user)
+    assert Tenancy.root_admin?(user)
     refute Tenancy.org_admin?(user, ctx.org_id)
-    assert Tenancy.org_admin?(user, ctx.fabrikam_id)
+    assert Tenancy.org_admin?(user, ctx.acme_id)
   end
 
   test "garbage input returns false and never raises", %{org_id: org_id} do

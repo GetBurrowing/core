@@ -5,11 +5,11 @@ defmodule PlatformWeb.ChatLiveGeneralRoutingTest do
 
   Background:
     * Post-ADR-0042, every tenant org has a chat_space with `slug: "general"`,
-      each scoped to that org via `chat_spaces.org_id`. Fabrikam also has its
-      own General (`org_id = fabrikam_id`).
+      each scoped to that org via `chat_spaces.org_id`. Acme also has its
+      own General (`org_id = acme_id`).
     * The previous `Chat.get_space_by_slug/1` returned `order_by inserted_at
       asc, limit 1`, so a Soylent member clicking the Soylent-section
-      "General" sidebar entry would always land in Fabrikam's General — the
+      "General" sidebar entry would always land in Acme's General — the
       oldest matching row.
 
   The fix narrows the lookup in `chat_live.ex` `handle_params/3` (and its
@@ -67,10 +67,10 @@ defmodule PlatformWeb.ChatLiveGeneralRoutingTest do
   end
 
   describe "GET /chat/general routes to the user's tenant General" do
-    test "Soylent member lands on Soylent's General, not Fabrikam's", %{conn: conn} do
-      fabrikam_general = ensure_general_for_org("fabrikam")
+    test "Soylent member lands on Soylent's General, not Acme's", %{conn: conn} do
+      acme_general = ensure_general_for_org("acme")
       soylent_general = ensure_general_for_org("soylent")
-      refute fabrikam_general.id == soylent_general.id
+      refute acme_general.id == soylent_general.id
 
       user = create_user!("soylent")
       membership!(user, Tenancy.get_org_by_slug!("soylent"))
@@ -81,14 +81,14 @@ defmodule PlatformWeb.ChatLiveGeneralRoutingTest do
 
       # The composer's `data-draft-key` is `chat-draft:<space_id>` and is
       # the most precise observable signal that the lookup picked the
-      # tenant's row and not Fabrikam's. (Post-ADR-0042 both spaces are named
+      # tenant's row and not Acme's. (Post-ADR-0042 both spaces are named
       # "General", so a title match alone wouldn't distinguish them.)
       assert html =~ "data-draft-key=\"chat-draft:#{soylent_general.id}\""
-      refute html =~ "data-draft-key=\"chat-draft:#{fabrikam_general.id}\""
+      refute html =~ "data-draft-key=\"chat-draft:#{acme_general.id}\""
     end
 
     test "SXI member lands on SXI's General when hitting /chat/general", %{conn: conn} do
-      _fabrikam_general = ensure_general_for_org("fabrikam")
+      _acme_general = ensure_general_for_org("acme")
       _soylent_general = ensure_general_for_org("soylent")
       sxi_general = ensure_general_for_org("sxi")
 
@@ -102,19 +102,19 @@ defmodule PlatformWeb.ChatLiveGeneralRoutingTest do
       assert html =~ "data-draft-key=\"chat-draft:#{sxi_general.id}\""
     end
 
-    test "Fabrikam member lands on Fabrikam's General (back-compat with the legacy path)",
+    test "Acme member lands on Acme's General (back-compat with the legacy path)",
          %{conn: conn} do
-      fabrikam_general = ensure_general_for_org("fabrikam")
+      acme_general = ensure_general_for_org("acme")
       _soylent_general = ensure_general_for_org("soylent")
 
-      user = create_user!("fabrikam")
-      membership!(user, Tenancy.get_org_by_slug!("fabrikam"))
+      user = create_user!("acme")
+      membership!(user, Tenancy.get_org_by_slug!("acme"))
 
       conn = init_test_session(conn, current_user_id: user.id)
 
       {:ok, _view, html} = live(conn, ~p"/chat/general")
 
-      assert html =~ "data-draft-key=\"chat-draft:#{fabrikam_general.id}\""
+      assert html =~ "data-draft-key=\"chat-draft:#{acme_general.id}\""
     end
   end
 
@@ -137,7 +137,7 @@ defmodule PlatformWeb.ChatLiveGeneralRoutingTest do
       assert {:ok, _} = Ecto.UUID.cast(slug)
 
       user = create_user!("boundary-16")
-      membership!(user, Tenancy.get_org_by_slug!("fabrikam"))
+      membership!(user, Tenancy.get_org_by_slug!("acme"))
       conn = init_test_session(conn, current_user_id: user.id)
 
       # Pre-fix this raised Ecto.Query.CastError before ever reaching
@@ -146,7 +146,7 @@ defmodule PlatformWeb.ChatLiveGeneralRoutingTest do
       # the assertion — the bug was that it could not.
       {:ok, _view, html} = live(conn, "/chat/#{slug}")
 
-      bootstrapped = Chat.get_space_by_slug(slug, org_id: Tenancy.get_org_by_slug!("fabrikam").id)
+      bootstrapped = Chat.get_space_by_slug(slug, org_id: Tenancy.get_org_by_slug!("acme").id)
       assert bootstrapped
       assert html =~ "data-draft-key=\"chat-draft:#{bootstrapped.id}\""
     end
@@ -154,18 +154,18 @@ defmodule PlatformWeb.ChatLiveGeneralRoutingTest do
     test "a 16-character slug that EXISTS still resolves to its space", %{conn: conn} do
       # The guard must not turn a working slug lookup into a silent miss:
       # `get_space_by_slug/2` runs first and is unaffected by the uuid guard.
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+      acme = Tenancy.get_org_by_slug!("acme")
 
       {:ok, space} =
         Chat.create_space(%{
           name: "Sixteen",
           slug: "higginshigginsxx",
           kind: "channel",
-          org_id: fabrikam.id
+          org_id: acme.id
         })
 
       user = create_user!("boundary-16-hit")
-      membership!(user, fabrikam)
+      membership!(user, acme)
       conn = init_test_session(conn, current_user_id: user.id)
 
       {:ok, _view, html} = live(conn, "/chat/higginshigginsxx")

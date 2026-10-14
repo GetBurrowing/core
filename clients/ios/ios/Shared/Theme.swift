@@ -37,9 +37,20 @@ enum SuiteFont {
         .custom(family, size: 13, relativeTo: .footnote).weight(weight)
     }
 
+    /// The unread pill on a picker row (task 01a1261e): 12pt, semibold.
+    static func pill() -> Font {
+        .custom(family, size: 12, relativeTo: .caption).weight(.semibold)
+    }
+
     /// Inputs stay at 16pt minimum so iOS never zooms a focused field.
     static func input() -> Font {
         .custom(family, size: 17, relativeTo: .body)
+    }
+
+    /// Utility type: a host to read character by character (the add-install
+    /// confirmation card, task 01a12787).
+    static func mono() -> Font {
+        .system(.subheadline, design: .monospaced)
     }
 }
 

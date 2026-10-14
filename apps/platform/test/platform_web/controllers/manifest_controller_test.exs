@@ -27,9 +27,12 @@ defmodule PlatformWeb.ManifestControllerTest do
   The default render is pinned field for field against what
   `priv/static/manifest.json` shipped, EXCEPT:
 
-    * `background_color` `#ffffff` -> `#171b25` (no white splash flash into
-      a dark-first app);
-    * `theme_color` `#000000` -> `#171b25` (was matching neither theme);
+    * `background_color` `#ffffff` -> dark base-100 (no white splash flash
+      into a dark-first app);
+    * `theme_color` `#000000` -> dark base-100 (was matching neither theme);
+
+  Dark base-100 was `#171b25` and the name "Suite" until task 01a120c5
+  stage 3 moved the seeded row to "Burrow" and `#191b20`.
     * the `maskable` entry now has its OWN `src`, because one file cannot
       be both `any` and `maskable`.
 
@@ -82,7 +85,7 @@ defmodule PlatformWeb.ManifestControllerTest do
     %OrgMembership{}
     |> OrgMembership.changeset(%{
       user_id: user.id,
-      org_id: Tenancy.get_org_by_slug!("fabrikam").id,
+      org_id: Tenancy.get_org_by_slug!("acme").id,
       role: "admin"
     })
     |> Repo.insert!()
@@ -119,17 +122,17 @@ defmodule PlatformWeb.ManifestControllerTest do
          %{conn: conn} do
       {_conn, body} = render(conn)
 
-      # Unchanged from the shipped file.
-      assert body["name"] == "Suite"
-      assert body["short_name"] == "Suite"
+      # The seeded row, as moved to Burrow (task 01a120c5 stage 3).
+      assert body["name"] == "Burrow"
+      assert body["short_name"] == "Burrow"
       assert body["start_url"] == "/chat"
       assert body["display"] == "standalone"
       assert body["orientation"] == "portrait"
 
       # Correction 1 + 2: the two colours are dark base-100, NOT the
       # shipped `#ffffff` / `#000000`.
-      assert body["background_color"] == "#171b25"
-      assert body["theme_color"] == "#171b25"
+      assert body["background_color"] == "#191b20"
+      assert body["theme_color"] == "#191b20"
       refute body["background_color"] == "#ffffff"
       refute body["theme_color"] == "#000000"
 
@@ -162,13 +165,26 @@ defmodule PlatformWeb.ManifestControllerTest do
       # Opaque: no alpha band.
       assert VipsImage.bands(img) == 3
 
-      # The corner is the seeded background colour — the padding rule ran.
+      # The corner is the derivation background, the Burrow dark base-100
+      # #191b20 (task 01a120c5 stage 2) — the padding rule ran on that ground.
       {:ok, corner} = VipsOperation.getpoint(img, 2, 2)
-      assert Enum.map(corner, &round/1) == [0x17, 0x1B, 0x25]
+      assert Enum.map(corner, &round/1) == [0x19, 0x1B, 0x20]
 
+      # The Burrow source is a transparent mark, so the `any` corner is that
+      # same ground and a corner sample no longer tells the two apart. Measure
+      # the padding instead: the mark's extent (everything that is not the
+      # ground) is 80% as wide in the maskable variant, centred.
       {:ok, any_img} = VipsImage.new_from_buffer(any)
-      {:ok, any_corner} = VipsOperation.getpoint(any_img, 2, 2)
-      refute Enum.map(any_corner, &round/1) == [0x17, 0x1B, 0x25]
+
+      {:ok, {any_left, _, any_width, _}} =
+        VipsOperation.find_trim(any_img, background: [0x19, 0x1B, 0x20])
+
+      {:ok, {mask_left, _, mask_width, _}} =
+        VipsOperation.find_trim(img, background: [0x19, 0x1B, 0x20])
+
+      assert_in_delta mask_width, any_width * 0.8, 3
+      assert mask_left > any_left
+      assert_in_delta mask_left + mask_width / 2, any_left + any_width / 2, 3
     end
   end
 
@@ -248,7 +264,7 @@ defmodule PlatformWeb.ManifestControllerTest do
   describe "the manifest follows the branding row without a restart" do
     test "a name change moves both name and short_name", %{conn: conn} do
       {_conn, before} = render(conn)
-      assert before["name"] == "Suite"
+      assert before["name"] == "Burrow"
 
       {:ok, _} = Branding.update_identity(admin!(), %{app_name: "SENTINEL-XYZ"})
 

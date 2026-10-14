@@ -22,16 +22,16 @@ defmodule PlatformWeb.ShellLiveTest do
       })
 
     # MT/RBAC stack 2 (task 019e3c4a): the admin nav gate now reads
-    # `Tenancy.fabrikam_admin_preloaded?/1` instead of the
-    # `Accounts.is_fabrikam_user?/1` stub. Default test users are admin so
+    # `Tenancy.root_admin_preloaded?/1` instead of the
+    # `Accounts.root_user?/1` stub. Default test users are admin so
     # the existing "renders rail / admin section" assertions keep working;
     # tests that need a non-admin can pass `role: "member"`.
     if role do
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+      acme = Tenancy.get_org_by_slug!("acme")
 
       Repo.insert!(%OrgMembership{
         user_id: user.id,
-        org_id: fabrikam.id,
+        org_id: acme.id,
         role: role
       })
     end
@@ -243,7 +243,9 @@ defmodule PlatformWeb.ShellLiveTest do
     # Wait for the async load to resolve to {principal_name: nil, ...}; the
     # template then falls through to the legacy "Agent" label branch.
     html = render_async(view, 1_000)
-    assert html =~ "Startup Suite"
+    # The rail label is the install's app name, "Burrow" on a migrated DB
+    # (task 01a120c5 stage 3).
+    assert html =~ "Burrow"
   end
 
   test "WS-connected mount initially renders roster + presence as loading AsyncResults", %{
@@ -789,9 +791,9 @@ defmodule PlatformWeb.ShellLiveTest do
   #
   # The component-level rendering contract is covered by IconRailTest.
   # These tests check the *wiring*: shell layout passes the right assigns
-  # (current_path, is_fabrikam_user, sidebar_collapsed) to the icon-rail and
+  # (current_path, root_user, sidebar_collapsed) to the icon-rail and
   # bottom-rail at both breakpoints, and the Admin slot's DOM presence
-  # respects the is_fabrikam_user gate end-to-end.
+  # respects the root_user gate end-to-end.
   # ---------------------------------------------------------------------
 
   describe "icon-rail integration" do
@@ -838,8 +840,8 @@ defmodule PlatformWeb.ShellLiveTest do
       {:ok, _view, html} = live(conn, ~p"/tasks")
 
       # After MT/RBAC stack 2 (task 019e3c4a), the Admin tile is gated on
-      # `Tenancy.fabrikam_admin_preloaded?/1` instead of the
-      # `Accounts.is_fabrikam_user?/1` stub. Default test conn seeds an admin
+      # `Tenancy.root_admin_preloaded?/1` instead of the
+      # `Accounts.root_user?/1` stub. Default test conn seeds an admin
       # membership so the tile renders.
       assert html =~ ~s(data-destination="admin")
     end
@@ -880,19 +882,19 @@ defmodule PlatformWeb.ShellLiveTest do
     end
   end
 
-  describe "Admin gate (fabrikam_admin? + is_fabrikam_user)" do
-    test "is_fabrikam_user assign reflects real Fabrikam-root admin membership", %{conn: conn} do
+  describe "Admin gate (root_admin? + root_user)" do
+    test "root_user assign reflects real Acme-root admin membership", %{conn: conn} do
       conn = authenticated_conn(conn, role: "admin")
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      assert :sys.get_state(view.pid).socket.assigns.is_fabrikam_user == true
+      assert :sys.get_state(view.pid).socket.assigns.root_user == true
     end
 
-    test "is_fabrikam_user is false for a Fabrikam member (non-admin)", %{conn: conn} do
+    test "root_user is false for an Acme member (non-admin)", %{conn: conn} do
       conn = authenticated_conn(conn, role: "member")
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
-      assert :sys.get_state(view.pid).socket.assigns.is_fabrikam_user == false
+      assert :sys.get_state(view.pid).socket.assigns.root_user == false
     end
 
     test "More sheet renders the Admin section for an admin user", %{conn: conn} do
@@ -1085,7 +1087,11 @@ defmodule PlatformWeb.ShellLiveTest do
       assert_push_event(view, "app_badge", %{count: 0, label: nil})
     end
 
-    test "reading an item does NOT move the badge (stage 4: reading is not clearing)",
+    # INVERTED by task 01a11703: the badge counts rows the user has not opened
+    # (`Inbox.badge_scope/1`), so a read moves it even though the row stays on
+    # the /inbox list. This used to pin "reading does NOT move the badge"
+    # (task 01a00108 stage 4).
+    test "reading an item clears it from the badge and pushes the clear",
          %{conn: conn} do
       conn = authenticated_conn(conn)
       user_id = conn.private.plug_session["current_user_id"]
@@ -1095,13 +1101,14 @@ defmodule PlatformWeb.ShellLiveTest do
       {:ok, view, _html} = live(conn, ~p"/tasks")
       assert_push_event(view, "app_badge", %{count: 1, label: "1"})
 
-      # The recompute runs (mark_read/2 still broadcasts) and lands on the same
-      # number, so the count the client is holding stays 1.
+      # mark_read/2 broadcasts `:inbox_changed`; the recompute lands on 0.
       {:ok, _} = Inbox.mark_read(item.id, user_id)
       _ = render(view)
 
-      refute_push_event(view, "app_badge", %{count: 0, label: nil})
-      assert Platform.Inbox.unread_count(user_id) == 1
+      assert_push_event(view, "app_badge", %{count: 0, label: nil})
+      assert Platform.Inbox.unread_count(user_id) == 0
+      # Still listed: reading is not a list clear.
+      assert user_id |> Platform.Inbox.unread_scope() |> Platform.Repo.aggregate(:count) == 1
     end
 
     test "the pushed label uses the rail's cap, not a second one", %{conn: _conn} do
@@ -2680,7 +2687,7 @@ defmodule PlatformWeb.ShellLiveTest do
       Repo.insert!(%Platform.Tenancy.Org{
         name: "Reconcile Tenant #{n}",
         slug: "tenant_reconcile_#{n}",
-        parent_org_id: Tenancy.get_org_by_slug!("fabrikam").id
+        parent_org_id: Tenancy.get_org_by_slug!("acme").id
       })
     end
 
@@ -2845,7 +2852,7 @@ defmodule PlatformWeb.ShellLiveTest do
       user = Repo.get!(User, user_id)
       refute Tenancy.external_user?(user)
 
-      org = Tenancy.get_org_by_slug!("fabrikam")
+      org = Tenancy.get_org_by_slug!("acme")
       %{read_row: read_row, unread_row: unread_row} = mention_pair!(user, org.id)
 
       assert Inbox.unread_count(user_id) == 2
@@ -4006,6 +4013,41 @@ defmodule PlatformWeb.ShellLiveTest do
 
       assert renamed in roster_names(view),
              "the roster switch released a chat topic that :shell_chat_space_ids still holds"
+    end
+  end
+
+  describe "top bar account menu" do
+    test "collapses the username and log out into one avatar button", %{conn: conn} do
+      {conn, user} = authenticated_conn_with_user(conn)
+      {:ok, view, _html} = live(conn, "/changelog")
+      html = render(view)
+
+      assert has_element?(
+               view,
+               ~s(#account-menu-trigger[aria-label="Account menu"][aria-haspopup="menu"][aria-expanded="false"])
+             )
+
+      assert has_element?(view, ~s(#account-menu-trigger [data-avatar-kind="human"]))
+
+      # The Log out item is the SAME control as before: a plain GET link to
+      # /auth/logout, no data-method, inside the menu.
+      assert has_element?(
+               view,
+               ~s(#account-menu-list[role="menu"] a[role="menuitem"][href="/auth/logout"]),
+               "Log out"
+             )
+
+      refute has_element?(view, ~s(#account-menu-list a[data-method]))
+      assert has_element?(view, "#account-menu-list", user.name)
+      assert has_element?(view, "#account-menu-list", user.email)
+
+      # Exactly one logout link in the top bar, and it lives in the menu: the
+      # old inline icon link and bare username span are gone.
+      header = view |> element("header#utility-bar") |> render()
+      assert length(Regex.scan(~r{href="/auth/logout"}, header)) == 1
+      refute header =~ ~s(title="Log out")
+      refute header =~ ~s(<span class="text-xs text-base-content/50">#{user.name}</span>)
+      assert html =~ "account-menu-list"
     end
   end
 end

@@ -14,8 +14,8 @@ defmodule PlatformWeb.Components.NotificationState do
   collided with the Inbox tile beside it, which holds the actual activity
   notifications, and a rail row that navigates nowhere is not a rail row.
   Settings was the obvious alternative and does not exist — there is no
-  `/settings` route, and the rail's bottom gear is Admin (`fabrikam_only?: true`,
-  gated on `is_fabrikam_user`), so external and non-admin internal users would
+  `/settings` route, and the rail's bottom gear is Admin (`root_only?: true`,
+  gated on `root_user`), so external and non-admin internal users would
   never see it, and this feature has to cover external users.
 
   `InboxLive` runs the `:authenticated` `live_session`, whose `on_mount` chain

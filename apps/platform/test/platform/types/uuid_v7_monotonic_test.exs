@@ -40,6 +40,49 @@ defmodule Platform.Types.UUIDv7MonotonicTest do
              "timestamp cannot separate ids, so rand_a must be a monotonic counter."
   end
 
+  @tasks 16
+
+  # The single-process case above cannot see a race between minters; this
+  # one makes 16 of them collide on the shared counter at once. Each task's
+  # own ids must still sort in the order that task generated them (task
+  # 01a13aac: a two-write millisecond reset let a minter draw from the old
+  # millisecond's sequence and then from the new one, so its own ids within
+  # one millisecond came back reversed).
+  test "ids minted concurrently sort in each minter's own generation order" do
+    tasks =
+      for _ <- 1..@tasks do
+        Task.async(fn ->
+          receive do
+            :go -> for _ <- 1..@count, do: UUIDv7.generate()
+          end
+        end)
+      end
+
+    # Release them only once all exist, so they contend for the counter
+    # rather than each finishing before the next is spawned.
+    Enum.each(tasks, &send(&1.pid, :go))
+    per_task = Task.await_many(tasks, 60_000)
+
+    groups = Enum.flat_map(per_task, &Enum.chunk_by(&1, fn id -> ms_prefix(id) end))
+
+    # Guard the guard: with no shared millisecond inside any one task there
+    # is nothing to order, and this test would pass against any counter.
+    largest = groups |> Enum.map(&length/1) |> Enum.max()
+
+    assert largest > 1,
+           "No task minted two ids in one millisecond, so this test exercised nothing."
+
+    out_of_order = Enum.filter(groups, fn g -> g != Enum.sort(g) end)
+
+    assert out_of_order == [],
+           "#{length(out_of_order)} of #{length(groups)} per-task millisecond-groups " <>
+             "sorted differently from that task's generation order across " <>
+             "#{@tasks} concurrent minters. The millisecond and its counter must " <>
+             "advance as one atomic step."
+
+    assert length(Enum.uniq(List.flatten(per_task))) == @tasks * @count
+  end
+
   test "the counter does not cost uniqueness" do
     ids = for _ <- 1..@count, do: UUIDv7.generate()
     assert length(Enum.uniq(ids)) == @count

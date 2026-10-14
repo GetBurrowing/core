@@ -46,7 +46,8 @@ struct InstallLauncher {
     /// or anything else, so the handoff lands on `/`.
     static func localPath(of url: URL?, on host: String) -> String? {
         guard let url, url.host?.lowercased() == host.lowercased(),
-              let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+            let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        else { return nil }
         let path = components.percentEncodedPath.isEmpty ? "/" : components.percentEncodedPath
         let local = components.percentEncodedQuery.map { "\(path)?\($0)" } ?? path
         return local == "/" ? nil : local
@@ -67,19 +68,26 @@ struct NativeSignOut {
     let client: SuiteAPIClient
     let tokens: MutableTokenStore
     let appInstallID: String
+    /// Deletes the install's sealed-preview key with its bearer (task 01a1261e).
+    let forgetPushKey: (String) -> Void
 
-    init(client: SuiteAPIClient = .shared,
-         tokens: MutableTokenStore = KeychainTokenStore.shared,
-         appInstallID: String = InstallStore.shared.appInstallID) {
+    init(
+        client: SuiteAPIClient = .shared,
+        tokens: MutableTokenStore = KeychainTokenStore.shared,
+        appInstallID: String = InstallStore.shared.appInstallID,
+        forgetPushKey: @escaping (String) -> Void = { PushKeyStore.shared.remove(for: $0) }
+    ) {
         self.client = client
         self.tokens = tokens
         self.appInstallID = appInstallID
+        self.forgetPushKey = forgetPushKey
     }
 
     func run(host: String, completion: @escaping () -> Void) {
         client.delete(host: host, path: SuiteAPIClient.devicePath(appInstallID)) { _ in
             client.delete(host: host, path: "/api/app/session") { _ in
                 tokens.remove(for: host)
+                forgetPushKey(host)
                 completion()
             }
         }

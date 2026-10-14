@@ -1,7 +1,7 @@
 <%!--
   Zero-access holding landing. Brand chip + logout are the ONLY affordances
   — deliberately NO icon rail, NO bottom nav, NO space/discovery list.
-  Semantic DaisyUI tokens only (Fabrikam cyan primary theming lives in app.css).
+  Semantic DaisyUI tokens only (brand cyan primary theming lives in app.css).
   env(safe-area-inset-*) padding keeps content clear of the notch / home
   indicator on mobile, where external users overwhelmingly hit this.
 --%>
@@ -15,8 +15,8 @@
     data-role="holding-header"
   >
     <div class="flex items-center gap-2" data-role="brand-chip">
-      <img src={~p"/images/logo.svg"} alt="Fabrikam" class="size-7" />
-      <span class="text-sm font-semibold tracking-tight text-base-content">Fabrikam</span>
+      <img src={~p"/images/burrow-mark.svg"} alt={@brand_name} class="size-7" />
+      <span class="text-sm font-semibold tracking-tight text-base-content">{@brand_name}</span>
     </div>
 
     <a href={~p"/auth/logout"} class="btn btn-ghost btn-sm gap-2" data-role="holding-logout">

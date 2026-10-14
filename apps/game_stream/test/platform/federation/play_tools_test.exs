@@ -37,7 +37,19 @@ defmodule Platform.Federation.PlayToolsTest do
   # main's catalogue at 23ff27a0, in order (119 tools). Measured, not derived.
   # 120 with `validation_payload_amend` after `plan_reject` (task 01a0acb4
   # stage 2). 121 with `task_delivery_candidate_list` after
-  # `task_close_as_delivered` (task 01a044b0 stage 4).
+  # `task_close_as_delivered` (task 01a044b0 stage 4). 122 with
+  # `dispatch_metrics_list` after `experiment_promote` (task 01a114a8 stage 1).
+  # 123 with `suite_run` (bundle `code_mode`) last (task 01a114a8 stage 2).
+  # 124 with `suite_run_describe` after it (task 01a114a8 stage 3).
+  # 125 with `code_mode_report` after `dispatch_metrics_list` (task 01a114a8
+  # stage 4).
+  # 126 with `janitor_hand_back` after `stack_assign_agents` (task
+  # 019fa1ac-6685 stage 3, carried into Play at the PR #1226 main merge).
+  # 129 with `prototype.publish`, `prototype.versions`, `prototype.rollback`
+  # (bundle `prototype`) last (task 01a1316b-4e46 stage 1).
+  # 128 with `vault_fetch` and `vault_list` after `federation_status`
+  # (task 01a131c5 stage 1).
+  # 131 with both (rollup merge of stack prototype-runtime onto main).
   @main_tool_names ~w(
     canvas.create canvas.patch canvas.describe canvas.list_kinds canvas.template canvas.versions
     canvas.restore send_media react project_list org_list_descendants project_update epic_list
@@ -47,13 +59,15 @@ defmodule Platform.Federation.PlayToolsTest do
     task_detach_canvas task_list_canvases stack_create stack_update stack_get stack_list
     stack_add stack_add_dependency stack_remove_dependency stack_eject stack_abandon
     stack_complete stack_start stack_retry_member_merge stack_start_planning stack_assign_agents
+    janitor_hand_back
     plan_create plan_update plan_get plan_submit plan_approve plan_reject validation_payload_amend
     plan_architecture_verdict stage_architecture_audit stage_start stage_list validation_evaluate
     validation_pass stage_complete report_blocker validation_list prompt_template_list
     prompt_template_update review_request_create review_request_get review_item_list
     design_critique_request space_create space_list space_list_agents space_leave dm_create
     space_get_context space_search_messages space_get_messages canvas_list canvas_get
-    principal_search federation_status memory_view memory_create memory_str_replace memory_insert
+    principal_search federation_status vault_fetch vault_list memory_view memory_create
+    memory_str_replace memory_insert
     memory_delete memory_rename memory_search org_memory_recently_edited
     org_memory_recently_deleted org_memory_feedback_at_path skill.list skill.get skill.upsert
     attachment.upload_inline attachment.get_inline attachment.upload_start file_list
@@ -61,7 +75,8 @@ defmodule Platform.Federation.PlayToolsTest do
     meeting_activity_push intent_ack experiment_surface_list experiment_list experiment_get
     experiment_create experiment_variant_add experiment_start experiment_stop experiment_conclude
     experiment_results experiment_signals_list experiment_exclude experiment_goal_set
-    experiment_goal_list experiment_promote
+    experiment_goal_list experiment_promote dispatch_metrics_list code_mode_report suite_run
+    suite_run_describe prototype.publish prototype.versions prototype.rollback
   )
 
   @names ~w(play_session_start play_session_stop play_session_status)
@@ -112,8 +127,8 @@ defmodule Platform.Federation.PlayToolsTest do
   defp catalogue_names, do: Enum.map(ToolSurface.tool_definitions(), & &1.name)
 
   describe "GUARD: with GAME_STREAM_ENABLED unset the tool list is main's" do
-    test "tool_definitions/0 names equal main's 121, in order" do
-      assert length(@main_tool_names) == 121
+    test "tool_definitions/0 names equal main's 131, in order" do
+      assert length(@main_tool_names) == 131
       assert catalogue_names() == @main_tool_names
     end
 

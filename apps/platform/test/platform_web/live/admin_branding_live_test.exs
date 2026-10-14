@@ -53,7 +53,7 @@ defmodule PlatformWeb.AdminBrandingLiveTest do
     %OrgMembership{}
     |> OrgMembership.changeset(%{
       user_id: user.id,
-      org_id: Tenancy.get_org_by_slug!("fabrikam").id,
+      org_id: Tenancy.get_org_by_slug!("acme").id,
       role: role
     })
     |> Repo.insert!()
@@ -111,7 +111,7 @@ defmodule PlatformWeb.AdminBrandingLiveTest do
       assert flash["error"] =~ "access"
     end
 
-    test "a Fabrikam admin gets the form", %{conn: conn} do
+    test "an Acme admin gets the form", %{conn: conn} do
       {:ok, _view, html} = conn |> admin_conn() |> live(~p"/admin/branding")
 
       assert html =~ ~s(data-role="branding-dropzone")
@@ -362,7 +362,13 @@ defmodule PlatformWeb.AdminBrandingLiveTest do
       attr_of(html, ~s([data-role="color-save"]), "disabled") != nil
     end
 
-    test "the blocking example is real and the spec's #777777 is not a block" do
+    # The 01a0dbee spec expected #777777 NOT to block, and it did not while the
+    # light body text was #000000 (4.69:1). The Burrow spec's warm ink #221f1b
+    # would have made it block (3.66:1), but stage 4 of task 01a120c5 kept the
+    # light body text black for secondary-text AA, so Palette (which picks body
+    # text from the two shipped base-content colours, Brosnan's 2026-09-26
+    # decision) lets #777777 through again: 4.6895:1 against #000000.
+    test "the blocking example is real, and #777777 does not block under black body text" do
       assert Palette.blocked?(:light, %{surface: @blocking_grey})
       refute Palette.blocked?(:light, %{surface: "#777777"})
     end
@@ -382,7 +388,7 @@ defmodule PlatformWeb.AdminBrandingLiveTest do
       end
 
       assert attr_of(html, "#colors-light_accent", "placeholder") == "same as action"
-      assert text_of(html, ~s([data-role="color-preset-label"])) == "current: Suite default"
+      assert text_of(html, ~s([data-role="color-preset-label"])) == "current: Burrow default"
       assert attr_of(html, ~s([data-role="color-preview-light"]), "style") in [nil, ""]
 
       page = conn |> get(~p"/admin/branding") |> html_response(200)

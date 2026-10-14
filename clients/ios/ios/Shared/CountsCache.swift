@@ -10,6 +10,12 @@ struct SuiteCounts: Codable, Equatable {
     /// cannot make an old count look fresh. (The server's `as_of` is the
     /// same instant give or take the round trip.)
     var fetchedAt: Date
+    /// The Chat unread total (task 01a1261e), OPTIONAL: an older server, and
+    /// a counts entry cached before this field existed, decode without it.
+    var unread: Int? = nil
+    /// The server's `as_of` for these counts, compared against push
+    /// `unread_as_of` in `InstallUnreadStore` (newer wins). Optional as above.
+    var asOf: Date? = nil
 
     func count(_ kind: SlabKind) -> Int {
         switch kind {

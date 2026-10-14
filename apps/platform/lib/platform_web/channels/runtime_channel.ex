@@ -15,8 +15,8 @@ defmodule PlatformWeb.RuntimeChannel do
   alias Platform.Federation
   alias Platform.Federation.McpContent
   alias Platform.Federation.RuntimePresence
-  alias Platform.Federation.ToolArguments
   alias Platform.Federation.ToolAuthorization
+  alias Platform.Federation.ToolCall
   alias Platform.Federation.ToolSurface
   alias Platform.Meetings
   alias Platform.Meetings.IntentQueue
@@ -532,9 +532,10 @@ defmodule PlatformWeb.RuntimeChannel do
 
     RuntimePresence.touch(runtime_id)
 
-    case authorize_tool_call(tool, socket) do
-      :ok -> execute_tool_call(tool, args, call_id, socket)
-      {:error, :forbidden} -> deny_tool_call(tool, call_id, socket)
+    case Federation.get_runtime(socket.assigns.runtime_pk) do
+      # A vanished row denies. Fail closed, never fall through to execution.
+      nil -> deny_tool_call(tool, call_id, socket)
+      runtime -> execute_tool_call(tool, args, call_id, runtime, socket)
     end
 
     {:noreply, socket}
@@ -852,46 +853,26 @@ defmodule PlatformWeb.RuntimeChannel do
     end)
   end
 
-  # Authorization gate for `tool_call`. Reads the grant FRESH on every call
+  # `tool_call` goes through `ToolCall.invoke/4` (task 01a114a8 stage 1),
+  # the same path `MCPController` uses: `ToolAuthorization.authorize/2`, then
+  # `ToolArguments.dispatch/3`, then the ledger row. Only the FRAMING of each
+  # outcome lives here.
+  #
+  # The runtime row is read FRESH on every call (in `handle_in/3` above)
   # rather than reusing the join-time `:runtime` assign, which is an
-  # advertisement snapshot only.
-  #
-  # openclaw sockets stay joined for days (the channel re-tracks presence
-  # every 30s precisely because connections outlive process restarts), so a
-  # cached grant would let a capability revoked in Control Center keep
-  # working until the runtime happened to reconnect — a worse failure mode
-  # than the bug this closes. The cost is one primary-key `Repo.get` plus
-  # the indexed `Repo.exists?` inside `Tenancy.external_user?/1`: exactly
-  # what the HTTP path already pays per request.
-  #
-  # A vanished row denies. Fail closed, never fall through to execution.
-  defp authorize_tool_call(tool, socket) do
-    case Federation.get_runtime(socket.assigns.runtime_pk) do
-      nil -> {:error, :forbidden}
-      runtime -> ToolAuthorization.authorize(tool, runtime)
-    end
-  end
-
-  defp execute_tool_call(tool, args, call_id, socket) do
+  # advertisement snapshot only. openclaw sockets stay joined for days (the
+  # channel re-tracks presence every 30s precisely because connections
+  # outlive process restarts), so a cached grant would let a capability
+  # revoked in Control Center keep working until the runtime happened to
+  # reconnect. The cost is one primary-key `Repo.get` plus the indexed
+  # `Repo.exists?` inside `Tenancy.external_user?/1`: exactly what the HTTP
+  # path already pays per request. The handler context is built from that
+  # fresh row too (`ToolCall.build_context/2`).
+  defp execute_tool_call(tool, args, call_id, runtime, socket) do
     runtime_id = socket.assigns.runtime_id
     start_time = System.monotonic_time(:millisecond)
 
-    space_id = Map.get(args, "space_id")
-    agent_participant_id = get_agent_participant_id(socket, space_id)
-
-    context = %{
-      space_id: space_id,
-      agent_id: socket.assigns[:agent_id],
-      agent_participant_id: agent_participant_id,
-      runtime_id: runtime_id
-    }
-
-    # `ToolArguments.dispatch/3`, not `ToolSurface.execute/3` — the same gate
-    # `MCPController` runs, from the same module, so the two federation
-    # transports cannot refuse the same malformed call differently.
-    # `authorize_tool_call/2` has already run above; argument policy never
-    # front-runs capability policy.
-    result = ToolArguments.dispatch(tool, args, context)
+    result = ToolCall.invoke(tool, args, runtime)
     elapsed = System.monotonic_time(:millisecond) - start_time
 
     case result do
@@ -910,6 +891,9 @@ defmodule PlatformWeb.RuntimeChannel do
           status: "ok",
           result: McpContent.strip(data)
         })
+
+      {:error, :forbidden} ->
+        deny_tool_call(tool, call_id, socket)
 
       {:error, error} ->
         Logger.warning(

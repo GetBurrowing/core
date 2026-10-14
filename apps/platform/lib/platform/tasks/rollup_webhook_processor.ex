@@ -40,7 +40,18 @@ defmodule Platform.Tasks.RollupWebhookProcessor do
 
   alias Platform.Repo
   alias Platform.Tasks
-  alias Platform.Tasks.{Plan, PlanEngine, Stack, StackDeployer, Stacks, Stage, Task, Validation}
+
+  alias Platform.Tasks.{
+    Plan,
+    PlanEngine,
+    PostCommit,
+    Stack,
+    StackDeployer,
+    Stacks,
+    Stage,
+    Task,
+    Validation
+  }
 
   # Member statuses that are considered valid sources for a rollup-PR
   # `pr_merged` fan-out (ADR 0041 §"Stack-level deploy"). See the
@@ -199,34 +210,40 @@ defmodule Platform.Tasks.RollupWebhookProcessor do
       "fanned_out_from_stack_rollup_pr" => true
     }
 
-    Repo.transaction(fn ->
-      Enum.reduce(members, {[], []}, fn member, {passed_acc, anomaly_acc} ->
-        cond do
-          # Must sit BEFORE the generic unexpected-status branch: that one
-          # matches every non-landed status and would shadow this clause.
-          member.status in @rollup_fan_out_unlanded_member_statuses ->
-            cancel_unlanded_member(stack, member, pr, passed_acc, anomaly_acc)
+    # Task 01a136c1: an OUTER transaction around per-member
+    # `PlanEngine.evaluate_validation/2` calls. The post-commit scope is
+    # opened here so any side effect those calls defer runs after THIS
+    # commit, not at the inner transaction's (still uncommitted) return.
+    PostCommit.scope(fn ->
+      Repo.transaction(fn ->
+        Enum.reduce(members, {[], []}, fn member, {passed_acc, anomaly_acc} ->
+          cond do
+            # Must sit BEFORE the generic unexpected-status branch: that one
+            # matches every non-landed status and would shadow this clause.
+            member.status in @rollup_fan_out_unlanded_member_statuses ->
+              cancel_unlanded_member(stack, member, pr, passed_acc, anomaly_acc)
 
-          member.status not in @rollup_fan_out_expected_member_statuses ->
-            anomaly = %{
-              "task_id" => member.id,
-              "member_status" => member.status,
-              "reason" => "unexpected_status:" <> member.status,
-              "recorded_at" => DateTime.utc_now() |> DateTime.to_iso8601()
-            }
+            member.status not in @rollup_fan_out_expected_member_statuses ->
+              anomaly = %{
+                "task_id" => member.id,
+                "member_status" => member.status,
+                "reason" => "unexpected_status:" <> member.status,
+                "recorded_at" => DateTime.utc_now() |> DateTime.to_iso8601()
+              }
 
-            Logger.warning(
-              "[RollupWebhookProcessor] Stack #{stack.id} rollup fan-out: member task " <>
-                "#{member.id} is in unexpected status #{inspect(member.status)} " <>
-                "(expected one of #{inspect(@rollup_fan_out_expected_member_statuses)}); " <>
-                "recording anomaly and skipping"
-            )
+              Logger.warning(
+                "[RollupWebhookProcessor] Stack #{stack.id} rollup fan-out: member task " <>
+                  "#{member.id} is in unexpected status #{inspect(member.status)} " <>
+                  "(expected one of #{inspect(@rollup_fan_out_expected_member_statuses)}); " <>
+                  "recording anomaly and skipping"
+              )
 
-            {passed_acc, [anomaly | anomaly_acc]}
+              {passed_acc, [anomaly | anomaly_acc]}
 
-          true ->
-            fan_out_member(stack, member, evidence_base, passed_acc, anomaly_acc)
-        end
+            true ->
+              fan_out_member(stack, member, evidence_base, passed_acc, anomaly_acc)
+          end
+        end)
       end)
     end)
     |> case do

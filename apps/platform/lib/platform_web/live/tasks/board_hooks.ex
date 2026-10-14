@@ -48,7 +48,7 @@ defmodule PlatformWeb.Tasks.BoardHooks do
       socket = PlatformWeb.Tasks.BoardHooks.attach(socket)
   """
 
-  import Phoenix.Component, only: [assign: 3]
+  import Phoenix.Component, only: [assign: 3, assign_new: 3]
   import Phoenix.LiveView, only: [attach_hook: 4, connected?: 1, send_update: 2]
 
   alias Platform.Tasks
@@ -68,7 +68,11 @@ defmodule PlatformWeb.Tasks.BoardHooks do
   """
   @spec attach(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
   def attach(socket) do
-    attach_hook(socket, :board_info, :handle_info, &handle_info/2)
+    socket
+    # The External Feedback lane (task 01a11ec3 stage 4). Defaulted here, not
+    # in the budgeted shell; `apply_url_filters/3` is its only other writer.
+    |> assign(:origin_filter, :all)
+    |> attach_hook(:board_info, :handle_info, &handle_info/2)
   end
 
   # ── PubSub ─────────────────────────────────────────────────────────────
@@ -143,9 +147,21 @@ defmodule PlatformWeb.Tasks.BoardHooks do
   NEITHER branch fires (no filter actually changed — e.g. a bare `/tasks`
   mount) touches `:expanded_stacks` not at all.
   """
-  def apply_url_filters(socket, new_sponsor, new_sort, new_query, new_scope) do
+  def apply_url_filters(socket, filters, params \\ %{})
+
+  def apply_url_filters(
+        socket,
+        {new_sponsor, new_sort, new_query, new_scope, new_kind},
+        params
+      ) do
+    # `?origin=` (task 01a11ec3 stage 4) is decoded HERE from the raw params
+    # rather than in `TasksLive.handle_params/3`, whose line count is pinned.
+    new_origin = BoardData.decode_origin_param(params["origin"])
+
     board_changed? =
-      {new_sponsor, new_sort} != {socket.assigns[:sponsor_filter], socket.assigns[:board_sort]}
+      {new_sponsor, new_sort, new_kind, new_origin} !=
+        {socket.assigns[:sponsor_filter], socket.assigns[:board_sort],
+         socket.assigns[:kind_filter], socket.assigns[:origin_filter]}
 
     search_changed? = new_query != socket.assigns[:task_search_query]
 
@@ -155,6 +171,8 @@ defmodule PlatformWeb.Tasks.BoardHooks do
       |> assign(:board_sort, new_sort)
       |> assign(:task_search_query, new_query)
       |> assign(:scope_filter, new_scope)
+      |> assign(:kind_filter, new_kind)
+      |> assign(:origin_filter, new_origin)
 
     cond do
       board_changed? -> refresh_board(socket)
@@ -183,6 +201,8 @@ defmodule PlatformWeb.Tasks.BoardHooks do
       # when the "Sponsored by me" toggle is active. `nil` is the unfiltered
       # passthrough that matches every prior refresh_board call site.
       |> maybe_put(:sponsor_user_id, sponsor_filter_user_id(socket))
+      |> maybe_put(:kind, kind_filter_value(socket))
+      |> maybe_put(:origin, origin_filter_value(socket))
 
     tasks = Tasks.list_all_tasks(opts)
 
@@ -193,6 +213,8 @@ defmodule PlatformWeb.Tasks.BoardHooks do
       %{}
       |> maybe_put_map(:project_id, socket.assigns.selected_project_id)
       |> maybe_put_map(:sponsor_user_id, sponsor_filter_user_id(socket))
+      |> maybe_put_map(:kind, kind_filter_value(socket))
+      |> maybe_put_map(:origin, origin_filter_value(socket))
 
     stack_entries = Stacks.list_stacks_with_members(stack_filters)
     {stack_board_data, stacks} = BoardData.split_stack_entries(stack_entries)
@@ -218,6 +240,9 @@ defmodule PlatformWeb.Tasks.BoardHooks do
     # board events.
     |> assign(:scope_counts, Tasks.count_by_scope())
     |> assign(:scope_counts_db, Tasks.count_by_scope())
+    # The all-tasks bucket's key (task 01a116de stage 3): the root org's slug
+    # from config or its row, read once per LiveView, never a literal.
+    |> assign_new(:root_org_slug, fn -> Platform.Tenancy.root_org_slug() end)
     |> assign(:visible_task_count, length(tasks))
     |> sync_review_request_subscriptions(tasks)
     # An active search must survive PubSub-driven refreshes — the assigns
@@ -264,21 +289,25 @@ defmodule PlatformWeb.Tasks.BoardHooks do
     # Marlowe 2026-07-12 ("narrow everything"): while a query is active every
     # on-screen count — columns, scope-rail chips, header total — describes
     # the filtered board. Chips mirror Tasks.count_by_scope/0's current stub
-    # semantics (everything under "fabrikam"); when that becomes a real per-org
-    # GROUP BY this branch needs the matching in-memory group-by over `tasks`.
+    # semantics (everything under the root org's slug); when that becomes a
+    # real per-org GROUP BY this branch needs the matching in-memory group-by
+    # over `tasks`.
     #
-    # The key is the STRING "fabrikam" since task 01a09287 stage 2 re-keyed
-    # `count_by_scope/0` on the org rows. As `:fabrikam` it would have added a
-    # SEVENTH entry beside the real one rather than overwriting it — the
-    # header total is `Map.values |> Enum.sum`, so the searched board's total
-    # would have double-counted instead of failing.
+    # The key is the root org's slug as a STRING (task 01a116de stage 3; a
+    # literal before that), matching `count_by_scope/0`'s row-derived keys.
+    # An atom key would add a SECOND entry beside the real one rather than
+    # overwriting it — the header total is `Map.values |> Enum.sum`, so the
+    # searched board's total would double-count instead of failing.
     scope_counts =
       if q == "" do
         socket.assigns.scope_counts_db
       else
-        socket.assigns.scope_counts_db
-        |> Map.new(fn {key, _} -> {key, 0} end)
-        |> Map.put("fabrikam", length(tasks))
+        zeroed = Map.new(socket.assigns.scope_counts_db, fn {key, _} -> {key, 0} end)
+
+        case socket.assigns[:root_org_slug] || Platform.Tenancy.root_org_slug() do
+          root_slug when is_binary(root_slug) -> Map.put(zeroed, root_slug, length(tasks))
+          nil -> zeroed
+        end
       end
 
     socket
@@ -294,6 +323,20 @@ defmodule PlatformWeb.Tasks.BoardHooks do
   # The active list order; `:priority` until something (the stage-2 `?sort=`
   # decode) assigns otherwise.
   defp board_sort(socket), do: socket.assigns[:board_sort] || :priority
+
+  defp kind_filter_value(socket) do
+    case socket.assigns[:kind_filter] do
+      kind when kind in ~w(feature chore bug research ops) -> kind
+      _ -> nil
+    end
+  end
+
+  defp origin_filter_value(socket) do
+    case socket.assigns[:origin_filter] do
+      "external_feedback" -> "external_feedback"
+      _ -> nil
+    end
+  end
 
   # Task 01a06df3 stage 2: a member the search FOUND must be visible without a
   # further click. Matching the parent stack (stage 1) only gets its card onto

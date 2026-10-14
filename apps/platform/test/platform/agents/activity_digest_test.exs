@@ -545,11 +545,11 @@ defmodule Platform.Agents.ActivityDigestTest do
 
   defp insert_project(attrs \\ %{}) do
     # ADR 0042: projects require org_id. Default fixtures attach to the
-    # root Fabrikam org unless the test overrides.
+    # root Acme org unless the test overrides.
     defaults = %{
       name: "Test Project",
       description: "tests",
-      org_id: Platform.TenancyFixtures.fabrikam_org_id()
+      org_id: Platform.TenancyFixtures.acme_org_id()
     }
 
     %Project{}
@@ -610,8 +610,8 @@ defmodule Platform.Agents.ActivityDigestTest do
     setup do
       ext = external_user!()
 
-      internal = insert_space(%{name: "fabrikam-eng"})
-      ip = insert_participant(internal.id, %{display_name: "Fabrikam"})
+      internal = insert_space(%{name: "acme-eng"})
+      ip = insert_participant(internal.id, %{display_name: "Acme"})
 
       insert_message(internal.id, ip.id, %{
         content: "internal chatter",
@@ -646,7 +646,7 @@ defmodule Platform.Agents.ActivityDigestTest do
     test "build/2 (default :internal) keeps internal content, omits the external space" do
       result = ActivityDigest.build(@window_start, @window_end)
 
-      assert result =~ "#fabrikam-eng"
+      assert result =~ "#acme-eng"
       assert result =~ "internal chatter"
       # Task 01a0a12e: transcripts are excluded by default in either scope.
       refute result =~ "internal meeting notes"
@@ -665,7 +665,7 @@ defmodule Platform.Agents.ActivityDigestTest do
 
       refute result =~ "internal chatter"
       refute result =~ "internal meeting notes"
-      refute result =~ "fabrikam-eng"
+      refute result =~ "acme-eng"
     end
   end
 
@@ -1050,8 +1050,8 @@ defmodule Platform.Agents.ActivityDigestTest do
     end
 
     test "build/2 is unchanged with no external users (regression)" do
-      internal = insert_space(%{name: "fabrikam-eng"})
-      ip = insert_participant(internal.id, %{display_name: "Fabrikam"})
+      internal = insert_space(%{name: "acme-eng"})
+      ip = insert_participant(internal.id, %{display_name: "Acme"})
 
       insert_message(internal.id, ip.id, %{
         content: "internal chatter",

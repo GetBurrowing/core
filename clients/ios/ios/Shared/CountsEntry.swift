@@ -28,8 +28,9 @@ struct CountsEntry: TimelineEntry {
         return DeepLink(host: host, path: kind.path).url
     }
 
-    static let preview = CountsEntry(date: Date(), host: "suite.example.com", signedIn: true,
-                                     counts: SuiteCounts(approvals: 3, tasks: 12, fetchedAt: Date()))
+    static let preview = CountsEntry(
+        date: Date(), host: "yourteam.example.com", signedIn: true,
+        counts: SuiteCounts(approvals: 3, tasks: 12, fetchedAt: Date()))
 
     /// The widgets ask for a new timeline this often.
     static let refreshInterval: TimeInterval = 15 * 60

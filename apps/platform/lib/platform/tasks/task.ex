@@ -45,6 +45,18 @@ defmodule Platform.Tasks.Task do
   # `@deletable_statuses` so the UI can still fold it.
   @statuses ~w(backlog planning in_progress in_review deploying done blocked stack_pending cancelled)
   @priorities ~w(low medium high critical)
+  @kinds ~w(feature chore bug research ops)
+
+  # Independent origin and trust dimensions (task 01a11ec3 stage 1).
+  # `origin` says where the task came from; `trust` says whether it may
+  # be planned/executed without an explicit audited promotion. External
+  # feedback is an ORIGIN, never a kind. Both are persisted, authoritative
+  # stamps: a later environment-policy change never rewrites them, and
+  # trust must never be inferred from repository privacy or connectivity.
+  @origins ~w(internal external_feedback)
+  @trust_states ~w(trusted quarantined)
+  def origins, do: @origins
+  def trust_states, do: @trust_states
 
   # Per-phase assignee keys. Order matches the natural lifecycle progression.
   @phases ~w(planning execution review)
@@ -103,6 +115,17 @@ defmodule Platform.Tasks.Task do
     field(:description, :string)
     field(:status, :string, default: "backlog")
     field(:priority, :string, default: "medium")
+    field(:kind, :string, default: "feature")
+    # Independent provenance dimensions (task 01a11ec3 stage 1).
+    # `origin` defaults to internal; `external_feedback` marks work filed
+    # from an accepted external report. `trust` defaults to trusted;
+    # `quarantined` blocks plan/execution until an explicit audited
+    # promotion. Repository identity + issue number give durable external
+    # provenance and drive deduplication.
+    field(:origin, :string, default: "internal")
+    field(:trust, :string, default: "trusted")
+    field(:external_repository_identity, :string)
+    field(:external_issue_number, :integer)
     # `assignee_type` / `assignee_id` are the *current-phase* assignee, derived
     # by `Platform.Tasks` whenever the phase changes. New assignments should be
     # written via `phase_assignees` so all phases get explicit values.
@@ -211,6 +234,7 @@ defmodule Platform.Tasks.Task do
 
   def statuses, do: @statuses
   def priorities, do: @priorities
+  def kinds, do: @kinds
 
   @doc """
   Sort rank for a priority value, by MEANING: `"critical"` 0, `"high"` 1,
@@ -290,6 +314,11 @@ defmodule Platform.Tasks.Task do
       :description,
       :status,
       :priority,
+      :kind,
+      :origin,
+      :trust,
+      :external_repository_identity,
+      :external_issue_number,
       :assignee_type,
       :assignee_id,
       :phase_assignees,
@@ -316,6 +345,11 @@ defmodule Platform.Tasks.Task do
     |> validate_length(:title, max: 255, count: :codepoints)
     |> validate_inclusion(:status, @statuses)
     |> validate_inclusion(:priority, @priorities)
+    |> validate_inclusion(:kind, @kinds)
+    |> validate_inclusion(:origin, @origins)
+    |> validate_inclusion(:trust, @trust_states)
+    |> default_external_trust_to_quarantined()
+    |> validate_external_provenance()
     |> validate_phase_assignees()
     |> validate_dependencies()
     |> validate_metadata()
@@ -325,10 +359,133 @@ defmodule Platform.Tasks.Task do
     |> foreign_key_constraint(:epic_id)
     |> foreign_key_constraint(:stack_id)
     |> foreign_key_constraint(:sponsor_user_id)
-    # Last in the pipeline on purpose: `prepare_changes/2` only runs when
-    # the changeset is valid AND the operation actually executes, so an
-    # invalid or never-executed changeset records nothing.
+    |> unique_constraint([:external_repository_identity, :external_issue_number],
+      name: :tasks_external_feedback_identity_unique,
+      message: "has already been taken"
+    )
+    |> check_constraint(:origin, name: :tasks_origin_valid)
+    |> check_constraint(:trust, name: :tasks_trust_valid)
+    |> check_constraint(:external_repository_identity,
+      name: :tasks_external_feedback_provenance_complete
+    )
+    # Task 01a11ec3 stage 1: ordinary updates must never be able to forge
+    # promotion or rewrite durable provenance. The only exits are
+    # `promote_from_quarantine/3` (which uses `promotion_changeset/2` and
+    # never touches this path) for trust, and create-time ingestion for
+    # provenance.
+    |> prepare_changes(&guard_provenance_mutation_on_update/1)
+    |> prepare_changes(&guard_quarantined_status_transition/1)
+    # Last in the pipeline on purpose: only a fully-admitted status change
+    # records a transition row.
     |> prepare_changes(&record_status_transition/1)
+  end
+
+  # Refuses any provenance change made through the ordinary `changeset/2`
+  # on an UPDATE. Inserts (intake creating an external task) may set the
+  # initial stamps; after that they are authoritative and immutable except
+  # for the explicit attributed promotion. A same-value write (no actual
+  # change) is permitted and is a no-op.
+  defp guard_provenance_mutation_on_update(%{action: :update} = changeset) do
+    [:origin, :trust, :external_repository_identity, :external_issue_number]
+    |> Enum.reduce(changeset, fn field, acc ->
+      case Ecto.Changeset.get_change(acc, field) do
+        nil ->
+          acc
+
+        new_value ->
+          if Map.get(acc.data, field) == new_value do
+            acc
+          else
+            Ecto.Changeset.add_error(
+              acc,
+              field,
+              "#{field} is authoritative once persisted; only the explicit, attributed promotion " <>
+                "(Platform.Tasks.promote_from_quarantine/3) may change trust, and origin/" <>
+                "external identity may not be rewritten by ordinary updates"
+            )
+          end
+      end
+    end)
+  end
+
+  defp guard_provenance_mutation_on_update(changeset), do: changeset
+
+  @quarantine_refused_statuses ~w(planning stack_pending in_progress in_review deploying)
+
+  # Last-line defense for every writer that persists through Task.changeset/2,
+  # including direct update_task/2 callers. Domain entry points return the
+  # richer quarantine tuple earlier; this changeset guard prevents a new or
+  # forgotten writer from bypassing the boundary.
+  #
+  # Covers INSERT as well as UPDATE: a row may not be born quarantined in a
+  # dispatch-bearing status (an insert has no prior status, so the field
+  # value is what counts). On update the PERSISTED trust is what counts,
+  # because trust is immutable through this changeset.
+  defp guard_quarantined_status_transition(%{action: :insert} = changeset) do
+    if get_field(changeset, :trust) == "quarantined" and
+         get_field(changeset, :status) in @quarantine_refused_statuses do
+      add_error(
+        changeset,
+        :status,
+        "cannot enter planning or execution while task trust is quarantined"
+      )
+    else
+      changeset
+    end
+  end
+
+  defp guard_quarantined_status_transition(
+         %{action: :update, data: %{trust: "quarantined"}} = changeset
+       ) do
+    case get_change(changeset, :status) do
+      status when status in @quarantine_refused_statuses ->
+        add_error(
+          changeset,
+          :status,
+          "cannot enter planning or execution while task trust is quarantined"
+        )
+
+      _ ->
+        changeset
+    end
+  end
+
+  defp guard_quarantined_status_transition(changeset), do: changeset
+
+  # Fail closed (task 01a11ec3 stage 1): a NEW external-feedback row that
+  # does not state its trust is quarantined, never the schema's `trusted`
+  # default. Trust for external work is granted by an explicit intake
+  # policy decision or by `promote_from_quarantine/3`, never by omission.
+  # Only applies to rows not yet persisted; existing rows keep their
+  # authoritative stamp.
+  defp default_external_trust_to_quarantined(%{data: %{__meta__: %{state: :built}}} = changeset) do
+    # Read the PARAMS, not the changes: Ecto records no change for a cast
+    # value equal to the schema default, so an explicit `trust: "trusted"`
+    # and an omitted trust look identical in `changes`.
+    trust_given? = Map.get(changeset.params || %{}, "trust") not in [nil, ""]
+
+    if get_field(changeset, :origin) == "external_feedback" and not trust_given? do
+      put_change(changeset, :trust, "quarantined")
+    else
+      changeset
+    end
+  end
+
+  defp default_external_trust_to_quarantined(changeset), do: changeset
+
+  @doc """
+  Narrow changeset for the explicit quarantine promotion (task 01a11ec3
+  stage 1). Casts ONLY `:trust` and is used exclusively by
+  `Platform.Tasks.promote_from_quarantine/3` — the sole writer allowed to
+  move a task from `quarantined` to `trusted`. It deliberately does not
+  cast `:origin` or the external identity fields, so the promotion path
+  cannot clear provenance accidentally or deliberately.
+  """
+  def promotion_changeset(task, attrs) do
+    task
+    |> cast(attrs, [:trust])
+    |> validate_required([:trust])
+    |> validate_inclusion(:trust, @trust_states)
   end
 
   # Writes one `task_phase_transitions` row per executed status change.
@@ -386,6 +543,44 @@ defmodule Platform.Tasks.Task do
 
         changeset
     end
+  end
+
+  # External rows require a complete repository/issue pair; internal rows
+  # carry neither, keeping persisted provenance and the partial index sound.
+  defp validate_external_provenance(changeset) do
+    origin = Ecto.Changeset.get_field(changeset, :origin)
+    repo = Ecto.Changeset.get_field(changeset, :external_repository_identity)
+    issue = Ecto.Changeset.get_field(changeset, :external_issue_number)
+
+    changeset =
+      cond do
+        origin == "external_feedback" ->
+          changeset
+          |> validate_required([:external_repository_identity, :external_issue_number])
+          |> validate_length(:external_repository_identity, max: 255)
+          # `owner/repo`, GitHub's own character set. Deduplication is
+          # case-insensitive at the index (GitHub resolves owner/repo
+          # case-insensitively), so the stored spelling is display-only.
+          |> validate_format(
+            :external_repository_identity,
+            ~r/\A[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9._-]+\z/,
+            message: "must be an owner/repository identity"
+          )
+          |> validate_number(:external_issue_number, greater_than: 0)
+
+        is_nil(repo) and is_nil(issue) ->
+          changeset
+
+        true ->
+          changeset
+          |> add_error(
+            :external_repository_identity,
+            "cannot be set on an internal-origin task"
+          )
+          |> add_error(:external_issue_number, "cannot be set on an internal-origin task")
+      end
+
+    changeset
   end
 
   @doc """

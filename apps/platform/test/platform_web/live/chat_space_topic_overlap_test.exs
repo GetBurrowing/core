@@ -164,7 +164,7 @@ defmodule PlatformWeb.ChatSpaceTopicOverlapTest do
     |> Org.changeset(%{
       name: "Overlap Tenant #{n}",
       slug: "overlap_tenant_#{n}",
-      parent_org_id: Tenancy.get_org_by_slug!("fabrikam").id
+      parent_org_id: Tenancy.get_org_by_slug!("acme").id
     })
     |> Repo.insert!()
   end

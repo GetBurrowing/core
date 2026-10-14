@@ -44,7 +44,7 @@ defmodule PlatformWeb.GithubWebhookController do
   @doc """
   Dispatch one GitHub webhook delivery.
 
-  ONE `@doc` for all four clauses. Elixir reports a second `@doc` on the
+  ONE `@doc` for all five clauses. Elixir reports a second `@doc` on the
   same name/arity as "redefining @doc attribute"; the three per-clause
   strings this replaces were two such warnings, carried since before this
   task.
@@ -54,6 +54,9 @@ defmodule PlatformWeb.GithubWebhookController do
     * `check_suite.completed` → the `ci_passed` gate belonging to the
       repository that ran it, and per-repo auto-merge for that repository.
     * `workflow_run.completed` → same, from the other CI event shape.
+    * `issues` (`X-GitHub-Event: issues`; opened / edited / reopened) on a
+      signature-verified delivery → `Platform.Feedback.Intake`, which
+      decides whether the repository is in scope (task 01a11ec3 stage 3).
     * anything else → ignored.
   """
   def handle(conn, %{"action" => "closed", "pull_request" => pr} = params) do
@@ -104,8 +107,75 @@ defmodule PlatformWeb.GithubWebhookController do
     )
   end
 
+  # issues.* → external-feedback intake (task 01a11ec3 stage 3).
+  def handle(conn, %{"issue" => %{}, "repository" => %{}} = params) do
+    if github_event(conn) == "issues" do
+      handle_issue_event(conn, params)
+    else
+      conn |> put_status(:ok) |> json(%{status: "ignored", reason: "not a relevant event"})
+    end
+  end
+
   def handle(conn, _params) do
     conn |> put_status(:ok) |> json(%{status: "ignored", reason: "not a relevant event"})
+  end
+
+  # ── External-feedback intake (task 01a11ec3 stage 3) ────────────────────
+  #
+  # Acts ONLY on a delivery whose signature verified on this request. The
+  # `:github_webhook_signature_required` rollback valve lets an unsigned
+  # delivery through to the CI/merge handlers above; it never lets one file a
+  # task. The response carries bounded values only — never issue text.
+  #
+  # Outside :test the work runs in a spawned process so GitHub's delivery
+  # timeout is not spent on a model call; `Intake.precheck/1` still answers
+  # policy, shape and scope synchronously. Under :test it runs inline, the
+  # same arrangement as `spawn_auto_merge/5`.
+  defp handle_issue_event(conn, params) do
+    cond do
+      conn.assigns[:github_signature_verified] != true ->
+        conn
+        |> put_status(:ok)
+        |> json(%{status: "ignored", reason: "signature_not_verified"})
+
+      true ->
+        case Platform.Feedback.Intake.precheck(params) do
+          {:ignored, reason} ->
+            conn |> put_status(:ok) |> json(%{status: "ignored", reason: Atom.to_string(reason)})
+
+          {:ok, issue} ->
+            run_intake(conn, issue)
+        end
+    end
+  end
+
+  defp run_intake(conn, issue) do
+    if Application.get_env(:platform, :env) == :test do
+      case Platform.Feedback.Intake.process(issue) do
+        {:ok, result} ->
+          conn
+          |> put_status(:ok)
+          |> json(%{
+            status: "processed",
+            outcome: Atom.to_string(result.outcome),
+            verdict: result.verdict,
+            task_id: result.task_id
+          })
+
+        {:ignored, reason} ->
+          conn |> put_status(:ok) |> json(%{status: "ignored", reason: Atom.to_string(reason)})
+
+        {:error, reason} ->
+          conn |> put_status(:ok) |> json(%{status: "error", reason: Atom.to_string(reason)})
+      end
+    else
+      Elixir.Task.start(fn -> Platform.Feedback.Intake.process(issue) end)
+      conn |> put_status(:accepted) |> json(%{status: "accepted"})
+    end
+  end
+
+  defp github_event(conn) do
+    conn |> get_req_header("x-github-event") |> List.first()
   end
 
   # ── Which repository delivered this event ───────────────────────────────

@@ -39,6 +39,11 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
   # `open_target`, not a reuse of it, so a caller can send the two apart.
   attr(:event_target, :any, default: nil)
 
+  # The actor for kinds whose own controls write the document (the prototype
+  # kind's "Pin this version"). nil hides those controls. See
+  # `Platform.Chat.Canvas.Renderer.render_node/1`.
+  attr(:viewer, :any, default: nil)
+
   def canvas_document(assigns) do
     canvas = assigns.canvas
     # Mode suffix distinguishes inline (in-chat) vs. expanded (panel/overlay)
@@ -109,6 +114,7 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
             dom_id_scope={"#{@canvas.id}-#{@id_suffix}"}
             canvas_id={@canvas.id}
             event_target={@event_target}
+            viewer={@viewer}
           />
         </div>
         """

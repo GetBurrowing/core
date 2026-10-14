@@ -25,7 +25,13 @@ object PushTestSupport {
             "install_host" to HOST,
             "author_name" to "Harper",
             "space_name" to "Internal Fabrikam SXI",
+            "space_kind" to "channel",
+            "author_id" to "0192-u",
+            "author_type" to "user",
         )
+
+    /** The same message to a non-mention reason: the server sends `chat_message`. */
+    val chatMessage = mention + ("kind" to "chat_message") + ("message_id" to "0192-c")
 
     fun approval(
         n: Int,
@@ -59,6 +65,8 @@ object PushTestSupport {
         BurrowPush.cipherOverride = null
         BurrowPush.transportOverride = null
         BurrowPush.tokenSourceOverride = null
+        BurrowPush.avatarFetcherOverride = null
+        com.koboai.burrow.shortcuts.ConversationShortcuts.sinkOverride = null
     }
 
     fun withTransport(transport: HttpTransport) {

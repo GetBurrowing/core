@@ -337,7 +337,11 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
       # `|| ""` keeps the assign a binary — `subject_id/1` treats BOTH as
       # no-subject, so nothing is fabricated.
       federation_preamble:
-        PromptTemplates.federation_preamble(%{task_id: contract_id(task, :id) || ""})
+        PromptTemplates.federation_preamble(%{task_id: contract_id(task, :id) || ""}),
+      # Task 01a11ec3 stage 2: `""` unless the installation's feedback
+      # capability is on (`Platform.Feedback.Policy.enabled?/0`, the predicate
+      # ToolSurface lists and executes `feedback.submit` under).
+      feedback_guidance: PromptTemplates.feedback_guidance()
     }
 
     prompt =
@@ -358,7 +362,14 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
 
     # After the case, so the served row, the derived default and the
     # hardcoded last resort all pass through the one helper.
-    append_experiment_directive(prompt, "planner.stage_budget", "dispatch.planning", task)
+    prompt
+    |> insert_before_context(
+      render_design_canvases_section(Keyword.get(opts, :canvases, []), :planning)
+    )
+    |> append_experiment_directive("planner.stage_budget", "dispatch.planning", task,
+      phase: "planning"
+    )
+    |> append_code_mode_directive(task, "planning")
   end
 
   # DERIVE, don't restate (task 019ff10f stage 1).
@@ -386,10 +397,17 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   # ── Experiment directives (task 01a0d415 stage 4) ───────────────────────
   #
   # THE one code path by which a non-prompt experiment surface reaches a
-  # dispatch prompt. `planning_prompt/2` and `in_progress_prompt/4` call it on
-  # whatever body their render produced — the served row, the derived
-  # default or the hardcoded last resort — so no branch can skip it or carry
-  # a second copy.
+  # dispatch prompt's TEXT. `planning_prompt/2`, `in_progress_prompt/4` and
+  # (since task 01a114a8 stage 4, for `dispatch.code_mode` only)
+  # `review_prompt/5` call it on whatever body their render produced — the
+  # served row, the derived default or the hardcoded last resort — so no
+  # branch can skip it or carry a second copy.
+  #
+  # SCOPE, measured by task 01a114a8 stage 4: this is the only path into the
+  # prompt text, not into the dispatch. `dispatch.product_docs_preamble` is
+  # resolved by `Platform.Org.PreambleBuilder.product_doc_keys/1` into the
+  # dispatch context's org preamble, with its own subject builder (which
+  # carries no `agent_id`).
   #
   # The block is APPENDED rather than interpolated through a template
   # placeholder, so running an experiment never needs a template edit.
@@ -411,17 +429,36 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   #
   # `:experiments_surface_resolver` (default `Platform.Experiments.Surfaces`)
   # is a TEST SEAM for the raising-resolver case; no config file sets it.
+  #
+  # `opts[:phase]` ("planning" | "execution" | "review") names the phase
+  # being dispatched, so the subject carries that phase's assignee as
+  # `agent_id` (task 01a114a8 stage 4). Without it no `agent_id` is set.
   @doc false
-  @spec append_experiment_directive(String.t(), String.t(), String.t(), map()) :: String.t()
-  def append_experiment_directive(prompt, surface_key, target, task) when is_binary(prompt) do
-    case experiment_directive_block(surface_key, target, task) do
+  @spec append_experiment_directive(String.t(), String.t(), String.t(), map(), keyword()) ::
+          String.t()
+  def append_experiment_directive(prompt, surface_key, target, task, opts \\ [])
+      when is_binary(prompt) do
+    case experiment_directive_block(surface_key, target, task, Keyword.get(opts, :phase)) do
       block when is_binary(block) -> prompt <> block
       nil -> prompt
     end
   end
 
-  defp experiment_directive_block(surface_key, target, task) do
-    with %ExperimentSubject{} = subject <- experiment_subject(task),
+  # `dispatch.code_mode` (task 01a114a8 stage 4) on the planning, execution
+  # and review renders. One target for all three: the arm is per task, so
+  # every dispatch of a task carries the same directive.
+  defp append_code_mode_directive(prompt, task, phase) do
+    append_experiment_directive(
+      prompt,
+      ExperimentSurfaces.CodeMode.key(),
+      ExperimentSurfaces.CodeMode.target(),
+      task,
+      phase: phase
+    )
+  end
+
+  defp experiment_directive_block(surface_key, target, task, phase) do
+    with %ExperimentSubject{} = subject <- experiment_subject(task, phase),
          surface when not is_nil(surface) <- ExperimentSurfaces.get(surface_key),
          true <- function_exported?(surface, :render_directive, 1),
          resolver =
@@ -453,7 +490,12 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   # Built from the task already in hand; policies read only these
   # attributes (subject.ex moduledoc). A nil value is left out rather than
   # passed, so the resolver can fill it (see `Surfaces.with_attributes/3`).
-  defp experiment_subject(task) do
+  #
+  # `agent_id` (task 01a114a8 stage 4) is the dispatched phase's AGENT
+  # assignee: the phase slot of `phase_assignees`, else the top-level
+  # assignee, the resolution `Tasks.assignee_for_phase/2` uses. A user
+  # assignee is not an agent and sets nothing.
+  defp experiment_subject(task, phase) do
     with id when is_binary(id) <- contract_id(task, :id),
          true <- Platform.UUID.valid?(id) do
       attributes =
@@ -461,13 +503,39 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
           project_id: Map.get(task, :project_id),
           epic_id: Map.get(task, :epic_id),
           inserted_at: Map.get(task, :inserted_at),
-          org_id: task_org_id(task)
+          org_id: task_org_id(task),
+          agent_id: phase_agent_id(task, phase)
         ]
         |> Enum.reject(fn {_key, value} -> is_nil(value) end)
         |> Map.new()
 
       ExperimentSubject.new("task", id, attributes)
     else
+      _ -> nil
+    end
+  end
+
+  defp phase_agent_id(task, phase) when is_binary(phase) do
+    slot =
+      case Map.get(task, :phase_assignees) do
+        %{} = slots -> Map.get(slots, phase)
+        _ -> nil
+      end
+
+    case slot do
+      %{"assignee_id" => id} = slot when is_binary(id) ->
+        if Map.get(slot, "assignee_type", "agent") == "agent", do: id
+
+      _ ->
+        if Map.get(task, :assignee_type) == "agent", do: binary_or_nil(task, :assignee_id)
+    end
+  end
+
+  defp phase_agent_id(_task, _phase), do: nil
+
+  defp binary_or_nil(task, key) do
+    case Map.get(task, key) do
+      value when is_binary(value) -> value
       _ -> nil
     end
   end
@@ -552,7 +620,11 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
       # (task 019f5e2a stage 2). See planning branch above for rationale,
       # including the task-scoped subject (task 01a00c99 stage 3).
       federation_preamble:
-        PromptTemplates.federation_preamble(%{task_id: contract_id(task, :id) || ""})
+        PromptTemplates.federation_preamble(%{task_id: contract_id(task, :id) || ""}),
+      # Task 01a11ec3 stage 2: `""` unless the installation's feedback
+      # capability is on (`Platform.Feedback.Policy.enabled?/0`, the predicate
+      # ToolSurface lists and executes `feedback.submit` under).
+      feedback_guidance: PromptTemplates.feedback_guidance()
     }
 
     prompt =
@@ -567,8 +639,11 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
       end
 
     prompt
-    |> enrich_in_progress_prompt(task, stage)
-    |> append_experiment_directive("mail.draft.generator", "dispatch.in_progress", task)
+    |> enrich_in_progress_prompt(task, stage, opts)
+    |> append_experiment_directive("mail.draft.generator", "dispatch.in_progress", task,
+      phase: "execution"
+    )
+    |> append_code_mode_directive(task, "execution")
   end
 
   # `dispatch.in_review` and `dispatch.review_e2e` share one assigns body — they
@@ -613,7 +688,9 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
         # branch via Map.merge below. Task-scoped subject as on the planning
         # branch (task 01a00c99 stage 3).
         federation_preamble:
-          PromptTemplates.federation_preamble(%{task_id: contract_id(task, :id) || ""})
+          PromptTemplates.federation_preamble(%{task_id: contract_id(task, :id) || ""}),
+        # Task 01a11ec3 stage 2: see the in_progress branch.
+        feedback_guidance: PromptTemplates.feedback_guidance()
       }
       |> Map.merge(extra_assigns)
 
@@ -637,7 +714,9 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
           end)
       end
 
-    enrich_in_review_prompt(prompt, task, stage)
+    prompt
+    |> enrich_in_review_prompt(task, stage, opts)
+    |> append_code_mode_directive(task, "review")
   end
 
   defp deploying_prompt(task, plan, stage) do
@@ -697,7 +776,11 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
       # (task 019f5e2a stage 2). Task-scoped subject as on the planning
       # branch (task 01a00c99 stage 3).
       federation_preamble:
-        PromptTemplates.federation_preamble(%{task_id: contract_id(task, :id) || ""})
+        PromptTemplates.federation_preamble(%{task_id: contract_id(task, :id) || ""}),
+      # Task 01a11ec3 stage 2: `""` unless the installation's feedback
+      # capability is on (`Platform.Feedback.Policy.enabled?/0`, the predicate
+      # ToolSurface lists and executes `feedback.submit` under).
+      feedback_guidance: PromptTemplates.feedback_guidance()
     }
 
     prompt =
@@ -726,7 +809,11 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
       # (task 019f5e2a stage 2). Task-scoped subject as on the planning
       # branch (task 01a00c99 stage 3).
       federation_preamble:
-        PromptTemplates.federation_preamble(%{task_id: contract_id(task, :id) || ""})
+        PromptTemplates.federation_preamble(%{task_id: contract_id(task, :id) || ""}),
+      # Task 01a11ec3 stage 2: `""` unless the installation's feedback
+      # capability is on (`Platform.Feedback.Policy.enabled?/0`, the predicate
+      # ToolSurface lists and executes `feedback.submit` under).
+      feedback_guidance: PromptTemplates.feedback_guidance()
     }
 
     case PromptTemplates.render_template("dispatch.fallback", assigns) do
@@ -823,6 +910,152 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   # Renders "" (no header) for a non-stack task, for a root member (no
   # in-stack deps), and when every declared dep points outside the stack —
   # cross-stack deps are gated by the `done`-only sweep, not by landing.
+  # ── Attached design canvases (task 01a13ae7 stage 1) ─────────────────────
+  #
+  # `ContextAssembler.serialize_attached_canvases/1` already puts the task's
+  # attached canvases in the dispatch payload's `context`, but the Claude Code
+  # bridge builds the agent's message from `message.content` only, so for that
+  # runtime the canvases never reached the agent. This renders them INTO the
+  # prompt text. It is inserted in code via `insert_before_context/2`, not a
+  # `{{placeholder}}`, so it reaches stale rows and experiment variant blobs
+  # unchanged.
+  #
+  # Repo-free: the canvases arrive through `opts[:canvases]` (threaded by
+  # `TaskRouter.do_dispatch_resolved/6`), never from a query here.
+  #
+  # Only entries with `canvas_present: true` render; a task whose only canvas
+  # was soft-deleted gets no block. Titles and notes are user/agent-authored:
+  # each is escaped with `ExternalContent.escape_mentions/1` (an `@[...]`
+  # token would otherwise route attention when the engagement copy posts to
+  # the execution space), flattened to one line and capped in length, and the
+  # list is capped at `@design_canvases_max` entries.
+  #
+  # Modes: `:ui` / `:reference` on execution (chosen by
+  # `PlanEngine.ui_touching?/1` over the stage description), `:planning` and
+  # `:review` list the canvases and the recipe only. Non-UI execution stages
+  # get the `:reference` form BY DESIGN: `ui_touching?/1` is a prose
+  # heuristic, and a false negative there must not silently drop the design.
+  @design_canvases_heading "## Attached design canvases — the design spec"
+  @design_canvases_max 5
+  @design_canvas_text_cap 200
+
+  @design_canvases_ui_sentence "Before writing any code for this stage, open every canvas above with canvas_get(mode: \"full\") and capture a screenshot of it using the recipe below; post the screenshots to the execution space before your first commit."
+
+  @design_canvases_reference_sentence "Reference only: this stage's description names no UI file. If this stage nonetheless changes what renders, the screenshot-first rule applies."
+
+  @design_canvases_recipe """
+  ### Render recipe (no production browser session needed)
+
+  Canvases live on prod; read each one over MCP with `canvas_get(canvas_id, mode: "full")`, which returns the whole document. Then:
+
+  (a) `embed` nodes: take `props.srcdoc` and render it in headless Chrome via CDP: `Target.createTarget` about:blank, `Emulation.setDeviceMetricsOverride` at `props.width` if set (else at both 375x812 and 1280x800), `Page.setDocumentContent`, `Page.captureScreenshot`.
+  (b) every other node tree: re-create the document on YOUR dev server (`Platform.Chat.create_canvas/1` in a dev space), log in there with `/dev/login`, and screenshot `/canvases/<dev id>` at the same viewports.
+  (c) `prototype` nodes (multi-file bundles): the bytes sit behind `/proto/` auth with no agent byte read path. Record "could not render prototype <id> v<n>" and do not guess.
+
+  Rig by runtime: Rowan-owned agents use the dev-on-moon-e2e-rig and agent-chrome-cdp skills (chromedp/headless-shell on moon, CDP at 192.0.2.200:9222); other runtimes use their own rig; never run a BEAM or Chrome on hive.
+  """
+
+  @doc false
+  @spec design_canvases_heading() :: String.t()
+  def design_canvases_heading, do: @design_canvases_heading
+
+  @doc false
+  @spec render_design_canvases_section(list() | nil, :ui | :reference | :planning | :review) ::
+          String.t()
+  def render_design_canvases_section(canvases, mode)
+      when mode in [:ui, :reference, :planning, :review] do
+    present =
+      canvases
+      |> List.wrap()
+      |> Enum.filter(&(is_map(&1) and canvas_field(&1, :canvas_present) == true))
+      |> Enum.filter(&is_binary(canvas_field(&1, :id)))
+
+    case present do
+      [] ->
+        ""
+
+      _ ->
+        {shown, rest} = Enum.split(present, @design_canvases_max)
+
+        lines = Enum.map_join(shown, "\n", &design_canvas_line/1)
+
+        more =
+          case length(rest) do
+            0 -> ""
+            n -> "\n- … #{n} more attached; list them with `task_list_canvases`."
+          end
+
+        mode_sentence =
+          case mode do
+            :ui -> "\n" <> @design_canvases_ui_sentence <> "\n"
+            :reference -> "\n" <> @design_canvases_reference_sentence <> "\n"
+            _ -> ""
+          end
+
+        "\n" <>
+          @design_canvases_heading <>
+          "\n\n" <>
+          lines <>
+          more <>
+          "\n" <>
+          mode_sentence <>
+          "\n" <>
+          @design_canvases_recipe
+    end
+  end
+
+  def render_design_canvases_section(_canvases, _mode), do: ""
+
+  defp execution_canvas_mode(stage) do
+    description =
+      if is_map(stage), do: Map.get(stage, :description) || Map.get(stage, "description")
+
+    if Platform.Tasks.PlanEngine.ui_touching?(description), do: :ui, else: :reference
+  end
+
+  defp design_canvas_line(entry) do
+    id = canvas_field(entry, :id)
+    title = design_canvas_text(canvas_field(entry, :title)) || "(untitled)"
+    kind = design_canvas_text(canvas_field(entry, :kind)) || "unknown"
+    view_url = canvas_field(entry, :view_url) || Platform.Chat.Canvas.Links.view_url(id)
+
+    note =
+      case design_canvas_text(canvas_field(entry, :note)) do
+        nil -> ""
+        text -> " — note: " <> text
+      end
+
+    "- `#{id}` — \"#{title}\" (root: #{kind}) — #{view_url}" <> note
+  end
+
+  # One line, capped, mention-escaped. nil/blank → nil.
+  defp design_canvas_text(value) when is_binary(value) do
+    text =
+      value
+      |> String.replace(~r/\s+/u, " ")
+      |> String.trim()
+
+    case text do
+      "" ->
+        nil
+
+      text ->
+        capped =
+          if String.length(text) > @design_canvas_text_cap,
+            do: String.slice(text, 0, @design_canvas_text_cap) <> "…",
+            else: text
+
+        ExternalContent.escape_mentions(capped)
+    end
+  end
+
+  defp design_canvas_text(value) when is_atom(value) and not is_nil(value),
+    do: design_canvas_text(Atom.to_string(value))
+
+  defp design_canvas_text(_), do: nil
+
+  defp canvas_field(entry, key), do: Map.get(entry, key) || Map.get(entry, Atom.to_string(key))
+
   @stack_predecessors_heading "## Stack predecessors (landing state)"
 
   defp render_stack_predecessors_section(task) do
@@ -1056,7 +1289,9 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
         if(pending_ids == "",
           do: "(none — call stage_complete if work is done)",
           else: pending_ids
-        )
+        ),
+      # Task 01a11ec3 stage 2: the one-line form, `""` while feedback is off.
+      feedback_guidance: PromptTemplates.feedback_guidance(:nudge)
     }
 
     case PromptTemplates.render_template("nudge", assigns) do
@@ -1201,6 +1436,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     no_ack_notice = PromptTemplates.planning_no_ack_notice()
     experiment_surface_notice = PromptTemplates.planning_experiment_surface_notice()
     ci_evidence_section = PromptTemplates.planning_ci_evidence_section()
+    design_fidelity_section = PromptTemplates.planning_design_fidelity_section()
 
     """
     #{no_ack_notice}
@@ -1325,6 +1561,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     - `code_review` is NOT a supported validation kind — do not include it.
     - Pre-writing `failure_feedback` in the evaluation_payload — observed at review time.
 
+    #{design_fidelity_section}
     ## Stage quality bar
 
     A good stage description explains: what specifically will be changed, which files will be modified
@@ -1363,6 +1600,11 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     # without the seeded template row still get the reservation.
     migration_slot_section = render_migration_slot_section(task, stage)
 
+    # Same section, same position as the `dispatch.in_progress` descriptor
+    # (task 01a13ae7 stage 3): above the migration slot, so it is never inside
+    # the span `strip_bounded_git_workflow/2` removes.
+    design_fidelity_section = PromptTemplates.in_progress_design_fidelity_section()
+
     """
     #{ack_preamble}
     Plan approved — execute the current stage.
@@ -1375,7 +1617,8 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     Push evidence using validation_pass or stage_complete as you finish each step. \
     Post commentary to the execution space so reviewers can follow along. \
     Use report_blocker if you are stuck.
-    #{migration_slot_section}
+
+    #{design_fidelity_section}#{migration_slot_section}
 
     The Stage Description block above is your specification — it is the planner's own authored text for this stage, and it is the authority over any summary of it. The full task hierarchy (project, epic, task body, whole plan) is NOT in this message; fetch it with suite_task_get / suite_plan_get if you need it.
     Start from that stage description and any attached/bundled skill content before re-fetching broad task/project context.
@@ -1702,6 +1945,8 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     title = Map.get(task, :title) || Map.get(task, "title") || ""
     pending_json = Map.get(assigns, :pending_e2e_validations_json, "[]")
     execution_space_id = Map.get(assigns, :execution_space_id, "")
+    # Task 01a13ae7 stage 3: shared with the `dispatch.review_e2e` descriptor.
+    design_fidelity_section = PromptTemplates.review_e2e_design_fidelity_section()
 
     """
     Task is in behavioral review — execute every planner-authored e2e_behavior test case and disposition each validation independently.
@@ -1721,6 +1966,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
 
     For each entry, walk through `setup` → `actions`, then compare observed behavior to `expected`.
 
+    #{design_fidelity_section}
     On success, call `suite_validation_evaluate` with the matching `validation_id`, `status: "passed"` and an `evidence` map describing what you observed.
 
     On failure, call `suite_validation_evaluate` with the matching `validation_id`, `status: "failed"` and an `evidence` map containing what you EXPECTED (verbatim from the payload) and what you ACTUALLY OBSERVED, with diagnostics. Post that same observation into the execution space (#{execution_space_id}) so the implementing agent reads it on the next dispatch — your observation IS the failure_feedback.
@@ -2142,7 +2388,8 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
       "Task #{task_id} stage #{stage_id} — no ack in #{elapsed_str}m. " <>
         "Please ack, push validation, or report_blocker.\n"
 
-    preamble <> nudge_contract(task, stage)
+    # Same capability gate as the seeded row's `{{feedback_guidance}}`.
+    preamble <> nudge_contract(task, stage) <> PromptTemplates.feedback_guidance(:nudge)
   end
 
   # ── Enrichment pipeline ─────────────────────────────────────────────────
@@ -2157,7 +2404,11 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   # deploying   → deploy_contract   → PR, CI, merge (fix-forward only inside the task's diff)
   # nudge       → nudge_contract    → pending validation IDs + ack fork
 
-  defp enrich_in_progress_prompt(prompt, task, stage) do
+  # `opts` carries `:canvases` (task 01a13ae7 stage 1). The hardcoded
+  # last-resort body calls this with `[]` because its caller,
+  # `in_progress_prompt/4`, enriches the returned body again with the real
+  # opts — passing them on both calls would insert the block twice.
+  defp enrich_in_progress_prompt(prompt, task, stage, opts \\ []) do
     prompt
     |> maybe_strip_git_workflow(task)
     |> insert_before_context(execution_contract(task, stage))
@@ -2167,11 +2418,24 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     # call — it never replaces or reflows the section above it). Renders ""
     # for a root member and for a non-stack task.
     |> insert_before_context(render_stack_predecessors_section(task))
+    # Task 01a13ae7 stage 1: the attached design canvases, after the stack
+    # block. `:ui` when the stage description names a UI file, `:reference`
+    # otherwise — see `render_design_canvases_section/2`.
+    |> insert_before_context(
+      render_design_canvases_section(
+        Keyword.get(opts, :canvases, []),
+        execution_canvas_mode(stage)
+      )
+    )
   end
 
-  defp enrich_in_review_prompt(prompt, task, stage) do
+  # Serves BOTH `dispatch.in_review` and `dispatch.review_e2e`.
+  defp enrich_in_review_prompt(prompt, task, stage, opts) do
     prompt
     |> insert_before_context(review_contract(task, stage))
+    |> insert_before_context(
+      render_design_canvases_section(Keyword.get(opts, :canvases, []), :review)
+    )
   end
 
   defp enrich_deploying_prompt(prompt, task, stage) do

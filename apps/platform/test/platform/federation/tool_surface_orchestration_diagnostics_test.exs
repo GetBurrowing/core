@@ -38,9 +38,9 @@ defmodule Platform.Federation.ToolSurfaceOrchestrationDiagnosticsTest do
   alias Platform.Tenancy
 
   setup do
-    fabrikam = ensure_root_org()
-    sxi = ensure_tenant_org("sxi-diag-#{u()}", fabrikam)
-    wayne_tech = ensure_tenant_org("wayne-tech-diag-#{u()}", fabrikam)
+    acme = ensure_root_org()
+    sxi = ensure_tenant_org("sxi-diag-#{u()}", acme)
+    wayne_tech = ensure_tenant_org("wayne-tech-diag-#{u()}", acme)
 
     {:ok, project} = Tasks.create_project(%{name: "Diag Proj #{u()}", org_id: sxi.id})
     {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Watched Task"})
@@ -556,11 +556,11 @@ defmodule Platform.Federation.ToolSurfaceOrchestrationDiagnosticsTest do
   defp u, do: System.unique_integer([:positive])
 
   defp ensure_root_org do
-    case Repo.get_by(Tenancy.Org, slug: "fabrikam") do
+    case Repo.get_by(Tenancy.Org, slug: "acme") do
       nil ->
         {:ok, org} =
           %Tenancy.Org{}
-          |> Tenancy.Org.changeset(%{slug: "fabrikam", name: "Fabrikam", parent_org_id: nil})
+          |> Tenancy.Org.changeset(%{slug: "acme", name: "Acme", parent_org_id: nil})
           |> Repo.insert()
 
         org

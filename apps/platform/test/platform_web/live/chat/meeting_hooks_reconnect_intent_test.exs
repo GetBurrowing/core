@@ -192,7 +192,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooksReconnectIntentTest do
 
   describe "guest reconnect mount (MeetingLive guest ingress) keeps committed media intent" do
     setup do
-      org_id = Platform.TenancyFixtures.fabrikam_org_id()
+      org_id = Platform.TenancyFixtures.acme_org_id()
 
       {:ok, project} =
         Platform.Tasks.create_project(%{

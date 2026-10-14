@@ -8,6 +8,7 @@ import com.koboai.burrow.InMemoryKeyValueStore
 import com.koboai.burrow.KeystoreTokenStore
 import com.koboai.burrow.RecordingTransport
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
@@ -48,5 +49,22 @@ class AppShareClientTest {
                 assertTrue(e.message!!.contains("tok_bearer").not())
             }
         }
+    }
+
+    @Test
+    fun `parseSpaces reads kind and tolerates a missing kind and 01a111bb's org key`() {
+        val body =
+            """
+            {"spaces": [
+              {"id": "s1", "name": "Ops", "path_segment": "ops", "kind": "channel",
+               "org": {"id": "o1", "name": "Fabrikam"}, "agents": []},
+              {"id": "s2", "name": "Harper", "path_segment": "s2", "kind": "dm"},
+              {"id": "s3", "name": "Old server"}
+            ]}
+            """.trimIndent()
+        val spaces = AppShareClient.parseSpaces(body)
+        assertEquals(listOf("channel", "dm", null), spaces.map { it.kind })
+        assertEquals("ops", spaces[0].pathSegment)
+        assertNull(spaces[2].pathSegment)
     }
 }

@@ -56,9 +56,9 @@ defmodule PlatformWeb.ChatLiveBootstrapDuplicateTest do
       assert orgless.org_id == nil
       assert length(rows_for(slug)) == 1
 
-      user = create_user!("fabrikam")
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
-      membership!(user, fabrikam)
+      user = create_user!("acme")
+      acme = Tenancy.get_org_by_slug!("acme")
+      membership!(user, acme)
 
       conn = init_test_session(conn, current_user_id: user.id)
       {:ok, _view, _html} = live(conn, ~p"/chat/#{slug}")
@@ -74,15 +74,15 @@ defmodule PlatformWeb.ChatLiveBootstrapDuplicateTest do
       slug = "brand-new-bootstrap-chan"
       assert rows_for(slug) == []
 
-      user = create_user!("fabrikam-new")
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
-      membership!(user, fabrikam)
+      user = create_user!("acme-new")
+      acme = Tenancy.get_org_by_slug!("acme")
+      membership!(user, acme)
 
       conn = init_test_session(conn, current_user_id: user.id)
       {:ok, _view, _html} = live(conn, ~p"/chat/#{slug}")
 
       assert [%Space{org_id: org_id}] = rows_for(slug)
-      assert org_id == fabrikam.id
+      assert org_id == acme.id
     end
 
     test "a per-org slug collision is NOT adopted across orgs", %{conn: conn} do
@@ -91,18 +91,18 @@ defmodule PlatformWeb.ChatLiveBootstrapDuplicateTest do
       sxi = Tenancy.get_org_by_slug!("sxi")
       {:ok, sxi_chan} = Chat.create_channel(%{name: "Org Scoped", slug: slug, org_id: sxi.id})
 
-      user = create_user!("fabrikam-collide")
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
-      membership!(user, fabrikam)
+      user = create_user!("acme-collide")
+      acme = Tenancy.get_org_by_slug!("acme")
+      membership!(user, acme)
 
       conn = init_test_session(conn, current_user_id: user.id)
       {:ok, _view, _html} = live(conn, ~p"/chat/#{slug}")
 
       # ADR-0042 per-org slug scoping is NOT weakened by the adoption guard:
-      # an SXI channel is not handed to a Fabrikam member, so Fabrikam gets its own.
+      # an SXI channel is not handed to an Acme member, so Acme gets its own.
       rows = rows_for(slug)
       assert length(rows) == 2
-      assert Enum.sort(Enum.map(rows, & &1.org_id)) == Enum.sort([sxi.id, fabrikam.id])
+      assert Enum.sort(Enum.map(rows, & &1.org_id)) == Enum.sort([sxi.id, acme.id])
       assert Enum.any?(rows, &(&1.id == sxi_chan.id))
     end
   end
@@ -113,9 +113,9 @@ defmodule PlatformWeb.ChatLiveBootstrapDuplicateTest do
       slug = "bootstrap-creator-admin-chan"
       assert rows_for(slug) == []
 
-      user = create_user!("fabrikam-creator")
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
-      membership!(user, fabrikam)
+      user = create_user!("acme-creator")
+      acme = Tenancy.get_org_by_slug!("acme")
+      membership!(user, acme)
 
       conn = init_test_session(conn, current_user_id: user.id)
       {:ok, _view, _html} = live(conn, ~p"/chat/#{slug}")
@@ -140,9 +140,9 @@ defmodule PlatformWeb.ChatLiveBootstrapDuplicateTest do
       slug = "adopted-no-admin-chan"
       {:ok, orgless} = Chat.create_channel(%{name: "Adopted", slug: slug})
 
-      user = create_user!("fabrikam-adopter")
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
-      membership!(user, fabrikam)
+      user = create_user!("acme-adopter")
+      acme = Tenancy.get_org_by_slug!("acme")
+      membership!(user, acme)
 
       conn = init_test_session(conn, current_user_id: user.id)
       {:ok, _view, _html} = live(conn, ~p"/chat/#{slug}")

@@ -654,7 +654,8 @@ defmodule Platform.Chat.AttentionRouter do
     # failures on other tests sharing the pool. Tests don't exercise push
     # (no subscriptions, no VAPID keys), so short-circuiting here costs
     # nothing and eliminates the flake. The notification itself is built by
-    # the pure `push_notification/5`, which tests call directly.
+    # `push_notification/5` (pure apart from one branding-row read for the
+    # app name), which tests call directly.
     if Application.get_env(:platform, :env) != :test do
       Task.start(fn ->
         attachments = if blank?(message.content), do: message_attachments(message.id), else: []
@@ -692,8 +693,32 @@ defmodule Platform.Chat.AttentionRouter do
   `author_type` / `author_id`, or a bare display name, which carries no
   author identity.
 
-  Pure (no queries), so tests can assert the exact notification without the
+  It makes two reads: the branding row for the install's app name (the
+  title of a space with no name; task 01a120c5 stage 3), and the author's
+  own row for the sender avatar (task 01a12773 stage 2; the `agents` row for
+  an agent author, the `users` row for a user, none for a bare name). Both
+  are plain reads, so tests can assert the exact notification without the
   push `Task`, which short-circuits under `:test`.
+
+  The avatar (`sender_avatar/1`) is `author_avatar_url` plus
+  `author_avatar_tone`:
+
+    * agent: the bearer-gated app route on THIS install,
+      `https://<install_host>/api/app/agents/<agent_id>/avatar`, with the
+      stored `?v=` cache token copied verbatim, or nil when the agent has no
+      avatar. Tone `"agent"`.
+    * user: when the picture the chat renders is the user's own absolute
+      https `users.avatar_url`, the bearer-gated app route on THIS install,
+      `https://<install_host>/api/app/users/<user_id>/avatar?v=<hash>`
+      (`Platform.Accounts.UserAvatarCache.push_url/1`), which serves that
+      picture at a size both apps accept (they drop a body over 256 KB); nil
+      while a fetch of it is remembered as failed. A participant's own
+      absolute https `avatar_url` that differs from the user's is still
+      carried verbatim (the route only ever fetches `users.avatar_url`).
+      Anything else is nil. Tone is the chat's palette index for the same
+      seed (`Platform.Avatars`), `"0".."7"`.
+
+  A failure resolving the avatar never costs the push: it yields a nil url.
   """
   @spec push_notification(
           Participant.t() | String.t(),
@@ -713,19 +738,27 @@ defmodule Platform.Chat.AttentionRouter do
         conversation_name \\ nil
       ) do
     {sender_name, author_type, author_id} = sender_identity(sender)
+    {avatar_url, avatar_tone} = sender_avatar(sender)
 
     Platform.Push.Notification.chat(%{
       reason: reason,
       author: sender_name,
       author_type: author_type,
       author_id: author_id,
+      author_avatar_url: avatar_url,
+      author_avatar_tone: avatar_tone,
       space_name: space.name,
+      space_kind: space.kind,
       conversation_name: conversation_name,
       space_path: Platform.Chat.space_path_segment(space),
       space_id: space.id,
       message_id: message.id,
       content: message.content,
-      attachments: attachments
+      attachments: attachments,
+      # The install's product name for the title of a space with no name (a
+      # DM or unnamed group): read once here, at the router boundary, so
+      # `Notification.chat_title/4` stays pure (task 01a120c5 stage 3).
+      app_name: Platform.Branding.app_name()
     })
   end
 
@@ -734,6 +767,93 @@ defmodule Platform.Chat.AttentionRouter do
 
   defp sender_identity(name) when is_binary(name), do: {name, nil, nil}
   defp sender_identity(_), do: {"Someone", nil, nil}
+
+  # `{author_avatar_url, author_avatar_tone}`; see push_notification/6.
+  defp sender_avatar(%Participant{participant_type: "agent"} = p) do
+    stored =
+      [p]
+      |> Chat.agent_avatar_map_for_participants()
+      |> Map.values()
+      |> List.first()
+
+    {agent_push_avatar_url(p.participant_id, stored), "agent"}
+  rescue
+    _ -> {nil, "agent"}
+  end
+
+  defp sender_avatar(%Participant{participant_type: "user"} = p) do
+    user = sender_user(p.participant_id)
+    tone = p |> Platform.Avatars.user_seed(user) |> Platform.Avatars.fallback_tone()
+    {user_push_avatar_url(p, user), Integer.to_string(tone)}
+  rescue
+    _ -> {nil, nil}
+  end
+
+  defp sender_avatar(_sender), do: {nil, nil}
+
+  # The participant's own picture wins, as in the chat. When that is (or
+  # falls back to) the user's own `avatar_url`, the push names the app route
+  # that serves it sized for the apps; with no install host the url goes
+  # verbatim, as before the route existed.
+  defp user_push_avatar_url(%Participant{} = p, user) do
+    own = absolute_https_url(user && user.avatar_url)
+
+    case absolute_https_url(p.avatar_url) do
+      override when is_binary(override) and override != own ->
+        override
+
+      _ when is_binary(own) ->
+        if Platform.Push.Notification.install_host() in [nil, ""],
+          do: own,
+          else: Platform.Accounts.UserAvatarCache.push_url(user)
+
+      _ ->
+        nil
+    end
+  end
+
+  defp sender_user(user_id) when is_binary(user_id) do
+    if Platform.UUID.valid?(user_id), do: Repo.get(Platform.Accounts.User, user_id)
+  end
+
+  defp sender_user(_), do: nil
+
+  # The stored agent url is `/agents/<id>/avatar?v=<token>` (session-gated);
+  # the app can only present its bearer, so the push names the bearer route
+  # on this install's own host. The `?v=` query is copied verbatim so the
+  # client's cache key changes when the bytes do.
+  defp agent_push_avatar_url(agent_id, stored)
+       when is_binary(agent_id) and is_binary(stored) do
+    case Platform.Push.Notification.install_host() do
+      host when is_binary(host) and host != "" ->
+        base = "https://#{host}/api/app/agents/#{agent_id}/avatar"
+
+        case URI.parse(stored).query do
+          query when is_binary(query) and query != "" -> base <> "?" <> query
+          _ -> base
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp agent_push_avatar_url(_agent_id, _stored), do: nil
+
+  # Passed through verbatim (trimmed), never re-serialised.
+  defp absolute_https_url(url) when is_binary(url) do
+    url = String.trim(url)
+
+    case URI.parse(url) do
+      %URI{scheme: "https", host: host} when is_binary(host) and host != "" ->
+        url
+
+      _ ->
+        nil
+    end
+  end
+
+  defp absolute_https_url(_), do: nil
 
   @doc """
   The recipient's label for `space`, carried as the notification's
@@ -829,21 +949,23 @@ defmodule Platform.Chat.AttentionRouter do
   Build the push-notification title for a given sender + routing reason.
 
   The push itself now names the space (`push_notification/5`, task 01a10882);
-  this is that title with no space, which reads `in Suite`.
+  this is that title with no space, which reads `in {app name}`: the
+  install's `Platform.Branding.app_name/0` (task 01a120c5 stage 3), unless
+  the caller passes `app_name` explicitly.
 
   For `:here` broadcasts, surface the `@here` context so the recipient knows
   they were pinged as part of a channel-wide blast (not a direct mention or
   ambient activity). All other reasons reuse the default
-  `"<sender> in Suite"` form — keeping push behaviour stable for the
+  `"<sender> in <app name>"` form — keeping push behaviour stable for the
   existing `:mention`, `:all`, `:active`, `:directed`, `:watch`, etc. paths.
 
-  Pure helper, no side effects — exposed so tests can exercise the title
-  shape without spawning the push `Task` (which short-circuits under
-  `:test` env anyway).
+  With `app_name` given it is a pure helper; the two-argument form reads the
+  branding row once. Exposed so tests can exercise the title shape without
+  spawning the push `Task` (which short-circuits under `:test` env anyway).
   """
-  @spec notification_title(String.t(), atom()) :: String.t()
-  def notification_title(sender_name, reason),
-    do: Platform.Push.Notification.chat_title(sender_name, nil, reason)
+  @spec notification_title(String.t(), atom(), String.t() | nil) :: String.t()
+  def notification_title(sender_name, reason, app_name \\ Platform.Branding.app_name()),
+    do: Platform.Push.Notification.chat_title(sender_name, nil, reason, app_name)
 
   # ── Human participant decision (unchanged) ─────────────────────────────────
 

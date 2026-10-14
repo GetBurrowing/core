@@ -97,7 +97,7 @@ defmodule Platform.Federation.ExperimentTools do
             type: "string",
             required: true,
             description:
-              "What on the surface is varied — for dispatch.prompt, a prompt template slug. For a surface that lists `targets` in experiment_surface_list, one of those (mail.draft.generator: \"dispatch.in_progress\"; planner.stage_budget: \"dispatch.planning\"); any other is refused."
+              "What on the surface is varied — for dispatch.prompt, a prompt template slug. For a surface that lists `targets` in experiment_surface_list, one of those (mail.draft.generator: \"dispatch.in_progress\"; planner.stage_budget: \"dispatch.planning\"; dispatch.code_mode: \"dispatch.prompt_directive\"); any other is refused."
           },
           name: %{type: "string", required: true, description: "Human-readable name."},
           slug: %{
@@ -115,13 +115,13 @@ defmodule Platform.Federation.ExperimentTools do
             type: "object",
             required: false,
             description:
-              "How the result is measured, e.g. {kind: \"outcome_rate\", labels: [\"screen\"], window_days: 14} or {kind: \"registered\", slug: \"stages_per_plan\"}. An unknown kind or bad parameter is refused."
+              "How the result is measured, e.g. {kind: \"outcome_rate\", labels: [\"screen\"], window_days: 14}, {kind: \"registered\", slug: \"stages_per_plan\"} or {kind: \"dispatch_usage\", field: \"suite_tool_calls\", agg: \"median\"}. An unknown kind or bad parameter is refused."
           },
           assignment_policy: %{
             type: "object",
             required: false,
             description:
-              "Which subjects are eligible, as data over the existing policies (task_cohort, epic_scoped, time_window, random_buckets, composite, exclude)."
+              "Which subjects are eligible, as data over the existing policies (task_cohort, epic_scoped, time_window, random_buckets, composite, exclude). A task_cohort may name project_id, org_id, epic_id or agent_id (the dispatched phase's assignee), e.g. {type: \"task_cohort\", cohort: {agent_id: [uuid, ...]}}."
           },
           org_id: %{
             type: "string",
@@ -345,6 +345,52 @@ defmodule Platform.Federation.ExperimentTools do
         limitations:
           "Refused unless the org's guardrails allow auto-promotion (code auto_promote_disabled), and ALWAYS refused for any mail.* surface (surface_not_promotable). Then refused below the stop rule (insufficient_data), inside the 14-day cooldown (cooldown_active, with available_from), or on a concurrent promotion (concurrent_promotion). There is no override for agents.",
         when_to_use: "When an arm has earned a figure that beats control and the org allows it."
+      },
+      %{
+        name: "dispatch_metrics_list",
+        description:
+          "List per-dispatch measurements, newest first: Suite tool calls the dispatch made, client-reported turns, tokens and local tool calls, wall time and outcome. A dispatch is an execution.acked event (unit_source ack), else a started stage with no ack (stage_row), else a lease row (lease).",
+        parameters: %{
+          agent_id: %{type: "string", required: false, description: "Filter by agent UUID."},
+          task_id: %{type: "string", required: false, description: "Filter by task UUID."},
+          from: %{
+            type: "string",
+            required: false,
+            description:
+              "ISO 8601; dispatches starting at or after. Default 7 days ago unless task_id is given."
+          },
+          to: %{
+            type: "string",
+            required: false,
+            description: "ISO 8601; dispatches starting at or before. Default now."
+          },
+          limit: %{type: "integer", required: false, description: "Default 50, max 500."},
+          offset: %{type: "integer", required: false, description: "Rows to skip. Default 0."}
+        },
+        returns:
+          "%{dispatches: [%{dispatch_id, unit_source, task_id, stage_id, runtime_id, agent_id, subagent_id, started_at, ended_at, wall_ms, lease_ids, suite_tool_calls, inner_tool_calls, suite_run_calls, tool_calls_denied, tool_calls_error, client_reports, client_turns, client_tool_calls, client_wall_ms, client_tokens_in, client_tokens_out, client_cache_read_tokens, client_cache_write_tokens, client_harness, stage_status, validations, re_dispatch_count}], count, limit, total, has_more, coverage: [%{agent_id, dispatches, by_unit_source}], attribution_coverage: [%{agent_id, tool_calls, attributed, pct, by_rung}]} — `total` is the number of dispatches matching the filters, independent of `limit`; `has_more` is true exactly when matching dispatches exist beyond this page. client_* fields are null, never 0, when the client reported nothing.",
+        limitations:
+          "Server-side counts cover Suite MCP tool calls only, and a call whose attribution is `unattributed` counts toward no dispatch. Local tools, turns and tokens are client self-report: the usage-events endpoint does not bind agent_id to the sending runtime. stage_row wall time starts at stages.started_at, earlier than the ack clock. A tenant-pinned agent sees only its own org's tasks.",
+        when_to_use:
+          "To measure what a dispatch cost and how it ended, per agent, and to read how much of it is measurable (coverage, attribution_coverage)."
+      },
+      %{
+        name: "code_mode_report",
+        description:
+          "Per-agent report for an experiment on the dispatch.code_mode surface: one row per dispatched agent and arm, with dispatch counts, usage metrics, suite_run adoption (treatment) or violations (control), and how much of the agent is measurable.",
+        parameters: %{
+          experiment_id: %{
+            type: "string",
+            required: true,
+            description: "UUID of an experiment on dispatch.code_mode."
+          }
+        },
+        returns:
+          "%{experiment_id, surface_key, status, min_subjects, rows: [%{agent_id, variant_slug, suite_run_arm, tasks, n, metrics: %{\"<field>_<agg>\" => %{value, n, reason}}, suite_run_dispatches, suite_run_adoption_rate, control_suite_run_violations, coverage: %{unit_source: %{ack, stage_row, lease}, ack_pct, client_report_pct, attribution_tool_calls, attribution_pct, attribution_by_rung}}], total, has_more} — every row, whole: `total` is the number of rows and `has_more` is always false. n counts dispatches. A metric's value is null, never 0, when no dispatch carried the field, and null below the stop rule (reason below_stop_rule / no_stop_rule). A cohort agent with no dispatch in an arm still gets a row with n 0.",
+        limitations:
+          "Only for dispatch.code_mode experiments (code wrong_surface otherwise). Planning dispatches are not counted. client_* metrics are client self-report. attribution_pct covers the agent's model-issued tool calls on every task since the first assignment, so both arms of one agent carry the same figure. No arm is compared with another.",
+        when_to_use:
+          "To read the code-mode experiment per agent: whether an agent's data is usable (coverage) before reading its figures, and whether the control arm is calling suite_run."
       }
     ]
   end

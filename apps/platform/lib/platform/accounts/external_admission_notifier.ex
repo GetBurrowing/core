@@ -1,7 +1,7 @@
 defmodule Platform.Accounts.ExternalAdmissionNotifier do
   @moduledoc """
   Bridges the `[:platform, :auth, :external_admission]` telemetry signal to
-  Fabrikam admins (rbac-external-users M3 stage 3, task 019f8837).
+  root-org admins (rbac-external-users M3 stage 3, task 019f8837).
 
   M2's `ExternalAdmission` emits this event on EVERY login with metadata
   `action` (`"full"` / `"holding"` / `"recovered"`), `reason`, `email`,
@@ -13,7 +13,7 @@ defmodule Platform.Accounts.ExternalAdmissionNotifier do
        three from task 019ff7ff stages 2 and 5) on `admin_admissions_topic/0` so any OPEN M3 stage-4 recovery
        surface live-appends the row + increments its "new" badge without a
        reload.
-    2. Push-notifies Fabrikam root-org admins through the existing
+    2. Push-notifies root-org admins through the existing
        `Platform.Notifications.fan_out_to_humans/3` seam with an
        external-SAFE payload (title / body naming the email+reason, url
        `/admin/external-logins`), exactly as `MeetingNotifier` fans out.
@@ -134,7 +134,7 @@ defmodule Platform.Accounts.ExternalAdmissionNotifier do
   defp reason_suffix(reason), do: " (#{reason})"
 
   # Root-org admins: `org_memberships.role == "admin"` joined to an org with
-  # NO parent (the Fabrikam root). Mirrors `Platform.Tenancy.fabrikam_admin?/1`'s
+  # NO parent (the root org). Mirrors `Platform.Tenancy.root_admin?/1`'s
   # predicate, selecting the distinct recipient user ids instead of a
   # boolean.
   defp root_admin_user_ids do

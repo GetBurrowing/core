@@ -8,8 +8,9 @@ defmodule Platform.Chat.Canvas.MarkdownExporter do
   to serialise a canvas to a `.md` attachment. Does not touch the repo, the
   filesystem, or telemetry — the caller decides where the bytes go.
 
-  Kind coverage mirrors `Platform.Chat.Canvas.Kinds.@modules` (16 kinds).
-  Interactive-only kinds (`form`, `action_row`, `embed`, `image`, `mermaid`)
+  Kind coverage mirrors `Platform.Chat.Canvas.Kinds.@modules` (17 kinds).
+  Interactive-only kinds (`form`, `action_row`, `embed`, `image`, `mermaid`,
+  `prototype`)
   render as an HTML comment marker so the export is round-trippable and diffable
   across redeploys. Unknown kinds render as `<!-- unknown-kind: <type> -->`
   rather than crashing — the exporter is a deploy-time helper and must never
@@ -19,7 +20,7 @@ defmodule Platform.Chat.Canvas.MarkdownExporter do
   alias Platform.Chat.Canvas
   alias Platform.Chat.Canvas.Kinds
 
-  @skipped_kinds ~w(form action_row embed image mermaid)
+  @skipped_kinds ~w(form action_row embed image mermaid prototype)
 
   @doc """
   Render a canvas, a canonical document map, or a bare root-node map to

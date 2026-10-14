@@ -12,9 +12,13 @@ defmodule Platform.Branding.ContrastTest do
   doctest Platform.Branding.Contrast
 
   describe "agrees with Platform.Design.WcagContrast" do
-    # The three figures app.css records, computed by focus_ring_slot_test.exs
-    # and primary_contrast_sweep_test.exs through the reference module.
+    # Figures app.css records, computed by focus_ring_slot_test.exs and
+    # primary_contrast_sweep_test.exs through the reference module: three
+    # Burrow pairs (task 01a120c5) and the three pre-Burrow ones they replaced.
     for {a, b, expected} <- [
+          {"#AD4B07", "#FBFAF9", 5.3202},
+          {"#8B3B04", "#FBFAF9", 7.3919},
+          {"#F47721", "#191B20", 6.1588},
           {"#06D5ED", "#FFFFFF", 1.7875},
           {"#087F93", "#FFFFFF", 4.7007},
           {"#06D5ED", "#171B25", 9.6304}
@@ -27,7 +31,8 @@ defmodule Platform.Branding.ContrastTest do
     end
 
     @fixed ~w(#000000 #ffffff #06d5ed #087f93 #171b25 #4dd7e8 #767676 #d7d7d7 #f2f2f2
-              #10b981 #f59e0b #ef4444 #2e3440 #88c0d0 #b48ead #123456 #fedcba #7f7f7f)
+              #10b981 #f59e0b #ef4444 #2e3440 #88c0d0 #b48ead #123456 #fedcba #7f7f7f
+              #ad4b07 #f47721 #8b3b04 #ff9b55 #fbfaf9 #191b20 #221f1b #eeeff1)
 
     test "ratio/2 matches the reference on every pair of a fixed set" do
       for a <- @fixed, b <- @fixed do

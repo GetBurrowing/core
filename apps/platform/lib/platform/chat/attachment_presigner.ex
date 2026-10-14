@@ -28,6 +28,12 @@ defmodule Platform.Chat.AttachmentPresigner do
   `max_age_seconds` is an upper bound from issue time; the `expires_at`
   field in the payload is checked independently so callers can reject
   even earlier when desired.
+
+  `check_expires_at: false` skips that `expires_at` check (the signature and
+  `max_age` still apply). The resumable chunked verbs use it: their liveness
+  is the reservation row's sliding `upload_expires_at`, which each accepted
+  chunk pushes forward, so a slow 1 GB upload is not cut off by the fixed
+  expiry minted into the token (task 01a120be).
   """
   @spec verify(String.t(), keyword()) :: {:ok, payload} | {:error, :invalid | :expired}
   def verify(token, opts \\ []) when is_binary(token) do
@@ -35,7 +41,8 @@ defmodule Platform.Chat.AttachmentPresigner do
 
     case Plug.Crypto.verify(signing_key(), @salt, token, max_age: max_age) do
       {:ok, %{key: _, max_bytes: _, expires_at: expires_at} = payload} ->
-        if DateTime.utc_now() |> DateTime.to_unix() > expires_at do
+        if Keyword.get(opts, :check_expires_at, true) and
+             DateTime.utc_now() |> DateTime.to_unix() > expires_at do
           {:error, :expired}
         else
           {:ok, payload}

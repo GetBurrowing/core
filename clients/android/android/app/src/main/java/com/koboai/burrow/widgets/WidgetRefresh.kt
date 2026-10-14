@@ -17,8 +17,10 @@ import com.koboai.burrow.push.BurrowPush
 import java.util.concurrent.TimeUnit
 
 /**
- * When the widgets refresh: every 30 minutes (WorkManager periodic), when
- * the app comes to the foreground, and on sign-in and sign-out. Each
+ * When the widgets refresh: every 30 minutes (WorkManager periodic), and on
+ * sign-in and sign-out. On an app open they only re-render ([renderNow]):
+ * the open's single counts request per install (ResumeRefresh) already
+ * wrote the selected install's counts. Each
  * refresh also schedules a render-only run just past the stale boundary of
  * the counts it fetched, so a widget whose next refresh never comes still
  * drops its cyan on time (the Android form of iOS's second timeline entry).
@@ -42,6 +44,21 @@ object WidgetRefresh {
         WorkManager
             .getInstance(context)
             .enqueueUniqueWork(NOW, ExistingWorkPolicy.REPLACE, OneTimeWorkRequestBuilder<CountsRefreshWorker>().build())
+    }
+
+    /**
+     * Re-render only, no fetch: the app open already wrote the selected
+     * install's counts ([com.koboai.burrow.push.ResumeRefresh]). When it did
+     * ([fetchedAtMillis]), the stale-boundary render is scheduled as a
+     * refresh would.
+     */
+    fun renderNow(
+        context: Context,
+        fetchedAtMillis: Long? = null,
+    ) {
+        val request = OneTimeWorkRequestBuilder<CountsRefreshWorker>().setInputData(workDataOf(KEY_RENDER_ONLY to true)).build()
+        WorkManager.getInstance(context).enqueueUniqueWork(NOW, ExistingWorkPolicy.REPLACE, request)
+        fetchedAtMillis?.let { scheduleStaleRender(context, it + SlabState.STALE_AFTER_MILLIS + 1_000 - System.currentTimeMillis()) }
     }
 
     internal fun scheduleStaleRender(

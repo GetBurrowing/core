@@ -66,6 +66,17 @@ defmodule Platform.Tasks.StackDeployer do
   branch: it transitions the stack to `done` (member statuses are
   handled by T6's fan-out, not here).
 
+  ## The rollup branch is deleted after the rollup PR merges (intentional)
+
+  After the rollup PR merges, `handle_rollup_pr_merged/1` deletes the
+  stack's rollup branch (`stack/<name>`) on origin, through
+  `kick_off_rollup_branch_delete/1`. It does this whatever the repository's
+  `delete_branch_on_merge` setting is: the deployer owns the rollup branch's
+  lifecycle, per ADR 0045 (`docs/decisions/0045-task-stacks-v2.md`, "On
+  merge, `stack/<name>` is deleted"). A missing rollup branch after a
+  shipped stack is therefore expected, not a GitHub setting. An abandoned
+  stack keeps its rollup branch (same ADR, `stack.abandon`).
+
   ## Stage 5 (this module's added surface)
 
   `handle_rollup_ci_failure/2` is the failure path T6 will call when
@@ -114,7 +125,7 @@ defmodule Platform.Tasks.StackDeployer do
   alias Platform.Orchestration.HeartbeatScheduler
   alias Platform.Repo
   alias Platform.Tasks
-  alias Platform.Tasks.{Stack, Stacks}
+  alias Platform.Tasks.{PostCommit, Stack, Stacks}
   alias Platform.Tasks.Stage, as: PlanStage
   alias Platform.Tasks.Task, as: TaskRecord
   alias Platform.Tasks.Validation
@@ -288,6 +299,42 @@ defmodule Platform.Tasks.StackDeployer do
   end
 
   def handle_member_transition(%TaskRecord{}, _from, _to), do: :ok
+
+  @doc """
+  `handle_member_transition/3`, deferred until the enclosing
+  `Platform.Tasks.PostCommit` scope commits (task 01a136c1).
+
+  The plan engine's write paths open that scope around their transaction.
+  The merge child reads through its own connection under `async: true`, so
+  firing it before commit showed it the transaction's own writes (the
+  validation just passed, the stage just settled) as not yet there, and it
+  declined the merge.
+
+  At run time the member is RE-READ, so the merge sees the committed row,
+  including a stamp written by an earlier thunk of the same commit. The
+  deferral is keyed per member and target status: one commit fires at most
+  one merge attempt per member, however many trigger sites asked for it.
+  With no scope open it runs immediately, as `handle_member_transition/3`
+  always did.
+  """
+  @spec handle_member_transition_after_commit(
+          TaskRecord.t(),
+          atom() | String.t(),
+          atom() | String.t()
+        ) :: term()
+  def handle_member_transition_after_commit(%TaskRecord{stack_id: nil}, _from, _to), do: :ok
+
+  def handle_member_transition_after_commit(%TaskRecord{id: task_id} = task, from, to) do
+    PostCommit.run_after_commit(
+      fn ->
+        case Tasks.get_task_record(task_id) do
+          %TaskRecord{} = fresh -> handle_member_transition(fresh, from, to)
+          nil -> handle_member_transition(task, from, to)
+        end
+      end,
+      key: {:stack_member_transition, task_id, to_string(to)}
+    )
+  end
 
   # Bug #1 (task 019f708f): `Task.Supervisor.async_nolink` swallows any
   # exception raised inside the fn, silently stranding the member in
@@ -1813,8 +1860,8 @@ defmodule Platform.Tasks.StackDeployer do
           )
         end
 
-        # ADR-0042 rollup branch lifecycle: delete the rollup branch on
-        # merge. Best-effort — a failure here does NOT undo the `status
+        # ADR 0045 rollup branch lifecycle ("On merge, `stack/<name>` is
+        # deleted"): delete the rollup branch on merge. Best-effort — a failure here does NOT undo the `status
         # → done` transition. On async: false (tests) we run
         # synchronously so callers can observe the runner interaction.
         _ = kick_off_rollup_branch_delete(updated)
@@ -1871,7 +1918,7 @@ defmodule Platform.Tasks.StackDeployer do
   # to `done`. Loads the project inside the async task so the caller
   # of `handle_rollup_pr_merged/1` isn't blocked by a repo lookup.
   #
-  # ADR-0042: `stack.abandon` deliberately leaves the rollup branch in
+  # ADR 0045: `stack.abandon` deliberately leaves the rollup branch in
   # place for human-driven cleanup, so this helper is only invoked from
   # the merged-success path.
   defp kick_off_rollup_branch_delete(%Stack{} = stack) do

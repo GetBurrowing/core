@@ -195,10 +195,12 @@ defmodule Platform.Experiments.Assignments do
 
   defp attr(attributes, key), do: Map.get(attributes, key) || Map.get(attributes, to_string(key))
 
-  # Policies read atom keys. Only the four documented keys are carried, so a
-  # caller-supplied string never becomes an atom.
+  # Policies read atom keys. Only the documented keys are carried, so a
+  # caller-supplied string never becomes an atom. `:agent_id` (task 01a114a8
+  # stage 4) is the dispatched phase's assignee, which a `task_cohort` on
+  # `agent_id` reads; without it here that cohort could never match.
   defp atomize_attributes(attributes) do
-    for key <- [:project_id, :org_id, :epic_id, :inserted_at],
+    for key <- [:project_id, :org_id, :epic_id, :inserted_at, :agent_id],
         value = attr(attributes, key),
         not is_nil(value),
         into: %{},

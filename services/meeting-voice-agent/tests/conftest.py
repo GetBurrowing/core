@@ -13,4 +13,8 @@ def clean_mva_env(monkeypatch):
     for key in list(os.environ):
         if key.startswith("MVA_") or key.startswith("LIVEKIT_"):
             monkeypatch.delenv(key, raising=False)
+    # MVA_MCP_BASE_URL is REQUIRED (no default, task 01a116de), so the clean
+    # slate carries a neutral placeholder; test_config.py removes it to prove
+    # the requirement.
+    monkeypatch.setenv("MVA_MCP_BASE_URL", "https://suite.example.test/mcp")
     yield

@@ -2,6 +2,11 @@
 // Attaches to the chat column div; shows a styled drag-hint overlay on dragover,
 // queues files into LiveView's upload system on drop/paste, and opens the
 // staging dialog.
+//
+// Files over the composer's inline cap are routed to the chunked large-file
+// path (./large_upload.js, task 01a120be) instead of the LiveView upload.
+import { routeFiles } from "./large_upload"
+
 const DragDropUpload = {
   mounted() {
     this._dragCounter = 0;
@@ -61,8 +66,9 @@ const DragDropUpload = {
       const files = Array.from(e.dataTransfer.files);
       if (files.length === 0) return;
 
-      // Queue files into LiveView's upload channel
-      this.uploadTo(this.el, "attachments", files);
+      // Large files go the chunked way; the rest into LiveView's upload channel
+      const small = routeFiles(this, files);
+      if (small.length > 0) this.uploadTo(this.el, "attachments", small);
 
       // Tell the server to open the staging dialog
       this.pushEvent("upload_dialog_open", {});
@@ -97,7 +103,8 @@ const DragDropUpload = {
       }, 2500);
 
       // Queue pasted images and open dialog
-      this.uploadTo(this.el, "attachments", imageFiles);
+      const small = routeFiles(this, imageFiles);
+      if (small.length > 0) this.uploadTo(this.el, "attachments", small);
       this.pushEvent("upload_dialog_open", {});
     };
 

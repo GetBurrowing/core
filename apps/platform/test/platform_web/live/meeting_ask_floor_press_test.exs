@@ -55,7 +55,7 @@ defmodule PlatformWeb.MeetingAskFloorPressTest do
       %OrgMembership{}
       |> OrgMembership.changeset(%{
         user_id: user.id,
-        org_id: Platform.TenancyFixtures.fabrikam_org_id(),
+        org_id: Platform.TenancyFixtures.acme_org_id(),
         role: "member"
       })
       |> Repo.insert!()
@@ -64,7 +64,7 @@ defmodule PlatformWeb.MeetingAskFloorPressTest do
     {:ok, project} =
       Platform.Tasks.create_project(%{
         name: "Ask Floor Project #{n}",
-        org_id: Platform.TenancyFixtures.fabrikam_org_id()
+        org_id: Platform.TenancyFixtures.acme_org_id()
       })
 
     {:ok, meeting} =

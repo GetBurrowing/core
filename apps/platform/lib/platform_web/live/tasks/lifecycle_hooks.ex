@@ -20,7 +20,7 @@ defmodule PlatformWeb.Tasks.LifecycleHooks do
       `"delete_include_all"`, `"confirm_schedule_deletion"` (10 events —
       `open_delete_modal` has two clauses, org and non-org)
 
-  Fabrikam-admin-only: the controls only render behind `@fabrikam_admin?`, and
+  root-admin-only: the controls only render behind `@root_admin?`, and
   every call re-authorizes underneath in `Platform.Tenancy.Lifecycle`, so a
   forged event from a non-admin still gets `{:error, :unauthorized}`.
 
@@ -270,7 +270,7 @@ defmodule PlatformWeb.Tasks.LifecycleHooks do
   viewer-scoped since; de-allowlisted by task 01a09287 stage 2): one ENTRY
   per active org the VIEWER BELONGS TO, in canonical tenant-priority order.
 
-      [%{slug: "fabrikam", label: "Fabrikam", hue: 264, chroma: 0.17}, ...]
+      [%{slug: "acme", label: "Acme", hue: 264, chroma: 0.17}, ...]
 
   The tenant read is `Tenancy.list_active_tenants_for_user/1` — the
   viewer-scoped sibling of `list_active_tenants_unscoped/0`, which leaked

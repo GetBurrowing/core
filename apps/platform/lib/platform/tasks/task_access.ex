@@ -71,7 +71,7 @@ defmodule Platform.Tasks.TaskAccess do
 
   Paths 5 and 6 are never reached for `{:agent, _}`, and the stop is on
   principal SHAPE rather than on a failed lookup. This is TYPING, not policy:
-  `Tenancy.member_of?/2`, `external_user?/1` and `fabrikam_admin?/1` all query
+  `Tenancy.member_of?/2`, `external_user?/1` and `root_admin?/1` all query
   `org_memberships.user_id`, the `agents` table carries no `org_id` and no
   membership join at all, and `Accounts.get_user/1` raises
   `Ecto.Query.CastError` on a non-UUID id. An agent id handed to a

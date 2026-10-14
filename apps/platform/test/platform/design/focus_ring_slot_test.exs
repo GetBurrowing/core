@@ -9,9 +9,11 @@ defmodule Platform.Design.FocusRingSlotTest do
   ## The defect this closes
 
   WCAG 2.2 SC 1.4.11 Non-text Contrast requires 3:1 against every adjacent
-  ground for a focus indicator. `--color-primary` (#06D5ED) cannot supply that
-  in the light theme — it measures 1.7875:1 on light `--color-base-100`, and it
-  gets worse, not better, on the other two grounds. The dark theme is the
+  ground for a focus indicator. The pre-Burrow `--color-primary` cyan could not
+  supply that in the light theme — it measured 1.7875:1 on light
+  `--color-base-100`, and worse on the other two grounds. (The Burrow light
+  primary #ad4b07 would clear it, but the slot's mechanism is unchanged by the
+  recolor, task 01a120c5.) The dark theme is the
   opposite case: the same cyan clears the floor by a factor of three there. One
   token cannot serve both, so the ring gets its own theme-split slot, exactly
   as `--edge` did in task 01a0740b.
@@ -67,13 +69,9 @@ defmodule Platform.Design.FocusRingSlotTest do
   declaration-derived figures, e.g. the `.chip-soft` alpha ceilings; the figures
   `app.css` labels painted-pixel ("MEASURED ... in a browser") are hex-to-hex,
   and `WcagContrast.contrast_painted/2` is the named mechanism for that
-  quantity. It matters here: quantizing light `--color-base-200` to `#F2F2F2`
-  before measuring gives 4.1990:1 rather than 4.1847:1, and light
-  `--color-base-300` gives 3.2661:1 rather than 3.2747:1. Both conventions
-  clear the 3:1 floor, so nothing about the decision turns on it, but the
-  pinned figures below are the float-through ones and a reader comparing them
-  against a quantize-first calculator should expect the third decimal to
-  disagree.
+  quantity. Since the Burrow recolor (task 01a120c5) every ground and both
+  ring colours are hex literals, so the two conventions agree exactly on the
+  figures pinned below: there is nothing between 8-bit steps to round.
 
   ## What this test must not touch
 
@@ -103,16 +101,19 @@ defmodule Platform.Design.FocusRingSlotTest do
   # The ratio each pair measures today, pinned to 4 decimals as well as
   # floored. A re-tune that still technically clears 3:1 therefore cannot land
   # silently — someone has to come here and say what the new number is.
+  # Burrow palette (task 01a120c5): light rings with --color-interactive
+  # #8b3b04 on #fbfaf9 / #f6f4f1 / #efebe7; dark with --color-primary #f47721
+  # on #191b20 / #111214 / #25272b.
   @light_ratios %{
-    "--color-base-100" => 4.7007,
-    "--color-base-200" => 4.1847,
-    "--color-base-300" => 3.2747
+    "--color-base-100" => 7.3919,
+    "--color-base-200" => 7.0195,
+    "--color-base-300" => 6.4978
   }
 
   @dark_ratios %{
-    "--color-base-100" => 9.6304,
-    "--color-base-200" => 11.5762,
-    "--color-base-300" => 10.1049
+    "--color-base-100" => 6.1588,
+    "--color-base-200" => 6.7002,
+    "--color-base-300" => 5.348
   }
 
   setup_all do
@@ -264,8 +265,8 @@ defmodule Platform.Design.FocusRingSlotTest do
                "(#{WcagContrast.to_hex(ground_color)}) is #{Float.round(ratio, 4)}:1, " <>
                "under the #{@min_ratio}:1 WCAG 2.2 SC 1.4.11 Non-text Contrast floor. A " <>
                "focus indicator this faint is the defect this slot exists to close — " <>
-               "light --color-primary is 1.7875:1 on white. Do not lower the floor; " <>
-               "change the colour."
+               "the pre-Burrow light cyan was 1.7875:1 on white. Do not lower the " <>
+               "floor; change the colour."
 
       assert Float.round(ratio, 4) == pinned,
              "#{theme} --focus-ring (#{WcagContrast.to_hex(ring)}) against #{ground} " <>
@@ -347,7 +348,7 @@ defmodule Platform.Design.FocusRingSlotTest do
   # Cascade order, most specific first. The theme's plugin block is emitted
   # under [data-theme=<name>]; the hand-written selectors below it override
   # :root for the dark theme only. --color-interactive is the live example:
-  # #087f93 at :root, #4dd7e8 under [data-theme="dark"].
+  # #8b3b04 at :root, #ff9b55 under [data-theme="dark"].
   defp scopes(css, "light") do
     [
       {"the light daisyui-theme plugin block", [theme_block(css, "light")]},

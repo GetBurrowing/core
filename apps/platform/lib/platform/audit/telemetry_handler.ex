@@ -121,6 +121,15 @@ defmodule Platform.Audit.TelemetryHandler do
     # handle_event clause) so the row exists when the call returns. An
     # unregistered emit fails SILENTLY.
     [:platform, :tasks, :validation_payload_amended],
+    # Task 01a11ec3 stage 1 — the explicit, attributed promotion of a
+    # quarantined external-feedback task to trusted. Emitted by
+    # `Platform.Tasks.promote_from_quarantine/3` after the write commits.
+    # Metadata carries task_id, origin, trust, external_repository_identity,
+    # external_issue_number, actor_type / actor_id and via, plus
+    # resource_type "task" / resource_id / action for the Audit.Event
+    # columns. Registration here is load-bearing: an emit with no matching
+    # @events entry fails SILENTLY and the audit row never appears.
+    [:platform, :tasks, :external_feedback_promoted],
     # Task 019e95ea — channel lifecycle. Emitted by `Platform.Chat.archive_space/1,2`
     # and `unarchive_space/2`; metadata carries actor_id (nil for system
     # callers), resource_type: "chat_space", space kind + name.
@@ -334,7 +343,19 @@ defmodule Platform.Audit.TelemetryHandler do
     # (default handle_event clause) so tests can assert the row immediately
     # after `fail_transcript/3` returns; `scope_check/2` falls through to
     # `:ok` for this namespace.
-    [:platform, :meetings, :transcription_failed]
+    [:platform, :meetings, :transcription_failed],
+    # Task 01a1316b-aab0 stage 2 — one canvas handler invocation (a call or
+    # a timer fire), emitted by `Platform.Chat.CanvasRoom` when the run ends
+    # or is refused before it starts. Metadata carries canvas_id, node_id,
+    # handler, script_sha256 (of the source), caller_type / caller_id,
+    # engine, trigger ("call" | "timer"), duration_ms, result (ok | an engine
+    # kind | busy | rate_limited | unknown_handler | an op error code) and
+    # code (the refusal code, e.g. binding_not_registered), plus
+    # resource_type "canvas" / resource_id / action "script_run" / actor_type
+    # / actor_id. Never the source, args, state or result. Sync (default
+    # handle_event clause). Registration here is load-bearing: an emit with
+    # no matching @events entry fails SILENTLY.
+    [:platform, :canvas, :script_run]
 
     # NOTE: `[:platform, :memory, :proposal_promoted]` is NOT registered
     # here. `Platform.Memory.Proposals.queue_promotion/1` (task 019f70e9

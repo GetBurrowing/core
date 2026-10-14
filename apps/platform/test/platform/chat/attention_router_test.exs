@@ -88,7 +88,7 @@ defmodule Platform.Chat.AttentionRouterTest do
     agent
   end
 
-  defp create_message(space_id, participant_id, attrs \\ %{}) do
+  defp create_message(space_id, participant_id, attrs) do
     defaults = %{
       space_id: space_id,
       participant_id: participant_id,
@@ -114,7 +114,7 @@ defmodule Platform.Chat.AttentionRouterTest do
   # JOIN keeps those bogus rows visible while still dropping known-archived
   # users. Tests here need REAL user rows so `Accounts.archive_user/1` has
   # something to flip.
-  defp insert_test_user(opts \\ []) do
+  defp insert_test_user(opts) do
     n = System.unique_integer([:positive])
 
     Repo.insert!(%Platform.Accounts.User{
@@ -1650,23 +1650,25 @@ defmodule Platform.Chat.AttentionRouterTest do
   # than pass the helper output through.
 
   describe "notification_title/2" do
+    # The no-space title names the install (Platform.Branding.app_name/0,
+    # "Burrow" on a migrated DB; task 01a120c5 stage 3), never a compiled name.
     test "for :here, surfaces the @here broadcast context in the title" do
-      assert AttentionRouter.notification_title("Rowan", :here) == "Rowan @here in Suite"
+      assert AttentionRouter.notification_title("Rowan", :here) == "Rowan @here in Burrow"
     end
 
     test "for :mention, uses the default sender-only title" do
-      assert AttentionRouter.notification_title("Rowan", :mention) == "Rowan in Suite"
+      assert AttentionRouter.notification_title("Rowan", :mention) == "Rowan in Burrow"
     end
 
     test "for :all, uses the default sender-only title" do
-      assert AttentionRouter.notification_title("Rowan", :all) == "Rowan in Suite"
+      assert AttentionRouter.notification_title("Rowan", :all) == "Rowan in Burrow"
     end
 
     test "for any other reason atom, uses the default sender-only title" do
       # Defensive: future reasons (e.g. :directed, :watch, :active_agent)
       # should fall through to the default rather than crash.
       for reason <- [:directed, :watch, :active_agent, :active, :multi_mention] do
-        assert AttentionRouter.notification_title("Rowan", reason) == "Rowan in Suite",
+        assert AttentionRouter.notification_title("Rowan", reason) == "Rowan in Burrow",
                "expected default title for reason #{inspect(reason)}"
       end
     end
@@ -1943,6 +1945,18 @@ defmodule Platform.Chat.AttentionRouterTest do
       message = create_message(space.id, user.id, %{content: "@[Higgins] hi"})
 
       refute AttentionRouter.mentioned?(participant, message)
+    end
+  end
+
+  describe "push_notification/6 space_kind (task 01a116c4)" do
+    test "sets space_kind from space.kind" do
+      for kind <- ~w(dm group channel) do
+        space = %Platform.Chat.Space{id: Ecto.UUID.generate(), kind: kind, name: "S", slug: nil}
+        message = %Message{id: Ecto.UUID.generate(), content: "hi"}
+
+        assert AttentionRouter.push_notification("Harper", message, :all, space, []).space_kind ==
+                 kind
+      end
     end
   end
 end

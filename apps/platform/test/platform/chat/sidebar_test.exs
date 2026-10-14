@@ -1,8 +1,8 @@
 defmodule Platform.Chat.SidebarTest do
   @moduledoc """
   Stage 2 (chat sidebar v2): the channel_sections org-default layer +
-  Fabrikam-admin-gated curation writes. Verifies the migration seeded one section
-  per org, and that every write authorizes through `Tenancy.fabrikam_admin?/1`.
+  Acme-admin-gated curation writes. Verifies the migration seeded one section
+  per org, and that every write authorizes through `Tenancy.root_admin?/1`.
   """
   use Platform.DataCase, async: false
 
@@ -44,13 +44,13 @@ defmodule Platform.Chat.SidebarTest do
 
   defp admin_user! do
     user = create_user!()
-    membership!(user, Tenancy.get_org_by_slug!("fabrikam"), "admin")
+    membership!(user, Tenancy.get_org_by_slug!("acme"), "admin")
     user
   end
 
   defp member_user! do
     user = create_user!()
-    membership!(user, Tenancy.get_org_by_slug!("fabrikam"), "member")
+    membership!(user, Tenancy.get_org_by_slug!("acme"), "member")
     user
   end
 
@@ -123,10 +123,10 @@ defmodule Platform.Chat.SidebarTest do
       positions = Enum.map(sections, & &1.position)
       assert positions == Enum.sort(positions)
 
-      # color is the scope token in CSS form, e.g. fabrikam -> "fabrikam", wayne_tech -> "wayne-tech"
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
-      fabrikam_section = Enum.find(sections, &(&1.org_id == fabrikam.id))
-      assert fabrikam_section.color == "fabrikam"
+      # color is the scope token in CSS form, e.g. acme -> "acme", wayne_tech -> "wayne-tech"
+      acme = Tenancy.get_org_by_slug!("acme")
+      acme_section = Enum.find(sections, &(&1.org_id == acme.id))
+      assert acme_section.color == "acme"
     end
 
     # Task 01a08212: a following section has a NULL name, and `asc: s.name`
@@ -184,9 +184,9 @@ defmodule Platform.Chat.SidebarTest do
       refute Enum.any?(Sidebar.resolve_for_user(nil, []), &(&1.section.org_id == paragon.id))
 
       # Active orgs are untouched.
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
-      assert Enum.any?(Sidebar.list_active_default_sections(), &(&1.org_id == fabrikam.id))
-      assert Enum.any?(Sidebar.resolve_for_user(nil, []), &(&1.section.org_id == fabrikam.id))
+      acme = Tenancy.get_org_by_slug!("acme")
+      assert Enum.any?(Sidebar.list_active_default_sections(), &(&1.org_id == acme.id))
+      assert Enum.any?(Sidebar.resolve_for_user(nil, []), &(&1.section.org_id == acme.id))
     end
 
     test "a deletion-scheduled org's section is dropped too (schedule stamps archived_at)" do
@@ -226,20 +226,20 @@ defmodule Platform.Chat.SidebarTest do
     test "a channel filed into an org's section survives that org being archived" do
       admin = admin_user!()
       user = create_user!()
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+      acme = Tenancy.get_org_by_slug!("acme")
       sxi = Tenancy.get_org_by_slug!("sxi")
 
-      # Fabrikam-owned, so the SXI archive cascade never touches this channel row.
+      # Acme-owned, so the SXI archive cascade never touches this channel row.
       # NOT pinned: ChatLive partitions pinned spaces out before the resolver
       # runs, so a pinned channel never reaches this path and proves nothing.
-      channel = channel!(%{org_id: fabrikam.id})
+      channel = channel!(%{org_id: acme.id})
       {:ok, _} = Sidebar.put_channel_order(user.id, section_for!(sxi).id, [channel.id])
 
       {:ok, _} = Tenancy.archive_org(admin, sxi)
 
       resolved = Sidebar.resolve_for_user(user.id, [channel])
 
-      assert section_channel_ids(resolved, section_for!(fabrikam).id) == [channel.id]
+      assert section_channel_ids(resolved, section_for!(acme).id) == [channel.id]
 
       # The mobile pill strip renders flatten_sections/1, so the same defect
       # blanks the channel there too.
@@ -251,7 +251,7 @@ defmodule Platform.Chat.SidebarTest do
   # ── Admin-gated writes ───────────────────────────────────────────────────
 
   describe "rename_section/3" do
-    test "Fabrikam admin renames a section" do
+    test "Acme admin renames a section" do
       admin = admin_user!()
       section = hd(Sidebar.list_default_sections())
 
@@ -285,7 +285,7 @@ defmodule Platform.Chat.SidebarTest do
   end
 
   describe "recolor_section/3" do
-    test "Fabrikam admin recolors a section" do
+    test "Acme admin recolors a section" do
       admin = admin_user!()
       section = hd(Sidebar.list_default_sections())
 
@@ -295,7 +295,7 @@ defmodule Platform.Chat.SidebarTest do
   end
 
   describe "reorder_sections/2" do
-    test "Fabrikam admin sets positions from an ordered id list; unknown ids skipped" do
+    test "Acme admin sets positions from an ordered id list; unknown ids skipped" do
       admin = admin_user!()
       ids = Sidebar.list_default_sections() |> Enum.map(& &1.id) |> Enum.reverse()
 
@@ -314,7 +314,7 @@ defmodule Platform.Chat.SidebarTest do
   end
 
   describe "reassign_channel/3" do
-    test "Fabrikam admin sets the channel's org_id (global identity move)" do
+    test "Acme admin sets the channel's org_id (global identity move)" do
       admin = admin_user!()
       sxi = Tenancy.get_org_by_slug!("sxi")
       space = channel!()
@@ -885,7 +885,7 @@ defmodule Platform.Chat.SidebarTest do
       member = create_user!()
       from_org = Tenancy.get_org_by_slug!("sxi")
       to_org = Tenancy.get_org_by_slug!("paragon")
-      chosen = section_for!(Tenancy.get_org_by_slug!("fabrikam"))
+      chosen = section_for!(Tenancy.get_org_by_slug!("acme"))
 
       channel = channel!(%{name: "Wharfside"})
       {:ok, channel} = Chat.assign_space_org(channel, from_org.id)
@@ -938,7 +938,7 @@ defmodule Platform.Chat.SidebarTest do
     test "clears the channel out of every user's order when called directly" do
       member = create_user!()
       other = create_user!()
-      section = section_for!(Tenancy.get_org_by_slug!("fabrikam"))
+      section = section_for!(Tenancy.get_org_by_slug!("acme"))
 
       pruned = channel!(%{name: "Tollgate"})
       keeper = channel!(%{name: "Ninebark"})

@@ -89,6 +89,17 @@ defmodule PlatformWeb.Router do
     plug(:put_secure_browser_headers)
   end
 
+  # Prototype bundles (task 01a1316b-4e46 stage 1, ADR 0057). No `:accepts`:
+  # a bundle's `<script src>`, stylesheet, image and font requests send their
+  # own Accept headers and every one must reach the controller. No root layout
+  # and no `protect_from_forgery`: every route is a GET that renders nothing.
+  # `put_secure_browser_headers` is LOAD-BEARING, as on `:blob_browser`: the
+  # controller's sandbox CSP APPENDS to its `frame-ancestors 'self'`.
+  pipeline :proto_browser do
+    plug(:fetch_session)
+    plug(:put_secure_browser_headers)
+  end
+
   pipeline :api do
     plug(:accepts, ["json"])
   end
@@ -146,6 +157,13 @@ defmodule PlatformWeb.Router do
   pipeline :app_api do
     plug(:accepts, ["json"])
     plug(PlatformWeb.Plugs.AppBearerAuth)
+  end
+
+  # Push relay (task 01a1261e stage 2): 404 unless relay mode is on, 401
+  # without a live install credential.
+  pipeline :push_relay do
+    plug(:accepts, ["json"])
+    plug(PlatformWeb.Plugs.PushRelayAuth)
   end
 
   pipeline :require_auth do
@@ -238,6 +256,44 @@ defmodule PlatformWeb.Router do
     get("/agents/:id/avatar", AgentAvatarController, :show)
   end
 
+  # Agent avatar reads for the native app (task 01a12773 stage 1). The FCM
+  # service and the iOS Notification Service Extension hold an
+  # `app_sessions` bearer and no session cookie, so `:agent_avatar` answers
+  # them 401. Same controller, same 404s; only the authentication differs.
+  #
+  # A SEPARATE pipeline rather than a bearer branch inside `:agent_avatar`:
+  # that pipeline is the browser <img> gate, and `RequireAuth`'s deny
+  # contract (302 vs 401) is keyed on it. Mixing a bearer path in would
+  # change every browser avatar request.
+  #
+  # NO `:accepts` plug, deliberately. `:agent_avatar`'s `["html", "json"]`
+  # works for browsers only because an <img> request's Accept ends in
+  # `*/*`; a bare `Accept: image/png` (or `image/*`) raises
+  # `Phoenix.NotAcceptableError`, a 406. A native HTTP client may send
+  # exactly that, and a 406 here is a silent fall back to the letter icon.
+  # `:app_api` (json only) refuses the same requests. Nothing is negotiated
+  # on this route: the controller takes the content type from the storage
+  # key and ignores Accept, so an `:accepts` list could only ever refuse.
+  pipeline :app_avatar do
+    plug(PlatformWeb.Plugs.AppBearerAuth)
+  end
+
+  # HOST-AGNOSTIC, like the browser avatar scope above and every other
+  # `/api/app` route.
+  scope "/api/app", PlatformWeb do
+    pipe_through(:app_avatar)
+
+    # `:app_show`, not `:show`: the app gets a thumbnail of a large avatar,
+    # because both Burrow apps drop a body over 256 KB (see
+    # `AgentAvatarController.app_show/2`).
+    get("/agents/:id/avatar", AgentAvatarController, :app_show)
+
+    # A member's avatar for a push notification: `users.avatar_url` fetched
+    # server-side and served at a size both apps accept (see
+    # `UserAvatarController`).
+    get("/users/:id/avatar", UserAvatarController, :app_show)
+  end
+
   # Install PWA icon reads (task 01a0879a stage 3). NOTHING but `:accepts` —
   # no `fetch_session`, no `RequireAuth`, deliberately. See
   # `BrandingIconController`'s moduledoc: a PWA icon is fetched by the OS at
@@ -294,6 +350,29 @@ defmodule PlatformWeb.Router do
     pipe_through(:api)
 
     post("/chat/attachments/upload/:token", ChatAttachmentUploadController, :create)
+    # Resumable chunked verbs (task 01a120be). HEAD arrives here as GET:
+    # the endpoint's `Plug.Head` rewrites it before the router runs.
+    get("/chat/attachments/upload/:token", ChatAttachmentUploadController, :head)
+    patch("/chat/attachments/upload/:token", ChatAttachmentUploadController, :append)
+  end
+
+  # Single-use vault fetch (task 01a131c5 stage 1). Same posture as the
+  # presigned upload above: the token in the URL is the only auth — no
+  # session, no bearer. An agent's shell curls it with `-o` to a private file
+  # (`Platform.Vault.Fetch`). No `plug(:accepts, ...)`: curl's Accept header
+  # is not ours to negotiate, and the controller sends a raw body.
+  # HOST-AGNOSTIC: the URL is minted from `PlatformWeb.Endpoint.url/0`.
+  pipeline :vault_fetch do
+    plug(:put_secure_browser_headers)
+  end
+
+  scope "/", PlatformWeb do
+    pipe_through(:vault_fetch)
+
+    # `log: false`: no route-dispatch line for a secret download. The
+    # endpoint's request line is suppressed for this path too
+    # (`PlatformWeb.Endpoint.request_log_level/1`).
+    get("/vault/fetch/:token", VaultFetchController, :show, log: false)
   end
 
   # Calendar feed pipeline (task 019fb955-b702 stage 3) — same posture as
@@ -702,6 +781,29 @@ defmodule PlatformWeb.Router do
     get("/files/blob/:id", FileBlobController, :show)
   end
 
+  # Prototype bundles (task 01a1316b-4e46 stage 1, ADR 0057 Decision 1). Two
+  # app-fenced scopes, both `:require_app_surface` LAST.
+  #
+  # The GRANT route carries no session by construction (requests from an
+  # opaque-origin frame are cross-site for SameSite=Lax), so it does NOT pipe
+  # through `:require_auth`: the controller verifies the grant in the path and
+  # re-checks org membership for the grant's user on every request. It is
+  # declared ABOVE the entry route, which would otherwise match it as a path.
+  scope "/", PlatformWeb do
+    pipe_through([:proto_browser, :require_app_surface])
+
+    get("/proto/:id/:version/g/:grant/*path", PrototypeController, :serve)
+  end
+
+  # Entry and latest: navigations a Suite page starts, so the session is sent.
+  # `latest` is declared above `:version` so it is not parsed as a number.
+  scope "/", PlatformWeb do
+    pipe_through([:proto_browser, :require_auth, :enforce_external_scope, :require_app_surface])
+
+    get("/proto/:id/latest/*path", PrototypeController, :latest)
+    get("/proto/:id/:version/*path", PrototypeController, :entry)
+  end
+
   # THE FENCED SCOPE. `:require_app_surface` is LAST in the pipeline on
   # purpose: an unauthenticated request must still redirect to login (via
   # `:require_auth`) rather than 404, which keeps existing auth behaviour on
@@ -837,7 +939,7 @@ defmodule PlatformWeb.Router do
       layout: {PlatformWeb.Layouts, :shell} do
       live("/admin", AdminLive, :index)
       live("/admin/recovery", RecoveryLive, :index)
-      # rbac-external-users M3 stage 4 (task 019f8837): the Fabrikam-admin
+      # rbac-external-users M3 stage 4 (task 019f8837): the root-admin
       # recovery queue for external logins awaiting setup. Inherits the
       # `:ensure_admin` gate + `:shell` chrome from this live_session.
       live("/admin/external-logins", ExternalRecoveryLive, :index)
@@ -847,7 +949,7 @@ defmodule PlatformWeb.Router do
       # exactly the same shape as `/admin/users`, so it takes the same gate
       # from this live_session rather than inventing a second one — and the
       # context function re-checks the actor itself
-      # (`Lifecycle.with_fabrikam_admin_authz/2`) so neither half is load-bearing
+      # (`Lifecycle.with_root_admin_authz/2`) so neither half is load-bearing
       # alone.
       live("/admin/orgs", AdminOrgsLive, :index)
       # Task 01a0879a stage 4: this install's PWA identity (name, colours,
@@ -857,6 +959,15 @@ defmodule PlatformWeb.Router do
       # `/admin/orgs` does, and `Platform.Branding` re-checks the actor on
       # both writes.
       live("/admin/branding", AdminBrandingLive, :index)
+      # Task 01a1316b-4e46 stage 2: prototype publishing switch and caps,
+      # install-wide for the same reason as branding. `Settings.update/2`
+      # re-checks root admin on the write.
+      live("/admin/prototypes", AdminPrototypesLive, :index)
+      # Task 01a131c5 stage 2: shared secrets an admin grants to agents.
+      # `Platform.Vault.Shared` re-checks the actor on every call, so this
+      # live_session's gate is not load-bearing alone.
+      live("/admin/vault", AdminVaultLive, :index)
+      live("/admin/vault/:slug", AdminVaultLive, :show)
       live("/admin/prompts", AdminPromptsLive, :index)
       live("/admin/prompts/:slug", AdminPromptsLive, :edit)
       live("/admin/federation", AdminFederationLive, :index)
@@ -868,6 +979,39 @@ defmodule PlatformWeb.Router do
       # no redirect from the old path, which now falls to the
       # `/control/:agent_slug` catch-all as a URL that should not be typed.
       live("/admin/pipeline", PipelineLive, :index)
+    end
+  end
+
+  # Task 01a113ea stage 3: the native sign-in users page, which manages the
+  # install's bundled pocket-id users. Its own scope because the gate plug
+  # runs BEFORE `:require_auth`: with `POCKET_ID_ADMIN_ENABLED` off, every
+  # caller (admin, non-admin, signed out) gets 404, never a login redirect
+  # that would reveal the page exists. The rest of the pipeline is the fenced
+  # scope's, in the same order. Its own `live_session` too, because a
+  # `live_session` belongs to one scope; the `on_mount` list and layout are
+  # the `:admin` session's, so `:ensure_admin` still refuses a non-admin.
+  # `/admin/users` stays `UserAccessLive`, unchanged.
+  pipeline :require_sign_in_admin do
+    plug(PlatformWeb.Plugs.RequireSignInAdmin)
+  end
+
+  scope "/", PlatformWeb do
+    pipe_through([
+      :browser,
+      :require_sign_in_admin,
+      :require_auth,
+      :enforce_external_scope,
+      :require_app_surface
+    ])
+
+    live_session :admin_sign_in,
+      on_mount: [
+        PlatformWeb.ShellLive,
+        {PlatformWeb.LiveAuth, :default},
+        {PlatformWeb.LiveAuth, :ensure_admin}
+      ],
+      layout: {PlatformWeb.Layouts, :shell} do
+      live("/admin/sign-in-users", AdminSignInUsersLive, :index)
     end
   end
 
@@ -919,6 +1063,14 @@ defmodule PlatformWeb.Router do
   # Native app API (task 01a10882). HOST-AGNOSTIC like every other `/api/*`
   # machine caller. `POST /session` is the one unauthenticated route: it
   # redeems a PKCE-bound exchange code for a bearer token.
+  scope "/api/push-relay/v1", PlatformWeb do
+    pipe_through(:push_relay)
+
+    # `log: false`: Phoenix's request log prints parameters, and nothing an
+    # install sends may reach the relay's log.
+    post("/notifications", PushRelayController, :create, log: false)
+  end
+
   scope "/api/app", PlatformWeb do
     pipe_through(:api)
 
@@ -934,6 +1086,9 @@ defmodule PlatformWeb.Router do
     delete("/devices/:app_install_id", AppApiController, :unregister_device)
     get("/spaces", AppApiController, :spaces)
     post("/spaces/:space_id/messages", AppApiController, :create_message)
+    # Large-file chunked uploads (task 01a120be stage 2).
+    post("/spaces/:space_id/uploads", AppApiController, :create_upload)
+    get("/upload_config", AppApiController, :upload_config)
     get("/counts", AppApiController, :counts)
 
     # App Intents (task 01a10db6): Siri, Shortcuts, widgets, controls.
@@ -972,7 +1127,11 @@ defmodule PlatformWeb.Router do
 
   scope "/api/webhooks", PlatformWeb do
     pipe_through(:github_webhook)
-    post("/github", GithubWebhookController, :handle)
+    # `log: false` (task 01a11ec3 stage 3): Phoenix's route-dispatch log line
+    # prints the full `Parameters:` map, and an `issues` delivery's params ARE
+    # the external issue's title and body — untrusted text that must never
+    # reach a log. The endpoint's request line (method + path) still logs.
+    post("/github", GithubWebhookController, :handle, log: false)
   end
 
   scope "/api/webhooks", PlatformWeb do

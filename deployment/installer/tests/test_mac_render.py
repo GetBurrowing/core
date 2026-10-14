@@ -270,7 +270,8 @@ class MacKnobTest(PositiveControlMixin, unittest.TestCase):
                 "ROOM_PATTERN",
                 "IDLE_TIMEOUT_S",
                 "EMPTY_GRACE_S",
-                "LOG_LEVEL",
+                # No LOG_LEVEL: the bundled pocket-id declares it too (task
+                # 01a114c1), so a meetings-off render still carries the name.
             },
         )
 
@@ -593,10 +594,50 @@ class MacSecretsTest(PositiveControlMixin, TempDirMixin, unittest.TestCase):
         block = compose_block(rendered.files["compose.yaml"][0], "pocket-id")
         self.assertIn('image: "ghcr.io/pocket-id/pocket-id:v2.18.0"', block)
         self.assertIn('core-postgres:\n        condition: "service_healthy"', block)
-        # Positive control: single-host keeps sqlite and no static key.
-        single = build(manifest_from(SINGLE_HOST)).files["secrets.env"][0]
-        self.assertNotIn("DB_CONNECTION_STRING", single)
-        self.assertNotIn("STATIC_API_KEY", single)
+        # Positive control: single-host keeps sqlite. It does get the static key
+        # since task 01a113ea stage 4 (core's Users page needs it on every
+        # bundled install); test_render.SignInAdminEnvTest covers that.
+        single = build(manifest_from(SINGLE_HOST))
+        single_env = single.files["secrets.env"][0]
+        self.assertNotIn("DB_CONNECTION_STRING", single_env)
+        self.assertIn(f"STATIC_API_KEY={single.generated['STATIC_API_KEY']}\n", single_env)
+
+    def test_bundled_mac_wires_core_to_the_pocket_id_admin_api(self):
+        rendered = mac_build(manifest_from(MAC_LITE))
+        compose = rendered.files["compose.yaml"][0]
+        core = compose_block(compose, "core-platform")
+        self.assertIn('POCKET_ID_ADMIN_ENABLED: "true"', core)
+        self.assertIn('POCKET_ID_ADMIN_URL: "http://pocket-id:1411"', core)
+        key = rendered.generated["STATIC_API_KEY"]
+        text, mode = rendered.files["secrets.env"]
+        self.assertEqual(mode, 0o600)
+        env = dict(line.split("=", 1) for line in text.splitlines() if "=" in line)
+        self.assertEqual(env["POCKET_ID_API_KEY"], key)
+        self.assertNotIn("POCKET_ID_API_KEY", compose)
+        self.assertNotIn(key, compose)
+
+    def test_external_oidc_mac_writes_none_of_the_users_page_vars(self):
+        names = ("POCKET_ID_ADMIN_ENABLED", "POCKET_ID_ADMIN_URL", "POCKET_ID_API_KEY")
+        bundled = all_text(mac_build(manifest_from(MAC_LITE)))
+        for name in names:
+            self.assertIn(name, bundled)  # positive control
+        raw = load(MAC_LITE)
+        raw["auth"] = {
+            "mode": "external-oidc",
+            "issuer": "https://id.customer.example",
+            "client_id": "suite",
+            "client_secret_ref": "CUSTOMER_OIDC_SECRET",
+        }
+        errors, manifest = validate(raw)
+        self.assertEqual(errors, [])
+        with open(CUSTOMER, encoding="utf-8") as handle:
+            customer = handle.read()
+        supplied = os.path.join(self.tmp, "c.env")
+        with open(supplied, "w") as handle:
+            handle.write(customer + "CUSTOMER_OIDC_SECRET=oidc-value-01a113ea\n")
+        text = all_text(mac_build(manifest, customer_secrets=supplied))
+        for name in (*names, "STATIC_API_KEY", "pocket-id:1411"):
+            self.assertNotIn(name, text)
 
     def test_tunnel_token_is_required_at_render(self):
         with open(os.path.join(self.tmp, "c.env"), "w") as handle:

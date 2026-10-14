@@ -408,7 +408,7 @@ defmodule Platform.Agents.HistorianCorpusRegistrationTest do
     {:ok, file} =
       Files.create_file(%{
         project_id: project.id,
-        org_id: fabrikam_org_id(),
+        org_id: acme_org_id(),
         name: slug,
         original_filename: "#{slug}.pdf",
         content_type: "application/pdf",
@@ -424,7 +424,7 @@ defmodule Platform.Agents.HistorianCorpusRegistrationTest do
     {:ok, page} =
       Wiki.upsert_page(card_key, %{
         content: content,
-        org_id: fabrikam_org_id(),
+        org_id: acme_org_id(),
         project_id: project.id
       })
 
@@ -434,7 +434,7 @@ defmodule Platform.Agents.HistorianCorpusRegistrationTest do
   end
 
   defp seed_plain_page(file_key, content) do
-    {:ok, page} = Wiki.upsert_page(file_key, %{content: content, org_id: fabrikam_org_id()})
+    {:ok, page} = Wiki.upsert_page(file_key, %{content: content, org_id: acme_org_id()})
     backdate(page)
   end
 

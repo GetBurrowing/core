@@ -1,6 +1,8 @@
 package com.koboai.burrow.share
 
 import com.koboai.burrow.ApiException
+import com.koboai.burrow.InMemoryKeyValueStore
+import com.koboai.burrow.InstallStore
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -58,10 +60,11 @@ class ShareSheetModelTest {
     }
 
     @Test
-    fun `the cap is pinned`() {
-        assertEquals(8_388_608L, SizeCheck.MAX_SHARE_FILE_BYTES)
-        assertEquals(8L * 1024 * 1024, SizeCheck.MAX_SHARE_FILE_BYTES)
-        // The server's whole-body multipart limit (Plug.Parsers :length; iOS maxRequestBytes).
+    fun `the multipart threshold is pinned`() {
+        // Task 01a120be: the 8 MiB MAX_SHARE_FILE_BYTES user limit is gone (the
+        // per-file limit is the server's upload_config); what remains is the
+        // server's whole-body multipart limit (Plug.Parsers :length; iOS maxRequestBytes),
+        // and only as the multipart threshold.
         assertEquals(8_000_000L, SizeCheck.MAX_REQUEST_BYTES)
     }
 
@@ -205,5 +208,69 @@ class ShareSheetModelTest {
                 """{"spaces":[{"id":"s1","name":"Ops","path_segment":"ops","agents":[{"id":"a1","name":"Higgins"}]},{"name":"no id"}]}""",
             )
         assertEquals(listOf(ShareSpace("s1", "Ops", "ops", listOf(ShareSpace.Agent("a1", "Higgins")))), spaces)
+    }
+
+    // Task 01a116c4: direct share from a conversation shortcut.
+
+    private val other = ShareSpace("0192-s2", "Design", "design", emptyList(), kind = "group")
+
+    @Test
+    fun `a direct-share target opens its own signed-in host with its space preselected`() {
+        val (h, space) =
+            ShareSheetModel.target("suite.milv.life|0192-s2", host) { it == "suite.milv.life" }
+        assertEquals("suite.milv.life", h)
+        assertEquals("0192-s2", space)
+
+        val m = ShareSheetModel(h, FakeClient(spaces = listOf(this.space, other)), emptyList(), "x", space)
+        m.start()
+        assertEquals("0192-s2", m.selectedSpaceId)
+    }
+
+    @Test
+    fun `a target whose host is not signed in, or no target, falls back to the selected install`() {
+        assertEquals(host to null, ShareSheetModel.target("suite.milv.life|0192-s2", host) { it == host })
+        assertEquals(host to null, ShareSheetModel.target(null, host) { true })
+        assertEquals(host to null, ShareSheetModel.target("switch_install", host) { true })
+    }
+
+    @Test
+    fun `an unknown preselected space selects nothing and does not crash`() {
+        val m = ShareSheetModel(host, FakeClient(spaces = listOf(space, other)), emptyList(), "x", "0192-gone")
+        m.start()
+        assertEquals(ShareSheetModel.Phase.READY, m.phase)
+        assertNull(m.selectedSpaceId)
+    }
+
+    @Test
+    fun `a sent share reports the conversation, a failed one does not`() {
+        val noted = mutableListOf<Pair<String, String>>()
+        val ok = ShareSheetModel(host, FakeClient(spaces = listOf(space)), emptyList(), "hi") { h, s -> noted.add(h to s.id) }
+        ok.start()
+        assertTrue(ok.send())
+        assertEquals(listOf(host to space.id), noted)
+
+        noted.clear()
+        val failingClient = FakeClient(spaces = listOf(space), failOn = setOf(0))
+        val failing = ShareSheetModel(host, failingClient, emptyList(), "hi") { h, s -> noted.add(h to s.id) }
+        failing.start()
+        assertFalse(failing.send())
+        assertTrue(noted.isEmpty())
+    }
+
+    @Test
+    fun `a fresh app with no install is the not-signed-in state, not a crash`() {
+        // Task 01a12787: the app ships no installs, so a fresh app's selected
+        // install is null. ShareActivity passes that null host straight in.
+        val installs = InstallStore(InMemoryKeyValueStore(), InMemoryKeyValueStore())
+        val selected = installs.selectedInstall?.host
+        assertNull(selected)
+        val (host, preselect) = ShareSheetModel.target(null, selected) { true }
+        assertNull(host)
+        assertNull(preselect)
+        val client = FakeClient(spaces = listOf(space))
+        val model = ShareSheetModel(host, client, emptyList(), "x").also { it.start() }
+        assertEquals(ShareSheetModel.Phase.NOT_SIGNED_IN, model.phase)
+        assertEquals(0, client.calls)
+        assertEquals("Sign in to Burrow first. Open the Burrow app, sign in, then share again.", ShareSheetModel.NOT_SIGNED_IN_TEXT)
     }
 }

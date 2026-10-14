@@ -136,24 +136,24 @@ defmodule Platform.Branding.PresetsTest do
       assert Presets.label("retired_preset", v) == "Custom"
     end
 
-    test "suite_default applied is labelled Suite default" do
+    test "suite_default applied is labelled Burrow default" do
       all_nil = %{
         light: %{action: nil, surface: nil, accent: nil},
         dark: %{action: nil, surface: nil, accent: nil}
       }
 
-      assert Presets.label("suite_default", all_nil) == "Suite default"
+      assert Presets.label("suite_default", all_nil) == "Burrow default"
       # reset_colors/1 writes a nil key with every colour nil: the same look.
-      assert Presets.label(nil, all_nil) == "Suite default"
+      assert Presets.label(nil, all_nil) == "Burrow default"
     end
 
-    test "suite_default with one colour set is Custom (from Suite default)" do
+    test "suite_default with one colour set is Custom (from Burrow default)" do
       values = %{
         light: %{action: "#ff0000", surface: nil, accent: nil},
         dark: %{action: nil, surface: nil, accent: nil}
       }
 
-      assert Presets.label("suite_default", values) == "Custom (from Suite default)"
+      assert Presets.label("suite_default", values) == "Custom (from Burrow default)"
     end
   end
 end

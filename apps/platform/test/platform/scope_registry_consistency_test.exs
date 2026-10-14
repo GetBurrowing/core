@@ -9,8 +9,9 @@ defmodule Platform.ScopeRegistryConsistencyTest do
   `scope_label/1`, the `~w(...)` swatch palette in `chat_live.html.heex`) are
   covered at render level in `scope_pill_test.exs` and the chat LiveView tests.
 
-  Adding a SEVENTH org to only some of these sources must fail here rather
-  than half-landing.
+  Adding a SIXTH compiled atom to only some of these sources must fail here
+  rather than half-landing. The root org is NOT a compiled atom (task
+  01a116de stage 3): it is install data, resolved from its row.
   """
   use ExUnit.Case, async: true
 
@@ -18,7 +19,7 @@ defmodule Platform.ScopeRegistryConsistencyTest do
   alias Platform.Tenancy
   alias PlatformWeb.Components.ScopePill
 
-  @expected [:fabrikam, :soylent, :wayne_tech, :sxi, :paragon, :cyberdyne]
+  @expected [:soylent, :wayne_tech, :sxi, :paragon, :cyberdyne]
 
   test "Tasks.scope_keys/0 is the canonical enum, in order" do
     assert Tasks.scope_keys() == @expected
@@ -57,10 +58,12 @@ defmodule Platform.ScopeRegistryConsistencyTest do
     # The append-don't-insert invariant (tasks_live.ex) protects the rail order
     # for the five pre-existing tenants. Assert the prefix explicitly so a
     # mid-list insertion fails here rather than silently reordering the board.
-    assert Enum.take(Tasks.scope_keys(), 5) == [:fabrikam, :soylent, :wayne_tech, :sxi, :paragon]
+    assert Enum.take(Tasks.scope_keys(), 4) == [:soylent, :wayne_tech, :sxi, :paragon]
     assert List.last(Tasks.scope_keys()) == :cyberdyne
 
-    assert Enum.take(Tasks.scope_keys(), 5) |> Enum.map(&Atom.to_string/1) ==
+    # `tenant_priority/0` lists TENANTS only (task 01a116de): the root sorts
+    # first structurally and has no compiled scope key at all (stage 3).
+    assert Enum.slice(Tasks.scope_keys(), 0..3) |> Enum.map(&Atom.to_string/1) ==
              Tenancy.tenant_priority()
   end
 end

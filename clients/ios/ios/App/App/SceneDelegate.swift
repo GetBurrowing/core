@@ -20,6 +20,10 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         self.window = window
 
         SceneDelegateProxy.shared.scene(scene, willConnectTo: session, options: connectionOptions)
+        #if DEBUG
+            DebugPushKeySeam.applyLaunchArgument()
+            DebugPushKeySeam.applyLocalPushArgument()
+        #endif
 
         // Cold launch from a widget: park the link for when the shell starts.
         if let link = connectionOptions.urlContexts.lazy.compactMap({ DeepLink(url: $0.url) }).first {
@@ -28,7 +32,10 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     func sceneDidBecomeActive(_ scene: UIScene) {
-        WidgetCountsRefresher.refresh()
+        // ONE counts request per signed-in install: every install's unread
+        // count, the summed icon badge, the web switcher dot and the widgets'
+        // counts for the selected install (task 01a1261e).
+        OpenRefresh.run()
         VoIPRegistrar.shared.registerWithSignedInInstalls()
         IntentAppHooks.didBecomeActive()
     }
@@ -57,6 +64,8 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             if urlContexts.contains(where: { DebugVoIPSeam.handle(url: $0.url) }) { return }
             // `burrow://debug/personal-context?host=`: donation and index counts.
             if urlContexts.contains(where: { DebugPersonalContext.handle(url: $0.url) }) { return }
+            // `burrow://debug/push-key?host=`: a sealed-preview key for a test push.
+            if urlContexts.contains(where: { DebugPushKeySeam.handle(url: $0.url) }) { return }
         #endif
         // `burrow://open?...` is a widget deep link (SuiteBridgeViewController
         // opens it); anything else is Capacitor's.

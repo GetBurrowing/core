@@ -69,6 +69,8 @@ defmodule Platform.Responsibilities.Providers do
   alias Platform.Responsibilities.Providers.Architecture
   alias Platform.Responsibilities.Providers.Design
   alias Platform.Responsibilities.Providers.Experiments
+  alias Platform.Responsibilities.Providers.Feedback
+  alias Platform.Responsibilities.Providers.Janitor
   alias Platform.Responsibilities.Providers.Meetings
   alias Platform.Responsibilities.Providers.Memory
   alias Platform.Responsibilities.Providers.Tasks
@@ -78,6 +80,10 @@ defmodule Platform.Responsibilities.Providers do
     "architecture" => Architecture,
     "design" => Design,
     "experiments" => Experiments,
+    "feedback" => Feedback,
+    # Task 019fa1ac-6685 stage 1: `janitor.cron_drain`. Removing this entry
+    # is the canonical detonation for janitor_registration_test.exs.
+    "janitor" => Janitor,
     "meetings" => Meetings,
     "memory" => Memory,
     "tasks" => Tasks

@@ -535,6 +535,30 @@ defmodule Platform.MobileTest do
 
       assert %{approvals: 2, tasks: 2, as_of: %DateTime{}} = Mobile.counts_for_user(user)
     end
+
+    # Task 01a11703: the app-icon `approvals` badge counts what the user has
+    # not opened; the app's approval LIST keeps an opened, unsettled approval.
+    test "approvals drops 1 -> 0 after open_item/2 while list_approvals keeps the row" do
+      user = create_user!()
+
+      {:ok, item} =
+        Inbox.emit(%{
+          user_id: user.id,
+          kind: "task_plan_review",
+          source_type: "task",
+          source_id: Ecto.UUID.generate(),
+          title: "Plan ready for review",
+          url: "/inbox"
+        })
+
+      assert %{approvals: 1} = Mobile.counts_for_user(user)
+      assert length(Platform.Mobile.AppEntities.list_approvals(user)) == 1
+
+      assert {:ok, _} = Inbox.open_item(item.id, user.id)
+
+      assert %{approvals: 0} = Mobile.counts_for_user(user)
+      assert length(Platform.Mobile.AppEntities.list_approvals(user)) == 1
+    end
   end
 
   describe "secrets never reach the log" do

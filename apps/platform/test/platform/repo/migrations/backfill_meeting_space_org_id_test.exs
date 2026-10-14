@@ -161,7 +161,7 @@ defmodule Platform.Repo.Migrations.BackfillMeetingSpaceOrgIdTest do
 
   describe "up/0 against a seeded table" do
     test "populates the resolvable rows with the RIGHT org and leaves the unresolvable ones NULL" do
-      org_a = fabrikam_org_id()
+      org_a = acme_org_id()
       org_b = tenant_org_id("sxi")
 
       # ANTI-VACUITY. With one org in the fixture, "resolved the project's org"
@@ -393,7 +393,7 @@ defmodule Platform.Repo.Migrations.BackfillMeetingSpaceOrgIdTest do
       # partial UNIQUE on `(org_id, slug) WHERE org_id IS NOT NULL` would
       # reject the second UPDATE in the same statement. The `DISTINCT ON
       # (target_org_id, slug)` level is what keeps the migration alive here.
-      org = fabrikam_org_id()
+      org = acme_org_id()
       project = project_in(org)
 
       {:ok, meeting} =

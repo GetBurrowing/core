@@ -41,7 +41,7 @@ defmodule Platform.Tasks.PayloadAmendmentNoticeTest do
     n = System.unique_integer([:positive])
 
     {:ok, project} =
-      Tasks.create_project(%{name: "Amend Notice Project #{n}", org_id: fabrikam_org_id()})
+      Tasks.create_project(%{name: "Amend Notice Project #{n}", org_id: acme_org_id()})
 
     {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Amend Notice Task #{n}"})
     {:ok, plan} = Tasks.create_plan(%{task_id: task.id})

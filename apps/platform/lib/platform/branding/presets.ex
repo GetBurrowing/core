@@ -11,9 +11,11 @@ defmodule Platform.Branding.Presets do
   ## `suite_default` is first and is all nil
 
   Its values are nil in every slot on purpose. Applying it writes the same row
-  `Branding.reset_colors/1` writes, so "Reset to Suite default restores today's
-  look exactly" is literally true: nil means `app.css` stands, not a derived
-  approximation of it.
+  `Branding.reset_colors/1` writes, so "Reset to Burrow default restores
+  today's look exactly" is literally true: nil means `app.css` stands, not a
+  derived approximation of it. The key stays `suite_default` because it is
+  stored data (`install_branding.color_preset`); only the displayed name moved
+  to "Burrow default" (task 01a120c5).
 
   ## The rest are published open palettes
 
@@ -46,7 +48,7 @@ defmodule Platform.Branding.Presets do
   @presets [
     %{
       key: "suite_default",
-      name: "Suite default",
+      name: "Burrow default",
       light: @nil_mode,
       dark: @nil_mode
     },

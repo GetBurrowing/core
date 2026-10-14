@@ -65,7 +65,10 @@ defmodule Platform.Experiments.Surfaces do
     Platform.Experiments.Surfaces.OpenQuestionClassifier,
     # Task 01a10a44: which Burrow product doc pages ride in a task
     # dispatch's org preamble. The control is the index page alone.
-    Platform.Experiments.Surfaces.ProductDocsPreamble
+    Platform.Experiments.Surfaces.ProductDocsPreamble,
+    # Task 01a114a8 stage 4: whether a task's dispatches are told to work
+    # through suite_run. Enrolment is a task_cohort on agent_id.
+    Platform.Experiments.Surfaces.CodeMode
   ]
 
   @prompt_surface "dispatch.prompt"

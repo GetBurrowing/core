@@ -20,7 +20,7 @@ defmodule Platform.Chat.SpaceAddressingTest do
 
   use Platform.DataCase, async: false
 
-  import Platform.TenancyFixtures, only: [fabrikam_org_id: 0]
+  import Platform.TenancyFixtures, only: [acme_org_id: 0]
 
   alias Platform.Chat
   alias Platform.Chat.Space
@@ -78,7 +78,7 @@ defmodule Platform.Chat.SpaceAddressingTest do
 
   describe "space_path_segment/1 -> space_for_path_segment/1 round trip" do
     test "org-scoped channel" do
-      space = create_space!(%{slug: unique_slug(), org_id: fabrikam_org_id()})
+      space = create_space!(%{slug: unique_slug(), org_id: acme_org_id()})
 
       segment = Chat.space_path_segment(space)
       assert segment == space.id

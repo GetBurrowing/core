@@ -107,7 +107,7 @@ defmodule PlatformWeb.MeetingLiveRailCollapseTest do
     |> Org.changeset(%{
       name: "Tenant #{n}",
       slug: "tenant_rail_collapse_#{n}",
-      parent_org_id: Tenancy.get_org_by_slug!("fabrikam").id
+      parent_org_id: Tenancy.get_org_by_slug!("acme").id
     })
     |> Repo.insert!()
   end

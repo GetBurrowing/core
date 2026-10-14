@@ -22,6 +22,8 @@ class HttpRequest(
 class HttpResponse(
     val status: Int,
     val body: String,
+    /** A 3xx's `Location` header, or null. Redirects are never followed (see [AppApiClient]). */
+    val location: String? = null,
 ) {
     override fun toString(): String = "HttpResponse($status)"
 }
@@ -58,7 +60,8 @@ class UrlConnectionTransport(
             val status = connection.responseCode
             val stream = if (status >= 400) connection.errorStream else connection.inputStream
             val text = stream?.bufferedReader()?.use { it.readText() } ?: ""
-            return HttpResponse(status, text)
+            val location = if (status in 300..399) connection.getHeaderField("Location") else null
+            return HttpResponse(status, text, location)
         } finally {
             connection.disconnect()
         }
@@ -73,6 +76,11 @@ class ApiException(
     val kind: Kind,
     val status: Int = 0,
     route: String = "",
+    /**
+     * For a 3xx: the host its `Location` names when that is an absolute
+     * `https://` URL on another host, else null. A host is not a secret.
+     */
+    val movedTo: String? = null,
 ) : Exception("${kind.name.lowercase()}${if (status != 0) " $status" else ""}${if (route.isNotEmpty()) " on $route" else ""}") {
     enum class Kind { NOT_SIGNED_IN, STATUS, BAD_RESPONSE, NETWORK }
 }
@@ -107,13 +115,23 @@ class AppApiClient(
 
         fun devicePath(appInstallId: String) = "/api/app/devices/$appInstallId"
 
-        private fun sameHost(
+        /**
+         * True when [url] is https on exactly [host] (case-insensitive). A
+         * non-default port must be part of [host] (`localhost:8443`), so a
+         * URL on another port of the same name is another host. The one
+         * rule for "may this request carry [host]'s bearer": the handoff
+         * checks here and the push avatar fetch (push/AvatarFetcher.kt)
+         * both use it.
+         */
+        fun sameHost(
             url: String,
             host: String,
         ): Boolean =
             try {
                 val uri = URI(url)
-                uri.scheme.equals("https", ignoreCase = true) && uri.host.equals(host, ignoreCase = true)
+                val name = uri.host
+                val authority = if (uri.port == -1 || uri.port == 443) name else "$name:${uri.port}"
+                uri.scheme.equals("https", ignoreCase = true) && name != null && authority.equals(host, ignoreCase = true)
             } catch (_: Exception) {
                 false
             }
@@ -178,12 +196,15 @@ class AppApiClient(
      * signed-in user. Returns only when the server answered 2xx (the
      * honesty rule: push is "granted" only once the row is stored); any
      * other status throws STATUS and a transport failure throws NETWORK.
+     * [pushPublicKey] (base64url, no padding) is this phone's X25519 key for
+     * [host]'s sealed previews; it is omitted when null.
      */
     fun registerDevice(
         host: String,
         token: String,
         packageName: String,
         appInstallId: String,
+        pushPublicKey: String? = null,
     ) {
         val body =
             JSONObject()
@@ -191,6 +212,7 @@ class AppApiClient(
                 .put("platform", "android")
                 .put("package_name", packageName)
                 .put("app_install_id", appInstallId)
+                .apply { if (pushPublicKey != null) put("push_public_key", pushPublicKey) }
                 .toString()
         send(authorized(host, "POST", DEVICES_PATH, body), DEVICES_PATH)
     }
@@ -217,6 +239,13 @@ class AppApiClient(
         host: String,
         path: String,
     ): String = send(authorized(host, "GET", path, null), path).body
+
+    /** A bearer JSON `POST` of [body] to [path] on [host]; the body of a 2xx, else throws (status kept). */
+    fun postJson(
+        host: String,
+        path: String,
+        body: String,
+    ): String = send(authorized(host, "POST", path, body), path).body
 
     /** A bearer `DELETE` (`/api/app/session`, `/api/app/devices/:id`). */
     fun delete(
@@ -250,9 +279,28 @@ class AppApiClient(
             } catch (_: IOException) {
                 throw ApiException(ApiException.Kind.NETWORK, route = route)
             }
+        if (response.status in 300..399) {
+            // Never followed: that would send this install's bearer to whatever
+            // host the redirect names. Say where it points, so a moved install
+            // (an install that changed host, 2026-10-10) reads as moved
+            // rather than as a dropped connection.
+            throw ApiException(ApiException.Kind.STATUS, response.status, route, movedTo(response.location, request.url))
+        }
         if (response.status !in 200..299) throw ApiException(ApiException.Kind.STATUS, response.status, route)
         return response
     }
+
+    private fun movedTo(
+        location: String?,
+        requestUrl: String,
+    ): String? =
+        try {
+            val target = URI(location ?: return null)
+            val from = URI(requestUrl).host
+            target.host?.lowercase()?.takeIf { target.scheme.equals("https", ignoreCase = true) && !it.equals(from, ignoreCase = true) }
+        } catch (_: Exception) {
+            null
+        }
 
     private fun parse(
         response: HttpResponse,

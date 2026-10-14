@@ -26,12 +26,14 @@ defmodule Platform.GameStream.ModuleInventoryTest do
   # Core's copy also lists `mail.test.generator` and `test.budget`, which
   # that file's own setup registers; this list is core's registered surfaces
   # plus Play's three (task 01a0fe45 added game_stream.touch), and nothing else.
+  # Task 01a114a8 stage 4 added the core surface dispatch.code_mode.
   test "the default allowed surfaces include Play's three" do
     rails = Guardrails.for_org(nil)
 
     assert Enum.sort(rails.allowed_surfaces) ==
              [
                "chat.context_summary",
+               "dispatch.code_mode",
                "dispatch.product_docs_preamble",
                "dispatch.prompt",
                "game_stream.encoder_preset",
@@ -51,6 +53,7 @@ defmodule Platform.GameStream.ModuleInventoryTest do
     assert Enum.map(context.surfaces, & &1.key) |> Enum.sort() ==
              [
                "chat.context_summary",
+               "dispatch.code_mode",
                "dispatch.product_docs_preamble",
                "dispatch.prompt",
                "game_stream.encoder_preset",

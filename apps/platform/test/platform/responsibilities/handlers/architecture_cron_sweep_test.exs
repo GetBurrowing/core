@@ -246,6 +246,13 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureCronSweepTest do
       assert task.metadata["filed_by"] == "architect_cron_sweep"
       assert task.metadata["adr"] == "0044"
       assert "#488" in task.metadata["refs"]
+
+      # Task 019fa1ac-6685 stage 3: filed as a trusted internal chore, the
+      # only shape `Platform.Responsibilities.Janitor` will claim. Before
+      # this, `kind` fell to the schema default "feature".
+      assert task.kind == "chore"
+      assert task.origin == "internal"
+      assert task.trust == "trusted"
     end
 
     test "caps at 3 follow-ups even when the model returns 5", %{project: project} do

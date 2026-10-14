@@ -49,6 +49,12 @@
 >
 </div>
 <div :if={!@embedded} id="meeting-soundboard" phx-hook="MeetingSoundboard" class="hidden"></div>
+<%!-- Canvas rooms (task 01a1316b-84fa stage 2): this LiveView answers the
+     canvas_room_* events (CanvasHooks). A CanvasRoomBridge hook only talks
+     to its LiveView when that LiveView renders this marker, so a frame on a
+     surface without the handlers (task pages, the standalone canvas page,
+     a meeting's canvas tile) runs disconnected instead of crashing it. --%>
+<span hidden data-canvas-rooms></span>
 
 <.notification_banner
   :if={!@embedded}
@@ -75,7 +81,7 @@
        Section order:
          1. Pinned   (renders only when non-empty; locked at top)
          2. DMs      (always shown; renders empty-state when no DMs)
-         3. Sub-orgs (Paragon / Soylent / Fabrikam / Wayne-Tech / SXI, ALWAYS
+         3. Sub-orgs (one per org, the root org included, ALWAYS
                       rendered as section headers — empty buckets get an
                       empty-state hint instead of being suppressed)
 
@@ -108,7 +114,7 @@
     sidebar_edit={@sidebar_edit}
     sidebar_admin_edit={@sidebar_admin_edit}
     sidebar_menu_open={@sidebar_menu_open}
-    fabrikam_admin?={@fabrikam_admin?}
+    root_admin?={@root_admin?}
     mask_names?={@mask_names?}
     revealed_section_ids={@revealed_section_ids}
     sidebar_sections={@sidebar_sections}
@@ -285,6 +291,8 @@
         canvas_explorer_collapsed={@canvas_explorer_collapsed}
         canvas_archive_count={@canvas_archive_count}
         canvas_search_focus={@canvas_search_focus}
+        prototype_upload={@uploads[PrototypeUpload.upload_name()]}
+        can_publish_prototype?={@can_publish_prototype?}
       />
 
       <div id="inline-focus-listener" phx-hook="InlineFocus" class="hidden"></div>
@@ -319,6 +327,8 @@
         editing_message_id={@editing_message_id}
         rendered_message_ids={@rendered_message_ids}
         refused_summons={@refused_summons}
+        mounted_inline_canvas_ids={@mounted_inline_canvas_ids}
+        load_older_failed?={@load_older_failed?}
         embedded={@embedded}
       />
 
@@ -452,6 +462,7 @@
         mask_names?={@mask_names?}
         revealed_section_ids={@revealed_section_ids}
         sidebar_sections={@sidebar_sections}
+        limits={@large_upload_limits}
       />
 
       <.upload_dialog
@@ -460,6 +471,8 @@
         uploads={@uploads}
         caption={@upload_caption}
         tagged_agents={@upload_tagged_agents}
+        large_staged={@large_upload_staged}
+        limits={@large_upload_limits}
       />
     </div>
 
@@ -468,6 +481,7 @@
       show_versions_panel={@show_versions_panel}
       canvas_versions={@canvas_versions}
       restore_confirm_revision={@restore_confirm_revision}
+      viewer={{:user, @user_id}}
     />
 
     <%!-- Embedded surfaces (e.g. inside MeetingLive) leave the meeting
@@ -596,7 +610,7 @@
      (`toggle_pinned`, `hide_channel`) are the wrong verbs for a task pin. --%>
 <.row_actions_dialog
   :if={!@embedded and !@external?}
-  fabrikam_admin?={@fabrikam_admin?}
+  root_admin?={@root_admin?}
   target={
     rail_row_actions_target(
       @row_actions_space_id,

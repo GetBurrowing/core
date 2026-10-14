@@ -22,7 +22,7 @@ defmodule Platform.Tasks.OperatorCorrectionTest do
   """
   use Platform.DataCase, async: true
 
-  import Platform.TenancyFixtures, only: [fabrikam_org_id: 0]
+  import Platform.TenancyFixtures, only: [acme_org_id: 0]
 
   alias Platform.Accounts.User
   alias Platform.Federation.ToolSurface
@@ -46,8 +46,8 @@ defmodule Platform.Tasks.OperatorCorrectionTest do
     user =
       %User{}
       |> User.changeset(%{
-        # Deliberately NOT an @example.com address: `Platform.Accounts`
-        # DERIVES `:admin` from that domain, so a kobo-ai email would make
+        # Deliberately NOT an @acme.test address: `Platform.Accounts`
+        # DERIVES `:admin` from that domain, so an acme.test email would make
         # the `:not_authorized` tests pass for a reason unrelated to the
         # membership row under test.
         email: "correction-#{n}@example.com",
@@ -57,7 +57,7 @@ defmodule Platform.Tasks.OperatorCorrectionTest do
       |> Repo.insert!()
 
     %OrgMembership{}
-    |> OrgMembership.changeset(%{user_id: user.id, org_id: fabrikam_org_id(), role: role})
+    |> OrgMembership.changeset(%{user_id: user.id, org_id: acme_org_id(), role: role})
     |> Repo.insert!()
 
     user
@@ -67,13 +67,13 @@ defmodule Platform.Tasks.OperatorCorrectionTest do
     admin = user!("admin")
     # Guard the fixture itself: every `:not_authorized` assertion below is
     # only meaningful if this really is an admin.
-    assert Tenancy.fabrikam_admin?(admin)
+    assert Tenancy.root_admin?(admin)
     admin
   end
 
   defp member! do
     member = user!("member")
-    refute Tenancy.fabrikam_admin?(member)
+    refute Tenancy.root_admin?(member)
     member
   end
 

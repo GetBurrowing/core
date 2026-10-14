@@ -8,7 +8,7 @@ defmodule Platform.Tenancy.Org do
   ## Tiers
 
     * **Root** — `parent_org_id == nil`. Exactly one row (DB-enforced via
-      the `orgs_single_root` partial unique index). For Suite, this is Fabrikam.
+      the `orgs_single_root` partial unique index). Each install names its own.
     * **Tenant** — `parent_org_id == root.id`. One row per tenant (Soylent,
       Wayne-Tech, SXI, Paragon, etc.).
 

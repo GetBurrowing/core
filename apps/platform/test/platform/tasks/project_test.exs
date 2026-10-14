@@ -49,9 +49,9 @@ defmodule Platform.Tasks.ProjectTest do
 
     # ── ADR 0042: org_id is required ───────────────────────────────────────
 
-    test "defaults org_id to root Fabrikam when omitted (legacy callers)" do
+    test "defaults org_id to root Acme when omitted (legacy callers)" do
       assert {:ok, project} = Tasks.create_project(%{name: "Defaulted"})
-      assert project.org_id == fabrikam_org_id()
+      assert project.org_id == acme_org_id()
     end
 
     test "honors an explicitly-passed tenant org_id" do

@@ -17,7 +17,7 @@ defmodule Platform.Tenancy do
 
   ## Two-tier hierarchy
 
-    * Root org (Fabrikam) — `parent_org_id IS NULL`. Exactly one row, enforced
+    * Root org — `parent_org_id IS NULL`. Exactly one row, enforced
       at the DB level via a partial unique index.
     * Tenant orgs (Soylent, Wayne-Tech, SXI, Paragon, future tenants) —
       `parent_org_id` references the root.
@@ -40,12 +40,12 @@ defmodule Platform.Tenancy do
   email-domain admin rule. The Stage 1 migration backfilled existing
   users; the Stage 2 hook in `Platform.Accounts.find_or_create_from_oidc/1`
   re-evaluates the rule on every user INSERT and on every email-change
-  UPDATE so new Fabrikam hires auto-inherit `:admin` without re-running the
+  UPDATE so new root-org hires auto-inherit `:admin` without re-running the
   migration.
 
   The domain is configuration, not a literal (task 01a081c2 stage 2,
   renamed from `:admin_email_domain` to `:root_org_admin_email_domain` in
-  task 01a068f6 stage 1 to drop the config.exs-level Fabrikam default that
+  task 01a068f6 stage 1 to drop the config.exs-level install default that
   survived that first fix). `config :platform, :root_org_admin_email_domain`
   plus `derive_role_from_email/1` are together the SINGLE SOURCE OF TRUTH
   for the rule; read the key via `root_org_admin_email_domain/0` and never
@@ -53,8 +53,8 @@ defmodule Platform.Tenancy do
   install disables auto-admin outright.
 
   > NOTHING IS LEFT IN LOCKSTEP WITH THE MIGRATION. The SQL in
-  > `priv/repo/migrations/20260519160000_refine_fabrikam_admin_membership_by_email_domain.exs`
-  > is frozen Fabrikam-specific history: a one-time backfill that has already
+  > the `priv/repo/migrations/20260519160000_*` email-domain backfill
+  > is frozen install-specific history: a one-time backfill that has already
   > run everywhere, recorded in `schema_migrations` by version number only,
   > never by content. Do NOT "fix" it to match this function. Editing its
   > body changes what a future fresh `mix ecto.migrate` runs while leaving
@@ -157,20 +157,42 @@ defmodule Platform.Tenancy do
   The slug of this install's root org — the org a write lands in when the
   caller named none.
 
-  Defaults to `"fabrikam"`. `config/runtime.exs` overrides it from `ROOT_ORG_SLUG`
-  for an install whose root org carries a different slug (a renamed org made
-  every `get_org_by_slug("fabrikam")` return nil there, so org_id-less wiki pages
-  and projects landed unowned and a first-time OIDC login could not create a
-  user at all).
+  Resolution order, with NO literal default anywhere in the code:
 
-  Read at RUNTIME via `Application.get_env/3`, never `compile_env/3`: the
+    1. `config :platform, :root_org_slug` when it is set and non-blank
+       (`config/runtime.exs` sets it from `ROOT_ORG_SLUG`). A blank value is
+       treated as unset.
+    2. Otherwise the slug of the structural root, `get_root_org/0`
+       (`parent_org_id IS NULL`).
+    3. Otherwise `nil` — a database nobody has seeded yet has no root.
+
+  Until task 01a116de this defaulted to a hard-coded client slug, so on a
+  fresh install whose root is seeded `root` it named an org that did not
+  exist, and its callers treated the real root as a tenant.
+
+  Read at RUNTIME via `Application.get_env/2`, never `compile_env/3`: the
   released image auto-updates from `:latest` and would otherwise ship whatever
   config.exs held at build time, and tests could not override the key per case.
-  The read is an ETS lookup, which is why calling it from a changeset or a
-  render path costs nothing measurable.
+  The config read is an ETS lookup, but step 2 is a DB query, so a render path
+  should resolve this once (into an assign) rather than per row.
   """
-  @spec root_org_slug() :: String.t()
-  def root_org_slug, do: Application.get_env(:platform, :root_org_slug, "fabrikam")
+  @spec root_org_slug() :: String.t() | nil
+  def root_org_slug do
+    case Application.get_env(:platform, :root_org_slug) do
+      slug when is_binary(slug) ->
+        if String.trim(slug) == "", do: root_org_slug_from_db(), else: slug
+
+      _ ->
+        root_org_slug_from_db()
+    end
+  end
+
+  defp root_org_slug_from_db do
+    case get_root_org() do
+      %Org{slug: slug} -> slug
+      nil -> nil
+    end
+  end
 
   @doc "Fetch an org by slug. Returns `nil` if not found."
   @spec get_org_by_slug(String.t()) :: Org.t() | nil
@@ -235,9 +257,9 @@ defmodule Platform.Tenancy do
   end
 
   @doc """
-  List every active org, UNSCOPED: the root org (Fabrikam) plus every tenant
-  whose `archived_at` is `nil`, in canonical tenant-priority order (Fabrikam
-  first — see `tenant_priority/0`).
+  List every active org, UNSCOPED: the root org plus every tenant
+  whose `archived_at` is `nil`, in canonical tenant-priority order (the
+  root first — see `sort_by_tenant_priority/2`).
 
   > #### This read has no viewer {: .error}
   >
@@ -256,7 +278,7 @@ defmodule Platform.Tenancy do
   the pending-deletion states.
 
   The root org can never be archived — `Lifecycle` refuses it with
-  `{:error, :not_deletable}` — so Fabrikam is always present.
+  `{:error, :not_deletable}` — so the root is always present.
 
   > #### Returned slugs are NOT limited to the seeded five {: .warning}
   >
@@ -313,10 +335,10 @@ defmodule Platform.Tenancy do
     * A `nil` user — or anything without a binary `:id` — returns `[]`.
       An anonymous caller is never authorized. Mirrors
       `Platform.Tasks.list_projects_for_user/2`.
-    * Root (Fabrikam) admins bypass the membership filter and see every
+    * Root-org admins bypass the membership filter and see every
       active org. Admin status is read from the preloaded
-      `:org_memberships` when they are loaded (`fabrikam_admin_preloaded?/1`,
-      zero queries — the live path), else via `fabrikam_admin?/1`.
+      `:org_memberships` when they are loaded (`root_admin_preloaded?/1`,
+      zero queries — the live path), else via `root_admin?/1`.
     * Archive semantics, ordering and the "slugs are arbitrary user
       input" warning are all identical to `list_active_tenants_unscoped/0`.
   """
@@ -324,7 +346,7 @@ defmodule Platform.Tenancy do
   def list_active_tenants_for_user(%{id: user_id} = user) when is_binary(user_id) do
     Org
     |> where([o], is_nil(o.archived_at))
-    |> maybe_filter_orgs_viewer(user_id, root_admin?(user))
+    |> maybe_filter_orgs_viewer(user_id, listing_root_admin?(user))
     |> Repo.all()
     |> sort_by_tenant_priority(& &1.slug)
   end
@@ -337,10 +359,10 @@ defmodule Platform.Tenancy do
     where(query, [o], o.id in subquery(viewer_org_ids_query(user_id)))
   end
 
-  defp root_admin?(%{org_memberships: memberships} = user) when is_list(memberships),
-    do: fabrikam_admin_preloaded?(user)
+  defp listing_root_admin?(%{org_memberships: memberships} = user) when is_list(memberships),
+    do: root_admin_preloaded?(user)
 
-  defp root_admin?(user), do: fabrikam_admin?(user)
+  defp listing_root_admin?(user), do: root_admin?(user)
 
   @doc """
   List the **inactive** tenant orgs for the recovery surface — every
@@ -370,20 +392,25 @@ defmodule Platform.Tenancy do
   end
 
   @doc """
-  Canonical tenant ordering for UI surfaces (ADR-0042).
+  Canonical TENANT ordering for UI surfaces (ADR-0042).
 
-  Returns slugs in seed order — `fabrikam` first (root), then tenants in
-  their original seed insertion order: `soylent, wayne_tech, sxi,
-  paragon`. This is the "tenant-priority" ordering that both the
-  sidebar project picker and the project-create FAB should agree on,
-  rather than alphabetizing-by-name (which moves Paragon to the
-  front) or alphabetizing-by-slug (which moves paragon to the front).
+  Returns tenant slugs in their original seed insertion order:
+  `soylent, wayne_tech, sxi, paragon`. This is the "tenant-priority"
+  ordering that both the sidebar project picker and the project-create FAB
+  should agree on, rather than alphabetizing-by-name (which moves Paragon
+  to the front) or alphabetizing-by-slug (which moves paragon to the front).
+
+  The ROOT org is deliberately not in this list: it sorts first
+  structurally (`parent_org_id IS NULL`), whatever its slug, in
+  `sort_by_tenant_priority/2` and `Platform.Projects.group_by_org/1`. Until
+  task 01a116de the list named one install's root slug literally, so every
+  other install's root fell to the alphabetical tail.
 
   Unknown slugs fall to the end in slug-alphabetical order so adding a
   new tenant without updating this list still produces a stable sort.
   """
   @spec tenant_priority() :: [String.t()]
-  def tenant_priority, do: ["fabrikam", "soylent", "wayne_tech", "sxi", "paragon"]
+  def tenant_priority, do: ["soylent", "wayne_tech", "sxi", "paragon"]
 
   @doc """
   Index helper for `tenant_priority/0`. Returns the position of a slug in the
@@ -407,14 +434,28 @@ defmodule Platform.Tenancy do
   @doc """
   Sort an enumerable by canonical tenant priority. The accessor should
   return the org slug for an element.
+
+  The root org sorts first STRUCTURALLY: an element that is (or carries,
+  under `:org`) an `%Org{}` with `parent_org_id: nil` ranks ahead of every
+  tenant, whatever its slug. The remaining elements follow
+  `tenant_priority/0`, then slug-alphabetical.
   """
   @spec sort_by_tenant_priority(Enumerable.t(), (any() -> String.t())) :: list()
   def sort_by_tenant_priority(enum, slug_fn) do
     Enum.sort_by(enum, fn item ->
       slug = slug_fn.(item)
-      {tenant_priority_index(slug), String.downcase(slug)}
+      {root_rank(item), tenant_priority_index(slug), String.downcase(slug)}
     end)
   end
+
+  @doc """
+  Sort key putting the root org first: `0` for an `%Org{}` (or a map
+  carrying one under `:org`) whose `parent_org_id` is `nil`, `1` otherwise.
+  """
+  @spec root_rank(any()) :: 0 | 1
+  def root_rank(%Org{parent_org_id: nil}), do: 0
+  def root_rank(%{org: %Org{parent_org_id: nil}}), do: 0
+  def root_rank(_), do: 1
 
   # ── Membership finders ────────────────────────────────────────────────
 
@@ -446,8 +487,8 @@ defmodule Platform.Tenancy do
 
       where: p.org_id in subquery(Tenancy.viewer_org_ids_query(user_id))
 
-  Callers that grant root (Fabrikam) admins a bypass must check
-  `fabrikam_admin?/1` (or `fabrikam_admin_preloaded?/1`) themselves — this query
+  Callers that grant root-org admins a bypass must check
+  `root_admin?/1` (or `root_admin_preloaded?/1`) themselves — this query
   is membership only and knows nothing about roles.
 
   Prefer `scope/3` over calling this directly: `scope/3` layers the
@@ -473,8 +514,8 @@ defmodule Platform.Tenancy do
   orgs may this viewer see".
 
     * A member of the **root** org at ANY role → `:root_all`. Rowan's
-      2026-08-05 ruling: sub-orgs are filtering mechanisms, so a Fabrikam
-      member sees Fabrikam *and* SXI content. This is deliberately wide.
+      2026-08-05 ruling: sub-orgs are filtering mechanisms, so a root
+      member sees the root's *and* every tenant's content. This is deliberately wide.
     * Otherwise, the viewer's memberships → `{:orgs, ids}`, sorted and
       deduped so the value is directly comparable in tests.
     * `nil`, anything without a binary `:id`, or a user with zero
@@ -498,7 +539,7 @@ defmodule Platform.Tenancy do
   Resolves from the preloaded `:org_memberships` (with nested `:org`)
   when they are a loaded list — zero queries, and that is the live path
   since `Accounts.get_user/1` preloads them. Otherwise falls back to the
-  `Repo` path. Mirrors the `fabrikam_admin_preloaded?/1` vs `fabrikam_admin?/1`
+  `Repo` path. Mirrors the `root_admin_preloaded?/1` vs `root_admin?/1`
   split.
 
   **Resolve once per request and thread the resolved value** through to
@@ -595,7 +636,7 @@ defmodule Platform.Tenancy do
   end
 
   @doc """
-  Pure-function variant of `fabrikam_admin?/1` that consumes the already-
+  Pure-function variant of `root_admin?/1` that consumes the already-
   preloaded `org_memberships` (with nested `:org`) on a user struct
   instead of hitting the DB.
 
@@ -605,26 +646,26 @@ defmodule Platform.Tenancy do
 
   Used on the hot authentication path (RequireAuth plug + LiveAuth
   `on_mount`) where `Accounts.get_user/1` has already preloaded
-  memberships — calling `fabrikam_admin?/1` there would issue a redundant
+  memberships — calling `root_admin?/1` there would issue a redundant
   query.
   """
-  @spec fabrikam_admin_preloaded?(any()) :: boolean()
-  def fabrikam_admin_preloaded?(%{org_memberships: memberships}) when is_list(memberships) do
+  @spec root_admin_preloaded?(any()) :: boolean()
+  def root_admin_preloaded?(%{org_memberships: memberships}) when is_list(memberships) do
     Enum.any?(memberships, &root_membership_struct?(&1, "admin"))
   end
 
-  def fabrikam_admin_preloaded?(_), do: false
+  def root_admin_preloaded?(_), do: false
 
   @doc """
   Pure-function variant of `root_member?/1` — is the user a member of the
   root org at ANY role, read from the already-preloaded
   `org_memberships` (with nested `:org`)?
 
-  Peer of `fabrikam_admin_preloaded?/1`, and deliberately a DIFFERENT
-  question: root membership is the calendar/visibility rule ("any Fabrikam
-  employee sees everything"), root admin is the operator bypass. A
+  Peer of `root_admin_preloaded?/1`, and deliberately a DIFFERENT
+  question: root membership is the calendar/visibility rule ("any root-org
+  member sees everything"), root admin is the operator bypass. A
   `role: "member"` membership on the root org is `true` here and `false`
-  in `fabrikam_admin_preloaded?/1`.
+  in `root_admin_preloaded?/1`.
   """
   @spec root_member_preloaded?(any()) :: boolean()
   def root_member_preloaded?(%{org_memberships: memberships}) when is_list(memberships) do
@@ -1021,7 +1062,7 @@ defmodule Platform.Tenancy do
   # ── Role helpers ──────────────────────────────────────────────────────
 
   @doc """
-  Is the user a Fabrikam (root) admin?
+  Is the user a root-org admin?
 
   Returns `true` only if there is a membership row with `role == "admin"`
   joined to the root org (`parent_org_id IS NULL`). Sub-org admins return
@@ -1030,21 +1071,21 @@ defmodule Platform.Tenancy do
 
   Returns `false` for `nil` or any non-user input.
   """
-  @spec fabrikam_admin?(any()) :: boolean()
-  def fabrikam_admin?(%{id: user_id}) when is_binary(user_id) do
+  @spec root_admin?(any()) :: boolean()
+  def root_admin?(%{id: user_id}) when is_binary(user_id) do
     Repo.exists?(root_membership_query(user_id, "admin"))
   end
 
-  def fabrikam_admin?(_), do: false
+  def root_admin?(_), do: false
 
   @doc """
-  Is the user a member of the root (Fabrikam) org at ANY role?
+  Is the user a member of the root org at ANY role?
 
-  Distinct from `fabrikam_admin?/1` and both are legitimate: root membership
-  is the visibility rule ("any Fabrikam employee sees everything" — it is
+  Distinct from `root_admin?/1` and both are legitimate: root membership
+  is the visibility rule ("any root-org member sees everything" — it is
   what makes `visibility/1` return `:root_all`), root admin is the
   operator bypass. A `role: "member"` on the root org answers `true`
-  here and `false` to `fabrikam_admin?/1`.
+  here and `false` to `root_admin?/1`.
 
   Returns `false` for `nil` or any non-user input.
   """
@@ -1056,7 +1097,7 @@ defmodule Platform.Tenancy do
   def root_member?(_), do: false
 
   # The ONE "which org is the root org" predicate, in query form. Both
-  # `fabrikam_admin?/1` and `root_member?/1` compose it so the definition of
+  # `root_admin?/1` and `root_member?/1` compose it so the definition of
   # root is written exactly once.
   defp root_org_ids_query do
     from(o in Org, where: is_nil(o.parent_org_id), select: o.id)
@@ -1115,7 +1156,7 @@ defmodule Platform.Tenancy do
   AND `external == false`. Nothing else confers it:
 
     * an external admin (`role: "admin", external: true`) is not an org admin;
-    * a Fabrikam root admin (`fabrikam_admin?/1`) who holds no admin row in THIS org is
+    * a root-org admin (`root_admin?/1`) who holds no admin row in THIS org is
       not an org admin of it — there is no root bypass here, by design (task
       01a0cf21 stage 1, where the requester settled mail-account management
       as org-admins-only).
@@ -1183,7 +1224,7 @@ defmodule Platform.Tenancy do
   #
   # Task 019ffe9d stage 1. Implemented alongside the lifecycle writes in
   # `Platform.Tenancy.Lifecycle`; delegated here so callers use the natural
-  # context API. Fabrikam-admin only, like every other org write.
+  # context API. Root-admin only, like every other org write.
 
   @doc "See `Platform.Tenancy.Lifecycle.create_org/2`."
   defdelegate create_org(actor, attrs), to: Platform.Tenancy.Lifecycle
@@ -1193,7 +1234,7 @@ defmodule Platform.Tenancy do
   # Task 019f4eaa stage 3. Implemented in `Platform.Tenancy.Lifecycle`
   # (which also owns the provenance-aware cascade over child projects and
   # chat_spaces); delegated here so callers use the natural context API.
-  # All four require a Fabrikam admin actor and refuse the root org.
+  # All four require a root-admin actor and refuse the root org.
 
   @doc "See `Platform.Tenancy.Lifecycle.archive_org/2`."
   defdelegate archive_org(actor, org), to: Platform.Tenancy.Lifecycle
@@ -1217,7 +1258,7 @@ defmodule Platform.Tenancy do
   # ── Inheritance resolver ──────────────────────────────────────────────
 
   # Maximum number of org ancestors we'll walk before giving up. The
-  # current two-tier design only ever needs 1 step (tenant → Fabrikam), but
+  # current two-tier design only ever needs 1 step (tenant → root), but
   # the resolver is written to support arbitrary depth for future use,
   # so we cap at 16 as a defensive guard against a corrupt
   # parent_org_id cycle (FK design prevents this, but belt + braces).
@@ -1241,7 +1282,7 @@ defmodule Platform.Tenancy do
     * `{:overridden, value, parent_value}` — `org` has its own value
       AND the nearest ancestor that defines `key` has a different (or
       same — caller decides what "shadow" means) value, surfaced as
-      `parent_value`. Useful for an "overrides Fabrikam default" pill.
+      `parent_value`. Useful for an "overrides root default" pill.
     * `{:inherited, source_org, value}` — `org` does not define `key`,
       but an ancestor does; `source_org` is the nearest ancestor that
       defines it and `value` is that ancestor's value.
@@ -1261,7 +1302,7 @@ defmodule Platform.Tenancy do
 
       iex> lookup = fn org, :skill -> Map.fetch(skills_by_org_id, org.id) end
       iex> Tenancy.effective_value(soylent, :skill, "fallback", lookup_fn: lookup)
-      {:inherited, %Org{slug: "fabrikam"}, "fabrikam-default-skill"}
+      {:inherited, %Org{slug: "acme"}, "acme-default-skill"}
 
   """
   @spec effective_value(Org.t(), term(), term(), keyword()) ::
@@ -1308,8 +1349,11 @@ defmodule Platform.Tenancy do
 
   # ── Scope display (pure, DB-free) ─────────────────────────────────────
 
+  # The root org has no entry: it is install data, not a compiled atom, and
+  # reaches its colour through the `data-scope` var path
+  # (`PlatformWeb.Components.ScopeColorStyles`) instead (task 01a116de
+  # stage 3). The five siblings are the inventory FOLLOW-UP.
   @scope_classes %{
-    fabrikam: "text-fabrikam",
     soylent: "text-soylent",
     wayne_tech: "text-wayne-tech",
     sxi: "text-sxi",
@@ -1318,7 +1362,6 @@ defmodule Platform.Tenancy do
   }
 
   @scope_labels %{
-    fabrikam: "Fabrikam",
     soylent: "Soylent",
     wayne_tech: "Wayne-Tech",
     sxi: "SXI",
@@ -1344,7 +1387,7 @@ defmodule Platform.Tenancy do
 
       [%{slug: "sxi", label: "SXI", hue: 162, chroma: 0.15, lightness: 0.7}, ...]
 
-  `label` is the org's own `name`, NOT `@scope_labels`: a map keyed on six
+  `label` is the org's own `name`, NOT `@scope_labels`: a map keyed on five
   compiled atoms cannot name a seventh org, and the row already carries the
   name an admin typed. `hue` is `nil` when the org has no colour set (the
   caller decides the fallback); `chroma` falls back to #{@default_chroma},
@@ -1390,6 +1433,16 @@ defmodule Platform.Tenancy do
 
   Emitting an org the viewer can already see names nothing new: the rule
   carries the org's slug and colour, both already on screen for them.
+
+  The ROOT org is always in the list, whatever the viewer's visibility
+  (task 01a116de, gate-fix stage). Its section and header pill reach
+  viewers who are not root members (an internal tenant member sees every
+  workspace channel, the root's included), and since stage 3 the root's
+  dot and pill are coloured only through this var path, with no compiled
+  class to fall back on. The root's colour is the install's own, not a
+  tenant's, so emitting it discloses nothing. The root is resolved
+  structurally (`parent_org_id IS NULL`), never by slug. Other tenants are
+  still emitted only to viewers who can see them.
   """
   @spec scope_color_entries(map() | nil) :: [
           %{
@@ -1401,10 +1454,16 @@ defmodule Platform.Tenancy do
           }
         ]
   def scope_color_entries(viewer) do
-    Org
-    |> where([o], is_nil(o.archived_at))
-    |> scope(visibility(viewer), field: :id)
-    |> Repo.all()
+    visible =
+      Org
+      |> where([o], is_nil(o.archived_at))
+      |> scope(visibility(viewer), field: :id)
+      |> Repo.all()
+
+    root = Repo.all(from(o in Org, where: is_nil(o.parent_org_id) and is_nil(o.archived_at)))
+
+    (visible ++ root)
+    |> Enum.uniq_by(& &1.id)
     |> sort_by_tenant_priority(& &1.slug)
     |> Enum.map(&scope_entry/1)
   end
@@ -1424,8 +1483,9 @@ defmodule Platform.Tenancy do
 
   > #### Deprecated {: .warning}
   >
-  > Keyed on the six compiled scope atoms, so it returns `"text-muted"` for
-  > any org added after this module was written. New callers want
+  > Keyed on the five compiled sibling scope atoms (the root org has none),
+  > so it returns `"text-muted"` for the root org and for any org added
+  > after this module was written. New callers want
   > `scope_slug_entries/1` plus `Platform.Tenancy.ScopeColor.derive/2`.
   > Retained because existing callers (`files_live`, `inheritance_pill`,
   > `recovery_live`) still read it.
@@ -1483,10 +1543,9 @@ defmodule Platform.Tenancy do
 
   No hardcoded fallback anywhere in `config.exs` — an install that never
   sets `ROOT_ORG_ADMIN_EMAIL_DOMAIN` gets `nil` and nobody is
-  auto-admined by domain. (`config/dev.exs` and `config/test.exs` each pin
-  this to `"example.com"` so Fabrikam's own dev workflow and existing test
-  suite keep behaving exactly as before — that is a per-environment
-  convenience override, not a shared/production default.)
+  auto-admined by domain. (`config/test.exs` pins a fixture domain so the
+  existing test suite keeps behaving exactly as before — that is a
+  per-environment convenience override, not a shared/production default.)
 
   `config/runtime.exs` overrides this key from `ROOT_ORG_ADMIN_EMAIL_DOMAIN`
   per install, and a BLANK value there is honoured rather than skipped:
@@ -1496,11 +1555,11 @@ defmodule Platform.Tenancy do
   handle.
 
   Until task 01a081c2 the domain was a literal compiled into this module, so
-  a Fabrikam email address was automatically an admin on any other install of
-  Suite. Renamed from `:admin_email_domain` (task 01a068f6 stage 1) to make
-  the "root org" scope explicit and to shed the config.exs-level Fabrikam
+  one install's email addresses were automatically admins on any other
+  install of Suite. Renamed from `:admin_email_domain` (task 01a068f6 stage 1) to make
+  the "root org" scope explicit and to shed the config.exs-level install
   default that survived that first fix — a fresh install that never touched
-  `ADMIN_EMAIL_DOMAIN` still auto-admined `@example.com` addresses.
+  `ADMIN_EMAIL_DOMAIN` still auto-admined that install's addresses.
 
   Read at RUNTIME via `Application.get_env/3`, never `compile_env/3`: the
   released image auto-updates from `:latest` and would otherwise ship whatever
@@ -1528,8 +1587,8 @@ defmodule Platform.Tenancy do
   `:member` otherwise. Nil, empty, and non-binary input return `:member`.
 
   **When no domain is configured, EVERY input returns `:member`.** Unset or
-  blank means nobody is auto-admined, never everybody and never a Fabrikam
-  fallback. The failure this guards is a config-less install silently
+  blank means nobody is auto-admined, never everybody and never an
+  install-specific fallback. The failure this guards is a config-less install silently
   promoting every user who logs in.
 
   `String.ends_with?/2` on `"@" <> domain`, not a runtime-built regex: a
@@ -1540,20 +1599,20 @@ defmodule Platform.Tenancy do
 
   ## Examples
 
-      # With :root_org_admin_email_domain set to "example.com"
-      iex> Platform.Tenancy.derive_role_from_email("alice@example.com")
+      # With :root_org_admin_email_domain set to "acme.test"
+      iex> Platform.Tenancy.derive_role_from_email("alice@acme.test")
       :admin
 
       # Host comparison is case-insensitive
-      iex> Platform.Tenancy.derive_role_from_email("ALICE@example.com")
+      iex> Platform.Tenancy.derive_role_from_email("ALICE@ACME.TEST")
       :admin
 
       # A subdomain is not the configured domain
-      iex> Platform.Tenancy.derive_role_from_email("alice@us.example.com")
+      iex> Platform.Tenancy.derive_role_from_email("alice@us.acme.test")
       :member
 
       # The domain in the local part is not the host
-      iex> Platform.Tenancy.derive_role_from_email("example.com@example.com")
+      iex> Platform.Tenancy.derive_role_from_email("acme.test@gmail.com")
       :member
 
       iex> Platform.Tenancy.derive_role_from_email(nil)
@@ -1576,7 +1635,7 @@ defmodule Platform.Tenancy do
 
   @doc """
   Upsert an `org_memberships` row for `{user_id, org_id}` to the given
-  role. `org_slug` defaults to `:fabrikam` (the root org).
+  role. `org_slug` (atom or string) is required; there is no default org.
 
   Idempotent: re-calling with the same role on an existing row is a no-op
   and still returns `{:ok, membership}`. A role change updates the
@@ -1588,8 +1647,8 @@ defmodule Platform.Tenancy do
 
   ## Examples
 
-      iex> {:ok, _membership} = Platform.Tenancy.set_membership_role(user, :fabrikam, :admin)
-      iex> {:ok, _membership} = Platform.Tenancy.set_membership_role(user, :fabrikam, :admin)
+      iex> {:ok, _membership} = Platform.Tenancy.set_membership_role(user, :acme, :admin)
+      iex> {:ok, _membership} = Platform.Tenancy.set_membership_role(user, :acme, :admin)
       # ^ second call is a no-op idempotent return
 
       iex> Platform.Tenancy.set_membership_role(user, "definitely-not-a-real-slug", :admin)
@@ -1664,8 +1723,8 @@ defmodule Platform.Tenancy do
 
   This is permanently inert once any membership exists on the org: the next
   user to land (any email) is evaluated by the ordinary domain rule (or
-  `:member`), never by this fallback again. Fabrikam's own root org already has
-  memberships, so this branch never fires there.
+  `:member`), never by this fallback again. A long-running install's root org
+  already has memberships, so this branch never fires there.
 
   This is the function the accounts hook should call. `set_membership_role/3`
   remains the unconditional setter for `promote_to_admin/2` /
@@ -1713,10 +1772,10 @@ defmodule Platform.Tenancy do
   end
 
   @doc """
-  Promote `user` to `:admin` on the Fabrikam root org and set `roles_locked_at`
+  Promote `user` to `:admin` on the root org and set `roles_locked_at`
   so the email-domain rule no longer overrides this row.
 
-  Use for non-Fabrikam collaborators who should hold admin (e.g. a partner
+  Use for collaborators outside the admin email domain who should hold admin (e.g. a partner
   engineer who needs full operator access despite an external email).
 
   ## Idempotency
@@ -1752,11 +1811,11 @@ defmodule Platform.Tenancy do
   def promote_to_admin(user, opts \\ []), do: set_managed_role(user, :admin, opts)
 
   @doc """
-  Revoke admin on `user`'s Fabrikam membership — sets `role: :member` AND
+  Revoke admin on `user`'s root-org membership — sets `role: :member` AND
   `roles_locked_at` so the email-domain rule cannot re-promote them on
   the next OIDC refresh.
 
-  Use for contractors on a `@example.com` email who should NOT have admin.
+  Use for contractors on the admin email domain who should NOT have admin.
 
   ## Idempotency
 
@@ -1780,7 +1839,7 @@ defmodule Platform.Tenancy do
   def revoke_admin(user, opts \\ []), do: set_managed_role(user, :member, opts)
 
   # Core implementation for promote_to_admin / revoke_admin. Force-sets
-  # both `role` and `roles_locked_at` on the user's Fabrikam membership row
+  # both `role` and `roles_locked_at` on the user's root-org membership row
   # and emits an audit event. Idempotent on already-target rows.
   # Binds only `user_id` (task 01a01041 stage 2): the `= user` binding was
   # unused — the body reaches the membership row through `user_id` alone

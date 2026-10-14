@@ -8,7 +8,9 @@ class InstallSessionTest {
     private val install = Install("suite.example.com")
     private val tokens = KeystoreTokenStore(InMemoryKeyValueStore(), FakeTokenCipher())
 
-    private fun launcher(transport: RecordingTransport) = InstallLauncher(AppApiClient(tokens, transport), tokens)
+    private val removed = mutableListOf<String>()
+
+    private fun launcher(transport: RecordingTransport) = InstallLauncher(AppApiClient(tokens, transport), tokens) { removed.add(it) }
 
     @Test
     fun `no bearer means native sign-in, with no request at all`() {
@@ -64,7 +66,7 @@ class InstallSessionTest {
                     "DELETE /api/app/session" to HttpResponse(204, ""),
                 ),
             )
-        NativeSignOut(AppApiClient(tokens, transport), tokens, "install-1").run(install.host)
+        NativeSignOut(AppApiClient(tokens, transport), tokens, "install-1") { removed.add(it) }.run(install.host)
         assertEquals(
             listOf("DELETE /api/app/devices/install-1", "DELETE /api/app/session"),
             transport.requests.map { "${it.method} ${java.net.URI(it.url).path}" },
@@ -75,10 +77,41 @@ class InstallSessionTest {
     }
 
     @Test
+    fun `sign-out forgets that install's push key with its bearer`() {
+        tokens.store(install.host, "b1")
+        val forgotten = mutableListOf<String>()
+        NativeSignOut(AppApiClient(tokens, RecordingTransport()), tokens, "i", { forgotten.add(it) }) { removed.add(it) }.run(install.host)
+        assertEquals(listOf(install.host), forgotten)
+        assertEquals(listOf(install.host), removed)
+    }
+
+    @Test
     fun `sign-out offline still forgets the bearer`() {
         tokens.store(install.host, "b1")
         val transport = RecordingTransport(failing = setOf("DELETE /api/app/devices/i", "DELETE /api/app/session"))
-        NativeSignOut(AppApiClient(tokens, transport), tokens, "i").run(install.host)
+        NativeSignOut(AppApiClient(tokens, transport), tokens, "i") { removed.add(it) }.run(install.host)
         assertNull(tokens.token(install.host))
+    }
+
+    // Task 01a116c4: only that install's conversation shortcuts go.
+
+    @Test
+    fun `signing out of A removes A's shortcuts only`() {
+        tokens.store(install.host, "b1")
+        tokens.store("suite.milv.life", "b2")
+        NativeSignOut(AppApiClient(tokens, RecordingTransport()), tokens, "i") { removed.add(it) }.run(install.host)
+        assertEquals(listOf(install.host), removed)
+    }
+
+    @Test
+    fun `a revoked bearer (401) removes that install's shortcuts only, other failures remove none`() {
+        tokens.store(install.host, "b1")
+        launcher(RecordingTransport(mapOf("POST /api/app/handoff" to HttpResponse(401, "{}")))).start(install, null)
+        assertEquals(listOf(install.host), removed)
+
+        removed.clear()
+        tokens.store(install.host, "b1")
+        launcher(RecordingTransport(mapOf("POST /api/app/handoff" to HttpResponse(502, "")))).start(install, null)
+        assertEquals(emptyList<String>(), removed)
     }
 }

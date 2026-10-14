@@ -151,7 +151,7 @@ defmodule Platform.Regression.SpaceWriteHandleEventAuditTest do
   # A handler calling one of these has been through the choke point. Test 2
   # verifies the claim against `chat.ex` per function, so an entry cannot be
   # added here to silence the audit without the function actually composing.
-  @space_authorized_chat_calls ~w(pin_message unpin_message remove_space_agent)
+  @space_authorized_chat_calls ~w(pin_message unpin_message remove_space_agent reserve_space_upload)
 
   # ── The allowlist ─────────────────────────────────────────────────────────
   #

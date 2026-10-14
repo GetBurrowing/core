@@ -152,7 +152,14 @@ defmodule Platform.OIDC do
     config(:strategy) || Assent.Strategy.OIDC
   end
 
-  defp issuer do
+  @doc """
+  The configured OIDC issuer with any trailing slash removed. On bundled
+  pocket-id installs this is pocket-id's browser-facing `APP_URL`, which
+  `Platform.SignInAdmin.Config.public_base/0` uses to build sign-in links.
+  Raises when no issuer is configured.
+  """
+  @spec issuer() :: String.t()
+  def issuer do
     config!(:issuer)
     |> String.trim_trailing("/")
   end

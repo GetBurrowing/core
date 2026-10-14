@@ -30,7 +30,7 @@ defmodule Platform.Security.MeetingSlugScopeTest do
       :slug])`, so one slug string can name two rows in two orgs. Each viewer
       resolves *their* org's meeting and never sees the other's name. Before
       this task both viewers got an `Ecto.MultipleResultsError` 500.
-    * ROOT ADMIN — the deliberate Fabrikam-admin bypass, pinned so a later reader
+    * ROOT ADMIN — the deliberate Acme-admin bypass, pinned so a later reader
       does not mistake it for a hole.
     * EXTERNAL NARROWING — org membership *alone* does not admit an external
       user; a `chat_participants` row for the meeting's bound space is also
@@ -93,7 +93,7 @@ defmodule Platform.Security.MeetingSlugScopeTest do
   # ── Fixtures ──────────────────────────────────────────────────────────────
 
   # `@example.com` so `Tenancy.derive_role_from_email/1` yields `member`. A
-  # `@example.com` address would derive admin and blanket-bypass the very
+  # `@acme.test` address would derive admin and blanket-bypass the very
   # check under test — the one fixture mistake that would make this whole
   # file green for the wrong reason.
   defp user_in_org(org_id, opts \\ []) do
@@ -544,15 +544,15 @@ defmodule Platform.Security.MeetingSlugScopeTest do
 
   # ── 5. Root-admin bypass (deliberate) ─────────────────────────────────────
 
-  describe "Fabrikam root admin" do
+  describe "Acme root admin" do
     test "an admin of the root org opens a tenant-org meeting they are not a member of",
          %{conn: conn} do
       org_id = tenant_org_id("soylent")
       meeting = meeting_in_org(org_id, "Root Reach")
-      admin = user_in_org(fabrikam_org_id(), role: "admin")
+      admin = user_in_org(acme_org_id(), role: "admin")
 
       refute Tenancy.member_of?(admin, org_id)
-      assert Tenancy.fabrikam_admin?(admin)
+      assert Tenancy.root_admin?(admin)
 
       assert {:ok, _view, html} = live(sign_in(conn, admin), ~p"/meetings/#{meeting.slug}")
       assert html =~ meeting.name
@@ -746,12 +746,12 @@ defmodule Platform.Security.MeetingSlugScopeTest do
   # ── 9. Root admin and anonymous, on the index ─────────────────────────────
 
   describe "the index bypass and the index floor" do
-    test "a Fabrikam root admin still sees every org's meetings, at both layers", %{conn: conn} do
+    test "an Acme root admin still sees every org's meetings, at both layers", %{conn: conn} do
       a = scheduled_meeting_in_org(tenant_org_id("soylent"), "Root Index Reach A", 9)
       b = scheduled_meeting_in_org(tenant_org_id("wayne_tech"), "Root Index Reach B", 13)
-      admin = user_in_org(fabrikam_org_id(), role: "admin")
+      admin = user_in_org(acme_org_id(), role: "admin")
 
-      assert Tenancy.fabrikam_admin?(admin)
+      assert Tenancy.root_admin?(admin)
 
       ids = listed_ids(admin)
       assert a.id in ids and b.id in ids
@@ -960,10 +960,10 @@ defmodule Platform.Security.MeetingSlugScopeTest do
       refute html =~ foreign.slug
     end
 
-    test "a Fabrikam root admin's archive spans orgs; a nil viewer's is empty", %{conn: conn} do
+    test "an Acme root admin's archive spans orgs; a nil viewer's is empty", %{conn: conn} do
       a = tenant_org_id("soylent") |> meeting_in_org("Archive Root Reach A") |> ended!()
       b = tenant_org_id("wayne_tech") |> meeting_in_org("Archive Root Reach B") |> ended!()
-      admin = user_in_org(fabrikam_org_id(), role: "admin")
+      admin = user_in_org(acme_org_id(), role: "admin")
 
       ids = archived_ids(admin)
       assert a.id in ids and b.id in ids

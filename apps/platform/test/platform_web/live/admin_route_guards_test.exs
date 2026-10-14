@@ -48,12 +48,13 @@ defmodule PlatformWeb.AdminRouteGuardsTest do
   describe "/admin (landing page)" do
     test "admin user reaches the page and sees the 4 section cards", %{conn: conn} do
       user = create_user!()
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
-      create_membership!(user, fabrikam, "admin")
+      acme = Tenancy.get_org_by_slug!("acme")
+      create_membership!(user, acme, "admin")
 
       {:ok, _view, html} = conn |> authenticated_conn(user) |> live(~p"/admin")
 
-      assert html =~ "Admin · Fabrikam Operations"
+      assert html =~ "Admin · Operations"
+      refute html =~ "Fabrikam Operations"
       assert html =~ "Agent Resources"
       assert html =~ "Agent Federation"
       assert html =~ "Usage / Cost Metering"
@@ -63,7 +64,7 @@ defmodule PlatformWeb.AdminRouteGuardsTest do
       assert html =~ ~s(href="/control/usage")
       assert html =~ ~s(href="/admin/users")
       # Prompts is intentionally NOT a card on the landing page — it's
-      # reached via the working-cluster rail tile (admin-only, fabrikam_only?:
+      # reached via the working-cluster rail tile (admin-only, root_only?:
       # true). Per 2026-05-20 dedup decision: single source of truth.
       # Can't `refute html =~ ~s(href="/admin/prompts")` page-wide because
       # the surrounding shell rail (visible to admins) renders the Prompts
@@ -75,8 +76,8 @@ defmodule PlatformWeb.AdminRouteGuardsTest do
 
     test "member user is redirected to /", %{conn: conn} do
       user = create_user!()
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
-      create_membership!(user, fabrikam, "member")
+      acme = Tenancy.get_org_by_slug!("acme")
+      create_membership!(user, acme, "member")
 
       assert {:error, {:live_redirect, %{to: "/", flash: flash}}} =
                conn |> authenticated_conn(user) |> live(~p"/admin")
@@ -95,8 +96,8 @@ defmodule PlatformWeb.AdminRouteGuardsTest do
   describe "/admin/users (User Access)" do
     test "admin user reaches the page and sees the user-list surface", %{conn: conn} do
       user = create_user!()
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
-      create_membership!(user, fabrikam, "admin")
+      acme = Tenancy.get_org_by_slug!("acme")
+      create_membership!(user, acme, "admin")
 
       {:ok, _view, html} = conn |> authenticated_conn(user) |> live(~p"/admin/users")
 
@@ -114,8 +115,8 @@ defmodule PlatformWeb.AdminRouteGuardsTest do
 
     test "member user is redirected to /", %{conn: conn} do
       user = create_user!()
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
-      create_membership!(user, fabrikam, "member")
+      acme = Tenancy.get_org_by_slug!("acme")
+      create_membership!(user, acme, "member")
 
       assert {:error, {:live_redirect, %{to: "/", flash: flash}}} =
                conn |> authenticated_conn(user) |> live(~p"/admin/users")
@@ -134,16 +135,16 @@ defmodule PlatformWeb.AdminRouteGuardsTest do
   describe "/admin/prompts" do
     test "admin user reaches the page", %{conn: conn} do
       user = create_user!()
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
-      create_membership!(user, fabrikam, "admin")
+      acme = Tenancy.get_org_by_slug!("acme")
+      create_membership!(user, acme, "admin")
 
       {:ok, _view, _html} = conn |> authenticated_conn(user) |> live(~p"/admin/prompts")
     end
 
     test "member user is redirected to /", %{conn: conn} do
       user = create_user!()
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
-      create_membership!(user, fabrikam, "member")
+      acme = Tenancy.get_org_by_slug!("acme")
+      create_membership!(user, acme, "member")
 
       assert {:error, {:live_redirect, %{to: "/", flash: flash}}} =
                conn |> authenticated_conn(user) |> live(~p"/admin/prompts")
@@ -162,16 +163,16 @@ defmodule PlatformWeb.AdminRouteGuardsTest do
   describe "/admin/federation" do
     test "admin user reaches the page", %{conn: conn} do
       user = create_user!()
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
-      create_membership!(user, fabrikam, "admin")
+      acme = Tenancy.get_org_by_slug!("acme")
+      create_membership!(user, acme, "admin")
 
       {:ok, _view, _html} = conn |> authenticated_conn(user) |> live(~p"/admin/federation")
     end
 
     test "member user is redirected to /", %{conn: conn} do
       user = create_user!()
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
-      create_membership!(user, fabrikam, "member")
+      acme = Tenancy.get_org_by_slug!("acme")
+      create_membership!(user, acme, "member")
 
       assert {:error, {:live_redirect, %{to: "/", flash: flash}}} =
                conn |> authenticated_conn(user) |> live(~p"/admin/federation")
@@ -181,17 +182,17 @@ defmodule PlatformWeb.AdminRouteGuardsTest do
   end
 
   describe "admin nav gating in shell" do
-    # Admin-only nav chrome is gated on `is_fabrikam_user`, which is driven by
-    # `Tenancy.fabrikam_admin_preloaded?/1`. Admin-only tiles in the rail today:
+    # Admin-only nav chrome is gated on `root_user`, which is driven by
+    # `Tenancy.root_admin_preloaded?/1`. Admin-only tiles in the rail today:
     # the dedicated **Admin** cluster tile (lands at `/admin` landing page
     # with section cards for Agent Resources / Agent Federation / Usage /
-    # User Access) AND the **Prompts** working-cluster tile (fabrikam_only?:
+    # User Access) AND the **Prompts** working-cluster tile (root_only?:
     # true as of 2026-05-20 — was false until then, which rendered the tile
     # for members but redirected on click; that bug is fixed).
     test "admin user sees the Admin cluster tile in shell", %{conn: conn} do
       user = create_user!()
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
-      create_membership!(user, fabrikam, "admin")
+      acme = Tenancy.get_org_by_slug!("acme")
+      create_membership!(user, acme, "admin")
 
       {:ok, _view, html} = conn |> authenticated_conn(user) |> live(~p"/tasks")
 
@@ -201,13 +202,13 @@ defmodule PlatformWeb.AdminRouteGuardsTest do
 
     test "member user does NOT see the Admin cluster tile in shell", %{conn: conn} do
       user = create_user!()
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
-      create_membership!(user, fabrikam, "member")
+      acme = Tenancy.get_org_by_slug!("acme")
+      create_membership!(user, acme, "member")
 
       {:ok, _view, html} = conn |> authenticated_conn(user) |> live(~p"/tasks")
 
       refute html =~ ~s(data-destination="admin")
-      # Members must also NOT see the Prompts tile (fabrikam_only?: true as
+      # Members must also NOT see the Prompts tile (root_only?: true as
       # of 2026-05-20). The data-destination attribute is the precise
       # check — the path string "/admin/prompts" alone could surface in
       # other contexts (e.g. tests that don't render the rail).

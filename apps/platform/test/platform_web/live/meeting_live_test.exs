@@ -38,9 +38,9 @@ defmodule PlatformWeb.MeetingLiveTest do
   # Org plumbing (task 019f9b14 stage 2): `/meetings/:slug` now resolves
   # through `Meetings.fetch_meeting_for_user/2`, which requires the viewer to
   # hold an `org_memberships` row in the meeting's org. Real users always have
-  # one — `Accounts.find_or_create_from_oidc/1` inserts a Fabrikam-root membership
+  # one — `Accounts.find_or_create_from_oidc/1` inserts an Acme-root membership
   # on signup — so the fixture mirrors that shape. `@example.com` keeps
-  # `derive_role_from_email/1` at `:member`; a `@example.com` address would
+  # `derive_role_from_email/1` at `:member`; a `@acme.test` address would
   # derive admin and blanket-bypass the check these tests rely on.
   defp authenticated_conn(conn, user \\ nil) do
     user =
@@ -51,7 +51,7 @@ defmodule PlatformWeb.MeetingLiveTest do
           oidc_sub: "oidc-meeting-test-#{System.unique_integer([:positive])}"
         })
 
-    member!(user, Platform.TenancyFixtures.fabrikam_org_id())
+    member!(user, Platform.TenancyFixtures.acme_org_id())
 
     {init_test_session(conn, current_user_id: user.id), user}
   end
@@ -76,9 +76,9 @@ defmodule PlatformWeb.MeetingLiveTest do
   end
 
   defp create_project do
-    # ADR 0042: projects require an org_id. Default to the root Fabrikam org so
+    # ADR 0042: projects require an org_id. Default to the root Acme org so
     # legacy fixtures (which never named an org) keep working untouched.
-    create_project(Platform.TenancyFixtures.fabrikam_org_id())
+    create_project(Platform.TenancyFixtures.acme_org_id())
   end
 
   defp create_project(org_id) do
@@ -263,7 +263,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       project = create_project(Platform.TenancyFixtures.tenant_org_id("soylent"))
       {meeting, _space} = create_meeting(%{project: project, name: "Soylent Only"})
 
-      # Fabrikam-root membership at :member level — the shape every OIDC signup
+      # Acme-root membership at :member level — the shape every OIDC signup
       # has, and not a membership in the meeting's org.
       {conn, _user} = authenticated_conn(conn)
 
@@ -5305,7 +5305,7 @@ defmodule PlatformWeb.MeetingLiveTest do
       %OrgMembership{}
       |> OrgMembership.changeset(%{
         user_id: user.id,
-        org_id: Platform.TenancyFixtures.fabrikam_org_id(),
+        org_id: Platform.TenancyFixtures.acme_org_id(),
         role: "member",
         external: Keyword.get(opts, :external, false)
       })
@@ -6214,7 +6214,7 @@ defmodule PlatformWeb.MeetingLiveTest do
           oidc_sub: "oidc-invitee-#{System.unique_integer([:positive])}"
         })
 
-      member!(user, Platform.TenancyFixtures.fabrikam_org_id())
+      member!(user, Platform.TenancyFixtures.acme_org_id())
     end
 
     defp search_invites(view, query) do

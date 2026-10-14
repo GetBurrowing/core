@@ -19,22 +19,22 @@ defmodule Platform.RootOrgSlugTest do
   ## Why "configured root org" is shaped the way it is
 
   Migration `20260519143620_seed_root_orgs.exs` seeds an org with slug
-  `"fabrikam"` into every migrated database, this test DB included. A test
+  `"acme"` into every migrated database, this test DB included. A test
   written against that seeded org passes identically whether or not the
   code under test even looks at `:root_org_slug`, and proves nothing. So
   each case here:
 
-    * keeps the seeded `"fabrikam"` org in place AND inserts a second org —
-      `"milhouse"`, parented UNDER Fabrikam, i.e. a real, ordinary tenant, not a
+    * keeps the seeded `"acme"` org in place AND inserts a second org —
+      `"milhouse"`, parented UNDER Acme, i.e. a real, ordinary tenant, not a
       root — then points `:root_org_slug` at `"milhouse"`; and
-    * asserts the write lands on **Fabrikam's org_id** and NOT `milhouse`'s.
+    * asserts the write lands on **Acme's org_id** and NOT `milhouse`'s.
       `root_org_slug/0` pointing at a real (non-root) org is exactly the
       case a naive "did it error?" assertion can't distinguish from a
       slug-based implementation that redirected there — asserting the org
       id is the only way to catch that regression.
 
   `describe "root org renamed away"` is the literal production shape: on
-  suite.example.com the single org was RENAMED from `"fabrikam"` to
+  suite.example.com the single org was RENAMED from `"acme"` to
   `"milhouse"` on 2026-09-03 — same *row*, same `parent_org_id IS NULL`,
   different slug. That is what made a first-time OIDC login unable to
   create a user under the pre-01a068f6 slug-based lookup —
@@ -79,25 +79,25 @@ defmodule Platform.RootOrgSlugTest do
     :ok
   end
 
-  # The seeded "fabrikam" org STAYS and remains the ONLY `parent_org_id IS NULL`
+  # The seeded "acme" org STAYS and remains the ONLY `parent_org_id IS NULL`
   # row — "milhouse" is parented under it, an ordinary tenant. A slug-based
   # lookup pointed at "milhouse" would find and use it; the structural
   # `get_root_org/0` lookup this file now exercises must not.
   defp seed_second_org! do
-    fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+    acme = Tenancy.get_org_by_slug!("acme")
 
     milhouse =
       %Org{}
       |> Org.changeset(%{
         name: "Milhouse",
         slug: @renamed_slug,
-        parent_org_id: fabrikam.id
+        parent_org_id: acme.id
       })
       |> Repo.insert!()
 
     put_root_org_slug(@renamed_slug)
 
-    %{fabrikam: fabrikam, milhouse: milhouse}
+    %{acme: acme, milhouse: milhouse}
   end
 
   defp create_user!(overrides \\ %{}) do
@@ -118,12 +118,12 @@ defmodule Platform.RootOrgSlugTest do
     |> Repo.insert!()
   end
 
-  # ── Configured root org (seeded "fabrikam" still present) ────────────────
+  # ── Configured root org (seeded "acme" still present) ────────────────
   #
   # Task 01a068f6 stage 1: these six call sites now resolve the root org
   # structurally (`get_root_org/0`), so `:root_org_slug` pointed at
   # "milhouse" — a real org, just not the root — must NOT redirect any of
-  # them. Every write below must land on Fabrikam, not milhouse.
+  # them. Every write below must land on Acme, not milhouse.
 
   describe "configured root org" do
     setup do
@@ -131,7 +131,7 @@ defmodule Platform.RootOrgSlugTest do
     end
 
     test "WikiPage.changeset/2 ignores :root_org_slug and defaults to the structural root",
-         %{milhouse: milhouse, fabrikam: fabrikam} do
+         %{milhouse: milhouse, acme: acme} do
       n = System.unique_integer([:positive])
 
       page =
@@ -139,36 +139,36 @@ defmodule Platform.RootOrgSlugTest do
         |> WikiPage.changeset(%{file_key: "org/root-org-slug-#{n}.md", content: "hello"})
         |> Repo.insert!()
 
-      assert page.org_id == fabrikam.id
+      assert page.org_id == acme.id
       refute page.org_id == milhouse.id
     end
 
     test "WikiJournalEntry.changeset/2 ignores :root_org_slug and defaults to the structural root",
-         %{milhouse: milhouse, fabrikam: fabrikam} do
+         %{milhouse: milhouse, acme: acme} do
       entry =
         %WikiJournalEntry{}
         |> WikiJournalEntry.changeset(%{content: "note", date: Date.utc_today()})
         |> Repo.insert!()
 
-      assert entry.org_id == fabrikam.id
+      assert entry.org_id == acme.id
       refute entry.org_id == milhouse.id
     end
 
     test "Tasks.create_project/1 with no :org_id ignores :root_org_slug and attaches to the structural root",
-         %{milhouse: milhouse, fabrikam: fabrikam} do
+         %{milhouse: milhouse, acme: acme} do
       n = System.unique_integer([:positive])
 
       assert {:ok, project} = Tasks.create_project(%{name: "Root Org Slug Project #{n}"})
-      assert project.org_id == fabrikam.id
+      assert project.org_id == acme.id
       refute project.org_id == milhouse.id
     end
 
     test "Tenancy.promote_to_admin/1 with no :org_slug ignores :root_org_slug and writes to the structural root",
-         %{milhouse: milhouse, fabrikam: fabrikam} do
+         %{milhouse: milhouse, acme: acme} do
       user = create_user!()
 
       assert {:ok, membership} = Tenancy.promote_to_admin(user)
-      assert membership.org_id == fabrikam.id
+      assert membership.org_id == acme.id
       refute membership.org_id == milhouse.id
       assert membership.role == "admin"
 
@@ -177,16 +177,16 @@ defmodule Platform.RootOrgSlugTest do
     end
 
     test "Tenancy.apply_derived_role/1 ignores :root_org_slug and writes to the structural root",
-         %{milhouse: milhouse, fabrikam: fabrikam} do
+         %{milhouse: milhouse, acme: acme} do
       user = create_user!()
 
       assert {:ok, %OrgMembership{} = membership} = Tenancy.apply_derived_role(user)
-      assert membership.org_id == fabrikam.id
+      assert membership.org_id == acme.id
       refute membership.org_id == milhouse.id
     end
 
     test "Accounts.find_or_create_from_oidc/1 ignores :root_org_slug and puts a new user's membership on the structural root",
-         %{milhouse: milhouse, fabrikam: fabrikam} do
+         %{milhouse: milhouse, acme: acme} do
       n = System.unique_integer([:positive])
 
       assert {:ok, user} =
@@ -197,26 +197,127 @@ defmodule Platform.RootOrgSlugTest do
                })
 
       assert %OrgMembership{} =
-               membership = Repo.get_by(OrgMembership, user_id: user.id, org_id: fabrikam.id)
+               membership = Repo.get_by(OrgMembership, user_id: user.id, org_id: acme.id)
 
-      assert membership.org_id == fabrikam.id
+      assert membership.org_id == acme.id
       refute Repo.get_by(OrgMembership, user_id: user.id, org_id: milhouse.id)
     end
   end
 
-  # ── The production shape: the root org was renamed, no "fabrikam" exists ──
+  # ── root_org_slug/0 itself: no literal default (task 01a116de) ────────
+  #
+  # `config.exs` used to default `:root_org_slug` to a client's slug, so on a
+  # fresh install whose root is seeded `root` the accessor named an org that
+  # did not exist. It now reads config when set and non-blank, else the
+  # structural root's slug, else nil. Each case pins BOTH inputs (the config
+  # key and the root row) so it cannot pass on whatever the test DB seeded.
+
+  defp delete_root_org_slug do
+    previous = Application.get_env(:platform, :root_org_slug)
+    Application.delete_env(:platform, :root_org_slug)
+
+    on_exit(fn ->
+      case previous do
+        nil -> Application.delete_env(:platform, :root_org_slug)
+        value -> Application.put_env(:platform, :root_org_slug, value)
+      end
+    end)
+
+    :ok
+  end
+
+  defp set_root_row_slug!(slug) do
+    {1, _} =
+      Repo.update_all(from(o in Org, where: is_nil(o.parent_org_id)), set: [slug: slug])
+
+    :ok
+  end
+
+  describe "root_org_slug/0 resolution" do
+    test "(a) unset config + root row `root` resolves \"root\"" do
+      delete_root_org_slug()
+      set_root_row_slug!("root")
+
+      assert Tenancy.root_org_slug() == "root"
+    end
+
+    test "(b) config \"acme\" + root row `acme` resolves \"acme\"" do
+      put_root_org_slug("acme")
+      set_root_row_slug!("acme")
+
+      assert Tenancy.root_org_slug() == "acme"
+    end
+
+    test "(b') a set config wins over the root row's slug" do
+      put_root_org_slug("acme")
+      set_root_row_slug!("root")
+
+      assert Tenancy.root_org_slug() == "acme"
+    end
+
+    test "(c) no root row and no config resolves nil" do
+      delete_root_org_slug()
+      # `TRUNCATE ... CASCADE`, not `Repo.delete_all/1`: other tables
+      # FK-reference `orgs.id` with ON DELETE RESTRICT. Transactional, so it
+      # rolls back with the test (same approach as
+      # adr_0042_root_org_resolution_test.exs).
+      Ecto.Adapters.SQL.query!(Repo, "TRUNCATE orgs CASCADE")
+
+      assert Tenancy.get_root_org() == nil
+      assert Tenancy.root_org_slug() == nil
+    end
+
+    test "(d) a blank config value is treated as unset" do
+      set_root_row_slug!("root")
+
+      put_root_org_slug("")
+      assert Tenancy.root_org_slug() == "root"
+
+      put_root_org_slug("   ")
+      assert Tenancy.root_org_slug() == "root"
+    end
+  end
+
+  # ── The root sorts first structurally, whatever its slug ─────────────
+
+  describe "root-first ordering" do
+    test "list_orgs_in_priority_order/0 puts a root slugged `zz-root` first" do
+      set_root_row_slug!("zz-root")
+
+      slugs = Tenancy.list_orgs_in_priority_order() |> Enum.map(& &1.slug)
+      assert Enum.take(slugs, 5) == ["zz-root", "soylent", "wayne_tech", "sxi", "paragon"]
+    end
+
+    test "Projects.group_by_org/1 puts the root's bucket first whatever its slug" do
+      set_root_row_slug!("zz-root")
+      root = Tenancy.get_root_org()
+      soylent = Tenancy.get_org_by_slug!("soylent")
+
+      {:ok, _} = Tasks.create_project(%{name: "Soylent Order Probe", org_id: soylent.id})
+      {:ok, _} = Tasks.create_project(%{name: "Root Order Probe", org_id: root.id})
+
+      slugs =
+        Tasks.list_projects_unscoped(preload: :org)
+        |> Platform.Projects.group_by_org()
+        |> Enum.map(fn {slug, _name, _ps} -> slug end)
+
+      assert Enum.take(slugs, 2) == ["zz-root", "soylent"]
+    end
+  end
+
+  # ── The production shape: the root org was renamed, no "acme" exists ──
 
   describe "root org renamed away" do
     setup do
       {1, _} =
         Repo.update_all(
-          from(o in Org, where: o.slug == "fabrikam"),
+          from(o in Org, where: o.slug == "acme"),
           set: [slug: @renamed_slug]
         )
 
       put_root_org_slug(@renamed_slug)
 
-      assert Tenancy.get_org_by_slug("fabrikam") == nil
+      assert Tenancy.get_org_by_slug("acme") == nil
       %{root: Tenancy.get_org_by_slug!(@renamed_slug)}
     end
 

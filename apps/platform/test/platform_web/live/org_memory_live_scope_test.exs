@@ -106,7 +106,7 @@ defmodule PlatformWeb.OrgMemoryLiveScopeTest do
   #   * `upsert_page/3` previously read only `:content` and
   #     `:updated_by`, which made the ADR-0042 tenancy pair unreachable
   #     through the one function every page write goes through. A page
-  #     written at `project/<uuid>/…` therefore landed as a root-Fabrikam
+  #     written at `project/<uuid>/…` therefore landed as a root-Acme
   #     row with a nil `project_id` (`WikiPage.changeset/2`'s
   #     `maybe_default_org_id/1` fills a nil org by design), and
   #     `update_changeset/2` cast neither column, so nothing could ever
@@ -114,7 +114,7 @@ defmodule PlatformWeb.OrgMemoryLiveScopeTest do
   #     permanently.
   #   * The new `tenancy_attrs/1` helper forwards ONLY the keys a caller
   #     actually supplied. Absence is not an explicit nil: omit both and
-  #     the write is byte-identical to the old behaviour, Fabrikam default
+  #     the write is byte-identical to the old behaviour, Acme default
   #     included. Every existing caller omits them.
   #
   # `Platform.Files.Cataloger` is the reference caller and the reason
@@ -149,7 +149,7 @@ defmodule PlatformWeb.OrgMemoryLiveScopeTest do
   #
   # Re-pinned 2026-09-08 (task 01a081c2 stage 1): DOC COMMENT ONLY. The
   # module's `@moduledoc` described `maybe_default_org_id/1` as filling a
-  # nil `org_id` with the `"fabrikam"` org; that slug is now
+  # nil `org_id` with the `"acme"` org; that slug is now
   # `Platform.Tenancy.root_org_slug/0`, so the sentence named a literal the
   # code no longer contains. Two phrases changed ("root-Fabrikam row" → "root-org
   # row", "Fabrikam default included" → "root-org default included") plus the
@@ -170,7 +170,13 @@ defmodule PlatformWeb.OrgMemoryLiveScopeTest do
   # `list_pages_updated_since/2` now composes so the Historian's pages
   # corpus skips product docs. The attribute keeps its historical name so
   # the assertion message below stays greppable.
-  @wiki_ex_sha256_2026_09_08 "e81440f932b7cff52dfbfb2e36d4402ea11e38af8da0382285b74e061e5482f5"
+  #
+  # Re-pinned 2026-10-07 (task 01a116de stage 2): DOC COMMENT ONLY. Two
+  # comment phrases that named one install's root org ("the root Fabrikam org",
+  # "the Fabrikam default") now say "the root org" / "the root-org default".
+  # No function, arity, clause, query or return value moved — `git diff` on
+  # the file is those two comment lines and nothing else.
+  @wiki_ex_sha256_2026_09_08 "110c72c4e99a90cc4e7bdf9fe03cb80c5e07fcbd80f16abc9f5f7d86e500be42"
 
   test "wiki.ex matches the 2026-09-08 authorized domain surface (sha256 pin)" do
     rel_path = "lib/platform/org/wiki.ex"

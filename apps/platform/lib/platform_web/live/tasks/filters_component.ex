@@ -76,6 +76,7 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
   """
   use PlatformWeb, :live_component
 
+  alias Platform.Tasks.Task
   alias Platform.Tenancy
   alias PlatformWeb.Tasks.{BoardData, SortControl, TaskDisplay}
 
@@ -160,7 +161,7 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
 
            Click semantics: the "All" chip dispatches `filter_scope` with
            `phx-value-scope="all"`; sub-org chips dispatch it with their scope
-           SLUG, a plain string (`"fabrikam"`, `"soylent"`, etc) that stays a
+           SLUG, a plain string (`"acme"`, `"soylent"`, etc) that stays a
            string all the way through `parse_scope/2` into `@scope_filter`. The
            shell narrows the kanban render via
            `desktop_column_items_for_scope/6` once it mirrors the value. --%>
@@ -283,6 +284,64 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
         </button>
       </nav>
 
+      <%!-- External Feedback lane (task 01a11ec3 stage 4). Two patch links,
+           no event: `?origin=external_feedback` is decoded by
+           `BoardHooks.apply_url_filters/3`, which narrows every board query on
+           the PERSISTED `origin` column. Rendered at every width — the lane
+           is a primary surface, not a desktop-only refinement. --%>
+      <nav
+        data-role="origin-lane-tabs"
+        aria-label="Task lanes"
+        class="inline-flex shrink-0 items-center gap-0.5 rounded-full border border-edge bg-base-200 p-0.5"
+      >
+        <.link
+          :for={{lane, label, icon} <- origin_lanes()}
+          patch={
+            BoardData.tasks_path(
+              @sponsor_filter,
+              @board_sort,
+              @task_search_query,
+              @scope_filter,
+              @kind_filter,
+              lane
+            )
+          }
+          data-role="origin-lane-tab"
+          data-lane={to_string(lane)}
+          aria-current={if lane_active?(@origin_filter, lane), do: "page", else: "false"}
+          class={[
+            "inline-flex h-7 items-center gap-1 rounded-full px-2.5 text-xs font-medium leading-none whitespace-nowrap transition-colors focus-visible-ring max-sm:h-9",
+            if(lane_active?(@origin_filter, lane),
+              do: "bg-primary text-primary-content",
+              else: "text-base-content/70 hover:bg-base-300"
+            )
+          ]}
+        >
+          <span class={[icon, "size-3.5"]} aria-hidden="true"></span>
+          <span>{label}</span>
+        </.link>
+      </nav>
+
+      <form phx-change="filter_kind" phx-target={@myself} class="block shrink-0">
+        <label for="tasks-kind-filter" class="sr-only">Filter tasks by kind</label>
+        <select
+          id="tasks-kind-filter"
+          name="kind"
+          data-role="task-kind-filter"
+          aria-label="Filter tasks by kind"
+          class="select select-bordered select-xs min-h-7 h-7"
+        >
+          <option value="all" selected={@kind_filter == :all}>All kinds</option>
+          <option
+            :for={kind <- Task.kinds()}
+            value={kind}
+            selected={@kind_filter == kind}
+          >
+            {String.capitalize(kind)}
+          </option>
+        </select>
+      </form>
+
       <%!-- Sort control (task 01a0cef1 stage 2). A SIBLING of the scope rail,
            not a chip inside it: the rail narrows the set and scrolls, this
            reorders it and never scrolls (`shrink-0`). See `SortControl`. --%>
@@ -293,11 +352,25 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
         sponsor_filter={@sponsor_filter}
         task_search_query={@task_search_query}
         scope_filter={@scope_filter}
+        kind_filter={@kind_filter}
+        origin_filter={@origin_filter}
         class="hidden lg:inline-flex shrink-0"
       />
     </div>
     """
   end
+
+  # The two lanes, in tab order. `:all` is the unfiltered board (the default,
+  # emits no `?origin=`); `"external_feedback"` is the persisted origin value.
+  defp origin_lanes do
+    [
+      {:all, "All tasks", "hero-squares-2x2"},
+      {"external_feedback", "External feedback", "hero-inbox-arrow-down"}
+    ]
+  end
+
+  defp lane_active?(origin_filter, :all), do: origin_filter != "external_feedback"
+  defp lane_active?(origin_filter, lane), do: origin_filter == lane
 
   # Header total for the "All" chip. The sum of every sub-org bucket.
   defp scope_count_total(scope_counts) when is_map(scope_counts) do
@@ -413,6 +486,13 @@ defmodule PlatformWeb.Tasks.FiltersComponent do
   def handle_event("filter_scope", _params, socket) do
     socket = announce(socket, %{scope_filter: :all})
     {:noreply, push_patch(socket, to: BoardData.tasks_path(socket.assigns))}
+  end
+
+  def handle_event("filter_kind", %{"kind" => kind}, socket) do
+    parsed = if kind in Task.kinds(), do: kind, else: :all
+
+    {:noreply,
+     push_patch(socket, to: BoardData.tasks_path(%{socket.assigns | kind_filter: parsed}))}
   end
 
   # Thin push_patch shim: `handle_params/3` in the shell owns the decode, so

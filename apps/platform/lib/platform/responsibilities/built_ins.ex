@@ -71,7 +71,13 @@ defmodule Platform.Responsibilities.BuiltIns do
       Handlers.ArchitectureCronSweep,
       Handlers.AgentsGoalHeartbeat,
       Handlers.ExperimentsLabelSignal,
-      Handlers.ExperimentsScientist
+      Handlers.ExperimentsScientist,
+      # Task 01a11ec3 stage 3: external-feedback intake. A dedicated
+      # responsibility, never the janitor; the Router never fires it.
+      Handlers.FeedbackIntake,
+      # Task 019fa1ac-6685 stage 1: the janitor's weekly chore drain, a
+      # Router cron row (Monday 06:00 UTC) gated on the `janitor` role.
+      Handlers.JanitorCronDrain
     ]
   end
 end

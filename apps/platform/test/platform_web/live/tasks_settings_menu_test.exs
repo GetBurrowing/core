@@ -61,7 +61,7 @@ defmodule PlatformWeb.TasksSettingsMenuTest do
         oidc_sub: "oidc-tasks-settings-admin-#{n}"
       })
 
-    org = Tenancy.get_org_by_slug!("fabrikam")
+    org = Tenancy.get_org_by_slug!("acme")
 
     %OrgMembership{}
     |> OrgMembership.changeset(%{user_id: user.id, org_id: org.id, role: "admin"})

@@ -54,6 +54,9 @@ defmodule PlatformWeb.ExternalHoldingLive do
         {:ok,
          socket
          |> assign(:page_title, "Setting up your workspace")
+         # The install's app name from the branding row, not a compiled
+         # product name (task 01a116de stage 3).
+         |> assign(:brand_name, Platform.Branding.app_name())
          |> assign(:holding_user_id, uid), layout: {Layouts, :holding}}
 
       _ ->

@@ -231,6 +231,13 @@ defmodule Platform.Responsibilities.EventTopicDeliveryTest do
       mode: :sweeper_only,
       owner: Platform.Experiments.Signals.MailSubscriber
     },
+    # Task 01a11ec3 stage 3. Nothing broadcasts on it; signed GitHub `issues`
+    # deliveries drive `feedback.intake` through Platform.Feedback.Intake and
+    # the tool-less Classifier, never through a Router fire.
+    "platform.feedback.intake_only" => %{
+      mode: :sweeper_only,
+      owner: Platform.Feedback.Intake
+    },
     "plan:submitted" => %{
       mode: :direct_fire,
       entry_point: {Platform.Tasks, :submit_plan_for_review, 1}
@@ -470,6 +477,18 @@ defmodule Platform.Responsibilities.EventTopicDeliveryTest do
       # the Labeler asks Roles.assignee_for/1 about. A renamed key on either
       # side would leave the labeler resolving nobody.
       assert keys == [Platform.Experiments.Labeler.responsibility_key()]
+    end
+
+    test ":sweeper_only feedback key is the one the intake classifier resolves" do
+      owner = @topic_delivery["platform.feedback.intake_only"].owner
+      assert Code.ensure_loaded?(owner) and function_exported?(owner, :process, 1)
+
+      keys =
+        event_topic_specs()
+        |> Enum.filter(&(&1.topic == "platform.feedback.intake_only"))
+        |> Enum.map(& &1.key)
+
+      assert keys == [Platform.Feedback.Classifier.responsibility_key()]
     end
 
     test ":direct_fire topics name an exported lifecycle entry point" do

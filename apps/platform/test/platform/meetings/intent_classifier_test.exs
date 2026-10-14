@@ -1309,7 +1309,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
   @gate_must_keep [
     "As an action item, Chris needs to start developing the podcast software on suite.",
     "A pretty simple HTML page for now, what we're trying to build is a dog training app.",
-    "Give me the Fabrikam stuff so I can just make this Fabrikam",
+    "Give me the Acme stuff so I can just make this Acme",
     "Yeah, I mean, that's all well and good. This is on Cloudflare. Again, I have not been shown where the domain or anything like that is registered.",
     "Actually, they need sweet because they need the ability to add its skills and stuff."
   ]
@@ -2725,7 +2725,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
     end
 
     test "the org's prior corrections are rendered into the prompt" do
-      meeting = create_meeting_in_org!(fabrikam_org_id())
+      meeting = create_meeting_in_org!(acme_org_id())
 
       record_correction!(meeting.id, %{
         transcript_chunk_excerpt: "bump the header type up a notch",

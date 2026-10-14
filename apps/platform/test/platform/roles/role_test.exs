@@ -88,16 +88,17 @@ defmodule Platform.Roles.RoleTest do
   end
 
   describe "valid_keys/0" do
-    test "exposes the nine canonical roles in a stable order" do
+    test "exposes the ten canonical roles in a stable order" do
       # `security_guard` added in task `019f3e8e-4406` stage 1 (ADR-0043).
       # `architect` added in task `019f3da3` stage 1 (ADR-0044). Order is
       # meaningful: the four legacy roles come first, then meeting_producer
       # (task 019f2451), then security_guard, then architect.
       # `agents_leader` added in task `01a0b491` stage 1; `scientist` added
-      # in task `01a0d415` stage 3, last.
+      # in task `01a0d415` stage 3; `janitor` added in task `019fa1ac-6685`
+      # stage 1, last.
       # Down-migrations rely on this append-only shape.
       assert Role.valid_keys() ==
-               ~w(designer historian meeting_scribe meeting_producer triage_officer security_guard architect agents_leader scientist)
+               ~w(designer historian meeting_scribe meeting_producer triage_officer security_guard architect agents_leader scientist janitor)
     end
   end
 

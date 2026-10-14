@@ -12,7 +12,7 @@ defmodule Platform.Projects do
 
   Stage 5 of ADR 0042 added the org-grouped sidebar to TasksLive
   (PR #438) as a `defp` on the LV. Stage 5 of the Files surface needs
-  the exact same grouping (Fabrikam first, then tenants in
+  the exact same grouping (the root org first, then tenants in
   `Tenancy.tenant_priority/0`, orphans last) so the two sidebars never
   silently disagree. Extracting here is cheaper than copy-pasting and
   drifts.
@@ -31,8 +31,9 @@ defmodule Platform.Projects do
   Buckets `[%Project{org: %Org{}}]` into `[{org_slug, org_name, [project]}]`
   tuples in canonical tenant-priority order.
 
-  Order is `Tenancy.tenant_priority/0` (Fabrikam → Soylent → Wayne-Tech →
-  SXI → Paragon → unknown tenants alphabetically). Inside each bucket
+  Order is the root org first (structurally: `parent_org_id` is `nil`,
+  whatever its slug), then `Tenancy.tenant_priority/0` (Soylent →
+  Wayne-Tech → SXI → Paragon → unknown tenants alphabetically). Inside each bucket
   projects keep the caller's existing order (typically alphabetical via
   `Platform.Tasks.list_projects_unscoped/1`).
 
@@ -64,10 +65,10 @@ defmodule Platform.Projects do
 
     assigned
     |> Enum.group_by(fn p -> {p.org.slug, p.org.name} end)
-    |> Enum.map(fn {{slug, name}, ps} -> {slug, name, ps} end)
-    |> Enum.sort_by(fn {slug, _name, _} ->
-      {Tenancy.tenant_priority_index(slug), slug}
+    |> Enum.sort_by(fn {{slug, _name}, [p | _]} ->
+      {Tenancy.root_rank(p.org), Tenancy.tenant_priority_index(slug), slug}
     end)
+    |> Enum.map(fn {{slug, name}, ps} -> {slug, name, ps} end)
     |> Kernel.++(
       case orphan do
         [] -> []

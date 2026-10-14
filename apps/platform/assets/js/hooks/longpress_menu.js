@@ -37,6 +37,7 @@
 const DOUBLE_TAP_MS = 300
 const DOUBLE_TAP_MAX_MOVE_PX = 12
 const HAPTIC_MS = 20
+const FULLSCREEN_PROTOTYPE = '[data-role="prototype-canvas"][data-fullscreen="true"]'
 
 const LongpressMenu = {
   mounted() {
@@ -55,6 +56,15 @@ const LongpressMenu = {
   handleTap(e) {
     const touch = e.changedTouches && e.changedTouches[0]
     if (!touch) return
+    // A prototype in fullscreen is promoted to the browser top layer
+    // (prototype_fullscreen.js, task 01a1389f) but still sits inside this
+    // message in the DOM, so its taps bubble here. The actions sheet would
+    // open UNDER the top layer, unreachable, so a double-tap on the
+    // fullscreen bar must not count. Reset the pending first tap too.
+    if (e.target && e.target.closest && e.target.closest(FULLSCREEN_PROTOTYPE)) {
+      this._lastTapAt = 0
+      return
+    }
 
     const now = Date.now()
     const dx = touch.clientX - this._lastTapX

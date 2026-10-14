@@ -28,7 +28,7 @@ defmodule Platform.Regression.OrgScopeChokePointAuditTest do
 
   Note the exemption is `Tenancy.scope(` specifically, not "mentions
   `Tenancy.`". `Meetings.Archive.narrow_to_viewer_orgs/2` calls
-  `Tenancy.fabrikam_admin?/1` while hand-rolling its own org predicate; a
+  `Tenancy.root_admin?/1` while hand-rolling its own org predicate; a
   bare-module-name exemption would have let exactly the site this test
   most needs to see slide past.
 
@@ -115,7 +115,7 @@ defmodule Platform.Regression.OrgScopeChokePointAuditTest do
     # boundary.
     "lib/platform/tasks.ex",
 
-    # `Meetings.viewer_meeting_query/3` bypasses on `fabrikam_admin?/1` (root
+    # `Meetings.viewer_meeting_query/3` bypasses on `root_admin?/1` (root
     # org AND admin role), whereas `Tenancy.visibility/1` bypasses on
     # `root_member?/1` (root org, ANY role). Converting was attempted and
     # reverted: every OIDC signup lands as a plain `member` of the root
@@ -126,11 +126,21 @@ defmodule Platform.Regression.OrgScopeChokePointAuditTest do
     "lib/platform/meetings.ex",
 
     # `Meetings.Archive.narrow_to_viewer_orgs/2` and its private
-    # `viewer_org_ids/1`. Same `fabrikam_admin?/1`-vs-`root_member?/1`
+    # `viewer_org_ids/1`. Same `root_admin?/1`-vs-`root_member?/1`
     # widening hazard as `lib/platform/meetings.ex` above, for the same
     # reason, blocked on the same sponsor decision. The two move
     # together.
-    "lib/platform/meetings/archive.ex"
+    "lib/platform/meetings/archive.ex",
+
+    # `Mobile.AppPeople.org_mates/1` — the Burrow people directory
+    # (`GET /api/app/people?scope=directory`) lists the members of the
+    # orgs the caller BELONGS to. That is deliberately narrower than
+    # `Tenancy.visibility/1`, which bypasses on `root_member?/1`: every
+    # OIDC signup is a root-org member, so composing the choke point
+    # would hand each of them a directory of every user in every tenant.
+    # It is a membership join for a contact picker, not a visibility
+    # scope, and it can only ever narrow.
+    "lib/platform/mobile/app_people.ex"
   ]
 
   describe "private org filters outside the choke point" do

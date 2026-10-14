@@ -5,6 +5,26 @@ The top `## v<version>` section is sent as the build's "What to Test" by
 MARKETING_VERSION, and it is capped at 4000 characters.
 
 ## v1.2
+New in build 7:
+1. One app, many installs. Burrow now gets notifications from every install you are signed in to. Each notification names its install, and unread counts are kept per install (the app icon badge adds them up). Tap a notification from another install and Burrow switches to it.
+2. Pictures on notifications. Notifications show the agent's or person's picture, or their initial if they have none.
+3. Add your install. Burrow no longer comes with built-in installs: a new user starts on Add your install and types their own address. If you already use Burrow, your saved installs and sign-ins are kept.
+4. In the install switcher, an install that is down shows "Could not update" instead of an old count.
+5. Large files. Share sheet uploads now take files up to 1 GB, uploaded in the background.
+
+Please try:
+1. Sign in to two installs, have someone mention you on each, and check each notification names the right install and shows the sender's picture.
+2. Check the unread badge per install in the switcher, and that reading the messages clears it.
+3. Share a large video (over 8 MB) to a space from Photos.
+
+Also in v1.2: native meetings. Joining a meeting runs it as a real phone call: audio keeps going when you leave the app or lock the phone, the Lock Screen and AirPods control it, and it shows in the phone app's Recents. If someone invites you while their meeting is live, or a meeting you were invited to starts, your phone rings like a call. A second invite during a call shows a banner with Not now and Switch. "Start a meeting in Burrow" (Siri and Shortcuts) starts the call natively.
+
+Known gaps in this build:
+- Native calls are audio only: no video, screen share or live captions, and Open full meeting does not add them.
+- iPad: Burrow asks for Local Network access only to reach a server on your own network; for internet servers you can decline it.
+- Not built: PushToTalk, a custom ringtone, native game streaming, Apple Watch.
+
+## v1.2, builds up to 6
 Meetings are now native. Joining a meeting from Burrow runs it as a real phone call: audio keeps going when you leave the app or lock the phone, the Lock Screen and AirPods control it, and a call shows in the phone app's Recents. If someone invites you while their meeting is live, or a meeting you were invited to starts, your phone rings like a call.
 
 Please try:

@@ -116,7 +116,7 @@ defmodule PlatformWeb.ChatLiveMaskMobileTest do
   describe "the drawer masks like the rail" do
     test "the drawer carries the SAME eye control and the SAME strip", %{conn: conn} do
       {conn, _user} = authenticated_conn(conn)
-      create_channel("fabrikam")
+      create_channel("acme")
       view = open_drawer(conn)
 
       before = view |> render() |> drawer()
@@ -137,7 +137,7 @@ defmodule PlatformWeb.ChatLiveMaskMobileTest do
     test "section headers, their aria-labels and the slug attribute all mask together",
          %{conn: conn} do
       {conn, _user} = authenticated_conn(conn)
-      create_channel("fabrikam")
+      create_channel("acme")
       view = open_drawer(conn)
 
       assert_name_anywhere(view |> render() |> drawer(), @canary)
@@ -158,7 +158,7 @@ defmodule PlatformWeb.ChatLiveMaskMobileTest do
     test "the per-item reveal is a real focusable control, not a hover treatment",
          %{conn: conn} do
       {conn, _user} = authenticated_conn(conn)
-      create_channel("fabrikam")
+      create_channel("acme")
       view = open_drawer(conn)
       toggle_mask(view)
 
@@ -172,7 +172,7 @@ defmodule PlatformWeb.ChatLiveMaskMobileTest do
 
     test "revealing one section in the drawer shows only that org", %{conn: conn} do
       {conn, _user} = authenticated_conn(conn)
-      create_channel("fabrikam")
+      create_channel("acme")
       view = open_drawer(conn)
       masked = toggle_mask(view)
 
@@ -293,7 +293,7 @@ defmodule PlatformWeb.ChatLiveMaskMobileTest do
     test "the org grouping heading masks", %{conn: conn} do
       {conn, user} = authenticated_conn(conn)
       channel = create_channel("wayne_tech")
-      create_channel("fabrikam")
+      create_channel("acme")
       {:ok, _} = Platform.Accounts.hide_channel(user.id, channel.id)
 
       {:ok, view, html} = live_following_redirect(conn)
@@ -331,7 +331,7 @@ defmodule PlatformWeb.ChatLiveMaskMobileTest do
       ".chat-header-scope-pill-mobile"
     ]
 
-    # A Fabrikam member, so the viewer can see the runtime org (the shell's colour
+    # An Acme member, so the viewer can see the runtime org (the shell's colour
     # rules are built from the orgs the viewer can see).
     defp runtime_org_conn(conn) do
       user = insert_chat_user()
@@ -339,7 +339,7 @@ defmodule PlatformWeb.ChatLiveMaskMobileTest do
       %Platform.Tenancy.OrgMembership{}
       |> Platform.Tenancy.OrgMembership.changeset(%{
         user_id: user.id,
-        org_id: Platform.Tenancy.get_org_by_slug!("fabrikam").id,
+        org_id: Platform.Tenancy.get_org_by_slug!("acme").id,
         role: "member"
       })
       |> Repo.insert!()
@@ -349,7 +349,7 @@ defmodule PlatformWeb.ChatLiveMaskMobileTest do
           Platform.Tenancy.Org.changeset(%Platform.Tenancy.Org{}, %{
             name: "Newclient",
             slug: "new_client",
-            parent_org_id: Platform.Tenancy.get_org_by_slug!("fabrikam").id,
+            parent_org_id: Platform.Tenancy.get_org_by_slug!("acme").id,
             color_hue: 200
           })
         )
@@ -404,7 +404,7 @@ defmodule PlatformWeb.ChatLiveMaskMobileTest do
     test "no padlock, no shield, and no privacy vocabulary on the mobile surfaces",
          %{conn: conn} do
       {conn, _user} = authenticated_conn(conn)
-      create_channel("fabrikam")
+      create_channel("acme")
       view = open_drawer(conn)
       html = toggle_mask(view)
 

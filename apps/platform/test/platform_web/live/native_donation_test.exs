@@ -42,6 +42,20 @@ defmodule PlatformWeb.NativeDonationTest do
     refute inspect(payload) =~ sentinel
   end
 
+  defp channel_with!(user) do
+    n = u()
+    {:ok, channel} = Chat.create_space(%{name: "Donate #{n}", slug: "donate-#{n}"})
+
+    {:ok, participant} =
+      Chat.add_participant(channel.id, %{
+        participant_type: "user",
+        participant_id: user.id,
+        joined_at: DateTime.utc_now()
+      })
+
+    {channel, participant}
+  end
+
   describe "NativeDonation.payload/2" do
     test "keeps only the kind's id keys, whatever the caller passes" do
       payload =
@@ -97,6 +111,61 @@ defmodule PlatformWeb.NativeDonationTest do
 
       assert_push_event(view, "native_donate", payload)
       assert payload == %{kind: "message_sent", space_id: channel.id, recipient_ids: []}
+    end
+
+    # Task 01a116c4 stage 2: Android consumes this same event for its
+    # conversation shortcuts, so both send paths must push it and an empty
+    # send must not. The composer and inline-thread cases are the controls
+    # for the empty-send refutation.
+    test "an inline-thread send donates the space with no text", %{conn: conn} do
+      me = user!("Thread Sender")
+      {channel, participant} = channel_with!(me)
+
+      {:ok, root} =
+        Chat.post_message(%{
+          space_id: channel.id,
+          participant_id: participant.id,
+          content_type: "text",
+          content: "root"
+        })
+
+      {:ok, view, _html} = live(login(conn, me), ~p"/chat/#{channel.slug}")
+      render_click(view, "open_thread", %{"message-id" => root.id})
+      sentinel = "zq-thread-#{u()}"
+
+      render_submit(view, "send_inline_thread_message", %{
+        "inline_thread_compose" => %{"text" => sentinel, "message_id" => root.id}
+      })
+
+      assert_push_event(view, "native_donate", payload)
+      assert payload.kind == "message_sent"
+      assert payload.space_id == channel.id
+      assert_ids_only(payload, sentinel)
+    end
+
+    test "an empty or whitespace-only send donates nothing", %{conn: conn} do
+      me = user!("Empty Sender")
+      {channel, participant} = channel_with!(me)
+
+      {:ok, root} =
+        Chat.post_message(%{
+          space_id: channel.id,
+          participant_id: participant.id,
+          content_type: "text",
+          content: "root"
+        })
+
+      {:ok, view, _html} = live(login(conn, me), ~p"/chat/#{channel.slug}")
+
+      view |> form("#compose-form", compose: %{text: ""}) |> render_submit()
+      view |> form("#compose-form", compose: %{text: "   "}) |> render_submit()
+      render_click(view, "open_thread", %{"message-id" => root.id})
+
+      render_submit(view, "send_inline_thread_message", %{
+        "inline_thread_compose" => %{"text" => "  ", "message_id" => root.id}
+      })
+
+      refute_push_event(view, "native_donate", %{kind: "message_sent"})
     end
   end
 
@@ -197,7 +266,7 @@ defmodule PlatformWeb.NativeDonationTest do
         |> Project.changeset(%{
           name: "Donate Meet #{u()}",
           slug: "donate-meet-#{u()}",
-          org_id: Platform.TenancyFixtures.fabrikam_org_id()
+          org_id: Platform.TenancyFixtures.acme_org_id()
         })
         |> Repo.insert()
 

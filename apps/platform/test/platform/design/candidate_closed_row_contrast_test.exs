@@ -127,10 +127,13 @@ defmodule Platform.Design.CandidateClosedRowContrastTest do
   @recorded_pure_hex [
     {"--cc-title-dead on --cc-bg-closed, light", :light, "--cc-title-dead", "--cc-bg-closed",
      3.78},
+    # Burrow (task 01a120c5): re-recorded in app.css's closed-row tables as
+    # 7.0641 light (#8b3b04) and 8.7599 dark (#ff9b55). The pre-Burrow cyans
+    # read 4.31 and 10.61.
     {"--color-interactive on --cc-bg-closed, light", :light, "--color-interactive",
-     "--cc-bg-closed", 4.31},
+     "--cc-bg-closed", 7.06},
     {"--color-interactive on --cc-bg-closed, dark", :dark, "--color-interactive",
-     "--cc-bg-closed", 10.61}
+     "--cc-bg-closed", 8.76}
   ]
 
   @recorded_conversion [

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The launcher long-press shortcut, iOS UIApplicationShortcutItems
+     ("Switch install"). Static: the label never changes.
+     A shortcut intent's targetPackage cannot take a manifest placeholder,
+     and the debug build is com.koboai.burrow.debug (applicationIdSuffix),
+     so src/debug/res/xml/shortcuts.xml overrides this file with the debug
+     package. ShortcutsResourceTest pins each variant to its own package.
+     The target is the SwitchInstallActivity trampoline, not MainActivity:
+     Android adds CLEAR_TASK to static shortcut intents (see that class). -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="switch_install"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_switch_install"
+        android:shortcutShortLabel="@string/shortcut_switch_install"
+        android:shortcutLongLabel="@string/shortcut_switch_install">
+        <intent
+            android:action="com.koboai.burrow.action.SWITCH_INSTALL"
+            android:targetPackage="com.koboai.burrow"
+            android:targetClass="com.koboai.burrow.SwitchInstallActivity" />
+    </shortcut>
+    <!-- Direct share (task 01a116c4): conversation shortcuts carry this
+         category, so the share sheet offers them as targets on API 29+.
+         API 26-28 get no direct-share row (no androidx.sharetarget).
+         Identical in src/main and src/debug. -->
+    <share-target android:targetClass="com.koboai.burrow.share.ShareActivity">
+        <data android:mimeType="text/plain" />
+        <data android:mimeType="image/*" />
+        <data android:mimeType="application/pdf" />
+        <data android:mimeType="*/*" />
+        <category android:name="com.koboai.burrow.category.SHARE_TARGET" />
+    </share-target>
+</shortcuts>

@@ -15,6 +15,7 @@ defmodule Platform.Experiments.PolicySpec do
       %{"type" => "random_buckets"}
       %{"type" => "epic_scoped", "epic_ids" => [uuid, ...]}
       %{"type" => "task_cohort", "cohort" => %{"epic_id" => [uuid, ...]}}
+      %{"type" => "task_cohort", "cohort" => %{"agent_id" => [uuid, ...]}}
       %{"type" => "time_window", "from" => iso8601, "until" => iso8601}
       %{"type" => "composite", "policies" => [policy_map, ...]}
 
@@ -61,7 +62,11 @@ defmodule Platform.Experiments.PolicySpec do
   @cohort_keys %{
     "project_id" => :project_id,
     "org_id" => :org_id,
-    "epic_id" => :epic_id
+    "epic_id" => :epic_id,
+    # Task 01a114a8 stage 4: the dispatched phase's assignee, supplied by
+    # `HeartbeatScheduler.experiment_subject/2`. Enrolling agents in an
+    # experiment is then a cohort map, i.e. data.
+    "agent_id" => :agent_id
   }
 
   @type built :: {module(), keyword()}

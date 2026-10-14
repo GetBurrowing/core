@@ -354,7 +354,7 @@ defmodule PlatformWeb.MeetingLiveSpaceTopicHoldersTest do
     |> Org.changeset(%{
       name: "Tenant #{n}",
       slug: "tenant_space_topic_holders_#{n}",
-      parent_org_id: Tenancy.get_org_by_slug!("fabrikam").id
+      parent_org_id: Tenancy.get_org_by_slug!("acme").id
     })
     |> Repo.insert!()
   end

@@ -61,6 +61,14 @@ class ReleaseManifestTest {
     }
 
     @Test
+    fun `the unread evidence seam is debug-only and exported only to the adb shell`() {
+        assertTrue(receivers("burrow.releaseManifest").none { it.name().endsWith("DebugUnreadReceiver") })
+        val debug = receivers("burrow.debugManifest").single { it.name() == "com.koboai.burrow.push.DebugUnreadReceiver" }
+        assertEquals(listOf("com.koboai.burrow.debug.UNREAD"), debug.actions())
+        assertEquals("android.permission.DUMP", debug.getAttributeNS(android, "permission"))
+    }
+
+    @Test
     fun `the share target is its own task-less activity, not MainActivity`() {
         val activities = elements("burrow.releaseManifest", "activity")
         val share = activities.single { it.name() == "com.koboai.burrow.share.ShareActivity" }
@@ -77,5 +85,36 @@ class ReleaseManifestTest {
         val receivers = receivers("burrow.releaseManifest").map { it.name() }
         assertTrue(receivers.contains("com.koboai.burrow.widgets.MyApprovalsWidgetReceiver"))
         assertTrue(receivers.contains("com.koboai.burrow.widgets.MyTasksWidgetReceiver"))
+    }
+
+    @Test
+    fun `MainActivity declares the launcher shortcuts in the release and debug manifests`() {
+        for (property in listOf("burrow.releaseManifest", "burrow.debugManifest")) {
+            val main = elements(property, "activity").single { it.name() == "com.koboai.burrow.MainActivity" }
+            val metas = main.getElementsByTagName("meta-data")
+            val shortcuts =
+                (0 until metas.length)
+                    .map { metas.item(it) as Element }
+                    .filter { it.name() == "android.app.shortcuts" }
+            assertEquals(property, 1, shortcuts.size)
+            assertEquals(property, "@xml/shortcuts", shortcuts.single().getAttributeNS(android, "resource"))
+            assertEquals(property, "singleTask", main.getAttributeNS(android, "launchMode"))
+        }
+    }
+
+    @Test
+    fun `the shortcut trampoline has no UI, no recents entry and its own task affinity`() {
+        for (property in listOf("burrow.releaseManifest", "burrow.debugManifest")) {
+            val trampoline = elements(property, "activity").single { it.name() == "com.koboai.burrow.SwitchInstallActivity" }
+            // An empty affinity: the CLEAR_TASK Android adds to static
+            // shortcut intents must clear this throwaway task, not MainActivity's.
+            assertTrue(property, trampoline.hasAttributeNS(android, "taskAffinity"))
+            assertEquals(property, "", trampoline.getAttributeNS(android, "taskAffinity"))
+            assertEquals(property, "true", trampoline.getAttributeNS(android, "excludeFromRecents"))
+            assertEquals(property, "true", trampoline.getAttributeNS(android, "noHistory"))
+            assertEquals(property, "false", trampoline.getAttributeNS(android, "exported"))
+            assertEquals(property, "@android:style/Theme.NoDisplay", trampoline.getAttributeNS(android, "theme"))
+            assertTrue(property, trampoline.actions().isEmpty())
+        }
     }
 }

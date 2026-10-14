@@ -1310,7 +1310,7 @@ defmodule PlatformWeb.MeetingLive do
     # `{:meeting_created, _}` / `{:meeting_ended, _}` / `{:meeting_started, _}`
     # broadcasts flowing in.
     # The index is viewer-scoped: `Meetings.list_meetings_for_user/1`
-    # supplies the rule (Fabrikam root admin sees all; an external user sees
+    # supplies the rule (root-org admin sees all; an external user sees
     # the meetings they hold a live invite for; everyone else is narrowed
     # by org membership), and the calendar below shares that one rule via
     # its range sibling. The project picker is viewer-scoped too. (Which
@@ -4975,12 +4975,23 @@ defmodule PlatformWeb.MeetingLive do
   # simplicity beats cleverness here. Subscribe-once-per-project ensures
   # the broadcast lands on a process that owns these assigns.
   #
+  # `:meeting_resumed` (task 01a1265f stage 2) re-renders an ended meeting
+  # as live when someone rejoins it from its own page. It is a
+  # distinct tag so `MeetingNotifier` never announces the resume as a start;
+  # see `Meetings.resume_meeting/2`.
+  #
   # `:meeting_cancelled` is on the list because the calendar must UNDRAW a
   # cancelled meeting: `CalendarWindow.placeable?/1` excludes the status,
   # but only if the assigns are refreshed to notice the change. Without it
   # the grid would keep showing a meeting that is off until a navigation.
   def handle_info({tag, %Meetings.Meeting{}}, socket)
-      when tag in [:meeting_created, :meeting_started, :meeting_ended, :meeting_cancelled] do
+      when tag in [
+             :meeting_created,
+             :meeting_started,
+             :meeting_resumed,
+             :meeting_ended,
+             :meeting_cancelled
+           ] do
     if Map.has_key?(socket.assigns, :meetings) do
       # Scoped with the same viewer as the initial render. A peer's
       # broadcast re-queries the list, so an unscoped read here would
@@ -5483,14 +5494,33 @@ defmodule PlatformWeb.MeetingLive do
   # Flip a `scheduled` meeting to `live` (stamping `started_at` and
   # broadcasting `{:meeting_started, _}` so the index re-buckets it under
   # "Live now"). Guarded on `"scheduled"` because `status_changeset` rejects
-  # illegal transitions (a live→live attempt errors); any other status is a
-  # no-op. On success the updated meeting is re-assigned so the render path
+  # illegal transitions (a live→live attempt errors). An ended meeting is
+  # resumed by the next clause; any other status is a no-op. On success the updated meeting is re-assigned so the render path
   # sees the live status.
   defp maybe_start_meeting(%{assigns: %{meeting: %{status: "scheduled"} = m}} = socket) do
     # The joining user is recorded as the starter (task 01a10db7); a guest
     # surface has no `:user_id`, and the stamp is then simply absent.
     case Meetings.start_meeting(m, started_by_user_id: socket.assigns[:user_id]) do
       {:ok, started} -> assign(socket, :meeting, started)
+      {:error, _} -> socket
+    end
+  end
+
+  # Resume an ENDED meeting when someone joins its call from its own page
+  # (task 01a1265f stage 2). The viewer is in the LiveKit room, so the
+  # meeting is happening again; left ended, `Meetings.meeting_id_for_space/2`
+  # resolves the new transcript to nil and every Ask press in the call closes
+  # as nothing heard. This clause is the ONLY caller of
+  # `Meetings.resume_meeting/2`: the chat page's Meet button, the webhooks
+  # and the native app all leave an ended meeting ended.
+  #
+  # Both join sites reach it: `:auto_join` (which fires on any connected
+  # shell mount, so merely opening a past meeting from the list resumes it)
+  # and the lobby's `"join_meeting"`. To gate resumption behind an explicit
+  # Join later, change only this clause.
+  defp maybe_start_meeting(%{assigns: %{meeting: %{status: "ended"} = m}} = socket) do
+    case Meetings.resume_meeting(m, started_by_user_id: socket.assigns[:user_id]) do
+      {:ok, resumed} -> assign(socket, :meeting, resumed)
       {:error, _} -> socket
     end
   end

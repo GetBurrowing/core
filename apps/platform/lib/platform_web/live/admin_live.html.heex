@@ -3,7 +3,7 @@
   <div class="flex items-center justify-between border-b border-edge px-4 py-3">
     <div class="flex items-center gap-3">
       <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content/60">
-        Admin · Fabrikam Operations
+        Admin · Operations
       </h1>
     </div>
   </div>
@@ -85,7 +85,29 @@
               </span>
             </div>
             <p class="mt-1 text-sm text-base-content/60">
-              Manage Suite users — archive and unarchive Fabrikam membership.
+              Manage Suite users — archive and unarchive root-org membership.
+            </p>
+          </div>
+        </div>
+      </.link>
+
+      <.link
+        :if={@sign_in_admin?}
+        navigate="/admin/sign-in-users"
+        class="group block rounded-lg border border-edge bg-base-200 p-4 transition-colors hover:border-primary/40 hover:bg-base-300"
+        data-role="admin-sign-in-users-link"
+      >
+        <div class="flex items-start gap-3">
+          <span class="hero-key size-6 mt-0.5 flex-shrink-0 text-base-content/60"></span>
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center justify-between gap-3">
+              <h2 class="text-base font-semibold text-base-content">Users</h2>
+              <span class="text-xs font-medium text-primary opacity-0 group-hover:opacity-100 transition-opacity">
+                Open →
+              </span>
+            </div>
+            <p class="mt-1 text-sm text-base-content/60">
+              Invite people, send sign-in links, and disable or remove sign-in.
             </p>
           </div>
         </div>
@@ -114,6 +136,27 @@
       </.link>
 
       <.link
+        navigate="/admin/vault"
+        class="group block rounded-lg border border-edge bg-base-200 p-4 transition-colors hover:border-primary/40 hover:bg-base-300"
+        data-role="admin-vault-link"
+      >
+        <div class="flex items-start gap-3">
+          <span class="hero-key size-6 mt-0.5 flex-shrink-0 text-base-content/60"></span>
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center justify-between gap-3">
+              <h2 class="text-base font-semibold text-base-content">Vault</h2>
+              <span class="text-xs font-medium text-primary opacity-0 group-hover:opacity-100 transition-opacity">
+                Open →
+              </span>
+            </div>
+            <p class="mt-1 text-sm text-base-content/60">
+              Paste a secret once and grant it to agents. They fetch it with vault_fetch; it never enters chat.
+            </p>
+          </div>
+        </div>
+      </.link>
+
+      <.link
         navigate="/admin/branding"
         class="group block rounded-lg border border-edge bg-base-200 p-4 transition-colors hover:border-primary/40 hover:bg-base-300"
         data-role="admin-branding-link"
@@ -129,6 +172,28 @@
             </div>
             <p class="mt-1 text-sm text-base-content/60">
               This install's app name, manifest colours, and home-screen icons — derived from one square upload.
+            </p>
+          </div>
+        </div>
+      </.link>
+
+      <.link
+        navigate="/admin/prototypes"
+        class="group block rounded-lg border border-edge bg-base-200 p-4 transition-colors hover:border-primary/40 hover:bg-base-300"
+        data-role="admin-prototypes-link"
+      >
+        <div class="flex items-start gap-3">
+          <span class="hero-cube-transparent size-6 mt-0.5 flex-shrink-0 text-base-content/60">
+          </span>
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center justify-between gap-3">
+              <h2 class="text-base font-semibold text-base-content">Prototypes</h2>
+              <span class="text-xs font-medium text-primary opacity-0 group-hover:opacity-100 transition-opacity">
+                Open →
+              </span>
+            </div>
+            <p class="mt-1 text-sm text-base-content/60">
+              Turn prototype publishing on or off, choose who may publish, and set size, file and retention limits.
             </p>
           </div>
         </div>

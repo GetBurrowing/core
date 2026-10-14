@@ -704,7 +704,7 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
     # bumped by task 01a0a552 stage 3 — `task_close_as_delivered`, added to
     # the existing `task` bundle beside `task_complete`. An admin-owned
     # runtime recording work that shipped outside the plan pipeline, gated
-    # on the runtime OWNER being a Fabrikam admin. Not a T6 concern — it adds no
+    # on the runtime OWNER being an Acme admin. Not a T6 concern — it adds no
     # schedule, no trigger and no historian surface
     # (+task_close_as_delivered -> 105)
     # bumped by task 01a0d415 stage 2 — the `experiments` bundle, 14
@@ -721,7 +721,37 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
     # `task_close_as_delivered`. On demand, never scheduled. Not a T6
     # concern — it adds no schedule, no trigger and no historian surface
     # (+task_delivery_candidate_list -> 121)
-    @t6_baseline_tool_count 121
+    # bumped by task 01a114a8 stage 1 — `dispatch_metrics_list`, a read-only
+    # per-dispatch measurement tool in the existing `experiments` bundle. On
+    # demand, never scheduled. Not a T6 concern — it adds no schedule, no
+    # trigger and no historian surface
+    # (+dispatch_metrics_list -> 122)
+    # bumped by task 01a114a8 stage 2 — `suite_run`, the code mode tool in
+    # the new `code_mode` bundle (grantable, not a default). On demand, never
+    # scheduled. Not a T6 concern — it adds no schedule, no trigger and no
+    # historian surface
+    # (+suite_run -> 123)
+    # bumped by task 01a114a8 stage 3 — `suite_run_describe`, read-only
+    # binding docs in the same `code_mode` bundle; no schedule, no trigger.
+    # (+suite_run_describe -> 124)
+    # bumped by task 01a114a8 stage 4 — `code_mode_report`, a read-only
+    # per-agent report in the existing `experiments` bundle; no schedule, no
+    # trigger and no historian surface.
+    # (+code_mode_report -> 125)
+    # bumped by task 019fa1ac-6685 stage 3 — `janitor_hand_back` in the
+    # `task` bundle, the janitor's escalation path; no schedule, no trigger
+    # and no historian surface.
+    # (+janitor_hand_back -> 126)
+    # bumped by task 01a1316b-4e46 stage 1 — `prototype.publish`,
+    # `prototype.versions`, `prototype.rollback` in the new `prototype` bundle
+    # (ADR 0057); no schedule, no trigger and no historian surface.
+    # (+3 prototype tools -> 129)
+    # bumped by task 01a131c5 stage 1 — `vault_fetch` and `vault_list` in the
+    # `federation` bundle, the agent read path for admin-vault secrets; no
+    # schedule, no trigger and no historian surface.
+    # (+vault_fetch, +vault_list -> 128)
+    # merged: stack prototype-runtime rollup onto main (+3 prototype, +2 vault -> 131)
+    @t6_baseline_tool_count 131
 
     defp t6_root, do: Mix.Project.project_file() |> Path.dirname()
 

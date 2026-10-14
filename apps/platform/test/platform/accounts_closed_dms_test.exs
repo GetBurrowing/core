@@ -121,7 +121,7 @@ defmodule Platform.AccountsClosedDmsTest do
       drop = Ecto.UUID.generate()
       channel_id = Ecto.UUID.generate()
 
-      {:ok, _} = Accounts.update_user_preference(user.id, :chat_section_order, ["Fabrikam"])
+      {:ok, _} = Accounts.update_user_preference(user.id, :chat_section_order, ["Acme"])
       {:ok, _} = Accounts.hide_channel(user.id, channel_id)
       {:ok, _} = Accounts.close_dm(user.id, keep)
       {:ok, _} = Accounts.close_dm(user.id, drop)
@@ -132,7 +132,7 @@ defmodule Platform.AccountsClosedDmsTest do
       assert Map.keys(closed) == [keep]
 
       reloaded = Repo.get!(User, user.id)
-      assert reloaded.preferences["chat_section_order"] == ["Fabrikam"]
+      assert reloaded.preferences["chat_section_order"] == ["Acme"]
       assert reloaded.preferences["hidden_channel_ids"] == [channel_id]
     end
 

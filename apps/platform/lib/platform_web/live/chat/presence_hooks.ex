@@ -737,24 +737,11 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
 
   defp participant_avatar_seed(%{avatar_seed: seed}, _user) when not is_nil(seed), do: seed
 
-  defp participant_avatar_seed(participant, user) do
-    cond do
-      user && is_binary(user.oidc_sub) && user.oidc_sub != "" ->
-        user.oidc_sub
-
-      user && is_binary(user.email) && user.email != "" ->
-        user.email
-
-      is_binary(participant.participant_id) && participant.participant_id != "" ->
-        participant.participant_id
-
-      is_binary(participant.id) && participant.id != "" ->
-        participant.id
-
-      true ->
-        "user"
-    end
-  end
+  # The cond lives in `Platform.Avatars.user_seed/2` (task 01a12773) so the
+  # push notification's `author_avatar_tone` colours a person exactly as the
+  # chat does.
+  defp participant_avatar_seed(participant, user),
+    do: Platform.Avatars.user_seed(participant, user)
 
   defp resolve_display_name(user_id, participant) do
     participant.display_name || name_for_user(user_id)

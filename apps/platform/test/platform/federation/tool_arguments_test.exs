@@ -178,7 +178,31 @@ defmodule Platform.Federation.ToolArgumentsTest do
   # `require_amend_payload/1`, also before any lookup. None is tolerated
   # absent, and `reason` may not be: the reason is what the amendment history
   # records as WHY a gate case changed after authoring.
-  @surveyed_required_count 172
+  # 173 with `suite_run`'s `script` (task 01a114a8 stage 2). HONEST: read
+  # under its declared key only by `Platform.CodeMode.Run.run_tool/2`, which
+  # refuses an absent, non-binary or empty script (`missing_script`) before
+  # any slot is taken or wasm is instantiated. No alias, no context fallback.
+  # 174 with `code_mode_report`'s `experiment_id` (task 01a114a8 stage 4).
+  # HONEST: read under its declared key only, by
+  # `Platform.Experiments.Tools`'s `fetch_visible/3` -> `required_uuid/3`,
+  # which refuses an absent or malformed id. No alias, no context fallback.
+  # 176 with `janitor_hand_back`'s `task_id` and `reason` (task 019fa1ac-6685
+  # stage 3). HONEST, both: the handler passes each under its declared key
+  # straight to `Platform.Responsibilities.Janitor.hand_back/3`, which refuses
+  # an absent or malformed task_id (`invalid_task_id`) and an absent or
+  # unknown reason (`invalid_reason`) before it opens a transaction. No
+  # alias, no context fallback.
+  # 179 with `prototype.versions`' `prototype_id` and `prototype.rollback`'s
+  # `prototype_id` and `version` (task 01a1316b-4e46 stage 1). HONEST, all
+  # three: `Platform.Prototypes.Tools` reads each under its declared key only
+  # (`require_string/2`, `require_integer/2`) and refuses an absent value with
+  # `invalid_argument` before any read or write. No alias, no context fallback.
+  # 177 with `vault_fetch`'s `name` (task 01a131c5 stage 1). HONEST: read
+  # under its declared key only by `Platform.Vault.ToolHandlers.fetch/2`,
+  # which refuses an absent or non-slug name (`invalid_name`) before any
+  # lookup. No alias, no context fallback.
+  # 180 with both of the above (stack prototype-runtime rollup merge).
+  @surveyed_required_count 180
 
   defp read_source(relative) do
     # Resolved from __DIR__ (apps/platform/test/platform/federation) rather

@@ -260,7 +260,7 @@ defmodule Platform.Chat.MemberSpaceIdsTest do
       # This block is the case that already worked before the fence came off,
       # and nothing in it may move. The zero-org and cross-org blocks further
       # down are where the fence's removal is measured.
-      root = Tenancy.get_org_by_slug!("fabrikam")
+      root = Tenancy.get_org_by_slug!("acme")
       viewer = create_user!()
       member!(viewer, root)
 
@@ -415,7 +415,7 @@ defmodule Platform.Chat.MemberSpaceIdsTest do
       # Same root-org viewer as the block above, and for the same reason: this
       # is the positive control, the shape that already worked before task
       # 01a01f4c took the org fence off the count and off the write.
-      root = Tenancy.get_org_by_slug!("fabrikam")
+      root = Tenancy.get_org_by_slug!("acme")
       viewer = create_user!()
       member!(viewer, root)
 

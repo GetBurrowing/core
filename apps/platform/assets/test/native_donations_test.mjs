@@ -58,3 +58,44 @@ test("an app build without donate is a no-op, and a rejected promise is swallowe
   rejecting.dispatch("phx:native_donate", { kind: "task_created" });
   await new Promise((r) => setTimeout(r, 0));
 });
+
+// Task 01a116c4 stage 2: the Android app consumes the same bridge for its
+// conversation shortcuts. The android case is the control for the browser one.
+test("on Android, message_sent reaches SuiteNative.donate with the exact detail", () => {
+  const calls = [];
+  const win = fakeWindow({
+    isNativePlatform: () => true,
+    getPlatform: () => "android",
+    Plugins: { SuiteNative: { donate: (detail) => calls.push(detail) } },
+  });
+
+  installNativeDonations(win);
+  const detail = {
+    kind: "message_sent",
+    space_id: "0192-s",
+    recipient_ids: [{ type: "user", id: "0192-u" }],
+  };
+  win.dispatch("phx:native_donate", detail);
+
+  assert.equal(calls.length, 1);
+  assert.strictEqual(calls[0], detail);
+  assert.deepEqual(calls[0], {
+    kind: "message_sent",
+    space_id: "0192-s",
+    recipient_ids: [{ type: "user", id: "0192-u" }],
+  });
+});
+
+test("in a plain browser, message_sent reaches nothing", () => {
+  const calls = [];
+  const browser = fakeWindow({
+    isNativePlatform: () => false,
+    getPlatform: () => "web",
+    Plugins: { SuiteNative: { donate: (d) => calls.push(d) } },
+  });
+
+  installNativeDonations(browser);
+  browser.dispatch("phx:native_donate", { kind: "message_sent", space_id: "0192-s", recipient_ids: [] });
+
+  assert.deepEqual(calls, []);
+});

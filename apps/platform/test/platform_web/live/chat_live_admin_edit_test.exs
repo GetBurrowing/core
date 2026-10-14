@@ -1,21 +1,21 @@
 defmodule PlatformWeb.ChatLiveAdminEditTest do
   @moduledoc """
-  Fabrikam-admin "Edit default" mode for the chat sidebar (Stage 6).
+  Acme-admin "Edit default" mode for the chat sidebar (Stage 6).
 
   A SEPARATE mode from the personal "Edit layout" (Stage 5): admin-edit routes
   the same gestures to the GLOBAL org default (Sidebar Stage 2 API) instead of
-  the acting user's prefs, so a Fabrikam admin curates the company-wide default
+  the acting user's prefs, so an Acme admin curates the company-wide default
   sidebar that everyone sees.
 
   Covers, against real DB-backed channels + the migration-seeded org sections:
 
     * the "Edit company default" item renders in the sidebar overflow menu for
-      a Fabrikam admin and is ABSENT for a non-admin member;
+      an Acme admin and is ABSENT for a non-admin member;
     * each admin event (rename / recolor / reorder / reassign) persists via the
       Stage 2 `Sidebar.*` API;
     * a NON-admin attempting each event is rejected server-side — no mutation —
       because every handler re-checks authorization through `Sidebar.*`, which
-      gates on `Tenancy.fabrikam_admin?/1` (the client toggle is an affordance, not
+      gates on `Tenancy.root_admin?/1` (the client toggle is an affordance, not
       the gate).
 
   Desktop only — mobile is out of scope for this stack. Sidebar assertions read
@@ -52,13 +52,13 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
 
   defp admin_user!(suffix) do
     user = create_user!(suffix)
-    membership!(user, Tenancy.get_org_by_slug!("fabrikam"), "admin")
+    membership!(user, Tenancy.get_org_by_slug!("acme"), "admin")
     user
   end
 
   defp member_user!(suffix) do
     user = create_user!(suffix)
-    membership!(user, Tenancy.get_org_by_slug!("fabrikam"), "member")
+    membership!(user, Tenancy.get_org_by_slug!("acme"), "member")
     user
   end
 
@@ -104,7 +104,7 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
   end
 
   # Open the sidebar overflow ("More") menu — the single entry point that fans
-  # out to personal-edit and (for Fabrikam admins) admin-edit. Returns the rendered
+  # out to personal-edit and (for Acme admins) admin-edit. Returns the rendered
   # html so callers can assert on the open menu.
   defp open_sidebar_menu(view) do
     view |> element(~s(button[phx-click="toggle_sidebar_menu"])) |> render_click()
@@ -242,11 +242,11 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
   # ── (a) toggle visibility: admin sees it, member does not ───────────────
 
   describe "Edit default (admin) toggle visibility" do
-    test "a Fabrikam admin sees the 'Edit company default' item in the overflow menu",
+    test "an Acme admin sees the 'Edit company default' item in the overflow menu",
          %{conn: conn} do
       admin = admin_user!("toggle_admin")
       conn = authenticated_conn(conn, admin)
-      create_channel("general", "fabrikam")
+      create_channel("general", "acme")
 
       {:ok, view, html} = live_following_redirect(conn)
       sidebar = desktop_sidebar(html)
@@ -267,7 +267,7 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
          %{conn: conn} do
       member = member_user!("toggle_member")
       conn = authenticated_conn(conn, member)
-      create_channel("general", "fabrikam")
+      create_channel("general", "acme")
 
       {:ok, view, html} = live_following_redirect(conn)
       sidebar = desktop_sidebar(html)
@@ -285,7 +285,7 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
     test "entering admin-edit reveals rename inputs + recolor palette", %{conn: conn} do
       admin = admin_user!("toggle_reveal")
       conn = authenticated_conn(conn, admin)
-      create_channel("general", "fabrikam")
+      create_channel("general", "acme")
 
       {:ok, view, html} = live_following_redirect(conn)
       sidebar = desktop_sidebar(html)
@@ -316,7 +316,7 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       # asserted in the same breath.
       admin = admin_user!("no_grab")
       conn = authenticated_conn(conn, admin)
-      channel = create_channel("wanderer", "fabrikam")
+      channel = create_channel("wanderer", "acme")
 
       {:ok, view, _html} = live_following_redirect(conn)
 
@@ -341,7 +341,7 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
     test "admin-edit and personal-edit are mutually exclusive", %{conn: conn} do
       admin = admin_user!("mutex")
       conn = authenticated_conn(conn, admin)
-      create_channel("general", "fabrikam")
+      create_channel("general", "acme")
 
       {:ok, view, _html} = live_following_redirect(conn)
 
@@ -376,17 +376,17 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
          %{conn: conn} do
       admin = admin_user!("rename")
       conn = authenticated_conn(conn, admin)
-      create_channel("general", "fabrikam")
-      fabrikam_section = section_id_for_org("fabrikam")
+      create_channel("general", "acme")
+      acme_section = section_id_for_org("acme")
 
       {:ok, view, _html} = live_following_redirect(conn)
 
       render_hook(view, "rename_section_default", %{
-        "section_id" => fabrikam_section,
+        "section_id" => acme_section,
         "name" => "Brand & Social"
       })
 
-      assert Repo.get!(Section, fabrikam_section).name == "Brand & Social"
+      assert Repo.get!(Section, acme_section).name == "Brand & Social"
     end
 
     # Task 01a08212 stage 2: the input is an optional sidebar-only label, so a
@@ -396,23 +396,23 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
          %{conn: conn} do
       admin = admin_user!("rename_blank")
       conn = authenticated_conn(conn, admin)
-      create_channel("general", "fabrikam")
-      fabrikam_section = section_id_for_org("fabrikam")
-      {:ok, _} = Sidebar.rename_section(admin, fabrikam_section, "Brand & Social")
+      create_channel("general", "acme")
+      acme_section = section_id_for_org("acme")
+      {:ok, _} = Sidebar.rename_section(admin, acme_section, "Brand & Social")
 
       {:ok, view, _html} = live_following_redirect(conn)
 
       render_hook(view, "rename_section_default", %{
-        "section_id" => fabrikam_section,
+        "section_id" => acme_section,
         "name" => "   "
       })
 
-      assert Repo.get!(Section, fabrikam_section).name == nil
-      assert displayed_name(fabrikam_section) == Tenancy.get_org_by_slug!("fabrikam").name
+      assert Repo.get!(Section, acme_section).name == nil
+      assert displayed_name(acme_section) == Tenancy.get_org_by_slug!("acme").name
 
       assert has_element?(
                view,
-               ~s(#chat-sidebar section#section-#{fabrikam_section}[aria-label="#{displayed_name(fabrikam_section)} channels"])
+               ~s(#chat-sidebar section#section-#{acme_section}[aria-label="#{displayed_name(acme_section)} channels"])
              )
     end
 
@@ -420,42 +420,42 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
          %{conn: conn} do
       admin = admin_user!("recolor")
       conn = authenticated_conn(conn, admin)
-      create_channel("general", "fabrikam")
-      fabrikam_section = section_id_for_org("fabrikam")
+      create_channel("general", "acme")
+      acme_section = section_id_for_org("acme")
 
       {:ok, view, _html} = live_following_redirect(conn)
 
       render_hook(view, "recolor_section_default", %{
-        "section_id" => fabrikam_section,
+        "section_id" => acme_section,
         "color" => "paragon"
       })
 
-      assert Repo.get!(Section, fabrikam_section).color == "paragon"
+      assert Repo.get!(Section, acme_section).color == "paragon"
     end
 
     test "recolor with an unknown token is ignored (whitelist guard)",
          %{conn: conn} do
       admin = admin_user!("recolor_bad")
       conn = authenticated_conn(conn, admin)
-      create_channel("general", "fabrikam")
-      fabrikam_section = section_id_for_org("fabrikam")
-      original_color = Repo.get!(Section, fabrikam_section).color
+      create_channel("general", "acme")
+      acme_section = section_id_for_org("acme")
+      original_color = Repo.get!(Section, acme_section).color
 
       {:ok, view, _html} = live_following_redirect(conn)
 
       render_hook(view, "recolor_section_default", %{
-        "section_id" => fabrikam_section,
+        "section_id" => acme_section,
         "color" => "rainbow"
       })
 
-      assert Repo.get!(Section, fabrikam_section).color == original_color
+      assert Repo.get!(Section, acme_section).color == original_color
     end
 
     test "section_reordered in admin-edit persists positions to the org default",
          %{conn: conn} do
       admin = admin_user!("reorder")
       conn = authenticated_conn(conn, admin)
-      create_channel("general", "fabrikam")
+      create_channel("general", "acme")
 
       {:ok, view, html} = live_following_redirect(conn)
 
@@ -491,12 +491,12 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
          %{conn: conn} do
       admin = admin_user!("reassign")
       conn = authenticated_conn(conn, admin)
-      channel = create_channel("roamer", "fabrikam")
+      channel = create_channel("roamer", "acme")
       sxi_section = section_id_for_org("sxi")
-      fabrikam_org_id = Tenancy.get_org_by_slug!("fabrikam").id
+      acme_org_id = Tenancy.get_org_by_slug!("acme").id
       sxi_org_id = Tenancy.get_org_by_slug!("sxi").id
       to_label = displayed_name(sxi_section)
-      from_label = displayed_name(section_id_for_org("fabrikam"))
+      from_label = displayed_name(section_id_for_org("acme"))
 
       {:ok, view, _html} = live_following_redirect(conn)
 
@@ -510,7 +510,7 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       # Matched by selector rather than by substring, so the assertion does
       # not depend on the order HEEx happens to emit the attributes in.
       assert has_element?(view, destination_selector(sxi_section))
-      refute has_element?(view, destination_selector(section_id_for_org("fabrikam")))
+      refute has_element?(view, destination_selector(section_id_for_org("acme")))
 
       html = pick_move_destination(view, channel.id, sxi_section)
 
@@ -527,7 +527,7 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       assert html =~ "Personal layouts are not affected."
 
       # Step 1 wrote NOTHING.
-      assert Chat.get_space(channel.id).org_id == fabrikam_org_id
+      assert Chat.get_space(channel.id).org_id == acme_org_id
 
       # Step 2 writes.
       view |> element(~s(button[data-role="move-to-org-confirm"])) |> render_click()
@@ -547,8 +547,8 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       # real controls a person clicks.
       admin = admin_user!("reassign_repaint")
       conn = authenticated_conn(conn, admin)
-      channel = create_channel("repainter", "fabrikam")
-      fabrikam_section = section_id_for_org("fabrikam")
+      channel = create_channel("repainter", "acme")
+      acme_section = section_id_for_org("acme")
       sxi_section = section_id_for_org("sxi")
       sxi_org_id = Tenancy.get_org_by_slug!("sxi").id
 
@@ -558,7 +558,7 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       # be satisfied by a rail that never drew the row at all. A fresh admin has
       # no personal collapse prefs, so both sections render EXPANDED and a row's
       # absence can only mean the resolver filed it elsewhere.
-      assert has_element?(view, row_selector(channel.id, fabrikam_section)),
+      assert has_element?(view, row_selector(channel.id, acme_section)),
              "the row must start under its source section, or the assertions below are vacuous"
 
       refute has_element?(view, row_selector(channel.id, sxi_section))
@@ -577,7 +577,7 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       assert has_element?(view, row_selector(channel.id, sxi_section)),
              "after the move the row must render under the destination section without a reload"
 
-      refute has_element?(view, row_selector(channel.id, fabrikam_section)),
+      refute has_element?(view, row_selector(channel.id, acme_section)),
              "after the move the row must no longer render under the source section"
     end
 
@@ -592,8 +592,8 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       # row straight back under the source section: the same defect stage 1
       # fixed for the acting tab, reached by a different route.
       admin = admin_user!("reassign_broadcast_admin")
-      channel = create_channel("broadcaster", "fabrikam")
-      fabrikam_section = section_id_for_org("fabrikam")
+      channel = create_channel("broadcaster", "acme")
+      acme_section = section_id_for_org("acme")
       sxi_section = section_id_for_org("sxi")
       sxi_org_id = Tenancy.get_org_by_slug!("sxi").id
 
@@ -611,7 +611,7 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       # Positive control on SESSION TWO, the rail under test here. Without it
       # both closing assertions could be satisfied by a rail that never drew
       # the row at all.
-      assert has_element?(observer_view, row_selector(channel.id, fabrikam_section)),
+      assert has_element?(observer_view, row_selector(channel.id, acme_section)),
              "session two must start with the row under its source section, or the assertions below are vacuous"
 
       refute has_element?(observer_view, row_selector(channel.id, sxi_section))
@@ -630,7 +630,7 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       assert has_element?(observer_view, row_selector(channel.id, sxi_section)),
              "session two must draw the row under the destination section after the broadcast, with no re-mount"
 
-      refute has_element?(observer_view, row_selector(channel.id, fabrikam_section)),
+      refute has_element?(observer_view, row_selector(channel.id, acme_section)),
              "session two must stop drawing the row under the source section after the broadcast"
     end
 
@@ -646,8 +646,8 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       # own test.
       admin = admin_user!("reassign_collapsed_dest")
       conn = authenticated_conn(conn, admin)
-      channel = create_channel("collapsed_lander", "fabrikam")
-      fabrikam_section = section_id_for_org("fabrikam")
+      channel = create_channel("collapsed_lander", "acme")
+      acme_section = section_id_for_org("acme")
       sxi_section = section_id_for_org("sxi")
       sxi_org_id = Tenancy.get_org_by_slug!("sxi").id
 
@@ -671,7 +671,7 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
              "the moved channel must carry no unread, or a collapsed section peeks its row"
 
       # Positive control, same shape as the two cases above.
-      assert has_element?(view, row_selector(channel.id, fabrikam_section)),
+      assert has_element?(view, row_selector(channel.id, acme_section)),
              "the row must start under its source section, or the assertions below are vacuous"
 
       refute has_element?(view, row_selector(channel.id, sxi_section))
@@ -690,7 +690,7 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       assert has_element?(view, row_selector(channel.id, sxi_section)),
              "after the move the row must render under the destination section even though it was collapsed"
 
-      refute has_element?(view, row_selector(channel.id, fabrikam_section)),
+      refute has_element?(view, row_selector(channel.id, acme_section)),
              "after the move the row must no longer render under the source section"
 
       # Corroboration on the mechanism: the destination is expanded, which is
@@ -716,7 +716,7 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       # from the markup under test.
       admin = admin_user!("reassign_confirmation")
       conn = authenticated_conn(conn, admin)
-      channel = create_channel("confirmer", "fabrikam")
+      channel = create_channel("confirmer", "acme")
       sxi_section = section_id_for_org("sxi")
       sxi_org_id = Tenancy.get_org_by_slug!("sxi").id
       to_label = displayed_name(sxi_section)
@@ -769,9 +769,9 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       # line survives the other.
       admin = admin_user!("reassign_two_toasts")
       conn = authenticated_conn(conn, admin)
-      hidden_first = create_channel("hidden-first", "fabrikam")
-      moved = create_channel("moved-second", "fabrikam")
-      hidden_last = create_channel("hidden-last", "fabrikam")
+      hidden_first = create_channel("hidden-first", "acme")
+      moved = create_channel("moved-second", "acme")
+      hidden_last = create_channel("hidden-last", "acme")
       sxi_section = section_id_for_org("sxi")
       to_label = displayed_name(sxi_section)
 
@@ -808,9 +808,9 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
     test "cancelling a requested move leaves the channel where it was", %{conn: conn} do
       admin = admin_user!("reassign_cancel")
       conn = authenticated_conn(conn, admin)
-      channel = create_channel("stayer", "fabrikam")
+      channel = create_channel("stayer", "acme")
       sxi_section = section_id_for_org("sxi")
-      fabrikam_org_id = Tenancy.get_org_by_slug!("fabrikam").id
+      acme_org_id = Tenancy.get_org_by_slug!("acme").id
 
       {:ok, view, _html} = live_following_redirect(conn)
 
@@ -821,17 +821,17 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
 
       # The dialog is gone and the channel never moved.
       refute html =~ ~s(data-role="move-to-org-dialog")
-      assert Chat.get_space(channel.id).org_id == fabrikam_org_id
+      assert Chat.get_space(channel.id).org_id == acme_org_id
     end
 
     test "a forged confirm payload cannot re-point an approved move", %{conn: conn} do
       admin = admin_user!("reassign_repoint")
       conn = authenticated_conn(conn, admin)
-      approved = create_channel("approved", "fabrikam")
-      bystander = create_channel("bystander", "fabrikam")
+      approved = create_channel("approved", "acme")
+      bystander = create_channel("bystander", "acme")
       sxi_section = section_id_for_org("sxi")
       soylent_section = section_id_for_org("soylent")
-      fabrikam_org_id = Tenancy.get_org_by_slug!("fabrikam").id
+      acme_org_id = Tenancy.get_org_by_slug!("acme").id
       sxi_org_id = Tenancy.get_org_by_slug!("sxi").id
 
       {:ok, view, _html} = live_following_redirect(conn)
@@ -854,31 +854,31 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       # The approved move happened, exactly as approved.
       assert Chat.get_space(approved.id).org_id == sxi_org_id
       # The channel named in the forged payload did not move.
-      assert Chat.get_space(bystander.id).org_id == fabrikam_org_id
+      assert Chat.get_space(bystander.id).org_id == acme_org_id
     end
 
     test "a forged request naming the org the channel is already in opens no confirmation",
          %{conn: conn} do
       admin = admin_user!("reassign_noop")
       conn = authenticated_conn(conn, admin)
-      channel = create_channel("stayput", "fabrikam")
-      fabrikam_section = section_id_for_org("fabrikam")
-      fabrikam_org_id = Tenancy.get_org_by_slug!("fabrikam").id
+      channel = create_channel("stayput", "acme")
+      acme_section = section_id_for_org("acme")
+      acme_org_id = Tenancy.get_org_by_slug!("acme").id
 
       {:ok, view, _html} = live_following_redirect(conn)
 
       # The chooser never offers the org a channel is already in, so this can
-      # only arrive forged. "Move #stayput to Fabrikam?" for a channel already in
-      # Fabrikam is a question with no answer, and confirming it would write a
+      # only arrive forged. "Move #stayput to Acme?" for a channel already in
+      # Acme is a question with no answer, and confirming it would write a
       # no-op the admin had been told was a move.
       html =
         render_hook(view, "request_channel_reassign", %{
           "channel_id" => channel.id,
-          "target_section_id" => fabrikam_section
+          "target_section_id" => acme_section
         })
 
       refute html =~ ~s(data-role="move-to-org-dialog")
-      assert Chat.get_space(channel.id).org_id == fabrikam_org_id
+      assert Chat.get_space(channel.id).org_id == acme_org_id
     end
 
     test "a channel filed under no organisation gets no move control", %{conn: conn} do
@@ -892,7 +892,7 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       # it between two named orgs, and the confirmation copy has no honest way
       # to name the org it would be leaving.
       {:ok, unfiled} = Chat.create_space(%{name: "Unfiled", slug: "unfiled", kind: "channel"})
-      filed = create_channel("filed", "fabrikam")
+      filed = create_channel("filed", "acme")
 
       {:ok, view, html} = live_following_redirect(conn)
 
@@ -932,10 +932,10 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       # Two channels called "general" in two different orgs is the ORDINARY
       # shape of this data, so `chat_spaces_unique_org_slug` fires in routine
       # use rather than as an edge case.
-      mover = create_channel("general", "fabrikam")
+      mover = create_channel("general", "acme")
       _blocker = create_channel("general", "sxi")
       sxi_section = section_id_for_org("sxi")
-      fabrikam_org_id = Tenancy.get_org_by_slug!("fabrikam").id
+      acme_org_id = Tenancy.get_org_by_slug!("acme").id
       to_label = displayed_name(sxi_section)
 
       {:ok, view, _html} = live_following_redirect(conn)
@@ -948,7 +948,7 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       assert html =~ "A channel in #{to_label} already uses that name."
       refute html =~ "Could not move the channel."
       # The write was refused, not half-applied.
-      assert Chat.get_space(mover.id).org_id == fabrikam_org_id
+      assert Chat.get_space(mover.id).org_id == acme_org_id
     end
   end
 
@@ -957,8 +957,8 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
   # Regression for the user-reported BUG (task 019e467d): the section header
   # used to render a `<.scope_pill scope={section_scope_atom(section.color)}>`,
   # so the pill's VISIBLE TEXT was derived from the section's COLOR. Recoloring
-  # a section (e.g. Fabrikam → yellow/paragon) flipped the chip text to "Paragon"
-  # even though the section's real name was still "Fabrikam" — the recolor looked
+  # a section (e.g. Acme → yellow/paragon) flipped the chip text to "Paragon"
+  # even though the section's real name was still "Acme" — the recolor looked
   # like a rename. The fix renders a COLOR-ONLY dot keyed off `section.color`;
   # identity text comes solely from `section.name`. These tests assert on the
   # RENDERED header (not just the DB write the earlier reviews verified).
@@ -968,29 +968,33 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
          %{conn: conn} do
       admin = admin_user!("recolor_render")
       conn = authenticated_conn(conn, admin)
-      create_channel("general", "fabrikam")
-      fabrikam_section = section_id_for_org("fabrikam")
-      original_label = Repo.get!(Section, fabrikam_section).name
+      create_channel("general", "acme")
+      acme_section = section_id_for_org("acme")
+      original_label = Repo.get!(Section, acme_section).name
 
       # The header text is the DISPLAYED name (task 01a08212): the label
       # override, else the org's current name. A following section's stored
       # `name` is nil, so the stored column alone says nothing about the text.
-      original_name = displayed_name(fabrikam_section)
+      original_name = displayed_name(acme_section)
 
       {:ok, view, _html} = live_following_redirect(conn)
       html_before = enter_admin_edit(view)
       sidebar_before = desktop_sidebar(html_before)
 
-      # Before the recolor the Fabrikam section header carries the fabrikam dot and the
-      # rename input shows its real name. (The recolor target — paragon — must
-      # NOT already be the fabrikam dot's color.)
-      assert sidebar_before =~ "bg-fabrikam-dot"
+      # Before the recolor the root section header carries its own-org dot and
+      # the rename input shows its real name. The root has no compiled dot
+      # class since task 01a116de stage 3: the dot is coloured from the org
+      # row through `data-scope`. (The recolor target — paragon — must NOT
+      # already be the root dot's color.)
+      assert sidebar_before =~
+               ~r/class="channel-section-color-dot channel-section-color-dot--unassigned"\s+data-scope="acme"/
+
       assert sidebar_before =~ ~s(aria-label="Collapse #{original_name}")
 
-      # Recolor Fabrikam → paragon (the "yellow" swatch in the palette).
+      # Recolor Acme → paragon (the "yellow" swatch in the palette).
       html_after =
         render_hook(view, "recolor_section_default", %{
-          "section_id" => fabrikam_section,
+          "section_id" => acme_section,
           "color" => "paragon"
         })
 
@@ -1000,8 +1004,22 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       assert sidebar_after =~ "bg-paragon-dot",
              "Recoloring to paragon should change the section's color dot"
 
+      refute sidebar_after =~
+               ~r/class="channel-section-color-dot channel-section-color-dot--unassigned"\s+data-scope="acme"/
+
+      # The palette still offers the root's OWN token, so the recolor is
+      # reversible, and the server accepts it for this section.
+      assert sidebar_after =~ ~s(phx-value-color="acme")
+
+      render_hook(view, "recolor_section_default", %{
+        "section_id" => acme_section,
+        "color" => "acme"
+      })
+
+      assert Repo.get!(Section, acme_section).color == "acme"
+
       # …but the section's NAME is unchanged — the recolor did NOT rename it.
-      assert Repo.get!(Section, fabrikam_section).name == original_label
+      assert Repo.get!(Section, acme_section).name == original_label
 
       assert sidebar_after =~ ~s(aria-label="Collapse #{original_name}"),
              "Recolor must not change the rendered section name"
@@ -1027,7 +1045,7 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
     test "a fresh user sees the admin's new section order in the rendered rail",
          %{conn: _conn} do
       admin = admin_user!("reorder_visible_admin")
-      create_channel("general", "fabrikam")
+      create_channel("general", "acme")
 
       # Admin reorders the global default: move the first-rendered section to the
       # last slot via the admin path.
@@ -1064,7 +1082,7 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       # where the resolver stops honoring position for the default case.
       member = member_user!("default_position")
       conn = authenticated_conn(conn, member)
-      create_channel("general", "fabrikam")
+      create_channel("general", "acme")
 
       {:ok, _view, html} = live_following_redirect(conn)
 
@@ -1080,43 +1098,43 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
          %{conn: conn} do
       member = member_user!("rename_reject")
       conn = authenticated_conn(conn, member)
-      create_channel("general", "fabrikam")
-      fabrikam_section = section_id_for_org("fabrikam")
-      original = Repo.get!(Section, fabrikam_section)
+      create_channel("general", "acme")
+      acme_section = section_id_for_org("acme")
+      original = Repo.get!(Section, acme_section)
 
       {:ok, view, _html} = live_following_redirect(conn)
 
       render_hook(view, "rename_section_default", %{
-        "section_id" => fabrikam_section,
+        "section_id" => acme_section,
         "name" => "Hijacked"
       })
 
-      assert Repo.get!(Section, fabrikam_section).name == original.name
+      assert Repo.get!(Section, acme_section).name == original.name
     end
 
     test "recolor_section_default by a member does not mutate the section",
          %{conn: conn} do
       member = member_user!("recolor_reject")
       conn = authenticated_conn(conn, member)
-      create_channel("general", "fabrikam")
-      fabrikam_section = section_id_for_org("fabrikam")
-      original = Repo.get!(Section, fabrikam_section)
+      create_channel("general", "acme")
+      acme_section = section_id_for_org("acme")
+      original = Repo.get!(Section, acme_section)
 
       {:ok, view, _html} = live_following_redirect(conn)
 
       render_hook(view, "recolor_section_default", %{
-        "section_id" => fabrikam_section,
+        "section_id" => acme_section,
         "color" => "paragon"
       })
 
-      assert Repo.get!(Section, fabrikam_section).color == original.color
+      assert Repo.get!(Section, acme_section).color == original.color
     end
 
     test "section_reordered by a member does not change the global default order",
          %{conn: conn} do
       member = member_user!("reorder_reject")
       conn = authenticated_conn(conn, member)
-      create_channel("general", "fabrikam")
+      create_channel("general", "acme")
 
       {:ok, view, _html} = live_following_redirect(conn)
 
@@ -1125,7 +1143,7 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       last = List.last(sections)
 
       # A member can't even enter admin-edit (toggle is hidden + the handler
-      # re-checks fabrikam_admin?), so we force the event directly. The handler
+      # re-checks root_admin?), so we force the event directly. The handler
       # falls back to the PERSONAL reorder path (sidebar_admin_edit is false),
       # which writes the member's own prefs — NOT the global default. Either
       # way the global channel_sections.position order is untouched. Keyed by
@@ -1138,7 +1156,7 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       assert Sidebar.list_default_sections() |> Enum.map(& &1.id) == before_ids
     end
 
-    test "a Fabrikam admin's row menu carries the move item", %{conn: conn} do
+    test "an Acme admin's row menu carries the move item", %{conn: conn} do
       # The positive control for the refutation in the test below. Since task
       # 019ff8ba stage 1 the item lives in a menu that has to be opened, so a
       # build that dropped the item for EVERYONE would satisfy that refutation
@@ -1146,7 +1164,7 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       # thing being measured there.
       admin = admin_user!("reassign_positive")
       conn = authenticated_conn(conn, admin)
-      channel = create_channel("roamer", "fabrikam")
+      channel = create_channel("roamer", "acme")
 
       {:ok, view, _html} = live_following_redirect(conn)
 
@@ -1163,9 +1181,9 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
          %{conn: conn} do
       member = member_user!("reassign_reject")
       conn = authenticated_conn(conn, member)
-      channel = create_channel("roamer", "fabrikam")
+      channel = create_channel("roamer", "acme")
       sxi_section = section_id_for_org("sxi")
-      fabrikam_org_id = Tenancy.get_org_by_slug!("fabrikam").id
+      acme_org_id = Tenancy.get_org_by_slug!("acme").id
 
       {:ok, view, _html} = live_following_redirect(conn)
 
@@ -1197,25 +1215,25 @@ defmodule PlatformWeb.ChatLiveAdminEditTest do
       refute html =~ ~s(data-role="move-to-org-dialog")
 
       # (3) A forged step-2 writes nothing either — belt and braces, since
-      # `Sidebar.reassign_channel/3` re-checks `fabrikam_admin?` underneath.
+      # `Sidebar.reassign_channel/3` re-checks `root_admin?` underneath.
       render_hook(view, "confirm_channel_reassign", %{
         "channel_id" => channel.id,
         "target_section_id" => sxi_section
       })
 
-      assert Chat.get_space(channel.id).org_id == fabrikam_org_id
+      assert Chat.get_space(channel.id).org_id == acme_org_id
     end
 
     test "a member cannot enter admin-edit even by forging the toggle event",
          %{conn: conn} do
       member = member_user!("toggle_forge")
       conn = authenticated_conn(conn, member)
-      create_channel("general", "fabrikam")
+      create_channel("general", "acme")
 
       {:ok, view, _html} = live_following_redirect(conn)
 
       # Forge the toggle event a non-admin could never click (the button is
-      # hidden). The handler re-checks @fabrikam_admin? and refuses to flip.
+      # hidden). The handler re-checks @root_admin? and refuses to flip.
       html = render_hook(view, "toggle_sidebar_admin_edit", %{})
       sidebar = desktop_sidebar(html)
 

@@ -56,6 +56,7 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
 
   alias Platform.Orchestration.{
     PhaseRuntime,
+    RuntimeEvent,
     RuntimeSupervision,
     SandboxGuard,
     TaskRouterSupervisor
@@ -63,7 +64,7 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
 
   alias Platform.Repo
   alias Platform.Tasks
-  alias Platform.Tasks.{Plan, Stacks, Task}
+  alias Platform.Tasks.{Plan, StackDeployer, Stacks, Task}
 
   @reconcile_interval_ms 5 * 60 * 1_000
 
@@ -225,6 +226,26 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
           %{scanned: 0, transitioned: 0, observed: 0}
       end
 
+    # Task 01a136c1 — the stall sweep above selects ONLY members that already
+    # carry `merged_into_rollup_at`. A member whose rollup merge was declined
+    # (or never fired) has no stamp, so nothing else retries it. This sweep
+    # re-fires the merge for those members. Same envelope as its siblings.
+    unstamped_result =
+      try do
+        sweep_unstamped_review_ready_members()
+      rescue
+        e ->
+          Logger.warning(
+            "[TaskRouterWatcher] sweep_unstamped_review_ready_members raised: " <>
+              Exception.message(e)
+          )
+
+          %{scanned: 0, triggered: 0, skipped_blocked: 0, observed: 0}
+      catch
+        :exit, _reason ->
+          %{scanned: 0, triggered: 0, skipped_blocked: 0, observed: 0}
+      end
+
     # Gap 3 + Gap 4 (task 019f921d) — piggyback the same 5-min tick to
     # self-heal the two fire-and-forget stack-lifecycle gaps: commence any
     # `forming`-but-ready stack, and re-fire the rollup-PR open for any
@@ -289,6 +310,10 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
       "[TaskRouterWatcher] reconcile: started #{started}, stopped #{stopped}; " <>
         "in_review stall sweep: scanned=#{stall_result.scanned}, " <>
         "transitioned=#{stall_result.transitioned}, observed=#{stall_result.observed}; " <>
+        "unstamped member merge sweep: scanned=#{unstamped_result.scanned}, " <>
+        "triggered=#{unstamped_result.triggered}, " <>
+        "skipped_blocked=#{unstamped_result.skipped_blocked}, " <>
+        "observed=#{unstamped_result.observed}; " <>
         "stack lifecycle: commenced=#{lifecycle_result.commenced}, " <>
         "pr_reopened=#{lifecycle_result.pr_reopened}, " <>
         "promoted=#{lifecycle_result.promoted}; " <>
@@ -455,7 +480,13 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
     # absent on the plain maps some test helpers and transient PubSub
     # payloads use. Both "key missing" and "key set to nil" mean "not
     # deleted"; only an actual timestamp suppresses the router.
-    is_nil(Map.get(task, :deleted_at))
+    #
+    # Task 01a11ec3 stage 1 (defense in depth): a quarantined external-
+    # feedback task must never have a router spawned even if a stale
+    # transition slipped through another seam. The persisted trust stamp
+    # is the authoritative fact regardless of status or assignee.
+    is_nil(Map.get(task, :deleted_at)) and
+      not Platform.Tasks.quarantined?(task)
   end
 
   def should_run?(_), do: false
@@ -626,6 +657,160 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
         })
 
         %{acc | observed: acc.observed + 1}
+    end
+  end
+
+  # ── Task 01a136c1: unstamped review-ready member sweep ────────────────
+
+  @doc """
+  Re-fire the rollup merge for stack members stranded at `in_review` with NO
+  `merged_into_rollup_at` stamp.
+
+  `sweep_in_review_stalls/0` handles members that already carry the stamp.
+  A member whose merge was declined, for example by a merge child that ran
+  before the passing transaction committed and saw `{:stages_pending, _, _}`,
+  never gets a stamp, and nothing else retries it. This sweep selects members
+  that are:
+
+    * `in_review`, with a non-nil `stack_id` and no `merged_into_rollup_at`;
+    * not deleted;
+    * idle for `@in_review_stall_debounce_minutes` (same debounce as the
+      stall sweep, so ordinary review latency stays invisible);
+    * capped at `@in_review_stall_sweep_cap` per tick, oldest first.
+
+  For each one it requires `Stacks.member_review_validations_all_passed?/1`
+  and then calls `StackDeployer.handle_member_transition(task, :sweep,
+  :in_review)`. The deployer keeps its own readiness gate and idempotency.
+
+  A member with an OPEN rollup-merge blocker is SKIPPED (see
+  `open_merge_blocker?/1`). Without that, a member whose branch diverged from
+  the rollup would re-run the merge, fail the same way, and file another
+  needs_human escalation every 5 minutes.
+
+  Returns `%{scanned: n, triggered: t, skipped_blocked: b, observed: o}`.
+  `triggered` counts merge attempts dispatched, not merges completed: under
+  `async: true` the merge runs in a child process.
+  """
+  @spec sweep_unstamped_review_ready_members() :: %{
+          scanned: non_neg_integer(),
+          triggered: non_neg_integer(),
+          skipped_blocked: non_neg_integer(),
+          observed: non_neg_integer()
+        }
+  def sweep_unstamped_review_ready_members do
+    candidates = list_unstamped_review_candidates()
+
+    if length(candidates) >= @in_review_stall_sweep_cap do
+      Logger.warning(
+        "[TaskRouterWatcher] unstamped member merge sweep hit the " <>
+          "#{@in_review_stall_sweep_cap}-row LIMIT; expect follow-up ticks to drain."
+      )
+    end
+
+    Enum.reduce(
+      candidates,
+      %{scanned: 0, triggered: 0, skipped_blocked: 0, observed: 0},
+      fn task, acc ->
+        acc = %{acc | scanned: acc.scanned + 1}
+        handle_unstamped_candidate(task, acc)
+      end
+    )
+  end
+
+  defp list_unstamped_review_candidates do
+    cutoff =
+      DateTime.utc_now()
+      |> DateTime.add(-@in_review_stall_debounce_minutes * 60, :second)
+
+    from(t in Task,
+      where:
+        t.status == "in_review" and
+          not is_nil(t.stack_id) and
+          not fragment("coalesce(? \\? ?, false)", t.metadata, "merged_into_rollup_at") and
+          is_nil(t.deleted_at) and
+          t.updated_at < ^cutoff,
+      order_by: [asc: t.updated_at],
+      limit: @in_review_stall_sweep_cap
+    )
+    |> Repo.all()
+  end
+
+  defp handle_unstamped_candidate(%Task{} = task, acc) do
+    cond do
+      open_merge_blocker?(task) ->
+        emit_stall_telemetry(task, %{
+          action: :observed_only,
+          reason: :unstamped_open_merge_blocker
+        })
+
+        %{acc | skipped_blocked: acc.skipped_blocked + 1}
+
+      not Stacks.member_review_validations_all_passed?(task) ->
+        emit_stall_telemetry(task, %{
+          action: :observed_only,
+          reason: :unstamped_validations_not_passed
+        })
+
+        %{acc | observed: acc.observed + 1}
+
+      true ->
+        Logger.info(
+          "[TaskRouterWatcher] unstamped review-ready member #{task.id} at in_review " <>
+            "(updated_at #{inspect(task.updated_at)}); re-firing rollup merge"
+        )
+
+        _ = StackDeployer.handle_member_transition(task, :sweep, :in_review)
+        emit_stall_telemetry(task, %{action: :merge_retriggered})
+        %{acc | triggered: acc.triggered + 1}
+    end
+  end
+
+  # An OPEN rollup-merge blocker is identified from what
+  # `StackDeployer.record_merge_blocker/3` and the divergence path write:
+  #
+  #   * `metadata["paused_reason"]["kind"] == "rollup_diverged"`, stamped by
+  #     `record_divergence/3` and cleared by the next successful merge; or
+  #   * an `execution.blocked` runtime event from `runtime_id:
+  #     "stack_deployer"` for this task with no LATER `execution.unblocked`
+  #     event for the task (from any runtime: the human or agent who clears
+  #     it may report from their own runtime).
+  #
+  # LIMITATION, stated as scope: an old stack_deployer blocker that nobody
+  # ever unblocked keeps the member out of THIS sweep until someone records
+  # `execution.unblocked` or merges it (`stack_retry_member_merge`). The
+  # sweep never files a blocker itself.
+  defp open_merge_blocker?(%Task{id: task_id, metadata: metadata}) do
+    diverged? =
+      case metadata do
+        %{"paused_reason" => %{"kind" => "rollup_diverged"}} -> true
+        _ -> false
+      end
+
+    diverged? or open_stack_deployer_blocked_event?(task_id)
+  end
+
+  defp open_stack_deployer_blocked_event?(task_id) do
+    latest_blocked =
+      from(e in RuntimeEvent,
+        where:
+          e.task_id == ^task_id and e.runtime_id == "stack_deployer" and
+            e.event_type == "execution.blocked",
+        select: max(e.occurred_at)
+      )
+      |> Repo.one()
+
+    case latest_blocked do
+      nil ->
+        false
+
+      %DateTime{} = blocked_at ->
+        not Repo.exists?(
+          from(e in RuntimeEvent,
+            where:
+              e.task_id == ^task_id and e.event_type == "execution.unblocked" and
+                e.occurred_at > ^blocked_at
+          )
+        )
     end
   end
 
@@ -1177,6 +1362,7 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
         t.assignee_type == "agent" and
           not is_nil(t.assignee_id) and
           t.status in @active_statuses and
+          t.trust != "quarantined" and
           is_nil(t.deleted_at) and
           p.dispatch_paused == false,
       preload: [project: p]

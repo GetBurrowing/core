@@ -15,7 +15,7 @@
     project_sections={@project_sections}
     projects_by_org={@projects_by_org}
     orgs={@orgs}
-    fabrikam_admin={@fabrikam_admin?}
+    root_admin?={@root_admin?}
     lifecycle_menu_key={@lifecycle_menu_key}
     mask_names?={@mask_names?}
     revealed_rail_ids={@revealed_rail_ids}
@@ -133,7 +133,7 @@
             </div>
           </div>
 
-          <.settings_menu admin?={@fabrikam_admin?} open?={@settings_menu_open} />
+          <.settings_menu admin?={@root_admin?} open?={@settings_menu_open} />
         </div>
       </:primary_action>
       <:filters>
@@ -147,6 +147,8 @@
           id="tasks-filters"
           scope_filter={@scope_filter}
           sponsor_filter={@sponsor_filter}
+          kind_filter={@kind_filter}
+          origin_filter={@origin_filter}
           board_sort={@board_sort}
           task_search_query={@task_search_query}
           active_status_filter={@active_status_filter}
@@ -180,13 +182,13 @@
       mask_names?={@mask_names?}
       mask_labels={@mask_labels}
       epics_collapsed={@epics_collapsed}
-      show_detail={@show_detail}
-      selected_task={@selected_task}
       kanban_columns={@kanban_columns}
       mobile_columns={@mobile_columns}
       active_status_filter={@active_status_filter}
       scope_filter={@scope_filter}
       sponsor_filter={@sponsor_filter}
+      kind_filter={@kind_filter}
+      origin_filter={@origin_filter}
       task_search_query={@task_search_query}
       columns={@columns}
       board_items={@board_items}
@@ -310,7 +312,7 @@
     agents={@agents}
   />
 
-  <.settings_sheet admin?={@fabrikam_admin?} open?={@settings_menu_open} />
+  <.settings_sheet admin?={@root_admin?} open?={@settings_menu_open} />
 
   <%!-- Schedule-deletion confirm dialog (task 019f4eaa stage 6). Archive is
        instant + reversible with no modal; only this destructive step confirms. --%>

@@ -95,9 +95,9 @@ defmodule Platform.Lifecycle.EdgeInventory do
       SCOPE UPDATE (task 01a0a552): `close_as_delivered` now has an MCP
       entry point, `task_close_as_delivered` in the `task` bundle. State
       what it admits, not what it forbids — an exception sentence rots and
-      a scope sentence survives. The one route it opens is: a Fabrikam admin's
+      a scope sentence survives. The one route it opens is: a root-org admin's
       own authority, exercised through an AgentRuntime that admin OWNS
-      (`Platform.Tenancy.fabrikam_admin?/1` on the runtime's owner, checked
+      (`Platform.Tenancy.root_admin?/1` on the runtime's owner, checked
       before the task is read so a refusal cannot be used to probe the
       board), with a `delivery_reference` that is REQUIRED, parsed strictly
       and RESOLVED against the project's own repo before any write. It

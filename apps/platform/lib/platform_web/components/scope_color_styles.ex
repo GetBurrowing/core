@@ -124,8 +124,9 @@ defmodule PlatformWeb.Components.ScopeColorStyles do
   Pass `entries` directly (a list of `%{slug:, hue:, chroma:, lightness:}`
   maps; `lightness` may be absent or nil) or pass a `viewer` and let the
   component resolve them with `Platform.Tenancy.scope_color_entries/1`:
-  every active org the viewer can SEE, because a chip anywhere on the page
-  for an org outside the list renders uncoloured. Tests take the first
+  every active org the viewer can SEE, plus the root org for every viewer,
+  because a chip anywhere on the page for an org outside the list renders
+  uncoloured. Tests take the first
   form; the shell takes the second.
 
   The element carries a stable `id` and is deliberately NOT

@@ -1006,7 +1006,7 @@ defmodule Platform.Meetings.IntentEval.HarnessTest do
         root,
         "cfg",
         %{"inline_file" => write_prompt!(root, "p.txt", "P {{correction_exemplars}}")},
-        %{"correction_exemplars" => %{"db_recent" => %{"org_slug" => "fabrikam"}}}
+        %{"correction_exemplars" => %{"db_recent" => %{"org_slug" => "acme"}}}
       )
 
       config = Harness.load_config!(root, "cfg")

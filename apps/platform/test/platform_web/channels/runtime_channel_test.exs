@@ -428,8 +428,13 @@ defmodule PlatformWeb.RuntimeChannelTest do
 
       payload = join_and_capture_capabilities(runtime, ctx.raw_token)
 
-      assert Enum.map(payload.tools, & &1.name) == ["federation_status"]
-      assert payload.tool_count == 1
+      assert Enum.map(payload.tools, & &1.name) == [
+               "federation_status",
+               "vault_fetch",
+               "vault_list"
+             ]
+
+      assert payload.tool_count == 3
     end
 
     test "a runtime with no bundles is pushed zero tools", ctx do
@@ -480,7 +485,7 @@ defmodule PlatformWeb.RuntimeChannelTest do
 
       _payload = join_and_capture_capabilities(runtime, ctx.raw_token)
 
-      assert_receive {:capabilities_pushed, %{tool_count: 1}, metadata}
+      assert_receive {:capabilities_pushed, %{tool_count: 3}, metadata}
       assert metadata.runtime_id == runtime.runtime_id
       assert metadata.external == false
     end
@@ -2499,6 +2504,45 @@ defmodule PlatformWeb.RuntimeChannelTest do
       assert_push "tool_result", %{call_id: "call-1", status: "ok", result: result}
       assert result.kind == "stack"
       assert result.title == "Runtime Canvas"
+    end
+
+    test "task kind round-trips through the RuntimeChannel transport", ctx do
+      {:ok, _granted} = Federation.update_allowed_bundles(ctx.runtime, ["task"])
+      project = create_project()
+      socket = joined_socket(ctx)
+
+      push(socket, "tool_call", %{
+        "call_id" => "call-kind-create",
+        "tool" => "task_create",
+        "args" => %{
+          "project_id" => project.id,
+          "title" => "Runtime kind",
+          "kind" => "chore"
+        }
+      })
+
+      assert_push "tool_result", %{
+        call_id: "call-kind-create",
+        status: "ok",
+        result: created
+      }
+
+      assert created.kind == "chore"
+
+      push(socket, "tool_call", %{
+        "call_id" => "call-kind-update",
+        "tool" => "task_update",
+        "args" => %{"task_id" => created.id, "kind" => "ops"}
+      })
+
+      assert_push "tool_result", %{
+        call_id: "call-kind-update",
+        status: "ok",
+        result: updated
+      }
+
+      assert updated.kind == "ops"
+      assert Tasks.get_task_record(created.id).kind == "ops"
     end
 
     # Task 01a0fcfa. `attachment.get_inline` marks an eligible image for an

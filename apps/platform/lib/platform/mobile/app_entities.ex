@@ -12,8 +12,11 @@ defmodule Platform.Mobile.AppEntities do
   ## Approvals
 
   `list_approvals/1` is built from `Platform.Inbox.reachable_unread_scope/1`
-  with the same kind predicate `Platform.Mobile.counts_for_user/1` counts, so
-  the list the app shows and the badge number cannot disagree.
+  (the list scope) with the same kind predicate `Platform.Mobile.counts_for_user/1`
+  counts. The count is built on `Platform.Inbox.reachable_badge_scope/1`, which
+  composes on that scope and adds `is_nil(read_at)`, so the badge number is the
+  unopened subset of this list: every counted approval is listed, and an
+  approval the user has opened but not settled is listed and not counted.
 
   `approve/2` and `reject/3` resolve the inbox item by id AND owner (another
   user's item is `:not_found`, so ids are not probeable), then act through the
@@ -55,7 +58,7 @@ defmodule Platform.Mobile.AppEntities do
   alias Platform.Tasks.Task
 
   # Must stay equal to `Platform.Mobile`'s `@approval_kinds`: the list and the
-  # badge count are the same predicate. `app_entities_test.exs` pins parity.
+  # badge count share this kind predicate. `app_entities_test.exs` pins parity.
   @approval_kinds ~w(task_plan_review review_request_pending)
   @terminal_task_statuses ~w(done cancelled)
 

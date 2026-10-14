@@ -19,7 +19,7 @@ defmodule PlatformWeb.UserAccessLive do
       immediately lose access to this surface (and every other Suite
       surface via the auth plug in Stage 5).
 
-  Fabrikam-only gate is inherited from the `:admin` `live_session` in
+  root-admin-only gate is inherited from the `:admin` `live_session` in
   `PlatformWeb.Router` (via `PlatformWeb.LiveAuth.on_mount(:ensure_admin, ...)`).
   """
   use PlatformWeb, :live_view

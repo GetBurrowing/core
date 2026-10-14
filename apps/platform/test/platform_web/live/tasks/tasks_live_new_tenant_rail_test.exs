@@ -49,7 +49,7 @@ defmodule PlatformWeb.Tasks.NewTenantRailTest do
     })
   end
 
-  # Parented under fabrikam deliberately. The `orgs_single_root` unique index
+  # Parented under acme deliberately. The `orgs_single_root` unique index
   # refuses a SECOND parentless org, so a root-less fixture here fails on the
   # insert with a constraint error that reads nothing like the thing under
   # test (found the hard way on stage 1 of this task).
@@ -58,7 +58,7 @@ defmodule PlatformWeb.Tasks.NewTenantRailTest do
     |> Org.changeset(%{
       name: name,
       slug: slug,
-      parent_org_id: Tenancy.get_org_by_slug!("fabrikam").id
+      parent_org_id: Tenancy.get_org_by_slug!("acme").id
     })
     |> Repo.insert!()
   end
@@ -95,12 +95,12 @@ defmodule PlatformWeb.Tasks.NewTenantRailTest do
       assert_raise ArgumentError, fn -> String.to_existing_atom(@new_slug) end
 
       org = insert_tenant_org(@new_slug, @new_name)
-      {conn, user} = member_conn(conn, ["fabrikam", @new_slug])
+      {conn, user} = member_conn(conn, ["acme", @new_slug])
 
-      # A fabrikam admin bypasses the membership filter by design, so an admin
+      # A acme admin bypasses the membership filter by design, so an admin
       # viewer would make a membership-blind rail look correct. This viewer
       # must be a plain member.
-      refute Tenancy.fabrikam_admin?(user)
+      refute Tenancy.root_admin?(user)
 
       # Mounts at all. Pre-019fa209-fix this was an ArgumentError in
       # `mount/3`; the page is the thing that 500'd, so assert the page.
@@ -113,7 +113,7 @@ defmodule PlatformWeb.Tasks.NewTenantRailTest do
       # a rail that rendered zero org chips is not visibly empty. Prove the
       # loop produced something known-good before reading the new chip as
       # evidence of anything.
-      assert "fabrikam" in chips
+      assert "acme" in chips
 
       # THE STAGE, in one line: no deploy, no allowlist entry, a chip.
       assert @new_slug in chips
@@ -155,7 +155,7 @@ defmodule PlatformWeb.Tasks.NewTenantRailTest do
       hueless = insert_tenant_org("zzz-hueless", "ZZZ Hueless")
       assert is_nil(hueless.color_hue)
 
-      {conn, _user} = member_conn(conn, ["fabrikam", @new_slug, "zzz-hueless"])
+      {conn, _user} = member_conn(conn, ["acme", @new_slug, "zzz-hueless"])
       {:ok, view, _html} = live(conn, ~p"/tasks")
       html = render(view)
 
@@ -190,7 +190,7 @@ defmodule PlatformWeb.Tasks.NewTenantRailTest do
 
     test "the chip's filter round-trips as a string and narrows the board", %{conn: conn} do
       insert_tenant_org(@new_slug, @new_name)
-      {conn, _user} = member_conn(conn, ["fabrikam", @new_slug])
+      {conn, _user} = member_conn(conn, ["acme", @new_slug])
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
@@ -214,7 +214,7 @@ defmodule PlatformWeb.Tasks.NewTenantRailTest do
 
     test "an archived new tenant loses its chip", %{conn: conn} do
       org = insert_tenant_org(@new_slug, @new_name)
-      {conn, _user} = member_conn(conn, ["fabrikam", @new_slug])
+      {conn, _user} = member_conn(conn, ["acme", @new_slug])
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
       assert @new_slug in rendered_scope_chips(view)
@@ -229,7 +229,7 @@ defmodule PlatformWeb.Tasks.NewTenantRailTest do
       {:ok, view2, _html} = live(conn, ~p"/tasks")
 
       refute @new_slug in rendered_scope_chips(view2)
-      assert "fabrikam" in rendered_scope_chips(view2)
+      assert "acme" in rendered_scope_chips(view2)
     end
 
     test "a member of the new org does NOT see chips for orgs they don't belong to", %{
@@ -261,7 +261,7 @@ defmodule PlatformWeb.Tasks.NewTenantRailTest do
     # emitted values is `ScopeColorStylesShippedSixTest`; this is the proof
     # that the page actually reads the row.
     test "sxi and wayne_tech are coloured from their rows at their shipped fills", %{conn: conn} do
-      {conn, user} = member_conn(conn, ["fabrikam", "sxi", "wayne_tech", "paragon"])
+      {conn, user} = member_conn(conn, ["acme", "sxi", "wayne_tech", "paragon"])
 
       entries = Tenancy.scope_slug_entries(user)
       sxi = Enum.find(entries, &(&1.slug == "sxi"))

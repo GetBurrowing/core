@@ -66,6 +66,7 @@ defmodule Platform.Push do
   alias Platform.Push.APNs
   alias Platform.Push.FCM
   alias Platform.Push.Notification
+  alias Platform.Push.Relay
   alias Platform.Push.Subscription
   alias Platform.Repo
   alias Platform.Tenancy
@@ -210,12 +211,14 @@ defmodule Platform.Push do
       send_web_push(subscriptions, notification)
 
       # Native push only for a USER-typed recipient. An agent row's
-      # `participant_id` is an agent id and has no app devices.
+      # `participant_id` is an agent id and has no app devices, and no
+      # unread count is read for it.
       case apns_user_id(participant_id) do
         nil ->
           :ok
 
         user_id ->
+          notification = stamp_unread(notification, user_id)
           deliver_apns(user_id, notification)
           deliver_fcm(user_id, notification)
       end
@@ -240,10 +243,65 @@ defmodule Platform.Push do
     end)
   end
 
+  # Task 01a1261e: stamp the recipient's chat unread total on this install,
+  # and when it was read, onto the native-push copy, so the app can keep one
+  # count per install and sum the icon badge. USER recipients only (both
+  # callers reach this only with a user id), after redaction, before the
+  # native transport split; web push never carries it (`to_web_payload/1`
+  # has no such key).
+  #
+  # The number is `Platform.Chat.total_unread_for_viewer/1`, the codebase's
+  # single definition of the Chat unread total (the rail badge and the
+  # per-channel pills); never a second counting query. It accepts any map
+  # with a binary `:id`, so no `users` read is spent loading a struct.
+  #
+  # A count error must never cost the push: it is rescued to nil, which the
+  # serialisers drop, and the notification goes out without a count.
+  # `config :platform, Platform.Push, unread_counter: {mod, fun}` is a test
+  # seam for that failure; production leaves it unset.
+  defp stamp_unread(%Notification{} = notification, user_id) when is_binary(user_id) do
+    {mod, fun} =
+      Application.get_env(:platform, __MODULE__, [])
+      |> Keyword.get(:unread_counter, {Platform.Chat, :total_unread_for_viewer})
+
+    # Read the clock BEFORE the count: the count reflects at least every read
+    # up to `as_of`, so a device comparing `unread_as_of` values (newer wins)
+    # never lets this number overwrite a later reconcile.
+    as_of = DateTime.utc_now()
+
+    count =
+      case apply(mod, fun, [%{id: user_id}]) do
+        n when is_integer(n) and n >= 0 -> n
+        _ -> nil
+      end
+
+    %Notification{
+      notification
+      | unread_count: count,
+        unread_as_of: if(count, do: as_of)
+    }
+  rescue
+    e ->
+      Logger.warning("[Push] unread count failed: #{inspect(e.__struct__)}")
+      %Notification{notification | unread_count: nil, unread_as_of: nil}
+  end
+
   # APNs is a second transport for the SAME notification. Its failure must
   # never take web push down with it, and it never logs the notification.
+  #
+  # Transport selection per platform (task 01a1261e stage 2): direct
+  # credentials configured -> direct, exactly as before (installs holding
+  # their own APNs key keep direct push untouched); else the push relay if
+  # configured; else today's not-configured log. Direct is always tried
+  # FIRST and the relay is consulted only when the user has devices and
+  # direct is unconfigured, so a user with no devices still costs one query
+  # and no configuration lookup.
   defp deliver_apns(user_id, %Notification{} = notification) do
-    APNs.deliver_to_user(user_id, notification)
+    case APNs.deliver_to_user(user_id, notification, quiet_unconfigured: true) do
+      {:error, :not_configured} -> via_relay(user_id, notification, :ios)
+      _ -> :ok
+    end
+
     :ok
   rescue
     e ->
@@ -254,12 +312,30 @@ defmodule Platform.Push do
   # FCM is the Android twin of `deliver_apns/2`: the same redacted struct,
   # and its failure never takes web push or APNs down with it.
   defp deliver_fcm(user_id, %Notification{} = notification) do
-    FCM.deliver_to_user(user_id, notification)
+    case FCM.deliver_to_user(user_id, notification, quiet_unconfigured: true) do
+      {:error, :not_configured} -> via_relay(user_id, notification, :android)
+      _ -> :ok
+    end
+
     :ok
   rescue
     e ->
       Logger.warning("[Push] FCM delivery raised: #{inspect(e.__struct__)}")
       :ok
+  end
+
+  # The push relay for one platform, or the not-configured log when the
+  # relay is absent too. A relay failure is rescued by the caller like any
+  # other transport and never takes web push down.
+  defp via_relay(user_id, %Notification{} = notification, platform) do
+    if Relay.configured?() do
+      Relay.deliver_to_user(user_id, notification, platform)
+    else
+      case platform do
+        :ios -> APNs.log_unconfigured()
+        :android -> FCM.report_unconfigured()
+      end
+    end
   end
 
   defp apns_user_id(participant_id) when is_binary(participant_id) do
@@ -366,6 +442,8 @@ defmodule Platform.Push do
       notification = preview_for_user(user_id, notification)
 
       send_web_push(subscriptions, notification)
+
+      notification = stamp_unread(notification, user_id)
       deliver_apns(user_id, notification)
       deliver_fcm(user_id, notification)
 

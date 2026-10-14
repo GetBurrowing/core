@@ -384,7 +384,15 @@ defmodule Platform.Orchestration.TaskRouter do
   # ── GenServer callbacks ────────────────────────────────────────────────
 
   @impl true
-  def init(%{task_id: task_id, assignee: assignee}) do
+  def init(%{task_id: task_id} = args) do
+    case Tasks.require_not_quarantined_task(task_id) do
+      :ok -> init_allowed(args)
+      {:error, :quarantined, details} -> {:stop, {:quarantined, details}}
+      {:error, :task_not_found} -> {:stop, :task_not_found}
+    end
+  end
+
+  defp init_allowed(%{task_id: task_id, assignee: assignee}) do
     # Trap exits so `TaskRouterSupervisor.stop_assignment/1` cannot kill this
     # process mid-query (task 019fa06a).
     #
@@ -650,7 +658,9 @@ defmodule Platform.Orchestration.TaskRouter do
     # funnel into a router, because `TaskRouterWatcher.should_run?/1` spawns one
     # for any task in `planning`. One chokepoint instead of five.
     task = Tasks.get_task_detail(state.task_id)
-    state = maybe_run_design_edge(state, task)
+
+    state =
+      if task && not Tasks.quarantined?(task), do: maybe_run_design_edge(state, task), else: state
 
     # Task 01a04a8c. Read ONCE per dispatch and threaded into both branches:
     # a second call would be a second query, and — worse — could observe a
@@ -669,6 +679,10 @@ defmodule Platform.Orchestration.TaskRouter do
       task == nil ->
         Logger.warning("[TaskRouter] task #{state.task_id} not found, stopping")
         {:stop, :normal, state}
+
+      Tasks.quarantined?(task) ->
+        Logger.warning("[TaskRouter] stopped dispatch for quarantined task=#{state.task_id}")
+        {:stop, :normal, clear_liveness(state)}
 
       plan_awaiting_review?(state.task_id) ->
         # Pre-dispatch guard, PLAN level (task 019f9ae5). `init/1` already
@@ -2538,6 +2552,10 @@ defmodule Platform.Orchestration.TaskRouter do
     # solo tasks the key is absent and this defaults to `[]` so the planning
     # dispatch template renders no upstream-plans section.
     parent_plans = (context && Map.get(context, :parent_plans, [])) || []
+    # Task 01a13ae7 stage 1: attached canvases ride in `context`, which the
+    # Claude Code bridge drops — the rendered prompt is the only text such a
+    # runtime sees, so the canvases must reach `dispatch_prompt/4` too.
+    canvases = (context && Map.get(context, :canvases, [])) || []
 
     prompt =
       HeartbeatScheduler.dispatch_prompt(task, plan, stage,
@@ -2545,6 +2563,7 @@ defmodule Platform.Orchestration.TaskRouter do
         runtime: runtime,
         previous_rejection_reason: previous_rejection_reason,
         parent_plans: parent_plans,
+        canvases: canvases,
         # The execution space lives HERE, on the router's state — there is no
         # `execution_space_id` field on the task schema (task 019fa469 stage 3).
         # `dispatch.review_e2e` interpolates it, and without this opt the

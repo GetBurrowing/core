@@ -16,7 +16,8 @@ defmodule Platform.Federation.ToolSurfaceExperimentsTest do
   @names ~w(experiment_surface_list experiment_list experiment_get experiment_create
             experiment_variant_add experiment_start experiment_stop experiment_conclude
             experiment_results experiment_signals_list experiment_exclude
-            experiment_goal_set experiment_goal_list experiment_promote)
+            experiment_goal_set experiment_goal_list experiment_promote
+            dispatch_metrics_list code_mode_report)
 
   defp runtime(bundles), do: %AgentRuntime{owner_user_id: nil, allowed_bundles: bundles}
 

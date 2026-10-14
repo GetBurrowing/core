@@ -57,7 +57,7 @@ defmodule Platform.Meetings.ArchiveTest do
     |> Repo.insert!()
   end
 
-  # A plain member — deliberately not "admin", which `fabrikam_admin?/1` would
+  # A plain member — deliberately not "admin", which `root_admin?/1` would
   # read as "sees every org" and quietly defeat the cross-org test.
   defp member!(user, org_id) do
     %OrgMembership{}
@@ -67,12 +67,12 @@ defmodule Platform.Meetings.ArchiveTest do
     user
   end
 
-  defp viewer_in_fabrikam! do
-    create_user!() |> member!(fabrikam_org_id())
+  defp viewer_in_acme! do
+    create_user!() |> member!(acme_org_id())
   end
 
   defp create_meeting!(name, opts \\ []) do
-    org_id = Keyword.get(opts, :org_id, fabrikam_org_id())
+    org_id = Keyword.get(opts, :org_id, acme_org_id())
     n = System.unique_integer([:positive])
 
     {:ok, project} = Tasks.create_project(%{name: "Archive Project #{n}", org_id: org_id})
@@ -170,7 +170,7 @@ defmodule Platform.Meetings.ArchiveTest do
 
   describe "search/2 ranking" do
     test "a canvas title outranks a more recent meeting whose only hit is a transcript segment" do
-      viewer = viewer_in_fabrikam!()
+      viewer = viewer_in_acme!()
 
       older = create_meeting!("Platform sync alpha")
       canvas!(older, "#{@term} rollout plan")
@@ -208,9 +208,9 @@ defmodule Platform.Meetings.ArchiveTest do
 
   describe "search/2 viewer scoping" do
     test "a meeting in an org the viewer has no membership in is in neither partition, and is not counted" do
-      viewer = viewer_in_fabrikam!()
+      viewer = viewer_in_acme!()
 
-      mine = create_meeting!("Fabrikam planning")
+      mine = create_meeting!("Acme planning")
       canvas!(mine, "#{@term} rollout plan")
       mine = end_meeting!(mine, ago(3))
 
@@ -231,14 +231,14 @@ defmodule Platform.Meetings.ArchiveTest do
       assert result.matched == 1
     end
 
-    test "a fabrikam root admin sees every org's meetings" do
+    test "an acme root admin sees every org's meetings" do
       admin = create_user!()
 
       %OrgMembership{}
-      |> OrgMembership.changeset(%{user_id: admin.id, org_id: fabrikam_org_id(), role: "admin"})
+      |> OrgMembership.changeset(%{user_id: admin.id, org_id: acme_org_id(), role: "admin"})
       |> Repo.insert!()
 
-      mine = create_meeting!("Fabrikam planning")
+      mine = create_meeting!("Acme planning")
       mine = end_meeting!(mine, ago(3))
 
       theirs = create_meeting!("Soylent planning", org_id: tenant_org_id("soylent"))
@@ -255,7 +255,7 @@ defmodule Platform.Meetings.ArchiveTest do
 
   describe "search/2 with a blank query" do
     test "returns every in-scope meeting in others, with matched: 0 and no calendar meetings" do
-      viewer = viewer_in_fabrikam!()
+      viewer = viewer_in_acme!()
 
       ended = create_meeting!("Retention review") |> end_meeting!(ago(5))
       cancelled = create_meeting!("Budget sync") |> cancel_meeting!(ago(2))
@@ -281,7 +281,7 @@ defmodule Platform.Meetings.ArchiveTest do
     end
 
     test "an un-queried archive is distinguishable from a query that matched nothing" do
-      viewer = viewer_in_fabrikam!()
+      viewer = viewer_in_acme!()
 
       ended = create_meeting!("Retention review") |> end_meeting!(ago(5))
 
@@ -302,7 +302,7 @@ defmodule Platform.Meetings.ArchiveTest do
 
   describe "search/2 partitioning" do
     test "a cancelled meeting with no artifacts sits in others while another meeting matches" do
-      viewer = viewer_in_fabrikam!()
+      viewer = viewer_in_acme!()
 
       cancelled = create_meeting!("Budget sync") |> cancel_meeting!(ago(4))
 
@@ -326,7 +326,7 @@ defmodule Platform.Meetings.ArchiveTest do
 
   describe "search/2 type counts and filters" do
     test "counts matching meetings per artifact type and narrows on :types" do
-      viewer = viewer_in_fabrikam!()
+      viewer = viewer_in_acme!()
 
       by_canvas = create_meeting!("Alpha")
       canvas!(by_canvas, "#{@term} rollout plan")
@@ -376,7 +376,7 @@ defmodule Platform.Meetings.ArchiveTest do
     end
 
     test "the meeting name is always searched, whatever :types says" do
-      viewer = viewer_in_fabrikam!()
+      viewer = viewer_in_acme!()
 
       by_name = create_meeting!("#{@term} kickoff") |> end_meeting!(ago(1))
 
@@ -390,7 +390,7 @@ defmodule Platform.Meetings.ArchiveTest do
 
   describe "search/2 paging" do
     test "limit and offset page across the seam between the two partitions" do
-      viewer = viewer_in_fabrikam!()
+      viewer = viewer_in_acme!()
 
       matching = create_meeting!("Platform sync")
       canvas!(matching, "#{@term} rollout plan")
@@ -421,7 +421,7 @@ defmodule Platform.Meetings.ArchiveTest do
 
   describe "search/2 scope filters" do
     test "narrows to a project" do
-      viewer = viewer_in_fabrikam!()
+      viewer = viewer_in_acme!()
 
       keep = create_meeting!("Kept") |> end_meeting!(ago(1))
       drop = create_meeting!("Dropped") |> end_meeting!(ago(2))
@@ -434,7 +434,7 @@ defmodule Platform.Meetings.ArchiveTest do
     end
 
     test "narrows to a person's meetings" do
-      viewer = viewer_in_fabrikam!()
+      viewer = viewer_in_acme!()
       person_id = Ecto.UUID.generate()
 
       attended = create_meeting!("Attended")
@@ -457,9 +457,9 @@ defmodule Platform.Meetings.ArchiveTest do
     end
 
     test "a malformed filter id narrows to nothing instead of raising or widening" do
-      viewer = viewer_in_fabrikam!()
+      viewer = viewer_in_acme!()
 
-      create_meeting!("Fabrikam planning") |> end_meeting!(ago(1))
+      create_meeting!("Acme planning") |> end_meeting!(ago(1))
 
       # `where: m.project_id == ^"not-a-uuid"` raises Ecto.Query.CastError,
       # and these ids come off a params map. Both the raise and the
@@ -479,7 +479,7 @@ defmodule Platform.Meetings.ArchiveTest do
 
   describe "search/2 with no viewer" do
     test "returns nothing rather than everything" do
-      create_meeting!("Fabrikam planning") |> end_meeting!(ago(1))
+      create_meeting!("Acme planning") |> end_meeting!(ago(1))
 
       result = Archive.search(nil, [])
 

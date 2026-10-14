@@ -85,4 +85,31 @@ class KeystoreTokenStoreTest {
         assertFalse(text.contains(bearerA) || text.contains(bearerB))
         assertFalse(Sealed(ByteArray(12), bearerA.toByteArray()).toString().contains(bearerA))
     }
+
+    @Test
+    fun `hostsIn returns entry names and never touches the cipher`() {
+        assertTrue(store.store("a.example.com", bearerA))
+        assertTrue(store.store("B.Example.com", bearerB))
+        prefs.putString("unrelated.key", "x")
+        // A cipher that throws on any use: hostsIn must not decrypt.
+        val throwing =
+            object : TokenCipher {
+                override fun encrypt(
+                    plaintext: ByteArray,
+                    aad: ByteArray,
+                ): Sealed = throw AssertionError("hostsIn encrypted")
+
+                override fun decrypt(
+                    sealed: Sealed,
+                    aad: ByteArray,
+                ): ByteArray = throw AssertionError("hostsIn decrypted")
+            }
+        val untouchable = KeystoreTokenStore(prefs, throwing)
+        assertEquals(setOf("a.example.com", "b.example.com"), KeystoreTokenStore.hostsIn(prefs))
+        assertEquals("KeystoreTokenStore(2 hosts)", untouchable.toString())
+        // A bearer that no longer decrypts still counts as a sign-in.
+        cipher.forget()
+        assertEquals(setOf("a.example.com", "b.example.com"), KeystoreTokenStore.hostsIn(prefs))
+        assertEquals(emptySet<String>(), KeystoreTokenStore.hostsIn(InMemoryKeyValueStore()))
+    }
 }

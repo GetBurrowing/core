@@ -26,6 +26,7 @@ defmodule PlatformWeb.AppApiController do
   alias Platform.Chat.ExternalScope
   alias Platform.Chat.Participant
   alias Platform.Chat.Space
+  alias Platform.Chat.UploadLimits
   alias Platform.Mobile
   alias Platform.Repo
   alias Platform.Tenancy.Org
@@ -88,7 +89,13 @@ defmodule PlatformWeb.AppApiController do
   # ── devices ──────────────────────────────────────────────────────────
 
   def register_device(conn, params) do
-    attrs = Map.take(params, ~w(token environment bundle_id app_install_id platform package_name))
+    # `push_public_key` (task 01a1261e) is optional: a registration without
+    # it behaves exactly as before.
+    attrs =
+      Map.take(
+        params,
+        ~w(token environment bundle_id app_install_id platform package_name push_public_key)
+      )
 
     case Mobile.register_device(conn.assigns.app_session, attrs) do
       {:ok, _device} ->
@@ -247,6 +254,93 @@ defmodule PlatformWeb.AppApiController do
     end
   end
 
+  # ── large-file uploads (task 01a120be stage 2) ───────────────────────
+
+  # Files at or under this many bytes keep using the multipart
+  # `create_message` path (Plug.Parsers' default multipart :length, which the
+  # endpoint does not raise). Larger ones reserve with `create_upload` and
+  # PATCH chunks to the returned `upload_url`.
+  @multipart_max_bytes 8_000_000
+
+  @doc "The install's upload limits, so clients never hard-code them."
+  def upload_config(conn, _params) do
+    json(conn, %{
+      max_upload_bytes: UploadLimits.max_bytes(),
+      max_upload_label: UploadLimits.label(),
+      chunk_bytes: UploadLimits.chunk_bytes(),
+      multipart_max_bytes: @multipart_max_bytes
+    })
+  end
+
+  @doc """
+  Reserve a chunked upload whose completion posts a message to the space
+  (`Platform.Chat.reserve_user_upload/2`). Takes `filename`, `content_type`,
+  `byte_size` and the same optional `text`, `agent_id` and `reply_to` as
+  `create_message`. Over the limit is 413 before any byte moves.
+  """
+  def create_upload(conn, %{"space_id" => space_id} = params) do
+    user = conn.assigns.current_user
+
+    with {:ok, space, participant} <- authorize_space(user, space_id),
+         {:ok, mention} <- agent_mention(space.id, params["agent_id"]),
+         {:ok, thread_id} <- resolve_thread(space.id, params["reply_to"]),
+         {:ok, byte_size} <- reservation_size(params["byte_size"]) do
+      poster = %{
+        space_id: space.id,
+        participant_id: participant.id,
+        user_id: user.id,
+        thread_id: thread_id,
+        content: compose_content(mention, params["text"])
+      }
+
+      file = %{
+        filename: params["filename"],
+        content_type: params["content_type"],
+        byte_size: byte_size
+      }
+
+      case Chat.reserve_user_upload(poster, file) do
+        {:ok, reservation} ->
+          conn |> put_status(:created) |> json(reservation)
+
+        {:error, :too_large} ->
+          conn
+          |> put_status(:request_entity_too_large)
+          |> json(%{
+            error: "file_too_large",
+            max_upload_bytes: UploadLimits.max_bytes(),
+            max_upload_label: UploadLimits.label()
+          })
+
+        {:error, :invalid_file} ->
+          conn |> put_status(:unprocessable_entity) |> json(%{error: "invalid_file"})
+
+        {:error, reason}
+        when reason in [:space_archived, :dm_not_allowed, :out_of_external_scope] ->
+          post_error(conn, reason)
+
+        {:error, _reason} ->
+          conn |> put_status(:internal_server_error) |> json(%{error: "reservation_failed"})
+      end
+    else
+      {:error, status, code} ->
+        conn
+        |> put_status(status)
+        |> json(%{error: code})
+    end
+  end
+
+  defp reservation_size(n) when is_integer(n) and n > 0, do: {:ok, n}
+
+  defp reservation_size(n) when is_binary(n) do
+    case Integer.parse(n) do
+      {int, ""} when int > 0 -> {:ok, int}
+      _ -> {:error, :unprocessable_entity, "invalid_file"}
+    end
+  end
+
+  defp reservation_size(_), do: {:error, :unprocessable_entity, "invalid_file"}
+
   defp authorize_space(user, space_id) do
     with %Space{archived_at: nil} = space <- Chat.get_space(space_id),
          true <- ExternalScope.authorized_space?(user, space),
@@ -359,11 +453,18 @@ defmodule PlatformWeb.AppApiController do
 
   # ── counts ───────────────────────────────────────────────────────────
 
+  # `unread` (task 01a1261e) is the Chat unread total the app reconciles its
+  # per-install count with on open; see `Mobile.counts_for_user/1`.
   def counts(conn, _params) do
-    %{approvals: approvals, tasks: tasks, as_of: as_of} =
+    %{approvals: approvals, tasks: tasks, unread: unread, as_of: as_of} =
       Mobile.counts_for_user(conn.assigns.current_user)
 
-    json(conn, %{approvals: approvals, tasks: tasks, as_of: DateTime.to_iso8601(as_of)})
+    json(conn, %{
+      approvals: approvals,
+      tasks: tasks,
+      unread: unread,
+      as_of: DateTime.to_iso8601(as_of)
+    })
   end
 
   # Field names only: a changeset's error tuples can carry the rejected

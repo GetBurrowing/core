@@ -73,7 +73,7 @@ defmodule Platform.Meetings.IntentCorrectionsTest do
 
   describe "create_correction/1 — org derivation" do
     test "derives org_id from the meeting's project" do
-      org_id = fabrikam_org_id()
+      org_id = acme_org_id()
       meeting = create_meeting!(org_id)
 
       {:ok, correction} = IntentCorrections.create_correction(correction_attrs(meeting.id))
@@ -82,27 +82,27 @@ defmodule Platform.Meetings.IntentCorrectionsTest do
     end
 
     test "two meetings in different orgs derive different org_ids" do
-      fabrikam = fabrikam_org_id()
+      acme = acme_org_id()
       sxi = tenant_org_id("sxi")
 
-      fabrikam_meeting = create_meeting!(fabrikam)
+      acme_meeting = create_meeting!(acme)
       sxi_meeting = create_meeting!(sxi)
 
-      {:ok, fabrikam_correction} =
-        IntentCorrections.create_correction(correction_attrs(fabrikam_meeting.id))
+      {:ok, acme_correction} =
+        IntentCorrections.create_correction(correction_attrs(acme_meeting.id))
 
       {:ok, sxi_correction} =
         IntentCorrections.create_correction(correction_attrs(sxi_meeting.id))
 
-      assert fabrikam_correction.org_id == fabrikam
+      assert acme_correction.org_id == acme
       assert sxi_correction.org_id == sxi
-      refute fabrikam_correction.org_id == sxi_correction.org_id
+      refute acme_correction.org_id == sxi_correction.org_id
     end
 
     test "an explicit org_id wins over derivation" do
       # The stage-7 UI already holds an org and should not pay for a
       # lookup it can answer itself.
-      meeting = create_meeting!(fabrikam_org_id())
+      meeting = create_meeting!(acme_org_id())
       explicit = tenant_org_id("paragon")
 
       {:ok, correction} =
@@ -112,7 +112,7 @@ defmodule Platform.Meetings.IntentCorrectionsTest do
     end
 
     test "an explicit nil org_id still derives — nil is 'I don't know', not 'leave it empty'" do
-      org_id = fabrikam_org_id()
+      org_id = acme_org_id()
       meeting = create_meeting!(org_id)
 
       {:ok, correction} =
@@ -138,7 +138,7 @@ defmodule Platform.Meetings.IntentCorrectionsTest do
     end
 
     test "string-keyed attrs (a LiveView form) derive too, without mixing key types" do
-      org_id = fabrikam_org_id()
+      org_id = acme_org_id()
       meeting = create_meeting!(org_id)
 
       {:ok, correction} =
@@ -197,7 +197,7 @@ defmodule Platform.Meetings.IntentCorrectionsTest do
     end
 
     test "returns newest first" do
-      org_id = fabrikam_org_id()
+      org_id = acme_org_id()
       [_first, _second, third] = seed_exemplars!(org_id, ~w(one two three))
 
       assert [newest | _] = IntentCorrections.recent_exemplars(org_id)
@@ -243,23 +243,23 @@ defmodule Platform.Meetings.IntentCorrectionsTest do
     end
 
     test "never returns another org's corrections" do
-      fabrikam = fabrikam_org_id()
+      acme = acme_org_id()
       sxi = tenant_org_id("sxi")
 
-      seed_exemplars!(fabrikam, ~w(fabrikam_only))
+      seed_exemplars!(acme, ~w(acme_only))
       seed_exemplars!(sxi, ~w(sxi_only))
 
-      fabrikam_intents = Enum.map(IntentCorrections.recent_exemplars(fabrikam), & &1.classified_intent)
+      acme_intents = Enum.map(IntentCorrections.recent_exemplars(acme), & &1.classified_intent)
 
-      assert "fabrikam_only" in fabrikam_intents
-      refute "sxi_only" in fabrikam_intents
+      assert "acme_only" in acme_intents
+      refute "sxi_only" in acme_intents
     end
 
     test "a nil org returns [] rather than every org's corrections" do
       # The dangerous failure mode: an unresolvable org silently widening
       # the query to the whole corpus and leaking another tenant's
       # vocabulary into a classification.
-      seed_exemplars!(fabrikam_org_id(), ~w(should_not_leak))
+      seed_exemplars!(acme_org_id(), ~w(should_not_leak))
 
       assert IntentCorrections.recent_exemplars(nil) == []
     end
@@ -269,14 +269,14 @@ defmodule Platform.Meetings.IntentCorrectionsTest do
 
   describe "exemplars_for_meeting/2" do
     test "resolves the meeting's org and returns only that org's exemplars" do
-      fabrikam = fabrikam_org_id()
+      acme = acme_org_id()
       sxi = tenant_org_id("sxi")
 
-      fabrikam_meeting = create_meeting!(fabrikam)
+      acme_meeting = create_meeting!(acme)
 
       {:ok, _} =
         IntentCorrections.create_correction(
-          correction_attrs(fabrikam_meeting.id, %{classified_intent: "fabrikam_intent"})
+          correction_attrs(acme_meeting.id, %{classified_intent: "acme_intent"})
         )
 
       sxi_meeting = create_meeting!(sxi)
@@ -287,11 +287,11 @@ defmodule Platform.Meetings.IntentCorrectionsTest do
         )
 
       intents =
-        fabrikam_meeting.id
+        acme_meeting.id
         |> IntentCorrections.exemplars_for_meeting(10)
         |> Enum.map(& &1.classified_intent)
 
-      assert "fabrikam_intent" in intents
+      assert "acme_intent" in intents
       refute "sxi_intent" in intents
     end
 
@@ -328,7 +328,7 @@ defmodule Platform.Meetings.IntentCorrectionsTest do
 
   describe "list_for_meeting/2" do
     test "returns this meeting's corrections, newest first" do
-      meeting = create_meeting!(fabrikam_org_id())
+      meeting = create_meeting!(acme_org_id())
 
       for intent <- ~w(first second third) do
         {:ok, _} =
@@ -346,7 +346,7 @@ defmodule Platform.Meetings.IntentCorrectionsTest do
     end
 
     test "excludes other meetings in the same org" do
-      org_id = fabrikam_org_id()
+      org_id = acme_org_id()
       mine = create_meeting!(org_id)
       theirs = create_meeting!(org_id)
 
@@ -369,7 +369,7 @@ defmodule Platform.Meetings.IntentCorrectionsTest do
     end
 
     test "honours a limit" do
-      meeting = create_meeting!(fabrikam_org_id())
+      meeting = create_meeting!(acme_org_id())
 
       for intent <- ~w(a b c) do
         {:ok, _} =
@@ -391,10 +391,10 @@ defmodule Platform.Meetings.IntentCorrectionsTest do
       # Reading the corpus, resolving orgs, and listing exemplars are all
       # pure reads. A context whose read path wrote a row would poison the
       # corpus with examples of correct behaviour labelled as errors.
-      meeting = create_meeting!(fabrikam_org_id())
+      meeting = create_meeting!(acme_org_id())
       _ = IntentCorrections.org_id_for_meeting(meeting.id)
       _ = IntentCorrections.exemplars_for_meeting(meeting.id, 10)
-      _ = IntentCorrections.recent_exemplars(fabrikam_org_id())
+      _ = IntentCorrections.recent_exemplars(acme_org_id())
       _ = IntentCorrections.list_for_meeting(meeting.id)
 
       assert Repo.aggregate(IntentCorrection, :count) == before_count

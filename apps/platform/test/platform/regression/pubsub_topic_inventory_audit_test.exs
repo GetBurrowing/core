@@ -125,6 +125,10 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
     # ── space ──
     {"active_agent:<id>", :space},
     {"chat:canvas:<id>", :space},
+    # canvas_id + node_id (task 01a1316b-84fa). A room belongs to one canvas,
+    # and a canvas to one space; the only subscriber (stage 2's CanvasHooks)
+    # joins after `find/2` has resolved the canvas for the viewing session.
+    {"chat:canvas_room:<id>:<id>", :space},
     {"chat:space:<id>", :space},
     # meeting-keyed. A Meeting has a chat_space_id, and a room belongs to a
     # meeting, so the reachable set is the meeting's space either way. The KEY
@@ -292,6 +296,10 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
     # by design: Platform.Experiments.Signals.MailSubscriber drives the
     # labeler, not the Router (task 01a0d415 stage 3).
     {"platform.experiments.mail_subscriber_only", :global},
+    # Sentinel. `feedback.intake` declares it and no publisher exists, by
+    # design: signed GitHub `issues` deliveries drive Platform.Feedback.Intake
+    # and its tool-less classifier, never a Router fire (task 01a11ec3 stage 3).
+    {"platform.feedback.intake_only", :global},
     {"(dynamic) entry.topic", :global}
   ]
 

@@ -55,7 +55,7 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
   end
 
   defp create_project do
-    org_id = Platform.TenancyFixtures.fabrikam_org_id()
+    org_id = Platform.TenancyFixtures.acme_org_id()
 
     {:ok, project} =
       Tasks.create_project(%{
@@ -649,12 +649,12 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
 
       # Org plumbing (task 019f9b14 stage 2): `/meetings/:slug` resolves
       # through the org-scoped `Meetings.fetch_meeting_for_user/2`, so the
-      # viewer needs the Fabrikam-root membership every real OIDC signup gets.
+      # viewer needs the Acme-root membership every real OIDC signup gets.
       # `create_meeting/0` below builds its project in that same org.
       Repo.insert!(
         Platform.Tenancy.OrgMembership.changeset(%Platform.Tenancy.OrgMembership{}, %{
           user_id: user.id,
-          org_id: Platform.TenancyFixtures.fabrikam_org_id(),
+          org_id: Platform.TenancyFixtures.acme_org_id(),
           role: "member"
         })
       )
@@ -724,7 +724,7 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
       Repo.insert!(
         Platform.Tenancy.OrgMembership.changeset(%Platform.Tenancy.OrgMembership{}, %{
           user_id: user.id,
-          org_id: Platform.TenancyFixtures.fabrikam_org_id(),
+          org_id: Platform.TenancyFixtures.acme_org_id(),
           role: "member"
         })
       )
@@ -796,7 +796,7 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
       {:ok, project} =
         Tasks.create_project(%{
           name: "Guest Collision Project #{System.unique_integer([:positive])}",
-          org_id: Platform.TenancyFixtures.fabrikam_org_id()
+          org_id: Platform.TenancyFixtures.acme_org_id()
         })
 
       {:ok, meeting} =
@@ -1003,7 +1003,7 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
   end
 
   # An authenticated conn that can reach `/meetings/:slug` for a meeting
-  # built by `create_meeting/1` — i.e. a Fabrikam-root member, mirroring the
+  # built by `create_meeting/1` — i.e. an Acme-root member, mirroring the
   # shell regression test above.
   defp authenticated_meeting_conn do
     user =
@@ -1016,7 +1016,7 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
     Repo.insert!(
       Platform.Tenancy.OrgMembership.changeset(%Platform.Tenancy.OrgMembership{}, %{
         user_id: user.id,
-        org_id: Platform.TenancyFixtures.fabrikam_org_id(),
+        org_id: Platform.TenancyFixtures.acme_org_id(),
         role: "member"
       })
     )

@@ -9,14 +9,27 @@ an `AgentConfig` (or a value pulled from one) as an argument.
 
 Every value has a documented default so the service is runnable out of the
 box against moon/wave's currently-known addresses, but every one of those
-defaults is expected to be overridden per-deployment via env vars. See
-README.md for the full list.
+defaults is expected to be overridden per-deployment via env vars. The one
+exception is `MVA_MCP_BASE_URL`, the Suite install this agent talks to: it has
+no default, because any default would name one particular install, and an
+empty or unset value raises `ConfigError`. See README.md for the full list.
 """
 
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+
+
+class ConfigError(ValueError):
+    """A required environment variable is missing or empty."""
+
+
+def _env_required_str(name: str, hint: str) -> str:
+    value = os.environ.get(name)
+    if value is None or value.strip() == "":
+        raise ConfigError(f"{name} is required and has no default: {hint}")
+    return value
 
 
 def _env_str(name: str, default: str) -> str:
@@ -204,13 +217,39 @@ class AskFloorConfig:
     as a reply generated from audio spoken after the human's own release).
     Tune by replaying recorded hold sessions and counting each rate
     against this value -- never hard-coded, always this field.
+
+    ## Why the default is 1000 ms, not 300 (task 01a1265f stage 3)
+
+    Input is only ever turned into an STT request when Silero VAD ends a
+    speech segment, and VAD ends one only after `VadConfig.min_silence_duration`
+    (0.55 s) of silence has reached it. Detaching the input stops VAD from
+    seeing anything, so a hold whose speech runs right up to the release
+    must keep the input attached for at least that long after "closed".
+    300 ms never could. Measured on a dev worker against a throwaway
+    `livekit-server --dev` (livekit-agents 1.8.5): control holds that went
+    silent before release made their STT request 0.71-0.75 s after the last
+    spoken sample. Three holds that spoke up to release made NO STT request
+    of their own; their audio sat in VAD's open segment and was transcribed,
+    glued to the next hold's words, as soon as that hold attached. Frames
+    kept reaching the worker after every release, even in holds where the
+    publisher stopped sending (the receiving AudioStream keeps yielding
+    frames), and the web client never mutes its mic on release. So the
+    frames are there to end the segment; the input was just detached too
+    soon, and a longer grace is the fix. Once the STT request has started,
+    detaching does not stop the reply: a measured control reply was
+    generated after its input detached. The hard floor is therefore VAD
+    silence plus inference, about 0.75 s. The default is held above the more
+    conservative `min_silence_duration` plus
+    `EndpointingConfig.min_endpointing_delay` (0.95 s), and tests pin that
+    relation, so raising either of those means raising this too. The cost:
+    up to 1 s of speech after release can reach the reply (bleed-through).
     """
 
-    grace_ms: int = 300
+    grace_ms: int = 1000
 
     @classmethod
     def from_env(cls) -> AskFloorConfig:
-        return cls(grace_ms=_env_int("MVA_ASK_FLOOR_GRACE_MS", 300))
+        return cls(grace_ms=_env_int("MVA_ASK_FLOOR_GRACE_MS", 1000))
 
 
 @dataclass(frozen=True)
@@ -239,9 +278,13 @@ class McpConfig:
             # the MCP client correctly refuses to follow a redirect rather
             # than silently re-POSTing — so the *URL* has to be right, not
             # the client's redirect handling (Dalton's moon run, rollup
-            # space 01a0b5bf: "the MCP base has to be
-            # https://suite.example.com/mcp").
-            base_url=_env_str("MVA_MCP_BASE_URL", "https://suite.example.com/mcp"),
+            # space 01a0b5bf). Required, with no default: a default would
+            # name one particular Suite install (task 01a116de).
+            base_url=_env_required_str(
+                "MVA_MCP_BASE_URL",
+                "set it to this deployment's public Suite MCP URL, "
+                "e.g. https://suite.example.com/mcp",
+            ),
             auth_token=_env_str("MVA_MCP_AUTH_TOKEN", ""),
             client_session_timeout_seconds=_env_float("MVA_MCP_TIMEOUT", 10.0),
         )

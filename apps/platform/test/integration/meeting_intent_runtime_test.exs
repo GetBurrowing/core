@@ -209,7 +209,7 @@ defmodule Platform.Integration.MeetingIntentRuntimeTest do
           space_id: meeting.chat_space_id
         })
 
-      {:ok, _updated} =
+      {:ok, updated} =
         Meetings.append_segment(transcript.id, %{
           participant_identity: "user-1",
           text: "let's schedule a follow-up meeting Friday",
@@ -242,9 +242,14 @@ defmodule Platform.Integration.MeetingIntentRuntimeTest do
       assert entry.target_role == "scheduler"
       assert entry.confidence == 0.87
       assert entry.status == :queued
-      # `transcript_chunk_id` falls back to transcript_id when the
-      # segment lacks its own id — `append_segment/2` doesn't stamp one.
-      assert entry.transcript_chunk_id == transcript.id
+      # `append_segment/2` mints the segment id under the STRING key
+      # "id" (task 01a06672), and that id is the chunk's key. Until task
+      # 01a1265f the classifier read only `:id`, so this fell back to the
+      # transcript id and every chunk of one transcript shared one key.
+      [segment] = updated.segments
+      assert is_binary(segment["id"])
+      assert entry.transcript_chunk_id == segment["id"]
+      refute entry.transcript_chunk_id == transcript.id
     end
 
     test "a transcript with no meeting behind it classifies but enqueues nowhere",

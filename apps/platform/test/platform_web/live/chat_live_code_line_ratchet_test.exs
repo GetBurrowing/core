@@ -77,7 +77,7 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
        individual assigns: 25 of the comment lines inside the candidate runs
        name a condition, a resting value, a gate or a scope
        (e.g. `@sidebar_edit` / `@sidebar_menu_open` mutual exclusion and its
-       `@fabrikam_admin?` gate at `chat_live.ex:511..524`; the drawer-query note at
+       `@root_admin?` gate at `chat_live.ex:511..524`; the drawer-query note at
        `chat_live.ex:568..573` explaining that the underlying assigns stay
        UNFILTERED because the desktop rail reads the same data). Moving the
        code without moving each of those, or moving them into a helper where
@@ -533,7 +533,38 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   # composer's attachment cap instead of a second copy of the number. Stage 1
   # landed the code without the bump; stage 2's full-suite run caught it.
   # 2364 + 2 = 2366, re-derived from the guard's own measurement.
-  @chat_live_code_line_count 2366
+  #
+  # Root org from its row (task 01a116de stage 3): +32. The nil-org default
+  # bucket became the root row's name (`default_bucket/1`, a third element on
+  # `org_indexes/0`, threaded through `bucket_names/2`, `channel_scope/3` and
+  # `sub_org_order/0`), the recolor whitelist gained the section's own org
+  # token (`valid_scope_token?/3`, `own_scope_token/2`,
+  # `section_own_token/1`, `sibling_scope_tokens/0`), and the root's dot
+  # reads its row colour through `section_dot_scope/1`. The four compiled
+  # "acme" clauses went (-4). 2366 + 32 = 2398, re-derived with the guard's
+  # counting rule over the formatted file.
+  #
+  # Merge of origin/main into 01a116de (deploy stage): main moved the base
+  # 2366 -> 2363 (#1209). 2363 + 32 = 2395, re-measured with the guard's
+  # counting rule over the merged file.
+  #
+  # Large file uploads (task 01a120be stage 3): +2. The `LargeUploadHooks`
+  # alias and its `attach/1` pipeline step; the feature lives in
+  # `PlatformWeb.ChatLive.LargeUploadHooks`, the dialog partial and the
+  # composer partial. 2363 + 2 = 2365.
+  #
+  # Merge of origin/main into 01a120be (deploy stage): main's pin was 2395
+  # (01a116de +32 on the 2363 base); this branch adds +2 on that base.
+  # 2395 + 2 = 2397, re-measured with the guard's counting rule over the
+  # merged file.
+  #
+  # Prototype hosting (task 01a1316b-4e46 stage 2, commit 32f23bcf4 on
+  # stack/prototype-runtime): +50, the New canvas form's Prototype tab
+  # (upload wiring and its handle_event clauses) in chat_live.ex. That commit
+  # did not move this pin, so the rollup tip failed here; task 01a1316b-677a
+  # stage 1 (which does not touch chat_live.ex) records it. Measured by the
+  # guard on moon: 2397 + 50 = 2447.
+  @chat_live_code_line_count 2447
 
   @doc """
   Count the CODE lines of a source file.

@@ -28,11 +28,12 @@ import { test, expect, devices, Browser, BrowserContext, Page } from "@playwrigh
 
 const SPACE = "general"
 
-// Mirrors the `@quick_emojis` assign (`chat_live.ex` line 53), which is the
-// single source for BOTH the desktop hover action row and the touch sheet's
-// strip. If this count drifts, the assign changed and the strip changed with
-// it — update here, not in the template.
-const QUICK_EMOJI_COUNT = 4
+// Mirrors the `@quick_emojis` assign, which is `Platform.Chat.Emoji.quick_defaults/0`
+// (`lib/platform/chat/emoji.ex`) and the single source for BOTH the desktop
+// hover action row and the touch sheet's strip. If this count drifts, the
+// assign changed and the strip changed with it — update here, not in the
+// template.
+const QUICK_EMOJI_COUNT = 6
 
 interface Peer {
   slug: string
@@ -423,8 +424,11 @@ test.describe("chat reactions", () => {
 
       // The picker never appeared. This is the load-bearing half of the
       // one-tap claim: reaching a reaction must not have cost a trip through
-      // #reaction-picker.
-      await expect(bob.page.locator("#reaction-picker")).toHaveCount(0)
+      // #reaction-picker. Since #944 (task 019e0814) `#reaction-picker` is
+      // always mounted and the server drives `data-open`, so "never opened"
+      // reads as `data-open="false"`; a `toHaveCount(0)` here fails on every
+      // run (observed 1 vs 0 on dev-on-moon, task 01a13aac).
+      await expect(bob.page.locator("#reaction-picker")).toHaveAttribute("data-open", "false")
     } finally {
       await alice.context.close()
       await bob.context.close()

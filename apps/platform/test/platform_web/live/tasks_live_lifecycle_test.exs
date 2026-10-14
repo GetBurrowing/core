@@ -1,7 +1,7 @@
 defmodule PlatformWeb.TasksLiveLifecycleTest do
   @moduledoc """
   Container-lifecycle UI on the Tasks surfaces (task 019f4eaa stage 6 +
-  review follow-up): the fabrikam-admin-only Archive / Schedule-deletion kebab
+  review follow-up): the acme-admin-only Archive / Schedule-deletion kebab
   on org headers and project rows — on both the DESKTOP sidebar and the
   MOBILE project sheet — plus the Schedule-deletion confirm modal.
   Browser-only concerns (chip color, pixel layout) are out of scope here —
@@ -26,13 +26,13 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
     })
   end
 
-  defp fabrikam_admin_conn(conn) do
+  defp acme_admin_conn(conn) do
     user = insert_user()
 
     %OrgMembership{}
     |> OrgMembership.changeset(%{
       user_id: user.id,
-      org_id: Tenancy.get_org_by_slug!("fabrikam").id,
+      org_id: Tenancy.get_org_by_slug!("acme").id,
       role: "admin"
     })
     |> Repo.insert!()
@@ -58,11 +58,11 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
     project
   end
 
-  describe "fabrikam admin — archive" do
+  describe "acme admin — archive" do
     test "sees the project kebab, and archiving removes the row from the active sidebar", %{
       conn: conn
     } do
-      {conn, _user} = fabrikam_admin_conn(conn)
+      {conn, _user} = acme_admin_conn(conn)
       project = create_project("soylent")
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
@@ -82,7 +82,7 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
     test "sees the org kebab on a tenant, and archiving the org drops it off the scope rail", %{
       conn: conn
     } do
-      {conn, _user} = fabrikam_admin_conn(conn)
+      {conn, _user} = acme_admin_conn(conn)
       _project = create_project("soylent")
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
@@ -100,7 +100,7 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
 
     test "archiving an org's LAST project keeps the org header, kebab, and scope chip (regression: task 019f4eaa)",
          %{conn: conn} do
-      {conn, _user} = fabrikam_admin_conn(conn)
+      {conn, _user} = acme_admin_conn(conn)
       # Soylent with exactly one project — the reported case (Marlowe, 2026-07-16).
       project = create_project("soylent")
 
@@ -131,10 +131,10 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
     end
   end
 
-  describe "fabrikam admin — schedule deletion modal" do
+  describe "acme admin — schedule deletion modal" do
     test "the confirm modal opens on 'Schedule deletion…' and confirming schedules the project",
          %{conn: conn} do
-      {conn, _user} = fabrikam_admin_conn(conn)
+      {conn, _user} = acme_admin_conn(conn)
       project = create_project("sxi")
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
@@ -173,7 +173,7 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
       # can see it. A server-rendered test cannot read computed opacity, so
       # this pins the specific mistake structurally instead. Real visibility
       # proof lives in the browser e2e cases.
-      {conn, _admin} = fabrikam_admin_conn(conn)
+      {conn, _admin} = acme_admin_conn(conn)
       project = create_project("sxi")
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
@@ -196,7 +196,7 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
     end
 
     test "Cancel closes the modal without scheduling", %{conn: conn} do
-      {conn, _user} = fabrikam_admin_conn(conn)
+      {conn, _user} = acme_admin_conn(conn)
       project = create_project("sxi")
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
@@ -211,10 +211,10 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
     end
   end
 
-  describe "fabrikam admin — mobile parity" do
+  describe "acme admin — mobile parity" do
     test "the mobile project sheet renders the same lifecycle kebab, wired to the same archive event",
          %{conn: conn} do
-      {conn, _user} = fabrikam_admin_conn(conn)
+      {conn, _user} = acme_admin_conn(conn)
       project = create_project("soylent")
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
@@ -259,7 +259,7 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
     # reversal one click away.
 
     test "archiving an org shows what it took, and Undo puts it all back", %{conn: conn} do
-      {conn, _admin} = fabrikam_admin_conn(conn)
+      {conn, _admin} = acme_admin_conn(conn)
       org = Tenancy.get_org_by_slug!("paragon")
       project = create_project("paragon")
       {:ok, _} = Tasks.update_project(project, %{name: "Site Expansion"})
@@ -289,7 +289,7 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
     end
 
     test "dismissing leaves the archive in place — dismiss is not undo", %{conn: conn} do
-      {conn, _admin} = fabrikam_admin_conn(conn)
+      {conn, _admin} = acme_admin_conn(conn)
       org = Tenancy.get_org_by_slug!("soylent")
       # The Tasks sidebar only renders orgs that HAVE projects, so an org with
       # none has no kebab to click.
@@ -328,7 +328,7 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
     # stale entry and stops the archived board recurring on every visit.
 
     test "falls back to All Projects instead of selecting it", %{conn: conn} do
-      {conn, admin} = fabrikam_admin_conn(conn)
+      {conn, admin} = acme_admin_conn(conn)
       project = create_project("paragon")
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
@@ -346,7 +346,7 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
     end
 
     test "an active project is still selectable", %{conn: conn} do
-      {conn, _admin} = fabrikam_admin_conn(conn)
+      {conn, _admin} = acme_admin_conn(conn)
       project = create_project("soylent")
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
@@ -359,7 +359,7 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
 
   # ── Org delete "surface & choose" (task 019f7600 stage 5) ──────────────
 
-  describe "fabrikam admin — org delete surface & choose" do
+  describe "acme admin — org delete surface & choose" do
     defp open_org_delete_modal(view) do
       org_menu = "[data-menu-key='org:soylent']"
       view |> element("#{org_menu} [data-role=lifecycle-menu-trigger]") |> render_click()
@@ -369,7 +369,7 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
 
     test "the org delete confirm lists children as a checklist, Delete gated until acknowledged",
          %{conn: conn} do
-      {conn, _user} = fabrikam_admin_conn(conn)
+      {conn, _user} = acme_admin_conn(conn)
       swept = create_project("soylent")
       kept = create_project("soylent")
 
@@ -385,7 +385,7 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
     end
 
     test "keeping a child spares it while the org + the rest are scheduled", %{conn: conn} do
-      {conn, _user} = fabrikam_admin_conn(conn)
+      {conn, _user} = acme_admin_conn(conn)
       swept = create_project("soylent")
       kept = create_project("soylent")
 
@@ -410,7 +410,7 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
     test "submitting without the acknowledgement schedules nothing and leaves the modal open", %{
       conn: conn
     } do
-      {conn, _user} = fabrikam_admin_conn(conn)
+      {conn, _user} = acme_admin_conn(conn)
       project = create_project("soylent")
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
@@ -458,7 +458,7 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
       |> Org.changeset(%{
         name: name,
         slug: slug,
-        parent_org_id: Tenancy.get_org_by_slug!("fabrikam").id
+        parent_org_id: Tenancy.get_org_by_slug!("acme").id
       })
       |> Repo.insert!()
     end
@@ -476,7 +476,7 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
     test "mount /tasks succeeds with an active tenant whose slug is not an existing atom", %{
       conn: conn
     } do
-      {conn, _user} = fabrikam_admin_conn(conn)
+      {conn, _user} = acme_admin_conn(conn)
 
       # Premise, asserted rather than assumed: if this slug ever became a
       # compiled atom the test would silently stop covering the ArgumentError
@@ -488,7 +488,7 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
       # Renders at all (pre-fix: ArgumentError in mount/3 -> 500) …
-      assert has_element?(view, "[data-scope-chip='fabrikam']")
+      assert has_element?(view, "[data-scope-chip='acme']")
       # … and since task 01a09287 stage 2 the runtime-created org is a chip
       # like any other, rather than being filtered out by an allowlist.
       assert has_element?(view, "[data-scope-chip='e2e-target-323']")
@@ -496,7 +496,7 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
 
     test "mount /tasks succeeds with an active tenant whose slug IS an existing atom but not a scope",
          %{conn: conn} do
-      {conn, _user} = fabrikam_admin_conn(conn)
+      {conn, _user} = acme_admin_conn(conn)
 
       # `:name` exists because it is an Ecto field on `Org` itself, and
       # "name" satisfies the slug format — so `to_existing_atom/1` SUCCEEDS
@@ -514,12 +514,12 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
       # that stopped being about an allowlist when `slug/1` and
       # `scope_label/1` became total (task 01a09287 stage 2): the render is
       # now safe for an arbitrary slug, so the chip is allowed through.
-      assert has_element?(view, "[data-scope-chip='fabrikam']")
+      assert has_element?(view, "[data-scope-chip='acme']")
       assert has_element?(view, "[data-scope-chip='name']")
     end
 
     test "the seeded scope rail is unchanged", %{conn: conn} do
-      {conn, _user} = fabrikam_admin_conn(conn)
+      {conn, _user} = acme_admin_conn(conn)
 
       # Every active tenant, not the `tenant_priority/0` subset: since task
       # 01a09287 stage 2 the rail is the tenant rows, and `tenant_priority/0`
@@ -537,7 +537,7 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
     end
 
     test "archiving an org still drops its chip while a bad-slug org exists", %{conn: conn} do
-      {conn, _user} = fabrikam_admin_conn(conn)
+      {conn, _user} = acme_admin_conn(conn)
       _project = create_project("soylent")
 
       # Deliberately mount BEFORE the bad-slug org exists. That makes this
@@ -561,7 +561,7 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
       # `active_scope_keys/0` — a mount-only fix would still crash the socket
       # here.
       refute has_element?(view, "[data-scope-chip='soylent']")
-      assert has_element?(view, "[data-scope-chip='fabrikam']")
+      assert has_element?(view, "[data-scope-chip='acme']")
 
       # The org inserted mid-session appears on the re-read, which is the
       # positive half of the same claim: `refresh_containers/1` re-runs the
@@ -599,12 +599,12 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
     test "a plain member sees chips for their orgs and NOT for an org they don't belong to", %{
       conn: conn
     } do
-      {conn, user} = member_of_conn(conn, ["fabrikam", "soylent"])
+      {conn, user} = member_of_conn(conn, ["acme", "soylent"])
 
-      # Premise, asserted rather than assumed: a Fabrikam admin bypasses the
+      # Premise, asserted rather than assumed: an Acme admin bypasses the
       # membership filter BY DESIGN, so an admin viewer would make a broken
       # fix look correct. This viewer must not be one.
-      refute Tenancy.fabrikam_admin?(user)
+      refute Tenancy.root_admin?(user)
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
@@ -616,7 +616,7 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
       # passes vacuously for an implementation that returns [] for everyone.
       # Prove the org-chip list is non-empty and correct before reading any
       # absence as evidence.
-      assert "fabrikam" in chips
+      assert "acme" in chips
       assert "soylent" in chips
 
       # The leak itself, asserted BEFORE the count so a regression reports the
@@ -627,8 +627,8 @@ defmodule PlatformWeb.TasksLiveLifecycleTest do
       assert length(chips) == 2
     end
 
-    test "a fabrikam admin still sees every active seeded org chip", %{conn: conn} do
-      {conn, _user} = fabrikam_admin_conn(conn)
+    test "a acme admin still sees every active seeded org chip", %{conn: conn} do
+      {conn, _user} = acme_admin_conn(conn)
 
       # Same expectation the "the seeded scope rail is unchanged" test uses:
       # admins bypass the membership filter, so the unscoped list is correct

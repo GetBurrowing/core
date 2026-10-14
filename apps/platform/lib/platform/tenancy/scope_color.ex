@@ -68,7 +68,7 @@ defmodule Platform.Tenancy.ScopeColor do
   1.17-1.41:1. WCAG 1.4.11 asks 3:1 for the visual boundary of an
   interactive component. The edge cannot be a higher alpha of the fill:
   four of the six shipped colours never reach 3:1 against white at ANY
-  alpha (fully opaque, fabrikam 2.61, wayne-tech 2.83, sxi 2.51, paragon 1.87).
+  alpha (fully opaque, root 2.61, wayne-tech 2.83, sxi 2.51, paragon 1.87).
 
   So each cell also solves an `edge`: the fill's hue and chroma at a lower
   L, walked from the fill exactly as the label is (light DOWN, dark UP, in
@@ -102,7 +102,7 @@ defmodule Platform.Tenancy.ScopeColor do
   Steps are half-percent, not whole. `app.css` records cyberdyne needing
   `55.5%` at hue 340 precisely because whole-percent steps overshoot the
   4.56-4.66 band there. Walking from the fill (rather than taking the
-  minimal qualifying L) is what reproduces the shipped ramp: fabrikam's dark
+  minimal qualifying L) is what reproduces the shipped ramp: the root org's dark
   label is `72%`, its fill, even though a lower L already clears AA.
 
   ## Known divergence from the shipped CSS
@@ -149,8 +149,8 @@ defmodule Platform.Tenancy.ScopeColor do
   under a one-unit move. The margin each shipped org has, label against
   its painted 12% tint over base-100:
 
-      slug         painted   worst single +-1     worst all-channel +-1
-      fabrikam          4.6121      4.5804                  4.5124   holds
+      org          painted   worst single +-1     worst all-channel +-1
+      root          4.6121      4.5804                  4.5124   holds
       soylent      4.6375      4.6042                  4.5340   holds
       wayne-tech      4.6738      4.6224                  4.5706   holds
       sxi           4.5539      4.4974                  4.4535   CROSSES
@@ -209,6 +209,16 @@ defmodule Platform.Tenancy.ScopeColor do
   # `#F5F5F5`, wrong by three per channel, until task 01a09333-d374 stage 6
   # corrected it. Reading the declaration is what made this module immune to
   # that while the comment was wrong. Keep reading the declaration.
+  #
+  # NOT YET BURROW (task 01a120c5 stage 1, deliberately deferred). app.css now
+  # declares the Burrow grounds (light #fbfaf9 / #f6f4f1, dark #191b20 /
+  # #111214, 16.53:1 apart, so the "no single colour" argument above still
+  # holds). These four are the PRE-Burrow grounds, kept because the solved
+  # ramps are pinned against browser-painted bytes in scope_color_test.exs,
+  # scope_color_styles_shipped_six_test.exs and the scope pill tests, and
+  # re-solving them needs a fresh painted gate, not a constant swap. The
+  # nearest delta is small (white vs #fbfaf9; #171b25 vs #191b20), but it is
+  # a delta: re-solve against the Burrow grounds as a follow-up.
   @surfaces %{
     light: [
       {"base-100", "oklch(100% 0 0)"},
@@ -536,7 +546,7 @@ defmodule Platform.Tenancy.ScopeColor do
   Against the twelve measured 12% tints (six orgs over base-100 and
   base-200, DOM swatches painted and read back pixel-wise), this matches
   seven exactly. The other five are one byte HIGH on one or two channels:
-  soylent over base-100, and fabrikam, soylent, wayne-tech and paragon over
+  soylent over base-100, and root, soylent, wayne-tech and paragon over
   base-200. `Platform.Design.WcagContrast`'s independent float path gives
   the same twelve values. No mechanism for that byte survived testing; see
   "The one-byte rule" in the moduledoc for what it means for a value

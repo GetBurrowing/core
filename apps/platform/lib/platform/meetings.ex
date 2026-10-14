@@ -109,7 +109,7 @@ defmodule Platform.Meetings do
       `Ecto.MultipleResultsError` as soon as two projects pick the same slug.
       Two rows returns `{:error, :ambiguous}`; a slug-only URL genuinely
       cannot disambiguate and this function will not pick one for you.
-    * Root (Fabrikam) **admins** bypass the org-membership filter — see
+    * Root-org **admins** bypass the org-membership filter — see
       `Platform.Chat` and `Platform.Chat.Sidebar` for the same precedent.
       Without it a root operator who is not an explicit member of a tenant org
       would lose access to that tenant's meetings. The ambiguity handling
@@ -120,7 +120,7 @@ defmodule Platform.Meetings do
   This is the one viewer-scoping site the tenancy consolidation left on its
   own query, on purpose. The two predicates are NOT the same:
 
-    * here, the bypass is `Tenancy.fabrikam_admin?/1` — root membership at
+    * here, the bypass is `Tenancy.root_admin?/1` — root membership at
       **admin** role;
     * `Tenancy.visibility/1` bypasses on `Tenancy.root_member?/1` — root
       membership at **any** role, which is strictly wider.
@@ -148,9 +148,9 @@ defmodule Platform.Meetings do
   There is no `project_members` table in this codebase. The finest membership
   grain that exists is `org_memberships`. Worse,
   `Platform.Accounts.find_or_create_from_oidc/1` gives **every** new user an
-  `org_memberships` row in the Fabrikam root org. So this function does **not**
-  create per-project isolation within a single org: every Fabrikam-org user can
-  still read every Fabrikam-org meeting, by design.
+  `org_memberships` row in the root org. So this function does **not**
+  create per-project isolation within a single org: every root-org user can
+  still read every root-org meeting, by design.
 
   What it closes is the cross-**org** read — a Soylent user reading a
   Wayne-Tech meeting, an external user reading an internal one, an
@@ -162,7 +162,7 @@ defmodule Platform.Meetings do
   def fetch_meeting_for_user(%{id: user_id} = user, slug)
       when is_binary(user_id) and is_binary(slug) do
     slug
-    |> viewer_meeting_query(user_id, Platform.Tenancy.fabrikam_admin?(user))
+    |> viewer_meeting_query(user_id, Platform.Tenancy.root_admin?(user))
     |> Repo.all()
     |> case do
       [] ->
@@ -184,7 +184,7 @@ defmodule Platform.Meetings do
 
   @doc """
   Fetch a meeting BY ID that `user` may see, under the same viewer rule as
-  `list_meetings_for_user/1` (`viewer_listing_query/1`): Fabrikam root admins see
+  `list_meetings_for_user/1` (`viewer_listing_query/1`): root-org admins see
   everything, an external user sees the meetings they hold a live invite for,
   and an internal user sees the meetings of their orgs' projects.
 
@@ -213,7 +213,7 @@ defmodule Platform.Meetings do
 
   # NOT YET on `Tenancy.scope/3`, and deliberately so — see the "Why this is
   # still hand-rolled" section of the moduledoc. The bypass predicate here is
-  # `fabrikam_admin?/1`; `visibility/1`'s is `root_member?/1`, which is strictly
+  # `root_admin?/1`; `visibility/1`'s is `root_member?/1`, which is strictly
   # wider. Swapping them is an access change, not a refactor.
   defp viewer_meeting_query(slug, _user_id, true = _root_admin?) do
     from(m in Meeting, where: m.slug == ^slug, limit: 2)
@@ -704,8 +704,8 @@ defmodule Platform.Meetings do
   # Three branches, matching the detail route (`fetch_meeting_for_user/2`)
   # wherever a listing can:
   #
-  #   * Fabrikam root ADMIN — everything. The bypass predicate is
-  #     `Tenancy.fabrikam_admin?/1`, the same one `viewer_meeting_query/3` uses.
+  #   * Root-org ADMIN — everything. The bypass predicate is
+  #     `Tenancy.root_admin?/1`, the same one `viewer_meeting_query/3` uses.
   #     NOT `root_member?/1`, which is strictly wider: every OIDC signup gets a
   #     plain `role: "member"` row in the root org, so swapping the predicate
   #     would hand every signed-up user every tenant's meetings. See the
@@ -725,7 +725,7 @@ defmodule Platform.Meetings do
   #     join the project and require its `org_id` among the viewer's orgs.
   defp viewer_listing_query(user) do
     cond do
-      Platform.Tenancy.fabrikam_admin?(user) ->
+      Platform.Tenancy.root_admin?(user) ->
         from(m in Meeting)
 
       Platform.Tenancy.external_user?(user) ->
@@ -888,6 +888,83 @@ defmodule Platform.Meetings do
           Platform.PubSub,
           project_meetings_topic(updated.project_id),
           {:meeting_started, updated}
+        )
+
+        ok
+
+      error ->
+        error
+    end
+  end
+
+  @doc """
+  Resume an `ended` meeting: back to `live`, `ended_at` cleared, `started_at`
+  kept (task 01a1265f stage 2). See `Meeting.resume_changeset/1`.
+
+  ## The one caller
+
+  `PlatformWeb.MeetingLive`'s `maybe_start_meeting/1`, when somebody joins
+  the call from the meeting's own page (auto-join or the lobby's Join). That
+  is the only place that knows a join is a rejoin of THIS meeting. Every
+  other way into the room (the chat page's Meet button, `join_for_user/3`,
+  LiveKit webhooks, the transcriber, the native app) leaves an ended meeting
+  ended, so #902's bound in `meeting_id_for_space/2` still keeps an unrelated
+  later call from inheriting it.
+
+  Without this, a rejoined meeting stayed ended, `meeting_id_for_space/2`
+  resolved its new transcript to nil, and every Ask press in the rejoined
+  call closed as nothing heard.
+
+  `opts[:started_by_user_id]` is stamped only when the row has no starter
+  yet. A resume does not change who started the meeting.
+
+  ## Why `{:meeting_resumed, meeting}` and not `{:meeting_started, meeting}`
+
+  Measured against every subscriber of `project_meetings_topic/1`:
+
+    * `Platform.Meetings.MeetingNotifier` handles `:meeting_started` by
+      pushing "X started a meeting" to the attendees and RINGING invitees.
+      Its only guard against a repeat is `mark_notified/1`'s CAS on
+      `notified_at`. That stamp is set only if the notifier was running when
+      the meeting first started; a row whose `notified_at` is nil (notifier
+      down at the time, or a row older than the column) would be announced
+      and rung for again just because someone opened its page. A distinct
+      tag reaches the notifier's catch-all clause and is ignored whatever
+      `notified_at` holds.
+    * `Platform.Agents.MeetingHistorianHandler` acts only on `:meeting_ended`
+      and ignores both tags. The resumed meeting's SECOND end does fire it
+      again; that is a curation of a meeting that now has more in it, under
+      the handler's own 15-minute debounce and its default-withheld config.
+    * The meetings index (`MeetingLive`'s lifecycle `handle_info/2`) re-queries
+      and re-buckets. It is the only subscriber that needs to hear a resume,
+      and it lists `:meeting_resumed` beside `:meeting_started`.
+
+  The summarizer is keyed on transcripts and triggered by the LiveKit
+  webhook, not by this topic, so it is unaffected by either tag.
+
+  Returns `{:error, changeset}` for anything not `ended`.
+  """
+  @spec resume_meeting(Meeting.t(), keyword()) ::
+          {:ok, Meeting.t()} | {:error, Ecto.Changeset.t()}
+  def resume_meeting(%Meeting{} = meeting, opts \\ []) do
+    changeset =
+      case {meeting.started_by_user_id, Keyword.get(opts, :started_by_user_id)} do
+        {nil, user_id} when is_binary(user_id) ->
+          meeting
+          |> Meeting.resume_changeset()
+          |> Ecto.Changeset.put_change(:started_by_user_id, user_id)
+          |> Ecto.Changeset.foreign_key_constraint(:started_by_user_id)
+
+        _ ->
+          Meeting.resume_changeset(meeting)
+      end
+
+    case Repo.update(changeset) do
+      {:ok, updated} = ok ->
+        Phoenix.PubSub.broadcast(
+          Platform.PubSub,
+          project_meetings_topic(updated.project_id),
+          {:meeting_resumed, updated}
         )
 
         ok
@@ -4814,7 +4891,7 @@ defmodule Platform.Meetings do
   # External-space digest partition (stack member 12, rbac-external-users).
   # Mirrors `Chat.list_messages_since/2`'s `:scope` opt on the transcript
   # corpus: `:internal` (default) excludes external-user spaces from the
-  # Fabrikam-internal digest; `{:external_spaces, ids}` restricts to an external
+  # internal digest; `{:external_spaces, ids}` restricts to an external
   # user's allowlisted spaces. See `Chat.external_space_ids/0`.
   defp apply_digest_scope(query, :internal) do
     exclude = Chat.external_space_ids()

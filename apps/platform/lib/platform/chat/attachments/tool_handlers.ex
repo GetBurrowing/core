@@ -172,6 +172,14 @@ defmodule Platform.Chat.Attachments.ToolHandlers do
       nil ->
         {:error, :not_found}
 
+      # A user's chunked upload (task 01a120be stage 2) carries the message
+      # to post. It SKIPS cross-row dedup: a chat_attachments row has a single
+      # message_id, so deduplicating would delete this row and point two
+      # messages at one row. Agent reservations never carry the key.
+      %Attachment{state: "pending", metadata: %{"pending_message" => %{} = intent}} =
+          attachment ->
+        finalize_user_upload(attachment, intent, size, hash)
+
       %Attachment{state: "pending"} = attachment ->
         finalize_or_dedup(
           space_id: attachment.space_id,
@@ -192,6 +200,45 @@ defmodule Platform.Chat.Attachments.ToolHandlers do
   end
 
   # ── Internals ─────────────────────────────────────────────────────────
+
+  # Marks the row ready, then posts the reserved message server-side and links
+  # this row to it. The response gains `message_id`.
+  defp finalize_user_upload(attachment, intent, size, hash) do
+    with {:ok, ready} <-
+           attachment
+           |> Attachment.changeset(%{
+             byte_size: size,
+             content_hash: hash,
+             state: "ready",
+             upload_expires_at: nil
+           })
+           |> Repo.update(),
+         {:ok, message, _} <-
+           Chat.post_message_with_existing_attachment(
+             %{
+               space_id: intent["space_id"],
+               thread_id: intent["thread_id"],
+               participant_id: intent["participant_id"],
+               content_type: "text",
+               content: intent["content"] || ""
+             },
+             ready,
+             poster_user_id: intent["user_id"]
+           ) do
+      {:ok,
+       %{
+         id: ready.id,
+         url: "/chat/attachments/#{ready.id}",
+         byte_size: ready.byte_size,
+         content_hash: ready.content_hash,
+         content_type: ready.content_type,
+         deduplicated: false,
+         message_id: message.id
+       }}
+    else
+      {:error, reason} -> {:error, {:post_failed, reason}}
+    end
+  end
 
   # Takes write-side attrs, checks for a ready twin with the same
   # (space_id, content_hash). Returns the canonical result either way.

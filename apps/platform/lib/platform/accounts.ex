@@ -46,16 +46,16 @@ defmodule Platform.Accounts do
   def get_user(_), do: nil
 
   @doc """
-  Whether the given user is a Fabrikam admin (gates the Admin slot in the icon-rail
+  Whether the given user is a root-org user (gates the Admin slot in the icon-rail
   and the Admin section in the More sheet).
 
   Stub: returns `true` for every user today. Multi-tenant org membership lives
   on a downstream stack (see TODO below); until that ships, all current Suite
-  users are Fabrikam admins per product decision (Marlowe, 2026-05-18).
+  users are root-org admins per product decision (Marlowe, 2026-05-18).
   """
-  # TODO(MT/RBAC stack 019e3c49-6983-755a-8550-d76ccd680c2c): replace with Platform.Orgs.fabrikam_admin?/1
-  # All current users are Fabrikam admins (Marlowe 2026-05-18); stub returns true until MT/RBAC ships.
-  def is_fabrikam_user?(_user), do: true
+  # TODO(MT/RBAC stack 019e3c49-6983-755a-8550-d76ccd680c2c): replace with Platform.Tenancy.root_admin?/1
+  # All current users are root-org admins (Marlowe 2026-05-18); stub returns true until MT/RBAC ships.
+  def root_user?(_user), do: true
 
   @doc """
   Return a map of user id => user for the given ids.
@@ -193,12 +193,116 @@ defmodule Platform.Accounts do
   end
 
   @doc """
+  Give an ARCHIVED user a new OIDC identity and unarchive them, in one row
+  write: `oidc_sub` becomes `new_sub` and all three archive columns are
+  cleared.
+
+  Why it exists: re-inviting a person who was removed from the sign-in
+  service (task 01a113ea, `Platform.SignInAdmin`) creates a NEW identity at
+  the identity provider, with a new `sub`. Sign-in links a login to a user by
+  `oidc_sub` only (`find_or_create_from_oidc/1`), so without this the
+  returning person would land on a fresh row and lose the attribution of
+  everything they authored. Relinking keeps their Suite user id, so their
+  messages, tasks and files stay theirs.
+
+  Refuses a user that is not archived with `{:error, :not_archived}` and
+  writes nothing: moving a live identity is not what this is for. A `new_sub`
+  already held by another user returns `{:error, changeset}` (the unique
+  `oidc_sub` constraint) and leaves the row unchanged.
+  """
+  @spec relink_oidc_identity(User.t(), String.t()) ::
+          {:ok, User.t()} | {:error, :not_archived} | {:error, Ecto.Changeset.t()}
+  def relink_oidc_identity(%User{archived_at: %DateTime{}} = user, new_sub)
+      when is_binary(new_sub) do
+    user
+    |> User.changeset(%{
+      oidc_sub: new_sub,
+      archived_at: nil,
+      archived_by_user_id: nil,
+      archived_reason: nil
+    })
+    |> Repo.update()
+  end
+
+  def relink_oidc_identity(%User{}, new_sub) when is_binary(new_sub),
+    do: {:error, :not_archived}
+
+  @doc """
+  Record that a sign-in link valid until `expires_at` was minted for `user`
+  (task 01a114c1, `Platform.SignInAdmin`). Stores the LATER of the user's
+  current `sign_in_link_expires_at` and `expires_at`, so a second, shorter
+  link never shortens the window of a longer one still live.
+
+  The stored value is `expires_at` rounded UP to the next whole second, plus
+  a 5-second margin (task 01a11503): pocket-id keeps the token alive to a
+  later instant than Suite's own sample, so a truncated or exact copy could
+  let Enable through while the token still works.
+
+  `Platform.SignInAdmin.enable/2` refuses while that value is in the future:
+  pocket-id has no route to revoke a one-time token, and it restores a token
+  a disabled user tried to redeem, so a link minted before a Disable would
+  work again the moment the user is enabled. Only the expiry is stored, never
+  the link or its code.
+
+  The comparison runs in the database (`GREATEST`, which skips a NULL), so
+  a stale `user` struct cannot move the value backwards. Returns
+  `{:error, :not_found}` when the row no longer exists.
+  """
+  # Task 01a11503 (evidence canvas 01a11502-9e61-7001-8992-1be3e31eb59d):
+  # a refused redeem restores pocket-id's token to a whole second that can sit
+  # after Suite's truncated copy, so Enable went through while the pre-Disable
+  # link still worked. Rounding up closes the sub-second gap; the margin also
+  # absorbs clock skew between the Suite and pocket-id hosts.
+  @sign_in_link_expiry_margin_seconds 5
+
+  @spec note_sign_in_link_expiry(User.t(), DateTime.t()) ::
+          {:ok, User.t()} | {:error, :not_found}
+  def note_sign_in_link_expiry(
+        %User{id: id},
+        %DateTime{utc_offset: 0, std_offset: 0} = expires_at
+      ) do
+    # `users.sign_in_link_expires_at` is a UTC `timestamp` column: compare as
+    # naive UTC so no session time zone is involved.
+    expires_at =
+      expires_at
+      |> ceil_to_second()
+      |> DateTime.add(@sign_in_link_expiry_margin_seconds, :second)
+      |> DateTime.to_naive()
+
+    now = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_naive()
+
+    query =
+      from(u in User,
+        where: u.id == ^id,
+        select: u,
+        update: [
+          set: [
+            sign_in_link_expires_at:
+              fragment("GREATEST(?, ?::timestamp)", u.sign_in_link_expires_at, ^expires_at),
+            updated_at: ^now
+          ]
+        ]
+      )
+
+    case Repo.update_all(query, []) do
+      {1, [user]} -> {:ok, user}
+      {0, _} -> {:error, :not_found}
+    end
+  end
+
+  # Whole-second ceiling: a value already on the second is left alone.
+  defp ceil_to_second(%DateTime{microsecond: {0, _}} = at), do: DateTime.truncate(at, :second)
+
+  defp ceil_to_second(%DateTime{} = at),
+    do: at |> DateTime.truncate(:second) |> DateTime.add(1, :second)
+
+  @doc """
   Find a user by OIDC `sub`, creating one if missing, or refreshing
   email/name/avatar from the OIDC payload.
 
   ## Self-healing admin rule (Stage 2) + manual-override overlay (Stage 3)
 
-  Wrapped in `Ecto.Multi` so the user write and the Fabrikam-membership
+  Wrapped in `Ecto.Multi` so the user write and the root-org membership
   upsert are atomic:
 
     * **INSERT**: every new user gets an `org_memberships` row in the
@@ -210,10 +314,10 @@ defmodule Platform.Accounts do
       `apply_derived_role/1`'s bootstrap-admin fallback). No lock exists
       yet for a fresh user, so the rule always applies on first INSERT.
     * **UPDATE with email change**: if the email changes AND the new
-      email derives `:admin`, promote the user in Fabrikam — UNLESS the
-      Fabrikam membership row has `roles_locked_at` set, in which case the
+      email derives `:admin`, promote the user in the root org — UNLESS
+      the root-org membership row has `roles_locked_at` set, in which case the
       manual grant wins and the row is left untouched. **No auto-revoke**
-      — a Fabrikam email changing to non-Fabrikam leaves the existing role
+      — an admin-domain email changing to another domain leaves the existing role
       untouched. Offboarding is explicitly out of scope (plan Stage 2).
     * **UPDATE without email change**: pure idempotent refresh of
       name/avatar; no membership write.
@@ -222,7 +326,7 @@ defmodule Platform.Accounts do
   is the lock-aware entry point for the rule.
 
   See `Platform.Tenancy.derive_role_from_email/1` for the rule and the
-  WARNING about Fabrikam alias domains. See `Platform.Tenancy.promote_to_admin/2`
+  WARNING about alias domains. See `Platform.Tenancy.promote_to_admin/2`
   / `revoke_admin/2` for the manual-override ops API.
   """
   def find_or_create_from_oidc(%{sub: sub, email: email, name: name} = oidc_user)
@@ -247,7 +351,7 @@ defmodule Platform.Accounts do
 
   def find_or_create_from_oidc(_attrs), do: {:error, :invalid_oidc_user}
 
-  # INSERT path: write the user, then upsert a Fabrikam membership at the
+  # INSERT path: write the user, then upsert a root-org membership at the
   # derived role. Both writes share one transaction.
   defp insert_user_with_membership(attrs) do
     changeset = User.changeset(%User{}, attrs)
@@ -270,7 +374,7 @@ defmodule Platform.Accounts do
   end
 
   # UPDATE path: refresh user fields. If the email actually changed AND
-  # the new email derives :admin, promote in Fabrikam. Never auto-revoke.
+  # the new email derives :admin, promote in the root org. Never auto-revoke.
   defp update_user_with_membership_sync(%User{} = user, attrs) do
     refreshed = refresh_oidc_user_attrs(user, attrs)
     changeset = User.changeset(user, refreshed)
@@ -289,7 +393,7 @@ defmodule Platform.Accounts do
   end
 
   # Promote only — no auto-revoke. If the email changed and the new
-  # email derives :admin, set the Fabrikam membership to :admin VIA the
+  # email derives :admin, set the root-org membership to :admin VIA the
   # lock-aware `apply_derived_role/1` — which is a no-op if the row is
   # manually locked (Stage 3). Otherwise leave the existing membership
   # row (if any) untouched. Returning `{:ok, :noop}` is harmless inside

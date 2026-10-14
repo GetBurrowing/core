@@ -111,7 +111,7 @@ defmodule PlatformWeb.ShellLiveSpaceTopicsTest do
 
     Repo.insert!(%OrgMembership{
       user_id: user.id,
-      org_id: Platform.Tenancy.get_org_by_slug!("fabrikam").id,
+      org_id: Platform.Tenancy.get_org_by_slug!("acme").id,
       role: "admin"
     })
 

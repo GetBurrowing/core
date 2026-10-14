@@ -43,7 +43,7 @@ defmodule Platform.Org.WikiJournalEntry do
   # existing write paths keep working while we migrate them. Resolved
   # structurally via `Platform.Tenancy.get_root_org/0` (`parent_org_id IS
   # NULL`) — resolving by slug instead (task 01a068f6) meant an install
-  # whose root org was not literally "fabrikam" resolved nil here and wrote
+  # whose root org did not carry the expected slug resolved nil here and wrote
   # the row unowned.
   defp maybe_default_org_id(changeset) do
     case Ecto.Changeset.get_field(changeset, :org_id) do

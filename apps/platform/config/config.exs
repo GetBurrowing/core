@@ -95,7 +95,11 @@ config :platform, Platform.Responsibilities,
     Platform.Responsibilities.Handlers.ArchitectureCronSweep,
     Platform.Responsibilities.Handlers.AgentsGoalHeartbeat,
     Platform.Responsibilities.Handlers.ExperimentsLabelSignal,
-    Platform.Responsibilities.Handlers.ExperimentsScientist
+    Platform.Responsibilities.Handlers.ExperimentsScientist,
+    # Task 01a11ec3 stage 3: external-feedback intake (never the janitor).
+    Platform.Responsibilities.Handlers.FeedbackIntake,
+    # Task 019fa1ac-6685 stage 1: the janitor's weekly chore drain.
+    Platform.Responsibilities.Handlers.JanitorCronDrain
   ]
 
 # Meeting-triage guardrails (task 019f5e2b-8d29). Two independent caps:
@@ -117,6 +121,18 @@ config :platform, Platform.Responsibilities,
 #     Overridable per-call via the `:threshold` opt.
 config :platform, :meetings_triage_backlog_cap, 10
 config :platform, :meetings_triage_per_canvas_cap, 20
+
+# Canvas rooms (task 01a1316b-84fa stage 1) — an experiment surface, read at
+# call time by `Platform.Chat.CanvasRoom`:
+#   * `:persist_debounce_ms` — how long accepted ops wait before ONE
+#     transaction flushes them. Larger = fewer transactions per 100 ops, and
+#     more ops lost to a brutal kill (at most one window).
+#   * `:idle_stop_ms` — how long a room with no viewers lives before it
+#     flushes and stops.
+config :platform, Platform.Chat.CanvasRoom,
+  persist_debounce_ms: 500,
+  idle_stop_ms: 60_000
+
 config :platform, :meetings_triage_dedup_threshold, 0.85
 
 # Meeting Producer runtime (task 019f2452). Supervisor gate: when
@@ -390,7 +406,15 @@ config :phoenix, :json_library, Jason
 # "code" (task 01a10882): app login exchange and handoff codes, and the
 # PKCE `code_verifier`, arrive as request params. Phoenix matches by
 # substring, so this also filters the OIDC callback's authorization code.
-config :phoenix, :filter_parameters, ["password", "token", "secret", "api_key", "code"]
+# "sealed" (task 01a1261e): the push relay's sealed preview blobs.
+config :phoenix, :filter_parameters, [
+  "password",
+  "token",
+  "secret",
+  "api_key",
+  "code",
+  "sealed"
+]
 
 # Timezone database — Tzdata (IANA rules) backs `DateTime.shift_zone!/2`
 # for timezone-aware cron triggers (task 019f70e9 stage 6). Without this
@@ -419,17 +443,12 @@ config :platform, :oidc,
 # 1-3 has to be touched, which is why enforcement is a flag at all.
 config :platform, :host_surface_enforcement, :on
 
-# Root org slug (task 01a081c2 stage 1). Every code path that needs "the
-# org a write lands in when the caller named none" resolves this slug through
-# `Platform.Tenancy.root_org_slug/0`. Fabrikam's own install keeps "fabrikam", so this
-# default preserves current behaviour everywhere.
-#
-# A separate install (suite.example.com) runs its own database whose
-# single org was renamed to "milhouse" on 2026-09-03. There every
-# `get_org_by_slug("fabrikam")` returned nil, so org_id-less wiki pages and
-# projects landed unowned and a first-time OIDC login could not create a user
-# at all. runtime.exs threads the per-install value via ROOT_ORG_SLUG.
-config :platform, :root_org_slug, "fabrikam"
+# Root org slug: deliberately UNSET here (task 01a116de). Every code path that
+# needs "the org a write lands in when the caller named none" resolves it
+# through `Platform.Tenancy.root_org_slug/0`, which reads this key when an
+# install sets it (runtime.exs threads ROOT_ORG_SLUG) and otherwise falls back
+# to the slug of the structural root org (`parent_org_id IS NULL`). A literal
+# default here named an org that a fresh install does not have.
 
 # Auto-admin email domain (task 01a081c2 stage 2, renamed + de-defaulted in
 # task 01a068f6 stage 1). `derive_role_from_email/1` reads this through
@@ -439,17 +458,16 @@ config :platform, :root_org_slug, "fabrikam"
 #
 # Deliberately UNSET here: this file is the shared base every environment
 # (including a stranger's fresh production install) imports from, and
-# task 01a068f6 exists precisely because Fabrikam-specific defaults living here
-# make every fresh Suite install come up implicitly owned by Fabrikam — an
-# install that never sets ROOT_ORG_ADMIN_EMAIL_DOMAIN must get `nil`
-# (nobody auto-admined), not a silent inherited "example.com". Fabrikam's own
-# dev and test behaviour is preserved by pinning this key in
-# `config/dev.exs` and `config/test.exs` instead — a per-environment
+# task 01a068f6 exists precisely because install-specific defaults living
+# here make every fresh Suite install come up implicitly owned by one
+# client's org — an install that never sets ROOT_ORG_ADMIN_EMAIL_DOMAIN must
+# get `nil` (nobody auto-admined), not a silently inherited domain. The test
+# environment pins this key in `config/test.exs` as a per-environment
 # convenience override, not a shared default.
 #
-# Until task 01a081c2 the domain was the literal regex `~r/@example\.com$/`
-# compiled into tenancy.ex, which made a Fabrikam email address an automatic
-# admin on somebody else's Suite. runtime.exs threads the per-install value
+# Until task 01a081c2 the domain was a literal regex compiled into
+# tenancy.ex, which made one install's email addresses automatic admins on
+# somebody else's Suite. runtime.exs threads the per-install value
 # via ROOT_ORG_ADMIN_EMAIL_DOMAIN, and a BLANK value there disables
 # auto-admin entirely even when dev/test pins a default above. See the
 # accessor's @doc for why blank must not fall back to an environment

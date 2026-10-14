@@ -8,8 +8,8 @@ defmodule PlatformWeb.ChatLiveNavTargetTest do
     * v1 (PR #441) made Chat.get_space_by_slug/2 org-aware, but every
       sidebar link still emitted the slug for org-scoped channels. The
       URL handler then resolved the active org from the user's primary
-      membership (Fabrikam for multi-org users), so clicking the Soylent-
-      section General sidebar entry still routed to Fabrikam's General.
+      membership (Acme for multi-org users), so clicking the Soylent-
+      section General sidebar entry still routed to Acme's General.
     * v2 closes the gap: for any space with a non-nil :org_id, the
       sidebar emits /chat/<space_id> (UUID-form). The URL handler's
       existing valid_uuid? && Chat.get_space/1 fallback then resolves
@@ -85,13 +85,13 @@ defmodule PlatformWeb.ChatLiveNavTargetTest do
   describe "sidebar link emission for org-scoped channels" do
     setup %{conn: conn} do
       # Three tenant Generals — the canonical reproduction triple.
-      fabrikam_general = ensure_general_for_org("fabrikam")
+      acme_general = ensure_general_for_org("acme")
       soylent_general = ensure_general_for_org("soylent")
       sxi_general = ensure_general_for_org("sxi")
 
       # User is a member of all three orgs (multi-org admin shape).
       user = create_user!("multi-org-nav")
-      membership!(user, Tenancy.get_org_by_slug!("fabrikam"))
+      membership!(user, Tenancy.get_org_by_slug!("acme"))
       membership!(user, Tenancy.get_org_by_slug!("soylent"))
       membership!(user, Tenancy.get_org_by_slug!("sxi"))
 
@@ -100,7 +100,7 @@ defmodule PlatformWeb.ChatLiveNavTargetTest do
       %{
         conn: conn,
         user: user,
-        fabrikam_general: fabrikam_general,
+        acme_general: acme_general,
         soylent_general: soylent_general,
         sxi_general: sxi_general
       }
@@ -108,7 +108,7 @@ defmodule PlatformWeb.ChatLiveNavTargetTest do
 
     test "each tenant's General is linked by its UUID, not the colliding slug", %{
       conn: conn,
-      fabrikam_general: k,
+      acme_general: k,
       soylent_general: g,
       sxi_general: s
     } do
@@ -131,7 +131,7 @@ defmodule PlatformWeb.ChatLiveNavTargetTest do
 
     test "direct UUID navigation mounts the clicked tenant's General", %{
       conn: conn,
-      fabrikam_general: k,
+      acme_general: k,
       soylent_general: g,
       sxi_general: s
     } do

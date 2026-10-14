@@ -9,6 +9,7 @@ defmodule Platform.Orchestration.TaskRouterSupervisor do
   use DynamicSupervisor
 
   alias Platform.Orchestration.TaskRouter
+  alias Platform.Tasks
 
   @spec start_link(keyword()) :: Supervisor.on_start()
   def start_link(opts \\ []) do
@@ -29,8 +30,10 @@ defmodule Platform.Orchestration.TaskRouterSupervisor do
   """
   @spec start_assignment(String.t(), map()) :: DynamicSupervisor.on_start_child()
   def start_assignment(task_id, assignee) do
-    child_spec = {TaskRouter, task_id: task_id, assignee: assignee}
-    DynamicSupervisor.start_child(__MODULE__, child_spec)
+    with :ok <- Tasks.require_not_quarantined_task(task_id) do
+      child_spec = {TaskRouter, task_id: task_id, assignee: assignee}
+      DynamicSupervisor.start_child(__MODULE__, child_spec)
+    end
   end
 
   @doc "Stop the TaskRouter for the given task."

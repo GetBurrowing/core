@@ -149,7 +149,7 @@ defmodule PlatformWeb.AuthControllerTest do
 
       body = response(conn, 403)
       assert body =~ "archived"
-      assert body =~ "Suite administrator"
+      assert body =~ "Contact your Burrow administrator."
 
       # No `current_user_id` planted in the session, and any bleed-through
       # was dropped by `configure_session(drop: true)`.
@@ -567,7 +567,7 @@ defmodule PlatformWeb.AuthControllerTest do
     default = %{
       name: "Tenant #{n}",
       slug: "tenant_#{n}",
-      parent_org_id: Tenancy.get_org_by_slug!("fabrikam").id
+      parent_org_id: Tenancy.get_org_by_slug!("acme").id
     }
 
     %Org{} |> Org.changeset(Map.merge(default, attrs)) |> Repo.insert!()

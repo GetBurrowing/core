@@ -1932,6 +1932,7 @@
                   phx-hook="MeetingScreenShare"
                   class="stage-mode--enter absolute inset-0 flex h-full w-full items-center justify-center overflow-hidden rounded-xl bg-base-200"
                   data-placeholder="center-stage"
+                  data-screen-share-viewer
                   data-screen-share-active="false"
                   phx-remove={JS.transition("stage-mode--leave", time: 60)}
                 >
@@ -1957,6 +1958,20 @@
                     class="absolute inset-0 hidden h-full w-full"
                   >
                   </div>
+
+                  <button
+                    type="button"
+                    hidden
+                    data-screen-share-fullscreen
+                    aria-label="Enter full screen"
+                    aria-pressed="false"
+                    class="screen-share-fullscreen-button focus-visible-ring"
+                  >
+                    <span class="hero-arrows-pointing-out size-5" aria-hidden="true"></span>
+                    <span class="sr-only" data-screen-share-fullscreen-label>
+                      Enter full screen
+                    </span>
+                  </button>
 
                   <%!-- Empty state: visible when no screen-share is live. The
                    hook toggles `hidden` on this node when it (de)attaches. --%>
@@ -4711,7 +4726,7 @@
 
          The floor therefore has to be local. Raising `--size-field` would
          resize every button and input in the app to fix one button, and
-         that token is a deliberate Fabrikam-spec value. And the floor is
+         that token is a deliberate design-spec value. And the floor is
          expressed as `min-*` rather than `size-11` on purpose: min-width
          and min-height beat width and height in the box model whatever
          order the two utility rules land in, so this does not depend on

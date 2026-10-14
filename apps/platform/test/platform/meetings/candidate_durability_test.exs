@@ -45,7 +45,7 @@ defmodule Platform.Meetings.CandidateDurabilityTest do
   alias Platform.Repo
 
   setup do
-    meeting = create_meeting!(fabrikam_org_id())
+    meeting = create_meeting!(acme_org_id())
     on_exit(fn -> IntentQueue.stop(meeting.id) end)
 
     %{

@@ -68,7 +68,6 @@ final class IntentsTests: XCTestCase {
         InstallStore.didRemove = nil
         defer { InstallStore.didRemove = removeHook }
         for host in hosts { store.add(host: host) }
-        for host in InstallStore.defaultHosts where !hosts.contains(host) { store.remove(host: host) }
         XCTAssertEqual(store.installs.map(\.host), hosts)
         return IntentEnvironment(
             client: SuiteAPIClient(session: StubURLProtocol.session(), tokens: MemoryTokenStore(tokens: tokens)),

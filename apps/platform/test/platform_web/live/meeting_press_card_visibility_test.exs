@@ -66,7 +66,7 @@ defmodule PlatformWeb.MeetingPressCardVisibilityTest do
     %OrgMembership{}
     |> OrgMembership.changeset(%{
       user_id: user.id,
-      org_id: Platform.TenancyFixtures.fabrikam_org_id(),
+      org_id: Platform.TenancyFixtures.acme_org_id(),
       role: "member"
     })
     |> Repo.insert!()
@@ -82,7 +82,7 @@ defmodule PlatformWeb.MeetingPressCardVisibilityTest do
     {:ok, project} =
       Platform.Tasks.create_project(%{
         name: "Press Card Project #{n}",
-        org_id: Platform.TenancyFixtures.fabrikam_org_id()
+        org_id: Platform.TenancyFixtures.acme_org_id()
       })
 
     {:ok, meeting} =

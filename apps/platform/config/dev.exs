@@ -3,20 +3,6 @@ import Config
 # Federation: store node identity in a local dev-friendly path
 config :platform, :node_identity_path, "priv/dev/node_identity.json"
 
-# Auto-admin email domain (task 01a068f6 stage 1): `config/config.exs`
-# deliberately carries no default for `:root_org_admin_email_domain` (a
-# fresh production install must not implicitly inherit Fabrikam's domain). This
-# is a dev-only convenience pin so a Fabrikam contributor's local `@example.com`
-# OIDC login keeps auto-admining exactly like it did before that change.
-config :platform, :root_org_admin_email_domain, "example.com"
-
-# Root org identity (task 01a068f6 stage 2): see the matching comment in
-# `config/test.exs`. Keeps a freshly-created dev database (`mix ecto.reset`)
-# seeding "Fabrikam"/"fabrikam" — a fresh PRODUCTION install gets none of this and
-# seeds a neutral "Root Org"/"root" instead.
-System.put_env("ROOT_ORG_SLUG", "fabrikam")
-System.put_env("ROOT_ORG_NAME", "Fabrikam")
-
 bind_ip =
   case System.get_env("PHX_BIND_IP", "127.0.0.1") do
     "0.0.0.0" -> {0, 0, 0, 0}

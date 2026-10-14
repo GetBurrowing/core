@@ -53,10 +53,10 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
   discovery rail — a single flat allowlisted-space list with NO sub-org section
   headers, NO pinned-task / archived sections, and NO new-channel / scope-pill
   / edit-layout / admin chrome (each of which leaks the internal workspace org
-  tree). M4's `:external` app layout is chrome-less, so the Fabrikam branding +
+  tree). M4's `:external` app layout is chrome-less, so the brand +
   identity chip + logout that the icon-rail normally carries are rendered here
   at the rail head. Two paths, one ChatLive — mirrors the shipped `meet.` guest
-  branch. Semantic DaisyUI tokens only (Fabrikam cyan primary is themed in
+  branch. Semantic DaisyUI tokens only (brand cyan primary is themed in
   app.css); mobile-first single column with env(safe-area-inset-*) padding.
 
   `hidden lg:flex` (task 019f9257-a83e): the external rail is desktop-only,
@@ -69,6 +69,7 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
       assigns
       |> assign(:external_spaces, assigns.channels ++ assigns.dm_conversations)
       |> assign(:mask_assigns, Map.take(assigns, @mask_keys))
+      |> assign_brand_name()
 
     ~H"""
     <aside
@@ -84,9 +85,9 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
       >
         <div class="flex items-center justify-between px-3 py-2.5">
           <div class="flex items-center gap-2 min-w-0" data-role="brand-chip">
-            <img src={~p"/images/logo.svg"} alt="Fabrikam" class="size-6 flex-shrink-0" />
+            <img src={~p"/images/burrow-mark.svg"} alt={@brand_name} class="size-6 flex-shrink-0" />
             <span class="truncate text-sm font-semibold tracking-tight text-base-content">
-              Fabrikam
+              {@brand_name}
             </span>
           </div>
           <a
@@ -203,7 +204,7 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
   internal-discovery chrome. External users get this FLAT parallel: the same
   `fixed inset-0 z-40 lg:hidden` shell + `drawer_search` + `DrawerSearchFocus`
   hook, but a single flat `@channels ++ @dm_conversations` list (the exact set
-  `external_rail/1` renders), plus the Fabrikam brand / identity / logout that the
+  `external_rail/1` renders), plus the app brand / identity / logout that the
   chrome-less `:external` layout (layouts.ex) has nowhere else to hang on
   mobile. Opened by the pills-strip search button (`toggle_mobile_browser`); on
   the no-space landing it is shown by default — the list IS the landing
@@ -215,6 +216,7 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
       assigns
       |> assign(:external_switcher_spaces, assigns.channels ++ assigns.dm_conversations)
       |> assign(:mask_assigns, Map.take(assigns, @mask_keys))
+      |> assign_brand_name()
 
     ~H"""
     <%= if @external? and !@embedded and (@mobile_browser_open or is_nil(@active_space)) do %>
@@ -226,9 +228,9 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
         <header class="flex-shrink-0 border-b border-edge safe-area-top">
           <div class="flex h-12 items-center justify-between px-4">
             <div class="flex items-center gap-2 min-w-0" data-role="brand-chip">
-              <img src={~p"/images/logo.svg"} alt="Fabrikam" class="size-6 flex-shrink-0" />
+              <img src={~p"/images/burrow-mark.svg"} alt={@brand_name} class="size-6 flex-shrink-0" />
               <span class="truncate text-sm font-semibold tracking-tight text-base-content">
-                Fabrikam
+                {@brand_name}
               </span>
             </div>
             <div class="flex items-center gap-1">
@@ -372,5 +374,18 @@ defmodule PlatformWeb.ChatLive.Partials.ExternalRail do
       </div>
     <% end %>
     """
+  end
+
+  # The install's app name (`Platform.Branding.app_name/0`, the branding row
+  # an admin edits) for the brand chip's alt text and visible name, instead of
+  # a compiled product name (task 01a116de stage 3). Read only on the
+  # external branch: `Branding.get/0` is a DB read and internal renders never
+  # show this chip.
+  defp assign_brand_name(assigns) do
+    if assigns[:external?] do
+      assign(assigns, :brand_name, Platform.Branding.app_name())
+    else
+      assign(assigns, :brand_name, nil)
+    end
   end
 end

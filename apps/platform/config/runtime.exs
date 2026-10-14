@@ -39,13 +39,13 @@ end
 
 # ── Root org slug (per-install root/default org) ──────────────────────────────
 # `Platform.Tenancy.root_org_slug/0` reads this key at runtime. config.exs
-# defaults it to "fabrikam"; an install whose root org carries a different slug
-# sets ROOT_ORG_SLUG so org_id-less writes, the derived-role hook, and the
-# admin promote/revoke helpers all resolve the org that actually exists there.
+# sets no default; when the key is unset the accessor falls back to the slug
+# of the structural root org (`parent_org_id IS NULL`). An install sets
+# ROOT_ORG_SLUG to pin the slug explicitly.
 #
-# Written only when the var is present and non-blank, so dev, test and CI keep
-# the config.exs default and per-test `Application.put_env/3` overrides are the
-# only thing that moves it.
+# Written only when the var is present and non-blank, so an unset or blank
+# var leaves the structural fallback in charge and per-test
+# `Application.put_env/3` overrides are the only other thing that moves it.
 case System.get_env("ROOT_ORG_SLUG") do
   slug when is_binary(slug) and slug != "" ->
     config :platform, :root_org_slug, slug
@@ -58,23 +58,23 @@ end
 # `Platform.Tenancy.root_org_admin_email_domain/0` reads this key at runtime
 # and `derive_role_from_email/1` uses it on every user INSERT and every
 # email-change UPDATE. Renamed from ADMIN_EMAIL_DOMAIN / :admin_email_domain
-# (task 01a068f6 stage 1): config.exs no longer defaults this key to
-# "example.com" at all — only `config/dev.exs` and `config/test.exs` pin
-# that value now, as an environment convenience rather than a shared
-# production default.
+# (task 01a068f6 stage 1): config.exs no longer defaults this key at all —
+# only `config/test.exs` pins a value now, as an environment convenience
+# rather than a shared production default.
 #
 # The branch shape here deliberately differs from SESSION_COOKIE_DOMAIN and
 # ROOT_ORG_SLUG above, which both skip a blank value. Here a blank value is
 # MEANINGFUL: ROOT_ORG_ADMIN_EMAIL_DOMAIN="" disables auto-admin entirely,
 # and must NOT fall back to whatever the environment config pinned (e.g.
-# dev/test's "example.com"). An install that does not want Fabrikam addresses
+# test's fixture domain). An install that does not want any address
 # auto-promoted on its database has to be able to say so by setting the var
 # empty, without inventing a sentinel string.
 #
 # Unset (nil) means "keep whatever config.exs + the env-specific config file
-# already set" — nothing on a production release (no default anywhere), and
-# "example.com" in dev/test — so per-test `Application.put_env/3` overrides
-# remain the only thing that moves the key there.
+# already set" — nothing on a production release or in dev (no default
+# anywhere), and the fixture domain in test — so per-test
+# `Application.put_env/3` overrides remain the only thing that moves the key
+# there.
 case System.get_env("ROOT_ORG_ADMIN_EMAIL_DOMAIN") do
   nil -> :ok
   domain -> config :platform, :root_org_admin_email_domain, String.trim(domain)
@@ -222,6 +222,16 @@ config :platform,
   upload_max_bytes: String.to_integer(System.get_env("UPLOAD_MAX_BYTES", "524288000")),
   pending_ttl_seconds: String.to_integer(System.get_env("PENDING_TTL_SECONDS", "900"))
 
+# Per-install ceiling for one chat file sent through the resumable chunked
+# upload path (task 01a120be), and the size of each PATCH chunk. Read only via
+# Platform.Chat.UploadLimits. Default 1_000_000_000 bytes ("1 GB"); lower it
+# on an install to roll back without a deploy. The chunk default (32 MiB) stays well under any edge
+# (Cloudflare) request-body cap. Distinct from :upload_max_bytes (agents' single
+# POST, 500 MB) and ChatLive's 15 MB inline LiveView cap, both unchanged.
+config :platform,
+  chat_max_upload_bytes: String.to_integer(System.get_env("CHAT_MAX_UPLOAD_BYTES", "1000000000")),
+  upload_chunk_bytes: String.to_integer(System.get_env("UPLOAD_CHUNK_BYTES", "33554432"))
+
 # The attachment storage root. This file loads AFTER config/test.exs, so an
 # unguarded write here would replace the per-run tmp root test.exs sets with
 # the deploy-host path, and every file test on a box without a writable
@@ -238,6 +248,60 @@ end
 # and its Vault secret. :test keeps the recording adapter from test.exs.
 if config_env() != :test do
   config :platform, Platform.Mail.Mailer, adapter: Swoosh.Adapters.SMTP
+end
+
+# ── External feedback (task 01a11ec3 stage 2) ─────────────────────────────────
+# FEEDBACK_POLICY is the ONE capability value: disabled | quarantined | trusted.
+# `Platform.Feedback.Policy.normalize/1` treats unset, blank and every other
+# value as disabled, so a typo turns the capability off, never on.
+#
+# Publisher settings carry NO credential. FEEDBACK_PUBLISHER selects the
+# adapter: `broker` (default; every Burrow installation) posts to
+# FEEDBACK_BROKER_URL and holds no GitHub secret at all; `github_app` is for
+# the Suite-hosted broker side only and reads FEEDBACK_GITHUB_APP_ID,
+# FEEDBACK_GITHUB_APP_INSTALLATION_ID and FEEDBACK_GITHUB_APP_PRIVATE_KEY from
+# the process environment at call time — they are deliberately NOT copied
+# into application config here.
+#
+# Skipped under :test, which pins the policy to disabled and routes both
+# adapters to Req.Test stubs; tests flip keys per-test and restore them.
+if config_env() != :test do
+  config :platform, :feedback_policy, System.get_env("FEEDBACK_POLICY", "disabled")
+
+  feedback_adapter =
+    case System.get_env("FEEDBACK_PUBLISHER", "broker") |> String.trim() |> String.downcase() do
+      "github_app" -> Platform.Feedback.GithubPublisher.GithubApp
+      _ -> Platform.Feedback.GithubPublisher.Broker
+    end
+
+  config :platform, Platform.Feedback.GithubPublisher,
+    adapter: feedback_adapter,
+    repository: System.get_env("FEEDBACK_REPOSITORY", "Startup-Suite/core"),
+    broker_url: System.get_env("FEEDBACK_BROKER_URL"),
+    github_api_url: System.get_env("FEEDBACK_GITHUB_API_URL"),
+    installation_label: System.get_env("FEEDBACK_INSTALLATION_LABEL")
+
+  feedback_int = fn name ->
+    case Integer.parse(System.get_env(name, "")) do
+      {n, ""} when n > 0 -> n
+      _ -> nil
+    end
+  end
+
+  config :platform, :feedback_rate_limits,
+    per_actor: feedback_int.("FEEDBACK_RATE_LIMIT_PER_AGENT"),
+    per_installation: feedback_int.("FEEDBACK_RATE_LIMIT_PER_INSTALLATION"),
+    window_seconds: feedback_int.("FEEDBACK_RATE_LIMIT_WINDOW_SECONDS")
+
+  # Intake (task 01a11ec3 stage 3). FEEDBACK_INTAKE_PROJECT_ID names the
+  # project accepted reports on the feedback repository are filed into (when
+  # unset, the oldest non-archived project connected to that repository).
+  # FEEDBACK_INTAKE_DISPOSITION is comment | comment_and_close | none; any
+  # other value is comment. Dispositions go through the broker, so this
+  # carries no credential either.
+  config :platform, Platform.Feedback.Intake,
+    project_id: System.get_env("FEEDBACK_INTAKE_PROJECT_ID"),
+    disposition_mode: System.get_env("FEEDBACK_INTAKE_DISPOSITION", "comment")
 end
 
 # :attachment_signing_key is set by dev.exs/test.exs for local envs; prod
@@ -402,7 +466,7 @@ if config_env() == :prod do
   chat_host = System.get_env("CHAT_HOST")
 
   # EXTRA_ORIGIN_APEXES is an optional comma-separated list of ADDITIONAL apex
-  # domains (e.g. "example.com") that resolve to this same Phoenix endpoint.
+  # domains (e.g. "example.org") that resolve to this same Phoenix endpoint.
   # Suite is being served on a second apex in parallel with the PHX_HOST apex
   # ahead of a later cutover: Traefik already routes suite./chat./meet.<apex>
   # there with a valid wildcard cert, but check_origin only allowlists the
@@ -465,6 +529,26 @@ if vapid_public && vapid_private do
     private_key: vapid_private
 end
 
+# ── Push relay server mode (task 01a1261e stage 2) ───────────────────────────
+# PUSH_RELAY_SERVER=true turns this install into a Burrow push relay: it accepts
+# `POST /api/push-relay/v1/notifications` from registered installs and forwards
+# sealed items to APNs/FCM with its own credentials. Unset (every normal
+# install), every relay route is a 404. PUSH_RELAY_RATE_PER_MINUTE overrides
+# the per-install item budget (default 1,200/min). The INSTALL side
+# (PUSH_RELAY_URL / PUSH_RELAY_CREDENTIAL) is resolved at call time by
+# `Platform.Push.Relay.relay_config/0`, like the APNs credentials.
+if System.get_env("PUSH_RELAY_SERVER") in ["true", "1"] do
+  relay_rate =
+    case Integer.parse(System.get_env("PUSH_RELAY_RATE_PER_MINUTE") || "") do
+      {n, ""} when n > 0 -> n
+      _ -> nil
+    end
+
+  config :platform, :push_relay_server,
+    enabled: true,
+    rate_per_minute: relay_rate
+end
+
 # ── WebMCP tool surface (BACKLOG #14) ─────────────────────────────────────────
 # Gates registration of `navigator.modelContext` tools in app.js. Off by default
 # in prod; on by default in dev. Override with WEBMCP_ENABLED=true|false.
@@ -478,6 +562,25 @@ webmcp_enabled =
   end
 
 config :platform, :webmcp_enabled, webmcp_enabled
+
+# ── Reconnect escalation thresholds (task 01a12b10) ──────────────────────────
+# A dropped LiveView connection shows a quiet "Reconnecting…" state; the red
+# toast waits for RECONNECT_ESCALATE_ATTEMPTS failed attempts or
+# RECONNECT_ESCALATE_SECONDS seconds, whichever comes first. Garbage, zero or
+# negative values fall back to the defaults (11/10);
+# PlatformWeb.ReconnectEscalation.config/0 clamps and renders them into the
+# root layout's <meta name="reconnect-escalation">. Runs in dev too, so the
+# dev-on-moon rig's EXTRA_ENV can set it.
+reconnect_escalate = fn var, default ->
+  case Integer.parse(String.trim(System.get_env(var) || "")) do
+    {n, ""} when n > 0 -> n
+    _ -> default
+  end
+end
+
+config :platform, :reconnect_escalation,
+  attempts: reconnect_escalate.("RECONNECT_ESCALATE_ATTEMPTS", 11),
+  seconds: reconnect_escalate.("RECONNECT_ESCALATE_SECONDS", 10)
 
 # ── Agents goal surface (task 01a0b491) ──────────────────────────────────────
 # Gates the WHOLE agents surface: the rail block above Pinned and the space

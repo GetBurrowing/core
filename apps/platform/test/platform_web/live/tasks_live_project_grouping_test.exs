@@ -1,7 +1,7 @@
 defmodule PlatformWeb.TasksLiveProjectGroupingTest do
   @moduledoc """
   Stage 5 of ADR-0042 (+ V1 e2e regression fix): the Tasks sidebar
-  groups its project picker by owning org. Fabrikam (root) renders first,
+  groups its project picker by owning org. Acme (root) renders first,
   then tenant orgs in canonical `Platform.Tenancy.tenant_priority/0`
   order — Soylent, Wayne-Tech, SXI, Paragon — matching the
   project-create FAB's `<select>` so the two surfaces never disagree.
@@ -37,21 +37,21 @@ defmodule PlatformWeb.TasksLiveProjectGroupingTest do
       Tasks.create_project(%{
         name: name,
         slug: name |> String.downcase() |> String.replace(~r/[^a-z0-9]+/, "-"),
-        org_id: tenant_or_fabrikam_org_id(org_slug)
+        org_id: tenant_or_acme_org_id(org_slug)
       })
 
     project
   end
 
-  defp tenant_or_fabrikam_org_id("fabrikam"), do: fabrikam_org_id()
-  defp tenant_or_fabrikam_org_id(slug), do: tenant_org_id(slug)
+  defp tenant_or_acme_org_id("acme"), do: acme_org_id()
+  defp tenant_or_acme_org_id(slug), do: tenant_org_id(slug)
 
   describe "sidebar project picker grouped by org" do
     test "renders one <details> section per org slug present in the data", %{conn: conn} do
       conn = authenticated_conn(conn)
 
-      # Seed projects across multiple orgs (Fabrikam + 2 tenants).
-      _fabrikam_proj = seed_project("fabrikam", "Platform Core")
+      # Seed projects across multiple orgs (Acme + 2 tenants).
+      _acme_proj = seed_project("acme", "Platform Core")
       _gen_proj = seed_project("soylent", "Soylent Storefront")
       _sxi_proj = seed_project("sxi", "SXI Onboarding")
 
@@ -59,13 +59,13 @@ defmodule PlatformWeb.TasksLiveProjectGroupingTest do
 
       # Each org slug present in the seeded data renders a <details>
       # section keyed by `data-org-slug=<slug>`.
-      assert html =~ ~s(data-role="project-group" data-org-slug="fabrikam")
+      assert html =~ ~s(data-role="project-group" data-org-slug="acme")
       assert html =~ ~s(data-role="project-group" data-org-slug="soylent")
       assert html =~ ~s(data-role="project-group" data-org-slug="sxi")
 
       # Header labels come from Tenancy.scope_label/1 (canonical
       # human-readable names).
-      assert html =~ "Fabrikam"
+      assert html =~ "Acme"
       assert html =~ "Soylent"
       assert html =~ "SXI"
 
@@ -75,23 +75,23 @@ defmodule PlatformWeb.TasksLiveProjectGroupingTest do
       assert html =~ "SXI Onboarding"
     end
 
-    test "Fabrikam (root) section renders before any tenant section", %{conn: conn} do
+    test "Acme (root) section renders before any tenant section", %{conn: conn} do
       conn = authenticated_conn(conn)
 
-      # Alphabetical name order would put Paragon first, but Fabrikam must
+      # Alphabetical name order would put Paragon first, but Acme must
       # always lead because it's the root org.
       _paragon = seed_project("paragon", "Paragon Project")
-      _fabrikam = seed_project("fabrikam", "Fabrikam Project")
+      _acme = seed_project("acme", "Acme Project")
 
       {:ok, _view, html} = live(conn, ~p"/tasks")
 
-      fabrikam_pos = :binary.match(html, ~s(data-org-slug="fabrikam"))
+      acme_pos = :binary.match(html, ~s(data-org-slug="acme"))
       paragon_pos = :binary.match(html, ~s(data-org-slug="paragon"))
 
-      assert is_tuple(fabrikam_pos) and is_tuple(paragon_pos)
-      {fabrikam_idx, _} = fabrikam_pos
+      assert is_tuple(acme_pos) and is_tuple(paragon_pos)
+      {acme_idx, _} = acme_pos
       {alt_idx, _} = paragon_pos
-      assert fabrikam_idx < alt_idx, "Fabrikam section must render before tenant sections"
+      assert acme_idx < alt_idx, "Acme section must render before tenant sections"
     end
 
     test "tenant sections render in canonical tenant-priority order", %{conn: conn} do
@@ -129,7 +129,7 @@ defmodule PlatformWeb.TasksLiveProjectGroupingTest do
       # so we have to trigger the toggle first to materialize the
       # <select>.
       conn = authenticated_conn(conn)
-      _ = seed_project("fabrikam", "Anchor")
+      _ = seed_project("acme", "Anchor")
 
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
@@ -147,9 +147,9 @@ defmodule PlatformWeb.TasksLiveProjectGroupingTest do
         |> Enum.map(fn [_, label] -> String.trim(label) end)
         |> Enum.reject(&(&1 == "Select org"))
 
-      # First label should be Fabrikam (root); tenant labels follow canonical order.
-      assert hd(option_labels) == "Fabrikam",
-             "expected FAB select to lead with Fabrikam; got: #{inspect(option_labels)}"
+      # First label should be Acme (root); tenant labels follow canonical order.
+      assert hd(option_labels) == "Acme",
+             "expected FAB select to lead with Acme; got: #{inspect(option_labels)}"
 
       tenants_in_order = Enum.drop(option_labels, 1) |> Enum.take(4)
 

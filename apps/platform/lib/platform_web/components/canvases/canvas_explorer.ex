@@ -126,9 +126,10 @@ defmodule PlatformWeb.Components.Canvases.CanvasExplorer do
       cannot — a match inside a title that is already truncated.
 
   **Measured, and flagged for the design review rather than quietly
-  changed:** in dark, `--color-base-200` is `#000306` and
-  `--color-base-100` is `#171b25`, so the hit band is DARKER than the row
-  it sits on (≈1.22:1), not lighter. It is discriminable — the `--edge`
+  changed:** in dark, `--color-base-200` is `#111214` and
+  `--color-base-100` is `#191b20` (Burrow, task 01a120c5; it was ≈1.22:1
+  before), so the hit band is DARKER than the row it sits on (1.0879:1),
+  not lighter. It is discriminable — the `--edge`
   ticket accepted 1.1966:1 for a hairline whose whole job is to be seen —
   and it is what the design canvas ruled, so it is what ships here. But
   `conversation.ex` chose `bg-base-content/5` for its snippet ground over

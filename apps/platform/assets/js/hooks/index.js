@@ -7,6 +7,7 @@ import extensionHooks from "@extensions"
 import AppBadge from "./app_badge"
 import ButtonLoading from "./button_loading"
 import CandidateClock, { SheetHandleClock } from "./candidate_clock"
+import CanvasRoomBridge from "./canvas_room_bridge"
 import CanvasSidebarResize from "./canvas_sidebar_resize"
 import ChannelMembershipDrag from "./channel_membership_drag"
 import ChannelPicker from "./channel_picker"
@@ -15,17 +16,21 @@ import MessageContextPopover from "./message_context_popover"
 import CodeBlock from "./code_block"
 import ComposeInput from "./compose_input"
 import CopyToClipboard from "./copy_to_clipboard"
+import DoneColumnState from "./done_column_state"
 import DragDropUpload from "./drag_drop_upload"
 import DrawerSearchFocus from "./drawer_search_focus"
 import EmbedCanvasScale from "./embed_canvas_scale"
+import PrototypeFullscreen from "./prototype_fullscreen"
 import ExecutionLogScroll from "./execution_log_scroll"
 import FilePreviewScale from "./file_preview_scale"
 import HexField from "./hex_field"
 import InfiniteScroll from "./infinite_scroll"
 import InlineEdit from "./inline_edit"
+import LargeUpload, { LargeUploadTimeline } from "./large_upload"
 import InlineFocus from "./inline_focus"
 import InlineThread from "./inline_thread"
 import KanbanDragDrop from "./kanban_drag_drop"
+import LazyInlineCanvas from "./lazy_inline_canvas"
 import LastProject from "./last_project"
 import LongpressMenu from "./longpress_menu"
 import MarkdownEditor from "./markdown_editor"
@@ -49,6 +54,7 @@ import MeetingWatchdog from "./meeting_watchdog"
 import MeetingWhiteboard from "./meeting_whiteboard"
 import MermaidDiagram from "./mermaid_diagram"
 import MessageEditor from "./message_editor"
+import NativeInstallSwitch from "./native_install_switch"
 import PushSubscribe from "./push_subscribe"
 import ReactionPicker from "./reaction_picker"
 import ReactorPopover from "./reactor_popover"
@@ -71,6 +77,7 @@ export default {
   AppBadge,
   ButtonLoading,
   CandidateClock,
+  CanvasRoomBridge,
   CanvasSidebarResize,
   ChannelMembershipDrag,
   ChannelPicker,
@@ -79,14 +86,19 @@ export default {
   CodeBlock,
   ComposeInput,
   CopyToClipboard,
+  DoneColumnState,
   DragDropUpload,
   DrawerSearchFocus,
   EmbedCanvasScale,
+  PrototypeFullscreen,
   ExecutionLogScroll,
   FilePreviewScale,
   HexField,
   InfiniteScroll,
   InlineEdit,
+  LazyInlineCanvas,
+  LargeUpload,
+  LargeUploadTimeline,
   InlineFocus,
   InlineThread,
   KanbanDragDrop,
@@ -114,6 +126,7 @@ export default {
   MermaidDiagram,
   MessageEditor,
   MessageLift,
+  NativeInstallSwitch,
   PushSubscribe,
   ReactionPicker,
   ReactorPopover,

@@ -8,7 +8,7 @@ defmodule Platform.Tenancy.OrgColorTest do
   a raw insert that never goes through `Org.changeset/2`. A test of either
   one alone passes for a build that dropped the other.
 
-  Every org here is a TENANT under fabrikam. `orgs_single_root` is a partial
+  Every org here is a TENANT under acme. `orgs_single_root` is a partial
   unique index on `(parent_org_id IS NULL)`, so a second parentless org is a
   unique violation, not a colour failure.
   """
@@ -21,7 +21,7 @@ defmodule Platform.Tenancy.OrgColorTest do
   alias Platform.Tenancy.Org
 
   setup do
-    %{root_id: Tenancy.get_org_by_slug!("fabrikam").id}
+    %{root_id: Tenancy.get_org_by_slug!("acme").id}
   end
 
   defp attrs(root_id, extra) do
@@ -96,13 +96,18 @@ defmodule Platform.Tenancy.OrgColorTest do
   end
 
   describe "migration backfill" do
-    test "fabrikam carries the hue and chroma its app.css block already used" do
+    test "a shipped org carries the hue and chroma its app.css block already used" do
       # The migration is only load-bearing if the six shipped orgs come out
       # of it with the values that were previously hardcoded; otherwise the
-      # later stages that read the column regress the scope rail.
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
-      assert fabrikam.color_hue == 50
-      assert fabrikam.color_chroma == 0.16
+      # later stages that read the column regress the scope rail. The test
+      # root is the neutral `acme` fixture (task 01a116de stage 4), which is
+      # not one of the six, so this reads a shipped tenant instead.
+      sxi = Tenancy.get_org_by_slug!("sxi")
+      assert sxi.color_hue == 162
+      assert sxi.color_chroma == 0.15
+
+      acme = Tenancy.get_org_by_slug!("acme")
+      assert acme.color_hue == nil
     end
   end
 end

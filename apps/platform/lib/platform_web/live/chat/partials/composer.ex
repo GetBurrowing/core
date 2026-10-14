@@ -93,7 +93,7 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
          re-authorizes.
 
          Stage 4: when a deletion is scheduled the banner shows the purge
-         date instead, with a Cancel button for Fabrikam admins only
+         date instead, with a Cancel button for root-org admins only
          (@can_cancel_deletion?). Unarchive is hidden while deletion is
          pending — cancel first, then unarchive. Deletion-flagged channels
          are excluded from the sidebar's Archived section, so this banner
@@ -174,6 +174,17 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
       "msg_id => [agent name] for this viewer's own messages whose agent mention was refused (task 01a0fd62). Author-only; see MessagesHooks."
   )
 
+  attr(:mounted_inline_canvas_ids, :any,
+    required: true,
+    doc:
+      "MapSet of message ids whose inline canvas is mounted, or `:all` (task 01a13884 stage 4). See `PlatformWeb.Components.ChatInlineCanvas`."
+  )
+
+  attr(:load_older_failed?, :boolean,
+    default: false,
+    doc: "True when the last `load_older_messages` raised; the top sentinel offers a retry."
+  )
+
   attr(:rendered_message_ids, :any,
     required: true,
     doc:
@@ -225,16 +236,30 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
     >
       <%!-- Top sentinel: fires `load_older_messages` when visible AND
            :has_more_older is true. --%>
+      <%!-- Copy per the design canvas (task 01a13884 stage 4): neutral text,
+           no spinner; on a failed load, an inline text button that re-fires
+           the load through the hook, so the reading position is held the
+           same way as an ordinary scroll-triggered load. --%>
       <div
         :if={@has_more_older}
         id="chat-scroll-sentinel-top"
         phx-hook="InfiniteScroll"
         data-direction="older"
         data-loading={if @loading_older, do: "true"}
-        class="flex justify-center py-2 text-xs text-base-content/40"
+        data-failed={if @load_older_failed?, do: "true"}
+        class="flex justify-center py-2 text-xs text-neutral"
       >
-        <span :if={@loading_older} class="hero-arrow-path size-3 animate-spin"></span>
-        <span :if={!@loading_older}>Loading older messages…</span>
+        <span :if={!@load_older_failed?} data-role="load-older-status">
+          Loading earlier messages
+        </span>
+        <button
+          :if={@load_older_failed?}
+          type="button"
+          data-role="load-older-retry"
+          class="rounded px-1 underline underline-offset-2 hover:text-base-content focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+        >
+          Couldn't load earlier messages. Retry
+        </button>
       </div>
 
       <div
@@ -268,8 +293,23 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
           read_only={@active_space != nil && @active_space.archived_at != nil}
           refused_summons={@refused_summons}
           space_kind={@active_space && @active_space.kind}
+          mounted_inline_canvas_ids={@mounted_inline_canvas_ids}
         />
       </div>
+
+      <%!-- Pending large-file uploads (task 01a120be): rows at the end of the
+           timeline, drawn by JS. Not while the newest messages are evicted
+           (the end of the list is not on screen then); the hook redraws
+           them from the browser's registry when this mounts again. --%>
+      <.large_upload_timeline
+        :if={
+          @active_space != nil and is_nil(@active_space.archived_at) and
+            @current_participant != nil and not @newest_evicted?
+        }
+        active_space={@active_space}
+        current_participant={@current_participant}
+        participants_map={@participants_map}
+      />
 
       <%!-- Zero-message empty state, per docs/design-system/03-voice.md
            §5.2. Without this a brand-new channel renders a literally blank
@@ -469,6 +509,10 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
   attr(:mask_names?, :boolean, required: true)
   attr(:revealed_section_ids, :any, required: true)
   attr(:sidebar_sections, :list, required: true)
+  # Large file uploads (task 01a120be): the server's limits, for the
+  # LargeUpload hook's routing. Default keeps every other caller rendering as
+  # before. The pending cards are in the timeline (`message_scroller/1`).
+  attr(:limits, :map, default: nil)
 
   @doc """
   The compose input area: the compose form with its @mention dropdown, the
@@ -483,6 +527,10 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
   def composer(assigns) do
     ~H"""
     <div class="flex-shrink-0 compose-input-area safe-area-bottom">
+      <.large_upload_root
+        :if={@active_space && is_nil(@active_space.archived_at) && @limits}
+        limits={@limits}
+      />
       <%!-- Composer is structurally absent on archived spaces (task
            019e95ea stage 2) — hiding is affordance; the context layer
            rejects the writes regardless. --%>
@@ -645,4 +693,116 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
   end
 
   defp masked_space_name(assigns, name), do: ChatLive.masked_space_name(assigns, name)
+
+  # ── Large file uploads (task 01a120be) ───────────────────────────────
+
+  attr(:limits, :map, required: true)
+
+  @doc """
+  The element the `LargeUpload` JS hook runs on: it takes files over the
+  composer's inline cap out of the upload dialog and starts the uploads the
+  server reserved. `data-inline-max` is that cap, from the server; the
+  browser holds no limit of its own. It renders nothing visible: the pending
+  cards are drawn in the timeline (`large_upload_timeline/1`).
+  """
+  def large_upload_root(assigns) do
+    ~H"""
+    <div id="large-upload-root" phx-hook="LargeUpload" data-inline-max={@limits.inline_max_bytes}>
+    </div>
+    """
+  end
+
+  attr(:active_space, :any, required: true)
+  attr(:current_participant, :any, required: true)
+  attr(:participants_map, :map, required: true)
+
+  @doc """
+  The sender's pending large-file cards, as rows at the END OF THE TIMELINE
+  (design canvas 01a120be-f336, "the attachment card is the progress bar").
+
+  The container is `phx-update="ignore"` and the `LargeUploadTimeline` hook
+  draws the rows into it from the browser's upload registry, which holds the
+  File and the offset. Neither a socket reconnect (a new LiveView process,
+  fresh assigns) nor a hook remount loses a card: LiveView never touches the
+  rows, and a remount redraws them from the registry.
+
+  Each row is cloned from `#large-upload-row-template`, the sender's own
+  message row with the real avatar and name, and the card inside it is the
+  posted attachment at its final size (video: the `max-w-md` box with an
+  `aspect-video` frame and one `py-2` line; any other file: the paper-clip
+  chip), plus a 3px primary bar along its bottom edge and a mono counter
+  ("412 of 900 MB · about 2 min"). When the last chunk lands, the server
+  posts the message, and the card stays where it is until that message is in
+  `#message-list`; then the message takes its place.
+
+  The id carries the space id, so moving to another space mounts a fresh
+  container that draws only that space's uploads.
+  """
+  def large_upload_timeline(assigns) do
+    ~H"""
+    <div
+      id={"large-upload-timeline-#{@active_space.id}"}
+      phx-hook="LargeUploadTimeline"
+      phx-update="ignore"
+      data-space-id={@active_space.id}
+      data-role="large-upload-timeline"
+      class="px-5"
+    >
+    </div>
+    <template id="large-upload-row-template">
+      <div
+        data-role="large-upload-row"
+        data-participant-id={@current_participant.id}
+        data-is-own-message="true"
+        class="group relative rounded-2xl bg-base-200/60"
+      >
+        <div class="message-row-inner flex gap-3 px-2 py-2 rounded-2xl">
+          <div class="flex-shrink-0 mt-0.5 message-avatar">
+            <.human_avatar
+              name={PresenceHooks.sender_name(@participants_map, @current_participant.id)}
+              avatar_url={PresenceHooks.sender_avatar_url(@participants_map, @current_participant.id)}
+              seed={
+                PresenceHooks.sender_avatar_seed(@participants_map, %{
+                  participant_id: @current_participant.id
+                })
+              }
+              size="md"
+            />
+          </div>
+          <div class="flex-1 min-w-0" data-slot="body">
+            <div class="flex items-baseline gap-2 message-header">
+              <span class="text-sm font-bold text-base-content">
+                {PresenceHooks.sender_name(@participants_map, @current_participant.id)}
+              </span>
+              <span data-slot="time" class="text-[10px] text-base-content/40"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </template>
+    """
+  end
+
+  @doc """
+  Truncate a file name in the middle so the extension survives:
+  `launch-walkthrough-final-cut.mov` -> `launch-walk…l-cut.mov`.
+  """
+  @spec middle_truncate(String.t(), pos_integer()) :: String.t()
+  def middle_truncate(name, max \\ 32)
+
+  def middle_truncate(name, max) when is_binary(name) do
+    if String.length(name) <= max do
+      name
+    else
+      ext = Path.extname(name)
+      ext = if String.length(ext) > 8, do: "", else: ext
+      base = String.slice(name, 0, String.length(name) - String.length(ext))
+      keep = max - String.length(ext) - 1
+      head = div(keep + 1, 2)
+      tail = keep - head
+      String.slice(base, 0, head) <> "…" <> String.slice(base, -tail, tail) <> ext
+    end
+  end
+
+  def middle_truncate(_name, _max), do: ""
 end

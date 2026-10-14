@@ -127,7 +127,7 @@ defmodule Platform.Meetings.InviteDeliveryExternalTest do
     {user, org}
   end
 
-  # The meeting's project takes the DEFAULT org (fabrikam), which is deliberately
+  # The meeting's project takes the DEFAULT org (acme), which is deliberately
   # NOT the external invitee's tenant org — that difference is what makes the
   # slug-vs-UUID trap real rather than staged.
   defp meeting_hosted_by(name, host_name) do

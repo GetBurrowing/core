@@ -23,6 +23,7 @@ import com.getcapacitor.BridgeActivity
 import com.koboai.burrow.push.BurrowPush
 import com.koboai.burrow.push.NotificationPresenter
 import com.koboai.burrow.push.PushPayload
+import com.koboai.burrow.shortcuts.ConversationShortcuts
 import com.koboai.burrow.widgets.CountsRepository
 import com.koboai.burrow.widgets.WidgetRefresh
 import kotlinx.coroutines.runBlocking
@@ -44,13 +45,19 @@ import java.util.concurrent.Executors
  * - back walks the WebView's history, then falls through to the system's
  *   predictive back-to-home.
  */
-class MainActivity : BridgeActivity() {
+class MainActivity :
+    BridgeActivity(),
+    LaunchRouter.Shell {
     private lateinit var store: InstallStore
+    private lateinit var pickerReturn: PickerReturn
     private lateinit var tokens: KeystoreTokenStore
     private lateinit var client: AppApiClient
     private lateinit var exposure: NativeBridgeExposure
 
     private val io: ExecutorService = Executors.newSingleThreadExecutor()
+
+    // Its own thread: a slow install's counts must not hold up a handoff on [io].
+    private val reconcile: ExecutorService = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
 
     private var currentInstall: Install? = null
@@ -65,6 +72,7 @@ class MainActivity : BridgeActivity() {
     private var clearHistoryOnFinish = false
     private var started = false
     private var pendingIntent: Intent? = null
+    private val router = LaunchRouter(this)
 
     private var picker: InstallPickerView? = null
     private lateinit var cover: View
@@ -72,7 +80,8 @@ class MainActivity : BridgeActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
-        store = InstallStore(SharedPreferencesStore(this, InstallStore.PREFS_FILE), SharedPreferencesStore(this, InstallStore.DEVICE_FILE))
+        store = BurrowPush.installs(this)
+        pickerReturn = PickerReturn(store)
         tokens = KeystoreTokenStore(SharedPreferencesStore(this, KeystoreTokenStore.PREFS_FILE), AndroidKeyStoreCipher())
         client = AppApiClient(tokens)
         registerPlugin(SuiteNativePlugin::class.java)
@@ -103,17 +112,7 @@ class MainActivity : BridgeActivity() {
         WidgetRefresh.schedule(this)
         val launchIntent = pendingIntent ?: intent
         pendingIntent = null
-        if (launchIntent != null && openFromNotification(launchIntent)) {
-            // A notification tap that cold-started the app: handled.
-        } else if (launchIntent != null && AuthCallback.code(launchIntent.dataString) != null) {
-            // A callback that cold-started the app: the verifier died with
-            // the old process, so the code cannot be used. Start over.
-            presentPicker()
-        } else if (store.hasConfirmedSelection && store.selectedInstall != null) {
-            open(store.selectedInstall!!, null)
-        } else {
-            presentPicker()
-        }
+        router.onLaunch(launchIntent, restored = savedInstanceState != null)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -124,8 +123,11 @@ class MainActivity : BridgeActivity() {
             pendingIntent = intent
             return
         }
-        if (openFromNotification(intent)) return
-        val code = AuthCallback.code(intent.dataString) ?: return
+        router.onNewIntent(intent)
+    }
+
+    /** The login callback's code, for the sign-in this activity started. */
+    override fun completeSignIn(code: String) {
         val session = auth
         auth = null
         authTabShown = false
@@ -158,12 +160,20 @@ class MainActivity : BridgeActivity() {
     override fun onPause() {
         super.onPause()
         if (auth != null) authTabShown = true
+        BurrowPush.unreadChanged = null
     }
 
     override fun onResume() {
         super.onResume()
-        // Foreground: refresh the widget counts.
-        WidgetRefresh.now(this)
+        // Every open re-reads each install's counts ONCE (ResumeRefresh):
+        // the unread badges and the widgets' cache come from the same
+        // answer, so a notification cleared without opening the app cannot
+        // leave a stale badge and no install is asked twice. Not an
+        // intent action: it never goes through LaunchRouter, so a restore
+        // after process death (LaunchRouter.onLaunch(restored = true)) runs
+        // it without replaying a one-shot Open.
+        BurrowPush.unreadChanged = ::installBadgesChanged
+        reconcileUnread()
         // Back from the Custom Tab without a callback: the person closed it.
         if (auth != null && authTabShown) {
             auth = null
@@ -174,7 +184,30 @@ class MainActivity : BridgeActivity() {
 
     override fun onDestroy() {
         io.shutdown()
+        reconcile.shutdown()
         super.onDestroy()
+    }
+
+    // Per-install unread
+
+    private fun reconcileUnread() {
+        if (!started) return
+        val app = applicationContext
+        val selected = store.selectedHost
+        reconcile.execute {
+            val hosts = BurrowPush.signedInHosts(app)
+            val outcome = if (hosts.isEmpty()) null else BurrowPush.resumeRefresh(app).run(hosts, selected)
+            // Re-render only: the counts above are the widgets' refresh.
+            WidgetRefresh.renderNow(app, outcome?.widgetCounts?.fetchedAtMillis)
+            if (outcome != null) main.post { installBadgesChanged() }
+        }
+    }
+
+    /** The counts may have changed: the page's switcher dot re-queries, an open picker redraws. */
+    private fun installBadgesChanged() {
+        if (!started || isDestroyed) return
+        bridge?.triggerWindowJSEvent(SuiteNativePlugin.BADGES_EVENT)
+        picker?.refreshUnread()
     }
 
     // Notifications
@@ -187,7 +220,7 @@ class MainActivity : BridgeActivity() {
      * here, since an intent is input. An install that is no longer on this
      * phone just brings the app forward.
      */
-    private fun openFromNotification(intent: Intent): Boolean {
+    override fun openFromNotification(intent: Intent): Boolean {
         if (intent.action != NotificationPresenter.ACTION_OPEN) return false
         val path = PushPayload.safePath(intent.getStringExtra(NotificationPresenter.EXTRA_PATH))
         val host = intent.getStringExtra(NotificationPresenter.EXTRA_HOST)?.let { InstallStore.normalizeHost(it) }
@@ -196,16 +229,40 @@ class MainActivity : BridgeActivity() {
         }
         // Consumed: a recreated activity must not replay it.
         intent.action = null
+        openInstallAt(host, path)
+        return true
+    }
+
+    /** A conversation shortcut: the same switch-and-load as a notification's Open. */
+    override fun openConversation(
+        host: String?,
+        path: String,
+    ) {
+        openInstallAt(host, PushPayload.safePath(path))
+    }
+
+    /**
+     * Shows [path] on [host]'s install, switching to it first when another
+     * is showing. An install that is no longer on this phone just brings the
+     * app forward.
+     */
+    private fun openInstallAt(
+        host: String?,
+        path: String,
+    ) {
         val install = host?.let { h -> store.installs.firstOrNull { it.host == h } }
         when {
             install == null -> if (currentInstall == null) startWithSelection()
             install.host == currentInstall?.host && picker == null -> bridge.webView.loadUrl("https://${install.host}$path")
-            else -> open(install, "https://${install.host}$path")
+            else -> {
+                val banner = SwitchBanner.shouldShow(currentInstall?.host, install.host)
+                open(install, "https://${install.host}$path")
+                if (banner) SwitchBanner.show(bridge.webView.parent as ViewGroup, getString(R.string.switched_to, install.displayName))
+            }
         }
-        return true
     }
 
-    private fun startWithSelection() {
+    override fun startWithSelection() {
         if (store.hasConfirmedSelection && store.selectedInstall != null) open(store.selectedInstall!!, null) else presentPicker()
     }
 
@@ -234,6 +291,7 @@ class MainActivity : BridgeActivity() {
         }
         currentInstall = install
         signingOutHost = null
+        pickerReturn.clear()
         policy = NavigationPolicy(install.host)
         exposure.expose(install.host)
         store.select(install.host)
@@ -246,7 +304,7 @@ class MainActivity : BridgeActivity() {
         destination: String?,
     ) {
         lastHandoffAt = SystemClock.elapsedRealtime()
-        val launcher = InstallLauncher(client, tokens)
+        val launcher = InstallLauncher(client, tokens, ::removeShortcuts)
         io.execute {
             val step = launcher.start(install, destination)
             main.post {
@@ -296,7 +354,8 @@ class MainActivity : BridgeActivity() {
     private fun signOut(install: Install) {
         signingOutHost = install.host
         cover.visibility = View.VISIBLE
-        val signOut = NativeSignOut(client, tokens, store.appInstallId)
+        val pushKeys = BurrowPush.pushKeys(applicationContext)
+        val signOut = NativeSignOut(client, tokens, store.appInstallId, pushKeys::remove, ::removeShortcuts)
         io.execute {
             signOut.run(install.host)
             // The old account's counts must not show under the next sign-in.
@@ -316,13 +375,23 @@ class MainActivity : BridgeActivity() {
         presentPicker()
     }
 
-    fun presentPicker() {
+    /**
+     * The launcher's "Switch install": the picker, remembering the current
+     * install so back returns to it with its selection intact.
+     */
+    override fun presentSwitchPicker() {
+        pickerReturn.onPresent(switching = true)
+        presentPicker()
+    }
+
+    override fun presentPicker() {
+        pickerReturn.onPresent(switching = false)
         picker?.let {
             it.reload()
             return
         }
         val view =
-            InstallPickerView(this, store) { install ->
+            InstallPickerView(this, store, ::removeShortcuts, { BurrowPush.unread(applicationContext).entries() }) { install ->
                 open(install, null)
             }
         (bridge.webView.parent as ViewGroup).addView(view, ViewGroup.LayoutParams(MATCH, MATCH))
@@ -335,6 +404,7 @@ class MainActivity : BridgeActivity() {
         val view = picker ?: return
         (view.parent as? ViewGroup)?.removeView(view)
         picker = null
+        pickerReturn.clear()
         updateBackState()
     }
 
@@ -417,7 +487,7 @@ class MainActivity : BridgeActivity() {
         val picker = picker
         back.isEnabled =
             if (picker != null) {
-                picker.hasSubScreen || currentInstall != null
+                pickerReturn.decide(picker.hasSubScreen, currentInstall?.host) != PickerBack.SYSTEM
             } else {
                 bridge.webView.canGoBack()
             }
@@ -426,7 +496,16 @@ class MainActivity : BridgeActivity() {
     private fun goBack() {
         val picker = picker
         if (picker != null) {
-            if (!picker.handleBack() && currentInstall != null) dismissPicker()
+            when (pickerReturn.decide(picker.hasSubScreen, currentInstall?.host)) {
+                PickerBack.CLOSE_SUB_SCREEN -> picker.handleBack()
+                PickerBack.DISMISS_TO_CURRENT -> {
+                    // A row tap selected another install; it was not picked.
+                    pickerReturn.restoreSelection()
+                    dismissPicker()
+                }
+                PickerBack.OPEN_RESTORED -> pickerReturn.restoreSelection()?.let { open(it, null) }
+                PickerBack.SYSTEM -> Unit
+            }
         } else if (bridge.webView.canGoBack()) {
             bridge.webView.goBack()
         }
@@ -450,6 +529,11 @@ class MainActivity : BridgeActivity() {
                 }
             WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightStatusBars = !dark
         }
+    }
+
+    /** One install's conversation shortcuts, after its sign-out, revocation or removal. */
+    private fun removeShortcuts(host: String) {
+        ConversationShortcuts.forContext(applicationContext).removeForHost(host)
     }
 
     private fun deviceName(): String = Settings.Global.getString(contentResolver, Settings.Global.DEVICE_NAME) ?: Build.MODEL

@@ -17,8 +17,10 @@ defmodule PlatformWeb.InboxLive do
 
   `mount/3` subscribes to `Platform.Inbox.topic/1` (`inbox:<user_id>`) and
   loads the initial list via `load_items/1`, which is built on
-  `Platform.Inbox.unread_scope/1` — the SAME query the rail badge counts, which
-  is why the two cannot disagree. (It is emphatically not
+  `Platform.Inbox.unread_scope/1`. The rail badge counts
+  `Platform.Inbox.badge_scope/1`, which composes on that same query and adds
+  `is_nil(read_at)`, so every counted row is listed and a listed row is counted
+  only until it is opened. (It is emphatically not
   `Inbox.list_unread_for_user/2`; that function has no production caller at
   all. This sentence used to say otherwise, and a ticket was filed off the
   mistake.) Items are held in three streams — one per section — so a live insert/dismiss patches a
@@ -32,8 +34,10 @@ defmodule PlatformWeb.InboxLive do
     * `handle_event("dismiss", %{"id" => id}, socket)` →
       `Inbox.mark_dismissed/2` + `stream_delete_by_dom_id/3` + drop the count.
     * `handle_event("open", %{"id" => id, "url" => url}, socket)` →
-      `Inbox.mark_read/2` then `push_navigate` to the item's url. The row STAYS
-      on the list — opening is not clearing; see "Read vs. dismissed" below.
+      `Inbox.open_item/2` then `push_navigate` to the item's url. Opening an
+      action row (`Inbox.action_kinds/0`) marks it read and it STAYS listed;
+      opening any other row acknowledges it, which dismisses it. See "Read vs.
+      dismissed" below.
 
   ## Bulk selection (task 01a00108 stage 2)
 
@@ -98,11 +102,30 @@ defmodule PlatformWeb.InboxLive do
   `dismiss_selected` raises the same toast — stage 2 stashed its changed ids for
   exactly this.
 
-  ## Read vs. dismissed (rewritten by task 01a00108 stage 4)
+  ## Read vs. dismissed (task 01a00108 stage 4, then task 01a11703)
 
-  The surface shows every non-dismissed row, read or not. **Opening an item does
-  not clear it.** Dismissal is the only "gone" verb — per-row (the X), by
-  selection ("Clear selected"), or wholesale ("Clear all").
+  The surface shows every non-dismissed row, read or not. Dismissal is the only
+  "gone" verb — per-row (the X), by selection ("Clear selected"), wholesale
+  ("Clear all"), and, since task `01a11703`, by OPENING any row whose kind is
+  not in `Inbox.action_kinds/0`.
+
+  Opening splits by kind:
+
+    * an action row (`task_plan_review`, `review_request_pending`) is marked
+      read. It stays listed, because the thing it asks for is still undone,
+      and it leaves the badge, because the user has seen it. It leaves the list
+      when its own resolution path dismisses it (the plan settles, the reviews
+      resolve, or the reconciler confirms either) or when the user dismisses it.
+    * every other row is acknowledged: `read_at` and `dismissed_at` are written
+      together, so it leaves the list and the badge in one step.
+
+  The badge therefore counts rows nobody has opened (`Inbox.badge_scope/1`),
+  and the list holds what is still outstanding (`Inbox.unread_scope/1`).
+
+  The history below explains why opening stopped being a clear in `01a00108`.
+  `01a11703` restores it for the kinds where opening IS the whole job (a
+  mention, a meeting notice, a sponsor note, a failed hook) and keeps the
+  `01a00108` rule for the kinds that ask for a decision.
 
   This is a reversal, and the reasoning behind the old behaviour is worth
   keeping because it was not silly. It ran: an inbox that keeps showing things
@@ -116,7 +139,7 @@ defmodule PlatformWeb.InboxLive do
   not want to open.
 
   So reading was demoted and bulk dismissal (stages 2 and 3) put in its place.
-  `Inbox.mark_read/2` still records `read_at`; nothing filters on it.
+  `read_at` now feeds the badge (`Inbox.badge_scope/1`).
 
   Migration `20260817120000_backfill_read_as_dismissed_inbox_items.exs` copied
   `read_at` into `dismissed_at` for every pre-existing row when this shipped,
@@ -163,11 +186,30 @@ defmodule PlatformWeb.InboxLive do
      # Both must land BEFORE init_sections/2 — it ends in prune_selection/1,
      # which reads :selected.
      |> assign(:selected, %{})
-     # The act-then-confirm toast: `nil`, or `%{message:, undo_ids:, nonce:}`.
+     # The act-then-confirm toast: `nil`, or `%{message:, undo_ids:, nonce:}`,
+     # plus `variant: :single` for the open-undo toast `open_undo_toast/2`
+     # derives on connected mount.
      # It is the ONLY place the undo ids live — no persistence, no journal table.
      |> assign(:toast, nil)
-     |> init_sections(items)}
+     |> init_sections(items)
+     |> maybe_toast(open_undo_toast(socket, user_id))}
   end
+
+  # Opening a non-action row dismisses it and navigates away, so the undo
+  # cannot ride a socket assign across the navigation. Derive it from the DB on
+  # the next connected mount instead (task `01a11703` stage 3). Accepted wart:
+  # it is derived, so returning to /inbox twice inside the window shows it
+  # twice — no table or ETS owner was added to suppress that.
+  defp open_undo_toast(socket, user_id) when is_binary(user_id) do
+    with true <- connected?(socket),
+         %Item{} = item <- Inbox.last_dismissed_on_open(user_id) do
+      %{message: ~s(Removed "#{item.title}"), undo_ids: [item.id], variant: :single}
+    else
+      _ -> nil
+    end
+  end
+
+  defp open_undo_toast(_socket, _user_id), do: nil
 
   # ── Live inserts ───────────────────────────────────────────────────────
 
@@ -353,7 +395,7 @@ defmodule PlatformWeb.InboxLive do
 
   def handle_event("open", %{"id" => id} = params, socket) do
     user_id = socket.assigns.current_user_id
-    if is_binary(user_id), do: Inbox.mark_read(id, user_id)
+    if is_binary(user_id), do: Inbox.open_item(id, user_id)
 
     case params["url"] do
       url when is_binary(url) and url != "" ->

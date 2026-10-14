@@ -12,6 +12,8 @@ data class ShareSpace(
     val name: String,
     val pathSegment: String?,
     val agents: List<Agent>,
+    /** `dm`, `group`, `channel`, ...; null when the server sent none. */
+    val kind: String? = null,
 ) {
     data class Agent(
         val id: String,
@@ -32,6 +34,21 @@ interface ShareClient {
         spaceId: String,
         form: MultipartForm,
     )
+
+    /**
+     * `GET /api/app/upload_config` (task 01a120be), or null when the server
+     * predates it or the call fails: then only the multipart path exists.
+     */
+    fun uploadConfig(host: String): UploadConfig? = null
+
+    /** `POST /api/app/spaces/<id>/uploads`. Throws [ApiException] (413 when over the limit). */
+    fun reserveUpload(
+        host: String,
+        spaceId: String,
+        file: SharedFile,
+        text: String?,
+        agentId: String?,
+    ): UploadReservation = throw ApiException(ApiException.Kind.BAD_RESPONSE, route = "uploads")
 }
 
 /**
@@ -64,11 +81,40 @@ class AppShareClient(
         if (response.status !in 200..299) throw ApiException(ApiException.Kind.STATUS, response.status, path)
     }
 
+    override fun uploadConfig(host: String): UploadConfig? =
+        try {
+            UploadConfig.parse(api.getJson(host, UploadConfig.PATH))
+        } catch (_: ApiException) {
+            null
+        }
+
+    override fun reserveUpload(
+        host: String,
+        spaceId: String,
+        file: SharedFile,
+        text: String?,
+        agentId: String?,
+    ): UploadReservation {
+        if (!ID.matches(spaceId)) throw ApiException(ApiException.Kind.BAD_RESPONSE, route = "uploads")
+        val body =
+            JSONObject()
+                .put("filename", file.name)
+                .put("content_type", file.mimeType)
+                .put("byte_size", file.size)
+        text?.takeIf { it.isNotEmpty() }?.let { body.put("text", it) }
+        agentId?.takeIf { it.isNotEmpty() }?.let { body.put("agent_id", it) }
+        return UploadReservation.parse(api.postJson(host, UploadReservation.uploadsPath(spaceId), body.toString()))
+    }
+
     companion object {
         const val SPACES_PATH = "/api/app/spaces"
         private val ID = Regex("^[A-Za-z0-9_-]{1,128}$")
 
-        /** `{"spaces": [{id, name, path_segment, agents: [{id, name}]}]}`; a space without an id is skipped. */
+        /**
+         * `{"spaces": [{id, name, path_segment, kind, agents: [{id, name}]}]}`;
+         * a space without an id is skipped, and keys this does not read (01a111bb's
+         * `org`) are ignored.
+         */
         fun parseSpaces(body: String): List<ShareSpace> {
             val list =
                 try {
@@ -84,6 +130,7 @@ class AppShareClient(
                     id = id,
                     name = o.optString("name").ifEmpty { id },
                     pathSegment = o.optString("path_segment").ifEmpty { null },
+                    kind = o.optString("kind").ifEmpty { null },
                     agents =
                         (0 until (agents?.length() ?: 0)).mapNotNull { j ->
                             val a = agents!!.optJSONObject(j) ?: return@mapNotNull null

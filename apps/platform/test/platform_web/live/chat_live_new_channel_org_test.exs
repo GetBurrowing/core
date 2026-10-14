@@ -59,8 +59,8 @@ defmodule PlatformWeb.ChatLiveNewChannelOrgTest do
   describe "the dialog's org destination" do
     test "defaults to the mounting user's active org", %{conn: conn} do
       user = create_user!("default")
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
-      membership!(user, fabrikam)
+      acme = Tenancy.get_org_by_slug!("acme")
+      membership!(user, acme)
 
       conn = init_test_session(conn, current_user_id: user.id)
       view = open_dialog(conn)
@@ -68,10 +68,10 @@ defmodule PlatformWeb.ChatLiveNewChannelOrgTest do
       html = render(view)
       assert html =~ ~s(name="org_id")
 
-      submit(view, %{"name" => "Default Org Chan", "description" => "", "org_id" => fabrikam.id})
+      submit(view, %{"name" => "Default Org Chan", "description" => "", "org_id" => acme.id})
 
       assert [%Space{org_id: org_id}] = rows_for("default-org-chan")
-      assert org_id == fabrikam.id
+      assert org_id == acme.id
     end
 
     test "creating into SXI yields exactly one row, filed to SXI", %{conn: conn} do
@@ -93,9 +93,9 @@ defmodule PlatformWeb.ChatLiveNewChannelOrgTest do
     test "an org the viewer cannot see is refused and falls back to the active org",
          %{conn: conn} do
       user = create_user!("forged")
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+      acme = Tenancy.get_org_by_slug!("acme")
       sxi = Tenancy.get_org_by_slug!("sxi")
-      membership!(user, fabrikam)
+      membership!(user, acme)
 
       conn = init_test_session(conn, current_user_id: user.id)
       view = open_dialog(conn)
@@ -106,7 +106,7 @@ defmodule PlatformWeb.ChatLiveNewChannelOrgTest do
 
       assert [%Space{org_id: org_id}] = rows_for("forged-dest-chan")
       refute org_id == sxi.id
-      assert org_id == fabrikam.id
+      assert org_id == acme.id
     end
   end
 
@@ -116,8 +116,8 @@ defmodule PlatformWeb.ChatLiveNewChannelOrgTest do
   describe "the dialog's creator" do
     test "is seated once, as admin, and navigation adds no second row", %{conn: conn} do
       user = create_user!("creator-admin")
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
-      membership!(user, fabrikam)
+      acme = Tenancy.get_org_by_slug!("acme")
+      membership!(user, acme)
 
       conn = init_test_session(conn, current_user_id: user.id)
       view = open_dialog(conn)

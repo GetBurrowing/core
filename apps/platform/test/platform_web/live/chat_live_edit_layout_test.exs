@@ -47,7 +47,7 @@ defmodule PlatformWeb.ChatLiveEditLayoutTest do
 
   # Create a channel and assign it to a specific org so it resolves under
   # that org's seeded section. `org_slug` is one of the seeded tenant slugs
-  # (fabrikam / paragon / soylent / wayne_tech / sxi).
+  # (acme / paragon / soylent / wayne_tech / sxi).
   defp create_channel(slug, org_slug) do
     {:ok, ch} =
       Chat.create_space(%{name: String.capitalize(slug), slug: slug, kind: "channel"})
@@ -113,7 +113,7 @@ defmodule PlatformWeb.ChatLiveEditLayoutTest do
          %{conn: conn} do
       user = insert_user("toggle")
       conn = authenticated_conn(conn, user)
-      create_channel("general", "fabrikam")
+      create_channel("general", "acme")
       {:ok, view, html} = live_following_redirect(conn)
 
       sidebar = desktop_sidebar(html)
@@ -171,16 +171,16 @@ defmodule PlatformWeb.ChatLiveEditLayoutTest do
          %{conn: conn} do
       user = insert_user("move")
       conn = authenticated_conn(conn, user)
-      # One channel defaulting to the Fabrikam section; we try to move it to SXI.
-      channel = create_channel("roamer", "fabrikam")
-      fabrikam_section = section_id_for_org("fabrikam")
+      # One channel defaulting to the Acme section; we try to move it to SXI.
+      channel = create_channel("roamer", "acme")
+      acme_section = section_id_for_org("acme")
       sxi_section = section_id_for_org("sxi")
 
       {:ok, view, html} = live_following_redirect(conn)
       sidebar = desktop_sidebar(html)
 
-      # Precondition: the channel renders inside the Fabrikam section, not SXI.
-      assert section_fragment(sidebar, fabrikam_section) =~ ~s(data-channel-id="#{channel.id}")
+      # Precondition: the channel renders inside the Acme section, not SXI.
+      assert section_fragment(sidebar, acme_section) =~ ~s(data-channel-id="#{channel.id}")
       refute section_fragment(sidebar, sxi_section) =~ ~s(data-channel-id="#{channel.id}")
 
       # The drag hook no longer offers this drop; a forged event still can.
@@ -192,8 +192,8 @@ defmodule PlatformWeb.ChatLiveEditLayoutTest do
         })
 
       sidebar_after = desktop_sidebar(html_after)
-      # Still under Fabrikam, still absent from SXI.
-      assert section_fragment(sidebar_after, fabrikam_section) =~ ~s(data-channel-id="#{channel.id}")
+      # Still under Acme, still absent from SXI.
+      assert section_fragment(sidebar_after, acme_section) =~ ~s(data-channel-id="#{channel.id}")
       refute section_fragment(sidebar_after, sxi_section) =~ ~s(data-channel-id="#{channel.id}")
 
       # A refused move writes NOTHING — not a placement under SXI, and not an
@@ -207,9 +207,9 @@ defmodule PlatformWeb.ChatLiveEditLayoutTest do
     test "a within-section reorder still persists", %{conn: conn} do
       user = insert_user("reorder")
       conn = authenticated_conn(conn, user)
-      first = create_channel("alpha", "fabrikam")
-      second = create_channel("bravo", "fabrikam")
-      fabrikam_section = section_id_for_org("fabrikam")
+      first = create_channel("alpha", "acme")
+      second = create_channel("bravo", "acme")
+      acme_section = section_id_for_org("acme")
 
       {:ok, view, _html} = live_following_redirect(conn)
 
@@ -217,25 +217,25 @@ defmodule PlatformWeb.ChatLiveEditLayoutTest do
       # neighbour: same section, both of that section's ids, new order.
       render_hook(view, "channel_moved", %{
         "channel_id" => second.id,
-        "target_section_id" => fabrikam_section,
+        "target_section_id" => acme_section,
         "ordered_ids" => [second.id, first.id]
       })
 
       cco = Accounts.get_user_preferences(user.id)["chat_channel_order"]
-      assert cco[fabrikam_section] == [second.id, first.id]
+      assert cco[acme_section] == [second.id, first.id]
     end
 
     test "a foreign channel smuggled into ordered_ids is not filed into the section",
          %{conn: conn} do
       user = insert_user("smuggle")
       conn = authenticated_conn(conn, user)
-      # `channel_id` names a channel that legitimately lives in Fabrikam, so a
+      # `channel_id` names a channel that legitimately lives in Acme, so a
       # guard reading only that half of the payload would let this through —
       # and `Sidebar.put_channel_order/3` writes `ordered_ids` verbatim, so
-      # the smuggled id would be filed under Fabrikam and stripped from SXI.
-      resident = create_channel("resident", "fabrikam")
+      # the smuggled id would be filed under Acme and stripped from SXI.
+      resident = create_channel("resident", "acme")
       outsider = create_channel("outsider", "sxi")
-      fabrikam_section = section_id_for_org("fabrikam")
+      acme_section = section_id_for_org("acme")
       sxi_section = section_id_for_org("sxi")
 
       {:ok, view, _html} = live_following_redirect(conn)
@@ -243,37 +243,37 @@ defmodule PlatformWeb.ChatLiveEditLayoutTest do
       html_after =
         render_hook(view, "channel_moved", %{
           "channel_id" => resident.id,
-          "target_section_id" => fabrikam_section,
+          "target_section_id" => acme_section,
           "ordered_ids" => [outsider.id, resident.id]
         })
 
       sidebar_after = desktop_sidebar(html_after)
       assert section_fragment(sidebar_after, sxi_section) =~ ~s(data-channel-id="#{outsider.id}")
-      refute section_fragment(sidebar_after, fabrikam_section) =~ ~s(data-channel-id="#{outsider.id}")
+      refute section_fragment(sidebar_after, acme_section) =~ ~s(data-channel-id="#{outsider.id}")
 
       cco = Accounts.get_user_preferences(user.id)["chat_channel_order"] || %{}
-      refute outsider.id in Map.get(cco, fabrikam_section, [])
+      refute outsider.id in Map.get(cco, acme_section, [])
     end
 
     test "move_channel (keyboard) reorders two channels within a section", %{conn: conn} do
       user = insert_user("kbd")
       conn = authenticated_conn(conn, user)
-      first = create_channel("alpha", "fabrikam")
-      second = create_channel("bravo", "fabrikam")
-      fabrikam_section = section_id_for_org("fabrikam")
+      first = create_channel("alpha", "acme")
+      second = create_channel("bravo", "acme")
+      acme_section = section_id_for_org("acme")
 
       {:ok, view, _html} = live_following_redirect(conn)
 
       # Move the second channel up one slot via the keyboard control.
       render_hook(view, "move_channel", %{
         "channel_id" => second.id,
-        "section_id" => fabrikam_section,
+        "section_id" => acme_section,
         "direction" => "up"
       })
 
       cco = Accounts.get_user_preferences(user.id)["chat_channel_order"]
-      # Both channels now ordered under the Fabrikam section, second ahead of first.
-      assert cco[fabrikam_section] == [second.id, first.id]
+      # Both channels now ordered under the Acme section, second ahead of first.
+      assert cco[acme_section] == [second.id, first.id]
     end
   end
 
@@ -283,7 +283,7 @@ defmodule PlatformWeb.ChatLiveEditLayoutTest do
     test "hiding a section drops it; reset brings it back", %{conn: conn} do
       user = insert_user("hide")
       conn = authenticated_conn(conn, user)
-      create_channel("general", "fabrikam")
+      create_channel("general", "acme")
       sxi_section = section_id_for_org("sxi")
 
       {:ok, view, html} = live_following_redirect(conn)
@@ -321,8 +321,8 @@ defmodule PlatformWeb.ChatLiveEditLayoutTest do
          %{conn: conn} do
       user = insert_user("reset")
       conn = authenticated_conn(conn, user)
-      channel = create_channel("mover", "fabrikam")
-      fabrikam_section = section_id_for_org("fabrikam")
+      channel = create_channel("mover", "acme")
+      acme_section = section_id_for_org("acme")
 
       {:ok, view, _html} = live_following_redirect(conn)
 
@@ -331,7 +331,7 @@ defmodule PlatformWeb.ChatLiveEditLayoutTest do
       # cross-section payload is refused and would leave nothing to reset.
       render_hook(view, "channel_moved", %{
         "channel_id" => channel.id,
-        "target_section_id" => fabrikam_section,
+        "target_section_id" => acme_section,
         "ordered_ids" => [channel.id]
       })
 
@@ -371,20 +371,20 @@ defmodule PlatformWeb.ChatLiveEditLayoutTest do
       user = insert_user("scoped")
       other = insert_user("victim")
       conn = authenticated_conn(conn, user)
-      channel = create_channel("scoped-ch", "fabrikam")
-      fabrikam_section = section_id_for_org("fabrikam")
+      channel = create_channel("scoped-ch", "acme")
+      acme_section = section_id_for_org("acme")
 
       {:ok, view, _html} = live_following_redirect(conn)
 
       render_hook(view, "channel_moved", %{
         "channel_id" => channel.id,
-        "target_section_id" => fabrikam_section,
+        "target_section_id" => acme_section,
         "ordered_ids" => [channel.id]
       })
 
       # The acting user's prefs changed; the other user's are untouched —
       # there is no client-supplied user id, so a payload can't cross users.
-      assert Accounts.get_user_preferences(user.id)["chat_channel_order"][fabrikam_section] ==
+      assert Accounts.get_user_preferences(user.id)["chat_channel_order"][acme_section] ==
                [channel.id]
 
       assert Accounts.get_user_preferences(other.id) == %{}

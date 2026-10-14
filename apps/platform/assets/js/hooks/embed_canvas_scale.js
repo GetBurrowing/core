@@ -20,6 +20,17 @@
  *
  * `phx-update="ignore"` on the wrapper means LiveView won't re-render
  * us out from under the inline styles the hook applies.
+ *
+ * SCRIPTED MODE (task 01a1316b-677a): a `scripts: true` embed's wrapper
+ * carries `data-scripted-src="/proto/<id>/<version>/"` and no
+ * `data-srcdoc`; its iframe is `<iframe src=... sandbox="allow-scripts">`
+ * served under the sealed prototype CSP. In that mode this hook NEVER reads
+ * or writes `srcdoc`: `srcdoc` wins over `src`, so writing script-bearing
+ * HTML into it would run the script under the Suite page's CSP instead of
+ * the sealed one. `updated()` moves `iframe.src` when the version changes,
+ * and the expand overlay frames the same `src` with the same sandbox. The
+ * mode is fixed at mount (the server gives each mode its own wrapper id, so
+ * toggling `scripts` replaces the element rather than updating it).
  */
 export default {
   mounted() {
@@ -41,13 +52,16 @@ export default {
     this.openExpand = this.openExpand.bind(this)
     this.closeExpand = this.closeExpand.bind(this)
 
+    this.scripted = this.el.dataset.scriptedSrc !== undefined
+    this._appliedScriptedSrc = this.el.dataset.scriptedSrc || ""
+
     this.applyScale()
 
     // Track the srcdoc we've actually written to the iframe so updated()
     // can detect real changes vs. no-op re-renders. The wrapper's initial
     // server render already populated the iframe's srcdoc attribute, so
     // seed from the dataset (kept in sync with the iframe by the server).
-    this._appliedSrcdoc = this.el.dataset.srcdoc || ""
+    this._appliedSrcdoc = this.scripted ? "" : this.el.dataset.srcdoc || ""
 
     if (typeof ResizeObserver !== "undefined") {
       this.observer = new ResizeObserver(this.applyScale)
@@ -91,10 +105,20 @@ export default {
         ? parseFloat(rawMinScale)
         : null
 
-    const nextSrcdoc = this.el.dataset.srcdoc || ""
-    if (nextSrcdoc !== this._appliedSrcdoc) {
-      this.iframe.srcdoc = nextSrcdoc
-      this._appliedSrcdoc = nextSrcdoc
+    if (this.scripted) {
+      // A new version is a new URL; phx-update="ignore" would otherwise
+      // freeze the frame at the version it mounted with.
+      const nextSrc = this.el.dataset.scriptedSrc || ""
+      if (nextSrc && nextSrc !== this._appliedScriptedSrc) {
+        this.iframe.src = nextSrc
+        this._appliedScriptedSrc = nextSrc
+      }
+    } else {
+      const nextSrcdoc = this.el.dataset.srcdoc || ""
+      if (nextSrcdoc !== this._appliedSrcdoc) {
+        this.iframe.srcdoc = nextSrcdoc
+        this._appliedSrcdoc = nextSrcdoc
+      }
     }
 
     this.applyScale()
@@ -216,8 +240,16 @@ export default {
     })
 
     const iframe = document.createElement("iframe")
-    iframe.setAttribute("sandbox", "")
-    iframe.srcdoc = this.injectViewportMeta(this.el.dataset.srcdoc || "")
+    if (this.scripted) {
+      // Same seal as the inline frame; no viewport injection, because the
+      // bytes are served by /proto and never pass through this hook.
+      iframe.setAttribute("sandbox", "allow-scripts")
+      iframe.setAttribute("referrerpolicy", "no-referrer")
+      iframe.src = this._appliedScriptedSrc
+    } else {
+      iframe.setAttribute("sandbox", "")
+      iframe.srcdoc = this.injectViewportMeta(this.el.dataset.srcdoc || "")
+    }
     Object.assign(iframe.style, {
       width: this.declaredWidth + "px",
       height: this.declaredHeight + "px",

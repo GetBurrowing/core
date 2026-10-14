@@ -50,7 +50,7 @@ defmodule Platform.PushExternalPreviewTest do
     user = insert_user("Xavier External")
 
     {:ok, _} =
-      Tenancy.mark_membership_external(%{user_id: user.id, org_id: TenancyFixtures.fabrikam_org_id()})
+      Tenancy.mark_membership_external(%{user_id: user.id, org_id: TenancyFixtures.acme_org_id()})
 
     add_user_participant(create_space().id, user)
   end
@@ -63,7 +63,7 @@ defmodule Platform.PushExternalPreviewTest do
       %Platform.Tenancy.OrgMembership{}
       |> Platform.Tenancy.OrgMembership.changeset(%{
         user_id: user.id,
-        org_id: TenancyFixtures.fabrikam_org_id(),
+        org_id: TenancyFixtures.acme_org_id(),
         role: "member"
       })
       |> Repo.insert()

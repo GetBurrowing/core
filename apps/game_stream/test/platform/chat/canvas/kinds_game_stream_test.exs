@@ -8,7 +8,7 @@ defmodule Platform.Chat.Canvas.KindsGameStreamTest do
 
   ## The literal-list GUARD
 
-  With the flag unset, `Kinds.names()` must equal main's sixteen names,
+  With the flag unset, `Kinds.names()` must equal the base's seventeen names,
   typed out below — not derived from `@modules`, `Kinds.all/0` or anything
   else in the application, because a derived list would move with the
   defect it is meant to catch. The guard is shown to fire: the same
@@ -27,9 +27,11 @@ defmodule Platform.Chat.Canvas.KindsGameStreamTest do
   alias Platform.Chat.Canvas.Renderer
   alias Platform.Chat.CanvasDocument
 
-  # main's registry at 23ff27a0, in `@modules` order. Typed, not derived.
+  # The registry in `@modules` order. Typed, not derived. main's sixteen at
+  # 23ff27a0, plus `prototype` (registered last by 01a1316b stage 2,
+  # 32f23bcf4; re-pinned by 01a1316b-aab0 stage 3).
   @main_kind_names ~w(stack row card text markdown heading badge image code mermaid embed
-                      form action_row checklist checklist_item table)
+                      form action_row checklist checklist_item table prototype)
 
   @sha "0123456789abcdef0123456789abcdef01234567"
 
@@ -62,8 +64,8 @@ defmodule Platform.Chat.Canvas.KindsGameStreamTest do
   defp gs_node(props \\ %{}), do: %{"id" => "gs", "type" => "game_stream", "props" => props}
 
   describe "GUARD: with GAME_STREAM_ENABLED unset the registry is main's" do
-    test "Kinds.names() is exactly main's 16 names, in order" do
-      assert length(@main_kind_names) == 16
+    test "Kinds.names() is exactly the base's 17 names, in order" do
+      assert length(@main_kind_names) == 17
       assert Kinds.names() == @main_kind_names
     end
 

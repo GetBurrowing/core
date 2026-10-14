@@ -37,10 +37,10 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
     {init_test_session(conn, current_user_id: user.id), user}
   end
 
-  defp fabrikam_org, do: Tenancy.get_org_by_slug!("fabrikam")
+  defp acme_org, do: Tenancy.get_org_by_slug!("acme")
 
-  defp fabrikam_section do
-    Enum.find(Sidebar.list_active_default_sections(), &(&1.org_id == fabrikam_org().id))
+  defp acme_section do
+    Enum.find(Sidebar.list_active_default_sections(), &(&1.org_id == acme_org().id))
   end
 
   # A pinned TASK, which is what fills the second pinned block. Different
@@ -66,7 +66,7 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
     {:ok, ch} =
       Chat.create_space(
         Map.merge(
-          %{name: String.capitalize(slug), slug: slug, kind: "channel", org_id: fabrikam_org().id},
+          %{name: String.capitalize(slug), slug: slug, kind: "channel", org_id: acme_org().id},
           attrs
         )
       )
@@ -147,7 +147,7 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
   defp dm_section(sidebar), do: section_by(sidebar, ~s(data-section-key="dms"))
 
   defp client_section(sidebar) do
-    section_by(sidebar, ~s(data-section-id="#{fabrikam_section().id}"))
+    section_by(sidebar, ~s(data-section-id="#{acme_section().id}"))
   end
 
   # ── Mobile surfaces ─────────────────────────────────────────────────────
@@ -595,7 +595,7 @@ defmodule PlatformWeb.ChatLivePinnedBlockTest do
       block = rail(conn) |> pinned_block()
       refute block =~ "channel-section-color-dot"
 
-      for token <- ["paragon", "soylent", "fabrikam", "wayne-tech", "sxi"] do
+      for token <- ["paragon", "soylent", "acme", "wayne-tech", "sxi"] do
         refute block =~ "bg-#{token}-dot",
                "client colour token #{token} leaked into the Pinned block"
       end

@@ -172,7 +172,8 @@ defmodule Platform.Push.APNsTest do
       assert req.body == Notification.to_apns_payload(n)
       assert req.body["aps"]["alert"] == %{"title" => n.title, "body" => n.body}
       assert req.body["aps"]["category"] == "SUITE_OPEN"
-      assert req.body["aps"]["thread-id"] == "approvals"
+      # Task 01a1261e: the APNs thread id carries the install host.
+      assert req.body["aps"]["thread-id"] == "#{n.install_host}:approvals"
 
       # A well-formed ES256 provider token, signed for this team and key.
       jwt = jwt_from(req)
@@ -556,7 +557,11 @@ defmodule Platform.Push.APNsTest do
       log = capture_log(fn -> assert :ok = Push.send_to_user(user.id, n) end)
 
       assert_received {:apns_request, req}
-      assert req.body == Notification.to_apns_payload(n)
+      # Task 01a1261e: Platform.Push stamps the recipient's unread count (and
+      # its time) onto the native copy; everything else is the same struct.
+      assert req.body["unread_count"] == 0
+      assert is_binary(req.body["unread_as_of"])
+      assert Map.drop(req.body, ~w(unread_count unread_as_of)) == Notification.to_apns_payload(n)
       refute_secrets(log, [jwt_from(req)])
     end
 
@@ -583,7 +588,7 @@ defmodule Platform.Push.APNsTest do
       {:ok, _} =
         Tenancy.mark_membership_external(%{
           user_id: user.id,
-          org_id: TenancyFixtures.fabrikam_org_id()
+          org_id: TenancyFixtures.acme_org_id()
         })
 
       insert_device(user)
@@ -602,7 +607,9 @@ defmodule Platform.Push.APNsTest do
       assert req.body["url"] == "/chat"
       refute Map.has_key?(req.body, "task_id")
       refute req.body |> Jason.encode!() =~ "Suite iOS app v1"
-      assert req.body == Notification.to_apns_payload(Push.preview_for_user(user.id, n))
+
+      assert Map.drop(req.body, ~w(unread_count unread_as_of)) ==
+               Notification.to_apns_payload(Push.preview_for_user(user.id, n))
     end
 
     test "an archived user gets no APNs push" do

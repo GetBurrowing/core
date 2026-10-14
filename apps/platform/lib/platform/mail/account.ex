@@ -17,8 +17,8 @@ defmodule Platform.Mail.Account do
   A port whose protocol is fixed refuses the mismatched mode, with the error
   on the tls field: SMTP 465 is implicit TLS (not `"starttls"`) and 587 is
   STARTTLS (not `"tls"`); IMAP 993 is implicit TLS (only `"tls"`) and 143 is
-  never `"tls"`. Every other port is unconstrained. Measured cause (fabrikam,
-  2026-09-24): smtp.gmail.com:465 with `"starttls"` failed every delivery
+  never `"tls"`. Every other port is unconstrained. Measured cause (a production
+  install, 2026-09-24): smtp.gmail.com:465 with `"starttls"` failed every delivery
   with `{:network_failure, ..., {:error, :closed}}`. The check reads the
   merged fields, so an existing row with a bad pairing fails on its next edit.
   """

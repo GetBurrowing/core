@@ -407,7 +407,7 @@ defmodule Platform.Chat do
 
   Deliberately narrower than `get_space_by_slug(slug, [])`: that back-compat
   branch returns the OLDEST row of any org, so an SXI channel would answer a
-  Fabrikam member's lookup and ADR-0042's per-org slug scoping would be weakened.
+  root-org member's lookup and ADR-0042's per-org slug scoping would be weakened.
   This one matches `org_id IS NULL` explicitly and can therefore never hand
   back another tenant's channel.
 
@@ -710,7 +710,7 @@ defmodule Platform.Chat do
   end
 
   @doc """
-  User-initiated archive. Allowed for Fabrikam admins and the space's creator
+  User-initiated archive. Allowed for root-org admins and the space's creator
   (`created_by`); returns `{:error, :unauthorized}` for anyone else. The
   check lives here in the context layer — LiveView assigns are UI affordance
   only, never the gate.
@@ -751,7 +751,7 @@ defmodule Platform.Chat do
 
   @doc """
   Reverse an archive by clearing `archived_at`. Same authorization as
-  `archive_space/2`: Fabrikam admin or space creator.
+  `archive_space/2`: root-org admin or space creator.
   """
   @spec unarchive_space(map(), Space.t()) ::
           {:ok, Space.t()} | {:error, :unauthorized | Ecto.Changeset.t()}
@@ -769,7 +769,7 @@ defmodule Platform.Chat do
   end
 
   defp with_space_lifecycle_authz(actor, %Space{} = space, fun) do
-    if Platform.Tenancy.fabrikam_admin?(actor) or space_creator?(actor, space) do
+    if Platform.Tenancy.root_admin?(actor) or space_creator?(actor, space) do
       fun.()
     else
       {:error, :unauthorized}
@@ -785,7 +785,7 @@ defmodule Platform.Chat do
   @doc """
   Flag a channel for permanent deletion (task 019e95ea stage 3).
 
-  Fabrikam-admin only — deletion is destructive, so unlike `archive_space/2`
+  Root-admin only — deletion is destructive, so unlike `archive_space/2`
   the space's creator does NOT qualify. Only `kind: "channel"` spaces are
   deletable: execution spaces are task audit logs (deleting them corrupts
   task history), and dm/group conversations are out of scope — all return
@@ -801,7 +801,7 @@ defmodule Platform.Chat do
           {:ok, Space.t()} | {:error, :unauthorized | :not_deletable | Ecto.Changeset.t()}
   def schedule_space_deletion(actor, %Space{} = space) do
     cond do
-      not Platform.Tenancy.fabrikam_admin?(actor) ->
+      not Platform.Tenancy.root_admin?(actor) ->
         {:error, :unauthorized}
 
       space.kind != "channel" ->
@@ -826,7 +826,7 @@ defmodule Platform.Chat do
   end
 
   @doc """
-  Cancel a scheduled deletion (Fabrikam-admin only, task 019e95ea stage 3).
+  Cancel a scheduled deletion (root-admin only, task 019e95ea stage 3).
 
   Clears `deletion_scheduled_at` but leaves `archived_at` — the channel
   returns to the plain archived state; `unarchive_space/2` is the separate
@@ -837,7 +837,7 @@ defmodule Platform.Chat do
           {:ok, Space.t()} | {:error, :unauthorized | :not_scheduled | Ecto.Changeset.t()}
   def cancel_space_deletion(actor, %Space{} = space) do
     cond do
-      not Platform.Tenancy.fabrikam_admin?(actor) ->
+      not Platform.Tenancy.root_admin?(actor) ->
         {:error, :unauthorized}
 
       is_nil(space.deletion_scheduled_at) ->
@@ -2104,6 +2104,194 @@ defmodule Platform.Chat do
     end
   end
 
+  # ── Large-file user uploads (task 01a120be stage 2) ─────────────────────
+
+  @doc """
+  Reserve a chunked large-file upload for a user's message. The ONE entry
+  point the app API (`POST /api/app/spaces/:space_id/uploads`) and the web
+  composer share, so web and native cannot drift.
+
+  `poster` is an already-authorized sender: `%{space_id, participant_id,
+  user_id, thread_id, content}` (the caller checked membership, as
+  `post_message_with_attachments/3`'s callers do). `file` is `%{filename,
+  content_type, byte_size}`.
+
+  Refuses `byte_size` over `Platform.Chat.UploadLimits.max_bytes/0` with
+  `{:error, :too_large}` and runs the same space-writable, DM and external
+  scope guards a post would, all before any byte moves. On success inserts a
+  pending `chat_attachments` row owned by `uploaded_by_user_id` that carries
+  the message to post in `metadata["pending_message"]`, presigns it, and
+  returns `%{id, upload_url, chunk_bytes, offset: 0, expires_at,
+  max_upload_bytes}`. The upload's last PATCH posts the message server-side
+  (`Platform.Chat.Attachments.ToolHandlers.finalize_pending/2`), so a client
+  whose process is gone by then (iOS background URLSession, Android
+  WorkManager) loses nothing.
+  """
+  @spec reserve_user_upload(map(), map()) ::
+          {:ok, map()}
+          | {:error,
+             :too_large
+             | :invalid_file
+             | :space_archived
+             | :dm_not_allowed
+             | :out_of_external_scope
+             | term()}
+  def reserve_user_upload(poster, file) do
+    %{space_id: space_id, participant_id: participant_id, user_id: user_id} = poster
+    byte_size = file[:byte_size]
+    filename = file[:filename]
+
+    with :ok <- valid_reservation_file(filename, byte_size),
+         :ok <- Platform.Chat.UploadLimits.check_size(byte_size),
+         :ok <- ensure_space_writable(space_id),
+         :ok <- ensure_dm_send_allowed(space_id, participant_id),
+         :ok <- ensure_external_upload_allowed(space_id, user_id) do
+      do_reserve_user_upload(poster, filename, file[:content_type], byte_size)
+    end
+  end
+
+  @doc """
+  `reserve_user_upload/2` for a caller that holds only a space id, which may
+  have come from the client (the web composer's re-reservation after an
+  expiry carries the space the upload began in, not the session's).
+
+  Composes `SpaceAccess.authorize_writer/2` first and derives the poster from
+  the participant row it returns, so a forged space id is `{:error,
+  :forbidden}` and no row is written. `attrs` is `%{space_id, content,
+  thread_id, participant_id}`; when `participant_id` is given it must be the
+  actor's own row in that space, otherwise `{:error, :forbidden}`. `file` is
+  as for `reserve_user_upload/2`.
+  """
+  @spec reserve_space_upload(SpaceAccess.actor(), map(), map()) ::
+          {:ok, map()} | {:error, :forbidden | term()}
+  def reserve_space_upload(actor, attrs, file) do
+    with {:ok, participant} <- SpaceAccess.authorize_writer(attrs[:space_id], actor),
+         :ok <- same_participant(participant, attrs[:participant_id]) do
+      reserve_user_upload(
+        %{
+          space_id: participant.space_id,
+          participant_id: participant.id,
+          user_id: participant.participant_id,
+          thread_id: attrs[:thread_id],
+          content: attrs[:content] || ""
+        },
+        file
+      )
+    end
+  end
+
+  defp same_participant(_participant, nil), do: :ok
+  defp same_participant(%Participant{id: id}, id), do: :ok
+  defp same_participant(_participant, _other), do: {:error, :forbidden}
+
+  defp valid_reservation_file(filename, byte_size)
+       when is_binary(filename) and filename != "" and is_integer(byte_size) and byte_size > 0,
+       do: :ok
+
+  defp valid_reservation_file(_filename, _byte_size), do: {:error, :invalid_file}
+
+  defp do_reserve_user_upload(poster, filename, client_type, byte_size) do
+    %{storage_key: key, content_type: content_type} =
+      Platform.Chat.AttachmentStorage.reservation(filename, client_type)
+
+    ttl_s = Application.get_env(:platform, :pending_ttl_seconds, 15 * 60)
+
+    adapter =
+      Application.get_env(
+        :platform,
+        :attachment_storage_adapter,
+        Platform.Chat.AttachmentStorage.Adapter.LocalDisk
+      )
+
+    pending_message = %{
+      "space_id" => poster.space_id,
+      "participant_id" => poster.participant_id,
+      "user_id" => poster.user_id,
+      "thread_id" => Map.get(poster, :thread_id),
+      "content" => Map.get(poster, :content) || ""
+    }
+
+    with {:ok, attachment} <-
+           create_attachment(%{
+             space_id: poster.space_id,
+             uploaded_by_user_id: poster.user_id,
+             filename: filename,
+             content_type: content_type,
+             byte_size: byte_size,
+             storage_key: key,
+             state: "pending",
+             upload_expires_at: DateTime.utc_now() |> DateTime.add(ttl_s, :second),
+             metadata: %{"pending_message" => pending_message}
+           }) do
+      case adapter.presign_upload(key, Platform.Chat.UploadLimits.max_bytes(), ttl_s) do
+        {:ok, %{url: url, expires_at: expires_at}} ->
+          {:ok,
+           %{
+             id: attachment.id,
+             upload_url: url,
+             chunk_bytes: Platform.Chat.UploadLimits.chunk_bytes(),
+             offset: 0,
+             expires_at: expires_at,
+             max_upload_bytes: Platform.Chat.UploadLimits.max_bytes()
+           }}
+
+        {:error, reason} ->
+          Repo.delete(attachment)
+          {:error, {:presign_failed, reason}}
+      end
+    end
+  end
+
+  @doc """
+  Sibling of `post_message_with_attachments/3` for a `chat_attachments` row
+  that already exists and is `ready` (the finished chunked upload): posts the
+  message and LINKS the row to it instead of inserting one. Same guards, same
+  broadcast and notification path. The link is conditional on the row having
+  no message yet, so a row can never end up attached to two messages.
+  """
+  @spec post_message_with_existing_attachment(map(), Attachment.t(), keyword()) ::
+          {:ok, Message.t(), [Attachment.t()]}
+          | {:error, :space_archived | :dm_not_allowed | :out_of_external_scope | term()}
+  def post_message_with_existing_attachment(attrs, %Attachment{} = attachment, opts \\ []) do
+    space_id = attrs[:space_id]
+    participant_id = attrs[:participant_id]
+    poster_user_id = Keyword.get(opts, :poster_user_id)
+
+    with :ok <- ensure_space_writable(space_id),
+         :ok <- ensure_dm_send_allowed(space_id, participant_id),
+         :ok <- ensure_external_upload_allowed(space_id, poster_user_id) do
+      attrs = put_author_snapshot(attrs, :participant_id, :author)
+
+      Multi.new()
+      |> Multi.insert(:message, Message.changeset(%Message{}, attrs))
+      |> Multi.run(:v1_version, fn _repo, %{message: message} ->
+        {:ok, MessageVersions.record_v1!(message)}
+      end)
+      |> Multi.run(:attachment, fn repo, %{message: message} ->
+        from(a in Attachment,
+          where: a.id == ^attachment.id and is_nil(a.message_id) and a.state == "ready",
+          select: a
+        )
+        |> repo.update_all(set: [message_id: message.id])
+        |> case do
+          {1, [linked]} -> {:ok, linked}
+          _ -> {:error, :attachment_not_linkable}
+        end
+      end)
+      |> Repo.transaction()
+      |> case do
+        {:ok, %{message: message, attachment: linked}} ->
+          message |> reinvite_and_pin_mentioned() |> notify_refused_summons(message, opts)
+          emit_inbox_for_mentions(message)
+          publish_message_posted(message, opts)
+          {:ok, message, [linked]}
+
+        {:error, _operation, reason, _changes_so_far} ->
+          {:error, reason}
+      end
+    end
+  end
+
   @doc """
   Fetch a message by primary key. Returns `nil` if not found.
 
@@ -2622,7 +2810,7 @@ defmodule Platform.Chat do
   # The Historian's activity digest partitions message/transcript selection
   # by the M1 `external` marker in BOTH directions:
   #   * `:internal` (default) — exclude external-user spaces/DMs from the
-  #     Fabrikam-internal digest.
+  #     internal digest.
   #   * `{:external_spaces, ids}` — restrict to the external user's
   #     allowlisted spaces for an external-user-facing summary.
   # `external_space_ids/0` and `participant_space_ids_for_user/1` supply the
@@ -2643,10 +2831,10 @@ defmodule Platform.Chat do
   spaces where at least one external user (a user holding an
   `org_memberships.external == true` membership, per M1) participates.
 
-  A MIXED space (both a Fabrikam human and an external user as participants)
+  A MIXED space (both an internal human and an external user as participants)
   classifies as external here: its content is already visible to an
   external party, so it belongs to the external surface and is excluded
-  from the pure Fabrikam-internal Historian digest.
+  from the pure internal Historian digest.
 
   Returns `[]` when there are no external memberships (fast path — the
   internal digest's `NOT IN ^[]` filter is then a no-op, leaving all-internal
@@ -2680,7 +2868,7 @@ defmodule Platform.Chat do
   This is the allowlisted-space set that scopes an external-user-facing
   summary: an external user is only ever a participant of their allowlisted
   spaces, so scoping a digest to this set intrinsically excludes
-  Fabrikam-internal content.
+  internal content.
   """
   @spec participant_space_ids_for_user(binary()) :: [binary()]
   def participant_space_ids_for_user(user_id) when is_binary(user_id) do
@@ -3915,7 +4103,10 @@ defmodule Platform.Chat do
 
     multi =
       Multi.new()
-      |> Multi.insert(:canvas, Canvas.changeset(%Canvas{}, attrs))
+      |> Multi.insert(:inserted_canvas, Canvas.changeset(%Canvas{}, attrs))
+      |> Multi.run(:canvas, fn repo, %{inserted_canvas: canvas} ->
+        stamp_scripted_embeds(repo, canvas, CanvasVersions.attribution_from_canvas(canvas))
+      end)
       |> CanvasSearchIndex.upsert_multi(:canvas_search, & &1.canvas)
       |> Multi.merge(fn %{canvas: canvas} ->
         version_revision = canvas_version_revision(canvas)
@@ -3936,11 +4127,32 @@ defmodule Platform.Chat do
         publish_canvas_created(canvas)
         {:ok, canvas}
 
-      {:error, :canvas, %Ecto.Changeset{} = changeset, _} ->
+      {:error, step, %Ecto.Changeset{} = changeset, _} when step in [:inserted_canvas, :canvas] ->
         {:error, changeset}
 
       {:error, _step, reason, _} ->
         {:error, reason}
+    end
+  end
+
+  # Task 01a1316b-677a: stamp every embed's `prototype_ref`
+  # (`Platform.Chat.Canvas.ScriptedEmbeds`) AFTER the insert, because a
+  # canvas-owned prototype references the canvas row, and inside the same
+  # transaction, so a refused stamp (`prototypes_disabled`, ...) creates no
+  # canvas. A document with no scripted embed and no stray ref is untouched
+  # and costs no query.
+  defp stamp_scripted_embeds(repo, %Canvas{} = canvas, attribution) do
+    ctx = %{canvas_id: canvas.id, space_id: canvas.space_id, actor: attribution}
+
+    case Platform.Chat.Canvas.ScriptedEmbeds.stamp(canvas.document, ctx) do
+      {:ok, document, _verified} when document == canvas.document ->
+        {:ok, canvas}
+
+      {:ok, document, _verified} ->
+        canvas |> Canvas.changeset(%{"document" => document}) |> repo.update()
+
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -3964,7 +4176,7 @@ defmodule Platform.Chat do
 
     multi =
       Multi.new()
-      |> Multi.run(:canvas, fn repo, _changes ->
+      |> Multi.run(:inserted_canvas, fn repo, _changes ->
         attrs
         |> Map.put("space_id", space_id)
         |> Map.put("created_by", participant_id)
@@ -3972,6 +4184,17 @@ defmodule Platform.Chat do
         |> Map.put("created_by_participant_type", snapshot[:author_participant_type])
         |> then(&Canvas.changeset(%Canvas{}, &1))
         |> repo.insert()
+      end)
+      |> Multi.run(:canvas, fn repo, %{inserted_canvas: canvas} ->
+        stamp_scripted_embeds(
+          repo,
+          canvas,
+          CanvasVersions.attribution_from_fields(%{
+            type: snapshot[:author_participant_type] || "unknown",
+            id: participant_id,
+            display_name: snapshot[:author_display_name]
+          })
+        )
       end)
       |> CanvasSearchIndex.upsert_multi(:canvas_search, & &1.canvas)
       |> Multi.run(:message, fn repo, %{canvas: canvas} ->
@@ -4110,7 +4333,14 @@ defmodule Platform.Chat do
 
     multi =
       Multi.new()
-      |> Multi.update(:canvas, Canvas.changeset(canvas, attrs))
+      |> Multi.update(:updated_canvas, Canvas.changeset(canvas, attrs))
+      |> Multi.run(:canvas, fn repo, %{updated_canvas: updated} ->
+        # Only a write that changes the document can change an embed.
+        if Map.has_key?(attrs, "document") and updated.document != canvas.document,
+          do:
+            stamp_scripted_embeds(repo, updated, CanvasVersions.attribution_from_canvas(updated)),
+          else: {:ok, updated}
+      end)
       |> CanvasSearchIndex.upsert_multi(:canvas_search, & &1.canvas)
 
     case Repo.transaction(multi) do
@@ -4118,7 +4348,7 @@ defmodule Platform.Chat do
         publish_canvas_updated(updated)
         {:ok, updated}
 
-      {:error, :canvas, %Ecto.Changeset{} = changeset, _} ->
+      {:error, step, %Ecto.Changeset{} = changeset, _} when step in [:updated_canvas, :canvas] ->
         {:error, changeset}
 
       {:error, _step, reason, _} ->

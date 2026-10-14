@@ -343,6 +343,33 @@ class ScrubberTest(unittest.TestCase):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
+    def test_scrubber_replaces_the_pocket_id_api_key_alias(self):
+        # task 01a113ea stage 4: secrets.env carries the static key twice, as
+        # STATIC_API_KEY and as core's POCKET_ID_API_KEY alias. Either name may
+        # win the placeholder; the value must not survive.
+        import io
+
+        from suite_install.setup.state import Install
+
+        tmp = tempfile.mkdtemp(prefix="scrub-01a113ea-")
+        value = "static-01a113ea-alias-scrub-me"
+        try:
+            install = Install(tmp)
+            install.upsert_secret("STATIC_API_KEY", value)
+            install.upsert_secret("POCKET_ID_API_KEY", value)
+            ctx = steps.Ctx(install, {"steps": {}, "inputs": {}, "ids": {}}, None, None, {})
+            self.assertIn("secrets.env:POCKET_ID_API_KEY", ctx.secret_values())
+            doc = {"outputs": {"core_key": value, "pocket_key": value}}
+            ctx._scrub = False
+            out = io.StringIO()
+            cli._emit(doc, ctx, out)
+            self.assertIn(value, out.getvalue())  # positive control: unscrubbed leaks
+            scrubbed = self._scrubbed(ctx, doc)
+            self.assertNotIn(value, scrubbed)
+            self.assertEqual(scrubbed.count("<secret:secrets.env:"), 2)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
     @staticmethod
     def _scrubbed(ctx, doc):
         import io

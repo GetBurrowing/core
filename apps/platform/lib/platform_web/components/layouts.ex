@@ -50,7 +50,7 @@ defmodule PlatformWeb.Layouts do
     <header class="navbar px-4 sm:px-6 lg:px-8">
       <div class="flex-1">
         <a href="/" class="flex-1 flex w-fit items-center gap-2">
-          <img src={~p"/images/logo.svg"} width="36" />
+          <img src={~p"/images/burrow-mark.svg"} width="36" />
           <span class="text-sm font-semibold">v{Application.spec(:phoenix, :vsn)}</span>
         </a>
       </div>
@@ -328,12 +328,31 @@ defmodule PlatformWeb.Layouts do
   @doc """
   Shows the flash group with standard titles and content.
 
+  The two connection toasts (#client-error, #server-error) are NOT bound to
+  the stock `phx-disconnected` / `phx-connected` attributes. LiveView runs
+  those 500 ms into any drop, which turned every routine reconnect red
+  (task 01a12b10). The app.js reconnect controller decides when a drop
+  deserves the toast (assets/js/lib/reconnect_escalation.js) and runs the
+  `data-escalate` / `data-clear` JS commands through `liveSocket.execJS/2`,
+  so the shown/hidden state stays sticky across LiveView patches the way the
+  stock bindings did.
+
+  `connection_status` renders the window-wide quiet reconnect slot
+  (`connection_status/1`, fixed variant). The shell layout passes `false`
+  and renders the pane variant inside `<main>` instead, so every page has
+  exactly one slot.
+
   ## Examples
 
       <.flash_group flash={@flash} />
   """
   attr(:flash, :map, required: true, doc: "the map of flash messages")
   attr(:id, :string, default: "flash-group", doc: "the optional id of flash container")
+
+  attr(:connection_status, :boolean,
+    default: true,
+    doc: "render the window-wide quiet reconnect slot (the shell renders its own in <main>)"
+  )
 
   def flash_group(assigns) do
     ~H"""
@@ -345,8 +364,8 @@ defmodule PlatformWeb.Layouts do
         id="client-error"
         kind={:error}
         title="We can't find the internet"
-        phx-disconnected={show(".phx-client-error #client-error") |> JS.remove_attribute("hidden")}
-        phx-connected={hide("#client-error") |> JS.set_attribute({"hidden", ""})}
+        data-escalate={show("#client-error") |> JS.remove_attribute("hidden")}
+        data-clear={hide("#client-error") |> JS.set_attribute({"hidden", ""})}
         hidden
       >
         Attempting to reconnect
@@ -357,13 +376,66 @@ defmodule PlatformWeb.Layouts do
         id="server-error"
         kind={:error}
         title="Something went wrong!"
-        phx-disconnected={show(".phx-server-error #server-error") |> JS.remove_attribute("hidden")}
-        phx-connected={hide("#server-error") |> JS.set_attribute({"hidden", ""})}
+        data-escalate={show("#server-error") |> JS.remove_attribute("hidden")}
+        data-clear={hide("#server-error") |> JS.set_attribute({"hidden", ""})}
         hidden
       >
         Attempting to reconnect
         <.icon name="hero-arrow-path" class="ml-1 size-3 motion-safe:animate-spin" />
       </.flash>
+    </div>
+    <.connection_status :if={@connection_status} variant={:window} />
+    """
+  end
+
+  @doc """
+  The quiet reconnect slot (task 01a12b10): a 2px `bg-primary` line along the
+  top edge plus a centred `bg-base-300` pill reading "Reconnecting…" or
+  "Up to date". It is an overlay with no layout footprint, never uses error
+  or warning tokens, and is announced politely (`role="status"`).
+
+  The app.js reconnect controller owns its state through `data-state`
+  (idle | pending | reconnecting | up_to_date | escalated) and the pill text.
+  `phx-update="ignore"` keeps the JS-applied children (the pill text) across
+  the rejoin re-render, because the shell layout renders inside the
+  LiveView. It does NOT protect `data-*` attributes on the container itself:
+  LiveView 1.1 still merges those from the server on every patch
+  (`DOM.mergeAttrs/3` with `isIgnored`), so the server-rendered
+  `data-state="idle"` would reset the JS state on any patch. The controller
+  re-asserts its state when that happens (assets/js/lib/connection_status_view.js).
+
+  Variants: `:pane` sits at the top of the shell's `<main>` (which is
+  `relative`); `:window` is fixed to the viewport for the non-shell layouts.
+  """
+  attr(:variant, :atom, values: [:pane, :window], default: :window)
+
+  def connection_status(assigns) do
+    ~H"""
+    <div
+      id="connection-status"
+      phx-update="ignore"
+      role="status"
+      aria-live="polite"
+      data-state="idle"
+      class={[
+        "connection-status inset-x-0 top-0 pointer-events-none z-40",
+        @variant == :pane && "absolute",
+        @variant == :window && "fixed pt-[env(safe-area-inset-top)]"
+      ]}
+    >
+      <div class="reconnect-track h-0.5 overflow-hidden" aria-hidden="true">
+        <div class="reconnect-line h-full bg-primary"></div>
+      </div>
+      <div class="reconnect-pill-wrap flex justify-center pt-2">
+        <span class="reconnect-pill inline-flex items-center gap-1.5 rounded-full bg-base-300 text-base-content px-3 py-1 text-xs font-medium shadow-sm">
+          <span
+            class="reconnect-spinner hero-arrow-path size-3 text-base-content/60 motion-safe:animate-spin"
+            aria-hidden="true"
+          >
+          </span>
+          <span data-connection-status-text></span>
+        </span>
+      </div>
     </div>
     """
   end

@@ -46,7 +46,7 @@ defmodule PlatformWeb.MeetingLiveIndexMobileCardsTest do
     %OrgMembership{}
     |> OrgMembership.changeset(%{
       user_id: user.id,
-      org_id: Platform.TenancyFixtures.fabrikam_org_id(),
+      org_id: Platform.TenancyFixtures.acme_org_id(),
       role: "member"
     })
     |> Repo.insert!()
@@ -71,7 +71,7 @@ defmodule PlatformWeb.MeetingLiveIndexMobileCardsTest do
       |> Project.changeset(%{
         name: "Meeting Cards Project #{System.unique_integer([:positive])}",
         slug: "meeting-cards-project-#{System.unique_integer([:positive])}",
-        org_id: Platform.TenancyFixtures.fabrikam_org_id()
+        org_id: Platform.TenancyFixtures.acme_org_id()
       })
       |> Repo.insert()
 

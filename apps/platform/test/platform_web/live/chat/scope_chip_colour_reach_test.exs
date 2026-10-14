@@ -1,6 +1,6 @@
 defmodule PlatformWeb.ChatLive.ScopeChipColourReachTest do
   @moduledoc """
-  The chat header's scope chip is coloured for a Fabrikam member who is not an
+  The chat header's scope chip is coloured for an Acme member who is not an
   admin (task 01a09333-d374 stage 5).
 
   Since stage 5 a chip's colour comes only from the `<style>` block's rule
@@ -18,7 +18,7 @@ defmodule PlatformWeb.ChatLive.ScopeChipColourReachTest do
   alias Platform.{Chat, Repo, Tenancy}
   alias Platform.Tenancy.OrgMembership
 
-  defp fabrikam_member_conn(conn) do
+  defp acme_member_conn(conn) do
     n = System.unique_integer([:positive])
 
     user =
@@ -31,17 +31,17 @@ defmodule PlatformWeb.ChatLive.ScopeChipColourReachTest do
     %OrgMembership{}
     |> OrgMembership.changeset(%{
       user_id: user.id,
-      org_id: Tenancy.get_org_by_slug!("fabrikam").id,
+      org_id: Tenancy.get_org_by_slug!("acme").id,
       role: "member"
     })
     |> Repo.insert!()
 
-    refute Tenancy.fabrikam_admin?(user)
+    refute Tenancy.root_admin?(user)
     {init_test_session(conn, current_user_id: user.id), user}
   end
 
-  test "an SXI channel's header chip has a colour rule for a Fabrikam member", %{conn: conn} do
-    {conn, user} = fabrikam_member_conn(conn)
+  test "an SXI channel's header chip has a colour rule for an Acme member", %{conn: conn} do
+    {conn, user} = acme_member_conn(conn)
 
     {:ok, channel} =
       Chat.create_space(%{
@@ -58,8 +58,8 @@ defmodule PlatformWeb.ChatLive.ScopeChipColourReachTest do
         joined_at: DateTime.utc_now()
       })
 
-    # By id: a slug is looked up in the VIEWER's active org (Fabrikam here), and
-    # would miss this SXI channel and mint a Fabrikam one with the same slug.
+    # By id: a slug is looked up in the VIEWER's active org (Acme here), and
+    # would miss this SXI channel and mint an Acme one with the same slug.
     {:ok, view, _html} = live(conn, ~p"/chat/#{channel.id}")
     html = render(view)
 

@@ -9,7 +9,7 @@ defmodule PlatformWeb.Plugs.AppBearerAuth do
   revoked session and an archived user alike. On success it assigns
   `:current_user`, `:app_session`, and the same MT/RBAC assigns
   `PlatformWeb.Plugs.RequireAuth` sets (`:current_user_org_membership`,
-  `:fabrikam_admin?`), so external-user scoping downstream sees the shape it
+  `:root_admin?`), so external-user scoping downstream sees the shape it
   expects. `last_used_at` is bumped at most once a minute.
 
   Every refusal is the same `401 {"error": "unauthorized"}`: the body never
@@ -33,7 +33,7 @@ defmodule PlatformWeb.Plugs.AppBearerAuth do
       |> assign(:current_user, user)
       |> assign(:app_session, session)
       |> assign(:current_user_org_membership, Tenancy.load_membership(user))
-      |> assign(:fabrikam_admin?, Tenancy.fabrikam_admin_preloaded?(user))
+      |> assign(:root_admin?, Tenancy.root_admin_preloaded?(user))
     else
       _ -> unauthorized(conn)
     end

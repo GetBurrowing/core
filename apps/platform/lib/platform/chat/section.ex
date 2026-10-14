@@ -41,6 +41,16 @@ defmodule Platform.Chat.Section do
     # Never persisted; `nil` on a struct loaded any other way.
     field(:org_name, :string, virtual: true)
 
+    # The owning org's slug as stored, selected alongside `org_name`. The
+    # rail keys the section dot's `data-scope` on it, so an org with no
+    # compiled colour class (the root org on every install) is coloured
+    # from its own row (task 01a116de stage 3). Never persisted.
+    field(:org_slug, :string, virtual: true)
+
+    # Whether the owning org is the root (its `parent_org_id` is nil). An
+    # unscoped channel falls back to this section (task 01a116de stage 3).
+    field(:org_is_root, :boolean, virtual: true)
+
     timestamps(type: :utc_datetime_usec)
   end
 

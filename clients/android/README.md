@@ -35,7 +35,8 @@ and widgets (stage 4).
 | `AppApiClient.kt` | `Shared/SuiteAPIClient.swift` | `/api/app/*` calls. The bearer is attached in one place, looked up by the host the request is for. |
 | `InstallSession.kt` | `App/InstallSession.swift` | `InstallLauncher` (relaunch through `POST /api/app/handoff`) and `NativeSignOut`. |
 | `NavigationPolicy.kt` | `App/NavigationPolicy.swift` | Which navigations stay in the WebView. |
-| `SuiteNativePlugin.kt` | `App/Plugins/SuiteNativePlugin.swift` | The ONE Capacitor plugin, `SuiteNative`: `pushState`, `enablePush`, `switchInstall`. See "Push". |
+| `SuiteNativePlugin.kt` | `App/Plugins/SuiteNativePlugin.swift` | The ONE Capacitor plugin, `SuiteNative`: `pushState`, `enablePush`, `switchInstall`, `donate`. See "Push" and "Conversations, shortcuts and voice reply". |
+| `shortcuts/` | `Intents/` (INSendMessageIntent donation) | Conversation shortcuts, the `donate` bridge and the sender monogram. See "Conversations, shortcuts and voice reply". |
 | `share/` | `Shared/ShareSheetModel.swift`, `ShareExtension` | The share target. See "Share". |
 | `widgets/` | `Shared/SlabState.swift`, `CountsCache.swift`, `SuiteWidgets` | Glance count widgets. See "Widgets". |
 | `push/` | `App/Push*.swift`, `NotificationRouter` | FCM, the permission explainer, channels, the notification builder and Reply. See "Push". |
@@ -212,6 +213,53 @@ PendingIntent made immutable (NotificationPresenterTest); the debug receiver
 declared in the main manifest (ReleaseManifestTest); pushState ignoring the
 explainer flag (PushPermissionTest).
 
+## Relayed pushes and unread badges
+
+Task 01a1261e. An install with no FCM credentials of its own sends through
+the Burrow push relay (`Platform.Push.Relay` in core). The relay forwards a
+data-only map with ONLY `install_host`, `unread_count`, `unread_as_of` and
+`sealed`: it has no `kind`, and no title or body.
+
+- **Keys** (`push/PushKeyStore.kt`). There is one X25519 keypair per install host.
+  - The public key goes to `POST /api/app/devices` as `push_public_key`, base64url without padding.
+  - The private key never leaves the phone. It is AES-256-GCM ciphertext under its own
+    non-exportable AndroidKeyStore key (`burrow_push_key_v1`), with the host as associated data,
+    in `burrow_push_keys`, which is excluded from backup.
+  - Sign-out deletes the install's key with its bearer.
+- **Opening** (`push/PushSeal.kt`, `push/PushContentPreparer.kt`). This is HPKE base mode:
+  DHKEM(X25519, HKDF-SHA256) / HKDF-SHA256 / AES-128-GCM, info `burrow push v1`,
+  aad = `install_host`, via Tink.
+  - The inner map is the server's own FCM data map, so it takes the same `PushPayload` /
+    MessagingStyle / Reply / channel path as a direct push.
+  - If the blob is missing or does not open (no key, another install's blob), the notification
+    reads `New message in <install>`. It never shows ciphertext and is never blank.
+  - With two or more installs signed in, every notification names its install
+    (`BurrowPush.installLabel`).
+    - `setSubText(<install>)` draws `Burrow • <install>` on the fallback and approval layouts.
+    - API 35's conversation template ignores the subtext and titles a chat notification from
+      its conversation SHORTCUT's label. The label therefore becomes `<space> · <install>`
+      (`<sender> · <install>` for a dm with no space name), and so do the MessagingStyle title
+      and the content title.
+    - With one install signed in, none of these change.
+  - Nothing here logs.
+- **Counts** (`push/UnreadStore.kt`, prefs `burrow_unread`, excluded from backup).
+  - Every push's `unread_count` / `unread_as_of` is written per install. Only a newer as-of
+    replaces a stored count.
+  - `MainActivity.onResume` runs `ResumeRefresh`: ONE `GET /api/app/counts` for every signed-in
+    install, 4 at a time, each with its own bearer. The answers feed the unread counts, and the
+    selected install's answer also feeds the widgets' cache.
+  - A failed fetch marks that install stale and keeps its last count. Its picker row is dimmed
+    and reads `Could not update`, including when the install is also unreachable (red dot,
+    tap to retry).
+  - The shell then fires `burrowInstallBadges` into the WebView. `SuiteNative.installBadges()`
+    answers `{others_unread}` for the switcher dot.
+- **Icon badge limit.** Android's launcher draws the app icon badge from the active
+  notifications (Launcher3 counts each one as at least 1). An app cannot set it to an exact
+  number.
+  - Each install's group summary carries `setNumber(<install unread>)` as a best effort.
+  - The exact-sum badge is an iOS property. On Android the contract is the stored per-install
+    counts and the switcher pills.
+
 ## Share
 
 `share/ShareActivity` is a translucent activity (`taskAffinity=""`,
@@ -225,17 +273,174 @@ file is one multipart `POST /api/app/spaces/<id>/messages`, with `text` (the
 message, then any shared link) and `agent_id` on the FIRST request only. A
 retry after a partial failure sends only the files that are left.
 
-**Size limit.** A file is over when it is larger than
-`SizeCheck.MAX_SHARE_FILE_BYTES` (8 MiB, the plan's constant) OR when its
-request body would pass `MAX_REQUEST_BYTES` (8_000_000). That second number is
-the server's real limit: Plug.Parsers' multipart `:length` applies to the whole
-body, and it is what iOS uses. With only the 8 MiB check, an 8.2 MB file would
-pass and then get a 413. The copy is the canvas's, and it reads "8 MB" either
-way.
+**Size limit and large files (task 01a120be).** The limit is the server's:
+the sheet reads `GET /api/app/upload_config` (`max_upload_bytes`,
+`max_upload_label`, `chunk_bytes`, `multipart_max_bytes`) and holds no
+per-file limit of its own. `SizeCheck` then sorts each file:
+
+- **Request body at or under `multipart_max_bytes` (8_000_000):** today's
+  multipart `POST`. The threshold is Plug.Parsers' multipart `:length`, which
+  counts the WHOLE body, so routing measures the request, not just the file.
+- **Larger, up to `max_upload_bytes` (1 GB by default, per install):**
+  `POST /api/app/spaces/<id>/uploads` reserves it (with the text and agent
+  when it is the first request), the file is copied into app storage while
+  the share grant is live, and `share/LargeUploadWorker` (WorkManager,
+  expedited, `NetworkType.CONNECTED`, a `dataSync` foreground service with an
+  ongoing "412 of 900 MB" notification, one unique work per reservation id)
+  PATCHes `chunk_bytes` slices to the returned upload URL with
+  `Upload-Offset`. Every run first HEADs the server's offset and resumes from
+  it, never from zero; a 409 adopts the server's offset; a network failure is
+  `Result.retry()` with exponential backoff. The sheet says "Uploading in the
+  background. You can close this." and closes. The server posts the message
+  when the last chunk lands; the device shows "Sent to #<space>".
+  - **Offline.** A default-network callback (and WorkManager stopping the run
+    when `CONNECTED` goes unmet) aborts the chunk in flight at once
+    (`ChunkTransport.cancel`, which disconnects the `HttpURLConnection`;
+    timeouts 15 s connect / 30 s read). The run ends in `Result.retry()` and
+    leaves a separate ongoing "Waiting for connection · 377 of 899.1 MB"
+    notification (`waitingNotificationId`), since the foreground one goes
+    with the run. The next run clears it as it starts and shows progress again.
+  - **Progress** is `setForeground` about once a second, and the same
+    notification is also posted directly, so it shows even when the
+    foreground start is refused.
+  - **Failure.** HEAD or PATCH 404/410 (the reservation was reaped) posts
+    "Couldn't send <file> to #<space>: the upload expired after the connection
+    was lost too long. Share it again."; any other failure posts its own
+    "Couldn't send ..." line with the HTTP status.
+  - **Debug stub** (debug builds only): `rig.sh adb shell am broadcast -a
+    com.koboai.burrow.debug.PUSH -n
+    com.koboai.burrow.debug/com.koboai.burrow.push.DebugPushReceiver --es
+    upload_stub 899109076/1000` (bytes / ms per 33,554,432-byte chunk) runs the real worker against an
+    in-process stand-in for the upload endpoint (no request leaves the
+    device), so `svc wifi disable` / `svc data disable` show the offline path.
+- **Over `max_upload_bytes`:** refused before any upload, with the server's
+  label: "<name> is 1.2 GB. This Suite accepts files up to 1 GB."
+
+Every size label (the file row, the over-limit copy, the notifications) is
+`ByteLabel`: the one decimal rule shared with the server, web and iOS
+("899.1 MB", "1 GB", "512 bytes"; "416 of 899.1 MB").
+
+Against a server without `upload_config`, only the multipart path exists and
+a request over `MAX_REQUEST_BYTES` (8_000_000) is over, with the canvas 01a10d91
+"8 MB" copy. `MAX_SHARE_FILE_BYTES` (8 MiB) is gone: it was never the server's
+limit.
 
 **Back.** With nothing typed, back closes the sheet. With something typed, it
 asks `Discard this share?` (Discard / Keep editing). With no bearer, the sheet
 says so and offers Open Burrow.
+
+## Conversations, shortcuts and voice reply
+
+Task 01a116c4. Every chat push (`chat_mention` AND `chat_message`; before this
+only mentions were) is a `MessagingStyle` conversation with a sender `Person`,
+a Reply and a long-lived conversation shortcut, so Android files it under
+Conversations and offers it as a direct-share target.
+
+**When a shortcut is published** (`shortcuts/ConversationShortcuts.kt`; each
+publish also refreshes it):
+
+| Trigger | Where | Reports usage |
+|---|---|---|
+| A chat notification, published BEFORE `notify` so the notification can name it | `NotificationPresenter.present` | no |
+| A message sent from the web view: 01a111bb's `native_donate` with kind `message_sent` (ids only), forwarded by `assets/js/native_donations.js` to `SuiteNative.donate` | `ConversationNoter` (name, kind and path from `GET /api/app/spaces`, cached 10 min per host, one refetch on a miss) | yes |
+| A Reply from the notification that the server took (2xx) | `ReplyHandler` | yes |
+| A share that was sent | `ShareActivity` | yes |
+
+Every other `donate` kind (`task_created`, `approval_acted`,
+`meeting_started`, unknown) resolves and does nothing (`DonateDispatch`).
+
+**Ids.** The shortcut id is `<host>|<spaceId>` (host normalized, space id
+`^[A-Za-z0-9_-]{1,128}$`). The notification's `shortcutId` and `locusId` are
+that same id. A sender is keyed `<host>|<author_type>:<author_id>` from the FCM
+`author_id`/`author_type`, or `<host>|name:<author_name>` when the server sent
+no id. A dm (`space_kind == "dm"`) is a one-to-one conversation, anything
+else a group. A redacted push has no `space_id`, so it gets no shortcut;
+approvals never do.
+
+**Sender avatars (task 01a12773).** The push carries `author_avatar_url` (an
+absolute https url; inside the sealed blob on a relayed push) and
+`author_avatar_tone` (`agent` or the in-app palette index `0`..`7`).
+`present` fetches the picture on the FCM worker BEFORE building the
+notification (`push/AvatarFetcher.kt`): https only; the install's bearer goes
+only to a url on the install's own host (`AppApiClient.sameHost`), never to an
+OIDC picture elsewhere; no redirect is followed; connect and read timeouts of
+1.5 s each plus a 2.5 s total deadline; at most 256 KB, decoded to at most
+192 px. It is cached by the full url in memory and under
+`cacheDir/avatars/<sha256(url)>.png`, and a failure is remembered for 10
+minutes. The reply and restore paths read the cache only. The picture is
+flattened onto the theme's opaque base-100 and circle-cropped; on any failure
+the sender gets the in-app letter disc instead (`shortcuts/Monogram.kt`: an
+agent's one initial in primary on base-300, a person's up to two initials in
+the `.avatar-fallback-N` pair). A dm's shortcut is the sender's face; a
+channel or group shortcut keeps the space-name monogram.
+
+**Cap.** The launcher allows `getMaxShortcutCountPerActivity()` shortcuts, and
+the static `switch_install` counts toward it, so dynamic conversation
+shortcuts are capped at `max(0, max - manifestCount)`. The prefs file
+`burrow_shortcuts` (excluded from backup) records each id's last use; the least
+recently used is evicted first. `switch_install` is never removed and
+`removeAllDynamicShortcuts` is never called.
+
+**Removal.** Sign-out (`NativeSignOut`), a revoked bearer (the 401 branch of
+`InstallLauncher`) and removing an install in the picker each call
+`removeForHost(host)`, which removes the registry ids with the prefix
+`"<host>|"` (separator included, so `10.0.2.2` never takes `10.0.2.20`'s) as
+both dynamic and long-lived shortcuts.
+
+**Direct share.** Both `shortcuts.xml` files declare an identical
+`<share-target>` for `share.ShareActivity` with the category
+`com.koboai.burrow.category.SHARE_TARGET`, which conversation shortcuts carry.
+A share started from one reads `EXTRA_SHORTCUT_ID`; when it parses and its host
+is signed in, the sheet opens on that install with the space preselected.
+API 26-28 get no direct-share row (no `androidx.sharetarget` dependency).
+
+**Launch.** A conversation shortcut's intent is `MainActivity` with action
+`com.koboai.burrow.action.OPEN_CONVERSATION` and extras host and path
+(`/chat/<segment>`). `LaunchRouter` routes it after a notification's Open and
+before Switch install, cold and warm, and consumes it; a Recents restore
+(`restored`) does not replay it. Measured on the API 35 emulator (2026-10-07):
+the launcher starts a dynamic shortcut with `flg=0x10000000` (NEW_TASK only)
+and a warm tap reaches `onNewIntent`, unlike the static `switch_install`,
+which Android stores with CLEAR_TASK (hence its `SwitchInstallActivity`
+trampoline).
+
+**Dependencies.** Built on two branches merged into the task branch, never
+rebased: 01a116a1 (Switch install, `LaunchRouter`, `PickerBack`; on main as
+#1206) and 01a111bb (`PlatformWeb.NativeDonation`,
+`assets/js/native_donations.js`, `author_id`/`author_type` on
+`Platform.Push.Notification`). The server half of this task adds only
+`space_kind` (FCM payload only; `redact/2` clears it).
+
+### Inline reply and voice, measured on moon (2026-10-07, task branch at 638bce35d)
+
+Rig: own API 35 AVD, a dev server from the task branch on `https://10.0.2.2`
+(own CA, conscrypt apex bind, DNAT 443 to the server, Chrome SPKI flag, mock
+IdP), `fcm_stub.py` recording, pushes replayed with the debug `PUSH` broadcast
+(no `reply_stub`: the real server). Dev Alice signed in on the emulator; Dev Bob
+sent her a plain DM and an `@[Dev Alice]` mention in a group.
+
+- **The FCM data** carried `author_id`, `author_type: user` and `space_kind`
+  (`dm`, `group`). Both notifications posted with `shortcut=10.0.2.2|<space>`
+  and a matching `locusId`; both shortcuts were long-lived with the
+  conversation and share-target categories. The DM (`chat_message`) had Reply.
+- **Inline reply from the shade** on the DM: `POST
+  /api/app/spaces/<dm>/messages`, and the newest message in that DM was
+  authored by Alice's participant, top-level, with the same text in no other
+  space. The notification updated in place to `You: ...`, and usage stats
+  logged a `SHORTCUT_INVOCATION` for the DM's shortcut id.
+- **No activity launched:** `logcat -b events` showed no
+  `wm_create_activity`, `wm_resume_activity` or `wm_new_intent` for the reply
+  (on API 35 these are the `wm_*` events; the query matches `am_*` too).
+  Positive control: Open on the other notification showed `wm_new_intent` and
+  `wm_resume_activity` for MainActivity in the same query.
+- **Assistant:** the Google app (15.22.33.28) is installed and holds the
+  assistant role. Typed (the emulator has no audio input) "read my messages"
+  and "reply": both answered "Let me get some more information" with "Unlock
+  more Assistant features", because the device has no Google account; nothing
+  was read and nothing was posted. **Voice reply is NOT verified.** What was
+  tested is the RemoteInput / `SEMANTIC_ACTION_REPLY` path that an assistant
+  uses; a voice run needs a signed-in Google account on a device with a
+  microphone.
 
 ## Widgets
 
@@ -258,8 +463,10 @@ notification Open path.
   (`burrow_widget_counts`) with this device's fetch time. A failed refresh
   keeps the last counts, which then show as stale. Sign-out forgets the host's
   counts.
-- `WidgetRefresh`: a WorkManager job every 30 minutes, plus a refresh on app
-  foreground, sign-in and sign-out. Each refresh schedules a render just past
+- `WidgetRefresh`: a WorkManager job every 30 minutes, plus a refresh on
+  sign-in and sign-out. On app foreground the widgets only re-render: the
+  open's single `/api/app/counts` per install (`push/ResumeRefresh.kt`)
+  already wrote the selected install's approvals and tasks. Each refresh schedules a render just past
   the stale boundary, so the cyan drops on time even when no refresh comes.
 - Glance cannot load Public Sans and has no tabular figures, so numerals use
   the system sans in Bold.

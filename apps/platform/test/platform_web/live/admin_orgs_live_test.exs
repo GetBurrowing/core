@@ -53,7 +53,7 @@ defmodule PlatformWeb.AdminOrgsLiveTest do
 
   defp admin_user! do
     user = create_user!()
-    create_membership!(user, Tenancy.get_org_by_slug!("fabrikam"), "admin")
+    create_membership!(user, Tenancy.get_org_by_slug!("acme"), "admin")
     user
   end
 
@@ -64,7 +64,7 @@ defmodule PlatformWeb.AdminOrgsLiveTest do
   describe "authorization" do
     test "a member (non-admin) mount is redirected by :ensure_admin", %{conn: conn} do
       user = create_user!()
-      create_membership!(user, Tenancy.get_org_by_slug!("fabrikam"), "member")
+      create_membership!(user, Tenancy.get_org_by_slug!("acme"), "member")
 
       assert {:error, {:live_redirect, %{to: "/", flash: flash}}} =
                conn |> authenticated_conn(user) |> live(~p"/admin/orgs")
@@ -88,7 +88,7 @@ defmodule PlatformWeb.AdminOrgsLiveTest do
 
       assert html =~ "Admin · Orgs"
       # Seeded root org is listed.
-      assert html =~ ~s(data-org-slug="fabrikam")
+      assert html =~ ~s(data-org-slug="acme")
       # The sheet is not in the DOM until it is opened.
       refute html =~ ~s(id="create-org-sheet")
 
@@ -121,6 +121,19 @@ defmodule PlatformWeb.AdminOrgsLiveTest do
   end
 
   describe "colour (task 01a09287 stage 4)" do
+    # The shipped-colour migrations pin the historical root slug, which the
+    # neutral `acme` test root (task 01a116de stage 4) does not carry, so the
+    # root is coloured here, inside the sandbox, at the hue the root shipped
+    # with. The list then has no uncoloured row but the one a test creates.
+    setup do
+      {1, _} =
+        Repo.update_all(from(o in Org, where: o.slug == "acme"),
+          set: [color_hue: 50, color_chroma: 0.16]
+        )
+
+      :ok
+    end
+
     defp open_sheet(conn, admin) do
       {:ok, view, _html} = conn |> authenticated_conn(admin) |> live(~p"/admin/orgs")
       view |> element(~s([data-role="open-create-org"])) |> render_click()
@@ -184,8 +197,8 @@ defmodule PlatformWeb.AdminOrgsLiveTest do
 
     test "a hue within 20 degrees of an existing org warns and still submits", %{conn: conn} do
       admin = admin_user!()
-      # fabrikam ships at hue 50; 62 is 12 degrees away, inside the window.
-      assert Tenancy.get_org_by_slug!("fabrikam").color_hue == 50
+      # The setup colours acme at hue 50; 62 is 12 degrees away, inside the window.
+      assert Tenancy.get_org_by_slug!("acme").color_hue == 50
 
       view = open_sheet(conn, admin)
 
@@ -196,7 +209,7 @@ defmodule PlatformWeb.AdminOrgsLiveTest do
       |> render_change()
 
       warned = warning_html(view)
-      assert warned =~ "Fabrikam"
+      assert warned =~ "Acme"
       assert warned =~ "12"
       refute warned =~ "Soylent"
 
@@ -514,7 +527,7 @@ defmodule PlatformWeb.AdminOrgsLiveTest do
     end
 
     # Scoped to the warning block, NOT the whole document: every org's name
-    # appears in the list row and in a ring notch title, so `html =~ "Fabrikam"`
+    # appears in the list row and in a ring notch title, so `html =~ "Acme"`
     # would pass whether or not the warning named it — and the negative
     # assertions would fail for the same irrelevant reason.
     defp warning_html(view) do
@@ -529,11 +542,11 @@ defmodule PlatformWeb.AdminOrgsLiveTest do
   end
 
   describe "create" do
-    test "a valid name and slug creates a tenant org parented to Fabrikam, and it lists", %{
+    test "a valid name and slug creates a tenant org parented to Acme, and it lists", %{
       conn: conn
     } do
       admin = admin_user!()
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+      acme = Tenancy.get_org_by_slug!("acme")
 
       {:ok, view, _html} = conn |> authenticated_conn(admin) |> live(~p"/admin/orgs")
       view |> element(~s([data-role="open-create-org"])) |> render_click()
@@ -546,7 +559,7 @@ defmodule PlatformWeb.AdminOrgsLiveTest do
       created = Repo.get_by!(Org, slug: "aurora_labs")
       assert created.name == "Aurora Labs"
       # Parentage is derived by `create_org/2`, not posted by the form.
-      assert created.parent_org_id == fabrikam.id
+      assert created.parent_org_id == acme.id
 
       assert html =~ ~s(data-org-slug="aurora_labs")
       assert html =~ "Aurora Labs"

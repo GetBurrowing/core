@@ -46,9 +46,9 @@ defmodule Platform.Federation.ToolSurfaceCallLedgerTest do
   ]
 
   setup do
-    fabrikam = ensure_root_org()
-    sxi = ensure_tenant_org("sxi-ledger-#{u()}", fabrikam)
-    wayne_tech = ensure_tenant_org("wayne-tech-ledger-#{u()}", fabrikam)
+    acme = ensure_root_org()
+    sxi = ensure_tenant_org("sxi-ledger-#{u()}", acme)
+    wayne_tech = ensure_tenant_org("wayne-tech-ledger-#{u()}", acme)
 
     {:ok, project} = Tasks.create_project(%{name: "Ledger Proj #{u()}", org_id: sxi.id})
     {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Ledger Task"})
@@ -396,12 +396,12 @@ defmodule Platform.Federation.ToolSurfaceCallLedgerTest do
   end
 
   defp ensure_root_org do
-    case Repo.get_by(Tenancy.Org, slug: "fabrikam") do
+    case Repo.get_by(Tenancy.Org, slug: "acme") do
       nil ->
         Repo.insert!(
           Tenancy.Org.changeset(%Tenancy.Org{}, %{
-            slug: "fabrikam",
-            name: "Fabrikam",
+            slug: "acme",
+            name: "Acme",
             parent_org_id: nil
           })
         )

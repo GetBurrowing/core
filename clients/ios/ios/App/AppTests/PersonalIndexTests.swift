@@ -112,7 +112,6 @@ final class PersonalIndexTests: XCTestCase {
         InstallStore.didRemove = nil
         defer { InstallStore.didRemove = removeHook }
         for host in [a, b] { store.add(host: host) }
-        for host in InstallStore.defaultHosts where ![a, b].contains(host) { store.remove(host: host) }
         return IntentEnvironment(
             client: SuiteAPIClient(session: StubURLProtocol.session(), tokens: MemoryTokenStore(tokens: [a: "token-for-a", b: "token-for-b"])),
             installs: store, sleeper: VirtualClock(), now: { Date(timeIntervalSince1970: 4_000_000) },

@@ -50,13 +50,13 @@ defmodule Platform.Meetings.ArchiveArtifactsTest do
     |> Repo.insert!()
   end
 
-  # A plain member, not "admin" — `fabrikam_admin?/1` reads admin as "sees every
+  # A plain member, not "admin" — `root_admin?/1` reads admin as "sees every
   # org", which would make the viewer argument untested here.
-  defp viewer_in_fabrikam! do
+  defp viewer_in_acme! do
     user = create_user!()
 
     %OrgMembership{}
-    |> OrgMembership.changeset(%{user_id: user.id, org_id: fabrikam_org_id(), role: "member"})
+    |> OrgMembership.changeset(%{user_id: user.id, org_id: acme_org_id(), role: "member"})
     |> Repo.insert!()
 
     user
@@ -66,7 +66,7 @@ defmodule Platform.Meetings.ArchiveArtifactsTest do
     n = System.unique_integer([:positive])
 
     {:ok, project} =
-      Tasks.create_project(%{name: "Artifacts Project #{n}", org_id: fabrikam_org_id()})
+      Tasks.create_project(%{name: "Artifacts Project #{n}", org_id: acme_org_id()})
 
     {:ok, meeting} = Meetings.create_meeting(%{project_id: project.id, name: name})
 
@@ -171,7 +171,7 @@ defmodule Platform.Meetings.ArchiveArtifactsTest do
 
   describe "artifacts_for/2 canvas revision spans" do
     test "each meeting's chip spans only the revisions written inside its own window" do
-      viewer = viewer_in_fabrikam!()
+      viewer = viewer_in_acme!()
 
       # Meeting A ran 2026-06-11 09:00–09:30; meeting B ran 2026-07-29
       # 14:00–14:52. Revision 7 lands on 2026-07-01, between the two.
@@ -219,7 +219,7 @@ defmodule Platform.Meetings.ArchiveArtifactsTest do
     end
 
     test "a canvas with exactly one in-window revision renders no dash" do
-      viewer = viewer_in_fabrikam!()
+      viewer = viewer_in_acme!()
 
       meeting = create_meeting!("Ops review")
       canvas = canvas!(meeting, "Ops runbook")
@@ -236,7 +236,7 @@ defmodule Platform.Meetings.ArchiveArtifactsTest do
     end
 
     test "a canvas whose only revisions fall outside the window contributes no chip, while one written during it does" do
-      viewer = viewer_in_fabrikam!()
+      viewer = viewer_in_acme!()
 
       meeting = create_meeting!("Retention review")
 
@@ -263,7 +263,7 @@ defmodule Platform.Meetings.ArchiveArtifactsTest do
 
   describe "artifacts_for/2 soft-deleted canvases" do
     test "a deleted canvas contributes no chip and a live one in the same space does" do
-      viewer = viewer_in_fabrikam!()
+      viewer = viewer_in_acme!()
 
       meeting = create_meeting!("Experiment editor v2")
 
@@ -290,7 +290,7 @@ defmodule Platform.Meetings.ArchiveArtifactsTest do
 
   describe "artifacts_for/2 summary and transcript chips" do
     test "the two chips resolve independently from the same transcript row, in both directions" do
-      viewer = viewer_in_fabrikam!()
+      viewer = viewer_in_acme!()
 
       summarised = create_meeting!("Budget sync")
       transcript!(summarised, %{summary: "We settled the bucket policy.", segments: []})
@@ -324,7 +324,7 @@ defmodule Platform.Meetings.ArchiveArtifactsTest do
 
   describe "artifacts_for/2 action items" do
     test "the chip is a count, with a shortened mobile label" do
-      viewer = viewer_in_fabrikam!()
+      viewer = viewer_in_acme!()
 
       meeting = create_meeting!("Experiment editor v2")
       canvas = canvas!(meeting, "Action items")
@@ -348,7 +348,7 @@ defmodule Platform.Meetings.ArchiveArtifactsTest do
 
   describe "artifacts_for/2 row context" do
     test "carries the duration, host, attendee count and project path the subtitle renders" do
-      viewer = viewer_in_fabrikam!()
+      viewer = viewer_in_acme!()
 
       meeting = create_meeting!("Experiment editor v2")
       host = participant!(meeting, "Rowan")
@@ -370,7 +370,7 @@ defmodule Platform.Meetings.ArchiveArtifactsTest do
     end
 
     test "a cancelled meeting has no duration and no artifacts" do
-      viewer = viewer_in_fabrikam!()
+      viewer = viewer_in_acme!()
 
       meeting = create_meeting!("Budget sync")
       canvas = canvas!(meeting, "Bucket policy canvas")
@@ -392,7 +392,7 @@ defmodule Platform.Meetings.ArchiveArtifactsTest do
 
   describe "artifacts_for/2 scoping" do
     test "a meeting in an org the viewer has no membership in is absent from the result" do
-      viewer = viewer_in_fabrikam!()
+      viewer = viewer_in_acme!()
 
       {:ok, project} =
         Tasks.create_project(%{name: "Soylent planning", org_id: tenant_org_id("soylent")})
@@ -403,7 +403,7 @@ defmodule Platform.Meetings.ArchiveArtifactsTest do
       version!(canvas, 1, at("2026-07-29T14:20:00Z"))
       theirs = run_meeting!(theirs, at("2026-07-29T14:00:00Z"), at("2026-07-29T14:52:00Z"))
 
-      mine = create_meeting!("Fabrikam sync")
+      mine = create_meeting!("Acme sync")
       mine_canvas = canvas!(mine, "My canvas")
       version!(mine_canvas, 1, at("2026-07-29T14:20:00Z"))
       mine = run_meeting!(mine, at("2026-07-29T14:00:00Z"), at("2026-07-29T14:52:00Z"))
@@ -419,7 +419,7 @@ defmodule Platform.Meetings.ArchiveArtifactsTest do
 
   describe "artifacts_for/2 batching" do
     test "issues the same number of queries for a page of six meetings as for one" do
-      viewer = viewer_in_fabrikam!()
+      viewer = viewer_in_acme!()
 
       [one | _] = many = Enum.map(1..6, &archived_meeting_with_artifacts!("Batch #{&1}"))
 
@@ -434,7 +434,7 @@ defmodule Platform.Meetings.ArchiveArtifactsTest do
       # Pinned exactly, not `> 0`: the telemetry handler silently measuring
       # nothing would make the equality below hold at 0 == 0, and the whole
       # test would pass on a resolver that never touched the database. Six is
-      # `fabrikam_admin?/1`'s membership lookup, `external_user?/1`'s membership
+      # `root_admin?/1`'s membership lookup, `external_user?/1`'s membership
       # lookup, one query per chip family, and the row context — see the
       # moduledoc's "Batching".
       #
@@ -448,6 +448,80 @@ defmodule Platform.Meetings.ArchiveArtifactsTest do
              "artifacts_for/2 issued #{six_rows} queries for six meetings and " <>
                "#{one_row} for one — it is resolving artifacts per row"
     end
+
+    test "count_queries/1 does not attribute a concurrent sibling process's queries" do
+      # Anti-vacuity fixture for task 01a07783 stage 1's fix. `one_row == 6`
+      # above is true for BOTH the pre-fix unfiltered `:telemetry.attach` and
+      # the stage-1 `:caller`-filtered `count_queries/1` when nothing else is
+      # running concurrently — that assertion alone cannot tell the two
+      # implementations apart, which is exactly the ticket's anti-vacuity
+      # point. This test manufactures the concurrent noise the ticket
+      # describes (another async test issuing Repo queries while the guard
+      # is attached) and checks that the count is unaffected by it.
+      viewer = viewer_in_acme!()
+      one = archived_meeting_with_artifacts!("Isolation")
+
+      test_pid = self()
+
+      # A bare `spawn` — deliberately NOT `Task.async`/`Task.Supervisor`,
+      # which propagate `$callers` to their children. A propagated
+      # `$callers` would make the spawned process read as "the same caller"
+      # under the `:caller` discriminator (`self() == pid or pid in
+      # Process.get(:"$callers", [])`, mirrored from
+      # `Platform.TelemetryHelpers.attach_scoped/4`) and defeat the point of
+      # this fixture. A bare `spawn` has no `$callers` of its own, so it is
+      # the correct stand-in for "an unrelated sibling async test module
+      # issuing queries against the same repo."
+      intruder =
+        spawn(fn ->
+          receive do
+            :go ->
+              # A real query against the SAME repo, from a process that is
+              # neither `self()` nor in `$callers` for the counted operation
+              # below.
+              Repo.all(from(o in Org, limit: 1))
+              send(test_pid, :intruder_done)
+          end
+        end)
+
+      one_row =
+        count_queries(fn ->
+          # Message rendezvous, not `Process.sleep`: release the intruder
+          # only once we're inside the handler's attach window (it detaches
+          # in `count_queries/1`'s `after` clause, which cannot run until
+          # this fun returns), then block on the intruder's own completion
+          # signal before returning. That guarantees the intruder's query —
+          # and its `[:platform, :repo, :query]` telemetry event — actually
+          # lands while the handler is attached, rather than racing it.
+          send(intruder, :go)
+          result = Archive.artifacts_for(viewer, [one])
+
+          receive do
+            :intruder_done -> :ok
+          end
+
+          result
+        end)
+
+      # Why this discriminates the two implementations:
+      #
+      # Against the PRE-STAGE-1 unfiltered `:telemetry.attach` (no per-
+      # process check at all), this same test would observe an INFLATED
+      # count — the intruder's query lands in the same handler as the
+      # counted operation's own six, giving 7, because the old handler has
+      # no way to distinguish "my emitting process" from "any emitting
+      # process in the BEAM."
+      #
+      # Against the stage-1 `:caller`-filtered handler, only queries whose
+      # emitting process is `self()` (the counted operation's own process)
+      # or appears in that process's `$callers` are counted. The intruder is
+      # neither, so its query is correctly excluded and the count stays
+      # exactly 6 — identical to what `one_row == 6` already asserts above
+      # when run with no concurrent noise. That equivalence — same answer
+      # whether or not something else is running — is the property the
+      # ticket asks for and the property a solo assertion cannot exercise.
+      assert one_row == 6
+    end
   end
 
   defp archived_meeting_with_artifacts!(name) do
@@ -460,6 +534,25 @@ defmodule Platform.Meetings.ArchiveArtifactsTest do
     run_meeting!(meeting, at("2026-07-29T14:00:00Z"), at("2026-07-29T14:52:00Z"))
   end
 
+  # NOT `Platform.TelemetryHelpers.attach_scoped/4` — its detach only runs
+  # via `on_exit`, i.e. at test-end, and this helper is called TWICE per
+  # test (`one_row` then `six_rows`) with an immediate `try/after` detach
+  # between calls. Reusing the helper as-is would leave the first
+  # invocation's handler attached while the second one runs, double-
+  # counting every query the second call issues. So this hand-rolls the
+  # same `:caller` discriminator `attach_scoped/4` uses
+  # (`telemetry_helpers.ex` — `self() == pid or pid in
+  # Process.get(:"$callers", [])`) inside the existing immediate-detach
+  # shape instead. `:telemetry` handlers run synchronously in the process
+  # that calls `:telemetry.execute/3`, so `self()` here IS the emitting
+  # process — no metadata pid is needed (repo-query metadata carries none;
+  # see `deps/ecto_sql/lib/ecto/adapters/sql.ex`).
+  #
+  # Without this filter, `[:platform, :repo, :query]` fires for every
+  # query in the BEAM while attached, including sibling `async: true` test
+  # modules running concurrently — this module is `async: false` (see the
+  # top of the file), but that never protected it, since the pollution
+  # source is OTHER modules' queries, not this module's own scheduling.
   defp count_queries(fun) do
     handler_id = "archive-artifacts-query-count-#{System.unique_integer([:positive])}"
     test_pid = self()
@@ -467,7 +560,11 @@ defmodule Platform.Meetings.ArchiveArtifactsTest do
     :telemetry.attach(
       handler_id,
       [:platform, :repo, :query],
-      fn _event, _measurements, _metadata, _config -> send(test_pid, {handler_id, :query}) end,
+      fn _event, _measurements, _metadata, _config ->
+        if self() == test_pid or test_pid in Process.get(:"$callers", []) do
+          send(test_pid, {handler_id, :query})
+        end
+      end,
       nil
     )
 

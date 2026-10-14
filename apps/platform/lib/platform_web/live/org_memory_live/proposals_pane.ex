@@ -4,8 +4,8 @@ defmodule PlatformWeb.OrgMemoryLive.ProposalsPane do
   019f70e9).
 
   Renders pending `Platform.Memory.MemoryProposal` rows from the
-  Historian's dreaming synthesis pipeline as a 5-column table
-  (Category | Confidence | Evidence | Source | Age | Actions). Each row
+  Historian's dreaming synthesis pipeline as a table
+  (expand | Category | Confidence | Evidence | Source | Age | Actions). Each row
   offers two icon-only actions:
 
     * Approve (checkmark) → `phx-click="approve_proposal"` — flips
@@ -16,6 +16,15 @@ defmodule PlatformWeb.OrgMemoryLive.ProposalsPane do
       Cancel + Submit. The feedback text feeds the next dreaming run's
       few-shot exemplars per
       `Platform.Memory.Proposals.rejected_exemplars/1`.
+
+  A first 40px column holds a chevron `<button>` (`phx-click=
+  "toggle_proposal_row"`, `aria-expanded`, `aria-controls`) that opens a
+  panel row (colspan 7) under the proposal (task 01a1170a stage 1):
+  "Writes to <target path>", the body as an additive diff (shared with
+  the mobile card via `PlatformWeb.OrgMemoryLive.ProposalBody`), the
+  full untruncated evidence, and labelled Reject / Approve buttons.
+  Many rows can be open at once. Rejecting from an open panel swaps its
+  action bar for the reject form instead of adding a second row.
 
   Empty state renders a friendly "the Historian's dreaming is quiet"
   message — rejected + expired proposals persist in the DB for post-hoc
@@ -28,11 +37,14 @@ defmodule PlatformWeb.OrgMemoryLive.ProposalsPane do
   the pending set is bounded (default `list_pending/1` limit == 50,
   and Rowan's typical inbox is single-digit).
 
-  Stateless — the pending list, `show_reject_form_for`, and the
-  workspace scope all live on `PlatformWeb.OrgMemoryLive`.
+  Stateless — the pending list, `show_reject_form_for`,
+  `expanded_proposals`, `expanded_diffs` and the workspace scope all live on `PlatformWeb.OrgMemoryLive`.
   """
 
   use Phoenix.Component
+
+  alias Platform.Org.Wiki.Journal
+  alias PlatformWeb.OrgMemoryLive.ProposalBody
 
   attr(:proposals, :list, required: true, doc: "[MemoryProposal.t()] newest first")
 
@@ -41,7 +53,22 @@ defmodule PlatformWeb.OrgMemoryLive.ProposalsPane do
     doc: "id of the proposal whose inline reject textarea is expanded"
   )
 
+  attr(:expanded_proposals, :any,
+    default: nil,
+    doc: "MapSet of proposal ids whose panel row is open (many may be open)"
+  )
+
+  attr(:expanded_diffs, :any,
+    default: nil,
+    doc: "MapSet of proposal ids whose long diff is shown in full"
+  )
+
   def proposals_pane(assigns) do
+    assigns =
+      assigns
+      |> assign(:expanded_proposals, assigns.expanded_proposals || MapSet.new())
+      |> assign(:expanded_diffs, assigns.expanded_diffs || MapSet.new())
+
     ~H"""
     <div class="flex flex-1 flex-col overflow-hidden" data-role="proposals-pane">
       <%!-- Header --%>
@@ -77,63 +104,99 @@ defmodule PlatformWeb.OrgMemoryLive.ProposalsPane do
         <% else %>
           <table
             id="org-memory-proposals-table"
-            class="w-full text-sm"
+            class="w-full table-fixed text-sm"
             data-role="proposals-table"
           >
-            <thead class="sticky top-0 z-10 bg-base-200/60 text-xs uppercase tracking-wider text-base-content/50">
+            <thead class="sticky top-0 z-10 bg-base-200 text-xs uppercase tracking-wider text-base-content/50">
               <tr>
-                <th class="px-4 py-2 text-left font-medium">Category</th>
-                <th class="px-4 py-2 text-left font-medium">Confidence</th>
-                <th class="px-4 py-2 text-left font-medium">Evidence</th>
-                <th class="px-4 py-2 text-left font-medium">Source</th>
-                <th class="px-4 py-2 text-left font-medium">Age</th>
-                <th class="px-4 py-2 text-right font-medium">Actions</th>
+                <%!-- table-fixed: these header widths ARE the layout, so no
+                     cell's content (a long project Source label, an open
+                     panel's diff) can widen the table past the pane.
+                     Evidence takes the remainder and truncates. --%>
+                <th class="w-10 px-2 py-2"><span class="sr-only">Expand</span></th>
+                <th class="w-40 px-3 py-2 text-left font-medium">Category</th>
+                <th class="w-28 px-3 py-2 text-left font-medium">Confidence</th>
+                <th class="px-3 py-2 text-left font-medium">Evidence</th>
+                <th class="w-36 px-3 py-2 text-left font-medium">Source</th>
+                <th class="w-20 px-3 py-2 text-left font-medium">Age</th>
+                <th class="w-28 px-3 py-2 text-right font-medium">Actions</th>
               </tr>
             </thead>
             <tbody id="proposals-tbody">
               <%= for proposal <- @proposals do %>
+                <% open? = MapSet.member?(@expanded_proposals, proposal.id) %>
+                <% rejecting? = @show_reject_form_for == proposal.id %>
                 <tr
                   id={"proposal-row-#{proposal.id}"}
                   data-proposal-id={proposal.id}
                   class={[
-                    "border-b border-edge transition-colors hover:bg-base-200",
+                    "border-b border-edge transition-colors hover:bg-base-content/5",
                     "md:even:bg-base-100/50",
-                    @show_reject_form_for == proposal.id &&
-                      "bg-warning/5 border-l-2 border-l-warning"
+                    open? && "bg-base-content/5",
+                    rejecting? && "bg-warning/5 border-l-2 border-l-warning"
                   ]}
                 >
-                  <td class="px-4 py-3">
-                    <span class={[
-                      "badge badge-xs whitespace-nowrap",
-                      category_badge_class(proposal.category)
-                    ]}>
-                      {proposal.category}
+                  <td class="w-10 px-2 py-3 text-center">
+                    <button
+                      type="button"
+                      phx-click="toggle_proposal_row"
+                      phx-value-id={proposal.id}
+                      aria-expanded={to_string(open?)}
+                      aria-controls={"proposal-panel-#{proposal.id}"}
+                      aria-label={if open?, do: "Collapse proposal", else: "Expand proposal"}
+                      class="btn btn-ghost btn-xs btn-square"
+                      data-role="proposal-row-toggle"
+                    >
+                      <span class={[
+                        "hero-chevron-right size-4 transition-transform",
+                        open? && "rotate-90"
+                      ]}>
+                      </span>
+                    </button>
+                  </td>
+                  <td class="px-3 py-3">
+                    <span
+                      class={[
+                        "badge badge-xs max-w-full whitespace-nowrap",
+                        category_badge_class(proposal.category)
+                      ]}
+                      title={proposal.category}
+                    >
+                      <span class="truncate">{proposal.category}</span>
                     </span>
                   </td>
-                  <td class="px-4 py-3">
+                  <td class="px-3 py-3">
                     <span class={["badge badge-xs", confidence_badge_class(proposal.confidence)]}>
                       {proposal.confidence}
                     </span>
                   </td>
                   <td
-                    class="px-4 py-3 max-w-xs truncate text-base-content/70"
+                    class="px-3 py-3 truncate text-base-content/70"
                     title={proposal.evidence}
                     data-role="evidence-cell"
                   >
                     {proposal.evidence || "—"}
                   </td>
-                  <td class="px-4 py-3 font-mono text-xs text-base-content/50">
-                    <a
-                      href={"/org_memory/#{proposal.journal_path}"}
-                      class="hover:text-primary hover:underline"
-                    >
+                  <td
+                    class="px-3 py-3 truncate font-mono text-xs text-base-content/50"
+                    title={proposal.journal_path}
+                    data-role="proposal-source"
+                  >
+                    <%= if href = source_href(proposal.journal_path) do %>
+                      <a
+                        href={href}
+                        class="text-interactive hover:underline focus-visible:underline"
+                      >
+                        {source_label(proposal.journal_path)}
+                      </a>
+                    <% else %>
                       {source_label(proposal.journal_path)}
-                    </a>
+                    <% end %>
                   </td>
-                  <td class="px-4 py-3 text-xs text-base-content/50 whitespace-nowrap">
+                  <td class="px-3 py-3 truncate text-xs text-base-content/50">
                     {relative_age(proposal.inserted_at)}
                   </td>
-                  <td class="px-4 py-3 text-right whitespace-nowrap">
+                  <td class="px-3 py-3 text-right whitespace-nowrap">
                     <button
                       phx-click="approve_proposal"
                       phx-value-id={proposal.id}
@@ -157,47 +220,89 @@ defmodule PlatformWeb.OrgMemoryLive.ProposalsPane do
                   </td>
                 </tr>
 
-                <%!-- Inline reject-form expansion row --%>
+                <%!-- Expanded panel row: review order is target path, diff,
+                     evidence, actions (Saru's canvas). Stacked at every width,
+                     measure capped at 96ch AND at the cell width, so neither
+                     the diff nor the action bar can run past the pane. --%>
                 <tr
-                  :if={@show_reject_form_for == proposal.id}
+                  :if={open?}
+                  id={"proposal-panel-#{proposal.id}"}
+                  data-role="proposal-panel"
+                  class="border-b border-edge bg-base-content/5"
+                >
+                  <td colspan="7" class="px-4 py-4 pl-14">
+                    <div class="flex min-w-0 max-w-[min(96ch,100%)] flex-col gap-4">
+                      <div class="text-sm text-base-content/70" data-role="proposal-target">
+                        Writes to
+                        <span class="break-all font-mono text-[13px] text-base-content">
+                          {ProposalBody.target_key(proposal)}
+                        </span>
+                      </div>
+
+                      <%= if ProposalBody.blank_body?(proposal.body) do %>
+                        <p class="text-sm text-base-content/60" data-role="proposal-empty-body">
+                          No body on this proposal
+                        </p>
+                      <% else %>
+                        <div>
+                          <ProposalBody.proposal_diff
+                            proposal={proposal}
+                            surface={:desktop}
+                            expanded?={MapSet.member?(@expanded_diffs, proposal.id)}
+                          />
+                        </div>
+                      <% end %>
+
+                      <div>
+                        <div class="mb-1 text-xs font-medium text-base-content/60">Evidence</div>
+                        <%!-- phx-no-format: pre-wrap would render the
+                             formatter's indentation around the expression. --%>
+                        <p
+                          class="whitespace-pre-wrap break-words text-sm text-base-content/80"
+                          data-role="proposal-evidence"
+                          phx-no-format
+                        >{proposal.evidence || "—"}</p>
+                      </div>
+
+                      <%= if rejecting? do %>
+                        <.reject_form proposal={proposal} />
+                      <% else %>
+                        <div class="flex justify-end gap-2" data-role="proposal-panel-actions">
+                          <button
+                            type="button"
+                            phx-click="show_reject_form"
+                            phx-value-id={proposal.id}
+                            class="btn btn-ghost btn-sm"
+                            data-action="panel-reject"
+                          >
+                            Reject
+                          </button>
+                          <button
+                            type="button"
+                            phx-click="approve_proposal"
+                            phx-value-id={proposal.id}
+                            class="btn btn-primary btn-sm"
+                            data-action="panel-approve"
+                          >
+                            Approve and promote
+                          </button>
+                        </div>
+                      <% end %>
+                    </div>
+                  </td>
+                </tr>
+
+                <%!-- Inline reject-form expansion row. When the panel is open
+                     the form lives inside it instead (replacing the action
+                     bar), so it never renders twice. --%>
+                <tr
+                  :if={rejecting? and not open?}
                   id={"proposal-reject-row-#{proposal.id}"}
                   data-role="reject-form-row"
                   class="bg-warning/5 border-b border-edge"
                 >
-                  <td colspan="6" class="px-4 py-4">
-                    <form
-                      id={"proposal-reject-form-#{proposal.id}"}
-                      phx-submit="reject_proposal"
-                    >
-                      <%!-- `name="_id"`, not `name="id"`: on an input, name="id"
-                           overrides the DOM id of the enclosing form element, which
-                           LiveView warns about at compile time. The handler in
-                           `view.ex` matches `"_id"` for both proposal reject
-                           forms. --%>
-                      <input type="hidden" name="_id" value={proposal.id} />
-                      <div class="mb-2 text-xs font-medium text-base-content/70">
-                        Why is this proposal being rejected? Your feedback trains the next dreaming run.
-                      </div>
-                      <textarea
-                        name="feedback"
-                        rows="3"
-                        placeholder="Optional feedback — e.g. 'Not novel; already captured in org/page/pricing.md.'"
-                        class="textarea textarea-bordered w-full text-sm"
-                      ></textarea>
-                      <div class="mt-2 flex justify-end gap-2">
-                        <button
-                          type="button"
-                          phx-click="cancel_reject"
-                          phx-value-id={proposal.id}
-                          class="btn btn-ghost btn-xs"
-                        >
-                          Cancel
-                        </button>
-                        <button type="submit" class="btn btn-warning btn-xs">
-                          Submit rejection
-                        </button>
-                      </div>
-                    </form>
+                  <td colspan="7" class="px-4 py-4">
+                    <.reject_form proposal={proposal} />
                   </td>
                 </tr>
               <% end %>
@@ -206,6 +311,46 @@ defmodule PlatformWeb.OrgMemoryLive.ProposalsPane do
         <% end %>
       </div>
     </div>
+    """
+  end
+
+  attr(:proposal, :map, required: true)
+
+  defp reject_form(assigns) do
+    ~H"""
+    <form
+      id={"proposal-reject-form-#{@proposal.id}"}
+      phx-submit="reject_proposal"
+    >
+      <%!-- `name="_id"`, not `name="id"`: on an input, name="id"
+           overrides the DOM id of the enclosing form element, which
+           LiveView warns about at compile time. The handler in
+           `view.ex` matches `"_id"` for both proposal reject
+           forms. --%>
+      <input type="hidden" name="_id" value={@proposal.id} />
+      <div class="mb-2 text-xs font-medium text-base-content/70">
+        Why is this proposal being rejected? Your feedback trains the next dreaming run.
+      </div>
+      <textarea
+        name="feedback"
+        rows="3"
+        placeholder="Optional feedback — e.g. 'Not novel; already captured in org/page/pricing.md.'"
+        class="textarea textarea-bordered w-full text-sm"
+      ></textarea>
+      <div class="mt-2 flex justify-end gap-2">
+        <button
+          type="button"
+          phx-click="cancel_reject"
+          phx-value-id={@proposal.id}
+          class="btn btn-ghost btn-xs"
+        >
+          Cancel
+        </button>
+        <button type="submit" class="btn btn-warning btn-xs">
+          Submit rejection
+        </button>
+      </div>
+    </form>
     """
   end
 
@@ -224,6 +369,29 @@ defmodule PlatformWeb.OrgMemoryLive.ProposalsPane do
   defp confidence_badge_class("medium"), do: "badge-warning"
   defp confidence_badge_class("low"), do: "badge-ghost"
   defp confidence_badge_class(_), do: "badge-ghost"
+
+  # Source link → the Journal tab focused on the proposal's day (task
+  # 01a1170a stage 2). Journal days have no `org_wiki_pages` row, so the
+  # old `/org_memory/<journal_path>` href always hit "Page not found".
+  #   org/journal/2026-10-07.md
+  #     → /org_memory?tab=journal&date=2026-10-07#journal-day-2026-10-07
+  #   project/<uuid>/journal/2026-10-07.md
+  #     → /org_memory?tab=journal&date=2026-10-07&ns=project%2F<uuid>#journal-day-2026-10-07
+  # A nil or unparsable path returns nil, and the cell renders plain text
+  # with no `<a>`, so no Source link can 404. The fragment targets the
+  # `journal-day-<date>` id `JournalPane` renders per day group.
+  @doc false
+  def source_href(path) do
+    case Journal.parse_virtual_path(path) do
+      {:ok, %{namespace: ns, date: date}} ->
+        iso = Date.to_iso8601(date)
+        ns_param = if ns == "org", do: "", else: "&ns=" <> URI.encode_www_form(ns)
+        "/org_memory?tab=journal&date=#{iso}#{ns_param}#journal-day-#{iso}"
+
+      :error ->
+        nil
+    end
+  end
 
   # `org/journal/2026-07-18.md` → `2026-07-18` (just the date).
   # `project/<uuid>/journal/<date>.md` → `project/<short>/<date>`.

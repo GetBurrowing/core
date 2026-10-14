@@ -50,7 +50,7 @@ defmodule PlatformWeb.MeetingCalendarControllerTest do
   @seeded_updated_at ~U[2026-06-01 09:30:00.000000Z]
 
   defp create_project! do
-    org_id = Platform.TenancyFixtures.fabrikam_org_id()
+    org_id = Platform.TenancyFixtures.acme_org_id()
 
     {:ok, project} =
       Tasks.create_project(%{

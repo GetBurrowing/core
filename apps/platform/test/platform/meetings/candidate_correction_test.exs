@@ -38,7 +38,7 @@ defmodule Platform.Meetings.CandidateCorrectionTest do
   alias Platform.Repo
 
   setup do
-    meeting = create_meeting!(Platform.TenancyFixtures.fabrikam_org_id())
+    meeting = create_meeting!(Platform.TenancyFixtures.acme_org_id())
 
     %{
       meeting: meeting,
@@ -211,7 +211,7 @@ defmodule Platform.Meetings.CandidateCorrectionTest do
 
       assert {:ok, _} = Candidates.correct(candidate, :not_an_action, now: ctx.now)
 
-      assert only_correction!().org_id == Platform.TenancyFixtures.fabrikam_org_id()
+      assert only_correction!().org_id == Platform.TenancyFixtures.acme_org_id()
     end
   end
 

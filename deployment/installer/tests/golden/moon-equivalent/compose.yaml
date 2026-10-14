@@ -36,6 +36,8 @@ services:
       OIDC_PKCE_ENABLED: "true"
       PHX_HOST: "suite-01a0d69d.test"
       PHX_SERVER: "true"
+      POCKET_ID_ADMIN_ENABLED: "true"
+      POCKET_ID_ADMIN_URL: "http://pocket-id:1411"
       PORT: "4000"
     volumes:
       - "core-data:/data/platform"
@@ -156,6 +158,7 @@ services:
     environment:
       ANALYTICS_DISABLED: "true"
       APP_URL: "https://auth.suite-01a0d69d.test"
+      LOG_LEVEL: "error"
       TRUST_PROXY: "true"
     volumes:
       - "pocket-id-data:/app/data"

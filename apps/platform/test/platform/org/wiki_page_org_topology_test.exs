@@ -3,7 +3,7 @@ defmodule Platform.Org.WikiPageOrgTopologyTest do
   ADR 0042 Stage 1 — verifies the schema-level pieces of the WikiPage /
   WikiJournalEntry changes on `org_wiki_pages` / `org_wiki_journal_entries`:
 
-    * `org_id` is required (or auto-defaulted to Fabrikam for legacy callers)
+    * `org_id` is required (or auto-defaulted to Acme for legacy callers)
     * `project_id` is accepted as an optional belongs_to
     * Namespaced `file_key`s (`project/<uuid>/page/<rest>`) are accepted
 
@@ -21,10 +21,10 @@ defmodule Platform.Org.WikiPageOrgTopologyTest do
   alias Platform.Repo
 
   describe "WikiPage.changeset/2 — ADR 0042 org topology" do
-    test "defaults org_id to root Fabrikam when the caller omits it" do
+    test "defaults org_id to root Acme when the caller omits it" do
       changeset = WikiPage.changeset(%WikiPage{}, %{file_key: "org/page/identity.md"})
       assert changeset.valid?
-      assert Ecto.Changeset.get_field(changeset, :org_id) == fabrikam_org_id()
+      assert Ecto.Changeset.get_field(changeset, :org_id) == acme_org_id()
     end
 
     test "preserves an explicitly-supplied tenant org_id" do
@@ -58,11 +58,11 @@ defmodule Platform.Org.WikiPageOrgTopologyTest do
         |> WikiPage.changeset(%{
           file_key: "org/page/FILES.md",
           content: "# Files\n",
-          org_id: fabrikam_org_id()
+          org_id: acme_org_id()
         })
         |> Repo.insert()
 
-      assert page.org_id == fabrikam_org_id()
+      assert page.org_id == acme_org_id()
       assert page.file_key == "org/page/FILES.md"
     end
 

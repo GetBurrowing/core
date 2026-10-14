@@ -248,6 +248,200 @@ defmodule Platform.Experiments.Results do
     end
   end
 
+  # ── Per-agent breakdown (task 01a114a8 stage 4) ─────────────────────────
+
+  @by_agent_fields [
+    {"suite_tool_calls", "mean"},
+    {"suite_tool_calls", "median"},
+    {"client_turns", "mean"},
+    {"client_tokens_in", "mean"},
+    {"client_tokens_out", "mean"},
+    {"wall_ms", "mean"},
+    {"wall_ms", "median"},
+    {"outcome_first_pass", "mean"},
+    {"tool_calls_error", "mean"}
+  ]
+
+  @doc """
+  One row per (dispatched agent x arm) for an experiment whose subjects are
+  tasks, built from `Platform.Orchestration.DispatchMetrics.for_tasks/2`
+  over each arm's assigned, non-excluded tasks. Written for the
+  `dispatch.code_mode` surface (`code_mode_report`) and usable on any
+  task-subject experiment.
+
+  Each row carries:
+
+    * `agent_id`, `variant_slug`, `suite_run_arm` (the arm payload's
+      `"suite_run"`, nil when the arm has no such key), `tasks` (distinct
+      assigned tasks the agent was dispatched on) and `n` (dispatches);
+    * `metrics`: `"<field>_<agg>"` => `%{value, n, reason}` for every
+      field `DispatchUsage` aggregates. `n` is how many dispatches carried
+      the field. `value` is nil, never 0, when none did
+      (`reason: :insufficient_data`), and nil below the experiment's stop
+      rule (`:below_stop_rule`, or `:no_stop_rule` when none is set), the
+      same "earned" rule as `rows/1`;
+    * `suite_run_dispatches` (dispatches with at least one suite_run call),
+      `suite_run_adoption_rate` (share of those, only on an arm whose
+      payload says `suite_run: true`) and `control_suite_run_violations`
+      (the same count, only on an arm whose payload says `suite_run: false`);
+    * `coverage`: how much of the agent is measurable. `unit_source`
+      counts dispatches per source (`ack`, `stage_row`, `lease`) and
+      `ack_pct` their ack share; a runtime that cannot call `task_ack`
+      shows as stage_row-only. `client_report_pct` is the share of
+      dispatches with a usage report. `attribution_pct` / `attribution_by_rung`
+      are the agent's model-issued tool calls since the experiment's first
+      assignment
+      (all tasks, both arms: an unattributed call cannot be tied to a task),
+      so the two arms of one agent carry the same figure.
+
+  Excluded subjects are left out of every row, and no arm is compared with
+  another here: the rows sit side by side for a reader.
+  """
+  @spec by_agent(Experiment.t(), keyword()) :: [map()]
+  def by_agent(%Experiment{} = experiment, opts \\ []) do
+    now = Keyword.get(opts, :now) || DateTime.utc_now()
+    assignments = experiment |> Assignments.list_assignments() |> Enum.filter(&measured?/1)
+    arm_by_task = Map.new(assignments, &{&1.subject_id, &1.variant_slug})
+    payloads = arm_payloads(experiment)
+
+    dispatches =
+      arm_by_task
+      |> Map.keys()
+      |> Platform.Orchestration.DispatchMetrics.for_tasks(now: now)
+
+    coverage = attribution_by_agent(experiment, assignments, now)
+    minimum = min_subjects(experiment)
+
+    groups = Enum.group_by(dispatches, &{&1.agent_id, Map.fetch!(arm_by_task, &1.task_id)})
+
+    # A cohort agent with no dispatch in an arm still gets that row, with
+    # n 0: an enrolled agent producing no data must be visible, not absent.
+    empty =
+      for agent_id <- cohort_agent_ids(experiment.assignment_policy),
+          slug <- Map.keys(payloads),
+          not Map.has_key?(groups, {agent_id, slug}),
+          into: %{},
+          do: {{agent_id, slug}, []}
+
+    groups
+    |> Map.merge(empty)
+    |> Enum.map(fn {{agent_id, slug}, rows} ->
+      agent_row(
+        agent_id,
+        slug,
+        rows,
+        Map.get(payloads, slug),
+        Map.get(coverage, agent_id),
+        minimum
+      )
+    end)
+    |> Enum.sort_by(
+      &{to_string(&1.agent_id), &1.variant_slug != Experiment.control_slug(), &1.variant_slug}
+    )
+  end
+
+  # The agent ids a task_cohort names, at any depth of a composite policy.
+  defp cohort_agent_ids(%{} = policy) do
+    own =
+      case Map.get(policy, "cohort") do
+        %{"agent_id" => ids} when is_list(ids) -> Enum.filter(ids, &is_binary/1)
+        %{"agent_id" => id} when is_binary(id) -> [id]
+        _ -> []
+      end
+
+    nested =
+      case Map.get(policy, "policies") do
+        list when is_list(list) -> Enum.flat_map(list, &cohort_agent_ids/1)
+        _ -> []
+      end
+
+    Enum.uniq(own ++ nested)
+  end
+
+  defp cohort_agent_ids(_policy), do: []
+
+  defp measured?(%{subject_type: "task", excluded_reason: nil}), do: true
+  defp measured?(_assignment), do: false
+
+  defp arm_payloads(experiment) do
+    experiment
+    |> Experiments.list_variants()
+    |> Map.new(fn variant -> {variant.slug, variant.payload || %{}} end)
+  end
+
+  # The window opens at the experiment's first assignment (an experiment
+  # has no started_at column), else at its creation.
+  defp attribution_by_agent(%Experiment{} = experiment, assignments, now) do
+    from =
+      case assignments do
+        [] -> experiment.inserted_at
+        rows -> rows |> Enum.map(& &1.assigned_at) |> Enum.min(DateTime)
+      end
+
+    %{from: from, to: now}
+    |> Platform.Orchestration.DispatchMetrics.attribution_coverage_for()
+    |> Map.new(&{&1.agent_id, &1})
+  end
+
+  defp agent_row(agent_id, slug, rows, payload, attribution, minimum) do
+    n = length(rows)
+    suite_run_arm = suite_run_flag(payload)
+    with_suite_run = Enum.count(rows, &((&1.suite_run_calls || 0) > 0))
+    sources = Enum.frequencies_by(rows, & &1.unit_source)
+    reported = Enum.count(rows, &((&1.client_reports || 0) > 0))
+
+    %{
+      agent_id: agent_id,
+      variant_slug: slug,
+      suite_run_arm: suite_run_arm,
+      tasks: rows |> Enum.map(& &1.task_id) |> Enum.uniq() |> length(),
+      n: n,
+      metrics: Map.new(@by_agent_fields, &metric(rows, &1, minimum)),
+      suite_run_dispatches: with_suite_run,
+      suite_run_adoption_rate: if(suite_run_arm == true, do: ratio(with_suite_run, n)),
+      control_suite_run_violations: if(suite_run_arm == false, do: with_suite_run),
+      coverage: %{
+        unit_source: Map.new(~w(ack stage_row lease), &{&1, Map.get(sources, &1, 0)}),
+        ack_pct: pct(Map.get(sources, "ack", 0), n),
+        client_report_pct: pct(reported, n),
+        attribution_tool_calls: attribution && attribution.tool_calls,
+        attribution_pct: attribution && attribution.pct,
+        attribution_by_rung: (attribution && attribution.by_rung) || %{}
+      }
+    }
+  end
+
+  defp suite_run_flag(%{"suite_run" => flag}) when is_boolean(flag), do: flag
+  defp suite_run_flag(_payload), do: nil
+
+  # The stop rule gates every per-agent figure exactly as it gates `rows/1`:
+  # `value` is carried only when `n >= min_subjects`, and a missing stop
+  # rule earns nothing. `n` is always present.
+  defp metric(rows, {field, agg}, minimum) do
+    key = field <> "_" <> agg
+
+    case Platform.Experiments.MetricKinds.DispatchUsage.aggregate(rows, field, agg) do
+      {:ok, %Result{value: value, n: n}} ->
+        earned? = is_integer(minimum) and n >= minimum
+
+        {key,
+         %{
+           value: if(earned?, do: value),
+           n: n,
+           reason: reason_for(earned?, minimum)
+         }}
+
+      :insufficient_data ->
+        {key, %{value: nil, n: 0, reason: :insufficient_data}}
+    end
+  end
+
+  defp ratio(_count, 0), do: nil
+  defp ratio(count, n), do: count / n
+
+  defp pct(_count, 0), do: nil
+  defp pct(count, n), do: Float.round(count * 100 / n, 1)
+
   @doc """
   Why a figure is absent, in the reader's words.
 

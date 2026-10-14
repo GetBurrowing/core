@@ -46,7 +46,7 @@ defmodule PlatformWeb.MeetingLiveParticipantNamesTest do
     %OrgMembership{}
     |> OrgMembership.changeset(%{
       user_id: viewer.id,
-      org_id: Platform.TenancyFixtures.fabrikam_org_id(),
+      org_id: Platform.TenancyFixtures.acme_org_id(),
       role: "member"
     })
     |> Repo.insert!()
@@ -69,7 +69,7 @@ defmodule PlatformWeb.MeetingLiveParticipantNamesTest do
       |> Project.changeset(%{
         name: "Voice Worker Presence Project #{n}",
         slug: "voice-worker-presence-project-#{n}",
-        org_id: Platform.TenancyFixtures.fabrikam_org_id()
+        org_id: Platform.TenancyFixtures.acme_org_id()
       })
       |> Repo.insert()
 

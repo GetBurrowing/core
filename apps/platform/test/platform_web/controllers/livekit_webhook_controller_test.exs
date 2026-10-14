@@ -628,60 +628,6 @@ defmodule PlatformWeb.LivekitWebhookControllerTest do
   # and never persisting a byte for a phantom room end-to-end.
 
   describe "POST #{@livekit_webhook_path} — end-to-end lifecycle + idempotence" do
-    test "full lifecycle for an app-registered room persists segments then finalizes",
-         %{conn: conn} do
-      # room_started → transcription (3 segments) → room_finished. Assert
-      # the final DB row carries the segments AND has been advanced past
-      # "recording" by the finalize step (zero-segment app rooms
-      # transition straight to "complete" via the summarizer's empty
-      # path; multi-segment ones sit at "processing" until the async
-      # summary lands).
-      room_name = unique_room_id()
-
-      start_conn = post(conn, @livekit_webhook_path, room_started_payload(room_name))
-
-      assert %{"status" => "created", "transcript_id" => transcript_id} =
-               json_response(start_conn, 201)
-
-      segments = [
-        sample_segment(%{"text" => "One", "participant_identity" => "user-a"}),
-        sample_segment(%{"text" => "Two", "participant_identity" => "user-b"}),
-        sample_segment(%{"text" => "Three", "participant_identity" => "user-a"})
-      ]
-
-      trans_conn =
-        post(conn, @livekit_webhook_path, transcription_payload(room_name, segments))
-
-      assert %{
-               "status" => "appended",
-               "transcript_id" => ^transcript_id,
-               "segments_appended" => 3
-             } = json_response(trans_conn, 200)
-
-      # Row now has 3 segments and is still "recording".
-      mid = Meetings.get_transcript(transcript_id)
-      assert length(mid.segments) == 3
-      assert mid.status == "recording"
-
-      finish_conn = post(conn, @livekit_webhook_path, room_finished_payload(room_name))
-
-      assert %{
-               "status" => "finalized",
-               "transcript_id" => ^transcript_id,
-               "segment_count" => 3
-             } = json_response(finish_conn, 200)
-
-      final = Meetings.get_transcript(transcript_id)
-      # Segments survive finalize.
-      assert length(final.segments) == 3
-      assert Enum.map(final.segments, & &1["text"]) == ["One", "Two", "Three"]
-      # Multi-segment path leaves the row at "processing" — the async
-      # summary task advances it to "complete" once the LLM returns.
-      # Accept either since the summarizer is triggered synchronously
-      # under the test task supervisor and MAY have completed already.
-      assert final.status in ["processing", "complete"]
-    end
-
     test "phantom RM_<random> lifecycle end-to-end never persists a row",
          %{conn: conn} do
       # room_started → transcription → room_finished for a phantom

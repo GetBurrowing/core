@@ -179,7 +179,12 @@ defmodule Platform.Design.DarkTokenDiffTest do
   # ── 4. staleness ────────────────────────────────────────────────────────
 
   describe "staleness guard" do
-    test "each live reading's declaration is still what the dark block declares", %{dark: dark} do
+    # Since the Burrow recolor (task 01a120c5) this fixture is a dated record
+    # of the PRE-Burrow palette. The guard below therefore requires it to be
+    # MARKED superseded whenever it no longer matches, and the next test holds
+    # the current dark block to the Burrow re-measure instead.
+    test "each live reading's declaration still matches, or the table is marked superseded",
+         %{dark: dark} do
       stale =
         F.live()
         |> Map.keys()
@@ -194,10 +199,50 @@ defmodule Platform.Design.DarkTokenDiffTest do
             ]
         end)
 
-      assert stale == [],
+      # Superseded means: the superseding re-measure is committed beside the
+      # probe (task 01a120c5, `F.superseded_by/0`). Read from disk, so the check is a
+      # fact about the repo rather than a constant.
+      superseded? =
+        File.exists?(Path.expand("../../../" <> F.burrow_remeasure_path(), __DIR__))
+
+      assert stale == [] or superseded?,
              "re-measure: the dark palette changed since the painted table was taken. Run " <>
                "priv/measurements/01a0cf85-dark-token-diff/probe.mjs and paste the new bytes " <>
                "into DarkTokenPaintedFixture.\n  " <> Enum.join(stale, "\n  ")
+
+      # A superseded mark on a table that still matches would be a false label.
+      assert stale != [] or not superseded?, "marked superseded but still current"
+    end
+
+    test "the current dark block is what the Burrow live re-measure painted", %{dark: dark} do
+      run =
+        Path.expand("../../../" <> F.burrow_remeasure_path(), __DIR__)
+        |> File.read!()
+        |> Jason.decode!()
+
+      assert run["git"]["assets_dirty"] == false
+
+      for {_k, c} <- Map.take(run["controls"]["live"], ["white", "black", "planted"]) do
+        assert c["status"] == "painted"
+      end
+
+      checked =
+        for {row, %{"declaration" => decl, "hex" => painted}} <- run["live"]["rows"],
+            is_binary(decl),
+            {var, value} <- [split_declaration(decl)],
+            String.starts_with?(value, "#") do
+          current = declaration(dark, var)
+
+          assert String.upcase(current) == painted,
+                 "re-measure: #{row} painted #{painted} from `#{decl}` in the Burrow run, " <>
+                   "but the dark block now declares `#{var}: #{current};`. Run probe.mjs " <>
+                   "again and replace #{F.burrow_remeasure_path()}."
+
+          row
+        end
+
+      # Every hex-declared Burrow token was checked, not a convenient subset.
+      assert length(checked) >= 9, "only #{length(checked)} rows checked: #{inspect(checked)}"
     end
 
     test "the ground decision is still recorded in the dark block", %{dark: dark} do

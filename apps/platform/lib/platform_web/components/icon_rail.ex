@@ -42,7 +42,7 @@ defmodule PlatformWeb.Components.IconRail do
   durable notification-state row now lives on `/inbox`, rendered by
   `PlatformWeb.Components.NotificationState`. Settings was considered and ruled
   out: there is no `/settings` route, and the rail's bottom gear is Admin,
-  `fabrikam_only?: true`, so it could never host a feature that has to reach
+  `root_only?: true`, so it could never host a feature that has to reach
   external users. The rail therefore carries no `push_permission` state at all;
   `ShellLive`'s `:push_permission` assign feeds `/inbox` and the chat banner.
 
@@ -50,8 +50,8 @@ defmodule PlatformWeb.Components.IconRail do
 
   Both desktop and mobile views consume the same `destinations/1` list.
   The list carries the hero icon name, label, path, cluster, and a
-  `fabrikam_only?` flag. Admin and Prompts are `fabrikam_only?: true` today (as of
-  2026-05-20); consumers filter on the flag via `is_fabrikam_user`.
+  `root_only?` flag. Admin and Prompts are `root_only?: true` today (as of
+  2026-05-20); consumers filter on the flag via `root_user`.
   Future destinations (e.g. Inbox, Context, Memory, Prompts) may not yet
   have routes; their `:path` values are noted in the entry but the actual
   link wiring is deferred to Stage 3.
@@ -67,7 +67,7 @@ defmodule PlatformWeb.Components.IconRail do
     doc: "current request path; used for active-state styling and aria-current"
   )
 
-  attr(:is_fabrikam_user, :boolean,
+  attr(:root_user, :boolean,
     default: false,
     doc: "when true, the Admin slot renders; otherwise it is omitted from the DOM entirely"
   )
@@ -102,6 +102,15 @@ defmodule PlatformWeb.Components.IconRail do
         "canonical list (nil)."
   )
 
+  attr(:brand_name, :string,
+    default: "",
+    doc:
+      "the install's app name (Platform.Branding.app_name/0, assigned once per mount by " <>
+        "ShellLive) — the alt text of the Burrow mark and the label text in the rail header " <>
+        "(task 01a120c5 stages 2 and 3). Never a compiled " <>
+        "product name; empty (decorative) only when a caller renders the rail without one."
+  )
+
   @doc """
   Desktop vertical icon-rail. Hidden below the `lg` breakpoint.
 
@@ -110,20 +119,20 @@ defmodule PlatformWeb.Components.IconRail do
   gets `.icon-rail-tab--active` and `aria-current="page"`.
   """
   def icon_rail(assigns) do
-    is_fabrikam_user = Map.get(assigns, :is_fabrikam_user, false)
+    root_user = Map.get(assigns, :root_user, false)
     current_path = Map.get(assigns, :current_path, "/")
     collapsed = Map.get(assigns, :sidebar_collapsed, false)
     all = assigns[:destinations] || canonical_destinations()
 
-    live = cluster_destinations(all, :live, is_fabrikam_user)
-    working = cluster_destinations(all, :working, is_fabrikam_user)
-    admin = cluster_destinations(all, :admin, is_fabrikam_user)
+    live = cluster_destinations(all, :live, root_user)
+    working = cluster_destinations(all, :working, root_user)
+    admin = cluster_destinations(all, :admin, root_user)
 
     visible = live ++ working ++ admin
 
     # Single winner computed across every VISIBLE desktop destination so the
     # CSS active class and aria-current can never disagree, and so a
-    # fabrikam-filtered tile never lights up. Children join the pool only when
+    # root-filtered tile never lights up. Children join the pool only when
     # expanded: collapsed mode doesn't render child rows, and the parent's
     # shorter prefix then wins the match so the iconed parent lights up.
     # See active_destination_key/2.
@@ -164,10 +173,10 @@ defmodule PlatformWeb.Components.IconRail do
           :if={!@sidebar_collapsed}
           class="flex size-10 flex-shrink-0 items-center justify-center"
         >
-          <img src={~p"/images/logo.svg"} alt="Startup Suite" class="size-5" />
+          <img src={~p"/images/burrow-mark.svg"} alt={@brand_name} class="size-5" />
         </div>
         <span :if={!@sidebar_collapsed} class="icon-rail-label text-sm font-semibold">
-          Startup Suite
+          {@brand_name}
         </span>
         <button
           :if={!@sidebar_collapsed}
@@ -221,7 +230,7 @@ defmodule PlatformWeb.Components.IconRail do
       />
 
       <div class="mt-auto" aria-hidden="true"></div>
-      <%= if @is_fabrikam_user do %>
+      <%= if @root_user do %>
         <%!-- Admin cluster keeps its pinned-bottom position and a hairline
              separator in both rail states, but no "Admin" eyebrow label
              (task 019f575e v2, 2026-07-14). --%>
@@ -347,10 +356,10 @@ defmodule PlatformWeb.Components.IconRail do
 
   Renders exactly 5 tiles: Chat / Tasks / Inbox / Activity / More. The
   Admin destination lives in the More sheet on mobile, never in the bar
-  — `is_fabrikam_user` does not change the tile count here.
+  — `root_user` does not change the tile count here.
   """
   attr(:current_path, :string, default: "/")
-  attr(:is_fabrikam_user, :boolean, default: false)
+  attr(:root_user, :boolean, default: false)
 
   def bottom_rail(assigns) do
     current_path = Map.get(assigns, :current_path, "/")
@@ -409,16 +418,16 @@ defmodule PlatformWeb.Components.IconRail do
       navigation and will reconcile any missing routes.)
     * `:hero_icon` — heroicon class name (rendered in Stage 2)
     * `:cluster` — `:live | :working | :admin`
-    * `:fabrikam_only?` — boolean; today `:admin` and `:prompts` are `true`
+    * `:root_only?` — boolean; today `:admin` and `:prompts` are `true`
 
-  When `opts[:is_fabrikam_user]` is `false` (default), all `fabrikam_only?: true`
+  When `opts[:root_user]` is `false` (default), all `root_only?: true`
   entries are omitted from the returned list.
   """
   def destinations(opts \\ []) do
-    is_fabrikam_user = Keyword.get(opts, :is_fabrikam_user, false)
+    root_user = Keyword.get(opts, :root_user, false)
 
     canonical_destinations()
-    |> Enum.reject(fn dest -> dest.fabrikam_only? and not is_fabrikam_user end)
+    |> Enum.reject(fn dest -> dest.root_only? and not root_user end)
     |> Enum.filter(&enabled?/1)
   end
 
@@ -444,21 +453,21 @@ defmodule PlatformWeb.Components.IconRail do
   # Internals
   # ------------------------------------------------------------------
 
-  defp cluster_destinations(all, cluster, is_fabrikam_user) do
+  defp cluster_destinations(all, cluster, root_user) do
     all
     |> Enum.filter(&(&1.cluster == cluster))
-    |> filter_fabrikam_only(is_fabrikam_user)
+    |> filter_root_only(root_user)
     |> Enum.filter(&enabled?/1)
   end
 
-  # Apply the fabrikam_only? filter against a per-render is_fabrikam_user flag.
+  # Apply the root_only? filter against a per-render root_user flag.
   # Used at the icon_rail/1 render boundary so EVERY cluster (live /
-  # working / admin) honors fabrikam_only? consistently. Previously only the
-  # admin cluster had a `:if={@is_fabrikam_user}` template gate, which meant
-  # a fabrikam_only?:true tile in the working cluster (e.g. Prompts) still
+  # working / admin) honors root_only? consistently. Previously only the
+  # admin cluster had a `:if={@root_user}` template gate, which meant
+  # a root_only?:true tile in the working cluster (e.g. Prompts) still
   # rendered for members. Fixed 2026-05-20.
-  defp filter_fabrikam_only(destinations, is_fabrikam_user) do
-    Enum.reject(destinations, fn dest -> dest.fabrikam_only? and not is_fabrikam_user end)
+  defp filter_root_only(destinations, root_user) do
+    Enum.reject(destinations, fn dest -> dest.root_only? and not root_user end)
   end
 
   defp mobile_primary_destinations do
@@ -657,7 +666,7 @@ defmodule PlatformWeb.Components.IconRail do
   # Canonical destination list: core's 12 entries, then every build-time
   # module's (`Platform.Extensions.rail_items/0`, ADR 0055 section 5, read per
   # call). Order within a cluster determines render order in the rail, and an
-  # extension's item goes through the same `fabrikam_only?` and `enabled?`
+  # extension's item goes through the same `root_only?` and `enabled?`
   # filters as a core item.
   defp canonical_destinations do
     core_destinations() ++ Platform.Extensions.rail_items()
@@ -672,7 +681,7 @@ defmodule PlatformWeb.Components.IconRail do
         path: "/chat",
         hero_icon: "hero-chat-bubble-left-right",
         cluster: :live,
-        fabrikam_only?: false
+        root_only?: false
       },
       %{
         key: :tasks,
@@ -680,7 +689,7 @@ defmodule PlatformWeb.Components.IconRail do
         path: "/tasks",
         hero_icon: "hero-rectangle-stack",
         cluster: :live,
-        fabrikam_only?: false
+        root_only?: false
       },
       %{
         # Inbox is a future "My Notifications" surface (stack 019e389b-53b9-...).
@@ -691,7 +700,7 @@ defmodule PlatformWeb.Components.IconRail do
         path: "/inbox",
         hero_icon: "hero-inbox",
         cluster: :live,
-        fabrikam_only?: false
+        root_only?: false
       },
       %{
         key: :activity,
@@ -699,7 +708,7 @@ defmodule PlatformWeb.Components.IconRail do
         path: "/activity",
         hero_icon: "hero-sparkles",
         cluster: :live,
-        fabrikam_only?: false
+        root_only?: false
       },
 
       # Working cluster — reference / configuration surfaces
@@ -709,18 +718,18 @@ defmodule PlatformWeb.Components.IconRail do
         path: "/skills",
         hero_icon: "hero-book-open",
         cluster: :working,
-        fabrikam_only?: false
+        root_only?: false
       },
       %{
         # ADR-0042 stage 5: project-scoped document store (FilesLive).
         # Lives next to Skills/Memory in the Working cluster; available
-        # to every authenticated user (not Fabrikam-gated).
+        # to every authenticated user (not root-gated).
         key: :files,
         label: "Files",
         path: "/files",
         hero_icon: "hero-document-text",
         cluster: :working,
-        fabrikam_only?: false
+        root_only?: false
       },
       %{
         # T7 stage 2 (2026-05-20): renamed surface from "Context + Memory"
@@ -733,12 +742,12 @@ defmodule PlatformWeb.Components.IconRail do
         path: "/org_memory",
         hero_icon: "hero-building-library",
         cluster: :working,
-        fabrikam_only?: false
+        root_only?: false
       },
       %{
         key: :prompts,
         # Prompts is admin-only per the route gate (live_session :admin /
-        # ensure_admin). Rail entry was previously fabrikam_only?: false which
+        # ensure_admin). Rail entry was previously root_only?: false which
         # rendered the tile for members but redirected on click — fixed
         # 2026-05-20. Kept in working cluster (vs admin cluster) because
         # Prompts is the most-frequently-used admin surface for admins.
@@ -746,11 +755,11 @@ defmodule PlatformWeb.Components.IconRail do
         path: "/admin/prompts",
         hero_icon: "hero-command-line",
         cluster: :working,
-        fabrikam_only?: true
+        root_only?: true
       },
       %{
         # Task 019fe6ba / ADR-0048: the experiments surface at
-        # `/control/experiments`. Deliberately NOT fabrikam_only? — the routes
+        # `/control/experiments`. Deliberately NOT root_only? — the routes
         # sit in `live_session :authenticated`, so reads are member-visible
         # and the tile must be too. Writes (start/stop/conclude) stay
         # admin-gated server-side inside the LiveView, which is where the
@@ -762,7 +771,7 @@ defmodule PlatformWeb.Components.IconRail do
         path: "/control/experiments",
         hero_icon: "hero-beaker",
         cluster: :working,
-        fabrikam_only?: false
+        root_only?: false
       },
       %{
         key: :meetings,
@@ -770,7 +779,7 @@ defmodule PlatformWeb.Components.IconRail do
         path: "/meetings",
         hero_icon: "hero-video-camera",
         cluster: :working,
-        fabrikam_only?: false
+        root_only?: false
       },
       %{
         # Task 01a0cf21 stage 4: the Email module. Its own module in the
@@ -783,18 +792,18 @@ defmodule PlatformWeb.Components.IconRail do
         path: "/email",
         hero_icon: "hero-envelope",
         cluster: :working,
-        fabrikam_only?: false,
+        root_only?: false,
         enabled?: &Platform.Mail.Config.enabled?/0
       },
 
-      # Admin cluster — Fabrikam-only, gated by `is_fabrikam_user`
+      # Admin cluster — root-admin-only, gated by `root_user`
       %{
         key: :admin,
         label: "Admin",
         path: "/admin",
         hero_icon: "hero-cog-6-tooth",
         cluster: :admin,
-        fabrikam_only?: true
+        root_only?: true
       }
     ]
   end

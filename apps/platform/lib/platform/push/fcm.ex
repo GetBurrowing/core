@@ -3,7 +3,7 @@ defmodule Platform.Push.FCM do
   Firebase Cloud Messaging HTTP v1 transport (task 01a10d8e stage 1).
 
   Delivers a `%Platform.Push.Notification{}` to every `fcm_devices` row of a
-  user (the Android app, package `com.koboai.burrow`). Like
+  user (the Android app; its package id lives in `Platform.Mobile.FcmDevice`). Like
   `Platform.Push.APNs`, it is reached only from `Platform.Push`, AFTER the
   archived-user check and the external redaction ran on the notification, so
   it never decides what a notification says, only where it goes. The message
@@ -110,9 +110,12 @@ defmodule Platform.Push.FCM do
   Returns `:ok`, or `{:error, :not_configured}` when the user has devices and
   the configuration is incomplete. A user with no devices costs one query and
   no configuration lookup.
+
+  `opts`: `quiet_unconfigured: true` skips the not-configured log line.
   """
-  @spec deliver_to_user(binary(), Notification.t()) :: :ok | {:error, :not_configured}
-  def deliver_to_user(user_id, %Notification{} = notification) when is_binary(user_id) do
+  @spec deliver_to_user(binary(), Notification.t(), keyword()) :: :ok | {:error, :not_configured}
+  def deliver_to_user(user_id, %Notification{} = notification, opts \\ [])
+      when is_binary(user_id) do
     case devices_for_user(user_id) do
       [] ->
         :ok
@@ -120,7 +123,9 @@ defmodule Platform.Push.FCM do
       devices ->
         case resolve() do
           {:missing, missing} ->
-            log_unconfigured(missing)
+            # `quiet_unconfigured: true` (task 01a1261e): the caller tries
+            # the push relay next and logs only if that is absent too.
+            unless opts[:quiet_unconfigured], do: log_unconfigured(missing)
             {:error, :not_configured}
 
           {:ok, config} ->
@@ -131,9 +136,56 @@ defmodule Platform.Push.FCM do
     end
   end
 
-  # ── Private ────────────────────────────────────────────────────────────────
+  @doc """
+  Send one v1 `message` (without `token`) to one registration token (task
+  01a1261e stage 2): the per-token core of `deliver_to_user/2`, shared with
+  the push relay, which holds no device rows.
 
-  defp devices_for_user(user_id) do
+  `target` carries `:token`. Same OAuth access-token cache, transport retry
+  schedule and response classification as `deliver_to_user/2`; `label`
+  names the target in log lines (never the token).
+
+  Returns `:ok`, `{:error, :unregistered}` (404 `UNREGISTERED`, or 400
+  `INVALID_ARGUMENT` naming `message.token`), or `{:error, reason}`. It
+  deletes nothing.
+  """
+  @spec send_to_token(map(), map(), keyword(), String.t()) ::
+          :ok | {:error, :unregistered | term()}
+  def send_to_token(target, message, config, label \\ "relay target") do
+    case do_send(target, message, config, label) do
+      {:unregistered, _reason} -> {:error, :unregistered}
+      other -> other
+    end
+  end
+
+  @doc """
+  Resolve the FCM credential set (`{:ok, config}`) or `:error`, logging
+  nothing. The relay resolves once per batch.
+  """
+  @spec resolve_config() :: {:ok, keyword()} | :error
+  def resolve_config do
+    case resolve() do
+      {:ok, config} -> {:ok, config}
+      {:missing, _} -> :error
+    end
+  end
+
+  @doc false
+  # Public for `Platform.Push`: logs the not-configured line (which keys are
+  # missing, never a value) when neither FCM nor the push relay is set up.
+  def report_unconfigured do
+    case resolve() do
+      {:missing, missing} -> log_unconfigured(missing)
+      {:ok, _} -> :ok
+    end
+  end
+
+  @doc """
+  The user's `fcm_devices` rows (the query `deliver_to_user/2` sends to).
+  Public so `Platform.Push.Relay` addresses exactly the same set.
+  """
+  @spec devices_for_user(binary()) :: [FcmDevice.t()]
+  def devices_for_user(user_id) do
     if Platform.UUID.valid?(user_id) do
       Repo.all(from(d in FcmDevice, where: d.user_id == ^user_id))
     else
@@ -141,15 +193,24 @@ defmodule Platform.Push.FCM do
     end
   end
 
+  # ── Private ────────────────────────────────────────────────────────────────
+
   defp deliver(%FcmDevice{} = device, message, config) do
+    case do_send(device, message, config, "device #{device.id}") do
+      {:unregistered, reason} -> prune(device, reason)
+      other -> other
+    end
+  end
+
+  defp do_send(target, message, config, label) do
     case access_token(config) do
       {:ok, access_token} ->
-        fn -> request(device, message, config, access_token) end
+        fn -> request(target, message, config, access_token) end
         |> with_transport_retry()
-        |> handle_response(device)
+        |> handle_response(label)
 
       {:error, reason} ->
-        Logger.error("[FCM] no access token (#{reason}); device #{device.id} skipped")
+        Logger.error("[FCM] no access token (#{reason}); #{label} skipped")
         {:error, :no_access_token}
     end
   end
@@ -204,35 +265,33 @@ defmodule Platform.Push.FCM do
     end
   end
 
-  defp handle_response({:ok, %{status: 200}}, _device), do: :ok
+  defp handle_response({:ok, %{status: 200}}, _label), do: :ok
 
-  defp handle_response({:ok, %{status: 404} = resp}, device) do
+  defp handle_response({:ok, %{status: 404} = resp}, label) do
     case error_code(resp) do
-      "UNREGISTERED" -> prune(device, "UNREGISTERED")
-      _ -> warn(device, 404, error_status(resp))
+      "UNREGISTERED" -> {:unregistered, "UNREGISTERED"}
+      _ -> warn(label, 404, error_status(resp))
     end
   end
 
-  defp handle_response({:ok, %{status: 400} = resp}, device) do
+  defp handle_response({:ok, %{status: 400} = resp}, label) do
     if names_token?(resp),
-      do: prune(device, "INVALID_ARGUMENT"),
-      else: warn(device, 400, error_status(resp))
+      do: {:unregistered, "INVALID_ARGUMENT"},
+      else: warn(label, 400, error_status(resp))
   end
 
-  defp handle_response({:ok, %{status: 401} = resp}, device) do
+  defp handle_response({:ok, %{status: 401} = resp}, label) do
     :persistent_term.erase(@access_token_key)
-    warn(device, 401, error_status(resp))
+    warn(label, 401, error_status(resp))
   end
 
-  defp handle_response({:ok, %{status: status} = resp}, device),
-    do: warn(device, status, error_status(resp))
+  defp handle_response({:ok, %{status: status} = resp}, label),
+    do: warn(label, status, error_status(resp))
 
   # Transport failures are reported by the reason atom only: the exception
   # struct can carry the request it failed on, which holds the token.
-  defp handle_response({:error, reason}, device) do
-    Logger.warning(
-      "[FCM] request for device #{device.id} failed: transport_error (#{reason_atom(reason)})"
-    )
+  defp handle_response({:error, reason}, label) do
+    Logger.warning("[FCM] request for #{label} failed: transport_error (#{reason_atom(reason)})")
 
     {:error, :transport_error}
   end
@@ -250,8 +309,8 @@ defmodule Platform.Push.FCM do
     {:error, :device_removed}
   end
 
-  defp warn(device, status, reason) do
-    Logger.warning("[FCM] device #{device.id} push returned #{status}: #{reason || "unknown"}")
+  defp warn(label, status, reason) do
+    Logger.warning("[FCM] #{label} push returned #{status}: #{reason || "unknown"}")
     {:error, {:http_error, status}}
   end
 

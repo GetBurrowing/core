@@ -103,15 +103,15 @@ defmodule Platform.Orchestration.ExecutionSpaceBurstTest do
 
   defp count_exec_spaces_for(task_id), do: count_exec_spaces_for_tasks([task_id])
 
-  defp project_in_fabrikam(name) do
-    org_id = fabrikam_org_id()
+  defp project_in_acme(name) do
+    org_id = acme_org_id()
     {:ok, project} = Tasks.create_project(%{name: name, org_id: org_id})
     {org_id, project}
   end
 
   describe "burst creation followed by lazy materialisation" do
     test "every task in a one-org burst materialises its own execution space" do
-      {org_id, project} = project_in_fabrikam("Exec Slug Burst Project")
+      {org_id, project} = project_in_acme("Exec Slug Burst Project")
 
       # ── Realism: 20 tasks through the real creation path, tight loop, no
       # sleeps, no jitter, no serialisation. This half exercises
@@ -196,7 +196,7 @@ defmodule Platform.Orchestration.ExecutionSpaceBurstTest do
 
   describe "ChatPins.pin/3 — a real production materialisation path" do
     test "both members of a same-millisecond pair pin successfully in one org" do
-      {org_id, project} = project_in_fabrikam("Exec Slug Pin Project")
+      {org_id, project} = project_in_acme("Exec Slug Pin Project")
 
       # Constructed to share the UUIDv7 millisecond `0b0b0b0b2c2c`.
       id_a = "0b0b0b0b-2c2c-7000-8000-00000000000a"
@@ -233,7 +233,7 @@ defmodule Platform.Orchestration.ExecutionSpaceBurstTest do
 
   describe "back-compatibility with pre-existing short slugs" do
     test "a legacy 12-character slug row resolves alongside a newly minted one" do
-      {org_id, project} = project_in_fabrikam("Exec Slug Legacy Project")
+      {org_id, project} = project_in_acme("Exec Slug Legacy Project")
 
       # Deliberately a same-millisecond pair. A legacy row occupying
       # `task-exec-<12 hex>` is precisely what the old derivation left

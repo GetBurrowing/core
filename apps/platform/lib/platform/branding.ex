@@ -140,13 +140,13 @@ defmodule Platform.Branding do
   def default_icon_url(variant) when variant in @variants, do: Map.fetch!(@repo_defaults, variant)
 
   @doc """
-  Update the admin-editable identity fields. Fabrikam-admin only.
+  Update the admin-editable identity fields. Root-admin only.
 
   The route that hosts the form is gated by
   `PlatformWeb.LiveAuth.on_mount(:ensure_admin, ...)`, but a route gate is
   not an authorization boundary for a context function — anything holding a
   reference to this module can call it. So the check is re-run here, mirroring
-  `Platform.Tenancy.Lifecycle`'s `with_fabrikam_admin_authz/2`.
+  `Platform.Tenancy.Lifecycle`'s `with_root_admin_authz/2`.
 
   Broadcasts `{:install_branding_updated, branding}` on `"install_branding"`
   so a form open in a second window re-reads.
@@ -154,7 +154,7 @@ defmodule Platform.Branding do
   @spec update_identity(any(), map()) ::
           {:ok, InstallBranding.t()} | {:error, Ecto.Changeset.t() | :unauthorized}
   def update_identity(actor, attrs) do
-    with_fabrikam_admin_authz(actor, fn ->
+    with_root_admin_authz(actor, fn ->
       get()
       |> InstallBranding.identity_changeset(attrs)
       |> Repo.update()
@@ -170,7 +170,7 @@ defmodule Platform.Branding do
   end
 
   @doc """
-  Save the in-app theme colours. Fabrikam-admin only, re-checked here for the
+  Save the in-app theme colours. Root-admin only, re-checked here for the
   reason `update_identity/2` documents.
 
   `attrs` may carry any of `light_action`, `light_surface`, `light_accent`,
@@ -195,7 +195,7 @@ defmodule Platform.Branding do
   @spec update_colors(any(), map()) ::
           {:ok, InstallBranding.t()} | {:error, Ecto.Changeset.t() | :unauthorized}
   def update_colors(actor, attrs) do
-    with_fabrikam_admin_authz(actor, fn ->
+    with_root_admin_authz(actor, fn ->
       get()
       |> InstallBranding.colors_changeset(attrs)
       |> update_and_broadcast()
@@ -204,7 +204,7 @@ defmodule Platform.Branding do
 
   @doc """
   Put every in-app colour back to the Suite default: the six colours and
-  `color_preset` all become nil. Fabrikam-admin only. Broadcasts.
+  `color_preset` all become nil. Root-admin only. Broadcasts.
   """
   @spec reset_colors(any()) ::
           {:ok, InstallBranding.t()} | {:error, Ecto.Changeset.t() | :unauthorized}
@@ -244,7 +244,7 @@ defmodule Platform.Branding do
 
   @doc """
   Accept an uploaded square, derive the seven variants, and make them the
-  install's icons (task 01a0879a stage 2). Fabrikam-admin only, re-checked here
+  install's icons (task 01a0879a stage 2). Root-admin only, re-checked here
   for the reason `update_identity/2` documents.
 
   `source` is `{:path, path}` (a `live_file_upload` temp file) or
@@ -275,7 +275,7 @@ defmodule Platform.Branding do
   @spec put_source(any(), {:path, Path.t()} | {:binary, binary()}, keyword()) ::
           {:ok, InstallBranding.t()} | {:error, term()}
   def put_source(actor, source, opts \\ []) do
-    with_fabrikam_admin_authz(actor, fn ->
+    with_root_admin_authz(actor, fn ->
       branding = get()
 
       with {:ok, bytes} <- read_source(source),
@@ -359,8 +359,8 @@ defmodule Platform.Branding do
     :sha256 |> :crypto.hash(bytes) |> Base.encode16(case: :lower) |> binary_part(0, 12)
   end
 
-  defp with_fabrikam_admin_authz(actor, fun) do
-    if Tenancy.fabrikam_admin?(actor), do: fun.(), else: {:error, :unauthorized}
+  defp with_root_admin_authz(actor, fun) do
+    if Tenancy.root_admin?(actor), do: fun.(), else: {:error, :unauthorized}
   end
 
   defp broadcast(%InstallBranding{} = branding) do

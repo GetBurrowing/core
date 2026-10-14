@@ -130,19 +130,18 @@ defmodule Platform.InboxTest do
   end
 
   describe "unread_count/1" do
-    # HISTORY — the two tests below asserted the OPPOSITE until task `01a00108`
-    # stage 4, and the inversion is intentional, not a broken guard.
+    # HISTORY — these tests have flipped twice, and both flips are intentional.
     #
-    # They were written for #589/#592, where the badge and the list disagreed
-    # about read rows. That invariant — badge and list agree — is NOT retired
-    # and is still what these assert. What changed underneath it is the
-    # definition of a cleared row: `unread_scope/1` now keys on `dismissed_at`
-    # alone, so reading an item no longer removes it from either side. The
-    # tests had to move because they pinned the OLD definition (count decrements
-    # on read) as well as the invariant. Do not read the diff as #589/#592
-    # being reopened; a test asserting badge == rows is directly below.
+    # Written for #589/#592 (badge and list disagreed about read rows), they
+    # asserted that reading decremented the count. Task `01a00108` stage 4
+    # made `unread_scope/1` key on `dismissed_at` alone and inverted them.
+    # Task `01a11703` split the badge from the list: `unread_count/1` now
+    # aggregates `badge_scope/1` (the list's rows with `read_at` nil), so
+    # reading decrements the BADGE again while the row stays LISTED. What
+    # survives from #589/#592 is that the badge is built ON the list scope,
+    # so it can never count a row the list does not show.
 
-    test "counts non-dismissed rows — reading one does NOT decrement it" do
+    test "counts undismissed, unopened rows — reading one decrements it, dismissing too" do
       user = insert_user()
 
       assert Inbox.unread_count(user.id) == 0
@@ -153,22 +152,20 @@ defmodule Platform.InboxTest do
 
       assert Inbox.unread_count(user.id) == 3
 
-      # Opening an item is not doing it. The row stays on the list, so it stays
-      # in the badge — the badge and the list still agree, they just agree on a
-      # larger set than they used to.
+      # Seen leaves the badge. It does not leave the list.
       {:ok, _} = Inbox.mark_read(a.id, user.id)
-      assert Inbox.unread_count(user.id) == 3
-
-      # Dismissal is now the only thing that decrements it.
-      {:ok, _} = Inbox.mark_dismissed(c.id, user.id)
       assert Inbox.unread_count(user.id) == 2
+      assert user.id |> Inbox.unread_scope() |> Repo.aggregate(:count) == 3
 
-      # Including dismissing the row that was already read.
+      {:ok, _} = Inbox.mark_dismissed(c.id, user.id)
+      assert Inbox.unread_count(user.id) == 1
+
+      # Dismissing the row that was already read does not move the badge.
       {:ok, _} = Inbox.mark_dismissed(a.id, user.id)
       assert Inbox.unread_count(user.id) == 1
     end
 
-    test "badge equals the list the Inbox surface renders, read rows included" do
+    test "badge is the unread subset of the list the Inbox surface renders" do
       user = insert_user()
 
       {:ok, _a} = Inbox.emit(valid_attrs(user, %{title: "A"}))
@@ -179,13 +176,14 @@ defmodule Platform.InboxTest do
       {:ok, _} = Inbox.mark_read(b.id, user.id)
       {:ok, _} = Inbox.mark_dismissed(c.id, user.id)
 
-      # The surface renders `unread_scope/1` (see `InboxLive.load_items/1`) —
-      # the same query `unread_count/1` aggregates, which is the whole point.
+      # The surface renders `unread_scope/1` (see `InboxLive.load_items/1`);
+      # `unread_count/1` aggregates `badge_scope/1`, composed on it.
       rendered = user.id |> Inbox.unread_scope() |> Repo.all()
 
       assert length(rendered) == 2
       assert b.id in Enum.map(rendered, & &1.id)
-      assert Inbox.unread_count(user.id) == length(rendered)
+      assert Inbox.unread_count(user.id) == Enum.count(rendered, &is_nil(&1.read_at))
+      assert Inbox.unread_count(user.id) == 1
     end
 
     test "is scoped per user — a second user's rows do not leak into the count" do
@@ -437,8 +435,11 @@ defmodule Platform.InboxTest do
       {:ok, read} = Inbox.emit(valid_attrs(user))
       {:ok, _} = Inbox.mark_read(read.id, user.id)
 
-      # Both are on the surface, so the button's count is 2, not 1.
-      assert Inbox.unread_count(user.id) == 2
+      # Both are on the surface, so the button's count is 2, not 1. (The
+      # badge, `unread_count/1`, is 1 since task `01a11703`: the read row is
+      # listed and not counted.)
+      assert user.id |> Inbox.unread_scope() |> Repo.aggregate(:count) == 2
+      assert Inbox.unread_count(user.id) == 1
 
       assert {:ok, changed} = Inbox.dismiss_all_unread(user.id)
 
@@ -523,7 +524,7 @@ defmodule Platform.InboxTest do
     {:ok, project} =
       Platform.Tasks.create_project(%{
         name: "Reconcile #{System.unique_integer([:positive])}",
-        org_id: Platform.TenancyFixtures.fabrikam_org_id()
+        org_id: Platform.TenancyFixtures.acme_org_id()
       })
 
     project
@@ -698,6 +699,8 @@ defmodule Platform.InboxTest do
     # while the task runs. If this detonates, someone has added a reconciler
     # clause for the kind, and the decision must be REOPENED, not the test
     # adjusted.
+    # (Opening the task as its sponsor DOES dismiss the row — a user action, not
+    # reconciliation; see tasks_live_sponsor_inbox_dismiss_test.exs, task 01a116ff.)
     test "a sponsor row survives reconciliation, including after its task completes" do
       user = insert_user()
       {:ok, task} = Platform.Tasks.create_task(%{project_id: project!().id, title: "Sponsored"})
@@ -884,7 +887,7 @@ defmodule Platform.InboxTest do
         Repo.insert!(%Platform.Tenancy.Org{
           name: "Reach Tenant #{n}",
           slug: "tenant_reach_#{n}",
-          parent_org_id: Platform.TenancyFixtures.fabrikam_org_id()
+          parent_org_id: Platform.TenancyFixtures.acme_org_id()
         })
 
       {:ok, _} = Platform.Tenancy.mark_membership_external(%{user_id: user.id, org_id: org.id})
@@ -975,41 +978,152 @@ defmodule Platform.InboxTest do
       assert Repo.aggregate(Inbox.reachable_unread_scope(user.id, false), :count) == 2
     end
 
-    test "the internal scope is `unread_scope/1` verbatim — dismissed rows drop, read rows do not" do
-      # Task `01a00108` stage 4: this used to assert that reading dropped a row
-      # here too. The property under test is unchanged — this scope is
-      # `unread_scope/1` verbatim for an internal viewer — so it inverts exactly
-      # as `unread_scope/1` did, which is the point of composing on it.
+    test "the internal scope is `unread_scope/1` verbatim; the internal COUNT is `unread_count/1`" do
+      # Task `01a00108` stage 4 made reading leave a row in this scope; task
+      # `01a11703` made the COUNT (`reachable_badge_scope/1`) drop read rows.
+      # Both still compose on `unread_scope/1`, so for an internal viewer the
+      # scope is the list and the count is the badge.
       user = insert_user()
       %{sponsor: sponsor, mention: mention} = mixed_rows!(user)
 
       {:ok, _} = Inbox.mark_read(mention.id, user.id)
-      assert Inbox.reachable_unread_count(user.id) == 2
+      assert Repo.aggregate(Inbox.reachable_unread_scope(user.id), :count) == 2
+      assert Inbox.reachable_unread_count(user.id) == 1
       assert Inbox.reachable_unread_count(user.id) == Inbox.unread_count(user.id)
 
       {:ok, _} = Inbox.mark_dismissed(sponsor.id, user.id)
-      assert Inbox.reachable_unread_count(user.id) == 1
+      assert Inbox.reachable_unread_count(user.id) == 0
+      assert Repo.aggregate(Inbox.reachable_unread_scope(user.id), :count) == 1
 
       {:ok, _} = Inbox.mark_dismissed(mention.id, user.id)
-      assert Inbox.reachable_unread_count(user.id) == 0
+      assert Repo.aggregate(Inbox.reachable_unread_scope(user.id), :count) == 0
     end
 
-    test "an external user's reachable count drops to 0 when the mention is DISMISSED, not read" do
+    test "an external user's reachable count drops to 0 when the mention is read, and stays 0 on dismiss" do
       user = external_user!()
       %{mention: mention} = mixed_rows!(user)
 
       assert Inbox.reachable_unread_count(user.id) == 1
 
-      # Reading it leaves it standing (stage 4: reading is not clearing).
+      # Task `01a11703`: reading takes it out of the badge; it stays in the
+      # reachable LIST scope until dismissed.
       {:ok, _} = Inbox.mark_read(mention.id, user.id)
-      assert Inbox.reachable_unread_count(user.id) == 1
+      assert Inbox.reachable_unread_count(user.id) == 0
+      assert Repo.aggregate(Inbox.reachable_unread_scope(user.id, true), :count) == 1
 
       {:ok, _} = Inbox.mark_dismissed(mention.id, user.id)
+      assert Repo.aggregate(Inbox.reachable_unread_scope(user.id, true), :count) == 0
 
       # Nothing reachable left → 0 → no badge at all, not a zero and not a
       # dot. The unreachable sponsor row is still live and still uncounted.
       assert Inbox.reachable_unread_count(user.id) == 0
       assert Inbox.unread_count(user.id) == 1
+    end
+  end
+
+  # ── Task 01a11703 stage 1: acknowledge on open ─────────────────────────
+
+  describe "action_kinds/0" do
+    # A literal list on purpose. Adding a kind to `Item.kinds/0` turns this
+    # red, which forces the author to decide whether opening the new kind
+    # acknowledges it (the default) or leaves it listed (an action kind).
+    test "every kind outside the action allowlist is acknowledged on open" do
+      assert Item.kinds() -- Inbox.action_kinds() == [
+               "chat_mention",
+               "meeting_starting",
+               "meeting_invited",
+               "task_sponsor_assigned",
+               "lifecycle_step_failed"
+             ]
+
+      assert Inbox.action_kinds() == ["task_plan_review", "review_request_pending"]
+      assert Inbox.action_kinds() == Platform.Mobile.AppEntities.approval_kinds()
+    end
+  end
+
+  describe "badge_scope/1 vs unread_scope/1" do
+    test "one unread row, one read action row, one read non-action row: badge 1, list 3" do
+      user = insert_user()
+
+      {:ok, _unread} = Inbox.emit(valid_attrs(user, %{title: "unread"}))
+
+      {:ok, action} =
+        Inbox.emit(valid_attrs(user, %{kind: "task_plan_review", source_type: "task"}))
+
+      {:ok, non_action} = Inbox.emit(valid_attrs(user, %{title: "read mention"}))
+
+      {:ok, _} = Inbox.mark_read(action.id, user.id)
+      {:ok, _} = Inbox.mark_read(non_action.id, user.id)
+
+      assert Inbox.unread_count(user.id) == 1
+      assert Repo.aggregate(Inbox.badge_scope(user.id), :count) == 1
+      assert length(user.id |> Inbox.unread_scope() |> Repo.all()) == 3
+    end
+  end
+
+  describe "open_item/2" do
+    test "a non-action kind is read AND dismissed in one write, with equal timestamps" do
+      user = insert_user()
+      {:ok, item} = Inbox.emit(valid_attrs(user))
+      :ok = Inbox.subscribe(user.id)
+
+      assert {:ok, %Item{read_at: %DateTime{} = r, dismissed_at: %DateTime{} = d}} =
+               Inbox.open_item(item.id, user.id)
+
+      assert r == d
+      assert %Item{read_at: ^r, dismissed_at: ^d} = Repo.get!(Item, item.id)
+
+      item_id = item.id
+      assert_receive {:inbox_item_dismissed, %Item{id: ^item_id}}
+      assert Inbox.unread_count(user.id) == 0
+      assert user.id |> Inbox.unread_scope() |> Repo.all() == []
+    end
+
+    test "an action kind is only read: listed, not counted, and broadcasts :inbox_changed" do
+      user = insert_user()
+      user_id = user.id
+
+      {:ok, item} =
+        Inbox.emit(valid_attrs(user, %{kind: "review_request_pending", source_type: "task"}))
+
+      :ok = Inbox.subscribe(user.id)
+
+      assert {:ok, %Item{read_at: %DateTime{}, dismissed_at: nil}} =
+               Inbox.open_item(item.id, user.id)
+
+      assert_receive {:inbox_changed, ^user_id}
+      refute_received {:inbox_item_dismissed, _}
+      assert Inbox.unread_count(user.id) == 0
+      assert [%Item{}] = user.id |> Inbox.unread_scope() |> Repo.all()
+    end
+
+    test "an already-dismissed row keeps its dismissed_at" do
+      user = insert_user()
+      {:ok, item} = Inbox.emit(valid_attrs(user))
+      {:ok, dismissed} = Inbox.mark_dismissed(item.id, user.id)
+
+      assert {:ok, %Item{dismissed_at: d, read_at: %DateTime{}}} =
+               Inbox.open_item(item.id, user.id)
+
+      assert d == dismissed.dismissed_at
+    end
+
+    test "a malformed id is :not_found, not a raise" do
+      user = insert_user()
+      assert {:error, :not_found} = Inbox.open_item("not-a-uuid", user.id)
+      assert {:error, :not_found} = Inbox.mark_read("not-a-uuid", user.id)
+    end
+
+    test "another user's id is :not_found, writes nothing and broadcasts nothing" do
+      owner = insert_user()
+      other = insert_user()
+      {:ok, item} = Inbox.emit(valid_attrs(owner))
+      :ok = Inbox.subscribe(owner.id)
+
+      assert {:error, :not_found} = Inbox.open_item(item.id, other.id)
+      assert %Item{read_at: nil, dismissed_at: nil} = Repo.get!(Item, item.id)
+      refute_receive {:inbox_item_dismissed, _}, 100
+      refute_received {:inbox_changed, _}
     end
   end
 end

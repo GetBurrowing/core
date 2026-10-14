@@ -155,14 +155,14 @@ if Process.whereis(Platform.Repo) do
         )
       end
 
-      # `20260604000100_create_channel_sections.exs` already gave "fabrikam" a
+      # `20260604000100_create_channel_sections.exs` already gave "acme" a
       # section at position 0 — the only org that existed when IT ran,
       # since the four orgs above didn't exist yet at migrate time. Redoing
       # its exact seed pass here (same `ORDER BY name ASC` + `with_index`),
       # but `ON CONFLICT (org_id) DO UPDATE` instead of `DO NOTHING`,
-      # renumbers every org's section — fabrikam's included — to the position
+      # renumbers every org's section — acme's included — to the position
       # it would have gotten had all five existed together at migrate time,
-      # instead of leaving fabrikam pinned at a now-wrong 0 while the newcomers
+      # instead of leaving acme pinned at a now-wrong 0 while the newcomers
       # collide on whatever position they'd otherwise all share.
       %{rows: org_rows} =
         Platform.Repo.query!("SELECT id, name, slug FROM orgs ORDER BY name ASC")

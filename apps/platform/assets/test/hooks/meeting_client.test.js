@@ -1407,6 +1407,39 @@ describe("MeetingClient — quick-meet screen-share routing", () => {
     expect(globalThis.document._slot.classList.contains("hidden")).toBe(true)
     expect(globalThis.document._slot.dataset.screenShareActive).toBe("false")
   })
+
+  it("restamps the active viewer and fullscreen control after a LiveView patch", () => {
+    globalThis.document = buildScreenShareDoc()
+    const hook = buildHook()
+    const track = fakeScreenTrack("screen_share")
+    const participant = { identity: "user:remote", name: "Remote Sharer" }
+    hook._attachTrack(track, participant)
+
+    // Morphdom patches the server-owned wrapper/button back to their inactive
+    // defaults while phx-update=ignore correctly preserves the video child.
+    const slot = globalThis.document._slot
+    const button = { hidden: true }
+    const label = { textContent: "" }
+    slot.classList.add("hidden")
+    slot.dataset.screenShareActive = "false"
+    slot.parentElement.dataset = { screenShareActive: "false" }
+    slot.parentElement.querySelector = (selector) => {
+      if (selector === "[data-screen-share-fullscreen]") return button
+      if (selector === "[data-quickmeet-screen-share-sharer]") return label
+      return null
+    }
+    hook._screenShareController = { button }
+
+    hook._rehomeScreenShare()
+
+    expect(slot.children).toContain(hook._screenShareEl)
+    expect(slot.classList.contains("hidden")).toBe(false)
+    expect(slot.dataset.screenShareActive).toBe("true")
+    expect(slot.parentElement.dataset.screenShareActive).toBe("true")
+    expect(slot.dataset.screenShareSharer).toBe("user:remote")
+    expect(label.textContent).toBe("Remote Sharer")
+    expect(button.hidden).toBe(false)
+  })
 })
 
 

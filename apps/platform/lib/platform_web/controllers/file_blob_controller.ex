@@ -4,7 +4,7 @@ defmodule PlatformWeb.FileBlobController do
   in the FilesLive surface (ADR 0042 stage 5 UI).
 
   Authorization mirrors the `file_get_text` MCP tool: the caller must
-  either be a Fabrikam (root) admin or a member of the project's owning
+  either be a root-org admin or a member of the project's owning
   org. Files without an org association fall back to the standard
   authenticated-user check (every logged-in user can read).
 
@@ -204,7 +204,7 @@ defmodule PlatformWeb.FileBlobController do
     project = Tasks.get_project(project_id)
 
     cond do
-      Tenancy.fabrikam_admin?(user) ->
+      Tenancy.root_admin?(user) ->
         {:ok, project}
 
       is_nil(project) ->

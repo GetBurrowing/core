@@ -181,6 +181,35 @@ window lasts from pocket-id's first answer to that call, not until a later step
 runs. If the call cannot be made within 120 s, `up` fails with
 `admin_not_created` and says so.
 
+Suite core calls pocket-id's admin API too, for its Users page
+(`/admin/sign-in-users`, Suite admins only; task 01a113ea). On every
+bundled-pocket-id install the renderer gives core-platform three env vars:
+`POCKET_ID_ADMIN_ENABLED="true"` (the page's switch; only the exact string
+`true` turns it on), `POCKET_ID_ADMIN_URL=http://pocket-id:1411` (the same
+upstream Caddy proxies the auth host to) and `POCKET_ID_API_KEY`, which is
+`STATIC_API_KEY` under a second name. The key is an admin-grade pocket-id
+credential. It lives in `secrets.env` (0600), never in `compose.yaml`, and
+core reads it server-side only: it is sent as the `X-API-Key` header and is
+never logged or shown in the browser. Core's endpoints are `GET/POST
+/api/users`, `GET/PUT/DELETE /api/users/:id`, `GET
+/api/users/:id/webauthn-credentials` and `POST
+/api/users/:id/one-time-access-token`. The sign-in links it mints use a 30
+minute TTL for the same reason as `LOGIN_TTL`: at 15 minutes or less pocket-id
+mints a 6-character code that never auto-submits from `/lc/<code>`. With
+`[auth] mode = "external-oidc"` there is no bundled pocket-id, and none of the
+three vars is written. To keep the key but ship with the page off, delete
+`POCKET_ID_ADMIN_ENABLED` from core-platform's environment.
+
+The bundled pocket-id runs with `LOG_LEVEL=error` in its compose environment
+(task 01a114c1). Its request log records the full URL path, and every
+one-time sign-in code travels in one: `GET /lc/<code>` and `POST
+/api/one-time-access-token/<code>`. pocket-id logs every response below 500 at
+info, except a rate-limited 429 at warn, so `warn` would still print a code.
+At `error`, only 5xx request lines are written. The residual is that a 5xx on
+either path still logs that path, code included. `docker compose logs
+pocket-id` still shows errors, including the failures the setup steps point
+you to. Never set `debug`: it also logs SQL queries.
+
 ## JSON contract (version 1)
 
 The desktop app (task 01a0d6b9) and the skill depend on this contract. Any

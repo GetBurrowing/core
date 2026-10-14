@@ -76,7 +76,7 @@ defmodule PlatformWeb.AdminOrgsLive do
     * AND the write itself re-checks: the acting user
       (`@current_user_record`, assigned by `LiveAuth.on_mount(:default, ...)`)
       is threaded into `Tenancy.create_org/2` as the actor, and
-      `Lifecycle.with_fabrikam_admin_authz/2` answers `{:error, :unauthorized}`
+      `Lifecycle.with_root_admin_authz/2` answers `{:error, :unauthorized}`
       for anyone who is not a root-org admin. Neither check is load-bearing
       alone.
 

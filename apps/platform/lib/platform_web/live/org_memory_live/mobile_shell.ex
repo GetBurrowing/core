@@ -50,9 +50,9 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
   import PlatformWeb.OrgMemoryLive.NamespaceTree, only: [file_icon: 1]
 
   alias Phoenix.LiveView.JS
-  alias Platform.Memory.Proposals
   alias PlatformWeb.OrgMemoryLive.NamespaceTree
   alias PlatformWeb.OrgMemoryLive.ProductDocs
+  alias PlatformWeb.OrgMemoryLive.ProposalBody
   alias PlatformWeb.OrgMemoryLive.SearchPane
 
   @tabs [
@@ -697,7 +697,7 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
             <%!-- target page key the body promotes into --%>
             <div class="mb-2 flex items-center gap-1 text-xs text-base-content/50">
               <.icon name="hero-arrow-down-tray" class="size-3.5 shrink-0" />
-              <span class="min-w-0 truncate font-mono">{target_key(proposal)}</span>
+              <span class="min-w-0 truncate font-mono">{ProposalBody.target_key(proposal)}</span>
             </div>
 
             <%!-- Additive diff. Long PROSE lines WRAP (whitespace-pre-wrap
@@ -706,43 +706,14 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
                  overflow-x-auto is only a fallback for genuinely unbreakable
                  tokens. A generous height shows most proposals in full; a
                  truly long one clamps with a >=44px "Show full diff"
-                 tap-to-expand (server-held, never silently truncated). --%>
-            <% long? = long_body?(proposal.body) %>
-            <% expanded? = MapSet.member?(@expanded_diffs, proposal.id) %>
-            <div class="relative">
-              <div
-                class={[
-                  "whitespace-pre-wrap break-words rounded-lg border border-edge bg-base-200/40 p-2 font-mono text-xs leading-relaxed",
-                  if(long? and not expanded?,
-                    do: "max-h-64 overflow-hidden",
-                    else: "overflow-x-auto"
-                  )
-                ]}
-                data-role="mobile-proposal-diff"
-              >
-                <div :for={line <- diff_lines(proposal.body)} class="text-success">
-                  {"+ " <> line}
-                </div>
-              </div>
-              <div
-                :if={long? and not expanded?}
-                class="pointer-events-none absolute inset-x-0 bottom-0 h-12 rounded-b-lg bg-gradient-to-t from-base-100 to-transparent"
-              >
-              </div>
-            </div>
-            <button
-              :if={long?}
-              phx-click="toggle_proposal_diff"
-              phx-value-id={proposal.id}
-              class="flex min-h-11 items-center gap-1 text-xs font-medium text-primary"
-              data-role="mobile-diff-toggle"
-            >
-              <.icon
-                name="hero-chevron-down"
-                class={["size-4 transition-transform", expanded? && "rotate-180"]}
-              />
-              {if expanded?, do: "Show less", else: "Show full diff"}
-            </button>
+                 tap-to-expand (server-held, never silently truncated).
+                 Shared with the desktop panel via ProposalBody. --%>
+            <ProposalBody.proposal_diff
+              proposal={proposal}
+              surface={:mobile}
+              expanded?={MapSet.member?(@expanded_diffs, proposal.id)}
+              line_prefix="+ "
+            />
 
             <%!-- footer: Reject / Apply (>=44px) --%>
             <div class="mt-3 flex gap-2">
@@ -816,26 +787,6 @@ defmodule PlatformWeb.OrgMemoryLive.MobileShell do
   defp confidence_badge_class("medium"), do: "badge-warning"
   defp confidence_badge_class("low"), do: "badge-ghost"
   defp confidence_badge_class(_), do: "badge-ghost"
-
-  # Target wiki page the body promotes into — the ingest-time
-  # `target_page_key`, falling back to the same derivation the promotion
-  # pipeline uses when the column is nil (pre-column rows).
-  defp target_key(%{target_page_key: key}) when is_binary(key) and key != "", do: key
-
-  defp target_key(%{category: category, evidence: evidence, body: body}),
-    do: Proposals.derive_target_page_key(category, evidence, body)
-
-  defp diff_lines(body) when is_binary(body), do: String.split(body, "\n")
-  defp diff_lines(_), do: []
-
-  # A proposal body is "long" (worth clamping behind a Show-full-diff
-  # expander) when it has many hard lines or enough characters to wrap
-  # past the generous default height. Short proposals render in full with
-  # no clamp and no expander.
-  defp long_body?(body) when is_binary(body),
-    do: String.length(body) > 320 or length(String.split(body, "\n")) > 8
-
-  defp long_body?(_), do: false
 
   # ── Search (mobile) ─────────────────────────────────────────────────────
 

@@ -11,6 +11,8 @@ import com.koboai.burrow.push.PushTestSupport.HOST
 import com.koboai.burrow.push.PushTestSupport.mention
 import com.koboai.burrow.push.PushTestSupport.posted
 import com.koboai.burrow.push.PushTestSupport.text
+import com.koboai.burrow.shortcuts.ConversationShortcuts
+import com.koboai.burrow.shortcuts.RecordingShortcutSink
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -26,12 +28,15 @@ import org.robolectric.Shadows.shadowOf
 @RunWith(RobolectricTestRunner::class)
 class ReplyTest {
     private lateinit var app: Application
+    private lateinit var sink: RecordingShortcutSink
     private val payload = PushPayload.from(mention)
     private val route = "POST /api/app/spaces/0192-s/messages"
 
     @Before
     fun setUp() {
         app = PushTestSupport.app()
+        sink = RecordingShortcutSink()
+        ConversationShortcuts.sinkOverride = sink
         PushTestSupport.signIn(app)
         NotificationPresenter.present(app, mention)
     }
@@ -109,5 +114,20 @@ class ReplyTest {
         assertFalse(handler(transport).handle(app, other, "On it"))
         // Not signed in there: no request, and never install A's bearer.
         assertTrue(transport.requests.isEmpty())
+    }
+
+    // Task 01a116c4: a reply the server took is a use of the conversation.
+
+    @Test
+    fun `a 201 reply re-publishes the conversation and reports its use, a 500 does not`() {
+        val failing = RecordingTransport(mapOf(route to HttpResponse(500, "{}")))
+        assertFalse(handler(failing).handle(app, payload, "nope"))
+        assertTrue(sink.reported.isEmpty())
+
+        val pushedBefore = sink.pushed.size
+        val ok = RecordingTransport(mapOf(route to HttpResponse(201, """{"message":{"id":"r1"}}""")))
+        assertTrue(handler(ok).handle(app, payload, "on it"))
+        assertEquals(listOf("$HOST|0192-s"), sink.reported)
+        assertEquals(pushedBefore + 1, sink.pushed.size)
     }
 }

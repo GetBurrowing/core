@@ -667,7 +667,7 @@ defmodule PlatformWeb.ChatLive.Partials do
       `users.preferences["hidden_channel_ids"]`, and the Hidden drawer that
       reverses it lists channels, so offering it on a DM would create a state
       with no way back.
-    * Move to organisation…: Fabrikam admin, on a channel with an `org_id`. It
+    * Move to organisation…: root-org admin, on a channel with an `org_id`. It
       stays reachable from a PINNED row: pinning lifts a channel out of its
       sub-org section, so gating this on "unpinned" would strand it.
 
@@ -750,7 +750,7 @@ defmodule PlatformWeb.ChatLive.Partials do
     doc: "nil when closed, else the `row_actions_target/5` map for the row that opened it"
   )
 
-  attr(:fabrikam_admin?, :boolean, default: false)
+  attr(:root_admin?, :boolean, default: false)
 
   def row_actions_dialog(assigns) do
     ~H"""
@@ -830,7 +830,7 @@ defmodule PlatformWeb.ChatLive.Partials do
                  destination chooser never opens on top of it. Same shape as
                  the drawer's `new_conversation_open |> close_mobile_browser`
                  pair; no new server event. --%>
-            <li :if={@fabrikam_admin? and @target.movable} class="border-t border-edge">
+            <li :if={@root_admin? and @target.movable} class="border-t border-edge">
               <button
                 type="button"
                 class="flex min-h-11 w-full items-center gap-3 rounded-lg px-2 py-2 text-left text-sm text-base-content transition-colors hover:bg-base-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
@@ -892,8 +892,20 @@ defmodule PlatformWeb.ChatLive.Partials do
   attr(:uploads, :any, required: true)
   attr(:caption, :string, default: "")
   attr(:tagged_agents, :any, required: true)
+  # Large files (task 01a120be stage 3): staged over-the-inline-cap files and
+  # the server's limits (`LargeUploadHooks.limits/0`), so the hint and the
+  # too-large copy both name the install's real limit.
+  attr(:large_staged, :list, default: [])
+  attr(:limits, :map, default: nil)
 
   def upload_dialog(assigns) do
+    assigns =
+      assign(
+        assigns,
+        :has_files?,
+        assigns.uploads.attachments.entries != [] or assigns.large_staged != []
+      )
+
     ~H"""
     <div :if={@open} class="upload-backdrop" phx-click="upload_dialog_close">
       <div class="upload-panel" phx-click="noop">
@@ -926,7 +938,7 @@ defmodule PlatformWeb.ChatLive.Partials do
              registration — drops on this label register entries through the
              same code path as the file picker. --%>
         <label
-          :if={@uploads.attachments.entries == []}
+          :if={not @has_files?}
           id="upload-dropzone"
           for={@uploads.attachments.ref}
           phx-drop-target={@uploads.attachments.ref}
@@ -946,10 +958,15 @@ defmodule PlatformWeb.ChatLive.Partials do
             Browse files
           </span>
           <div class="upload-dropzone-sub">You can also paste images with ⌘V</div>
-          <div class="upload-dropzone-formats">
+          <div :if={@limits} class="upload-dropzone-formats" data-role="upload-limit-hint">
+            Up to {@limits.label} per file
+          </div>
+          <div :if={!@limits} class="upload-dropzone-formats">
             PNG · JPG · GIF · WebP · SVG — max 15 MB each
           </div>
         </label>
+
+        <.large_staged_rows :if={@large_staged != []} staged={@large_staged} limits={@limits} />
 
         <div :if={@uploads.attachments.entries != []} class="upload-grid-area">
           <div class="upload-grid">
@@ -1053,7 +1070,7 @@ defmodule PlatformWeb.ChatLive.Partials do
              after `LiveUploader.trackFiles` had nowhere to serialize, and
              the entry never registered. With the form always present, paste
              on an empty modal works on the very first attempt. --%>
-        <div :if={@uploads.attachments.entries != []}>
+        <div :if={@has_files?}>
           <div class="upload-comment">
             <textarea
               name="caption"
@@ -1066,8 +1083,18 @@ defmodule PlatformWeb.ChatLive.Partials do
 
           <div class="upload-footer">
             <div class="upload-count">
-              <strong>{length(@uploads.attachments.entries)}</strong>
-              {if length(@uploads.attachments.entries) == 1, do: "image", else: "images"} selected
+              <%= if @large_staged == [] do %>
+                <strong>{length(@uploads.attachments.entries)}</strong>
+                {if length(@uploads.attachments.entries) == 1, do: "image", else: "images"} selected
+              <% else %>
+                <strong>{length(@uploads.attachments.entries) + length(@large_staged)}</strong>
+                {if length(@uploads.attachments.entries) + length(@large_staged) == 1,
+                  do: "file",
+                  else: "files"} selected
+              <% end %>
+              <span :if={@limits} class="block text-xs text-base-content/60">
+                Up to {@limits.label} per file
+              </span>
             </div>
             <div class="upload-footer-actions">
               <button type="button" class="upload-btn-cancel" phx-click="upload_dialog_close">
@@ -1081,7 +1108,9 @@ defmodule PlatformWeb.ChatLive.Partials do
                   Enum.any?(
                     @uploads.attachments.entries,
                     &(&1.progress > 0 and &1.progress < 100)
-                  )
+                  ) or
+                    (@uploads.attachments.entries == [] and @large_staged != [] and
+                       Enum.all?(@large_staged, & &1.too_large?))
                 }
               >
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
@@ -1097,11 +1126,59 @@ defmodule PlatformWeb.ChatLive.Partials do
     """
   end
 
+  attr(:staged, :list, required: true)
+  attr(:limits, :map, required: true)
+
+  # One row per staged large file. A file over the install's limit reads
+  # "(!) <name> is 1.1 GB. This Suite accepts files up to 1 GB." with the
+  # error hue on the icon only (the token fails AA as small text), and never
+  # uploads. Design canvas 01a120be-f336, "TOO LARGE".
+  defp large_staged_rows(assigns) do
+    ~H"""
+    <ul class="flex flex-col gap-2 px-5 pb-2" data-role="large-staged">
+      <li
+        :for={file <- @staged}
+        id={"large-staged-#{file.ref}"}
+        data-too-large={to_string(file.too_large?)}
+        class="flex items-start gap-2 rounded-box border border-edge bg-base-200 px-3 py-2 text-sm"
+      >
+        <%= if file.too_large? do %>
+          <span class="hero-exclamation-circle size-5 shrink-0 text-error" aria-hidden="true"></span>
+          <span class="min-w-0 flex-1 text-base-content">
+            <span title={file.name}>
+              {PlatformWeb.ChatLive.Partials.Composer.middle_truncate(file.name)}
+            </span>
+            is {Platform.Chat.UploadLimits.format_bytes(max(file.size, 0))}. This Suite accepts files up to {@limits &&
+              @limits.label}.
+          </span>
+        <% else %>
+          <span class="hero-document size-5 shrink-0 text-base-content/60" aria-hidden="true"></span>
+          <span class="min-w-0 flex-1 truncate" title={file.name}>
+            {PlatformWeb.ChatLive.Partials.Composer.middle_truncate(file.name)}
+          </span>
+          <span class="shrink-0 font-mono text-[11px] tabular-nums text-base-content/60">
+            {Platform.Chat.UploadLimits.format_bytes(max(file.size, 0))}
+          </span>
+        <% end %>
+        <button
+          type="button"
+          class="btn btn-ghost btn-xs shrink-0"
+          phx-click="large_upload_unstage"
+          phx-value-ref={file.ref}
+        >
+          Remove
+        </button>
+      </li>
+    </ul>
+    """
+  end
+
   @doc "Active-canvas side panel (desktop) and full-screen overlay (mobile)."
   attr(:canvas, :any, default: nil)
   attr(:show_versions_panel, :boolean, default: false)
   attr(:canvas_versions, :list, default: [])
   attr(:restore_confirm_revision, :integer, default: nil)
+  attr(:viewer, :any, default: nil)
 
   def canvas_overlay(assigns) do
     ~H"""
@@ -1147,7 +1224,7 @@ defmodule PlatformWeb.ChatLive.Partials do
         </button>
       </div>
       <div class="flex-1 overflow-y-auto px-4 py-4">
-        <.canvas_document canvas={@canvas} dom_id_base="chat-live-canvas-panel" />
+        <.canvas_document canvas={@canvas} dom_id_base="chat-live-canvas-panel" viewer={@viewer} />
       </div>
       <.canvas_versions_panel
         :if={@show_versions_panel}
@@ -1183,7 +1260,7 @@ defmodule PlatformWeb.ChatLive.Partials do
         </button>
       </header>
       <div class="flex-1 overflow-y-auto px-4 py-4">
-        <.canvas_document canvas={@canvas} dom_id_base="chat-live-canvas-overlay" />
+        <.canvas_document canvas={@canvas} dom_id_base="chat-live-canvas-overlay" viewer={@viewer} />
       </div>
       <.canvas_versions_panel
         :if={@show_versions_panel}
@@ -1440,7 +1517,7 @@ defmodule PlatformWeb.ChatLive.Partials do
              the participants grid so it's never cropped by avatar
              tiles. `phx-update="ignore"` because the LV doesn't render
              the video element itself. --%>
-        <div class="mb-2">
+        <div class="relative mb-2" data-screen-share-viewer data-screen-share-active="false">
           <div
             data-quickmeet-screen-share-slot
             data-pane="desktop"
@@ -1450,6 +1527,17 @@ defmodule PlatformWeb.ChatLive.Partials do
             class="hidden aspect-video w-full overflow-hidden rounded-lg bg-black"
           >
           </div>
+          <button
+            type="button"
+            hidden
+            data-screen-share-fullscreen
+            aria-label="Enter full screen"
+            aria-pressed="false"
+            class="screen-share-fullscreen-button focus-visible-ring"
+          >
+            <span class="hero-arrows-pointing-out size-5" aria-hidden="true"></span>
+            <span class="sr-only" data-screen-share-fullscreen-label>Enter full screen</span>
+          </button>
           <p
             data-quickmeet-screen-share-sharer
             class="mt-1 text-xs text-base-content/50 truncate"
@@ -1606,7 +1694,7 @@ defmodule PlatformWeb.ChatLive.Partials do
       <div class="flex-1 overflow-y-auto p-4" data-role="call-stage" data-pane="mobile">
         <%!-- Screen-share preview (task 019e420f stage 3). See the
              desktop variant for the rationale. --%>
-        <div class="mb-2">
+        <div class="relative mb-2" data-screen-share-viewer data-screen-share-active="false">
           <div
             data-quickmeet-screen-share-slot
             data-pane="mobile"
@@ -1616,6 +1704,17 @@ defmodule PlatformWeb.ChatLive.Partials do
             class="hidden aspect-video w-full overflow-hidden rounded-lg bg-black"
           >
           </div>
+          <button
+            type="button"
+            hidden
+            data-screen-share-fullscreen
+            aria-label="Enter full screen"
+            aria-pressed="false"
+            class="screen-share-fullscreen-button focus-visible-ring"
+          >
+            <span class="hero-arrows-pointing-out size-5" aria-hidden="true"></span>
+            <span class="sr-only" data-screen-share-fullscreen-label>Enter full screen</span>
+          </button>
           <p
             data-quickmeet-screen-share-sharer
             class="mt-1 text-xs text-base-content/50 truncate"

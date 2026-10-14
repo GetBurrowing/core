@@ -12,7 +12,7 @@ defmodule Platform.Meetings.MeetingScopeTest do
   test that says why.
 
   Users are seeded with `@example.com` addresses and an explicit
-  `%OrgMembership{role: "member"}` row. A `@example.com` address would make
+  `%OrgMembership{role: "member"}` row. A `@acme.test` address would make
   `Tenancy.derive_role_from_email/1` return `:admin` and blanket-bypass the
   very filter under test. Each negative case asserts `refute
   Tenancy.root_member?(user)` inline first: without that precondition a
@@ -67,7 +67,7 @@ defmodule Platform.Meetings.MeetingScopeTest do
 
   setup do
     %{
-      fabrikam: Platform.TenancyFixtures.fabrikam_org_id(),
+      acme: Platform.TenancyFixtures.acme_org_id(),
       org_a: Platform.TenancyFixtures.tenant_org_id("soylent"),
       org_b: Platform.TenancyFixtures.tenant_org_id("wayne_tech")
     }
@@ -88,7 +88,7 @@ defmodule Platform.Meetings.MeetingScopeTest do
 
     test "fetch_meeting_for_user/2 returns only the plain member's own org", ctx do
       user = user!() |> member!(ctx.org_a)
-      refute Tenancy.fabrikam_admin?(user)
+      refute Tenancy.root_admin?(user)
       refute Tenancy.root_member?(user)
       assert Tenancy.visibility(user) == {:orgs, [ctx.org_a]}
 
@@ -111,9 +111,9 @@ defmodule Platform.Meetings.MeetingScopeTest do
   end
 
   describe "fetch_meeting_for_user/2 — the root bypass is ADMIN-only here" do
-    test "a Fabrikam root admin reaches every org's meeting", ctx do
-      admin = user!(name: "Root Admin") |> member!(ctx.fabrikam, "admin")
-      assert Tenancy.fabrikam_admin?(admin)
+    test "an Acme root admin reaches every org's meeting", ctx do
+      admin = user!(name: "Root Admin") |> member!(ctx.acme, "admin")
+      assert Tenancy.root_admin?(admin)
 
       a = meeting!(ctx.org_a)
       b = meeting!(ctx.org_b)
@@ -138,8 +138,8 @@ defmodule Platform.Meetings.MeetingScopeTest do
     # rule, not deleted — whichever way it goes, one of these two lines
     # changes.
     test "a plain root member resolves :root_all but is still denied a tenant meeting", ctx do
-      member = user!(name: "Root Member") |> member!(ctx.fabrikam, "member")
-      refute Tenancy.fabrikam_admin?(member)
+      member = user!(name: "Root Member") |> member!(ctx.acme, "member")
+      refute Tenancy.root_admin?(member)
       assert Tenancy.root_member?(member)
 
       a = meeting!(ctx.org_a)
@@ -148,7 +148,7 @@ defmodule Platform.Meetings.MeetingScopeTest do
              "the choke point would admit this viewer everywhere"
 
       assert Meetings.fetch_meeting_for_user(member, a.slug) == {:error, :not_found},
-             "but this surface's own fabrikam_admin?/1 bypass does not"
+             "but this surface's own root_admin?/1 bypass does not"
     end
   end
 

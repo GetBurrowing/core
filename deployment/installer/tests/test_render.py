@@ -658,6 +658,134 @@ class TargetAndTlsTest(PositiveControlMixin, unittest.TestCase):
         )
 
 
+# ---------------------------------------------------------------------------
+# core's Users page env (task 01a113ea stage 4)
+# ---------------------------------------------------------------------------
+
+SIGN_IN_ADMIN_VARS = ("POCKET_ID_ADMIN_ENABLED", "POCKET_ID_ADMIN_URL", "POCKET_ID_API_KEY")
+
+
+def core_compose_block(compose):
+    return compose.split("\n  core-platform:\n", 1)[1].split("\n  core-postgres:\n", 1)[0]
+
+
+def external_oidc_render(path):
+    raw = load(path)
+    raw["auth"] = {
+        "mode": "external-oidc",
+        "issuer": "https://id.customer.example",
+        "client_id": "suite",
+        "client_secret_ref": "CUSTOMER_OIDC_SECRET",
+    }
+    with tempfile.TemporaryDirectory(prefix="suite-install-01a113ea-") as tmp:
+        supplied = os.path.join(tmp, "c.env")
+        with open(supplied, "w") as handle:
+            handle.write("CUSTOMER_OIDC_SECRET=oidc-value-01a113ea\n")
+        return build(valid(raw), customer_secrets=supplied)
+
+
+class SignInAdminEnvTest(PositiveControlMixin, unittest.TestCase):
+    """Bundled pocket-id gives core the Users page env; external OIDC gives none.
+
+    The key is pocket-id's admin-grade STATIC_API_KEY, aliased as
+    POCKET_ID_API_KEY: it must reach core only through secrets.env (0600).
+    """
+
+    def test_bundled_single_host_wires_core_to_the_pocket_id_admin_api(self):
+        rendered = build(manifest_from(EXAMPLE))
+        compose = rendered.files["compose.yaml"][0]
+        core = core_compose_block(compose)
+        self.assertIn('POCKET_ID_ADMIN_ENABLED: "true"', core)
+        self.assertIn('POCKET_ID_ADMIN_URL: "http://pocket-id:1411"', core)
+        # The URL names the upstream Caddy already proxies the auth host to.
+        self.assertIn("reverse_proxy pocket-id:1411", rendered.files["Caddyfile"][0])
+
+        key = rendered.generated["STATIC_API_KEY"]
+        self.assertGreaterEqual(len(key), 16)  # pocket-id refuses a shorter key
+        text, mode = rendered.files["secrets.env"]
+        self.assertEqual(mode, 0o600)
+        env = dict(line.split("=", 1) for line in text.splitlines() if "=" in line)
+        self.assertEqual(env["POCKET_ID_API_KEY"], key)
+        self.assertEqual(env["STATIC_API_KEY"], key)
+        # Never in compose.yaml: neither the name nor the value.
+        self.assertNotIn("POCKET_ID_API_KEY", compose)
+        self.assertNotIn(key, compose)
+        self.assertNotIn(key, rendered.files["Caddyfile"][0])
+
+    def test_external_oidc_writes_none_of_the_users_page_vars(self):
+        # Positive control: the bundled render of the same manifest has all three.
+        bundled = all_text(build(manifest_from(EXAMPLE)))
+        for name in SIGN_IN_ADMIN_VARS:
+            self.assertIn(name, bundled)
+        text = all_text(external_oidc_render(EXAMPLE))
+        for name in (*SIGN_IN_ADMIN_VARS, "STATIC_API_KEY", "pocket-id:1411"):
+            self.assertNotIn(name, text)
+
+
+# ---------------------------------------------------------------------------
+# bundled pocket-id log level (task 01a114c1 stage 2)
+# ---------------------------------------------------------------------------
+
+MAC_EXAMPLE = os.path.join(REPO, "deployment", "examples", "mac.install.toml")
+MAC_RENDER_FIXTURES = os.path.join(HERE, "render_fixtures")
+POCKET_ID_LOG_LEVEL = 'LOG_LEVEL: "error"'
+
+
+def compose_service_block(compose, service):
+    """The lines of one top-level compose service, header excluded."""
+    match = re.search(rf"^  {re.escape(service)}:\n((?:    .*\n)*)", compose, re.MULTILINE)
+    if not match:
+        raise AssertionError(f"no {service} service in compose.yaml")
+    return match.group(1)
+
+
+class PocketIdLogLevelTest(PositiveControlMixin, unittest.TestCase):
+    """pocket-id's request log carries one-time sign-in codes in the URL path.
+
+    The bundled pocket-id runs at LOG_LEVEL=error so only 5xx request lines
+    are written. The assertions read the pocket-id service block, not the
+    whole file.
+    """
+
+    def renders(self):
+        mac = build(
+            manifest_from(MAC_EXAMPLE),
+            customer_secrets=os.path.join(MAC_RENDER_FIXTURES, "mac-customer.env"),
+            registry_auth=os.path.join(MAC_RENDER_FIXTURES, "mac-registry-auth.json"),
+        )
+        return {"single-host": build(manifest_from(EXAMPLE)), "mac": mac}
+
+    def test_bundled_pocket_id_runs_at_error_and_nothing_else_inherits_it(self):
+        for name, rendered in self.renders().items():
+            with self.subTest(render=name):
+                compose = rendered.files["compose.yaml"][0]
+                pocket_id = compose_service_block(compose, "pocket-id")
+                # The extractor found the right block.
+                self.assertIn('image: "ghcr.io/pocket-id/pocket-id:', pocket_id)
+                self.assertIn(POCKET_ID_LOG_LEVEL, pocket_id)
+                # Scope control: the level belongs to pocket-id alone.
+                self.assertNotIn(
+                    POCKET_ID_LOG_LEVEL, compose_service_block(compose, "core-platform")
+                )
+                self.assertEqual(compose.count(POCKET_ID_LOG_LEVEL), 1)
+                # Not a secret: it must not move into secrets.env.
+                self.assertNotIn("LOG_LEVEL", rendered.files["secrets.env"][0])
+
+    def test_the_block_reader_tells_services_apart(self):
+        # Positive control for the scoping: in the mac render another service
+        # sets its own LOG_LEVEL, and the reader returns that value for it.
+        compose = self.renders()["mac"].files["compose.yaml"][0]
+        transcriber = compose_service_block(compose, "meeting-transcriber")
+        self.assertIn('LOG_LEVEL: "INFO"', transcriber)
+        self.assertNotIn(POCKET_ID_LOG_LEVEL, transcriber)
+        self.assertNotIn('LOG_LEVEL: "INFO"', compose_service_block(compose, "pocket-id"))
+
+    def test_external_oidc_renders_no_pocket_id_log_level(self):
+        compose = external_oidc_render(EXAMPLE).files["compose.yaml"][0]
+        self.assertNotRegex(compose, r"(?m)^  pocket-id:$")
+        self.assertNotIn(POCKET_ID_LOG_LEVEL, compose)
+
+
 if __name__ == "__main__":
     unittest.main()
 

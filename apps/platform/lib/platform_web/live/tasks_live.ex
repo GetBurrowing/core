@@ -103,10 +103,11 @@ defmodule PlatformWeb.TasksLive do
      # (see its comment and `FiltersComponent`'s moduledoc).
      |> assign(:scope_filter, :all)
      |> assign(:sponsor_filter, :all)
+     |> assign(:kind_filter, :all)
      |> assign(:task_search_query, "")
      |> assign(:create_menu_open, false)
      # Task 019fed1e: the admin-only Tasks settings menu (one row today,
-     # Pipeline). The trigger renders only behind `@fabrikam_admin?` and the
+     # Pipeline). The trigger renders only behind `@root_admin?` and the
      # destination is gated again by `live_session :admin`.
      |> assign(:settings_menu_open, false)
      |> assign(:agents, agents)
@@ -154,6 +155,7 @@ defmodule PlatformWeb.TasksLive do
     with {:ok, _} <- Platform.UUID.cast(task_id),
          task when not is_nil(task) <- Tasks.get_task_detail(task_id) do
       pending_reviews = ReviewRequests.list_pending_for_task(task.id)
+      Platform.Inbox.dismiss_sponsor_row_on_open(socket.assigns.current_user_id, task.id)
 
       # The execution log, its participant and the steering composer all
       # belong to `SteeringComponent` (stage 5). It loads them off the
@@ -188,15 +190,14 @@ defmodule PlatformWeb.TasksLive do
   def handle_params(params, _url, socket) do
     # `?sponsor=mine`, `?sort=updated`, `?q=` and `?scope=` (tasks 019f3f22,
     # 01a0cef1, 01a08df0 stage 1) are the authoritative source for the four
-    # board filters — decoded here so patches and direct URL loads
-    # (share-a-URL, refresh) land in the same state. `BoardHooks.apply_url_filters/5`
-    # has the assign + refresh/rebuild dispatch (its own doc has the "why").
+    # URL-authoritative board filters; BoardHooks owns assign + refresh/rebuild.
     new_sponsor = decode_sponsor_param(params)
     new_sort = BoardData.decode_sort(params["sort"])
     new_query = BoardData.decode_search_param(params["q"])
     new_scope = BoardData.decode_scope_param(params["scope"], socket.assigns[:active_scopes])
-
-    socket = BoardHooks.apply_url_filters(socket, new_sponsor, new_sort, new_query, new_scope)
+    new_kind = BoardData.decode_kind_param(params["kind"])
+    filters = {new_sponsor, new_sort, new_query, new_scope, new_kind}
+    socket = BoardHooks.apply_url_filters(socket, filters, params)
 
     {:noreply, socket |> assign(:selected_task, nil) |> assign(:show_detail, false)}
   end
@@ -383,7 +384,6 @@ defmodule PlatformWeb.TasksLive do
      |> resubscribe_execution_space(nil)
      |> clear_detail()
      |> assign(:selected_task_canvases, [])
-     |> BoardHooks.refresh_board()
      |> bump_detail_epoch()
      |> push_patch(to: BoardData.tasks_path(socket.assigns))}
   end

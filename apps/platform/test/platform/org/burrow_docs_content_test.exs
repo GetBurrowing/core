@@ -44,7 +44,19 @@ defmodule Platform.Org.BurrowDocsContentTest do
   # family prefix, but name something else. Each entry says what it is.
   @non_tool_terms [
     # task status: a stack member waiting for its in-stack dependencies
-    "stack_pending"
+    "stack_pending",
+    # an experiment SURFACE key (docs/burrow/experiments.md), not a tool. It
+    # became tool-shaped when `dispatch_metrics_list` (task 01a114a8 stage 1)
+    # made `dispatch` a tool-name prefix.
+    "dispatch.prompt",
+    # a validation KIND (docs/burrow/tasks.md), not a tool. It became
+    # tool-shaped when `code_mode_report` (task 01a114a8 stage 4) made `code`
+    # a tool-name prefix.
+    "code_review",
+    # the prototype frame's JS API (apps/platform/priv/prototype/suite.js)
+    # that runs a canvas handler (docs/burrow/canvases.md), not an MCP tool.
+    # It became tool-shaped with `suite_run_describe` making `suite` a prefix.
+    "suite.call"
   ]
 
   # ── The tool-token shape rule ─────────────────────────────────────────────
@@ -70,7 +82,7 @@ defmodule Platform.Org.BurrowDocsContentTest do
   # spells it with an underscore is teaching a name that does not work.
 
   @tool_shape ~r/\A[a-z][a-z0-9]*(?:[._][a-z0-9]+)+\z/
-  @banned_words ~r/\b(fabrikam|ellis|hive|moon)\b/i
+  @banned_words ~r/\b(acme|ellis|hive|moon)\b/i
   @sha ~r/\A[0-9a-f]{8,40}\z/
   # A page that documents the separately released `suite` CLI also stamps the
   # CLI commit it was checked against: `_Last verified at <core>; suite CLI at
@@ -466,7 +478,7 @@ defmodule Platform.Org.BurrowDocsContentTest do
       token = "@" <> "[Someone]"
       assert banned_errors("ask #{token} now") == ["contains an at-bracket mention token"]
 
-      for word <- ~w(fabrikam Ellis HIVE moon) do
+      for word <- ~w(acme Ellis HIVE moon) do
         assert banned_errors("runs on #{word} today") == ["contains banned word #{inspect(word)}"]
       end
 

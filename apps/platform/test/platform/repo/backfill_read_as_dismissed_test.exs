@@ -120,7 +120,9 @@ defmodule Platform.Repo.BackfillReadAsDismissedTest do
       # Precondition: without the backfill it IS back on the list. If this
       # assertion ever fails, the predicate change was reverted and the rest of
       # this test proves nothing.
-      assert Inbox.unread_count(user.id) == 1,
+      # (The LIST scope, not `unread_count/1`: since task `01a11703` the badge
+      # counts unopened rows only, so a read row is listed and not counted.)
+      assert user.id |> Inbox.unread_scope() |> Repo.aggregate(:count) == 1,
              "expected the opened row to be visible pre-backfill — is unread_scope/1 " <>
                "still keyed on dismissed_at alone?"
 

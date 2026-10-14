@@ -35,7 +35,7 @@ defmodule Platform.Org.TenantsSummaryTest do
 
   defp summary_page do
     from(p in WikiPage,
-      where: p.file_key == "org/fabrikam/TENANTS_SUMMARY.md" and is_nil(p.workspace_id),
+      where: p.file_key == "org/acme/TENANTS_SUMMARY.md" and is_nil(p.workspace_id),
       limit: 1
     )
     |> Repo.one()
@@ -63,7 +63,7 @@ defmodule Platform.Org.TenantsSummaryTest do
         seed_identity_page!(t.slug, "Identity notes for #{t.name}: focus on quality.")
       end)
 
-      assert {:ok, %WikiPage{file_key: "org/fabrikam/TENANTS_SUMMARY.md"}} =
+      assert {:ok, %WikiPage{file_key: "org/acme/TENANTS_SUMMARY.md"}} =
                TenantsSummary.recompute(llm_fun: stub_llm())
 
       page = summary_page()
@@ -204,7 +204,7 @@ defmodule Platform.Org.TenantsSummaryTest do
 
   describe "file_key_for/1" do
     test "expands the root-slug placeholder" do
-      assert TenantsSummary.file_key_for("fabrikam") == "org/fabrikam/TENANTS_SUMMARY.md"
+      assert TenantsSummary.file_key_for("acme") == "org/acme/TENANTS_SUMMARY.md"
       assert TenantsSummary.file_key_for("acme") == "org/acme/TENANTS_SUMMARY.md"
     end
   end

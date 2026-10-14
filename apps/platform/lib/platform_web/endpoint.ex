@@ -49,7 +49,15 @@ defmodule PlatformWeb.Endpoint do
 
   plug(Plug.RequestId)
   plug(PlatformWeb.Plugs.RewriteRemoteIp)
-  plug(Plug.Telemetry, event_prefix: [:phoenix, :endpoint])
+  # `log:` keeps Phoenix's per-request "GET /path" line, at its default
+  # :info, for every path except the single-use vault fetch: that line prints
+  # the RAW request path, and `:filter_parameters` only filters the params
+  # map, so the ticket token would otherwise reach the log while it is still
+  # redeemable (task 01a131c5).
+  plug(Plug.Telemetry,
+    event_prefix: [:phoenix, :endpoint],
+    log: {__MODULE__, :request_log_level, []}
+  )
 
   # `RawBodyPaths` delegates to `Plug.Parsers` for everything except the
   # routes that stream their own request body (the presigned attachment
@@ -71,4 +79,9 @@ defmodule PlatformWeb.Endpoint do
   # LiveView socket reads/verifies the already-signed cookie. See the plug.
   plug(PlatformWeb.Plugs.SessionCookieDomain, @session_options)
   plug(PlatformWeb.Router)
+
+  @doc false
+  # Plug.Telemetry `log:` callback; see the plug above.
+  def request_log_level(%Plug.Conn{path_info: ["vault", "fetch" | _]}), do: false
+  def request_log_level(_conn), do: :info
 end

@@ -5,9 +5,9 @@ defmodule Platform.AccountsTest do
 
   The hook fires on:
 
-    * **INSERT** — every new user gets an `org_memberships` row in Fabrikam
+    * **INSERT** — every new user gets an `org_memberships` row in Acme
       with role derived from `Platform.Tenancy.derive_role_from_email/1`.
-    * **email-change UPDATE** — if a user's email refreshes to a Fabrikam
+    * **email-change UPDATE** — if a user's email refreshes to an Acme
       address, they auto-promote to admin. There is **no auto-revoke**;
       offboarding is explicitly out of scope per the plan.
 
@@ -25,22 +25,22 @@ defmodule Platform.AccountsTest do
 
   # ── Helpers ──────────────────────────────────────────────────────────
 
-  defp fabrikam_role(user) do
-    fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+  defp acme_role(user) do
+    acme = Tenancy.get_org_by_slug!("acme")
 
     Repo.one(
       from(m in OrgMembership,
-        where: m.user_id == ^user.id and m.org_id == ^fabrikam.id,
+        where: m.user_id == ^user.id and m.org_id == ^acme.id,
         select: m.role
       )
     )
   end
 
-  defp fabrikam_membership_count(user) do
-    fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+  defp acme_membership_count(user) do
+    acme = Tenancy.get_org_by_slug!("acme")
 
     Repo.aggregate(
-      from(m in OrgMembership, where: m.user_id == ^user.id and m.org_id == ^fabrikam.id),
+      from(m in OrgMembership, where: m.user_id == ^user.id and m.org_id == ^acme.id),
       :count,
       :id
     )
@@ -64,10 +64,10 @@ defmodule Platform.AccountsTest do
   # regardless of the domain rule. This file is specifically about the
   # DOMAIN rule wiring (see moduledoc), not that fallback — it has its own
   # dedicated, isolated coverage in `tenancy_test.exs`. Seed an unrelated
-  # membership first so Fabrikam is never empty in a test's sandboxed
+  # membership first so Acme is never empty in a test's sandboxed
   # transaction and the fallback never fires here.
-  defp seed_bystander_fabrikam_membership! do
-    fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+  defp seed_bystander_acme_membership! do
+    acme = Tenancy.get_org_by_slug!("acme")
     n = System.unique_integer([:positive])
 
     bystander =
@@ -80,7 +80,7 @@ defmodule Platform.AccountsTest do
       |> Repo.insert!()
 
     %OrgMembership{}
-    |> OrgMembership.changeset(%{user_id: bystander.id, org_id: fabrikam.id, role: "member"})
+    |> OrgMembership.changeset(%{user_id: bystander.id, org_id: acme.id, role: "member"})
     |> Repo.insert!()
 
     :ok
@@ -90,38 +90,38 @@ defmodule Platform.AccountsTest do
 
   describe "find_or_create_from_oidc/1 — INSERT hook" do
     setup do
-      seed_bystander_fabrikam_membership!()
+      seed_bystander_acme_membership!()
     end
 
-    test "a brand-new @example.com signup gets a Fabrikam admin membership" do
-      attrs = oidc_attrs(%{email: "newhire@example.com"})
+    test "a brand-new @acme.test signup gets an Acme admin membership" do
+      attrs = oidc_attrs(%{email: "newhire@acme.test"})
       assert {:ok, user} = Accounts.find_or_create_from_oidc(attrs)
 
-      assert fabrikam_role(user) == "admin"
-      assert fabrikam_membership_count(user) == 1
-      assert Tenancy.fabrikam_admin?(user)
+      assert acme_role(user) == "admin"
+      assert acme_membership_count(user) == 1
+      assert Tenancy.root_admin?(user)
     end
 
-    test "a brand-new @gmail.com signup gets a Fabrikam member membership" do
+    test "a brand-new @gmail.com signup gets an Acme member membership" do
       attrs = oidc_attrs(%{email: "external@gmail.com"})
       assert {:ok, user} = Accounts.find_or_create_from_oidc(attrs)
 
-      assert fabrikam_role(user) == "member"
-      assert fabrikam_membership_count(user) == 1
-      refute Tenancy.fabrikam_admin?(user)
+      assert acme_role(user) == "member"
+      assert acme_membership_count(user) == 1
+      refute Tenancy.root_admin?(user)
     end
 
     test "the case-insensitive rule applies on insert" do
-      attrs = oidc_attrs(%{email: "Mixed-Case@example.com"})
+      attrs = oidc_attrs(%{email: "Mixed-Case@ACME.TEST"})
       assert {:ok, user} = Accounts.find_or_create_from_oidc(attrs)
-      assert fabrikam_role(user) == "admin"
+      assert acme_role(user) == "admin"
     end
 
     test "subdomain spoofs do NOT receive admin on insert" do
-      attrs = oidc_attrs(%{email: "subdomain@us.example.com"})
+      attrs = oidc_attrs(%{email: "subdomain@us.acme.test"})
       assert {:ok, user} = Accounts.find_or_create_from_oidc(attrs)
-      assert fabrikam_role(user) == "member"
-      refute Tenancy.fabrikam_admin?(user)
+      assert acme_role(user) == "member"
+      refute Tenancy.root_admin?(user)
     end
   end
 
@@ -129,10 +129,10 @@ defmodule Platform.AccountsTest do
 
   describe "find_or_create_from_oidc/1 — email-change hook" do
     setup do
-      seed_bystander_fabrikam_membership!()
+      seed_bystander_acme_membership!()
     end
 
-    test "an existing member changing email to @example.com is promoted to admin" do
+    test "an existing member changing email to @acme.test is promoted to admin" do
       sub = "promo-sub-#{System.unique_integer([:positive])}"
 
       {:ok, user} =
@@ -142,37 +142,37 @@ defmodule Platform.AccountsTest do
           name: "Alice"
         })
 
-      assert fabrikam_role(user) == "member"
+      assert acme_role(user) == "member"
 
       {:ok, promoted} =
         Accounts.find_or_create_from_oidc(%{
           sub: sub,
-          email: "alice@example.com",
+          email: "alice@acme.test",
           name: "Alice"
         })
 
       assert promoted.id == user.id
-      assert promoted.email == "alice@example.com"
-      assert fabrikam_role(promoted) == "admin"
-      assert fabrikam_membership_count(promoted) == 1
-      assert Tenancy.fabrikam_admin?(promoted)
+      assert promoted.email == "alice@acme.test"
+      assert acme_role(promoted) == "admin"
+      assert acme_membership_count(promoted) == 1
+      assert Tenancy.root_admin?(promoted)
     end
 
-    test "an existing admin (Fabrikam email) changing email to @gmail.com STAYS admin" do
+    test "an existing admin (Acme email) changing email to @gmail.com STAYS admin" do
       # DELIBERATE: offboarding is out of scope per plan Stage 2. The
-      # hook is promote-only; a Fabrikam email changing to non-Fabrikam MUST
+      # hook is promote-only; an Acme email changing to non-Acme MUST
       # NOT auto-revoke admin. Stripping a departed employee is a
       # separate operation (planned for a later stage).
       sub = "offboard-sub-#{System.unique_integer([:positive])}"
 
-      {:ok, fabrikam_user} =
+      {:ok, acme_user} =
         Accounts.find_or_create_from_oidc(%{
           sub: sub,
-          email: "bob@example.com",
+          email: "bob@acme.test",
           name: "Bob"
         })
 
-      assert fabrikam_role(fabrikam_user) == "admin"
+      assert acme_role(acme_user) == "admin"
 
       {:ok, after_change} =
         Accounts.find_or_create_from_oidc(%{
@@ -181,11 +181,11 @@ defmodule Platform.AccountsTest do
           name: "Bob"
         })
 
-      assert after_change.id == fabrikam_user.id
+      assert after_change.id == acme_user.id
       assert after_change.email == "bob@gmail.com"
       # Role is preserved — no auto-revoke.
-      assert fabrikam_role(after_change) == "admin"
-      assert fabrikam_membership_count(after_change) == 1
+      assert acme_role(after_change) == "admin"
+      assert acme_membership_count(after_change) == 1
     end
 
     test "an existing user whose email does NOT change is unaffected by the hook" do
@@ -195,7 +195,7 @@ defmodule Platform.AccountsTest do
       {:ok, user} =
         Accounts.find_or_create_from_oidc(%{sub: sub, email: email, name: "Carol"})
 
-      assert fabrikam_role(user) == "member"
+      assert acme_role(user) == "member"
 
       # Name refresh, same email — hook is a no-op.
       {:ok, refreshed} =
@@ -203,11 +203,11 @@ defmodule Platform.AccountsTest do
 
       assert refreshed.id == user.id
       assert refreshed.name == "Carol Renamed"
-      assert fabrikam_role(refreshed) == "member"
-      assert fabrikam_membership_count(refreshed) == 1
+      assert acme_role(refreshed) == "member"
+      assert acme_membership_count(refreshed) == 1
     end
 
-    test "a member changing email to another non-Fabrikam address is NOT auto-promoted" do
+    test "a member changing email to another non-Acme address is NOT auto-promoted" do
       sub = "lateral-sub-#{System.unique_integer([:positive])}"
 
       {:ok, user} =
@@ -217,7 +217,7 @@ defmodule Platform.AccountsTest do
           name: "Dave"
         })
 
-      assert fabrikam_role(user) == "member"
+      assert acme_role(user) == "member"
 
       {:ok, refreshed} =
         Accounts.find_or_create_from_oidc(%{
@@ -227,7 +227,7 @@ defmodule Platform.AccountsTest do
         })
 
       assert refreshed.email == "dave@yahoo.com"
-      assert fabrikam_role(refreshed) == "member"
+      assert acme_role(refreshed) == "member"
     end
   end
 
@@ -239,7 +239,7 @@ defmodule Platform.AccountsTest do
         Accounts.find_or_create_from_oidc(oidc_attrs(%{email: "target@example.com"}))
 
       {:ok, actor} =
-        Accounts.find_or_create_from_oidc(oidc_attrs(%{email: "actor@example.com"}))
+        Accounts.find_or_create_from_oidc(oidc_attrs(%{email: "actor@acme.test"}))
 
       %{target: target, actor: actor}
     end
@@ -508,7 +508,157 @@ defmodule Platform.AccountsTest do
       refute match?(%Ecto.Association.NotLoaded{}, fetched.org_memberships)
       assert [membership | _] = fetched.org_memberships
       refute match?(%Ecto.Association.NotLoaded{}, membership.org)
-      assert membership.org.slug == "fabrikam"
+      assert membership.org.slug == "acme"
+    end
+  end
+
+  # ── relink_oidc_identity/2 (task 01a113ea stage 2) ───────────────────
+
+  describe "relink_oidc_identity/2" do
+    setup do
+      seed_bystander_acme_membership!()
+    end
+
+    test "relinks an archived user to a new sub and unarchives them; a login with the new sub finds the same row" do
+      attrs = oidc_attrs(%{email: "relink-me@example.com"})
+      {:ok, user} = Accounts.find_or_create_from_oidc(attrs)
+      {:ok, archived} = Accounts.archive_user(user, reason: "sign-in removed")
+      new_sub = "relinked-#{System.unique_integer([:positive])}"
+
+      assert {:ok, relinked} = Accounts.relink_oidc_identity(archived, new_sub)
+
+      assert relinked.id == user.id
+      assert relinked.oidc_sub == new_sub
+      assert is_nil(relinked.archived_at)
+      assert is_nil(relinked.archived_by_user_id)
+      assert is_nil(relinked.archived_reason)
+
+      count_before = Repo.aggregate(Accounts.User, :count)
+
+      assert {:ok, logged_in} =
+               Accounts.find_or_create_from_oidc(%{
+                 sub: new_sub,
+                 email: attrs.email,
+                 name: attrs.name
+               })
+
+      assert logged_in.id == user.id
+      assert Repo.aggregate(Accounts.User, :count) == count_before
+
+      # The old sub no longer reaches the row.
+      assert {:ok, other} =
+               Accounts.find_or_create_from_oidc(%{attrs | email: "old-sub@example.com"})
+
+      refute other.id == user.id
+    end
+
+    test "refuses a user that is not archived and writes nothing" do
+      {:ok, user} = Accounts.find_or_create_from_oidc(oidc_attrs(%{}))
+      before = Repo.get!(Accounts.User, user.id)
+
+      assert {:error, :not_archived} = Accounts.relink_oidc_identity(user, "never-applied")
+
+      assert Repo.get!(Accounts.User, user.id) == before
+    end
+
+    test "a sub already held by another user returns a changeset and leaves the row unchanged" do
+      {:ok, holder} = Accounts.find_or_create_from_oidc(oidc_attrs(%{}))
+      {:ok, user} = Accounts.find_or_create_from_oidc(oidc_attrs(%{}))
+      {:ok, archived} = Accounts.archive_user(user, reason: "sign-in removed")
+      before = Repo.get!(Accounts.User, user.id)
+
+      assert {:error, %Ecto.Changeset{} = changeset} =
+               Accounts.relink_oidc_identity(archived, holder.oidc_sub)
+
+      assert {_, [constraint: :unique, constraint_name: _]} = changeset.errors[:oidc_sub]
+      assert Repo.get!(Accounts.User, user.id) == before
+    end
+  end
+
+  # ── note_sign_in_link_expiry/2 (task 01a114c1 stage 1) ───────────────
+
+  describe "note_sign_in_link_expiry/2" do
+    setup do
+      seed_bystander_acme_membership!()
+    end
+
+    @earlier ~U[2030-01-01 12:00:00Z]
+    @later ~U[2030-01-01 12:30:00Z]
+    # What each is stored as: already whole seconds, so only the 5 s margin
+    # is added (task 01a11503).
+    @earlier_stored ~U[2030-01-01 12:00:05Z]
+    @later_stored ~U[2030-01-01 12:30:05Z]
+
+    test "stores the first value on a user with none" do
+      {:ok, user} = Accounts.find_or_create_from_oidc(oidc_attrs(%{}))
+      assert is_nil(user.sign_in_link_expires_at)
+
+      assert {:ok, noted} = Accounts.note_sign_in_link_expiry(user, @earlier)
+      assert noted.sign_in_link_expires_at == @earlier_stored
+      assert Repo.get!(Accounts.User, user.id).sign_in_link_expires_at == @earlier_stored
+    end
+
+    test "earlier then later keeps the later" do
+      {:ok, user} = Accounts.find_or_create_from_oidc(oidc_attrs(%{}))
+
+      {:ok, user} = Accounts.note_sign_in_link_expiry(user, @earlier)
+      assert {:ok, noted} = Accounts.note_sign_in_link_expiry(user, @later)
+
+      assert noted.sign_in_link_expires_at == @later_stored
+      assert Repo.get!(Accounts.User, user.id).sign_in_link_expires_at == @later_stored
+    end
+
+    test "later then earlier keeps the later, even through a stale struct" do
+      {:ok, user} = Accounts.find_or_create_from_oidc(oidc_attrs(%{}))
+
+      {:ok, noted} = Accounts.note_sign_in_link_expiry(user, @later)
+      assert noted.sign_in_link_expires_at == @later_stored
+
+      # `user` still carries nil: the comparison must use the stored value.
+      assert {:ok, again} = Accounts.note_sign_in_link_expiry(user, @earlier)
+      assert again.sign_in_link_expires_at == @later_stored
+      assert Repo.get!(Accounts.User, user.id).sign_in_link_expires_at == @later_stored
+    end
+
+    # Task 01a11503: the ticket's evidence. Truncating stored :18, before the
+    # token pocket-id restored to :19 had expired.
+    test "a sub-second expiry is rounded UP to the next second, plus 5 s" do
+      {:ok, user} = Accounts.find_or_create_from_oidc(oidc_attrs(%{}))
+
+      assert {:ok, noted} =
+               Accounts.note_sign_in_link_expiry(user, ~U[2026-10-07 06:42:18.608Z])
+
+      assert noted.sign_in_link_expires_at == ~U[2026-10-07 06:42:24Z]
+      assert Repo.get!(Accounts.User, user.id).sign_in_link_expires_at == ~U[2026-10-07 06:42:24Z]
+    end
+
+    test "a whole-second expiry is not bumped by the rounding, only by the 5 s" do
+      {:ok, user} = Accounts.find_or_create_from_oidc(oidc_attrs(%{}))
+
+      assert {:ok, noted} = Accounts.note_sign_in_link_expiry(user, ~U[2026-10-07 06:42:18Z])
+
+      assert noted.sign_in_link_expires_at == ~U[2026-10-07 06:42:23Z]
+      assert Repo.get!(Accounts.User, user.id).sign_in_link_expires_at == ~U[2026-10-07 06:42:23Z]
+    end
+
+    test "GREATEST compares the rounded values" do
+      {:ok, user} = Accounts.find_or_create_from_oidc(oidc_attrs(%{}))
+
+      {:ok, _} = Accounts.note_sign_in_link_expiry(user, ~U[2026-10-07 06:42:18.608Z])
+      assert {:ok, same} = Accounts.note_sign_in_link_expiry(user, ~U[2026-10-07 06:42:18.200Z])
+      assert same.sign_in_link_expires_at == ~U[2026-10-07 06:42:24Z]
+
+      assert {:ok, moved} = Accounts.note_sign_in_link_expiry(user, ~U[2026-10-07 06:42:19.001Z])
+      assert moved.sign_in_link_expires_at == ~U[2026-10-07 06:42:25Z]
+      assert Repo.get!(Accounts.User, user.id).sign_in_link_expires_at == ~U[2026-10-07 06:42:25Z]
+    end
+
+    test "a user row that no longer exists is :not_found" do
+      {:ok, user} = Accounts.find_or_create_from_oidc(oidc_attrs(%{}))
+      Repo.delete_all(from(m in OrgMembership, where: m.user_id == ^user.id))
+      Repo.delete!(user)
+
+      assert {:error, :not_found} = Accounts.note_sign_in_link_expiry(user, @later)
     end
   end
 end

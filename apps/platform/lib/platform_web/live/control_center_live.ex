@@ -394,7 +394,7 @@ defmodule PlatformWeb.ControlCenterLive do
 
   def handle_event("cancel_avatar_upload", _params, socket), do: {:noreply, socket}
 
-  # ── Vault write events. Both re-check `@fabrikam_admin?` inside VaultEvents ──
+  # ── Vault write events. Both re-check `@root_admin?` inside VaultEvents ──
   #
   # Delegated rather than inlined for the same reason every other panel's
   # events are: the gate, the scope decision and the reason the secret never
@@ -760,7 +760,7 @@ defmodule PlatformWeb.ControlCenterLive do
                   agent_credentials={@agent_credentials}
                   platform_credentials={@platform_credentials}
                   all_platform_credentials={@all_platform_credentials}
-                  fabrikam_admin?={@fabrikam_admin?}
+                  root_admin?={@root_admin?}
                   show_credential_form={@show_credential_form}
                   credential_form={@credential_form}
                 />

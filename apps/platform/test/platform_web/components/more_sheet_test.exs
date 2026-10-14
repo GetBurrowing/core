@@ -9,8 +9,8 @@ defmodule PlatformWeb.Components.MoreSheetTest do
 
     * Working-cluster destinations render (Skills / Context / Memory /
       Prompts / Meetings).
-    * Admin section is gated on `is_fabrikam_user` and is DOM-absent (not just
-      visually hidden) for non-Fabrikam users.
+    * Admin section is gated on `root_user` and is DOM-absent (not just
+      visually hidden) for non-Acme users.
     * Hero icons render via the data-driven loop.
   """
 
@@ -24,7 +24,7 @@ defmodule PlatformWeb.Components.MoreSheetTest do
       Map.merge(
         %{
           open: true,
-          is_fabrikam_user: false,
+          root_user: false,
           current_user: nil
         },
         assigns
@@ -33,20 +33,20 @@ defmodule PlatformWeb.Components.MoreSheetTest do
     rendered_to_string(~H"""
     <.more_sheet
       open={@open}
-      is_fabrikam_user={@is_fabrikam_user}
+      root_user={@root_user}
       current_user={@current_user}
     />
     """)
   end
 
   describe "working cluster destinations" do
-    test "renders member-visible working-cluster destinations for a non-fabrikam user" do
+    test "renders member-visible working-cluster destinations for a non-acme user" do
       html = render_more_sheet(%{})
 
       # Working cluster keys visible to members per IconRail.canonical_destinations.
       # (Memory tabs under Context per Marlowe 2026-05-18; not its own destination.)
-      # Prompts is fabrikam_only?:true as of 2026-05-20 — visible only to admins;
-      # see fabrikam-only assertion in the next test.
+      # Prompts is root_only?:true as of 2026-05-20 — visible only to admins;
+      # see acme-only assertion in the next test.
       for key <- ["skills", "context", "meetings"] do
         assert html =~ ~s(data-destination="#{key}"),
                "expected data-destination=#{inspect(key)} in the member-view More sheet"
@@ -55,12 +55,12 @@ defmodule PlatformWeb.Components.MoreSheetTest do
       refute html =~ ~s(data-destination="prompts")
     end
 
-    test "renders all working-cluster destinations including Prompts for a fabrikam user" do
-      html = render_more_sheet(%{is_fabrikam_user: true})
+    test "renders all working-cluster destinations including Prompts for a acme user" do
+      html = render_more_sheet(%{root_user: true})
 
       for key <- ["skills", "context", "prompts", "meetings"] do
         assert html =~ ~s(data-destination="#{key}"),
-               "expected data-destination=#{inspect(key)} in the fabrikam-view More sheet"
+               "expected data-destination=#{inspect(key)} in the acme-view More sheet"
       end
     end
 
@@ -71,14 +71,14 @@ defmodule PlatformWeb.Components.MoreSheetTest do
   end
 
   describe "admin gate" do
-    test "renders the Admin section when is_fabrikam_user is true" do
-      html = render_more_sheet(%{is_fabrikam_user: true})
+    test "renders the Admin section when root_user is true" do
+      html = render_more_sheet(%{root_user: true})
       assert html =~ ">Admin<"
       assert html =~ ~s(data-destination="admin")
     end
 
-    test "omits the Admin section entirely when is_fabrikam_user is false" do
-      html = render_more_sheet(%{is_fabrikam_user: false})
+    test "omits the Admin section entirely when root_user is false" do
+      html = render_more_sheet(%{root_user: false})
       refute html =~ ">Admin<"
       refute html =~ ~s(data-destination="admin")
     end
@@ -86,7 +86,7 @@ defmodule PlatformWeb.Components.MoreSheetTest do
 
   describe "hero icons" do
     test "renders a hero icon class for each visible destination" do
-      html = render_more_sheet(%{is_fabrikam_user: true})
+      html = render_more_sheet(%{root_user: true})
 
       # Spot-check a working-cluster hero + the admin hero — full coverage
       # is in IconRailTest.
@@ -139,7 +139,7 @@ defmodule PlatformWeb.Components.MoreSheetMailFlagTest do
     assigns = %{}
 
     rendered_to_string(~H"""
-    <.more_sheet open={true} is_fabrikam_user={false} current_user={nil} />
+    <.more_sheet open={true} root_user={false} current_user={nil} />
     """)
   end
 

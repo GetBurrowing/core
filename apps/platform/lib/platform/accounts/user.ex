@@ -26,6 +26,12 @@ defmodule Platform.Accounts.User do
     field(:archived_by_user_id, :binary_id)
     field(:archived_reason, :string)
 
+    # Latest expiry of any sign-in link `Platform.SignInAdmin` minted for this
+    # user (task 01a114c1). Written only by
+    # `Platform.Accounts.note_sign_in_link_expiry/2`; the link itself is never
+    # stored.
+    field(:sign_in_link_expires_at, :utc_datetime)
+
     # MT/RBAC foundation (Plan 2 v3, task 019e3c4a). Users carry their
     # org memberships so authenticated request hot paths can preload
     # them on the same round-trip as the user fetch and avoid a
@@ -46,7 +52,8 @@ defmodule Platform.Accounts.User do
       :preferences,
       :archived_at,
       :archived_by_user_id,
-      :archived_reason
+      :archived_reason,
+      :sign_in_link_expires_at
     ])
     |> validate_required([:email, :name, :oidc_sub])
     |> validate_format(:email, ~r/^[^\s]+@[^\s]+$/)

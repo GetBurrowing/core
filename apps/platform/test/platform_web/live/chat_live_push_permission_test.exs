@@ -53,11 +53,11 @@ defmodule PlatformWeb.ChatLivePushPermissionTest do
         oidc_sub: "oidc-push-perm-#{n}"
       })
 
-    fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+    acme = Tenancy.get_org_by_slug!("acme")
 
-    unless Repo.get_by(OrgMembership, user_id: user.id, org_id: fabrikam.id) do
+    unless Repo.get_by(OrgMembership, user_id: user.id, org_id: acme.id) do
       %OrgMembership{}
-      |> OrgMembership.changeset(%{user_id: user.id, org_id: fabrikam.id, role: "member"})
+      |> OrgMembership.changeset(%{user_id: user.id, org_id: acme.id, role: "member"})
       |> Repo.insert!()
     end
 
@@ -88,7 +88,7 @@ defmodule PlatformWeb.ChatLivePushPermissionTest do
 
     defp channel_member_conn(conn) do
       n = System.unique_integer([:positive])
-      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+      acme = Tenancy.get_org_by_slug!("acme")
 
       user =
         Repo.insert!(%User{
@@ -97,7 +97,7 @@ defmodule PlatformWeb.ChatLivePushPermissionTest do
           oidc_sub: "oidc-push-chat-#{n}"
         })
 
-      Repo.insert!(%OrgMembership{user_id: user.id, org_id: fabrikam.id, role: "member"})
+      Repo.insert!(%OrgMembership{user_id: user.id, org_id: acme.id, role: "member"})
 
       # TWO channels, joined in order. Mounting the SECOND is what makes this a
       # real control rather than a coincidence: the user-level fallback picks
@@ -112,7 +112,7 @@ defmodule PlatformWeb.ChatLivePushPermissionTest do
               name: "Push Chat Chan #{i}",
               slug: "push-chat-#{n}-#{i}",
               kind: "channel",
-              org_id: fabrikam.id
+              org_id: acme.id
             })
 
           {:ok, participant} =

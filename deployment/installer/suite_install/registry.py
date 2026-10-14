@@ -24,10 +24,13 @@ Nothing here is specific to a target. Values are target-neutral:
   single host).
 
 Target-aware entries (task 01a0d6ab). ``Ctx.target`` exists for the mac
-target's additions to shared services (pocket-id on the bundled postgres with a
-STATIC_API_KEY, core's TRUST_PROXY_HEADERS). They are gated on ``target ==
-"mac"`` ONLY because every single-host golden file must stay byte-identical;
-single-host adopts them by deleting the gate and regenerating its goldens.
+target's additions to shared services (pocket-id on the bundled postgres,
+core's TRUST_PROXY_HEADERS). They are gated on ``target == "mac"`` ONLY because
+every single-host golden file must stay byte-identical; single-host adopts them
+by deleting the gate and regenerating its goldens. pocket-id's STATIC_API_KEY
+was adopted that way (task 01a113ea stage 4): every bundled-pocket-id install
+generates it, because core's Users page (/admin/sign-in-users) calls pocket-id's
+admin API with it.
 Target-only containers (cloudflared, the tailscale sidecars) are added by
 ``enabled_containers`` from the manifest's ``[access]`` table.
 
@@ -315,7 +318,9 @@ SECRETS = {
             "STATIC_API_KEY",
             _urlsafe(32),
             "pocket-id v2 STATIC_API_KEY (admin API key, X-API-KEY header); used by "
-            "the first-run bootstrap (task 01a0d6ab stage 4). Target mac only",
+            "the mac first-run bootstrap (task 01a0d6ab stage 4) and, aliased as "
+            "POCKET_ID_API_KEY, by core's Users page lib/platform/sign_in_admin/config.ex "
+            "(task 01a113ea). Every bundled-pocket-id install, any target",
         ),
         Secret(
             "POCKETID_DB_PASSWORD",
@@ -535,20 +540,29 @@ def _pocket_id_env(ctx):
         # Data sovereignty: no third-party heartbeat by default.
         "ANALYTICS_DISABLED": "true",
         "ENCRYPTION_KEY": "{secret:ENCRYPTION_KEY}",
+        # Task 01a114c1: pocket-id's request log records the full URL path, and
+        # one-time sign-in codes travel in it (GET /lc/<code>, POST
+        # /api/one-time-access-token/<code>). Every response below 500 logs at
+        # INFO, except a 429 at WARN, so "warn" would still print the code of a
+        # rate-limited exchange. "error" keeps only 5xx request lines. Never
+        # "debug": that also turns on SQL query logs.
+        "LOG_LEVEL": "error",
     }
     if ctx.mac:
         env["DB_CONNECTION_STRING"] = (
             "postgres://pocketid:{secret:POCKETID_DB_PASSWORD}"
             "@core-postgres:5432/pocketid?sslmode=disable"
         )
-        env["STATIC_API_KEY"] = "{secret:STATIC_API_KEY}"
+    # Every bundled install (any target): core's Users page reaches pocket-id's
+    # admin API with this key, aliased as POCKET_ID_API_KEY (_pocket_id_injects).
+    env["STATIC_API_KEY"] = "{secret:STATIC_API_KEY}"
     return env
 
 
 def _pocket_id_secrets(ctx):
-    names = ["ENCRYPTION_KEY", "OIDC_CLIENT_SECRET"]
+    names = ["ENCRYPTION_KEY", "OIDC_CLIENT_SECRET", "STATIC_API_KEY"]
     if ctx.mac:
-        names += ["STATIC_API_KEY", "POCKETID_DB_PASSWORD"]
+        names += ["POCKETID_DB_PASSWORD"]
     return [SECRETS[n] for n in names]
 
 
@@ -558,6 +572,13 @@ def _pocket_id_injects(ctx):
             "OIDC_ISSUER": f"https://{ctx.auth_host}",
             "OIDC_CLIENT_ID": "suite-core",
             "OIDC_CLIENT_SECRET": "{secret:OIDC_CLIENT_SECRET}",
+            # core's Users page (Platform.SignInAdmin.Config, task 01a113ea). These
+            # exist only because pocket-id is bundled: this inject is dropped with
+            # the pocket-id container in external-OIDC mode. The key is a {secret:}
+            # alias, so it lands in secrets.env (0600), never in compose.yaml.
+            "POCKET_ID_ADMIN_ENABLED": "true",
+            "POCKET_ID_ADMIN_URL": "http://pocket-id:1411",
+            "POCKET_ID_API_KEY": "{secret:STATIC_API_KEY}",
         }
     }
     if ctx.mac:
