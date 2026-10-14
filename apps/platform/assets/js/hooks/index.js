@@ -19,6 +19,7 @@ import CopyToClipboard from "./copy_to_clipboard"
 import DragDropUpload from "./drag_drop_upload"
 import DrawerSearchFocus from "./drawer_search_focus"
 import EmbedCanvasScale from "./embed_canvas_scale"
+import PrototypeFullscreen from "./prototype_fullscreen"
 import ExecutionLogScroll from "./execution_log_scroll"
 import FilePreviewScale from "./file_preview_scale"
 import HexField from "./hex_field"
@@ -86,6 +87,7 @@ export default {
   DragDropUpload,
   DrawerSearchFocus,
   EmbedCanvasScale,
+  PrototypeFullscreen,
   ExecutionLogScroll,
   FilePreviewScale,
   HexField,

@@ -103,6 +103,58 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrameTest do
     end
   end
 
+  describe "fullscreen" do
+    test "toggling keeps the bridge element and iframe, adds fullscreen classes and a close control",
+         ctx do
+      {:ok, view, html} =
+        live_isolated(build_conn(), __MODULE__.Host,
+          session: %{"canvas_id" => ctx.canvas.id, "node" => proto_node(ctx.prototype.id)}
+        )
+
+      bridge = ~s([phx-hook="CanvasRoomBridge"])
+
+      assert has_element?(
+               view,
+               ~s([data-role="prototype-canvas"][phx-hook="PrototypeFullscreen"])
+             )
+
+      [before_id] = find(html, bridge) |> LazyHTML.attribute("id")
+      refute has_element?(view, ~s([data-role="prototype-fullscreen-close"]))
+      refute has_element?(view, ~s([data-role="prototype-canvas"].fixed))
+      assert has_element?(view, ~s([data-role="prototype-open"]))
+
+      view |> element(~s([data-role="prototype-fullscreen"])) |> render_click()
+
+      assert has_element?(view, ~s([data-role="prototype-canvas"].fixed.inset-0.z-50.h-dvh))
+      assert has_element?(view, ~s([data-role="prototype-fullscreen-close"]))
+      assert has_element?(view, ~s([data-role="prototype-open"]))
+      [after_id] = find(render(view), bridge) |> LazyHTML.attribute("id")
+      assert after_id == before_id
+      assert has_element?(view, "#{bridge} iframe")
+
+      view |> element(~s([data-role="prototype-fullscreen-close"])) |> render_click()
+      refute has_element?(view, ~s([data-role="prototype-canvas"].fixed))
+      [back_id] = find(render(view), bridge) |> LazyHTML.attribute("id")
+      assert back_id == before_id
+    end
+
+    test "Escape closes it", ctx do
+      {:ok, view, _} =
+        live_isolated(build_conn(), __MODULE__.Host,
+          session: %{"canvas_id" => ctx.canvas.id, "node" => proto_node(ctx.prototype.id)}
+        )
+
+      view |> element(~s([data-role="prototype-fullscreen"])) |> render_click()
+      assert has_element?(view, ~s([phx-window-keydown="fullscreen"][phx-key="Escape"]))
+
+      view
+      |> element(~s([phx-window-keydown="fullscreen"]))
+      |> render_keydown(%{"key" => "Escape"})
+
+      refute has_element?(view, ~s([data-role="prototype-canvas"].fixed))
+    end
+  end
+
   describe "latest version" do
     test "frames the latest version with sandbox allow-scripts and nothing else", ctx do
       html = render_frame(proto_node(ctx.prototype.id), ctx.canvas.id)

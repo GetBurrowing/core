@@ -49,7 +49,14 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
   @impl true
   def mount(socket) do
     {:ok,
-     assign(socket, open: nil, load_key: nil, view: nil, pin_error: nil, retention_days: nil)}
+     assign(socket,
+       open: nil,
+       fullscreen: false,
+       load_key: nil,
+       view: nil,
+       pin_error: nil,
+       retention_days: nil
+     )}
   end
 
   @impl true
@@ -111,6 +118,13 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
 
   def handle_event("close", _params, socket), do: {:noreply, assign(socket, open: nil)}
 
+  # In-app fullscreen (iOS standalone PWA has no Fullscreen API for non-video
+  # elements, and `target="_blank"` escapes to Safari with an address bar).
+  # Pure class/style toggle on the existing tree: the iframe and its
+  # CanvasRoomBridge element never move in the DOM, so nothing reloads.
+  def handle_event("fullscreen", %{"on" => on}, socket) when on in ~w(true false),
+    do: {:noreply, assign(socket, fullscreen: on == "true", open: nil)}
+
   def handle_event("pin", %{"version" => raw}, socket) do
     with {:user, _} = actor <- socket.assigns.viewer,
          {version, ""} <- Integer.parse(to_string(raw)),
@@ -166,7 +180,29 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
       |> assign(:can_pin?, match?({:user, _}, assigns.viewer) and is_binary(assigns.canvas_id))
 
     ~H"""
-    <div id={@id} class="relative rounded-xl border border-edge" data-role="prototype-canvas">
+    <div
+      id={@id}
+      phx-hook="PrototypeFullscreen"
+      class={
+        if @fullscreen,
+          do: [
+            "fixed inset-0 z-50 flex h-dvh flex-col bg-base-100",
+            "pt-[env(safe-area-inset-top)] pr-[env(safe-area-inset-right)]",
+            "pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)]"
+          ],
+          else: "relative rounded-xl border border-edge"
+      }
+      data-role="prototype-canvas"
+      data-fullscreen={to_string(@fullscreen)}
+    >
+      <div
+        :if={@fullscreen}
+        phx-window-keydown="fullscreen"
+        phx-value-on="false"
+        phx-key="Escape"
+        phx-target={@myself}
+      >
+      </div>
       <%!-- The bar is its own size container (`@container`): every width
            rule below is keyed to the BAR, not the viewport. The inline
            preview (~330px) and the Live Canvas side panel (~350px) are that
@@ -174,7 +210,10 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
            expanded the chip to 426px of content and pushed Open and the menu
            off the card (member 2's review). --%>
       <div
-        class="@container flex h-10 items-center gap-1.5 rounded-t-xl border-b border-edge bg-base-100 pl-3 pr-1 @sm:gap-2"
+        class={[
+          "@container flex h-10 shrink-0 items-center gap-1.5 border-b border-edge bg-base-100 pl-3 pr-1 @sm:gap-2",
+          !@fullscreen && "rounded-t-xl"
+        ]}
         data-role="prototype-bar"
       >
         <p
@@ -214,11 +253,28 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
         >
           {@stamp}<span class="hero-chevron-down size-3" aria-hidden="true"></span>
         </button>
+        <button
+          :if={@view.state != :removed}
+          type="button"
+          phx-click="fullscreen"
+          phx-value-on={to_string(not @fullscreen)}
+          phx-target={@myself}
+          class="btn btn-ghost btn-sm btn-square shrink-0 rounded-field max-sm:min-h-[44px] max-sm:min-w-[44px]"
+          aria-label={if @fullscreen, do: "Exit full screen", else: "Full screen"}
+          title={if @fullscreen, do: "Close", else: "Full screen"}
+          data-role={if @fullscreen, do: "prototype-fullscreen-close", else: "prototype-fullscreen"}
+        >
+          <span
+            class={[if(@fullscreen, do: "hero-x-mark", else: "hero-arrows-pointing-out"), "size-4"]}
+            aria-hidden="true"
+          >
+          </span>
+        </button>
         <a
           href={@url}
           target="_blank"
           rel="noopener noreferrer"
-          class="btn btn-ghost btn-sm btn-square shrink-0 rounded-field"
+          class="btn btn-ghost btn-sm btn-square shrink-0 rounded-field max-sm:hidden"
           aria-label="Open this version in a new tab"
           title="Open"
           data-role="prototype-open"
@@ -342,6 +398,17 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
              the fresh iframe. --%>
         <div
           id={"#{@id}-room-v#{@view.shown}"}
+          class={
+            @fullscreen &&
+              [
+                "min-h-0 flex-1",
+                # The scale hook owns inline height/width/transform on its
+                # (phx-update="ignore") wrapper and iframe; fill the screen
+                # over them instead of fighting the hook.
+                "[&>[data-role=prototype-frame]]:!h-full [&>[data-role=prototype-frame]]:!rounded-none",
+                "[&_iframe]:!h-full [&_iframe]:!w-full [&_iframe]:![transform:none]"
+              ]
+          }
           {CanvasRoom.frame_attrs(@canvas_id, @node["id"])}
         >
           <%!-- The id carries the version: the wrapper is phx-update="ignore"
