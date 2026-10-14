@@ -5,7 +5,7 @@
 **Owners:** Rowan, Dalton
 **Task:** `01a1386d-a18f-7001-9faa-04316dc0198c` (stack `rbac-roles`, `01a1386d-6d34-7001-9f93-b1428a6b0604`, position 1)
 **Design source:** Rowan's settlement on 2026-10-14 in space `019f4882-c8d1-724e-a89e-ecb17d2681c8` (#RBAC System), and prototype canvas `01a1384a-3317-7001-ace5-45c7ef34f08e` ("Access — agent-first prototype").
-**Amends (in part, not superseded):** the *authorization* role of capability bundles in `0034-mcp-endpoint-and-capability-bundles.md § Capability bundles` (bundles stop being the thing that grants a tool; see § Agents below), and the Historian-only page-write rule in `0041-org-memory-v2-wiki-system.md § Historian as sole page writer` (a subtree `memory.write` grant replaces it for agents). Everything else in both ADRs stands.
+**Amends (in part, not superseded):** the *authorization* role of capability bundles in `0034-mcp-endpoint-and-capability-bundles.md § Capability bundles` (bundles stop being the thing that grants a tool; see § Agents below). Everything else in it stands. The Historian-only page-write rule in `0041-org-memory-v2-wiki-system.md § Historian as sole page writer` is **not** amended: Rowan dropped agent page writes through a subtree `memory.write` grant on 2026-10-14 (§ Memory grants).
 **Related:** `0042-org-project-topology-and-context-inheritance.md § 3. Context inheritance rules` (the org → project → space tree that grants inherit along), `0040-federated-agent-owner-identity.md § D2. What scope does ownership confer?` (the owner question this ADR answers for authorization), `0057-prototypes-on-suite.md` (prototype grants, one of the bypass surfaces). Runbook for the v1 model: `docs/runbooks/external_users.md`.
 
 The Context section records the falsifier check, the measured premises, the mapping from today's
@@ -185,9 +185,9 @@ closed later by deliberate changes, never by the mapping.
 | # | Actor class | Today's code path | Mapped built-in role and permission set |
 |---|---|---|---|
 | 1 | **Root-org admin** (root admin) | `root_admin?/1` true (`tenancy.ex:1075`). `/admin/*` mounts (`live_auth.ex:47`, `router.ex:933-980`). `visibility/1` gives `:root_all`. Org-reach bypasses: file blobs (`file_blob_controller.ex:207`), canvas `:org_reader` (`canvas_access.ex:488`), quarantine promotion (`tasks.ex:7379`), prototype admin policy (`prototypes.ex:208`). | `admin` on the root org, scope `:all` across orgs, **plus** the separate root-admin bypass. Every install-level permission comes from the bypass, never from the `admin` role. |
-| 2 | **Root-org member** (`role: member`, internal) | `visibility/1` gives `:root_all`, so it lists every org's projects (`Tasks.list_projects_for_user/2`, `tasks.ex:331-345`). No `/admin`. Org memory is editable (`view.ex:674`, `:1129`). Chat goes through `ExternalScope` pass-through, with implicit join of `channel`/`system`/`execution` spaces (`chat_live.ex:4334`, `:4346-4351`). File blobs need `member_of?` the project's org (`file_blob_controller.ex:217`), **not** `:root_all`. | `member` on the root org, with org-and-project read at `:all` (reproducing `:root_all`) and `memory.write` at `:all` (reproducing today's ungated edit). `files.read` stays scoped to the orgs the user is a member of, to reproduce the blob controller's narrower rule. |
+| 2 | **Root-org member** (`role: member`, internal) | `visibility/1` gives `:root_all`, so it lists every org's projects (`Tasks.list_projects_for_user/2`, `tasks.ex:331-345`). No `/admin`. Org memory is editable (`view.ex:674`, `:1129`). Chat goes through `ExternalScope` pass-through, with implicit join of `channel`/`system`/`execution` spaces (`chat_live.ex:4334`, `:4346-4351`). File blobs need `member_of?` the project's org (`file_blob_controller.ex:217`), **not** `:root_all`. | `member` on the root org, with org-and-project read at `:all` (reproducing `:root_all`) and `memory.write` at `:all` (reproducing today's ungated edit). `files.read` stays scoped to the orgs the user is a member of, to reproduce the blob controller's narrower rule. Chat is `chat.read` and `chat.write` under the `implicit_or_participant` rule (§ Built-in roles), **not** `:all`: every `channel`, `system` and `execution` space in every org, plus the user's own `dm`, `group`, `meeting` and `guest_meeting` spaces. The oracle is `chat_live.ex:4334-4352`. |
 | 3 | **Sub-org admin** (internal, with no root-org row) | `visibility/1` gives `{:orgs, ids}`. `org_admin?/2` is true for that org (`tenancy.ex:1168`), so it can manage mail accounts (`mail.ex:61`), publish prototypes under the `"admins"` policy (`prototypes.ex:208`) and promote from quarantine (`tasks.ex:7379`). **No `/admin`**: `root_admin?/1` is false. | `admin` scoped to that org. **The built-in `admin` carries no install-level permission**: it has no `/admin` route and no branding, OIDC, prototype-settings or experiments control. On an OIDC install this actor also holds row 2, so their effective set is row 2 ∪ row 3. |
-| 4 | **Sub-org member** (internal, with no root-org row) | `visibility/1` gives `{:orgs, ids}`, so projects are fenced to those orgs (`tasks.ex:337-340`). **The Tasks board is not viewer-scoped**: `BoardHooks` calls `Tasks.list_all_tasks/1` with no viewer (`lib/platform_web/live/tasks/board_hooks.ex:207`), so this actor sees every org's tasks on the board. Org memory is editable. | `member` scoped to those orgs. To keep behaviour unchanged, the board's task read reproduces today's unscoped list. Narrowing it is a later, deliberate change recorded as such. |
+| 4 | **Sub-org member** (internal, with no root-org row) | `visibility/1` gives `{:orgs, ids}`, so projects are fenced to those orgs (`tasks.ex:337-340`). **The Tasks board is not viewer-scoped**: `BoardHooks` calls `Tasks.list_all_tasks/1` with no viewer (`lib/platform_web/live/tasks/board_hooks.ex:207`), so this actor sees every org's tasks on the board. Org memory is editable. | `member` scoped to those orgs. To keep behaviour unchanged, the board's task read reproduces today's unscoped list. Narrowing it is a later, deliberate change recorded as such. Chat is `implicit_or_participant`, as in row 2: the implicitly joinable kinds are not org-fenced today (the channel rail is `Chat.list_spaces(kind: "channel", scope: nil)`, `chat.ex:452-487`, `chat_live.ex:348`). |
 | 5 | **`external: true` member** | `external_user?/1` true (`tenancy.ex:817`). HTTP is allowlisted to `/`, `/chat` and `/chat/:slug`, plus the meet-host routes; everything else is denied (`external_user_scope.ex:54-63`, `:76-147`). Chat lists and reads are narrowed to participant spaces (`external_scope.ex:96`, `:108`, `:120`, `:133`). DMs are admitted through the per-org allowlist (`external_scope.ex:173`). Canvases need participation only, with no org reach (`canvas_access.ex:343`). Attachments need space membership, and nil-space rows are refused (`chat.ex:4976`). Org admin is off (`tenancy.ex:1193`). | **`guest`** in that org, plus a `chat.read` **and `chat.write`** grant on each `chat_participants` space. Write is included because today an external user posts, uploads and downloads in their spaces (rbac-v1 resolved questions 3 and 4); the planner's `chat.read`-only reading would remove that. The per-org DM allowlist is preserved as is. Guest dominates this user's internal root-org row (see above). |
 | 6 | **External admin** (`role: admin`, `external: true`) | On a tenant org, `org_admin?/2` is false (`:1193`), so the admin role grants nothing beyond row 5. On the **root** org, `root_admin?/1` returns **true** (`tenancy.ex:1106-1116` ignores `external`). The only thing holding this user off `/admin` and the other app routes is the `ExternalUserScope` plug, not `:ensure_admin`. | **`guest`**, exactly as row 5. The `admin` role on an external row maps to no permission, and **root-admin bypass is never derived for a user with any external row**, so the plug-only defence becomes a modelled rule. This row is the one place where the stored role and the mapped role differ, and it does so on purpose. |
 | 7 | **Agent** | Tools: `allowed_bundles` through `ToolAuthorization.authorize/2` (`tool_authorization.ex:106`). Space reads: participation (`assert_agent_in_space/2`, `tool_surface.ex:15431`). Page writes: the Historian pin only (`routing.ex:294`). Owner: `agent_runtimes.owner_user_id` for federated agents (`agent_runtime.ex:58`). None for `built_in` (`agent.ex:85`). | Effective set = the agent's own grants ∩ its owner's, inheriting the owner's by default. On day one, an agent's own grants are the translation of its current bundles, so every runtime's `tools/list` is unchanged. The current Historian keeps its page-write reach. The ownerless built-in case is decided in § Agents. |
@@ -235,11 +235,12 @@ member's choice is recorded in § Per-member build map.
 | **Notifications** | **None today.** `grep -cE 'external\|visibility\|ExternalScope\|external_user' lib/platform/notifications.ex` gives `0`. `fan_out_to_humans/3` (`notifications.ex:44-48`) sends to whatever participant ids the caller passes. `AttentionRouter` pushes to a user directly (`lib/platform/chat/attention_router.ex:916`). | Nothing in the notification layer. Recipients are the caller's choice, which is today a space's participants. | A push carries resource content, so it is a read. Before sending, each recipient must hold read on the resource the payload names (for example `chat.read` on the space, `tasks.read` on the task). A recipient who lacks it is dropped. Notifications stay derived from participation, but participation no longer implies the grant. |
 | **Search** | Chat: `Chat.search_messages/3` applies `ExternalScope.scope_by_space_id/2` (`chat.ex:3047`). Memory: `Org.Wiki.Search` post-filters message hits to the calling agent's spaces (`lib/platform/org/wiki/search.ex:1304`), and pages and journals go through `Routing.gate_read/2` (`routing.ex:313`), which drops only private rows. The human UI calls `memory_search` with `agent: nil` (`view.ex:367`), which returns no message hits and unscoped pages. | Chat search: external only. Memory search: agent space membership for messages, private-row ownership for pages, and the optional `org_id` filter. No per-user scope. | Each corpus applies `*.read` through the Scope **before** fusion: page and journal hits by `memory.read` on the node's subtree, message hits by `chat.read` on the space, task hits by `tasks.read`. Filtering after fusion would let ranking reveal hidden rows, and `Wiki.Search` already counts ACL drops in `dropped` (`search.ex:1038-1046`). |
 | **Mentions** | `Chat.can_summon_agents?/2` (`chat.ex:5484-5488`) is true for a space-admin participant or the sponsor of the space's task. `admin_add_agent/3` (`:5507`) shares the rule. | Every user. It checks space-participant admin or sponsor, not org role, and does not check whether the agent's owner may see the space. | Summoning needs `chat.manage` (or the space-admin participant role) on the space, **and** the agent's effective scope must hold `chat.read` there. A mention can never widen an agent beyond its owner, and the bounded `history_visible_from` grant stays. |
-| **PubSub topics** | **None at the topic layer.** `PlatformWeb.SpaceTopics.hold/3` (`lib/platform_web/space_topics.ex:179`) subscribes whatever space id it is given. `CanvasHooks.find/2` (`lib/platform_web/live/chat/canvas_hooks.ex:337`) resolves any canvas id through `Chat.get_canvas/1`, and `put/2` (`:203`) subscribes to that canvas's topic. | The callers decide. ChatLive admits a space through `ExternalScope.authorized_space?/2` (externals) or the implicit-join kinds (internals) before holding its topic. The canvas hook has no check. | Subscribing is reading. Every `subscribe` goes through a Scope check on the topic's resource (`chat.read` on the space, read on the canvas), in one helper that `SpaceTopics` and `CanvasHooks` both call. A grant change broadcasts an invalidation that makes held topics re-check and drop (live apply, § Delegation and audit). |
-| **Presence** | `Chat.Presence.list_online_for_viewer/1` (`lib/platform/chat/presence.ex:223`) reads only spaces from `Chat.list_viewer_presence_space_ids/1` (`chat.ex:611-616`), which is participation fenced by `Tenancy.visibility/1`. | Every user, by participation ∩ org visibility. For an external user, `:root_all` makes the org fence a no-op (see premises), so participation alone bounds it. | Presence is a read on the space: a viewer sees a person online only in spaces where the viewer holds `chat.read`. Same seam, with the Scope replacing `visibility/1`. |
-| **Attachments** | HTTP: the `:attachment_auth` pipeline (`router.ex:216-219`) runs `PlatformWeb.Plugs.AttachmentAuth`, then `ChatAttachmentController.show/2` (`router.ex:230`) calls `Chat.get_visible_attachment_for_principal/2` (`chat.ex:4963-4980`). That function requires space membership (`principal_is_member?/2`, `:4998`) and refuses nil-space rows to external principals (`:4976`). Upload: the M9 check `require_user_member/2` (`lib/platform/chat/attachments/tool_handlers.ex:370-377`) uses `ExternalScope` for external users and `Chat.user_in_space?/2` for others. A second agent gate sits at `tool_handlers.ex:392`. | Every user (space membership), with the extra nil-space refusal for external users only. | Download needs `chat.read`, and upload needs `chat.write`, on the attachment's space through the Scope. An attachment linked to a canvas or task inherits from that resource. A nil-space row needs root admin. The duplicate agent gate at `tool_handlers.ex:392` folds into the same check. |
+| **PubSub topics** | **None at the topic layer.** `PlatformWeb.SpaceTopics.hold/3` (`lib/platform_web/space_topics.ex:179`) subscribes whatever space id it is given. `CanvasHooks.find/2` (`lib/platform_web/live/chat/canvas_hooks.ex:337`) resolves any canvas id through `Chat.get_canvas/1`, and `put/2` (`:203`) subscribes to that canvas's topic. | The callers decide. ChatLive admits a space through `ExternalScope.authorized_space?/2` (externals) or the implicit-join kinds (internals) before holding its topic. The canvas hook has no check. | Subscribing is reading. Every `subscribe` goes through a Scope check on the topic's resource (`chat.read` on the space, read on the canvas), in one helper that `SpaceTopics` and `CanvasHooks` both call. A grant change broadcasts an invalidation that makes held topics re-check and drop (live apply, § Delegation and audit). Under the built-in `implicit_or_participant` rule (§ Built-in roles) this admits an internal user to a channel, system or execution topic, as the implicit join does today, and refuses a DM, group, meeting or guest_meeting topic unless the user is a participant (`chat_live.ex:4342-4352`). The set of spaces held is not widened: the shell still holds only its participant set. |
+| **Presence** | `Chat.Presence.list_online_for_viewer/1` (`lib/platform/chat/presence.ex:223`) reads only spaces from `Chat.list_viewer_presence_space_ids/1` (`chat.ex:611-616`), which is participation fenced by `Tenancy.visibility/1`. | Every user, by participation ∩ org visibility. For an external user, `:root_all` makes the org fence a no-op (see premises), so participation alone bounds it. | Presence stays **participation-based**: a viewer sees a person online only in spaces where the viewer is a participant **and** holds `chat.read` through the Scope. Same seam, with the Scope replacing `visibility/1`. `chat.read` alone is not enough, because the built-in `implicit_or_participant` rule gives an internal user `chat.read` on every channel, and presence today is bounded by participation (`chat.ex:611-616`). |
+| **Attachments** | HTTP: the `:attachment_auth` pipeline (`router.ex:216-219`) runs `PlatformWeb.Plugs.AttachmentAuth`, then `ChatAttachmentController.show/2` (`router.ex:230`) calls `Chat.get_visible_attachment_for_principal/2` (`chat.ex:4963-4980`). That function requires space membership (`principal_is_member?/2`, `:4998`) and refuses nil-space rows to external principals (`:4976`). Upload: the M9 check `require_user_member/2` (`lib/platform/chat/attachments/tool_handlers.ex:370-377`) uses `ExternalScope` for external users and `Chat.user_in_space?/2` for others. A second agent gate sits at `tool_handlers.ex:392`. | Every user (space membership), with the extra nil-space refusal for external users only. | Download needs participation in the attachment's space (`principal_is_member?/2`, `chat.ex:4979`, for every space kind, channels included) **and** `chat.read` on it through the Scope. Upload needs participation and `chat.write`. `chat.read` alone is not enough, because the built-in `implicit_or_participant` rule gives an internal user `chat.read` on channels they have not joined, and today's download refuses them. An attachment linked to a canvas or task inherits from that resource. A nil-space row keeps today's rule (refused to guests, pass-through for internal users and agents, `chat.ex:4968-4976`). The duplicate agent gate at `tool_handlers.ex:392` folds into the same check. |
 | **Canvases** | `Platform.Chat.CanvasAccess.fetch_for_viewer/3` (`lib/platform/chat/canvas_access.ex:234`) and `fetch_for_writer/2` (`:273`). They check participation first, then org reach (`:org_reader`, root admin or `member_of?`, `:488`). External users skip org reach (`:343`). | Every user. Participation or org reach, and external users get participation only. | `canvas` read and write through the Scope. A canvas inherits from its space and from the task it is attached to, and a deny on either wins. `fetch_for_viewer/3` and `fetch_for_writer/2` are rewritten to consume `%Scope{}`; no second gate is added next to them. `CanvasHooks.find/2` goes through `fetch_for_viewer/3`. |
 | **Prototype grants** | `PrototypeController.serve/2` (`lib/platform_web/controllers/prototype_controller.ex:167-172`) verifies the signed grant for this prototype and version, then re-checks `Tenancy.member_of?/2` of the prototype's org for the grant's user on every request. The grant route runs without `:require_auth` (`router.ex:792-796`). Minting goes through `session_member?/2` (`:252-256`) behind `:enforce_external_scope` (`router.ex:801`). | Every user, by org membership. `member_of?/2` counts external rows (`tenancy.ex:1139-1145` has no `external` filter), so an external member of the org passes the per-request re-check. Minting is blocked for them by the HTTP plug. | Each request re-checks `prototypes.read` on the prototype (resource-scoped, inheriting from the org or project) for the grant's user, through the Scope. Revoking the grant revokes the URL on the next request, as membership removal does today. |
+| **Digests** | `Platform.Agents.ActivityDigest` (`lib/platform/agents/activity_digest.ex`). `build/3` (`:156`) and `build_windowed_result/1` (`:342`) feed the Historian's digest (`historian_dispatcher.ex:806`, `:1248`). The corpora are chat messages (`Chat.list_messages_since/2`, `chat.ex:2714`, through `digest_eligible_messages_query/1`, default kinds `channel` and `group` at `:2781`, with no participation filter), meeting transcripts (`Meetings.list_transcripts_since/2`, `meetings.ex:4820`) and task changes (`Tasks.list_tasks_updated_since/2`, `tasks.ex:1798`); the windowed form adds pages, journal and files (`@corpora`, `:55`). The `:scope` opt partitions the message and transcript corpora: `:internal` (the default, `:157`) omits external-user spaces, and `build_external/3` (`:207`) restricts to one external user's spaces. | The rbac-v1 external partition only, on two corpora. DMs, archived spaces, deleted and log-only messages are excluded by the queries. Nothing checks the recipient's reach: group spaces the Historian is not in are included today, and so are all tasks and pages. | Each corpus is filtered by the **recipient's capped scope** (`for_runtime/1`, agent ∩ owner, § Agents; `for_user/1` for a user recipient of `build_external/3`) **before aggregation**, the same pre-fusion rule as the Search row: messages by `chat.read` on the space, transcripts by read on the meeting's space, tasks by `tasks.read`, pages and journal by `memory.read` on the node, files by `files.read`. A dropped row contributes no title, preview or content; at most a count, as `Wiki.Search`'s `dropped` does. The filter runs **in conjunction with** today's `:scope` partition and query exclusions, never replacing them, through member 7's `Access.check/3`, so a grant-less install renders a byte-identical digest (subject to the role-restriction condition on the short-circuit in § Precedence). A `permitted_ids/2` intersection would not: the built-in `implicit_or_participant` rule does not cover group spaces the owner is not in, so those groups would drop out of the digest. That would be a behaviour change and needs its own decision. |
 | *External HTTP fast-fail* (added) | `PlatformWeb.Plugs.ExternalUserScope` (`external_user_scope.ex:54`, allowlist `gate_external/2` at `:76-147`), applied by the `:enforce_external_scope` pipeline (`router.ex:178-180`). | External users only. Internal users pass through unchanged. | Kept as the fast-fail for the guest role's HTTP surface. It is not the authorization: a live navigation inside one live_session never re-runs an HTTP plug (`router.ex:882-893`), so module gates also run in `on_mount`. |
 | *File blobs* (added) | `FileBlobController.do_authorize/2` (`file_blob_controller.ex:202-221`): root admin, OR an org-less project, OR `member_of?` the project's org. | Every user, by org membership. This is narrower than `:root_all`: a root-org member who is not a member of the project's org is refused. | `files.read` on the file's project through the Scope (see the files-service row). |
 
@@ -326,8 +327,8 @@ gets one ruling. None of them gains a second gate:
 | `ExternalScope.authorized_space?/2` (`external_scope.ex:164`) | Unchanged. It is the admission branch that carries the per-org DM allowlist. | 2 |
 | `ToolAuthorization.authorize/2` and `effective_tools/1` (`tool_authorization.ex:106`, `:75`) | Kept as the one entry point every transport calls. Both delegate to `Platform.Access.Tools`. | 5 |
 | `CanvasAccess.fetch_for_viewer/3` (`canvas_access.ex:234`) | Consults `Access.can?/3` when `:access_scope` is given, so a denied canvas answers like a missing one. `fetch_for_writer/2` (`:273`) is unchanged in this stack. | 3 |
-| `Chat.SpaceAccess.authorize_writer/2` (`space_access.ex:132`) | **Not rewritten by any member.** It stays participation-based, and `chat.write` on a space is decided there until a follow-up folds it into Access (Open question 4). | none |
-| `Wiki.Routing.gate_write/3` (`routing.ex:294`) | Rewritten to ask Access (§ Memory grants), but **no member plan builds this** (Open question 3). | none |
+| `Chat.SpaceAccess.authorize_writer/2` (`space_access.ex:132`) | **Stays as it is.** It stays participation-based, and `chat.write` on a space is decided there. A `chat.write` deny that blocks posts was **dropped by Rowan on 2026-10-14, with no follow-up** (Open question 4). | none |
+| `Wiki.Routing.gate_write/3` (`routing.ex:294`) | **Stays as it is: Historian-only.** Agent page writes through a subtree `memory.write` grant were **dropped by Rowan on 2026-10-14, with no follow-up** (§ Memory grants, Open question 3). | none |
 | `LiveAuth.on_mount(:ensure_admin)` (`live_auth.ex:47`) | Replaced by `PlatformWeb.ModuleGate`. | 4 |
 | `Tenancy.root_admin?/1` re-checks inside contexts (`branding.ex:362`, `prototypes/settings.ex:64`, `tenancy/lifecycle.ex:1173`, `vault/shared.ex:365`, `sign_in_admin.ex:433`) | Replaced by `Access.authorize_install/1`. | 4 |
 
@@ -342,10 +343,18 @@ a module whose LiveView reads are not yet Scope-filtered would see everything in
 
 **The built-in roles are admin, member and guest, stored as rows in `access_roles`** with
 `builtin: true`. A role maps each permission to a grant rule. Grant rules are data, and there are
-three values:
+four values:
 - `"all"`;
 - `"membership_org"`, meaning the org of the membership that carries the role;
-- `"participant_spaces"`, meaning the actor's `chat_participants` spaces.
+- `"participant_spaces"`, meaning the actor's `chat_participants` spaces;
+- `"implicit_or_participant"`, meaning every space of an implicitly joinable kind (`channel`,
+  `system`, `execution`) in every org, plus the actor's `chat_participants` spaces of any other
+  kind (`dm`, `group`, `meeting`, `guest_meeting`). **The oracle is `chat_live.ex:4334-4352`**:
+  `@implicitly_joinable_kinds` (`:4334`) and `internal_join_denied?/2` (`:4346-4352`), which lets
+  an internal user open those three kinds without a participant row and refuses the other four
+  unless one exists. It is not org-fenced, because the channel rail is not
+  (`Chat.list_spaces(kind: "channel", scope: nil)`, `chat.ex:452-487`; `chat_live.ex:348`). If
+  that list changes, this rule changes with it.
 
 A role cannot store a resource id, because admin and member are relative to the membership's org.
 **A role carries no deny.** Deny is a row in `access_grants` (§ Precedence). A deny can target a
@@ -376,7 +385,13 @@ table is the oracle. Member 2's equivalence test checks the derived sets against
 paths for every actor class. If this section and that test disagree, the test wins and this ADR
 is amended. In outline:
 - **`member`** holds:
-  - `chat.read` and `chat.write` at `:all` (internal chat is pass-through today);
+  - `chat.read` and `chat.write` under `implicit_or_participant`, **not** `:all`. `ExternalScope`
+    is pass-through for internal users, but that is not their whole chat rule: ChatLive refuses
+    them a DM, group, meeting or guest_meeting space they are not in (`chat_live.ex:4342-4352`),
+    and attachment download needs participation in every space kind, channels included
+    (`chat.ex:4978-4979`). `chat.read :all` would grant every DM in the install. The v2 rules
+    that consume `chat.read` (Attachments, Presence, PubSub topics in § Bypass surfaces) each
+    state how they reproduce today under this rule;
   - `tasks.read` and `tasks.write` at `:all`. The Tasks board is not viewer-scoped
     (`board_hooks.ex:207`), and this mapping deliberately keeps that;
   - `memory.read`, `memory.write` and `memory.journal` at `:all`, because human edits are ungated
@@ -409,12 +424,19 @@ and how far, are listed in § Per-member build map.
 
 **Custom roles** (member 8) are rows in the same table with an `org_id` and the key
 `"custom:" <> uuidv7`, so their keys never collide with a built-in key. They are named permission
-sets that use the same three grant rules. They may not carry `install.admin`. **The base role
+sets that use the same four grant rules. They may not carry `install.admin`. **The base role
 stays derived:** extra roles are additive `access_role_assignments` rows (`source` is `manual` or
 `idp`). Member 2's moduledoc forecasts converting `access_role_key` into an assignable column;
 member 8's plan does not do that, and member 8's choice is the decision. Built-in roles cannot be
 assigned through an assignment row, because the base role comes from the membership. A guest may
 hold a custom role's key, but the role's permissions do not widen a guest.
+
+**Deleting a custom role that still restricts a space is refused** (Rowan's ruling, 2026-10-14).
+A role restriction is a deny on every non-holder, so cascading it away with the role would open
+the space: deletion must never fail open. The delete returns an error naming the restricted
+spaces, and the role can be deleted once no `access_space_restrictions` row names it. **This
+overrides member 8's plan**, which cascaded the restriction away and pinned that with a test;
+member 8 builds the refusal instead, and its test asserts it.
 
 ## Levels and inheritance
 
@@ -463,7 +485,9 @@ step ends in a single answer; there is no tie-break left unstated.
 3. **Collect the denies.** Gather every `effect = 'deny'` row whose principal is the actor's user
    id, the actor's agent id, or any role key the actor holds in the resource's org, **and** whose
    resource is the resource itself or any ancestor on a downward edge from § Levels and
-   inheritance.
+   inheritance, **and** whose `permission` equals the permission being requested. A deny refuses
+   only its own permission: a `chat.write` deny does not refuse `chat.read`, and a `tasks.read`
+   deny on a project does not refuse `chat.read` on that project's execution spaces.
 4. **Any deny → refuse** (rule `deny`). A deny on project P therefore refuses every task,
    execution space and canvas below P, whatever allows exist elsewhere.
 5. **Role restriction → refuse** (rule `restricted`). If the resource is a restricted space, or
@@ -471,7 +495,7 @@ step ends in a single answer; there is no tie-break left unstated.
    an ancestor org counts. Restriction rows are read at decision time; they are not snapshotted.
    A restriction beats every allow, including a direct user grant on that space (member 8).
 6. **Allow.** Permit if a role rule grants `permission` over the resource (`all`,
-   `membership_org` or `participant_spaces`), or if an `effect = 'allow'` row of the actor's
+   `membership_org`, `participant_spaces` or `implicit_or_participant`), or if an `effect = 'allow'` row of the actor's
    principals names the resource or any ancestor on a downward edge.
 7. **Otherwise refuse** (rule `not_granted`).
 
@@ -502,15 +526,16 @@ read.
 
 ### Worked examples
 
-**(a) A deny on project P, while user U holds a direct grant on the execution space C of a task
-in P.**
-- Step 3 collects the deny on P, because P → task → C is a downward edge.
+**(a) A `chat.read` deny on project P, while user U holds a direct `chat.read` grant on the
+execution space C of a task in P.**
+- Step 3 collects the deny on P, because P → task → C is a downward edge and the deny's
+  permission is the one requested.
 - Step 4 refuses.
 - **U cannot read C.** The rule is `deny`. The direct allow on C is never reached, because a deny
   beats a grant from another path.
 
 **(b) An owner with `tasks.read` on project X only, whose agent holds `tasks.read :all`, and the
-owner also holds a deny on canvas K inside X.**
+owner also holds a `canvas.read` deny on canvas K inside X. The question for K is `canvas.read`.**
 
 On day one the built-in `member` role carries `tasks.read :all`, so this owner is one whose base
 role does not, for example a guest holding an allow on X.
@@ -522,8 +547,14 @@ role does not, for example a guest holding an allow on X.
   the answer is **denied**, with rule `deny`. The agent's own allow cannot override the owner's
   deny.
 
-**(c) Agent A holds a `memory.write` allow on subtree `org/page/eng/`, and a deny on page
-`org/page/eng/secret/plan.md`. Then `org/page/eng/` is renamed to `org/page/engineering/`.**
+**(c) Agent A holds a `memory.write` allow on subtree `org/page/eng/`, and a `memory.write` deny on
+page `org/page/eng/secret/plan.md`. Then `org/page/eng/` is renamed to `org/page/engineering/`.**
+
+This example shows what `can?/3` answers and how anchoring behaves. It does not mean an agent can
+write pages through such a grant: Rowan dropped agent page writes through a subtree `memory.write`
+grant on 2026-10-14, so `Wiki.Routing.gate_write/3` stays Historian-only and does not consult this
+answer (§ Memory grants). The same anchoring governs a human's `memory.write` deny and every
+`memory.read` grant.
 
 A's owner is an internal member, who holds `memory.write :all`, so the cap does not bite.
 - Before the rename, the allow names node N_eng (path `org/page/eng/`) and the deny names node
@@ -598,27 +629,25 @@ carry `memory.write :all`, which reproduces today's rule: any authenticated huma
 `/org_memory` is not on their HTTP allowlist today (`external_user_scope.ex:147`). A deny on a node
 narrows a human's editing below the role default.
 
-**Agents.** A subtree `memory.write` grant lets an agent write a page directly. This replaces the
-Historian-only rule (`0041-org-memory-v2-wiki-system.md § Historian as sole page writer`) as
-enforced by `Wiki.Routing.gate_write/3` (`routing.ex:294`, which is agent-only;
-`page_write_gate/3` at `:326` checks `historian?/1`). The agent rule is evaluated with the § Agents
-cap.
-- **No page-write capability is lost on day one.** The `memory` bundle translates to
-  `memory.read` and `memory.journal`, not `memory.write`. So an existing runtime that cannot write
-  pages today still cannot.
-- **The current Historian receives nothing new and loses nothing.** The `role_assignments`
-  Historian pin (`routing.ex:210-214`) stays a source of `memory.write` over every page namespace.
-  It is evaluated at decision time, so when the pin moves to another agent, the write moves with
+**Agents: the Historian-only rule stays.** An earlier draft of this section had a subtree
+`memory.write` grant let an agent write pages directly, replacing the Historian-only rule
+(`0041-org-memory-v2-wiki-system.md § Historian as sole page writer`). **Rowan dropped that on
+2026-10-14, with no follow-up.** The decision is:
+- `Wiki.Routing.gate_write/3` (`routing.ex:294`, which is agent-only; `page_write_gate/3` at
+  `:326` checks `historian?/1`) stays as it is on main. No member rewrites it and no follow-up is
+  planned.
+- The `role_assignments` Historian pin (`routing.ex:210-214`) stays the only way an agent writes a
+  page. It is read at decision time, so when the pin moves to another agent, the write moves with
   it.
-- **New runtimes inherit their owner** (§ Agents, member 5's exception 2). A new runtime owned by
-  an internal member can therefore write pages its owner can write. This is the intended
-  replacement of Historian-only, not a leak.
+- An agent-principal `memory.write` allow can be stored like any grant, but it gives the agent no
+  page write, because `gate_write/3` does not consult Access. Agent `memory.read` grants and denies
+  do apply, through member 3's listing filters above.
+- **No page-write capability changes.** The `memory` bundle translates to `memory.read` and
+  `memory.journal`, not `memory.write`. A new runtime that inherits its owner (§ Agents) does
+  **not** gain page writes from that owner.
 - **Journal writes stay open** to every agent (`gate_write/3`'s `:journal` clause returns `:ok`).
   **Product-owned `burrow/page/...` stays refused to everyone**, human and agent
   (`wiki.ex:393-397` `check_product_owned/2`; the `write_role: :product` clause of `gate_write/3`).
-- **Who builds it:** no approved member plan rewrites `gate_write/3`. Member 3's stage 4 says
-  explicitly that the Historian gate is NOT replaced. Until a member does it, the Historian-only
-  rule stays as it is on main, which is consistent with no behaviour change. Open question 3.
 
 ## Agents
 
@@ -643,6 +672,12 @@ it, so only one path enforces the owner cap.
   - Member 3's agent-principal grants add to it.
 - **"Restrict this agent"** is the Control Center toggle that writes that map. It lists only
   permissions the owner holds.
+
+**The Agents module on the rail.** The Agents module's rail permission is `agents.manage_own`,
+and the rail rule in § Permission model applies to it unchanged: the module shows when the actor
+holds `agents.manage_own` anywhere (`Access.holds_anywhere?/2`). The built-in `member` and `admin`
+roles carry it, so once member 5 returns the module to the rail, every internal user sees it. `guest` does not carry it and
+the Agents module is not `guest_admissible`, so a guest does not see it.
 
 **The ownerless agent cap (decided).** `agents` rows carry no owner field (`agent.ex:72-99`). A
 `runtime_type: "built_in"` agent (`:85`) has no runtime, and neither does a `kind: "external"`
@@ -789,6 +824,8 @@ The ledger covers `access_grants` only. Member 8's rows are written outside `Cha
 - Restrictions are read at decision time, so they apply on the next request or navigation
   without live apply.
 - The cascade that deletes a custom role's `access_grants` rows also bypasses the ledger.
+- Deleting a custom role that still restricts a space is refused, never cascaded (§ Built-in
+  roles, Rowan's ruling of 2026-10-14), so a role deletion can never silently remove a restriction.
 
 Member 9's plan adds this paragraph's substance. It is written here so that member 9 finds it
 already present.
@@ -974,13 +1011,13 @@ falsifier.
 
 | Pos | Member | Title | Implements | Member's falsifier, and how this ADR answers it |
 |---|---|---|---|---|
-| 2 | `01a1386d-cb5c` | Permission registry, Scope and built-in roles mapped from today's model, with no visible change | § Permission model, § Built-in roles, and the stage-1 mapping table | "If an equivalence test cannot be written because today's access isn't derivable from role + external + participants + root admin, stop." Answered: the mapping table derives every actor class from those four inputs plus root-org membership. The two non-data rules (root-org widening, root admin) are named in § Built-in roles. |
+| 2 | `01a1386d-cb5c` | Permission registry, Scope and built-in roles mapped from today's model, with no visible change | § Permission model, § Built-in roles, and the stage-1 mapping table | "If an equivalence test cannot be written because today's access isn't derivable from role + external + participants + root admin, stop." Answered: the mapping table derives every actor class from those four inputs plus root-org membership. The two non-data rules (root-org widening, root admin) are named in § Built-in roles. **The equivalence test must include an internal user who is NOT a participant of a given DM, and assert that the DM is not visible to them** (not listed, not openable, no `chat.read`, attachment download refused). That is the case `chat.read :all` would have got wrong; the built-in chat rule is `implicit_or_participant`, with `chat_live.ex:4334-4352` as the oracle. |
 | 3 | `01a1386d-e528` | Resource-scoped grants with inheritance and deny: projects, spaces, org-memory subtrees | § Levels and inheritance, § Precedence, § Memory grants | "If org-memory pages have no stable node id, stop and settle the anchoring." Answered: settled in § Memory grants (node entity, path history, lazy nodes, rename moves the node, delete keeps it, overwrite merges fail-closed). Note: this ADR adds the direct space-to-canvas edge to member 3's edge list. |
 | 4 | `01a1386d-fb6e` | Module gating: rail, live_session and context checks; admin views return to their modules | The rail rule in § Permission model, § Root-admin carve-outs, § Denials explain why and who can grant | "If the shell rail is not built from a single filterable list, stop." Not an ADR question; member 4 measured that it is (`icon_rail.ex:671`). Its classification falsifier ("every `:admin` route classified") is answered by the route table in § Root-admin carve-outs. Member 4 closes the guest live-redirect path into the unscoped Tasks board (`ModuleGate`) and re-checks Tasks writes. It does **not** narrow an internal user's default `tasks.read :all`, which is today's behaviour by design. |
-| 5 | `01a1386e-1710` | Agents on the rail: users own their agents, agent scope capped at its owner, MCP tools gated by permission instead of bundles | § Agents | "If `owner_user_id` is not reliably set, backfill first." Measured NOT NULL with 0 dangling on both installs. Its owner-cap falsifier for `jack-mobile-claude` is settled by Rowan's ruling (§ Agents); none of that runtime's tools is `install.admin`. |
+| 5 | `01a1386e-1710` | Agents on the rail: users own their agents, agent scope capped at its owner, MCP tools gated by permission instead of bundles | § Agents, and the rail rule in § Permission model (the Agents module's rail permission is `agents.manage_own`) | "If `owner_user_id` is not reliably set, backfill first." Measured NOT NULL with 0 dangling on both installs. Its owner-cap falsifier for `jack-mobile-claude` is settled by Rowan's ruling (§ Agents); none of that runtime's tools is `install.admin`. |
 | 6 | `01a1386e-30bd` | Delegation, view-as, audit log and live apply for access changes | § Delegation and audit, including § Ledger coverage | "If permissions are not cached per socket, decide the caching first." Answered: the cache is member 2's `:access_scope` assign carrying member 3's grant snapshot, rebuilt over PubSub after commit. Member 6's "not capped at owner (pos 5)" view-as label goes stale once member 5's cap lands (member 9 fixes it). |
-| 7 | `01a1386e-45a5` | Close the bypass surfaces: files-service, task-router dispatch, notifications, search and mentions | The stage-1 "Bypass surfaces" table | "If files-service already authorizes against core's Scope, drop that part." Answered: files-service has no user read surface (`GET /health` and token-gated `POST /extract` only, at `42b43055e1b9`), so enforcement is on core's controllers and member 7 drops the files-service part. **Member 7 runs its checks in conjunction with each surface's existing check, rather than replacing it** (the stage-1 table's files row says "replaces"; member 7's choice stands). Because a grant-less scope short-circuits to `:ok`, a grant-less install keeps today's two gaps: `CanvasHooks.find/2` still resolves any canvas id for an internal user, and FilesLive `load_project/2` still has no check. Member 7 closes them only for resources under a grant or deny, and records the FilesLive gap as pre-existing. |
-| 8 | `01a1386e-59d1` | Custom roles, role-restricted channels and mapping IdP groups to roles | § Built-in roles (custom roles), § Precedence step 5, § IdP groups → roles | "If OIDC claims no longer carry `groups`, stop." Measured on main: they do (`oidc.ex:2`, `:92`). The base role stays derived (member 8's choice, which differs from member 2's forecast). |
+| 7 | `01a1386e-45a5` | Close the bypass surfaces: files-service, task-router dispatch, notifications, search and mentions | The stage-1 "Bypass surfaces" table, including its **Digests** row (`ActivityDigest`: each corpus filtered by the recipient's capped scope before aggregation) | "If files-service already authorizes against core's Scope, drop that part." Answered: files-service has no user read surface (`GET /health` and token-gated `POST /extract` only, at `42b43055e1b9`), so enforcement is on core's controllers and member 7 drops the files-service part. **Member 7 runs its checks in conjunction with each surface's existing check, rather than replacing it** (the stage-1 table's files row says "replaces"; member 7's choice stands). Because a grant-less scope short-circuits to `:ok`, a grant-less install keeps today's two gaps: `CanvasHooks.find/2` still resolves any canvas id for an internal user, and FilesLive `load_project/2` still has no check. Member 7 narrows them only for resources under a grant or deny, and records the FilesLive gap as pre-existing. **This stack does not close either gap**; security task `01a13b84` does, after the rollup ships (Consequences). |
+| 8 | `01a1386e-59d1` | Custom roles, role-restricted channels and mapping IdP groups to roles | § Built-in roles (custom roles), § Precedence step 5, § IdP groups → roles | "If OIDC claims no longer carry `groups`, stop." Measured on main: they do (`oidc.ex:2`, `:92`). The base role stays derived (member 8's choice, which differs from member 2's forecast). **Deleting a custom role that still restricts a space is refused** (Rowan's ruling, 2026-10-14, § Built-in roles); this overrides member 8's plan, which cascaded the restriction away. |
 | 9 | `01a1386e-72e1` | Agent-first access UX: change-card MCP tools and the break-glass Access panel | § UX, § Denials explain why and who can grant | "If the delegation/audit member did not ship an undo-able change log, stop." Answered: member 6's `Changes.commit/4` / `undo/3` ledger. Member 9 also maps `AccessViewAsLive` in `ModuleGate`, which member 6 left unmapped. |
 
 ## Open questions
@@ -992,21 +1029,20 @@ falsifier.
    runtime, because `for_runtime/1` takes an `AgentRuntime`. Until a member does, ownerless
    agents stay outside Access, exactly as today: they use `ToolRunner` and never reach
    `ToolAuthorization`.
-3. **`Wiki.Routing.gate_write/3` has no builder.** § Memory grants decides the replacement (pin OR
-   capped node grant), but member 3's stage 4 explicitly keeps the Historian gate and no other
-   member rewrites it. Until a follow-up task does, agent page writes stay Historian-only, which
-   is consistent with no behaviour change.
-4. **`Chat.SpaceAccess.authorize_writer/2` has no builder.** `chat.write` on a space is decided by
-   participation there, and no member routes it through Access. A deny of `chat.write` therefore
-   does not yet stop a participant from posting.
+3. **Agent page writes through a subtree `memory.write` grant: dropped by Rowan on 2026-10-14,
+   with no follow-up.** `Wiki.Routing.gate_write/3` stays Historian-only (§ Memory grants). This
+   is closed, not open.
+4. **A `chat.write` deny that blocks posts: dropped by Rowan on 2026-10-14, with no follow-up.**
+   `Chat.SpaceAccess.authorize_writer/2` stays as it is: `chat.write` on a space is decided by
+   participation there, and no member routes it through Access. A `chat.write` deny does not stop
+   a participant from posting, and no task is planned to make it. This is closed, not open.
 5. **Conflicts between member plans, which whichever member lands second resolves:**
    - Member 7 and member 8: the grant-less short-circuit in `Access.check/3` skips role
      restrictions. Decided in § Precedence (also check for a restriction row); the code is
      unbuilt.
-   - Member 8: deleting the last custom role that restricts a space cascades the restriction away,
-     which **fails open**. Member 8's plan calls that intended and pins it with a test; the
-     architect asked for a fail-closed refusal. This needs Rowan's choice. Until he makes it, the
-     member-8 behaviour is what ships.
+   - Member 8: deleting a custom role that still restricts a space. **Decided by Rowan on
+     2026-10-14: the delete is refused and never fails open** (§ Built-in roles). This overrides
+     member 8's plan, which cascaded the restriction away and pinned that with a test.
    - Member 8's assignment, restriction and IdP rows are outside the ledger (§ Ledger coverage).
    - `chat/attachments/tool_handlers.ex:392` keeps a second `assert_agent_in_space` beside
      `tool_surface.ex:15431`, and no member folds the two together.
@@ -1046,10 +1082,19 @@ falsifier.
   - creating an ownerless agent becomes `agents.manage_all` only;
   - the external root admin is refused inside install-level contexts as well as by the plug;
   - a zero-membership owner's runtime gets no tools.
-- **Deliberate widening:** a new runtime inherits its owner by default, including page writes its
-  owner can make (§ Memory grants).
+- **Deliberate widening:** a new runtime inherits its owner by default (§ Agents). It does not
+  inherit page writes: agent page writes stay Historian-only (§ Memory grants).
 - **Kept as they are today, on purpose:**
   - the unscoped Tasks board for internal users;
-  - `CanvasHooks.find/2` and FilesLive `load_project/2` on a grant-less install;
-  - participation-based chat writes;
-  - Historian-only agent page writes until Open question 3 has a builder.
+  - participation-based chat writes (`Chat.SpaceAccess.authorize_writer/2`). A `chat.write` deny
+    that blocks posts was dropped by Rowan on 2026-10-14, with no follow-up;
+  - Historian-only agent page writes (`Wiki.Routing.gate_write/3`). Agent page writes through a
+    subtree `memory.write` grant were dropped by Rowan on 2026-10-14, with no follow-up.
+- **Not closed by this stack:** the canvas-by-id gap (`CanvasHooks.find/2`,
+  `canvas_hooks.ex:337`, resolves any canvas id through `Chat.get_canvas/1`) and the
+  `/files/:project_id` gap (`router.ex:835`, FilesLive `load_project/2` at `files_live.ex:842`
+  has no access check). Member 7 narrows them only for resources under a grant or deny. A separate
+  security task, `01a13b84`, closes both after the rbac-roles rollup ships. Where § Bypass
+  surfaces states a v2 rule for `CanvasHooks.find/2`, that task delivers it.
+- **Custom-role deletion fails closed:** deleting a custom role that still restricts a space is
+  refused (Rowan's ruling, 2026-10-14), overriding member 8's plan.
