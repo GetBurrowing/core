@@ -216,6 +216,33 @@ defmodule Platform.Access.Scope do
     do: Enum.any?(role_keys, fn {_org, keys} -> MapSet.member?(keys, "guest") end)
 
   @doc """
+  The grant rules the scope's contributing roles carry for `permission`, as a
+  flat, de-duplicated list (`[]` when no contributing role carries it). Guest
+  dominance picks the contributors exactly as `for_user/1` does: a guest scope
+  reads the `guest` role only.
+
+  `Platform.Chat.ExternalScope` reads this to decide whether a Scope's chat
+  read is participant-restricted (task `01a1386d-cb5c` stage 3).
+  """
+  @spec rules_for(t(), String.t()) :: [String.t()]
+  def rules_for(%__MODULE__{role_keys: role_keys} = scope, permission)
+      when is_binary(permission) do
+    keys =
+      if guest?(scope),
+        do: ["guest"],
+        else: role_keys |> Map.values() |> Enum.flat_map(&MapSet.to_list/1) |> Enum.uniq()
+
+    rules = Access.builtin_role_rules()
+
+    keys
+    |> Enum.flat_map(fn key ->
+      rules |> Map.get(key, %{}) |> Map.get(permission) |> rule_list()
+    end)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
+
+  @doc """
   The tool names this scope lists: the held bundles (a runtime's
   `allowed_bundles` in row order) through `ToolSurface.list_tools/1`, then
   `ToolSurface.scope_for_external/2` for a guest scope. The same composition
@@ -396,22 +423,8 @@ defmodule Platform.Access.Scope do
     kind_ok? and implicit_rule?(scope, permission)
   end
 
-  defp implicit_rule?(%__MODULE__{role_keys: role_keys} = scope, permission) do
-    keys =
-      if guest?(scope),
-        do: ["guest"],
-        else: role_keys |> Map.values() |> Enum.flat_map(&MapSet.to_list/1)
-
-    rules = Access.builtin_role_rules()
-
-    Enum.any?(keys, fn key ->
-      rules
-      |> Map.get(key, %{})
-      |> Map.get(permission)
-      |> rule_list()
-      |> Enum.member?("implicit_or_participant")
-    end)
-  end
+  defp implicit_rule?(scope, permission),
+    do: "implicit_or_participant" in rules_for(scope, permission)
 
   defp holds_bundle?(scope, bundle) do
     case Registry.bundle_permission(bundle) do

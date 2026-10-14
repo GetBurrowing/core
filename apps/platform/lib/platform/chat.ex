@@ -265,7 +265,7 @@ defmodule Platform.Chat do
 
   ## Options
 
-    * `:scope` — an optional `%Platform.Chat.ExternalScope{}`. When it is an
+    * `:scope` — an optional `%Platform.Chat.ExternalScope{}` or `%Platform.Access.Scope{}`. When it is an
       external scope, a space the user does not participate in resolves to
       `nil` (a 404-shaped miss, not a leak). Absent / nil / internal scopes are
       pass-through, so `get_space/1` and every existing caller are unchanged.
@@ -367,7 +367,7 @@ defmodule Platform.Chat do
       be derived from the user's session (e.g. `/chat/general` resolving to
       *this user's* tenant General, not the oldest cross-tenant match).
 
-    * `:scope` — optional `%Platform.Chat.ExternalScope{}`. For an external
+    * `:scope` — optional `%Platform.Chat.ExternalScope{}` or `%Platform.Access.Scope{}`. For an external
       scope a slug outside the caller's participant set resolves to `nil`
       (a 404, not a leak). Absent / nil / internal scopes are pass-through.
 
@@ -436,7 +436,7 @@ defmodule Platform.Chat do
     * `:workspace_id` — filter by workspace
     * `:kind`         — filter by kind ("channel", "dm", "group")
     * `:archived`     — `true` for archived only, `false` (default) for active only
-    * `:scope`        — optional `%Platform.Chat.ExternalScope{}`. For an
+    * `:scope`        — optional `%Platform.Chat.ExternalScope{}` or `%Platform.Access.Scope{}`. For an
       external scope the result is narrowed to the caller's participant spaces
       (so `list_spaces(kind: "channel", scope: ext)` returns ONLY their
       channels, never the full channel set). Absent / nil / internal scopes are
@@ -2295,7 +2295,7 @@ defmodule Platform.Chat do
   @doc """
   Fetch a message by primary key. Returns `nil` if not found.
 
-  The optional `:scope` (a `%Platform.Chat.ExternalScope{}`) gates the message
+  The optional `:scope` (a `%Platform.Chat.ExternalScope{}` or `%Platform.Access.Scope{}`) gates the message
   on its space: for an external caller a message in a non-participant space
   resolves to `nil`. Absent / nil / internal scopes are pass-through.
   """
@@ -4255,7 +4255,7 @@ defmodule Platform.Chat do
   @doc """
   Fetch a canvas. Returns `nil` if not found or soft-deleted.
 
-  The optional `:scope` (a `%Platform.Chat.ExternalScope{}`) gates the canvas
+  The optional `:scope` (a `%Platform.Chat.ExternalScope{}` or `%Platform.Access.Scope{}`) gates the canvas
   on its `space_id`: for an external caller a canvas in a non-participant space
   resolves to `nil`. Absent / nil / internal scopes are pass-through.
   """
@@ -4359,7 +4359,7 @@ defmodule Platform.Chat do
   @doc """
   List canvases in a space (excluding soft-deleted).
 
-  The optional `:scope` (a `%Platform.Chat.ExternalScope{}`) yields `[]` when
+  The optional `:scope` (a `%Platform.Chat.ExternalScope{}` or `%Platform.Access.Scope{}`) yields `[]` when
   the `space_id` is out of the external caller's participant set (canvas embeds
   from an off-limits space can't be resolved from an external session). Absent
   / nil / internal scopes are pass-through.
@@ -4899,7 +4899,7 @@ defmodule Platform.Chat do
   @doc """
   Fetch an attachment by primary key. Returns `nil` if not found.
 
-  The optional `:scope` (a `%Platform.Chat.ExternalScope{}`) gates the
+  The optional `:scope` (a `%Platform.Chat.ExternalScope{}` or `%Platform.Access.Scope{}`) gates the
   attachment on its `space_id`: for an external caller an attachment in a
   non-participant space resolves to `nil`. Legacy `space_id: nil` rows have no
   space to scope and pass through. Absent / nil / internal scopes are
@@ -5016,7 +5016,7 @@ defmodule Platform.Chat do
   @doc """
   List attachments for a message, oldest first.
 
-  The optional `:scope` (a `%Platform.Chat.ExternalScope{}`) drops attachments
+  The optional `:scope` (a `%Platform.Chat.ExternalScope{}` or `%Platform.Access.Scope{}`) drops attachments
   whose `space_id` is out of the external caller's participant set. Absent /
   nil / internal scopes are pass-through.
   """
@@ -5035,7 +5035,7 @@ defmodule Platform.Chat do
   @doc """
   Batch-load attachments for a list of message IDs in a single query.
 
-  The optional `:scope` (a `%Platform.Chat.ExternalScope{}`) drops attachments
+  The optional `:scope` (a `%Platform.Chat.ExternalScope{}` or `%Platform.Access.Scope{}`) drops attachments
   whose `space_id` is out of the external caller's participant set. Absent /
   nil / internal scopes are pass-through.
   """
