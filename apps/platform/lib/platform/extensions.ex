@@ -133,6 +133,18 @@ defmodule Platform.Extensions do
   end
 
   @doc """
+  Permission declarations every extension contributes (`permissions/0` is
+  optional; an extension without it contributes nothing). Read by
+  `Platform.Access.Registry`, per call.
+  """
+  @spec permissions() :: [Platform.Extension.permission_declaration()]
+  def permissions do
+    Enum.flat_map(list(), fn ext ->
+      if implements?(ext, :permissions, 0), do: ext.permissions(), else: []
+    end)
+  end
+
+  @doc """
   Every extension's migrations path, in configuration order, without core's.
   Callers put core's path first: `[core_path | migrations_paths()]`.
   """

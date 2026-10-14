@@ -144,6 +144,20 @@ defmodule Platform.FixtureExtension do
     ]
   end
 
+  # Task 01a1386d-cb5c: the positive control for `Platform.Access.Registry`'s
+  # extension seam. `Twin` below omits `permissions/0`, the negative control.
+  @impl true
+  def permissions do
+    [
+      %{
+        module: "fixture",
+        permissions: ["fixture.use"],
+        rail: [%{key: :fixture, permission: "fixture.use"}],
+        bundles: %{"fixture" => "fixture.use"}
+      }
+    ]
+  end
+
   defmodule Twin do
     @moduledoc "Claims exactly what `Platform.FixtureExtension` claims: the two-extension clash control."
     @behaviour Platform.Extension
