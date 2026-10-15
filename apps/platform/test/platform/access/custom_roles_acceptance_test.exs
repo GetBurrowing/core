@@ -170,7 +170,11 @@ defmodule Platform.Access.CustomRolesAcceptanceTest do
       assert scoped_counts(user_id) == {0, 0}
       assert census() == {elem(before, 0), elem(before, 1) + 1, elem(before, 2)}
       user = Accounts.get_user(user_id)
-      assert Scope.for_user(user) == Scope.for_user(Repo.preload(user, org_memberships: :org))
+      scope = Scope.for_user(user)
+      root = Tenancy.get_org!(acme_org_id())
+      assert Map.get(scope.role_keys, root.id) == MapSet.new(["member"])
+      refute Scope.guest?(scope)
+      assert scope.grants == []
     end
   end
 
@@ -183,9 +187,10 @@ defmodule Platform.Access.CustomRolesAcceptanceTest do
       %{user: claims, userinfo: claims, id_token: claims, token: %{"id_token" => "test-id-token"}}
     })
 
-    conn
-    |> init_test_session(oidc_session_params: %{state: "expected-state", nonce: "n"})
-    |> get("/auth/oidc/callback?code=test-code&state=expected-state")
+    login_conn = conn |> init_test_session(%{}) |> get("/auth/login")
+    assert redirected_to(login_conn, 302) =~ "https://issuer.example.com/authorize?"
+    %{state: state} = get_session(login_conn, :oidc_session_params)
+    login_conn |> recycle() |> get("/auth/oidc/callback?code=test-code&state=#{state}")
   end
 
   defp idp_keys(user_id) do
