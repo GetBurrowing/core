@@ -55,7 +55,7 @@ defmodule PlatformWeb.AccessViewAsTest do
     guest = user!("View guest")
     membership!(root, root_org, "admin")
     membership!(member, root_org, "member")
-    membership!(guest, root_org, "guest")
+    assert {:ok, _} = Tenancy.mark_membership_external(%{user_id: guest.id, org_id: root_org.id})
     %{root: root, member: member, guest: guest, org: root_org}
   end
 
@@ -119,7 +119,7 @@ defmodule PlatformWeb.AccessViewAsTest do
 
     manager = user!("View project manager")
     target = user!("View project target")
-    membership!(manager, org, "guest")
+    assert {:ok, _} = Tenancy.mark_membership_external(%{user_id: manager.id, org_id: org.id})
     membership!(target, org, "member")
     {:ok, p} = Tasks.create_project(%{name: "Visible view project #{n}", org_id: org.id})
     {:ok, q} = Tasks.create_project(%{name: "Hidden view project #{n}", org_id: org.id})

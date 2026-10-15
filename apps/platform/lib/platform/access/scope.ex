@@ -206,7 +206,7 @@ defmodule Platform.Access.Scope do
     membership = %OrgMembership{
       org_id: org.id,
       org: org,
-      role: role_key,
+      role: if(role_key == "guest", do: "member", else: role_key),
       access_role_key: role_key,
       external: role_key == "guest"
     }
