@@ -33,8 +33,10 @@ defmodule Platform.Access.Change do
   schema "access_grant_changes" do
     belongs_to(:org, Platform.Tenancy.Org)
     field(:actor_type, :string)
-    field(:actor_id, :binary_id)
-    field(:via_agent_id, :binary_id)
+    # Ecto.UUID, not :binary_id: a malformed id is a changeset error (and the
+    # change rolls back) rather than a raise at dump time.
+    field(:actor_id, Ecto.UUID)
+    field(:via_agent_id, Ecto.UUID)
     field(:bypass, :string)
     field(:action, :string)
     field(:before, {:array, :map}, default: [])
