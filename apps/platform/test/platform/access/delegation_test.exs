@@ -326,6 +326,12 @@ defmodule Platform.Access.DelegationTest do
     test "SignInAdmin refuses demoting the sole org admin, then permits it with a second admin", ctx do
       %{root: root, r: r} = ctx
 
+      # `tenant_org_id/1` seeds a throwaway root admin to create each org.
+      # Remove those fixture memberships so R is the sole manager here.
+      Repo.delete_all(
+        from(m in OrgMembership, where: m.org_id == ^root and m.user_id != ^r.id)
+      )
+
       for {key, value} <- [
             sign_in_admin_enabled: true,
             sign_in_admin_url: "http://pocket-id.test",
