@@ -4185,6 +4185,7 @@ defmodule Platform.Federation.ToolSurface do
     rows =
       Enum.map(spaces, fn s ->
         row = %{id: s.id, name: s.name, kind: s.kind, description: s.description}
+
         if MapSet.member?(restricted, s.id) or not Platform.Access.can?(scope, "chat.read", s.id),
           do: Map.merge(row, %{restricted: true, description: nil}),
           else: row
@@ -15673,8 +15674,13 @@ defmodule Platform.Federation.ToolSurface do
 
   defp space_read_scope(context) do
     case runtime_access_opts(context) do
-      [access_scope: scope] -> scope
-      [] -> Platform.Access.Scope.for_runtime(%Platform.Agents.AgentRuntime{agent_id: Map.get(context, :agent_id)})
+      [access_scope: scope] ->
+        scope
+
+      [] ->
+        Platform.Access.Scope.for_runtime(%Platform.Agents.AgentRuntime{
+          agent_id: Map.get(context, :agent_id)
+        })
     end
   end
 
@@ -15702,6 +15708,7 @@ defmodule Platform.Federation.ToolSurface do
         case Chat.get_agent_participant(space_id, agent_id) do
           %Chat.Participant{} ->
             scope = space_read_scope(context)
+
             if Platform.Access.can?(scope, "chat.read", space_id) do
               :ok
             else

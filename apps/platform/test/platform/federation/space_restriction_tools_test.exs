@@ -13,10 +13,24 @@ defmodule Platform.Federation.SpaceRestrictionToolsTest do
     plain_member!(owner, org)
     space = channel!(%{org_id: org.id, description: "secret description"})
     p = add_user!(space.id, owner.id)
-    agent = Repo.insert!(%Agent{slug: "restr-tools-#{System.unique_integer([:positive])}", name: "Agent", status: "active"})
+
+    agent =
+      Repo.insert!(%Agent{
+        slug: "restr-tools-#{System.unique_integer([:positive])}",
+        name: "Agent",
+        status: "active"
+      })
+
     add_agent!(space.id, agent.id)
-    rt = Repo.insert!(%AgentRuntime{agent_id: agent.id, owner_user_id: owner.id,
-      runtime_id: "restr-tools-#{System.unique_integer([:positive])}", status: "active"})
+
+    rt =
+      Repo.insert!(%AgentRuntime{
+        agent_id: agent.id,
+        owner_user_id: owner.id,
+        runtime_id: "restr-tools-#{System.unique_integer([:positive])}",
+        status: "active"
+      })
+
     context = %{agent_id: agent.id, runtime_id: rt.runtime_id}
     marker = "restrictedfinancemarker"
     post!(space.id, p.id, marker)
@@ -28,16 +42,19 @@ defmodule Platform.Federation.SpaceRestrictionToolsTest do
     assert inspect(before) =~ marker
     assert {:ok, _} = ToolSurface.execute("canvas_get", %{"canvas_id" => canvas.id}, context)
     {:ok, _} = Restrictions.restrict_space(space, ["admin"], owner.id)
+
     for tool <- tools do
       assert {:error, denial} = ToolSurface.execute(tool, args, context)
       assert denial == Map.put(ToolSurface.space_write_denied(space.id), :restricted, true)
       refute inspect(denial) =~ marker
     end
+
     assert {:error, _} = ToolSurface.execute("canvas_get", %{"canvas_id" => canvas.id}, context)
     assert {:ok, %{spaces: rows}} = ToolSurface.execute("space_list", %{}, context)
     row = Enum.find(rows, &(&1.id == space.id))
     assert row.restricted and is_nil(row.description)
     # An in-process caller without a runtime must not bypass restrictions.
-    assert {:error, %{restricted: true}} = ToolSurface.execute("space_get_messages", args, %{agent_id: agent.id})
+    assert {:error, %{restricted: true}} =
+             ToolSurface.execute("space_get_messages", args, %{agent_id: agent.id})
   end
 end

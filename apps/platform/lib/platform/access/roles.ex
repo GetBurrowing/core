@@ -89,21 +89,30 @@ defmodule Platform.Access.Roles do
 
   @doc """
   Delete a custom role. Its assignments and role-principal grants go with
-  it (FK cascade). Built-ins: `{:error, :builtin}`.
+  it (FK cascade). Built-ins: `{:error, :builtin}`. A role still restricting
+  any channel returns `{:error, {:role_restricts_spaces, space_ids}}`; remove
+  those restrictions explicitly first. This enforces the human ruling in
+  `0058-rbac-v2-roles-scopes-and-agent-capping.md § Built-in roles`.
   """
   @spec delete_custom_role(Role.t() | String.t()) :: {:ok, Role.t()} | {:error, term()}
   def delete_custom_role(role) do
     with {:ok, %Role{} = role} <- fetch_custom(role) do
-      case Repo.transaction(fn ->
-             # Serialize deletion with Restrictions' FOR SHARE role lock.
-             Repo.one!(from r in Role, where: r.key == ^role.key, lock: "FOR UPDATE")
-             spaces = Repo.all(from r in Platform.Access.SpaceRestriction,
-               where: r.role_key == ^role.key, select: r.space_id, order_by: r.space_id)
-             if spaces != [], do: Repo.rollback({:role_restricts_spaces, spaces})
-             Repo.delete!(role)
-           end) do
-        result -> result
-      end
+      Repo.transaction(fn ->
+        # Serialize deletion with Restrictions' FOR SHARE role lock.
+        Repo.one!(from(r in Role, where: r.key == ^role.key, lock: "FOR UPDATE"))
+
+        spaces =
+          Repo.all(
+            from(r in Platform.Access.SpaceRestriction,
+              where: r.role_key == ^role.key,
+              select: r.space_id,
+              order_by: r.space_id
+            )
+          )
+
+        if spaces != [], do: Repo.rollback({:role_restricts_spaces, spaces})
+        Repo.delete!(role)
+      end)
     end
   end
 

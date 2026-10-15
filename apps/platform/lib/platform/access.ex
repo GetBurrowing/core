@@ -29,7 +29,7 @@ defmodule Platform.Access do
     1. collect the explicit DENIES of the actor's principals for exactly
        this permission on the resource or on any resource above it on a
        downward edge (`Platform.Access.Lineage`);
-    2. any deny → refuse;
+    2. any deny, or a read restriction the actor does not satisfy → refuse;
     3. else a role-rule allow (member 2's `Scope`), or an explicit ALLOW on
        the resource or above it → permit;
     4. else refuse.
@@ -39,11 +39,13 @@ defmodule Platform.Access do
   `install.admin` always takes the grant-less path, which is member 2's
   root-admin rule.
 
-  **No grants means member 2's answer.** When the Scope carries no grant for
+  **No grants or restrictions means member 2's answer.** Restrictions are
+  queried at decision time, including for a previously built Scope. When no
+  restriction covers the resource and the Scope carries no grant for
   the requested permission, `can?/3` returns `Scope.can?/3` for the same
   arguments, before any lineage is read. `permitted_ids/2` is member 2's
-  function, unchanged in shape and meaning: the ROLE-RULE set
-  (`:all | [id]`). It does not read grants and must not be used to filter
+  function's shape: the ROLE-RULE set (`:all | [id]`), narrowed by channel
+  restrictions for chat and canvas reads. It does not read grants and must not be used to filter
   rows once grants exist. The grant-aware set form is the new
   `permitted/3`, which returns a `%Platform.Access.Permitted{}` (the shape
   change is carried by a new function so every caller of member 2's shape
@@ -189,8 +191,8 @@ defmodule Platform.Access do
       false
     else
       case applicable(scope, permission) do
-      [] -> role_allows?(scope, permission, resource)
-      grants -> decide(scope, permission, resource, grants)
+        [] -> role_allows?(scope, permission, resource)
+        grants -> decide(scope, permission, resource, grants)
       end
     end
   end
@@ -198,19 +200,33 @@ defmodule Platform.Access do
   def can?(scope, permission, resource), do: Scope.can?(scope, permission, resource)
 
   @doc """
-  Member 2's ROLE-RULE set: `:all`, or the resource ids a role rule names.
-  It does not read grants (see the moduledoc); use `permitted/3` to filter.
+  Member 2's ROLE-RULE set: `:all`, or the resource ids a role rule names,
+  minus channel restrictions for chat/canvas reads. It does not read grants (see the moduledoc); use `permitted/3` to filter.
   See `Platform.Access.Scope.permitted_ids/2`.
   """
   @spec permitted_ids(Scope.t(), String.t()) :: :all | [binary()]
   def permitted_ids(scope, permission) do
     ids = Scope.permitted_ids(scope, permission)
-    type = if permission == "canvas.read", do: :canvas, else: :space
+
+    type =
+      case permission do
+        "chat.read" -> :space
+        "canvas.read" -> :canvas
+        _ -> :other
+      end
+
     denied = restriction_ids(scope, permission, type)
+
     case {ids, denied} do
-      {ids, []} -> ids
-      {:all, denied} -> Repo.all(from r in ^(if type == :canvas, do: Platform.Chat.Canvas, else: Platform.Chat.Space), select: r.id) -- denied
-      {ids, denied} -> ids -- denied
+      {ids, []} ->
+        ids
+
+      {:all, denied} ->
+        schema = if type == :canvas, do: Platform.Chat.Canvas, else: Platform.Chat.Space
+        Repo.all(from(r in schema, select: r.id)) -- denied
+
+      {ids, denied} ->
+        ids -- denied
     end
   end
 
@@ -266,7 +282,11 @@ defmodule Platform.Access do
       resource_type: type,
       permission: permission,
       allow: allow,
-      deny: Enum.uniq(Lineage.descendant_ids(type, targets(denies)) ++ restriction_ids(scope, permission, type))
+      deny:
+        Enum.uniq(
+          Lineage.descendant_ids(type, targets(denies)) ++
+            restriction_ids(scope, permission, type)
+        )
     }
   end
 
@@ -314,7 +334,11 @@ defmodule Platform.Access do
       resource_type: type,
       permission: permission,
       allow: Lineage.descendant_ids(type, targets(allows)),
-      deny: Enum.uniq(Lineage.descendant_ids(type, targets(denies)) ++ restriction_ids(scope, permission, type))
+      deny:
+        Enum.uniq(
+          Lineage.descendant_ids(type, targets(denies)) ++
+            restriction_ids(scope, permission, type)
+        )
     }
   end
 
@@ -334,17 +358,17 @@ defmodule Platform.Access do
       false
     else
       case applicable(scope, permission) do
-      [] ->
-        base?
+        [] ->
+          base?
 
-      grants ->
-        {allows, denies} = split(matching(resource, grants))
+        grants ->
+          {allows, denies} = split(matching(resource, grants))
 
-        cond do
-          denies != [] -> false
-          base? -> true
-          true -> allows != []
-        end
+          cond do
+            denies != [] -> false
+            base? -> true
+            true -> allows != []
+          end
       end
     end
   end
@@ -456,21 +480,28 @@ defmodule Platform.Access do
   @spec restricted_space_ids(Scope.t(), [binary()]) :: MapSet.t()
   def restricted_space_ids(%Scope{actor: :system}, _ids), do: MapSet.new()
   def restricted_space_ids(_scope, []), do: MapSet.new()
-  def restricted_space_ids(%Scope{role_keys: held}, ids) do
+
+  def restricted_space_ids(%Scope{} = scope, ids) do
+    held = held_restriction_keys(scope)
     filter = if ids == :all, do: "", else: "WHERE s.id = ANY($1::uuid[])"
     params = if ids == :all, do: [], else: [Enum.map(ids, &Ecto.UUID.dump!/1)]
-    rows = Repo.query!("""
-    WITH RECURSIVE ancestry(space_id, role_key, org_id) AS (
-      SELECT s.id, r.role_key, COALESCE(s.org_id, (SELECT id FROM orgs WHERE parent_org_id IS NULL))
-      FROM access_space_restrictions r JOIN chat_spaces s ON s.id = r.space_id
-      #{filter}
-      UNION
-      SELECT a.space_id, a.role_key, o.parent_org_id
-      FROM ancestry a JOIN orgs o ON o.id = a.org_id
-      WHERE o.parent_org_id IS NOT NULL
-    )
-    SELECT space_id, role_key, org_id FROM ancestry
-    """, params).rows
+
+    rows =
+      Repo.query!(
+        """
+        WITH RECURSIVE ancestry(space_id, role_key, org_id, depth) AS (
+          SELECT s.id, r.role_key, COALESCE(s.org_id, (SELECT id FROM orgs WHERE parent_org_id IS NULL)), 1
+          FROM access_space_restrictions r JOIN chat_spaces s ON s.id = r.space_id
+          #{filter}
+          UNION
+          SELECT a.space_id, a.role_key, o.parent_org_id, a.depth + 1
+          FROM ancestry a JOIN orgs o ON o.id = a.org_id
+          WHERE o.parent_org_id IS NOT NULL AND a.depth < 16
+        )
+        SELECT space_id, role_key, org_id FROM ancestry
+        """,
+        params
+      ).rows
 
     rows
     |> Enum.group_by(fn [id, _, _] -> Ecto.UUID.load!(id) end)
@@ -486,34 +517,57 @@ defmodule Platform.Access do
 
   @doc false
   def restriction_ids(%Scope{actor: :system}, _permission, _type), do: []
+
   def restriction_ids(scope, permission, type) when type in [:space, :canvas] do
     if String.ends_with?(permission, ".read") do
       ids = scope |> restricted_space_ids(:all) |> MapSet.to_list()
-      if type == :space, do: ids, else: Lineage.descendant_ids(:canvas, Enum.map(ids, &{:space, &1}))
+
+      if type == :space,
+        do: ids,
+        else: Lineage.descendant_ids(:canvas, Enum.map(ids, &{:space, &1}))
     else
       []
     end
   end
+
   def restriction_ids(_scope, _permission, _type), do: []
 
   defp restriction_denied?(%Scope{actor: :system}, _permission, _resource), do: false
+
   defp restriction_denied?(scope, permission, resource) do
     if String.ends_with?(permission, ".read") do
-      ids = case Lineage.typed(resource) do
-        {:space, id} -> [id]
-        {:canvas, id} -> Repo.all(from c in Platform.Chat.Canvas, where: c.id == ^id, select: c.space_id)
-        :untyped ->
-          case untyped_id(resource) do
-            id when is_binary(id) ->
-              cond do
-                not Platform.UUID.valid?(id) -> []
-                permission == "canvas.read" -> Repo.all(from c in Platform.Chat.Canvas, where: c.id == ^id, select: c.space_id)
-                true -> [id]
-              end
-            _ -> []
-          end
-        _ -> []
-      end
+      ids =
+        case Lineage.typed(resource) do
+          {:space, id} ->
+            [id]
+
+          {:canvas, id} ->
+            Repo.all(from(c in Platform.Chat.Canvas, where: c.id == ^id, select: c.space_id))
+
+          :untyped ->
+            case untyped_id(resource) do
+              id when is_binary(id) ->
+                cond do
+                  not Platform.UUID.valid?(id) ->
+                    []
+
+                  permission == "canvas.read" ->
+                    Repo.all(
+                      from(c in Platform.Chat.Canvas, where: c.id == ^id, select: c.space_id)
+                    )
+
+                  true ->
+                    [id]
+                end
+
+              _ ->
+                []
+            end
+
+          _ ->
+            []
+        end
+
       MapSet.size(restricted_space_ids(scope, ids)) > 0
     else
       false
@@ -602,7 +656,8 @@ defmodule Platform.Access do
 
   def holds_role?(%Scope{actor: :system}, _role_keys, _org_id), do: true
 
-  def holds_role?(%Scope{role_keys: held}, role_keys, org_id) do
+  def holds_role?(%Scope{} = scope, role_keys, org_id) do
+    held = held_restriction_keys(scope)
     wanted = role_keys |> List.wrap() |> MapSet.new()
 
     if map_size(held) == 0 or MapSet.size(wanted) == 0 do
@@ -617,6 +672,16 @@ defmodule Platform.Access do
   end
 
   def holds_role?(_scope, _role_keys, _org_id), do: false
+
+  # An external runtime's guest key marks guest scoping; it is not an
+  # assigned role. Agents hold only explicitly assigned custom roles.
+  defp held_restriction_keys(%Scope{actor: %AgentRuntime{}, role_keys: held}) do
+    Map.new(held, fn {org, keys} ->
+      {org, MapSet.difference(keys, MapSet.new(~w(admin member guest)))}
+    end)
+  end
+
+  defp held_restriction_keys(%Scope{role_keys: held}), do: held
 
   defp org_chain(nil) do
     case Platform.Tenancy.get_root_org() do

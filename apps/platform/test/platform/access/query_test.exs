@@ -367,7 +367,15 @@ defmodule Platform.Access.QueryTest do
     assert ctx.channel.id in assert_same(scope(m), "chat.read", :space)
     assert ctx.kc.id in assert_same(scope(m), "canvas.read", :canvas)
     {:ok, _} = Platform.Access.Restrictions.restrict_space(ctx.channel, ["admin"], m.id)
-    {:ok, _} = Grants.grant(%{principal: {:user, m.id}, permission: "chat.read", resource: {:space, ctx.channel.id}, effect: "allow"})
+
+    {:ok, _} =
+      Grants.grant(%{
+        principal: {:user, m.id},
+        permission: "chat.read",
+        resource: {:space, ctx.channel.id},
+        effect: "allow"
+      })
+
     refute ctx.channel.id in assert_same(scope(m), "chat.read", :space)
     refute ctx.kc.id in assert_same(scope(m), "canvas.read", :canvas)
   end
