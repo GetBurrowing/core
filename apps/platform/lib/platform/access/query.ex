@@ -50,8 +50,9 @@ defmodule Platform.Access.Query do
 
   @doc """
   Restrict `query` with explicit grants IN CONJUNCTION WITH the surface's
-  existing check (task 01a1386d-e528 stage 3; ADR 0058 § Decisions names this
-  `restrict/5`, "which short-circuits" `where_permitted/5`).
+  existing check (task 01a1386d-e528 stage 3). The ADR names this function
+  `restrict/5`, "which short-circuits" `where_permitted/5`:
+  `0058-rbac-v2-roles-scopes-and-agent-capping.md § Decisions`.
 
   The existing check stands in for the role-rule allow (step 3 of the
   moduledoc order in `Platform.Access`):
@@ -97,7 +98,7 @@ defmodule Platform.Access.Query do
 
   A runtime's Scope (member 2's `for_runtime/1`) carries `mcp.<bundle>` and
   `chat.read` only, never `tasks.read` or `canvas.read`, until stack member 5
-  caps it at its owner (ADR 0058 § Agents). Its MCP tool authorization is the
+  caps it at its owner (`0058-rbac-v2-roles-scopes-and-agent-capping.md § Agents`). Its MCP tool authorization is the
   existing check its listings pass today, so a runtime's listing keeps
   today's rows with no grant and loses what an agent-principal deny covers.
   An agent-principal ALLOW therefore adds nothing to a runtime listing in

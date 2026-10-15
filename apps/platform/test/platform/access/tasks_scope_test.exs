@@ -125,6 +125,13 @@ defmodule Platform.Access.TasksScopeTest do
     {:ok, %{} = env} =
       ToolSurface.execute(name, args, %{runtime_id: rt.runtime_id, agent_id: rt.agent_id})
 
+    # The MCP transport JSON-encodes every result: the caller's Scope must
+    # never ride along in it (it is not JSON, and it is not the caller's
+    # filter to echo).
+    encoded = Jason.encode!(env)
+    refute encoded =~ "access_scope"
+    refute encoded =~ "Platform.Access"
+
     key = %{"task_list" => :tasks, "project_list" => :projects, "stack_list" => :stacks}[name]
     env |> Map.fetch!(key) |> Enum.map(&(&1[:id] || &1["id"])) |> MapSet.new()
   end

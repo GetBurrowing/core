@@ -67,8 +67,8 @@ defmodule Platform.Chat.ExternalScope do
 
   ## Explicit grants compose with the Scope clauses
 
-  Task `01a1386d-e528` stage 3 (`0058-rbac-v2-roles-scopes-and-agent-capping.md
-  § Precedence`). The three Scope clauses above hand their filter to
+  Task `01a1386d-e528` stage 3,
+  `0058-rbac-v2-roles-scopes-and-agent-capping.md § Precedence`. The three Scope clauses above hand their filter to
   `Platform.Access.Query.restrict/5` (`visible_space_id?/2` to
   `Platform.Access.within?/4`) as the EXISTING check, under `chat.read` on
   resource type `:space`:

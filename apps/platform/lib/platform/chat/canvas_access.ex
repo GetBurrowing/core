@@ -251,8 +251,8 @@ defmodule Platform.Chat.CanvasAccess do
 
   def fetch_for_viewer(_canvas_id, _viewer, _opts), do: {:error, :not_found}
 
-  # Task 01a1386d-e528 stage 3 (ADR 0058 § Permission model, the
-  # `fetch_for_viewer/3` seam row): with `:access_scope`, a canvas a
+  # Task 01a1386d-e528 stage 3, the `fetch_for_viewer/3` seam row of
+  # `0058-rbac-v2-roles-scopes-and-agent-capping.md § Permission model`: with `:access_scope`, a canvas a
   # `canvas.read` deny covers (on the canvas, its space, or a project above
   # it) answers EXACTLY like a missing row, before any grant path runs, so no
   # audit event is minted for a refused read. The grant paths below stay the

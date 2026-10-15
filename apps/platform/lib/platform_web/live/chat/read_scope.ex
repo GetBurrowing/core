@@ -1,8 +1,8 @@
 defmodule PlatformWeb.ChatLive.ReadScope do
   @moduledoc """
   The read-scope and the guest flag `PlatformWeb.ChatLive` mounts with (task
-  `01a1386d-e528` stage 3, `0058-rbac-v2-roles-scopes-and-agent-capping.md
-  § Permission model`, the `ExternalScope` seam row).
+  `01a1386d-e528` stage 3, the `ExternalScope` seam row of
+  `0058-rbac-v2-roles-scopes-and-agent-capping.md § Permission model`).
 
   `resolve/3` returns `{scope, external?}`:
 

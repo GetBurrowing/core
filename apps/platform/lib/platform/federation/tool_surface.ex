@@ -5538,7 +5538,7 @@ defmodule Platform.Federation.ToolSurface do
     # would be a silently dropped filter — the exact defect this task exists
     # to remove, reintroduced one key over.
     case task_list_assignee_opts(args) do
-      {:ok, assignee_opts} -> do_task_list(args, assignee_opts ++ runtime_access_opts(context))
+      {:ok, assignee_opts} -> do_task_list(args, assignee_opts, runtime_access_opts(context))
       {:error, _} = refusal -> refusal
     end
   end
@@ -15108,7 +15108,10 @@ defmodule Platform.Federation.ToolSurface do
     end)
   end
 
-  defp do_task_list(args, assignee_opts) do
+  # `access_opts` (task 01a1386d-e528 stage 3) reach the query but NOT the
+  # `filters` echo below: they are the caller's authorization, not a filter it
+  # supplied, and a `%Platform.Access.Scope{}` is not JSON.
+  defp do_task_list(args, assignee_opts, access_opts) do
     # Compose every supplied filter together — passing project_id and status
     # both must AND, not pick one branch. The old `cond` was mutually
     # exclusive and silently dropped the status filter when project_id was
@@ -15151,10 +15154,10 @@ defmodule Platform.Federation.ToolSurface do
     # two pages cannot skip or repeat a row.
     {limit, offset} = ResultBound.page(args)
 
-    total = Tasks.count_tasks(opts)
+    total = Tasks.count_tasks(opts ++ access_opts)
 
     rows =
-      opts
+      (opts ++ access_opts)
       |> Tasks.list_tasks_page(limit: limit, offset: offset)
       |> Enum.map(&serialize_task_row(&1, full_detail?(args)))
 
