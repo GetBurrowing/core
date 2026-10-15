@@ -167,7 +167,10 @@ defmodule PlatformWeb.Components.IconRailScopeTest do
 
     test "a guest holding tasks.read on a project still sees no Tasks tile", ctx do
       guest = ctx.w.ext
-      {:ok, _} = Grants.grant(%{principal: guest, permission: "tasks.read", resource: ctx.project})
+
+      {:ok, _} =
+        Grants.grant(%{principal: guest, permission: "tasks.read", resource: ctx.project})
+
       scope = scope_of(guest)
 
       # The grant is on the Scope and counts as holding tasks.read anywhere
