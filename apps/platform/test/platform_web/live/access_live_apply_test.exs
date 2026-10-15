@@ -66,6 +66,14 @@ defmodule PlatformWeb.AccessLiveApplyTest do
     Tenancy.allow_dm(guest, org)
     c = channel!(org, "Live Channel C")
     d = channel!(org, "Live Channel D")
+
+    {:ok, _} =
+      Chat.add_participant(d.id, %{
+        participant_type: "user",
+        participant_id: guest.id,
+        joined_at: DateTime.utc_now()
+      })
+
     c_grant = grant!(guest, c)
     grant!(guest, d)
     %{org: org, guest: guest, c: c, d: d, c_grant: c_grant}
@@ -90,7 +98,8 @@ defmodule PlatformWeb.AccessLiveApplyTest do
   end
 
   test "active revoked channel navigates to chat with a flash", ctx do
-    {:ok, view, _} = conn_for(ctx.guest) |> live("/chat/#{ctx.c.slug}")
+    {:ok, view, _} = conn_for(ctx.guest) |> live("/chat/#{ctx.d.slug}")
+    render_patch(view, "/chat/#{ctx.c.slug}")
     assert {:ok, _} = Grants.revoke(ctx.c_grant)
     assert_redirect(view, "/chat")
   end
