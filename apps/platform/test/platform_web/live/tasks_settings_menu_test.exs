@@ -124,7 +124,7 @@ defmodule PlatformWeb.TasksSettingsMenuTest do
 
     test "is refused /admin/pipeline on a direct request that bypasses the affordance",
          %{conn: conn} do
-      assert {:error, {:live_redirect, %{to: "/"}}} =
+      assert {:error, {_, %{to: "/access-denied?module=admin"}}} =
                conn |> member_conn() |> live("/admin/pipeline")
     end
   end

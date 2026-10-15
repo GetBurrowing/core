@@ -105,10 +105,9 @@ defmodule PlatformWeb.AdminBrandingLiveTest do
     test "a member (non-admin) mount is redirected by :ensure_admin", %{conn: conn} do
       user = create_user!("member")
 
-      assert {:error, {:live_redirect, %{to: "/", flash: flash}}} =
+      assert {:error, {_, %{to: "/access-denied?module=admin"}}} =
                conn |> authenticated_conn(user) |> live(~p"/admin/branding")
 
-      assert flash["error"] =~ "access"
     end
 
     test "an Acme admin gets the form", %{conn: conn} do

@@ -92,7 +92,7 @@ defmodule PlatformWeb.AdminVaultLiveTest do
     test "a non-admin mount is redirected", %{conn: conn} do
       user = non_admin!()
 
-      assert {:error, {:live_redirect, %{to: "/"}}} =
+      assert {:error, {_, %{to: "/access-denied?module=admin"}}} =
                conn
                |> Plug.Test.init_test_session(%{"current_user_id" => user.id})
                |> live(~p"/admin/vault")

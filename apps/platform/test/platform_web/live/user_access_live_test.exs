@@ -66,16 +66,15 @@ defmodule PlatformWeb.UserAccessLiveTest do
       acme = Tenancy.get_org_by_slug!("acme")
       create_membership!(user, acme, "member")
 
-      assert {:error, {:live_redirect, %{to: "/", flash: flash}}} =
+      assert {:error, {_, %{to: "/access-denied?module=admin"}}} =
                conn |> authenticated_conn(user) |> live(~p"/admin/users")
 
-      assert Phoenix.Flash.get(flash, :error) =~ "don't have access"
     end
 
     test "user with no memberships is redirected away", %{conn: conn} do
       user = create_user!()
 
-      assert {:error, {:live_redirect, %{to: "/"}}} =
+      assert {:error, {_, %{to: "/access-denied?module=admin"}}} =
                conn |> authenticated_conn(user) |> live(~p"/admin/users")
     end
   end

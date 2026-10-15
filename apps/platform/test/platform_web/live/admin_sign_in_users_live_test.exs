@@ -325,10 +325,9 @@ defmodule PlatformWeb.AdminSignInUsersLiveTest do
 
       member = suite_user!("member")
 
-      assert {:error, {:live_redirect, %{to: "/", flash: flash}}} =
+      assert {:error, {_, %{to: "/access-denied?module=admin"}}} =
                live(login(conn, member), @path)
 
-      assert Phoenix.Flash.get(flash, :error) =~ "don't have access"
     end
 
     test "a websocket mount after the switch went off raises the 404 in mount/3",

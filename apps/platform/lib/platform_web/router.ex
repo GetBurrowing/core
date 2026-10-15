@@ -541,7 +541,11 @@ defmodule PlatformWeb.Router do
     pipe_through([:browser, :require_auth, :enforce_external_scope])
 
     live_session :external_chat,
-      on_mount: [PlatformWeb.ShellLive, {PlatformWeb.LiveAuth, :default}],
+      on_mount: [
+        PlatformWeb.ShellLive,
+        {PlatformWeb.LiveAuth, :default},
+        {PlatformWeb.ModuleGate, :default}
+      ],
       layout: {PlatformWeb.Layouts, :external},
       session: %{"chat_mode" => "external"} do
       live("/chat", ChatLive, :index)
@@ -570,6 +574,7 @@ defmodule PlatformWeb.Router do
     # `live("/meetings", MeetingLive, :index)`: a landing target exists.
     # Nobody re-examined the deferral when the fact under it changed.
     get("/", PageController, :home)
+    get("/access-denied", AccessDeniedController, :show)
   end
 
   # Invited-member meeting surface on the `meet.` host (task 019fb955-f8b1
@@ -822,7 +827,11 @@ defmodule PlatformWeb.Router do
     get("/api/transcripts/:id/download", TranscriptController, :show)
 
     live_session :authenticated,
-      on_mount: [PlatformWeb.ShellLive, {PlatformWeb.LiveAuth, :default}],
+      on_mount: [
+        PlatformWeb.ShellLive,
+        {PlatformWeb.LiveAuth, :default},
+        {PlatformWeb.ModuleGate, :default}
+      ],
       layout: {PlatformWeb.Layouts, :shell} do
       live("/chat", ChatLive, :index)
       live("/chat/:space_slug", ChatLive, :show)
@@ -900,7 +909,11 @@ defmodule PlatformWeb.Router do
     # documented above the `chat.` scope does not apply here. Adding a scope
     # would inherit that hazard for no benefit.
     live_session :canvas_standalone,
-      on_mount: [PlatformWeb.ShellLive, {PlatformWeb.LiveAuth, :default}],
+      on_mount: [
+        PlatformWeb.ShellLive,
+        {PlatformWeb.LiveAuth, :default},
+        {PlatformWeb.ModuleGate, :default}
+      ],
       layout: {PlatformWeb.Layouts, :shell} do
       live("/canvases/:id", CanvasLive, :show)
     end
@@ -926,15 +939,15 @@ defmodule PlatformWeb.Router do
       live("/welcome", ExternalHoldingLive, :index)
     end
 
-    # MT/RBAC stack 2 (task 019e3c4a) — `/admin/*` lives in its own
-    # `live_session` so the `:ensure_admin` hook can halt-and-redirect
-    # non-admin mounts. Keeps the same `ShellLive` + `LiveAuth :default`
-    # prefix so the shell chrome renders before the admin gate fires.
+    # ModuleGate runs after LiveAuth on every admin mount. The holding session
+    # above deliberately has no module gate: its zero-membership users have
+    # a dedicated landing. The meet sessions and unauthenticated guest meeting
+    # session keep their invite admission and query fences instead.
     live_session :admin,
       on_mount: [
         PlatformWeb.ShellLive,
         {PlatformWeb.LiveAuth, :default},
-        {PlatformWeb.LiveAuth, :ensure_admin}
+        {PlatformWeb.ModuleGate, :default}
       ],
       layout: {PlatformWeb.Layouts, :shell} do
       live("/admin", AdminLive, :index)
@@ -1008,7 +1021,7 @@ defmodule PlatformWeb.Router do
       on_mount: [
         PlatformWeb.ShellLive,
         {PlatformWeb.LiveAuth, :default},
-        {PlatformWeb.LiveAuth, :ensure_admin}
+        {PlatformWeb.ModuleGate, :default}
       ],
       layout: {PlatformWeb.Layouts, :shell} do
       live("/admin/sign-in-users", AdminSignInUsersLive, :index)

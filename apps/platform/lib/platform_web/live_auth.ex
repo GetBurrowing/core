@@ -15,16 +15,13 @@ defmodule PlatformWeb.LiveAuth do
       `false` for anonymous mounts (LV mounts that somehow reach here
       without an authenticated session).
 
-    * `:ensure_admin` — gate for the `/admin/*` surfaces. Halts and
-      redirects to `/` with a flash error when the user is not a root-org
-      admin.
+    * `:ensure_admin` — compatibility hook delegated to `ModuleGate`.
 
   Adding a new hook? Mirror the existing pattern: read assigns,
   never hit the DB, never reach into `socket.private`.
   """
 
   import Phoenix.Component, only: [assign: 3]
-  import Phoenix.LiveView, only: [push_navigate: 2, put_flash: 3]
 
   alias Platform.Access.Scope
   alias Platform.Tenancy
@@ -49,16 +46,8 @@ defmodule PlatformWeb.LiveAuth do
      |> assign(:access_scope, Scope.for_user(user))}
   end
 
-  def on_mount(:ensure_admin, _params, _session, socket) do
-    if socket.assigns[:root_admin?] do
-      {:cont, socket}
-    else
-      {:halt,
-       socket
-       |> put_flash(:error, "You don't have access to that page.")
-       |> push_navigate(to: "/")}
-    end
-  end
+  def on_mount(:ensure_admin, params, session, socket),
+    do: PlatformWeb.ModuleGate.on_mount(:default, params, session, socket)
 
   # ShellLive assigns the user struct under `:current_user_record`
   # (the display name lives under `:current_user`). When this hook

@@ -44,6 +44,8 @@ defmodule PlatformWeb.Plugs.ExternalUserScope do
 
   alias Platform.Chat
   alias Platform.Chat.ExternalScope
+  alias Platform.Access
+  alias Platform.Access.Registry
   alias Platform.Meetings
   alias Platform.Tenancy
   alias PlatformWeb.ExternalRedirect
@@ -143,10 +145,29 @@ defmodule PlatformWeb.Plugs.ExternalUserScope do
       {_, ["chat", slug]} ->
         gate_space(conn, user, slug)
 
+      # The app host admits only a registry rail path whose module explicitly
+      # permits guests. The LiveView mount gate then re-checks every view.
+      {:app, [segment | _]} ->
+        entry =
+          Enum.find(Registry.rail_entries(), fn entry ->
+            entry.key != :chat and rail_segment(entry.key) == segment
+          end)
+
+        if entry && Access.module_access?(conn.assigns[:access_scope], entry.key) do
+          conn
+        else
+          deny(conn, user, "external_non_chat_route")
+        end
+
       {_, _} ->
         deny(conn, user, "external_non_chat_route")
     end
   end
+
+  defp rail_segment(:context), do: "org_memory"
+  defp rail_segment(:experiments), do: "control"
+  defp rail_segment(:prompts), do: "admin"
+  defp rail_segment(key), do: Atom.to_string(key)
 
   # task 019f9257: redirect an external user off the internal /chat index to the
   # absolute chat-host external surface. Returns a halted conn (302) when the

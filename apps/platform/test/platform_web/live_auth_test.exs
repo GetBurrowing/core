@@ -163,28 +163,23 @@ defmodule PlatformWeb.LiveAuthTest do
     end
   end
 
-  describe "on_mount(:ensure_admin, ...)" do
-    test "continues when :root_admin? is true" do
-      socket = %Socket{endpoint: PlatformWeb.Endpoint, assigns: %{__changed__: %{}, flash: %{}}}
-      socket = Phoenix.Component.assign(socket, :root_admin?, true)
+  describe "on_mount(:ensure_admin, ...) compatibility delegate" do
+    test "uses ModuleGate and the scope for an admin" do
+      user = create_user!()
+      create_membership!(user, Tenancy.get_org_by_slug!("acme"), "admin")
+      socket = socket_with(Platform.Accounts.get_user(user.id))
+      {:cont, socket} = LiveAuth.on_mount(:default, %{}, %{}, socket)
+      socket = %{socket | view: PlatformWeb.AdminLive}
 
       assert {:cont, _socket} = LiveAuth.on_mount(:ensure_admin, %{}, %{}, socket)
     end
 
-    test "halts and pushes a redirect when :root_admin? is false" do
-      socket = %Socket{endpoint: PlatformWeb.Endpoint, assigns: %{__changed__: %{}, flash: %{}}}
-      socket = Phoenix.Component.assign(socket, :root_admin?, false)
-
-      assert {:halt, socket} = LiveAuth.on_mount(:ensure_admin, %{}, %{}, socket)
-
-      # `push_navigate/2` enqueues a redirect operation on the socket's
-      # private state — assert the flash was set as a stable proxy for
-      # "the gate fired" rather than reaching into LV internals.
-      assert Phoenix.Flash.get(socket.assigns.flash, :error) =~ "don't have access"
-    end
-
-    test "halts when :root_admin? assign is missing entirely" do
-      socket = %Socket{endpoint: PlatformWeb.Endpoint, assigns: %{__changed__: %{}, flash: %{}}}
+    test "halts when scope is missing" do
+      socket = %Socket{
+        endpoint: PlatformWeb.Endpoint,
+        view: PlatformWeb.AdminLive,
+        assigns: %{__changed__: %{}, flash: %{}}
+      }
 
       assert {:halt, _socket} = LiveAuth.on_mount(:ensure_admin, %{}, %{}, socket)
     end

@@ -57,7 +57,6 @@ defmodule Platform.Access.EquivalenceTest do
 
   @router PlatformWeb.Router
   @admin_sessions [:admin, :admin_sign_in]
-  @denied_flash "You don't have access to that page."
 
   # ── The world ───────────────────────────────────────────────────────────
 
@@ -457,11 +456,11 @@ defmodule Platform.Access.EquivalenceTest do
 
   defp classify_redirect("/auth/login", _conn), do: :login
 
-  defp classify_redirect("/", conn) do
-    if Phoenix.Flash.get(conn.assigns[:flash] || %{}, :error) == @denied_flash,
-      do: :denied_admin,
-      else: {:redirect, "/"}
-  end
+  # Quantity 4 still compares the denial class. Stage 3 gives that denial a
+  # dedicated destination and its message on the 403 page instead of a flash.
+  defp classify_redirect("/access-denied?module=admin", _conn), do: :denied_admin
+
+  defp classify_redirect("/", _conn), do: {:redirect, "/"}
 
   # The page passed every gate and then redirected for its own reasons (an
   # unknown `:slug` placeholder, for example).
