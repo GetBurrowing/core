@@ -161,6 +161,7 @@ defmodule PlatformWeb.Components.IconRail do
       |> assign(:working_destinations, working)
       |> assign(:admin_destinations, admin)
       |> assign(:show_admin, show_admin?(filter, admin))
+      |> assign(:show_working, show_working?(filter, working))
       |> assign(:active_key, active_destination_key(pool, current_path))
 
     ~H"""
@@ -232,7 +233,11 @@ defmodule PlatformWeb.Components.IconRail do
         chat_unread_count={@chat_unread_count}
       />
 
-      <.rail_eyebrow label="Working" sidebar_collapsed={@sidebar_collapsed} />
+      <.rail_eyebrow
+        :if={@show_working}
+        label="Working"
+        sidebar_collapsed={@sidebar_collapsed}
+      />
       <.rail_cluster
         destinations={@working_destinations}
         cluster="working"
@@ -520,6 +525,11 @@ defmodule PlatformWeb.Components.IconRail do
   # `root_user`, the Scope path off whether any admin tile survived.
   defp show_admin?([scope: _scope], admin), do: admin != []
   defp show_admin?([root_user: root_user], _admin), do: root_user
+
+  # The Working eyebrow: a guest's Scope admits no Working tile, so the Scope
+  # path drops the label over an empty cluster. Legacy always renders it.
+  defp show_working?([scope: _scope], working), do: working != []
+  defp show_working?([root_user: _root_user], _working), do: true
 
   # Apply the root_only? filter against a per-render root_user flag.
   # Used at the icon_rail/1 render boundary so EVERY cluster (live /

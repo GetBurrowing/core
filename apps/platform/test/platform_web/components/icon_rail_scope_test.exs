@@ -169,6 +169,15 @@ defmodule PlatformWeb.Components.IconRailScopeTest do
       end
 
       assert more_sheet_html(%{access_scope: member}) =~ ">Working</p>"
+
+      # Desktop: no Working eyebrow over an empty cluster for a guest; the
+      # member's rail carries it (control).
+      assert desktop_html(%{access_scope: member}) =~ "icon-rail-eyebrow\">Working<"
+
+      for {row, user} <- ctx.guests do
+        refute desktop_html(%{access_scope: scope_of(user)}) =~ ">Working<",
+               "#{row}'s rail renders an empty Working eyebrow"
+      end
     end
 
     test "a guest holding tasks.read on a project still sees no Tasks tile", ctx do
@@ -288,7 +297,13 @@ defmodule PlatformWeb.Components.IconRailScopeTest do
   defp scope_destination_keys(scope),
     do: [scope: scope] |> IconRail.destinations() |> Enum.map(& &1.key)
 
-  defp desktop_keys(assigns) do
+  defp desktop_keys(assigns),
+    do:
+      assigns
+      |> desktop_html()
+      |> keys("[data-icon-rail] .icon-rail-tab:not(.icon-rail-tab--child)")
+
+  defp desktop_html(assigns) do
     assigns = Map.merge(%{current_path: "/chat", root_user: false, access_scope: nil}, assigns)
 
     rendered_to_string(~H"""
@@ -298,7 +313,6 @@ defmodule PlatformWeb.Components.IconRailScopeTest do
       access_scope={@access_scope}
     />
     """)
-    |> keys("[data-icon-rail] .icon-rail-tab:not(.icon-rail-tab--child)")
   end
 
   defp mobile_keys(assigns) do
