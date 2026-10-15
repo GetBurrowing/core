@@ -15,7 +15,9 @@ defmodule Platform.Access.Restrictions do
   def restrict_space(%Space{id: id}, keys, actor_id), do: restrict_space(id, keys, actor_id)
 
   def restrict_space(id, keys, actor_id) when is_binary(id) and is_list(keys) do
-    if Platform.UUID.valid?(id), do: do_restrict_space(id, keys, actor_id), else: {:error, :not_found}
+    if Platform.UUID.valid?(id),
+      do: do_restrict_space(id, keys, actor_id),
+      else: {:error, :not_found}
   end
 
   defp do_restrict_space(id, keys, actor_id) do
