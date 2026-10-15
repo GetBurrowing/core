@@ -323,14 +323,13 @@ defmodule Platform.Access.DelegationTest do
   # ── the last-manager guard ──────────────────────────────────────────────
 
   describe "the last manager cannot be removed" do
-    test "SignInAdmin refuses demoting the sole org admin, then permits it with a second admin", ctx do
+    test "SignInAdmin refuses demoting the sole org admin, then permits it with a second admin",
+         ctx do
       %{root: root, r: r} = ctx
 
       # `tenant_org_id/1` seeds a throwaway root admin to create each org.
       # Remove those fixture memberships so R is the sole manager here.
-      Repo.delete_all(
-        from(m in OrgMembership, where: m.org_id == ^root and m.user_id != ^r.id)
-      )
+      Repo.delete_all(from(m in OrgMembership, where: m.org_id == ^root and m.user_id != ^r.id))
 
       for {key, value} <- [
             sign_in_admin_enabled: true,
@@ -377,6 +376,7 @@ defmodule Platform.Access.DelegationTest do
                SignInAdmin.invite(r, %{email: r.email, role: :member})
 
       second = admin_in!(root)
+
       assert {:ok, %{user: restored}} =
                SignInAdmin.invite(second, %{email: r.email, role: :member})
 
