@@ -80,7 +80,10 @@ defmodule PlatformWeb.Components.MoreSheet do
       <:title>More</:title>
 
       <nav class="more-sheet-list" aria-label="Long-tail navigation">
-        <p class="more-sheet-section-label">Working</p>
+        <%!-- A guest's Scope admits no Working tile (task 01a1386d-fb6e
+             stage 1): drop the empty section's label rather than render a
+             heading over nothing. The legacy path always has Working tiles. --%>
+        <p :if={@working_destinations != []} class="more-sheet-section-label">Working</p>
 
         <.link
           :for={dest <- @working_destinations}
@@ -111,7 +114,12 @@ defmodule PlatformWeb.Components.MoreSheet do
           </.link>
         <% end %>
 
-        <div class="more-sheet-divider" aria-hidden="true"></div>
+        <div
+          :if={@working_destinations != [] or @show_admin}
+          class="more-sheet-divider"
+          aria-hidden="true"
+        >
+        </div>
 
         <%!-- Profile row + sign-out. Renders only when current_user is present
              (mount-time, not session-derived). --%>

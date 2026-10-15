@@ -158,11 +158,17 @@ defmodule PlatformWeb.Components.IconRailScopeTest do
       assert diffs == []
 
       # The More sheet lists only the Working and Admin clusters; Chat is in
-      # the Live cluster, so a guest's sheet is empty.
+      # the Live cluster, so a guest's sheet is empty, with no section label
+      # over nothing (the member's sheet carries the label: control).
       for {row, user} <- ctx.guests do
         assert more_sheet_keys(%{access_scope: scope_of(user), root_user: true}) == [],
                "#{row} sees More-sheet tiles"
+
+        refute more_sheet_html(%{access_scope: scope_of(user), root_user: true}) =~
+                 "more-sheet-section-label"
       end
+
+      assert more_sheet_html(%{access_scope: member}) =~ ">Working</p>"
     end
 
     test "a guest holding tasks.read on a project still sees no Tasks tile", ctx do
@@ -309,7 +315,10 @@ defmodule PlatformWeb.Components.IconRailScopeTest do
     |> List.delete(:more)
   end
 
-  defp more_sheet_keys(assigns) do
+  defp more_sheet_keys(assigns),
+    do: assigns |> more_sheet_html() |> keys(".more-sheet-row[data-destination]")
+
+  defp more_sheet_html(assigns) do
     assigns = Map.merge(%{root_user: false, access_scope: nil}, assigns)
 
     rendered_to_string(~H"""
@@ -320,7 +329,6 @@ defmodule PlatformWeb.Components.IconRailScopeTest do
       current_user={nil}
     />
     """)
-    |> keys(".more-sheet-row[data-destination]")
   end
 
   defp keys(html, selector) do
