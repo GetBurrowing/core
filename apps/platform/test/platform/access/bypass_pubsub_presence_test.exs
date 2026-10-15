@@ -5,6 +5,7 @@ defmodule Platform.Access.BypassPubsubPresenceTest do
   alias Platform.Access.{Grants, Scope}
   alias Platform.Chat
   alias Platform.ExternalUserFixtures, as: World
+  alias Platform.Tasks
   alias PlatformWeb.ChatLive
   alias PlatformWeb.ChatLive.CanvasHooks
 
@@ -67,5 +68,25 @@ defmodule Platform.Access.BypassPubsubPresenceTest do
 
     assert CanvasHooks.find(socket, denied.id) == nil
     assert CanvasHooks.find(socket, sibling.id).id == sibling.id
+  end
+
+  test "the Tasks badge count drops an assigned task in a denied project", ctx do
+    {:ok, project} = Tasks.create_project(%{name: "Presence badge Q", org_id: ctx.org_a.id})
+
+    {:ok, _task} =
+      Tasks.create_task(%{
+        project_id: project.id,
+        title: "ZQX-BYPASS-BOARD",
+        status: "in_progress",
+        assignee_id: ctx.int.id,
+        assignee_type: "user"
+      })
+
+    assert Tasks.count_in_progress_for_user(ctx.int.id) == 1
+
+    assert {:ok, _} =
+             Grants.deny(%{principal: ctx.int, permission: "tasks.read", resource: project})
+
+    assert Tasks.count_in_progress_for_user(ctx.int.id) == 0
   end
 end
