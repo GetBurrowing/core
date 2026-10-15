@@ -45,6 +45,24 @@ defmodule Platform.Access.RolesMigrationTest do
 
   @opts [log: false, log_migrations_sql: false, migration_lock: false]
 
+  # `access_grants` (task 01a1386d-e528 stage 2, a LATER migration) has an FK
+  # to `access_roles(key)`, so this migration's `down` cannot run while it is
+  # applied, exactly as in a real rollback, which reverts later migrations
+  # first. Roll it back first, inside the same sandbox transaction.
+  @grants_version 20_261_014_172_224
+  @grants_module Platform.Repo.Migrations.CreateAccessGrants
+
+  setup do
+    [path] =
+      Path.wildcard(
+        Path.join(:code.priv_dir(:platform), "repo/migrations/#{@grants_version}_*.exs")
+      )
+
+    unless Code.ensure_loaded?(@grants_module), do: Code.require_file(path)
+    :ok = Ecto.Migrator.down(Repo, @grants_version, @grants_module, @opts)
+    :ok
+  end
+
   defp up! do
     Repo.query!("DELETE FROM schema_migrations WHERE version = $1", [@migration_version])
     :ok = Ecto.Migrator.up(Repo, @migration_version, @migration_module, @opts)

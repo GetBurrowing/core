@@ -20,7 +20,7 @@ defmodule Platform.Access.QueryTest do
   alias Platform.Access.{Grants, Query, Scope}
   alias Platform.Accounts
   alias Platform.Accounts.User
-  alias Platform.Chat.{Canvas, Space}
+  alias Platform.Chat.{Canvas, Participant, Space}
   alias Platform.Org.Wiki
   alias Platform.Org.Wiki.{Node, NodePath}
   alias Platform.Org.WikiPage
@@ -156,8 +156,21 @@ defmodule Platform.Access.QueryTest do
 
   defp exec_space!(task, org), do: space!("execution", org, %{"task_id" => task.id})
 
-  defp canvas!(space, author),
-    do: Repo.insert!(%Canvas{space_id: space.id, created_by: author.id, title: "q canvas"})
+  # `chat_canvases.created_by` references `chat_participants`: the author
+  # is a participant row with no real user behind it, so no fixture user
+  # gains participation by creating a canvas.
+  defp canvas!(space, _author) do
+    author =
+      Repo.insert!(%Participant{
+        space_id: space.id,
+        participant_type: "user",
+        participant_id: Ecto.UUID.generate(),
+        role: "member",
+        joined_at: DateTime.utc_now()
+      })
+
+    Repo.insert!(%Canvas{space_id: space.id, created_by: author.id, title: "q canvas"})
+  end
 
   defp attach!(task, canvas),
     do: Repo.insert!(%CanvasAttachment{task_id: task.id, canvas_id: canvas.id})
