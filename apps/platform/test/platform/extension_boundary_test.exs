@@ -157,7 +157,8 @@ defmodule Platform.ExtensionBoundaryTest do
 
   defp compile(needles) do
     %{
-      regexes: Enum.map(needles, fn {kind, text} -> {kind, text, ~r/\b#{Regex.escape(text)}\b/} end),
+      regexes:
+        Enum.map(needles, fn {kind, text} -> {kind, text, ~r/\b#{Regex.escape(text)}\b/} end),
       literals: :binary.compile_pattern(Enum.map(needles, &elem(&1, 1)))
     }
   end
