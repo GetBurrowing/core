@@ -174,6 +174,10 @@ defmodule Platform.ExtensionBoundaryTest do
     |> Enum.with_index(1)
     |> Enum.flat_map(fn {line, n} ->
       for {kind, needle, re} <- compiled,
+          # Literal containment is a necessary condition for this escaped
+          # word-boundary regex. Avoid running every regex on every line of
+          # the full platform tree while other async tests are active.
+          String.contains?(line, needle),
           Regex.match?(re, line),
           do: "#{label}:#{n}: #{kind} #{needle}: #{String.trim(line)}"
     end)
@@ -255,5 +259,14 @@ defmodule Platform.ExtensionBoundaryTest do
     end
 
     assert scan_text("defmodule Platform.Chat do end", "clean", compiled) == []
+  end
+
+  test "literal prefilter preserves a module hit and the regex word boundary" do
+    compiled = compile([{:module, "NimbusBridge"}])
+
+    assert scan_text("alias NimbusBridge", "positive", compiled) ==
+             ["positive:1: module NimbusBridge: alias NimbusBridge"]
+
+    assert scan_text("alias PrefixNimbusBridgeSuffix", "negative", compiled) == []
   end
 end
