@@ -206,6 +206,13 @@ defmodule Platform.Access.MemoryListingScopeTest do
       refute leaks?(after_deny, ctx)
       assert paths(after_deny.results) == [ctx.sibling]
       assert after_deny.total == before.total - 1
+
+      # Removed inside the lexical channel, before fusion: the hidden hit is
+      # not a hydration drop either, so `dropped` cannot count it. (Probe 1
+      # showed `total` and the marker alone stay green when only the
+      # hydration filter remains: that path drops the hit and counts it.)
+      assert before.dropped.page == 0
+      assert after_deny.dropped.page == 0
     end
 
     test "a semantic page hit is removed before fusion, so it is neither counted nor dropped",
