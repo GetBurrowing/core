@@ -442,16 +442,16 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
       """
 
       assert source =~
-               ~r/if space\.id in presence_subscribe_space_ids\(\[space\], socket\.assigns\.user_id\) do\s+subscribe_space\(socket, space\.id, :chat_rail\)\s+else\s+socket\s+end/,
+               ~r/if space\.id in presence_subscribe_space_ids\(\s*\[space\],\s*socket\.assigns\.user_id,\s*socket\.assigns\[:access_scope\]\s*\) do\s+subscribe_space\(socket, space\.id, :chat_rail\)\s+else\s+socket\s+end/,
              """
              The `{:space_created, %{kind: "channel"}}` clause no longer guards
-             its subscribe with `presence_subscribe_space_ids/2` (task 01a011d4).
+             its subscribe with `presence_subscribe_space_ids/3` (task 01a011d4).
              Unguarded, every connected session holds a live subscription to
              every channel created after it mounted, whether or not that channel
              is in its subscribe scope, and an external session picks up
              internal-only channel topics that way.
 
-             `presence_subscribe_space_ids/2` is the single source of truth for
+             `presence_subscribe_space_ids/3` is the single source of truth for
              this decision at all three sites that make it: `do_mount/3`'s
              mount-time set, `rail_subscribe_space_ids/1`'s held set, and this
              one. Swapping in a second predicate here is the drift this audit
