@@ -944,7 +944,7 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "memory_rename",
         description:
-          "Atomically rename a memory page from `old_path` to `new_path`. Same-kind only (page ↔ page, private ↔ private — no cross-kind moves). Page paths only — journal paths return `:journal_immutable`. Gated against BOTH paths: the calling agent must be allowed to write to both `old_path` and `new_path`.",
+          "Atomically rename a memory page from `old_path` to `new_path`. Same-kind only (page ↔ page, private ↔ private — no cross-kind moves). Page paths only — journal paths return `:journal_immutable`. Gated against BOTH paths: the calling agent must be allowed to write to both `old_path` and `new_path`. Subtree mode: when BOTH paths are page-namespace prefixes ending in `/` (e.g. `org/page/eng/` → `org/page/engineering/`), every page under `old_path` moves to the same relative path under `new_path` in one all-or-nothing transaction, and the memory-node identities under it (which resource grants anchor to) move with them; every (old, new) page pair is gated like a single rename.",
         parameters: %{
           old_path: %{type: "string", required: true, description: "Current path."},
           new_path: %{type: "string", required: true, description: "Target path."},
@@ -954,9 +954,10 @@ defmodule Platform.Federation.ToolSurface do
             description: "UUID of the workspace (default: org-level)."
           }
         },
-        returns: "%{path: new_path, version, kind, updated_at, frontmatter}",
+        returns:
+          "%{path: new_path, version, kind, updated_at, frontmatter}. Subtree mode: %{path: new_path, kind, count, renamed: [%{from, to, version}]}",
         limitations:
-          "Cross-kind moves (page ↔ private) → `:ambiguous_kind`. Either-side gate failure surfaces that gate's error. Missing source → `:not_found`.",
+          "Cross-kind moves (page ↔ private) → `:ambiguous_kind`. Either-side gate failure surfaces that gate's error. Missing source → `:not_found`. Subtree mode never overwrites: if ANY target path already holds a page or a memory node the whole rename is refused with `:conflict` and the conflicting paths; a prefix with no pages and no nodes under it → `:not_found`.",
         when_to_use:
           "When you (Historian) want to move a curated page to a new path while preserving its content + embeddings."
       },
@@ -7478,7 +7479,11 @@ defmodule Platform.Federation.ToolSurface do
          existing_new = Wiki.get_page(new_path, workspace_id: workspace_id),
          :ok <-
            gate_rename_paths(agent, [{old_path, existing_old}, {new_path, existing_new}]) do
-      do_memory_rename(old_path, new_path, agent, workspace_id)
+      if prefix_rename?(old_path, new_path) do
+        do_memory_rename_prefix(old_path, new_path, agent, workspace_id)
+      else
+        do_memory_rename(old_path, new_path, agent, workspace_id)
+      end
     end
   end
 
@@ -14123,6 +14128,79 @@ defmodule Platform.Federation.ToolSurface do
            recoverable: false,
            suggestion: "Check both paths and the workspace_id, then retry."
          }}
+    end
+  end
+
+  # A subtree rename (task 01a1386d-e528 stage 1): BOTH paths end in `/` and
+  # are page-namespace prefixes. Private trailing-slash paths keep the
+  # single-page route, and its answer, unchanged.
+  defp prefix_rename?(old_path, new_path) do
+    String.ends_with?(old_path, "/") and String.ends_with?(new_path, "/") and
+      match?(%{kind: :page}, Routing.classify(old_path)) and
+      match?(%{kind: :page}, Routing.classify(new_path))
+  end
+
+  defp do_memory_rename_prefix(old_prefix, new_prefix, agent, workspace_id) do
+    pairs =
+      old_prefix
+      |> Wiki.list_pages_under(workspace_id: workspace_id)
+      |> Enum.flat_map(fn page ->
+        target = new_prefix <> String.replace_prefix(page.file_key, old_prefix, "")
+
+        [
+          {page.file_key, page},
+          {target, Wiki.get_page(target, workspace_id: workspace_id)}
+        ]
+      end)
+
+    opts =
+      [workspace_id: workspace_id]
+      |> maybe_put(:updated_by, agent && agent.id)
+
+    with :ok <- gate_rename_paths(agent, pairs) do
+      case Wiki.rename_prefix(old_prefix, new_prefix, opts) do
+        {:ok, renamed} ->
+          {:ok,
+           %{
+             path: new_prefix,
+             kind: classify_kind_string(new_prefix),
+             count: length(renamed),
+             renamed:
+               Enum.map(renamed, fn {from, page} ->
+                 %{from: from, to: page.file_key, version: page.version}
+               end)
+           }}
+
+        {:error, {:conflict, paths}} ->
+          {:error,
+           %{
+             error:
+               "memory_rename: the subtree rename would overwrite existing path(s): #{Enum.join(paths, ", ")}. A subtree rename never overwrites.",
+             code: :conflict,
+             recoverable: true,
+             conflicts: paths,
+             suggestion:
+               "Pick a target prefix with nothing under it, or move or delete the conflicting paths first."
+           }}
+
+        {:error, :not_found} ->
+          not_found_error(old_prefix)
+
+        {:error, :stale} ->
+          version_conflict_error(new_prefix)
+
+        {:error, %Ecto.Changeset{} = changeset} ->
+          changeset_error("memory_rename", changeset)
+
+        {:error, reason} ->
+          {:error,
+           %{
+             error: "memory_rename failed: #{inspect(reason)}",
+             code: :rename_failed,
+             recoverable: false,
+             suggestion: "Check both paths and the workspace_id, then retry."
+           }}
+      end
     end
   end
 

@@ -43,6 +43,8 @@ defmodule Platform.Org.Wiki do
 
   alias Ecto.Adapters.SQL
   alias Platform.Files
+  alias Platform.Org.Wiki.Nodes
+  alias Platform.Org.Wiki.Routing
   alias Platform.Org.WikiJournalEntry
   alias Platform.Org.WikiPage
   alias Platform.Repo
@@ -736,6 +738,11 @@ defmodule Platform.Org.Wiki do
                          workspace_id: deleted.workspace_id
                        })
 
+                       # The location identity follows the page (ADR 0058
+                       # § Memory grants), only once both page writes
+                       # succeeded, inside this same transaction.
+                       move_node!(deleted.file_key, new_file_key, workspace_id)
+
                        new_page
 
                      {:error, reason} ->
@@ -750,6 +757,137 @@ defmodule Platform.Org.Wiki do
       {:ok, %WikiPage{} = page} -> {:ok, page}
       {:error, _} = err -> err
     end
+  end
+
+  defp move_node!(old_key, new_key, workspace_id) do
+    case Nodes.move(old_key, new_key, workspace_id: workspace_id) do
+      {:ok, _count} -> :ok
+      {:error, reason} -> Repo.rollback(reason)
+    end
+  end
+
+  @doc """
+  Pages whose `file_key` starts with `prefix`, ordered by `file_key asc`.
+  Exact keys only: no alias fallback.
+
+  ## Options
+    * `:workspace_id` (default `nil`)
+  """
+  @spec list_pages_under(String.t(), keyword()) :: [WikiPage.t()]
+  def list_pages_under(prefix, opts \\ []) when is_binary(prefix) do
+    WikiPage
+    |> where([p], fragment("starts_with(?, ?)", p.file_key, ^prefix))
+    |> filter_workspace(Keyword.get(opts, :workspace_id))
+    |> order_by([p], asc: p.file_key)
+    |> Repo.all()
+  end
+
+  @doc """
+  Rename a directory prefix: every page under `old_prefix` moves to the same
+  relative key under `new_prefix`, then every memory node still under
+  `old_prefix` (the prefix node itself, nodes of deleted pages) moves too
+  (task 01a1386d-e528, ADR 0058 § Memory grants).
+
+  All-or-nothing in ONE transaction. Each page goes through the same
+  `do_rename/4` a single `rename_page/3` uses, so per-page content,
+  `version` and `updated_by` are what N single renames would produce.
+
+  Refusals, checked before any write:
+    * `{:error, :not_a_prefix}` unless both end in `/`;
+    * `{:error, :same_path}` when they are equal;
+    * `{:error, :product_owned}` for `burrow/`, as `check_product_owned/2`;
+    * `{:error, :ambiguous_kind}` unless both classify as Historian page
+      namespaces;
+    * `{:error, {:conflict, paths}}` when ANY target key already holds a page
+      or a memory node. A subtree rename never overwrites, so the
+      single-page overwrite semantic (and its node merge) never applies here;
+    * `{:error, :not_found}` when there is no page and no node under
+      `old_prefix`, the answer a trailing-slash `rename_page/3` gave before
+      this existed.
+
+  ## Options
+    * `:workspace_id` (default `nil`)
+    * `:updated_by` — as `rename_page/3`
+  """
+  @spec rename_prefix(String.t(), String.t(), keyword()) ::
+          {:ok, [{String.t(), WikiPage.t()}]}
+          | {:error,
+             :not_a_prefix
+             | :same_path
+             | :product_owned
+             | :ambiguous_kind
+             | :not_found
+             | {:conflict, [String.t()]}
+             | term()}
+  def rename_prefix(old_prefix, new_prefix, opts \\ [])
+      when is_binary(old_prefix) and is_binary(new_prefix) do
+    workspace_id = Keyword.get(opts, :workspace_id)
+
+    cond do
+      not (String.ends_with?(old_prefix, "/") and String.ends_with?(new_prefix, "/")) ->
+        {:error, :not_a_prefix}
+
+      old_prefix == new_prefix ->
+        {:error, :same_path}
+
+      check_product_owned([old_prefix, new_prefix], opts) != :ok ->
+        {:error, :product_owned}
+
+      not (historian_page_prefix?(old_prefix) and historian_page_prefix?(new_prefix)) ->
+        {:error, :ambiguous_kind}
+
+      true ->
+        do_rename_prefix(old_prefix, new_prefix, workspace_id, opts)
+    end
+  end
+
+  defp historian_page_prefix?(prefix),
+    do: match?(%{kind: :page, write_role: :historian}, Routing.classify(prefix))
+
+  defp do_rename_prefix(old_prefix, new_prefix, workspace_id, opts) do
+    Repo.transaction(fn ->
+      pages = list_pages_under(old_prefix, workspace_id: workspace_id)
+      nodes = Nodes.current_under(old_prefix, workspace_id: workspace_id)
+
+      if pages == [] and nodes == [] do
+        Repo.rollback(:not_found)
+      end
+
+      retarget = &(new_prefix <> String.replace_prefix(&1, old_prefix, ""))
+      page_moves = Enum.map(pages, &{&1.file_key, retarget.(&1.file_key)})
+      targets = Enum.uniq(Enum.map(page_moves, &elem(&1, 1)) ++ Enum.map(nodes, &retarget.(&1.path)))
+
+      case prefix_conflicts(targets, workspace_id) do
+        [] -> :ok
+        conflicts -> Repo.rollback({:conflict, conflicts})
+      end
+
+      renamed =
+        Enum.map(page_moves, fn {from, to} ->
+          case do_rename(from, to, workspace_id, opts) do
+            {:ok, page} -> {from, page}
+            {:error, reason} -> Repo.rollback(reason)
+          end
+        end)
+
+      # Whatever is still under the old prefix: the prefix node itself and
+      # nodes of pages that no longer exist.
+      case Nodes.move(old_prefix, new_prefix, workspace_id: workspace_id) do
+        {:ok, _} -> renamed
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  defp prefix_conflicts(targets, workspace_id) do
+    pages =
+      WikiPage
+      |> where([p], p.file_key in ^targets)
+      |> filter_workspace(workspace_id)
+      |> Repo.all()
+      |> Enum.map(& &1.file_key)
+
+    Enum.sort(Enum.uniq(pages ++ Nodes.occupied(targets, workspace_id: workspace_id)))
   end
 
   # ── Pure parsers (filled in by Stage 2) ───────────────────────────────
