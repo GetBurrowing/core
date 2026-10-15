@@ -376,6 +376,7 @@ defmodule Platform.Access.ResourceBypassAcceptanceTest do
 
       assert_receive %Phoenix.Socket.Broadcast{event: "attention", topic: topic}, 1_500
       assert topic == "runtime:#{active.runtime_id}"
+      _ = TaskRouter.current_status(task.id)
       assert %{stage_id: _} = LeaseManager.get(task.id)
       GenServer.stop(router, :normal)
       _ = TaskRouterSupervisor.stop_assignment(task.id)
