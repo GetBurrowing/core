@@ -568,6 +568,9 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   # restricted deep link stops at /chat instead of opening another channel.
   # Rebasing onto the rollup also brought 21 ChatLive code lines from sibling
   # members. The moon guard measured 2521 + 21 = 2542 at the merged SHA.
+  # RBAC member 6 stage 3 (7efd11c6d): +27 code lines for the shared
+  # access-change/sidebar refresh and active-space revocation navigation.
+  # Re-measure the combined rollup tree after the member-6 rebase.
   @chat_live_code_line_count 2542
 
   @doc """

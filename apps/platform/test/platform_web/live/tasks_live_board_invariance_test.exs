@@ -987,7 +987,10 @@ defmodule PlatformWeb.TasksLiveShellNonAccretionTest do
   # `Platform.Inbox.dismiss_sponsor_row_on_open/2`, not in the shell. 651 is
   # inside the 653 budget in `scripts/surface-budgets.txt`, which is not
   # raised.
-  @shell_line_count 651
+  # RBAC member 6 stage 3: one delegated LiveView callback lets the shell's
+  # refreshed access scope reach BoardHooks. The callback is the only shell
+  # addition; 653 remains within scripts/surface-budgets.txt's 653 budget.
+  @shell_line_count 653
 
   defp line_count(source), do: source |> :binary.matches("\n") |> length()
 

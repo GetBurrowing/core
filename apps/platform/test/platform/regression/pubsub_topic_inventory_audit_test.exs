@@ -143,6 +143,9 @@ defmodule Platform.Regression.PubSubTopicInventoryAuditTest do
     {"space_agents:<id>", :space},
 
     # ── user ──
+    # Only the user's authenticated LiveView sessions subscribe. The payload
+    # is a change id; ShellLive reloads that user's own scope after commit.
+    {"access:user:<id>", :user},
     # No production subscriber: Chat.Messages.Edit publishes, only tests listen.
     {"chat:participant:<id>", :user},
     {"chat:sidebar:<id>", :user},

@@ -556,6 +556,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "task 01a1386e-59d1 stage 1: (1) `create_custom_role/2`'s org id before `get(Org)`; (2) `list_roles/1`'s org id before the custom-role `where: r.org_id == ^org_id`; (3) `unassign/1`'s id before `get(RoleAssignment)`; (4) `principal/1`'s `{:user | :agent, id}` before the membership and agent `exists?` queries. Every failure answers the site's not-found or `{:error, :invalid_principal}`; covered by custom_roles_test.exs \"refuses a non-member, an external member, a built-in role and a missing agent\""},
     {"platform/access/lineage.ex", :platform_uuid_guard, "-", 1, :must_cast,
      "task 01a1386d-e528 stage 2: `typed/1` makes a `{type, id}` resource tuple `:untyped` unless its id is a canonical UUID, so every `Repo.one` in `ancestors/1` and `base_candidates/1` (this file's `@repo_one_counts` entry) sees only valid ids. A tuple can carry a LiveView param or an MCP argument from stage 3 on; covered by precedence_test.exs \"malformed ids are not found and decide nothing\""},
+    {"platform/access/view_as.ex", :platform_uuid_guard, "-", 1, :must_cast,
+     "task 01a1386e-30bd stage 4: the agent runtime id comes from `/access/view-as/agent/:id`. The human-readable runtime_id lookup uses a string column; the fallback primary-key lookup runs only when Platform.UUID.valid?/1 accepts the URL segment. A malformed id retains the view-as not-found response rather than raising Ecto.Query.CastError"},
     {"platform/org/wiki/indexer.ex", :get, "WikiJournalEntry", 1, :safe_internal,
      "the indexer re-loads ids it selected from the same table in the enclosing sweep"},
     {"platform/org/wiki/indexer.ex", :get, "WikiPage", 1, :safe_internal,
@@ -1351,6 +1353,12 @@ defmodule Platform.RepoLookupBoundaryTest do
     # `org_chain/1`'s Platform.UUID.valid?/1 guard, or a `parent_org_id` /
     # root-org id read from the Repo. No unguarded caller id reaches it.
     "platform/access.ex" => 1,
+    # RBAC member 6 stage 2: project, space, canvas and memory-node org lookups
+    # in Delegation.resource_org_id/1. `Changes.commit/4` supplies only
+    # Grant.snapshot/1 rows or normalized Grant.tuple_key/1 resources; the
+    # human demotion path supplies an org id from a loaded membership.
+    # Consequently each typed id is a stored UUID, not a raw boundary string.
+    "platform/access/delegation.ex" => 4,
     # 0 → 10 for task 01a1386d-e528 stage 2's `Platform.Access.Lineage`:
     # `ancestors/1` and `base_candidates/1` pin ids that come either from a
     # resource tuple (behind `typed/1`'s Platform.UUID.valid?/1 guard), from a

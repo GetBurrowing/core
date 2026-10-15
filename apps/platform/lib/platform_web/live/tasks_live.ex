@@ -70,9 +70,7 @@ defmodule PlatformWeb.TasksLive do
   import PlatformWeb.Tasks.Selection,
     only: [assign_selected_task: 2, bump_detail_epoch: 1, reload_selected_task: 1]
 
-  @doc "Reload the board against the scope rebuilt by ShellLive."
-  def on_access_changed(socket), do: BoardHooks.refresh_board(socket)
-
+  defdelegate on_access_changed(socket), to: BoardHooks, as: :refresh_board
   @impl true
   def mount(_params, session, socket) do
     if connected?(socket) do

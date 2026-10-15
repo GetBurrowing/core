@@ -50,7 +50,7 @@ defmodule PlatformWeb.AccessViewAsLive do
           <li
             :for={key <- @rail_keys}
             data-destination={key}
-            class="rounded border border-base-300 px-3 py-2"
+            class="rounded border border-edge px-3 py-2"
           >
             {key}
           </li>
