@@ -1,8 +1,8 @@
 defmodule Platform.Access.ContextRecheckTest do
   @moduledoc """
   Context-level permission re-checks (task 01a1386d-fb6e stage 2, RBAC stack
-  member 4; `0058-rbac-v2-roles-scopes-and-agent-capping.md § Root-admin
-  carve-outs`). A route gate is not an authorization boundary, so each
+  member 4; `0058-rbac-v2-roles-scopes-and-agent-capping.md § Root-admin carve-outs`).
+  A route gate is not an authorization boundary, so each
   install-level context, every human Experiments write, the prompt template
   writes and the pipeline-health read re-check through `Platform.Access`.
 
