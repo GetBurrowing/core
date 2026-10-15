@@ -197,6 +197,40 @@ defmodule Platform.Access.Scope do
   def for_user(_), do: %__MODULE__{}
 
   @doc """
+  A hypothetical built-in role in `org`, including that role principal's
+  grants. It has no user participant spaces, so participant-based chat rules
+  resolve to an empty set.
+  """
+  @spec for_role(Org.t(), String.t()) :: t()
+  def for_role(%Org{} = org, role_key) when role_key in ~w(admin member guest) do
+    membership = %OrgMembership{
+      org_id: org.id,
+      org: org,
+      role: role_key,
+      access_role_key: role_key,
+      external: role_key == "guest"
+    }
+
+    rules = Access.builtin_role_rules()
+    memberships = [membership]
+
+    permissions =
+      [{Map.get(rules, role_key, %{}), membership}]
+      |> role_permissions([])
+      |> org_admin_per_membership(memberships, rules)
+      |> widen_root_org(memberships)
+      |> grant_root_admin(memberships, memberships)
+
+    %__MODULE__{
+      actor: %{id: org.id, org_memberships: memberships},
+      org: org,
+      permissions: permissions,
+      role_keys: %{org.id => MapSet.new([role_key])},
+      grants: Grants.list_for_principals([{:role, role_key, org.id}])
+    }
+  end
+
+  @doc """
   The Scope for an agent runtime: one `mcp.<bundle>` permission at `:all` per
   `allowed_bundles` entry the registry declares. No owner intersection.
   """
