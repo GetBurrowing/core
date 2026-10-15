@@ -47,7 +47,7 @@ defmodule Platform.Access.BypassDispatchTest do
   alias Platform.Chat.{ActiveAgentStore, AttentionRouter, Message, Participant}
   alias Platform.Federation
   alias Platform.Orchestration.{ExecutionSpace, LeaseManager, PhaseRuntime}
-  alias Platform.Orchestration.{TaskRouter, TaskRouterWatcher}
+  alias Platform.Orchestration.{TaskRouter, TaskRouterSupervisor, TaskRouterWatcher}
   alias Platform.Repo
   alias Platform.Tasks
   alias Platform.Tasks.Task, as: TaskSchema
@@ -524,7 +524,12 @@ defmodule Platform.Access.BypassDispatchTest do
     pid
   end
 
+  # A router the WATCHER started is a TaskRouterSupervisor child, and a bare
+  # `GenServer.stop/3` would have the supervisor restart it: terminate it
+  # through the supervisor first.
   defp stop_router(task_id) do
+    _ = TaskRouterSupervisor.stop_assignment(task_id)
+
     case Registry.lookup(Platform.Orchestration.Registry, task_id) do
       [{pid, _}] ->
         try do
