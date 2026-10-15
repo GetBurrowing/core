@@ -1,7 +1,8 @@
 defmodule Platform.Org.Wiki.Node do
   @moduledoc """
   A stable identity for an org-memory LOCATION: a page path or a directory
-  prefix ending in `/` (task 01a1386d-e528, ADR 0058 § Memory grants).
+  prefix ending in `/` (task 01a1386d-e528,
+  `0058-rbac-v2-roles-scopes-and-agent-capping.md § Memory grants`).
 
   A node is not a page. `org_wiki_pages` rows keep their own ids and
   semantics; a node outlives the page at its location (deleting a page keeps

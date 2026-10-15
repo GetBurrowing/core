@@ -1,6 +1,7 @@
 defmodule Platform.Repo.Migrations.CreateOrgMemoryNodes do
   @moduledoc """
-  Task 01a1386d-e528 stage 1 (ADR 0058 § Memory grants, stack `rbac-roles`):
+  Task 01a1386d-e528 stage 1 (stack `rbac-roles`), recorded in
+  `0058-rbac-v2-roles-scopes-and-agent-capping.md § Memory grants`:
   a stable identity for org-memory LOCATIONS, so a resource grant anchors to
   a node and follows renames instead of matching a path string.
 

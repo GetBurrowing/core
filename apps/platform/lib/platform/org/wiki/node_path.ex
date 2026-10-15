@@ -1,7 +1,7 @@
 defmodule Platform.Org.Wiki.NodePath do
   @moduledoc """
   One interval of a `Platform.Org.Wiki.Node`'s path history (task
-  01a1386d-e528, ADR 0058 § Memory grants).
+  01a1386d-e528, `0058-rbac-v2-roles-scopes-and-agent-capping.md § Memory grants`).
 
   The node occupied `path` during `[valid_from, valid_to)`. `valid_to` is
   `nil` for the node's current location; the partial unique index

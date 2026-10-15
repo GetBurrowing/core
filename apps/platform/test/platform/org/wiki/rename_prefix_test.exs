@@ -1,8 +1,8 @@
 defmodule Platform.Org.Wiki.RenamePrefixTest do
   @moduledoc """
   Task 01a1386d-e528 stage 1: `Platform.Org.Wiki.rename_prefix/3`, the
-  subtree rename (`0058-rbac-v2-roles-scopes-and-agent-capping.md § Memory
-  grants`).
+  subtree rename, recorded in
+  `0058-rbac-v2-roles-scopes-and-agent-capping.md § Memory grants`.
 
   The per-page result must equal what N single `rename_page/3` calls
   produce, because a prefix rename is those renames in one transaction. A

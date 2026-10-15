@@ -738,9 +738,9 @@ defmodule Platform.Org.Wiki do
                          workspace_id: deleted.workspace_id
                        })
 
-                       # The location identity follows the page (ADR 0058
-                       # § Memory grants), only once both page writes
-                       # succeeded, inside this same transaction.
+                       # The location identity follows the page, only once
+                       # both page writes succeeded, inside this same
+                       # transaction. See Platform.Org.Wiki.Nodes.
                        move_node!(deleted.file_key, new_file_key, workspace_id)
 
                        new_page
@@ -786,7 +786,7 @@ defmodule Platform.Org.Wiki do
   Rename a directory prefix: every page under `old_prefix` moves to the same
   relative key under `new_prefix`, then every memory node still under
   `old_prefix` (the prefix node itself, nodes of deleted pages) moves too
-  (task 01a1386d-e528, ADR 0058 § Memory grants).
+  (task 01a1386d-e528, `0058-rbac-v2-roles-scopes-and-agent-capping.md § Memory grants`).
 
   All-or-nothing in ONE transaction. Each page goes through the same
   `do_rename/4` a single `rename_page/3` uses, so per-page content,
