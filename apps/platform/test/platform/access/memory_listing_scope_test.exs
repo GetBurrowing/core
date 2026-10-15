@@ -466,10 +466,23 @@ defmodule Platform.Access.MemoryListingScopeTest do
       refute String.contains?(Jason.encode!(after_rename), marker)
       assert "org/page/eng/sibling.md" in paths(after_rename)
 
+      # A row recorded AFTER the rename, at the NEW path, is hidden too
+      # (task 01a1386d-e528 stage 5). This is what tells node anchoring
+      # from path anchoring: the pre-rename rows above sit at the old path,
+      # so they stay hidden even if the deny's node never moved (probe M3,
+      # `Nodes.move/3` a no-op, left this test green without it).
+      moved = "org/page/engineering/secret/plan.md"
+      edit!(moved, marker <> "-post")
+
+      assert {:ok, post_rename} = call(rt, "org_memory_recently_edited", %{})
+      refute String.contains?(Jason.encode!(post_rename), marker)
+      refute moved in paths(post_rename)
+
       # Positive control after the rename: the rows exist and an actor with
-      # no deny still reads both of them.
+      # no deny still reads all of them.
       assert {:ok, unhidden} = call(other, "org_memory_recently_edited", %{})
       assert Enum.count(unhidden, &(&1.path == plan)) == 2
+      assert Enum.count(unhidden, &(&1.path == moved)) == 1
     end
   end
 
