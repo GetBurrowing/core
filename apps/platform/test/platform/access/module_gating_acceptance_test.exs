@@ -28,6 +28,7 @@ defmodule Platform.Access.ModuleGatingAcceptanceTest do
   alias PlatformWeb.Components.{IconRail, MoreSheet}
 
   setup do
+    Platform.Experiments.TestSurfaces.register()
     root = acme_org_id()
     child = tenant_org_id("module-gating-acceptance")
     admin = user!("admin", root, "admin")
@@ -151,7 +152,12 @@ defmodule Platform.Access.ModuleGatingAcceptanceTest do
   describe "3. contexts re-check authorization" do
     test "Experiments and Branding refuse a non-root caller before writes", ctx do
       {:ok, draft} =
-        Experiments.create_experiment(%{slug: unique("acceptance"), name: unique("Experiment")})
+        Experiments.create_experiment(%{
+          slug: unique("acceptance"),
+          name: unique("Experiment"),
+          surface_key: "test.budget",
+          surface_target: unique("target")
+        })
 
       assert {:error, :unauthorized} = Experiments.start(draft, ctx.member)
       assert Repo.get!(Platform.Experiments.Experiment, draft.id).status == "draft"
