@@ -1,8 +1,9 @@
 defmodule Platform.Access.BypassBytesTest do
   @moduledoc """
   The core byte surfaces honour RBAC v2 denies (task 01a1386e-45a5 stage 1,
-  RBAC stack member 7; `0058-rbac-v2-roles-scopes-and-agent-capping.md
-  § Precedence`, "The grant-less short-circuit").
+  RBAC stack member 7;
+  `0058-rbac-v2-roles-scopes-and-agent-capping.md § Precedence`,
+  "The grant-less short-circuit").
 
   Before this stage every surface here checked MEMBERSHIP only (space
   participation, `Tenancy.member_of?/2`, the MCP org filter), so a deny on a

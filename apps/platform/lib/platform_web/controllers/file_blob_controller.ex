@@ -74,8 +74,10 @@ defmodule PlatformWeb.FileBlobController do
 
   # RBAC v2 (task 01a1386e-45a5 stage 1): `files.read` on the file's project,
   # in conjunction with `do_authorize/2`. It runs after EVERY admitting arm,
-  # the root-admin one included: ADR 0058 § Precedence, "the root-admin bypass
-  # does not read past a deny". With no grants on the scope it is `:ok`.
+  # the root-admin one included, because "the root-admin bypass does not read
+  # past a deny":
+  # `0058-rbac-v2-roles-scopes-and-agent-capping.md § Precedence`.
+  # With no grants on the scope it is `:ok`.
   defp access_check(_conn, nil), do: :ok
 
   defp access_check(conn, %Tasks.Project{id: project_id}) do
