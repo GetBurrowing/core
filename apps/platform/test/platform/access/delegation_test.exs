@@ -323,6 +323,35 @@ defmodule Platform.Access.DelegationTest do
   # ── the last-manager guard ──────────────────────────────────────────────
 
   describe "the last manager cannot be removed" do
+    test "SignInAdmin refuses demoting the sole org admin, then permits it with a second admin", ctx do
+      %{root: root, r: r} = ctx
+
+      for {key, value} <- [
+            sign_in_admin_enabled: true,
+            sign_in_admin_url: "http://pocket-id.test",
+            sign_in_admin_api_key: "test-key"
+          ] do
+        previous = Application.fetch_env(:platform, key)
+
+        on_exit(fn ->
+          case previous do
+            {:ok, old} -> Application.put_env(:platform, key, old)
+            :error -> Application.delete_env(:platform, key)
+          end
+        end)
+
+        Application.put_env(:platform, key, value)
+      end
+
+      assert Enum.map(Delegation.managers({:org, root}), & &1.id) == [r.id]
+      assert {:error, %{rule: :last_admin, resource: {:org, ^root}}} =
+               SignInAdmin.set_role(r, :member, r)
+
+      second = admin_in!(root)
+      assert {:ok, membership} = SignInAdmin.set_role(r, :member, second)
+      assert membership.role == "member"
+    end
+
     test "revoking P's only manager is refused; with a second manager it succeeds", ctx do
       %{org: org, p: p, r: r} = ctx
       p2 = project!(org)

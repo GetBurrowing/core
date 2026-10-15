@@ -82,6 +82,7 @@ defmodule Platform.SignInAdmin do
 
   alias Platform.Access
   alias Platform.Accounts
+  alias Platform.Access.Delegation
   alias Platform.SignInAdmin.{Config, Link, PocketId}
   alias Platform.Tenancy
 
@@ -290,8 +291,35 @@ defmodule Platform.SignInAdmin do
     end
   end
 
-  defp set_role(user, :admin, actor), do: Tenancy.promote_to_admin(user, actor_id: actor.id)
-  defp set_role(user, :member, actor), do: Tenancy.revoke_admin(user, actor_id: actor.id)
+  @doc "Set an install user's managed role, preserving the last manager of each org."
+  @spec set_role(Accounts.User.t(), :admin | :member, actor()) :: {:ok, term()} | {:error, term()}
+  def set_role(user, :admin, actor) do
+    with :ok <- authorize(actor), do: Tenancy.promote_to_admin(user, actor_id: actor.id)
+  end
+
+  def set_role(user, :member, actor) do
+    with :ok <- authorize(actor), do: demote_unless_last_admin(user, actor)
+  end
+
+  defp demote_unless_last_admin(user, actor) do
+    memberships = Tenancy.list_user_memberships(user)
+
+    last_admin_org =
+      Enum.find(memberships, fn membership ->
+        membership.role == "admin" and
+          case Delegation.managers({:org, membership.org_id}) do
+            [%{id: id}] -> id == user.id
+            _ -> false
+          end
+      end)
+
+    if last_admin_org do
+      {:error,
+       %{missing: "access.manage", resource: {:org, last_admin_org.org_id}, rule: :last_admin}}
+    else
+      Tenancy.revoke_admin(user, actor_id: actor.id)
+    end
+  end
 
   defp compensate(identity, true, error) do
     case PocketId.delete_user(identity.id) do
