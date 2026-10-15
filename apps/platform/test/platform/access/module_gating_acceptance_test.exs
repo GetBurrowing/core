@@ -24,7 +24,6 @@ defmodule Platform.Access.ModuleGatingAcceptanceTest do
   alias Platform.Repo
   alias Platform.Tasks
   alias Platform.Tasks.Task
-  alias Platform.Tenancy
   alias Platform.Tenancy.OrgMembership
   alias PlatformWeb.Components.{IconRail, MoreSheet}
 
