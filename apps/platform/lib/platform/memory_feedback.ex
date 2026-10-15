@@ -90,6 +90,14 @@ defmodule Platform.MemoryFeedback do
     * `:feedback_kind` — `"edit"` | `"delete"` | `"retention"` or `nil`
       for all kinds.
     * `:limit` (default 20, silently clamped to a max of 100).
+    * `:access_scope` — optional `%Platform.Access.Scope{}` (task
+      01a1386d-e528 stage 4): only rows whose page the scope may
+      `memory.read`. Each row's `path` is read through the node interval
+      that covered it AT `inserted_at` (`Platform.Org.Wiki.Nodes.resolve/2`
+      `:at`), so a row recorded before a later rename still reaches the
+      moved node and its deny. The filter is SQL, applied before `limit`,
+      so a run of hidden rows cannot starve the result. Absent, or with no
+      `memory.read` grant on the scope, the query is unchanged.
 
   Ordering is `inserted_at DESC`. This is the layer-1 read shape;
   layer-3 may add a `signature_sha256` index for large corpora — do
@@ -108,6 +116,7 @@ defmodule Platform.MemoryFeedback do
     |> maybe_filter_workspace(workspace_id)
     |> maybe_filter_path_prefix(path_prefix)
     |> maybe_filter_feedback_kind(feedback_kind)
+    |> maybe_scope_by(Keyword.get(opts, :access_scope))
     |> order_by([e], desc: e.inserted_at)
     |> limit(^lim)
     |> Repo.all()
@@ -194,6 +203,18 @@ defmodule Platform.MemoryFeedback do
       {k, v} when is_binary(k) -> {k, v}
     end)
   end
+
+  # A thin call to the one Access-owned query helper (task 01a1386d-e528
+  # stage 4); precedence is decided in `Platform.Access`.
+  defp maybe_scope_by(query, %Platform.Access.Scope{} = scope) do
+    Platform.Access.Query.where_readable(query, scope, "memory.read", :memory_page, %{
+      path: :path,
+      workspace_id: :workspace_id,
+      at: :inserted_at
+    })
+  end
+
+  defp maybe_scope_by(query, _scope), do: query
 
   defp maybe_filter_workspace(queryable, nil), do: queryable
 

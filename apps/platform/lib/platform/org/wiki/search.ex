@@ -207,7 +207,8 @@ defmodule Platform.Org.Wiki.Search do
           workspace_id: String.t() | nil,
           org_id: String.t() | nil,
           project_id: String.t() | nil,
-          memory_type: String.t() | nil
+          memory_type: String.t() | nil,
+          access_scope: Platform.Access.Scope.t() | nil
         ]
 
   # Internal channel-hit shape. Stays inside this module — the public
@@ -257,6 +258,16 @@ defmodule Platform.Org.Wiki.Search do
     * `:memory_type` — restrict the semantic channel to a single tag
       (e.g. `"document"`, `"page"`, `"journal"`, `"daily"`). Ignored
       by the lexical channels (they already partition by corpus).
+    * `:access_scope` — optional `%Platform.Access.Scope{}` (task
+      01a1386d-e528 stage 4). Page hits the scope may not `memory.read`
+      (`Platform.Org.Wiki.scope_by/3`) are removed INSIDE each channel,
+      before fusion: in SQL for the lexical page channel, and by one id
+      query on the semantic channel's page hits before they are ranked.
+      So `match_count`, `truncated` and `dropped` are computed as if the
+      denied page did not exist, and none of them counts it. Absent, or
+      with no `memory.read` grant on the scope, every channel is
+      unchanged. The journal, message and task corpora are not filtered
+      here (stack position 7).
   """
   @spec search(String.t(), search_opts()) :: {:ok, response()}
   def search(query, opts \\ []) when is_binary(query) and is_list(opts) do
@@ -438,14 +449,15 @@ defmodule Platform.Org.Wiki.Search do
 
           hits =
             classified
+            |> Enum.map(fn {hit, corpus} ->
+              case corpus do
+                :untagged -> {hit, Map.get(resolved, semantic_hit_id(hit), :unknown)}
+                other -> {hit, other}
+              end
+            end)
+            |> drop_unreadable_pages(opts)
             |> Enum.with_index(1)
             |> Enum.flat_map(fn {{hit, corpus}, rank} ->
-              corpus =
-                case corpus do
-                  :untagged -> Map.get(resolved, semantic_hit_id(hit), :unknown)
-                  other -> other
-                end
-
               semantic_hit_to_channel(hit, rank, corpus, corpora)
             end)
 
@@ -578,6 +590,39 @@ defmodule Platform.Org.Wiki.Search do
       |> put_corpus(page_ids, :page)
     end
   end
+
+  # Access scoping of the semantic page hits (task 01a1386d-e528 stage 4).
+  # A page the scope may not read is removed BEFORE the hits are ranked, so
+  # no surviving hit's rank (and RRF score) is shifted by it, and it never
+  # reaches fusion, `match_count` or `dropped`. One id query, issued only
+  # when a `memory.read` grant applies; with none the list is untouched.
+  defp drop_unreadable_pages(resolved_hits, %{access_scope: %Platform.Access.Scope{} = scope}) do
+    page_ids =
+      for {hit, :page} <- resolved_hits,
+          id = semantic_hit_id(hit),
+          Platform.UUID.valid?(id),
+          uniq: true,
+          do: id
+
+    if page_ids == [] or not Platform.Access.grants_apply?(scope, "memory.read") do
+      resolved_hits
+    else
+      readable =
+        WikiPage
+        |> where([p], p.id in ^page_ids)
+        |> Wiki.scope_by(scope, :memory_page)
+        |> select([p], p.id)
+        |> Repo.all()
+        |> MapSet.new()
+
+      Enum.reject(resolved_hits, fn {hit, corpus} ->
+        id = semantic_hit_id(hit)
+        corpus == :page and id in page_ids and not MapSet.member?(readable, id)
+      end)
+    end
+  end
+
+  defp drop_unreadable_pages(resolved_hits, _opts), do: resolved_hits
 
   defp put_corpus(acc, ids, corpus) do
     Enum.reduce(ids, acc, fn id, acc -> Map.put(acc, id, corpus) end)
@@ -731,6 +776,7 @@ defmodule Platform.Org.Wiki.Search do
       |> filter_project(opts.project_id)
       |> maybe_filter_namespace(opts.namespace)
       |> maybe_filter_since_inserted(opts.since)
+      |> Wiki.maybe_scope_by(opts.access_scope)
       |> where(
         [p],
         fragment("? @@ websearch_to_tsquery('english', ?)", p.search_vector, ^prepared)
@@ -765,6 +811,7 @@ defmodule Platform.Org.Wiki.Search do
       |> filter_project(opts.project_id)
       |> maybe_filter_namespace(opts.namespace)
       |> maybe_filter_since_inserted(opts.since)
+      |> Wiki.maybe_scope_by(opts.access_scope)
       |> where([p], ilike(p.content, ^pattern))
       |> order_by([p], desc: p.inserted_at)
       |> limit(^cap)
@@ -1232,6 +1279,7 @@ defmodule Platform.Org.Wiki.Search do
       |> filter_workspace(opts.workspace_id)
       |> scope_page_org(opts.org_id)
       |> filter_project(opts.project_id)
+      |> Wiki.maybe_scope_by(opts.access_scope)
       |> where([p], p.id in ^ids)
       |> Repo.all()
       |> Map.new(fn p -> {p.id, p} end)
@@ -1467,7 +1515,8 @@ defmodule Platform.Org.Wiki.Search do
       workspace_id: Keyword.get(opts, :workspace_id),
       org_id: Keyword.get(opts, :org_id),
       project_id: Keyword.get(opts, :project_id),
-      memory_type: Keyword.get(opts, :memory_type)
+      memory_type: Keyword.get(opts, :memory_type),
+      access_scope: Keyword.get(opts, :access_scope)
     }
   end
 

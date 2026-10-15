@@ -7405,8 +7405,8 @@ defmodule Platform.Federation.ToolSurface do
       view_range = Map.get(args, "view_range")
 
       case class.kind do
-        :page -> view_page(path, view_range, workspace_id, class)
-        :private -> view_page(path, view_range, workspace_id, class)
+        :page -> view_page(path, view_range, workspace_id, class, memory_access_opts(context))
+        :private -> view_page(path, view_range, workspace_id, class, memory_access_opts(context))
         :journal -> view_journal(path, class, view_range, workspace_id)
       end
     end
@@ -7511,7 +7511,7 @@ defmodule Platform.Federation.ToolSurface do
 
       with :ok <- authorize_org_filter(agent, Map.get(args, "org_id")),
            {:ok, opts} <- search_opts_from(args, agent) do
-        query |> Search.search(opts) |> bound_memory_search_payload()
+        query |> Search.search(opts ++ memory_access_opts(context)) |> bound_memory_search_payload()
       end
     end
   end
@@ -7529,19 +7529,22 @@ defmodule Platform.Federation.ToolSurface do
   # keeps the tool_surface source clean of any bundle-name-adjacent
   # string literals that the T5 scope-creep guard forbids.
 
-  def execute("org_memory_recently_edited", args, _context) do
-    opts = feedback_read_opts(args, "edit")
+  def execute("org_memory_recently_edited", args, context) do
+    opts = feedback_read_opts(args, "edit") ++ memory_access_opts(context)
     {:ok, Enum.map(Platform.MemoryFeedback.list_recent(opts), &serialize_feedback_entry/1)}
   end
 
-  def execute("org_memory_recently_deleted", args, _context) do
-    opts = feedback_read_opts(args, "delete")
+  def execute("org_memory_recently_deleted", args, context) do
+    opts = feedback_read_opts(args, "delete") ++ memory_access_opts(context)
     {:ok, Enum.map(Platform.MemoryFeedback.list_recent(opts), &serialize_feedback_entry/1)}
   end
 
-  def execute("org_memory_feedback_at_path", args, _context) do
+  def execute("org_memory_feedback_at_path", args, context) do
     with {:ok, path} <- require_string(args, "path", "org_memory_feedback_at_path") do
       workspace_id = Map.get(args, "workspace_id")
+      # Task 01a1386d-e528 stage 4: these rows carry `original_content`, so
+      # an unscoped read here leaks a denied page's CONTENT, not a title.
+      access_opts = memory_access_opts(context)
 
       # Two `list_recent/1` calls (one per feedback_kind) rather than a
       # single unfiltered call + Elixir-side partition — keeps the query
@@ -7551,6 +7554,7 @@ defmodule Platform.Federation.ToolSurface do
       edits =
         [feedback_kind: "edit", path_prefix: path, workspace_id: workspace_id, limit: 100]
         |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+        |> Kernel.++(access_opts)
         |> Platform.MemoryFeedback.list_recent()
         |> Enum.filter(&(&1.path == path))
         |> Enum.map(&serialize_feedback_entry/1)
@@ -7558,6 +7562,7 @@ defmodule Platform.Federation.ToolSurface do
       deletes =
         [feedback_kind: "delete", path_prefix: path, workspace_id: workspace_id, limit: 100]
         |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+        |> Kernel.++(access_opts)
         |> Platform.MemoryFeedback.list_recent()
         |> Enum.filter(&(&1.path == path))
         |> Enum.map(&serialize_feedback_entry/1)
@@ -13880,8 +13885,10 @@ defmodule Platform.Federation.ToolSurface do
   defp page_count(nil), do: nil
   defp page_count(pages) when is_list(pages), do: length(pages)
 
-  defp view_page(path, view_range, workspace_id, class) do
-    case Wiki.get_page(path, workspace_id: workspace_id) do
+  # `access_opts` (task 01a1386d-e528 stage 4): a page the caller may not
+  # `memory.read` answers the same `not_found` envelope as an absent one.
+  defp view_page(path, view_range, workspace_id, class, access_opts) do
+    case Wiki.get_page(path, [workspace_id: workspace_id] ++ access_opts) do
       nil ->
         not_found_error(path)
 
@@ -15520,6 +15527,17 @@ defmodule Platform.Federation.ToolSurface do
   # today's rows (`Platform.Access.Query.where_readable/5`). A call with no
   # resolvable runtime (no `:runtime_id`, or an unknown one) passes no scope,
   # which is today's read.
+  # The memory tools' caller scope (task 01a1386d-e528 stage 4): an
+  # `:access_scope` the in-process caller put on the context (the org-memory
+  # LiveView passes its user's Scope; an MCP request never carries one, its
+  # context is built server-side), else the calling runtime's
+  # `runtime_access_opts/1`. Used by `memory_view`, `memory_search` and the
+  # three `org_memory_*` feedback reads.
+  defp memory_access_opts(%{access_scope: %Platform.Access.Scope{} = scope}),
+    do: [access_scope: scope]
+
+  defp memory_access_opts(context), do: runtime_access_opts(context)
+
   defp runtime_access_opts(context) do
     with runtime_id when is_binary(runtime_id) <- Map.get(context, :runtime_id),
          %Platform.Agents.AgentRuntime{} = runtime <-

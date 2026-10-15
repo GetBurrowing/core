@@ -102,18 +102,25 @@ defmodule Platform.Org.Wiki do
 
   ## Options
     * `:workspace_id` (default `nil` — org-scoped)
+    * `:access_scope` — optional `%Platform.Access.Scope{}` (task
+      01a1386d-e528 stage 4). Given, a page the scope may not
+      `memory.read` (`scope_by/3`) answers `nil`, exactly as an absent page
+      does, whether it was reached directly or through an alias. Absent,
+      the lookup is unchanged.
   """
   @spec get_page(String.t(), keyword()) :: WikiPage.t() | nil
   def get_page(file_key, opts \\ []) when is_binary(file_key) do
     workspace_id = Keyword.get(opts, :workspace_id)
+    access_scope = Keyword.get(opts, :access_scope)
 
     direct =
       WikiPage
       |> where([p], p.file_key == ^file_key)
       |> filter_workspace(workspace_id)
+      |> maybe_scope_by(access_scope)
       |> Repo.one()
 
-    direct || lookup_via_alias(file_key, workspace_id)
+    direct || readable_or_nil(lookup_via_alias(file_key, workspace_id), access_scope)
   end
 
   @doc """
@@ -121,6 +128,9 @@ defmodule Platform.Org.Wiki do
 
   ## Options
     * `:workspace_id` (default `nil` — org-scoped)
+    * `:access_scope` — optional `%Platform.Access.Scope{}` (task
+      01a1386d-e528 stage 4): only the pages it may `memory.read`
+      (`scope_by/3`). Absent, the listing is unchanged.
   """
   @spec list_pages(keyword()) :: [WikiPage.t()]
   def list_pages(opts \\ []) do
@@ -128,8 +138,52 @@ defmodule Platform.Org.Wiki do
 
     WikiPage
     |> filter_workspace(workspace_id)
+    |> maybe_scope_by(Keyword.get(opts, :access_scope))
     |> order_by([p], asc: p.file_key)
     |> Repo.all()
+  end
+
+  @doc """
+  Restrict a `WikiPage` query (its root binding) to the pages `scope` may
+  `memory.read` (task 01a1386d-e528 stage 4,
+  `0058-rbac-v2-roles-scopes-and-agent-capping.md § Memory grants`).
+
+  A thin call to `Platform.Access.Query.where_readable/5` over
+  `file_key` and `workspace_id`. Grants name org-memory NODES
+  (`Platform.Org.Wiki.Nodes`), never a path string; the query reads which
+  node covers each page's path now. Precedence (deny wins, downward only)
+  is decided in `Platform.Access`. With no `memory.read` grant on the scope
+  the query is returned unchanged.
+  """
+  @spec scope_by(Ecto.Queryable.t(), Platform.Access.Scope.t(), :memory_page) ::
+          Ecto.Queryable.t()
+  def scope_by(query, %Platform.Access.Scope{} = scope, :memory_page) do
+    Platform.Access.Query.where_readable(query, scope, "memory.read", :memory_page, %{
+      path: :file_key,
+      workspace_id: :workspace_id
+    })
+  end
+
+  @doc false
+  # The optional `:access_scope` seam shared with `Platform.Org.Wiki.Search`.
+  def maybe_scope_by(query, %Platform.Access.Scope{} = scope),
+    do: scope_by(query, scope, :memory_page)
+
+  def maybe_scope_by(query, _scope), do: query
+
+  # An alias hit is a page at ANOTHER key, so it is checked against the
+  # scope on its own row: a denied page is never reachable by its old name.
+  defp readable_or_nil(nil, _scope), do: nil
+  defp readable_or_nil(%WikiPage{} = page, nil), do: page
+
+  defp readable_or_nil(%WikiPage{id: id} = page, scope) do
+    readable =
+      WikiPage
+      |> where([p], p.id == ^id)
+      |> maybe_scope_by(scope)
+      |> Repo.exists?()
+
+    if readable, do: page, else: nil
   end
 
   # ── The pages / files corpus partition (task 01a0008c stage 4) ───────────
@@ -264,6 +318,8 @@ defmodule Platform.Org.Wiki do
     * `:workspace_id` (default `nil` — org-scoped; matches rows with
       `is_nil(workspace_id)`)
     * `:window_end`   (default `DateTime.utc_now/0`)
+    * `:access_scope` — optional (task 01a1386d-e528 stage 4): only the
+      pages the scope may `memory.read` (`scope_by/3`). Absent, unchanged.
   """
   @spec list_pages_updated_since(DateTime.t(), keyword()) :: [WikiPage.t()]
   def list_pages_updated_since(%DateTime{} = window_start, opts \\ []) do
@@ -313,6 +369,7 @@ defmodule Platform.Org.Wiki do
       p.updated_at >= ^window_start and p.updated_at < ^window_end
     )
     |> filter_workspace(workspace_id)
+    |> maybe_scope_by(Keyword.get(opts, :access_scope))
     |> order_by([p], asc: p.updated_at)
   end
 

@@ -27,7 +27,11 @@ defmodule Platform.Access.Query do
       Without `:at` the predicate reads CURRENT node paths
       (`valid_to IS NULL`); with it, the interval that covered the row's
       path at that instant, so a row recorded before a rename still reaches
-      its node. A node covers a path when its path equals it, or is a
+      its node. A node's FIRST interval is open backward (task
+      01a1386d-e528 stage 4): nodes are created on demand, when a grant is
+      first made, so a row recorded at that location before the grant
+      existed still reaches the node, as `Platform.Org.Wiki.Nodes.resolve/2`
+      reads it. A node covers a path when its path equals it, or is a
       prefix ending in `/` that the path starts with.
   """
 
@@ -36,6 +40,8 @@ defmodule Platform.Access.Query do
   alias Platform.Access
   alias Platform.Access.{Permitted, Scope}
   alias Platform.Agents.AgentRuntime
+
+  @memory_types [:memory_page, :memory_node]
 
   @doc """
   Restrict `query` (its root binding) to the `resource_type` rows `scope`
@@ -79,6 +85,10 @@ defmodule Platform.Access.Query do
     base = Map.get(mapping, :base)
 
     cond do
+      Access.grants_apply?(scope, permission) and resource_type in @memory_types ->
+        granted = Access.granted(scope, permission, resource_type)
+        from(r in query, where: ^restrict_memory_condition(granted, mapping, base))
+
       Access.grants_apply?(scope, permission) ->
         granted = Access.granted(scope, permission, resource_type)
         from(r in query, where: ^restrict_condition(granted, mapping, base))
@@ -103,14 +113,55 @@ defmodule Platform.Access.Query do
   today's rows with no grant and loses what an agent-principal deny covers.
   An agent-principal ALLOW therefore adds nothing to a runtime listing in
   this member: today's check already admits every row.
+
+  ## Memory (`:memory_page`, task 01a1386d-e528 stage 4)
+
+  Org memory's surfaces carry no role check today: the memory MCP tools,
+  `Platform.Org.Wiki` and `Platform.MemoryFeedback` read every page for
+  every caller, and a guest (who holds no `memory.read` role rule) is kept
+  off `/org_memory` by the rail, not by a row filter. So for memory:
+
+    * **no grant names the permission** → the query is returned UNCHANGED
+      for every scope, user or runtime. A grant-less scope reads exactly
+      what the surface read before;
+    * a runtime's Scope → `restrict/5` with no `:base`: only a deny narrows;
+    * any other Scope → `where_permitted/5`: the role rule (`:all` for an
+      internal member) or an explicit allow covers the path, and no deny
+      covers it. A guest holding grants therefore reads only what its
+      allows cover.
   """
   @spec where_readable(Ecto.Queryable.t(), Scope.t(), String.t(), atom(), map()) ::
           Ecto.Queryable.t()
+  def where_readable(query, %Scope{} = scope, permission, type, mapping)
+      when type in @memory_types do
+    cond do
+      not Access.grants_apply?(scope, permission) -> query
+      match?(%Scope{actor: %AgentRuntime{}}, scope) -> restrict(query, scope, permission, type, Map.delete(Map.new(mapping), :base))
+      true -> where_permitted(query, scope, permission, type, mapping)
+    end
+  end
+
   def where_readable(query, %Scope{actor: %AgentRuntime{}} = scope, permission, type, mapping),
     do: restrict(query, scope, permission, type, Map.delete(Map.new(mapping), :base))
 
   def where_readable(query, %Scope{} = scope, permission, type, mapping),
     do: where_permitted(query, scope, permission, type, mapping)
+
+  # Memory: `(base OR an allow node covers the path) AND no deny node covers
+  # it`; with no `:base`, an allow adds nothing and only denies narrow.
+  defp restrict_memory_condition(%Permitted{allow: allow, deny: deny}, mapping, base) do
+    allowed =
+      case {base, allow} do
+        {nil, _} -> dynamic([r], true)
+        {base, []} -> base
+        {base, ids} -> dynamic([r], ^base or ^covered(ids, mapping))
+      end
+
+    case deny do
+      [] -> allowed
+      ids -> dynamic([r], ^allowed and not (^covered(ids, mapping)))
+    end
+  end
 
   defp restrict_condition(%Permitted{allow: allow, deny: deny}, mapping, base) do
     col = Map.fetch!(mapping, :id)
@@ -194,7 +245,7 @@ defmodule Platform.Access.Query do
         dynamic(
           [r],
           fragment(
-            "EXISTS (SELECT 1 FROM org_memory_node_paths np WHERE np.node_id = ANY(?) AND np.valid_from <= ? AND (np.valid_to IS NULL OR np.valid_to > ?) AND np.workspace_id IS NULL AND (np.path = ? OR (right(np.path, 1) = '/' AND starts_with(?, np.path))))",
+            "EXISTS (SELECT 1 FROM org_memory_node_paths np WHERE np.node_id = ANY(?) AND (np.valid_from <= ? OR NOT EXISTS (SELECT 1 FROM org_memory_node_paths np0 WHERE np0.node_id = np.node_id AND np0.valid_from < np.valid_from)) AND (np.valid_to IS NULL OR np.valid_to > ?) AND np.workspace_id IS NULL AND (np.path = ? OR (right(np.path, 1) = '/' AND starts_with(?, np.path))))",
             ^ids,
             ^at,
             ^at,
@@ -207,7 +258,7 @@ defmodule Platform.Access.Query do
         dynamic(
           [r],
           fragment(
-            "EXISTS (SELECT 1 FROM org_memory_node_paths np WHERE np.node_id = ANY(?) AND np.valid_from <= ? AND (np.valid_to IS NULL OR np.valid_to > ?) AND np.workspace_id IS NOT DISTINCT FROM ? AND (np.path = ? OR (right(np.path, 1) = '/' AND starts_with(?, np.path))))",
+            "EXISTS (SELECT 1 FROM org_memory_node_paths np WHERE np.node_id = ANY(?) AND (np.valid_from <= ? OR NOT EXISTS (SELECT 1 FROM org_memory_node_paths np0 WHERE np0.node_id = np.node_id AND np0.valid_from < np.valid_from)) AND (np.valid_to IS NULL OR np.valid_to > ?) AND np.workspace_id IS NOT DISTINCT FROM ? AND (np.path = ? OR (right(np.path, 1) = '/' AND starts_with(?, np.path))))",
             ^ids,
             ^at,
             ^at,
@@ -221,7 +272,7 @@ defmodule Platform.Access.Query do
         dynamic(
           [r],
           fragment(
-            "EXISTS (SELECT 1 FROM org_memory_node_paths np WHERE np.node_id = ANY(?) AND np.valid_from <= ? AND (np.valid_to IS NULL OR np.valid_to > ?) AND np.workspace_id IS NULL AND (np.path = ? OR (right(np.path, 1) = '/' AND starts_with(?, np.path))))",
+            "EXISTS (SELECT 1 FROM org_memory_node_paths np WHERE np.node_id = ANY(?) AND (np.valid_from <= ? OR NOT EXISTS (SELECT 1 FROM org_memory_node_paths np0 WHERE np0.node_id = np.node_id AND np0.valid_from < np.valid_from)) AND (np.valid_to IS NULL OR np.valid_to > ?) AND np.workspace_id IS NULL AND (np.path = ? OR (right(np.path, 1) = '/' AND starts_with(?, np.path))))",
             ^ids,
             field(r, ^at),
             field(r, ^at),
@@ -234,7 +285,7 @@ defmodule Platform.Access.Query do
         dynamic(
           [r],
           fragment(
-            "EXISTS (SELECT 1 FROM org_memory_node_paths np WHERE np.node_id = ANY(?) AND np.valid_from <= ? AND (np.valid_to IS NULL OR np.valid_to > ?) AND np.workspace_id IS NOT DISTINCT FROM ? AND (np.path = ? OR (right(np.path, 1) = '/' AND starts_with(?, np.path))))",
+            "EXISTS (SELECT 1 FROM org_memory_node_paths np WHERE np.node_id = ANY(?) AND (np.valid_from <= ? OR NOT EXISTS (SELECT 1 FROM org_memory_node_paths np0 WHERE np0.node_id = np.node_id AND np0.valid_from < np.valid_from)) AND (np.valid_to IS NULL OR np.valid_to > ?) AND np.workspace_id IS NOT DISTINCT FROM ? AND (np.path = ? OR (right(np.path, 1) = '/' AND starts_with(?, np.path))))",
             ^ids,
             field(r, ^at),
             field(r, ^at),

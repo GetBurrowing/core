@@ -222,6 +222,12 @@ defmodule Platform.Org.Wiki.Nodes do
   the node that has since moved and `resolve(old_path)` after the rename
   returns nothing for it.
 
+  A node's FIRST interval is open backward (task 01a1386d-e528 stage 4).
+  Nodes are created on demand, when a grant is first made, so the location
+  existed before its node did: a feedback row recorded at `path` before the
+  grant was made still resolves to the node (and its deny). Only the first
+  interval extends; a later interval (after a move) starts where it starts.
+
   ## Options
     * `:workspace_id` (default nil)
     * `:at` — a `DateTime` (default `DateTime.utc_now/0`)
@@ -233,9 +239,18 @@ defmodule Platform.Org.Wiki.Nodes do
     candidates = covering_paths(path)
 
     from(p in NodePath,
+      as: :np,
       join: n in assoc(p, :node),
       where: p.path in ^candidates,
-      where: p.valid_from <= ^at,
+      where:
+        p.valid_from <= ^at or
+          not exists(
+            from(p0 in NodePath,
+              where:
+                p0.node_id == parent_as(:np).node_id and
+                  p0.valid_from < parent_as(:np).valid_from
+            )
+          ),
       where: is_nil(p.valid_to) or p.valid_to > ^at,
       select: %{n | path: p.path}
     )

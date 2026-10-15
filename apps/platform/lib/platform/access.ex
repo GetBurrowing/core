@@ -191,6 +191,20 @@ defmodule Platform.Access do
   check, which stands in for the role-rule allow.
   """
   @spec granted(Scope.t(), String.t(), atom()) :: Permitted.t()
+  def granted(%Scope{} = scope, permission, type)
+      when type in [:memory_page, :memory_node] and is_binary(permission) do
+    # Memory (task 01a1386d-e528 stage 4): the NODE ids the explicit allows
+    # and denies name, not expanded, read as `permitted/3` reads them.
+    {allows, denies} = split(applicable(scope, permission))
+
+    %Permitted{
+      resource_type: :memory_node,
+      permission: permission,
+      allow: node_ids(allows),
+      deny: node_ids(denies)
+    }
+  end
+
   def granted(%Scope{} = scope, permission, type) when is_binary(permission) do
     unless type in Lineage.id_types(),
       do: raise(ArgumentError, "unknown resource type for granted/3: #{inspect(type)}")
