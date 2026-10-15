@@ -252,7 +252,7 @@ defmodule Platform.Access.QueryTest do
           canvas: "canvas.read"
         ] do
       ids = assert_same(s, perm, type)
-      assert ids != [] and ids != all_ids(type) or type == :space, "#{type} set is vacuous"
+      assert (ids != [] and ids != all_ids(type)) or type == :space, "#{type} set is vacuous"
     end
 
     refute ctx.q.id in via_query(s, "tasks.read", :project)
@@ -299,7 +299,13 @@ defmodule Platform.Access.QueryTest do
     g = guest!(ctx.org)
     m = member!(ctx.org)
 
-    ok!(Grants.grant(%{principal: g, permission: "memory.read", resource: {:memory, "org/page/eng/"}}))
+    ok!(
+      Grants.grant(%{
+        principal: g,
+        permission: "memory.read",
+        resource: {:memory, "org/page/eng/"}
+      })
+    )
 
     for u <- [g, m] do
       ok!(

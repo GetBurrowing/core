@@ -145,7 +145,8 @@ defmodule Platform.Access.PrecedenceTest do
       attach!(t, attached)
       outside = canvas!(space!("channel", org), author)
 
-      for c <- [k, k2, attached], do: refute(Access.can?(scope(u), "canvas.read", {:canvas, c.id}))
+      for c <- [k, k2, attached],
+          do: refute(Access.can?(scope(u), "canvas.read", {:canvas, c.id}))
 
       ok!(Grants.grant(%{principal: u, permission: "canvas.read", resource: {:project, x.id}}))
       s = scope(u)
@@ -189,7 +190,11 @@ defmodule Platform.Access.PrecedenceTest do
 
       allow =
         ok!(
-          Grants.grant(%{principal: u, permission: "memory.read", resource: {:memory, "org/page/eng/"}})
+          Grants.grant(%{
+            principal: u,
+            permission: "memory.read",
+            resource: {:memory, "org/page/eng/"}
+          })
         )
 
       deny =
@@ -203,6 +208,7 @@ defmodule Platform.Access.PrecedenceTest do
 
       s = scope(u)
       assert Access.can?(s, "memory.read", {:memory, "org/page/eng/x.md"})
+
       assert Access.can?(s, "memory.read", {:memory, "org/page/eng/y.md"}),
              "control: before the rename the allow covers any path under eng/"
 
@@ -258,7 +264,11 @@ defmodule Platform.Access.PrecedenceTest do
       {:ok, _} = Wiki.upsert_page("org/page/eng/b.md", %{content: "b"})
 
       ok!(
-        Grants.grant(%{principal: u, permission: "memory.read", resource: {:memory, "org/page/eng/sub/"}})
+        Grants.grant(%{
+          principal: u,
+          permission: "memory.read",
+          resource: {:memory, "org/page/eng/sub/"}
+        })
       )
 
       s = scope(u)
@@ -293,7 +303,12 @@ defmodule Platform.Access.PrecedenceTest do
       p = project!(other)
 
       ok!(
-        Grants.grant(%{principal: {:role, "guest"}, permission: "tasks.read", resource: p, org_id: other})
+        Grants.grant(%{
+          principal: {:role, "guest"},
+          permission: "tasks.read",
+          resource: p,
+          org_id: other
+        })
       )
 
       refute Access.can?(scope(g), "tasks.read", {:project, p.id})
@@ -359,7 +374,11 @@ defmodule Platform.Access.PrecedenceTest do
       p = project!(org)
 
       assert {:error, :namespace_root} =
-               Grants.grant(%{principal: u, permission: "memory.read", resource: {:memory, "org/page/"}})
+               Grants.grant(%{
+                 principal: u,
+                 permission: "memory.read",
+                 resource: {:memory, "org/page/"}
+               })
 
       assert {:error, :product_owned} =
                Grants.grant(%{

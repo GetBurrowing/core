@@ -355,8 +355,11 @@ defmodule Platform.Org.Wiki.Nodes do
 
         Enum.each(pairs, fn {row, target} ->
           case Map.get(displaced, target) do
-            nil -> :ok
-            %NodePath{node_id: displaced_id} -> Grants.merge_memory_nodes(displaced_id, row.node_id)
+            nil ->
+              :ok
+
+            %NodePath{node_id: displaced_id} ->
+              Grants.merge_memory_nodes(displaced_id, row.node_id)
           end
 
           case open_interval(row.node_id, workspace_id, target, now) do
