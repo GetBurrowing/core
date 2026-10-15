@@ -564,7 +564,9 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   # did not move this pin, so the rollup tip failed here; task 01a1316b-677a
   # stage 1 (which does not touch chat_live.ex) records it. Measured by the
   # guard on moon: 2397 + 50 = 2447.
-  @chat_live_code_line_count 2514
+  # Task 01a1386e-59d1 remediation adds the denied-link landing branch so a
+  # restricted deep link stops at /chat instead of opening another channel.
+  @chat_live_code_line_count 2521
 
   @doc """
   Count the CODE lines of a source file.
