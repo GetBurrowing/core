@@ -59,7 +59,14 @@ defmodule Platform.Access.ResourceBypassAcceptanceTest do
         })
     end
 
-    Map.merge(world, %{p: p, q: q, task_q: task_q, eq: eq, guest_in_eq: guest_in_eq, member_in_eq: member_in_eq})
+    Map.merge(world, %{
+      p: p,
+      q: q,
+      task_q: task_q,
+      eq: eq,
+      guest_in_eq: guest_in_eq,
+      member_in_eq: member_in_eq
+    })
   end
 
   defp session(user), do: build_conn() |> init_test_session(current_user_id: user.id)
@@ -299,6 +306,7 @@ defmodule Platform.Access.ResourceBypassAcceptanceTest do
   describe "prototype entry and served grant" do
     test "a grant minted before denial cannot serve a prototype", ctx do
       marker = "ZQX-ACCEPT-PROTO"
+
       Platform.PrototypeFixtures.set_settings!(%{
         enabled: true,
         who_may_publish: "members",
@@ -349,6 +357,7 @@ defmodule Platform.Access.ResourceBypassAcceptanceTest do
 
       {:ok, task} =
         Tasks.create_task(%{project_id: ctx.q.id, title: marker, deploy_target: "production"})
+
       entry = %{"assignee_id" => linked.id, "assignee_type" => "agent"}
 
       task =
@@ -362,6 +371,7 @@ defmodule Platform.Access.ResourceBypassAcceptanceTest do
         |> Repo.update!()
 
       {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved", version: 1})
+
       {:ok, stage} =
         Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "coding", description: "code"})
 
@@ -372,8 +382,12 @@ defmodule Platform.Access.ResourceBypassAcceptanceTest do
       |> Repo.update!()
 
       PlatformWeb.Endpoint.subscribe("runtime:#{active.runtime_id}")
+
       {:ok, router} =
-        TaskRouter.start_link(task_id: task.id, assignee: %{type: :federated, id: active.runtime_id})
+        TaskRouter.start_link(
+          task_id: task.id,
+          assignee: %{type: :federated, id: active.runtime_id}
+        )
 
       assert_receive %Phoenix.Socket.Broadcast{event: "attention", topic: topic}, 1_500
       assert topic == "runtime:#{active.runtime_id}"
@@ -388,7 +402,10 @@ defmodule Platform.Access.ResourceBypassAcceptanceTest do
       assert {:error, :owner_denied} = Platform.Orchestration.PhaseRuntime.resolve(task)
 
       {:ok, denied_router} =
-        TaskRouter.start_link(task_id: task.id, assignee: %{type: :federated, id: active.runtime_id})
+        TaskRouter.start_link(
+          task_id: task.id,
+          assignee: %{type: :federated, id: active.runtime_id}
+        )
 
       refute_receive %Phoenix.Socket.Broadcast{event: "attention", topic: ^topic}, 250
       assert LeaseManager.get(task.id) == nil
@@ -426,24 +443,34 @@ defmodule Platform.Access.ResourceBypassAcceptanceTest do
 
       post.()
       refute_receive {:mention_summon_refused, _, _}, 100
-      assert Repo.exists?(from p in Chat.Participant,
-               where: p.space_id == ^ctx.eq.id and p.participant_type == "agent" and
-                        p.participant_id == ^linked.id
+
+      assert Repo.exists?(
+               from(p in Chat.Participant,
+                 where:
+                   p.space_id == ^ctx.eq.id and p.participant_type == "agent" and
+                     p.participant_id == ^linked.id
+               )
              )
 
       Repo.delete_all(
-        from p in Chat.Participant,
-          where: p.space_id == ^ctx.eq.id and p.participant_type == "agent" and
-                   p.participant_id == ^linked.id
+        from(p in Chat.Participant,
+          where:
+            p.space_id == ^ctx.eq.id and p.participant_type == "agent" and
+              p.participant_id == ^linked.id
+        )
       )
 
       deny!(ctx.int, "chat.read", ctx.q)
       post.()
       assert_receive {:mention_summon_refused, _, [name]}, 1_000
       assert name == linked.name
-      refute Repo.exists?(from p in Chat.Participant,
-               where: p.space_id == ^ctx.eq.id and p.participant_type == "agent" and
-                        p.participant_id == ^linked.id
+
+      refute Repo.exists?(
+               from(p in Chat.Participant,
+                 where:
+                   p.space_id == ^ctx.eq.id and p.participant_type == "agent" and
+                     p.participant_id == ^linked.id
+               )
              )
     end
   end
@@ -496,6 +523,7 @@ defmodule Platform.Access.ResourceBypassAcceptanceTest do
       assert Enum.any?(before.results, &(&1.id == task.id))
 
       deny!(ctx.int, "tasks.read", ctx.q)
+
       assert {:ok, after_deny} =
                Search.search(marker, source: "task", access_scope: Scope.for_user(ctx.int))
 
@@ -637,6 +665,7 @@ defmodule Platform.Access.ResourceBypassAcceptanceTest do
           permission: "chat.read",
           resource: {:space, meeting.chat_space_id}
         })
+
       denied = Meetings.fetch_meeting_for_user(ctx.int, meeting.slug)
       assert denied == {:error, :not_found}
       no_marker!(denied, marker)
