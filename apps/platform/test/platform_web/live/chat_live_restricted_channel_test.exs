@@ -61,8 +61,17 @@ defmodule PlatformWeb.ChatLiveRestrictedChannelTest do
     assert html =~ "Restricted, ask an admin"
     assert html =~ "hero-lock-closed-mini"
     refute html =~ marker
-    assert html |> Floki.parse_document!() |> Floki.find(~s(a[data-role="channel-pill"][data-space-id="#{finance.id}"])) == []
-    assert html |> Floki.parse_document!() |> Floki.find(~s([data-role="restricted-channel-pill"][data-space-id="#{finance.id}"][aria-disabled="true"])) |> length() == 1
+
+    assert html
+           |> Floki.parse_document!()
+           |> Floki.find(~s(a[data-role="channel-pill"][data-space-id="#{finance.id}"])) == []
+
+    assert html
+           |> Floki.parse_document!()
+           |> Floki.find(
+             ~s([data-role="restricted-channel-pill"][data-space-id="#{finance.id}"][aria-disabled="true"])
+           )
+           |> length() == 1
 
     [restricted_row] =
       Regex.run(

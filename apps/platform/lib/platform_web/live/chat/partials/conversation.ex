@@ -1134,42 +1134,42 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
       <% switcher_channel_pills =
         if @external?, do: @channels, else: Sidebar.flatten_sections(@sidebar_sections) %>
       <%= for space <- switcher_channel_pills do %>
-      <.link
-        :if={not MapSet.member?(@restricted_channel_ids, space.id)}
-        patch={~p"/chat/#{space_nav_target(space)}"}
-        data-role="channel-pill"
-        data-space-id={space.id}
-        class={[
-          "flex items-center gap-1.5 px-3 py-1.5 rounded-full whitespace-nowrap text-[13px] font-medium shrink-0 transition-all",
-          "active:scale-[0.97] ease-[cubic-bezier(0.16,1,0.3,1)]",
-          if @active_space.id == space.id do
-            "bg-primary text-primary-content shadow-[0_0_16px_oklch(0.78_0.14_207_/_0.18)]"
-          else
-            "bg-base-200 text-base-content/70 border border-base-content/10 hover:bg-base-300"
-          end
-        ]}
-      >
-        <span class={[
-          if(@active_space.id == space.id,
-            do: "text-primary-content/80",
-            else: "text-base-content/40"
-          )
-        ]}>#</span>{masked_space_name(assigns, space.name)}<span
-          :if={unread_label(Map.get(@unread_counts, space.id, 0))}
-          class="inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full text-[10px] font-bold tabular-nums bg-primary text-primary-content border border-base-100"
-        >{unread_label(Map.get(@unread_counts, space.id, 0))}</span>
-      </.link>
+        <.link
+          :if={not MapSet.member?(@restricted_channel_ids, space.id)}
+          patch={~p"/chat/#{space_nav_target(space)}"}
+          data-role="channel-pill"
+          data-space-id={space.id}
+          class={[
+            "flex items-center gap-1.5 px-3 py-1.5 rounded-full whitespace-nowrap text-[13px] font-medium shrink-0 transition-all",
+            "active:scale-[0.97] ease-[cubic-bezier(0.16,1,0.3,1)]",
+            if @active_space.id == space.id do
+              "bg-primary text-primary-content shadow-[0_0_16px_oklch(0.78_0.14_207_/_0.18)]"
+            else
+              "bg-base-200 text-base-content/70 border border-base-content/10 hover:bg-base-300"
+            end
+          ]}
+        >
+          <span class={[
+            if(@active_space.id == space.id,
+              do: "text-primary-content/80",
+              else: "text-base-content/40"
+            )
+          ]}>#</span>{masked_space_name(assigns, space.name)}<span
+            :if={unread_label(Map.get(@unread_counts, space.id, 0))}
+            class="inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full text-[10px] font-bold tabular-nums bg-primary text-primary-content border border-base-100"
+          >{unread_label(Map.get(@unread_counts, space.id, 0))}</span>
+        </.link>
 
-      <div
-        :if={MapSet.member?(@restricted_channel_ids, space.id)}
-        data-role="restricted-channel-pill"
-        data-space-id={space.id}
-        aria-disabled="true"
-        title="Restricted, ask an admin"
-        class="flex items-center gap-1.5 px-3 py-1.5 rounded-full whitespace-nowrap text-[13px] font-medium shrink-0 bg-base-200 text-base-content/40 border border-base-content/10"
-      >
-        <span class="hero-lock-closed-mini size-3"></span>{masked_space_name(assigns, space.name)}
-      </div>
+        <div
+          :if={MapSet.member?(@restricted_channel_ids, space.id)}
+          data-role="restricted-channel-pill"
+          data-space-id={space.id}
+          aria-disabled="true"
+          title="Restricted, ask an admin"
+          class="flex items-center gap-1.5 px-3 py-1.5 rounded-full whitespace-nowrap text-[13px] font-medium shrink-0 bg-base-200 text-base-content/40 border border-base-content/10"
+        >
+          <span class="hero-lock-closed-mini size-3"></span>{masked_space_name(assigns, space.name)}
+        </div>
       <% end %>
 
       <%!-- DM pills (after channels, no divider for now to keep mobile compact) --%>
