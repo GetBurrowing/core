@@ -14,7 +14,16 @@ defmodule Platform.Access.Changes do
     2. snapshots them as `before` (`Platform.Access.Grant.snapshot/1`);
     3. runs the mutation;
     4. snapshots the same rows as `after`;
-    5. inserts the `Platform.Access.Change` row.
+    5. asks `Platform.Access.Delegation` whether the actor may make exactly
+       that diff (stage 2), and whether every resource that had an
+       `access.manage` holder before still has one;
+    6. inserts the `Platform.Access.Change` row.
+
+  A delegation refusal rolls everything back and returns
+  `{:error, %{missing:, resource:, rule:}}`: no grant row and no change row.
+  A root admin's change is recorded `bypass: "root_admin"`. `Scope.system/0`
+  (the arity-1 `Grants` forms and the wiki re-point) is the operator path
+  and skips step 5.
 
   A failure anywhere rolls back all of it: no grant changes without its
   ledger row, and no ledger row without its change. A mutation that leaves
@@ -47,7 +56,7 @@ defmodule Platform.Access.Changes do
 
   import Ecto.Query
 
-  alias Platform.Access.{Change, Grant, Scope}
+  alias Platform.Access.{Change, Delegation, Grant, Scope}
   alias Platform.Agents.AgentRuntime
   alias Platform.Repo
 
@@ -86,6 +95,7 @@ defmodule Platform.Access.Changes do
         lock_keys(Keyword.get(opts, :keys, []) ++ Enum.map(pre, &Grant.tuple_key/1))
 
         before = snapshot(query, lock: true)
+        baseline = baseline(actor, before ++ key_resources(Keyword.get(opts, :keys, [])))
 
         result =
           case mutation_fun.() do
@@ -94,6 +104,7 @@ defmodule Platform.Access.Changes do
           end
 
         after_rows = snapshot(query)
+        bypass = delegate!(actor, before, after_rows, baseline)
 
         change =
           record!(before, after_rows, %{
@@ -101,7 +112,7 @@ defmodule Platform.Access.Changes do
             actor_type: actor_type,
             actor_id: actor_id,
             via_agent_id: Keyword.get(opts, :via_agent_id),
-            bypass: Keyword.get(opts, :bypass),
+            bypass: bypass || Keyword.get(opts, :bypass),
             action: action,
             undoes_change_id: Keyword.get(opts, :undoes_change_id)
           })
@@ -130,14 +141,14 @@ defmodule Platform.Access.Changes do
     with true <- Platform.UUID.valid?(change_id) || {:error, :not_found},
          %Change{} = change <- Repo.get(Change, change_id) || {:error, :not_found},
          {:ok, {actor_type, actor_id}} <- actor_fields(actor) do
-      Repo.transaction(fn -> do_undo(change, actor_type, actor_id, opts) end)
+      Repo.transaction(fn -> do_undo(change, actor, actor_type, actor_id, opts) end)
       |> after_commit()
     end
   end
 
   def undo(_change_id, _actor, _opts), do: {:error, :invalid_actor}
 
-  defp do_undo(%Change{} = change, actor_type, actor_id, opts) do
+  defp do_undo(%Change{} = change, actor, actor_type, actor_id, opts) do
     lock_keys(change.tuple_keys)
 
     # Re-read under the locks: a concurrent undo of the same change, or a
@@ -153,6 +164,7 @@ defmodule Platform.Access.Changes do
 
     query = rows_query(change)
     before = snapshot(query, lock: true)
+    baseline = baseline(actor, before ++ change.before)
 
     after_ids = Enum.map(change.after, & &1["id"])
     Repo.delete_all(from(g in Grant, where: g.id in ^after_ids))
@@ -160,6 +172,7 @@ defmodule Platform.Access.Changes do
     restored = restore!(change.before)
 
     after_rows = snapshot(query)
+    bypass = delegate!(actor, before, after_rows, baseline)
 
     undo_change =
       record!(before, after_rows, %{
@@ -167,7 +180,7 @@ defmodule Platform.Access.Changes do
         actor_type: actor_type,
         actor_id: actor_id,
         via_agent_id: Keyword.get(opts, :via_agent_id),
-        bypass: Keyword.get(opts, :bypass),
+        bypass: bypass || Keyword.get(opts, :bypass),
         action: "undo",
         undoes_change_id: change.id
       })
@@ -246,6 +259,47 @@ defmodule Platform.Access.Changes do
     end)
     |> limit(^limit)
     |> Repo.all()
+  end
+
+  # ── delegation (stage 2) ────────────────────────────────────────────────
+  #
+  # `Platform.Access.Delegation` decides who may make the change; this module
+  # only hands it the change's actual row diff. The system actor is the
+  # operator path (the arity-1 `Grants` forms and the wiki re-point) and is
+  # neither authorized nor last-manager guarded.
+
+  defp baseline(%Scope{actor: :system}, _rows), do: []
+  defp baseline(%Scope{}, rows), do: Delegation.manager_baseline(rows)
+
+  # Authorize the diff, then run the last-manager guard. Returns the bypass
+  # to record (`"root_admin"` or nil); a refusal rolls the transaction back
+  # with the denial, so no grant row and no change row is written.
+  defp delegate!(actor, before, after_rows, baseline) do
+    added = after_rows -- before
+    removed = before -- after_rows
+
+    bypass =
+      case Delegation.authorize(actor, %{added: added, removed: removed}) do
+        :ok -> nil
+        {:ok, :root_admin_bypass} -> "root_admin"
+        {:error, denial} -> Repo.rollback(denial)
+      end
+
+    case Delegation.ensure_manager_remains(baseline) do
+      :ok -> bypass
+      {:error, denial} -> Repo.rollback(denial)
+    end
+  end
+
+  # The resources named by tuple keys (`Grant.tuple_key/1`) of rows that may
+  # not exist yet. Only `access.manage` tuples matter to the guard. Every
+  # field but the role key is a UUID, a registry type or a `module.action`
+  # name, none of which contains `|`.
+  defp key_resources(keys) do
+    for key <- keys,
+        [_type, _principal, "access.manage", rtype, rid] <- [String.split(key, "|")],
+        rtype in Grant.resource_types(),
+        do: {String.to_existing_atom(rtype), rid}
   end
 
   # ── internals ───────────────────────────────────────────────────────────

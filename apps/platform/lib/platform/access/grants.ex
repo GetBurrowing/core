@@ -53,6 +53,13 @@ defmodule Platform.Access.Grants do
   `actor_type: "system"`). `merge_memory_nodes/2` is recorded as a
   `system_repoint` change when it moves or drops any row.
 
+  A non-system actor's write is delegated (task 01a1386e-30bd stage 2):
+  `Platform.Access.Delegation` refuses it with
+  `{:error, %{missing:, resource:, rule:}}`, writing nothing, unless the
+  actor holds `access.manage` on the resource (and, for a widening change,
+  the permission itself), and unless it would leave a managed resource with
+  no manager.
+
   ## Precedence is not here
 
   `merge_memory_nodes/2` keeps a deny over an allow when two nodes' grants

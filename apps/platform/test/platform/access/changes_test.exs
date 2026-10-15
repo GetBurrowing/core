@@ -51,6 +51,23 @@ defmodule Platform.Access.ChangesTest do
 
   defp ok!({:ok, value}), do: value
 
+  # Stage 2 (delegation): a user actor's change is authorized, so the actor
+  # here is a root admin (an admin membership in the root org), whose
+  # changes pass as the audited bypass.
+  defp root_admin! do
+    user = user!("admin")
+
+    %Platform.Tenancy.OrgMembership{}
+    |> Platform.Tenancy.OrgMembership.changeset(%{
+      user_id: user.id,
+      org_id: acme_org_id(),
+      role: "admin"
+    })
+    |> Repo.insert!()
+
+    Platform.Accounts.get_user(user.id)
+  end
+
   # Every grant row, as snapshots, ordered by id: the "exact grant set".
   defp all_grants, do: Repo.all(from(g in Grant, order_by: g.id)) |> Enum.map(&Grant.snapshot/1)
 
@@ -152,7 +169,7 @@ defmodule Platform.Access.ChangesTest do
     test "the arity-1 forms record actor_type system; arity-2 records the actor",
          %{p: p, q: q} do
       u = user!()
-      admin = user!("admin")
+      admin = root_admin!()
       agent_id = Ecto.UUID.generate()
 
       ok!(Grants.grant(%{principal: u, permission: "tasks.read", resource: p}))
@@ -170,7 +187,13 @@ defmodule Platform.Access.ChangesTest do
       c = last_change()
       assert {c.actor_type, c.actor_id, c.via_agent_id} == {"user", admin.id, agent_id}
 
-      agent_scope = %Scope{actor: %AgentRuntime{agent_id: agent_id}}
+      # Stage 2: a deny needs `access.manage` on the resource. This scope
+      # carries it directly; delegation itself is delegation_test.exs.
+      agent_scope = %Scope{
+        actor: %AgentRuntime{agent_id: agent_id},
+        permissions: %{"access.manage" => :all}
+      }
+
       ok!(Grants.deny(%{principal: u, permission: "tasks.read", resource: q}, actor: agent_scope))
       assert {last_change().actor_type, last_change().actor_id} == {"agent", agent_id}
     end
@@ -398,7 +421,7 @@ defmodule Platform.Access.ChangesTest do
   describe "audit mirror and listing" do
     test "each change is mirrored as platform.access.grant_changed", %{p: p} do
       u = user!()
-      admin = user!("admin")
+      admin = root_admin!()
 
       ok!(
         Grants.grant(%{principal: u, permission: "tasks.read", resource: p},
