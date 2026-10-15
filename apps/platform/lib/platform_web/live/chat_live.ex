@@ -339,10 +339,23 @@ defmodule PlatformWeb.ChatLive do
     # BOUNDARY: M5 owns the RENDER branch only. The scope threaded here filters
     # what the rail SHOWS; the guarantee that an external user cannot REACH an
     # off-limits space is M6's plug + M7's query filter, not this render.
-    external_scope =
-      if embedded?, do: nil, else: Platform.Chat.ExternalScope.for_user(user_id)
+    #
+    # RBAC v2 (task 01a1386d-e528 stage 3): when LiveAuth assigned an
+    # `@access_scope` for THIS user, it IS the read-scope, so explicit grants
+    # compose into every rail read (`ExternalScope`'s Scope clauses). Otherwise
+    # `ExternalScope.for_user/1`, as before; its return type never changes.
+    #
+    # THE SWITCH HAZARD: a `%Platform.Access.Scope{}` does not match
+    # `%ExternalScope{external?: true}`, so the old `match?/2` would read every
+    # guest as internal and hand them the unscoped archived-channel list below.
+    # `external?` is therefore asked of each struct through `guest_scope?/1`
+    # (`Platform.Access.Scope.guest?/1` for a Scope), never by a struct match.
+    # Both live in `PlatformWeb.ChatLive.ReadScope`. Guard:
+    # `test/platform_web/live/chat_live_access_scope_guest_test.exs`.
+    access_scope = socket.assigns[:access_scope]
 
-    external? = match?(%Platform.Chat.ExternalScope{external?: true}, external_scope)
+    {external_scope, external?} =
+      PlatformWeb.ChatLive.ReadScope.resolve(access_scope, user_id, embedded?)
 
     channels =
       if embedded?, do: [], else: Chat.list_spaces(kind: "channel", scope: external_scope)

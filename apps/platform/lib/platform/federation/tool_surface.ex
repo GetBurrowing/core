@@ -4550,7 +4550,7 @@ defmodule Platform.Federation.ToolSurface do
     space_id = Map.get(args, "space_id")
 
     with :ok <- assert_agent_in_space(space_id, context) do
-      canvases = Chat.list_canvases(space_id)
+      canvases = Chat.list_canvases(space_id, runtime_access_opts(context))
 
       rows =
         Enum.map(canvases, fn c ->
@@ -4661,12 +4661,14 @@ defmodule Platform.Federation.ToolSurface do
   # separate design with its own authorization layer
   # (`Platform.Federation.ToolAuthorization`) — deliberately deferred rather
   # than papered over with an invented agent-to-org mapping.
-  def execute("project_list", args, _context) do
+  def execute("project_list", args, context) do
     opts =
       case Map.get(args, "org_id") do
         org_id when is_binary(org_id) and org_id != "" -> [org_id: org_id]
         _ -> []
       end
+
+    opts = opts ++ runtime_access_opts(context)
 
     projects =
       opts
@@ -5529,14 +5531,14 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
-  def execute("task_list", args, _context) do
+  def execute("task_list", args, context) do
     # Task 01a0acc3 stage 3: the assignee pair is validated BEFORE any query.
     # A non-UUID id would raise Ecto.Query.CastError inside the flat-column
     # comparison (a 500 to the caller), and an `assignee_type` with no id
     # would be a silently dropped filter — the exact defect this task exists
     # to remove, reintroduced one key over.
     case task_list_assignee_opts(args) do
-      {:ok, assignee_opts} -> do_task_list(args, assignee_opts)
+      {:ok, assignee_opts} -> do_task_list(args, assignee_opts ++ runtime_access_opts(context))
       {:error, _} = refusal -> refusal
     end
   end
@@ -6224,11 +6226,12 @@ defmodule Platform.Federation.ToolSurface do
   # per-member inherited-vs-overridden flag (see serialize_stack/1 and
   # serialize_stack_member/1).
 
-  def execute("stack_list", args, _context) do
+  def execute("stack_list", args, context) do
     filters =
       %{}
       |> maybe_put_filter(:project_id, Map.get(args, "project_id"))
       |> maybe_put_filter(:status, Map.get(args, "status"))
+      |> Map.merge(Map.new(runtime_access_opts(context)))
 
     # Task 01a05394-8300 stage 4. Mirrors `task_list` (task 01a04a7a): an
     # ENVELOPE, never a bare array, because a JSON array cannot say whether
@@ -15503,6 +15506,24 @@ defmodule Platform.Federation.ToolSurface do
     case Platform.Orchestration.ExecutionSpace.find_by_task_id(task_id) do
       %{id: id} -> id
       _ -> nil
+    end
+  end
+
+  # RBAC v2 resource scoping (task 01a1386d-e528 stage 3): the calling
+  # runtime's `Platform.Access.Scope.for_runtime/1`, as `:access_scope`, for
+  # `task_list`, `project_list`, `stack_list` and `canvas_list`. Each listing
+  # keeps its existing check (bundle authorization, `assert_agent_in_space/2`)
+  # and an agent-principal deny now narrows it; with no grant it returns
+  # today's rows (`Platform.Access.Query.where_readable/5`). A call with no
+  # resolvable runtime (no `:runtime_id`, or an unknown one) passes no scope,
+  # which is today's read.
+  defp runtime_access_opts(context) do
+    with runtime_id when is_binary(runtime_id) <- Map.get(context, :runtime_id),
+         %Platform.Agents.AgentRuntime{} = runtime <-
+           Platform.Federation.get_runtime_by_runtime_id(runtime_id) do
+      [access_scope: Platform.Access.Scope.for_runtime(runtime)]
+    else
+      _ -> []
     end
   end
 

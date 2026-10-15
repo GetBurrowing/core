@@ -4377,6 +4377,10 @@ defmodule Platform.Chat do
   (`chat/canvas/server.ex:429`), so a document edit bumps the row's
   `updated_at`. Confirmed against production, where 228 of 818 canvases carry
   `updated_at > inserted_at`.
+
+  `:access_scope` (a `%Platform.Access.Scope{}`, also read from `:scope` when
+  `:scope` is one) drops every canvas a `canvas.read` deny covers
+  (`scope_by/3`, task 01a1386d-e528 stage 3). Absent, nothing changes.
   """
   @spec list_canvases(binary(), keyword()) :: [Canvas.t()]
   def list_canvases(space_id, opts \\ []) do
@@ -4387,7 +4391,51 @@ defmodule Platform.Chat do
     )
     |> canvas_order(Keyword.get(opts, :order, :inserted_asc))
     |> ExternalScope.scope_by_space_id(scope)
+    |> maybe_scope_canvases(canvas_access_scope(opts))
     |> Repo.all()
+  end
+
+  @doc """
+  Restrict a `Space` or `Canvas` query (its root binding) by explicit grants
+  (task 01a1386d-e528 stage 3,
+  `0058-rbac-v2-roles-scopes-and-agent-capping.md § Precedence`).
+
+    * `:space` — `chat.read`. This is `ExternalScope.scope_spaces/2`'s
+      `%Platform.Access.Scope{}` clause: a guest's live participant subquery,
+      or everything for an internal scope, UNION the spaces a `chat.read`
+      allow covers (a project allow covers its tasks' execution spaces),
+      MINUS the spaces a `chat.read` deny covers.
+    * `:canvas` — `canvas.read`, through `Platform.Access.Query.restrict/5`
+      with no base: the query's own filters are the existing check, and a
+      deny on the canvas, its space or a project above it drops the row.
+
+  With no grant naming the permission the query reads exactly what it read
+  before. The deny-wins condition lives in `Platform.Access.Query`.
+
+  `list_canvases/2` and `list_canvas_groups/2` apply `:canvas` when given
+  `:access_scope` (or a `%Platform.Access.Scope{}` as `:scope`).
+  """
+  @spec scope_by(Ecto.Queryable.t(), Platform.Access.Scope.t(), :space | :canvas) ::
+          Ecto.Queryable.t()
+  def scope_by(query, %Platform.Access.Scope{} = scope, :space),
+    do: ExternalScope.scope_spaces(query, scope)
+
+  def scope_by(query, %Platform.Access.Scope{} = scope, :canvas),
+    do: Platform.Access.Query.restrict(query, scope, "canvas.read", :canvas, %{id: :id})
+
+  defp maybe_scope_canvases(query, %Platform.Access.Scope{} = scope),
+    do: scope_by(query, scope, :canvas)
+
+  defp maybe_scope_canvases(query, _scope), do: query
+
+  # `:access_scope`, else a `%Platform.Access.Scope{}` passed as `:scope`
+  # (ChatLive's `@external_scope` is one since task 01a1386d-e528 stage 3).
+  defp canvas_access_scope(opts) do
+    case {Keyword.get(opts, :access_scope), Keyword.get(opts, :scope)} do
+      {%Platform.Access.Scope{} = scope, _} -> scope
+      {_, %Platform.Access.Scope{} = scope} -> scope
+      _ -> nil
+    end
   end
 
   # Title sort is case-insensitive: an `asc: c.title` would file "Zebra" before
@@ -4497,6 +4545,9 @@ defmodule Platform.Chat do
       paging defect #864 fixed for tasks. The window and the outer query are
       driven from the SAME list, so a page's contents and its sequence cannot
       disagree about what page 2 is.
+    * `:access_scope` — an optional `%Platform.Access.Scope{}`; a canvas a
+      `canvas.read` deny covers leaves both `rows` and `total_count`
+      (`scope_by/3`). Absent, nothing changes.
   """
   @spec list_canvas_groups([binary()], keyword()) :: [canvas_group()]
   def list_canvas_groups(space_ids, opts \\ [])
@@ -4516,8 +4567,11 @@ defmodule Platform.Chat do
       )
       |> Repo.all()
 
-    counts = canvas_group_counts(space_ids)
-    rows_by_space = canvas_group_rows(space_ids, limit, offset, order)
+    # A denied canvas leaves the rows AND the count, or `total_count` would
+    # tell the reader how many hidden canvases a space holds.
+    access_scope = canvas_access_scope(opts)
+    counts = canvas_group_counts(space_ids, access_scope)
+    rows_by_space = canvas_group_rows(space_ids, limit, offset, order, access_scope)
 
     Enum.map(spaces, fn space ->
       %{
@@ -4532,12 +4586,13 @@ defmodule Platform.Chat do
   # The true per-space total, independent of `:limit`. A GROUP BY over the
   # same `is_nil(deleted_at)` filter the rows use, so the header count and the
   # rows can never disagree about what "live" means.
-  defp canvas_group_counts(space_ids) do
+  defp canvas_group_counts(space_ids, access_scope) do
     from(c in Canvas,
       where: c.space_id in ^space_ids and is_nil(c.deleted_at),
       group_by: c.space_id,
       select: {c.space_id, count(c.id)}
     )
+    |> maybe_scope_canvases(access_scope)
     |> Repo.all()
     |> Map.new()
   end
@@ -4550,7 +4605,7 @@ defmodule Platform.Chat do
   # The outer select re-lists the columns rather than passing the subquery row
   # through, so `row_number` is dropped and the returned maps carry exactly the
   # seven documented keys. `document` is absent from both selects.
-  defp canvas_group_rows(space_ids, limit, offset, order) do
+  defp canvas_group_rows(space_ids, limit, offset, order, access_scope) do
     row_order = canvas_group_order(order)
 
     numbered =
@@ -4573,6 +4628,8 @@ defmodule Platform.Chat do
           rank: over(row_number(), :space)
         }
       )
+      # Scoped INSIDE the window, so a denied canvas takes no rank.
+      |> maybe_scope_canvases(access_scope)
 
     from(r in subquery(numbered),
       where: r.rank > ^offset and r.rank <= ^(offset + limit),

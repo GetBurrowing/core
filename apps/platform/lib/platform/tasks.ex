@@ -285,6 +285,7 @@ defmodule Platform.Tasks do
 
     Project
     |> maybe_filter_projects_org(org_id)
+    |> maybe_scope_by(Keyword.get(opts, :access_scope), :project)
     |> order_by([p], asc: p.name)
     |> Repo.all()
     |> Repo.preload(preload)
@@ -339,6 +340,7 @@ defmodule Platform.Tasks do
     Project
     |> Platform.Tenancy.scope(visibility)
     |> maybe_filter_projects_org(org_id)
+    |> maybe_scope_by(Keyword.get(opts, :access_scope), :project)
     |> order_by([p], asc: p.name)
     |> Repo.all()
     |> Repo.preload(preload)
@@ -1755,6 +1757,7 @@ defmodule Platform.Tasks do
     |> maybe_filter_epic(epic_id)
     |> maybe_filter_status(status)
     |> maybe_filter_assignee(assignee_id, assignee_type)
+    |> maybe_scope_by(Keyword.get(opts, :access_scope), :task)
     |> order_by([t], desc: t.inserted_at, desc: t.id)
   end
 
@@ -6514,6 +6517,7 @@ defmodule Platform.Tasks do
     |> maybe_filter_sponsor(sponsor_user_id)
     |> maybe_filter_kind(kind)
     |> maybe_filter_origin(origin)
+    |> maybe_scope_by(Keyword.get(opts, :access_scope), :task)
     |> order_by([t], desc: t.inserted_at)
     |> preload([:project, :epic, :sponsor, plans: :stages])
     |> Repo.all()
@@ -6521,6 +6525,36 @@ defmodule Platform.Tasks do
 
   defp maybe_filter_project(query, nil), do: query
   defp maybe_filter_project(query, id), do: where(query, [t], t.project_id == ^id)
+
+  @doc """
+  Restrict a `Task`, `Project` or `Stack` query (its root binding) to the
+  rows `scope` may `tasks.read` (task 01a1386d-e528 stage 3,
+  `0058-rbac-v2-roles-scopes-and-agent-capping.md § Precedence`).
+
+  A thin call to `Platform.Access.Query.where_readable/5`: explicit grants
+  with deny-wins and downward inheritance, decided in `Platform.Access`. With
+  no grant an internal human's `tasks.read :all` keeps every row, and a
+  runtime's listing keeps today's rows (see `where_readable/5`).
+
+  The listings take it as the OPTIONAL `:access_scope` opt (`list_all_tasks/1`,
+  `list_tasks/1`, `list_tasks_page/2`, `count_tasks/1`, `list_by_status/1`,
+  `list_projects_for_user/2`, `list_projects_unscoped/1`, and the
+  `Platform.Tasks.Stacks` listings). Absent, the query is unchanged, so
+  router, dispatch and system callers read exactly what they read before.
+  """
+  @spec scope_by(Ecto.Queryable.t(), Platform.Access.Scope.t(), :task | :project | :stack) ::
+          Ecto.Queryable.t()
+  def scope_by(query, %Platform.Access.Scope{} = scope, type)
+      when type in [:task, :project, :stack] do
+    Platform.Access.Query.where_readable(query, scope, "tasks.read", type, %{id: :id})
+  end
+
+  @doc false
+  # The optional `:access_scope` seam shared with `Platform.Tasks.Stacks`.
+  def maybe_scope_by(query, %Platform.Access.Scope{} = scope, type),
+    do: scope_by(query, scope, type)
+
+  def maybe_scope_by(query, _scope, _type), do: query
 
   defp maybe_filter_epic(query, nil), do: query
   defp maybe_filter_epic(query, id), do: where(query, [t], t.epic_id == ^id)
@@ -6688,6 +6722,7 @@ defmodule Platform.Tasks do
       |> maybe_filter_sponsor(sponsor_user_id)
       |> maybe_filter_kind(kind)
       |> maybe_filter_origin(origin)
+      |> maybe_scope_by(Keyword.get(opts, :access_scope), :task)
       |> order_by([t], desc: t.updated_at)
       # `plans: :stages` is required by the desktop kanban template,
       # which renders per-card plan progress (`<passed>/<total>` stage

@@ -95,8 +95,9 @@ defmodule Platform.Chat.ContextSummary do
   @doc """
   Summarise what led to `agent_msg` for `viewer_participant`.
 
-  `opts`: `:scope` — the viewer's `%ExternalScope{}` (the LiveView's
-  `external_scope`); nil means internal.
+  `opts`: `:scope` — the viewer's `%ExternalScope{}` or
+  `%Platform.Access.Scope{}` (the LiveView's `external_scope`); nil means
+  internal.
 
   Returns `{:ok, result}` or `{:error, :not_configured | :no_history |
   :not_a_participant | :deleted | term}`.
@@ -132,7 +133,11 @@ defmodule Platform.Chat.ContextSummary do
   Everything that changes which messages the viewer may read, and nothing
   else.
   """
-  @spec scope_key(Message.t(), Participant.t() | nil, ExternalScope.t() | nil) :: tuple()
+  @spec scope_key(
+          Message.t(),
+          Participant.t() | nil,
+          ExternalScope.t() | Platform.Access.Scope.t() | nil
+        ) :: tuple()
   def scope_key(%Message{} = agent_msg, viewer_participant, scope) do
     {thread_key(agent_msg), grant_bound(viewer_participant), external_key(scope)}
   end
@@ -148,6 +153,16 @@ defmodule Platform.Chat.ContextSummary do
   defp grant_bound(_), do: :unbounded
 
   defp external_key(%ExternalScope{external?: true, user_id: user_id}), do: user_id
+
+  # ChatLive's `@external_scope` is a `%Platform.Access.Scope{}` since task
+  # 01a1386d-e528 stage 3. Matching only the struct above would key a guest's
+  # summary as internal and share it with internal viewers, so the guest
+  # predicate is asked explicitly.
+  defp external_key(%Platform.Access.Scope{actor: %{id: user_id}} = scope)
+       when is_binary(user_id) do
+    if Platform.Access.Scope.guest?(scope), do: user_id
+  end
+
   defp external_key(_), do: nil
 
   defp check_message(%Message{deleted_at: nil}), do: :ok

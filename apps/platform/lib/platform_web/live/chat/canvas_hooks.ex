@@ -151,7 +151,7 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   @spec load_for_space(Phoenix.LiveView.Socket.t(), binary()) :: Phoenix.LiveView.Socket.t()
   def load_for_space(socket, space_id) do
     sort = Map.get(socket.assigns, :canvas_sort, @default_sort)
-    canvases = Chat.list_canvases(space_id, order: sort)
+    canvases = Chat.list_canvases(space_id, [order: sort] ++ access_scope_opts(socket))
 
     unsubscribe_all_canvases(socket)
     Enum.each(canvases, fn c -> ChatPubSub.subscribe_canvas(c.id) end)
@@ -359,7 +359,7 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
         # so this deliberately does not re-subscribe or touch `:show_canvases`;
         # going through `load_for_space/2` would close the drawer the user is
         # looking at.
-        canvases = Chat.list_canvases(space_id, order: sort)
+        canvases = Chat.list_canvases(space_id, [order: sort] ++ access_scope_opts(socket))
 
         {:halt,
          socket
@@ -1517,7 +1517,7 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
     # to read "3 of 41" against the space's real size rather than against the
     # number of matches. That is the whole reason stage 1 made `total_count` a
     # COUNT instead of `length(rows)`.
-    browse_groups = explorer_browse_groups(space_ids, order, offsets)
+    browse_groups = explorer_browse_groups(space_ids, order, offsets, access_scope_opts(socket))
     pinned = explorer_pinned_groups(socket, order)
 
     {groups, pinned} =
@@ -1581,22 +1581,21 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   # is a single `:offset` applied to every space and per-group offsets are the
   # point of a pager. Only paged groups pay for it, and only while they stay
   # paged.
-  defp explorer_browse_groups(space_ids, order, offsets) do
+  defp explorer_browse_groups(space_ids, order, offsets, scope_opts) do
     space_ids
-    |> Chat.list_canvas_groups(limit: @canvas_explorer_page_size, order: order)
+    |> Chat.list_canvas_groups([limit: @canvas_explorer_page_size, order: order] ++ scope_opts)
     |> Enum.map(fn group ->
       case Map.get(offsets, "space:" <> group.space_id, 0) do
-        offset when offset > 0 -> explorer_paged_group(group, offset, order)
+        offset when offset > 0 -> explorer_paged_group(group, offset, order, scope_opts)
         _ -> Map.put(group, :offset, 0)
       end
     end)
   end
 
-  defp explorer_paged_group(group, offset, order) do
-    Chat.list_canvas_groups([group.space_id],
-      limit: @canvas_explorer_page_size,
-      offset: offset,
-      order: order
+  defp explorer_paged_group(group, offset, order, scope_opts) do
+    Chat.list_canvas_groups(
+      [group.space_id],
+      [limit: @canvas_explorer_page_size, offset: offset, order: order] ++ scope_opts
     )
     |> case do
       # An offset past the end renders an empty group with no pager, which is a
@@ -1667,9 +1666,9 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
          %{chat_space_id: chat_space_id} when is_binary(chat_space_id) <-
            Meetings.get_live_meeting_for_space(space_id),
          [group] <-
-           Chat.list_canvas_groups([chat_space_id],
-             limit: @canvas_explorer_page_size,
-             order: order
+           Chat.list_canvas_groups(
+             [chat_space_id],
+             [limit: @canvas_explorer_page_size, order: order] ++ access_scope_opts(socket)
            ) do
       [
         %{
@@ -1926,6 +1925,17 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
         |> Platform.Repo.update()
 
         :ok
+    end
+  end
+
+  # RBAC v2 resource scoping (task 01a1386d-e528 stage 3): the viewer's
+  # `@access_scope`, so a `canvas.read` deny drops the canvas from the drawer
+  # and the explorer (rows and counts). No Scope on the socket: no opt, and
+  # the read is unchanged.
+  defp access_scope_opts(socket) do
+    case socket.assigns[:access_scope] do
+      %Platform.Access.Scope{} = scope -> [access_scope: scope]
+      _ -> []
     end
   end
 end

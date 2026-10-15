@@ -272,6 +272,9 @@ defmodule Platform.Tasks.Stacks do
     |> filter_by_project(Map.get(filters, :project_id))
     |> filter_by_status(Map.get(filters, :status))
     |> filter_by_sponsor(Map.get(filters, :sponsor_user_id))
+    # Optional `:access_scope` (task 01a1386d-e528 stage 3): absent is the
+    # unchanged query. See `Platform.Tasks.scope_by/3`.
+    |> Tasks.maybe_scope_by(Map.get(filters, :access_scope), :stack)
     |> order_by([s], desc: s.inserted_at, desc: s.id)
   end
 
@@ -2851,6 +2854,7 @@ defmodule Platform.Tasks.Stacks do
       |> filter_by_project(Map.get(filters, :project_id))
       |> filter_by_status(Map.get(filters, :status))
       |> filter_by_sponsor(Map.get(filters, :sponsor_user_id))
+      |> Tasks.maybe_scope_by(Map.get(filters, :access_scope), :stack)
       |> order_by([s], desc: s.updated_at)
       |> preload(:sponsor)
       |> Repo.all()
@@ -2879,6 +2883,10 @@ defmodule Platform.Tasks.Stacks do
           |> where([t], t.stack_id in ^stack_ids and is_nil(t.deleted_at))
           |> filter_members_by_kind(kind)
           |> filter_members_by_origin(origin)
+          # A visible stack can hold a member in a project the scope may not
+          # read (a stack's project and its members' projects can differ), so
+          # the members are scoped too, or their titles would leak.
+          |> Tasks.maybe_scope_by(Map.get(filters, :access_scope), :task)
           |> order_by([t], asc: t.stack_position)
           |> preload(:plans)
           |> Repo.all()

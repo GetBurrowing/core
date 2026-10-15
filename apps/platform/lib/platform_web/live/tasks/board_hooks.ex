@@ -203,6 +203,10 @@ defmodule PlatformWeb.Tasks.BoardHooks do
       |> maybe_put(:sponsor_user_id, sponsor_filter_user_id(socket))
       |> maybe_put(:kind, kind_filter_value(socket))
       |> maybe_put(:origin, origin_filter_value(socket))
+      # RBAC v2 resource scoping (task 01a1386d-e528 stage 3): the viewer's
+      # `@access_scope` (LiveAuth). With no grant an internal member's
+      # `tasks.read :all` keeps every row; a deny on a project drops it.
+      |> maybe_put(:access_scope, access_scope(socket))
 
     tasks = Tasks.list_all_tasks(opts)
 
@@ -215,6 +219,7 @@ defmodule PlatformWeb.Tasks.BoardHooks do
       |> maybe_put_map(:sponsor_user_id, sponsor_filter_user_id(socket))
       |> maybe_put_map(:kind, kind_filter_value(socket))
       |> maybe_put_map(:origin, origin_filter_value(socket))
+      |> maybe_put_map(:access_scope, access_scope(socket))
 
     stack_entries = Stacks.list_stacks_with_members(stack_filters)
     {stack_board_data, stacks} = BoardData.split_stack_entries(stack_entries)
@@ -427,6 +432,15 @@ defmodule PlatformWeb.Tasks.BoardHooks do
   defp sponsor_filter_user_id(socket) do
     case socket.assigns[:sponsor_filter] do
       :mine -> socket.assigns[:current_user_id]
+      _ -> nil
+    end
+  end
+
+  # A `%Platform.Access.Scope{}` or nil (a socket mounted without LiveAuth's
+  # `:default` hook passes nothing, exactly as before).
+  defp access_scope(socket) do
+    case socket.assigns[:access_scope] do
+      %Platform.Access.Scope{} = scope -> scope
       _ -> nil
     end
   end

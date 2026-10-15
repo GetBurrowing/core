@@ -225,6 +225,10 @@ defmodule Platform.Chat.CanvasAccess do
 
   ## Options
 
+    * `:access_scope` — an optional `%Platform.Access.Scope{}`. A canvas a
+      `canvas.read` deny covers returns `{:error, :not_found}`, the same as a
+      missing one. Absent, or with no grant naming `canvas.read`, nothing
+      changes.
     * `:audit` — emit the `[:platform, :chat, :canvas_read]` telemetry event on
       a `:task_reader` / `:org_reader` resolution. Defaults to `true`. Pass
       `false` from a LiveView remount so a reconnect does not mint a duplicate
@@ -235,12 +239,29 @@ defmodule Platform.Chat.CanvasAccess do
 
   def fetch_for_viewer(canvas_id, viewer, opts) when is_binary(canvas_id) do
     case load(canvas_id) do
-      %Canvas{} = canvas -> resolve_grant(canvas, normalize_actor(viewer), opts)
-      nil -> {:error, :not_found}
+      %Canvas{} = canvas ->
+        if denied_by_scope?(canvas, Keyword.get(opts, :access_scope)),
+          do: {:error, :not_found},
+          else: resolve_grant(canvas, normalize_actor(viewer), opts)
+
+      nil ->
+        {:error, :not_found}
     end
   end
 
   def fetch_for_viewer(_canvas_id, _viewer, _opts), do: {:error, :not_found}
+
+  # Task 01a1386d-e528 stage 3 (ADR 0058 § Permission model, the
+  # `fetch_for_viewer/3` seam row): with `:access_scope`, a canvas a
+  # `canvas.read` deny covers (on the canvas, its space, or a project above
+  # it) answers EXACTLY like a missing row, before any grant path runs, so no
+  # audit event is minted for a refused read. The grant paths below stay the
+  # existing check: `Access.within?/4` is asked with `true` because an allow
+  # adds nothing here (it cannot mint a `level`), only a deny narrows.
+  defp denied_by_scope?(%Canvas{id: id}, %Platform.Access.Scope{} = scope),
+    do: not Platform.Access.within?(scope, "canvas.read", {:canvas, id}, true)
+
+  defp denied_by_scope?(_canvas, _scope), do: false
 
   @doc """
   Resolve a canvas for a viewer who intends to WRITE it (task 019e2c4b,

@@ -65,6 +65,23 @@ defmodule Platform.Chat.ExternalScope do
 
   `authorized_space?/2` takes a user, not a scope, and is unchanged.
 
+  ## Explicit grants compose with the Scope clauses
+
+  Task `01a1386d-e528` stage 3 (`0058-rbac-v2-roles-scopes-and-agent-capping.md
+  § Precedence`). The three Scope clauses above hand their filter to
+  `Platform.Access.Query.restrict/5` (`visible_space_id?/2` to
+  `Platform.Access.within?/4`) as the EXISTING check, under `chat.read` on
+  resource type `:space`:
+
+    * no grant naming `chat.read` → exactly the filter described above;
+    * otherwise the visible set is that filter (a guest's live
+      `member_space_ids/1` subquery, everything for a pass-through scope)
+      UNION the spaces a `chat.read` allow covers (a project allow covers its
+      tasks' execution spaces), MINUS every space a `chat.read` deny covers.
+
+  The deny-wins condition is written once, in `Platform.Access.Query`; this
+  module only names the base. An `%ExternalScope{}` is unaffected.
+
   The Scope clauses match `%{__struct__: Scope}` rather than `%Scope{}` on
   purpose: `Platform.Access.Scope` builds an `%ExternalScope{}` for its
   participant snapshot, and a struct literal in each direction would make
@@ -87,7 +104,8 @@ defmodule Platform.Chat.ExternalScope do
 
   import Ecto.Query
 
-  alias Platform.Access.Scope
+  alias Platform.Access
+  alias Platform.Access.{Query, Scope}
   alias Platform.Chat
   alias Platform.Chat.Participant
   alias Platform.Repo
@@ -170,8 +188,14 @@ defmodule Platform.Chat.ExternalScope do
   """
   @spec scope_spaces(Ecto.Query.t() | module(), t() | Scope.t() | nil) ::
           Ecto.Query.t() | module()
-  def scope_spaces(query, %{__struct__: Scope} = scope),
-    do: scope_spaces(query, from_scope(scope))
+  def scope_spaces(query, %{__struct__: Scope} = scope) do
+    ext = from_scope(scope)
+
+    base =
+      if ext.external?, do: dynamic([s], s.id in subquery(member_space_ids(ext)))
+
+    Query.restrict(query, scope, "chat.read", :space, %{id: :id, base: base})
+  end
 
   def scope_spaces(query, %__MODULE__{external?: true} = scope) do
     where(query, [s], s.id in subquery(member_space_ids(scope)))
@@ -186,8 +210,14 @@ defmodule Platform.Chat.ExternalScope do
   """
   @spec scope_by_space_id(Ecto.Query.t() | module(), t() | Scope.t() | nil) ::
           Ecto.Query.t() | module()
-  def scope_by_space_id(query, %{__struct__: Scope} = scope),
-    do: scope_by_space_id(query, from_scope(scope))
+  def scope_by_space_id(query, %{__struct__: Scope} = scope) do
+    ext = from_scope(scope)
+
+    base =
+      if ext.external?, do: dynamic([x], x.space_id in subquery(member_space_ids(ext)))
+
+    Query.restrict(query, scope, "chat.read", :space, %{id: :space_id, base: base})
+  end
 
   def scope_by_space_id(query, %__MODULE__{external?: true} = scope) do
     where(query, [x], x.space_id in subquery(member_space_ids(scope)))
@@ -202,6 +232,11 @@ defmodule Platform.Chat.ExternalScope do
   `nil` for out-of-scope ids without re-issuing the full query.
   """
   @spec visible_space_id?(binary() | nil, t() | Scope.t() | nil) :: boolean()
+  def visible_space_id?(space_id, %{__struct__: Scope} = scope) when is_binary(space_id) do
+    base? = visible_space_id?(space_id, from_scope(scope))
+    Access.within?(scope, "chat.read", {:space, space_id}, base?)
+  end
+
   def visible_space_id?(space_id, %{__struct__: Scope} = scope),
     do: visible_space_id?(space_id, from_scope(scope))
 

@@ -171,6 +171,69 @@ defmodule Platform.Access do
     }
   end
 
+  @doc """
+  Does any grant of `scope`'s principals name `permission`? `false` means
+  every grant-aware answer for `permission` is member 2's role-rule answer
+  (or, for `within?/4` and `Platform.Access.Query.restrict/5`, the caller's
+  existing check), so a caller may skip the grant work entirely.
+  """
+  @spec grants_apply?(Scope.t(), String.t()) :: boolean()
+  def grants_apply?(%Scope{} = scope, permission) when is_binary(permission),
+    do: applicable(scope, permission) != []
+
+  def grants_apply?(_scope, _permission), do: false
+
+  @doc """
+  The EXPLICIT-GRANT part of `permitted/3`: `allow` holds only the ids an
+  allow grant covers (no role rule), `deny` the ids a deny covers, both
+  expanded down the inheritance edges (task 01a1386d-e528 stage 3). It is
+  what `Platform.Access.Query.restrict/5` composes with a surface's existing
+  check, which stands in for the role-rule allow.
+  """
+  @spec granted(Scope.t(), String.t(), atom()) :: Permitted.t()
+  def granted(%Scope{} = scope, permission, type) when is_binary(permission) do
+    unless type in Lineage.id_types(),
+      do: raise(ArgumentError, "unknown resource type for granted/3: #{inspect(type)}")
+
+    {allows, denies} = split(applicable(scope, permission))
+
+    %Permitted{
+      resource_type: type,
+      permission: permission,
+      allow: Lineage.descendant_ids(type, targets(allows)),
+      deny: Lineage.descendant_ids(type, targets(denies))
+    }
+  end
+
+  @doc """
+  `can?/3` in conjunction with a surface's EXISTING check, for one resource
+  (task 01a1386d-e528 stage 3). `base?` is that check's answer; it stands in
+  for step 3's role-rule allow. With no grant for `permission` the answer is
+  `base?`, so a grant-less scope changes nothing. Otherwise a deny on the
+  resource or above it refuses, then `base?` or an explicit allow on the
+  resource or above it permits. The single-resource form of
+  `Platform.Access.Query.restrict/5`.
+  """
+  @spec within?(Scope.t(), String.t(), term(), boolean()) :: boolean()
+  def within?(%Scope{} = scope, permission, resource, base?)
+      when is_binary(permission) and is_boolean(base?) do
+    case applicable(scope, permission) do
+      [] ->
+        base?
+
+      grants ->
+        {allows, denies} = split(matching(resource, grants))
+
+        cond do
+          denies != [] -> false
+          base? -> true
+          true -> allows != []
+        end
+    end
+  end
+
+  def within?(_scope, _permission, _resource, base?) when is_boolean(base?), do: base?
+
   # ── precedence ──────────────────────────────────────────────────────────
 
   defp applicable(%Scope{grants: grants}, permission),
@@ -181,23 +244,26 @@ defmodule Platform.Access do
   end
 
   defp decide(scope, permission, resource, grants) do
-    matching =
-      case Lineage.typed(resource) do
-        :untyped ->
-          id = untyped_id(resource)
-          Enum.filter(grants, &(&1.resource_id == id))
-
-        typed ->
-          above = MapSet.new(Lineage.ancestors(typed))
-          Enum.filter(grants, &MapSet.member?(above, Grant.target(&1)))
-      end
-
-    {allows, denies} = split(matching)
+    {allows, denies} = split(matching(resource, grants))
 
     cond do
       denies != [] -> false
       role_allows?(scope, permission, resource) -> true
       true -> allows != []
+    end
+  end
+
+  # The grants naming `resource` or a resource above it on a downward edge
+  # (a bare id or untyped map: only grants naming exactly that id).
+  defp matching(resource, grants) do
+    case Lineage.typed(resource) do
+      :untyped ->
+        id = untyped_id(resource)
+        Enum.filter(grants, &(&1.resource_id == id))
+
+      typed ->
+        above = MapSet.new(Lineage.ancestors(typed))
+        Enum.filter(grants, &MapSet.member?(above, Grant.target(&1)))
     end
   end
 
