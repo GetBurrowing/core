@@ -51,7 +51,7 @@ defmodule Platform.Access.Grants do
   `Platform.Access.Query`.
   """
 
-  import Ecto.Query, only: [from: 2]
+  import Ecto.Query, only: [from: 2, subquery: 1]
 
   alias Platform.Access.{Grant, Role, RoleAssignment}
   alias Platform.Agents.{Agent, AgentRuntime}
