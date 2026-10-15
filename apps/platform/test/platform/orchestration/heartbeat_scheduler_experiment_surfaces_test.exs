@@ -18,7 +18,6 @@ defmodule Platform.Orchestration.HeartbeatSchedulerExperimentSurfacesTest do
 
   import Platform.TenancyFixtures
 
-  alias Platform.Accounts.User
   alias Platform.Experiments
   alias Platform.Experiments.Assignment
   alias Platform.Experiments.Experiment
@@ -47,7 +46,7 @@ defmodule Platform.Orchestration.HeartbeatSchedulerExperimentSurfacesTest do
 
   defp unique, do: System.unique_integer([:positive])
 
-  defp admin, do: %User{id: Ecto.UUID.generate()}
+  defp admin, do: Platform.TenancyFixtures.root_admin!()
 
   defp task(project_id, status) do
     %{

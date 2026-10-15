@@ -24,15 +24,25 @@ defmodule Platform.Branding do
   No raw hex lives in this module. The default colours are seeded by the
   `create_install_branding` migration, which is the one place the literal
   appears; the regex here validates the SHAPE of an admin-supplied value.
+
+  ## Authorization goes through `Platform.Access` (task 01a1386d-fb6e stage 2)
+
+  The re-check is `Platform.Access.authorize_install/1`, not a local
+  `Tenancy.root_admin?/1`. It answers the same for every internal actor and is
+  STRICTER for exactly one class, the external root admin (guest dominates,
+  `0058-rbac-v2-roles-scopes-and-agent-capping.md § Root-admin carve-outs`),
+  who is now refused here too. Today the `ExternalUserScope` plug already
+  refuses that user over HTTP, so HTTP outcomes are unchanged. The refusal
+  shape stays `{:error, :unauthorized}`.
   """
 
   import Ecto.Query, only: [from: 2]
 
+  alias Platform.Access
   alias Platform.Branding.IconSet
   alias Platform.Branding.IconStorage
   alias Platform.Branding.InstallBranding
   alias Platform.Repo
-  alias Platform.Tenancy
 
   @pubsub_topic "install_branding"
 
@@ -360,7 +370,7 @@ defmodule Platform.Branding do
   end
 
   defp with_root_admin_authz(actor, fun) do
-    if Tenancy.root_admin?(actor), do: fun.(), else: {:error, :unauthorized}
+    with :ok <- Access.authorize_install(actor), do: fun.()
   end
 
   defp broadcast(%InstallBranding{} = branding) do

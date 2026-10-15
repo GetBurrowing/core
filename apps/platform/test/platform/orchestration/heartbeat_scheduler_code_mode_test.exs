@@ -15,7 +15,6 @@ defmodule Platform.Orchestration.HeartbeatSchedulerCodeModeTest do
   """
   use Platform.DataCase, async: false
 
-  alias Platform.Accounts.User
   alias Platform.Experiments
   alias Platform.Experiments.Assignment
   alias Platform.Experiments.Experiment
@@ -53,7 +52,7 @@ defmodule Platform.Orchestration.HeartbeatSchedulerCodeModeTest do
     :ok
   end
 
-  defp admin, do: %User{id: Ecto.UUID.generate()}
+  defp admin, do: Platform.TenancyFixtures.root_admin!()
 
   # The probe's task, byte for byte: only `id` and the assignee vary here.
   defp task(status, agent_id, id \\ @fixture_task_id) do

@@ -378,7 +378,7 @@ defmodule Platform.Federation.ListEnvelopeContractTest do
         })
 
       {:ok, _} =
-        Platform.Experiments.start(experiment, %Platform.Accounts.User{id: Ecto.UUID.generate()})
+        Platform.Experiments.start(experiment, root_admin!())
 
       env = call("code_mode_report", %{"experiment_id" => experiment.id})
       assert_unbounded("code_mode_report", env, 6)

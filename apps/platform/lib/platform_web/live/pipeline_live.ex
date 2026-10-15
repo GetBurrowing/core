@@ -99,19 +99,27 @@ defmodule PlatformWeb.PipelineLive do
 
   def handle_event("range_changed", _params, socket), do: {:noreply, socket}
 
+  # Reads through `PipelineHealth.snapshot/2`, which re-checks `tasks.manage`
+  # over every resource in the context (task 01a1386d-fb6e stage 2). A refused
+  # read assigns nothing from the aggregates and leaves the page.
   defp load_data(socket) do
     window = window_for(socket.assigns.range)
 
-    cohort = PipelineHealth.cohort(window)
-    breakdown = PipelineHealth.phase_breakdown(window)
+    case PipelineHealth.snapshot(window, socket.assigns[:access_scope]) do
+      {:ok, data} ->
+        socket
+        |> assign(:cohort, data.cohort)
+        |> assign(:breakdown, data.breakdown)
+        |> assign(:distribution, data.distribution)
+        |> assign(:throughput, data.throughput)
+        |> assign(:agent_activity, data.agent_activity)
+        |> assign(:sparse?, data.cohort.decomposable < @distribution_floor)
 
-    socket
-    |> assign(:cohort, cohort)
-    |> assign(:breakdown, breakdown)
-    |> assign(:distribution, PipelineHealth.cycle_time_distribution(window))
-    |> assign(:throughput, PipelineHealth.throughput(window))
-    |> assign(:agent_activity, PipelineHealth.agent_activity(window))
-    |> assign(:sparse?, cohort.decomposable < @distribution_floor)
+      {:error, :unauthorized} ->
+        socket
+        |> put_flash(:error, "You don't have access to that page.")
+        |> push_navigate(to: "/")
+    end
   end
 
   # "all" still needs a lower bound; instrumentation is the only honest one,

@@ -21,9 +21,15 @@ defmodule Platform.SignInAdmin do
 
     * `{:error, :not_found}` when `Platform.SignInAdmin.Config.enabled?/0`
       is false, so an install without the switch has no such feature;
-    * `{:error, :unauthorized}` unless `Platform.Tenancy.root_admin?/1` is
-      true, a fresh database read on every call (an admin demoted mid-session
-      is refused on their next action).
+    * `{:error, :unauthorized}` unless `Platform.Access.authorize_install/1`
+      is `:ok`, a fresh database read on every call (an admin demoted
+      mid-session is refused on their next action). Until task
+      01a1386d-fb6e stage 2 this was `Tenancy.root_admin?/1`; the Access check
+      answers the same for every internal actor and is STRICTER for exactly
+      one class, the external root admin (guest dominates,
+      `0058-rbac-v2-roles-scopes-and-agent-capping.md § Root-admin carve-outs`),
+      who is now refused here too. The `ExternalUserScope` plug already refuses
+      that user over HTTP, so HTTP outcomes are unchanged.
 
   Nothing reaches pocket-id or Accounts before both pass.
 
@@ -74,6 +80,7 @@ defmodule Platform.SignInAdmin do
 
   require Logger
 
+  alias Platform.Access
   alias Platform.Accounts
   alias Platform.SignInAdmin.{Config, Link, PocketId}
   alias Platform.Tenancy
@@ -430,8 +437,7 @@ defmodule Platform.SignInAdmin do
   defp authorize(actor) do
     cond do
       not Config.enabled?() -> {:error, :not_found}
-      not Tenancy.root_admin?(actor) -> {:error, :unauthorized}
-      true -> :ok
+      true -> Access.authorize_install(actor)
     end
   end
 

@@ -56,7 +56,7 @@ defmodule Platform.Experiments.GuardrailsTest do
   # each test sets up exactly the live set it is about.
   defp running!(attrs) do
     experiment = experiment!(attrs)
-    {:ok, running} = Experiments.start(experiment, %User{id: Ecto.UUID.generate()})
+    {:ok, running} = Experiments.start(experiment, root_admin!())
     running
   end
 
@@ -173,10 +173,10 @@ defmodule Platform.Experiments.GuardrailsTest do
       experiment = experiment!(%{org_id: a})
       {:ok, :pending_human_approval} = Experiments.start(experiment, :agent)
 
-      user_id = Ecto.UUID.generate()
+      %User{id: user_id} = admin = root_admin!()
 
       assert {:ok, %Experiment{status: "running", approval_state: "approved"}} =
-               Experiments.approve_launch(experiment, %User{id: user_id})
+               Experiments.approve_launch(experiment, admin)
 
       [event] = Platform.Audit.list(event_type: "platform.experiments.launch_approved")
       assert event.actor_id == user_id
@@ -186,7 +186,7 @@ defmodule Platform.Experiments.GuardrailsTest do
     test "approve_launch refuses an experiment that is not pending", %{org_a: a} do
       experiment = experiment!(%{org_id: a})
 
-      assert {:error, :not_pending} = Experiments.approve_launch(experiment, %User{})
+      assert {:error, :not_pending} = Experiments.approve_launch(experiment, root_admin!())
     end
 
     test "approve_launch still honours max_live: a human bypasses only the approval", %{
@@ -198,7 +198,7 @@ defmodule Platform.Experiments.GuardrailsTest do
       _live = running!(%{org_id: a, surface_target: "t2"})
 
       assert {:error, %Refusal{code: :max_live_reached, limit: 1, current: 1}} =
-               Experiments.approve_launch(pending, %User{})
+               Experiments.approve_launch(pending, root_admin!())
     end
   end
 

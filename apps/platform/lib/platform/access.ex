@@ -89,6 +89,82 @@ defmodule Platform.Access do
   def scope_for(%AgentRuntime{} = runtime), do: Scope.for_runtime(runtime)
   def scope_for(user), do: Scope.for_user(user)
 
+  # ── context re-checks (task 01a1386d-fb6e stage 2) ───────────────────────
+
+  @install_permission "install.admin"
+
+  @doc """
+  The context-level form of `can?/3`: `:ok` when `actor_or_scope` holds
+  `permission` over `resource`, else `{:error, :unauthorized}` (task
+  `01a1386d-fb6e` stage 2). A `%Scope{}` is used as given; anything else is
+  built into one with `scope_for/1` (a `%User{}` through `Scope.for_user/1`,
+  with its memberships re-read rather than taken from a preload, an
+  `%AgentRuntime{}` through `Scope.for_runtime/1`; `nil` and any other input
+  fail closed). The decision is `can?/3`'s, unchanged.
+  """
+  @spec authorize(term(), String.t(), term()) :: :ok | {:error, :unauthorized}
+  def authorize(actor_or_scope, permission, resource \\ nil) when is_binary(permission) do
+    if can?(to_scope(actor_or_scope), permission, resource),
+      do: :ok,
+      else: {:error, :unauthorized}
+  end
+
+  @doc """
+  `authorize/3` for the registry's install-level permission (`install.admin`,
+  `0058-rbac-v2-roles-scopes-and-agent-capping.md § Root-admin carve-outs`).
+  It replaces each install-level context's own `Tenancy.root_admin?/1` check.
+  No role and no grant carries `install.admin`, so it is held only through
+  `Scope.grant_root_admin/3`: a non-guest admin of a root org. That is
+  `Tenancy.root_admin?/1` for every internal actor, and STRICTER for one
+  class, the external root admin, whom guest dominance refuses.
+  """
+  @spec authorize_install(term()) :: :ok | {:error, :unauthorized}
+  def authorize_install(actor_or_scope), do: authorize(actor_or_scope, @install_permission)
+
+  @doc "The install-level permission `authorize_install/1` checks."
+  @spec install_permission() :: String.t()
+  def install_permission, do: @install_permission
+
+  @doc """
+  `:ok` only when `actor_or_scope` holds `permission` over EVERY resource:
+  member 2's role-rule set `permitted_ids/2` is `:all` (task `01a1386d-fb6e`
+  stage 2). For data with no resource dimension (pipeline health, prompt
+  templates), so a grantee whose allow names one project cannot read or write
+  install-wide data (`0058-rbac-v2-roles-scopes-and-agent-capping.md
+  § Root-admin carve-outs`, "Pipeline moves into Tasks").
+
+  Why the role-rule set and not `permitted/3`: an allow grant always names one
+  resource, so it can never make a permission install-wide, and a deny names
+  one resource too, so it never refuses data that has none ("a deny on one
+  resource does not refuse anywhere", moduledoc). Both readings give the same
+  answer; this one reads no grants. Not for permissions a role carries under
+  `membership_org`: there `[]` still means the module is open (`carries?`).
+  """
+  @spec authorize_everywhere(term(), String.t()) :: :ok | {:error, :unauthorized}
+  def authorize_everywhere(actor_or_scope, permission) when is_binary(permission) do
+    if permitted_ids(to_scope(actor_or_scope), permission) == :all,
+      do: :ok,
+      else: {:error, :unauthorized}
+  end
+
+  # A `%Scope{}` is used as given (a build-time snapshot). An actor is read
+  # FRESH: a user's preloaded memberships are dropped so `Scope.for_user/1`
+  # re-reads them, as `Tenancy.root_admin?/1` reads on every call. A context
+  # re-check must refuse an admin demoted after the struct was loaded.
+  defp to_scope(%Scope{} = scope), do: scope
+
+  defp to_scope(%{__struct__: owner, org_memberships: _} = user),
+    do: scope_for(%{user | org_memberships: not_loaded(owner)})
+
+  defp to_scope(actor), do: scope_for(actor)
+
+  defp not_loaded(owner),
+    do: %Ecto.Association.NotLoaded{
+      __field__: :org_memberships,
+      __owner__: owner,
+      __cardinality__: :many
+    }
+
   @doc """
   Does `scope` hold `permission` over `resource`, with explicit grants
   applied (deny wins, inheritance downward only)? See the moduledoc for the

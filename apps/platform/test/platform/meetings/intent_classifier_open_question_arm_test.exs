@@ -13,7 +13,6 @@ defmodule Platform.Meetings.IntentClassifierOpenQuestionArmTest do
 
   import ExUnit.CaptureLog
 
-  alias Platform.Accounts.User
   alias Platform.Agents.Agent
   alias Platform.Experiments
   alias Platform.Experiments.Assignment
@@ -164,7 +163,7 @@ defmodule Platform.Meetings.IntentClassifierOpenQuestionArmTest do
       })
 
     {:ok, %Experiment{status: "running"} = running} =
-      Experiments.start(experiment, %User{id: Ecto.UUID.generate()})
+      Experiments.start(experiment, Platform.TenancyFixtures.root_admin!())
 
     # Every new meeting goes to the imp arm.
     Repo.update_all(

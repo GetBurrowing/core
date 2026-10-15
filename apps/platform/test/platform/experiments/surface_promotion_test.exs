@@ -46,7 +46,7 @@ defmodule Platform.Experiments.SurfacePromotionTest do
       })
 
     {:ok, running} =
-      Experiments.start(experiment, %Platform.Accounts.User{id: Ecto.UUID.generate()})
+      Experiments.start(experiment, root_admin!())
 
     running
   end

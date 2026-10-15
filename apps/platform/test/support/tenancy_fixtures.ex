@@ -144,4 +144,30 @@ defmodule Platform.TenancyFixtures do
 
     user
   end
+
+  @doc """
+  Insert a user with an internal `admin` membership in this install's root
+  org: a root admin, the actor install-level writes require
+  (`Platform.Access.authorize_install/1`, task 01a1386d-fb6e stage 2). Use it
+  wherever a test needs a HUMAN actor that is allowed to make such a write;
+  an unsaved `%User{id: Ecto.UUID.generate()}` holds no membership and is
+  refused.
+  """
+  @spec root_admin!() :: User.t()
+  def root_admin! do
+    n = System.unique_integer([:positive, :monotonic])
+
+    user =
+      Repo.insert!(%User{
+        email: "root-admin-#{n}@example.com",
+        name: "Root Admin #{n}",
+        oidc_sub: "oidc-root-admin-#{n}"
+      })
+
+    %OrgMembership{}
+    |> OrgMembership.changeset(%{user_id: user.id, org_id: acme_org_id(), role: "admin"})
+    |> Repo.insert!()
+
+    user
+  end
 end

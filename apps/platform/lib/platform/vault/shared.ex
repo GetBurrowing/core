@@ -11,9 +11,16 @@ defmodule Platform.Vault.Shared do
   ## Authorization
 
   Every function takes the acting user record and re-checks
-  `Platform.Tenancy.root_admin?/1`, mirroring `Platform.Branding` — the route
-  gate is not load-bearing alone. A non-admin gets `{:error, :unauthorized}`
-  and nothing is written.
+  `Platform.Access.authorize_install/1`, mirroring `Platform.Branding` — the
+  route gate is not load-bearing alone. A non-admin gets
+  `{:error, :unauthorized}` and nothing is written.
+
+  Until task 01a1386d-fb6e stage 2 the re-check was `Tenancy.root_admin?/1`.
+  The Access check answers the same for every internal actor and is STRICTER
+  for exactly one class, the external root admin (guest dominates,
+  `0058-rbac-v2-roles-scopes-and-agent-capping.md § Root-admin carve-outs`),
+  who is now refused here too. The `ExternalUserScope` plug already refuses
+  that user over HTTP, so HTTP outcomes are unchanged.
 
   ## Write-only
 
@@ -24,9 +31,9 @@ defmodule Platform.Vault.Shared do
 
   import Ecto.Query
 
+  alias Platform.Access
   alias Platform.Agents.Agent
   alias Platform.Repo
-  alias Platform.Tenancy
   alias Platform.Vault
   alias Platform.Vault.AccessGrant
   alias Platform.Vault.AccessLog
@@ -362,6 +369,6 @@ defmodule Platform.Vault.Shared do
   defp accessor(%{id: id}), do: {:platform, id}
 
   defp with_root_admin(actor, fun) do
-    if Tenancy.root_admin?(actor), do: fun.(), else: {:error, :unauthorized}
+    with :ok <- Access.authorize_install(actor), do: fun.()
   end
 end

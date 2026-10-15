@@ -7372,7 +7372,13 @@ defmodule Platform.Federation.ToolSurface do
     {:ok, ResultBound.whole(:templates, result)}
   end
 
-  def execute("prompt_template_update", args, _context) do
+  # The write re-checks permission in the context
+  # (`PromptTemplates.update_template/3`, task 01a1386d-fb6e stage 2) with the
+  # caller's Scope: the calling runtime's `Scope.for_runtime/1`, or an
+  # in-process caller's `:access_scope`. With no grants a runtime holding the
+  # `plan` bundle is answered exactly as before. A call whose runtime cannot be
+  # resolved holds no permission and is refused, not treated as the system.
+  def execute("prompt_template_update", args, context) do
     slug = Map.get(args, "slug")
     content = Map.get(args, "content")
 
@@ -7386,10 +7392,11 @@ defmodule Platform.Federation.ToolSurface do
          }}
 
       template ->
-        case Platform.Orchestration.PromptTemplates.update_template(template, %{
-               "content" => content,
-               "updated_by" => "agent"
-             }) do
+        case Platform.Orchestration.PromptTemplates.update_template(
+               template,
+               %{"content" => content, "updated_by" => "agent"},
+               prompt_update_scope(context)
+             ) do
           {:ok, updated} ->
             {:ok,
              %{
@@ -7399,6 +7406,15 @@ defmodule Platform.Federation.ToolSurface do
                variables: updated.variables,
                updated_by: updated.updated_by,
                updated_at: format_datetime(updated.updated_at)
+             }}
+
+          {:error, :unauthorized} ->
+            {:error,
+             %{
+               error: "unauthorized: prompt_template_update needs the plan bundle",
+               code: :unauthorized,
+               recoverable: false,
+               suggestion: "Ask an admin to grant this runtime the plan bundle."
              }}
 
           {:error, changeset} ->
@@ -15626,6 +15642,18 @@ defmodule Platform.Federation.ToolSurface do
     |> memory_access_opts()
     |> Keyword.get(:access_scope)
     |> Platform.Access.check(permission, resource)
+  end
+
+  # The caller Scope `prompt_template_update` re-checks with (task
+  # 01a1386d-fb6e stage 2): an in-process caller's `:access_scope`, else the
+  # calling runtime's, else nil (refused by the context).
+  defp prompt_update_scope(%{access_scope: %Platform.Access.Scope{} = scope}), do: scope
+
+  defp prompt_update_scope(context) do
+    case runtime_access_opts(context) do
+      [access_scope: scope] -> scope
+      [] -> nil
+    end
   end
 
   defp runtime_access_opts(context) do
