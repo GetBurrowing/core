@@ -798,9 +798,11 @@ defmodule Platform.Org.Wiki do
     * `{:error, :product_owned}` for `burrow/`, as `check_product_owned/2`;
     * `{:error, :ambiguous_kind}` unless both classify as Historian page
       namespaces;
-    * `{:error, {:conflict, paths}}` when ANY target key already holds a page
-      or a memory node. A subtree rename never overwrites, so the
-      single-page overwrite semantic (and its node merge) never applies here;
+    * `{:error, {:conflict, paths}}` when ANY target location already holds
+      a page or a memory node. The target locations are `new_prefix` itself
+      and the new key of every page and node under `old_prefix`. A subtree
+      rename never overwrites, so the single-page overwrite semantic (and its
+      node merge) never applies here;
     * `{:error, :not_found}` when there is no page and no node under
       `old_prefix`, the answer a trailing-slash `rename_page/3` gave before
       this existed.
@@ -855,7 +857,11 @@ defmodule Platform.Org.Wiki do
 
       retarget = &(new_prefix <> String.replace_prefix(&1, old_prefix, ""))
       page_moves = Enum.map(pages, &{&1.file_key, retarget.(&1.file_key)})
-      targets = Enum.uniq(Enum.map(page_moves, &elem(&1, 1)) ++ Enum.map(nodes, &retarget.(&1.path)))
+      page_targets = Enum.map(page_moves, &elem(&1, 1))
+      node_targets = Enum.map(nodes, &retarget.(&1.path))
+      # The target prefix itself is a target location: a node already there
+      # would otherwise be merged into silently.
+      targets = Enum.uniq([new_prefix | page_targets ++ node_targets])
 
       case prefix_conflicts(targets, workspace_id) do
         [] -> :ok

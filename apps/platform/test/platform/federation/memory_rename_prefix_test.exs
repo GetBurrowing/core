@@ -119,8 +119,15 @@ defmodule Platform.Federation.MemoryRenamePrefixTest do
   end
 
   test "a private trailing-slash rename keeps the single-page route", %{historian: h} do
-    space = Ecto.UUID.generate()
-    base = "space/#{space}/private/#{h.id}/"
+    {:ok, space} =
+      Platform.Chat.create_space(%{
+        name: "Private prefix control",
+        slug: "private-prefix-#{System.unique_integer([:positive])}",
+        kind: "channel"
+      })
+
+    {:ok, _} = Platform.Chat.add_agent_participant(space.id, h, display_name: "Historian")
+    base = "space/#{space.id}/private/#{h.id}/"
 
     assert {:error, %{code: :not_found}} = rename(h, base <> "a/", base <> "b/")
   end

@@ -84,7 +84,7 @@ defmodule Platform.Org.Wiki.RenamePrefixTest do
 
     assert via_prefix == snapshot()
 
-    assert Enum.map(via_prefix, &elem(&1, 0)) == [
+    assert via_prefix |> Enum.map(&elem(&1, 0)) |> Enum.sort() == [
              "org/page/engineer.md",
              "org/page/engineering/a.md",
              "org/page/engineering/b.md",
