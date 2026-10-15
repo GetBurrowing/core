@@ -379,9 +379,7 @@ defmodule Platform.Access.ChangesTest do
 
       u = user!()
 
-      ok!(
-        Grants.deny(%{principal: u, permission: "memory.read", resource: {:memory_node, b.id}})
-      )
+      ok!(Grants.deny(%{principal: u, permission: "memory.read", resource: {:memory_node, b.id}}))
 
       n = change_count()
       assert {:ok, _} = Wiki.rename_page("org/page/a.md", "org/page/b.md")

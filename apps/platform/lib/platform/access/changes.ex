@@ -263,7 +263,9 @@ defmodule Platform.Access.Changes do
     |> Enum.uniq()
     |> Enum.sort()
     |> Enum.each(fn key ->
-      Repo.query!("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", ["access_grant:" <> key])
+      Repo.query!("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
+        "access_grant:" <> key
+      ])
     end)
   end
 
@@ -273,7 +275,8 @@ defmodule Platform.Access.Changes do
     keys = (before ++ after_rows) |> Enum.map(&Grant.tuple_key/1) |> Enum.uniq() |> Enum.sort()
     org_id = attrs.org_id || first_org(before ++ after_rows)
 
-    attrs = Map.merge(attrs, %{org_id: org_id, before: before, after: after_rows, tuple_keys: keys})
+    attrs =
+      Map.merge(attrs, %{org_id: org_id, before: before, after: after_rows, tuple_keys: keys})
 
     case %Change{} |> Change.changeset(attrs) |> Repo.insert() do
       {:ok, change} -> change
