@@ -98,10 +98,23 @@ defmodule PlatformWeb.AccessLiveApplyTest do
   end
 
   test "active revoked channel navigates to chat with a flash", ctx do
-    {:ok, view, _} = conn_for(ctx.guest) |> live("/chat/#{ctx.d.slug}")
-    render_patch(view, "/chat/#{ctx.c.slug}")
+    {:ok, participant} =
+      Chat.add_participant(ctx.c.id, %{
+        participant_type: "user",
+        participant_id: ctx.guest.id,
+        joined_at: DateTime.utc_now()
+      })
+
+    {:ok, view, _} = conn_for(ctx.guest) |> live("/chat/#{ctx.c.slug}")
+    # The HTTP deep-link gate admits a guest through participation, while the
+    # explicit grant keeps the already-open tab readable after that admission
+    # row is removed. Revoke then changes the rebuilt scope for the active C.
+    assert {:ok, _} = Chat.remove_participant(participant)
+    assert render(view) =~ ctx.c.name
     assert {:ok, _} = Grants.revoke(ctx.c_grant)
-    assert_redirect(view, "/chat")
+
+    assert Phoenix.Flash.get(assert_redirect(view, "/chat"), :error) ==
+             "You no longer have access to that channel."
   end
 
   test "a refused change does not broadcast", ctx do
