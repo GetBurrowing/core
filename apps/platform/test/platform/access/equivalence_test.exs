@@ -1,8 +1,8 @@
 defmodule Platform.Access.EquivalenceTest do
   @moduledoc """
   Task 01a1386d-cb5c stage 4: the before/after equivalence table for RBAC v2
-  member 2 (`0058-rbac-v2-roles-scopes-and-agent-capping.md § Today's state
-  mapped onto built-in roles (no behaviour change)`).
+  member 2, per
+  `0058-rbac-v2-roles-scopes-and-agent-capping.md § Today's state mapped onto built-in roles (no behaviour change)`.
 
   One row per actor class. For each row every quantity is computed TWICE:
   once through today's code path, and once from `%Platform.Access.Scope{}`

@@ -1,8 +1,8 @@
 defmodule Platform.Access.ScopeTest do
   @moduledoc """
   Task 01a1386d-cb5c stage 2: `%Platform.Access.Scope{}` over every actor
-  class in `0058-rbac-v2-roles-scopes-and-agent-capping.md § Today's state
-  mapped onto built-in roles (no behaviour change)`.
+  class in
+  `0058-rbac-v2-roles-scopes-and-agent-capping.md § Today's state mapped onto built-in roles (no behaviour change)`.
 
   Each row asserts the EXACT permissions map, written out here rather than
   derived from the role table, so a changed role row or rule turns a row red.
