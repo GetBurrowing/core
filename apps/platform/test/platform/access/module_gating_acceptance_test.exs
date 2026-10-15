@@ -104,7 +104,8 @@ defmodule Platform.Access.ModuleGatingAcceptanceTest do
   end
 
   describe "1. a guest's rail shows only granted modules" do
-    test "all three surfaces follow the single registry decision, including a project grant", ctx do
+    test "all three surfaces follow the single registry decision, including a project grant",
+         ctx do
       internal = rail_keys(scope(ctx.member))
       assert :tasks in internal.desktop
       assert :tasks in internal.mobile
@@ -174,8 +175,10 @@ defmodule Platform.Access.ModuleGatingAcceptanceTest do
       assert {:ok, _} = Branding.update_identity(ctx.admin, %{})
     end
 
-    test "Tasks scope predicate refuses guest writes; the legacy no-opt system path remains", ctx do
+    test "Tasks scope predicate refuses guest writes; the legacy no-opt system path remains",
+         ctx do
       s = scope(ctx.guest)
+
       assert Access.authorize(s, "tasks.write", {:project, ctx.q.id}) ==
                {:error, :unauthorized}
 
@@ -189,6 +192,7 @@ defmodule Platform.Access.ModuleGatingAcceptanceTest do
         Grants.grant(%{principal: ctx.member, permission: "tasks.manage", resource: ctx.p})
 
       assert Access.module_access?(scope(ctx.member), :tasks, "tasks.manage")
+
       assert {:error, {_, %{to: "/access-denied?module=tasks"}}} =
                live(authed(ctx.member), "/tasks/pipeline")
 
