@@ -11,7 +11,7 @@ defmodule PlatformWeb.AccessViewAsTest do
   alias Platform.Repo
   alias Platform.Tasks
   alias Platform.Tenancy
-  alias Platform.Tenancy.{Org, OrgMembership}
+  alias Platform.Tenancy.OrgMembership
   alias PlatformWeb.Components.IconRail
 
   defp user!(name) do

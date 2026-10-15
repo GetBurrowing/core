@@ -44,15 +44,32 @@ defmodule PlatformWeb.AccessViewAsLive do
       <h1 class="text-2xl font-semibold">View as</h1>
       <p data-role="view-as-surface">{Atom.to_string(@result.surface)}</p>
       <p :if={@result.capped == false}>Agent scope is not capped at owner (pos 5).</p>
-      <div data-role="view-as-rail">
-        <span :for={key <- @rail_keys} data-destination={key}>{key}</span>
-      </div>
-      <div data-role="view-as-resources">
-        <h2>Projects</h2>
-        <div :for={project <- @result.resources.projects} data-resource-id={project.id}>{project.name}</div>
-        <h2>Channels</h2>
-        <div :for={channel <- @result.resources.channels} data-resource-id={channel.id}>{channel.name}</div>
-      </div>
+      <section>
+        <h2 class="font-medium">Rail destinations</h2>
+        <ul data-role="view-as-rail" class="mt-2 grid grid-cols-2 gap-2 text-sm">
+          <li :for={key <- @rail_keys} data-destination={key} class="rounded border border-base-300 px-3 py-2">
+            {key}
+          </li>
+        </ul>
+      </section>
+      <section data-role="view-as-resources" class="space-y-4">
+        <div>
+          <h2 class="font-medium">Projects</h2>
+          <ul class="mt-2 space-y-1">
+            <li :for={project <- @result.resources.projects} data-resource-id={project.id}>
+              {project.name}
+            </li>
+          </ul>
+        </div>
+        <div>
+          <h2 class="font-medium">Channels</h2>
+          <ul class="mt-2 space-y-1">
+            <li :for={channel <- @result.resources.channels} data-resource-id={channel.id}>
+              {channel.name}
+            </li>
+          </ul>
+        </div>
+      </section>
     </main>
     """
   end
