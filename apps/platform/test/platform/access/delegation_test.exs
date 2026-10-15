@@ -350,11 +350,37 @@ defmodule Platform.Access.DelegationTest do
       end
 
       assert Enum.map(Delegation.managers({:org, root}), & &1.id) == [r.id]
+
+      # The private set_role/3 is reached by restoring an archived admin
+      # through Invite. Relink unarchives R before the role step.
+      Repo.update_all(
+        from(u in User, where: u.id == ^r.id),
+        set: [archived_at: DateTime.utc_now()]
+      )
+
+      Req.Test.stub(Platform.SignInAdmin.PocketId, fn conn ->
+        case {conn.method, conn.path_info} do
+          {"POST", ["api", "users"]} ->
+            {:ok, body, conn} = Plug.Conn.read_body(conn)
+            user = Jason.decode!(body) |> Map.put("id", "pid-restored")
+            conn |> Plug.Conn.put_status(201) |> Req.Test.json(user)
+
+          {"DELETE", ["api", "users", _]} ->
+            Plug.Conn.resp(conn, 204, "")
+
+          {"POST", ["api", "users", _, "one-time-access-token"]} ->
+            conn |> Plug.Conn.put_status(201) |> Req.Test.json(%{"token" => "test-token"})
+        end
+      end)
+
       assert {:error, %{rule: :last_admin, resource: {:org, ^root}}} =
-               SignInAdmin.set_role(r, :member, r)
+               SignInAdmin.invite(r, %{email: r.email, role: :member})
 
       second = admin_in!(root)
-      assert {:ok, membership} = SignInAdmin.set_role(r, :member, second)
+      assert {:ok, %{user: restored}} =
+               SignInAdmin.invite(second, %{email: r.email, role: :member})
+
+      membership = Repo.get_by!(OrgMembership, org_id: root, user_id: restored.id)
       assert membership.role == "member"
     end
 

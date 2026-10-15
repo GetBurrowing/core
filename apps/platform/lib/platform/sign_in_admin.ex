@@ -291,15 +291,8 @@ defmodule Platform.SignInAdmin do
     end
   end
 
-  @doc "Set an install user's managed role, preserving the last manager of each org."
-  @spec set_role(Accounts.User.t(), :admin | :member, actor()) :: {:ok, term()} | {:error, term()}
-  def set_role(user, :admin, actor) do
-    with :ok <- authorize(actor), do: Tenancy.promote_to_admin(user, actor_id: actor.id)
-  end
-
-  def set_role(user, :member, actor) do
-    with :ok <- authorize(actor), do: demote_unless_last_admin(user, actor)
-  end
+  defp set_role(user, :admin, actor), do: Tenancy.promote_to_admin(user, actor_id: actor.id)
+  defp set_role(user, :member, actor), do: demote_unless_last_admin(user, actor)
 
   defp demote_unless_last_admin(user, actor) do
     root_org_id = Tenancy.get_root_org().id
