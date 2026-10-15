@@ -80,10 +80,13 @@ defmodule Platform.Mobile.AppEntities do
   The user's reachable, unread approval inbox items, newest first.
   """
   @spec list_approvals(User.t()) :: [map()]
-  def list_approvals(%User{id: user_id}) do
+  def list_approvals(%User{id: user_id} = user) do
     items =
       user_id
-      |> Inbox.reachable_unread_scope()
+      |> Inbox.reachable_unread_scope(
+        Platform.Tenancy.external_user?(user),
+        Platform.Access.Scope.for_user(user)
+      )
       |> where([i], i.kind in @approval_kinds)
       |> order_by([i], desc: i.inserted_at, desc: i.id)
       |> Repo.all()

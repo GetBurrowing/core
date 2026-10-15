@@ -299,8 +299,7 @@ defmodule Platform.Lifecycle.Executor do
         :no_sponsor
 
       sponsor_user_id ->
-        {:ok, _item} =
-          Inbox.emit(%{
+        case Inbox.emit(%{
             user_id: sponsor_user_id,
             kind: "lifecycle_step_failed",
             source_type: "task",
@@ -308,9 +307,11 @@ defmodule Platform.Lifecycle.Executor do
             title: "Lifecycle step failed: #{run.step_name}",
             body: "Edge #{run.edge} — #{reason}",
             url: "/tasks/#{task.id}"
-          })
-
-        :notified
+          }) do
+          {:ok, _item} -> :notified
+          {:error, :denied} -> :not_notified
+          {:error, _reason} -> :not_notified
+        end
     end
   end
 

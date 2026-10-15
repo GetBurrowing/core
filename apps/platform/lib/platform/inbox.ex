@@ -37,10 +37,15 @@ defmodule Platform.Inbox do
 
   require Logger
 
+  alias Platform.Access
+  alias Platform.Access.{Query, Scope}
+  alias Platform.Chat.{Message, Space}
   alias Platform.Inbox.Item
+  alias Platform.Meetings.Meeting
   alias Platform.Push.Notification
   alias Platform.Repo
   alias Platform.Tenancy
+  alias Platform.Tasks.{ReviewRequest, Task}
 
   # The kinds whose row asks the user to DO something that has its own
   # resolution path (approve/reject the plan, resolve the review). Opening one
@@ -82,17 +87,51 @@ defmodule Platform.Inbox do
   `{:ok, item}`. On a changeset failure returns `{:error, changeset}`. No
   fan-out — call once per recipient.
   """
-  @spec emit(map()) :: {:ok, Item.t()} | {:error, Ecto.Changeset.t()}
+  @spec emit(map()) :: {:ok, Item.t()} | {:error, Ecto.Changeset.t()} | {:error, :denied}
   def emit(attrs) do
-    case %Item{} |> Item.changeset(attrs) |> Repo.insert() do
-      {:ok, item} ->
+    changeset = Item.changeset(%Item{}, attrs)
+
+    if changeset.valid? do
+      recipient = Repo.get(Platform.Accounts.User, Ecto.Changeset.get_field(changeset, :user_id))
+
+      resource =
+        resource_for(
+          Ecto.Changeset.get_field(changeset, :source_type),
+          Ecto.Changeset.get_field(changeset, :source_id)
+        )
+
+      with :ok <- resource_check(recipient, resource),
+           {:ok, item} <- Repo.insert(changeset) do
         Phoenix.PubSub.broadcast(Platform.PubSub, topic(item.user_id), {:inbox_item_added, item})
         maybe_push(item)
         {:ok, item}
-
-      {:error, changeset} ->
-        {:error, changeset}
+      end
+    else
+      {:error, changeset}
     end
+  end
+
+  @doc "The resource whose read permission guards an inbox source."
+  def resource_for("chat_message", id), do: resource_id(Message, id, :space_id, :space)
+  def resource_for("task", id), do: {:task, id}
+  def resource_for("task_review", id), do: {:task, id}
+  def resource_for("review_request", id), do: resource_id(ReviewRequest, id, :task_id, :task)
+  def resource_for("meeting", id), do: resource_id(Meeting, id, :chat_space_id, :space)
+  def resource_for(_, _), do: nil
+
+  defp resource_id(schema, id, field, type) do
+    case Repo.get(schema, id) do
+      nil -> nil
+      row -> {type, Map.fetch!(row, field)}
+    end
+  end
+
+  defp resource_check(_recipient, nil), do: :ok
+  defp resource_check(nil, _resource), do: :ok
+
+  defp resource_check(recipient, {type, _} = resource) do
+    permission = if type == :task, do: "tasks.read", else: "chat.read"
+    Access.check(Scope.for_user(recipient), permission, resource)
   end
 
   # Kinds whose row is ALSO a push (task 01a10882). Approvals had no push
@@ -252,6 +291,14 @@ defmodule Platform.Inbox do
     reachable_unread_scope(user_id, Tenancy.external_user?(%{id: user_id}))
   end
 
+  @doc "The reachable inbox list narrowed by the viewer's current grants."
+  @spec reachable_unread_scope(Ecto.UUID.t(), boolean(), Scope.t()) :: Ecto.Query.t()
+  def reachable_unread_scope(user_id, external?, %Scope{} = scope) do
+    user_id
+    |> reachable_unread_scope(external?)
+    |> restrict_sources(scope)
+  end
+
   @doc """
   The BADGE scope: the rows of `unread_scope/1` the user has not opened
   (`read_at` nil). Task `01a11703`.
@@ -293,6 +340,62 @@ defmodule Platform.Inbox do
     reachable_badge_scope(user_id, Tenancy.external_user?(%{id: user_id}))
   end
 
+  @doc "The reachable badge is always a subset of the grant-filtered list."
+  @spec reachable_badge_scope(Ecto.UUID.t(), boolean(), Scope.t()) :: Ecto.Query.t()
+  def reachable_badge_scope(user_id, external?, %Scope{} = scope) do
+    user_id
+    |> reachable_unread_scope(external?, scope)
+    |> where([i], is_nil(i.read_at))
+  end
+
+  # Restrict source IDs through Access.Query rather than duplicating grant
+  # precedence in the Inbox. The grants_apply? guard preserves historical
+  # orphan rows when no grant names that permission.
+  defp restrict_sources(query, %Scope{} = scope) do
+    query
+    |> restrict_task_sources(scope)
+    |> restrict_space_sources(scope)
+  end
+
+  defp restrict_task_sources(query, scope) do
+    if Access.grants_apply?(scope, "tasks.read") do
+      tasks =
+        Task
+        |> Query.restrict(scope, "tasks.read", :task, %{id: :id})
+        |> select([t], t.id)
+
+      reviews = from(r in ReviewRequest, where: r.task_id in subquery(tasks), select: r.id)
+
+      where(query, [i],
+        i.source_type not in ["task", "task_review", "review_request"] or
+          (i.source_type in ["task", "task_review"] and i.source_id in subquery(tasks)) or
+          (i.source_type == "review_request" and i.source_id in subquery(reviews))
+      )
+    else
+      query
+    end
+  end
+
+  defp restrict_space_sources(query, scope) do
+    if Access.grants_apply?(scope, "chat.read") do
+      spaces =
+        Space
+        |> Query.restrict(scope, "chat.read", :space, %{id: :id})
+        |> select([s], s.id)
+
+      messages = from(m in Message, where: m.space_id in subquery(spaces), select: m.id)
+      meetings = from(m in Meeting, where: m.chat_space_id in subquery(spaces), select: m.id)
+
+      where(query, [i],
+        i.source_type not in ["chat_message", "meeting"] or
+          (i.source_type == "chat_message" and i.source_id in subquery(messages)) or
+          (i.source_type == "meeting" and i.source_id in subquery(meetings))
+      )
+    else
+      query
+    end
+  end
+
   @doc """
   The badge number for this viewer: one aggregate over
   `reachable_badge_scope/1`. For an internal user this is `unread_count/1`
@@ -304,7 +407,9 @@ defmodule Platform.Inbox do
   """
   @spec reachable_unread_count(Ecto.UUID.t()) :: non_neg_integer()
   def reachable_unread_count(user_id) do
-    Repo.aggregate(reachable_badge_scope(user_id), :count)
+    scope = Scope.for_user(%{id: user_id})
+    external? = Tenancy.external_user?(%{id: user_id})
+    Repo.aggregate(reachable_badge_scope(user_id, external?, scope), :count)
   end
 
   @doc """

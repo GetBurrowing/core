@@ -685,7 +685,10 @@ defmodule PlatformWeb.InboxLive do
     Inbox.reconcile_for_user(user_id)
 
     user_id
-    |> Inbox.unread_scope()
+    |> Inbox.reachable_unread_scope(
+      Platform.Tenancy.external_user?(%{id: user_id}),
+      Platform.Access.Scope.for_user(%{id: user_id})
+    )
     |> order_by([i], desc: i.inserted_at)
     |> Repo.all()
   end

@@ -493,7 +493,10 @@ defmodule Platform.Mobile do
 
     approvals =
       user_id
-      |> Inbox.reachable_badge_scope()
+      |> Inbox.reachable_badge_scope(
+        Platform.Tenancy.external_user?(user),
+        Platform.Access.Scope.for_user(user)
+      )
       |> where([i], i.kind in @approval_kinds)
       |> Repo.aggregate(:count)
 

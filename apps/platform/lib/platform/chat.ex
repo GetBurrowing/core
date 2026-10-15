@@ -5453,6 +5453,16 @@ defmodule Platform.Chat do
       |> Enum.filter(&Platform.Chat.AttentionRouter.mentioned?(&1, msg))
       |> Enum.reject(&(&1.participant_id == msg.author_user_id))
       |> Enum.uniq_by(& &1.participant_id)
+      |> Enum.filter(fn p ->
+        user = Repo.get(Platform.Accounts.User, p.participant_id)
+
+        is_nil(user) or
+          Platform.Access.check(
+            Platform.Access.Scope.for_user(user),
+            "chat.read",
+            {:space, space_id}
+          ) == :ok
+      end)
       |> Enum.each(fn p ->
         Platform.Inbox.emit(%{
           user_id: p.participant_id,

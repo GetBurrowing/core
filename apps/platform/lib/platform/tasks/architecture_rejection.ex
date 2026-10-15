@@ -629,6 +629,9 @@ defmodule Platform.Tasks.ArchitectureRejection do
           {:ok, _msg} ->
             :ok
 
+          {:error, :denied} ->
+            "none"
+
           {:error, reason} ->
             Logger.warning(
               "[ArchitectureRejection] failed to post escalation digest for plan " <>

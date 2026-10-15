@@ -365,11 +365,20 @@ defmodule Platform.Meetings.InviteDelivery do
     # succeeded. `fan_out_to_user/2` and not `fan_out_to_humans/3` — the
     # latter takes chat-participant row ids and cannot reach an invitee who
     # is not in this meeting's chat space.
-    notifications_module().fan_out_to_user(invite.user_id, %{
-      title: title,
-      body: body,
-      url: url
-    })
+    user = Repo.get(Platform.Accounts.User, invite.user_id)
+
+    if user &&
+         Platform.Access.check(
+           Platform.Access.Scope.for_user(user),
+           "chat.read",
+           {:space, meeting.chat_space_id}
+         ) == :ok do
+      notifications_module().fan_out_to_user(invite.user_id, %{
+        title: title,
+        body: body,
+        url: url
+      })
+    end
 
     stamp_carrier(invite, :internal_inbox_push)
     emit_telemetry(invite, meeting, :internal_inbox_push)
