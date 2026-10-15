@@ -20,6 +20,7 @@ defmodule Platform.Access.ModuleGatingAcceptanceTest do
   alias Platform.Accounts.User
   alias Platform.Branding
   alias Platform.Experiments
+  alias Platform.Prototypes.Settings, as: PrototypeSettings
   alias Platform.Repo
   alias Platform.Tasks
   alias Platform.Tasks.Task
@@ -198,9 +199,11 @@ defmodule Platform.Access.ModuleGatingAcceptanceTest do
 
         assert Access.authorize_install(user) == {:error, :unauthorized}
         assert Branding.update_identity(user, %{}) == {:error, :unauthorized}
+        assert PrototypeSettings.update(user, %{}) == {:error, :unauthorized}
       end
 
       assert {:ok, _, _} = live(authed(ctx.admin), "/admin/branding")
+      assert {:ok, _} = PrototypeSettings.update(ctx.admin, %{})
     end
   end
 end
