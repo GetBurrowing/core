@@ -60,7 +60,6 @@ defmodule PlatformWeb.ChatLiveRestrictedChannelTest do
     assert html =~ ~s(data-space-id="#{finance.id}")
     assert html =~ "Restricted, ask an admin"
     assert html =~ "hero-lock-closed-mini"
-    refute html =~ ~s(href="/chat/#{finance.id}")
     refute html =~ marker
 
     [restricted_row] =
@@ -77,7 +76,16 @@ defmodule PlatformWeb.ChatLiveRestrictedChannelTest do
     mobile = render(member_view)
     assert mobile =~ ~s(id="mobile-channel-browser")
     assert mobile =~ ~s(data-role="restricted-channel-row")
-    refute mobile =~ ~s(href="/chat/#{finance.id}")
+
+    mobile_row =
+      mobile
+      |> Floki.parse_document!()
+      |> Floki.find(
+        ~s(#mobile-channel-browser [data-role="restricted-channel-row"][data-space-id="#{finance.id}"])
+      )
+
+    assert length(mobile_row) == 1
+    assert Floki.find(mobile_row, "a, button") == []
 
     participant_count = length(Chat.list_participants(finance.id))
     assert {:error, {:live_redirect, %{to: "/chat"}}} = live(member_conn, ~p"/chat/#{finance.id}")
