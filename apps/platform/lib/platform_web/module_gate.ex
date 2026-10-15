@@ -12,6 +12,7 @@ defmodule PlatformWeb.ModuleGate do
   @view_modules %{
     PlatformWeb.ChatLive => {:chat, nil},
     PlatformWeb.ActivityLive => {:activity, nil},
+    PlatformWeb.ChangelogLive => {:activity, nil},
     PlatformWeb.InboxLive => {:inbox, nil},
     PlatformWeb.TasksLive => {:tasks, nil},
     PlatformWeb.FilesLive => {:files, nil},
@@ -37,9 +38,9 @@ defmodule PlatformWeb.ModuleGate do
     PlatformWeb.AdminSignInUsersLive => {:admin, nil}
   }
 
-  # Changelog is public to every signed-in internal user and has no module
-  # permission or cross-org resource behind it.
-  @ungated [PlatformWeb.ChangelogLive]
+  # Every current gated-session view has a module. Keep an explicit list so
+  # any future exception must be deliberate and documented here.
+  @ungated []
 
   @doc "The explicit module mapping used by the mount gate and its route sweep."
   def view_modules, do: @view_modules

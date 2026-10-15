@@ -102,7 +102,7 @@ defmodule PlatformWeb.ModuleGateTest do
     end
   end
 
-  test "the mount gate refuses a guest Tasks socket even after a chat admission" do
+  test "the mount gate refuses guest Tasks and Changelog sockets after chat admission" do
     user = user!()
 
     {:ok, _} =
@@ -111,15 +111,17 @@ defmodule PlatformWeb.ModuleGateTest do
         org_id: Tenancy.get_org_by_slug!("sxi").id
       })
 
-    socket = %Phoenix.LiveView.Socket{
-      endpoint: PlatformWeb.Endpoint,
-      view: PlatformWeb.TasksLive,
-      assigns: %{
-        __changed__: %{},
-        access_scope: Scope.for_user(Platform.Accounts.get_user(user.id))
+    for view <- [PlatformWeb.TasksLive, PlatformWeb.ChangelogLive] do
+      socket = %Phoenix.LiveView.Socket{
+        endpoint: PlatformWeb.Endpoint,
+        view: view,
+        assigns: %{
+          __changed__: %{},
+          access_scope: Scope.for_user(Platform.Accounts.get_user(user.id))
+        }
       }
-    }
 
-    assert {:halt, _socket} = ModuleGate.on_mount(:default, %{}, %{}, socket)
+      assert {:halt, _socket} = ModuleGate.on_mount(:default, %{}, %{}, socket)
+    end
   end
 end
