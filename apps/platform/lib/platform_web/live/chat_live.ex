@@ -929,9 +929,10 @@ defmodule PlatformWeb.ChatLive do
     # inside MeetingLive, so `push_navigate/2` would move the PARENT surface out
     # of the meeting. Denial here is silent and local to the pane.
     space =
-      if space && (external_space_denied?(socket, space) or restricted_space_denied?(socket, space)),
-        do: nil,
-        else: space
+      if space &&
+           (external_space_denied?(socket, space) or restricted_space_denied?(socket, space)),
+         do: nil,
+         else: space
 
     case space do
       nil ->
@@ -1076,21 +1077,20 @@ defmodule PlatformWeb.ChatLive do
     # `external_space_denied?/2`: the two ask different questions of different
     # populations, and collapsing them would put the external allowlist in the
     # internal path.
-    if space && not external_space_denied?(socket, space) &&
-         restricted_space_denied?(socket, space) do
-      {:noreply,
-       socket
-       |> put_flash(:error, "Restricted, ask an admin")
-       |> handle_route_stale("chat")
-       |> push_navigate(to: ~p"/chat")}
-    else
+    restricted? =
+      space && not external_space_denied?(socket, space) &&
+        restricted_space_denied?(socket, space)
+
     if is_nil(space) or external_space_denied?(socket, space) or
-         implicit_join_denied?(socket, space) do
+         implicit_join_denied?(socket, space) or restricted? do
       # The URL saved by the RouteResume hook (`route_resume:chat` in
       # localStorage) points at a space this user can no longer resolve
       # (deleted, unauthorized). Signal the client to clear the entry so the
       # next Chat-tile click falls back to `/chat` rather than looping right
       # back into this dead resolve. See PlatformWeb.RouteResume.
+      socket =
+        if restricted?, do: put_flash(socket, :error, "Restricted, ask an admin"), else: socket
+
       {:noreply,
        socket
        |> handle_route_stale("chat")
@@ -1117,7 +1117,12 @@ defmodule PlatformWeb.ChatLive do
       participants = Chat.list_participants(space.id)
 
       page_title =
-        space_page_title(space, participants, socket.assigns.user_id, space_mask(socket.assigns))
+        space_page_title(
+          space,
+          participants,
+          socket.assigns.user_id,
+          space_mask(socket.assigns)
+        )
 
       # Refresh sidebar lists. rbac-external-users M5: re-thread the same
       # `@external_scope` the mount used so a channel-to-channel nav re-derives
@@ -1205,11 +1210,15 @@ defmodule PlatformWeb.ChatLive do
        # earlier in this pipeline would be wiped a line later.
        |> apply_anchor_arrival(anchor)}
     end
-    end
   end
 
   def handle_params(_params, _url, socket) do
-    case Enum.reject(socket.assigns.channels, &MapSet.member?(socket.assigns.restricted_channel_ids, &1.id)) do
+    restricted_ids =
+      restricted_channel_ids(socket, socket.assigns.channels, socket.assigns.archived_channels)
+
+    socket = assign(socket, :restricted_channel_ids, restricted_ids)
+
+    case Enum.reject(socket.assigns.channels, &MapSet.member?(restricted_ids, &1.id)) do
       [first | _] ->
         {:noreply, push_navigate(socket, to: ~p"/chat/#{space_nav_target(first)}")}
 
@@ -4364,7 +4373,10 @@ defmodule PlatformWeb.ChatLive do
   end
 
   defp restricted_space_denied?(socket, %{id: id, kind: "channel"}) do
-    not Access.can?(access_scope(socket), "chat.read", id)
+    scope = access_scope(socket)
+
+    MapSet.member?(Access.restricted_space_ids(scope, [id]), id) and
+      not Access.can?(scope, "chat.read", id)
   end
 
   defp restricted_space_denied?(_socket, _space), do: false
