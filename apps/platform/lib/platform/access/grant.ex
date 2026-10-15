@@ -60,6 +60,57 @@ defmodule Platform.Access.Grant do
   def target(%__MODULE__{resource_type: type, resource_id: id}),
     do: {String.to_existing_atom(type), id}
 
+  @snapshot_fields ~w(id org_id principal_type principal_id principal_role_key permission
+                      resource_type resource_id effect granted_by inserted_at)a
+
+  @doc """
+  Every column of `grant` as a JSON-safe, string-keyed map (task
+  01a1386e-30bd stage 1). `Platform.Access.Changes` stores these in the
+  ledger's `before` / `after`, and `from_snapshot/1` restores one losslessly:
+  the same id, effect, principal, resource, `granted_by` and `inserted_at`
+  (microseconds included).
+  """
+  @spec snapshot(t()) :: %{String.t() => term()}
+  def snapshot(%__MODULE__{} = grant) do
+    Map.new(@snapshot_fields, fn
+      :inserted_at -> {"inserted_at", grant.inserted_at && DateTime.to_iso8601(grant.inserted_at)}
+      field -> {Atom.to_string(field), Map.fetch!(grant, field)}
+    end)
+  end
+
+  @doc """
+  The `Repo.insert_all/3` row for a `snapshot/1` map: every column, typed.
+  The inverse of `snapshot/1`.
+  """
+  @spec from_snapshot(%{String.t() => term()}) :: keyword()
+  def from_snapshot(%{} = snapshot) do
+    Enum.map(@snapshot_fields, fn
+      :inserted_at ->
+        {:ok, at, 0} = DateTime.from_iso8601(Map.fetch!(snapshot, "inserted_at"))
+        {:inserted_at, at}
+
+      field ->
+        {field, Map.fetch!(snapshot, Atom.to_string(field))}
+    end)
+  end
+
+  @doc """
+  The (principal, permission, resource) tuple of a grant or a `snapshot/1`
+  map, as the string the ledger's `tuple_keys` stores. The access_grants
+  unique index is over exactly this tuple, so one key names at most one row.
+  """
+  @spec tuple_key(t() | map()) :: String.t()
+  def tuple_key(%__MODULE__{} = grant), do: grant |> snapshot() |> tuple_key()
+
+  def tuple_key(%{"principal_type" => type} = snap) do
+    principal = snap["principal_id"] || snap["principal_role_key"]
+
+    Enum.join(
+      [type, principal, snap["permission"], snap["resource_type"], snap["resource_id"]],
+      "|"
+    )
+  end
+
   @doc false
   def changeset(grant, attrs) do
     grant

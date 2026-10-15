@@ -355,7 +355,17 @@ defmodule Platform.Audit.TelemetryHandler do
     # / actor_id. Never the source, args, state or result. Sync (default
     # handle_event clause). Registration here is load-bearing: an emit with
     # no matching @events entry fails SILENTLY.
-    [:platform, :canvas, :script_run]
+    [:platform, :canvas, :script_run],
+    # Task 01a1386e-30bd stage 1 — one committed change to the grants table.
+    # Emitted by `Platform.Access.Changes` AFTER its transaction commits
+    # (grant, deny, revoke, undo, system_repoint). Metadata carries
+    # actor_id / actor_type ("user" | "agent" | "system"), resource_type
+    # "access_grant_change", resource_id (the change id), action,
+    # via_agent_id, bypass, org_id, undoes_change_id and tuple_keys. The
+    # ledger row is the undo source; this is its mirror on the platform
+    # stream. Sync (default handle_event clause). Registration here is
+    # load-bearing: an emit with no matching @events entry fails SILENTLY.
+    [:platform, :access, :grant_changed]
 
     # NOTE: `[:platform, :memory, :proposal_promoted]` is NOT registered
     # here. `Platform.Memory.Proposals.queue_promotion/1` (task 019f70e9

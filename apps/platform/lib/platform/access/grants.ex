@@ -43,6 +43,16 @@ defmodule Platform.Access.Grants do
   falls back to the install's root org. A role grant applies to holders of
   the role key in that org. Pass `:org_id` to override.
 
+  ## Every write is ledgered (task 01a1386e-30bd stage 1)
+
+  `grant/2`, `deny/2` and `revoke/2` take `actor:` (a `%Platform.Access.Scope{}`,
+  required) and `via_agent_id:`, and run through
+  `Platform.Access.Changes.commit/4`, which writes the
+  `Platform.Access.Change` row with the exact before/after rows in the same
+  transaction. The arity-1 forms act as `Scope.system/0` (recorded
+  `actor_type: "system"`). `merge_memory_nodes/2` is recorded as a
+  `system_repoint` change when it moves or drops any row.
+
   ## Precedence is not here
 
   `merge_memory_nodes/2` keeps a deny over an allow when two nodes' grants
@@ -53,7 +63,7 @@ defmodule Platform.Access.Grants do
 
   import Ecto.Query, only: [from: 2, subquery: 1]
 
-  alias Platform.Access.{Grant, Role, RoleAssignment}
+  alias Platform.Access.{Changes, Grant, Role, RoleAssignment, Scope}
   alias Platform.Tenancy.OrgMembership
   alias Platform.Agents.{Agent, AgentRuntime}
   alias Platform.Chat.{Canvas, Space}
@@ -68,23 +78,67 @@ defmodule Platform.Access.Grants do
           {:user, binary()} | {:agent, binary()} | {:role, String.t(), binary()}
 
   # ── writes ────────────────────────────────────────────────────────────
+  #
+  # Every write goes through `Platform.Access.Changes.commit/4`, the one
+  # writer to `access_grants` (task 01a1386e-30bd stage 1): the change row
+  # with its before/after snapshot is written in the same transaction.
 
-  @doc "Insert an `allow` grant. See the moduledoc for the accepted shapes."
+  @doc """
+  Insert an `allow` grant as `Platform.Access.Scope.system/0` (recorded
+  `actor_type: "system"`). Equivalent to `grant(attrs, actor: Scope.system())`.
+  """
   @spec grant(map()) :: {:ok, Grant.t()} | {:error, term()}
-  def grant(attrs), do: insert(attrs, "allow")
+  def grant(attrs), do: grant(attrs, actor: Scope.system())
 
-  @doc "Insert a `deny` grant. See the moduledoc for the accepted shapes."
+  @doc """
+  Insert an `allow` grant as `opts[:actor]` (a `%Scope{}`, required), with
+  `opts[:via_agent_id]` recorded on the ledger row. See the moduledoc for the
+  accepted shapes. `granted_by` defaults to the actor's user id.
+  """
+  @spec grant(map(), keyword()) :: {:ok, Grant.t()} | {:error, term()}
+  def grant(attrs, opts), do: insert(attrs, "allow", "grant", opts)
+
+  @doc "Insert a `deny` grant as `Platform.Access.Scope.system/0`."
   @spec deny(map()) :: {:ok, Grant.t()} | {:error, term()}
-  def deny(attrs), do: insert(attrs, "deny")
+  def deny(attrs), do: deny(attrs, actor: Scope.system())
 
-  @doc "Delete a grant by struct or id. `{:error, :not_found}` when absent."
-  @spec revoke(Grant.t() | binary()) :: {:ok, Grant.t()} | {:error, :not_found}
-  def revoke(%Grant{id: id}), do: revoke(id)
+  @doc "Insert a `deny` grant as `opts[:actor]`. Options as `grant/2`."
+  @spec deny(map(), keyword()) :: {:ok, Grant.t()} | {:error, term()}
+  def deny(attrs, opts), do: insert(attrs, "deny", "deny", opts)
 
-  def revoke(id) when is_binary(id) do
+  @doc """
+  Delete a grant by struct or id as `Platform.Access.Scope.system/0`.
+  `{:error, :not_found}` when absent.
+  """
+  @spec revoke(Grant.t() | binary()) :: {:ok, Grant.t()} | {:error, term()}
+  def revoke(grant_or_id), do: revoke(grant_or_id, actor: Scope.system())
+
+  @doc "Delete a grant by struct or id as `opts[:actor]`. Options as `grant/2`."
+  @spec revoke(Grant.t() | binary(), keyword()) :: {:ok, Grant.t()} | {:error, term()}
+  def revoke(%Grant{id: id}, opts), do: revoke(id, opts)
+
+  def revoke(id, opts) when is_binary(id) do
+    actor = actor!(opts)
+
     with true <- Platform.UUID.valid?(id),
          %Grant{} = grant <- Repo.get(Grant, id) do
-      Repo.delete(grant)
+      key = Grant.tuple_key(grant)
+
+      mutation = fn ->
+        case Repo.get(Grant, id) do
+          %Grant{} = current -> Repo.delete(current)
+          nil -> {:error, :not_found}
+        end
+      end
+
+      actor
+      |> Changes.commit("revoke", mutation,
+        query: tuple_query(grant),
+        keys: [key],
+        org_id: grant.org_id,
+        via_agent_id: Keyword.get(opts, :via_agent_id)
+      )
+      |> unwrap()
     else
       _ -> {:error, :not_found}
     end
@@ -276,7 +330,8 @@ defmodule Platform.Access.Grants do
     end)
   end
 
-  defp insert(attrs, effect) do
+  defp insert(attrs, effect, action, opts) do
+    actor = actor!(opts)
     attrs = Map.new(attrs)
 
     with {:ok, principal} <- principal_fields(Map.get(attrs, :principal)),
@@ -289,12 +344,62 @@ defmodule Platform.Access.Grants do
           resource_type: type,
           resource_id: id,
           effect: effect,
-          granted_by: Map.get(attrs, :granted_by)
+          granted_by: Map.get(attrs, :granted_by) || actor_user_id(actor)
         })
 
-      %Grant{}
-      |> Grant.changeset(fields)
-      |> Repo.insert()
+      changeset = Grant.changeset(%Grant{}, fields)
+
+      if changeset.valid? do
+        tuple = Ecto.Changeset.apply_changes(changeset)
+
+        actor
+        |> Changes.commit(action, fn -> Repo.insert(changeset) end,
+          query: tuple_query(tuple),
+          keys: [Grant.tuple_key(tuple)],
+          org_id: org_id,
+          via_agent_id: Keyword.get(opts, :via_agent_id)
+        )
+        |> unwrap()
+      else
+        {:error, changeset}
+      end
+    end
+  end
+
+  defp actor!(opts) do
+    case Keyword.fetch(opts, :actor) do
+      {:ok, %Scope{} = actor} ->
+        actor
+
+      _ ->
+        raise ArgumentError,
+              "Platform.Access.Grants writes need `actor:` (a %Platform.Access.Scope{}); " <>
+                "the arity-1 forms act as Scope.system/0"
+    end
+  end
+
+  defp unwrap({:ok, %{result: result}}), do: {:ok, result}
+  defp unwrap({:error, _} = error), do: error
+
+  defp actor_user_id(%Scope{actor: %Platform.Accounts.User{id: id}}), do: id
+  defp actor_user_id(_), do: nil
+
+  # The rows of one (principal, permission, resource) tuple: at most one,
+  # by the access_grants unique index.
+  defp tuple_query(%Grant{} = g) do
+    base =
+      from(r in Grant,
+        where:
+          r.principal_type == ^g.principal_type and r.permission == ^g.permission and
+            r.resource_type == ^g.resource_type and r.resource_id == ^g.resource_id
+      )
+
+    case g do
+      %Grant{principal_id: nil, principal_role_key: key} ->
+        from(r in base, where: is_nil(r.principal_id) and r.principal_role_key == ^key)
+
+      %Grant{principal_id: pid} ->
+        from(r in base, where: r.principal_id == ^pid and is_nil(r.principal_role_key))
     end
   end
 
@@ -409,6 +514,25 @@ defmodule Platform.Access.Grants do
   @spec merge_memory_nodes(Ecto.UUID.t(), Ecto.UUID.t()) :: :ok
   def merge_memory_nodes(displaced_node_id, moved_node_id)
       when is_binary(displaced_node_id) and is_binary(moved_node_id) do
+    query =
+      from(g in Grant,
+        where:
+          g.resource_type == "memory_node" and
+            g.resource_id in ^[displaced_node_id, moved_node_id]
+      )
+
+    case Changes.commit(
+           Scope.system(),
+           "system_repoint",
+           fn -> {:ok, repoint(displaced_node_id, moved_node_id)} end,
+           query: query
+         ) do
+      {:ok, _} -> :ok
+      {:error, reason} -> Repo.rollback(reason)
+    end
+  end
+
+  defp repoint(displaced_node_id, moved_node_id) do
     params = [Ecto.UUID.dump!(moved_node_id), Ecto.UUID.dump!(displaced_node_id)]
 
     # 1. A deny on the displaced node beats an allow on the moved node.
