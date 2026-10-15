@@ -280,8 +280,13 @@ defmodule Platform.Meetings.MeetingNotifier do
   defp readable_recipients(recipients, %Meeting{chat_space_id: space_id}) do
     allowed? = fn user_id ->
       user = Repo.get(Platform.Accounts.User, user_id)
+
       is_nil(user) or
-        Platform.Access.check(Platform.Access.Scope.for_user(user), "chat.read", {:space, space_id}) == :ok
+        Platform.Access.check(
+          Platform.Access.Scope.for_user(user),
+          "chat.read",
+          {:space, space_id}
+        ) == :ok
     end
 
     allowed_ids = recipients.user_ids |> Enum.filter(allowed?) |> MapSet.new()

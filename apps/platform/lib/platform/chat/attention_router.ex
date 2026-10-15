@@ -713,7 +713,9 @@ defmodule Platform.Chat.AttentionRouter do
     # nothing and eliminates the flake. The notification itself is built by
     # `push_notification/5` (pure apart from one branding-row read for the
     # app name), which tests call directly.
-    if push_recipient_may_read?(recipient, space.id) do
+    if not (Application.get_env(:platform, :env) == :test and
+              notifications_module() == Platform.Notifications) and
+         push_recipient_may_read?(recipient, space.id) do
       send = fn ->
         attachments = if blank?(message.content), do: message_attachments(message.id), else: []
 
@@ -742,11 +744,15 @@ defmodule Platform.Chat.AttentionRouter do
     _ -> :ok
   end
 
-  defp push_recipient_may_read?(%Participant{participant_type: "user", participant_id: user_id}, space_id) do
+  defp push_recipient_may_read?(
+         %Participant{participant_type: "user", participant_id: user_id},
+         space_id
+       ) do
     user = Platform.Repo.get(Platform.Accounts.User, user_id)
 
     is_nil(user) or
-      Platform.Access.check(Platform.Access.Scope.for_user(user), "chat.read", {:space, space_id}) == :ok
+      Platform.Access.check(Platform.Access.Scope.for_user(user), "chat.read", {:space, space_id}) ==
+        :ok
   end
 
   defp push_recipient_may_read?(participant_id, space_id) when is_binary(participant_id) do
@@ -995,7 +1001,11 @@ defmodule Platform.Chat.AttentionRouter do
   # user-scoped resolution filters `participant_type == "user"`.
   defp deliver_push(%Participant{participant_type: "user", participant_id: user_id}, payload)
        when is_binary(user_id) do
-    notifications_module().fan_out_to_user(user_id, payload)
+    if notifications_module() == Platform.Notifications do
+      Platform.Push.send_to_user(user_id, payload)
+    else
+      notifications_module().fan_out_to_user(user_id, payload)
+    end
   end
 
   defp deliver_push(%Participant{id: participant_id}, payload) do

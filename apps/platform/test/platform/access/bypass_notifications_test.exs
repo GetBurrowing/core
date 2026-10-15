@@ -1,13 +1,13 @@
 defmodule Platform.Access.BypassNotificationsTest do
-  use Platform.DataCase, async: false
+  use PlatformWeb.ConnCase, async: false
 
   import Ecto.Query
+  import Phoenix.LiveViewTest
   import Platform.TenancyFixtures
 
   alias Platform.Access.{Grants, Scope}
   alias Platform.Accounts.User
   alias Platform.Chat
-  alias Platform.Chat.{AttentionRouter, Message}
   alias Platform.Inbox
   alias Platform.Inbox.Item
   alias Platform.Orchestration.ExecutionSpace
@@ -40,7 +40,8 @@ defmodule Platform.Access.BypassNotificationsTest do
     %{project: project, task: task, user: user}
   end
 
-  test "emit refuses task rows before insert, broadcast and push; a preexisting row leaves list and badge", ctx do
+  test "emit refuses task rows before insert, broadcast and push; a preexisting row leaves list and badge",
+       ctx do
     user = ctx.user
     :ok = Inbox.subscribe(user.id)
 
@@ -75,20 +76,43 @@ defmodule Platform.Access.BypassNotificationsTest do
     assert Repo.aggregate(from(i in Item, where: i.user_id == ^user.id), :count) == 1
 
     scope = Scope.for_user(user)
-    refute earlier.id in Repo.all(select(Inbox.reachable_unread_scope(user.id, false, scope), [i], i.id))
+
+    refute earlier.id in Repo.all(
+             select(Inbox.reachable_unread_scope(user.id, false, scope), [i], i.id)
+           )
+
     assert Repo.aggregate(Inbox.reachable_badge_scope(user.id, false, scope), :count) == 0
     assert Inbox.reachable_unread_count(user.id) == 0
+
+    {:ok, view, html} = live(init_test_session(ctx.conn, current_user_id: user.id), "/inbox")
+    refute html =~ "ZQX-BYPASS-NOTIF"
+    refute render(view) =~ "ZQX-BYPASS-NOTIF"
   end
 
   test "a mentioned participant gets a push before a chat deny and none after", ctx do
     user = ctx.user
     {:ok, space} = ExecutionSpace.find_or_create(ctx.task.id)
     author = user!(ctx.project.org_id)
-    {:ok, author_row} = Chat.add_participant(space.id, %{participant_type: "user", participant_id: author.id})
-    {:ok, recipient} = Chat.add_participant(space.id, %{participant_type: "user", participant_id: user.id})
 
-    before = message!(space.id, author_row.id, "@[#{user.name}] ZQX-BYPASS-NOTIF")
-    assert {:ok, _} = AttentionRouter.route(before)
+    {:ok, author_row} =
+      Chat.add_participant(space.id, %{
+        participant_type: "user",
+        participant_id: author.id,
+        joined_at: DateTime.utc_now()
+      })
+
+    {:ok, recipient} =
+      Chat.add_participant(space.id, %{
+        participant_type: "user",
+        participant_id: user.id,
+        joined_at: DateTime.utc_now()
+      })
+
+    :ok = Inbox.subscribe(user.id)
+
+    before = post!(space.id, author_row.id, "@[#{user.name}] ZQX-BYPASS-NOTIF")
+    assert_receive {:inbox_item_added, %Item{source_id: before_id}}
+    assert before_id == before.id
     assert_receive {:push, user_id, payload}
     assert user_id == user.id
     assert payload.body =~ "ZQX-BYPASS-NOTIF"
@@ -100,8 +124,8 @@ defmodule Platform.Access.BypassNotificationsTest do
         resource: {:project, ctx.project.id}
       })
 
-    after_deny = message!(space.id, author_row.id, "@[#{user.name}] ZQX-BYPASS-NOTIF")
-    assert {:ok, _} = AttentionRouter.route(after_deny)
+    _after_deny = post!(space.id, author_row.id, "@[#{user.name}] ZQX-BYPASS-NOTIF")
+    refute_receive {:inbox_item_added, _}, 100
     refute_receive {:push, ^user_id, _}, 100
     assert recipient.participant_id == user.id
   end
@@ -119,9 +143,18 @@ defmodule Platform.Access.BypassNotificationsTest do
     user
   end
 
-  defp message!(space_id, participant_id, content) do
-    %Message{}
-    |> Message.changeset(%{space_id: space_id, participant_id: participant_id, content: content})
-    |> Repo.insert!()
+  defp post!(space_id, participant_id, content) do
+    {:ok, message} =
+      Chat.post_message(
+        %{
+          space_id: space_id,
+          participant_id: participant_id,
+          content_type: "text",
+          content: content
+        },
+        from_pid: self()
+      )
+
+    message
   end
 end

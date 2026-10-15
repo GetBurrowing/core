@@ -366,7 +366,9 @@ defmodule Platform.Inbox do
 
       reviews = from(r in ReviewRequest, where: r.task_id in subquery(tasks), select: r.id)
 
-      where(query, [i],
+      where(
+        query,
+        [i],
         i.source_type not in ["task", "task_review", "review_request"] or
           (i.source_type in ["task", "task_review"] and i.source_id in subquery(tasks)) or
           (i.source_type == "review_request" and i.source_id in subquery(reviews))
@@ -386,7 +388,9 @@ defmodule Platform.Inbox do
       messages = from(m in Message, where: m.space_id in subquery(spaces), select: m.id)
       meetings = from(m in Meeting, where: m.chat_space_id in subquery(spaces), select: m.id)
 
-      where(query, [i],
+      where(
+        query,
+        [i],
         i.source_type not in ["chat_message", "meeting"] or
           (i.source_type == "chat_message" and i.source_id in subquery(messages)) or
           (i.source_type == "meeting" and i.source_id in subquery(meetings))
