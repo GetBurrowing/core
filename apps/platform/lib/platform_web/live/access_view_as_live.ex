@@ -47,7 +47,11 @@ defmodule PlatformWeb.AccessViewAsLive do
       <section>
         <h2 class="font-medium">Rail destinations</h2>
         <ul data-role="view-as-rail" class="mt-2 grid grid-cols-2 gap-2 text-sm">
-          <li :for={key <- @rail_keys} data-destination={key} class="rounded border border-base-300 px-3 py-2">
+          <li
+            :for={key <- @rail_keys}
+            data-destination={key}
+            class="rounded border border-base-300 px-3 py-2"
+          >
             {key}
           </li>
         </ul>

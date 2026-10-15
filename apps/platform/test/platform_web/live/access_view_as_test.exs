@@ -96,11 +96,19 @@ defmodule PlatformWeb.AccessViewAsTest do
 
   test "channel resources match the real scoped listing and viewer intersection", ctx do
     {:ok, channel} =
-      Chat.create_space(%{name: "View channel", slug: "view-#{System.unique_integer([:positive])}", kind: "channel", org_id: ctx.org.id})
+      Chat.create_space(%{
+        name: "View channel",
+        slug: "view-#{System.unique_integer([:positive])}",
+        kind: "channel",
+        org_id: ctx.org.id
+      })
 
     viewer = Scope.for_user(Accounts.get_user(ctx.root.id))
     {:ok, result} = ViewAs.compute(viewer, {:user, ctx.member.id})
-    real = Chat.list_spaces(kind: "channel", scope: Scope.for_user(Accounts.get_user(ctx.member.id)))
+
+    real =
+      Chat.list_spaces(kind: "channel", scope: Scope.for_user(Accounts.get_user(ctx.member.id)))
+
     expected = Enum.filter(real, &Platform.Access.can?(viewer, "chat.read", &1))
     assert Enum.map(result.resources.channels, & &1.id) == Enum.map(expected, & &1.id)
     assert channel.id in Enum.map(expected, & &1.id)
@@ -126,7 +134,11 @@ defmodule PlatformWeb.AccessViewAsTest do
 
     for permission <- ~w(access.manage tasks.read) do
       assert {:ok, _} =
-               Grants.grant(%{principal: manager, permission: permission, resource: {:project, p.id}})
+               Grants.grant(%{
+                 principal: manager,
+                 permission: permission,
+                 resource: {:project, p.id}
+               })
     end
 
     {:ok, result} =
@@ -139,6 +151,7 @@ defmodule PlatformWeb.AccessViewAsTest do
   test "agent target is explicitly labelled uncapped", ctx do
     n = System.unique_integer([:positive])
     runtime_id = "view-as-runtime-#{n}"
+
     assert {:ok, _runtime} =
              Federation.register_runtime(ctx.member.id, %{
                runtime_id: runtime_id,

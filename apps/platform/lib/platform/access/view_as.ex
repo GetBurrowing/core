@@ -39,7 +39,9 @@ defmodule Platform.Access.ViewAs do
 
   defp resolve({:user, id}) when is_binary(id) do
     case Accounts.get_user(id) do
-      nil -> {:error, %{rule: :not_found}}
+      nil ->
+        {:error, %{rule: :not_found}}
+
       user ->
         org_ids = Enum.map(user.org_memberships, & &1.org_id)
         surface = if Tenancy.external_user?(user), do: :external_chat, else: :authenticated
@@ -49,20 +51,26 @@ defmodule Platform.Access.ViewAs do
 
   defp resolve({:role, org_id, key}) when key in @roles do
     case Tenancy.get_org(org_id) do
-      nil -> {:error, %{rule: :not_found}}
+      nil ->
+        {:error, %{rule: :not_found}}
+
       org ->
         scope = Scope.for_role(org, key)
-        {:ok, scope, scope.actor, [org.id], if(key == "guest", do: :external_chat, else: :authenticated)}
+
+        {:ok, scope, scope.actor, [org.id],
+         if(key == "guest", do: :external_chat, else: :authenticated)}
     end
   end
 
   defp resolve({:agent, runtime_id}) when is_binary(runtime_id) do
     runtime =
       Federation.get_runtime_by_runtime_id(runtime_id) ||
-        (if Platform.UUID.valid?(runtime_id), do: Federation.get_runtime(runtime_id))
+        if Platform.UUID.valid?(runtime_id), do: Federation.get_runtime(runtime_id)
 
     case runtime do
-      nil -> {:error, %{rule: :not_found}}
+      nil ->
+        {:error, %{rule: :not_found}}
+
       runtime ->
         owner = Accounts.get_user(runtime.owner_user_id)
         org_ids = if owner, do: Enum.map(owner.org_memberships, & &1.org_id), else: []
@@ -79,7 +87,9 @@ defmodule Platform.Access.ViewAs do
 
     resource_manager? =
       Enum.any?(org_ids, fn org_id ->
-        projects = Tasks.list_projects_for_user(viewer.actor, org_id: org_id, access_scope: viewer)
+        projects =
+          Tasks.list_projects_for_user(viewer.actor, org_id: org_id, access_scope: viewer)
+
         channels = Chat.list_spaces(kind: "channel", scope: viewer)
 
         Enum.any?(projects, &Access.can?(viewer, "access.manage", &1)) or
