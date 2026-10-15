@@ -59,6 +59,7 @@ defmodule Platform.Chat.AttentionRouter do
 
   require Logger
 
+  alias Platform.Access.AgentWake
   alias Platform.Chat
   alias Platform.Chat.{ActiveAgentStore, AgentResponder, Message, Participant, Presence, Space}
   alias Platform.Chat.MentionIdentity
@@ -259,7 +260,16 @@ defmodule Platform.Chat.AttentionRouter do
     # Exclude the message author
     recipients = Enum.reject(participants, &(&1.id == author_id))
 
-    agent_recipients = Enum.filter(recipients, &(&1.participant_type == "agent"))
+    # Task 01a1386e-45a5 stage 2 (RBAC stack member 7): an agent ALREADY a
+    # participant of a space its owner, or its own grants, may not read is
+    # never woken here, by a mention, the mutex or the execution-assignee
+    # fallback. Decided once per routed message (`wake_gate/2`).
+    wake = wake_gate(space_id, participants)
+
+    agent_recipients =
+      recipients
+      |> Enum.filter(&(&1.participant_type == "agent"))
+      |> Enum.filter(&wake.may_wake?.(&1.participant_id))
 
     # Task 019f671f Stage 3: filter archived-user participants out of the
     # human recipient list so attention routing (mentions, @[here] fan-out,
@@ -283,7 +293,7 @@ defmodule Platform.Chat.AttentionRouter do
 
     # ── Agent routing (mutex-based) ──────────────────────────────────────────
 
-    agent_decisions = route_agents(space, message, agent_recipients)
+    agent_decisions = route_agents(space, message, agent_recipients, wake)
 
     # ── Human participant routing ────────────────────────────────────────────
     #
@@ -404,7 +414,7 @@ defmodule Platform.Chat.AttentionRouter do
   # A later step may emit its own reason for addressed mail (e.g.
   # `:email_addressed`); it must be a deliberate new branch here, not a
   # fall-through into activity routing. Human routing is unchanged.
-  defp route_agents(%Space{} = space, %Message{} = message, agent_recipients) do
+  defp route_agents(%Space{} = space, %Message{} = message, agent_recipients, wake) do
     cond do
       untrusted_inbound?(message) ->
         []
@@ -413,8 +423,37 @@ defmodule Platform.Chat.AttentionRouter do
         route_role_scoped(space, message, agent_recipients, role_key)
 
       true ->
-        route_agents_by_activity(space, message, agent_recipients)
+        route_agents_by_activity(space, message, agent_recipients, wake)
     end
+  end
+
+  # The registry's read permission for a chat space (`Platform.Access.Registry`).
+  @chat_read "chat.read"
+
+  # Task 01a1386e-45a5 stage 2. The wake decision for this ONE routed
+  # message, memoized: `Platform.Access.AgentWake.denied/3` is asked once
+  # for every agent participant of the space (one `EXISTS` query when no
+  # grant is reachable from any of them, none when there are no agent
+  # participants). An agent outside that set (the execution-assignee
+  # fallback naming an agent not yet in the space) is asked on its own,
+  # only when that fallback reaches it.
+  defp wake_gate(space_id, participants) do
+    known =
+      participants
+      |> Enum.filter(&(&1.participant_type == "agent"))
+      |> MapSet.new(& &1.participant_id)
+
+    refused = AgentWake.denied(MapSet.to_list(known), @chat_read, {:space, space_id})
+
+    may_wake? = fn agent_id ->
+      if MapSet.member?(known, agent_id) do
+        not MapSet.member?(refused, agent_id)
+      else
+        not MapSet.member?(AgentWake.denied([agent_id], @chat_read, {:space, space_id}), agent_id)
+      end
+    end
+
+    %{may_wake?: may_wake?}
   end
 
   @untrusted_inbound_sources ~w(email_inbound federation_inbound)
@@ -481,14 +520,14 @@ defmodule Platform.Chat.AttentionRouter do
     []
   end
 
-  defp route_agents_by_activity(%Space{kind: "dm"}, _message, agent_recipients) do
+  defp route_agents_by_activity(%Space{kind: "dm"}, _message, agent_recipients, _wake) do
     # DM spaces: always route to the agent participant directly
     Enum.map(agent_recipients, fn p ->
       %{participant_id: p.id, reason: :directed}
     end)
   end
 
-  defp route_agents_by_activity(%Space{} = space, %Message{} = message, agent_recipients) do
+  defp route_agents_by_activity(%Space{} = space, %Message{} = message, agent_recipients, wake) do
     # Build roster lookup for role validation
     roster = Chat.list_space_agents(space.id)
     roster_by_agent_id = Map.new(roster, fn sa -> {sa.agent_id, sa} end)
@@ -516,7 +555,7 @@ defmodule Platform.Chat.AttentionRouter do
 
     case length(mentioned_agents) do
       0 ->
-        route_no_mention(space, message, agent_recipients)
+        route_no_mention(space, message, agent_recipients, wake)
 
       1 ->
         # Single @mention → set as active agent (mutex)
@@ -539,9 +578,10 @@ defmodule Platform.Chat.AttentionRouter do
   defp route_no_mention(
          %Space{kind: "execution"} = space,
          %Message{participant_id: author_id},
-         agent_recipients
+         agent_recipients,
+         wake
        ) do
-    case execution_assignee_participant(space) do
+    case execution_assignee_participant(space, wake) do
       {:ok, %Participant{id: assignee_participant_id}}
       when assignee_participant_id == author_id ->
         ActiveAgentStore.set_active(space.id, assignee_participant_id)
@@ -564,7 +604,7 @@ defmodule Platform.Chat.AttentionRouter do
     end
   end
 
-  defp route_no_mention(%Space{} = space, _message, agent_recipients) do
+  defp route_no_mention(%Space{} = space, _message, agent_recipients, _wake) do
     case ActiveAgentStore.get_active(space.id) do
       nil ->
         # No active agent — the eye is closed, so nobody hears this (ADR 0027).
@@ -625,10 +665,14 @@ defmodule Platform.Chat.AttentionRouter do
     end
   end
 
-  defp execution_assignee_participant(%Space{} = space) do
+  # Task 01a1386e-45a5 stage 2: an assignee the wake gate refuses is neither
+  # added to the space nor woken; the fallback falls through to the mutex
+  # branch exactly as for a task with no agent assignee.
+  defp execution_assignee_participant(%Space{} = space, wake) do
     with task_id when is_binary(task_id) <- execution_space_task_id(space),
          %TaskRecord{assignee_type: "agent", assignee_id: agent_id} when is_binary(agent_id) <-
-           Repo.get(TaskRecord, task_id) do
+           Repo.get(TaskRecord, task_id),
+         true <- wake.may_wake?.(agent_id) do
       Chat.add_agent_participant(space.id, agent_id, attention_mode: "all")
     else
       _ -> {:error, :no_execution_assignee}

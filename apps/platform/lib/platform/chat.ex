@@ -5267,17 +5267,23 @@ defmodule Platform.Chat do
             # `{:refused, agents}` so the post path can tell the author's own
             # process. Already-present agents are not refused: the mention is
             # honoured by the attention router as before.
+            #
+            # Task 01a1386e-45a5 stage 2 (RBAC stack member 7): an agent whose
+            # owner, or whose own grants, may not read the space is never
+            # summoned, by ANY author. It joins the refused list whether or
+            # not it is already present, because the attention router will
+            # not wake it here either, and the author should be told so.
             matched = mentioned_summonable_agents(space, tokens)
+            unreadable = unreadable_agents(matched, space_id)
+            readable = Enum.reject(matched, &MapSet.member?(unreadable, &1.id))
+            refused_unreadable = Enum.filter(matched, &MapSet.member?(unreadable, &1.id))
 
             result =
               if mention_summon_authorized?(space, msg) do
-                Enum.each(matched, &reinstate_on_mention(space_id, &1))
-                :ok
+                Enum.each(readable, &reinstate_on_mention(space_id, &1))
+                refused_result(refused_unreadable)
               else
-                case reject_present_agents(space_id, matched) do
-                  [] -> :ok
-                  refused -> {:refused, refused}
-                end
+                refused_result(reject_present_agents(space_id, readable) ++ refused_unreadable)
               end
 
             # Stage 3 pin-propagation pass. Only executes when the space is
@@ -5292,6 +5298,38 @@ defmodule Platform.Chat do
   end
 
   defp reinvite_and_pin_mentioned(_), do: :ok
+
+  # The registry's read permission for a chat space (`Platform.Access.Registry`).
+  @chat_read "chat.read"
+
+  defp refused_result([]), do: :ok
+  defp refused_result(agents), do: {:refused, agents}
+
+  defp unreadable_agents(agents, space_id) do
+    agents
+    |> Enum.map(& &1.id)
+    |> Platform.Access.AgentWake.denied(@chat_read, {:space, space_id})
+  end
+
+  @doc """
+  May `agent` be woken in the space `space_id` (task 01a1386e-45a5 stage 2,
+  RBAC stack member 7)? `true` unless `Platform.Access.check/3` refuses
+  `chat.read` on `{:space, space_id}` to the owner of the agent's runtime
+  (`Access.Scope.for_user/1`) or to the agent's own grants
+  (`Access.Scope.for_runtime/1`), through
+  `Platform.Access.AgentWake.check_agent/4`.
+
+  Conjunctive with every existing gate: the mention summon and the attention
+  router still apply their own participation, roster and authorship rules
+  first. With no grants reachable from the agent or its owner this is
+  `true` after one `EXISTS` query.
+  """
+  @spec agent_may_read_space?(Platform.Agents.Agent.t(), binary()) :: boolean()
+  def agent_may_read_space?(%Platform.Agents.Agent{} = agent, space_id) when is_binary(space_id) do
+    runtime = Platform.Federation.get_runtime_for_agent(agent)
+
+    Platform.Access.AgentWake.check_agent(agent, runtime, @chat_read, {:space, space_id}) == :ok
+  end
 
   # Agents a `@[…]` token in `tokens` names (slug OR display name,
   # case-insensitive) among the space's summonable set.
