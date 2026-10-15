@@ -347,7 +347,8 @@ defmodule Platform.Access.ResourceBypassAcceptanceTest do
 
       {linked, active} = runtime!(ctx.int, agent)
 
-      {:ok, task} = Tasks.create_task(%{project_id: ctx.q.id, title: marker})
+      {:ok, task} =
+        Tasks.create_task(%{project_id: ctx.q.id, title: marker, deploy_target: "production"})
       entry = %{"assignee_id" => linked.id, "assignee_type" => "agent"}
 
       task =
