@@ -172,7 +172,8 @@ defmodule Platform.Access.CustomRolesAcceptanceTest do
       user = Accounts.get_user(user_id)
       scope = Scope.for_user(user)
       root = Tenancy.get_org!(acme_org_id())
-      assert Map.get(scope.role_keys, root.id) == MapSet.new(["member"])
+      expected_base_key = user.email |> Tenancy.derive_role_from_email() |> Atom.to_string()
+      assert Map.get(scope.role_keys, root.id) == MapSet.new([expected_base_key])
       refute Scope.guest?(scope)
       assert scope.grants == []
     end
