@@ -290,7 +290,8 @@ defmodule Platform.Meetings.MeetingNotifier do
     end
 
     candidate_ids =
-      recipients.user_ids ++ Enum.map(Map.get(recipients, :chat_participants, []), & &1.participant_id)
+      recipients.user_ids ++
+        Enum.map(Map.get(recipients, :chat_participants, []), & &1.participant_id)
 
     allowed_set = candidate_ids |> Enum.uniq() |> Enum.filter(allowed?) |> MapSet.new()
 
