@@ -88,9 +88,14 @@ defmodule PlatformWeb.ChatLiveAccessScopeGuestTest do
     assert %Platform.Access.Scope{} = a.external_scope
     assert Platform.Access.Scope.guest?(a.external_scope)
 
-    assert a.external? == true
-    assert a.archived_channels == []
+    # THE LEAK, asserted first so a broken guest predicate fails on the
+    # archived list itself rather than on the flag that causes it.
+    assert a.archived_channels == [],
+           "a guest's mount received the archived-channel list: " <>
+             inspect(Enum.map(a.archived_channels, & &1.name))
+
     refute html =~ ctx.archived.name
+    assert a.external? == true
 
     # Positive control: the same archived channel IS delivered to an
     # internal user, through the same mount.
