@@ -67,9 +67,13 @@ defmodule Platform.Access.IdpGroupRoles do
   def delete(%IdpGroupRole{id: id}), do: delete(id)
 
   def delete(id) when is_binary(id) do
-    case Repo.get(IdpGroupRole, id) do
-      nil -> {:error, :not_found}
-      mapping -> Repo.delete(mapping)
+    if Platform.UUID.valid?(id) do
+      case Repo.get(IdpGroupRole, id) do
+        nil -> {:error, :not_found}
+        mapping -> Repo.delete(mapping)
+      end
+    else
+      {:error, :not_found}
     end
   end
 

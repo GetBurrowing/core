@@ -534,8 +534,14 @@ defmodule Platform.RepoLookupBoundaryTest do
      "task 01a1386d-e528 stage 2: (1) `revoke/1`'s grant id; (2) `resource_fields/1`'s `{:project | :space | :canvas | :memory_node, id}` before the three `Repo.one` lookups (this file's `@repo_one_counts` entry) and the `get(Node)` above. Used as a BOOLEAN and the string discarded; covered by precedence_test.exs \"malformed ids are not found and decide nothing\""},
     {"platform/access/agent_wake.ex", :platform_uuid_guard, "-", 1, :must_cast,
      "task 01a1386e-45a5 stage 2: `valid_id?/1` filters the agent ids `denied/3` and `check_agent/4` receive (participant_id values and `%Agent{}` ids today, but both are public API) before they are pinned with `type(^ids, {:array, :binary_id})`, so a non-UUID id is never queried and decides nothing. Used as a BOOLEAN and the string discarded"},
-    {"platform/access.ex", :platform_uuid_guard, "-", 1, :must_cast,
-     "task 01a1386e-59d1 stage 1: `holds_role?/3`'s `org_chain/1` checks the caller-supplied `org_id` (a space's org from stage 2 on, which can come from a LiveView param or an MCP argument's space) with Platform.UUID.valid?/1 before `walk_orgs/3`'s `Repo.one` (this file's `@repo_one_counts` entry). Used as a BOOLEAN: a malformed id holds nothing; covered by custom_roles_test.exs \"empty inputs, malformed ids and the system scope\""},
+    {"platform/access.ex", :platform_uuid_guard, "-", 2, :must_cast,
+     "task 01a1386e-59d1: `holds_role?/3`'s `org_chain/1` checks the caller-supplied `org_id` before `walk_orgs/3`'s `Repo.one`, and `restriction_denied?/3` checks an untyped caller-supplied resource id before querying a canvas or restriction. Both use Platform.UUID.valid?/1 as a BOOLEAN and discard malformed ids; covered by custom_roles_test.exs and space_restrictions_test.exs"},
+    {"platform/access/idp_group_roles.ex", :get, "IdpGroupRole", 1, :must_cast,
+     "task 01a1386e-59d1 stage 3: `delete/1` takes a raw mapping id through the context API; Platform.UUID.valid?/1 returns {:error, :not_found} before Repo.get for malformed ids"},
+    {"platform/access/idp_group_roles.ex", :platform_uuid_guard, "-", 1, :must_cast,
+     "guards the raw mapping id accepted by `delete/1` before Repo.get(IdpGroupRole); a malformed id returns {:error, :not_found}"},
+    {"platform/access/restrictions.ex", :platform_uuid_guard, "-", 1, :must_cast,
+     "task 01a1386e-59d1 stage 2: `restrict_space/3` checks its raw space id before the locked Repo.one query; a malformed id returns {:error, :not_found}"},
     {"platform/access/roles.ex", :get, "Org", 1, :must_cast,
      "task 01a1386e-59d1 stage 1: `create_custom_role/2` takes a raw org id from its caller; guarded by Platform.UUID.valid?/1 (this file's :platform_uuid_guard) and answering the site's `{:error, :org_not_found}`"},
     {"platform/access/roles.ex", :get, "RoleAssignment", 1, :must_cast,
@@ -1332,6 +1338,10 @@ defmodule Platform.RepoLookupBoundaryTest do
     # project, space and canvas lookups of `fetch_resource/2`, each reached
     # only through `resource_fields/1`'s Platform.UUID.valid?/1 check.
     "platform/access/grants.ex" => 3,
+    # 0 → 1 for task 01a1386e-59d1 stage 2's channel replacement: the
+    # caller's space id is checked by Platform.UUID.valid?/1 before the
+    # locked query pins it against chat_spaces.id.
+    "platform/access/restrictions.ex" => 1,
     # 0 → 1 for task 01a1386e-59d1 stage 1's `Platform.Access.holds_role?/3`:
     # `walk_orgs/3` pins an org id that is either the caller's id behind
     # `org_chain/1`'s Platform.UUID.valid?/1 guard, or a `parent_org_id` /

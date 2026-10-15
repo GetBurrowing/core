@@ -112,6 +112,7 @@ defmodule Platform.Access.IdpGroupRolesTest do
     {:ok, mapping} = IdpGroupRoles.create(%{group_value: "partners-ext", role_key: "guest"})
     assert Enum.any?(IdpGroupRoles.mappings(), &(&1.group_value == "partners-ext"))
     assert {:ok, _} = IdpGroupRoles.delete(mapping)
+    assert {:error, :not_found} = IdpGroupRoles.delete("malformed-id")
     refute IdpGroupRoles.guest_group?(["partners-ext"])
   end
 

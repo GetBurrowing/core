@@ -118,6 +118,9 @@ defmodule Platform.Access.SpaceRestrictionsTest do
     assert {:error, :invalid_role} =
              Restrictions.restrict_space(c.finance, ["missing"], c.admin.id)
 
+    assert {:error, :not_found} =
+             Restrictions.restrict_space("malformed-id", ["admin"], c.admin.id)
+
     assert Restrictions.restricted_role_keys(c.finance.id) == ["admin"]
     legacy = channel!()
     {:ok, root_role} = Roles.create_custom_role(c.root, %{name: "Legacy"})

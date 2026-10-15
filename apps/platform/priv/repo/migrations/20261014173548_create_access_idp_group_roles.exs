@@ -1,4 +1,8 @@
 defmodule Platform.Repo.Migrations.CreateAccessIdpGroupRoles do
+  @moduledoc """
+  Task 01a1386e-59d1: stores normalized IdP group to role mappings so login
+  can reconcile custom role assignments while preserving the guest default.
+  """
   use Ecto.Migration
 
   def up do
