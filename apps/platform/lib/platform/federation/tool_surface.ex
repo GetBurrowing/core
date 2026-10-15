@@ -5174,14 +5174,24 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
-  def execute("task_get", args, _context) do
+  def execute("task_get", args, context) do
     task_id = Map.get(args, "task_id") || Map.get(args, "id")
 
     # A malformed id used to reach `Repo.get/2` and raise
     # `Ecto.Query.CastError` (a 500 naming nothing). It now gets the same
     # not-found envelope as a well-formed id that names no task (01a114a8
     # stage 3).
-    record = if Platform.UUID.valid?(task_id), do: Tasks.get_task_record(task_id)
+    #
+    # RBAC v2 (task 01a1386e-45a5 stage 1): a task a `tasks.read` deny covers
+    # for the caller's Scope (`Platform.Access.check/3`) is read as no task,
+    # so the denial confirms nothing, title included.
+    record =
+      with true <- Platform.UUID.valid?(task_id),
+           :ok <- caller_access_check(context, "tasks.read", {:task, task_id}) do
+        Tasks.get_task_record(task_id)
+      else
+        _ -> nil
+      end
 
     case record do
       nil ->
@@ -5803,7 +5813,16 @@ defmodule Platform.Federation.ToolSurface do
                "task_list_canvases"
              ) do
           :ok ->
-            entries = CanvasAttachments.list_task_canvases(task_id)
+            # RBAC v2 (task 01a1386e-45a5 stage 1): a canvas the caller's
+            # `canvas.read` deny covers is dropped before serialization, so
+            # neither its id nor its title is listed.
+            entries =
+              task_id
+              |> CanvasAttachments.list_task_canvases()
+              |> Enum.filter(fn %{attachment: attachment} ->
+                caller_access_check(context, "canvas.read", {:canvas, attachment.canvas_id}) ==
+                  :ok
+              end)
 
             canvases =
               Enum.map(entries, fn %{attachment: attachment, canvas: canvas_env} ->
@@ -7607,6 +7626,12 @@ defmodule Platform.Federation.ToolSurface do
          project_id: project.id,
          count: length(files)
        })}
+    else
+      {:error, :access_denied} ->
+        project_not_found_error("file_list", Map.get(args, "project_id"))
+
+      {:error, _} = err ->
+        err
     end
   end
 
@@ -7681,6 +7706,9 @@ defmodule Platform.Federation.ToolSurface do
       nil ->
         file_metadata_not_found_error(Map.get(args, "file_id"))
 
+      {:error, :access_denied} ->
+        file_metadata_not_found_error(Map.get(args, "file_id"))
+
       {:error, _} = err ->
         err
     end
@@ -7727,6 +7755,12 @@ defmodule Platform.Federation.ToolSurface do
                "The embedding service is unavailable or returned an error. Retry shortly; fall back to file_list if it persists."
            }}
       end
+    else
+      {:error, :access_denied} ->
+        project_not_found_error("file_search", Map.get(args, "project_id"))
+
+      {:error, _} = err ->
+        err
     end
   end
 
@@ -7754,6 +7788,9 @@ defmodule Platform.Federation.ToolSurface do
                "For small files pass base64-encoded bytes as `data_base64`; for files over 25 MB pass `byte_size` (positive integer) to reserve a presigned upload slot."
            }}
       end
+    else
+      {:error, :access_denied} -> project_not_found_error("file_add", Map.get(args, "project_id"))
+      {:error, _} = err -> err
     end
   end
 
@@ -7811,6 +7848,9 @@ defmodule Platform.Federation.ToolSurface do
       end
     else
       nil ->
+        file_delete_not_found_error(Map.get(args, "file_id"))
+
+      {:error, :access_denied} ->
         file_delete_not_found_error(Map.get(args, "file_id"))
 
       {:error, _} = err ->
@@ -12054,6 +12094,9 @@ defmodule Platform.Federation.ToolSurface do
              }}
         end
 
+      {:error, :access_denied} ->
+        file_not_found_error(Map.get(args, "file_id"))
+
       {:error, _} = err ->
         err
     end
@@ -12124,6 +12167,9 @@ defmodule Platform.Federation.ToolSurface do
        }}
     else
       nil ->
+        file_not_found_error(Map.get(args, "file_id"))
+
+      {:error, :access_denied} ->
         file_not_found_error(Map.get(args, "file_id"))
 
       {:error, _} = err ->
@@ -12876,17 +12922,8 @@ defmodule Platform.Federation.ToolSurface do
   # which arg was bad.
   defp fetch_project_for_files(project_id, tool) when is_binary(project_id) do
     case Platform.Tasks.get_project(project_id) do
-      nil ->
-        {:error,
-         %{
-           error: "#{tool}: project not found (#{project_id})",
-           code: :not_found,
-           recoverable: false,
-           suggestion: "Confirm the project_id — list available projects via the platform UI."
-         }}
-
-      project ->
-        {:ok, project}
+      nil -> project_not_found_error(tool, project_id)
+      project -> {:ok, project}
     end
   end
 
@@ -12914,7 +12951,12 @@ defmodule Platform.Federation.ToolSurface do
   # we permit — same convention `authorize_org_filter/2` uses. The MCP
   # endpoint always provides an agent_id; bare-call test paths exercise
   # the agent-less branch.
-  defp authorize_file_access(context, %Platform.Tasks.Project{org_id: project_org_id}) do
+  defp authorize_file_access(context, %Platform.Tasks.Project{} = project) do
+    with :ok <- authorize_file_org(context, project),
+         do: file_access_check(context, project)
+  end
+
+  defp authorize_file_org(context, %Platform.Tasks.Project{org_id: project_org_id}) do
     agent = load_agent(context)
 
     cond do
@@ -12932,6 +12974,30 @@ defmodule Platform.Federation.ToolSurface do
           {:error, envelope} -> {:error, file_unauthorized_envelope(envelope)}
         end
     end
+  end
+
+  # RBAC v2 (task 01a1386e-45a5 stage 1): `files.read` on the project through
+  # `Platform.Access.check/3`, in conjunction with the org filter above, for
+  # the calling runtime's Scope (or an in-process caller's `:access_scope`).
+  # `{:error, :access_denied}` is mapped by each tool to the envelope an
+  # UNKNOWN id gets, so a deny confirms nothing. `file_add` and `file_delete`
+  # share this helper, so a denied project refuses them too. With no grants
+  # (or no resolvable runtime) it is `:ok`.
+  defp file_access_check(context, %Platform.Tasks.Project{id: project_id}) do
+    case caller_access_check(context, "files.read", {:project, project_id}) do
+      :ok -> :ok
+      {:error, :denied} -> {:error, :access_denied}
+    end
+  end
+
+  defp project_not_found_error(tool, project_id) do
+    {:error,
+     %{
+       error: "#{tool}: project not found (#{project_id})",
+       code: :not_found,
+       recoverable: false,
+       suggestion: "Confirm the project_id — list available projects via the platform UI."
+     }}
   end
 
   # ── External feedback helpers (task 01a11ec3 stage 2) ──────────────────
@@ -15547,6 +15613,18 @@ defmodule Platform.Federation.ToolSurface do
     do: [access_scope: scope]
 
   defp memory_access_opts(context), do: runtime_access_opts(context)
+
+  # `Platform.Access.check/3` for the caller behind an MCP `context`: its
+  # `memory_access_opts/1` Scope (an in-process `:access_scope`, else the
+  # calling runtime's). With no resolvable Scope, `:ok` (today's read).
+  defp caller_access_check(context, _permission, _resource) when not is_map(context), do: :ok
+
+  defp caller_access_check(context, permission, resource) do
+    context
+    |> memory_access_opts()
+    |> Keyword.get(:access_scope)
+    |> Platform.Access.check(permission, resource)
+  end
 
   defp runtime_access_opts(context) do
     with runtime_id when is_binary(runtime_id) <- Map.get(context, :runtime_id),

@@ -248,6 +248,56 @@ defmodule Platform.Access do
 
   def within?(_scope, _permission, _resource, base?) when is_boolean(base?), do: base?
 
+  @doc """
+  The conjunctive point check every bypass surface calls AFTER its own
+  existing check has admitted the request (task 01a1386e-45a5 stage 1, stack
+  member 7; `0058-rbac-v2-roles-scopes-and-agent-capping.md § Precedence`,
+  "The grant-less short-circuit"): `:ok`, or `{:error, :denied}`.
+
+  `resource` is addressed exactly as `can?/3` takes it (`{:project, id}`,
+  `{:space, id}`, `{:canvas, id}`, `{:task, id}`, ...), so inheritance is
+  `Platform.Access.Lineage`'s: a deny on a project refuses its tasks, their
+  execution spaces and the canvases in or attached to them.
+
+  ## Why a scope with no grants returns `:ok`
+
+  Every call site keeps the check it had before this member (participation,
+  `Tenancy.member_of?/2`, the MCP org filter) and calls this only once that
+  check has admitted. Those existing checks already enforce what the role
+  rules restrict, so the only NEW information a Scope can carry is its
+  grants. With none, `check/3` has nothing to add and returns `:ok` without
+  reading lineage or role rules. That is what keeps "an install with no
+  grants behaves exactly as today" true by construction at every site,
+  rather than by the role rules happening to agree with each legacy check.
+
+  ## With grants: a deny narrows, an allow adds nothing here
+
+  With grants the answer is `within?(scope, permission, resource, true)`:
+  the site's existing check, which has already admitted, stands in for the
+  role-rule allow (step 6), and a deny for exactly `permission` on the
+  resource or anything above it refuses (steps 3-4). Not `can?/3`: that
+  re-derives the role-rule allow from the Scope, which disagrees with the
+  legacy checks these sites keep (a runtime's Scope carries no `files.read`
+  or `canvas.read` before stack member 5; a guest's carries no `files.read`
+  although `member_of?/2` admits it; an org-less project matches no
+  `membership_org` rule), so a single unrelated grant would refuse reads
+  today's code serves. An allow cannot widen past a check the site still
+  runs first, so it can add nothing here.
+
+  The ADR also requires the short-circuit to honour role restrictions
+  (`access_space_restrictions`, stack member 8). That table does not exist
+  on this member's base; whichever of members 7 and 8 lands second adds the
+  restriction lookup HERE, so no site changes.
+  """
+  @spec check(Scope.t() | nil, String.t(), term()) :: :ok | {:error, :denied}
+  def check(scope, permission, resource) when is_binary(permission) do
+    cond do
+      not Scope.has_grants?(scope) -> :ok
+      within?(scope, permission, resource, true) -> :ok
+      true -> {:error, :denied}
+    end
+  end
+
   # ── precedence ──────────────────────────────────────────────────────────
 
   defp applicable(%Scope{grants: grants}, permission),

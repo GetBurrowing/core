@@ -328,7 +328,7 @@ defmodule PlatformWeb.FilesLive do
   end
 
   def handle_event("select_semantic_hit", %{"id" => file_id}, socket) do
-    case Files.get_file(file_id) do
+    case readable_file(socket, file_id) do
       nil ->
         {:noreply, put_flash(socket, :error, "File no longer exists.")}
 
@@ -367,7 +367,7 @@ defmodule PlatformWeb.FilesLive do
   # extracted text nobody asked to lose or silently re-expose a withdrawn
   # file. Crashing is the honest outcome.
   def handle_event("toggle_agent_context", %{"id" => file_id}, socket) do
-    case Files.get_file(file_id) do
+    case readable_file(socket, file_id) do
       nil ->
         {:noreply, put_flash(socket, :error, "File no longer exists.")}
 
@@ -845,7 +845,10 @@ defmodule PlatformWeb.FilesLive do
     # a live file list via a restored selection or a deep link.
     project = Tasks.get_project(project_id)
 
-    if is_nil(project) or Platform.Projects.archived?(project) do
+    # RBAC v2 (task 01a1386e-45a5 stage 1): a project the viewer's
+    # `files.read` deny covers behaves exactly like a missing one.
+    if is_nil(project) or Platform.Projects.archived?(project) or
+         not project_readable?(socket, project.id) do
       socket
       |> put_flash(:error, "Project not found.")
       |> push_patch(to: ~p"/files")
@@ -868,6 +871,26 @@ defmodule PlatformWeb.FilesLive do
       |> assign(:semantic_search_state, :idle)
       |> assign(:filter, "")
       |> put_claims()
+    end
+  end
+
+  # RBAC v2 (task 01a1386e-45a5 stage 1): `files.read` on the project through
+  # `Platform.Access.check/3`, in conjunction with whatever already admitted
+  # the request. With no grants on `@access_scope` it is always true.
+  defp project_readable?(socket, project_id),
+    do:
+      Platform.Access.check(socket.assigns[:access_scope], "files.read", {:project, project_id}) ==
+        :ok
+
+  # `Files.get_file/1` for a file the viewer may read: a file in a project a
+  # deny covers is `nil`, exactly like a missing one.
+  defp readable_file(socket, file_id) do
+    case Files.get_file(file_id) do
+      %Files.File{project_id: project_id} = file ->
+        if project_readable?(socket, project_id), do: file, else: nil
+
+      other ->
+        other
     end
   end
 
@@ -910,7 +933,7 @@ defmodule PlatformWeb.FilesLive do
   defp refresh_file(%{assigns: %{selected_project_id: nil}} = socket, _file_id), do: socket
 
   defp refresh_file(socket, file_id) do
-    case Files.get_file(file_id) do
+    case readable_file(socket, file_id) do
       nil ->
         # Row vanished — drop it from the list.
         socket

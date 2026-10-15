@@ -294,6 +294,20 @@ defmodule Platform.Access.Scope do
     end
   end
 
+  @doc """
+  Does the scope hold ANY explicit grant row, allow or deny, for any
+  permission (task 01a1386e-45a5 stage 1)? True when the `grants` field the
+  builders load is non-empty, whichever principal the rows came through: the
+  user id, a `{role key, org}` pair of its memberships, or a runtime's agent
+  id. `false` for `nil`, `system/0` and every non-Scope value.
+
+  This is the short-circuit `Platform.Access.check/3` reads: a scope with no
+  grants is decided by each surface's existing check alone.
+  """
+  @spec has_grants?(t() | term()) :: boolean()
+  def has_grants?(%__MODULE__{grants: [_ | _]}), do: true
+  def has_grants?(_scope), do: false
+
   @doc "Does the scope carry the guest restriction (any base role key `guest`)?"
   @spec guest?(t()) :: boolean()
   def guest?(%__MODULE__{role_keys: role_keys}),

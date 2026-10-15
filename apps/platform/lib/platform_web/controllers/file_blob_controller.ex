@@ -56,7 +56,8 @@ defmodule PlatformWeb.FileBlobController do
 
   def show(conn, %{"id" => file_id} = params) do
     with %Files.File{} = file <- Files.get_file(file_id),
-         {:ok, _project} <- authorize(conn, file) do
+         {:ok, project} <- authorize(conn, file),
+         :ok <- access_check(conn, project) do
       send_file_bytes(
         conn,
         file,
@@ -66,7 +67,28 @@ defmodule PlatformWeb.FileBlobController do
     else
       nil -> send_resp(conn, :not_found, "Not found")
       {:error, :forbidden} -> send_resp(conn, :forbidden, "Forbidden")
+      # A deny answers exactly as an unknown file id does.
+      {:error, :denied} -> send_resp(conn, :not_found, "Not found")
     end
+  end
+
+  # RBAC v2 (task 01a1386e-45a5 stage 1): `files.read` on the file's project,
+  # in conjunction with `do_authorize/2`. It runs after EVERY admitting arm,
+  # the root-admin one included: ADR 0058 § Precedence, "the root-admin bypass
+  # does not read past a deny". With no grants on the scope it is `:ok`.
+  defp access_check(_conn, nil), do: :ok
+
+  defp access_check(conn, %Tasks.Project{id: project_id}) do
+    scope =
+      case conn.assigns do
+        %{access_scope: %Platform.Access.Scope{} = scope} ->
+          scope
+
+        _ ->
+          Platform.Access.Scope.for_user(Accounts.get_user(get_session(conn, :current_user_id)))
+      end
+
+    Platform.Access.check(scope, "files.read", {:project, project_id})
   end
 
   defp send_file_bytes(conn, file, force_download?, sandboxed_preview?) do

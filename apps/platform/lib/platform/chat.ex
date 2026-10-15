@@ -5030,12 +5030,51 @@ defmodule Platform.Chat do
         # (a nil-space row is a pre-backfill artifact an internal caller may
         # still need). The space-bound branch below is unchanged — its
         # `principal_is_member?/2` already equals M7's read-scope membership.
-        if external_principal?(principal), do: nil, else: attachment
+        if external_principal?(principal), do: nil, else: attachment_access(attachment, principal)
 
       %Attachment{space_id: space_id} = attachment ->
-        if principal_is_member?(space_id, principal), do: attachment, else: nil
+        if principal_is_member?(space_id, principal),
+          do: attachment_access(attachment, principal),
+          else: nil
     end
   end
+
+  @doc """
+  The RBAC v2 read check on one attachment for an access `scope` (task
+  01a1386e-45a5 stage 1): `Platform.Access.check/3` with `chat.read` on the
+  attachment's space and, when it is canvas-bound, `canvas.read` on its
+  canvas. Conjunctive: callers run it only after their own membership check
+  has admitted. With no grants on the scope it is `:ok`.
+  """
+  @spec attachment_access_check(Attachment.t(), Platform.Access.Scope.t() | nil) ::
+          :ok | {:error, :denied}
+  def attachment_access_check(%Attachment{} = attachment, scope) do
+    with :ok <- maybe_access_check(scope, "chat.read", :space, attachment.space_id) do
+      maybe_access_check(scope, "canvas.read", :canvas, attachment.canvas_id)
+    end
+  end
+
+  defp maybe_access_check(_scope, _permission, _type, nil), do: :ok
+
+  defp maybe_access_check(scope, permission, type, id),
+    do: Platform.Access.check(scope, permission, {type, id})
+
+  # A denied attachment is `nil`, so the download route answers the same 404
+  # a missing id gets, before its range branch (206/416) is reached.
+  defp attachment_access(attachment, principal) do
+    case attachment_access_check(attachment, principal_access_scope(principal)) do
+      :ok -> attachment
+      {:error, :denied} -> nil
+    end
+  end
+
+  defp principal_access_scope({:user, user_id}) when is_binary(user_id),
+    do: Platform.Access.Scope.for_user(%{id: user_id})
+
+  defp principal_access_scope({:runtime, %AgentRuntime{} = runtime}),
+    do: Platform.Access.Scope.for_runtime(runtime)
+
+  defp principal_access_scope(_principal), do: nil
 
   @doc """
   Is the download `principal` an external user? (M9, rbac-external-users.)
