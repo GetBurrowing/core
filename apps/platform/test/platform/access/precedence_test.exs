@@ -417,6 +417,27 @@ defmodule Platform.Access.PrecedenceTest do
                Grants.deny(%{principal: u, permission: "tasks.read", resource: p})
     end
 
+    test "malformed ids are not found and decide nothing", %{org: org} do
+      u = guest!(org)
+      m = member!(org)
+
+      for type <- [:project, :space, :canvas, :memory_node] do
+        assert {:error, :resource_not_found} =
+                 Grants.grant(%{principal: u, permission: "tasks.read", resource: {type, "nope"}})
+      end
+
+      assert {:error, :not_found} = Grants.revoke("not-a-uuid")
+
+      p = project!(org)
+      ok!(Grants.deny(%{principal: m, permission: "tasks.read", resource: p}))
+      s = scope(m)
+
+      for type <- [:project, :task, :stack, :space, :canvas, :memory_node] do
+        assert Access.can?(s, "tasks.read", {type, "not-a-uuid"}) ==
+                 Scope.can?(s, "tasks.read", {type, "not-a-uuid"})
+      end
+    end
+
     test "revoke removes the row and its effect", %{org: org} do
       u = guest!(org)
       p = project!(org)

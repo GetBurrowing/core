@@ -54,7 +54,11 @@ defmodule Platform.Access.Lineage do
   `nil`). Structs are inferred; tuples pass through.
   """
   @spec typed(term()) :: typed() | :untyped
-  def typed({type, id} = r) when type in @id_types and is_binary(id), do: r
+  # A tuple's id can arrive from a boundary (a LiveView param, an MCP
+  # argument): a malformed one is untyped, never a query that raises.
+  def typed({type, id} = r) when type in @id_types and is_binary(id),
+    do: if(Platform.UUID.valid?(id), do: r, else: :untyped)
+
   def typed({:memory, path}) when is_binary(path), do: {:memory, path, nil}
   def typed({:memory, path, _at} = r) when is_binary(path), do: r
   def typed(%Project{id: id}) when is_binary(id), do: {:project, id}

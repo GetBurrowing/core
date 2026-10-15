@@ -81,9 +81,11 @@ defmodule Platform.Access.Grants do
   def revoke(%Grant{id: id}), do: revoke(id)
 
   def revoke(id) when is_binary(id) do
-    case Repo.get(Grant, id) do
-      nil -> {:error, :not_found}
-      grant -> Repo.delete(grant)
+    with true <- Platform.UUID.valid?(id),
+         %Grant{} = grant <- Repo.get(Grant, id) do
+      Repo.delete(grant)
+    else
+      _ -> {:error, :not_found}
     end
   end
 
@@ -162,21 +164,41 @@ defmodule Platform.Access.Grants do
   defp resource_fields(%Space{id: id}), do: resource_fields({:space, id})
   defp resource_fields(%Canvas{id: id}), do: resource_fields({:canvas, id})
 
-  defp resource_fields({:project, id}) when is_binary(id) do
+  # Every id below can arrive from a caller: a malformed one is not found,
+  # never a query that raises.
+  defp resource_fields({type, id})
+       when type in [:project, :space, :canvas, :memory_node] and is_binary(id) do
+    if Platform.UUID.valid?(id), do: fetch_resource(type, id), else: not_found()
+  end
+
+  defp resource_fields({:memory, path}) when is_binary(path) do
+    if Regex.match?(@namespace_root, path) do
+      {:error, :namespace_root}
+    else
+      case Nodes.ensure(path) do
+        {:ok, %Node{id: id, org_id: org_id}} -> {:ok, {"memory_node", id, org_id}}
+        {:error, _} = err -> err
+      end
+    end
+  end
+
+  defp resource_fields(_), do: {:error, :invalid_resource}
+
+  defp fetch_resource(:project, id) do
     case Repo.one(from(p in Project, where: p.id == ^id, select: {p.id, p.org_id})) do
       {_, org_id} -> {:ok, {"project", id, org_id}}
       nil -> not_found()
     end
   end
 
-  defp resource_fields({:space, id}) when is_binary(id) do
+  defp fetch_resource(:space, id) do
     case Repo.one(from(s in Space, where: s.id == ^id, select: {s.id, s.org_id})) do
       {_, org_id} -> {:ok, {"space", id, org_id}}
       nil -> not_found()
     end
   end
 
-  defp resource_fields({:canvas, id}) when is_binary(id) do
+  defp fetch_resource(:canvas, id) do
     query =
       from(c in Canvas,
         left_join: s in Space,
@@ -191,25 +213,12 @@ defmodule Platform.Access.Grants do
     end
   end
 
-  defp resource_fields({:memory, path}) when is_binary(path) do
-    if Regex.match?(@namespace_root, path) do
-      {:error, :namespace_root}
-    else
-      case Nodes.ensure(path) do
-        {:ok, %Node{id: id, org_id: org_id}} -> {:ok, {"memory_node", id, org_id}}
-        {:error, _} = err -> err
-      end
-    end
-  end
-
-  defp resource_fields({:memory_node, id}) when is_binary(id) do
+  defp fetch_resource(:memory_node, id) do
     case Repo.get(Node, id) do
       %Node{org_id: org_id} -> {:ok, {"memory_node", id, org_id}}
       nil -> not_found()
     end
   end
-
-  defp resource_fields(_), do: {:error, :invalid_resource}
 
   defp not_found, do: {:error, :resource_not_found}
 

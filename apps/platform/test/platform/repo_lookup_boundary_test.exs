@@ -514,6 +514,16 @@ defmodule Platform.RepoLookupBoundaryTest do
      "get_file_by_id/1 checks Platform.UUID.valid?/1 before Repo.get, so a caller-supplied page id from the memory MCP tools returns nil"},
     {"platform/org/preamble_builder.ex", :get, "Org", 3, :safe_internal,
      "one call reads `project.org_id` off a preloaded task, one walks `parent_org_id` off a loaded `%Org{}`, and the third takes `opts[:org_id]` which callers set from a resolved `%Org{}`"},
+    {"platform/org/wiki/nodes.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "task 01a1386d-e528 stage 1: `org_of/2` checks the `project/<id>/` or `space/<id>/` path segment with Platform.UUID.valid?/1 before `where: r.id == ^id` (this file's `@repo_one_counts` entry), so a non-UUID segment answers nil and `ensure/2` falls back to the root org instead of raising Ecto.Query.CastError on a path an agent supplied"},
+    {"platform/access/grants.ex", :get, "Grant", 1, :must_cast,
+     "task 01a1386d-e528 stage 2: `revoke/1` takes a raw grant id from its caller. Guarded with Platform.UUID.valid?/1 (this file's :platform_uuid_guard), returning the site's `{:error, :not_found}`; covered by precedence_test.exs \"malformed ids are not found and decide nothing\""},
+    {"platform/access/grants.ex", :get, "Node", 1, :must_cast,
+     "task 01a1386d-e528 stage 2: `fetch_resource(:memory_node, id)` is reached only through `resource_fields/1`'s Platform.UUID.valid?/1 check on a caller-supplied `{:memory_node, id}`; a malformed id is `{:error, :resource_not_found}`. Same test as above"},
+    {"platform/access/grants.ex", :platform_uuid_guard, "-", 2, :must_cast,
+     "task 01a1386d-e528 stage 2: (1) `revoke/1`'s grant id; (2) `resource_fields/1`'s `{:project | :space | :canvas | :memory_node, id}` before the three `Repo.one` lookups (this file's `@repo_one_counts` entry) and the `get(Node)` above. Used as a BOOLEAN and the string discarded; covered by precedence_test.exs \"malformed ids are not found and decide nothing\""},
+    {"platform/access/lineage.ex", :platform_uuid_guard, "-", 1, :must_cast,
+     "task 01a1386d-e528 stage 2: `typed/1` makes a `{type, id}` resource tuple `:untyped` unless its id is a canonical UUID, so every `Repo.one` in `ancestors/1` and `base_candidates/1` (this file's `@repo_one_counts` entry) sees only valid ids. A tuple can carry a LiveView param or an MCP argument from stage 3 on; covered by precedence_test.exs \"malformed ids are not found and decide nothing\""},
     {"platform/org/wiki/indexer.ex", :get, "WikiJournalEntry", 1, :safe_internal,
      "the indexer re-loads ids it selected from the same table in the enclosing sweep"},
     {"platform/org/wiki/indexer.ex", :get, "WikiPage", 1, :safe_internal,
@@ -1291,6 +1301,21 @@ defmodule Platform.RepoLookupBoundaryTest do
     "platform/org/preamble_builder.ex" => 3,
     "platform/org/tenants_summary.ex" => 2,
     "platform/org/wiki.ex" => 5,
+    # 0 → 2 for task 01a1386d-e528 stage 1's `Platform.Org.Wiki.Nodes`:
+    # `current/2` pins `p.path == ^path` (a string column, no UUID type) and
+    # `org_of/2` pins `r.id == ^id` only behind Platform.UUID.valid?/1 (this
+    # file's :platform_uuid_guard entry).
+    "platform/org/wiki/nodes.ex" => 2,
+    # 0 → 3 for task 01a1386d-e528 stage 2's `Platform.Access.Grants`: the
+    # project, space and canvas lookups of `fetch_resource/2`, each reached
+    # only through `resource_fields/1`'s Platform.UUID.valid?/1 check.
+    "platform/access/grants.ex" => 3,
+    # 0 → 10 for task 01a1386d-e528 stage 2's `Platform.Access.Lineage`:
+    # `ancestors/1` and `base_candidates/1` pin ids that come either from a
+    # resource tuple (behind `typed/1`'s Platform.UUID.valid?/1 guard), from a
+    # struct loaded from the Repo, or from a UUID column of a row just read
+    # (`space_id`, `project_id`). No unguarded caller id reaches them.
+    "platform/access/lineage.ex" => 10,
     # 0 → 1 for task 019ffe52's `anchor_participant_id/1`, which resolves the
     # `chat_participants` row a user-level push subscription is filed against.
     # Triaged by hand as this map asks: the `where:` clause pins
