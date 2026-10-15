@@ -63,6 +63,9 @@ defmodule Platform.Access.RolesMigrationTest do
   @restrictions_version 20_261_014_173_547
   @restrictions_module Platform.Repo.Migrations.CreateAccessSpaceRestrictions
 
+  @idp_group_roles_version 20_261_014_173_548
+  @idp_group_roles_module Platform.Repo.Migrations.CreateAccessIdpGroupRoles
+
   defp up! do
     Repo.query!("DELETE FROM schema_migrations WHERE version = $1", [@migration_version])
     :ok = Ecto.Migrator.up(Repo, @migration_version, @migration_module, @opts)
@@ -148,6 +151,16 @@ defmodule Platform.Access.RolesMigrationTest do
   # is `Platform.Access.authorize_install/1` (task 01a1386d-fb6e stage 2) and
   # builds a Scope, which reads `access_grants`.
   setup do
+    [idp_group_roles_path] =
+      Path.wildcard(
+        Path.join(:code.priv_dir(:platform), "repo/migrations/#{@idp_group_roles_version}_*.exs")
+      )
+
+    unless Code.ensure_loaded?(@idp_group_roles_module),
+      do: Code.require_file(idp_group_roles_path)
+
+    :ok = Ecto.Migrator.down(Repo, @idp_group_roles_version, @idp_group_roles_module, @opts)
+
     [restrictions_path] =
       Path.wildcard(
         Path.join(:code.priv_dir(:platform), "repo/migrations/#{@restrictions_version}_*.exs")

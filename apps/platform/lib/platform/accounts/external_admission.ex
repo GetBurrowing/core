@@ -62,6 +62,7 @@ defmodule Platform.Accounts.ExternalAdmission do
 
   alias Platform.Accounts
   alias Platform.Accounts.ExternalAdmission.Result
+  alias Platform.Access.IdpGroupRoles
   alias Platform.Tenancy
   alias Platform.Tenancy.ExternalGrants
   alias Platform.Tenancy.PendingExternalGrant
@@ -116,7 +117,14 @@ defmodule Platform.Accounts.ExternalAdmission do
     surface = Keyword.get(opts, :surface, :app)
 
     case Accounts.find_or_create_from_oidc(oidc_user) do
-      {:ok, user} -> decide(user, oidc_user, surface)
+      {:ok, user} ->
+        result = decide(user, oidc_user, surface)
+
+        case maybe_sync_idp_roles(result, oidc_user) do
+          {:ok, counts} -> emit(result, nil, counts)
+          {:error, reason} -> {:error, reason}
+        end
+
       {:error, _reason} = error -> error
     end
   end
@@ -355,7 +363,7 @@ defmodule Platform.Accounts.ExternalAdmission do
         # `applied_at` guard + upserts), so a double login never
         # double-provisions.
         {:ok, _applied} = ExternalGrants.apply_grant(grant, user)
-        emit(%Result{user: user, state: :full, reason: nil, external?: true})
+        %Result{user: user, state: :full, reason: nil, external?: true}
 
       nil ->
         cond do
@@ -365,7 +373,7 @@ defmodule Platform.Accounts.ExternalAdmission do
           # :full and never re-provisions (idempotent) and never black-holes a
           # user we already admitted.
           Tenancy.external_user?(user) ->
-            emit(%Result{user: user, state: :full, reason: nil, external?: true})
+            %Result{user: user, state: :full, reason: nil, external?: true}
 
           # Flagged external but nothing staged — fail-closed: establish ZERO
           # scoped rows and wait for a grant (admin can `recover/3`).
@@ -378,7 +386,7 @@ defmodule Platform.Accounts.ExternalAdmission do
             groups = Map.get(oidc_user, :external_groups, [])
             {suggested_org_id, group_match} = resolve_group_suggestion(groups)
 
-            emit(%Result{
+            %Result{
               user: user,
               state: :holding,
               reason: :awaiting_grant,
@@ -386,21 +394,33 @@ defmodule Platform.Accounts.ExternalAdmission do
               suggested_org_id: suggested_org_id,
               group_match: group_match,
               external_groups: groups
-            })
+            }
 
           # Arrived on the external surface with no marker — misconfiguration,
           # hold. (`:unknown` is reserved in the Result type for M3; M2 uses
           # `:missing_claim` for the surface-external no-marker case.)
           surface == :external ->
-            emit(%Result{user: user, state: :holding, reason: :missing_claim, external?: false})
+            %Result{user: user, state: :holding, reason: :missing_claim, external?: false}
 
           # Ordinary internal login — UNCHANGED. NEVER black-hole an internal
           # user; role is governed entirely by `derive_role_from_email/1`.
           true ->
-            emit(%Result{user: user, state: :full, reason: nil, external?: false})
+            %Result{user: user, state: :full, reason: nil, external?: false}
         end
     end
   end
+
+  defp maybe_sync_idp_roles(
+         %Result{state: :full, external?: false, user: user},
+         %{groups_claim_present?: true, external_groups: groups}
+       ) do
+    case IdpGroupRoles.sync_user(user, groups) do
+      {:ok, counts} -> {:ok, counts}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp maybe_sync_idp_roles(_result, _claims), do: {:ok, %{applied: 0, revoked: 0}}
 
   # `{suggested_org_id, group_match}`. Exactly one distinct org => a
   # suggestion; nothing and ambiguity BOTH yield nil — never guess a tenant.
@@ -428,7 +448,7 @@ defmodule Platform.Accounts.ExternalAdmission do
   end
 
   # Emit telemetry and return the result (so callers can tail-return it).
-  defp emit(result, action \\ nil)
+  defp emit(result, action \\ nil, counts \\ %{applied: 0, revoked: 0})
 
   defp emit(
          %Result{
@@ -440,7 +460,8 @@ defmodule Platform.Accounts.ExternalAdmission do
            group_match: group_match,
            external_groups: external_groups
          } = result,
-         action
+         action,
+         counts
        ) do
     metadata =
       %{
@@ -449,7 +470,9 @@ defmodule Platform.Accounts.ExternalAdmission do
         email: user.email,
         actor_id: user.id,
         external?: external?,
-        group_match: group_match
+        group_match: group_match,
+        idp_roles_applied: counts.applied,
+        idp_roles_revoked: counts.revoked
       }
       # `TelemetryHandler` does NOT whitelist metadata keys — it drops the
       # top-level column keys and persists the rest verbatim — but its

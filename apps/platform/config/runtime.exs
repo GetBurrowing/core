@@ -180,8 +180,8 @@ if config_env() != :test do
     external_group: System.get_env("OIDC_EXTERNAL_GROUP") || "sxi-external",
     external_claim: System.get_env("OIDC_EXTERNAL_CLAIM") || "groups",
     # OIDC authorization scope. Must include `groups` so Pocket-ID releases the
-    # external-user group claim that external_claim?/1 inspects. Nil when unset,
-    # falling back to the groups-inclusive @default_scope in Platform.OIDC.
+    # external-user group claim and login-time IdP role mappings. Nil when
+    # unset, falling back to the groups-inclusive @default_scope in Platform.OIDC.
     scope: System.get_env("OIDC_SCOPE")
 
   config :platform, PlatformWeb.Endpoint,
