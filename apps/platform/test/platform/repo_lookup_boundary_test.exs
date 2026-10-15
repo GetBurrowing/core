@@ -176,8 +176,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "Chat.get_message/2 checks Platform.UUID.valid?/1 first; the other two read r.message_id / message_id off rows already loaded in the same function"},
     {"platform/chat.ex", :get, "Participant", 4, :safe_internal,
      "every call takes a participant id read off a loaded struct — `message.participant_id`, `r.message_id`'s reaction row, `p.participant_id`; `get_participant/1`'s only in-repo callers (agent_responder.ex, active_agent_hooks.ex) pass `message.participant_id`"},
-    {"platform/chat.ex", :get, "Platform.Accounts.User", 1, :safe_internal,
-     "`sponsor_email_for/2` destructures `%Task{sponsor_user_id: sponsor_id}` in the head, so the id is a column off a loaded task row"},
+    {"platform/chat.ex", :get, "Platform.Accounts.User", 2, :safe_internal,
+     "`sponsor_email_for/2` reads a loaded task's sponsor_user_id; mention inbox filtering reads participant_id off a persisted `%Participant{}` with a :binary_id field"},
     {"platform/chat.ex", :get, "Platform.Tasks.Task", 3, :safe_internal,
      "task_id is read from the execution space's own `metadata[\"task_id\"]`, written by `Orchestration.ExecutionSpace` from a persisted task PK. Residual risk is a hand-corrupted metadata blob, not a request-path input. Was 2 until task 01a0ac64 stage 1 added `sponsor_of_space_task?/2`, the mention-summon authorization check — a third call reading the SAME metadata key by the same route, so the classification is unchanged"},
     {"platform/chat.ex", :get, "Space", 6, :safe_internal,
@@ -202,14 +202,16 @@ defmodule Platform.RepoLookupBoundaryTest do
      "finalize_pending/2 checks Platform.UUID.valid?/1 before delegating to do_finalize_pending/3; the other two read existing_id off an %Attachment{} or off the dedup query in the same function"},
     {"platform/chat/attention_router.ex", :get, "Message", 1, :safe_internal,
      "message_id arrives in the router's own `handle_info` cast, broadcast by `Chat.create_message/1` with the PK it just inserted"},
-    {"platform/chat/attention_router.ex", :get, "Platform.Accounts.User", 1, :safe_internal,
-     "sender_user/1 (task 01a12773 stage 2, the push sender avatar) reads `participant_id` off the author's loaded %Participant{} and checks Platform.UUID.valid?/1 before the get; a malformed id yields no user, so no picture, never a raise inside the push Task"},
+    {"platform/chat/attention_router.ex", :get, "Participant", 1, :safe_internal,
+     "push_recipient_may_read?/2 checks Platform.UUID.valid?/1 before resolving a bare recipient id; malformed routing ids keep the existing no-row push behavior"},
+    {"platform/chat/attention_router.ex", :get, "Platform.Accounts.User", 2, :safe_internal,
+     "sender_user/1 guards the author's loaded participant_id with Platform.UUID.valid?/1; push_recipient_may_read?/2 reads its other user id from a persisted %Participant{} :binary_id field"},
     {"platform/chat/attention_router.ex", :get, "Space", 1, :safe_internal,
      "space_id comes off the `%Message{}` the router just loaded"},
     {"platform/chat/attention_router.ex", :get, "TaskRecord", 1, :safe_internal,
      "execution_assignee_agent_id/1 checks Platform.UUID.valid?/1 before reading the task id from the execution space's `metadata[\"task_id\"]`"},
-    {"platform/chat/attention_router.ex", :platform_uuid_guard, "-", 3, :safe_internal,
-     "mention_names/1 guards the agent-name fallback lookup: agent_id is read off a %Participant{} row, and a malformed value becomes `no mention`. sender_user/1 (task 01a12773 stage 2) guards the push sender's user lookup: a malformed participant_id yields no avatar. execution_assignee_agent_id/1 guards the task id read from execution-space metadata before Repo.get(TaskRecord, task_id)"},
+    {"platform/chat/attention_router.ex", :platform_uuid_guard, "-", 4, :safe_internal,
+     "mention_names/1 guards the agent-name fallback lookup; sender_user/1 guards the push sender's user lookup; execution_assignee_agent_id/1 guards the task id from execution-space metadata; push_recipient_may_read?/2 guards a bare participant id before Repo.get(Participant). Malformed values retain those paths' existing no-match outcomes"},
     {"platform/chat/canvas/server.ex", :get, "Canvas", 1, :safe_internal,
      "`do_persist/1` uses the canvas_id the `CanvasServer` was started with, which `Chat.get_canvas/1` already resolved to a row"},
     {"platform/chat/canvas_search_index.ex", :platform_uuid_guard, "-", 1, :safe_internal,
@@ -352,6 +354,10 @@ defmodule Platform.RepoLookupBoundaryTest do
     {"platform/files.ex", :get!, "~q:File", 1, :safe_internal,
      "Files.get_file!/2 checks Platform.UUID.valid?/1 and raises Ecto.NoResultsError — its documented miss exception — rather than Ecto.Query.CastError"},
     # ── Inbox ──────────────────────────────────────────────────────────
+    {"platform/inbox.ex", :get, "Platform.Accounts.User", 1, :safe_internal,
+     "emit/1 reads user_id from a valid Inbox.Item changeset, whose Ecto.UUID cast rejects malformed ids before Repo.get"},
+    {"platform/inbox.ex", :get, "~schema", 1, :safe_internal,
+     "resource_for/2 is called by emit/1 with source_id from a valid Inbox.Item Ecto.UUID changeset; its schema is one of Message, ReviewRequest or Meeting"},
     {"platform/inbox.ex", :platform_uuid_guard, "-", 2, :safe_internal,
      "fetch_owned/2, the one owned-row lookup behind mark_read/2, mark_dismissed/2 and open_item/2 (task 01a11703), checks Platform.UUID.valid?/1 on both item_id and user_id before `where: i.id == ^item_id and i.user_id == ^user_id`. item_id arrives from InboxLive's client \"open\"/\"dismiss\" events, so a malformed id folds into the existing {:error, :not_found} instead of raising Ecto.Query.CastError"},
     # ── Lifecycle ──────────────────────────────────────────────────────
@@ -360,6 +366,10 @@ defmodule Platform.RepoLookupBoundaryTest do
     {"platform/lifecycle/runs.ex", :get, "StepRun", 1, :safe_internal,
      "task 019fe1b6 stage 4 — `Runs.settle/2` resolves a run row to update it in place when a non-awaited step settles after its edge reported. The id is the `lifecycle_step_runs` PK exposed as `:run_id` on `Executor.run_edge/3`'s summary; every caller holds it because `record/1` returned it in the same process. It is deliberately UNGUARDED by `Platform.UUID.valid?/1`: the function's contract already answers `{:error, :not_found}` for an unknown id, and a guard would fold a malformed id into that same answer, hiding a caller bug as an ordinary miss. `Repo.get/2` on the strict `Platform.Types.UUIDv7` PK raises for a non-uuid, which is the louder and correct signal for a handle that can only come from this system"},
     # ── Meetings ───────────────────────────────────────────────────────
+    {"platform/meetings/invite_delivery.ex", :get, "Platform.Accounts.User", 1, :safe_internal,
+     "deliver_internal/2 reads invite.user_id off a persisted %Invite{} row whose user_id is a UUID foreign key to users"},
+    {"platform/meetings/meeting_notifier.ex", :get, "Platform.Accounts.User", 1, :safe_internal,
+     "readable_recipients/2 receives ids selected from persisted Invite.user_id or Participant.participant_id :binary_id fields by Meetings.recipients_for_meeting/1"},
     # ── Email module (task 01a0cf21-29ba-7001-8690-3c59d6cb17c6) ──────
     # Stages 1-3 landed these without classifying them; stage 4 records them
     # together with its own `mailbox.ex` / `email_live.ex` sites.

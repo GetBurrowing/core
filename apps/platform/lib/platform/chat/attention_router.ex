@@ -756,9 +756,13 @@ defmodule Platform.Chat.AttentionRouter do
   end
 
   defp push_recipient_may_read?(participant_id, space_id) when is_binary(participant_id) do
-    Participant
-    |> Platform.Repo.get(participant_id)
-    |> push_recipient_may_read?(space_id)
+    if Platform.UUID.valid?(participant_id) do
+      Participant
+      |> Platform.Repo.get(participant_id)
+      |> push_recipient_may_read?(space_id)
+    else
+      true
+    end
   end
 
   defp push_recipient_may_read?(_, _), do: true
