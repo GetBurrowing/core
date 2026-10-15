@@ -566,7 +566,9 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   # guard on moon: 2397 + 50 = 2447.
   # Task 01a1386e-59d1 remediation adds the denied-link landing branch so a
   # restricted deep link stops at /chat instead of opening another channel.
-  @chat_live_code_line_count 2521
+  # Rebasing onto the rollup also brought 21 ChatLive code lines from sibling
+  # members. The moon guard measured 2521 + 21 = 2542 at the merged SHA.
+  @chat_live_code_line_count 2542
 
   @doc """
   Count the CODE lines of a source file.
