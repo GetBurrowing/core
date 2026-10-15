@@ -341,6 +341,7 @@ defmodule Platform.Access.ResourceBypassAcceptanceTest do
 
   describe "TaskRouter dispatch and mention summon" do
     test "owner denial refuses the phase runtime", ctx do
+      Ecto.Adapters.SQL.Sandbox.mode(Repo, {:shared, self()})
       marker = "ZQX-ACCEPT-DISPATCH"
       agent = agent!()
 
