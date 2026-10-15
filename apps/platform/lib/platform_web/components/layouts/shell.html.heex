@@ -102,6 +102,7 @@
   <.icon_rail
     current_path={@current_path}
     root_user={@root_user}
+    access_scope={assigns[:access_scope]}
     sidebar_collapsed={@sidebar_collapsed}
     inbox_unread_count={@inbox_unread_count}
     chat_unread_count={@chat_unread_count}
@@ -555,7 +556,11 @@
          old `<.bottom_nav>` rendered it; the icon-rail rev re-introduces
          badge support in a later stage (badge data assign `@tasks_count`
          still computed in `shell_live.ex` for the future). --%>
-    <.bottom_rail current_path={@current_path} root_user={@root_user} />
+    <.bottom_rail
+      current_path={@current_path}
+      root_user={@root_user}
+      access_scope={assigns[:access_scope]}
+    />
 
     <%!-- Mobile More sheet (task 019e1322 Stage 2) — bottom sheet that surfaces
          the long-tail destinations (Skills, Changelog, Agent Resources, Org
@@ -566,6 +571,7 @@
       open={@more_sheet_open}
       current_user={@current_user}
       root_user={@root_user}
+      access_scope={assigns[:access_scope]}
     />
 
     <%!-- Persistent meeting bar (survives navigation) --%>

@@ -18,10 +18,12 @@ defmodule Platform.Access.Registry do
   read per call through `Platform.Extensions.permissions/0`, so nothing here
   is captured at compile time.
 
-  ## Nothing reads this for a decision yet
+  ## What reads it for a decision
 
-  The rail entry's required permission is DECLARED only. Rail gating is a
-  later stack member, and so is per-tool authorization: the `mcp.<bundle>`
+  The rail entry's required permission is read by
+  `Platform.Access.module_access?/3` (task `01a1386d-fb6e` stage 1), which
+  the shell rail filters through. Per-tool authorization is a later stack
+  member: the `mcp.<bundle>`
   permissions are the transitional per-bundle vocabulary the shadow
   `Scope.for_runtime/1` and the equivalence test use, which a per-tool map
   supersedes (`0058-rbac-v2-roles-scopes-and-agent-capping.md § Agents`).
@@ -44,6 +46,17 @@ defmodule Platform.Access.Registry do
   "Two rules are code, not role data"), so no role may carry it. The ADR's
   vocabulary has no name for org visibility; this one was added by task
   `01a1386d-cb5c` stage 2 so the widening has a permission to land on.
+
+  ## Guest-admissible rail entries
+
+  A rail entry may carry `guest_admissible: true` (task `01a1386d-fb6e`
+  stage 1, `0058-rbac-v2-roles-scopes-and-agent-capping.md § Permission
+  model`, "Rail rule"). A guest scope is shown an entry only when it carries
+  the flag AND holds the entry's permission anywhere
+  (`Platform.Access.module_access?/3`). It exists because a guest admitted
+  into a module whose LiveView reads are not yet Scope-filtered would see
+  everything in it. Only `:chat` carries it; an entry that omits the flag,
+  including every extension's, is `false`.
 
   ## Modules the ADR vocabulary does not name
 
@@ -68,8 +81,17 @@ defmodule Platform.Access.Registry do
           derived: boolean()
         }
 
-  @typedoc "A normalized rail entry: the destination key and the permission it requires."
-  @type rail_entry :: %{key: atom(), permission: String.t(), module: String.t()}
+  @typedoc """
+  A normalized rail entry: the destination key, the permission it requires,
+  and whether a guest scope may be shown it (`guest_admissible`, default
+  `false`; see "Guest-admissible rail entries" in the moduledoc).
+  """
+  @type rail_entry :: %{
+          key: atom(),
+          permission: String.t(),
+          module: String.t(),
+          guest_admissible: boolean()
+        }
 
   # Core MCP bundles → their one transitional permission. A literal map, not a
   # function of `ToolSurface.core_bundles/0`, so a bundle added to the catalogue
@@ -146,13 +168,22 @@ defmodule Platform.Access.Registry do
   @spec derived?(String.t()) :: boolean()
   def derived?(name), do: name in derived_permissions()
 
-  @doc "Every rail entry with the permission it requires."
+  @doc "Every rail entry with the permission it requires and its `guest_admissible` flag."
   @spec rail_entries() :: [rail_entry()]
   def rail_entries do
     for mod <- modules(), entry <- Map.get(mod, :rail, []) do
-      %{key: entry.key, permission: entry.permission, module: mod.module}
+      %{
+        key: entry.key,
+        permission: entry.permission,
+        module: mod.module,
+        guest_admissible: Map.get(entry, :guest_admissible, false) == true
+      }
     end
   end
+
+  @doc "The rail entry for destination `key`, or nil when no module declares one."
+  @spec rail_entry(atom()) :: rail_entry() | nil
+  def rail_entry(key), do: Enum.find(rail_entries(), &(&1.key == key))
 
   @doc "The permission rail destination `key` requires, or nil."
   @spec rail_permission(atom()) :: String.t() | nil
@@ -200,7 +231,9 @@ defmodule Platform.Access.Registry do
       %{
         module: "chat",
         permissions: ~w(chat.read chat.write chat.manage),
-        rail: [%{key: :chat, permission: "chat.read"}]
+        # The only guest-admissible entry (task 01a1386d-fb6e stage 1): Chat
+        # reads are already participant-scoped for a guest (ExternalScope).
+        rail: [%{key: :chat, permission: "chat.read", guest_admissible: true}]
       },
       %{
         module: "tasks",

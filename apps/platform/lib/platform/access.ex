@@ -13,7 +13,9 @@ defmodule Platform.Access do
   Stack member 2 builds the Scope and assigns it as `:access_scope`
   (`PlatformWeb.LiveAuth.on_mount(:default)`, `PlatformWeb.Plugs.RequireAuth`).
   No gate reads it for a decision. Later members (resource scoping, rail
-  gating, agent capping) consume it.
+  gating, agent capping) consume it. The shell rail is the first module-level
+  consumer: it filters through `module_access?/3` (task `01a1386d-fb6e`
+  stage 1).
 
   ## Precedence lives here, and only here
   (task `01a1386d-e528` stage 2,
@@ -72,7 +74,7 @@ defmodule Platform.Access do
 
   import Ecto.Query, only: [from: 2]
 
-  alias Platform.Access.{Grant, Lineage, Permitted, Role, Scope}
+  alias Platform.Access.{Grant, Lineage, Permitted, Registry, Role, Scope}
   alias Platform.Agents.AgentRuntime
   alias Platform.Repo
 
@@ -297,6 +299,53 @@ defmodule Platform.Access do
       true -> {:error, :denied}
     end
   end
+
+  # ── modules (task 01a1386d-fb6e stage 1) ─────────────────────────────────
+
+  @doc """
+  Does `scope` hold `permission` ANYWHERE, so a module needing it may be
+  opened (task 01a1386d-fb6e stage 1,
+  `0058-rbac-v2-roles-scopes-and-agent-capping.md § Permission model`)?
+
+  True when a role rule CARRIES `permission` at all (`Scope.carries?/2`,
+  including a `membership_org` rule that resolves to no org, the reading
+  member 2's equivalence test pins for the zero-membership user's Files
+  tile), or when `can?/3` permits it "anywhere" (`nil` resource), which an
+  explicit allow grant on any resource does. A deny names one resource and
+  never refuses "anywhere" (moduledoc, "Resource forms"), so a deny narrows
+  the rows inside a module and does not hide the module.
+  """
+  @spec holds_anywhere?(Scope.t() | nil, String.t()) :: boolean()
+  def holds_anywhere?(%Scope{} = scope, permission) when is_binary(permission),
+    do: Scope.carries?(scope, permission) or can?(scope, permission, nil)
+
+  def holds_anywhere?(_scope, _permission), do: false
+
+  @doc """
+  May `scope` open the module behind rail destination `module_key`?
+
+  Looks up the registry rail entry for `module_key`; `permission` defaults
+  to the entry's declared rail permission. True only when
+  `holds_anywhere?/2` holds AND, for a guest scope (`Scope.guest?/1`), the
+  entry carries `guest_admissible: true`. An unknown key or a nil scope is
+  `false` (fail closed). This is the one rail and module-visibility
+  decision; the rail, and later members' mount gate and plug, call it.
+  """
+  @spec module_access?(Scope.t() | nil, atom(), String.t() | nil) :: boolean()
+  def module_access?(scope, module_key, permission \\ nil)
+
+  def module_access?(%Scope{} = scope, module_key, permission) when is_atom(module_key) do
+    case Registry.rail_entry(module_key) do
+      nil ->
+        false
+
+      entry ->
+        holds_anywhere?(scope, permission || entry.permission) and
+          (entry.guest_admissible or not Scope.guest?(scope))
+    end
+  end
+
+  def module_access?(_scope, _module_key, _permission), do: false
 
   # ── precedence ──────────────────────────────────────────────────────────
 
