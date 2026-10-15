@@ -13,9 +13,11 @@ defmodule Platform.Inbox do
   `(user_id, source_type, source_id)` triple ALWAYS inserts a fresh row even if
   a prior row for that triple was dismissed — there is no dedup or resurrection.
 
-  **Dismissal is the only thing that takes a row off the LIST** (task
-  `01a00108` stage 4). The list scope, `unread_scope/1`, keys on `dismissed_at`
-  alone. What changed in task `01a11703` is WHAT dismisses on open:
+  For a viewer still allowed to read its source, **dismissal is the only
+  action that takes a row off the LIST** (task `01a00108` stage 4). A later
+  resource deny hides an existing row at read time. The underlying
+  `unread_scope/1` still keys on `dismissed_at` alone. What changed in task
+  `01a11703` is WHAT dismisses on open:
 
     * Opening a row from `/inbox` goes through `open_item/2`. For every kind
       outside `action_kinds/0` it is an acknowledgement: one write stamps
@@ -84,7 +86,8 @@ defmodule Platform.Inbox do
   Accepts an attrs map with `:user_id`, `:kind`, `:source_type`, `:source_id`,
   `:title`, and optional `:body` / `:url`. On success inserts a single row,
   broadcasts `{:inbox_item_added, item}` on `topic(user_id)`, and returns
-  `{:ok, item}`. On a changeset failure returns `{:error, changeset}`. No
+  `{:ok, item}`. A denied source returns `{:error, :denied}` before insertion,
+  broadcast, or push. A changeset failure returns `{:error, changeset}`. No
   fan-out — call once per recipient.
   """
   @spec emit(map()) :: {:ok, Item.t()} | {:error, Ecto.Changeset.t()} | {:error, :denied}

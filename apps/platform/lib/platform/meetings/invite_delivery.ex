@@ -157,8 +157,8 @@ defmodule Platform.Meetings.InviteDelivery do
   precisely who the invite table exists to reach.
 
   The inbox emit is wrapped in a `rescue` that logs and continues. The push
-  runs whether or not the emit succeeded: one surface failing must never
-  suppress the other, because the two exist to cover each other.
+  runs whether or not the emit succeeded when the recipient may read the
+  meeting space. An access refusal suppresses both surfaces.
 
   ## Test seams
 
@@ -361,8 +361,8 @@ defmodule Platform.Meetings.InviteDelivery do
 
     emit_inbox_row(invite, meeting, title, body, url)
 
-    # Unconditional: the push must run whether or not the emit above
-    # succeeded. `fan_out_to_user/2` and not `fan_out_to_humans/3` — the
+    # The push runs independently of an emit error for readable recipients.
+    # `fan_out_to_user/2` and not `fan_out_to_humans/3` — the
     # latter takes chat-participant row ids and cannot reach an invitee who
     # is not in this meeting's chat space.
     user = Repo.get(Platform.Accounts.User, invite.user_id)

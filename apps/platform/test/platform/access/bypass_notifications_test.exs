@@ -16,6 +16,7 @@ defmodule Platform.Access.BypassNotificationsTest do
   alias Platform.Orchestration.ExecutionSpace
   alias Platform.Repo
   alias Platform.Tasks
+  alias Platform.Tenancy
   alias Platform.Tenancy.OrgMembership
 
   defmodule Recorder do
@@ -38,6 +39,11 @@ defmodule Platform.Access.BypassNotificationsTest do
     Ecto.Adapters.SQL.Sandbox.mode(Repo, {:shared, self()})
     Application.put_env(:platform, :notifications_module, Recorder)
     :persistent_term.put({Recorder, :owner}, self())
+    _router = Process.whereis(AttentionRouter) || start_supervised!({AttentionRouter, []})
+
+    _store =
+      Process.whereis(Platform.Chat.ActiveAgentStore) ||
+        start_supervised!({Platform.Chat.ActiveAgentStore, []})
 
     on_exit(fn ->
       Application.delete_env(:platform, :notifications_module)
@@ -52,8 +58,7 @@ defmodule Platform.Access.BypassNotificationsTest do
     %{project: project, task: task, user: user}
   end
 
-  test "emit refuses task rows before insert, broadcast and push; a preexisting row leaves list and badge",
-       ctx do
+  test "emit refuses task rows before insert, broadcast and push", ctx do
     user = ctx.user
     :ok = Inbox.subscribe(user.id)
 
@@ -73,7 +78,6 @@ defmodule Platform.Access.BypassNotificationsTest do
     assert id == earlier.id
     assert_receive {:push, user_id, %{kind: "task_plan_review", body: "bpn task"}}
     assert user_id == user.id
-    assert Inbox.reachable_unread_count(user.id) == 1
 
     {:ok, _deny} =
       Grants.deny(%{
@@ -86,6 +90,30 @@ defmodule Platform.Access.BypassNotificationsTest do
     refute_receive {:inbox_item_added, _}, 100
     refute_receive {:push, _, _}, 100
     assert Repo.aggregate(from(i in Item, where: i.user_id == ^user.id), :count) == 1
+  end
+
+  test "a row emitted before denial leaves the list and badge on reload", ctx do
+    user = ctx.user
+    assert Inbox.reachable_unread_count(user.id) == 0
+
+    assert {:ok, %Item{} = earlier} =
+             Inbox.emit(%{
+               user_id: user.id,
+               kind: "task_plan_review",
+               source_type: "task",
+               source_id: ctx.task.id,
+               title: "ZQX-BYPASS-NOTIF",
+               url: "/tasks/#{ctx.task.id}"
+             })
+
+    assert Inbox.reachable_unread_count(user.id) == 1
+
+    {:ok, _deny} =
+      Grants.deny(%{
+        principal: {:user, user.id},
+        permission: "tasks.read",
+        resource: {:project, ctx.project.id}
+      })
 
     scope = Scope.for_user(user)
 
@@ -142,6 +170,57 @@ defmodule Platform.Access.BypassNotificationsTest do
     assert {:ok, _} = AttentionRouter.route(after_deny)
     refute_receive {:push, ^user_id, _}, 100
     assert recipient.participant_id == user.id
+  end
+
+  test "an external participant with a grant on P is silent after a deny on Q", ctx do
+    guest = user!(ctx.project.org_id)
+    {:ok, _} = Tenancy.mark_membership_external(%{user_id: guest.id, org_id: ctx.project.org_id})
+    {:ok, p} = Tasks.create_project(%{name: "bpn P", org_id: ctx.project.org_id})
+
+    {:ok, _allow} =
+      Grants.grant(%{
+        principal: {:user, guest.id},
+        permission: "chat.read",
+        resource: {:project, p.id}
+      })
+
+    {:ok, space} = ExecutionSpace.find_or_create(ctx.task.id)
+    author = user!(ctx.project.org_id)
+
+    {:ok, author_row} =
+      Chat.add_participant(space.id, %{
+        participant_type: "user",
+        participant_id: author.id,
+        joined_at: DateTime.utc_now()
+      })
+
+    {:ok, _guest_row} =
+      Chat.add_participant(space.id, %{
+        participant_type: "user",
+        participant_id: guest.id,
+        joined_at: DateTime.utc_now()
+      })
+
+    :ok = Inbox.subscribe(guest.id)
+    before = post!(space.id, author_row.id, "@[#{guest.name}] ZQX-BYPASS-NOTIF")
+    assert_receive {:inbox_item_added, %Item{source_id: before_id}}
+    assert before_id == before.id
+    assert {:ok, _} = AttentionRouter.route(before)
+    assert_receive {:push, guest_id, %{body: body}}
+    assert guest_id == guest.id
+    assert body =~ "ZQX-BYPASS-NOTIF"
+
+    {:ok, _deny} =
+      Grants.deny(%{
+        principal: {:user, guest.id},
+        permission: "chat.read",
+        resource: {:project, ctx.project.id}
+      })
+
+    denied = post!(space.id, author_row.id, "@[#{guest.name}] ZQX-BYPASS-NOTIF")
+    refute_receive {:inbox_item_added, _}, 100
+    assert {:ok, _} = AttentionRouter.route(denied)
+    refute_receive {:push, ^guest_id, _}, 100
   end
 
   test "the canonical external world keeps its zero-grant inbox rows" do
@@ -234,14 +313,15 @@ defmodule Platform.Access.BypassNotificationsTest do
     assert_receive {:inbox_item_added, %Item{source_id: source_id}}, 2_000
     assert source_id == before.meeting.id
 
+    after_deny = meeting_with_participants!(ctx.project.id, host, ctx.user)
+
     {:ok, _deny} =
       Grants.deny(%{
         principal: {:user, ctx.user.id},
         permission: "chat.read",
-        resource: {:project, ctx.project.id}
+        resource: {:space, after_deny.meeting.chat_space_id}
       })
 
-    after_deny = meeting_with_participants!(ctx.project.id, host, ctx.user)
     {:ok, _} = Meetings.start_meeting(after_deny.meeting)
     assert_receive {:push_humans, denied_ids, _, _}, 2_000
     refute after_deny.recipient_id in denied_ids
