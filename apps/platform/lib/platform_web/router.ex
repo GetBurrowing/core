@@ -822,6 +822,7 @@ defmodule PlatformWeb.Router do
     # Root redirects to /chat
     get("/", PageController, :home)
     get("/access-denied", AccessDeniedController, :show)
+    get("/admin/pipeline", LegacyPipelineController, :show)
 
     get("/artifacts/preview", ArtifactPreviewController, :show)
     get("/api/transcripts/:id/download", TranscriptController, :show)
@@ -838,6 +839,8 @@ defmodule PlatformWeb.Router do
       live("/activity", ActivityLive, :index)
       live("/inbox", InboxLive, :index)
       live("/tasks", TasksLive, :index)
+      # Keep the static module-admin route above the task-id catch-all.
+      live("/tasks/pipeline", PipelineLive, :index)
       live("/tasks/:task_id", TasksLive, :show)
       # ADR-0042 stage 5: project-scoped document store
       live("/files", FilesLive, :index)
@@ -984,14 +987,6 @@ defmodule PlatformWeb.Router do
       live("/admin/prompts", AdminPromptsLive, :index)
       live("/admin/prompts/:slug", AdminPromptsLive, :edit)
       live("/admin/federation", AdminFederationLive, :index)
-      # Task 019fed1e: pipeline health MOVED here from `/control/pipeline`.
-      # It is a read-only whole-page admin surface with no write handlers,
-      # so `:ensure_admin` on this live_session is the right gate — a
-      # page-local check under `/control` would invent a second pattern for
-      # a case this one already covers. Reached from the Tasks header cog;
-      # no redirect from the old path, which now falls to the
-      # `/control/:agent_slug` catch-all as a URL that should not be typed.
-      live("/admin/pipeline", PipelineLive, :index)
     end
   end
 

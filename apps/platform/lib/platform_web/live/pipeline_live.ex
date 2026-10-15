@@ -1,13 +1,11 @@
 defmodule PlatformWeb.PipelineLive do
   @moduledoc """
-  `/admin/pipeline` — where the time between a task starting and finishing
+  `/tasks/pipeline` — where the time between a task starting and finishing
   actually goes, and how much of it is the system waiting on a person.
 
-  ADMIN-ONLY, and reached from the cog in the Tasks module header. The route
-  sits in `live_session :admin`, whose `:ensure_admin` hook halts a non-admin
-  mount; `mount/3` re-checks `:root_admin?` anyway rather than assuming the
-  hook ran. The figures here are org-wide over a time window — nothing on
-  this page is scoped to a project.
+  Reached from the cog in the Tasks module header. `ModuleGate` requires
+  `tasks.manage`; `PipelineHealth.snapshot/2` re-checks that permission at
+  `:all` because the figures span the install, not one project.
 
   This module reads `Platform.Tasks.PipelineHealth` and nothing else. It does
   no date arithmetic over task rows: a duration presented here was measured by
@@ -70,23 +68,11 @@ defmodule PlatformWeb.PipelineLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    # Belt-and-suspenders. `live_session :admin`'s `:ensure_admin` hook has
-    # already halted a non-admin mount by the time this runs; this refuses
-    # again rather than assuming it, so a routing change that moves the page
-    # out of that live_session degrades to a redirect and not to an open
-    # admin surface.
-    if socket.assigns[:root_admin?] do
-      {:ok,
-       socket
-       |> assign(:page_title, "Pipeline health")
-       |> assign(:range, @default_range)
-       |> load_data()}
-    else
-      {:ok,
-       socket
-       |> put_flash(:error, "You don't have access to that page.")
-       |> push_navigate(to: "/")}
-    end
+    {:ok,
+     socket
+     |> assign(:page_title, "Pipeline health")
+     |> assign(:range, @default_range)
+     |> load_data()}
   end
 
   @impl true
@@ -116,9 +102,7 @@ defmodule PlatformWeb.PipelineLive do
         |> assign(:sparse?, data.cohort.decomposable < @distribution_floor)
 
       {:error, :unauthorized} ->
-        socket
-        |> put_flash(:error, "You don't have access to that page.")
-        |> push_navigate(to: "/")
+        push_navigate(socket, to: "/access-denied?module=tasks")
     end
   end
 

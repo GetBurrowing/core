@@ -106,9 +106,8 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:kind_filter, :all)
      |> assign(:task_search_query, "")
      |> assign(:create_menu_open, false)
-     # Task 019fed1e: the admin-only Tasks settings menu (one row today,
-     # Pipeline). The trigger renders only behind `@root_admin?` and the
-     # destination is gated again by `live_session :admin`.
+     # Task 019fed1e: the Tasks settings menu (one row today, Pipeline).
+     # SettingsMenu checks `tasks.manage`; ModuleGate checks its destination.
      |> assign(:settings_menu_open, false)
      |> assign(:agents, agents)
      |> assign(:agents_by_id, Map.new(agents, &{&1.id, &1}))

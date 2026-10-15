@@ -142,14 +142,14 @@ defmodule PlatformWeb.AdminRouteGuardsTest do
       acme = Tenancy.get_org_by_slug!("acme")
       create_membership!(user, acme, "member")
 
-      assert {:error, {_, %{to: "/access-denied?module=admin"}}} =
+      assert {:error, {_, %{to: "/access-denied?module=prompts"}}} =
                conn |> authenticated_conn(user) |> live(~p"/admin/prompts")
     end
 
     test "user with no memberships is redirected to access denied", %{conn: conn} do
       user = create_user!()
 
-      assert {:error, {_, %{to: "/access-denied?module=admin"}}} =
+      assert {:error, {_, %{to: "/access-denied?module=prompts"}}} =
                conn |> authenticated_conn(user) |> live(~p"/admin/prompts")
     end
   end
