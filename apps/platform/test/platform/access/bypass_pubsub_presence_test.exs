@@ -1,9 +1,12 @@
 defmodule Platform.Access.BypassPubsubPresenceTest do
-  use Platform.DataCase, async: false
+  use PlatformWeb.ConnCase, async: false
+
+  import Phoenix.LiveViewTest
 
   alias Phoenix.LiveView.Socket
   alias Platform.Access.{Grants, Scope}
   alias Platform.Chat
+  alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.ExternalUserFixtures, as: World
   alias Platform.Tasks
   alias PlatformWeb.ChatLive
@@ -24,6 +27,22 @@ defmodule Platform.Access.BypassPubsubPresenceTest do
 
     scope = Scope.for_user(ctx.int)
     assert ChatLive.presence_subscribe_space_ids([ctx.a, ctx.b], ctx.int.id, scope) == [ctx.b.id]
+  end
+
+  test "a remounted chat view does not subscribe to a denied background channel", ctx do
+    conn = init_test_session(ctx.conn, current_user_id: ctx.int.id)
+    {:ok, before_view, _} = live(conn, ~p"/chat/#{ctx.a.slug}")
+    assert registrations(before_view, ctx.b) > 0
+
+    assert {:ok, _} =
+             Grants.deny(%{principal: ctx.int, permission: "chat.read", resource: ctx.b})
+
+    {:ok, denied_view, _} =
+      build_conn()
+      |> init_test_session(current_user_id: ctx.int.id)
+      |> live(~p"/chat/#{ctx.a.slug}")
+
+    assert registrations(denied_view, ctx.b) == 0
   end
 
   test "canvas search and find hide a denied canvas while retaining a sibling", ctx do
@@ -88,5 +107,32 @@ defmodule Platform.Access.BypassPubsubPresenceTest do
              Grants.deny(%{principal: ctx.int, permission: "tasks.read", resource: project})
 
     assert Tasks.count_in_progress_for_user(ctx.int.id) == 0
+  end
+
+  test "board invalidation cannot reintroduce a denied task on a remounted view", ctx do
+    {:ok, project} = Tasks.create_project(%{name: "Board Q", org_id: ctx.org_a.id})
+    {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "ZQX-BYPASS-BOARD"})
+    conn = init_test_session(ctx.conn, current_user_id: ctx.int.id)
+    {:ok, before_view, before_html} = live(conn, ~p"/tasks")
+    assert before_html =~ task.title
+
+    assert {:ok, _} =
+             Grants.deny(%{principal: ctx.int, permission: "tasks.read", resource: project})
+
+    {:ok, denied_view, denied_html} =
+      build_conn()
+      |> init_test_session(current_user_id: ctx.int.id)
+      |> live(~p"/tasks")
+
+    refute denied_html =~ task.title
+    send(denied_view.pid, {:task_updated, task})
+    refute render(denied_view) =~ task.title
+    assert render(before_view) =~ task.title
+  end
+
+  defp registrations(view, space) do
+    Platform.PubSub
+    |> Registry.lookup(ChatPubSub.space_topic(space.id))
+    |> Enum.count(fn {pid, _meta} -> pid == view.pid end)
   end
 end
