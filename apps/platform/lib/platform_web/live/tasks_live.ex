@@ -42,9 +42,6 @@ defmodule PlatformWeb.TasksLive do
   """
   use PlatformWeb, :live_view
 
-  @doc "Reload the board against the scope rebuilt by ShellLive."
-  def on_access_changed(socket), do: BoardHooks.refresh_board(socket)
-
   alias Platform.Chat
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Skills
@@ -54,6 +51,7 @@ defmodule PlatformWeb.TasksLive do
   alias PlatformWeb.SpaceTopics
   alias PlatformWeb.Tasks.BoardData
   alias PlatformWeb.Tasks.BoardHooks
+
   alias PlatformWeb.Tasks.EpicLoaders
   alias PlatformWeb.Tasks.LifecycleHooks
   alias PlatformWeb.Tasks.PinHooks
@@ -71,6 +69,9 @@ defmodule PlatformWeb.TasksLive do
 
   import PlatformWeb.Tasks.Selection,
     only: [assign_selected_task: 2, bump_detail_epoch: 1, reload_selected_task: 1]
+
+  @doc "Reload the board against the scope rebuilt by ShellLive."
+  def on_access_changed(socket), do: BoardHooks.refresh_board(socket)
 
   @impl true
   def mount(_params, session, socket) do

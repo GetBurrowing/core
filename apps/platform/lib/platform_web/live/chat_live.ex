@@ -4125,6 +4125,82 @@ defmodule PlatformWeb.ChatLive do
     {:noreply, refresh_rail(socket)}
   end
 
+  # Shared org-DEFAULT invalidation (chat sidebar Stage 6). Fired on the
+  # `chat:sidebar:defaults` topic when a root-org admin curates the default layer
+  # (rename / recolor / reorder / reassign). EVERY connected session receives
+  # this (except the acting admin's own tab, which recomputed synchronously)
+  # and refreshes its rail so the admin's default change is visible to all
+  # users without a refresh.
+  #
+  # RE-FETCHES `@channels`, via the same `refresh_chat_containers/1` the acting
+  # tab uses in `recompute_sidebar_after_admin_write/1` (task 019ffcad stage 2).
+  # An earlier version of this comment claimed the resolver reads the updated
+  # default sections from the DB and that re-resolving the cached channel list
+  # was therefore enough. True for rename, recolor and reorder, which write the
+  # SECTION row. False for reassign, which writes `chat_spaces.org_id` and
+  # leaves the section rows alone: `Sidebar.resolve/3` buckets each channel by
+  # the `org_id` on the struct it is handed, so a session re-resolving its
+  # cached `@channels` filed the moved row back under the source section and
+  # kept it there until the reader re-mounted.
+  #
+  # The two paths are deliberately identical. Splitting them by event so the
+  # other three writes skip the fetch would need the broadcast to carry which
+  # kind of write fired it, and would leave the next channel-touching admin
+  # write silently stale in every session but one. The cost is one
+  # `Chat.list_spaces` per connected session per admin default write; those are
+  # rare, human-driven actions over a tens-of-rows table.
+  def handle_info(:sidebar_defaults_changed, socket) do
+    {:noreply, refresh_chat_containers(socket)}
+  end
+
+  # Task 01a0181f: release the space subscription when the viewer LOSES access
+  # to it. `:sidebar_changed`'s reconcile above is ADD-ONLY on purpose, so
+  # without this clause a revoked session keeps the registration for the rest of
+  # its life: the rail row disappears on the next reload, the topic does not.
+  # Message bodies do not leak (MessagesHooks halts for any non-active space),
+  # but `{:participant_joined, _}` keeps writing strangers into
+  # `@participants_map` — and so into the @-mention autocomplete of the space
+  # the viewer IS in — and `{:pin_added, _}` keeps writing foreign rows into
+  # `@pins`. Releasing the registration closes both at the choke point instead
+  # of bolting a space guard onto each handler.
+  #
+  # The predicate is LOSS OF ACCESS, never "my participant row was deleted".
+  # `presence_subscribe_space_ids/2` returns its input unchanged for an internal
+  # or anonymous session, so this clause is inert for them: internal users see
+  # every workspace channel in the rail with or without a participant row, and
+  # keying on identity would kill live chat for any internal user removed from a
+  # channel they can still open.
+  #
+  # The deviation this clause used to document — that its unsubscribe reached
+  # across the ADR 0013 ownership boundary and destroyed ShellLive's
+  # registration for the same topic on this shared pid — is CLOSED (task
+  # 01a01a1b). Both surfaces now go through `PlatformWeb.SpaceTopics`, so this
+  # releases only chat's own two holds and ShellLive's are released by ShellLive
+  # alone, off its own `:roster_resolved` / `:presence_spaces_resolved` paths.
+  #
+  # Both holds, not one: losing access must drop this module's interest in the
+  # space entirely, which was the existing intent when a single unsubscribe did
+  # the job. Whether the registration itself survives is now correctly a
+  # question about the OTHER surfaces' holds.
+  def handle_info({:participant_left, %{participant_type: "user"} = participant}, socket) do
+    socket =
+      if participant.participant_id == socket.assigns.user_id and
+           participant.space_id not in presence_subscribe_space_ids(
+             [%{id: participant.space_id}],
+             socket.assigns.user_id
+           ) do
+        socket
+        |> unsubscribe_space(participant.space_id, :chat_rail)
+        |> unsubscribe_space(participant.space_id, :chat_active)
+      else
+        socket
+      end
+
+    {:noreply, socket}
+  end
+
+  def handle_info(_msg, socket), do: {:noreply, socket}
+
   @doc "Refresh this socket's rail after ShellLive rebuilds its access scope."
   def on_access_changed(socket) do
     socket = socket |> refresh_rail() |> release_revoked_rail_topics()

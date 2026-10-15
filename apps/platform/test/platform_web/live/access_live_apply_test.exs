@@ -63,6 +63,7 @@ defmodule PlatformWeb.AccessLiveApplyTest do
     org = org!()
     guest = user!("Live Guest")
     {:ok, _} = Tenancy.mark_membership_external(%{user_id: guest.id, org_id: org.id})
+    Tenancy.allow_dm(guest, org)
     c = channel!(org, "Live Channel C")
     d = channel!(org, "Live Channel D")
     c_grant = grant!(guest, c)
@@ -100,7 +101,7 @@ defmodule PlatformWeb.AccessLiveApplyTest do
 
     assert {:error, %{rule: :not_granted}} =
              Grants.deny(
-               %{principal: ctx.guest, permission: "chat.read", resource: {:space, ctx.c.id}},
+               %{principal: ctx.guest, permission: "tasks.read", resource: {:space, ctx.c.id}},
                actor: Scope.for_user(other)
              )
 
@@ -149,7 +150,7 @@ defmodule PlatformWeb.AccessLiveApplyTest do
     member_id = member.id
     assert_receive {:probe, ^guest_id, {:access_changed, _}}
     assert_receive {:probe, ^other_guest_id, {:access_changed, _}}
-    assert_receive {:probe_timeout, ^member_id}
+    assert_receive {:probe_timeout, ^member_id}, 500
     Enum.each(probes, &Process.exit(&1, :normal))
   end
 
@@ -196,7 +197,9 @@ defmodule PlatformWeb.AccessLiveApplyTest do
     |> OrgMembership.changeset(%{org_id: ctx.org.id, user_id: member.id, role: "member"})
     |> Repo.insert!()
 
-    {:ok, view, _} = build_conn() |> init_test_session(current_user_id: member.id) |> live("/tasks")
+    {:ok, view, _} =
+      build_conn() |> init_test_session(current_user_id: member.id) |> live("/tasks")
+
     pid = view.pid
     send(pid, {:access_changed, Ecto.UUID.generate()})
     assert is_binary(render(view))
