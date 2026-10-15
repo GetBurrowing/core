@@ -3,11 +3,13 @@ defmodule PlatformWeb.AccessViewAsTest do
 
   import Phoenix.LiveViewTest
 
-  alias Platform.Access.{Scope, ViewAs}
+  alias Platform.Access.{Grants, Scope, ViewAs}
   alias Platform.Accounts
   alias Platform.Accounts.User
   alias Platform.Chat
+  alias Platform.Federation
   alias Platform.Repo
+  alias Platform.Tasks
   alias Platform.Tenancy
   alias Platform.Tenancy.{Org, OrgMembership}
   alias PlatformWeb.Components.IconRail
@@ -31,7 +33,7 @@ defmodule PlatformWeb.AccessViewAsTest do
   defp rail_keys(html) do
     html
     |> Floki.parse_document!()
-    |> Floki.find("[data-destination]")
+    |> Floki.find("[data-icon-rail] [data-destination]")
     |> Enum.map(&Floki.attribute(&1, "data-destination"))
     |> List.flatten()
     |> MapSet.new()
@@ -107,5 +109,44 @@ defmodule PlatformWeb.AccessViewAsTest do
   test "unauthorized member is redirected", ctx do
     assert {:error, {:live_redirect, %{to: "/chat"}}} =
              conn_for(ctx.member) |> live("/access/view-as/user/#{ctx.root.id}")
+  end
+
+  test "project manager sees only the project shared with the target", ctx do
+    n = System.unique_integer([:positive])
+
+    {:ok, org} =
+      Tenancy.create_org(ctx.root, %{name: "View tenant #{n}", slug: "view-tenant-#{n}"})
+
+    manager = user!("View project manager")
+    target = user!("View project target")
+    membership!(manager, org, "guest")
+    membership!(target, org, "member")
+    {:ok, p} = Tasks.create_project(%{name: "Visible view project #{n}", org_id: org.id})
+    {:ok, q} = Tasks.create_project(%{name: "Hidden view project #{n}", org_id: org.id})
+
+    for permission <- ~w(access.manage tasks.read) do
+      assert {:ok, _} =
+               Grants.grant(%{principal: manager, permission: permission, resource: {:project, p.id}})
+    end
+
+    {:ok, result} =
+      Scope.for_user(Accounts.get_user(manager.id)) |> ViewAs.compute({:user, target.id})
+
+    assert Enum.map(result.resources.projects, & &1.id) == [p.id]
+    refute q.id in Enum.map(result.resources.projects, & &1.id)
+  end
+
+  test "agent target is explicitly labelled uncapped", ctx do
+    n = System.unique_integer([:positive])
+    runtime_id = "view-as-runtime-#{n}"
+    assert {:ok, _runtime} =
+             Federation.register_runtime(ctx.member.id, %{
+               runtime_id: runtime_id,
+               display_name: "View runtime #{n}",
+               allowed_bundles: []
+             })
+
+    {:ok, _view, html} = conn_for(ctx.root) |> live("/access/view-as/agent/#{runtime_id}")
+    assert html =~ "not capped at owner (pos 5)"
   end
 end
