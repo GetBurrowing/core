@@ -69,6 +69,11 @@ defmodule Platform.Access.ModuleGatingAcceptanceTest do
   defp authed(user), do: build_conn() |> init_test_session(current_user_id: user.id)
   defp scope(user), do: user.id |> Accounts.get_user() |> Scope.for_user()
 
+  defp denial_content(conn) do
+    [content] = Regex.run(~r|<main\b.*</main>|s, conn.resp_body)
+    content
+  end
+
   defp keys(html, selector) do
     html
     |> LazyHTML.from_fragment()
@@ -133,7 +138,9 @@ defmodule Platform.Access.ModuleGatingAcceptanceTest do
 
       existing = get(authed(ctx.guest), "/tasks/#{ctx.task.id}")
       missing = get(authed(ctx.guest), "/tasks/#{Ecto.UUID.generate()}")
-      assert existing.resp_body == missing.resp_body
+      # The endpoint creates a fresh CSRF token in each response's head. The
+      # denial content itself must be byte-identical for real and absent ids.
+      assert denial_content(existing) == denial_content(missing)
 
       assert {:error, {_, %{to: "/access-denied?module=admin"}}} =
                live(authed(ctx.member), "/admin/branding")
