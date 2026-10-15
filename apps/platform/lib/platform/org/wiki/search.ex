@@ -126,6 +126,8 @@ defmodule Platform.Org.Wiki.Search do
 
   import Ecto.Query
 
+  alias Platform.Access
+  alias Platform.Access.Query, as: AccessQuery
   alias Platform.Agents.Agent
   alias Platform.Chat
   alias Platform.Memory
@@ -263,11 +265,10 @@ defmodule Platform.Org.Wiki.Search do
       (`Platform.Org.Wiki.scope_by/3`) are removed INSIDE each channel,
       before fusion: in SQL for the lexical page channel, and by one id
       query on the semantic channel's page hits before they are ranked.
-      So `match_count`, `truncated` and `dropped` are computed as if the
-      denied page did not exist, and none of them counts it. Absent, or
-      with no `memory.read` grant on the scope, every channel is
-      unchanged. The journal, message and task corpora are not filtered
-      here (stack position 7).
+      Task and message hits are likewise filtered before fusion when the
+      caller's scope has a relevant grant. `match_count`, `truncated` and
+      `dropped` are computed as if those denied rows did not exist. With
+      no grant on the relevant permission, each channel is unchanged.
   """
   @spec search(String.t(), search_opts()) :: {:ok, response()}
   def search(query, opts \\ []) when is_binary(query) and is_list(opts) do
@@ -456,6 +457,7 @@ defmodule Platform.Org.Wiki.Search do
               end
             end)
             |> drop_unreadable_pages(opts)
+            |> drop_unreadable_tasks_and_messages(opts)
             |> Enum.with_index(1)
             |> Enum.flat_map(fn {{hit, corpus}, rank} ->
               semantic_hit_to_channel(hit, rank, corpus, corpora)
@@ -623,6 +625,58 @@ defmodule Platform.Org.Wiki.Search do
   end
 
   defp drop_unreadable_pages(resolved_hits, _opts), do: resolved_hits
+
+  # Refuse indexed hits before fusion. A hydration-time refusal increments
+  # `dropped` and exposes that a matching but unreadable row exists.
+  defp drop_unreadable_tasks_and_messages(hits, %{access_scope: %Access.Scope{} = scope} = opts) do
+    task_ids =
+      if Access.grants_apply?(scope, "tasks.read"), do: corpus_hit_ids(hits, :task), else: []
+
+    message_ids =
+      if Access.grants_apply?(scope, "chat.read"), do: corpus_hit_ids(hits, :message), else: []
+
+    readable_tasks =
+      if task_ids == [] do
+        MapSet.new()
+      else
+        TaskRecord
+        |> where([t], t.id in ^task_ids)
+        |> AccessQuery.restrict(scope, "tasks.read", :task, %{id: :id})
+        |> select([t], t.id)
+        |> Repo.all()
+        |> MapSet.new()
+      end
+
+    readable_spaces = if message_ids == [], do: [], else: agent_space_ids(opts.agent, scope)
+
+    readable_messages =
+      if message_ids == [] or readable_spaces == [] do
+        MapSet.new()
+      else
+        Platform.Chat.Message
+        |> where([m], m.id in ^message_ids and m.space_id in ^readable_spaces)
+        |> select([m], m.id)
+        |> Repo.all()
+        |> MapSet.new()
+      end
+
+    Enum.reject(hits, fn {hit, corpus} ->
+      id = semantic_hit_id(hit)
+
+      (corpus == :task and id in task_ids and not MapSet.member?(readable_tasks, id)) or
+        (corpus == :message and id in message_ids and not MapSet.member?(readable_messages, id))
+    end)
+  end
+
+  defp drop_unreadable_tasks_and_messages(hits, _opts), do: hits
+
+  defp corpus_hit_ids(hits, corpus) do
+    for {hit, ^corpus} <- hits,
+        id = semantic_hit_id(hit),
+        Platform.UUID.valid?(id),
+        uniq: true,
+        do: id
+  end
 
   defp put_corpus(acc, ids, corpus) do
     Enum.reduce(ids, acc, fn id, acc -> Map.put(acc, id, corpus) end)
@@ -885,6 +939,7 @@ defmodule Platform.Org.Wiki.Search do
       agent_id
       |> Chat.list_spaces_for_agent()
       |> Enum.map(& &1.id)
+      |> readable_space_ids(opts.access_scope)
 
     if spaces == [] do
       []
@@ -927,6 +982,7 @@ defmodule Platform.Org.Wiki.Search do
       |> filter_task_deleted()
       |> filter_task_project(opts.project_id)
       |> scope_task_org(opts.org_id)
+      |> maybe_restrict_tasks(opts.access_scope)
       |> maybe_filter_since_inserted(opts.since)
       |> where(
         [t],
@@ -966,6 +1022,7 @@ defmodule Platform.Org.Wiki.Search do
       |> filter_task_deleted()
       |> filter_task_project(opts.project_id)
       |> scope_task_org(opts.org_id)
+      |> maybe_restrict_tasks(opts.access_scope)
       |> maybe_filter_since_inserted(opts.since)
       |> where([t], ilike(t.title, ^pattern) or ilike(t.description, ^pattern))
       |> order_by([t], desc: t.updated_at)
@@ -1072,7 +1129,7 @@ defmodule Platform.Org.Wiki.Search do
     messages_by_id = bulk_load_messages(fused, opts)
     tasks_by_id = bulk_load_tasks(fused, opts)
 
-    agent_space_ids = agent_space_ids(opts.agent)
+    agent_space_ids = agent_space_ids(opts.agent, opts.access_scope)
 
     ctx = %{
       pages: pages_by_id,
@@ -1347,13 +1404,33 @@ defmodule Platform.Org.Wiki.Search do
     |> Enum.uniq()
   end
 
-  defp agent_space_ids(nil), do: []
+  defp agent_space_ids(nil, _scope), do: []
 
-  defp agent_space_ids(%Agent{id: id}) do
+  defp agent_space_ids(%Agent{id: id}, scope) do
     id
     |> Chat.list_spaces_for_agent()
     |> Enum.map(& &1.id)
+    |> readable_space_ids(scope)
   end
+
+  defp readable_space_ids(ids, %Access.Scope{} = scope) do
+    if ids == [] or not Access.grants_apply?(scope, "chat.read") do
+      ids
+    else
+      Platform.Chat.Space
+      |> where([s], s.id in ^ids)
+      |> AccessQuery.restrict(scope, "chat.read", :space, %{id: :id})
+      |> select([s], s.id)
+      |> Repo.all()
+    end
+  end
+
+  defp readable_space_ids(ids, _scope), do: ids
+
+  defp maybe_restrict_tasks(query, %Access.Scope{} = scope),
+    do: AccessQuery.restrict(query, scope, "tasks.read", :task, %{id: :id})
+
+  defp maybe_restrict_tasks(query, _scope), do: query
 
   ## ─────────────────────────────────────────────────────────────────────
   ## Query helpers

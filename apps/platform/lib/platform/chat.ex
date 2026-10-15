@@ -3196,6 +3196,7 @@ defmodule Platform.Chat do
             )
         }
       )
+      |> maybe_scope_canvases(canvas_access_scope(opts))
       |> Repo.all()
       |> Enum.map(&canvas_search_hit/1)
     end

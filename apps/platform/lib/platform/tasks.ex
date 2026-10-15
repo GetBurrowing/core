@@ -6873,6 +6873,12 @@ defmodule Platform.Tasks do
     |> where([t], is_nil(t.deleted_at))
     |> where([t], t.status == "in_progress")
     |> where([t], t.assignee_id == ^user_id)
+    |> Platform.Access.Query.restrict(
+      Platform.Access.Scope.for_user(%{id: user_id}),
+      "tasks.read",
+      :task,
+      %{id: :id}
+    )
     |> Repo.aggregate(:count)
   end
 

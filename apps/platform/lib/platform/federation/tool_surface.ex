@@ -4453,7 +4453,8 @@ defmodule Platform.Federation.ToolSurface do
     query = Map.get(args, "query", "")
     limit = args |> Map.get("limit", 10) |> min(10)
 
-    with :ok <- assert_agent_in_space(space_id, context) do
+    with :ok <- assert_agent_in_space(space_id, context),
+         :ok <- readable_space_or_denied(space_id, context) do
       # Guard (task 01a006c2 stage 4): a query that parses to an EMPTY tsquery
       # — punctuation only, or otherwise no word token the `english` config
       # will keep — matches nothing by construction. Returning a bare `[]` for
@@ -4485,7 +4486,8 @@ defmodule Platform.Federation.ToolSurface do
     limit = args |> Map.get("limit", 20) |> min(20)
     before_id = Map.get(args, "before_id")
 
-    with :ok <- assert_agent_in_space(space_id, context) do
+    with :ok <- assert_agent_in_space(space_id, context),
+         :ok <- readable_space_or_denied(space_id, context) do
       opts = [limit: limit, top_level_only: true]
       opts = if before_id, do: Keyword.put(opts, :before_id, before_id), else: opts
 
@@ -15664,6 +15666,13 @@ defmodule Platform.Federation.ToolSurface do
           _ ->
             {:error, space_write_denied(space_id)}
         end
+    end
+  end
+
+  defp readable_space_or_denied(space_id, context) do
+    case caller_access_check(context, "chat.read", {:space, space_id}) do
+      :ok -> :ok
+      {:error, :denied} -> {:error, space_write_denied(space_id)}
     end
   end
 

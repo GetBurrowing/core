@@ -38,6 +38,7 @@ defmodule Platform.Mobile.AppEntities do
   import Ecto.Query
 
   alias Platform.Accounts.User
+  alias Platform.Access
   alias Platform.Agents.Agent
   alias Platform.Chat
   alias Platform.Chat.ExternalScope
@@ -546,6 +547,7 @@ defmodule Platform.Mobile.AppEntities do
     with true <- is_binary(space_id) and Platform.UUID.valid?(space_id),
          %Space{archived_at: nil} = space <- Chat.get_space(space_id),
          true <- ExternalScope.authorized_space?(user, space),
+         :ok <- Access.check(Access.Scope.for_user(user), "chat.read", {:space, space.id}),
          %Participant{} = participant <- user_participant(space.id, user.id) do
       {:ok, space, participant}
     else
@@ -582,7 +584,7 @@ defmodule Platform.Mobile.AppEntities do
             is_nil(s.archived_at) and s.kind != "execution",
         select: s.id
       )
-      |> ExternalScope.scope_spaces(ExternalScope.for_user(user))
+      |> ExternalScope.scope_spaces(Access.Scope.for_user(user))
 
     agents =
       from(a in Agent,
@@ -652,7 +654,7 @@ defmodule Platform.Mobile.AppEntities do
           after_id: after_id,
           order: :asc,
           limit: limit,
-          scope: ExternalScope.for_user(user)
+          scope: Access.Scope.for_user(user)
         )
 
       {:ok,

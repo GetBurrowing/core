@@ -20,6 +20,7 @@ defmodule PlatformWeb.ChatLive do
   use PlatformWeb, :live_view
 
   require Logger
+  import Ecto.Query, only: [from: 2]
 
   import PlatformWeb.ChatLive.Partials
   import PlatformWeb.ChatLive.Partials.Composer
@@ -171,15 +172,34 @@ defmodule PlatformWeb.ChatLive do
   Public only so the subscribe-scope decision is unit-testable without a
   LiveView; not part of the ChatLive public API.
   """
-  @spec presence_subscribe_space_ids([%{id: binary()}], binary()) :: [binary()]
-  def presence_subscribe_space_ids(all_spaces, user_id) do
+  @spec presence_subscribe_space_ids([%{id: binary()}], binary(), Platform.Access.Scope.t() | nil) ::
+          [binary()]
+  def presence_subscribe_space_ids(all_spaces, user_id, access_scope \\ nil) do
     ids = Enum.map(all_spaces, & &1.id)
 
-    if Platform.Tenancy.external_user?(%{id: user_id}) do
-      scope = Platform.Chat.Presence.external_scope_space_ids(user_id)
-      Enum.filter(ids, &MapSet.member?(scope, &1))
-    else
-      ids
+    ids =
+      if Platform.Tenancy.external_user?(%{id: user_id}) do
+        scope = Platform.Chat.Presence.external_scope_space_ids(user_id)
+        Enum.filter(ids, &MapSet.member?(scope, &1))
+      else
+        ids
+      end
+
+    case {ids, access_scope} do
+      {[], _} ->
+        []
+
+      {ids, %Platform.Access.Scope{} = scope} ->
+        readable =
+          from(s in Platform.Chat.Space, where: s.id in ^ids, select: s.id)
+          |> Platform.Access.Query.restrict(scope, "chat.read", :space, %{id: :id})
+          |> Platform.Repo.all()
+          |> MapSet.new()
+
+        Enum.filter(ids, &MapSet.member?(readable, &1))
+
+      {ids, _} ->
+        ids
     end
   end
 
@@ -210,7 +230,7 @@ defmodule PlatformWeb.ChatLive do
     } = socket.assigns
 
     (channels ++ pinned_task_spaces ++ dm_conversations)
-    |> presence_subscribe_space_ids(user_id)
+    |> presence_subscribe_space_ids(user_id, socket.assigns[:access_scope])
     |> MapSet.new()
   end
 
@@ -790,7 +810,7 @@ defmodule PlatformWeb.ChatLive do
         # two agree once M5's filtered render merges.
         socket =
           all_spaces
-          |> presence_subscribe_space_ids(user_id)
+          |> presence_subscribe_space_ids(user_id, socket.assigns[:access_scope])
           |> Enum.reduce(socket, &subscribe_space(&2, &1, :chat_rail))
 
         ChatPubSub.subscribe_spaces()
@@ -3880,7 +3900,11 @@ defmodule PlatformWeb.ChatLive do
     # for a topic at once, so a paired call here would silently kill another
     # code path's subscription with no error and no log.
     socket =
-      if space.id in presence_subscribe_space_ids([space], socket.assigns.user_id) do
+      if space.id in presence_subscribe_space_ids(
+           [space],
+           socket.assigns.user_id,
+           socket.assigns[:access_scope]
+         ) do
         subscribe_space(socket, space.id, :chat_rail)
       else
         socket
@@ -4163,7 +4187,8 @@ defmodule PlatformWeb.ChatLive do
       if participant.participant_id == socket.assigns.user_id and
            participant.space_id not in presence_subscribe_space_ids(
              [%{id: participant.space_id}],
-             socket.assigns.user_id
+             socket.assigns.user_id,
+             socket.assigns[:access_scope]
            ) do
         socket
         |> unsubscribe_space(participant.space_id, :chat_rail)

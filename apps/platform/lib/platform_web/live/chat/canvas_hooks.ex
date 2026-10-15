@@ -335,7 +335,21 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   """
   @spec find(Phoenix.LiveView.Socket.t(), binary()) :: map() | nil
   def find(socket, canvas_id) do
-    Chat.get_canvas(canvas_id) || Enum.find(socket.assigns.canvases, &(&1.id == canvas_id))
+    canvas =
+      Chat.get_canvas(canvas_id) || Enum.find(socket.assigns.canvases, &(&1.id == canvas_id))
+
+    case {canvas, socket.assigns[:access_scope]} do
+      {nil, _} ->
+        nil
+
+      {canvas, %Platform.Access.Scope{} = scope} ->
+        if Platform.Access.check(scope, "canvas.read", {:canvas, canvas.id}) == :ok,
+          do: canvas,
+          else: nil
+
+      {canvas, _} ->
+        canvas
+    end
   end
 
   defp viewer(socket) do
@@ -408,7 +422,7 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
 
         results =
           if search_active?(query) do
-            Chat.search_canvases(space_ids, query)
+            Chat.search_canvases(space_ids, query, access_scope_opts(socket))
           else
             []
           end
