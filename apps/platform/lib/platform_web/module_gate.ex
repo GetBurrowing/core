@@ -58,7 +58,7 @@ defmodule PlatformWeb.ModuleGate do
         end
 
       :error ->
-        if socket.view in @ungated do
+        if Enum.member?(@ungated, socket.view) do
           {:cont, socket}
         else
           {:halt, redirect(socket, to: "/access-denied")}
