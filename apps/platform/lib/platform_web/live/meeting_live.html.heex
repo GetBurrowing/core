@@ -2326,7 +2326,7 @@
              `hold_to_talk?` call sites above. --%>
           <CallShell.call_controls
             data-role="meeting-stage-controls"
-            class="h-[46px] w-full shrink-0 gap-2 rounded-box border border-edge bg-base-100 px-3"
+            class="min-h-[46px] w-full shrink-0 gap-2 rounded-box border border-edge bg-base-100 px-3"
             mic_event="meeting_toggle_mic"
             camera_event="meeting_toggle_camera"
             share_event="meeting_toggle_screen_share"
@@ -2334,6 +2334,9 @@
             mic_on={@mic_enabled}
             camera_on={@camera_enabled}
             sharing={@screen_share_enabled}
+            native={@native_call}
+            mic_pending={@mic_pending}
+            media_error={@media_error}
             show_leave={@in_meeting}
             mic_role="meeting-mic"
             camera_role="meeting-camera"

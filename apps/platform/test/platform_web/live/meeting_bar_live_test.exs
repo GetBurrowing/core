@@ -23,6 +23,32 @@ defmodule PlatformWeb.MeetingBarLiveTest do
   }
 
   describe "render/1" do
+    # Task 01a13c62 stage 3: inside the iOS app the bar follows the native
+    # call. No camera while the build has none; a pending mic is disabled
+    # with the warning ring.
+    test "native mode hides the camera and renders a pending mic disabled" do
+      assigns =
+        Map.merge(@meeting_assigns, %{
+          native: %{mic: true, camera: false, active_speakers: true},
+          mic_pending: true
+        })
+
+      html = render_component(MeetingBarLive, assigns)
+
+      refute html =~ "data-bar-camera"
+      assert html =~ "data-bar-mic"
+      assert html =~ "ring-warning"
+      assert html =~ ~s(aria-busy="true")
+    end
+
+    test "in a browser the bar keeps mic and camera" do
+      html = render_component(MeetingBarLive, @meeting_assigns)
+
+      assert html =~ "data-bar-camera"
+      assert html =~ "data-bar-mic"
+      refute html =~ "ring-warning"
+    end
+
     test "renders mini-bar when meeting is active and not on meeting page" do
       html = render_component(MeetingBarLive, @meeting_assigns)
 

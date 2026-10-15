@@ -29,7 +29,13 @@ defmodule PlatformWeb.MeetingBarLive do
     {:ok,
      socket
      |> assign(:mic_on, true)
-     |> assign(:camera_on, false)}
+     |> assign(:camera_on, false)
+     # Task 01a13c62 stage 3: the native call's capabilities while the
+     # Burrow iOS app owns the media (else nil), and whether a page mute is
+     # waiting for the native call to confirm it. Both arrive with the
+     # `:meeting_media_state` `send_update/2` from ShellLive.
+     |> assign(:native, nil)
+     |> assign(:mic_pending, false)}
   end
 
   @impl true
@@ -62,7 +68,9 @@ defmodule PlatformWeb.MeetingBarLive do
           {:sidebar_collapsed, :sidebar_collapsed},
           {:id, :id},
           {:mic_on, :mic_on},
-          {:camera_on, :camera_on}
+          {:camera_on, :camera_on},
+          {:native, :native},
+          {:mic_pending, :mic_pending}
         ],
         socket,
         fn {from_key, to_key}, acc ->
@@ -114,14 +122,21 @@ defmodule PlatformWeb.MeetingBarLive do
            MeetingHooks on /chat, ShellLive's fallback elsewhere. No
            `phx-click` so the LiveComponent doesn't intercept and create a
            local-only state path. --%>
+      <%!-- Task 01a13c62 stage 3: in the iOS app the state is what the
+           native call CONFIRMED. Pending (a tap in flight) is disabled with
+           a warning ring; a build whose page cannot drive the mic hides it. --%>
       <button
+        :if={is_nil(@native) or @native.mic}
         data-bar-mic
+        disabled={@mic_pending}
+        aria-busy={if @mic_pending, do: "true"}
         class={[
           "rounded-lg p-1.5 transition-colors",
           if(@mic_on,
             do: "text-base-content/70 hover:bg-base-300",
             else: "text-error bg-error/10 hover:bg-error/20"
-          )
+          ),
+          @mic_pending && "ring-2 ring-warning"
         ]}
         title={if @mic_on, do: "Mute mic", else: "Unmute mic"}
       >
@@ -130,6 +145,7 @@ defmodule PlatformWeb.MeetingBarLive do
 
       <%!-- Camera toggle. Same JS-hook pathway as mic, see above. --%>
       <button
+        :if={is_nil(@native) or @native.camera}
         data-bar-camera
         class={[
           "rounded-lg p-1.5 transition-colors",

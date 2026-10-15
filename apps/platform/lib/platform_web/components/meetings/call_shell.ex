@@ -1190,6 +1190,32 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
   attr(:camera_on, :boolean, default: true)
   attr(:sharing, :boolean, default: false)
 
+  # ── The iOS app's native call (task 01a13c62 stage 3) ─────────────
+  #
+  # Design canvas 01a13c62-5ef3: inside the Burrow app the native call owns
+  # the media, and a button may only show a state the call CONFIRMED.
+  attr(:native, :map,
+    default: nil,
+    doc: """
+    `%{mic, camera, active_speakers}` while the native call owns the media,
+    else nil (a browser: every control exactly as before). The camera
+    button is HIDDEN, not disabled, while `camera` is false, and Share is
+    hidden in the app; "Audio only in the app" closes the bar instead. A
+    build that cannot drive the mic from the page (`mic: false`) hides the
+    mic too.
+    """
+  )
+
+  attr(:mic_pending, :boolean,
+    default: false,
+    doc: "a page mute is waiting for the native call: warning ring, disabled, aria-busy"
+  )
+
+  attr(:media_error, :string,
+    default: nil,
+    doc: "the one line shown after the native call failed to confirm a mute"
+  )
+
   # ── Per-button identity overrides ────────────────────────────────
   #
   # The `data-role` values and the Share button's id/hook are a
@@ -1257,19 +1283,27 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
   def call_controls(assigns) do
     ~H"""
     <div
-      class={["flex items-center justify-center gap-2", @class]}
+      class={[
+        "flex items-center justify-center gap-2",
+        @native && @media_error && "flex-wrap",
+        @class
+      ]}
       data-component="call-controls"
       {@rest}
     >
       <button
+        :if={is_nil(@native) or @native.mic}
         type="button"
         phx-click={@mic_event}
         data-role={@mic_role}
         data-active={to_string(@mic_on)}
         data-on={to_string(@mic_on)}
+        data-pending={@native && to_string(@mic_pending)}
+        disabled={@native && @mic_pending}
+        aria-busy={if @native && @mic_pending, do: "true"}
         aria-pressed={to_string(!@mic_on)}
         aria-label={if @mic_on, do: "Mute microphone", else: "Unmute microphone"}
-        class="btn btn-sm rounded-field gap-2 border-edge bg-base-200 font-normal text-base-content/80"
+        class={mic_class(@native, @mic_on, @mic_pending)}
       >
         <span
           class={["size-4", if(@mic_on, do: "hero-microphone", else: "hero-microphone-slash")]}
@@ -1280,6 +1314,7 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
       </button>
 
       <button
+        :if={is_nil(@native) or @native.camera}
         type="button"
         phx-click={@camera_event}
         data-role={@camera_role}
@@ -1298,6 +1333,7 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
       </button>
 
       <button
+        :if={is_nil(@native)}
         type="button"
         id={@share_id}
         phx-hook={@share_hook}
@@ -1326,8 +1362,54 @@ defmodule PlatformWeb.Components.Meetings.CallShell do
         <span class="hero-arrow-right-start-on-rectangle size-4" aria-hidden="true"></span>
         <span class="call-control-label">Leave</span>
       </button>
+
+      <%!-- At the END of the bar, where it reads as a fact rather than an
+           error (design canvas 01a13c62-5ef3). The failure line takes the
+           same slot while it stands; the next confirmed change clears it.
+           It is the ONE instruction the user has after a failed mute, so
+           it is never `truncate`d: it takes its own full-width row (the bar
+           turns `flex-wrap` while it stands) and wraps there. Truncated, it
+           read "Couldn't change the mic. Use th…" at 390px. --%>
+      <p
+        :if={@native && @media_error}
+        role="alert"
+        data-role="call-control-media-error"
+        class="min-w-0 basis-full text-center text-sm leading-snug break-words text-error"
+      >
+        {@media_error}
+      </p>
+      <p
+        :if={@native && !@media_error}
+        data-role="call-control-native-note"
+        class="min-w-0 truncate text-sm text-base-content/70"
+      >
+        Audio only in the app
+      </p>
     </div>
     """
+  end
+
+  # Browser: byte-identical to before. Native: live keeps that ground,
+  # muted is the error fill, pending adds the warning ring.
+  #
+  # The ring is `ring-2!` (Tailwind v4 important), not `ring-2`: a pending
+  # button is `disabled`, and daisyUI's
+  # `.btn:is(:disabled,[disabled]):not(.btn-link,.btn-ghost) { box-shadow: none }`
+  # outranks the plain utility, so the ring computed to `none` and pending
+  # looked like nothing at all. `disabled` stays: it is what makes the
+  # button inert to pointer AND keyboard while the native call answers.
+  @mic_class "btn btn-sm rounded-field gap-2 border-edge bg-base-200 font-normal text-base-content/80"
+
+  defp mic_class(nil, _mic_on, _pending), do: @mic_class
+
+  defp mic_class(_native, mic_on, pending) do
+    [
+      if(mic_on,
+        do: @mic_class,
+        else: "btn btn-sm rounded-field gap-2 border-error/40 bg-error/15 font-normal text-error"
+      ),
+      pending && "ring-2! ring-warning"
+    ]
   end
 
   attr(:on, :boolean, required: true)

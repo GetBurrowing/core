@@ -588,6 +588,11 @@ defmodule PlatformWeb.Chat.PartialsMeetingPanelTest do
       el = within(html, bar)
       [class] = LazyHTML.attribute(el, "class")
       assert class =~ "h-[46px]"
+      # A FLOOR, not a fixed height (task 01a13c62 stage 5): the native
+      # failure line wraps onto its own row, and a fixed `h-[46px]`
+      # would clip that row out of the bar.
+      assert "min-h-[46px]" in String.split(class)
+      refute "h-[46px]" in String.split(class)
       assert class =~ "justify-center"
 
       # The degradation hides the LABEL, never the button: every role

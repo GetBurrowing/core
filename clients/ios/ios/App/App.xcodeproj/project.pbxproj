@@ -26,6 +26,7 @@
 		103357A92E2A32901E04F4D4 /* ApprovalsWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA34F7BCD1785FB63C540ECE /* ApprovalsWidget.swift */; };
 		106EB925985680D362F34AAE /* Intents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95476033D891E158ED21FA8F /* Intents.swift */; };
 		10B73BA6108F3CEBF5D945D8 /* CallStateReducerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8B65AA253F5FA2E5F97CB45 /* CallStateReducerTests.swift */; };
+		A13C62B2000000000000F001 /* SuiteMeetingsPluginTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A13C62B2000000000000F002 /* SuiteMeetingsPluginTests.swift */; };
 		1146BE2FF7FB0F5F3A4BE239 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48421D60D2C81BD6F37E64D2 /* Theme.swift */; };
 		122F95274D5C367FD4177E9C /* PushContentPreparer.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBB8006C64908FD4EA1BA7E3 /* PushContentPreparer.swift */; };
 		1263CD52F9690E5CAA14A00F /* NavigationPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = F46DFC793311833A64DEB882 /* NavigationPolicy.swift */; };
@@ -456,6 +457,7 @@
 		C8A9A2F9E029400EE1562218 /* AppTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = AppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		CFC7C5DC2BC35F7484C1EF57 /* PersonalContextTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersonalContextTests.swift; sourceTree = "<group>"; };
 		D8B65AA253F5FA2E5F97CB45 /* CallStateReducerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallStateReducerTests.swift; sourceTree = "<group>"; };
+		A13C62B2000000000000F002 /* SuiteMeetingsPluginTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SuiteMeetingsPluginTests.swift; sourceTree = "<group>"; };
 		D8BCDC22DDFAA9ECFB5ADCB9 /* MultipartFormTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MultipartFormTests.swift; sourceTree = "<group>"; };
 		D924922A5FA31654B66EF277 /* CallState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallState.swift; sourceTree = "<group>"; };
 		DA67FF4273339C4D4D25F62F /* MessagesDomainSystemTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessagesDomainSystemTests.swift; sourceTree = "<group>"; };
@@ -557,6 +559,7 @@
 				019DD0FC774F2201544F8C56 /* ShortcutParameterRefreshTests.swift */,
 				37C9E327224C059F2EF3BDFA /* SlabStateTests.swift */,
 				C1B412D64B3F0BB4C9DE56AD /* SuiteAPIClientTests.swift */,
+				A13C62B2000000000000F002 /* SuiteMeetingsPluginTests.swift */,
 				1BCA4F7949BCEADF89CA73DD /* TestSupport.swift */,
 				7F65F0C4F9A353203122D818 /* ThemeTests.swift */,
 				8238860C98E6B71B908E7B98 /* VoIPHandlingTests.swift */,
@@ -1347,6 +1350,7 @@
 				997351360346835A850A0EDB /* AvatarTests.swift in Sources */,
 				D7E19C30BC549C9294ABC389 /* CallAndMeetingTests.swift in Sources */,
 				10B73BA6108F3CEBF5D945D8 /* CallStateReducerTests.swift in Sources */,
+				A13C62B2000000000000F001 /* SuiteMeetingsPluginTests.swift in Sources */,
 				D811D6D8851C97B667406CC9 /* DeepLinkTests.swift in Sources */,
 				FB5EE48EC224C03107858CDD /* InCallModelTests.swift in Sources */,
 				9ABD003A8FC8171D875452AD /* InstallSessionTests.swift in Sources */,

@@ -1435,6 +1435,10 @@ defmodule PlatformWeb.ChatLive.Partials do
   attr(:mic_enabled, :boolean, required: true)
   attr(:camera_enabled, :boolean, required: true)
   attr(:screen_share_enabled, :boolean, required: true)
+  # Task 01a13c62 stage 3: the iOS app's native call, see `CallShell.call_controls/1`.
+  attr(:native_call, :map, default: nil)
+  attr(:mic_pending, :boolean, default: false)
+  attr(:media_error, :string, default: nil)
   attr(:meeting_participants, :list, default: [])
   attr(:invite_rows, :list, default: [])
 
@@ -1615,7 +1619,7 @@ defmodule PlatformWeb.ChatLive.Partials do
            not the id. Dropping either would leave a Share button that
            silently fails only in a real browser. --%>
       <CallShell.call_controls
-        class="h-[46px] shrink-0 justify-center gap-2 border-t border-edge px-2"
+        class="min-h-[46px] shrink-0 justify-center gap-2 border-t border-edge px-2"
         mic_event="meeting_toggle_mic"
         camera_event="meeting_toggle_camera"
         share_event="meeting_toggle_screen_share"
@@ -1623,6 +1627,9 @@ defmodule PlatformWeb.ChatLive.Partials do
         mic_on={@mic_enabled}
         camera_on={@camera_enabled}
         sharing={@screen_share_enabled}
+        native={@native_call}
+        mic_pending={@mic_pending}
+        media_error={@media_error}
         mic_role="meeting-mic"
         camera_role="meeting-camera"
         share_role="meeting-share-button"
@@ -1770,6 +1777,9 @@ defmodule PlatformWeb.ChatLive.Partials do
         mic_on={@mic_enabled}
         camera_on={@camera_enabled}
         sharing={@screen_share_enabled}
+        native={@native_call}
+        mic_pending={@mic_pending}
+        media_error={@media_error}
         mic_role="meeting-mic"
         camera_role="meeting-camera"
         share_role="meeting-share-button"

@@ -28,7 +28,7 @@ defmodule Platform.Meetings.State do
   |------------------------|------------------------------------------------------------------------------------------------------|
   | `:meeting_joined`      | `%{user_id, space_id, space_name, space_slug, meeting_slug, started_at}`                             |
   | `:meeting_left`        | `%{user_id}`                                                                                         |
-  | `:meeting_media_state` | `%{user_id, mic_enabled, camera_enabled}` — authoritative post-toggle media state                    |
+  | `:meeting_media_state` | `%{user_id, mic_enabled, camera_enabled}` — authoritative post-toggle media state; plus `native`, `mic_pending` when the iOS app's native call owns the media |
 
   ## Media state
 
@@ -217,12 +217,19 @@ defmodule Platform.Meetings.State do
   cached: a toggle outside a meeting has no intent to preserve, and
   minting a partial row here would make `get_for_user/1` report a
   meeting that does not exist.
+
+  The optional `:native` (the native call's capabilities map) and
+  `:mic_pending` keys (task 01a13c62 stage 3) ride along to the mini bar
+  when the Burrow iOS app's native call owns the media. They are broadcast
+  only, never cached, and absent on the browser path.
   """
   @spec broadcast_media_state(binary(), %{
           required(:mic_enabled) => boolean(),
-          required(:camera_enabled) => boolean()
+          required(:camera_enabled) => boolean(),
+          optional(:native) => map() | nil,
+          optional(:mic_pending) => boolean()
         }) :: :ok
-  def broadcast_media_state(user_id, %{mic_enabled: mic, camera_enabled: camera})
+  def broadcast_media_state(user_id, %{mic_enabled: mic, camera_enabled: camera} = attrs)
       when is_binary(user_id) and is_boolean(mic) and is_boolean(camera) do
     case get_for_user(user_id) do
       %{} = row ->
@@ -235,7 +242,11 @@ defmodule Platform.Meetings.State do
     Phoenix.PubSub.broadcast(
       @pubsub,
       topic(user_id),
-      {:meeting_media_state, %{user_id: user_id, mic_enabled: mic, camera_enabled: camera}}
+      {:meeting_media_state,
+       Map.merge(
+         %{user_id: user_id, mic_enabled: mic, camera_enabled: camera},
+         Map.take(attrs, [:native, :mic_pending])
+       )}
     )
   end
 

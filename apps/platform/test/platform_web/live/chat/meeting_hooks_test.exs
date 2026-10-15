@@ -1126,6 +1126,149 @@ defmodule PlatformWeb.ChatLive.MeetingHooksTest do
     end
   end
 
+  # ── The iOS app's native call (task 01a13c62 stage 3) ─────────────────────
+  #
+  # Inside Burrow the native call owns the mic. A page tap ASKS and shows
+  # pending; `:mic_enabled` changes only on the call's confirmation.
+
+  describe "native call: the mic shows only what the call confirmed" do
+    @native %{mic: true, camera: false, active_speakers: true}
+
+    defp native_socket(overrides \\ %{}) do
+      build_socket(
+        Map.merge(
+          %{
+            user_id: Ecto.UUID.generate(),
+            in_meeting: true,
+            mic_enabled: true,
+            camera_enabled: false,
+            screen_share_enabled: false,
+            native_call: @native,
+            mic_pending: false,
+            media_error: nil
+          },
+          overrides
+        )
+      )
+    end
+
+    test "a native toggle does NOT flip: it sets pending and tells the mini bar" do
+      socket = native_socket()
+      user_id = socket.assigns.user_id
+      Platform.Meetings.State.subscribe(user_id)
+
+      updated = MeetingHooks.toggle_mic(socket)
+
+      assert updated.assigns.mic_enabled == true
+      assert updated.assigns.mic_pending == true
+
+      assert_receive {:meeting_media_state,
+                      %{
+                        user_id: ^user_id,
+                        mic_enabled: true,
+                        mic_pending: true,
+                        native: @native
+                      }},
+                     200
+    end
+
+    test "a second tap while pending is a no-op" do
+      socket = native_socket(%{mic_pending: true})
+
+      updated = MeetingHooks.toggle_mic(socket)
+
+      assert updated.assigns.mic_enabled == true
+      assert updated.assigns.mic_pending == true
+    end
+
+    test "a build that cannot drive the mic from the page (legacy) changes nothing" do
+      socket = native_socket(%{native_call: %{mic: false, camera: false, active_speakers: false}})
+
+      updated = MeetingHooks.toggle_mic(socket)
+
+      assert updated.assigns.mic_enabled == true
+      assert updated.assigns.mic_pending == false
+    end
+
+    test "the browser path still flips optimistically (unchanged)" do
+      socket = native_socket(%{native_call: nil})
+
+      assert MeetingHooks.toggle_mic(socket).assigns.mic_enabled == false
+    end
+
+    test "a confirmed state flips, clears pending, and broadcasts so the mini bar follows" do
+      socket = native_socket(%{mic_pending: true})
+      user_id = socket.assigns.user_id
+      Platform.Meetings.State.subscribe(user_id)
+
+      updated =
+        MeetingHooks.apply_native_media_state(socket, %{"mic" => false, "camera" => false})
+
+      assert updated.assigns.mic_enabled == false
+      assert updated.assigns.mic_pending == false
+      assert updated.assigns.media_error == nil
+
+      assert_receive {:meeting_media_state,
+                      %{user_id: ^user_id, mic_enabled: false, mic_pending: false}},
+                     200
+    end
+
+    test "failed sets the one line and keeps the last confirmed state; the next confirmation clears it" do
+      socket = native_socket(%{mic_pending: true})
+
+      failed =
+        MeetingHooks.apply_native_media_state(socket, %{
+          "mic" => true,
+          "camera" => false,
+          "failed" => "mic"
+        })
+
+      assert failed.assigns.mic_enabled == true
+      assert failed.assigns.mic_pending == false
+      assert failed.assigns.media_error == "Couldn't change the mic. Use the call controls."
+
+      # The plugin waits 5 s, the page 3 s: a late confirmation arrives as
+      # `mediaChanged` and must heal the error.
+      healed = MeetingHooks.apply_native_media_state(failed, %{"mic" => false, "camera" => false})
+
+      assert healed.assigns.mic_enabled == false
+      assert healed.assigns.media_error == nil
+    end
+
+    test "native_media_state outside native mode is ignored" do
+      socket = native_socket(%{native_call: nil})
+
+      assert MeetingHooks.apply_native_media_state(socket, %{"mic" => false}).assigns.mic_enabled ==
+               true
+    end
+
+    test "native_call_attached assigns the capabilities and the confirmed mic; a nil mic keeps the assign" do
+      socket = native_socket(%{native_call: nil, mic_pending: true, media_error: "x"})
+
+      attached =
+        MeetingHooks.apply_native_call_attached(socket, %{
+          "capabilities" => %{"mic" => true, "camera" => false, "activeSpeakers" => true},
+          "mic" => false,
+          "camera" => false
+        })
+
+      assert attached.assigns.native_call == @native
+      assert attached.assigns.mic_enabled == false
+      assert attached.assigns.mic_pending == false
+      assert attached.assigns.media_error == nil
+
+      legacy =
+        MeetingHooks.apply_native_call_attached(socket, %{
+          "capabilities" => %{"mic" => false, "camera" => false, "activeSpeakers" => false},
+          "mic" => nil,
+          "camera" => nil
+        })
+
+      assert legacy.assigns.native_call == %{mic: false, camera: false, active_speakers: false}
+      assert legacy.assigns.mic_enabled == true
+    end
+  end
+
   describe "toggle_camera/1 broadcasts authoritative media state" do
     test "flips :camera_enabled and broadcasts post-toggle pair to MeetingState.topic(user_id)" do
       user_id = Ecto.UUID.generate()

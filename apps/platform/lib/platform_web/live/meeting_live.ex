@@ -2956,6 +2956,19 @@ defmodule PlatformWeb.MeetingLive do
     {:noreply, MeetingHooks.apply_active_speakers(socket, params)}
   end
 
+  # The iOS app's native call reporting its capabilities and CONFIRMED
+  # mic/camera (task 01a13c62 stage 3). Same one-implementation arrangement
+  # as `active_speakers`: the attached `MeetingHooks` halts these first on
+  # both the member and guest surfaces; these clauses are the fallback for a
+  # detached hook, so a push can never be a `FunctionClauseError`.
+  def handle_event("native_call_attached", params, socket) do
+    {:noreply, MeetingHooks.apply_native_call_attached(socket, params)}
+  end
+
+  def handle_event("native_media_state", params, socket) do
+    {:noreply, MeetingHooks.apply_native_media_state(socket, params)}
+  end
+
   # Per-identity remote mic/camera state, pushed by `MeetingClient`
   # (`_pushMediaStates`) on `RoomEvent.TrackMuted` / `TrackUnmuted`. Same
   # ONE-implementation arrangement as `active_speakers` above:
