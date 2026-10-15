@@ -54,6 +54,7 @@ defmodule Platform.Access.Grants do
   import Ecto.Query, only: [from: 2, subquery: 1]
 
   alias Platform.Access.{Grant, Role, RoleAssignment}
+  alias Platform.Tenancy.OrgMembership
   alias Platform.Agents.{Agent, AgentRuntime}
   alias Platform.Chat.{Canvas, Space}
   alias Platform.Org.Wiki.{Node, Nodes}
@@ -128,36 +129,36 @@ defmodule Platform.Access.Grants do
   SAME ONE query (task `01a1386e-59d1` stage 1). `actor` is `{:user, id}` or
   `{:agent, id}`: the grants returned also include every role-principal
   grant whose `(principal_role_key, org_id)` the actor holds through an
-  `access_role_assignments` row. `assignment_orgs` bounds which assignments
-  count: a list of org ids (a user's membership orgs, so an assignment in an
-  org the user has since left holds nothing), or `:any` (an agent).
+  `access_role_assignments` row. A USER's assignment counts only while the
+  user has an `org_memberships` row in the assignment's org (any row,
+  internal or external), so an assignment in an org the user has since left
+  holds nothing. An agent's assignments always count.
 
   Returns `{grants, assignments}`, grants ordered by id as
   `list_for_principals/1` orders them, and each assignment as
   `%{org_id, role_key, permissions}` (the custom role's permission map). With
   no principals and no actor it returns `{[], []}` without querying.
   """
-  @spec list_for_actor([principal_key()], {:user | :agent, binary()} | nil, [binary()] | :any) ::
+  @spec list_for_actor([principal_key()], {:user | :agent, binary()} | nil) ::
           {[Grant.t()], [%{org_id: binary(), role_key: String.t(), permissions: map()}]}
-  def list_for_actor(principals, actor, assignment_orgs)
+  def list_for_actor(principals, actor)
 
-  def list_for_actor([], nil, _assignment_orgs), do: {[], []}
+  def list_for_actor([], nil), do: {[], []}
 
-  def list_for_actor(principals, nil, _assignment_orgs),
-    do: {list_for_principals(principals), []}
+  def list_for_actor(principals, nil), do: {list_for_principals(principals), []}
 
-  def list_for_actor(principals, {type, id}, assignment_orgs)
-      when type in [:user, :agent] and is_binary(id) do
+  def list_for_actor(principals, {type, id}) when type in [:user, :agent] and is_binary(id) do
     type = Atom.to_string(type)
 
     held =
       from(a in RoleAssignment,
+        as: :assignment,
         where:
           a.principal_type == ^type and a.principal_id == ^id and
             a.role_key == parent_as(:grant).principal_role_key and
             a.org_id == parent_as(:grant).org_id
       )
-      |> assignment_orgs_filter(assignment_orgs)
+      |> held_by_member(type)
 
     condition =
       Ecto.Query.dynamic(
@@ -189,6 +190,7 @@ defmodule Platform.Access.Grants do
 
     assignments_q =
       from(a in RoleAssignment,
+        as: :assignment,
         join: r in Role,
         on: r.key == a.role_key,
         where: a.principal_type == ^type and a.principal_id == ^id,
@@ -208,7 +210,7 @@ defmodule Platform.Access.Grants do
           role_permissions: r.permissions
         }
       )
-      |> assignment_orgs_filter(assignment_orgs)
+      |> held_by_member(type)
 
     {grant_rows, assignment_rows} =
       grants_q
@@ -235,10 +237,20 @@ defmodule Platform.Access.Grants do
     {grants, assignments}
   end
 
-  defp assignment_orgs_filter(query, :any), do: query
+  # A user's assignment holds only while a membership row joins it on
+  # (user, org). This is the assignment's own provenance check, not a viewer
+  # visibility scope: root-org widening must NOT extend it.
+  defp held_by_member(query, "user") do
+    membership =
+      from(m in OrgMembership,
+        where: m.user_id == parent_as(:assignment).principal_id,
+        where: m.org_id == parent_as(:assignment).org_id
+      )
 
-  defp assignment_orgs_filter(query, org_ids) when is_list(org_ids),
-    do: from(a in query, where: a.org_id in ^org_ids)
+    from(a in query, where: exists(subquery(membership)))
+  end
+
+  defp held_by_member(query, "agent"), do: query
 
   defp principals_condition(principals) do
     Enum.reduce(principals, false, fn

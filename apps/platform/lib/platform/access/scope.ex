@@ -173,11 +173,7 @@ defmodule Platform.Access.Scope do
     base_keys = role_keys(memberships)
 
     {grants, assignments} =
-      Grants.list_for_actor(
-        [{:user, user_id} | role_principals(base_keys)],
-        {:user, user_id},
-        memberships |> Enum.map(& &1.org_id) |> Enum.uniq()
-      )
+      Grants.list_for_actor([{:user, user_id} | role_principals(base_keys)], {:user, user_id})
 
     custom = custom_role_sources(assignments, memberships)
     participants = participants || late_participants(user_id, custom)
@@ -220,7 +216,7 @@ defmodule Platform.Access.Scope do
         else: %{}
 
     {grants, assignments} =
-      Grants.list_for_actor(agent_principals(runtime), agent_actor(runtime), :any)
+      Grants.list_for_actor(agent_principals(runtime), agent_actor(runtime))
 
     %__MODULE__{
       actor: runtime,

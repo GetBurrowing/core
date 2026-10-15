@@ -534,6 +534,16 @@ defmodule Platform.RepoLookupBoundaryTest do
      "task 01a1386d-e528 stage 2: (1) `revoke/1`'s grant id; (2) `resource_fields/1`'s `{:project | :space | :canvas | :memory_node, id}` before the three `Repo.one` lookups (this file's `@repo_one_counts` entry) and the `get(Node)` above. Used as a BOOLEAN and the string discarded; covered by precedence_test.exs \"malformed ids are not found and decide nothing\""},
     {"platform/access/agent_wake.ex", :platform_uuid_guard, "-", 1, :must_cast,
      "task 01a1386e-45a5 stage 2: `valid_id?/1` filters the agent ids `denied/3` and `check_agent/4` receive (participant_id values and `%Agent{}` ids today, but both are public API) before they are pinned with `type(^ids, {:array, :binary_id})`, so a non-UUID id is never queried and decides nothing. Used as a BOOLEAN and the string discarded"},
+    {"platform/access.ex", :platform_uuid_guard, "-", 1, :must_cast,
+     "task 01a1386e-59d1 stage 1: `holds_role?/3`'s `org_chain/1` checks the caller-supplied `org_id` (a space's org from stage 2 on, which can come from a LiveView param or an MCP argument's space) with Platform.UUID.valid?/1 before `walk_orgs/3`'s `Repo.one` (this file's `@repo_one_counts` entry). Used as a BOOLEAN: a malformed id holds nothing; covered by custom_roles_test.exs \"empty inputs, malformed ids and the system scope\""},
+    {"platform/access/roles.ex", :get, "Org", 1, :must_cast,
+     "task 01a1386e-59d1 stage 1: `create_custom_role/2` takes a raw org id from its caller; guarded by Platform.UUID.valid?/1 (this file's :platform_uuid_guard) and answering the site's `{:error, :org_not_found}`"},
+    {"platform/access/roles.ex", :get, "RoleAssignment", 1, :must_cast,
+     "task 01a1386e-59d1 stage 1: `unassign/1` takes a raw assignment id; guarded by Platform.UUID.valid?/1 (this file's :platform_uuid_guard) and answering the site's `{:error, :not_found}`; covered by custom_roles_test.exs \"two assignments\" (unassign of a deleted id)"},
+    {"platform/access/roles.ex", :get_by, "Role", 1, :safe_internal,
+     "task 01a1386e-59d1 stage 1: `get_role/1` looks up by `access_roles.key`, a TEXT column (custom keys are `custom:<uuidv7>`, built-ins `admin`/`member`/`guest`), so no value can raise Ecto.Query.CastError; an unknown key answers nil"},
+    {"platform/access/roles.ex", :platform_uuid_guard, "-", 4, :must_cast,
+     "task 01a1386e-59d1 stage 1: (1) `create_custom_role/2`'s org id before `get(Org)`; (2) `list_roles/1`'s org id before the custom-role `where: r.org_id == ^org_id`; (3) `unassign/1`'s id before `get(RoleAssignment)`; (4) `principal/1`'s `{:user | :agent, id}` before the membership and agent `exists?` queries. Every failure answers the site's not-found or `{:error, :invalid_principal}`; covered by custom_roles_test.exs \"refuses a non-member, an external member, a built-in role and a missing agent\""},
     {"platform/access/lineage.ex", :platform_uuid_guard, "-", 1, :must_cast,
      "task 01a1386d-e528 stage 2: `typed/1` makes a `{type, id}` resource tuple `:untyped` unless its id is a canonical UUID, so every `Repo.one` in `ancestors/1` and `base_candidates/1` (this file's `@repo_one_counts` entry) sees only valid ids. A tuple can carry a LiveView param or an MCP argument from stage 3 on; covered by precedence_test.exs \"malformed ids are not found and decide nothing\""},
     {"platform/org/wiki/indexer.ex", :get, "WikiJournalEntry", 1, :safe_internal,
@@ -1322,6 +1332,11 @@ defmodule Platform.RepoLookupBoundaryTest do
     # project, space and canvas lookups of `fetch_resource/2`, each reached
     # only through `resource_fields/1`'s Platform.UUID.valid?/1 check.
     "platform/access/grants.ex" => 3,
+    # 0 → 1 for task 01a1386e-59d1 stage 1's `Platform.Access.holds_role?/3`:
+    # `walk_orgs/3` pins an org id that is either the caller's id behind
+    # `org_chain/1`'s Platform.UUID.valid?/1 guard, or a `parent_org_id` /
+    # root-org id read from the Repo. No unguarded caller id reaches it.
+    "platform/access.ex" => 1,
     # 0 → 10 for task 01a1386d-e528 stage 2's `Platform.Access.Lineage`:
     # `ancestors/1` and `base_candidates/1` pin ids that come either from a
     # resource tuple (behind `typed/1`'s Platform.UUID.valid?/1 guard), from a
