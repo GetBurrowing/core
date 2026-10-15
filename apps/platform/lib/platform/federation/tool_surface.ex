@@ -4177,12 +4177,17 @@ defmodule Platform.Federation.ToolSurface do
     kind = Map.get(args, "kind")
 
     spaces = Chat.list_spaces_for_agent(agent_id, kind: kind)
+    scope = space_read_scope(context)
+    restricted = Platform.Access.restricted_space_ids(scope, Enum.map(spaces, & &1.id))
 
     # Task 01a04a7a stage 4: `list_spaces_for_agent/2` has no LIMIT, so this
     # head returns everything it read and says so explicitly.
     rows =
       Enum.map(spaces, fn s ->
-        %{id: s.id, name: s.name, kind: s.kind, description: s.description}
+        row = %{id: s.id, name: s.name, kind: s.kind, description: s.description}
+        if MapSet.member?(restricted, s.id) or not Platform.Access.can?(scope, "chat.read", s.id),
+          do: Map.merge(row, %{restricted: true, description: nil}),
+          else: row
       end)
 
     {:ok, ResultBound.whole(:spaces, rows)}
@@ -15666,6 +15671,13 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
+  defp space_read_scope(context) do
+    case runtime_access_opts(context) do
+      [access_scope: scope] -> scope
+      [] -> Platform.Access.Scope.for_runtime(%Platform.Agents.AgentRuntime{agent_id: Map.get(context, :agent_id)})
+    end
+  end
+
   defp assert_agent_in_space(space_id, context) do
     agent_id = Map.get(context, :agent_id)
 
@@ -15689,7 +15701,12 @@ defmodule Platform.Federation.ToolSurface do
       true ->
         case Chat.get_agent_participant(space_id, agent_id) do
           %Chat.Participant{} ->
-            :ok
+            scope = space_read_scope(context)
+            if Platform.Access.can?(scope, "chat.read", space_id) do
+              :ok
+            else
+              {:error, Map.put(space_write_denied(space_id), :restricted, true)}
+            end
 
           _ ->
             {:error, space_write_denied(space_id)}

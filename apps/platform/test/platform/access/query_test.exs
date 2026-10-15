@@ -362,6 +362,16 @@ defmodule Platform.Access.QueryTest do
              ["org/page/eng/x.md"]
   end
 
+  test "restricted channel and its canvas agree with can? despite a direct allow", ctx do
+    m = member!(ctx.org)
+    assert ctx.channel.id in assert_same(scope(m), "chat.read", :space)
+    assert ctx.kc.id in assert_same(scope(m), "canvas.read", :canvas)
+    {:ok, _} = Platform.Access.Restrictions.restrict_space(ctx.channel, ["admin"], m.id)
+    {:ok, _} = Grants.grant(%{principal: {:user, m.id}, permission: "chat.read", resource: {:space, ctx.channel.id}, effect: "allow"})
+    refute ctx.channel.id in assert_same(scope(m), "chat.read", :space)
+    refute ctx.kc.id in assert_same(scope(m), "canvas.read", :canvas)
+  end
+
   test "Access.permitted/3 for :system is unrestricted and unknown types raise", _ctx do
     assert %Access.Permitted{allow: :all, deny: []} =
              Access.permitted(Scope.system(), "tasks.read", :task)

@@ -185,9 +185,13 @@ defmodule Platform.Access do
   def can?(%Scope{actor: :system}, _permission, _resource), do: true
 
   def can?(%Scope{} = scope, permission, resource) when is_binary(permission) do
-    case applicable(scope, permission) do
+    if restriction_denied?(scope, permission, resource) do
+      false
+    else
+      case applicable(scope, permission) do
       [] -> role_allows?(scope, permission, resource)
       grants -> decide(scope, permission, resource, grants)
+      end
     end
   end
 
@@ -199,7 +203,16 @@ defmodule Platform.Access do
   See `Platform.Access.Scope.permitted_ids/2`.
   """
   @spec permitted_ids(Scope.t(), String.t()) :: :all | [binary()]
-  def permitted_ids(scope, permission), do: Scope.permitted_ids(scope, permission)
+  def permitted_ids(scope, permission) do
+    ids = Scope.permitted_ids(scope, permission)
+    type = if permission == "canvas.read", do: :canvas, else: :space
+    denied = restriction_ids(scope, permission, type)
+    case {ids, denied} do
+      {ids, []} -> ids
+      {:all, denied} -> Repo.all(from r in ^(if type == :canvas, do: Platform.Chat.Canvas, else: Platform.Chat.Space), select: r.id) -- denied
+      {ids, denied} -> ids -- denied
+    end
+  end
 
   @doc """
   The grant-aware set form of `can?/3` for every resource of `type`
@@ -253,7 +266,7 @@ defmodule Platform.Access do
       resource_type: type,
       permission: permission,
       allow: allow,
-      deny: Lineage.descendant_ids(type, targets(denies))
+      deny: Enum.uniq(Lineage.descendant_ids(type, targets(denies)) ++ restriction_ids(scope, permission, type))
     }
   end
 
@@ -301,7 +314,7 @@ defmodule Platform.Access do
       resource_type: type,
       permission: permission,
       allow: Lineage.descendant_ids(type, targets(allows)),
-      deny: Lineage.descendant_ids(type, targets(denies))
+      deny: Enum.uniq(Lineage.descendant_ids(type, targets(denies)) ++ restriction_ids(scope, permission, type))
     }
   end
 
@@ -317,7 +330,10 @@ defmodule Platform.Access do
   @spec within?(Scope.t(), String.t(), term(), boolean()) :: boolean()
   def within?(%Scope{} = scope, permission, resource, base?)
       when is_binary(permission) and is_boolean(base?) do
-    case applicable(scope, permission) do
+    if restriction_denied?(scope, permission, resource) do
+      false
+    else
+      case applicable(scope, permission) do
       [] ->
         base?
 
@@ -329,6 +345,7 @@ defmodule Platform.Access do
           base? -> true
           true -> allows != []
         end
+      end
     end
   end
 
@@ -430,6 +447,78 @@ defmodule Platform.Access do
   end
 
   def module_access?(_scope, _module_key, _permission), do: false
+
+
+  @doc """
+  Restricted channels the actor cannot read, in ONE query including org ancestry.
+  Rows remain listed; callers use this set to redact their descriptions.
+  """
+  @spec restricted_space_ids(Scope.t(), [binary()]) :: MapSet.t()
+  def restricted_space_ids(%Scope{actor: :system}, _ids), do: MapSet.new()
+  def restricted_space_ids(_scope, []), do: MapSet.new()
+  def restricted_space_ids(%Scope{role_keys: held}, ids) do
+    filter = if ids == :all, do: "", else: "WHERE s.id = ANY($1::uuid[])"
+    params = if ids == :all, do: [], else: [Enum.map(ids, &Ecto.UUID.dump!/1)]
+    rows = Repo.query!("""
+    WITH RECURSIVE ancestry(space_id, role_key, org_id) AS (
+      SELECT s.id, r.role_key, COALESCE(s.org_id, (SELECT id FROM orgs WHERE parent_org_id IS NULL))
+      FROM access_space_restrictions r JOIN chat_spaces s ON s.id = r.space_id
+      #{filter}
+      UNION
+      SELECT a.space_id, a.role_key, o.parent_org_id
+      FROM ancestry a JOIN orgs o ON o.id = a.org_id
+      WHERE o.parent_org_id IS NOT NULL
+    )
+    SELECT space_id, role_key, org_id FROM ancestry
+    """, params).rows
+
+    rows
+    |> Enum.group_by(fn [id, _, _] -> Ecto.UUID.load!(id) end)
+    |> Enum.reject(fn {_id, rows} ->
+      Enum.any?(rows, fn [_, key, org] ->
+        org_id = if org, do: Ecto.UUID.load!(org)
+        MapSet.member?(Map.get(held, org_id, MapSet.new()), key)
+      end)
+    end)
+    |> Enum.map(&elem(&1, 0))
+    |> MapSet.new()
+  end
+
+  @doc false
+  def restriction_ids(%Scope{actor: :system}, _permission, _type), do: []
+  def restriction_ids(scope, permission, type) when type in [:space, :canvas] do
+    if String.ends_with?(permission, ".read") do
+      ids = scope |> restricted_space_ids(:all) |> MapSet.to_list()
+      if type == :space, do: ids, else: Lineage.descendant_ids(:canvas, Enum.map(ids, &{:space, &1}))
+    else
+      []
+    end
+  end
+  def restriction_ids(_scope, _permission, _type), do: []
+
+  defp restriction_denied?(%Scope{actor: :system}, _permission, _resource), do: false
+  defp restriction_denied?(scope, permission, resource) do
+    if String.ends_with?(permission, ".read") do
+      ids = case Lineage.typed(resource) do
+        {:space, id} -> [id]
+        {:canvas, id} -> Repo.all(from c in Platform.Chat.Canvas, where: c.id == ^id, select: c.space_id)
+        :untyped ->
+          case untyped_id(resource) do
+            id when is_binary(id) ->
+              cond do
+                not Platform.UUID.valid?(id) -> []
+                permission == "canvas.read" -> Repo.all(from c in Platform.Chat.Canvas, where: c.id == ^id, select: c.space_id)
+                true -> [id]
+              end
+            _ -> []
+          end
+        _ -> []
+      end
+      MapSet.size(restricted_space_ids(scope, ids)) > 0
+    else
+      false
+    end
+  end
 
   # ── precedence ──────────────────────────────────────────────────────────
 

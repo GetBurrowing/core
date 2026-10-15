@@ -94,7 +94,16 @@ defmodule Platform.Access.Roles do
   @spec delete_custom_role(Role.t() | String.t()) :: {:ok, Role.t()} | {:error, term()}
   def delete_custom_role(role) do
     with {:ok, %Role{} = role} <- fetch_custom(role) do
-      Repo.delete(role)
+      case Repo.transaction(fn ->
+             # Serialize deletion with Restrictions' FOR SHARE role lock.
+             Repo.one!(from r in Role, where: r.key == ^role.key, lock: "FOR UPDATE")
+             spaces = Repo.all(from r in Platform.Access.SpaceRestriction,
+               where: r.role_key == ^role.key, select: r.space_id, order_by: r.space_id)
+             if spaces != [], do: Repo.rollback({:role_restricts_spaces, spaces})
+             Repo.delete!(role)
+           end) do
+        result -> result
+      end
     end
   end
 

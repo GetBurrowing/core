@@ -89,7 +89,7 @@ defmodule Platform.Access.Query do
         granted = Access.granted(scope, permission, resource_type)
         from(r in query, where: ^restrict_memory_condition(granted, mapping, base))
 
-      Access.grants_apply?(scope, permission) ->
+      Access.grants_apply?(scope, permission) or Access.restriction_ids(scope, permission, resource_type) != [] ->
         granted = Access.granted(scope, permission, resource_type)
         from(r in query, where: ^restrict_condition(granted, mapping, base))
 
