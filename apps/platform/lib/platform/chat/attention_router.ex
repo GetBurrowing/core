@@ -264,7 +264,7 @@ defmodule Platform.Chat.AttentionRouter do
     # participant of a space its owner, or its own grants, may not read is
     # never woken here, by a mention, the mutex or the execution-assignee
     # fallback. Decided once per routed message (`wake_gate/2`).
-    wake = wake_gate(space_id, participants)
+    wake = wake_gate(space, participants)
 
     agent_recipients =
       recipients
@@ -432,16 +432,18 @@ defmodule Platform.Chat.AttentionRouter do
 
   # Task 01a1386e-45a5 stage 2. The wake decision for this ONE routed
   # message, memoized: `Platform.Access.AgentWake.denied/3` is asked once
-  # for every agent participant of the space (one `EXISTS` query when no
-  # grant is reachable from any of them, none when there are no agent
-  # participants). An agent outside that set (the execution-assignee
-  # fallback naming an agent not yet in the space) is asked on its own,
-  # only when that fallback reaches it.
-  defp wake_gate(space_id, participants) do
+  # for every agent participant and the execution task's assignee, including
+  # an assignee not yet in the space. This is one `EXISTS` query with no
+  # grants, or none when there are no candidate agents.
+  defp wake_gate(%Space{id: space_id} = space, participants) do
+    assignee_id = execution_assignee_agent_id(space)
+
     known =
       participants
       |> Enum.filter(&(&1.participant_type == "agent"))
       |> MapSet.new(& &1.participant_id)
+
+    known = if assignee_id, do: MapSet.put(known, assignee_id), else: known
 
     refused = AgentWake.denied(MapSet.to_list(known), @chat_read, {:space, space_id})
 
@@ -453,8 +455,20 @@ defmodule Platform.Chat.AttentionRouter do
       end
     end
 
-    %{may_wake?: may_wake?}
+    %{may_wake?: may_wake?, execution_assignee_id: assignee_id}
   end
+
+  defp execution_assignee_agent_id(%Space{kind: "execution"} = space) do
+    with task_id when is_binary(task_id) <- execution_space_task_id(space),
+         %TaskRecord{assignee_type: "agent", assignee_id: agent_id}
+         when is_binary(agent_id) <- Repo.get(TaskRecord, task_id) do
+      agent_id
+    else
+      _ -> nil
+    end
+  end
+
+  defp execution_assignee_agent_id(_space), do: nil
 
   @untrusted_inbound_sources ~w(email_inbound federation_inbound)
 
@@ -669,9 +683,7 @@ defmodule Platform.Chat.AttentionRouter do
   # added to the space nor woken; the fallback falls through to the mutex
   # branch exactly as for a task with no agent assignee.
   defp execution_assignee_participant(%Space{} = space, wake) do
-    with task_id when is_binary(task_id) <- execution_space_task_id(space),
-         %TaskRecord{assignee_type: "agent", assignee_id: agent_id} when is_binary(agent_id) <-
-           Repo.get(TaskRecord, task_id),
+    with agent_id when is_binary(agent_id) <- wake.execution_assignee_id,
          true <- wake.may_wake?.(agent_id) do
       Chat.add_agent_participant(space.id, agent_id, attention_mode: "all")
     else

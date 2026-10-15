@@ -345,6 +345,19 @@ defmodule Platform.Access.BypassDispatchTest do
         assert read(counter) == 1, "#{inspect(content)}: #{read(counter)} access_grants queries"
       end
 
+      # A different agent already participates, while the execution task's
+      # assignee has not joined. Both candidates must share the same EXISTS.
+      {assignee, _runtime} = linked!(ctx.u, "absent-assignee")
+      task_with_absent_assignee = dispatchable_task!(ctx.q, assignee, "bpd count fallback")
+      {:ok, fallback_space} = ExecutionSpace.find_or_create(task_with_absent_assignee.id)
+      fallback_author = user_participant!(fallback_space.id, m, "member")
+      {:ok, _other_agent} = Chat.add_agent_participant(fallback_space.id, ctx.agent_b)
+
+      fallback_msg = insert_message!(fallback_space.id, fallback_author.id, "status?")
+      reset(counter)
+      assert {:ok, [%{reason: :watch}]} = AttentionRouter.route(fallback_msg)
+      assert read(counter) == 1, "fallback used #{read(counter)} access_grants queries"
+
       # No agent participant: no query at all.
       msg = insert_message!(channel.id, ph.id, "only humans here")
       reset(counter)
