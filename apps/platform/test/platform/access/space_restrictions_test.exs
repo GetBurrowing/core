@@ -18,6 +18,7 @@ defmodule Platform.Access.SpaceRestrictionsTest do
     plain_member!(subadmin, sub, "admin")
     finance = channel!(%{org_id: root.id})
     p = add_user!(finance.id, member.id)
+    add_user!(finance.id, admin.id)
 
     agent =
       Repo.insert!(%Agent{

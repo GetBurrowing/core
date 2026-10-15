@@ -58,6 +58,11 @@ defmodule Platform.Access.RolesMigrationTest do
   @custom_roles_version 20_261_014_173_546
   @custom_roles_module Platform.Repo.Migrations.AddCustomRolesAndRoleAssignments
 
+  # Channel restrictions also reference access_roles(key), so revert them
+  # before exercising the earlier migration's down path.
+  @restrictions_version 20_261_014_173_547
+  @restrictions_module Platform.Repo.Migrations.CreateAccessSpaceRestrictions
+
   defp up! do
     Repo.query!("DELETE FROM schema_migrations WHERE version = $1", [@migration_version])
     :ok = Ecto.Migrator.up(Repo, @migration_version, @migration_module, @opts)
@@ -143,6 +148,14 @@ defmodule Platform.Access.RolesMigrationTest do
   # is `Platform.Access.authorize_install/1` (task 01a1386d-fb6e stage 2) and
   # builds a Scope, which reads `access_grants`.
   setup do
+    [restrictions_path] =
+      Path.wildcard(
+        Path.join(:code.priv_dir(:platform), "repo/migrations/#{@restrictions_version}_*.exs")
+      )
+
+    unless Code.ensure_loaded?(@restrictions_module), do: Code.require_file(restrictions_path)
+    :ok = Ecto.Migrator.down(Repo, @restrictions_version, @restrictions_module, @opts)
+
     [custom_roles_path] =
       Path.wildcard(
         Path.join(:code.priv_dir(:platform), "repo/migrations/#{@custom_roles_version}_*.exs")
