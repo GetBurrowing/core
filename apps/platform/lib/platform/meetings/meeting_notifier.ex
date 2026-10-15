@@ -289,12 +289,15 @@ defmodule Platform.Meetings.MeetingNotifier do
         ) == :ok
     end
 
-    allowed_ids = recipients.user_ids |> Enum.filter(allowed?) |> MapSet.new()
+    candidate_ids =
+      recipients.user_ids ++ Enum.map(Map.get(recipients, :chat_participants, []), & &1.participant_id)
+
+    allowed_set = candidate_ids |> Enum.uniq() |> Enum.filter(allowed?) |> MapSet.new()
 
     recipients
-    |> Map.put(:user_ids, MapSet.to_list(allowed_ids))
+    |> Map.put(:user_ids, Enum.filter(recipients.user_ids, &MapSet.member?(allowed_set, &1)))
     |> Map.update(:chat_participants, [], fn rows ->
-      Enum.filter(rows, &MapSet.member?(allowed_ids, &1.participant_id))
+      Enum.filter(rows, &MapSet.member?(allowed_set, &1.participant_id))
     end)
   end
 
