@@ -118,6 +118,7 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
   attr(:channels, :list, required: true)
   attr(:dm_conversations, :list, required: true)
   attr(:archived_channels, :list, required: true)
+  attr(:restricted_channel_ids, :any, required: true)
   attr(:archived_open, :boolean, required: true)
   attr(:active_space, :any, required: true)
   attr(:unread_counts, :map, required: true)
@@ -320,6 +321,7 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
           />
 
           <.drawer_sections
+            restricted_channel_ids={@restricted_channel_ids}
             sidebar_edit={@sidebar_edit}
             drawer_query={@drawer_query}
             sidebar_sections={@sidebar_sections}
@@ -355,8 +357,21 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
               </span>
             </button>
             <div :if={@archived_open} id="archived-channel-list-mobile">
+              <div
+                :for={space <- @archived_channels}
+                :if={MapSet.member?(@restricted_channel_ids, space.id)}
+                data-role="restricted-channel-row"
+                data-space-id={space.id}
+                aria-disabled="true"
+                class="flex items-center gap-3 px-4 py-3 text-sm text-base-content/50"
+              >
+                <span class="hero-lock-closed-mini size-4"></span>
+                <span class="truncate flex-1">{mask_name(@mask_assigns, space.name)}</span>
+                <span class="text-xs">Restricted, ask an admin</span>
+              </div>
               <.link
                 :for={space <- @archived_channels}
+                :if={not MapSet.member?(@restricted_channel_ids, space.id)}
                 patch={~p"/chat/#{ChatLive.space_nav_target(space)}"}
                 phx-click="close_mobile_browser"
                 class={[
@@ -978,6 +993,7 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
 
   attr(:sidebar_edit, :boolean, required: true)
   attr(:drawer_query, :string, required: true)
+  attr(:restricted_channel_ids, :any, required: true)
   # The three masking attrs again — this component builds its OWN
   # `SidebarMask.context/3` from them, and every heading, aria-label, move
   # button, drag handle and channel row below is derived through it. Drop one
@@ -1137,6 +1153,20 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
             No channels yet — channels in this org appear here.
           </p>
         <% @sidebar_edit && @drawer_query == "" -> %>
+          <div
+            :for={space <- section_channels}
+            :if={MapSet.member?(@restricted_channel_ids, space.id)}
+            data-role="restricted-channel-row"
+            data-space-id={space.id}
+            aria-disabled="true"
+            class="flex items-center gap-3 px-4 py-3 text-sm text-base-content/50"
+          >
+            <span class="hero-lock-closed-mini size-4"></span>
+            <span class="truncate flex-1">
+              {Platform.Chat.SidebarMask.channel_label(drawer_mask_ctx, section, space.name)}
+            </span>
+            <span class="text-xs">Restricted, ask an admin</span>
+          </div>
           <%!-- EDIT-MODE rows (channel-row reorder Stage 1; revised in
              Stage 2). Rows stop being navigation links — a mis-tap
              would navigate + close the drawer, ejecting the user from
@@ -1153,6 +1183,7 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
              the same one desktop's row controls persist through. --%>
           <div
             :for={{space, row_index} <- Enum.with_index(section_channels)}
+            :if={not MapSet.member?(@restricted_channel_ids, space.id)}
             data-channel-id={space.id}
             data-section-id={section.id}
             class="flex items-center gap-3 px-4 py-3 text-sm"
@@ -1214,6 +1245,20 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
             </span>
           </div>
         <% true -> %>
+          <div
+            :for={space <- section_channels}
+            :if={MapSet.member?(@restricted_channel_ids, space.id)}
+            data-role="restricted-channel-row"
+            data-space-id={space.id}
+            aria-disabled="true"
+            class="flex items-center gap-3 px-4 py-3 text-sm text-base-content/50"
+          >
+            <span class="hero-lock-closed-mini size-4"></span>
+            <span class="truncate flex-1">
+              {Platform.Chat.SidebarMask.channel_label(drawer_mask_ctx, section, space.name)}
+            </span>
+            <span class="text-xs">Restricted, ask an admin</span>
+          </div>
           <%!-- Row wrapper (task 019fe998). NORMAL mode only: the
                edit-mode branch above already carries its own persistent
                ▲▼ + drag cluster, and the sheet deliberately offers no
@@ -1222,6 +1267,7 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
                per step would be miserable. --%>
           <div
             :for={space <- section_channels}
+            :if={not MapSet.member?(@restricted_channel_ids, space.id)}
             class="flex items-center"
             data-role="drawer-row-wrap"
             data-space-id={space.id}

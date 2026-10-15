@@ -33,6 +33,8 @@ defmodule PlatformWeb.ChatLive do
   import PlatformWeb.ChatLive.RenderHelpers
 
   alias Platform.Accounts
+  alias Platform.Access
+  alias Platform.Access.Scope
   alias Platform.Chat
   alias Platform.Chat.ClosedDms
   alias Platform.Chat.HiddenChannels
@@ -390,6 +392,8 @@ defmodule PlatformWeb.ChatLive do
         do: [],
         else: Chat.list_spaces(kind: "channel", archived: true)
 
+    restricted_channel_ids = restricted_channel_ids(socket, channels, archived_channels, user_id)
+
     # `dm_conversations_for/3` and not the socket-shaped `rail_dm_conversations/1`:
     # none of these three values is in `socket.assigns` yet — they are assigned
     # further down this function — so the wrapper would read three nils here.
@@ -504,6 +508,7 @@ defmodule PlatformWeb.ChatLive do
         if(!embedded?, do: GoalCadenceForm.time_zone(get_connect_params(socket)))
       )
       |> assign(:archived_channels, archived_channels)
+      |> assign(:restricted_channel_ids, restricted_channel_ids)
       # Collapse state for the sidebar's "Archived" group (task 019e95ea
       # stage 2) — collapsed by default, toggled by `toggle_archived_section`.
       |> assign(:archived_open, false)
@@ -923,7 +928,10 @@ defmodule PlatformWeb.ChatLive do
     # Deliberately NOT the standalone deny. This LiveView is `live_render`ed
     # inside MeetingLive, so `push_navigate/2` would move the PARENT surface out
     # of the meeting. Denial here is silent and local to the pane.
-    space = if space && external_space_denied?(socket, space), do: nil, else: space
+    space =
+      if space && (external_space_denied?(socket, space) or restricted_space_denied?(socket, space)),
+        do: nil,
+        else: space
 
     case space do
       nil ->
@@ -1068,6 +1076,14 @@ defmodule PlatformWeb.ChatLive do
     # `external_space_denied?/2`: the two ask different questions of different
     # populations, and collapsing them would put the external allowlist in the
     # internal path.
+    if space && not external_space_denied?(socket, space) &&
+         restricted_space_denied?(socket, space) do
+      {:noreply,
+       socket
+       |> put_flash(:error, "Restricted, ask an admin")
+       |> handle_route_stale("chat")
+       |> push_navigate(to: ~p"/chat")}
+    else
     if is_nil(space) or external_space_denied?(socket, space) or
          implicit_join_denied?(socket, space) do
       # The URL saved by the RouteResume hook (`route_resume:chat` in
@@ -1115,6 +1131,8 @@ defmodule PlatformWeb.ChatLive do
           do: [],
           else: Chat.list_spaces(kind: "channel", archived: true)
 
+      restricted_channel_ids = restricted_channel_ids(socket, channels, archived_channels)
+
       dm_convos = rail_dm_conversations(socket)
 
       # `?message=<id>` deep link (task 019fabe8 stage 2). `Platform.Chat`
@@ -1158,6 +1176,7 @@ defmodule PlatformWeb.ChatLive do
        |> assign(:mobile_browser_open, false)
        |> assign(:channels, channels)
        |> assign(:archived_channels, archived_channels)
+       |> assign(:restricted_channel_ids, restricted_channel_ids)
        |> assign(:dm_conversations, dm_convos)
        |> assign(:spaces, channels ++ dm_convos)
        |> assign(:closed_dm_at, closed_dm_at)
@@ -1186,10 +1205,11 @@ defmodule PlatformWeb.ChatLive do
        # earlier in this pipeline would be wiped a line later.
        |> apply_anchor_arrival(anchor)}
     end
+    end
   end
 
   def handle_params(_params, _url, socket) do
-    case socket.assigns.channels do
+    case Enum.reject(socket.assigns.channels, &MapSet.member?(socket.assigns.restricted_channel_ids, &1.id)) do
       [first | _] ->
         {:noreply, push_navigate(socket, to: ~p"/chat/#{space_nav_target(first)}")}
 
@@ -4330,6 +4350,24 @@ defmodule PlatformWeb.ChatLive do
     external_session?(socket) and
       not Platform.Chat.ExternalScope.authorized_space?(%{id: socket.assigns.user_id}, space)
   end
+
+  defp access_scope(socket, user_id \\ nil) do
+    case socket.assigns[:access_scope] do
+      %Scope{} = scope -> scope
+      _ -> Scope.for_user(Accounts.get_user(user_id || socket.assigns.user_id))
+    end
+  end
+
+  defp restricted_channel_ids(socket, channels, archived_channels, user_id \\ nil) do
+    ids = Enum.map(channels ++ archived_channels, & &1.id)
+    Access.restricted_space_ids(access_scope(socket, user_id), ids)
+  end
+
+  defp restricted_space_denied?(socket, %{id: id, kind: "channel"}) do
+    not Access.can?(access_scope(socket), "chat.read", id)
+  end
+
+  defp restricted_space_denied?(_socket, _space), do: false
 
   # Space kinds an INTERNAL user may open — and therefore implicitly join —
   # without a `chat_participants` row already existing (task 01a01d0e).

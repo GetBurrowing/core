@@ -93,6 +93,7 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
   attr(:external?, :boolean, required: true)
   attr(:sidebar_edit, :boolean, required: true)
   attr(:sidebar_admin_edit, :boolean, required: true)
+  attr(:restricted_channel_ids, :any, required: true)
   attr(:sidebar_menu_open, :boolean, required: true)
   attr(:root_admin?, :boolean, required: true)
   attr(:mask_names?, :boolean, required: true)
@@ -167,6 +168,7 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
           user_id={@user_id}
         />
         <.sub_org_sections
+          restricted_channel_ids={@restricted_channel_ids}
           sidebar_sections={@sidebar_sections}
           scope_filter={@scope_filter}
           mask_names?={@mask_names?}
@@ -219,6 +221,7 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
           @channels == [] and @dm_conversations == [] and @archived_channels == []
         } />
         <.archived_section
+          restricted_channel_ids={@restricted_channel_ids}
           archived_channels={@archived_channels}
           archived_open={@archived_open}
           active_space={@active_space}
@@ -951,6 +954,7 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
   attr(:scope_filter, :any, required: true)
   attr(:sidebar_edit, :boolean, required: true)
   attr(:sidebar_admin_edit, :boolean, required: true)
+  attr(:restricted_channel_ids, :any, required: true)
   attr(:active_space, :any, required: true)
   attr(:unread_counts, :map, required: true)
   attr(:root_admin?, :boolean, required: true)
@@ -1373,7 +1377,22 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
                nothing at all. --%>
         <div :if={rows != []} class={collapsed? && "channel-ajar-group"}>
           <div
+            :for={{space, _idx} <- rows}
+            :if={MapSet.member?(@restricted_channel_ids, space.id)}
+            data-role="restricted-channel-row"
+            data-space-id={space.id}
+            aria-disabled="true"
+            class="channel-row text-base-content/50"
+          >
+            <span class="hero-lock-closed-mini size-3.5"></span>
+            <span class="truncate flex-1">
+              {Platform.Chat.SidebarMask.channel_label(mask_ctx, section, space.name)}
+            </span>
+            <span class="text-xs">Restricted, ask an admin</span>
+          </div>
+          <div
             :for={{space, idx} <- rows}
+            :if={not MapSet.member?(@restricted_channel_ids, space.id)}
             class={[
               "channel-row-wrap",
               (@sidebar_edit || @sidebar_admin_edit) && "channel-row-wrap--editing",
@@ -1511,6 +1530,7 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
 
   attr(:archived_channels, :list, required: true)
   attr(:archived_open, :boolean, required: true)
+  attr(:restricted_channel_ids, :any, required: true)
   attr(:active_space, :any, required: true)
 
   # THE MASK ATTRS — see the moduledoc. The archived rows render a space name
@@ -1558,8 +1578,21 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
         </span>
       </button>
       <div :if={@archived_open} id="archived-channel-list">
+        <div
+          :for={space <- @archived_channels}
+          :if={MapSet.member?(@restricted_channel_ids, space.id)}
+          data-role="restricted-channel-row"
+          data-space-id={space.id}
+          aria-disabled="true"
+          class="channel-row text-base-content/50"
+        >
+          <span class="hero-lock-closed-mini size-3.5"></span>
+          <span class="truncate flex-1">{mask_name(@mask_assigns, space.name)}</span>
+          <span class="text-xs">Restricted, ask an admin</span>
+        </div>
         <.link
           :for={space <- @archived_channels}
+          :if={not MapSet.member?(@restricted_channel_ids, space.id)}
           patch={~p"/chat/#{ChatLive.space_nav_target(space)}"}
           class={[
             "channel-row text-base-content/50",
