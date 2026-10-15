@@ -10,6 +10,8 @@ defmodule PlatformWeb.AccessLiveApplyTest do
   alias Platform.Tenancy
   alias Platform.Tenancy.Org
   alias Platform.Tenancy.OrgMembership
+  alias Platform.Tasks.Project
+  alias Platform.Tasks.Task
 
   defp user!(name) do
     n = System.unique_integer([:positive])
@@ -219,13 +221,34 @@ defmodule PlatformWeb.AccessLiveApplyTest do
     |> OrgMembership.changeset(%{org_id: ctx.org.id, user_id: member.id, role: "member"})
     |> Repo.insert!()
 
+    {:ok, project} =
+      %Project{}
+      |> Project.changeset(%{
+        name: "Live Tasks Project",
+        slug: "live-tasks-#{System.unique_integer([:positive])}",
+        org_id: ctx.org.id
+      })
+      |> Repo.insert()
+
+    task =
+      Repo.insert!(%Task{project_id: project.id, title: "Live Access Task", status: "backlog"})
+
     {:ok, view, _} =
       build_conn() |> init_test_session(current_user_id: member.id) |> live("/tasks")
 
     pid = view.pid
-    send(pid, {:access_changed, Ecto.UUID.generate()})
+    assert Enum.any?(assigns(view).all_tasks, &(&1.id == task.id))
+
+    assert {:ok, _} =
+             Grants.deny(%{
+               principal: member,
+               permission: "tasks.read",
+               resource: {:project, project.id}
+             })
+
     assert is_binary(render(view))
     assert Process.alive?(pid)
     assert assigns(view).access_scope.actor.id == member.id
+    refute Enum.any?(assigns(view).all_tasks, &(&1.id == task.id))
   end
 end
