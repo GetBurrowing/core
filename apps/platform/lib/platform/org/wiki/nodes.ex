@@ -36,7 +36,7 @@ defmodule Platform.Org.Wiki.Nodes do
     * **An overwrite merges.** When a single-page rename overwrites a location
       that has its own node, the displaced node's interval is closed and its
       grants are re-pointed to the moved node through
-      `Platform.Access.MemoryNodeMerge.merge/2`, which keeps a deny over an
+      `Platform.Access.Grants.merge_memory_nodes/2`, which keeps a deny over an
       allow on the same tuple.
     * **Deleting a page keeps its node.** The node is the location: a page
       recreated at the path inherits it, and a recently-deleted feedback row
@@ -49,7 +49,7 @@ defmodule Platform.Org.Wiki.Nodes do
 
   import Ecto.Query, only: [from: 2]
 
-  alias Platform.Access.MemoryNodeMerge
+  alias Platform.Access.Grants
   alias Platform.Org.Wiki
   alias Platform.Org.Wiki.{Node, NodePath, Routing}
   alias Platform.Org.WikiPage
@@ -303,7 +303,7 @@ defmodule Platform.Org.Wiki.Nodes do
 
   A node already current at a target location is DISPLACED: its interval is
   closed and its grants are merged into the moved node
-  (`Platform.Access.MemoryNodeMerge.merge/2`, deny kept). With no node at or
+  (`Platform.Access.Grants.merge_memory_nodes/2`, deny kept). With no node at or
   under `old` nothing happens.
 
   Returns `{:ok, moved_count}`.
@@ -356,7 +356,7 @@ defmodule Platform.Org.Wiki.Nodes do
         Enum.each(pairs, fn {row, target} ->
           case Map.get(displaced, target) do
             nil -> :ok
-            %NodePath{node_id: displaced_id} -> MemoryNodeMerge.merge(displaced_id, row.node_id)
+            %NodePath{node_id: displaced_id} -> Grants.merge_memory_nodes(displaced_id, row.node_id)
           end
 
           case open_interval(row.node_id, workspace_id, target, now) do

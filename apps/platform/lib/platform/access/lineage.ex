@@ -1,0 +1,325 @@
+defmodule Platform.Access.Lineage do
+  @moduledoc """
+  The inheritance edges between resources (task 01a1386d-e528 stage 2,
+  `0058-rbac-v2-roles-scopes-and-agent-capping.md § Levels and inheritance`).
+  This module answers "what is above this resource" and "what is below these
+  resources". It compares no effect and makes no decision: precedence lives
+  only in `Platform.Access` and `Platform.Access.Query`.
+
+  ## Edges, downward only
+
+    * project P → its tasks (`tasks.project_id`);
+    * project P → those tasks' execution spaces (`chat_spaces.kind =
+      'execution'`, `metadata->>'task_id'` compared as text, never cast);
+    * project P → the canvases in those spaces, and the canvases attached to
+      P's tasks (`task_canvas_attachments`);
+    * project P → stacks with `task_stacks.project_id = P`;
+    * space S → canvases whose `space_id` is S. The stage plan lists canvas
+      edges only below a project; the ADR additionally requires this direct
+      edge, and the ADR wins;
+    * memory node N → every node and page under N's current path, through
+      `Platform.Org.Wiki.Nodes.resolve/2`.
+
+  Nothing flows upward: `ancestors/1` of a project is the project alone, and
+  `descendant_ids/2` never returns a project for a space or canvas target.
+
+  ## Resource forms
+
+  A typed resource is one of `{:project, id}`, `{:task, id}`, `{:stack, id}`,
+  `{:space, id}`, `{:canvas, id}`, `{:memory, path}`, `{:memory, path, at}`
+  or `{:memory_node, id}`. `typed/1` also infers the type from a
+  `%Project{}`, `%Task{}`, `%Stack{}`, `%Space{}` or `%Canvas{}` struct.
+  """
+
+  import Ecto.Query, only: [from: 2, subquery: 1]
+
+  alias Platform.Chat.{Canvas, Space}
+  alias Platform.Org.Wiki.{NodePath, Nodes}
+  alias Platform.Repo
+  alias Platform.Tasks.{CanvasAttachment, Project, Stack, Task}
+
+  @type typed ::
+          {:project | :task | :stack | :space | :canvas | :memory_node, binary()}
+          | {:memory, String.t()}
+          | {:memory, String.t(), DateTime.t() | nil}
+
+  @id_types [:project, :task, :stack, :space, :canvas, :memory_node]
+
+  @doc "The resource types `descendant_ids/2` and `base_ids/4` accept."
+  @spec id_types() :: [atom()]
+  def id_types, do: [:project, :task, :stack, :space, :canvas]
+
+  @doc """
+  The typed form of `resource`, or `:untyped` (a bare id, an untyped map, or
+  `nil`). Structs are inferred; tuples pass through.
+  """
+  @spec typed(term()) :: typed() | :untyped
+  def typed({type, id} = r) when type in @id_types and is_binary(id), do: r
+  def typed({:memory, path}) when is_binary(path), do: {:memory, path, nil}
+  def typed({:memory, path, _at} = r) when is_binary(path), do: r
+  def typed(%Project{id: id}) when is_binary(id), do: {:project, id}
+  def typed(%Task{id: id}) when is_binary(id), do: {:task, id}
+  def typed(%Stack{id: id}) when is_binary(id), do: {:stack, id}
+  def typed(%Space{id: id}) when is_binary(id), do: {:space, id}
+  def typed(%Canvas{id: id}) when is_binary(id), do: {:canvas, id}
+  def typed(_), do: :untyped
+
+  # ── upward: what covers one resource ─────────────────────────────────
+
+  @doc """
+  The resource itself plus every resource above it on a downward edge, as
+  `{type, id}` pairs. Memory resolves to the covering node ids
+  (`{:memory_node, id}`), read through the interval history at `at`.
+  """
+  @spec ancestors(typed()) :: [{atom(), binary()}]
+  def ancestors({:project, id}), do: [{:project, id}]
+
+  def ancestors({:task, id}) do
+    project = Repo.one(from(t in Task, where: t.id == ^id, select: t.project_id))
+    [{:task, id} | project_pairs([project])]
+  end
+
+  def ancestors({:stack, id}) do
+    project = Repo.one(from(s in Stack, where: s.id == ^id, select: s.project_id))
+    [{:stack, id} | project_pairs([project])]
+  end
+
+  def ancestors({:space, id}) do
+    [{:space, id} | project_pairs([execution_space_project(id)])]
+  end
+
+  def ancestors({:canvas, id}) do
+    space_id = Repo.one(from(c in Canvas, where: c.id == ^id, select: c.space_id))
+
+    attached_projects =
+      Repo.all(
+        from(a in CanvasAttachment,
+          join: t in Task,
+          on: t.id == a.task_id,
+          where: a.canvas_id == ^id,
+          select: t.project_id
+        )
+      )
+
+    above_space = if space_id, do: ancestors({:space, space_id}), else: []
+
+    Enum.uniq([{:canvas, id}] ++ above_space ++ project_pairs(attached_projects))
+  end
+
+  def ancestors({:memory, path, at}) do
+    path
+    |> Nodes.resolve(at: at)
+    |> Enum.map(&{:memory_node, &1.id})
+  end
+
+  def ancestors({:memory_node, id}) do
+    current =
+      Repo.one(
+        from(p in NodePath, where: p.node_id == ^id and is_nil(p.valid_to), select: p.path)
+      )
+
+    case current do
+      nil -> [{:memory_node, id}]
+      path -> Enum.uniq([{:memory_node, id} | ancestors({:memory, path, nil})])
+    end
+  end
+
+  defp project_pairs(ids), do: for(id <- ids, is_binary(id), do: {:project, id})
+
+  defp execution_space_project(space_id) do
+    Repo.one(
+      from(s in Space,
+        join: t in Task,
+        on: fragment("?->>'task_id' = ?::text", s.metadata, t.id),
+        where: s.id == ^space_id and s.kind == "execution",
+        select: t.project_id
+      )
+    )
+  end
+
+  # ── downward: everything a set of targets covers ─────────────────────
+
+  @doc """
+  The ids of every `type` resource that `targets` (grant targets, as
+  `{type, id}` pairs) cover through the downward edges, the targets of that
+  type themselves included.
+  """
+  @spec descendant_ids(atom(), [{atom(), binary()}]) :: [binary()]
+  def descendant_ids(_type, []), do: []
+
+  def descendant_ids(type, targets) do
+    projects = ids_of(targets, :project)
+    spaces = ids_of(targets, :space)
+    canvases = ids_of(targets, :canvas)
+
+    case type do
+      :project ->
+        projects
+
+      :task ->
+        Repo.all(from(t in Task, where: t.project_id in ^projects, select: t.id))
+
+      :stack ->
+        Repo.all(from(s in Stack, where: s.project_id in ^projects, select: s.id))
+
+      :space ->
+        Repo.all(
+          from(s in Space,
+            where: s.id in ^spaces or s.id in subquery(execution_spaces_of(projects)),
+            select: s.id
+          )
+        )
+
+      :canvas ->
+        Repo.all(
+          from(c in Canvas,
+            where:
+              c.id in ^canvases or c.space_id in ^spaces or
+                c.space_id in subquery(execution_spaces_of(projects)) or
+                c.id in subquery(attached_canvases_of(projects)),
+            select: c.id
+          )
+        )
+    end
+    |> Enum.uniq()
+  end
+
+  defp ids_of(targets, type), do: for({^type, id} <- targets, do: id)
+
+  defp execution_spaces_of(projects) do
+    from(s in Space,
+      join: t in Task,
+      on: fragment("?->>'task_id' = ?::text", s.metadata, t.id),
+      where: s.kind == "execution" and t.project_id in ^projects,
+      select: s.id
+    )
+  end
+
+  defp attached_canvases_of(projects) do
+    from(a in CanvasAttachment,
+      join: t in Task,
+      on: t.id == a.task_id,
+      where: t.project_id in ^projects,
+      select: a.canvas_id
+    )
+  end
+
+  # ── the ids a role rule names ─────────────────────────────────────────
+
+  @doc """
+  The resource ids a role rule's id list could name for `typed`: the
+  resource's own id plus the ids of its context that member 2's rules name
+  (the org for `membership_org`, the space for a canvas's
+  `participant_spaces`). A space is returned as `%{id, kind}` so the
+  `implicit_or_participant` kind admission can answer it.
+  """
+  @spec base_candidates(typed()) :: [term()]
+  def base_candidates({:project, id}) do
+    [id | List.wrap(Repo.one(from(p in Project, where: p.id == ^id, select: p.org_id)))]
+  end
+
+  def base_candidates({:task, id}) do
+    org =
+      Repo.one(
+        from(t in Task,
+          join: p in Project,
+          on: p.id == t.project_id,
+          where: t.id == ^id,
+          select: p.org_id
+        )
+      )
+
+    [id | List.wrap(org)]
+  end
+
+  def base_candidates({:stack, id}) do
+    org =
+      Repo.one(
+        from(s in Stack,
+          join: p in Project,
+          on: p.id == s.project_id,
+          where: s.id == ^id,
+          select: p.org_id
+        )
+      )
+
+    [id | List.wrap(org)]
+  end
+
+  def base_candidates({:space, id}) do
+    case Repo.one(from(s in Space, where: s.id == ^id, select: {s.kind, s.org_id})) do
+      {kind, org_id} -> [%{id: id, kind: kind} | List.wrap(org_id)]
+      nil -> [id]
+    end
+  end
+
+  def base_candidates({:canvas, id}) do
+    row =
+      Repo.one(
+        from(c in Canvas,
+          left_join: s in Space,
+          on: s.id == c.space_id,
+          where: c.id == ^id,
+          select: {c.space_id, s.org_id}
+        )
+      )
+
+    case row do
+      {space_id, org_id} -> [id | Enum.reject([space_id, org_id], &is_nil/1)]
+      nil -> [id]
+    end
+  end
+
+  def base_candidates(_memory), do: []
+
+  @doc """
+  The set form of `base_candidates/1`: every `type` resource id one of `ids`
+  names through the same context, plus, for a space, every space whose kind
+  is in `kinds` (the `implicit_or_participant` admission).
+  """
+  @spec base_ids(atom(), [binary()], [String.t()]) :: [binary()]
+  def base_ids(:project, ids, _kinds),
+    do: Repo.all(from(p in Project, where: p.id in ^ids or p.org_id in ^ids, select: p.id))
+
+  def base_ids(:task, ids, _kinds) do
+    Repo.all(
+      from(t in Task,
+        left_join: p in Project,
+        on: p.id == t.project_id,
+        where: t.id in ^ids or p.org_id in ^ids,
+        select: t.id
+      )
+    )
+  end
+
+  def base_ids(:stack, ids, _kinds) do
+    Repo.all(
+      from(s in Stack,
+        left_join: p in Project,
+        on: p.id == s.project_id,
+        where: s.id in ^ids or p.org_id in ^ids,
+        select: s.id
+      )
+    )
+  end
+
+  def base_ids(:space, ids, kinds) do
+    Repo.all(
+      from(s in Space,
+        where: s.id in ^ids or s.org_id in ^ids or s.kind in ^kinds,
+        select: s.id
+      )
+    )
+  end
+
+  def base_ids(:canvas, ids, _kinds) do
+    Repo.all(
+      from(c in Canvas,
+        left_join: s in Space,
+        on: s.id == c.space_id,
+        where: c.id in ^ids or c.space_id in ^ids or s.org_id in ^ids,
+        select: c.id
+      )
+    )
+  end
+end

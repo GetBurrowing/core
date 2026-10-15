@@ -363,7 +363,7 @@ defmodule Platform.Access.ScopeTest do
       assert bare.role_keys == preloaded.role_keys
     end
 
-    test "the preloaded path issues no membership, org or role query: one participant query",
+    test "the preloaded path issues no membership, org or role query: one participant query and one grants query",
          ctx do
       user = create_user!("queries")
       member!(user, ctx.a, "admin")
@@ -376,12 +376,16 @@ defmodule Platform.Access.ScopeTest do
       {scope, sources} = count_queries(fn -> Scope.for_user(user) end)
 
       assert scope.permissions["chat.read"] == [ctx.dm.id]
-      assert sources == ["chat_participants"]
+      # Task 01a1386d-e528 stage 2 adds exactly one query: the actor's
+      # `access_grants` rows, loaded once for every principal.
+      assert sources == ["chat_participants", "access_grants"]
 
       # A zero-membership user's baseline carries a participant rule too:
-      # still the one participant query, nothing else.
+      # still the one participant query plus the grants query, nothing else.
       nobody = loaded(create_user!("queries-none"))
-      assert {_, ["chat_participants"]} = count_queries(fn -> Scope.for_user(nobody) end)
+
+      assert {_, ["chat_participants", "access_grants"]} =
+               count_queries(fn -> Scope.for_user(nobody) end)
     end
   end
 

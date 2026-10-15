@@ -16,7 +16,7 @@ defmodule Platform.Org.Wiki.NodesTest do
       inside it: "a failed page delete moves no node" goes red.
     * Run it after the transaction commits: "a failed node move renames no
       page" goes red.
-    * Drop step 1 of `Platform.Access.MemoryNodeMerge.merge/2`: the merge test
+    * Drop step 1 of `Platform.Access.Grants.merge_memory_nodes/2`: the merge test
       keeps an allow where a deny must win.
   """
 
@@ -206,7 +206,6 @@ defmodule Platform.Org.Wiki.NodesTest do
     end
 
     test "an overwrite re-points the displaced node's grants and keeps deny over allow" do
-      create_grants_table!()
       seed_page("org/page/a.md")
       seed_page("org/page/b.md")
       a = ensure!("org/page/a.md")
@@ -308,38 +307,21 @@ defmodule Platform.Org.Wiki.NodesTest do
 
   # ── grant fixtures ─────────────────────────────────────────────────────
   #
-  # `access_grants` is created by stage 2 of this task. A session-local TEMP
-  # table with the columns `Platform.Access.MemoryNodeMerge` reads stands in
-  # for it; temp relations shadow permanent ones on the search path, so this
-  # keeps working once the real table exists. It is dropped with the
-  # sandbox transaction.
-  defp create_grants_table! do
-    Repo.query!("""
-    CREATE TEMP TABLE access_grants (
-      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-      principal_type text NOT NULL,
-      principal_id uuid,
-      principal_role_key text,
-      permission text NOT NULL,
-      resource_type text NOT NULL,
-      resource_id uuid NOT NULL,
-      effect text NOT NULL
-    ) ON COMMIT DROP
-    """)
-  end
-
+  # Rows go into the real `access_grants` table (stage 2 of this task), each
+  # carrying its node's org, as `Platform.Access.Grants` stores them.
   defp grant!(node_id, type, principal_id, role_key, permission, effect) do
-    Repo.query!(
-      "INSERT INTO access_grants (principal_type, principal_id, principal_role_key, permission, resource_type, resource_id, effect) VALUES ($1, $2, $3, $4, 'memory_node', $5, $6)",
-      [
-        type,
-        principal_id && Ecto.UUID.dump!(principal_id),
-        role_key,
-        permission,
-        Ecto.UUID.dump!(node_id),
-        effect
-      ]
-    )
+    %Node{org_id: org_id} = Repo.get!(Node, node_id)
+
+    Repo.insert!(%Platform.Access.Grant{
+      org_id: org_id,
+      principal_type: type,
+      principal_id: principal_id,
+      principal_role_key: role_key,
+      permission: permission,
+      resource_type: "memory_node",
+      resource_id: node_id,
+      effect: effect
+    })
   end
 
   defp grants_on(node_id) do

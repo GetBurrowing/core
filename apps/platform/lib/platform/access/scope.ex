@@ -4,7 +4,7 @@ defmodule Platform.Access.Scope do
   (task `01a1386d-cb5c` stage 2;
   `0058-rbac-v2-roles-scopes-and-agent-capping.md § Permission model`).
 
-      %Scope{actor, org, permissions, role_keys}
+      %Scope{actor, org, permissions, role_keys, grants}
 
     * `actor` — the principal: a user (with `:org_memberships` and nested
       `:org` loaded), an `%AgentRuntime{}`, `{:meeting_invitee, term}`,
@@ -16,7 +16,16 @@ defmodule Platform.Access.Scope do
       (`org_memberships.access_role_key`). The ADR names this field for
       stack member 8; it is populated here with base keys only, because the
       decision needs it: guest dominance and the `implicit_or_participant`
-      kind admission are both read from it. No other field is added.
+      kind admission are both read from it.
+    * `grants` — the `%Platform.Access.Grant{}` rows (allow and deny) whose
+      principal is this actor (task `01a1386d-e528` stage 2): the user id,
+      every `{access_role_key, org_id}` pair of its memberships, or the
+      runtime's agent id. Loaded in ONE query by the builders, as a
+      build-time snapshot (live apply is stack position 6). With no rows it
+      is `[]`, the field default, so a grant-less Scope is equal to the one
+      member 2 built. `can?/3` and `permitted_ids/2` here read role rules
+      ONLY; the grant-aware decision is `Platform.Access.can?/3` /
+      `Platform.Access.permitted/3`, the one place precedence lives.
 
   ## Nothing consumes this yet
 
@@ -107,21 +116,22 @@ defmodule Platform.Access.Scope do
   import Ecto.Query, only: [from: 2]
 
   alias Platform.Access
-  alias Platform.Access.Registry
+  alias Platform.Access.{Grants, Registry}
   alias Platform.Agents.AgentRuntime
   alias Platform.Chat.ExternalScope
   alias Platform.Federation.{ToolAuthorization, ToolSurface}
   alias Platform.Repo
   alias Platform.Tenancy.{Org, OrgMembership}
 
-  defstruct actor: nil, org: nil, permissions: %{}, role_keys: %{}
+  defstruct actor: nil, org: nil, permissions: %{}, role_keys: %{}, grants: []
 
   @type permission_value :: :all | [binary()]
   @type t :: %__MODULE__{
           actor: term(),
           org: Org.t() | nil,
           permissions: %{String.t() => permission_value()},
-          role_keys: %{(binary() | nil) => MapSet.t(String.t())}
+          role_keys: %{(binary() | nil) => MapSet.t(String.t())},
+          grants: [Platform.Access.Grant.t()]
         }
 
   @implicit_kinds ~w(channel system execution)
@@ -151,11 +161,14 @@ defmodule Platform.Access.Scope do
       |> widen_root_org(memberships)
       |> grant_root_admin(memberships, contributing)
 
+    role_keys = role_keys(memberships)
+
     %__MODULE__{
       actor: user,
       org: primary_org(memberships),
       permissions: permissions,
-      role_keys: role_keys(memberships)
+      role_keys: role_keys,
+      grants: Grants.list_for_principals([{:user, user_id} | role_principals(role_keys)])
     }
   end
 
@@ -180,7 +193,12 @@ defmodule Platform.Access.Scope do
         do: owner_guest_keys(runtime.owner_user_id),
         else: %{}
 
-    %__MODULE__{actor: runtime, permissions: permissions, role_keys: role_keys}
+    %__MODULE__{
+      actor: runtime,
+      permissions: permissions,
+      role_keys: role_keys,
+      grants: Grants.list_for_principals(agent_principals(runtime))
+    }
   end
 
   @doc "A meeting invitee (unauthenticated link-token bearer): empty permissions."
@@ -255,6 +273,25 @@ defmodule Platform.Access.Scope do
   @spec declared_rail(t()) :: [atom()]
   def declared_rail(%__MODULE__{} = scope) do
     for entry <- Registry.rail_entries(), carries?(scope, entry.permission), do: entry.key
+  end
+
+  @doc """
+  The space kinds the `implicit_or_participant` rule admits for `permission`
+  without a participant row: `#{inspect(@implicit_kinds)}` when the scope
+  holds `permission` as an id list and a contributing role's rule for it is
+  `implicit_or_participant`, else `[]`. The set form of `can?/3`'s kind
+  admission, for `Platform.Access.permitted/3`.
+  """
+  @spec kind_admitted(t(), String.t()) :: [String.t()]
+  def kind_admitted(%__MODULE__{permissions: permissions} = scope, permission)
+      when is_binary(permission) do
+    case Map.get(permissions, permission) do
+      ids when is_list(ids) ->
+        if implicit_rule?(scope, permission), do: @implicit_kinds, else: []
+
+      _ ->
+        []
+    end
   end
 
   @doc "Does the scope carry the guest restriction (any base role key `guest`)?"
@@ -549,6 +586,19 @@ defmodule Platform.Access.Scope do
   end
 
   defp put_agent_roster(permissions, _runtime), do: permissions
+
+  # The grant principals of a user's memberships: one per (role key, org).
+  defp role_principals(role_keys) do
+    for {org_id, keys} <- role_keys, is_binary(org_id), key <- Enum.sort(keys) do
+      {:role, key, org_id}
+    end
+  end
+
+  # An agent's grants are its OWN (no owner intersection: stack position 5).
+  defp agent_principals(%AgentRuntime{agent_id: agent_id}) when is_binary(agent_id),
+    do: [{:agent, agent_id}]
+
+  defp agent_principals(_runtime), do: []
 
   defp bundles(%AgentRuntime{allowed_bundles: bundles}) when is_list(bundles), do: bundles
   defp bundles(_runtime), do: []
