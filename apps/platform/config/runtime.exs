@@ -694,6 +694,20 @@ if livekit_api_key && livekit_api_secret do
     url: livekit_url || "wss://localhost:7880"
 end
 
+# LiveKit agent name core dispatches the meeting transcriber as, on both the
+# JWT `roomConfig.agents` path and the CreateRoom body. The LiveKit server can
+# be shared by several Suite installs; each install needs its OWN transcriber
+# worker (registered under its own agent name, posting segments to its own
+# `PERSIST_URL`), or one install's meetings are transcribed into another's.
+# Unset or blank keeps the default `"meeting-transcriber"`.
+case System.get_env("MEETING_TRANSCRIBER_AGENT_NAME") do
+  name when is_binary(name) and name != "" ->
+    config :platform, :meeting_transcriber_agent_name, String.trim(name)
+
+  _ ->
+    :ok
+end
+
 # ── GitHub webhooks ───────────────────────────────────────────────────────────
 # App-level fallback secret for `/api/webhooks/github` HMAC verification. A
 # project may carry its own value at `deploy_config["webhook_secret"]`; either

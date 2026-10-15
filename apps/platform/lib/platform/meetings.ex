@@ -4231,11 +4231,35 @@ defmodule Platform.Meetings do
   # handles phone-call rooms) out of meetings — LiveKit routes by agentName.
   defp maybe_put_room_config(claims, "space-" <> _) do
     Map.put(claims, "roomConfig", %{
-      "agents" => [%{"agentName" => "meeting-transcriber"}]
+      "agents" => [%{"agentName" => transcriber_agent_name()}]
     })
   end
 
   defp maybe_put_room_config(claims, _room_name), do: claims
+
+  @default_transcriber_agent_name "meeting-transcriber"
+
+  @doc """
+  The LiveKit agent name core dispatches the meeting transcriber as.
+
+  Read from `config :platform, :meeting_transcriber_agent_name`
+  (`MEETING_TRANSCRIBER_AGENT_NAME`), defaulting to `"meeting-transcriber"`.
+  Installs that share one LiveKit server each run their own transcriber
+  worker under a distinct name, so a room is only ever joined by the worker
+  that persists segments back to the install that owns it.
+
+  This is a DISPATCH name only. Transcriber participants are recognised by
+  `transcriber_identity_markers/0` (substring match, including the
+  `"transcriber:"` identity prefix the worker joins with), so a different
+  name here does not change participant detection.
+  """
+  @spec transcriber_agent_name() :: String.t()
+  def transcriber_agent_name do
+    case Application.get_env(:platform, :meeting_transcriber_agent_name) do
+      name when is_binary(name) and name != "" -> name
+      _ -> @default_transcriber_agent_name
+    end
+  end
 
   @doc """
   Generate a LiveKit access token for an agent worker.
@@ -8679,7 +8703,7 @@ defmodule Platform.Meetings do
     Jason.encode!(%{
       "name" => room_name,
       "empty_timeout" => 300,
-      "agents" => [%{"agent_name" => "meeting-transcriber"}]
+      "agents" => [%{"agent_name" => transcriber_agent_name()}]
     })
   end
 
