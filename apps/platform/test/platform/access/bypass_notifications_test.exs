@@ -154,7 +154,7 @@ defmodule Platform.Access.BypassNotificationsTest do
     assert_receive {:inbox_item_added, %Item{source_id: before_id}}
     assert before_id == before.id
     assert {:ok, _} = AttentionRouter.route(before)
-    assert_receive {:push, user_id, payload}
+    assert_receive {:push, user_id, %{message_id: ^before_id} = payload}
     assert user_id == user.id
     assert payload.body =~ "ZQX-BYPASS-NOTIF"
 
@@ -168,7 +168,8 @@ defmodule Platform.Access.BypassNotificationsTest do
     after_deny = post!(space.id, author_row.id, "@[#{user.name}] ZQX-BYPASS-NOTIF")
     refute_receive {:inbox_item_added, _}, 100
     assert {:ok, _} = AttentionRouter.route(after_deny)
-    refute_receive {:push, ^user_id, _}, 100
+    denied_id = after_deny.id
+    refute_receive {:push, ^user_id, %{message_id: ^denied_id}}, 100
     assert recipient.participant_id == user.id
   end
 
@@ -206,7 +207,7 @@ defmodule Platform.Access.BypassNotificationsTest do
     assert_receive {:inbox_item_added, %Item{source_id: before_id}}
     assert before_id == before.id
     assert {:ok, _} = AttentionRouter.route(before)
-    assert_receive {:push, guest_id, %{body: body}}
+    assert_receive {:push, guest_id, %{message_id: ^before_id, body: body}}
     assert guest_id == guest.id
     assert body =~ "ZQX-BYPASS-NOTIF"
 
@@ -220,7 +221,8 @@ defmodule Platform.Access.BypassNotificationsTest do
     denied = post!(space.id, author_row.id, "@[#{guest.name}] ZQX-BYPASS-NOTIF")
     refute_receive {:inbox_item_added, _}, 100
     assert {:ok, _} = AttentionRouter.route(denied)
-    refute_receive {:push, ^guest_id, _}, 100
+    denied_id = denied.id
+    refute_receive {:push, ^guest_id, %{message_id: ^denied_id}}, 100
   end
 
   test "the canonical external world keeps its zero-grant inbox rows" do
