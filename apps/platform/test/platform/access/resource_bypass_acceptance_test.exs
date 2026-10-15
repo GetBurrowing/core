@@ -7,6 +7,7 @@ defmodule Platform.Access.ResourceBypassAcceptanceTest do
 
   use PlatformWeb.ConnCase, async: false
 
+  import Ecto.Query
   import Phoenix.LiveViewTest
 
   alias Phoenix.LiveView.Socket
@@ -21,9 +22,11 @@ defmodule Platform.Access.ResourceBypassAcceptanceTest do
   alias Platform.Inbox
   alias Platform.Meetings
   alias Platform.Mobile
+  alias Platform.Orchestration.{LeaseManager, TaskRouter, TaskRouterSupervisor}
   alias Platform.Org.Wiki.Search
   alias Platform.Repo
   alias Platform.Tasks
+  alias Platform.Chat.AttentionRouter
   alias PlatformWeb.ChatLive
   alias PlatformWeb.ChatLive.CanvasHooks
 
@@ -65,6 +68,41 @@ defmodule Platform.Access.ResourceBypassAcceptanceTest do
   defp agent! do
     n = System.unique_integer([:positive])
     Repo.insert!(%Agent{slug: "accept-agent-#{n}", name: "Accept agent #{n}", status: "active"})
+  end
+
+  defmodule MemoryStub do
+    @behaviour Platform.Memory.Provider
+    @impl true
+    def search(_query, _opts, config), do: {:ok, Keyword.get(config, :search_results, [])}
+    @impl true
+    def ingest(_entries, _config), do: {:ok, 0}
+    @impl true
+    def delete(ids, _config), do: {:ok, length(ids)}
+    @impl true
+    def health(_config), do: :ok
+  end
+
+  defmodule Recorder do
+    def fan_out_to_user(user_id, payload, _opts \\ []) do
+      send(:persistent_term.get({__MODULE__, :owner}), {:push, user_id, payload})
+      :ok
+    end
+
+    def fan_out_to_humans(ids, payload, opts \\ []) do
+      send(:persistent_term.get({__MODULE__, :owner}), {:push_humans, ids, payload, opts})
+      :ok
+    end
+  end
+
+  defp runtime!(owner, agent) do
+    {:ok, runtime} =
+      Platform.Federation.register_runtime(owner.id, %{
+        runtime_id: "accept-#{System.unique_integer([:positive])}"
+      })
+
+    {:ok, active, _token} = Platform.Federation.activate_runtime(runtime)
+    {:ok, linked} = Platform.Federation.link_agent(active, agent)
+    {linked, Repo.get!(Platform.Agents.AgentRuntime, active.id)}
   end
 
   defp mobile_token!(user) do
@@ -202,6 +240,61 @@ defmodule Platform.Access.ResourceBypassAcceptanceTest do
       assert denied_blob.status == 404
       no_marker!(denied_blob.resp_body, marker)
     end
+
+    test "four MCP file tools stop returning Q metadata and text after an agent deny", ctx do
+      marker = "ZQX-ACCEPT-FILE-TOOLS"
+      agent = agent!()
+      {linked, runtime} = runtime!(ctx.int, agent)
+      context = %{runtime_id: runtime.runtime_id, agent_id: linked.id}
+
+      {:ok, file} =
+        Platform.Files.create_file(%{
+          project_id: ctx.q.id,
+          org_id: ctx.q.org_id,
+          name: "#{marker}.txt",
+          original_filename: "#{marker}.txt",
+          content_type: "text/plain",
+          byte_size: byte_size(marker),
+          storage_key: "files/#{ctx.q.id}/#{Ecto.UUID.generate()}/#{marker}.txt",
+          content_hash: Base.encode16(:crypto.hash(:sha256, marker), case: :lower),
+          ingest_status: "ingested"
+        })
+
+      {:ok, _} = Platform.Files.upsert_extracted_text(file.id, marker, nil)
+      previous = Application.get_env(:platform, :memory_service, [])
+
+      Application.put_env(:platform, :memory_service,
+        provider: MemoryStub,
+        search_results: [%{entry_id: file.id, score: 0.9}]
+      )
+
+      on_exit(fn -> Application.put_env(:platform, :memory_service, previous) end)
+
+      calls = [
+        {"file_list", %{"project_id" => ctx.q.id}},
+        {"file_search", %{"project_id" => ctx.q.id, "query" => marker}},
+        {"file_get_metadata", %{"file_id" => file.id}},
+        {"file_get_text", %{"file_id" => file.id}}
+      ]
+
+      for {tool, args} <- calls do
+        assert {:ok, before} = ToolSurface.execute(tool, args, context)
+        assert inspect(before, limit: :infinity) =~ marker, "#{tool} positive control"
+      end
+
+      {:ok, _} =
+        Grants.deny(%{
+          principal: {:agent, linked.id},
+          permission: "files.read",
+          resource: {:project, ctx.q.id}
+        })
+
+      for {tool, args} <- calls do
+        denied = ToolSurface.execute(tool, args, context)
+        assert {:error, _} = denied, "#{tool} denied"
+        no_marker!(denied, marker)
+      end
+    end
   end
 
   describe "prototype entry and served grant" do
@@ -252,13 +345,7 @@ defmodule Platform.Access.ResourceBypassAcceptanceTest do
       marker = "ZQX-ACCEPT-DISPATCH"
       agent = agent!()
 
-      {:ok, runtime} =
-        Platform.Federation.register_runtime(ctx.int.id, %{
-          runtime_id: "accept-#{System.unique_integer([:positive])}"
-        })
-
-      {:ok, active, _token} = Platform.Federation.activate_runtime(runtime)
-      {:ok, linked} = Platform.Federation.link_agent(active, agent)
+      {linked, active} = runtime!(ctx.int, agent)
 
       {:ok, task} = Tasks.create_task(%{project_id: ctx.q.id, title: marker})
       entry = %{"assignee_id" => linked.id, "assignee_type" => "agent"}
@@ -273,15 +360,104 @@ defmodule Platform.Access.ResourceBypassAcceptanceTest do
         })
         |> Repo.update!()
 
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved", version: 1})
+      {:ok, stage} =
+        Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "coding", description: "code"})
+
+      {:ok, _} = Tasks.create_validation(%{stage_id: stage.id, kind: "test_pass"})
+
+      stage
+      |> Ecto.Changeset.change(%{status: "running", started_at: DateTime.utc_now()})
+      |> Repo.update!()
+
+      PlatformWeb.Endpoint.subscribe("runtime:#{active.runtime_id}")
+      {:ok, router} =
+        TaskRouter.start_link(task_id: task.id, assignee: %{type: :federated, id: active.runtime_id})
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention", topic: topic}, 1_500
+      assert topic == "runtime:#{active.runtime_id}"
+      assert %{stage_id: _} = LeaseManager.get(task.id)
+      GenServer.stop(router, :normal)
+      _ = TaskRouterSupervisor.stop_assignment(task.id)
+      LeaseManager.clear(task.id)
+
       assert {:ok, _} = Platform.Orchestration.PhaseRuntime.resolve(task)
       deny!(ctx.int, "tasks.read", ctx.q)
       assert {:error, :owner_denied} = Platform.Orchestration.PhaseRuntime.resolve(task)
+
+      {:ok, denied_router} =
+        TaskRouter.start_link(task_id: task.id, assignee: %{type: :federated, id: active.runtime_id})
+
+      refute_receive %Phoenix.Socket.Broadcast{event: "attention", topic: ^topic}, 250
+      assert LeaseManager.get(task.id) == nil
+      GenServer.stop(denied_router, :normal)
+      _ = TaskRouterSupervisor.stop_assignment(task.id)
+    end
+
+    test "an owner-denied agent is not summoned by an authorized mention", ctx do
+      marker = "ZQX-ACCEPT-MENTION"
+      agent = agent!()
+      {linked, _runtime} = runtime!(ctx.int, agent)
+
+      {:ok, author} =
+        Chat.add_participant(ctx.eq.id, %{
+          participant_type: "user",
+          participant_id: ctx.m.id,
+          role: "admin",
+          joined_at: DateTime.utc_now()
+        })
+
+      post = fn ->
+        {:ok, message} =
+          Chat.post_message(
+            %{
+              space_id: ctx.eq.id,
+              participant_id: author.id,
+              content_type: "text",
+              content: "#{marker} @[#{linked.slug}]"
+            },
+            from_pid: self()
+          )
+
+        message
+      end
+
+      post.()
+      refute_receive {:mention_summon_refused, _, _}, 100
+      assert Repo.exists?(from p in Chat.Participant,
+               where: p.space_id == ^ctx.eq.id and p.participant_type == "agent" and
+                        p.participant_id == ^linked.id
+             )
+
+      Repo.delete_all(
+        from p in Chat.Participant,
+          where: p.space_id == ^ctx.eq.id and p.participant_type == "agent" and
+                   p.participant_id == ^linked.id
+      )
+
+      deny!(ctx.int, "chat.read", ctx.q)
+      post.()
+      assert_receive {:mention_summon_refused, _, [name]}, 1_000
+      assert name == linked.name
+      refute Repo.exists?(from p in Chat.Participant,
+               where: p.space_id == ^ctx.eq.id and p.participant_type == "agent" and
+                        p.participant_id == ^linked.id
+             )
     end
   end
 
   describe "inbox row, badge and push preview" do
     test "an emitted row disappears from both read scopes", ctx do
       marker = "ZQX-ACCEPT-INBOX"
+      Ecto.Adapters.SQL.Sandbox.mode(Repo, {:shared, self()})
+      Application.put_env(:platform, :notifications_module, Recorder)
+      :persistent_term.put({Recorder, :owner}, self())
+
+      on_exit(fn ->
+        Application.delete_env(:platform, :notifications_module)
+        :persistent_term.erase({Recorder, :owner})
+      end)
+
       {:ok, task} = Tasks.create_task(%{project_id: ctx.q.id, title: marker})
 
       attrs = %{
@@ -295,10 +471,14 @@ defmodule Platform.Access.ResourceBypassAcceptanceTest do
       }
 
       assert {:ok, row} = Inbox.emit(attrs)
+      assert_receive {:push, recipient, payload}, 1_000
+      assert recipient == ctx.int.id
+      assert payload.body =~ marker
       assert Inbox.reachable_unread_count(ctx.int.id) == 1
       deny!(ctx.int, "tasks.read", ctx.q)
       assert Inbox.reachable_unread_count(ctx.int.id) == 0
       assert {:error, :denied} = Inbox.emit(attrs)
+      refute_receive {:push, _, _}, 100
       {:ok, _view, html} = live(session(ctx.int), "/inbox")
       no_marker!(html, marker)
       assert row.id
@@ -320,6 +500,64 @@ defmodule Platform.Access.ResourceBypassAcceptanceTest do
       refute Enum.any?(after_deny.results, &(&1.id == task.id))
       assert after_deny.dropped == before.dropped
       no_marker!(after_deny.results, marker)
+    end
+
+    test "message corpus and both space tools hide a denied execution space", ctx do
+      marker = "ZQX-ACCEPT-MESSAGE-SEARCH"
+      agent = agent!()
+      World.add_agent!(ctx.eq.id, agent.id)
+      message = World.post!(ctx.eq.id, ctx.member_in_eq.id, marker)
+      previous = Application.get_env(:platform, :memory_service, [])
+      Application.put_env(:platform, :memory_service, provider: MemoryStub, search_results: [])
+      on_exit(fn -> Application.put_env(:platform, :memory_service, previous) end)
+
+      context = %{agent_id: agent.id, access_scope: %Scope{}}
+
+      assert {:ok, before} =
+               Search.search(marker, source: "message", agent: agent, access_scope: %Scope{})
+
+      assert Enum.any?(before.results, &(&1.id == message.id))
+
+      for tool <- ["space_get_messages", "space_search_messages"] do
+        assert {:ok, _} =
+                 ToolSurface.execute(
+                   tool,
+                   %{"space_id" => ctx.eq.id, "query" => marker},
+                   context
+                 )
+      end
+
+      {:ok, grant} =
+        Grants.deny(%{
+          principal: {:agent, agent.id},
+          permission: "chat.read",
+          resource: {:project, ctx.q.id}
+        })
+
+      denied_scope = %Scope{grants: [grant]}
+
+      assert {:ok, after_deny} =
+               Search.search(marker,
+                 source: "message",
+                 agent: agent,
+                 access_scope: denied_scope
+               )
+
+      refute Enum.any?(after_deny.results, &(&1.id == message.id))
+      assert after_deny.dropped == before.dropped
+      no_marker!(after_deny.results, marker)
+
+      for tool <- ["space_get_messages", "space_search_messages"] do
+        denied =
+          ToolSurface.execute(
+            tool,
+            %{"space_id" => ctx.eq.id, "query" => marker},
+            %{context | access_scope: denied_scope}
+          )
+
+        assert {:error, _} = denied
+        no_marker!(denied, marker)
+      end
     end
   end
 
