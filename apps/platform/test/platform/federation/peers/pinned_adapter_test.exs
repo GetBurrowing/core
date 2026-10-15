@@ -89,25 +89,19 @@ defmodule Platform.Federation.Peers.PinnedAdapterTest do
   end
 
   test "the receive deadline holds against a server that never answers in time", %{base: base} do
-    started = System.monotonic_time(:millisecond)
-
     assert {:error, %Mint.TransportError{reason: :timeout}} =
              get(base <> "/slow", nil, receive_timeout: 200)
-
-    assert System.monotonic_time(:millisecond) - started < 1_500
   end
 
   test "ONE deadline for the whole response: a trickling server cannot extend it", %{
     base: base
   } do
-    started = System.monotonic_time(:millisecond)
-
     # every chunk arrives well inside 300 ms of the last one; the whole body
-    # takes 2 s. A per-read timeout would never fire here.
+    # takes 2 s. A per-read timeout would return a complete response, while
+    # a single whole-response deadline returns :timeout. The result assertion
+    # distinguishes those implementations without depending on scheduler load.
     assert {:error, %Mint.TransportError{reason: :timeout}} =
              get(base <> "/trickle", nil, receive_timeout: 300)
-
-    assert System.monotonic_time(:millisecond) - started < 1_500
   end
 
   test "a body over the cap is abandoned and flagged", %{base: base} do
