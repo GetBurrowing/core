@@ -190,6 +190,12 @@ defmodule Platform.Access.TasksScopeTest do
       board = board_ids(Tasks.list_by_status(access_scope: s))
       assert MapSet.subset?(all_p, board) and MapSet.disjoint?(all_q, board)
 
+      # The scope-rail badge counts what the board shows, not what it hides.
+      root = Platform.Tenancy.root_org_slug()
+      unscoped = Tasks.count_by_scope()[root]
+      assert Tasks.count_by_scope(access_scope: scope(m))[root] == unscoped - MapSet.size(all_q)
+      assert Tasks.count_by_scope(access_scope: nil) == Tasks.count_by_scope()
+
       projects = ids(Tasks.list_projects_for_user(m, access_scope: s))
       assert ctx.p.id in projects
       refute ctx.q.id in projects

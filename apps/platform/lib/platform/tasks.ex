@@ -6827,12 +6827,19 @@ defmodule Platform.Tasks do
   Once `tasks.org_id` lands, swap the body for a `group_by(t.org_id)`
   aggregate joined to `orgs.slug`; the public return shape is already the
   one that query produces.
+
+  ## `:access_scope` (task 01a1386d-e528 stage 3)
+
+  Optional. Given, the total counts only the tasks the scope may
+  `tasks.read` (`scope_by/3`), so the rail badge cannot say how many hidden
+  tasks exist. Absent, the count is unchanged.
   """
-  @spec count_by_scope() :: %{String.t() => non_neg_integer()}
-  def count_by_scope do
+  @spec count_by_scope(keyword()) :: %{String.t() => non_neg_integer()}
+  def count_by_scope(opts \\ []) do
     total =
       Task
       |> where([t], is_nil(t.deleted_at))
+      |> maybe_scope_by(Keyword.get(opts, :access_scope), :task)
       |> Repo.aggregate(:count)
 
     counts =

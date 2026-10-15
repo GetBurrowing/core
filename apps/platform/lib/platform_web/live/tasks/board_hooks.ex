@@ -243,8 +243,10 @@ defmodule PlatformWeb.Tasks.BoardHooks do
     # Recompute the scope-rail counts whenever the board refreshes so the
     # rail badges stay in sync with project/epic filter changes and PubSub
     # board events.
-    |> assign(:scope_counts, Tasks.count_by_scope())
-    |> assign(:scope_counts_db, Tasks.count_by_scope())
+    # `:access_scope` (task 01a1386d-e528 stage 3): a badge counting hidden
+    # tasks would report how many a deny removed.
+    |> assign(:scope_counts, Tasks.count_by_scope(access_scope: access_scope(socket)))
+    |> assign(:scope_counts_db, Tasks.count_by_scope(access_scope: access_scope(socket)))
     # The all-tasks bucket's key (task 01a116de stage 3): the root org's slug
     # from config or its row, read once per LiveView, never a literal.
     |> assign_new(:root_org_slug, fn -> Platform.Tenancy.root_org_slug() end)
