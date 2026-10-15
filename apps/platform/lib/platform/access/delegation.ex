@@ -204,6 +204,7 @@ defmodule Platform.Access.Delegation do
 
   defp has_manager?(resource), do: Enum.any?(candidates(resource), &manages?(&1, resource))
 
+  defp manages?(user, {:org, id}), do: Access.can?(Scope.for_user(user), @manage, id)
   defp manages?(user, resource), do: Access.can?(Scope.for_user(user), @manage, resource)
 
   defp managed_resource({type, id} = resource) when is_atom(type) and is_binary(id),
@@ -258,6 +259,8 @@ defmodule Platform.Access.Delegation do
   # R's owning org, derived exactly as `Platform.Access.Grants` derives a
   # grant's `org_id`: the project's, the space's, the canvas's space's, the
   # node's, falling back to the install's root org when that is NULL.
+  defp resource_org_id({:org, id}), do: id
+
   defp resource_org_id({:project, id}),
     do: Repo.one(from(p in Project, where: p.id == ^id, select: p.org_id)) || root_org_id()
 
