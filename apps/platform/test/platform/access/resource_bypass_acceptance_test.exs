@@ -26,7 +26,6 @@ defmodule Platform.Access.ResourceBypassAcceptanceTest do
   alias Platform.Org.Wiki.Search
   alias Platform.Repo
   alias Platform.Tasks
-  alias Platform.Chat.AttentionRouter
   alias PlatformWeb.ChatLive
   alias PlatformWeb.ChatLive.CanvasHooks
 
