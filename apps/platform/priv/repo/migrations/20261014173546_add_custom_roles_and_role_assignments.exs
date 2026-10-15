@@ -25,7 +25,9 @@ defmodule Platform.Repo.Migrations.AddCustomRolesAndRoleAssignments do
   EXPRESSION`). This migration does NOT: the base role stays the generated
   column, and extra roles are additive assignment rows. The 13 membership
   writers stay drift-free, and with zero assignment rows every Scope is the
-  one member 2 and 3 built. ADR 0058 § Built-in roles records this choice.
+  one member 2 and 3 built.
+  `0058-rbac-v2-roles-scopes-and-agent-capping.md § Built-in roles` records
+  this choice.
 
   ## Nothing existing changes meaning
 
