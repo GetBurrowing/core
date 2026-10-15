@@ -265,7 +265,12 @@ defmodule Platform.Access.ResourceBypassAcceptanceTest do
 
       task =
         task
-        |> Ecto.Changeset.change(%{phase_assignees: %{"execution" => entry}})
+        |> Ecto.Changeset.change(%{
+          status: "in_progress",
+          assignee_id: linked.id,
+          assignee_type: "agent",
+          phase_assignees: %{"planning" => entry, "execution" => entry}
+        })
         |> Repo.update!()
 
       assert {:ok, _} = Platform.Orchestration.PhaseRuntime.resolve(task)
@@ -352,8 +357,18 @@ defmodule Platform.Access.ResourceBypassAcceptanceTest do
           resource: {:space, ctx.a.id}
         })
 
+      {:ok, _} =
+        Grants.deny(%{
+          principal: {:user, ctx.int.id},
+          permission: "canvas.read",
+          resource: {:canvas, canvas.id}
+        })
+
       denied_scope = Scope.for_user(ctx.int)
       refute ctx.a.id in ChatLive.presence_subscribe_space_ids([ctx.a], ctx.int.id, denied_scope)
+
+      denied_socket = %{socket | assigns: %{socket.assigns | access_scope: denied_scope}}
+      assert CanvasHooks.find(denied_socket, canvas.id) == nil
       no_marker!(Chat.search_canvases([ctx.a.id], marker, access_scope: denied_scope), marker)
 
       after_ids =
@@ -376,7 +391,12 @@ defmodule Platform.Access.ResourceBypassAcceptanceTest do
       assert {:ok, %{id: id}} = Meetings.fetch_meeting_for_user(ctx.int, meeting.slug)
       assert id == meeting.id
 
-      deny!(ctx.int, "chat.read", ctx.q)
+      {:ok, _} =
+        Grants.deny(%{
+          principal: {:user, ctx.int.id},
+          permission: "chat.read",
+          resource: {:space, meeting.chat_space_id}
+        })
       denied = Meetings.fetch_meeting_for_user(ctx.int, meeting.slug)
       assert denied == {:error, :not_found}
       no_marker!(denied, marker)
