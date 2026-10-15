@@ -172,8 +172,14 @@ defmodule Platform.Access.QueryTest do
     Repo.insert!(%Canvas{space_id: space.id, created_by: author.id, title: "q canvas"})
   end
 
-  defp attach!(task, canvas),
-    do: Repo.insert!(%CanvasAttachment{task_id: task.id, canvas_id: canvas.id})
+  defp attach!(task, canvas) do
+    Repo.insert!(%CanvasAttachment{
+      task_id: task.id,
+      canvas_id: canvas.id,
+      attached_by_kind: "user",
+      attached_by_id: Ecto.UUID.generate()
+    })
+  end
 
   defp ok!({:ok, value}), do: value
 
