@@ -176,8 +176,7 @@ defmodule Platform.Experiments.Guardrails do
 
   A guardrail save is a human experiments write, so it re-checks
   `Platform.Access.authorize_install/1` and returns `{:error, :unauthorized}`
-  for anyone else, writing nothing
-  (`0058-rbac-v2-roles-scopes-and-agent-capping.md § Root-admin carve-outs`).
+  for anyone else, writing nothing (ADR 0058, "Root-admin carve-outs").
   """
   @spec save(Ecto.UUID.t() | nil, map(), User.t()) ::
           {:ok, Guardrail.t()} | {:error, Ecto.Changeset.t() | :unauthorized}

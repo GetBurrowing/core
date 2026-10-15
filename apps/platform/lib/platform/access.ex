@@ -130,8 +130,8 @@ defmodule Platform.Access do
   member 2's role-rule set `permitted_ids/2` is `:all` (task `01a1386d-fb6e`
   stage 2). For data with no resource dimension (pipeline health, prompt
   templates), so a grantee whose allow names one project cannot read or write
-  install-wide data (`0058-rbac-v2-roles-scopes-and-agent-capping.md
-  § Root-admin carve-outs`, "Pipeline moves into Tasks").
+  install-wide data ("Pipeline moves into Tasks" in
+  `0058-rbac-v2-roles-scopes-and-agent-capping.md § Root-admin carve-outs`).
 
   Why the role-rule set and not `permitted/3`: an allow grant always names one
   resource, so it can never make a permission install-wide, and a deny names

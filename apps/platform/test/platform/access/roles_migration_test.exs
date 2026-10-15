@@ -52,17 +52,6 @@ defmodule Platform.Access.RolesMigrationTest do
   @grants_version 20_261_014_172_224
   @grants_module Platform.Repo.Migrations.CreateAccessGrants
 
-  setup do
-    [path] =
-      Path.wildcard(
-        Path.join(:code.priv_dir(:platform), "repo/migrations/#{@grants_version}_*.exs")
-      )
-
-    unless Code.ensure_loaded?(@grants_module), do: Code.require_file(path)
-    :ok = Ecto.Migrator.down(Repo, @grants_version, @grants_module, @opts)
-    :ok
-  end
-
   defp up! do
     Repo.query!("DELETE FROM schema_migrations WHERE version = $1", [@migration_version])
     :ok = Ecto.Migrator.up(Repo, @migration_version, @migration_module, @opts)
@@ -141,6 +130,21 @@ defmodule Platform.Access.RolesMigrationTest do
     }
 
     %{org_id: org_id, seeded: seeded}
+  end
+
+  # Drop member 3's `access_grants` AFTER the fixtures above: `tenant_org_id/1`
+  # creates its org through `Tenancy.create_org/2`, whose root-admin re-check
+  # is `Platform.Access.authorize_install/1` (task 01a1386d-fb6e stage 2) and
+  # builds a Scope, which reads `access_grants`.
+  setup do
+    [path] =
+      Path.wildcard(
+        Path.join(:code.priv_dir(:platform), "repo/migrations/#{@grants_version}_*.exs")
+      )
+
+    unless Code.ensure_loaded?(@grants_module), do: Code.require_file(path)
+    :ok = Ecto.Migrator.down(Repo, @grants_version, @grants_module, @opts)
+    :ok
   end
 
   defp assert_mapped(seeded) do
