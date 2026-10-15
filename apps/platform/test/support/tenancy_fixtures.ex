@@ -96,12 +96,19 @@ defmodule Platform.TenancyFixtures do
     end
   end
 
-  # `Tenancy.create_org/2` is Acme-admin-only (see
-  # `Platform.Tenancy.Lifecycle`) — there is no system/unauthenticated path.
-  # A throwaway admin, scoped to whichever org `acme_org_id/0` resolves as
-  # root, is cheaper than threading a real admin actor through every
-  # `tenant_org_id/1` call site.
-  defp root_admin! do
+  @doc """
+  Insert a user with an internal `admin` membership in this install's root
+  org: a root admin.
+
+  `Tenancy.create_org/2` is Acme-admin-only (see `Platform.Tenancy.Lifecycle`)
+  — there is no system/unauthenticated path — so `tenant_org_id/1` uses one.
+  Public since task 01a1386d-fb6e stage 2: install-level writes
+  (`Platform.Access.authorize_install/1`) need a HUMAN actor that is allowed
+  to make them, and an unsaved `%User{id: Ecto.UUID.generate()}` holds no
+  membership and is refused.
+  """
+  @spec root_admin!() :: User.t()
+  def root_admin! do
     n = System.unique_integer([:positive])
 
     user =
@@ -141,32 +148,6 @@ defmodule Platform.TenancyFixtures do
       |> Tenancy.OrgMembership.changeset(%{user_id: user.id, org_id: org.id, role: "member"})
       |> Platform.Repo.insert!()
     end)
-
-    user
-  end
-
-  @doc """
-  Insert a user with an internal `admin` membership in this install's root
-  org: a root admin, the actor install-level writes require
-  (`Platform.Access.authorize_install/1`, task 01a1386d-fb6e stage 2). Use it
-  wherever a test needs a HUMAN actor that is allowed to make such a write;
-  an unsaved `%User{id: Ecto.UUID.generate()}` holds no membership and is
-  refused.
-  """
-  @spec root_admin!() :: User.t()
-  def root_admin! do
-    n = System.unique_integer([:positive, :monotonic])
-
-    user =
-      Repo.insert!(%User{
-        email: "root-admin-#{n}@example.com",
-        name: "Root Admin #{n}",
-        oidc_sub: "oidc-root-admin-#{n}"
-      })
-
-    %OrgMembership{}
-    |> OrgMembership.changeset(%{user_id: user.id, org_id: acme_org_id(), role: "admin"})
-    |> Repo.insert!()
 
     user
   end

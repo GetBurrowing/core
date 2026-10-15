@@ -300,7 +300,7 @@ defmodule Platform.Experiments.Promotion do
   end
 
   defp promote_unchecked(%Experiment{surface_key: key} = experiment, opts)
-      when is_binary(key) and key != @prompt_surface do
+       when is_binary(key) and key != @prompt_surface do
     trigger = Keyword.get(opts, :trigger, :manual)
 
     with :ok <- check_trigger(experiment, trigger),

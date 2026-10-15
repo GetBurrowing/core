@@ -66,7 +66,9 @@ defmodule Platform.Access.ContextRecheckTest do
 
     grantee = member!(child)
     {:ok, _} = Grants.grant(%{principal: grantee, permission: "tasks.manage", resource: project})
-    {:ok, _} = Grants.grant(%{principal: grantee, permission: "prompts.manage", resource: project})
+
+    {:ok, _} =
+      Grants.grant(%{principal: grantee, permission: "prompts.manage", resource: project})
 
     actors = %{
       root_admin: root_admin!(),
@@ -93,7 +95,12 @@ defmodule Platform.Access.ContextRecheckTest do
 
   defp membership!(user, org_id, role, external \\ false) do
     %OrgMembership{}
-    |> OrgMembership.changeset(%{user_id: user.id, org_id: org_id, role: role, external: external})
+    |> OrgMembership.changeset(%{
+      user_id: user.id,
+      org_id: org_id,
+      role: role,
+      external: external
+    })
     |> Repo.insert!()
 
     user
@@ -310,21 +317,24 @@ defmodule Platform.Access.ContextRecheckTest do
          s = slug()
          Lifecycle.create_org(actor, %{name: s, slug: s})
        end, &match?({:ok, _}, &1)},
-      {"SignInAdmin.disable/2",
-       fn actor ->
-         enable_sign_in_admin!()
-         SignInAdmin.disable(actor, actor.id)
-       end,
-       # The root admin passes authorization and is stopped by the next
-       # guard (`not_self`), before any pocket-id call.
-       &(&1 == {:error, :self})}
+      {
+        "SignInAdmin.disable/2",
+        fn actor ->
+          enable_sign_in_admin!()
+          SignInAdmin.disable(actor, actor.id)
+        end,
+        # The root admin passes authorization and is stopped by the next
+        # guard (`not_self`), before any pocket-id call.
+        &(&1 == {:error, :self})
+      }
     ]
   end
 
   defp slug, do: "ctx-org-#{System.unique_integer([:positive])}"
 
   describe "install-level contexts re-check through Access.authorize_install/1" do
-    test "the root admin is permitted and every other class is refused", %{actors: actors} = ctx do
+    test "the root admin is permitted and every other class is refused",
+         %{actors: actors} = ctx do
       for {label, call, permitted?} <- install_level_calls(ctx) do
         result = call.(actors.root_admin)
         assert permitted?.(result), "#{label}: root admin got #{inspect(result)}"
@@ -367,6 +377,7 @@ defmodule Platform.Access.ContextRecheckTest do
 
     test "an unsaved %User{} with no membership is refused, as a stranger" do
       experiment = draft!()
+
       assert Experiments.start(experiment, %User{id: Ecto.UUID.generate()}) ==
                {:error, :unauthorized}
 
@@ -448,11 +459,13 @@ defmodule Platform.Access.ContextRecheckTest do
         {"Guardrails.save/3",
          fn actor -> Guardrails.save(tenant_org_id(slug()), %{max_live: 2}, actor) end,
          &match?({:ok, _}, &1)},
-        {"Promotion.promote/2 with :actor",
-         fn actor -> Promotion.promote(running!(), actor: actor, variant: "nope") end,
-         # The root admin passes authorization and is stopped by the
-         # promotion's own guards.
-         &(&1 != {:error, :unauthorized})}
+        {
+          "Promotion.promote/2 with :actor",
+          fn actor -> Promotion.promote(running!(), actor: actor, variant: "nope") end,
+          # The root admin passes authorization and is stopped by the
+          # promotion's own guards.
+          &(&1 != {:error, :unauthorized})
+        }
       ]
 
       for {label, call, permitted?} <- calls do
@@ -510,9 +523,12 @@ defmodule Platform.Access.ContextRecheckTest do
     end
 
     test "create_template/2 is checked the same way", %{actors: actors} do
-      attrs = fn -> %{slug: "ctx.create.v#{System.unique_integer([:positive])}", name: "n", content: "c"} end
+      attrs = fn ->
+        %{slug: "ctx.create.v#{System.unique_integer([:positive])}", name: "n", content: "c"}
+      end
 
-      assert {:ok, %PromptTemplate{}} = PromptTemplates.create_template(attrs.(), actors.root_admin)
+      assert {:ok, %PromptTemplate{}} =
+               PromptTemplates.create_template(attrs.(), actors.root_admin)
 
       assert PromptTemplates.create_template(attrs.(), actors.sub_org_admin) ==
                {:error, :unauthorized}

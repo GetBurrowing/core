@@ -179,7 +179,6 @@ defmodule Platform.Tasks.PipelineHealth do
     end
   end
 
-
   @doc """
   The cohort for a window: how many tasks reached `done`, and how many of
   those can actually be decomposed.

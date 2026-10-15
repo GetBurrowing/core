@@ -340,6 +340,7 @@ defmodule PlatformWeb.ExperimentsLive do
       end)
     end)
   end
+
   def handle_event("approve_launch", params, socket) do
     admin_only(socket, fn ->
       with_user(socket, fn user ->
@@ -505,34 +506,34 @@ defmodule PlatformWeb.ExperimentsLive do
   # install-level re-check (`Experiments.add_variant/3`, task 01a1386d-fb6e
   # stage 2).
   defp add_variant(socket, params, user) do
-      experiment = socket.assigns.experiment
+    experiment = socket.assigns.experiment
 
-      with :ok <- variant_addable(experiment),
-           surface when not is_nil(surface) <- Surfaces.get(experiment.surface_key),
-           {:ok, slug} <- variant_slug(params["slug"]),
-           {:ok, raw} <- decode_payload(params["payload"]),
-           {:ok, payload} <- validate_payload(surface, raw),
-           {:ok, weight} <- parse_weight(params["weight"]),
-           {:ok, _variant} <-
-             Experiments.add_variant(
-               experiment,
-               %{"slug" => slug, "payload" => payload, "weight" => weight},
-               user
-             ) do
-        {:noreply, socket |> put_flash(:info, "Variant added.") |> load_experiment(experiment)}
-      else
-        nil ->
-          {:noreply, put_flash(socket, :error, "This experiment's surface is unknown.")}
+    with :ok <- variant_addable(experiment),
+         surface when not is_nil(surface) <- Surfaces.get(experiment.surface_key),
+         {:ok, slug} <- variant_slug(params["slug"]),
+         {:ok, raw} <- decode_payload(params["payload"]),
+         {:ok, payload} <- validate_payload(surface, raw),
+         {:ok, weight} <- parse_weight(params["weight"]),
+         {:ok, _variant} <-
+           Experiments.add_variant(
+             experiment,
+             %{"slug" => slug, "payload" => payload, "weight" => weight},
+             user
+           ) do
+      {:noreply, socket |> put_flash(:info, "Variant added.") |> load_experiment(experiment)}
+    else
+      nil ->
+        {:noreply, put_flash(socket, :error, "This experiment's surface is unknown.")}
 
-        {:error, %Ecto.Changeset{} = cs} ->
-          {:noreply, put_flash(socket, :error, error_message(cs))}
+      {:error, %Ecto.Changeset{} = cs} ->
+        {:noreply, put_flash(socket, :error, error_message(cs))}
 
-        {:error, :unauthorized} ->
-          {:noreply, put_flash(socket, :error, @refused_message)}
+      {:error, :unauthorized} ->
+        {:noreply, put_flash(socket, :error, @refused_message)}
 
-        {:error, message} ->
-          {:noreply, put_flash(socket, :error, message)}
-      end
+      {:error, message} ->
+        {:noreply, put_flash(socket, :error, message)}
+    end
   end
 
   # The create handler's body (`handle_event("create_experiment", …)`), with
