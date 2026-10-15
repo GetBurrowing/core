@@ -18,8 +18,16 @@ defmodule Platform.Access.IdpGroupRolesTest do
     watch_admission()
     {:ok, finance} = Roles.create_custom_role(root, %{name: "Finance"})
     {:ok, engineering} = Roles.create_custom_role(root, %{name: "Engineering"})
-    {:ok, _} = IdpGroupRoles.create(%{group_value: " Finance-Team ", role_key: finance.key, org_id: root.id})
-    {:ok, _} = IdpGroupRoles.create(%{group_value: "eng-team", role_key: engineering.key, org_id: root.id})
+
+    {:ok, _} =
+      IdpGroupRoles.create(%{
+        group_value: " Finance-Team ",
+        role_key: finance.key,
+        org_id: root.id
+      })
+
+    {:ok, _} =
+      IdpGroupRoles.create(%{group_value: "eng-team", role_key: engineering.key, org_id: root.id})
 
     conn = callback(conn, ["FINANCE-TEAM", "eng-team"])
     assert redirected_to(conn, 302) == "/"
@@ -45,7 +53,10 @@ defmodule Platform.Access.IdpGroupRolesTest do
 
   test "absent groups claim leaves existing IdP assignments untouched", %{conn: conn, root: root} do
     {:ok, role} = Roles.create_custom_role(root, %{name: "ClaimPresent"})
-    {:ok, _} = IdpGroupRoles.create(%{group_value: "claim-present", role_key: role.key, org_id: root.id})
+
+    {:ok, _} =
+      IdpGroupRoles.create(%{group_value: "claim-present", role_key: role.key, org_id: root.id})
+
     conn = callback(conn, ["claim-present"])
     user_id = get_session(conn, :current_user_id)
     assert assignments(user_id, "idp") == MapSet.new([role.key])
@@ -57,9 +68,15 @@ defmodule Platform.Access.IdpGroupRolesTest do
     assert assignment_ids(user_id) == before
   end
 
-  test "implicit sxi-external and stored guest groups hold without assigning custom roles", %{conn: conn, root: root} do
+  test "implicit sxi-external and stored guest groups hold without assigning custom roles", %{
+    conn: conn,
+    root: root
+  } do
     {:ok, role} = Roles.create_custom_role(root, %{name: "UnappliedGuestRole"})
-    {:ok, _} = IdpGroupRoles.create(%{group_value: "sxi-external", role_key: role.key, org_id: root.id})
+
+    {:ok, _} =
+      IdpGroupRoles.create(%{group_value: "sxi-external", role_key: role.key, org_id: root.id})
+
     assert IdpGroupRoles.guest_group?([" SXI-EXTERNAL "])
 
     conn = callback(conn, ["sxi-external"])
@@ -83,7 +100,11 @@ defmodule Platform.Access.IdpGroupRolesTest do
     end
 
     assert {:error, :guest_has_no_org} =
-             IdpGroupRoles.create(%{group_value: "guest-with-org", role_key: "guest", org_id: root.id})
+             IdpGroupRoles.create(%{
+               group_value: "guest-with-org",
+               role_key: "guest",
+               org_id: root.id
+             })
 
     assert {:error, :implicit_mapping} =
              IdpGroupRoles.create(%{group_value: "sxi-external", role_key: "guest"})
@@ -97,9 +118,19 @@ defmodule Platform.Access.IdpGroupRolesTest do
   test "pre-staged sxi-external login is full but its other mapped roles are not synced",
        %{conn: conn, root: root} do
     {:ok, role} = Roles.create_custom_role(root, %{name: "GuestOtherGroup"})
-    {:ok, _} = IdpGroupRoles.create(%{group_value: "other-group", role_key: role.key, org_id: root.id})
+
+    {:ok, _} =
+      IdpGroupRoles.create(%{group_value: "other-group", role_key: role.key, org_id: root.id})
+
     n = System.unique_integer([:positive])
-    {:ok, space} = Chat.create_space(%{kind: "channel", name: "Guest #{n}", slug: "guest-#{n}", org_id: root.id})
+
+    {:ok, space} =
+      Chat.create_space(%{
+        kind: "channel",
+        name: "Guest #{n}",
+        slug: "guest-#{n}",
+        org_id: root.id
+      })
 
     {:ok, _} =
       ExternalGrants.create_grant(%{
@@ -152,7 +183,12 @@ defmodule Platform.Access.IdpGroupRolesTest do
   end
 
   defp callback(conn, groups) do
-    claims = %{"sub" => "idp-role-subject", "email" => "idp-roles@example.com", "name" => "IdP Roles"}
+    claims = %{
+      "sub" => "idp-role-subject",
+      "email" => "idp-roles@example.com",
+      "name" => "IdP Roles"
+    }
+
     claims = if groups == :absent, do: claims, else: Map.put(claims, "groups", groups)
 
     Application.put_env(:platform, :oidc_mock_response, {

@@ -125,7 +125,8 @@ defmodule Platform.Accounts.ExternalAdmission do
           {:error, reason} -> {:error, reason}
         end
 
-      {:error, _reason} = error -> error
+      {:error, _reason} = error ->
+        error
     end
   end
 

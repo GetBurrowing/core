@@ -32,11 +32,21 @@ defmodule Platform.Access.IdpGroupRoles do
     group = Ecto.Changeset.get_field(changeset, :group_value)
 
     cond do
-      key in ["admin", "member"] -> {:error, :builtin_role}
-      key == "guest" and not is_nil(org_id) -> {:error, :guest_has_no_org}
-      key == "guest" and group == normalize(OIDC.external_group()) -> {:error, :implicit_mapping}
-      key == "guest" -> Repo.insert(changeset)
-      not is_binary(key) -> Repo.insert(changeset)
+      key in ["admin", "member"] ->
+        {:error, :builtin_role}
+
+      key == "guest" and not is_nil(org_id) ->
+        {:error, :guest_has_no_org}
+
+      key == "guest" and group == normalize(OIDC.external_group()) ->
+        {:error, :implicit_mapping}
+
+      key == "guest" ->
+        Repo.insert(changeset)
+
+      not is_binary(key) ->
+        Repo.insert(changeset)
+
       true ->
         case Roles.get_role(key) do
           %Role{builtin: false, org_id: ^org_id} when is_binary(org_id) ->
@@ -124,7 +134,12 @@ defmodule Platform.Access.IdpGroupRoles do
         desired
         |> MapSet.difference(existing_keys)
         |> Enum.count(fn {org_id, key} ->
-          case Roles.assign(%{principal: {:user, user_id}, role: key, org_id: org_id, source: "idp"}) do
+          case Roles.assign(%{
+                 principal: {:user, user_id},
+                 role: key,
+                 org_id: org_id,
+                 source: "idp"
+               }) do
             {:ok, _} -> true
             {:error, reason} -> Repo.rollback(reason)
           end
@@ -135,7 +150,10 @@ defmodule Platform.Access.IdpGroupRoles do
   end
 
   defp duplicate_implicit?(mapping, implicit) do
-    Enum.any?(implicit, &(&1.group_value == mapping.group_value and &1.role_key == mapping.role_key))
+    Enum.any?(
+      implicit,
+      &(&1.group_value == mapping.group_value and &1.role_key == mapping.role_key)
+    )
   end
 
   defp normalize(value) when is_binary(value) do

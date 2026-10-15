@@ -18,7 +18,8 @@ defmodule Platform.Repo.Migrations.CreateAccessIdpGroupRoles do
 
     create(
       constraint(:access_idp_group_roles, :access_idp_group_roles_guest_org_check,
-        check: "(role_key = 'guest' AND org_id IS NULL) OR (role_key <> 'guest' AND org_id IS NOT NULL)"
+        check:
+          "(role_key = 'guest' AND org_id IS NULL) OR (role_key <> 'guest' AND org_id IS NOT NULL)"
       )
     )
 
