@@ -302,11 +302,12 @@ defmodule Platform.SignInAdmin do
   end
 
   defp demote_unless_last_admin(user, actor) do
+    root_org_id = Tenancy.get_root_org().id
     memberships = Tenancy.list_user_memberships(user)
 
     last_admin_org =
       Enum.find(memberships, fn membership ->
-        membership.role == "admin" and
+        membership.org_id == root_org_id and membership.role == "admin" and
           case Delegation.managers({:org, membership.org_id}) do
             [%{id: id}] -> id == user.id
             _ -> false
