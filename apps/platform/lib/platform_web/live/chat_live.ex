@@ -379,8 +379,13 @@ defmodule PlatformWeb.ChatLive do
     {external_scope, external?} =
       PlatformWeb.ChatLive.ReadScope.resolve(access_scope, user_id, embedded?)
 
-    channels =
+    readable_channels =
       if embedded?, do: [], else: Chat.list_spaces(kind: "channel", scope: external_scope)
+
+    listed_channels =
+      if embedded?,
+        do: [],
+        else: Chat.list_spaces(kind: "channel", scope: channel_listing_scope(external?, user_id))
 
     # Archived channels (task 019e95ea stage 2) feed ONLY the sidebar's
     # collapsed "Archived" group — they are deliberately kept out of
@@ -392,7 +397,16 @@ defmodule PlatformWeb.ChatLive do
         do: [],
         else: Chat.list_spaces(kind: "channel", archived: true)
 
-    restricted_channel_ids = restricted_channel_ids(socket, channels, archived_channels, user_id)
+    restricted_channel_ids =
+      restricted_channel_ids(
+        socket,
+        readable_channels ++ listed_channels,
+        archived_channels,
+        user_id
+      )
+
+    channels =
+      include_restricted_channels(readable_channels, listed_channels, restricted_channel_ids)
 
     # `dm_conversations_for/3` and not the socket-shaped `rail_dm_conversations/1`:
     # none of these three values is in `socket.assigns` yet — they are assigned
@@ -1129,14 +1143,24 @@ defmodule PlatformWeb.ChatLive do
       # the SAME filtered rail rather than re-broadening it workspace-wide.
       # Internal / nil scope is pass-through, so the internal path is unchanged.
       scope = socket.assigns.external_scope
-      channels = Chat.list_spaces(kind: "channel", scope: scope)
+      readable_channels = Chat.list_spaces(kind: "channel", scope: scope)
+
+      listed_channels =
+        Chat.list_spaces(
+          kind: "channel",
+          scope: channel_listing_scope(socket.assigns.external?, socket.assigns.user_id)
+        )
 
       archived_channels =
         if socket.assigns.external?,
           do: [],
           else: Chat.list_spaces(kind: "channel", archived: true)
 
-      restricted_channel_ids = restricted_channel_ids(socket, channels, archived_channels)
+      restricted_channel_ids =
+        restricted_channel_ids(socket, readable_channels ++ listed_channels, archived_channels)
+
+      channels =
+        include_restricted_channels(readable_channels, listed_channels, restricted_channel_ids)
 
       dm_convos = rail_dm_conversations(socket)
 
@@ -4370,6 +4394,17 @@ defmodule PlatformWeb.ChatLive do
   defp restricted_channel_ids(socket, channels, archived_channels, user_id \\ nil) do
     ids = Enum.map(channels ++ archived_channels, & &1.id)
     Access.restricted_space_ids(access_scope(socket, user_id), ids)
+  end
+
+  defp channel_listing_scope(false, _user_id), do: nil
+
+  defp channel_listing_scope(true, user_id),
+    do: Platform.Chat.ExternalScope.for_user(user_id)
+
+  defp include_restricted_channels(readable, listed, restricted_ids) do
+    (readable ++ Enum.filter(listed, &MapSet.member?(restricted_ids, &1.id)))
+    |> Enum.uniq_by(& &1.id)
+    |> Enum.sort_by(& &1.inserted_at, DateTime)
   end
 
   defp restricted_space_denied?(socket, %{id: id, kind: "channel"}) do

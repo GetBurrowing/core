@@ -43,14 +43,12 @@ defmodule PlatformWeb.ChatLiveRestrictedChannelTest do
     {:ok, member_view, html} = live(member_conn, ~p"/chat/#{lobby.id}")
 
     section_ids =
-      Regex.scan(
-        ~r/phx-click="toggle_section_collapsed"\s+phx-value-section_id="([^"]+)"\s+phx-value-collapsed="false"/,
-        html
-      )
+      html
+      |> Floki.parse_document!()
+      |> Floki.find(~s(button[phx-click="toggle_section_collapsed"][phx-value-collapsed="false"]))
+      |> Enum.flat_map(&Floki.attribute(&1, "phx-value-section_id"))
 
-    assert section_ids != []
-
-    Enum.each(section_ids, fn [_, section_id] ->
+    Enum.each(section_ids, fn section_id ->
       render_click(member_view, "toggle_section_collapsed", %{
         "section_id" => section_id,
         "collapsed" => "false"
