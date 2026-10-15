@@ -67,7 +67,7 @@ defmodule Platform.Access.BypassPubsubPresenceTest do
     }
 
     ids =
-      Chat.search_canvases([ctx.a.id], "ZQX-BYPASS-CANVAS", access_scope: scope)
+      Chat.search_canvases([ctx.a.id], "ZQX-BYPASS", access_scope: scope)
       |> Enum.map(& &1.canvas.id)
       |> MapSet.new()
 
@@ -81,7 +81,7 @@ defmodule Platform.Access.BypassPubsubPresenceTest do
     socket = %Socket{socket | assigns: %{socket.assigns | access_scope: scope}}
 
     assert Enum.map(
-             Chat.search_canvases([ctx.a.id], "ZQX-BYPASS-CANVAS", access_scope: scope),
+             Chat.search_canvases([ctx.a.id], "ZQX-BYPASS", access_scope: scope),
              & &1.canvas.id
            ) == [sibling.id]
 

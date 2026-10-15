@@ -490,10 +490,10 @@ defmodule Platform.Chat.Attachments.ToolHandlers do
     end
   end
 
-  defp fetch_attachment_not_found(id) do
+  defp fetch_attachment_not_found(_id) do
     {:error,
      %{
-       error: "attachment: not found: #{inspect(id)}",
+       error: "attachment: not found",
        recoverable: false
      }}
   end

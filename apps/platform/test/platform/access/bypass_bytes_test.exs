@@ -387,7 +387,7 @@ defmodule Platform.Access.BypassBytesTest do
       random = call(ctx.a, "attachment.get_inline", %{"attachment_id" => random_id})
       denied = call(ctx.a, "attachment.get_inline", %{"attachment_id" => ctx.att.id})
 
-      assert normalize(denied, ctx.att.id) == normalize(random, random_id)
+      assert denied == random
       refute leaks?(denied)
 
       assert {:ok, %{data_base64: p64}} =
@@ -401,7 +401,7 @@ defmodule Platform.Access.BypassBytesTest do
 
       deny!({:agent, ctx.a.agent_id}, "canvas.read", ctx.k)
 
-      assert {:error, %{error: "attachment: not found: " <> _}} =
+      assert {:error, %{error: "attachment: not found"}} =
                call(ctx.a, "attachment.get_inline", %{"attachment_id" => ctx.att_k.id})
 
       assert {:ok, _} = call(ctx.a, "attachment.get_inline", %{"attachment_id" => ctx.att.id})
@@ -526,7 +526,7 @@ defmodule Platform.Access.BypassBytesTest do
         random = call(ctx.a, tool, Map.put(args, key, random_id))
         denied = call(ctx.a, tool, args)
         assert {:error, _} = denied
-        assert normalize(denied, id) == normalize(random, random_id), tool
+        assert denied == random, "#{tool} (#{id})"
         refute leaks?(denied), tool
       end
 

@@ -12920,8 +12920,8 @@ defmodule Platform.Federation.ToolSurface do
   # ── Files tool helpers (ADR-0042 Stage 4) ───────────────────────────────
 
   # Loads a project for the file_list / file_get_text dispatch. Surfaces a
-  # not-found envelope keyed to the calling tool so the caller learns
-  # which arg was bad.
+  # not-found envelope keyed to the calling tool. Do not echo the id: a
+  # denied resource must have the same envelope as an unknown resource.
   defp fetch_project_for_files(project_id, tool) when is_binary(project_id) do
     case Platform.Tasks.get_project(project_id) do
       nil -> project_not_found_error(tool, project_id)
@@ -12992,10 +12992,10 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
-  defp project_not_found_error(tool, project_id) do
+  defp project_not_found_error(tool, _project_id) do
     {:error,
      %{
-       error: "#{tool}: project not found (#{project_id})",
+       error: "#{tool}: project not found",
        code: :not_found,
        recoverable: false,
        suggestion: "Confirm the project_id — list available projects via the platform UI."
@@ -13557,20 +13557,20 @@ defmodule Platform.Federation.ToolSurface do
     |> Enum.join()
   end
 
-  defp file_not_found_error(file_id) do
+  defp file_not_found_error(_file_id) do
     {:error,
      %{
-       error: "file_get_text: file not found (#{inspect(file_id)})",
+       error: "file_get_text: file not found",
        code: :not_found,
        recoverable: false,
        suggestion: "Confirm the file_id — use file_list to enumerate the project's files."
      }}
   end
 
-  defp file_metadata_not_found_error(file_id) do
+  defp file_metadata_not_found_error(_file_id) do
     {:error,
      %{
-       error: "file_get_metadata: file not found (#{inspect(file_id)})",
+       error: "file_get_metadata: file not found",
        code: :not_found,
        recoverable: false,
        suggestion: "Confirm the file_id — use file_list to enumerate the project's files."

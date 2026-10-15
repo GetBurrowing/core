@@ -3134,7 +3134,12 @@ defmodule Platform.Chat do
   def search_canvases(_space_ids, query, _opts) when not is_binary(query), do: []
 
   def search_canvases(space_ids, query, opts) when is_list(space_ids) do
-    trimmed_query = String.trim(query)
+    # An embedded hyphen is part of a canvas title, not websearch's negation
+    # operator. Keep a leading `-term` intact for callers using that syntax.
+    trimmed_query =
+      query
+      |> String.trim()
+      |> String.replace(~r/(?<=[[:alnum:]])-(?=[[:alnum:]])/u, " ")
 
     if space_ids == [] or trimmed_query == "" do
       []
