@@ -61,7 +61,8 @@ defmodule Platform.Access.DelegationLiveAcceptanceTest do
   describe "a project admin cannot grant outside their project" do
     test "Q is refused without rows and P succeeds" do
       org = org!()
-      pa = member!(user!("Project admin"), org, "guest")
+      pa = user!("Project admin")
+      assert {:ok, _} = Tenancy.mark_membership_external(%{user_id: pa.id, org_id: org.id})
       recipient = user!("Recipient")
       {:ok, p} = Tasks.create_project(%{name: "Allowed #{unique()}", org_id: org.id})
       {:ok, q} = Tasks.create_project(%{name: "Outside #{unique()}", org_id: org.id})
@@ -117,9 +118,26 @@ defmodule Platform.Access.DelegationLiveAcceptanceTest do
       assert {:ok, _} = Tenancy.mark_membership_external(%{user_id: guest.id, org_id: org.id})
       Tenancy.allow_dm(guest, org)
       n = unique()
-      {:ok, c} = Chat.create_space(%{name: "Acceptance C #{n}", slug: "accept-c-#{n}", kind: "channel", org_id: org.id})
-      {:ok, d} = Chat.create_space(%{name: "Acceptance D #{n}", slug: "accept-d-#{n}", kind: "channel", org_id: org.id})
-      assert {:ok, c_grant} = Grants.grant(%{principal: guest, permission: "chat.read", resource: c})
+
+      {:ok, c} =
+        Chat.create_space(%{
+          name: "Acceptance C #{n}",
+          slug: "accept-c-#{n}",
+          kind: "channel",
+          org_id: org.id
+        })
+
+      {:ok, d} =
+        Chat.create_space(%{
+          name: "Acceptance D #{n}",
+          slug: "accept-d-#{n}",
+          kind: "channel",
+          org_id: org.id
+        })
+
+      assert {:ok, c_grant} =
+               Grants.grant(%{principal: guest, permission: "chat.read", resource: c})
+
       assert {:ok, _} = Grants.grant(%{principal: guest, permission: "chat.read", resource: d})
 
       assert {:ok, _} =
@@ -153,27 +171,60 @@ defmodule Platform.Access.DelegationLiveAcceptanceTest do
       org = org!()
       user = user!("Grant holder")
       {:ok, project} = Tasks.create_project(%{name: "Undo #{unique()}", org_id: org.id})
-      assert {:ok, _} = Grants.grant(%{principal: user, permission: "tasks.read", resource: project})
+
+      assert {:ok, _} =
+               Grants.grant(%{principal: user, permission: "tasks.read", resource: project})
+
       before = snapshots(org)
 
       rows = [
-        %{principal_type: "user", principal_id: user.id, org_id: org.id,
-          permission: "tasks.read", resource_type: "project", resource_id: project.id,
-          effect: "deny"},
-        %{principal_type: "user", principal_id: user.id, org_id: org.id,
-          permission: "chat.read", resource_type: "project", resource_id: project.id,
-          effect: "allow"}
+        %{
+          principal_type: "user",
+          principal_id: user.id,
+          org_id: org.id,
+          permission: "tasks.read",
+          resource_type: "project",
+          resource_id: project.id,
+          effect: "deny"
+        },
+        %{
+          principal_type: "user",
+          principal_id: user.id,
+          org_id: org.id,
+          permission: "chat.read",
+          resource_type: "project",
+          resource_id: project.id,
+          effect: "allow"
+        }
       ]
 
-      query = from(g in Grant, where: g.org_id == ^org.id and g.principal_id == ^user.id and g.resource_id == ^project.id)
-      keys = Enum.map(rows, &Grant.tuple_key(Map.new(&1, fn {k, v} -> {Atom.to_string(k), v} end)))
+      query =
+        from(g in Grant,
+          where:
+            g.org_id == ^org.id and g.principal_id == ^user.id and g.resource_id == ^project.id
+        )
+
+      keys =
+        Enum.map(rows, &Grant.tuple_key(Map.new(&1, fn {k, v} -> {Atom.to_string(k), v} end)))
 
       assert {:ok, %{change: %Change{} = change}} =
-               Changes.commit(Scope.system(), "acceptance_multi", fn ->
-                 Repo.delete_all(query)
-                 inserted = Enum.map(rows, fn attrs -> %Grant{} |> Grant.changeset(attrs) |> Repo.insert!() end)
-                 {:ok, inserted}
-               end, query: query, keys: keys, org_id: org.id)
+               Changes.commit(
+                 Scope.system(),
+                 "grant",
+                 fn ->
+                   Repo.delete_all(query)
+
+                   inserted =
+                     Enum.map(rows, fn attrs ->
+                       %Grant{} |> Grant.changeset(attrs) |> Repo.insert!()
+                     end)
+
+                   {:ok, inserted}
+                 end,
+                 query: query,
+                 keys: keys,
+                 org_id: org.id
+               )
 
       refute snapshots(org) == before
       assert {:ok, %{change: %Change{}}} = Changes.undo(change.id, Scope.system())
