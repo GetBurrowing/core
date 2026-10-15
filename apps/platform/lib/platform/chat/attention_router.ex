@@ -460,6 +460,7 @@ defmodule Platform.Chat.AttentionRouter do
 
   defp execution_assignee_agent_id(%Space{kind: "execution"} = space) do
     with task_id when is_binary(task_id) <- execution_space_task_id(space),
+         true <- Platform.UUID.valid?(task_id),
          %TaskRecord{assignee_type: "agent", assignee_id: agent_id}
          when is_binary(agent_id) <- Repo.get(TaskRecord, task_id) do
       agent_id
