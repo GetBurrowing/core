@@ -13,6 +13,18 @@ defmodule Platform.Access.Role do
     * `name` — display name.
     * `builtin` — true for the three rows the migration seeds.
     * `permissions` — `%{permission => grant_rule}`.
+    * `org_id` — NULL on the built-in rows; the owning org of a custom role
+      (task `01a1386e-59d1` stage 1).
+
+  ## Custom roles
+
+  A custom role is a row with `builtin: false`, an `org_id` and the key
+  `"custom:" <> uuidv7` (minted by `Platform.Access.Roles`, never by a
+  caller). `custom_changeset/2` validates it: every permission must be
+  registered, none install-level or derived, and every rule one of `all`,
+  `membership_org` and `participant_spaces` (or a list of them).
+  `implicit_or_participant` is the built-in `member` role's kind admission
+  and is not offered to custom roles.
 
   ## Grant rules are data, never a resource id
 
@@ -47,6 +59,7 @@ defmodule Platform.Access.Role do
     field(:name, :string)
     field(:builtin, :boolean, default: false)
     field(:permissions, :map, default: %{})
+    belongs_to(:org, Platform.Tenancy.Org, type: :binary_id)
 
     timestamps(type: :utc_datetime_usec)
   end
@@ -58,6 +71,45 @@ defmodule Platform.Access.Role do
     |> validate_required([:key, :name])
     |> validate_permissions()
     |> unique_constraint(:key)
+  end
+
+  @custom_rules ~w(all membership_org participant_spaces)
+
+  @doc "The grant-rule values a custom role may use."
+  @spec custom_rules() :: [String.t()]
+  def custom_rules, do: @custom_rules
+
+  @doc """
+  Changeset for a CUSTOM role. `key`, `org_id` and `builtin: false` are set
+  by `Platform.Access.Roles`, never cast from caller attrs; only `name` and
+  `permissions` are cast.
+  """
+  def custom_changeset(role, attrs) do
+    role
+    |> cast(attrs, [:name, :permissions])
+    |> validate_required([:key, :name, :org_id])
+    |> validate_length(:name, min: 1, max: 120)
+    |> validate_change(:builtin, fn :builtin, builtin ->
+      if builtin, do: [builtin: "a custom role cannot be built-in"], else: []
+    end)
+    |> validate_permissions()
+    |> validate_custom_rules()
+    |> unique_constraint(:key)
+    |> unique_constraint(:name, name: :access_roles_org_name_index)
+    |> check_constraint(:org_id, name: :access_roles_custom_org_check)
+    |> foreign_key_constraint(:org_id)
+  end
+
+  defp validate_custom_rules(changeset) do
+    validate_change(changeset, :permissions, fn :permissions, permissions ->
+      Enum.flat_map(permissions, fn {permission, rule} ->
+        rules = if is_list(rule), do: rule, else: [rule]
+
+        if Enum.all?(rules, &(&1 in @custom_rules)),
+          do: [],
+          else: [permissions: "#{permission} has a rule a custom role may not use"]
+      end)
+    end)
   end
 
   @doc "Is `rule` a valid grant rule value (one rule, or a non-empty list of distinct rules)?"

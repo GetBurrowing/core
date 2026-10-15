@@ -52,6 +52,12 @@ defmodule Platform.Access.RolesMigrationTest do
   @grants_version 20_261_014_172_224
   @grants_module Platform.Repo.Migrations.CreateAccessGrants
 
+  # `access_role_assignments` (task 01a1386e-59d1 stage 1, a LATER migration
+  # still) has an FK to `access_roles(key)` too, and adds `access_roles.org_id`.
+  # It is the latest of the three, so it rolls back first.
+  @custom_roles_version 20_261_014_173_546
+  @custom_roles_module Platform.Repo.Migrations.AddCustomRolesAndRoleAssignments
+
   defp up! do
     Repo.query!("DELETE FROM schema_migrations WHERE version = $1", [@migration_version])
     :ok = Ecto.Migrator.up(Repo, @migration_version, @migration_module, @opts)
@@ -132,11 +138,19 @@ defmodule Platform.Access.RolesMigrationTest do
     %{org_id: org_id, seeded: seeded}
   end
 
-  # Drop member 3's `access_grants` AFTER the fixtures above: `tenant_org_id/1`
+  # Drop later access migrations AFTER the fixtures above: `tenant_org_id/1`
   # creates its org through `Tenancy.create_org/2`, whose root-admin re-check
   # is `Platform.Access.authorize_install/1` (task 01a1386d-fb6e stage 2) and
   # builds a Scope, which reads `access_grants`.
   setup do
+    [custom_roles_path] =
+      Path.wildcard(
+        Path.join(:code.priv_dir(:platform), "repo/migrations/#{@custom_roles_version}_*.exs")
+      )
+
+    unless Code.ensure_loaded?(@custom_roles_module), do: Code.require_file(custom_roles_path)
+    :ok = Ecto.Migrator.down(Repo, @custom_roles_version, @custom_roles_module, @opts)
+
     [path] =
       Path.wildcard(
         Path.join(:code.priv_dir(:platform), "repo/migrations/#{@grants_version}_*.exs")

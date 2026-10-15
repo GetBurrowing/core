@@ -12,16 +12,23 @@ defmodule Platform.Access.Scope do
     * `org` — the `%Org{}` of the membership `Tenancy.load_membership/1`
       picks (LiveAuth's `:current_user_org_membership`), or nil.
     * `permissions` — `%{permission => :all | [resource_id]}`.
-    * `role_keys` — `%{org_id => MapSet}` of the actor's base role keys
-      (`org_memberships.access_role_key`). The ADR names this field for
-      stack member 8; it is populated here with base keys only, because the
-      decision needs it: guest dominance and the `implicit_or_participant`
-      kind admission are both read from it.
+    * `role_keys` — `%{org_id => MapSet}` of the actor's role keys: each
+      membership's base key (`org_memberships.access_role_key`), unioned
+      with every custom role the actor holds through an
+      `access_role_assignments` row (task `01a1386e-59d1` stage 1). A user's
+      assignments count only in orgs the user has a membership in; a
+      runtime's keys are its owner's guest keys plus the AGENT's own
+      assignments (never the owner's). Guest dominance and the
+      `implicit_or_participant` kind admission read the base keys in it;
+      `Platform.Access.holds_role?/3` is the only reader of the custom keys.
     * `grants` — the `%Platform.Access.Grant{}` rows (allow and deny) whose
       principal is this actor (task `01a1386d-e528` stage 2): the user id,
       every `{access_role_key, org_id}` pair of its memberships, or the
-      runtime's agent id. Loaded in ONE query by the builders, as a
-      build-time snapshot (live apply is stack position 6). With no rows it
+      runtime's agent id, plus every role-principal grant of a custom role
+      the actor is assigned (task `01a1386e-59d1`). Loaded in ONE query by
+      the builders, together with the actor's assignments
+      (`Platform.Access.Grants.list_for_actor/3`), as a build-time snapshot
+      (live apply is stack position 6). With no rows it
       is `[]`, the field default, so a grant-less Scope is equal to the one
       member 2 built. `can?/3` and `permitted_ids/2` here read role rules
       ONLY; the grant-aware decision is `Platform.Access.can?/3` /
@@ -52,6 +59,16 @@ defmodule Platform.Access.Scope do
       (a map carrying `:kind`), and `permitted_ids/2` returns only the
       participant part, a lower bound;
     * a list of rules → their union.
+
+  **Custom roles** (task `01a1386e-59d1` stage 1) contribute exactly like a
+  built-in role: each assignment's role permissions resolve against the
+  assignment's org (`membership_org` → that org), and union into
+  `permissions`. Guest dominance holds: when any membership maps to
+  `guest`, no custom role contributes a permission. A runtime's assigned
+  roles contribute KEYS and role grants only, never permissions (an agent's
+  reach is its bundles and roster until agent capping, stack position 5).
+  With zero assignment rows the permissions and grants are member 2's and
+  member 3's, unchanged.
 
   Memberships union, `:all` absorbing a list. A rule list may mix resource
   types (canvas: participant space ids and membership org ids); callers pass
@@ -153,22 +170,31 @@ defmodule Platform.Access.Scope do
     contributing = guest_dominates(memberships)
     sources = rule_sources(memberships, rules)
     participants = participant_snapshot(user_id, sources)
+    base_keys = role_keys(memberships)
+
+    {grants, assignments} =
+      Grants.list_for_actor(
+        [{:user, user_id} | role_principals(base_keys)],
+        {:user, user_id},
+        memberships |> Enum.map(& &1.org_id) |> Enum.uniq()
+      )
+
+    custom = custom_role_sources(assignments, memberships)
+    participants = participants || late_participants(user_id, custom)
 
     permissions =
-      sources
-      |> role_permissions(participants)
+      (sources ++ custom)
+      |> role_permissions(participants || [])
       |> org_admin_per_membership(memberships, rules)
       |> widen_root_org(memberships)
       |> grant_root_admin(memberships, contributing)
-
-    role_keys = role_keys(memberships)
 
     %__MODULE__{
       actor: user,
       org: primary_org(memberships),
       permissions: permissions,
-      role_keys: role_keys,
-      grants: Grants.list_for_principals([{:user, user_id} | role_principals(role_keys)])
+      role_keys: assigned_keys(base_keys, assignments),
+      grants: grants
     }
   end
 
@@ -193,11 +219,14 @@ defmodule Platform.Access.Scope do
         do: owner_guest_keys(runtime.owner_user_id),
         else: %{}
 
+    {grants, assignments} =
+      Grants.list_for_actor(agent_principals(runtime), agent_actor(runtime), :any)
+
     %__MODULE__{
       actor: runtime,
       permissions: permissions,
-      role_keys: role_keys,
-      grants: Grants.list_for_principals(agent_principals(runtime))
+      role_keys: assigned_keys(role_keys, assignments),
+      grants: grants
     }
   end
 
@@ -511,6 +540,10 @@ defmodule Platform.Access.Scope do
     from_roles ++ [{no_membership_baseline(memberships), nil}]
   end
 
+  # The participant ids when a held rule needs them, else `nil` (not
+  # loaded). `for_user/1` issues the query before the grants query, and only
+  # issues it again after (`late_participants/2`) when the base roles did not
+  # need it and a custom role does.
   defp participant_snapshot(user_id, sources) do
     needed? =
       Enum.any?(sources, fn {rule_map, _membership} ->
@@ -523,8 +556,33 @@ defmodule Platform.Access.Scope do
       |> Repo.all()
       |> normalize()
     else
-      []
+      nil
     end
+  end
+
+  defp late_participants(_user_id, []), do: nil
+  defp late_participants(user_id, custom), do: participant_snapshot(user_id, custom)
+
+  # Custom-role role data (task `01a1386e-59d1` stage 1): one source per
+  # assignment, resolved against the assignment's org exactly as a built-in
+  # role resolves against its membership's org. Guest dominance: when any
+  # membership maps to `guest`, no custom role contributes a permission, so a
+  # guest is never widened (their keys are still recorded in `role_keys`).
+  defp custom_role_sources(assignments, memberships) do
+    if Enum.any?(memberships, &(role_key(&1) == "guest")) do
+      []
+    else
+      for %{org_id: org_id, permissions: permissions} <- assignments,
+          is_map(permissions),
+          do: {permissions, %OrgMembership{org_id: org_id}}
+    end
+  end
+
+  # Base keys unioned with every assigned custom key, per org.
+  defp assigned_keys(base_keys, assignments) do
+    Enum.reduce(assignments, base_keys, fn %{org_id: org_id, role_key: key}, acc ->
+      Map.update(acc, org_id, MapSet.new([key]), &MapSet.put(&1, key))
+    end)
   end
 
   defp role_permissions(sources, participants) do
@@ -613,6 +671,11 @@ defmodule Platform.Access.Scope do
     do: [{:agent, agent_id}]
 
   defp agent_principals(_runtime), do: []
+
+  defp agent_actor(%AgentRuntime{agent_id: agent_id}) when is_binary(agent_id),
+    do: {:agent, agent_id}
+
+  defp agent_actor(_runtime), do: nil
 
   defp bundles(%AgentRuntime{allowed_bundles: bundles}) when is_list(bundles), do: bundles
   defp bundles(_runtime), do: []

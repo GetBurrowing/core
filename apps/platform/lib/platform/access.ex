@@ -67,9 +67,17 @@ defmodule Platform.Access do
   Repo on first use and keeps them in `:persistent_term`, so building a Scope
   on the hot path (every request, every socket mount) issues no role query.
   The rows are written only by the stage-1 migration, which seeds them; nothing
-  edits them at runtime. Custom roles (stack position 8) are NOT cached here:
-  the member that makes roles editable must add invalidation (or replace this
-  cache) in the same change. An empty read is never cached.
+  edits them at runtime. Custom roles (stack position 8, task `01a1386e-59d1`)
+  are NOT cached here and need no invalidation: `Platform.Access.Roles`
+  refuses every write to a built-in row, and a custom role's permissions are
+  read from the Repo in the Scope builder's grants query, so an edited custom
+  role applies to the next Scope built. An empty read is never cached.
+
+  ## Holding a role
+
+  `holds_role?/3` (task `01a1386e-59d1` stage 1) is the ONLY role-key
+  comparison in the codebase: callers ask whether an actor holds one of a
+  set of role keys over an org, and never read `Scope.role_keys` themselves.
   """
 
   import Ecto.Query, only: [from: 2]
@@ -484,6 +492,74 @@ defmodule Platform.Access do
 
   defp permitted_type(type) when type in [:memory_page, :memory_node], do: :memory_node
   defp permitted_type(type), do: type
+
+  # Maximum org ancestors `holds_role?/3` walks: a guard against a corrupt
+  # `parent_org_id` cycle, as `Platform.Tenancy.effective_value/4` guards.
+  @max_org_depth 16
+
+  @doc """
+  Does `scope`'s actor hold any of `role_keys` (a key or a list of keys) in
+  `org_id`, OR in any ancestor org of it (`orgs.parent_org_id`)? A root-org
+  admin therefore holds `admin` over a sub-org's resources, mirroring member
+  2's root widening; a sibling org's holding never counts. `org_id` `nil`
+  (an org-less resource) resolves to the install's root org.
+
+  Keys are the Scope's `role_keys`: base keys from memberships plus assigned
+  custom keys. `system/0` holds every role. An empty Scope or an empty key
+  set holds nothing, without querying.
+  """
+  @spec holds_role?(Scope.t(), String.t() | [String.t()], binary() | nil) :: boolean()
+  def holds_role?(scope, role_keys, org_id)
+
+  def holds_role?(%Scope{actor: :system}, _role_keys, _org_id), do: true
+
+  def holds_role?(%Scope{role_keys: held}, role_keys, org_id) do
+    wanted = role_keys |> List.wrap() |> MapSet.new()
+
+    if map_size(held) == 0 or MapSet.size(wanted) == 0 do
+      false
+    else
+      org_id
+      |> org_chain()
+      |> Enum.any?(fn id ->
+        held |> Map.get(id, MapSet.new()) |> MapSet.disjoint?(wanted) |> Kernel.not()
+      end)
+    end
+  end
+
+  def holds_role?(_scope, _role_keys, _org_id), do: false
+
+  defp org_chain(nil) do
+    case Platform.Tenancy.get_root_org() do
+      %{id: id} -> [id]
+      nil -> []
+    end
+  end
+
+  defp org_chain(org_id) when is_binary(org_id) do
+    if Platform.UUID.valid?(org_id), do: walk_orgs(org_id, @max_org_depth, []), else: []
+  end
+
+  defp org_chain(_), do: []
+
+  defp walk_orgs(nil, _depth, acc), do: Enum.reverse(acc)
+  defp walk_orgs(_id, 0, acc), do: Enum.reverse(acc)
+
+  defp walk_orgs(id, depth, acc) do
+    if id in acc do
+      Enum.reverse(acc)
+    else
+      parent =
+        Repo.one(
+          from(o in Platform.Tenancy.Org, where: o.id == ^id, select: {o.id, o.parent_org_id})
+        )
+
+      case parent do
+        {found, parent_id} -> walk_orgs(parent_id, depth - 1, [found | acc])
+        nil -> Enum.reverse(acc)
+      end
+    end
+  end
 
   @doc "The built-in `access_roles` rows (admin, guest, member), ordered by key. Cached."
   @spec builtin_roles() :: [Role.t()]

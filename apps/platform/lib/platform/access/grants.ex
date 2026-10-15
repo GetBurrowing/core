@@ -53,7 +53,7 @@ defmodule Platform.Access.Grants do
 
   import Ecto.Query, only: [from: 2]
 
-  alias Platform.Access.Grant
+  alias Platform.Access.{Grant, Role, RoleAssignment}
   alias Platform.Agents.{Agent, AgentRuntime}
   alias Platform.Chat.{Canvas, Space}
   alias Platform.Org.Wiki.{Node, Nodes}
@@ -121,6 +121,147 @@ defmodule Platform.Access.Grants do
       end)
 
     Repo.all(from(g in Grant, where: ^condition, order_by: [asc: g.id]))
+  end
+
+  @doc """
+  `list_for_principals/1` plus the actor's custom-role assignments, in the
+  SAME ONE query (task `01a1386e-59d1` stage 1). `actor` is `{:user, id}` or
+  `{:agent, id}`: the grants returned also include every role-principal
+  grant whose `(principal_role_key, org_id)` the actor holds through an
+  `access_role_assignments` row. `assignment_orgs` bounds which assignments
+  count: a list of org ids (a user's membership orgs, so an assignment in an
+  org the user has since left holds nothing), or `:any` (an agent).
+
+  Returns `{grants, assignments}`, grants ordered by id as
+  `list_for_principals/1` orders them, and each assignment as
+  `%{org_id, role_key, permissions}` (the custom role's permission map). With
+  no principals and no actor it returns `{[], []}` without querying.
+  """
+  @spec list_for_actor([principal_key()], {:user | :agent, binary()} | nil, [binary()] | :any) ::
+          {[Grant.t()], [%{org_id: binary(), role_key: String.t(), permissions: map()}]}
+  def list_for_actor(principals, actor, assignment_orgs)
+
+  def list_for_actor([], nil, _assignment_orgs), do: {[], []}
+
+  def list_for_actor(principals, nil, _assignment_orgs),
+    do: {list_for_principals(principals), []}
+
+  def list_for_actor(principals, {type, id}, assignment_orgs)
+      when type in [:user, :agent] and is_binary(id) do
+    type = Atom.to_string(type)
+
+    held =
+      from(a in RoleAssignment,
+        where:
+          a.principal_type == ^type and a.principal_id == ^id and
+            a.role_key == parent_as(:grant).principal_role_key and
+            a.org_id == parent_as(:grant).org_id
+      )
+      |> assignment_orgs_filter(assignment_orgs)
+
+    condition =
+      Ecto.Query.dynamic(
+        [grant: g],
+        ^principals_condition(principals) or
+          (g.principal_type == "role" and exists(subquery(held)))
+      )
+
+    grants_q =
+      from(g in Grant,
+        as: :grant,
+        where: ^condition,
+        select: %{
+          kind: type(^"grant", :string),
+          id: g.id,
+          org_id: g.org_id,
+          principal_type: g.principal_type,
+          principal_id: g.principal_id,
+          principal_role_key: g.principal_role_key,
+          permission: g.permission,
+          resource_type: g.resource_type,
+          resource_id: g.resource_id,
+          effect: g.effect,
+          granted_by: g.granted_by,
+          inserted_at: g.inserted_at,
+          role_permissions: type(^nil, :map)
+        }
+      )
+
+    assignments_q =
+      from(a in RoleAssignment,
+        join: r in Role,
+        on: r.key == a.role_key,
+        where: a.principal_type == ^type and a.principal_id == ^id,
+        select: %{
+          kind: type(^"assignment", :string),
+          id: a.id,
+          org_id: a.org_id,
+          principal_type: a.principal_type,
+          principal_id: a.principal_id,
+          principal_role_key: a.role_key,
+          permission: type(^nil, :string),
+          resource_type: type(^nil, :string),
+          resource_id: type(^nil, :binary_id),
+          effect: type(^nil, :string),
+          granted_by: type(^nil, :binary_id),
+          inserted_at: a.inserted_at,
+          role_permissions: r.permissions
+        }
+      )
+      |> assignment_orgs_filter(assignment_orgs)
+
+    {grant_rows, assignment_rows} =
+      grants_q
+      |> Ecto.Query.union_all(^assignments_q)
+      |> Repo.all()
+      |> Enum.split_with(&(&1.kind == "grant"))
+
+    grants =
+      grant_rows
+      |> Enum.sort_by(& &1.id)
+      |> Enum.map(fn row ->
+        Grant
+        |> struct(Map.drop(row, [:kind, :role_permissions]))
+        |> Ecto.put_meta(state: :loaded)
+      end)
+
+    assignments =
+      assignment_rows
+      |> Enum.sort_by(& &1.id)
+      |> Enum.map(fn row ->
+        %{org_id: row.org_id, role_key: row.principal_role_key, permissions: row.role_permissions}
+      end)
+
+    {grants, assignments}
+  end
+
+  defp assignment_orgs_filter(query, :any), do: query
+
+  defp assignment_orgs_filter(query, org_ids) when is_list(org_ids),
+    do: from(a in query, where: a.org_id in ^org_ids)
+
+  defp principals_condition(principals) do
+    Enum.reduce(principals, false, fn
+      {:user, id}, acc ->
+        Ecto.Query.dynamic(
+          [g],
+          ^acc or (g.principal_type == "user" and g.principal_id == ^id)
+        )
+
+      {:agent, id}, acc ->
+        Ecto.Query.dynamic(
+          [g],
+          ^acc or (g.principal_type == "agent" and g.principal_id == ^id)
+        )
+
+      {:role, key, org_id}, acc ->
+        Ecto.Query.dynamic(
+          [g],
+          ^acc or
+            (g.principal_type == "role" and g.principal_role_key == ^key and
+               g.org_id == ^org_id)
+        )
+    end)
   end
 
   defp insert(attrs, effect) do
