@@ -87,8 +87,26 @@ defmodule Platform.Access.BypassSearchTest do
       |> Agent.changeset(%{slug: "search-agent-#{n}", name: "Search Agent", status: "active"})
       |> Repo.insert()
 
-    {:ok, _} = Chat.add_agent_participant(space.id, agent)
+    {:ok, participant} = Chat.add_agent_participant(space.id, agent)
+
+    {:ok, message} =
+      Chat.post_message(%{
+        space_id: space.id,
+        participant_id: participant.id,
+        content_type: "text",
+        content: "ZQX-BYPASS-MESSAGE"
+      })
+
+    previous = Application.get_env(:platform, :memory_service, [])
+    Application.put_env(:platform, :memory_service, provider: SemanticStub, results: [])
+    on_exit(fn -> Application.put_env(:platform, :memory_service, previous) end)
+
     context = %{agent_id: agent.id, access_scope: %Scope{}}
+
+    {:ok, before_search} =
+      Search.search("ZQX-BYPASS-MESSAGE", source: "message", agent: agent, access_scope: %Scope{})
+
+    assert Enum.any?(before_search.results, &(&1.id == message.id))
 
     assert {:ok, _} =
              ToolSurface.execute("space_get_messages", %{"space_id" => space.id}, context)
@@ -112,6 +130,17 @@ defmodule Platform.Access.BypassSearchTest do
     # grant snapshot explicitly to this in-process tool call.
     grant = Grants.list_for_principals([{:agent, agent.id}]) |> List.first()
     denied_context = %{context | access_scope: %Scope{grants: [grant]}}
+
+    {:ok, after_search} =
+      Search.search("ZQX-BYPASS-MESSAGE",
+        source: "message",
+        agent: agent,
+        access_scope: denied_context.access_scope
+      )
+
+    refute Enum.any?(after_search.results, &(&1.id == message.id))
+    assert after_search.dropped == before_search.dropped
+    assert after_search.match_count == before_search.match_count - 1
 
     for tool <- ["space_get_messages", "space_search_messages"] do
       args = %{"space_id" => space.id, "query" => "ordinary"}
