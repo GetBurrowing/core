@@ -63,6 +63,18 @@ defmodule PlatformWeb.ModuleAdminViewsTest do
              live(authed(user), "/tasks/pipeline")
   end
 
+  test "a project-scoped prompts.manage grantee cannot read install-wide templates" do
+    child = tenant_org_id("module-admin-prompts-grantee")
+    user = user!("member", child)
+    {:ok, project} = Tasks.create_project(%{name: "Module prompts scope", org_id: child})
+
+    {:ok, _} =
+      Grants.grant(%{principal: user, permission: "prompts.manage", resource: project})
+
+    assert {:error, {_, %{to: "/access-denied?module=prompts"}}} =
+             live(authed(user), "/admin/prompts")
+  end
+
   test "module-admin grantees cannot mount install-level LiveViews" do
     child = tenant_org_id("module-admin-install")
     grantee = user!("member", child)
@@ -81,7 +93,14 @@ defmodule PlatformWeb.ModuleAdminViewsTest do
 
     for path <- install_routes, user <- [grantee, sub_admin] do
       if path == "/admin/sign-in-users" do
-        assert get(authed(user), path).status in [404, 403]
+        if Platform.SignInAdmin.Config.enabled?() do
+          assert {:error, {_, %{to: "/access-denied?module=admin"}}} =
+                   live(authed(user), path)
+        else
+          assert_raise PlatformWeb.Plugs.RequireSignInAdmin.NotFoundError, fn ->
+            get(authed(user), path)
+          end
+        end
       else
         assert {:error, {_, %{to: "/access-denied?module=admin"}}} =
                  live(authed(user), path)

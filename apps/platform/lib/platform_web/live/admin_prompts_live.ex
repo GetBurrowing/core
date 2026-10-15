@@ -212,8 +212,11 @@ defmodule PlatformWeb.AdminPromptsLive do
 
   @impl true
   def handle_params(%{"slug" => slug}, _url, socket) do
-    case PromptTemplates.get_template_by_slug(slug) do
-      nil ->
+    case PromptTemplates.get_template_by_slug(slug, socket.assigns.access_scope) do
+      {:error, :unauthorized} ->
+        {:noreply, push_navigate(socket, to: "/access-denied?module=prompts")}
+
+      {:ok, nil} ->
         # A slug with no row is not automatically "not found": it may be a
         # responsibility key declared in source whose template nobody ever
         # wrote, which is exactly the case this page now renders rather than
@@ -237,7 +240,7 @@ defmodule PlatformWeb.AdminPromptsLive do
              |> assign(:page_title, "Admin · #{entry.slug}")}
         end
 
-      template ->
+      {:ok, template} ->
         edit_form = to_form(PromptTemplate.changeset(template, %{}), as: "template")
         preview = render_preview(template.slug, template.content)
 
@@ -572,13 +575,18 @@ defmodule PlatformWeb.AdminPromptsLive do
   # empty state are about templates that exist, and folding orphans into that
   # count would be the badge this design explicitly refuses.
   defp assign_list(socket) do
-    templates = PromptTemplates.list_templates()
-    declared_missing = declared_missing()
+    case PromptTemplates.list_templates(socket.assigns.access_scope) do
+      {:ok, templates} ->
+        declared_missing = declared_missing()
 
-    socket
-    |> assign(:templates, templates)
-    |> assign(:declared_missing, declared_missing)
-    |> assign(:rows, union_rows(templates, declared_missing))
+        socket
+        |> assign(:templates, templates)
+        |> assign(:declared_missing, declared_missing)
+        |> assign(:rows, union_rows(templates, declared_missing))
+
+      {:error, :unauthorized} ->
+        push_navigate(socket, to: "/access-denied?module=prompts")
+    end
   end
 
   # Read through the stage-3 public audit, never re-derived here.

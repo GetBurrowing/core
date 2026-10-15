@@ -862,6 +862,11 @@ defmodule PlatformWeb.Router do
       live("/skills", SkillsLive, :index)
       live("/skills/:slug", SkillsLive, :show)
       live("/changelog", ChangelogLive, :index)
+      # Prompts is a module-admin view. It retains its stable URL and rail
+      # destination, but belongs to this module-gated session instead of the
+      # install-admin session.
+      live("/admin/prompts", AdminPromptsLive, :index)
+      live("/admin/prompts/:slug", AdminPromptsLive, :edit)
       live("/control", ControlCenterLive, :index)
       live("/control/usage", UsageLive, :index)
       # Task 019fe6ba, ADR-0048. `/control/:agent_slug` below is a catch-all:
@@ -984,8 +989,6 @@ defmodule PlatformWeb.Router do
       # live_session's gate is not load-bearing alone.
       live("/admin/vault", AdminVaultLive, :index)
       live("/admin/vault/:slug", AdminVaultLive, :show)
-      live("/admin/prompts", AdminPromptsLive, :index)
-      live("/admin/prompts/:slug", AdminPromptsLive, :edit)
       live("/admin/federation", AdminFederationLive, :index)
     end
   end

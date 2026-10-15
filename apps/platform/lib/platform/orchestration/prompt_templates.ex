@@ -87,6 +87,14 @@ defmodule Platform.Orchestration.PromptTemplates do
     Repo.all(from(t in PromptTemplate, order_by: [asc: t.slug]))
   end
 
+  @doc "Actor-checked install-wide template listing for the Prompts administration view."
+  @spec list_templates(term()) :: {:ok, [PromptTemplate.t()]} | {:error, :unauthorized}
+  def list_templates(actor) do
+    with :ok <- Access.authorize_everywhere(actor, "prompts.manage") do
+      {:ok, list_templates()}
+    end
+  end
+
   @doc "Get a prompt template by id."
   @spec get_template(String.t()) :: PromptTemplate.t() | nil
   def get_template(id) do
@@ -103,6 +111,15 @@ defmodule Platform.Orchestration.PromptTemplates do
   @spec get_template_by_slug(String.t()) :: PromptTemplate.t() | nil
   def get_template_by_slug(slug) do
     Repo.get_by(PromptTemplate, slug: slug)
+  end
+
+  @doc "Actor-checked single-template read for the Prompts administration view."
+  @spec get_template_by_slug(String.t(), term()) ::
+          {:ok, PromptTemplate.t() | nil} | {:error, :unauthorized}
+  def get_template_by_slug(slug, actor) do
+    with :ok <- Access.authorize_everywhere(actor, "prompts.manage") do
+      {:ok, get_template_by_slug(slug)}
+    end
   end
 
   @doc """

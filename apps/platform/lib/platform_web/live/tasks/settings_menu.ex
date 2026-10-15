@@ -42,7 +42,12 @@ defmodule PlatformWeb.Tasks.SettingsMenu do
   header.
   """
   def settings_menu(assigns) do
-    assigns = assign(assigns, :show_pipeline?, Access.module_access?(assigns.access_scope, :tasks, "tasks.manage"))
+    assigns =
+      assign(
+        assigns,
+        :show_pipeline?,
+        Access.module_access?(assigns.access_scope, :tasks, "tasks.manage")
+      )
 
     ~H"""
     <div :if={@show_pipeline?} class="relative">
@@ -102,7 +107,12 @@ defmodule PlatformWeb.Tasks.SettingsMenu do
   of scope here.
   """
   def settings_sheet(assigns) do
-    assigns = assign(assigns, :show_pipeline?, Access.module_access?(assigns.access_scope, :tasks, "tasks.manage"))
+    assigns =
+      assign(
+        assigns,
+        :show_pipeline?,
+        Access.module_access?(assigns.access_scope, :tasks, "tasks.manage")
+      )
 
     ~H"""
     <.sheet
