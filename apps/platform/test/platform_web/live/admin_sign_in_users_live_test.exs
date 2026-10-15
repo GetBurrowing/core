@@ -327,7 +327,6 @@ defmodule PlatformWeb.AdminSignInUsersLiveTest do
 
       assert {:error, {_, %{to: "/access-denied?module=admin"}}} =
                live(login(conn, member), @path)
-
     end
 
     test "a websocket mount after the switch went off raises the 404 in mount/3",

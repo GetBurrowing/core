@@ -68,7 +68,6 @@ defmodule PlatformWeb.AdminOrgsLiveTest do
 
       assert {:error, {_, %{to: "/access-denied?module=admin"}}} =
                conn |> authenticated_conn(user) |> live(~p"/admin/orgs")
-
     end
 
     test "a user with no memberships is redirected", %{conn: conn} do

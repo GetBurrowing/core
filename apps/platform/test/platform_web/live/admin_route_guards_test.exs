@@ -81,7 +81,6 @@ defmodule PlatformWeb.AdminRouteGuardsTest do
 
       assert {:error, {_, %{to: "/access-denied?module=admin"}}} =
                conn |> authenticated_conn(user) |> live(~p"/admin")
-
     end
 
     test "user with no memberships is redirected to access denied", %{conn: conn} do
@@ -119,7 +118,6 @@ defmodule PlatformWeb.AdminRouteGuardsTest do
 
       assert {:error, {_, %{to: "/access-denied?module=admin"}}} =
                conn |> authenticated_conn(user) |> live(~p"/admin/users")
-
     end
 
     test "user with no memberships is redirected to access denied", %{conn: conn} do
@@ -146,7 +144,6 @@ defmodule PlatformWeb.AdminRouteGuardsTest do
 
       assert {:error, {_, %{to: "/access-denied?module=admin"}}} =
                conn |> authenticated_conn(user) |> live(~p"/admin/prompts")
-
     end
 
     test "user with no memberships is redirected to access denied", %{conn: conn} do
@@ -173,7 +170,6 @@ defmodule PlatformWeb.AdminRouteGuardsTest do
 
       assert {:error, {_, %{to: "/access-denied?module=admin"}}} =
                conn |> authenticated_conn(user) |> live(~p"/admin/federation")
-
     end
   end
 

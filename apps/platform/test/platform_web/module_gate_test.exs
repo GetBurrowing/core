@@ -61,6 +61,7 @@ defmodule PlatformWeb.ModuleGateTest do
 
   test "member denied an admin deep link reaches the access page", %{conn: conn} do
     user = user!() |> member!("member")
+
     assert {:error, {_, %{to: "/access-denied?module=admin"}}} =
              conn |> authed(user) |> live("/admin/branding")
 
@@ -87,6 +88,7 @@ defmodule PlatformWeb.ModuleGateTest do
 
   test "a guest gets the same 403 message for tasks and files", %{conn: conn} do
     user = user!()
+
     {:ok, _} =
       Tenancy.mark_membership_external(%{
         user_id: user.id,
@@ -102,6 +104,7 @@ defmodule PlatformWeb.ModuleGateTest do
 
   test "the mount gate refuses a guest Tasks socket even after a chat admission" do
     user = user!()
+
     {:ok, _} =
       Tenancy.mark_membership_external(%{
         user_id: user.id,
@@ -111,7 +114,10 @@ defmodule PlatformWeb.ModuleGateTest do
     socket = %Phoenix.LiveView.Socket{
       endpoint: PlatformWeb.Endpoint,
       view: PlatformWeb.TasksLive,
-      assigns: %{__changed__: %{}, access_scope: Scope.for_user(Platform.Accounts.get_user(user.id))}
+      assigns: %{
+        __changed__: %{},
+        access_scope: Scope.for_user(Platform.Accounts.get_user(user.id))
+      }
     }
 
     assert {:halt, _socket} = ModuleGate.on_mount(:default, %{}, %{}, socket)
