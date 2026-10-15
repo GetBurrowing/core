@@ -186,7 +186,8 @@ defmodule Platform.Federation.Peers.SupervisorTest do
 
     test "a wrapper that gives up is logged by peer_id and restarted by the next re-scan" do
       enable_federation!()
-      start_supervised!({Boot, interval: 3_600_000, connection_opts: [max_restarts: 1]})
+      boot_pid = start_supervised!({Boot, interval: 3_600_000, connection_opts: [max_restarts: 1]})
+      assert :ok = Ecto.Adapters.SQL.Sandbox.allow(Platform.Repo, self(), boot_pid)
 
       x = peer_for!(remote_install())
       y = peer_for!(remote_install())
