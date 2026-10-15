@@ -7,9 +7,10 @@ defmodule Platform.Access.BypassNotificationsTest do
   alias Platform.Access.{Grants, Scope}
   alias Platform.Accounts.User
   alias Platform.Chat
-  alias Platform.Chat.{AttentionRouter, Message, Participant}
+  alias Platform.Chat.{AttentionRouter, Message}
   alias Platform.Inbox
   alias Platform.Inbox.Item
+  alias Platform.Orchestration.ExecutionSpace
   alias Platform.Repo
   alias Platform.Tasks
   alias Platform.Tenancy.OrgMembership
@@ -57,7 +58,7 @@ defmodule Platform.Access.BypassNotificationsTest do
     assert {:ok, %Item{} = earlier} = Inbox.emit(attrs)
     assert_receive {:inbox_item_added, %Item{id: id}}
     assert id == earlier.id
-    assert_receive {:push, user_id, %{body: "ZQX-BYPASS-NOTIF"}}
+    assert_receive {:push, user_id, %{kind: "task_plan_review", body: "bpn task"}}
     assert user_id == user.id
     assert Inbox.reachable_unread_count(user.id) == 1
 
@@ -81,7 +82,7 @@ defmodule Platform.Access.BypassNotificationsTest do
 
   test "a mentioned participant gets a push before a chat deny and none after", ctx do
     user = ctx.user
-    {:ok, space} = Chat.create_space(%{name: "bpn chat", kind: "channel", project_id: ctx.project.id})
+    {:ok, space} = ExecutionSpace.find_or_create(ctx.task.id)
     author = user!(ctx.project.org_id)
     {:ok, author_row} = Chat.add_participant(space.id, %{participant_type: "user", participant_id: author.id})
     {:ok, recipient} = Chat.add_participant(space.id, %{participant_type: "user", participant_id: user.id})
