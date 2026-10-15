@@ -31,7 +31,7 @@ defmodule Platform.Access.Lineage do
   `%Project{}`, `%Task{}`, `%Stack{}`, `%Space{}` or `%Canvas{}` struct.
   """
 
-  import Ecto.Query, only: [from: 2, subquery: 1]
+  import Ecto.Query, only: [from: 2]
 
   alias Platform.Chat.{Canvas, Space}
   alias Platform.Org.Wiki.{NodePath, Nodes}
