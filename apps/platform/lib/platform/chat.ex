@@ -5325,7 +5325,8 @@ defmodule Platform.Chat do
   `true` after one `EXISTS` query.
   """
   @spec agent_may_read_space?(Platform.Agents.Agent.t(), binary()) :: boolean()
-  def agent_may_read_space?(%Platform.Agents.Agent{} = agent, space_id) when is_binary(space_id) do
+  def agent_may_read_space?(%Platform.Agents.Agent{} = agent, space_id)
+      when is_binary(space_id) do
     runtime = Platform.Federation.get_runtime_for_agent(agent)
 
     Platform.Access.AgentWake.check_agent(agent, runtime, @chat_read, {:space, space_id}) == :ok

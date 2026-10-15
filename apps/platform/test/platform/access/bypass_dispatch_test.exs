@@ -180,7 +180,12 @@ defmodule Platform.Access.BypassDispatchTest do
       tq = dispatchable_task!(ctx.q, b, "bpd revoke q")
       subscribe(rt)
 
-      {:ok, row} = Grants.deny(%{principal: {:user, u.id}, permission: "tasks.read", resource: {:project, ctx.q.id}})
+      {:ok, row} =
+        Grants.deny(%{
+          principal: {:user, u.id},
+          permission: "tasks.read",
+          resource: {:project, ctx.q.id}
+        })
 
       pid = start_router!(tq.id, rt)
       assert collect_attention_topics() == []
@@ -225,7 +230,9 @@ defmodule Platform.Access.BypassDispatchTest do
 
       Repo.delete_all(
         from(pp in Participant,
-          where: pp.space_id == ^eq.id and pp.participant_type == "agent" and pp.participant_id == ^b.id
+          where:
+            pp.space_id == ^eq.id and pp.participant_type == "agent" and
+              pp.participant_id == ^b.id
         )
       )
 
@@ -378,7 +385,11 @@ defmodule Platform.Access.BypassDispatchTest do
 
     {:ok, agent} =
       %Agent{}
-      |> Agent.changeset(%{slug: "bpd-#{label}-#{n}", name: "BPD #{label} #{n}", status: "active"})
+      |> Agent.changeset(%{
+        slug: "bpd-#{label}-#{n}",
+        name: "BPD #{label} #{n}",
+        status: "active"
+      })
       |> Repo.insert()
 
     agent
@@ -578,8 +589,9 @@ defmodule Platform.Access.BypassDispatchTest do
   # ── AttentionRouter harness (mirrors attention_router_test.exs) ─────────
 
   defp attention_router(_ctx) do
-    previous = for k <- [:chat_agent_module, :chat_agent_dispatch_mode, :chat_agent_test_pid],
-                   do: {k, Application.get_env(:platform, k)}
+    previous =
+      for k <- [:chat_agent_module, :chat_agent_dispatch_mode, :chat_agent_test_pid],
+          do: {k, Application.get_env(:platform, k)}
 
     Application.put_env(:platform, :chat_agent_module, StubAgentChat)
     Application.put_env(:platform, :chat_agent_dispatch_mode, :sync)
@@ -617,5 +629,6 @@ defmodule Platform.Access.BypassDispatchTest do
     :ok = GenServer.call(AttentionRouter, :__drain__)
     :counters.put(counter, 1, 0)
   end
+
   defp read(counter), do: :counters.get(counter, 1)
 end

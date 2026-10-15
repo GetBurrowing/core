@@ -233,7 +233,8 @@ defmodule Platform.Orchestration.PhaseRuntime do
   # Task 01a1386e-45a5 stage 2. Conjunctive with everything above: the
   # runtime is already resolved, and this only decides whether it may be
   # woken onto the task.
-  defp authorize_wake(_agent, runtime, nil), do: {:ok, %{type: :federated, id: runtime.runtime_id}}
+  defp authorize_wake(_agent, runtime, nil),
+    do: {:ok, %{type: :federated, id: runtime.runtime_id}}
 
   defp authorize_wake(agent, runtime, task_id) do
     case AgentWake.check_agent(agent, runtime, @tasks_read, {:task, task_id}) do

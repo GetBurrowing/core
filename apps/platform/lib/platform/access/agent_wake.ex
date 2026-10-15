@@ -107,7 +107,10 @@ defmodule Platform.Access.AgentWake do
   defp agent_scope(_agent_id, %AgentRuntime{} = runtime), do: Scope.for_runtime(runtime)
 
   defp agent_scope(agent_id, nil),
-    do: %Scope{actor: {:agent, agent_id}, grants: Grants.list_for_principals([{:agent, agent_id}])}
+    do: %Scope{
+      actor: {:agent, agent_id},
+      grants: Grants.list_for_principals([{:agent, agent_id}])
+    }
 
   # ── the short-circuit ────────────────────────────────────────────────
 
