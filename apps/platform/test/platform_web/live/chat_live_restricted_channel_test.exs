@@ -41,12 +41,39 @@ defmodule PlatformWeb.ChatLiveRestrictedChannelTest do
     assert {:ok, _} = Restrictions.restrict_space(finance, ["admin"], admin.id)
 
     {:ok, member_view, html} = live(member_conn, ~p"/chat/#{lobby.id}")
+
+    section_ids =
+      Regex.scan(
+        ~r/phx-click="toggle_section_collapsed"\s+phx-value-section_id="([^"]+)"\s+phx-value-collapsed="false"/,
+        html
+      )
+
+    assert section_ids != []
+
+    Enum.each(section_ids, fn [_, section_id] ->
+      render_click(member_view, "toggle_section_collapsed", %{
+        "section_id" => section_id,
+        "collapsed" => "false"
+      })
+    end)
+
+    html = render(member_view)
     assert html =~ ~s(data-role="restricted-channel-row")
     assert html =~ ~s(data-space-id="#{finance.id}")
     assert html =~ "Restricted, ask an admin"
     assert html =~ "hero-lock-closed-mini"
     refute html =~ ~s(href="/chat/#{finance.id}")
     refute html =~ marker
+
+    [restricted_row] =
+      Regex.run(
+        ~r/<div[^>]*data-role="restricted-channel-row"[^>]*data-space-id="#{finance.id}"[^>]*>.*?<\/div>/s,
+        html
+      )
+
+    refute restricted_row =~ "<a "
+    refute restricted_row =~ "<button "
+    refute restricted_row =~ "channel-row-unread-pill"
 
     member_view |> element(~s(button[phx-click="toggle_mobile_browser"])) |> render_click()
     mobile = render(member_view)
