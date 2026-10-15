@@ -50,8 +50,9 @@ defmodule Platform.Access.Registry do
   ## Guest-admissible rail entries
 
   A rail entry may carry `guest_admissible: true` (task `01a1386d-fb6e`
-  stage 1, `0058-rbac-v2-roles-scopes-and-agent-capping.md § Permission
-  model`, "Rail rule"). A guest scope is shown an entry only when it carries
+  stage 1;
+  `0058-rbac-v2-roles-scopes-and-agent-capping.md § Permission model`,
+  "Rail rule"). A guest scope is shown an entry only when it carries
   the flag AND holds the entry's permission anywhere
   (`Platform.Access.module_access?/3`). It exists because a guest admitted
   into a module whose LiveView reads are not yet Scope-filtered would see
