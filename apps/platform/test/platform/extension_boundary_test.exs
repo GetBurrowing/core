@@ -155,8 +155,12 @@ defmodule Platform.ExtensionBoundaryTest do
       Enum.map(env_var_names(), &{:env_var, &1})
   end
 
-  defp compile(needles),
-    do: Enum.map(needles, fn {kind, text} -> {kind, text, ~r/\b#{Regex.escape(text)}\b/} end)
+  defp compile(needles) do
+    %{
+      regexes: Enum.map(needles, fn {kind, text} -> {kind, text, ~r/\b#{Regex.escape(text)}\b/} end),
+      literals: :binary.compile_pattern(Enum.map(needles, &elem(&1, 1)))
+    }
+  end
 
   # ── Scan ─────────────────────────────────────────────────────────────
 
@@ -168,18 +172,18 @@ defmodule Platform.ExtensionBoundaryTest do
     |> Enum.reject(&String.contains?(&1, "/node_modules/"))
   end
 
-  defp scan_text(text, label, compiled) do
+  defp scan_text(text, label, %{regexes: regexes, literals: literals}) do
     text
     |> String.split("\n")
     |> Enum.with_index(1)
     |> Enum.flat_map(fn {line, n} ->
-      for {kind, needle, re} <- compiled,
-          # Literal containment is a necessary condition for this escaped
-          # word-boundary regex. Avoid running every regex on every line of
-          # the full platform tree while other async tests are active.
-          String.contains?(line, needle),
-          Regex.match?(re, line),
-          do: "#{label}:#{n}: #{kind} #{needle}: #{String.trim(line)}"
+      if :binary.match(line, literals) == :nomatch do
+        []
+      else
+        for {kind, needle, re} <- regexes,
+            Regex.match?(re, line),
+            do: "#{label}:#{n}: #{kind} #{needle}: #{String.trim(line)}"
+      end
     end)
   end
 
