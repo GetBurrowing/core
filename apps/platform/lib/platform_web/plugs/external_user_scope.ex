@@ -283,16 +283,15 @@ defmodule PlatformWeb.Plugs.ExternalUserScope do
     if Chat.reserved_slug_prefix?(slug), do: Chat.get_space_by_slug(slug, [])
   end
 
-  # On any deny: emit the access-blocked telemetry (mirrors
-  # `RequireAuth.emit_access_blocked/3` — feeds the M15 security suite +
-  # audit), then halt with a uniform 403 rendered via the error views. The
-  # catch-all `render/2` in ErrorHTML/ErrorJSON already yields "Forbidden"
-  # for the `:"403"` template, so no new template clause is needed.
+  # On any deny, emit access-blocked telemetry and render the same standalone
+  # page for every path. The root layout omits its per-response CSRF token
+  # for a denial, giving known and missing resource URLs identical bytes.
   defp deny(conn, user, reason) do
     emit_access_blocked(conn, user, reason)
 
     conn
     |> put_status(:forbidden)
+    |> assign(:access_denied, true)
     |> Phoenix.Controller.put_view(html: PlatformWeb.ErrorHTML, json: PlatformWeb.ErrorJSON)
     |> Phoenix.Controller.render(:"403")
     |> halt()

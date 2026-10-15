@@ -642,16 +642,28 @@ defmodule Platform.Tasks do
     update_task(task, %{needs_promotion: false})
   end
 
+  @doc """
+  Update a task. When a caller supplies `:access_scope`, re-check `tasks.write`
+  on this task before any write or broadcast. Omitted scope retains the
+  existing system-call behaviour; a supplied nil scope fails closed.
+  """
   def update_task(%Task{} = task, attrs, opts \\ []) do
-    task
-    |> Task.changeset(attrs)
-    |> Repo.update()
-    |> case do
-      {:ok, updated} ->
-        after_task_update(task, updated, opts)
+    with :ok <- authorize_task_update(task, opts) do
+      task
+      |> Task.changeset(attrs)
+      |> Repo.update()
+      |> case do
+        {:ok, updated} -> after_task_update(task, updated, opts)
+        error -> error
+      end
+    end
+  end
 
-      error ->
-        error
+  defp authorize_task_update(task, opts) do
+    if Keyword.has_key?(opts, :access_scope) do
+      Platform.Access.authorize(Keyword.get(opts, :access_scope), "tasks.write", task)
+    else
+      :ok
     end
   end
 

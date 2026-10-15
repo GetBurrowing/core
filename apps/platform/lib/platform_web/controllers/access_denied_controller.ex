@@ -13,6 +13,7 @@ defmodule PlatformWeb.AccessDeniedController do
 
     conn
     |> put_status(:forbidden)
+    |> assign(:access_denied, true)
     |> put_view(html: PlatformWeb.ErrorHTML)
     |> render(:"403", module_label: module_label)
   end

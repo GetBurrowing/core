@@ -15,7 +15,9 @@
       name="viewport"
       content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, interactive-widget=resizes-content"
     />
-    <meta name="csrf-token" content={get_csrf_token()} />
+    <%!-- A denial page has no interactive controls. Exclude the per-response
+         token so known and missing resource URLs have identical 403 bodies. --%>
+    <meta :if={!assigns[:access_denied]} name="csrf-token" content={get_csrf_token()} />
     <%!-- Install identity (task 01a0879a stage 7). ONE row read per render,
          deliberately uncached: "upload, refresh, Add to Home Screen" is the
          requirement, and Safari reads `apple-touch-icon` and

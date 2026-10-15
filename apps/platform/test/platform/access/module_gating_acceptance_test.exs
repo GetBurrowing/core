@@ -69,11 +69,6 @@ defmodule Platform.Access.ModuleGatingAcceptanceTest do
   defp authed(user), do: build_conn() |> init_test_session(current_user_id: user.id)
   defp scope(user), do: user.id |> Accounts.get_user() |> Scope.for_user()
 
-  defp denial_content(conn) do
-    [content] = Regex.run(~r|<main\b.*</main>|s, conn.resp_body)
-    content
-  end
-
   defp keys(html, selector) do
     html
     |> LazyHTML.from_fragment()
@@ -139,9 +134,7 @@ defmodule Platform.Access.ModuleGatingAcceptanceTest do
 
       existing = get(authed(ctx.guest), "/tasks/#{ctx.task.id}")
       missing = get(authed(ctx.guest), "/tasks/#{Ecto.UUID.generate()}")
-      # The endpoint creates a fresh CSRF token in each response's head. The
-      # denial content itself must be byte-identical for real and absent ids.
-      assert denial_content(existing) == denial_content(missing)
+      assert existing.resp_body == missing.resp_body
 
       assert {:error, {_, %{to: "/access-denied?module=admin"}}} =
                live(authed(ctx.member), "/admin/branding")
@@ -182,7 +175,17 @@ defmodule Platform.Access.ModuleGatingAcceptanceTest do
       assert Access.authorize(s, "tasks.write", {:project, ctx.q.id}) ==
                {:error, :unauthorized}
 
+      original_title = ctx.task.title
+      assert {:error, :unauthorized} =
+               Tasks.update_task(ctx.task, %{title: unique("forbidden update")}, access_scope: s)
+
+      assert Repo.get!(Task, ctx.task.id).title == original_title
+      assert {:error, :unauthorized} =
+               Tasks.update_task(ctx.task, %{title: unique("nil scope update")}, access_scope: nil)
+
+      assert Repo.get!(Task, ctx.task.id).title == original_title
       assert {:ok, %Task{}} = Tasks.update_task(ctx.task, %{title: unique("system update")})
+      refute Repo.get!(Task, ctx.task.id).title == original_title
     end
   end
 
