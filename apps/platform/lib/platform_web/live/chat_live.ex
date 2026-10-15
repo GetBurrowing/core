@@ -4205,20 +4205,16 @@ defmodule PlatformWeb.ChatLive do
   def on_access_changed(socket) do
     socket = socket |> refresh_rail() |> release_revoked_rail_topics()
 
-    case socket.assigns[:active_space] do
-      %{id: id} ->
-        if Enum.any?(socket.assigns[:channels] || [], &(&1.id == id)) or
-             Enum.any?(socket.assigns[:dm_conversations] || [], &(&1.id == id)) do
-          socket
-        else
-          socket
-          |> unsubscribe_space(id, :chat_active)
-          |> put_flash(:error, "You no longer have access to that channel.")
-          |> push_navigate(to: "/chat")
-        end
+    space = socket.assigns[:active_space]
 
-      _ ->
-        socket
+    if socket.assigns[:embedded] or is_nil(space) or
+         Platform.Access.can?(socket.assigns[:access_scope], "chat.read", space) do
+      socket
+    else
+      socket
+      |> unsubscribe_space(space.id, :chat_active)
+      |> put_flash(:error, "You no longer have access to that channel.")
+      |> push_navigate(to: "/chat")
     end
   end
 
