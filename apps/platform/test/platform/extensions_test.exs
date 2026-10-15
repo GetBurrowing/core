@@ -604,7 +604,13 @@ defmodule Platform.ExtensionsTest do
     # prefix mode (both paths ending in `/` route to `Wiki.rename_prefix/3`).
     # Tool names and bundles are unchanged (the name assertion above passes
     # unmodified). Measured on moon at the stage-2 branch.
-    @main_tool_digest_off "416b7de2d657c11b857aa4c81b4778316a843ee61f280a4a00d01492071aca7e"
+    #
+    # Re-pinned by task 01a1386d-e528 stage 5: the `canvas_get` tool's
+    # `limitations` now says a canvas a `canvas.read` deny covers answers
+    # exactly as a nonexistent one (canvas_get passes the runtime's Access
+    # Scope to `ToolAccess.fetch_for_read/3`). Names and bundles unchanged.
+    # Measured on moon at the stage-5 wip ref.
+    @main_tool_digest_off "f42830845905858ffe772d4c54fba5219a74f8e98cbfb057e2867a35aa2d1fb1"
     @main_kinds_summaries_digest_off "26c0704185201d0926a8bcb6db6be411b821c54fcba3269676c631969944df72"
     @main_kinds_tool_schemas_digest_off "264902e4c54f3146fe5be6e658c4717aafc6382ea233523ca505607d848e0925"
     # main's lists minus exactly `play`.

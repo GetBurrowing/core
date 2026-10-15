@@ -1690,7 +1690,11 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   defp explorer_task_group(socket) do
     with %{metadata: metadata} <- socket.assigns[:active_space],
          task_id when is_binary(task_id) <- Map.get(metadata || %{}, "task_id"),
-         [_ | _] = rows <- explorer_task_rows(CanvasAttachments.list_task_canvases(task_id)) do
+         [_ | _] = rows <-
+           task_id
+           |> CanvasAttachments.list_task_canvases()
+           |> explorer_task_rows()
+           |> drop_denied_task_rows(socket.assigns[:access_scope]) do
       [%{key: "task", label: "On this task", rows: rows, total_count: length(rows)}]
     else
       _ -> []
@@ -1729,6 +1733,17 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   end
 
   defp explorer_task_row(_entry), do: nil
+
+  # RBAC v2 (task 01a1386d-e528 stage 5): the attachment rows bypass
+  # `Chat.list_canvas_groups/2`, so a `canvas.read` deny is applied here, per
+  # row, through `Platform.Access.within?/4` (the `CanvasAccess.fetch_for_viewer/3`
+  # check). The count is `length(rows)` AFTER this, so a hidden canvas leaves
+  # both the rows and the header count. No Scope on the socket: unchanged.
+  defp drop_denied_task_rows(rows, %Platform.Access.Scope{} = scope) do
+    Enum.filter(rows, &Platform.Access.within?(scope, "canvas.read", {:canvas, &1.id}, true))
+  end
+
+  defp drop_denied_task_rows(rows, _scope), do: rows
 
   # In search mode a pinned group is filtered to its matches, the same way a
   # space group is, so the component's "expand every group holding a match"

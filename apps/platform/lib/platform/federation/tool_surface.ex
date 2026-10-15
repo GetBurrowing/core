@@ -1632,7 +1632,7 @@ defmodule Platform.Federation.ToolSurface do
         # a `limitations` field is a contract a remote runtime branches on, not
         # a maintainer's note.
         limitations:
-          "Reads only canvases you hold a grant on: a participant of the canvas's space, or an agent bound by phase_assignees to a live task the canvas is attached to. Anything else is denied, and a canvas that does not exist is reported separately from one you may not read. Full mode may return large payloads for complex canvases.",
+          "Reads only canvases you hold a grant on: a participant of the canvas's space, or an agent bound by phase_assignees to a live task the canvas is attached to. Anything else is denied, and a canvas that does not exist is reported separately from one you may not read. A canvas a `canvas.read` deny covers for you answers exactly as a canvas that does not exist. Full mode may return large payloads for complex canvases.",
         when_to_use:
           "When you need to inspect a canvas's content before updating it, to present canvas data to a user, to read a design direction canvas attached to your task, or to get its view_url"
       },
@@ -4578,7 +4578,15 @@ defmodule Platform.Federation.ToolSurface do
     canvas_id = Map.get(args, "canvas_id")
     mode = Map.get(args, "mode", "summary")
 
-    with {:ok, canvas} <- Platform.Chat.Canvas.ToolAccess.fetch_for_read(canvas_id, context) do
+    # Task 01a1386d-e528 stage 5: the calling runtime's Scope, so a canvas an
+    # agent-principal `canvas.read` deny covers answers the same not-found
+    # envelope as a nonexistent id (the `canvas_list` read check, stage 3).
+    with {:ok, canvas} <-
+           Platform.Chat.Canvas.ToolAccess.fetch_for_read(
+             canvas_id,
+             context,
+             runtime_access_opts(context)
+           ) do
       result = %{
         id: canvas.id,
         title: canvas.title,

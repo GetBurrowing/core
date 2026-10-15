@@ -165,10 +165,17 @@ defmodule Platform.Chat.Canvas.ToolAccess do
   Audit is left at its default (`true`). The remount de-duplication that
   `fetch_for_viewer/3`'s `:audit` option exists for is a LiveView concern; a
   tool call is a discrete read and should mint a row.
+
+  `opts` is passed to `CanvasAccess.fetch_for_viewer/3`. Its `:access_scope`
+  (task 01a1386d-e528 stage 5, the calling runtime's
+  `Platform.Access.Scope.for_runtime/1`) makes a canvas a `canvas.read` deny
+  covers answer with the SAME not-found payload as a canvas id that does not
+  exist. No `:access_scope`, or no grant naming `canvas.read`, and the answer
+  is unchanged.
   """
-  @spec fetch_for_read(term(), context()) :: {:ok, Canvas.t()} | {:error, payload()}
-  def fetch_for_read(canvas_id, context) do
-    case CanvasAccess.fetch_for_viewer(canvas_id, actor(context)) do
+  @spec fetch_for_read(term(), context(), keyword()) :: {:ok, Canvas.t()} | {:error, payload()}
+  def fetch_for_read(canvas_id, context, opts \\ []) do
+    case CanvasAccess.fetch_for_viewer(canvas_id, actor(context), opts) do
       {:ok, %Canvas{deleted_at: nil} = canvas, _level} ->
         {:ok, canvas}
 
