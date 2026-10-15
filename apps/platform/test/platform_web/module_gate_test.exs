@@ -43,10 +43,9 @@ defmodule PlatformWeb.ModuleGateTest do
 
     missing =
       for route <- Phoenix.Router.routes(PlatformWeb.Router),
-          {_view, _action, _opts, %{name: session}} =
-            route.metadata[:phoenix_live_view],
+          {view, _action, _opts, %{name: session}} <-
+            [route.metadata[:phoenix_live_view]],
           session in @gated_sessions,
-          view = elem(route.metadata[:phoenix_live_view], 0),
           view not in known,
           do: {route.path, view}
 

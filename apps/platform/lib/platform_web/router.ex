@@ -574,7 +574,6 @@ defmodule PlatformWeb.Router do
     # `live("/meetings", MeetingLive, :index)`: a landing target exists.
     # Nobody re-examined the deferral when the fact under it changed.
     get("/", PageController, :home)
-    get("/access-denied", AccessDeniedController, :show)
   end
 
   # Invited-member meeting surface on the `meet.` host (task 019fb955-f8b1
@@ -822,6 +821,7 @@ defmodule PlatformWeb.Router do
 
     # Root redirects to /chat
     get("/", PageController, :home)
+    get("/access-denied", AccessDeniedController, :show)
 
     get("/artifacts/preview", ArtifactPreviewController, :show)
     get("/api/transcripts/:id/download", TranscriptController, :show)
