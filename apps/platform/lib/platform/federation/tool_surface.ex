@@ -7511,7 +7511,9 @@ defmodule Platform.Federation.ToolSurface do
 
       with :ok <- authorize_org_filter(agent, Map.get(args, "org_id")),
            {:ok, opts} <- search_opts_from(args, agent) do
-        query |> Search.search(opts ++ memory_access_opts(context)) |> bound_memory_search_payload()
+        query
+        |> Search.search(opts ++ memory_access_opts(context))
+        |> bound_memory_search_payload()
       end
     end
   end

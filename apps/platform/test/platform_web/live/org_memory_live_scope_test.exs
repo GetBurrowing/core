@@ -187,7 +187,15 @@ defmodule PlatformWeb.OrgMemoryLiveScopeTest do
   # when any target exists. Page rows, ids, versions and the single-page
   # overwrite semantics are unchanged. Stage 1 did not run this file, so the
   # pin is re-taken by stage 2, measured on moon at the stage-2 branch.
-  @wiki_ex_sha256_2026_09_08 "6300cf22171047f52561b70db00e55740303202d52f9765973b237d71a631ef4"
+  #
+  # Re-pinned 2026-10-15 (task 01a1386d-e528 stage 4, same approved plan):
+  # read scoping, authorized by the stage's specification. `get_page/2`,
+  # `list_pages/1` and `list_pages_updated_since/2` accept an OPTIONAL
+  # `:access_scope`; given, a page the scope may not `memory.read` is absent
+  # (a denied alias target too), through the new `scope_by/3` /
+  # `maybe_scope_by/2`, a thin call to `Platform.Access.Query`. Without the
+  # opt every query is byte-identical to before; no write path moved.
+  @wiki_ex_sha256_2026_09_08 "e4a425035a0c843dc3ad022cd8e44b508ccfe2a8c723d629f99bb1e5995c714d"
 
   test "wiki.ex matches the 2026-09-08 authorized domain surface (sha256 pin)" do
     rel_path = "lib/platform/org/wiki.ex"

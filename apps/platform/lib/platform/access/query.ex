@@ -135,9 +135,14 @@ defmodule Platform.Access.Query do
   def where_readable(query, %Scope{} = scope, permission, type, mapping)
       when type in @memory_types do
     cond do
-      not Access.grants_apply?(scope, permission) -> query
-      match?(%Scope{actor: %AgentRuntime{}}, scope) -> restrict(query, scope, permission, type, Map.delete(Map.new(mapping), :base))
-      true -> where_permitted(query, scope, permission, type, mapping)
+      not Access.grants_apply?(scope, permission) ->
+        query
+
+      match?(%Scope{actor: %AgentRuntime{}}, scope) ->
+        restrict(query, scope, permission, type, Map.delete(Map.new(mapping), :base))
+
+      true ->
+        where_permitted(query, scope, permission, type, mapping)
     end
   end
 
