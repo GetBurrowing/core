@@ -103,6 +103,11 @@ defmodule Platform.Access.EquivalenceTest do
     # the ExternalUserScope plug admits (its slug lookup is org-scoped).
     chan_a = space!("channel", org_a, [ext_admin, mixed_admin])
     chan_root = space!("channel", root, [ext_root, ext_root_admin])
+    # A mixed user resolves a slug against `Tenancy.load_membership/1`'s pick,
+    # the first row of an UNORDERED membership preload, so a page in only one
+    # of their orgs loads or 403s by row order. One channel per org keeps the
+    # rail measurement independent of that pick.
+    _ = World.add_user!(c.id, mixed_admin.id)
     _ = World.add_user!(w.a.id, mixed.id)
 
     # Projects and tasks in four orgs, including a foreign tenant no row is a
@@ -483,18 +488,22 @@ defmodule Platform.Access.EquivalenceTest do
     candidates =
       if Tenancy.external_user?(user) do
         spaces = listed_spaces(user, ExternalScope.for_user(user)) |> spaces_of(ctx)
-        Enum.map(spaces, &"/chat/#{&1.slug}") ++ ["/chat"]
+        Enum.uniq(Enum.map(spaces, &"/chat/#{&1.slug}") ++ ["/chat"])
       else
         ["/tasks"]
       end
 
-    html =
-      Enum.find_value(candidates, fn path ->
+    {html, tried} =
+      Enum.reduce_while(candidates, {nil, []}, fn path, {nil, tried} ->
         conn = authed(user) |> get(path)
-        if conn.status == 200, do: html_response(conn, 200)
+
+        case conn.status do
+          200 -> {:halt, {html_response(conn, 200), tried}}
+          status -> {:cont, {nil, [{path, status, get_resp_header(conn, "location")} | tried]}}
+        end
       end)
 
-    assert html, "no page in #{inspect(candidates)} loads for #{user.id}"
+    assert html, "no page loads for #{user.id}: #{inspect(Enum.reverse(tried))}"
 
     html
     |> LazyHTML.from_document()
