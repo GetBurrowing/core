@@ -1,8 +1,8 @@
 defmodule Platform.Access.AgentWake do
   @moduledoc """
-  May an agent be WOKEN onto a task or a space (task 01a1386e-45a5 stage 2,
-  RBAC stack member 7; `0058-rbac-v2-roles-scopes-and-agent-capping.md
-  § Precedence`, "The grant-less short-circuit")?
+  May an agent be WOKEN onto a task or a space? Task 01a1386e-45a5 stage 2,
+  RBAC stack member 7. ADR:
+  `0058-rbac-v2-roles-scopes-and-agent-capping.md § Precedence`, "The grant-less short-circuit".
 
   Three surfaces wake an agent and call this module after their own existing
   check has admitted: `Platform.Orchestration.PhaseRuntime.resolve/1` (the

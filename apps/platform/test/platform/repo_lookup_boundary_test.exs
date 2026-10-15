@@ -522,6 +522,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "task 01a1386d-e528 stage 2: `fetch_resource(:memory_node, id)` is reached only through `resource_fields/1`'s Platform.UUID.valid?/1 check on a caller-supplied `{:memory_node, id}`; a malformed id is `{:error, :resource_not_found}`. Same test as above"},
     {"platform/access/grants.ex", :platform_uuid_guard, "-", 2, :must_cast,
      "task 01a1386d-e528 stage 2: (1) `revoke/1`'s grant id; (2) `resource_fields/1`'s `{:project | :space | :canvas | :memory_node, id}` before the three `Repo.one` lookups (this file's `@repo_one_counts` entry) and the `get(Node)` above. Used as a BOOLEAN and the string discarded; covered by precedence_test.exs \"malformed ids are not found and decide nothing\""},
+    {"platform/access/agent_wake.ex", :platform_uuid_guard, "-", 1, :must_cast,
+     "task 01a1386e-45a5 stage 2: `valid_id?/1` filters the agent ids `denied/3` and `check_agent/4` receive (participant_id values and `%Agent{}` ids today, but both are public API) before they are pinned with `type(^ids, {:array, :binary_id})`, so a non-UUID id is never queried and decides nothing. Used as a BOOLEAN and the string discarded"},
     {"platform/access/lineage.ex", :platform_uuid_guard, "-", 1, :must_cast,
      "task 01a1386d-e528 stage 2: `typed/1` makes a `{type, id}` resource tuple `:untyped` unless its id is a canonical UUID, so every `Repo.one` in `ancestors/1` and `base_candidates/1` (this file's `@repo_one_counts` entry) sees only valid ids. A tuple can carry a LiveView param or an MCP argument from stage 3 on; covered by precedence_test.exs \"malformed ids are not found and decide nothing\""},
     {"platform/org/wiki/indexer.ex", :get, "WikiJournalEntry", 1, :safe_internal,

@@ -139,14 +139,22 @@ defmodule Platform.Access.BypassDispatchTest do
     test "the watcher starts no router for a refused task", ctx do
       %{agent_b: b, u: u} = ctx
       start_supervised!(TaskRouterWatcher)
+
+      # The positive control runs on a SIBLING task in Q rather than on TQ
+      # itself. An earlier version started and stopped TQ's own router for
+      # the control; one full-suite run then found TQ running after the
+      # deny, most likely restarted by a board event that was still in the
+      # watcher's mailbox before the deny landed (not confirmed). TQ is now
+      # never started, so its only evaluation happens after the deny.
+      control = dispatchable_task!(ctx.q, b, "bpd watcher q control")
       tq = dispatchable_task!(ctx.q, b, "bpd watcher q")
       tp = dispatchable_task!(ctx.p, b, "bpd watcher p")
-      on_exit(fn -> Enum.each([tq.id, tp.id], &stop_router/1) end)
+      on_exit(fn -> Enum.each([control.id, tq.id, tp.id], &stop_router/1) end)
 
-      # Positive control: the watcher starts a router for TQ before the deny.
-      watcher_evaluate([tq])
-      assert TaskRouterWatcher.router_running?(tq.id)
-      stop_router(tq.id)
+      # Positive control: the watcher starts a router for a Q task before
+      # the deny, on the same agent and runtime.
+      watcher_evaluate([control])
+      assert TaskRouterWatcher.router_running?(control.id)
       refute TaskRouterWatcher.router_running?(tq.id)
 
       deny!({:user, u.id}, "tasks.read", {:project, ctx.q.id})

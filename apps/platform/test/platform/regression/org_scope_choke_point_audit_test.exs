@@ -132,6 +132,15 @@ defmodule Platform.Regression.OrgScopeChokePointAuditTest do
     # together.
     "lib/platform/meetings/archive.ex",
 
+    # `Access.AgentWake.any_grants?/1` (task 01a1386e-45a5 stage 2) is not
+    # a viewer scope and filters no rows anyone reads. Its
+    # `g.org_id in subquery(owner_orgs)` asks whether ANY role grant
+    # exists in an org an agent owner belongs to, as the one-query
+    # short-circuit before building Scopes; it deliberately OVER-matches
+    # (every role key in those orgs), so it can only cause the full
+    # `Access.check/3` decision to run, never decide visibility itself.
+    "lib/platform/access/agent_wake.ex",
+
     # `Mobile.AppPeople.org_mates/1` — the Burrow people directory
     # (`GET /api/app/people?scope=directory`) lists the members of the
     # orgs the caller BELONGS to. That is deliberately narrower than
