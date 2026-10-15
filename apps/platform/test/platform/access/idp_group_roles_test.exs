@@ -15,6 +15,7 @@ defmodule Platform.Access.IdpGroupRolesTest do
 
   test "real OIDC callback applies every mapped custom role, then revokes stale IdP rows without touching manual rows",
        %{conn: conn, root: root} do
+    watch_admission()
     {:ok, finance} = Roles.create_custom_role(root, %{name: "Finance"})
     {:ok, engineering} = Roles.create_custom_role(root, %{name: "Engineering"})
     {:ok, _} = IdpGroupRoles.create(%{group_value: " Finance-Team ", role_key: finance.key, org_id: root.id})
@@ -25,6 +26,7 @@ defmodule Platform.Access.IdpGroupRolesTest do
     user_id = get_session(conn, :current_user_id)
     assert user_id
     assert assignments(user_id, "idp") == MapSet.new([finance.key, engineering.key])
+    assert_receive {:admission, %{idp_roles_applied: 2, idp_roles_revoked: 0}}
 
     {:ok, _} = Roles.assign(%{principal: {:user, user_id}, role: finance})
     conn = callback(Phoenix.ConnTest.build_conn(), ["eng-team"])
@@ -32,11 +34,13 @@ defmodule Platform.Access.IdpGroupRolesTest do
     assert get_session(conn, :current_user_id) == user_id
     assert assignments(user_id, "idp") == MapSet.new([engineering.key])
     assert assignments(user_id, "manual") == MapSet.new([finance.key])
+    assert_receive {:admission, %{idp_roles_applied: 0, idp_roles_revoked: 1}}
 
     conn = callback(Phoenix.ConnTest.build_conn(), [])
     assert redirected_to(conn, 302) == "/"
     assert assignments(user_id, "idp") == MapSet.new()
     assert assignments(user_id, "manual") == MapSet.new([finance.key])
+    assert_receive {:admission, %{idp_roles_applied: 0, idp_roles_revoked: 1}}
   end
 
   test "absent groups claim leaves existing IdP assignments untouched", %{conn: conn, root: root} do
@@ -45,10 +49,12 @@ defmodule Platform.Access.IdpGroupRolesTest do
     conn = callback(conn, ["claim-present"])
     user_id = get_session(conn, :current_user_id)
     assert assignments(user_id, "idp") == MapSet.new([role.key])
+    before = assignment_ids(user_id)
 
     conn = callback(Phoenix.ConnTest.build_conn(), :absent)
     assert redirected_to(conn, 302) == "/"
     assert assignments(user_id, "idp") == MapSet.new([role.key])
+    assert assignment_ids(user_id) == before
   end
 
   test "implicit sxi-external and stored guest groups hold without assigning custom roles", %{conn: conn, root: root} do
@@ -81,6 +87,11 @@ defmodule Platform.Access.IdpGroupRolesTest do
 
     assert {:error, :implicit_mapping} =
              IdpGroupRoles.create(%{group_value: "sxi-external", role_key: "guest"})
+
+    {:ok, mapping} = IdpGroupRoles.create(%{group_value: "partners-ext", role_key: "guest"})
+    assert Enum.any?(IdpGroupRoles.mappings(), &(&1.group_value == "partners-ext"))
+    assert {:ok, _} = IdpGroupRoles.delete(mapping)
+    refute IdpGroupRoles.guest_group?(["partners-ext"])
   end
 
   test "pre-staged sxi-external login is full but its other mapped roles are not synced",
@@ -114,6 +125,30 @@ defmodule Platform.Access.IdpGroupRolesTest do
       )
     )
     |> MapSet.new()
+  end
+
+  defp assignment_ids(user_id) do
+    Repo.all(
+      from(a in RoleAssignment,
+        where: a.principal_type == "user" and a.principal_id == ^user_id and a.source == "idp",
+        select: a.id
+      )
+    )
+  end
+
+  defp watch_admission do
+    handler = "idp-role-admission-#{System.unique_integer([:positive])}"
+    test_pid = self()
+
+    :ok =
+      :telemetry.attach(
+        handler,
+        [:platform, :auth, :external_admission],
+        fn _, _, metadata, _ -> send(test_pid, {:admission, metadata}) end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler) end)
   end
 
   defp callback(conn, groups) do

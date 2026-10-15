@@ -448,7 +448,7 @@ defmodule Platform.Accounts.ExternalAdmission do
   end
 
   # Emit telemetry and return the result (so callers can tail-return it).
-  defp emit(result, action \\ nil, counts \\ %{applied: 0, revoked: 0})
+  defp emit(result, action, counts \\ %{applied: 0, revoked: 0})
 
   defp emit(
          %Result{
