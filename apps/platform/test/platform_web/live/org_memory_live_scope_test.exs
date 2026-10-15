@@ -176,7 +176,18 @@ defmodule PlatformWeb.OrgMemoryLiveScopeTest do
   # "the Fabrikam default") now say "the root org" / "the root-org default".
   # No function, arity, clause, query or return value moved — `git diff` on
   # the file is those two comment lines and nothing else.
-  @wiki_ex_sha256_2026_09_08 "110c72c4e99a90cc4e7bdf9fe03cb80c5e07fcbd80f16abc9f5f7d86e500be42"
+  #
+  # Re-pinned 2026-10-15 (task 01a1386d-e528, RBAC resource grants, approved
+  # plan `01a13aa3-89c2`): stage 1 made two authorized domain changes,
+  # recorded in `0058-rbac-v2-roles-scopes-and-agent-capping.md § Memory grants`.
+  # `do_rename` calls `Platform.Org.Wiki.Nodes.move/3` inside its transaction
+  # after the page upsert and delete succeed, so a node (and the grants on
+  # it) follows a rename; and the new `rename_prefix/3` renames every page
+  # under a prefix all-or-nothing, refusing with `{:error, {:conflict, paths}}`
+  # when any target exists. Page rows, ids, versions and the single-page
+  # overwrite semantics are unchanged. Stage 1 did not run this file, so the
+  # pin is re-taken by stage 2, measured on moon at the stage-2 branch.
+  @wiki_ex_sha256_2026_09_08 "6300cf22171047f52561b70db00e55740303202d52f9765973b237d71a631ef4"
 
   test "wiki.ex matches the 2026-09-08 authorized domain surface (sha256 pin)" do
     rel_path = "lib/platform/org/wiki.ex"
