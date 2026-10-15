@@ -178,11 +178,15 @@ defmodule Platform.Access.MemoryListingScopeTest do
   end
 
   defp leaks?(resp, ctx) do
-    json = Jason.encode!(resp)
+    json = encode(resp)
     String.contains?(json, ctx.path_marker) or String.contains?(json, ctx.body_marker)
   end
 
   defp paths(rows), do: Enum.map(rows, & &1.path)
+
+  # The tool envelope's payload as JSON (`{:ok | :error, map}` unwrapped).
+  defp encode({tag, payload}) when tag in [:ok, :error], do: Jason.encode!(payload)
+  defp encode(payload), do: Jason.encode!(payload)
 
   # ── memory_search ───────────────────────────────────────────────────────
 
@@ -256,7 +260,7 @@ defmodule Platform.Access.MemoryListingScopeTest do
 
       denied = call(rt, "memory_view", %{"path" => ctx.secret})
       assert {:error, %{code: :not_found}} = denied
-      refute String.contains?(Jason.encode!(denied), ctx.body_marker)
+      refute String.contains?(encode(denied), ctx.body_marker)
 
       assert {:ok, %{content: sibling}} = call(rt, "memory_view", %{"path" => ctx.sibling})
       assert sibling =~ "sibling notes"
@@ -350,9 +354,10 @@ defmodule Platform.Access.MemoryListingScopeTest do
       u = user!("member")
       since = DateTime.add(DateTime.utc_now(), -3600, :second)
 
-      assert ctx.secret in paths(Wiki.list_pages(access_scope: scope(u))), "positive control"
+      assert ctx.secret in paths_of(Wiki.list_pages(access_scope: scope(u))), "positive control"
       assert Wiki.get_page(ctx.secret, access_scope: scope(u))
-      assert ctx.secret in paths(Wiki.list_pages_updated_since(since, access_scope: scope(u)))
+
+      assert ctx.secret in paths_of(Wiki.list_pages_updated_since(since, access_scope: scope(u)))
 
       deny!(u, ctx.secret)
       s = scope(u)
@@ -373,11 +378,27 @@ defmodule Platform.Access.MemoryListingScopeTest do
 
     test "a denied page is not reachable through an alias of its old name", ctx do
       u = user!("member")
-      {:ok, _} = Wiki.rename_page(ctx.secret, "org/page/eng/secret/renamed.md")
-      assert Wiki.get_page(ctx.secret, access_scope: scope(u)), "positive control: alias hit"
+      page = Wiki.get_page(ctx.secret)
+      legacy = "LEGACY_#{ctx.path_marker}.md"
 
-      deny!(u, "org/page/eng/secret/renamed.md")
-      assert Wiki.get_page(ctx.secret, access_scope: scope(u)) == nil
+      Ecto.Adapters.SQL.query!(
+        Repo,
+        "INSERT INTO org_wiki_aliases (workspace_id, old_path, current_id, inserted_at) VALUES ($1, $2, $3, now())",
+        [
+          Ecto.UUID.dump!("00000000-0000-0000-0000-000000000000"),
+          legacy,
+          Ecto.UUID.dump!(page.id)
+        ]
+      )
+
+      assert %WikiPage{id: id} = Wiki.get_page(legacy, access_scope: scope(u)),
+             "positive control: the alias resolves"
+
+      assert id == page.id
+
+      deny!(u, ctx.secret)
+      assert Wiki.get_page(legacy, access_scope: scope(u)) == nil
+      assert Wiki.get_page(legacy), "unscoped alias lookups are untouched"
     end
 
     test "a guest with a subtree allow lists only that subtree", ctx do
