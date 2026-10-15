@@ -104,6 +104,7 @@ defmodule Platform.Access.CustomRolesAcceptanceTest do
       assert redirected_to(response, 302) == "/"
       user_id = get_session(response, :current_user_id)
       assert idp_keys(user_id) == MapSet.new([finance.key, ops.key])
+      add_user!(ops_channel.id, user_id)
       scope = Scope.for_user(Accounts.get_user(user_id))
       assert Access.holds_role?(scope, finance.key, root.id)
       assert Access.holds_role?(scope, ops.key, root.id)
