@@ -9,6 +9,8 @@ defmodule PlatformWeb.ShellLive do
 
   alias Phoenix.LiveView.AsyncResult
   alias Platform.Accounts
+  alias Platform.Access.Live, as: AccessLive
+  alias Platform.Access.Scope
   alias Platform.Agents.{Agent, AgentServer, WorkspaceBootstrap}
   alias Platform.Chat
   alias Platform.Chat.Presence, as: ChatPresence
@@ -131,6 +133,7 @@ defmodule PlatformWeb.ShellLive do
         # `type: :user` gate). External users are real user records, so they
         # subscribe and get their own scoped count.
         if is_binary(raw_user_id), do: Inbox.subscribe(raw_user_id)
+        if is_binary(raw_user_id), do: AccessLive.subscribe(raw_user_id)
 
         # One global roster topic for the viewer-scoped union (see
         # `Chat.global_roster_topic/0`). The per-space subscription installed
@@ -605,6 +608,25 @@ defmodule PlatformWeb.ShellLive do
       # read action row is listed without being counted. Opening a row from
       # /inbox (`Inbox.open_item/2`) broadcasts, so the badge moves live.
       # We stay `:cont` so InboxLive's own `handle_info` still runs on `/inbox`.
+      |> attach_hook(:access_live_apply, :handle_info, fn
+        {:access_changed, _change_id}, socket ->
+          user = Accounts.get_user(socket.assigns.current_user_id)
+
+          socket =
+            socket
+            |> assign(:current_user_record, user)
+            |> assign(:access_scope, Scope.for_user(user))
+
+          socket =
+            if function_exported?(socket.view, :on_access_changed, 1),
+              do: socket.view.on_access_changed(socket),
+              else: socket
+
+          {:halt, socket}
+
+        _msg, socket ->
+          {:cont, socket}
+      end)
       |> attach_hook(:inbox_count_refresh, :handle_info, fn
         {evt, _payload}, socket
         when evt in [:inbox_item_added, :inbox_item_dismissed, :inbox_item_read, :inbox_changed] ->

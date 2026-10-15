@@ -1142,8 +1142,8 @@ defmodule PlatformWeb.ChatLive do
       # `@external_scope` the mount used so a channel-to-channel nav re-derives
       # the SAME filtered rail rather than re-broadening it workspace-wide.
       # Internal / nil scope is pass-through, so the internal path is unchanged.
-      scope = socket.assigns.external_scope
-      readable_channels = Chat.list_spaces(kind: "channel", scope: scope)
+      scope = socket.assigns[:access_scope] || socket.assigns.external_scope
+      readable_channels = rail_channels(socket)
 
       listed_channels =
         Chat.list_spaces(
@@ -1151,10 +1151,7 @@ defmodule PlatformWeb.ChatLive do
           scope: channel_listing_scope(socket.assigns.external?, socket.assigns.user_id)
         )
 
-      archived_channels =
-        if socket.assigns.external?,
-          do: [],
-          else: Chat.list_spaces(kind: "channel", archived: true)
+      archived_channels = rail_archived_channels(socket)
 
       restricted_channel_ids =
         restricted_channel_ids(socket, readable_channels ++ listed_channels, archived_channels)
@@ -3363,7 +3360,10 @@ defmodule PlatformWeb.ChatLive do
   # their allowlist. For internal / anonymous sessions `@external_scope` is nil
   # and this is a pass-through — the internal rail is byte-for-byte unchanged.
   defp rail_channels(socket) do
-    Chat.list_spaces(kind: "channel", scope: socket.assigns[:external_scope])
+    Chat.list_spaces(
+      kind: "channel",
+      scope: socket.assigns[:access_scope] || socket.assigns[:external_scope]
+    )
   end
 
   # The rail's ARCHIVED channel list. Sibling of `rail_channels/1` above, and
@@ -3385,7 +3385,8 @@ defmodule PlatformWeb.ChatLive do
   defp rail_archived_channels(socket) do
     if socket.assigns[:external?],
       do: [],
-      else: Chat.list_spaces(kind: "channel", archived: true)
+      else:
+        Chat.list_spaces(kind: "channel", archived: true, scope: socket.assigns[:access_scope])
   end
 
   # The rail's DM and group conversation list, scoped to the acting user.
@@ -3416,7 +3417,7 @@ defmodule PlatformWeb.ChatLive do
   defp rail_dm_conversations(socket) do
     dm_conversations_for(
       socket.assigns[:user_id],
-      socket.assigns[:external_scope],
+      socket.assigns[:access_scope] || socket.assigns[:external_scope],
       socket.assigns[:embedded]
     )
   end
@@ -4121,8 +4122,33 @@ defmodule PlatformWeb.ChatLive do
   # surfaces have no sidebar and never subscribe (see `do_mount/3`), so they
   # keep their empty lists.
   def handle_info(:sidebar_changed, socket) do
+    {:noreply, refresh_rail(socket)}
+  end
+
+  @doc "Refresh this socket's rail after ShellLive rebuilds its access scope."
+  def on_access_changed(socket) do
+    socket = socket |> refresh_rail() |> release_revoked_rail_topics()
+
+    case socket.assigns[:active_space] do
+      %{id: id} ->
+        if Enum.any?(socket.assigns[:channels] || [], &(&1.id == id)) or
+             Enum.any?(socket.assigns[:dm_conversations] || [], &(&1.id == id)) do
+          socket
+        else
+          socket
+          |> unsubscribe_space(id, :chat_active)
+          |> put_flash(:error, "You no longer have access to that channel.")
+          |> push_navigate(to: "/chat")
+        end
+
+      _ ->
+        socket
+    end
+  end
+
+  defp refresh_rail(socket) do
     if socket.assigns.embedded do
-      {:noreply, socket}
+      socket
     else
       # `rail_channels/1`, not a bare `Chat.list_spaces/1` (task 019ffebf-4745).
       # This arm runs in the acting user's OTHER tabs, so an unscoped read here
@@ -4184,8 +4210,19 @@ defmodule PlatformWeb.ChatLive do
       # sites already emit `:sidebar_changed`, every one of them changes what
       # the viewer can see, and a grant path added later that forgets a second
       # bespoke broadcast would re-create this exact defect one layer up.
-      {:noreply, reconcile_rail_subscriptions(socket)}
+      reconcile_rail_subscriptions(socket)
     end
+  end
+
+  defp release_revoked_rail_topics(socket) do
+    desired = rail_subscribe_space_ids(socket)
+
+    socket.assigns[:chat_space_holders]
+    |> Enum.reduce(socket, fn {space_id, holders}, acc ->
+      if MapSet.member?(holders, :chat_rail) and not MapSet.member?(desired, space_id),
+        do: unsubscribe_space(acc, space_id, :chat_rail),
+        else: acc
+    end)
   end
 
   # Shared org-DEFAULT invalidation (chat sidebar Stage 6). Fired on the

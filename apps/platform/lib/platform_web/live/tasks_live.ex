@@ -42,6 +42,9 @@ defmodule PlatformWeb.TasksLive do
   """
   use PlatformWeb, :live_view
 
+  @doc "Reload the board against the scope rebuilt by ShellLive."
+  def on_access_changed(socket), do: BoardHooks.refresh_board(socket)
+
   alias Platform.Chat
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Skills

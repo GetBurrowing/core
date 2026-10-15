@@ -56,7 +56,7 @@ defmodule Platform.Access.Changes do
 
   import Ecto.Query
 
-  alias Platform.Access.{Change, Delegation, Grant, Scope}
+  alias Platform.Access.{Change, Delegation, Grant, Live, Scope}
   alias Platform.Agents.AgentRuntime
   alias Platform.Repo
 
@@ -353,6 +353,7 @@ defmodule Platform.Access.Changes do
 
   defp after_commit({:ok, %{change: %Change{} = change}} = ok) do
     emit(change)
+    Live.broadcast_changed(change)
     ok
   end
 

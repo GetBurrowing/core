@@ -56,11 +56,10 @@ defmodule Platform.Access.Delegation do
   cannot name an org (`Platform.Access.Grant` resource types), so no grant
   change moves who manages the org itself; that is a membership question.
 
-  **Org-role demotion is NOT guarded here, deliberately.** The only demotion
-  code is `Platform.Tenancy.revoke_admin/2`, the operator/IEx path, and it
-  has no human- or agent-facing caller (`SignInAdmin`'s private `set_role/3`
-  runs only on invite). `test/platform/access/delegation_test.exs` pins that
-  no `PlatformWeb` or MCP module calls it.
+  `Platform.SignInAdmin` guards its private invite-restoration demotion path.
+  Raw `Platform.Tenancy.revoke_admin/2` remains an unguarded operator/IEx path;
+  it has no human- or agent-facing caller. `delegation_test.exs` pins that
+  boundary.
   """
 
   import Ecto.Query, only: [from: 2]
