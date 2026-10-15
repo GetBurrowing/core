@@ -157,6 +157,7 @@ defmodule Platform.Access.DelegationLiveAcceptanceTest do
       assert {:ok, _} = Grants.revoke(c_grant)
       after_html = render(view)
       elapsed_ms = System.monotonic_time(:millisecond) - started
+      IO.puts("acceptance live revoke elapsed_ms=#{elapsed_ms}")
 
       refute after_html =~ c.name
       assert after_html =~ d.name
