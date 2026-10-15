@@ -69,8 +69,7 @@ defmodule Platform.Chat.ExternalScope do
 
   Task `01a1386d-e528` stage 3,
   `0058-rbac-v2-roles-scopes-and-agent-capping.md § Precedence`. The three Scope clauses above hand their filter to
-  `Platform.Access.Query.restrict/5` (`visible_space_id?/2` to
-  `Platform.Access.within?/4`) as the EXISTING check, under `chat.read` on
+  `Platform.Access.Query.restrict/5` (including `visible_space_id?/2`) as the EXISTING check, under `chat.read` on
   resource type `:space`:
 
     * no grant naming `chat.read` → exactly the filter described above;
@@ -104,7 +103,6 @@ defmodule Platform.Chat.ExternalScope do
 
   import Ecto.Query
 
-  alias Platform.Access
   alias Platform.Access.{Query, Scope}
   alias Platform.Chat
   alias Platform.Chat.Participant
@@ -233,8 +231,10 @@ defmodule Platform.Chat.ExternalScope do
   """
   @spec visible_space_id?(binary() | nil, t() | Scope.t() | nil) :: boolean()
   def visible_space_id?(space_id, %{__struct__: Scope} = scope) when is_binary(space_id) do
-    base? = visible_space_id?(space_id, from_scope(scope))
-    Access.within?(scope, "chat.read", {:space, space_id}, base?)
+    Platform.Chat.Space
+    |> where([s], s.id == ^space_id)
+    |> scope_spaces(scope)
+    |> Repo.exists?()
   end
 
   def visible_space_id?(space_id, %{__struct__: Scope} = scope),
