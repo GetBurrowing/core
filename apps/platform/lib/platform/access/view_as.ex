@@ -87,10 +87,11 @@ defmodule Platform.Access.ViewAs do
 
     resource_manager? =
       Enum.any?(org_ids, fn org_id ->
-        projects =
-          Tasks.list_projects_for_user(viewer.actor, org_id: org_id, access_scope: viewer)
-
-        channels = Chat.list_spaces(kind: "channel", scope: viewer)
+        # Authorization must see managed resources even when the viewer
+        # cannot read their module's listing. These rows stay inside Access;
+        # the rendered list above remains viewer-scoped.
+        projects = Tasks.list_projects_unscoped(org_id: org_id)
+        channels = Chat.list_spaces(kind: "channel")
 
         Enum.any?(projects, &Access.can?(viewer, "access.manage", &1)) or
           Enum.any?(channels, &(&1.org_id == org_id and Access.can?(viewer, "access.manage", &1)))

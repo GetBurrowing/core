@@ -132,14 +132,24 @@ defmodule PlatformWeb.AccessViewAsTest do
     {:ok, p} = Tasks.create_project(%{name: "Visible view project #{n}", org_id: org.id})
     {:ok, q} = Tasks.create_project(%{name: "Hidden view project #{n}", org_id: org.id})
 
-    for permission <- ~w(access.manage tasks.read) do
-      assert {:ok, _} =
-               Grants.grant(%{
-                 principal: manager,
-                 permission: permission,
-                 resource: {:project, p.id}
-               })
-    end
+    assert {:ok, _} =
+             Grants.grant(%{
+               principal: manager,
+               permission: "access.manage",
+               resource: {:project, p.id}
+             })
+
+    {:ok, no_read} =
+      Scope.for_user(Accounts.get_user(manager.id)) |> ViewAs.compute({:user, target.id})
+
+    assert no_read.resources.projects == []
+
+    assert {:ok, _} =
+             Grants.grant(%{
+               principal: manager,
+               permission: "tasks.read",
+               resource: {:project, p.id}
+             })
 
     {:ok, result} =
       Scope.for_user(Accounts.get_user(manager.id)) |> ViewAs.compute({:user, target.id})
