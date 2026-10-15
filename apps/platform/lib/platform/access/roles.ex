@@ -166,7 +166,8 @@ defmodule Platform.Access.Roles do
   end
 
   @doc "Delete an assignment by struct or id. `{:error, :not_found}` when absent."
-  @spec unassign(RoleAssignment.t() | binary()) :: {:ok, RoleAssignment.t()} | {:error, :not_found}
+  @spec unassign(RoleAssignment.t() | binary()) ::
+          {:ok, RoleAssignment.t()} | {:error, :not_found}
   def unassign(%RoleAssignment{id: id}), do: unassign(id)
 
   def unassign(id) when is_binary(id) do

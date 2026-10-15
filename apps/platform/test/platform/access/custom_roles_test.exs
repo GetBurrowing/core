@@ -187,7 +187,6 @@ defmodule Platform.Access.CustomRolesTest do
             "VALUES ('custom:orphan', 'Orphan', false, '{}', now(), now())"
         )
       end
-
     end
   end
 
@@ -215,7 +214,10 @@ defmodule Platform.Access.CustomRolesTest do
                Roles.assign(%{principal: {:agent, Ecto.UUID.generate()}, role: role})
 
       assert {:error, :role_not_found} = Roles.assign(%{principal: insider, role: "custom:nope"})
-      assert {:error, :org_mismatch} = Roles.assign(%{principal: insider, role: role, org_id: ctx.b})
+
+      assert {:error, :org_mismatch} =
+               Roles.assign(%{principal: insider, role: role, org_id: ctx.b})
+
       assert {:error, :invalid_principal} = Roles.assign(%{principal: "someone", role: role})
 
       # This member never creates memberships.
@@ -234,7 +236,9 @@ defmodule Platform.Access.CustomRolesTest do
     test "two assignments: both keys held and both permission sets unioned", ctx do
       user = member!(ctx.a)
       finance = role!(ctx.a, "Finance", %{"tasks.promote" => "membership_org"})
-      ops = role!(ctx.a, "Ops", %{"prototypes.publish" => "membership_org", "tasks.read" => "all"})
+
+      ops =
+        role!(ctx.a, "Ops", %{"prototypes.publish" => "membership_org", "tasks.read" => "all"})
 
       # Custom roles that exist but are not assigned change nothing.
       base = scope(user)
@@ -285,7 +289,10 @@ defmodule Platform.Access.CustomRolesTest do
 
     test "a guest with an assignment holds the key but gains no permission", ctx do
       user = member!(ctx.a)
-      role = role!(ctx.a, "Finance", %{"tasks.promote" => "membership_org", "tasks.read" => "all"})
+
+      role =
+        role!(ctx.a, "Finance", %{"tasks.promote" => "membership_org", "tasks.read" => "all"})
+
       ok!(Roles.assign(%{principal: user, role: role}))
 
       # Positive control: while internal, the role widens.
@@ -324,7 +331,9 @@ defmodule Platform.Access.CustomRolesTest do
       {:ok, project} =
         Tasks.create_project(%{name: "cr-#{System.unique_integer([:positive])}", org_id: ctx.a})
 
-      ok!(Grants.grant(%{principal: {:role, role.key}, permission: "tasks.read", resource: project}))
+      ok!(
+        Grants.grant(%{principal: {:role, role.key}, permission: "tasks.read", resource: project})
+      )
 
       base = Scope.for_runtime(runtime)
       assert base.role_keys == %{}
@@ -355,7 +364,9 @@ defmodule Platform.Access.CustomRolesTest do
       {:ok, project} =
         Tasks.create_project(%{name: "cr-#{System.unique_integer([:positive])}", org_id: ctx.a})
 
-      ok!(Grants.deny(%{principal: {:role, role.key}, permission: "tasks.read", resource: project}))
+      ok!(
+        Grants.deny(%{principal: {:role, role.key}, permission: "tasks.read", resource: project})
+      )
 
       # Positive control: before the assignment the member reads the project.
       assert Access.can?(scope(holder), "tasks.read", {:project, project.id})
@@ -375,8 +386,14 @@ defmodule Platform.Access.CustomRolesTest do
 
       ok!(Roles.assign(%{principal: user, role: role}))
       ok!(Roles.assign(%{principal: user, role: keep}))
-      ok!(Grants.grant(%{principal: {:role, role.key}, permission: "tasks.read", resource: project}))
-      ok!(Grants.grant(%{principal: {:role, keep.key}, permission: "tasks.read", resource: project}))
+
+      ok!(
+        Grants.grant(%{principal: {:role, role.key}, permission: "tasks.read", resource: project})
+      )
+
+      ok!(
+        Grants.grant(%{principal: {:role, keep.key}, permission: "tasks.read", resource: project})
+      )
 
       count = fn schema, field, key ->
         Repo.aggregate(from(r in schema, where: field(r, ^field) == ^key), :count)

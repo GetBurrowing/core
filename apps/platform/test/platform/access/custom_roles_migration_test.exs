@@ -50,7 +50,9 @@ defmodule Platform.Access.CustomRolesMigrationTest do
 
   defp md5!(sql) do
     %{rows: [[md5]]} =
-      Repo.query!("SELECT md5(coalesce(string_agg(t::text, '|' ORDER BY t::text), '')) FROM (#{sql}) t")
+      Repo.query!(
+        "SELECT md5(coalesce(string_agg(t::text, '|' ORDER BY t::text), '')) FROM (#{sql}) t"
+      )
 
     md5
   end
