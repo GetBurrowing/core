@@ -345,6 +345,12 @@ defmodule Platform.Access.BypassDispatchTest do
         assert read(counter) == 1, "#{inspect(content)}: #{read(counter)} access_grants queries"
       end
 
+      # No agent participant: no query at all.
+      msg = insert_message!(channel.id, ph.id, "only humans here")
+      reset(counter)
+      assert {:ok, _} = AttentionRouter.route(msg)
+      assert read(counter) == 0
+
       # A different agent already participates, while the execution task's
       # assignee has not joined. Both candidates must share the same EXISTS.
       {assignee, _runtime} = linked!(ctx.u, "absent-assignee")
@@ -357,12 +363,6 @@ defmodule Platform.Access.BypassDispatchTest do
       reset(counter)
       assert {:ok, [%{reason: :watch}]} = AttentionRouter.route(fallback_msg)
       assert read(counter) == 1, "fallback used #{read(counter)} access_grants queries"
-
-      # No agent participant: no query at all.
-      msg = insert_message!(channel.id, ph.id, "only humans here")
-      reset(counter)
-      assert {:ok, _} = AttentionRouter.route(msg)
-      assert read(counter) == 0
     end
   end
 
