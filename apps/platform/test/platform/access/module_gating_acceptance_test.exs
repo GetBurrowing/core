@@ -176,12 +176,16 @@ defmodule Platform.Access.ModuleGatingAcceptanceTest do
                {:error, :unauthorized}
 
       original_title = ctx.task.title
+
       assert {:error, :unauthorized} =
                Tasks.update_task(ctx.task, %{title: unique("forbidden update")}, access_scope: s)
 
       assert Repo.get!(Task, ctx.task.id).title == original_title
+
       assert {:error, :unauthorized} =
-               Tasks.update_task(ctx.task, %{title: unique("nil scope update")}, access_scope: nil)
+               Tasks.update_task(ctx.task, %{title: unique("nil scope update")},
+                 access_scope: nil
+               )
 
       assert Repo.get!(Task, ctx.task.id).title == original_title
       assert {:ok, %Task{}} = Tasks.update_task(ctx.task, %{title: unique("system update")})
