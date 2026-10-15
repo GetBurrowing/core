@@ -1071,6 +1071,7 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
   attr(:mask_names?, :boolean, required: true)
   attr(:revealed_section_ids, :any, required: true)
   attr(:sidebar_sections, :list, required: true)
+  attr(:restricted_channel_ids, :any, required: true)
 
   @doc """
   The mobile channel-pills strip — `<nav aria-label="Channel switcher">`.
@@ -1132,8 +1133,9 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
            none of the user's channels. --%>
       <% switcher_channel_pills =
         if @external?, do: @channels, else: Sidebar.flatten_sections(@sidebar_sections) %>
+      <%= for space <- switcher_channel_pills do %>
       <.link
-        :for={space <- switcher_channel_pills}
+        :if={not MapSet.member?(@restricted_channel_ids, space.id)}
         patch={~p"/chat/#{space_nav_target(space)}"}
         data-role="channel-pill"
         data-space-id={space.id}
@@ -1157,6 +1159,18 @@ defmodule PlatformWeb.ChatLive.Partials.Conversation do
           class="inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full text-[10px] font-bold tabular-nums bg-primary text-primary-content border border-base-100"
         >{unread_label(Map.get(@unread_counts, space.id, 0))}</span>
       </.link>
+
+      <div
+        :if={MapSet.member?(@restricted_channel_ids, space.id)}
+        data-role="restricted-channel-pill"
+        data-space-id={space.id}
+        aria-disabled="true"
+        title="Restricted, ask an admin"
+        class="flex items-center gap-1.5 px-3 py-1.5 rounded-full whitespace-nowrap text-[13px] font-medium shrink-0 bg-base-200 text-base-content/40 border border-base-content/10"
+      >
+        <span class="hero-lock-closed-mini size-3"></span>{masked_space_name(assigns, space.name)}
+      </div>
+      <% end %>
 
       <%!-- DM pills (after channels, no divider for now to keep mobile compact) --%>
       <.link

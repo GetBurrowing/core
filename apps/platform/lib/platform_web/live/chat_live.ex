@@ -1242,6 +1242,16 @@ defmodule PlatformWeb.ChatLive do
 
     socket = assign(socket, :restricted_channel_ids, restricted_ids)
 
+    # A denied deep link navigates here with this flash. Keep /chat as its
+    # landing URL instead of immediately selecting an unrelated channel.
+    if Phoenix.Flash.get(socket.assigns.flash, :error) == "Restricted, ask an admin" do
+      {:noreply, socket}
+    else
+      default_chat_landing(socket, restricted_ids)
+    end
+  end
+
+  defp default_chat_landing(socket, restricted_ids) do
     case Enum.reject(socket.assigns.channels, &MapSet.member?(restricted_ids, &1.id)) do
       [first | _] ->
         {:noreply, push_navigate(socket, to: ~p"/chat/#{space_nav_target(first)}")}

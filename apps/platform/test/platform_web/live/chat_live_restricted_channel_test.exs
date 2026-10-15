@@ -61,6 +61,8 @@ defmodule PlatformWeb.ChatLiveRestrictedChannelTest do
     assert html =~ "Restricted, ask an admin"
     assert html =~ "hero-lock-closed-mini"
     refute html =~ marker
+    assert html |> Floki.parse_document!() |> Floki.find(~s(a[data-role="channel-pill"][data-space-id="#{finance.id}"])) == []
+    assert html |> Floki.parse_document!() |> Floki.find(~s([data-role="restricted-channel-pill"][data-space-id="#{finance.id}"][aria-disabled="true"])) |> length() == 1
 
     [restricted_row] =
       Regex.run(
@@ -88,7 +90,17 @@ defmodule PlatformWeb.ChatLiveRestrictedChannelTest do
     assert Floki.find(mobile_row, "a, button") == []
 
     participant_count = length(Chat.list_participants(finance.id))
-    assert {:error, {:live_redirect, %{to: "/chat"}}} = live(member_conn, ~p"/chat/#{finance.id}")
+    denied = live(member_conn, ~p"/chat/#{finance.id}")
+    assert {:error, {:live_redirect, %{to: "/chat"}}} = denied
+    assert {:ok, _denied_view, denied_html} = follow_redirect(denied, member_conn, "/chat")
+    assert denied_html =~ "Restricted, ask an admin"
+    refute denied_html =~ marker
+
+    deep_denied = live(member_conn, ~p"/chat/#{finance.id}?message=#{Ecto.UUID.generate()}")
+    assert {:error, {:live_redirect, %{to: "/chat"}}} = deep_denied
+    assert {:ok, _deep_view, deep_html} = follow_redirect(deep_denied, member_conn, "/chat")
+    assert deep_html =~ "Restricted, ask an admin"
+    refute deep_html =~ marker
     assert length(Chat.list_participants(finance.id)) == participant_count
 
     assert {:error, {:live_redirect, %{to: "/chat"}}} =
