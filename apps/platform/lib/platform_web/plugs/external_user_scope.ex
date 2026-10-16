@@ -15,8 +15,10 @@ defmodule PlatformWeb.Plugs.ExternalUserScope do
       `/meetings/:slug`, and only a meeting they hold a live invite to
       (`Platform.Meetings.invited_to_slug?/2`). `/chat` on this host is off
       surface.
-    * `:chat` — the external CHAT host (task 019f9257). UNCHANGED: `/`,
-      `/chat`, and a `/chat/:slug` they are scoped to.
+    * `:chat` — the external CHAT host (task 019f9257): `/`, `/chat`,
+      a scoped `/chat/:slug`, and the read-only view-as page. View-as performs
+      its own `access.manage` authorization and intersects resource listings
+      with the viewer's scope.
     * `:app` — the primary Suite host. UNCHANGED, byte for byte: same
       clauses, same order, same reason strings as before the meet surface
       existed.
@@ -135,8 +137,8 @@ defmodule PlatformWeb.Plugs.ExternalUserScope do
       {:chat, ["access", "view-as", type, _id]} when type in ["user", "agent"] ->
         conn
 
-      # CHAT and APP surfaces: byte-identical to the pre-meet behaviour —
-      # same clauses, same order, same reason strings.
+      # The remaining CHAT and APP clauses retain their pre-meet order and
+      # reason strings.
       #
       # Root redirects into /chat; the index list is filtered by M5/M7. But an
       # external user reaching the internal /chat index on the SUITE host must
