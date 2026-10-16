@@ -372,7 +372,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
     `live_file_input` needs it to report a picked file. It is also what makes
     the half-set warning on the voice card appear as you type. --%>
     <.form
-      :if={@can_manage?}
+      :if={@managed? or @can_manage?}
       for={@config_form}
       id="federated-identity-form"
       phx-submit="save_config"
