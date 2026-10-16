@@ -35,16 +35,24 @@ defmodule Platform.Chat.HistoryVisibleFromReadBoundTest do
 
     owner = Platform.TenancyFixtures.root_admin!()
 
-    %Platform.Agents.AgentRuntime{}
-    |> Platform.Agents.AgentRuntime.changeset(%{
-      runtime_id: "history-reader-#{n}",
-      owner_user_id: owner.id,
-      agent_id: agent.id,
-      auth_token_hash:
-        Platform.Agents.AgentRuntime.hash_token(Platform.Agents.AgentRuntime.generate_token()),
-      status: "active"
-    })
-    |> Repo.insert!()
+    runtime =
+      %Platform.Agents.AgentRuntime{}
+      |> Platform.Agents.AgentRuntime.changeset(%{
+        runtime_id: "history-reader-#{n}",
+        owner_user_id: owner.id,
+        agent_id: agent.id,
+        auth_token_hash:
+          Platform.Agents.AgentRuntime.hash_token(Platform.Agents.AgentRuntime.generate_token()),
+        status: "active"
+      })
+      |> Repo.insert!()
+
+    {:ok, _profile} =
+      Platform.Access.RuntimeProfiles.create_for_runtime(
+        runtime,
+        Platform.Agents.AgentRuntime.default_tool_profile(),
+        nil
+      )
 
     agent
   end

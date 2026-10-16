@@ -628,6 +628,7 @@ defmodule Platform.ExtensionsTest do
       :tasks,
       :inbox,
       :activity,
+      :agents,
       :skills,
       :files,
       :context,
