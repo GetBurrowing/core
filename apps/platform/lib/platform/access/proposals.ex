@@ -150,10 +150,14 @@ defmodule Platform.Access.Proposals do
     # Reload memberships and scope at the moment of consent.
     result =
       Repo.transaction(fn ->
+        row = locked!(id)
+        human = Scope.for_user(Accounts.get_user(user_id))
+        # Drain server persistence before lineage locks. After taking them,
+        # no server call may wait on this transaction's canvas table lock.
+        readable!(row, human)
         Changes.lock_for_consent()
         human = Scope.for_user(Accounts.get_user(user_id))
-        row = locked!(id)
-        readable!(row, human)
+        readable!(row, human, persisted_only: true)
         require_proposed!(row)
 
         option =
@@ -319,15 +323,24 @@ defmodule Platform.Access.Proposals do
       Repo.rollback(:not_found)
   end
 
-  defp readable!(row, %Scope{actor: %User{id: uid}} = scope) do
+  defp readable!(row, scope, opts \\ [])
+
+  defp readable!(row, %Scope{actor: %User{id: uid}} = scope, opts) do
     unless Chat.participant?(row.space_id, uid), do: Repo.rollback(:not_found)
 
     case CanvasAccess.fetch_for_viewer(row.canvas_id, {:user, uid},
            access_scope: scope,
            audit: false
          ) do
-      {:ok, canvas, _grant} -> verify_digest!(row, canvas)
-      _ -> Repo.rollback(:not_found)
+      {:ok, canvas, _grant} ->
+        if opts[:persisted_only] do
+          if digest(canvas.document) != row.card_digest, do: Repo.rollback(:card_changed)
+        else
+          verify_digest!(row, canvas)
+        end
+
+      _ ->
+        Repo.rollback(:not_found)
     end
   end
 
@@ -413,7 +426,7 @@ defmodule Platform.Access.Proposals do
   @doc "Conservative snapshot: concurrent membership, role, runtime or grant edits invalidate consent."
   def state_hash do
     tables =
-      ~w(access_grants org_memberships access_roles access_role_assignments access_space_restrictions agent_runtimes access_runtime_profiles chat_participants orgs projects chat_spaces)
+      ~w(access_grants org_memberships access_roles access_role_assignments access_space_restrictions agent_runtimes access_runtime_profiles chat_participants orgs projects chat_spaces chat_canvases tasks task_stacks task_canvas_attachments org_memory_nodes org_memory_node_paths)
 
     values =
       Enum.map(tables, fn table ->
@@ -431,11 +444,19 @@ defmodule Platform.Access.Proposals do
               []
           end
 
+        projection =
+          case table do
+            "chat_canvases" -> "SELECT id, space_id, deleted_at FROM chat_canvases"
+            "tasks" -> "SELECT id, project_id FROM tasks"
+            "task_stacks" -> "SELECT id, project_id FROM task_stacks"
+            "org_memory_nodes" -> "SELECT id, org_id, workspace_id FROM org_memory_nodes"
+            _ -> "SELECT * FROM " <> table
+          end
+
         %{rows: rows} =
           Repo.query!(
-            "SELECT (to_jsonb(t) - $1::text[])::text FROM " <>
-              table <>
-              " t ORDER BY (to_jsonb(t) - $1::text[])::text",
+            "SELECT (to_jsonb(t) - $1::text[])::text FROM (" <>
+              projection <> ") t ORDER BY (to_jsonb(t) - $1::text[])::text",
             [omitted]
           )
 

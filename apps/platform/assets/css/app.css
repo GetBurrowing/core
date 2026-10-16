@@ -36,6 +36,7 @@
 @source "../js";
 @source "../../lib/platform_web";
 @source "../../lib/platform/chat/canvas/kinds";
+@source "../../lib/platform/access/change_card.ex";
 
 /* Safelist: dynamic classes generated at runtime that Tailwind cannot scan */
 @layer utilities {

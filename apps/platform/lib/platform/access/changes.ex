@@ -333,7 +333,7 @@ defmodule Platform.Access.Changes do
   @doc "Serialize consent against grant and principal changes for its transaction."
   def lock_for_consent do
     tables =
-      ~w(access_grants access_role_assignments access_roles access_runtime_profiles access_space_restrictions agent_runtimes chat_participants chat_spaces org_memberships orgs projects)
+      ~w(access_grants access_role_assignments access_roles access_runtime_profiles access_space_restrictions agent_runtimes chat_participants chat_spaces org_memberships orgs projects chat_canvases tasks task_stacks task_canvas_attachments org_memory_nodes org_memory_node_paths)
 
     Repo.query!(
       "LOCK TABLE " <> Enum.join(Enum.sort(tables), ", ") <> " IN SHARE ROW EXCLUSIVE MODE"

@@ -96,7 +96,9 @@ defmodule PlatformWeb.AccessLiveTest do
       |> Floki.find("[data-role=view-as-rail] [data-destination]")
       |> Enum.flat_map(&Floki.attribute(&1, "data-destination"))
 
-    assert MapSet.new(keys) == MapSet.new(PlatformWeb.AccessViewAs.rail_keys(expected))
+    assert MapSet.new(keys) ==
+             MapSet.new(Enum.map(PlatformWeb.AccessViewAs.rail_keys(expected), &to_string/1))
+
     assert html =~ "Viewing as Panel member"
   end
 
@@ -131,8 +133,10 @@ defmodule PlatformWeb.AccessLiveTest do
     guest = user!("Panel guest")
     assert {:ok, _} = Tenancy.mark_membership_external(%{user_id: guest.id, org_id: ctx.org.id})
 
-    assert {:error, {:redirect, %{to: "/access-denied?module=admin"}}} =
-             live(conn_for(guest), "/access")
+    denied = conn_for(guest) |> get("/access")
+    assert denied.status == 403
+    assert denied.assigns.access_denied
+    refute denied.resp_body =~ ~s(id="access-panel")
   end
 
   test "a capped runtime names its owner and reset lists owned runtimes", ctx do

@@ -180,6 +180,39 @@ defmodule Platform.Access.ConsentCardTest do
     assert Grant.snapshot(Repo.get!(Grant, grant.id)) == before
   end
 
+  test "canvas relocation invalidates consent while cosmetic canvas edits do not", ctx do
+    {:ok, elsewhere} =
+      Chat.create_space(%{
+        name: "Relocation #{uniq()}",
+        slug: "relocation-#{uniq()}",
+        kind: "channel",
+        org_id: ctx.project.org_id
+      })
+
+    {:ok, child} =
+      Chat.create_canvas(%{
+        "space_id" => ctx.space.id,
+        "created_by" => ctx.participant.id,
+        "title" => "Existing child"
+      })
+
+    proposal = propose!(ctx, [%{key: "one", ops: [op(ctx, "grant", "tasks.write")]}])
+    original = Proposals.state_hash()
+
+    Repo.update_all(from(c in Chat.Canvas, where: c.id == ^child.id),
+      set: [title: "Cosmetic rename"]
+    )
+
+    assert Proposals.state_hash() == original
+
+    Repo.update_all(from(c in Chat.Canvas, where: c.id == ^child.id),
+      set: [space_id: elsewhere.id]
+    )
+
+    refute Proposals.state_hash() == original
+    assert {:error, :stale} = Proposals.apply(proposal.id, ctx.human)
+  end
+
   defp propose!(ctx, options) do
     {:ok, canvas} =
       Chat.create_canvas(%{

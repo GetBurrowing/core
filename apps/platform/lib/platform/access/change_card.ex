@@ -145,6 +145,8 @@ defmodule Platform.Access.ChangeCard do
     [
       node("action_row", "choices", %{
         "label" => "Choose a change",
+        "class_overrides" =>
+          "[&>button]:h-auto [&>button]:whitespace-normal [&>button]:max-w-full [&>button]:min-w-0 [&>button]:py-2",
         "actions" =>
           Enum.map(row.options, fn option ->
             %{
