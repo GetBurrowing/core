@@ -57,7 +57,7 @@ defmodule PlatformWeb.Components.IconRailTest do
   end
 
   describe "destinations/1" do
-    test "returns 9 destinations for a non-Acme user (Admin + Prompts filtered out)" do
+    test "returns 10 destinations for a non-Acme user (Admin + Prompts filtered out)" do
       # Count bumped from 7 → 8 when ADR-0042 stage 5 added the Files
       # destination (working cluster, root_only?: false), 8 → 9 when
       # task 019fe6ba added Experiments, 9 → 10 when task 019fea0d added
@@ -65,7 +65,7 @@ defmodule PlatformWeb.Components.IconRailTest do
       # (it moved to an admin-only cog in the Tasks header). Any future
       # destination addition should bump the matching guard below.
       list = destinations(root_user: false)
-      assert length(list) == 9
+      assert length(list) == 10
       refute Enum.any?(list, &(&1.key == :admin))
       # Prompts is also root_only?: true as of 2026-05-20 (admin-only access
       # at the route level; previously rendered for members but redirected
@@ -77,7 +77,7 @@ defmodule PlatformWeb.Components.IconRailTest do
 
     test "returns all 11 destinations for an Acme user (Admin + Prompts included)" do
       list = destinations(root_user: true)
-      assert length(list) == 11
+      assert length(list) == 12
       assert Enum.any?(list, &(&1.key == :admin))
       assert Enum.any?(list, &(&1.key == :prompts))
       assert Enum.any?(list, &(&1.key == :files))
@@ -246,14 +246,14 @@ defmodule PlatformWeb.Components.IconRailTest do
       # Tile count bumped from 9 → 10 when ADR-0042 stage 5 added Files, and
       # 10 → 11 when task 019fe6ba added Experiments.
       html = render_icon_rail(%{root_user: true})
-      assert count_data_destination_matches(html) == 11
+      assert count_data_destination_matches(html) == 12
     end
 
     test "renders 9 destination tiles for a non-Acme user (no Admin, no Prompts)" do
       # 7 → 8 when Files (visible to all authenticated users) shipped;
       # 8 → 9 when Experiments shipped (also visible to all).
       html = render_icon_rail(%{root_user: false})
-      assert count_data_destination_matches(html) == 9
+      assert count_data_destination_matches(html) == 10
       assert html =~ ~s(data-destination="experiments")
       assert html =~ "/control/experiments"
     end

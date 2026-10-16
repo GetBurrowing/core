@@ -12,12 +12,7 @@ defmodule PlatformWeb.ControlCenterLiveTest do
   alias Platform.Repo
 
   defp authenticated_conn(conn) do
-    user =
-      Repo.insert!(%User{
-        email: "control_test_#{System.unique_integer([:positive])}@example.com",
-        name: "Control Test User",
-        oidc_sub: "oidc-control-test-#{System.unique_integer([:positive])}"
-      })
+    user = Platform.TenancyFixtures.root_admin!()
 
     init_test_session(conn, current_user_id: user.id)
   end

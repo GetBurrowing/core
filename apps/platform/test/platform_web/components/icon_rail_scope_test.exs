@@ -78,6 +78,18 @@ defmodule PlatformWeb.Components.IconRailScopeTest do
   # ── Internal classes: Scope path == legacy path ─────────────────────────
 
   describe "internal actor classes with no grants" do
+    test "Agents appears on desktop and the mobile More sheet for a member, never a guest", ctx do
+      member = scope_of(ctx.internal[:root_member])
+      guest = scope_of(ctx.guests[:ext_member])
+
+      assert :agents in desktop_keys(%{access_scope: member})
+      assert :agents in more_sheet_keys(%{access_scope: member})
+      refute :agents in mobile_keys(%{access_scope: member})
+
+      refute :agents in desktop_keys(%{access_scope: guest})
+      refute :agents in more_sheet_keys(%{access_scope: guest})
+    end
+
     test "the Scope path's keys equal the legacy root_user path's keys on every surface", ctx do
       # `root_user` is bound inside the block, not as a comprehension
       # filter: a `root_user = false` filter would drop every non-root row.

@@ -23,7 +23,7 @@ defmodule Platform.Access.Agents do
   def manage?(_, _), do: false
 
   @spec may_federate?(Scope.t()) :: boolean()
-  def may_federate?(%Scope{} = scope), do: Access.holds_anywhere?(scope, "agents.manage_own")
+  def may_federate?(%Scope{} = scope), do: Access.module_access?(scope, :agents)
   def may_federate?(_), do: false
 
   @spec may_create_ownerless?(Scope.t()) :: boolean()
@@ -37,14 +37,20 @@ defmodule Platform.Access.Agents do
 
   defp manage_owner?(scope, owner_id) when is_binary(owner_id) do
     own? =
-      match?(%{id: ^owner_id}, scope.actor) and
-        Access.holds_anywhere?(scope, "agents.manage_own")
+      match?(%{id: ^owner_id}, scope.actor) and may_federate?(scope)
 
-    owner_org_ids =
-      from(m in OrgMembership, where: m.user_id == ^owner_id and not m.external, select: m.org_id)
-      |> Repo.all()
+    cond do
+      own? ->
+        true
 
-    own? or Enum.any?(owner_org_ids, &Access.can?(scope, "agents.manage_all", &1))
+      Access.can?(scope, "install.admin") ->
+        true
+
+      true ->
+        from(m in OrgMembership, where: m.user_id == ^owner_id and not m.external, select: m.org_id)
+        |> Repo.all()
+        |> Enum.any?(&Access.can?(scope, "agents.manage_all", &1))
+    end
   end
 
   defp manage_owner?(scope, _), do: may_create_ownerless?(scope)

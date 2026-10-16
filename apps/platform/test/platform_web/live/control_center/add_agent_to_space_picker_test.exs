@@ -34,7 +34,6 @@ defmodule PlatformWeb.ControlCenter.AddAgentToSpacePickerTest do
 
   import Phoenix.LiveViewTest
 
-  alias Platform.Accounts.User
   alias Platform.Agents.Agent
   alias Platform.Chat
   alias Platform.Chat.Participant
@@ -47,12 +46,7 @@ defmodule PlatformWeb.ControlCenter.AddAgentToSpacePickerTest do
   # ── fixtures ─────────────────────────────────────────────────────
 
   defp authenticated_conn(conn) do
-    user =
-      Repo.insert!(%User{
-        email: "picker_test_#{System.unique_integer([:positive])}@example.com",
-        name: "Picker Test User",
-        oidc_sub: "oidc-picker-test-#{System.unique_integer([:positive])}"
-      })
+    user = Platform.TenancyFixtures.root_admin!()
 
     init_test_session(conn, current_user_id: user.id)
   end

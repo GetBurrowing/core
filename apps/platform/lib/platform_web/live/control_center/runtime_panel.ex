@@ -207,7 +207,9 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
           <button type="submit" class="btn btn-primary btn-sm">Save restriction</button>
         </form>
         <p :if={!@can_manage?} class="mt-2 text-xs text-base-content/60">
-          {if is_nil(@restrictions), do: "Inherits owner's access", else: "Restricted access"}
+          {if is_nil(@restrictions),
+            do: "Inherits owner's access",
+            else: "Allowed: " <> (@restrictions |> Map.keys() |> Enum.sort() |> Enum.join(", "))}
         </p>
       </div>
 

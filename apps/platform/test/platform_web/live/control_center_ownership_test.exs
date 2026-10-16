@@ -13,6 +13,28 @@ defmodule PlatformWeb.ControlCenterOwnershipTest do
   alias Platform.Roles.RoleAssignment
   alias Platform.Tenancy.Org
 
+  test "a plain member federates an agent they own and sees its token once", %{conn: conn} do
+    user = member!()
+    runtime_id = "member-fed-#{System.unique_integer([:positive])}"
+    {:ok, view, _} = live(as_user(conn, user), ~p"/control")
+    render_click(view, "open_onboarding_chooser", %{})
+    render_click(view, "choose_onboarding", %{"flow" => "federate"})
+
+    html =
+      view
+      |> form("#federate-form",
+        federate: %{runtime_id: runtime_id, display_name: "Member Runtime", agent_name: "Member Agent"}
+      )
+      |> render_submit()
+
+    assert html =~ "Save this token now"
+    runtime = Federation.get_runtime_by_runtime_id(runtime_id)
+    assert runtime.owner_user_id == user.id
+
+    html = render_click(view, "federate_done", %{})
+    refute html =~ "Save this token now"
+  end
+
   test "plain member edits an owned agent's profile and releases its responsibility", %{
     conn: conn
   } do
@@ -81,6 +103,21 @@ defmodule PlatformWeb.ControlCenterOwnershipTest do
     user = member!()
     {:ok, view, _} = live(as_user(conn, user), ~p"/control")
     assert render_click(view, "unclassified_write", %{}) =~ "You can only manage your own agents."
+  end
+
+  test "root admin manages another user's agent", %{conn: conn} do
+    owner = member!()
+    admin = root_admin!()
+    {agent, runtime} = federated_agent!(owner)
+
+    {:ok, view, html} = live(as_user(conn, admin), ~p"/control/#{agent.slug}")
+    assert html =~ "Save tool profile"
+    assert has_element?(view, ~s(button[phx-click="regenerate_federated_token"]))
+
+    assert render_click(view, "save_tool_profile", %{"modules" => ["task"]}) =~
+             "Tool profile updated."
+
+    assert RuntimeProfiles.tool_profile(runtime) == ["task"]
   end
 
   test "event policy classifies every source handler" do
