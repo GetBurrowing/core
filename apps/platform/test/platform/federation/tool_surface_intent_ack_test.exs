@@ -18,7 +18,7 @@ defmodule Platform.Federation.ToolSurfaceIntentAckTest do
       rationale that "every dispatch-capable runtime already holds
       `task`". That was false WHEN WRITTEN, not a claim that went
       stale: `task` has never appeared in
-      `AgentRuntime.default_allowed_bundles/0` on any commit. So a
+      `AgentRuntime.default_tool_profile/0` on any commit. So a
       runtime on the defaults was dispatched meeting intents it could
       not ack, and since `ToolAuthorization.authorize/2` refuses ABOVE
       `ToolSurface.execute/3` the queue never heard about the refusal —

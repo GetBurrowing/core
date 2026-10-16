@@ -303,8 +303,8 @@ defmodule Platform.Meetings.IntentDispatcherTest do
   # `intent_ack` is the ONE thing that varies.
   #
   # The starting point is PROVEN rather than assumed: `register_runtime/2`
-  # is passed no `allowed_bundles` key, and the row is re-read from the
-  # database and held to `AgentRuntime.default_allowed_bundles/0`. A
+  # is passed no `tool_profile` key, and the row is re-read from the
+  # database and held to `AgentRuntime.default_tool_profile/0`. A
   # hand-written literal list would pass whatever the real defaults became.
   defp seed_ack_target!(role_key, can_ack?) do
     {agent, runtime} = create_runtime_agent!()

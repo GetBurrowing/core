@@ -46,13 +46,13 @@ defmodule Platform.Orchestration.InReviewDispatchToolPairingTest do
   `resolvability` says every prefixed tool the body names resolves inside the
   addressed runtime's surface. The fixture runtime is granted the full bundle
   set on purpose, and this is a real limit worth stating rather than hiding:
-  no test-database runtime can stand in for production's `allowed_bundles`
+  no test-database runtime can stand in for production's `tool_profile`
   rows, so this assertion detects a template naming a tool that NO bundle
   carries (a typo, or a tool deleted out from under the instruction) but
   cannot detect a production grant gap. The grant question was answered
   against production data and recorded in the PR body; every runtime the
   dispatcher can address for a review-phase dispatch already carries the
-  `review` bundle, so no `allowed_bundles` migration ships with this stage.
+  `review` bundle, so no `tool_profile` migration ships with this stage.
   """
   use Platform.DataCase, async: true
 

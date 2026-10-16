@@ -322,7 +322,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
 
     # Task 01a066af stage 4 — `meeting_create` and `meeting_say` used to be
     # registered inside `task_tools/0`, so they were stamped `"task"`, a bundle
-    # absent from `AgentRuntime.default_allowed_bundles/0`. A voice-capable
+    # absent from `AgentRuntime.default_tool_profile/0`. A voice-capable
     # runtime on the defaults was refused by `ToolAuthorization.authorize/2`
     # and could not speak at all. Both directions are asserted: presence in
     # `meetings` alone would still pass if the tools had merely been COPIED.
@@ -343,7 +343,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
     # moved the other two meeting tools out, so it was stamped `"task"`.
     #
     # This asserts bundle MEMBERSHIP only, and is deliberately independent of
-    # `AgentRuntime.default_allowed_bundles/0`: removing `"meetings"` from the
+    # `AgentRuntime.default_tool_profile/0`: removing `"meetings"` from the
     # default grant must leave this test green, because a bundle can exist and
     # be populated without being granted by default. The companion test in
     # `agent_runtime_test.exs` is what pins the grant.
@@ -366,7 +366,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
     # the RULE rather than a fourth name, so a future meeting-scoped
     # descriptor added to `task_tools/0` reddens here instead of arriving as
     # yet another follow-up ticket. `task` is absent from
-    # `AgentRuntime.default_allowed_bundles/0`, so a meeting-scoped tool
+    # `AgentRuntime.default_tool_profile/0`, so a meeting-scoped tool
     # landing there is simply unreachable for a default runtime.
     #
     # The class is NOT the `meeting_` name prefix, and that mattered. As
@@ -374,7 +374,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
     # `intent_ack` as a "KNOWN EXCEPTION ... NOT catchable by a prefix guard",
     # justified by the claim that every dispatch-capable runtime already holds
     # `task`. That claim was false when written — `task` has never appeared in
-    # `@default_allowed_bundles` on any commit — and the exemption it bought is
+    # `@default_tool_profile` on any commit — and the exemption it bought is
     # why `intent_ack` survived two cleanups of this exact bug class. The
     # prefix WAS the exemption: with the comment deleted and `intent_ack` put
     # back in `task_tools/0`, the prefix version of this test still passed.
@@ -8939,7 +8939,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
     end
 
     test "intersection is fail-closed: no chat bundle granted → empty, never injected" do
-      # allowed_bundles = [task] only — no messaging/space/context_read.
+      # tool_profile = [task] only — no messaging/space/context_read.
       tools = ToolSurface.list_tools(~w(task))
       assert ToolSurface.scope_for_external(tools, true) == []
     end

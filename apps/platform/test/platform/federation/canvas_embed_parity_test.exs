@@ -6,7 +6,7 @@ defmodule Platform.Federation.CanvasEmbedParityTest do
   Mirrors the structural template of `Platform.Federation.SkillMCPParityTest`
   (task 019dfaea): two `AgentRuntime` rows distinguished only by their
   `metadata.client_info.product` value (`"claude_channel"` vs `"openclaw"`),
-  each granted `allowed_bundles: ["canvas"]`, see byte-equivalent
+  each granted `tool_profile: ["canvas"]`, see byte-equivalent
   responses from the canonical MCP chokepoint at `POST /mcp`.
 
   Both flavors converge on `PlatformWeb.MCPController` regardless of the

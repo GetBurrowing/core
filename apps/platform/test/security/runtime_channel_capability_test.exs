@@ -188,8 +188,8 @@ defmodule Platform.Security.RuntimeChannelCapabilityTest do
 
   # ── Helpers ────────────────────────────────────────────────────────────
 
-  defp join_runtime(ctx, owner_user_id, allowed_bundles) do
-    {runtime, token} = runtime_for(ctx, owner_user_id, allowed_bundles)
+  defp join_runtime(ctx, owner_user_id, tool_profile) do
+    {runtime, token} = runtime_for(ctx, owner_user_id, tool_profile)
 
     {:ok, socket} =
       connect(PlatformWeb.RuntimeSocket, %{
@@ -204,9 +204,9 @@ defmodule Platform.Security.RuntimeChannelCapabilityTest do
   end
 
   # Mirrors `external_federation_scope_test.exs`'s builder, plus an `agent_id`
-  # so `tool_call` has an agent-shaped execution context. `allowed_bundles` is
+  # so `tool_call` has an agent-shaped execution context. `tool_profile` is
   # always a literal list supplied by the caller.
-  defp runtime_for(ctx, owner_user_id, allowed_bundles) do
+  defp runtime_for(ctx, owner_user_id, tool_profile) do
     raw_token = AgentRuntime.generate_token()
 
     {:ok, runtime} =
@@ -223,8 +223,8 @@ defmodule Platform.Security.RuntimeChannelCapabilityTest do
     {:ok, _profile} =
       Platform.Access.RuntimeProfiles.create_for_runtime(
         runtime,
-        allowed_bundles,
-        Platform.Access.RuntimeProfiles.translated_permissions(allowed_bundles)
+        tool_profile,
+        Platform.Access.RuntimeProfiles.translated_permissions(tool_profile)
       )
 
     {runtime, raw_token}

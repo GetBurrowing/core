@@ -115,7 +115,7 @@ defmodule Platform.Security.ExternalFederationScopeTest do
 
   # ── Helpers ────────────────────────────────────────────────────────────
 
-  defp runtime_for(owner_user_id, allowed_bundles) do
+  defp runtime_for(owner_user_id, tool_profile) do
     raw_token = AgentRuntime.generate_token()
 
     {:ok, runtime} =
@@ -131,8 +131,8 @@ defmodule Platform.Security.ExternalFederationScopeTest do
     {:ok, _profile} =
       Platform.Access.RuntimeProfiles.create_for_runtime(
         runtime,
-        allowed_bundles,
-        Platform.Access.RuntimeProfiles.translated_permissions(allowed_bundles)
+        tool_profile,
+        Platform.Access.RuntimeProfiles.translated_permissions(tool_profile)
       )
 
     {runtime, raw_token}

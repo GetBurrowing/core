@@ -215,7 +215,7 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
     canvas
   end
 
-  # An MCP runtime bound to `agent`. `allowed_bundles` is a LITERAL list rather
+  # An MCP runtime bound to `agent`. `tool_profile` is a LITERAL list rather
   # than `Platform.Access.RuntimeProfiles.valid_modules()`: this file is about authorization, and
   # a capability refusal (`-32001`) would be a different failure wearing the
   # same red.
