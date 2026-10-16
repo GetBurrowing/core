@@ -885,6 +885,11 @@ jobs:
           # /health reports. On a push event github.sha is the commit being built.
           build-args: |
             GIT_SHA=${{ github.sha }}
+          # Task 01a1449b: optional BuildKit secret for the ffmpeg stage, which
+          # fetches the static tarball from the private vendor-ffmpeg-7.0.2
+          # release (falls back to johnvansickle without it).
+          secrets: |
+            gh_token=${{ secrets.GITHUB_TOKEN }}
           outputs: type=image,name=docker.io/example/suite-core,push-by-digest=true,name-canonical=true,push=true
 
       - name: Export digest
@@ -1066,6 +1071,11 @@ jobs:
           # Same build identity as the core flavour (task 01a089d5).
           build-args: |
             GIT_SHA=${{ github.sha }}
+          # Task 01a1449b: optional BuildKit secret for the ffmpeg stage, which
+          # fetches the static tarball from the private vendor-ffmpeg-7.0.2
+          # release (falls back to johnvansickle without it).
+          secrets: |
+            gh_token=${{ secrets.GITHUB_TOKEN }}
           tags: |
             docker.io/example/suite-core:play
             docker.io/example/suite-core:play-${{ github.sha }}
@@ -1086,6 +1096,11 @@ jobs:
           # Same build identity as the core flavour (task 01a089d5).
           build-args: |
             GIT_SHA=${{ github.sha }}
+          # Task 01a1449b: optional BuildKit secret for the ffmpeg stage, which
+          # fetches the static tarball from the private vendor-ffmpeg-7.0.2
+          # release (falls back to johnvansickle without it).
+          secrets: |
+            gh_token=${{ secrets.GITHUB_TOKEN }}
           tags: |
             docker.io/example/suite-core:play-${{ steps.vars.outputs.branch_tag }}
             docker.io/example/suite-core:play-${{ github.sha }}

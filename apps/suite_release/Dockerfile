@@ -91,29 +91,57 @@ RUN mix release
 # pulled ~417 MB of shared libraries into every image; one pinned static
 # build (johnvansickle.com 7.0.2, libass 0.17.3) is two files, ~51-59 MB
 # compressed per arch. Fetched and sha256-verified here so curl and xz never
-# reach the runtime stage, which only COPYs the two binaries. To bump:
-# change FFMPEG_VERSION and both checksums (sha256 of each arch's tarball).
+# reach the runtime stage, which only COPYs the two binaries.
+#
+# Source: a byte-identical mirror on the Startup-Suite/core GitHub release
+# vendor-ffmpeg-7.0.2, so a build does not depend on johnvansickle.com being
+# up. The repo is private, so the mirror is fetched through the API asset
+# endpoint with an optional BuildKit secret `gh_token`
+# (`--secret id=gh_token,env=GH_TOKEN`); the token is read from
+# /run/secrets only and never reaches a layer, ENV or ARG. With no token, or
+# if the mirror download fails, it falls back to FFMPEG_FALLBACK_BASE. The
+# sha256 check runs once on whichever file was fetched, and a mismatch fails
+# the build: it never falls back after a checksum failure.
+#
+# To bump: upload the new tarballs to a new vendor-ffmpeg-<version> release,
+# then change FFMPEG_VERSION, both checksums (sha256 of each arch's tarball)
+# and both asset ids (gh api repos/Startup-Suite/core/releases/tags/<tag>).
 FROM elixir:1.20.4-otp-28-slim AS ffmpeg
 ARG TARGETARCH
 ARG FFMPEG_VERSION=7.0.2
 ARG FFMPEG_SHA256_AMD64=abda8d77ce8309141f83ab8edf0596834087c52467f6badf376a6a2a4c87cf67
 ARG FFMPEG_SHA256_ARM64=f4149bb2b0784e30e99bdda85471c9b5930d3402014e934a5098b41d0f7201b1
-RUN apt-get update -y \
+ARG FFMPEG_ASSET_ID_AMD64=647225386
+ARG FFMPEG_ASSET_ID_ARM64=647225387
+ARG FFMPEG_FALLBACK_BASE=https://johnvansickle.com/ffmpeg/releases
+RUN --mount=type=secret,id=gh_token,required=false \
+    apt-get update -y \
  && apt-get install -y --no-install-recommends curl ca-certificates xz-utils \
  && rm -rf /var/lib/apt/lists/* \
  && arch="${TARGETARCH:-$(dpkg --print-architecture)}" \
  && case "$arch" in \
-      amd64) sha="$FFMPEG_SHA256_AMD64" ;; \
-      arm64) sha="$FFMPEG_SHA256_ARM64" ;; \
+      amd64) sha="$FFMPEG_SHA256_AMD64"; asset="$FFMPEG_ASSET_ID_AMD64" ;; \
+      arm64) sha="$FFMPEG_SHA256_ARM64"; asset="$FFMPEG_ASSET_ID_ARM64" ;; \
       *) echo "no pinned ffmpeg build for $arch" >&2; exit 1 ;; \
     esac \
- && curl -fsSL -o /tmp/ffmpeg.tar.xz \
-      "https://johnvansickle.com/ffmpeg/releases/ffmpeg-${FFMPEG_VERSION}-${arch}-static.tar.xz" \
+ && if [ -s /run/secrets/gh_token ] \
+      && curl -fsSL -o /tmp/ffmpeg.tar.xz \
+           -H "Authorization: Bearer $(cat /run/secrets/gh_token)" \
+           -H 'Accept: application/octet-stream' \
+           "https://api.github.com/repos/Startup-Suite/core/releases/assets/${asset}"; then \
+      echo 'ffmpeg source: release'; \
+    else \
+      rm -f /tmp/ffmpeg.tar.xz \
+      && curl -fsSL -o /tmp/ffmpeg.tar.xz \
+           "${FFMPEG_FALLBACK_BASE}/ffmpeg-${FFMPEG_VERSION}-${arch}-static.tar.xz" \
+      && echo 'ffmpeg source: fallback'; \
+    fi \
  && echo "${sha}  /tmp/ffmpeg.tar.xz" | sha256sum -c - \
  && mkdir -p /out \
  && tar -xJf /tmp/ffmpeg.tar.xz -C /out --strip-components=1 \
       "ffmpeg-${FFMPEG_VERSION}-${arch}-static/ffmpeg" \
       "ffmpeg-${FFMPEG_VERSION}-${arch}-static/ffprobe" \
+ && rm -f /tmp/ffmpeg.tar.xz \
  && chmod 0755 /out/ffmpeg /out/ffprobe \
  && /out/ffmpeg -hide_banner -filters | grep -qE ' subtitles ' \
  && /out/ffmpeg -hide_banner -filters | grep -qE ' ass ' \
