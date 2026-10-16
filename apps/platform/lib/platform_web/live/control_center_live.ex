@@ -6,10 +6,13 @@ defmodule PlatformWeb.ControlCenterLive do
   alias Platform.Agents.{
     Agent,
     AgentServer,
-    MemoryContext,
-    Router
+    Config,
+    MemoryContext
   }
 
+  alias Platform.AgentHost
+  alias Platform.Agents.NativeAgents
+  alias Platform.Agents.NativeLogin
   alias Platform.Federation
   alias Platform.Federation.RuntimePresence
   alias Platform.Repo
@@ -20,6 +23,11 @@ defmodule PlatformWeb.ControlCenterLive do
   alias PlatformWeb.ControlCenter.AgentData
   alias PlatformWeb.ControlCenter.AgentDetail
   alias PlatformWeb.ControlCenter.MemoryEvents
+  alias PlatformWeb.ControlCenter.NativeAgentEvents
+  alias PlatformWeb.ControlCenter.NativeFileEvents
+  alias PlatformWeb.ControlCenter.NativeLogin, as: NativeLoginPanel
+  alias PlatformWeb.ControlCenter.NativeFiles
+  alias PlatformWeb.ControlCenter.NativeStatus
   alias PlatformWeb.ControlCenter.Onboarding
   alias PlatformWeb.ControlCenter.OnboardingEvents
   alias PlatformWeb.ControlCenter.RolesPanel
@@ -33,10 +41,18 @@ defmodule PlatformWeb.ControlCenterLive do
   def mount(_params, session, socket) do
     current_user_id = session["current_user_id"]
 
+    # Live rows and header for native agents (task 01a10322 stage 4): every
+    # observed-state change the agent host reports re-renders them.
+    if connected?(socket), do: AgentHost.subscribe()
+
     {:ok,
      socket
      |> assign(:page_title, "Agent Resources")
      |> assign(:current_user_id, current_user_id)
+     |> assign(:agent_host_connected?, AgentHost.connected?())
+     |> assign(:restarting_agent_id, nil)
+     |> assign(:manageable_agent_ids, MapSet.new())
+     |> assign(:native_header, nil)
      |> assign(:agents, [])
      |> assign(:selected_agent, nil)
      |> assign(:runtime, %{status: :unknown, running?: false, pid: nil, active_session_ids: []})
@@ -49,6 +65,8 @@ defmodule PlatformWeb.ControlCenterLive do
        :workspace_form,
        to_form(%{"file_key" => "", "content" => ""}, as: :workspace_file)
      )
+     |> NativeFileEvents.reset()
+     |> NativeAgentEvents.reset()
      |> assign(:memory_filters, AgentData.default_memory_filters())
      |> assign(
        :memory_filter_form,
@@ -123,17 +141,110 @@ defmodule PlatformWeb.ControlCenterLive do
       |> assign(:selected_agent, selected_agent)
       |> assign(:selected_agent_directory_entry, selected_entry)
 
-    {:noreply,
-     if selected_agent do
-       assign_agent_panel(socket, selected_agent,
-         selected_file_key: params["file"] || socket.assigns[:selected_file_key],
-         reset_forms?: agent_changed?(socket, selected_agent)
-       )
-     else
-       assign_empty_panel(socket)
-     end}
+    socket =
+      if selected_agent do
+        assign_agent_panel(socket, selected_agent,
+          selected_file_key: params["file"] || socket.assigns[:selected_file_key],
+          reset_forms?: agent_changed?(socket, selected_agent)
+        )
+      else
+        assign_empty_panel(socket)
+      end
+
+    {:noreply, socket}
   end
 
+  # ── Agent host (native agents, task 01a10322 stage 4) ─────────────
+
+  @impl true
+  def handle_info({:agent_host_status, _event}, socket) do
+    {:noreply, refresh_native(socket)}
+  end
+
+  def handle_info(_msg, socket), do: {:noreply, socket}
+
+  @doc """
+  Re-read the directory and every native-agent view (rows, the managed
+  header, who may manage what) after an agent-host event or a control.
+  """
+  def refresh_native(socket) do
+    agents = AgentData.list_agents()
+    selected = socket.assigns[:selected_agent]
+
+    socket
+    |> assign(:agents, agents)
+    |> assign(
+      :selected_agent_directory_entry,
+      selected && AgentData.find_agent_directory_entry(agents, selected.slug)
+    )
+    |> assign_native()
+  end
+
+  defp assign_native(socket) do
+    agents = socket.assigns.agents
+    user_id = socket.assigns.current_user_id
+
+    manageable =
+      for %{managed?: true, agent: %Agent{} = agent} <- agents,
+          NativeAgents.can_manage?(user_id, agent),
+          into: MapSet.new(),
+          do: agent.id
+
+    socket
+    |> assign(:agent_host_connected?, AgentHost.connected?())
+    |> assign(:manageable_agent_ids, manageable)
+    |> clear_finished_restart()
+    |> then(&assign(&1, :native_header, native_header(&1)))
+  end
+
+  # "Restarting" holds from the click until the host reports the agent in any
+  # state other than starting.
+  defp clear_finished_restart(%{assigns: %{restarting_agent_id: nil}} = socket), do: socket
+
+  defp clear_finished_restart(%{assigns: %{restarting_agent_id: id}} = socket) do
+    case AgentHost.status(id) do
+      %{state: :starting} -> socket
+      nil -> socket
+      _settled -> assign(socket, :restarting_agent_id, nil)
+    end
+  end
+
+  defp native_header(
+         %{assigns: %{selected_agent_directory_entry: %{managed?: true} = entry}} = socket
+       ) do
+    view = NativeStatus.row(entry)
+    restarting? = socket.assigns.restarting_agent_id == entry.agent.id
+    connected? = socket.assigns.agent_host_connected?
+    key_set? = NativeLogin.api_key_set?(entry.agent)
+
+    %{
+      view: view,
+      harness: entry.harness,
+      host: AgentHost.host(),
+      observed_at: entry.observed && entry.observed.observed_at,
+      restarting?: restarting?,
+      can_manage?: MapSet.member?(socket.assigns.manageable_agent_ids, entry.agent.id),
+      # Agent files (stage 5): is the process up, which saved files has it
+      # not picked up, and has the host said what it applied at all.
+      live?: NativeAgents.live?(entry.observed),
+      pending_keys:
+        NativeAgents.pending_file_keys(socket.assigns[:workspace_files] || [], entry.observed),
+      applied_known?: is_map(entry.observed && entry.observed.files_applied),
+      buttons: NativeStatus.header_buttons(view, connected?, restarting?),
+      # Login (stage 6): is an API key saved, and which step to show.
+      key_set?: key_set?,
+      login_step: NativeLogin.step(entry.observed, key_set?)
+    }
+  end
+
+  defp native_header(_socket), do: nil
+
+  # "Recent output" is kept with the agent it was read for, so switching
+  # agents never shows another agent's pane.
+  defp recent_output_for({agent_id, output}, %Agent{id: agent_id}), do: output
+  defp recent_output_for(_output, _agent), do: nil
+
+  # ── Roles panel events (M7 stage 5) ───────────────────────────────
   # Source-level guard tests compare every handle_control_event name with this map.
   # Unknown events fail closed before any delegated handler runs.
   @event_policy %{
@@ -183,22 +294,49 @@ defmodule PlatformWeb.ControlCenterLive do
     "save_agent_restrictions" => :manage_selected,
     "show_add_space_modal" => :manage_selected,
     "hide_add_space_modal" => :ui,
-    "add_agent_to_space" => :manage_selected
+    "add_agent_to_space" => :manage_selected,
+    "native_start" => :ui,
+    "native_stop" => :ui,
+    "native_restart" => :ui,
+    "submit_native" => :federate,
+    "native_api_key_save" => :ui,
+    "native_api_key_remove" => :ui,
+    "native_recent_output" => :ui,
+    "native_file_change" => :ui,
+    "native_file_save" => :ui
   }
 
   @impl true
   def handle_event(name, params, socket) do
-    scope = socket.assigns[:access_scope]
+    scope = Platform.Access.Scope.for_user(%{id: socket.assigns.current_user_id})
+    socket = assign(socket, :access_scope, scope)
 
     permitted? =
       case Map.get(@event_policy, name) do
-        :ui -> true
-        :vault -> true
-        :manage_selected -> Platform.Access.Agents.manage?(scope, socket.assigns[:selected_agent])
-        :federate -> Platform.Access.Agents.may_federate?(scope)
-        :create_ownerless -> Platform.Access.Agents.may_create_ownerless?(scope)
-        :responsibility -> Platform.Access.Agents.may_federate?(scope)
-        nil -> false
+        :ui ->
+          true
+
+        :vault ->
+          true
+
+        :manage_selected ->
+          agent = socket.assigns[:selected_agent]
+
+          Platform.Access.Agents.manage?(scope, agent) and
+            (not NativeAgents.managed?(agent) or
+               NativeAgents.can_manage?(socket.assigns.current_user_id, agent))
+
+        :federate ->
+          Platform.Access.Agents.may_federate?(scope)
+
+        :create_ownerless ->
+          Platform.Access.Agents.may_create_ownerless?(scope)
+
+        :responsibility ->
+          Platform.Access.Agents.may_federate?(scope)
+
+        nil ->
+          false
       end
 
     if permitted?,
@@ -428,10 +566,7 @@ defmodule PlatformWeb.ControlCenterLive do
          %{"config" => params},
          %{assigns: %{selected_agent: %Agent{} = agent}} = socket
        ) do
-    case AgentAvatarUpload.consume(socket, agent) do
-      {:ok, avatar_attrs} -> save_config_with_avatar(socket, agent, params, avatar_attrs)
-      {:error, message} -> {:noreply, reject_config_save(socket, agent, params, message)}
-    end
+    with_native_manager(socket, agent, fn -> save_config(socket, agent, params) end)
   end
 
   defp handle_control_event("save_config", _params, socket), do: {:noreply, socket}
@@ -442,37 +577,10 @@ defmodule PlatformWeb.ControlCenterLive do
   # way to express "none".
   defp handle_control_event(
          "remove_avatar",
-         _params,
+         params,
          %{assigns: %{selected_agent: %Agent{} = agent}} = socket
        ) do
-    previous_key = agent.avatar_storage_key
-
-    case agent
-         |> Agent.changeset(%{avatar_url: nil, avatar_storage_key: nil})
-         |> Repo.update() do
-      {:ok, updated_agent} ->
-        # Only after the row no longer points at it. The reverse order can
-        # delete the bytes and then fail to commit, leaving a live row
-        # pointing at nothing.
-        AgentAvatarUpload.delete_blob(previous_key)
-
-        {:noreply,
-         socket
-         |> put_flash(:info, "Removed the avatar for #{updated_agent.name}.")
-         |> assign(:agents, AgentData.list_agents())
-         |> assign(:selected_agent, updated_agent)
-         |> assign_agent_panel(updated_agent,
-           selected_file_key: socket.assigns.selected_file_key,
-           memory_filters: socket.assigns.memory_filters,
-           # Remove is its own button, not a save. Carrying the current
-           # params forward keeps any unsaved edit to name/model/etc. from
-           # being silently reverted by the panel rebuild.
-           config_params: socket.assigns.config_form.params
-         )}
-
-      {:error, %Ecto.Changeset{} = changeset} ->
-        {:noreply, put_flash(socket, :error, changeset_error_summary(changeset))}
-    end
+    with_native_manager(socket, agent, fn -> remove_avatar(socket, agent, params) end)
   end
 
   defp handle_control_event("remove_avatar", _params, socket), do: {:noreply, socket}
@@ -572,6 +680,35 @@ defmodule PlatformWeb.ControlCenterLive do
   defp handle_control_event("set_vault_mode", params, socket),
     do: OnboardingEvents.handle("set_vault_mode", params, socket)
 
+  # ── Native agents (delegated, task 01a10322 stage 4) ──────────────
+
+  defp handle_control_event("native_start", params, socket),
+    do: NativeAgentEvents.handle("native_start", params, socket)
+
+  defp handle_control_event("native_stop", params, socket),
+    do: NativeAgentEvents.handle("native_stop", params, socket)
+
+  defp handle_control_event("native_restart", params, socket),
+    do: NativeAgentEvents.handle("native_restart", params, socket)
+
+  defp handle_control_event("submit_native", params, socket),
+    do: NativeAgentEvents.handle("submit_native", params, socket)
+
+  defp handle_control_event("native_api_key_save", params, socket),
+    do: NativeAgentEvents.handle("native_api_key_save", params, socket)
+
+  defp handle_control_event("native_api_key_remove", params, socket),
+    do: NativeAgentEvents.handle("native_api_key_remove", params, socket)
+
+  defp handle_control_event("native_recent_output", params, socket),
+    do: NativeAgentEvents.handle("native_recent_output", params, socket)
+
+  defp handle_control_event("native_file_change", params, socket),
+    do: NativeFileEvents.handle("native_file_change", params, socket)
+
+  defp handle_control_event("native_file_save", params, socket),
+    do: NativeFileEvents.handle("native_file_save", params, socket)
+
   # ── Runtime management events (delegated) ─────────────────────────
 
   defp handle_control_event("suspend_federated_runtime", params, socket),
@@ -649,6 +786,18 @@ defmodule PlatformWeb.ControlCenterLive do
      put_flash(socket, :error, "Could not add agent to space: agent not selected or invalid.")}
   end
 
+  # Any event this page does not handle is refused here, and only its NAME is
+  # logged (task 01a10322 stage 6). Without this clause an unknown event
+  # crashed the view, and the crash report printed the event's params
+  # verbatim, `:filter_parameters` notwithstanding: a Claude login code sent
+  # to a made-up "paste" event would have landed in the log. No event on this
+  # page accepts a login code.
+  defp handle_control_event(event, _params, socket) do
+    require Logger
+    Logger.warning("[ControlCenterLive] refused unknown event #{inspect(event)}")
+    {:noreply, socket}
+  end
+
   defp normalize_tab("roles"), do: :roles
   defp normalize_tab(_), do: :roles
 
@@ -675,6 +824,7 @@ defmodule PlatformWeb.ControlCenterLive do
         role_templates={@role_templates}
         roles={@roles}
         role_assignments_by_key={@role_assignments_by_key}
+        agent_host_connected?={@agent_host_connected?}
       />
 
       <%!-- ── Main content ───────────────────────────────────────────── --%>
@@ -716,6 +866,10 @@ defmodule PlatformWeb.ControlCenterLive do
               :for={agent <- @agents}
               agent={agent}
               selected_slug={@selected_agent && @selected_agent.slug}
+              can_manage?={
+                agent[:managed?] == true and
+                  MapSet.member?(@manageable_agent_ids, agent.agent.id)
+              }
             />
 
             <%!-- ── Empty state ─────────────────────────────────── --%>
@@ -790,6 +944,7 @@ defmodule PlatformWeb.ControlCenterLive do
               federation_online?={@federation_online?}
               selected_agent_directory_entry={@selected_agent_directory_entry}
               pending_delete_slug={@pending_delete_slug}
+              native={@native_header}
             />
 
             <AgentDetail.stats
@@ -804,7 +959,6 @@ defmodule PlatformWeb.ControlCenterLive do
             <div :if={@selected_agent.runtime_type == "external"} class="flex flex-col gap-6">
               <AgentDetail.federation_panels
                 agent={@selected_agent}
-                can_manage?={Platform.Access.Agents.manage?(@access_scope, @selected_agent)}
                 config_form={@config_form}
                 uploads={@uploads}
                 regenerated_token={@regenerated_token}
@@ -813,6 +967,54 @@ defmodule PlatformWeb.ControlCenterLive do
                 show_add_space_modal={@show_add_space_modal}
                 available_spaces={@available_spaces}
                 available_meeting_spaces={@available_meeting_spaces}
+                managed?={not is_nil(@native_header)}
+                can_manage?={
+                  Platform.Access.Agents.manage?(@access_scope, @selected_agent) and
+                    (is_nil(@native_header) or @native_header.can_manage?)
+                }
+              />
+
+              <%!-- Login steps (stage 6) replace the files area while the agent
+                   waits for a login. --%>
+              <NativeLoginPanel.panel
+                :if={@native_header && @native_header.view.state == :needs_login}
+                agent={@selected_agent}
+                can_manage?={@native_header.can_manage?}
+                key_set?={@native_header.key_set?}
+                step={@native_header.login_step}
+              />
+
+              <NativeFiles.editor
+                :if={@native_header && @native_header.view.state != :needs_login}
+                agent={@selected_agent}
+                can_manage?={@native_header.can_manage?}
+                live?={@native_header.live?}
+                pending_keys={@native_header.pending_keys}
+                applied_known?={@native_header.applied_known?}
+                restarting?={@native_header.restarting?}
+                workspace_files={@workspace_files}
+                selected_workspace_file={@selected_workspace_file}
+                form={@native_file_form}
+                dirty?={@native_file_dirty?}
+                json_error={@native_file_json_error}
+                saved_key={@native_saved_key}
+              />
+
+              <NativeLoginPanel.summary
+                :if={
+                  @native_header && @native_header.view.state != :needs_login &&
+                    @native_header.harness == "claude_code"
+                }
+                agent={@selected_agent}
+                can_manage?={@native_header.can_manage?}
+                key_set?={@native_header.key_set?}
+                step={@native_header.login_step}
+              />
+
+              <NativeLoginPanel.logs
+                :if={@native_header && @native_header.can_manage?}
+                agent={@selected_agent}
+                output={recent_output_for(@native_recent_output, @selected_agent)}
               />
             </div>
 
@@ -884,7 +1086,7 @@ defmodule PlatformWeb.ControlCenterLive do
         :if={@agents != [] && is_nil(@selected_agent) && !@show_onboarding_chooser}
         type="button"
         phx-click="open_onboarding_chooser"
-        class="fixed bottom-[calc(1.5rem+var(--bottom-nav-height,0px))] right-6 z-40 btn btn-primary btn-circle shadow-lg lg:hidden"
+        class="fixed bottom-[calc(env(safe-area-inset-bottom)+1.5rem+var(--bottom-nav-height,0px))] right-6 z-40 btn btn-primary btn-circle shadow-lg lg:hidden"
       >
         <span class="hero-plus h-6 w-6" />
       </button>
@@ -920,6 +1122,8 @@ defmodule PlatformWeb.ControlCenterLive do
     |> assign(:selected_workspace_file, nil)
     |> assign(:selected_file_key, nil)
     |> assign(:workspace_form, to_form(%{"file_key" => "", "content" => ""}, as: :workspace_file))
+    |> NativeFileEvents.reset()
+    |> NativeAgentEvents.reset()
     |> assign(:memory_filters, AgentData.default_memory_filters())
     |> assign(
       :memory_filter_form,
@@ -947,6 +1151,7 @@ defmodule PlatformWeb.ControlCenterLive do
     |> assign(:available_spaces, [])
     |> assign(:available_meeting_spaces, [])
     |> assign_roles_panel()
+    |> assign_native()
   end
 
   defp assign_agent_panel(socket, %Agent{} = agent, opts) do
@@ -986,7 +1191,7 @@ defmodule PlatformWeb.ControlCenterLive do
       sessions: AgentData.count_sessions(agent.id),
       vault: length(agent_credentials) + length(platform_credentials)
     })
-    |> assign(:model_chain_result, Router.model_chain(agent))
+    |> assign(:model_chain_result, Config.model_chain(agent))
     |> assign(:workspace_files, workspace_files)
     |> assign(:selected_workspace_file, selected_workspace_file)
     |> assign(:selected_file_key, selected_workspace_file && selected_workspace_file.file_key)
@@ -998,6 +1203,7 @@ defmodule PlatformWeb.ControlCenterLive do
         Keyword.get(opts, :workspace_params, %{})
       )
     )
+    |> NativeFileEvents.reset(saved_key: Keyword.get(opts, :native_saved_key))
     |> assign(:memory_filters, memory_filters)
     |> assign(:memory_filter_form, to_form(memory_filters, as: :memory_filters))
     |> assign(:recent_memories, AgentData.list_filtered_memories(agent.id, memory_filters))
@@ -1017,6 +1223,7 @@ defmodule PlatformWeb.ControlCenterLive do
     |> assign(:memory_form, AgentData.build_memory_form(Keyword.get(opts, :memory_params)))
     |> assign(:agent_status, PlatformWeb.ShellLive.default_agent_status())
     |> assign_federation_data(agent)
+    |> assign_native()
   end
 
   defp assign_federation_data(socket, %Agent{runtime_type: "external"} = agent) do
@@ -1155,4 +1362,56 @@ defmodule PlatformWeb.ControlCenterLive do
        do: current.id != selected_agent.id
 
   defp agent_changed?(_socket, _selected_agent), do: true
+
+  # ── Native-agent gates for the identity form (stage 6) ────────────
+
+  defp save_config(socket, agent, params) do
+    case AgentAvatarUpload.consume(socket, agent) do
+      {:ok, avatar_attrs} -> save_config_with_avatar(socket, agent, params, avatar_attrs)
+      {:error, message} -> {:noreply, reject_config_save(socket, agent, params, message)}
+    end
+  end
+
+  # A native agent's identity, voice and runtime are the install's to change
+  # (stage 6): only its owner or an admin may. The form is rendered read-only
+  # for everyone else, but that is an affordance; this is the check.
+  defp with_native_manager(socket, agent, fun) do
+    if NativeAgents.managed?(agent) and
+         not NativeAgents.can_manage?(socket.assigns.current_user_id, agent) do
+      {:noreply, put_flash(socket, :error, NativeAgentEvents.refused_message())}
+    else
+      fun.()
+    end
+  end
+
+  defp remove_avatar(socket, agent, _params) do
+    previous_key = agent.avatar_storage_key
+
+    case agent
+         |> Agent.changeset(%{avatar_url: nil, avatar_storage_key: nil})
+         |> Repo.update() do
+      {:ok, updated_agent} ->
+        # Only after the row no longer points at it. The reverse order can
+        # delete the bytes and then fail to commit, leaving a live row
+        # pointing at nothing.
+        AgentAvatarUpload.delete_blob(previous_key)
+
+        {:noreply,
+         socket
+         |> put_flash(:info, "Removed the avatar for #{updated_agent.name}.")
+         |> assign(:agents, AgentData.list_agents())
+         |> assign(:selected_agent, updated_agent)
+         |> assign_agent_panel(updated_agent,
+           selected_file_key: socket.assigns.selected_file_key,
+           memory_filters: socket.assigns.memory_filters,
+           # Remove is its own button, not a save. Carrying the current
+           # params forward keeps any unsaved edit to name/model/etc. from
+           # being silently reverted by the panel rebuild.
+           config_params: socket.assigns.config_form.params
+         )}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:noreply, put_flash(socket, :error, changeset_error_summary(changeset))}
+    end
+  end
 end

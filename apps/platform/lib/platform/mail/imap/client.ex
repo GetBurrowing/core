@@ -3,10 +3,14 @@ defmodule Platform.Mail.Imap.Client do
   The seam between the IMAP poller and an IMAP library (task
   01a0cf21-29ba-7001-8690-3c59d6cb17c6 stage 3).
 
-  The poller (`Platform.Mail.Inbound`) only ever calls these six functions, and
+  The poller (`Platform.Mail.Inbound`) and the backfill
+  (`Platform.Mail.Inbound.Backfill`) only ever call these seven functions, and
   none of them can change a mailbox: there is no select, store, copy, move,
   expunge or delete here. `examine/2` is IMAP EXAMINE (read-only select) and
   `fetch_raw/2` must fetch with `BODY.PEEK[]` so `\\Seen` is never set.
+
+  `uids_since/2` (task 01a13ba5-42a7-7000-8f2b-4c63003f3f92) is called only
+  by the backfill; the live poller uses `uids_after/2`.
 
   Implementations: `Platform.Mail.Imap.WireClient` (production) and
   `Platform.Mail.Imap.FakeClient` (test/support, in memory). The module in
@@ -39,6 +43,14 @@ defmodule Platform.Mail.Imap.Client do
 
   @doc "UIDs strictly greater than `uid` in the examined folder, ascending."
   @callback uids_after(conn(), non_neg_integer()) :: {:ok, [pos_integer()]} | {:error, term()}
+
+  @doc """
+  IMAP `UID SEARCH SINCE <date>` in the examined folder, ascending. SINCE
+  matches a message's INTERNALDATE (when the server received it), not its
+  Date header, at DAY granularity in the server's own time zone: every
+  message whose internal date is `date` or later.
+  """
+  @callback uids_since(conn(), Date.t()) :: {:ok, [pos_integer()]} | {:error, term()}
 
   @doc "The raw RFC 5322 bytes of message `uid`, fetched without setting \\\\Seen."
   @callback fetch_raw(conn(), pos_integer()) :: {:ok, binary()} | {:error, term()}

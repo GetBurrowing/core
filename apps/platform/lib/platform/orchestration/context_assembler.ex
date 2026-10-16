@@ -221,7 +221,11 @@ defmodule Platform.Orchestration.ContextAssembler do
         kind: canvas && canvas.kind,
         note: attachment.note,
         attached_at: attachment.inserted_at,
-        canvas_present: not is_nil(canvas)
+        canvas_present: not is_nil(canvas),
+        # Task 01a13ae7 stage 1: the canonical page, so the execution
+        # dispatch's design-canvases block can name it without a Repo read
+        # inside HeartbeatScheduler.
+        view_url: Platform.Chat.Canvas.Links.view_url(attachment.canvas_id)
       }
     end)
   end

@@ -231,15 +231,15 @@ final class MessagingTests: XCTestCase {
             }
             return (200, self.json(#"{"people":[{"id":"\#(self.agentID)","kind":"agent","name":"Burrow Helper","org_names":[]}]}"#))
         }
-        let suggested = try await PersonQuery().suggestedEntities()
+        let suggested = try await MessagePersonEntityQuery().suggestedEntities()
         XCTAssertEqual(suggested.map(\.name), ["Burrow Helper"])
 
-        let found = try await PersonQuery().entities(matching: "Priya")
+        let found = try await MessagePersonEntityQuery().entities(matching: "Priya")
         XCTAssertEqual(found.map(\.id), ["\(a)|\(personID)"])
         XCTAssertEqual(StubURLProtocol.requests.last?.url?.query, "q=Priya", "matching asks the server, not the suggestion list")
 
         // The id Siri hands back resolves again, on its own host.
-        let again = try await PersonQuery().entities(for: ["\(a)|\(personID)"])
+        let again = try await MessagePersonEntityQuery().entities(for: ["\(a)|\(personID)"])
         XCTAssertEqual(again.map(\.name), ["Priya"])
     }
 
@@ -248,11 +248,11 @@ final class MessagingTests: XCTestCase {
         IntentEnvironment.current = env(tokens: [a: "token-for-a", b: "token-for-b"], hosts: [a, b])
         StubURLProtocol.respond = { _ in (200, self.json(#"{"people":[]}"#)) }
 
-        _ = try await PersonQuery(installScope: a).suggestedEntities()
+        _ = try await MessagePersonEntityQuery(installScope: a).suggestedEntities()
         let usedA = StubURLProtocol.requests.count
         XCTAssertEqual(StubURLProtocol.requests.map { $0.url?.host }, [a])
 
-        _ = try await PersonQuery(installScope: b).entities(matching: "Dalton")
+        _ = try await MessagePersonEntityQuery(installScope: b).entities(matching: "Dalton")
         let afterA = StubURLProtocol.requests.dropFirst(usedA)
         XCTAssertEqual(afterA.map { $0.url?.host }, [b])
         XCTAssertEqual(afterA.first?.value(forHTTPHeaderField: "Authorization"), "Bearer token-for-b")
@@ -260,7 +260,7 @@ final class MessagingTests: XCTestCase {
         // A person id on host B resolves only against host B.
         StubURLProtocol.reset()
         StubURLProtocol.respond = { _ in (200, self.json(#"{"people":[]}"#)) }
-        _ = try await PersonQuery().entities(for: ["\(b)|unknown-person"])
+        _ = try await MessagePersonEntityQuery().entities(for: ["\(b)|unknown-person"])
         XCTAssertEqual(StubURLProtocol.requests.map { $0.url?.host }, [b])
     }
 }

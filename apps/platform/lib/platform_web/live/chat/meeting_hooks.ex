@@ -114,6 +114,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
       # FIRST-JOIN defaults, and this overlay is what keeps a committed
       # mute alive across a socket drop. See `seed_media_intent/1`.
       |> seed_media_intent()
+      |> assign_native_call_defaults()
       |> assign(:screen_share_enabled, false)
       |> assign(:meeting_counts, %{})
       |> assign(:meeting_participants, [])
@@ -321,6 +322,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     # `assign_new` seeds `true` again there; the ETS overlay restores the
     # committed pair. See `seed_media_intent/1` for the reasoning.
     |> seed_guest_media_intent()
+    |> assign_native_call_defaults()
     |> assign(:screen_share_enabled, false)
     |> assign(:meeting_counts, %{})
     |> assign(:meeting_participants, [])
@@ -503,6 +505,8 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   the bar + in-chat controls in lockstep (see `MeetingState` moduledoc).
   """
   @spec toggle_mic(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  def toggle_mic(%{assigns: %{native_call: %{}}} = socket), do: request_native_mic(socket)
+
   def toggle_mic(socket) do
     new_mic = !socket.assigns.mic_enabled
 
@@ -520,6 +524,10 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   Symmetric companion to `toggle_mic/1` — same broadcast contract.
   """
   @spec toggle_camera(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  # The native call has no camera until stage 4 of task 01a13c62; the button
+  # is hidden, so a stray event changes nothing rather than lying.
+  def toggle_camera(%{assigns: %{native_call: %{camera: false}}} = socket), do: socket
+
   def toggle_camera(socket) do
     new_camera = !socket.assigns.camera_enabled
 
@@ -537,10 +545,10 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
        when is_boolean(mic) and is_boolean(camera) do
     case socket.assigns[:user_id] do
       user_id when is_binary(user_id) ->
-        MeetingState.broadcast_media_state(user_id, %{
-          mic_enabled: mic,
-          camera_enabled: camera
-        })
+        MeetingState.broadcast_media_state(
+          user_id,
+          Map.merge(%{mic_enabled: mic, camera_enabled: camera}, native_bar_state(socket))
+        )
 
       _ ->
         :ok
@@ -548,6 +556,131 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
 
     socket
   end
+
+  # ── Native call media (task 01a13c62 stage 3) ─────────────────────────
+  #
+  # Inside the Burrow iOS app the `SuiteMeetings` plugin owns the call, and
+  # `meeting_client.js` reports it with `native_call_attached` after the
+  # native join. From then on the mic button shows only what the native call
+  # CONFIRMED: a tap sets `:mic_pending` and asks the call (`toggle-mic`
+  # `%{want: bool}`), and `:mic_enabled` changes only when
+  # `native_media_state` arrives. The browser path keeps its optimistic flip.
+  #
+  # `:mic_pending` is a server assign, not a JS class, because morphdom
+  # clobbers a JS-added class on the next render (the same argument as
+  # `meeting_room.js`'s speaking rings). Every mount re-seeds it false
+  # (`assign_native_call_defaults/1`), so a pending state always has an exit
+  # even if the confirmation never arrives.
+
+  @media_error_mic "Couldn't change the mic. Use the call controls."
+
+  @doc "The one line shown when the native call did not confirm a page mute."
+  @spec media_error_mic() :: String.t()
+  def media_error_mic, do: @media_error_mic
+
+  defp assign_native_call_defaults(socket) do
+    socket
+    |> assign(:native_call, nil)
+    |> assign(:mic_pending, false)
+    |> assign(:media_error, nil)
+  end
+
+  # A tap in native mode: ask, don't flip. A build whose page cannot drive
+  # the mic (no `capabilities()`, so `mic: false`) hides the button; a stray
+  # event is a no-op. A second tap while one is in flight is a no-op too:
+  # the button is `disabled` then, and the first answer decides.
+  defp request_native_mic(%{assigns: %{native_call: %{mic: true}, mic_pending: false}} = socket) do
+    socket
+    |> assign(:mic_pending, true)
+    |> push_event("toggle-mic", %{want: !socket.assigns.mic_enabled})
+    |> broadcast_native(socket.assigns.mic_enabled, socket.assigns.camera_enabled)
+  end
+
+  defp request_native_mic(socket), do: socket
+
+  @doc """
+  `native_call_attached` from `meeting_client.js`: the native call owns the
+  media. Assigns `:native_call` (`%{mic, camera, active_speakers}`, booleans)
+  and the confirmed mic/camera. A value the build did not report (`nil`)
+  leaves the assign as it was.
+  """
+  @spec apply_native_call_attached(Phoenix.LiveView.Socket.t(), map()) ::
+          Phoenix.LiveView.Socket.t()
+  def apply_native_call_attached(socket, params) when is_map(params) do
+    caps = if is_map(params["capabilities"]), do: params["capabilities"], else: %{}
+
+    native = %{
+      mic: caps["mic"] == true,
+      camera: caps["camera"] == true,
+      active_speakers: caps["activeSpeakers"] == true
+    }
+
+    socket
+    |> assign(:native_call, native)
+    |> assign(:mic_pending, false)
+    |> assign(:media_error, nil)
+    |> assign_confirmed_media(params)
+  end
+
+  def apply_native_call_attached(socket, _params), do: socket
+
+  @doc """
+  `native_media_state` from `meeting_client.js`: the CONFIRMED mic/camera,
+  after a page tap or after any other change (the native call screen,
+  Control Centre, AirPods, the host). Clears `:mic_pending`. With
+  `"failed" => "mic"` it sets `:media_error`; without it, any error clears,
+  so a late confirmation (the plugin waits 5 s, the page 3 s) heals it.
+  """
+  @spec apply_native_media_state(Phoenix.LiveView.Socket.t(), map()) ::
+          Phoenix.LiveView.Socket.t()
+  def apply_native_media_state(%{assigns: %{native_call: %{}}} = socket, params)
+      when is_map(params) do
+    error = if params["failed"] == "mic", do: @media_error_mic, else: nil
+
+    socket
+    |> assign(:mic_pending, false)
+    |> assign(:media_error, error)
+    |> assign_confirmed_media(params)
+  end
+
+  def apply_native_media_state(socket, _params), do: socket
+
+  defp assign_confirmed_media(socket, params) do
+    socket =
+      socket
+      |> assign_reported(:mic_enabled, params["mic"])
+      |> assign_reported(:camera_enabled, params["camera"])
+
+    case socket.assigns do
+      %{mic_enabled: mic, camera_enabled: camera} when is_boolean(mic) and is_boolean(camera) ->
+        broadcast_native(socket, mic, camera)
+
+      _ ->
+        socket
+    end
+  end
+
+  defp assign_reported(socket, key, value) when is_boolean(value), do: assign(socket, key, value)
+  defp assign_reported(socket, _key, _value), do: socket
+
+  # Guests have no per-user topic; persist the pair like their toggles do.
+  defp broadcast_native(socket, mic, camera) do
+    if is_binary(socket.assigns[:user_id]) do
+      broadcast_media(socket, mic, camera)
+    else
+      persist_guest_media_intent(socket)
+    end
+  end
+
+  # The mini bar lives in another LiveView's layout and follows this
+  # surface only through `MeetingState.broadcast_media_state/2`, so native
+  # mode and the pending flag ride along on the same message. Browser mode
+  # adds nothing, keeping that payload byte-identical.
+  defp native_bar_state(%{assigns: %{native_call: %{} = native} = assigns}) do
+    %{native: native, mic_pending: assigns[:mic_pending] == true}
+  end
+
+  defp native_bar_state(_socket), do: %{}
 
   # ── Hook callbacks ────────────────────────────────────────────────────
 
@@ -579,6 +712,14 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
 
   defp handle_event("meeting_toggle_camera", _params, socket) do
     {:halt, toggle_camera(socket)}
+  end
+
+  defp handle_event("native_call_attached", params, socket) do
+    {:halt, apply_native_call_attached(socket, params)}
+  end
+
+  defp handle_event("native_media_state", params, socket) do
+    {:halt, apply_native_media_state(socket, params)}
   end
 
   defp handle_event("meeting_toggle_screen_share", _params, socket) do
@@ -724,6 +865,10 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   # guest ingress path in `PlatformWeb.MeetingLive` (chrome_mode: :none),
   # which has `:user_id = nil`.
 
+  defp handle_guest_event("meeting_toggle_mic", _params, %{assigns: %{native_call: %{}}} = socket) do
+    {:halt, request_native_mic(socket)}
+  end
+
   defp handle_guest_event("meeting_toggle_mic", _params, socket) do
     new_mic = !socket.assigns.mic_enabled
 
@@ -732,6 +877,14 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
      |> assign(:mic_enabled, new_mic)
      |> persist_guest_media_intent()
      |> push_event("toggle-mic", %{})}
+  end
+
+  defp handle_guest_event(
+         "meeting_toggle_camera",
+         _params,
+         %{assigns: %{native_call: %{camera: false}}} = socket
+       ) do
+    {:halt, socket}
   end
 
   defp handle_guest_event("meeting_toggle_camera", _params, socket) do
@@ -783,6 +936,14 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   defp handle_guest_event("meeting_left", _params, socket) do
     {:halt,
      socket |> release_guest_topics() |> clear_guest_media_intent() |> reset_meeting_state()}
+  end
+
+  defp handle_guest_event("native_call_attached", params, socket) do
+    {:halt, apply_native_call_attached(socket, params)}
+  end
+
+  defp handle_guest_event("native_media_state", params, socket) do
+    {:halt, apply_native_media_state(socket, params)}
   end
 
   defp handle_guest_event("active_speakers", params, socket) do
@@ -1893,6 +2054,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     |> assign(:camera_off_identities, MapSet.new())
     |> assign(:mic_enabled, true)
     |> assign(:camera_enabled, true)
+    |> assign_native_call_defaults()
     |> assign(:screen_share_enabled, false)
   end
 end

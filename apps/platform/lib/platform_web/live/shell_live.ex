@@ -207,6 +207,9 @@ defmodule PlatformWeb.ShellLive do
       # shell's own broadcast) so the cache stays the authority.
       |> assign(:shell_bar_mic_on, true)
       |> assign(:shell_bar_camera_on, false)
+      # Task 01a13c62 stage 3: the native call's capabilities while the
+      # Burrow iOS app owns the media, else nil. See `shell_meeting_toggle/2`.
+      |> assign(:shell_bar_native, nil)
       # Task 019ffb7b stage 3: the browser's notification-permission state,
       # reported by the `PushSubscribe` hook mounted at
       # `shell.html.heex`. Seeded here rather than in ChatLive so every
@@ -497,7 +500,7 @@ defmodule PlatformWeb.ShellLive do
 
           {:halt, socket}
 
-        {:meeting_media_state, %{mic_enabled: mic, camera_enabled: camera}}, socket ->
+        {:meeting_media_state, %{mic_enabled: mic, camera_enabled: camera} = payload}, socket ->
           # Stage 3 (task 019ee06b): MeetingHooks broadcasts the authoritative
           # post-toggle mic/camera state on `MeetingState.topic(user_id)`.
           # The bar is a LiveComponent so it can't subscribe to PubSub itself —
@@ -509,11 +512,21 @@ defmodule PlatformWeb.ShellLive do
           # Stage 4 (task 019ee06b): also mirror into the shell's cached
           # `:shell_bar_*` assigns so the no-ChatLive bar-toggle fallback
           # (`shell_meeting_toggle/2`) always flips off the current truth.
-          send_update(PlatformWeb.MeetingBarLive,
-            id: "meeting-bar",
-            mic_on: mic,
-            camera_on: camera
+          #
+          # Task 01a13c62 stage 3: a native-call producer adds `:native` and
+          # `:mic_pending`; a browser producer sends neither, so the bar's
+          # native state is touched only when the payload carries it.
+          native_update = payload |> Map.take([:native, :mic_pending]) |> Enum.to_list()
+
+          send_update(
+            PlatformWeb.MeetingBarLive,
+            [id: "meeting-bar", mic_on: mic, camera_on: camera] ++ native_update
           )
+
+          socket =
+            if Map.has_key?(payload, :native),
+              do: assign(socket, :shell_bar_native, payload.native),
+              else: socket
 
           {:halt,
            socket
@@ -534,6 +547,13 @@ defmodule PlatformWeb.ShellLive do
             # fresh join starts from MeetingBarLive's mount defaults again.
             |> assign(:shell_bar_mic_on, true)
             |> assign(:shell_bar_camera_on, false)
+            |> assign(:shell_bar_native, nil)
+
+          send_update(PlatformWeb.MeetingBarLive,
+            id: "meeting-bar",
+            native: nil,
+            mic_pending: false
+          )
 
           {:halt, socket}
 
@@ -571,6 +591,13 @@ defmodule PlatformWeb.ShellLive do
             |> assign(:on_meeting_page, false)
             |> assign(:shell_bar_mic_on, true)
             |> assign(:shell_bar_camera_on, false)
+            |> assign(:shell_bar_native, nil)
+
+          send_update(PlatformWeb.MeetingBarLive,
+            id: "meeting-bar",
+            native: nil,
+            mic_pending: false
+          )
 
           {:halt, socket}
 
@@ -1401,6 +1428,18 @@ defmodule PlatformWeb.ShellLive do
   # Anonymous shells (no `current_user_id`) skip the broadcast — there's
   # no per-user topic to fan out on. We still flip the local cache so a
   # logged-in-soon-to-be flow doesn't drift.
+  #
+  # Task 01a13c62 stage 3: while the native call owns the media
+  # (`:shell_bar_native` set) the fallback never flips. It asks with the
+  # same `%{want: bool}` MeetingHooks sends, and the bar changes only when
+  # `meeting_client.js` reports the CONFIRMED state. Where no MeetingClient
+  # is mounted the ask goes nowhere and the bar keeps showing the truth.
+  defp shell_meeting_toggle(%{assigns: %{shell_bar_native: %{mic: true}}} = socket, :mic) do
+    push_event(socket, "toggle-mic", %{want: !socket.assigns.shell_bar_mic_on})
+  end
+
+  defp shell_meeting_toggle(%{assigns: %{shell_bar_native: %{}}} = socket, _media), do: socket
+
   defp shell_meeting_toggle(socket, :mic) do
     new_mic = !socket.assigns.shell_bar_mic_on
     camera = socket.assigns.shell_bar_camera_on

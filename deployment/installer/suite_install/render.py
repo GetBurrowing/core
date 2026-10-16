@@ -71,6 +71,9 @@ class ResolvedService:
         self.ports = ()
         self.gpu = False
         self.healthcheck = None
+        self.networks = ()
+        self.systemd_init = False
+        self.own_env_file = False
 
     def secret_env(self):
         return {k: v for k, v in self.env.items() if markers(v)}
@@ -101,6 +104,11 @@ class Plan:
         self.customer_refs = {}
         self.endpoints = manifest["models"]["endpoints"]
         self.core_image = None
+        self.agent_host_image = None
+        # Native agents' capability profile (task 01a10322): "off",
+        # "full_machine" (an agent host on the HOST, target layer) or
+        # "contained" (the agent-host container, a registry service).
+        self.agents = manifest["agents"]["profile"]
 
     def routes(self):
         out = {}
@@ -175,6 +183,9 @@ def plan(manifest):
         svc.ports = entry.ports_for(ctx)
         svc.gpu = entry.gpu(ctx)
         svc.healthcheck = entry.healthcheck
+        svc.networks = tuple(entry.networks(ctx))
+        svc.systemd_init = entry.systemd_init
+        svc.own_env_file = entry.own_env_file
         result.services[container] = svc
 
     for container in enabled:
@@ -199,6 +210,8 @@ def plan(manifest):
 
     result.customer_refs = _customer_refs(manifest)
     result.core_image = result.services["core-platform"].image
+    # full_machine copies the daemon out of the agent-host image on the host.
+    result.agent_host_image = overrides.get(registry.AGENT_HOST) or registry.AGENT_HOST_IMAGE
     _check_references(result)
     return result
 
@@ -318,6 +331,9 @@ def build(
         for c in p.containers
         if registry.SERVICES[c].private_image and not manifest["images"]["refs"].get(c)
     ]
+    if p.agents == "full_machine" and not manifest["images"]["refs"].get(registry.AGENT_HOST):
+        # Not a container here, but the host pulls the image at first boot.
+        private_defaults.append(registry.AGENT_HOST)
     if not p.images_preloaded and private_defaults and registry_auth is None:
         raise RenderError(
             "registry_auth_required",

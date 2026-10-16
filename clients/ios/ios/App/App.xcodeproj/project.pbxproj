@@ -26,6 +26,7 @@
 		103357A92E2A32901E04F4D4 /* ApprovalsWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA34F7BCD1785FB63C540ECE /* ApprovalsWidget.swift */; };
 		106EB925985680D362F34AAE /* Intents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95476033D891E158ED21FA8F /* Intents.swift */; };
 		10B73BA6108F3CEBF5D945D8 /* CallStateReducerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8B65AA253F5FA2E5F97CB45 /* CallStateReducerTests.swift */; };
+		A13C62B2000000000000F001 /* SuiteMeetingsPluginTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A13C62B2000000000000F002 /* SuiteMeetingsPluginTests.swift */; };
 		1146BE2FF7FB0F5F3A4BE239 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48421D60D2C81BD6F37E64D2 /* Theme.swift */; };
 		122F95274D5C367FD4177E9C /* PushContentPreparer.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBB8006C64908FD4EA1BA7E3 /* PushContentPreparer.swift */; };
 		1263CD52F9690E5CAA14A00F /* NavigationPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = F46DFC793311833A64DEB882 /* NavigationPolicy.swift */; };
@@ -80,6 +81,7 @@
 		43F6FFE3D781F70AFAEB2196 /* MeetingLauncher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BA25A3AE7E8BD6A4694E6F3 /* MeetingLauncher.swift */; };
 		4477267F5890DCD183087CBB /* Colors.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F20AEF676C004D2C37F1D06C /* Colors.xcassets */; };
 		45434EE5E79FD1E5AF91F655 /* InstallUnreadStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1510D02E40E90C314AC0E673 /* InstallUnreadStore.swift */; };
+		4572C321FE62687D9C3731AA /* PersonResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB4116C761A2BFBE38EA3105 /* PersonResolver.swift */; };
 		4582366819213B76DABE5E6E /* InstallUnreadStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1510D02E40E90C314AC0E673 /* InstallUnreadStore.swift */; };
 		45D48C96A52AE8CE339A50D4 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48421D60D2C81BD6F37E64D2 /* Theme.swift */; };
 		46C09A5414802C6736DF7A5D /* DonationPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2CB880C6D4F67075F9EED68 /* DonationPolicy.swift */; };
@@ -93,6 +95,7 @@
 		5298D6CB3D0935D2576F2E03 /* ApprovalsProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3255B0B0C1D2387DCCB568FD /* ApprovalsProvider.swift */; };
 		54EAE98369A7A86E9879CC50 /* PushRelayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 179CD654AFC5317FC6FC6A81 /* PushRelayTests.swift */; };
 		556AE8ECBD6FC4E87265F820 /* InCallModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53A302BFBC4A79FDF762850D /* InCallModel.swift */; };
+		55AE2E729871EDDB184E7D4C /* PersonResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB4116C761A2BFBE38EA3105 /* PersonResolver.swift */; };
 		591680164EFFE46048C60154 /* CountsEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3CE35968982C56B6596BF2D /* CountsEntry.swift */; };
 		59ED11D54689A365DB1C227C /* PersonalContextSystemTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1057831535AAC14BF4CC1F1F /* PersonalContextSystemTests.swift */; };
 		5BAF3BAD4811588AFF876CD9 /* CountsEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3CE35968982C56B6596BF2D /* CountsEntry.swift */; };
@@ -236,6 +239,7 @@
 		D7FF0F390D42D200D34A9F3A /* SuiteAPIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7E0806D82BAD00F729000FD /* SuiteAPIClient.swift */; };
 		D811D6D8851C97B667406CC9 /* DeepLinkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AB72D587D4F0F2BF4D98D9D /* DeepLinkTests.swift */; };
 		D945CB8F4F75FE12293DA1BB /* Colors.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F20AEF676C004D2C37F1D06C /* Colors.xcassets */; };
+		D9F548505A6E559AC9351187 /* PersonResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB4116C761A2BFBE38EA3105 /* PersonResolver.swift */; };
 		DB85697BEEEACA5831087520 /* VoIPRegistrar.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5CA68A6E37861FFC3234F07 /* VoIPRegistrar.swift */; };
 		DCD946AF0D3CA682A43EDB70 /* AskAgentSystemTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1789456078BB71790213DC24 /* AskAgentSystemTests.swift */; };
 		DDBA16A62D69BDBF390B65C3 /* InstallStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E69F987B892561A06F26BE1 /* InstallStore.swift */; };
@@ -268,6 +272,7 @@
 		EF687E4A72A41ED6A1FA3A43 /* SwitchBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C90C2D4E1529AE82939AB74 /* SwitchBanner.swift */; };
 		EFE620C0625DDE50365FDD31 /* IntentActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50E3C6960995294AC8D0D25F /* IntentActions.swift */; };
 		EFF4792CE7D1C5C5F8184C5B /* StartCallIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = E207F14F676AA0A3745860A5 /* StartCallIntent.swift */; };
+		F37A06BC602C57A38F2821AD /* PersonResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB4116C761A2BFBE38EA3105 /* PersonResolver.swift */; };
 		F410DACF893D296718155247 /* IntentsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6F6FCE55A638A1302FC2263 /* IntentsTests.swift */; };
 		F621662430D0939656F7600A /* SuiteAPIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7E0806D82BAD00F729000FD /* SuiteAPIClient.swift */; };
 		F6E1B30ACE6007F95CC3A94E /* PushContentPreparer.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBB8006C64908FD4EA1BA7E3 /* PushContentPreparer.swift */; };
@@ -452,9 +457,11 @@
 		C8A9A2F9E029400EE1562218 /* AppTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = AppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		CFC7C5DC2BC35F7484C1EF57 /* PersonalContextTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersonalContextTests.swift; sourceTree = "<group>"; };
 		D8B65AA253F5FA2E5F97CB45 /* CallStateReducerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallStateReducerTests.swift; sourceTree = "<group>"; };
+		A13C62B2000000000000F002 /* SuiteMeetingsPluginTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SuiteMeetingsPluginTests.swift; sourceTree = "<group>"; };
 		D8BCDC22DDFAA9ECFB5ADCB9 /* MultipartFormTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MultipartFormTests.swift; sourceTree = "<group>"; };
 		D924922A5FA31654B66EF277 /* CallState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallState.swift; sourceTree = "<group>"; };
 		DA67FF4273339C4D4D25F62F /* MessagesDomainSystemTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessagesDomainSystemTests.swift; sourceTree = "<group>"; };
+		DB4116C761A2BFBE38EA3105 /* PersonResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersonResolver.swift; sourceTree = "<group>"; };
 		DBB8006C64908FD4EA1BA7E3 /* PushContentPreparer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushContentPreparer.swift; sourceTree = "<group>"; };
 		DBCBC8BD688D82DFA20B569B /* MeetingAPITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingAPITests.swift; sourceTree = "<group>"; };
 		DE9308F39A982153402CF2CC /* MeetingAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeetingAPI.swift; sourceTree = "<group>"; };
@@ -552,6 +559,7 @@
 				019DD0FC774F2201544F8C56 /* ShortcutParameterRefreshTests.swift */,
 				37C9E327224C059F2EF3BDFA /* SlabStateTests.swift */,
 				C1B412D64B3F0BB4C9DE56AD /* SuiteAPIClientTests.swift */,
+				A13C62B2000000000000F002 /* SuiteMeetingsPluginTests.swift */,
 				1BCA4F7949BCEADF89CA73DD /* TestSupport.swift */,
 				7F65F0C4F9A353203122D818 /* ThemeTests.swift */,
 				8238860C98E6B71B908E7B98 /* VoIPHandlingTests.swift */,
@@ -735,6 +743,7 @@
 				B9944C7EE764DE0881EC97B3 /* MessagingEntities.swift */,
 				C4A209DF9B0ACB4D8CE63E6C /* MessagingIntents.swift */,
 				BA623D3963F4BCFBB477D85D /* PersonalIndex.swift */,
+				DB4116C761A2BFBE38EA3105 /* PersonResolver.swift */,
 				EE185BEDD232F08332626453 /* ShortcutParameterRefresh.swift */,
 				E207F14F676AA0A3745860A5 /* StartCallIntent.swift */,
 				9CAD421181524C41F26D5056 /* TaskReminderTrial.swift */,
@@ -827,6 +836,7 @@
 				37BFF6A8CB5CC7FA21AD3FA3 /* Resources */,
 				BC0DC3536DED64E0E8C9923E /* Frameworks */,
 				7C6B2DB89D01A1E9B8F2A565 /* Embed Foundation Extensions */,
+				6D082A5BFA836738261C5F04 /* Check extensions declare no schema intents */,
 			);
 			buildRules = (
 			);
@@ -1088,6 +1098,28 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		6D082A5BFA836738261C5F04 /* Check extensions declare no schema intents */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Check extensions declare no schema intents";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "/usr/bin/python3 \"${SRCROOT}/../../scripts/check_extension_schema_intents.py\" \"${TARGET_BUILD_DIR}/${WRAPPER_NAME}\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		17457C94CBDF9C57D2F7B3DC /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -1136,6 +1168,7 @@
 				C4B690C2AEC6DDBE58AE49AD /* MessagingEntities.swift in Sources */,
 				90D15CB08305100B666613D1 /* MessagingIntents.swift in Sources */,
 				E77549BF32A12CAD72491F16 /* NotificationService.swift in Sources */,
+				D9F548505A6E559AC9351187 /* PersonResolver.swift in Sources */,
 				C33C760B72CD050A32E45EF8 /* PersonalIndex.swift in Sources */,
 				8622DC2EC7B5E8139ABDDCA9 /* PushContentPreparer.swift in Sources */,
 				CE774E8C1059ECE95055E469 /* PushKeyStore.swift in Sources */,
@@ -1189,6 +1222,7 @@
 				6A53356E2D3D694943E3AAAD /* MessagingActions.swift in Sources */,
 				083D4D795113B6A50D2C4827 /* MessagingEntities.swift in Sources */,
 				A96B5A379619F5D87AF49712 /* MessagingIntents.swift in Sources */,
+				4572C321FE62687D9C3731AA /* PersonResolver.swift in Sources */,
 				83766D31177476EC38F9CB16 /* PersonalIndex.swift in Sources */,
 				AAC2C29233EC052944973B8D /* PushContentPreparer.swift in Sources */,
 				C9C72475B691F18F6EC5DCB0 /* PushKeyStore.swift in Sources */,
@@ -1278,6 +1312,7 @@
 				C9EBE9623C35A1E505514D6B /* MessagingEntities.swift in Sources */,
 				707C8B72E67C85DB94D99BF2 /* MessagingIntents.swift in Sources */,
 				1263CD52F9690E5CAA14A00F /* NavigationPolicy.swift in Sources */,
+				F37A06BC602C57A38F2821AD /* PersonResolver.swift in Sources */,
 				731ED95C0F636C7947E4DB4C /* PersonalIndex.swift in Sources */,
 				122F95274D5C367FD4177E9C /* PushContentPreparer.swift in Sources */,
 				ECB092752AB315536FF9CE1D /* PushKeyStore.swift in Sources */,
@@ -1315,6 +1350,7 @@
 				997351360346835A850A0EDB /* AvatarTests.swift in Sources */,
 				D7E19C30BC549C9294ABC389 /* CallAndMeetingTests.swift in Sources */,
 				10B73BA6108F3CEBF5D945D8 /* CallStateReducerTests.swift in Sources */,
+				A13C62B2000000000000F001 /* SuiteMeetingsPluginTests.swift in Sources */,
 				D811D6D8851C97B667406CC9 /* DeepLinkTests.swift in Sources */,
 				FB5EE48EC224C03107858CDD /* InCallModelTests.swift in Sources */,
 				9ABD003A8FC8171D875452AD /* InstallSessionTests.swift in Sources */,
@@ -1377,6 +1413,7 @@
 				950248DC801ECC9497B03BD8 /* MessagingActions.swift in Sources */,
 				BB336A1BF8020247E993D679 /* MessagingEntities.swift in Sources */,
 				1E6B20D4A0050A4CD3FB2EC0 /* MessagingIntents.swift in Sources */,
+				55AE2E729871EDDB184E7D4C /* PersonResolver.swift in Sources */,
 				685945D840CE528AF9790D94 /* PersonalIndex.swift in Sources */,
 				F6E1B30ACE6007F95CC3A94E /* PushContentPreparer.swift in Sources */,
 				E0A81B143E940E475660BAB3 /* PushKeyStore.swift in Sources */,
@@ -1532,6 +1569,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = "com.kobo-ai.burrow";
 				SUITE_APS_ENVIRONMENT = development;
 				SUITE_PUSH_ENVIRONMENT = sandbox;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) BURROW_APP";
 			};
 			name = Debug;
 		};
@@ -1650,6 +1688,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = "com.kobo-ai.burrow";
 				SUITE_APS_ENVIRONMENT = production;
 				SUITE_PUSH_ENVIRONMENT = production;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) BURROW_APP";
 			};
 			name = Release;
 		};

@@ -43,6 +43,35 @@ defmodule PlatformWeb.AuthController do
       %{action: "redirect", ip_address: format_ip(conn.remote_ip)}
     )
 
+    case OIDC.missing_settings() do
+      [] -> redirect_to_provider(conn)
+      missing -> login_unavailable(conn, missing_settings_message(missing))
+    end
+  end
+
+  # Task 01a10322 stage 6: a fresh install with no OIDC settings, or one that
+  # cannot reach its provider, answers with a readable 503 instead of a raise
+  # or an inspected exception struct. The provider's error is logged by kind
+  # only; its fields can carry request details.
+  @doc false
+  def missing_settings_message(missing) do
+    "Sign-in is not set up on this install. Set #{Enum.join(missing, ", ")} " <>
+      "in the install's environment, then restart it."
+  end
+
+  @doc false
+  def provider_unreachable_message do
+    "Sign-in is unavailable: this install could not reach its sign-in provider. " <>
+      "Check that OIDC_ISSUER points at a provider this server can reach, then try again."
+  end
+
+  defp login_unavailable(conn, message) do
+    conn
+    |> put_status(:service_unavailable)
+    |> text(message)
+  end
+
+  defp redirect_to_provider(conn) do
     case OIDC.authorize_url() do
       {:ok, %{url: url, session_params: session_params}} ->
         # task 019ffec0: remember WHICH surface this login started on, in the
@@ -57,11 +86,14 @@ defmodule PlatformWeb.AuthController do
         |> redirect(external: url)
 
       {:error, error} ->
-        conn
-        |> put_status(:internal_server_error)
-        |> text("OIDC login failed: #{inspect(error)}")
+        require Logger
+        Logger.warning("[auth_login] OIDC authorize_url failed: #{error_kind(error)}")
+        login_unavailable(conn, provider_unreachable_message())
     end
   end
+
+  defp error_kind(%{__struct__: module}), do: inspect(module)
+  defp error_kind(_error), do: "unknown error"
 
   def callback(conn, %{"state" => state, "code" => _code} = params) do
     session_params = get_session(conn, :oidc_session_params)

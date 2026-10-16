@@ -627,6 +627,66 @@ defmodule Platform.Agents.Config do
     MemoryContext.list_memories(agent_id, memory_type: memory_type, limit: 10_000)
   end
 
+  @doc """
+  The resolved, ordered model chain for an agent: its `model_config`
+  `"primary"` followed by its `"fallbacks"`, blanks and duplicates removed.
+
+  Accepts an `%Agent{}`, an agent id or an agent slug. Options:
+
+    * `:model` - override the primary model
+    * `:fallbacks` - override the fallbacks (only read with `:model`)
+
+  Returns `{:ok, [model]}`, `{:error, :no_models_configured}`,
+  `{:error, {:invalid_model, key}}` for a key that is not `"provider/model"`,
+  or the lookup error (`:not_found`, `:ambiguous_slug`).
+
+  Moved here from the deleted agents router module (task 01a10322 stage 1),
+  whose chat/stream provider-failover half had no callers. The Control
+  Center's built-in config panel and credential filter are the readers.
+  """
+  @spec model_chain(Agent.t() | Ecto.UUID.t() | String.t(), keyword()) ::
+          {:ok, [String.t()]} | {:error, term()}
+  def model_chain(agent_or_ref, opts \\ []) do
+    with {:ok, agent} <- fetch_agent(agent_or_ref) do
+      model_config = normalize_map(agent.model_config || %{})
+
+      chain =
+        opts
+        |> configured_model_chain(model_config)
+        |> Enum.reject(&blank_model?/1)
+        |> Enum.uniq()
+
+      case {chain, Enum.reject(chain, &valid_model_key?/1)} do
+        {[], _} -> {:error, :no_models_configured}
+        {chain, []} -> {:ok, chain}
+        {_chain, [invalid | _]} -> {:error, {:invalid_model, invalid}}
+      end
+    end
+  end
+
+  defp configured_model_chain(opts, model_config) do
+    case Keyword.get(opts, :model) do
+      nil ->
+        [Map.get(model_config, "primary") | List.wrap(Map.get(model_config, "fallbacks", []))]
+
+      override ->
+        [override | List.wrap(Keyword.get(opts, :fallbacks, []))]
+    end
+  end
+
+  defp valid_model_key?(model_key) when is_binary(model_key) do
+    case String.split(model_key, "/", parts: 2) do
+      [provider, model] -> provider != "" and model != ""
+      _ -> false
+    end
+  end
+
+  defp valid_model_key?(_model_key), do: false
+
+  defp blank_model?(value) when is_binary(value), do: String.trim(value) == ""
+  defp blank_model?(nil), do: true
+  defp blank_model?(_value), do: false
+
   defp fetch_agent(%Agent{} = agent), do: {:ok, agent}
 
   defp fetch_agent(value) when is_binary(value) do

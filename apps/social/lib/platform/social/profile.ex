@@ -1,0 +1,66 @@
+defmodule Platform.Social.Profile do
+  @moduledoc """
+  A social profile: one brand or show an org posts as (task 01a140a8). It
+  owns the platform accounts (`Platform.Social.Account`) and the clip
+  candidates (`Platform.Social.Clip`); deleting it deletes both (FK
+  `delete_all`).
+
+  `org_id` is set by `Platform.Social`, never cast, so a profile cannot be
+  moved between orgs through attrs. `approver_user_ids` names the humans who
+  may approve its posts; `Platform.Social` checks every id is a user (never
+  an agent) when it is written. Whether the approver of a given post is in
+  this list is Social 3/7's rule, not this schema's.
+  """
+  use Ecto.Schema
+  import Ecto.Changeset
+
+  @primary_key {:id, Platform.Types.UUIDv7, autogenerate: true}
+  @foreign_key_type :binary_id
+  @timestamps_opts [type: :utc_datetime_usec]
+
+  @type t :: %__MODULE__{}
+
+  schema "social_profiles" do
+    belongs_to(:org, Platform.Tenancy.Org)
+    belongs_to(:project, Platform.Tasks.Project)
+
+    field(:name, :string)
+    field(:home_url, :string)
+    field(:voice_notes, :string)
+    field(:default_hashtags, {:array, :string}, default: [])
+    field(:approver_user_ids, {:array, :binary_id}, default: [])
+    # Social 2/7: the vendor's profile or workspace id (not a secret).
+    field(:provider_profile_ref, :string)
+    # Social 5/7: caption and end-card values over `Platform.Social.Brand`'s
+    # provisional placeholders.
+    field(:brand, :map, default: %{})
+    # Social 3/7: the channel approval cards are posted in (FK to chat_spaces,
+    # nilified when the space is deleted). Must be a space in the profile's org.
+    belongs_to(:space, Platform.Chat.Space)
+
+    has_many(:accounts, Platform.Social.Account)
+    has_many(:clips, Platform.Social.Clip)
+
+    timestamps()
+  end
+
+  @editable ~w(project_id name home_url voice_notes default_hashtags approver_user_ids brand space_id)a
+
+  @doc """
+  Changeset for the editable fields. `org_id` is set by `Platform.Social`,
+  never cast from attrs.
+  """
+  @spec changeset(t(), map()) :: Ecto.Changeset.t()
+  def changeset(%__MODULE__{} = profile, attrs) do
+    profile
+    |> cast(attrs, @editable)
+    |> cast(attrs, [:provider_profile_ref])
+    |> validate_required([:name])
+    |> validate_length(:name, min: 1, max: 255)
+    |> Platform.Social.Brand.validate(profile.org_id)
+    |> foreign_key_constraint(:org_id)
+    |> foreign_key_constraint(:project_id)
+    |> foreign_key_constraint(:space_id)
+    |> unique_constraint([:org_id, :name])
+  end
+end

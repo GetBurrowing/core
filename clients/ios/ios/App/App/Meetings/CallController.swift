@@ -20,7 +20,7 @@ import os
 ///
 /// What the surface draws is `state`, produced only by `CallState.reduce`.
 @MainActor
-final class CallController: NSObject, ObservableObject {
+final class CallController: NSObject, ObservableObject, MeetingMediaControl {
     static let shared = CallController()
 
     private static let log = Logger(subsystem: "com.kobo-ai.burrow", category: "meetings")
@@ -68,6 +68,8 @@ final class CallController: NSObject, ObservableObject {
     private var host: String?
     private var session: MeetingSession?
     private var ticker: Timer?
+    /// `requestMuted` callers waiting for the SDK's confirmation.
+    private var micWaiters: [UUID: CheckedContinuation<Bool, Error>] = [:]
     private var observers: [NSObjectProtocol] = []
     #if DEBUG
         /// DEBUG measurement: run the probe call without CallKit.
@@ -154,7 +156,44 @@ final class CallController: NSObject, ObservableObject {
             Task { await session?.setMicrophone(enabled: !muted) }
             return
         }
-        request(CXSetMutedCallAction(call: uuid, muted: muted))
+        callKit.request(CXTransaction(action: CXSetMutedCallAction(call: uuid, muted: muted))) { [weak self] error in
+            guard let error else { return }
+            Self.log.error("callkit mute refused code=\((error as NSError).code)")
+            Task { @MainActor in self?.settleMicWaiters(.failure(MicChangeError.refused)) }
+        }
+    }
+
+    enum MicChangeError: Error, Equatable {
+        case noCall
+        case refused
+        case failed
+        case timedOut
+        case callEnded
+    }
+
+    /// The page's mute (`SuiteMeetings.setMuted`): the SAME `setMuted(_:)`
+    /// -> `CXSetMutedCallAction` path as the native screen and Control
+    /// Centre, so all three converge on one state. Returns the CONFIRMED
+    /// mic state once the SDK reports it; throws when the change failed,
+    /// CallKit refused it, the call ended, or nothing confirmed in `timeout`.
+    func requestMuted(_ muted: Bool, timeout: TimeInterval = 5) async throws -> Bool {
+        guard meetingID != nil else { throw MicChangeError.noCall }
+        if state.micEnabled == !muted, state.isMuted == muted { return state.micEnabled }
+        let id = UUID()
+        return try await withCheckedThrowingContinuation { continuation in
+            micWaiters[id] = continuation
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                self?.micWaiters.removeValue(forKey: id)?.resume(throwing: MicChangeError.timedOut)
+            }
+            setMuted(muted)
+        }
+    }
+
+    private func settleMicWaiters(_ result: Result<Bool, Error>) {
+        let waiters = micWaiters
+        micWaiters = [:]
+        for waiter in waiters.values { waiter.resume(with: result) }
     }
 
     // MARK: The in-call screen's actions (stage 4)
@@ -372,6 +411,12 @@ final class CallController: NSObject, ObservableObject {
             state = CallState.reduce(state, event)
             // Keep CallKit's mute in step with the host's.
             if let uuid = callUUID { request(CXSetMutedCallAction(call: uuid, muted: true)) }
+        case .micConfirmed(let enabled):
+            state = CallState.reduce(state, event)
+            settleMicWaiters(.success(enabled))
+        case .micFailed:
+            state = CallState.reduce(state, event)
+            settleMicWaiters(.failure(MicChangeError.failed))
         default:
             state = CallState.reduce(state, event)
         }
@@ -392,6 +437,7 @@ final class CallController: NSObject, ObservableObject {
         }
         ticker?.invalidate()
         ticker = nil
+        settleMicWaiters(.failure(MicChangeError.callEnded))
         observers.forEach(NotificationCenter.default.removeObserver)
         observers = []
         self.session = nil
@@ -528,6 +574,7 @@ extension CallController: CXProviderDelegate {
     nonisolated func provider(_ provider: CXProvider, didActivate audioSession: AVAudioSession) {
         Task { @MainActor in
             Self.log.info("callkit audio session activated")
+            MeetingTrace.append("callkit didActivate session=\(self.session != nil)")
             self.audioActive = true
             self.session?.audioActivated()
         }
@@ -535,6 +582,7 @@ extension CallController: CXProviderDelegate {
 
     nonisolated func provider(_ provider: CXProvider, didDeactivate audioSession: AVAudioSession) {
         Task { @MainActor in
+            MeetingTrace.append("callkit didDeactivate session=\(self.session != nil)")
             self.audioActive = false
             self.session?.audioDeactivated()
         }

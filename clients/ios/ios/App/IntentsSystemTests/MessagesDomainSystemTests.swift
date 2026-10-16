@@ -1,3 +1,4 @@
+import AppIntents
 import AppIntentsTesting
 import XCTest
 
@@ -55,11 +56,60 @@ final class MessagesDomainSystemTests: XCTestCase {
     }
 
     func testPeopleAndConversationQueriesAnswerWithNoInstall() async throws {
-        let people = try await definitions.entities["PersonEntity"].entities(matching: "Priya")
+        let people = try await definitions.entities["MessagePersonEntity"].entities(matching: "Priya")
         XCTAssertEqual(people.count, 0, "no signed-in install, so nobody")
         let suggested = try await definitions.entities["ConversationEntity"].suggestedEntities()
         XCTAssertEqual(suggested.count, 0)
-        let foreign = try await definitions.entities["PersonEntity"].entities(identifiers: ["evil.example.com|9e000000-0000-4000-8000-000000000001"])
+        let foreign = try await definitions.entities["MessagePersonEntity"].entities(identifiers: ["evil.example.com|9e000000-0000-4000-8000-000000000001"])
         XCTAssertEqual(foreign.count, 0, "an id on an unknown host resolves to nothing")
+    }
+
+    /// Task 01a111bb stage 7, round 3: the device trace ended at
+    /// `person.query ids=1`, so Siri resolved the recipient by ID and the
+    /// system failed before perform. This drives that path: an entity
+    /// REFERENCE (id only) the system must resolve through MessagePersonEntityQuery,
+    /// then the send. The person is seeded in the people cache on a
+    /// `*.invalid` host, so the send itself never reaches a server.
+    func testSchemaSendResolvesAPersonReferenceAndReachesPerform() async throws {
+        let id = "evidence.invalid|3e000000-0000-4000-8000-0000000000d1"
+        await MainActor.run {
+            let app = XCUIApplication()
+            app.launchArguments += ["-SuiteEvidencePerson", "\(id)|Dalton Evidence|user"]
+            app.launch()
+        }
+        let entities = definitions.entities["MessagePersonEntity"]
+        let resolved = try await entities.entities(identifiers: [id])
+        XCTAssertEqual(resolved.count, 1, "the seeded person resolves by id")
+        if let first = resolved.first {
+            let exported = try await first.exported(as: IntentPerson.self)
+            print("system-test export identifier=\(exported.identifier)")
+        }
+        let reference = entities.makeReference(identifier: id)
+        let intent = definitions.intents["MessagesSendIntent"].makeIntent(destination: reference, content: AttributedString("hi"))
+        do {
+            let result = try await intent.run()
+            print("system-test ref-send result: \(result)")
+        } catch {
+            let text = String(describing: error)
+            print("system-test ref-send refused: \(text.prefix(600))")
+        }
+    }
+
+    /// Task 01a111bb stage 7, round 3: on the device Siri's send never
+    /// reached `perform` (no `intent step=send`). Run the schema send the
+    /// way the system does, with a contact Burrow cannot match: perform
+    /// must RUN and refuse with Burrow's own spoken failure, not die in
+    /// the framework before it.
+    func testSchemaSendRunsPerformForASystemPerson() async throws {
+        let person = IntentPerson(identifier: .unknown, name: .displayName("Nobody Here"), handle: nil)
+        let intent = definitions.intents["MessagesSendIntent"].makeIntent(destination: [person], content: AttributedString("hi"))
+        do {
+            let result = try await intent.run()
+            print("system-test send result: \(result)")
+        } catch {
+            let text = String(describing: error)
+            print("system-test send refused: \(text.prefix(400))")
+            XCTAssertFalse(text.contains("is not present"), "metadata not indexed yet: \(text.prefix(200))")
+        }
     }
 }

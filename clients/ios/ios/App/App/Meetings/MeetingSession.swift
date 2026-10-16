@@ -32,6 +32,8 @@ final class MeetingSession: NSObject, RoomDelegate, @unchecked Sendable {
     /// mic track is not mistaken for a host mute.
     private var expectingLocalMuteChange = false
     private var leaving = false
+    /// The last local `isSpeaking` traced, so the trace logs changes only.
+    private var tracedLocalSpeaking: Bool?
     #if DEBUG
         private var statsTimer: Timer?
     #endif
@@ -53,10 +55,18 @@ final class MeetingSession: NSObject, RoomDelegate, @unchecked Sendable {
             connectOptions: ConnectOptions(autoSubscribe: false),
             roomOptions: RoomOptions(adaptiveStream: false, dynacast: false, reportRemoteTrackStatistics: Self.reportsStatistics))
         Self.log.info("meeting connected room=\(self.join.roomName, privacy: .public) remote=\(self.room.remoteParticipants.count)")
+        MeetingTrace.append("connect ok remote=\(room.remoteParticipants.count)")
         for participant in room.remoteParticipants.values {
             subscribeAudio(of: participant)
         }
-        try await room.localParticipant.setMicrophone(enabled: true)
+        do {
+            try await room.localParticipant.setMicrophone(enabled: true)
+        } catch {
+            MeetingTrace.append("mic enable failed")
+            throw error
+        }
+        traceMicPublication("after-connect")
+        emit(.micConfirmed(room.localParticipant.isMicrophoneEnabled()))
         publishParticipants()
         #if DEBUG
             startStats()
@@ -65,17 +75,58 @@ final class MeetingSession: NSObject, RoomDelegate, @unchecked Sendable {
 
     /// CallKit activated the audio session: let the engine run.
     func audioActivated() {
-        try? AudioManager.shared.setEngineAvailability(.default)
+        do {
+            try AudioManager.shared.setEngineAvailability(.default)
+            MeetingTrace.append("engine availability=default")
+        } catch {
+            MeetingTrace.append("engine availability=default failed")
+        }
+        traceMicPublication("after-activate")
     }
 
     /// CallKit deactivated it (the call ended, or another call took over).
     func audioDeactivated() {
-        try? AudioManager.shared.setEngineAvailability(.none)
+        do {
+            try AudioManager.shared.setEngineAvailability(.none)
+            MeetingTrace.append("engine availability=none")
+        } catch {
+            MeetingTrace.append("engine availability=none failed")
+        }
     }
 
-    func setMicrophone(enabled: Bool) async {
+    /// Asks the SDK for `enabled`, then reads the CONFIRMED state back from
+    /// our microphone publication. Emits `.micConfirmed` with it, or
+    /// `.micFailed` when the SDK threw or the publication did not follow;
+    /// returns the confirmed state, or nil on failure.
+    @discardableResult
+    func setMicrophone(enabled: Bool) async -> Bool? {
         expectingLocalMuteChange = true
-        _ = try? await room.localParticipant.setMicrophone(enabled: enabled)
+        do {
+            _ = try await room.localParticipant.setMicrophone(enabled: enabled)
+        } catch {
+            expectingLocalMuteChange = false
+            MeetingTrace.append("mic set enabled=\(enabled) failed")
+            emit(.micFailed)
+            return nil
+        }
+        traceMicPublication("after-set enabled=\(enabled)")
+        let confirmed = room.localParticipant.isMicrophoneEnabled()
+        guard confirmed == enabled else {
+            MeetingTrace.append("mic set enabled=\(enabled) not confirmed")
+            emit(.micFailed)
+            return nil
+        }
+        emit(.micConfirmed(confirmed))
+        return confirmed
+    }
+
+    /// Whether our mic publication exists, and its mute flag. No identity.
+    private func traceMicPublication(_ when: String) {
+        if let publication = room.localParticipant.firstAudioPublication {
+            MeetingTrace.append("mic publication=present muted=\(publication.isMuted) \(when)")
+        } else {
+            MeetingTrace.append("mic publication=absent \(when)")
+        }
     }
 
     func disconnect() async {
@@ -128,15 +179,25 @@ final class MeetingSession: NSObject, RoomDelegate, @unchecked Sendable {
 
     func room(_ room: Room, participantDidConnect participant: RemoteParticipant) {
         subscribeAudio(of: participant)
+        MeetingTrace.append("remote joined remote=\(room.remoteParticipants.count)")
         publishParticipants()
     }
 
-    func room(_ room: Room, participantDidDisconnect participant: RemoteParticipant) { publishParticipants() }
+    func room(_ room: Room, participantDidDisconnect participant: RemoteParticipant) {
+        MeetingTrace.append("remote left remote=\(room.remoteParticipants.count)")
+        publishParticipants()
+    }
     func room(_ room: Room, didUpdateSpeakingParticipants participants: [Participant]) { publishParticipants() }
     func room(_ room: Room, participant: Participant, didUpdateName name: String) { publishParticipants() }
     func room(_ room: Room, participant: Participant, didUpdateMetadata metadata: String?) { publishParticipants() }
 
     private func publishParticipants() {
+        let local = room.localParticipant
+        let localSpeaking = local.isSpeaking
+        if tracedLocalSpeaking != localSpeaking {
+            tracedLocalSpeaking = localSpeaking
+            MeetingTrace.append("local speaking=\(localSpeaking) remote=\(room.remoteParticipants.count)")
+        }
         let people = room.remoteParticipants.values
             .map { p in
                 CallParticipant(
@@ -147,12 +208,17 @@ final class MeetingSession: NSObject, RoomDelegate, @unchecked Sendable {
             }
             .sorted { $0.id < $1.id }
         emit(.participantsChanged(people))
+        emit(.localParticipantChanged(identity: local.identity?.stringValue, isSpeaking: localSpeaking))
     }
 
     // MARK: Mute
 
     func room(_ room: Room, participant: Participant, trackPublication: TrackPublication, didUpdateIsMuted isMuted: Bool) {
         guard participant is LocalParticipant, trackPublication.source == .microphone else { return }
+        MeetingTrace.append("mic publication muted=\(isMuted) expected=\(expectingLocalMuteChange)")
+        // Every confirmed change, whatever caused it: our call, CallKit
+        // (Control Centre, AirPods, the lock screen) or a host mute.
+        emit(.micConfirmed(!isMuted))
         if expectingLocalMuteChange {
             expectingLocalMuteChange = false
             return
@@ -190,4 +256,42 @@ final class MeetingSession: NSObject, RoomDelegate, @unchecked Sendable {
             }
         }
     #endif
+}
+
+/// Debug builds only (task 01a13c62 stage 1): what the native call did with
+/// the mic and the audio session, appended to `Library/Caches/meeting-trace.log`
+/// so a device run can be read afterwards over Wi-Fi, where console capture
+/// does not work:
+/// `xcrun devicectl device copy from --domain-type appDataContainer
+/// --domain-identifier com.kobo-ai.burrow --source Library/Caches/meeting-trace.log`.
+/// Constants, booleans and counts ONLY: never the token, the join response,
+/// a name, an identity or a room name (`MeetingSourceScanTests` checks).
+/// Release builds compile this to nothing.
+enum MeetingTrace {
+    #if DEBUG
+        private static let lock = NSLock()
+        private static let url: URL? = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("meeting-trace.log")
+        private static let stamp: ISO8601DateFormatter = {
+            let f = ISO8601DateFormatter()
+            f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            return f
+        }()
+    #endif
+
+    static func append(_ line: String) {
+        #if DEBUG
+            guard let url else { return }
+            lock.lock()
+            defer { lock.unlock() }
+            guard let data = "\(stamp.string(from: Date())) \(line)\n".data(using: .utf8) else { return }
+            if let handle = try? FileHandle(forWritingTo: url) {
+                _ = try? handle.seekToEnd()
+                try? handle.write(contentsOf: data)
+                try? handle.close()
+            } else {
+                try? data.write(to: url)
+            }
+        #endif
+    }
 }

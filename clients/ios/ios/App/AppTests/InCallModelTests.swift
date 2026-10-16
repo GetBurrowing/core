@@ -45,6 +45,44 @@ final class InCallModelTests: XCTestCase {
         XCTAssertNil(m.people.first { $0.name == "Ada" }?.answering, "people never read 'answering'")
     }
 
+    // MARK: The "you" row (task 01a13c62 stage 1)
+
+    /// The SFU's speaker update says WE speak: the "you" row rings, exactly
+    /// as a remote speaker's does. It used to be hard-coded off.
+    func testLocalSpeakingRingsYou() {
+        var s = state([saru, ada])
+        s.localSpeaking = true
+        let m = InCallModel.make(state: s, elapsed: 12)
+        XCTAssertEqual(m.ringed, ["you"])
+        XCTAssertEqual(m.people.first?.isYou, true)
+        XCTAssertEqual(m.people.first?.isSpeaking, true)
+    }
+
+    /// Reduced from the session's event, not set by hand: the same path the
+    /// device takes.
+    func testTheLocalSpeakingEventRingsYouAlongsideARemoteSpeaker() {
+        var s = state([saru, speaking(ada)])
+        s = CallState.reduce(s, .localParticipantChanged(identity: "user:me", isSpeaking: true))
+        let m = InCallModel.make(state: s, elapsed: 12)
+        XCTAssertEqual(Set(m.ringed), ["you", "user:ada"])
+        // The ring moves; the list stays still.
+        XCTAssertEqual(m.people.map(\.id), ["you", "user:ada"])
+    }
+
+    func testAMutedYouIsNotRinged() {
+        var s = state([ada])
+        s.localSpeaking = true
+        s.isMuted = true
+        let m = InCallModel.make(state: s, elapsed: 12)
+        XCTAssertEqual(m.ringed, [])
+        XCTAssertEqual(m.people.first?.isMuted, true)
+    }
+
+    func testASilentYouIsNotRinged() {
+        let s = CallState.reduce(state([ada]), .localParticipantChanged(identity: "user:me", isSpeaking: false))
+        XCTAssertEqual(InCallModel.make(state: s, elapsed: 12).ringed, [])
+    }
+
     func testTheRingIsTheInfoSlotAtTwoPoints() {
         XCTAssertEqual(InCallStyle.ring, .info, "cyan marks live state; iOS primary is orange")
         XCTAssertNotEqual(InCallStyle.ring, .primary)

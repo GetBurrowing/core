@@ -3966,6 +3966,26 @@ body, .font-suite {
   padding-bottom: 0.125rem;
 }
 
+/* A fullscreen prototype must not be trapped by its chat row (task
+   01a1389f). The row (chat_message.ex, `.message-row-inner`) carries
+   `active:scale-[0.99]` as press feedback; Tailwind v4 compiles that to the
+   INDIVIDUAL `scale` property, not `transform`, and either one makes the row
+   the containing block and stacking context of every `position: fixed`
+   descendant, so a press collapsed the "fullscreen" overlay to the row's box
+   with the chat drawn over it. Where the popover API exists the frame is
+   promoted to the top layer (prototype_fullscreen.js) and no ancestor can
+   trap it; this rule is the fallback for WebKit without popover (iOS < 17),
+   and it covers the chat row only (other hosts rely on the top layer). It
+   applies only while a prototype in the row is fullscreen; the press
+   feedback stays everywhere else. */
+.message-row-inner:has([data-role="prototype-canvas"][data-fullscreen="true"]) {
+  transform: none !important;
+  scale: none !important;
+  translate: none !important;
+  rotate: none !important;
+  transition: none !important;
+}
+
 /* ── A run renders as one block ───────────────────────────────────────
    Companion to the marking pass above. `--grouped` and `--run-end` say
    WHERE a run starts and ends; these rules are what make the run look like

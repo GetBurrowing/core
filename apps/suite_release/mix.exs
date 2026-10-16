@@ -34,7 +34,8 @@ defmodule SuiteRelease.MixProject do
   defp deps do
     [
       {:platform, path: "../platform", env: Mix.env()},
-      {:game_stream, path: "../game_stream", env: Mix.env()}
+      {:game_stream, path: "../game_stream", env: Mix.env()},
+      {:social, path: "../social", env: Mix.env()}
     ]
   end
 
@@ -73,7 +74,7 @@ defmodule SuiteRelease.MixProject do
   defp releases do
     [
       platform: [
-        applications: [platform: :permanent, game_stream: :permanent],
+        applications: [platform: :permanent, game_stream: :permanent, social: :permanent],
         runtime_config_path: "../platform/config/runtime.exs"
       ]
     ]

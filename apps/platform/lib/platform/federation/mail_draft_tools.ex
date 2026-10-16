@@ -2,8 +2,9 @@ defmodule Platform.Federation.MailDraftTools do
   @moduledoc """
   Definitions of the Email module's two agent tools, `mail_draft_create` and
   `mail_draft_update` (task 01a0cf21-29ba-7001-8690-3c59d6cb17c6 stage 5).
-  `Platform.Federation.ToolSurface` lists them in the `messaging` bundle
-  while `Platform.Mail.Config.enabled?/0` is true and executes them.
+  `Platform.Federation.ToolSurface` lists them in the `mail` bundle (split
+  out of `messaging` by task 01a0d4a0 stage 4) while
+  `Platform.Mail.Config.enabled?/0` is true and executes them.
 
   They live in their own module because their `responsibility` argument —
   the delivery-row attribution `Platform.Mail.Draft` carries — is a

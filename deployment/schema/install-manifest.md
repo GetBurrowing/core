@@ -135,7 +135,7 @@ A missing required field gives one `backup_incomplete` error. A field the target
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `source` | `registry` \| `preloaded` | `registry` | `preloaded`: images are loaded onto the host out of band, and nothing is pulled. |
-| `refs.<container>` | string | registry default | Per-container image override. The keys are container names: `caddy`, `cloudflared`, `core-platform`, `core-postgres`, `embeddings`, `files-service`, `livekit`, `meeting-transcriber`, `memory-service`, `pocket-id`, `speaches`, `tailscale-auth`, `tailscale-livekit`, `tailscale-primary`. The `core-platform` default is the flavour `install.modules` selects; an override replaces it, so a pinned ref must be a build of the same flavour (for example `suite-core:play-<sha>` with `modules = ["play"]`). |
+| `refs.<container>` | string | registry default | Per-container image override. The keys are container names: `caddy`, `cloudflared`, `core-platform`, `core-postgres`, `embeddings`, `files-service`, `livekit`, `meeting-transcriber`, `memory-service`, `pocket-id`, `speaches`, `agent-host`, `tailscale-auth`, `tailscale-livekit`, `tailscale-primary`. The `core-platform` default is the flavour `install.modules` selects; an override replaces it, so a pinned ref must be a build of the same flavour (for example `suite-core:play-<sha>` with `modules = ["play"]`). |
 
 ## `[access]` (target `mac` only)
 
@@ -171,6 +171,39 @@ These keys are validated but not yet acted on. ADR 0053 names the follow-up work
 |---|---|---|
 | `upgrade_channel` | `stable` \| `edge` \| `pinned` | `stable` |
 | `phone_home` | bool | `false` |
+
+## `[agents]` (native agents, target `single-host`)
+
+The capability profile of the install's native agents (core task 01a10322). It is install
+config, realised by packaging: core never branches on it, and only displays the profile the
+agent host reports.
+
+| Key | Type | Default | Notes |
+|---|---|---|---|
+| `profile` | `full_machine` \| `contained` \| `off` | `full_machine` when the table is present, `off` when it is absent | A manifest without `[agents]` renders exactly as it did before the table existed. On `target = "mac"` any profile other than `off` is `field_not_applicable`. |
+
+- **`full_machine`** (the default for a VM we provision): the agent host is a root systemd
+  service on the HOST. The render adds to `user-data` the tools (tmux, git, curl, cron; node,
+  bun, Claude Code, Codex and suite-cli at the versions pinned in
+  `services/agent-host/versions.env`; chromium as a snap), `suite-agent-host.service`, the
+  `suite-agent@.service` template, a first-boot setup unit that copies the daemon out of the
+  agent-host image, `/etc/suite-agent-host.env` (0600 root) and `/etc/sudoers.d/suite-agents`
+  (`%suite-agents ALL=(ALL) NOPASSWD:ALL`, mode 0440). Agents reach core at the install's public
+  URL through Caddy; with `tls = "internal"` the install root is added to the system trust store.
+- **`contained`** (shared hosts): the agent host is the `agent-host` container
+  (`docker.io/example/suite-agent-host`, systemd as PID 1) on a dedicated `agents` network.
+  `core-platform` is the only service on both networks, so the agent host reaches core and the
+  internet and not Postgres or any other service. It reads its own `agent-host.env` (0600, only
+  `AGENT_HOST_TOKEN`), not `secrets.env`. Under DOCKER (this renderer) the container needs the
+  host cgroup namespace for systemd, so it is network and filesystem containment, not a privilege
+  boundary; under rootless podman (moon, see core-ops) container root is not host root.
+- Both: `AGENT_HOST_TOKEN` is generated and given to core-platform through `secrets.env`.
+
+**Isolation limit (option A).** An install is one trust group. Per-agent OS users stop
+accidental crossing, not malicious crossing. On `full_machine` an agent with sudo is root over
+the whole install: other agents' homes, env files and tokens, and core-platform's `secrets.env`
+and Postgres through docker. On `contained` an agent is root over the agent container (every
+agent's home), not over the host or Postgres.
 
 ---
 
@@ -267,7 +300,8 @@ given, must match it (`target_mismatch`). The service semantics live in
 | `services.txt` | 0644 | Same as `suite_install services`. |
 | `postgres-init/*.sql` | 0644 | Init SQL declared by the enabled services. |
 | `models.json` | 0644 | Written only when `[[models.endpoints]]` is declared. |
-| `user-data` | 0600 | `#cloud-config` for Ubuntu 24.04. Carries every file above plus `suite-stack.service`. |
+| `agent-host.env` | 0600 | `[agents] profile = "contained"` only: the agent-host container's `AGENT_HOST_TOKEN`, and nothing else. |
+| `user-data` | 0600 | `#cloud-config` for Ubuntu 24.04. Carries every file above plus `suite-stack.service`, and with `[agents] profile = "full_machine"` the agent host's units, setup script, env file and sudoers file. |
 | `meta-data` | 0644 | NoCloud instance id. |
 | `registry-auth.json` | 0600 | Written only with `--registry-auth`. |
 

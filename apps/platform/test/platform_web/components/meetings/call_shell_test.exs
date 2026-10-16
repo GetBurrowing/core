@@ -1072,6 +1072,128 @@ defmodule PlatformWeb.Components.Meetings.CallShellTest do
     # sharing"` was satisfied by `aria-label="Stop sharing your
     # screen"` in EVERY state, including the idle one, so it was
     # asserting nothing about what the button says.
+    # Task 01a13c62 stage 3, design canvas 01a13c62-5ef3: inside the iOS
+    # app the native call owns the media. Camera is HIDDEN (not disabled)
+    # while the build has none, Share is hidden in the app, and the note
+    # closes the bar.
+    @native %{mic: true, camera: false, active_speakers: true}
+
+    defp role?(html, role), do: count(html, ~s([data-role="#{role}"])) == 1
+
+    test "in a browser all three buttons are present and there is no note" do
+      html = controls()
+
+      assert role?(html, "call-control-mic")
+      assert role?(html, "call-control-camera")
+      assert role?(html, "call-control-share")
+      refute html =~ "Audio only in the app"
+      refute html =~ "aria-busy"
+    end
+
+    test "in native mode camera and share are absent and the note is present" do
+      html = controls(native: @native)
+
+      assert role?(html, "call-control-mic")
+      refute role?(html, "call-control-camera")
+      refute role?(html, "call-control-share")
+      assert role?(html, "call-control-leave")
+      assert role?(html, "call-control-native-note")
+      assert html =~ "Audio only in the app"
+    end
+
+    test "pending renders disabled, aria-busy, with the warning ring" do
+      html = controls(native: @native, mic_pending: true)
+
+      mic = html |> LazyHTML.from_fragment() |> LazyHTML.query(~s([data-role="call-control-mic"]))
+      assert LazyHTML.attribute(mic, "disabled") == [""]
+      assert LazyHTML.attribute(mic, "aria-busy") == ["true"]
+      assert [class] = LazyHTML.attribute(mic, "class")
+      tokens = String.split(class)
+      assert "ring-warning" in tokens
+
+      # `ring-2!`, never plain `ring-2`: the button is `disabled` while
+      # pending, and daisyUI's `.btn:is(:disabled,[disabled])` rule sets
+      # `box-shadow: none`, which outranks the plain utility. Measured on
+      # the dev rig: plain `ring-2` on the disabled button computed
+      # `box-shadow: none` -- the ring was never drawn.
+      assert "ring-2!" in tokens
+      refute "ring-2" in tokens
+
+      settled = controls(native: @native, mic_pending: false)
+
+      mic =
+        settled |> LazyHTML.from_fragment() |> LazyHTML.query(~s([data-role="call-control-mic"]))
+
+      assert LazyHTML.attribute(mic, "disabled") == []
+      refute settled =~ "ring-warning"
+    end
+
+    test "muted in native mode is the error fill with the slashed icon" do
+      html = controls(native: @native, mic_on: false)
+
+      mic = html |> LazyHTML.from_fragment() |> LazyHTML.query(~s([data-role="call-control-mic"]))
+      assert [class] = LazyHTML.attribute(mic, "class")
+      assert class =~ "bg-error/15"
+      assert html =~ "hero-microphone-slash"
+    end
+
+    test "a failure shows the one line in the note's place" do
+      html =
+        controls(native: @native, media_error: "Couldn't change the mic. Use the call controls.")
+
+      assert role?(html, "call-control-media-error")
+      refute role?(html, "call-control-native-note")
+      assert html =~ "Couldn&#39;t change the mic. Use the call controls."
+    end
+
+    # The failure line is the user's only instruction after a failed
+    # mute. With `truncate` it read "Couldn't change the mic. Use th…" at
+    # 390px and in the /meetings bar at 1280 (measured on the dev rig:
+    # scrollWidth > clientWidth). It must wrap on its own full row.
+    test "the failure line is never truncated and takes its own row" do
+      html =
+        controls(native: @native, media_error: "Couldn't change the mic. Use the call controls.")
+
+      doc = LazyHTML.from_fragment(html)
+
+      assert [class] =
+               doc
+               |> LazyHTML.query(~s([data-role="call-control-media-error"]))
+               |> LazyHTML.attribute("class")
+
+      tokens = String.split(class)
+      refute "truncate" in tokens
+      refute Enum.any?(tokens, &String.starts_with?(&1, "line-clamp"))
+      refute "whitespace-nowrap" in tokens
+      assert "basis-full" in tokens
+
+      assert [bar] =
+               doc
+               |> LazyHTML.query(~s([data-component="call-controls"]))
+               |> LazyHTML.attribute("class")
+
+      assert "flex-wrap" in String.split(bar)
+
+      # No failure, or a browser: the bar keeps its single row.
+      for quiet <- [controls(native: @native), controls()] do
+        assert [bar] =
+                 quiet
+                 |> LazyHTML.from_fragment()
+                 |> LazyHTML.query(~s([data-component="call-controls"]))
+                 |> LazyHTML.attribute("class")
+
+        refute "flex-wrap" in String.split(bar)
+      end
+    end
+
+    test "a legacy build (capabilities rejected) hides the mic too; the note stays" do
+      html = controls(native: %{mic: false, camera: false, active_speakers: false})
+
+      refute role?(html, "call-control-mic")
+      refute role?(html, "call-control-camera")
+      assert html =~ "Audio only in the app"
+    end
+
     test "share reflects whether a share is already running" do
       idle = controls(sharing: false)
       live = controls(sharing: true)

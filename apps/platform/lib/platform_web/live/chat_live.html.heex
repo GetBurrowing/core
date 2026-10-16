@@ -330,7 +330,10 @@
         editing_message_id={@editing_message_id}
         rendered_message_ids={@rendered_message_ids}
         refused_summons={@refused_summons}
+        mounted_inline_canvas_ids={@mounted_inline_canvas_ids}
+        load_older_failed?={@load_older_failed?}
         embedded={@embedded}
+        viewer_user_id={@user_id}
       />
 
       <.streaming_replies
@@ -495,6 +498,9 @@
       mic_enabled={@mic_enabled}
       camera_enabled={@camera_enabled}
       screen_share_enabled={@screen_share_enabled}
+      native_call={@native_call}
+      mic_pending={@mic_pending}
+      media_error={@media_error}
       meeting_participants={@meeting_participants}
       invite_rows={@invite_rows}
       active_meeting_tab={@active_meeting_tab}

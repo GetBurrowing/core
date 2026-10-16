@@ -27,8 +27,9 @@ defmodule PlatformWeb.EmailLive do
   check. Every mutating `handle_event` calls an actor-taking `Platform.Mail`
   function (`create_account/4`, `update_account/3`, `replace_secret/4`,
   `put_sender/3`, `delete_sender/3`, `archive_account/2`, `send_test/3`,
-  `refresh_inbound/2`) or `Platform.Mail.Mailbox.add_to_files/3`, and those
-  re-check. A crafted event from a member writes nothing.
+  `refresh_inbound/2`, `start_backfill/4`) or
+  `Platform.Mail.Mailbox.add_to_files/3`, and those re-check. A crafted
+  event from a member writes nothing.
 
   ## Refresh
 
@@ -38,6 +39,22 @@ defmodule PlatformWeb.EmailLive do
   never blocked on IMAP. Each poll goes through the account's poller
   (`Platform.Mail.Inbound.poll_now/2`), so it cannot race the timer. The
   flash names each account's outcome; error text is built from atoms only.
+
+  ## Import older mail (task 01a13ba5-42a7-7000-8f2b-4c63003f3f92 stage 3)
+
+  The account editor carries one "Import older mail" row for org admins
+  when the account reads mail (`Platform.Mail.Inbound.eligible?/1`); it is
+  absent, not disabled, otherwise. Import calls
+  `Platform.Mail.start_backfill/4` with a window from the fixed set 7 / 14 /
+  30 days. The row's state (idle, running, done, failed) is always the
+  latest `Platform.Mail.BackfillRun` row read through
+  `Platform.Mail.latest_backfill/2`, never LiveView-only state, so a reload
+  or a second device shows the same run. Progress arrives as
+  `{:mail_backfill_progress, %{run_id, account_id}}` (IDs only) on
+  `Platform.Mail.subscribe_backfill/1`; each one re-reads the row, and a run
+  that has finished reloads the inbox lists. The import is quiet: nothing is
+  posted to chat and nothing is broadcast on `"mail:inbound"`, and the row
+  says so before the admin clicks.
 
   ## Inbound mail is outside text
 
@@ -121,6 +138,8 @@ defmodule PlatformWeb.EmailLive do
      |> assign(:replacing, MapSet.new())
      |> assign(:test_results, %{})
      |> assign(:refreshing, false)
+     |> assign(:backfill, nil)
+     |> assign(:backfill_topics, MapSet.new())
      |> assign(:form, nil)
      |> assign(:form_account, nil)
      |> assign(:editor, nil)
@@ -293,6 +312,7 @@ defmodule PlatformWeb.EmailLive do
         |> assign(:replacing, MapSet.new())
         |> assign(:form, account_form(account, %{}))
         |> assign(:channels, Mailbox.org_channels(socket.assigns.org_id))
+        |> load_backfill()
 
       _ ->
         socket
@@ -716,6 +736,50 @@ defmodule PlatformWeb.EmailLive do
      |> start_async(:refresh_inbox, fn -> Mail.refresh_inbound(user, org_id) end)}
   end
 
+  # Import older mail: one quiet backfill of the open account. The window is
+  # taken from the fixed set only; `Mail.start_backfill/4` re-checks the
+  # actor, eligibility and the window, and refuses a second running import.
+  def handle_event("start_backfill", %{"account_id" => id} = params, socket) do
+    with {:ok, days} <- backfill_window(params["window_days"]),
+         %Account{} = account <- Mail.get_account(socket.assigns.org_id, id),
+         {:ok, run} <- Mail.start_backfill(socket.assigns.user, account, days) do
+      {:noreply,
+       socket
+       |> assign(:backfill, run)
+       |> subscribe_backfill(account.id)}
+    else
+      nil ->
+        {:noreply, put_flash(socket, :error, "That mail account is not in this org.")}
+
+      {:error, reason} ->
+        {:noreply, socket |> put_flash(:error, backfill_error_text(reason)) |> load_backfill()}
+    end
+  end
+
+  # Progress is IDs only: re-read the row. Only the run's final write
+  # carries `done`, so the inbox lists reload once per finished run, on
+  # whichever pane is open.
+  @impl true
+  def handle_info({:mail_backfill_progress, %{account_id: account_id}}, socket) do
+    case Mail.get_account(socket.assigns.org_id, account_id) do
+      %Account{} = account ->
+        run = Mail.latest_backfill(socket.assigns.user, account)
+
+        socket =
+          case socket.assigns.form_account do
+            %Account{id: ^account_id} -> assign(socket, :backfill, run)
+            _ -> socket
+          end
+
+        {:noreply, if(match?(%{status: "done"}, run), do: load_lists(socket), else: socket)}
+
+      nil ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_info(_message, socket), do: {:noreply, socket}
+
   @impl true
   def handle_async(:refresh_inbox, {:ok, {:ok, results}}, socket) do
     socket = socket |> assign(:refreshing, false) |> load_lists()
@@ -733,6 +797,115 @@ defmodule PlatformWeb.EmailLive do
     {:noreply,
      socket |> assign(:refreshing, false) |> put_flash(:error, "Refresh failed. Try again.")}
   end
+
+  # ── Import older mail helpers ──────────────────────────────────────────
+
+  @backfill_windows %{"7" => 7, "14" => 14, "30" => 30}
+
+  @doc false
+  def backfill_windows, do: [7, 14, 30]
+
+  defp backfill_window(value) when is_binary(value) do
+    case Map.fetch(@backfill_windows, value) do
+      {:ok, days} -> {:ok, days}
+      :error -> {:error, :invalid_window}
+    end
+  end
+
+  defp backfill_window(_), do: {:error, :invalid_window}
+
+  # The row reads the DB, never LiveView-only state. `latest_backfill/2`
+  # returns nil to anyone who may not manage the account.
+  defp load_backfill(%{assigns: %{form_account: %Account{} = account}} = socket) do
+    socket
+    |> assign(:backfill, Mail.latest_backfill(socket.assigns.user, account))
+    |> subscribe_backfill(account.id)
+  end
+
+  defp load_backfill(socket), do: assign(socket, :backfill, nil)
+
+  # Once per account per LiveView: a second subscribe would deliver every
+  # progress message twice.
+  defp subscribe_backfill(socket, account_id) do
+    topics = socket.assigns.backfill_topics
+
+    cond do
+      not connected?(socket) ->
+        socket
+
+      MapSet.member?(topics, account_id) ->
+        socket
+
+      true ->
+        :ok = Mail.subscribe_backfill(account_id)
+        assign(socket, :backfill_topics, MapSet.put(topics, account_id))
+    end
+  end
+
+  defp backfill_error_text(:unauthorized), do: "Only org admins can import mail."
+  defp backfill_error_text(:already_running), do: "An import is already running for this account."
+  defp backfill_error_text(:invalid_window), do: "Choose 7, 14 or 30 days."
+  defp backfill_error_text(:not_eligible), do: "This account is not reading mail."
+  defp backfill_error_text(_reason), do: "Could not start the import. Try again."
+
+  @doc false
+  def backfill_state(nil), do: "idle"
+  def backfill_state(%{status: status}) when status in ~w(running done failed), do: status
+  def backfill_state(_), do: "idle"
+
+  @doc false
+  # The folders an import reads: the configured list, or the live scope's
+  # description. A special-use All folder (Gmail's All Mail) is never read by an
+  # import, configured or not.
+  def backfill_folders_text(%Account{read_folders: folders}) when folders in [nil, []],
+    do: "All folders except Sent, Drafts, Trash, Junk/Spam, Archive, Starred and All Mail"
+
+  def backfill_folders_text(%Account{read_folders: folders}), do: Enum.join(folders, ", ")
+
+  @doc false
+  def backfill_count(n) when is_integer(n) do
+    n
+    |> Integer.to_string()
+    |> String.reverse()
+    |> String.replace(~r/(\d{3})(?=\d)/, "\\1,")
+    |> String.reverse()
+  end
+
+  def backfill_count(_), do: "0"
+
+  @doc false
+  def backfill_day(%Date{} = date), do: Calendar.strftime(date, "%-d %b")
+  def backfill_day(_), do: ""
+
+  @doc false
+  def backfill_at(%DateTime{} = at), do: Calendar.strftime(at, "%-d %b, %H:%M")
+  def backfill_at(_), do: ""
+
+  @doc false
+  def backfill_noun(1), do: "message"
+  def backfill_noun(_), do: "messages"
+
+  @doc false
+  def backfill_already_tail(1), do: "was already here."
+  def backfill_already_tail(_), do: "were already here."
+
+  @doc false
+  # Messages the run has looked at so far: imported plus already stored, so
+  # a re-run that imports nothing still visibly advances.
+  def backfill_processed(%{imported: imported, already_present: present}),
+    do: (imported || 0) + (present || 0)
+
+  @doc false
+  def backfill_default_window(%{window_days: days}) when days in [7, 14, 30], do: days
+  def backfill_default_window(_), do: 30
+
+  @doc false
+  def backfill_button_label(%{status: "done"}), do: "Import again"
+  def backfill_button_label(%{status: "failed"}), do: "Try again"
+  def backfill_button_label(_), do: "Import"
+
+  defp backfill_inbox_path(assigns, account_id),
+    do: email_path(%{assigns | account_filter: account_id}, "/email")
 
   defp single_sender_key(%Account{senders: [%{key: key}]}), do: key
   defp single_sender_key(_), do: nil

@@ -19,9 +19,7 @@
  * is available, and binds once a `livekit:room-connected` event fires.
  */
 import { participantLabel, readParticipantNames } from "./lib/participant_label"
-
-// Trailing-debounce window for `activeSpeakersChanged` pushes, in ms.
-const ACTIVE_SPEAKER_DEBOUNCE_MS = 250
+import { cancelActiveSpeakers, offerActiveSpeakers } from "./lib/active_speakers_debounce"
 
 const MeetingRoom = {
   mounted() {
@@ -36,10 +34,7 @@ const MeetingRoom = {
   },
 
   destroyed() {
-    if (this._speakerTimer) {
-      clearTimeout(this._speakerTimer)
-      this._speakerTimer = null
-    }
+    cancelActiveSpeakers(this)
     this._unbind()
   },
 
@@ -153,26 +148,12 @@ const MeetingRoom = {
    *      collapse into a single push carrying the LAST set seen.
    */
   _onActiveSpeaker(speakers) {
-    const identities = (speakers || [])
-      .map((p) => (p && p.identity) || "")
-      .filter((id) => id !== "")
-      .sort()
+    const identities = (speakers || []).map((p) => (p && p.identity) || "")
 
-    const key = identities.join("\u0000")
-
-    // Guard 1: nothing changed since the last push — drop it.
-    if (key === this._lastSpeakerKey) return
-
-    // Guard 2: trailing 250ms debounce. Keep the newest payload and reset
-    // the timer so a burst results in exactly one push.
-    this._pendingSpeakers = identities
-    if (this._speakerTimer) clearTimeout(this._speakerTimer)
-    this._speakerTimer = setTimeout(() => {
-      this._speakerTimer = null
-      const pending = this._pendingSpeakers || []
-      const pendingKey = pending.join("\u0000")
-      if (pendingKey === this._lastSpeakerKey) return
-      this._lastSpeakerKey = pendingKey
+    // Both guards live in `lib/active_speakers_debounce.js`, shared with
+    // `MeetingClient`'s native `activeSpeakers` listener (task 01a13c62
+    // stage 3) so the two sources cannot drift apart.
+    offerActiveSpeakers(this, identities, (pending) => {
       this.pushEvent("active_speakers", { identities: pending })
 
       // SECOND CONSUMER (task 01a0740e stage 2): MeetingCaptions' stall
@@ -191,7 +172,7 @@ const MeetingRoom = {
       document.dispatchEvent(
         new CustomEvent("meeting:speaking", { detail: { identities: pending } })
       )
-    }, ACTIVE_SPEAKER_DEBOUNCE_MS)
+    })
   },
 }
 

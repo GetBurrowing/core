@@ -1,5 +1,6 @@
 import { Room, RoomEvent, Track } from "livekit-client"
 import { participantLabel, readParticipantNames } from "./lib/participant_label"
+import { cancelActiveSpeakers, offerActiveSpeakers } from "./lib/active_speakers_debounce"
 import { toggleScreenShare } from "./lib/screen_share_policy"
 import { ScreenShareFullscreenController } from "./lib/screen_share_viewer"
 
@@ -18,6 +19,21 @@ function isScreenShareSource(source) {
   // to the dedicated container (it just plays through #meeting-media).
   return source === Track.Source.ScreenShare || source === "screen_share"
 }
+
+// How long the page waits for the native call to confirm a page mute before
+// it reads the native state back and tells the server the change failed
+// (task 01a13c62 stage 3, design canvas 01a13c62-5ef3: "about 3 s"). The
+// plugin's own `setMuted` gives up at 5 s; a confirmation landing between
+// the two arrives as `mediaChanged`, which clears the failure.
+export const NATIVE_MUTE_TIMEOUT_MS = 3000
+
+// What a build without `capabilities()` can do from the page: nothing. Its
+// `SuiteMeetings` has no `setMuted`, so the mic button cannot drive it.
+const LEGACY_NATIVE_CAPABILITIES = Object.freeze({
+  mic: false,
+  camera: false,
+  activeSpeakers: false,
+})
 
 const MeetingClient = {
   mounted() {
@@ -60,7 +76,7 @@ const MeetingClient = {
       this._leaveNative()
       this._leave()
     })
-    this.handleEvent("toggle-mic", () => this._toggleMic())
+    this.handleEvent("toggle-mic", (payload) => this._toggleMic(payload))
     this.handleEvent("toggle-camera", () => this._toggleCamera())
     this.handleEvent("toggle-screen-share", () => this._toggleScreenShare())
     // The server pushes this on every `set_stage_mode` (meeting_live.ex).
@@ -761,6 +777,73 @@ const MeetingClient = {
       console.error("[MeetingClient] native join failed", error && error.message)
       this._nativeMeetingId = null
       this.pushEvent("meeting_left", {})
+      return
+    }
+    await this._attachNativeMedia(native)
+  },
+
+  // Task 01a13c62 stage 3. Tell the server the native call owns the media,
+  // what this build can do from the page, and the CONFIRMED mic/camera.
+  // Listeners go on first so a change between the read and the push is not
+  // lost: it arrives as `native_media_state` after the attach.
+  async _attachNativeMedia(native) {
+    this._listenNativeMedia(native)
+
+    let capabilities = LEGACY_NATIVE_CAPABILITIES
+    try {
+      if (typeof native.capabilities !== "function") throw new Error("no capabilities()")
+      const caps = (await native.capabilities()) || {}
+      capabilities = {
+        mic: caps.mic === true,
+        camera: caps.camera === true,
+        activeSpeakers: caps.activeSpeakers === true,
+      }
+    } catch (_error) {
+      // A build from before stage 2 rejects the unknown method.
+      capabilities = LEGACY_NATIVE_CAPABILITIES
+    }
+
+    const state = await this._readNativeState(native)
+    this.pushEvent("native_call_attached", {
+      capabilities,
+      mic: state.mic,
+      camera: state.camera,
+    })
+  },
+
+  // `{mic, camera}` from `state()`, each a boolean or null when the build
+  // does not report it (a legacy `state()` has neither).
+  async _readNativeState(native) {
+    try {
+      const state = (await native.state()) || {}
+      return {
+        mic: typeof state.mic === "boolean" ? state.mic : null,
+        camera: typeof state.camera === "boolean" ? state.camera : null,
+      }
+    } catch (_error) {
+      return { mic: null, camera: null }
+    }
+  },
+
+  _listenNativeMedia(native) {
+    if (typeof native.addListener !== "function") return
+    if (!this._nativeMediaHandle) {
+      // Every CONFIRMED change, whatever caused it: this page, the native
+      // call screen, Control Centre, AirPods or the host.
+      this._nativeMediaHandle = native.addListener("mediaChanged", (data = {}) => {
+        this.pushEvent("native_media_state", {
+          mic: typeof data.mic === "boolean" ? data.mic : null,
+          camera: typeof data.camera === "boolean" ? data.camera : null,
+        })
+      })
+    }
+    if (!this._nativeSpeakersHandle) {
+      // Same guards as `MeetingRoom._onActiveSpeaker`, from the same helper.
+      this._nativeSpeakersHandle = native.addListener("activeSpeakers", (data = {}) => {
+        offerActiveSpeakers(this, data.identities, (identities) =>
+          this.pushEvent("active_speakers", { identities }),
+        )
+      })
     }
   },
 
@@ -772,12 +855,17 @@ const MeetingClient = {
   },
 
   _releaseNativeListener() {
-    const handle = this._nativeEndedHandle
+    const handles = [this._nativeEndedHandle, this._nativeMediaHandle, this._nativeSpeakersHandle]
     this._nativeEndedHandle = null
-    if (!handle) return
-    Promise.resolve(handle)
-      .then((h) => h && typeof h.remove === "function" && h.remove())
-      .catch(() => {})
+    this._nativeMediaHandle = null
+    this._nativeSpeakersHandle = null
+    cancelActiveSpeakers(this)
+    for (const handle of handles) {
+      if (!handle) continue
+      Promise.resolve(handle)
+        .then((h) => h && typeof h.remove === "function" && h.remove())
+        .catch(() => {})
+    }
   },
 
   async _join({ token, url, room_name, mic_enabled, camera_enabled, meeting_id }) {
@@ -1096,7 +1184,15 @@ const MeetingClient = {
     }
   },
 
-  async _toggleMic() {
+  async _toggleMic(payload) {
+    // Native mode (task 01a13c62 stage 3): the server sends `want` only when
+    // the native call owns the mic, and leaves the button pending until the
+    // call CONFIRMS. A browser push carries no `want` and takes the Room path.
+    const native = this._nativeMeetings()
+    if (native && payload && typeof payload.want === "boolean") {
+      await this._setNativeMuted(native, !payload.want)
+      return
+    }
     const room = this._room
     if (!room || !room.localParticipant) return
     const enabled = room.localParticipant.isMicrophoneEnabled
@@ -1105,6 +1201,32 @@ const MeetingClient = {
       // Server already flipped :mic_enabled optimistically via meeting_toggle_mic.
     } catch (err) {
       console.warn("[MeetingClient] mic toggle failed:", err)
+    }
+  },
+
+  // Race the plugin's confirmed `setMuted` against NATIVE_MUTE_TIMEOUT_MS.
+  // A confirmation pushes the confirmed state; a rejection or timeout reads
+  // the native state back and pushes it with `failed: "mic"`, so the button
+  // returns to what the call really has and shows the one-line error.
+  async _setNativeMuted(native, muted) {
+    let timer = null
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error("timeout")), NATIVE_MUTE_TIMEOUT_MS)
+    })
+    try {
+      if (typeof native.setMuted !== "function") throw new Error("no setMuted()")
+      const result = (await Promise.race([native.setMuted({ muted }), timeout])) || {}
+      const state = await this._readNativeState(native)
+      this.pushEvent("native_media_state", {
+        mic: typeof result.mic === "boolean" ? result.mic : state.mic,
+        camera: state.camera,
+      })
+    } catch (error) {
+      console.warn("[MeetingClient] native mute failed:", error && error.message)
+      const state = await this._readNativeState(native)
+      this.pushEvent("native_media_state", { ...state, failed: "mic" })
+    } finally {
+      clearTimeout(timer)
     }
   },
 

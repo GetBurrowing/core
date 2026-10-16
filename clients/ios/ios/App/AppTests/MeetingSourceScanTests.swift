@@ -98,6 +98,32 @@ final class MeetingSourceScanTests: XCTestCase {
 
     /// Reads project.yml's target blocks: only `App` may depend on the
     /// LiveKit package.
+    /// The meeting trace file (task 01a13c62 stage 1) holds constants,
+    /// booleans and counts only: no token, name, identity or room name.
+    func testNoMeetingTraceLineInterpolatesAnIdentityOrName() throws {
+        let call = try NSRegularExpression(pattern: #"MeetingTrace\.append\s*\("#)
+        let banned = ["token", "identity", "name", "join", "room)", "metadata", "sid", "host"]
+        var traceLines = 0
+        var offences: [String] = []
+        for file in try swiftFiles("App/Meetings") {
+            let lines = try String(contentsOf: file, encoding: .utf8).components(separatedBy: .newlines)
+            for (n, line) in lines.enumerated() {
+                let range = NSRange(line.startIndex..., in: line)
+                guard call.firstMatch(in: line, range: range) != nil else { continue }
+                traceLines += 1
+                for match in Self.interpolation.matches(in: line, range: range) {
+                    guard let inner = Range(match.range(at: 1), in: line) else { continue }
+                    let expression = line[inner].lowercased()
+                    if banned.contains(where: { expression.contains($0) }) {
+                        offences.append("\(file.lastPathComponent):\(n + 1) traces \(line[inner])")
+                    }
+                }
+            }
+        }
+        XCTAssertGreaterThan(traceLines, 5, "the scan found no trace calls; is it reading the sources?")
+        XCTAssertEqual(offences, [])
+    }
+
     func testOnlyTheAppTargetLinksLiveKit() throws {
         let yml = try String(contentsOf: appRoot.appendingPathComponent("project.yml"), encoding: .utf8)
         let targets = Self.targetBlocks(yml)

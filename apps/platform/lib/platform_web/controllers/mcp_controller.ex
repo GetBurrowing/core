@@ -92,6 +92,10 @@ defmodule PlatformWeb.MCPController do
     # of whatever 500 the handler happened to raise), then the ledger row.
     # Capability is decided before arguments are looked at. The refusal
     # framing stays HERE: a JSON-RPC -32001 error, not a tool result.
+    # A tool call is turn activity for the no-reply watchdog (task 01a10322
+    # stage 7): a native agent working through Suite's tools is not silent.
+    Platform.Chat.ReplyFailure.Watchdog.activity(Map.get(runtime, :agent_id))
+
     case ToolCall.invoke(name, args, runtime) do
       {:ok, data} ->
         {:ok, success_content(data)}

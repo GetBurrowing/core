@@ -201,7 +201,14 @@ defmodule PlatformWeb.Components.InboxItem do
   # MUST sit above the humanizing catch-all: it would render "Meeting invited"
   # — a one-character difference that reads as correct at a glance.
   def kind_label("meeting_invited"), do: "Meeting invite"
-  def kind_label(other) when is_binary(other), do: Phoenix.Naming.humanize(other)
+
+  def kind_label(other) when is_binary(other) do
+    case Platform.Extensions.inbox_kind(other) do
+      %{label: label} -> label
+      nil -> Phoenix.Naming.humanize(other)
+    end
+  end
+
   def kind_label(_), do: "Notification"
 
   @doc false
@@ -212,7 +219,13 @@ defmodule PlatformWeb.Components.InboxItem do
   # An envelope (a message you were sent), not a camera (a call in progress).
   # MUST sit above the `hero-bell` catch-all.
   def kind_icon("meeting_invited"), do: "hero-envelope"
-  def kind_icon(_), do: "hero-bell"
+
+  def kind_icon(other) do
+    case Platform.Extensions.inbox_kind(other) do
+      %{icon: icon} -> icon
+      nil -> "hero-bell"
+    end
+  end
 
   # ── Helpers ────────────────────────────────────────────────────────────
 

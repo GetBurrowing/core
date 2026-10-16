@@ -49,7 +49,14 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
   @impl true
   def mount(socket) do
     {:ok,
-     assign(socket, open: nil, load_key: nil, view: nil, pin_error: nil, retention_days: nil)}
+     assign(socket,
+       open: nil,
+       fullscreen: false,
+       load_key: nil,
+       view: nil,
+       pin_error: nil,
+       retention_days: nil
+     )}
   end
 
   @impl true
@@ -111,6 +118,19 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
 
   def handle_event("close", _params, socket), do: {:noreply, assign(socket, open: nil)}
 
+  # In-app fullscreen (iOS standalone PWA has no Fullscreen API for non-video
+  # elements, and `target="_blank"` escapes to Safari with an address bar).
+  # A class toggle on the existing tree, and the PrototypeFullscreen hook
+  # promotes the root to the browser TOP LAYER (popover="manual") where no
+  # native fullscreen is in effect. Promotion is a rendering change, not a
+  # DOM move: an ancestor's transform/scale (the chat row's
+  # `active:scale-[0.99]`, chat_message.ex) can no longer become the
+  # overlay's containing block, and the iframe and its CanvasRoomBridge
+  # element keep their browsing context. The render keeps every conditional
+  # sibling after the keyed room element so morphdom never re-appends it.
+  def handle_event("fullscreen", %{"on" => on}, socket) when on in ~w(true false),
+    do: {:noreply, assign(socket, fullscreen: on == "true", open: nil)}
+
   def handle_event("pin", %{"version" => raw}, socket) do
     with {:user, _} = actor <- socket.assigns.viewer,
          {version, ""} <- Integer.parse(to_string(raw)),
@@ -166,7 +186,29 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
       |> assign(:can_pin?, match?({:user, _}, assigns.viewer) and is_binary(assigns.canvas_id))
 
     ~H"""
-    <div id={@id} class="relative rounded-xl border border-edge" data-role="prototype-canvas">
+    <div
+      id={@id}
+      phx-hook="PrototypeFullscreen"
+      class={
+        if @fullscreen,
+          do: [
+            "fixed inset-0 z-50 flex h-dvh flex-col bg-base-100 text-base-content",
+            # UA popover resets: PrototypeFullscreen promotes this element to
+            # the browser top layer with popover="manual", whose UA sheet
+            # centres a fit-content box with a border, padding, overflow:auto
+            # and CanvasText colour. Author classes beat the UA sheet, so
+            # these keep the top-layer box identical to the overlay. The
+            # safe-area longhands below still win over p-0 (Tailwind orders
+            # the shorthand first; checked in the served app.css, stage 2).
+            "m-0 w-dvw max-h-none max-w-none border-0 p-0 overflow-hidden",
+            "pt-[env(safe-area-inset-top)] pr-[env(safe-area-inset-right)]",
+            "pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)]"
+          ],
+          else: "relative rounded-xl border border-edge"
+      }
+      data-role="prototype-canvas"
+      data-fullscreen={to_string(@fullscreen)}
+    >
       <%!-- The bar is its own size container (`@container`): every width
            rule below is keyed to the BAR, not the viewport. The inline
            preview (~330px) and the Live Canvas side panel (~350px) are that
@@ -174,7 +216,10 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
            expanded the chip to 426px of content and pushed Open and the menu
            off the card (member 2's review). --%>
       <div
-        class="@container flex h-10 items-center gap-1.5 rounded-t-xl border-b border-edge bg-base-100 pl-3 pr-1 @sm:gap-2"
+        class={[
+          "@container flex h-10 shrink-0 items-center gap-1.5 border-b border-edge bg-base-100 pl-3 pr-1 @sm:gap-2",
+          !@fullscreen && "rounded-t-xl"
+        ]}
         data-role="prototype-bar"
       >
         <p
@@ -214,11 +259,28 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
         >
           {@stamp}<span class="hero-chevron-down size-3" aria-hidden="true"></span>
         </button>
+        <button
+          :if={@view.state != :removed}
+          type="button"
+          phx-click="fullscreen"
+          phx-value-on={to_string(not @fullscreen)}
+          phx-target={@myself}
+          class="btn btn-ghost btn-sm btn-square shrink-0 rounded-field max-sm:min-h-[44px] max-sm:min-w-[44px]"
+          aria-label={if @fullscreen, do: "Exit full screen", else: "Full screen"}
+          title={if @fullscreen, do: "Close", else: "Full screen"}
+          data-role={if @fullscreen, do: "prototype-fullscreen-close", else: "prototype-fullscreen"}
+        >
+          <span
+            class={[if(@fullscreen, do: "hero-x-mark", else: "hero-arrows-pointing-out"), "size-4"]}
+            aria-hidden="true"
+          >
+          </span>
+        </button>
         <a
           href={@url}
           target="_blank"
           rel="noopener noreferrer"
-          class="btn btn-ghost btn-sm btn-square shrink-0 rounded-field"
+          class="btn btn-ghost btn-sm btn-square shrink-0 rounded-field max-sm:hidden"
           aria-label="Open this version in a new tab"
           title="Open"
           data-role="prototype-open"
@@ -238,6 +300,99 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
         >
           <span class="hero-ellipsis-horizontal size-4" aria-hidden="true"></span>
         </button>
+      </div>
+
+      <%= if @view.state == :removed do %>
+        <div
+          class="flex flex-wrap items-center justify-center gap-3 rounded-b-xl bg-base-200 px-4 py-8 text-center text-sm text-base-content/70"
+          data-role="prototype-removed"
+        >
+          <span>
+            {removed_text(@retention_days)} Latest is v{@view.latest}.
+          </span>
+          <button
+            :if={@can_pin?}
+            type="button"
+            phx-click="pin"
+            phx-value-version={@view.latest}
+            phx-target={@myself}
+            class="btn btn-sm rounded-field"
+          >
+            View v{@view.latest}
+          </button>
+          <a
+            :if={not @can_pin?}
+            href={Prototypes.url(@view.prototype.id, @view.latest)}
+            target="_blank"
+            rel="noopener noreferrer"
+            class="btn btn-sm rounded-field"
+          >
+            View v{@view.latest}
+          </a>
+        </div>
+      <% else %>
+        <%!-- The room bridge (task 01a1316b-84fa stage 2) wraps the scale
+             wrapper because an element carries one phx-hook. Its id carries
+             the version too, so a pinned version mounts a fresh bridge on
+             the fresh iframe. --%>
+        <div
+          id={"#{@id}-room-v#{@view.shown}"}
+          class={
+            @fullscreen &&
+              [
+                "min-h-0 flex-1",
+                # The scale hook owns inline height/width/transform on its
+                # (phx-update="ignore") wrapper and iframe; fill the screen
+                # over them instead of fighting the hook.
+                "[&>[data-role=prototype-frame]]:!h-full [&>[data-role=prototype-frame]]:!rounded-none",
+                "[&_iframe]:!h-full [&_iframe]:!w-full [&_iframe]:![transform:none]"
+              ]
+          }
+          {CanvasRoom.frame_attrs(@canvas_id, @node["id"])}
+        >
+          <%!-- The id carries the version: the wrapper is phx-update="ignore"
+             (EmbedCanvasScale owns its inline styles), so a pinned version
+             must replace the element rather than patch the iframe src. --%>
+          <div
+            id={"#{@id}-frame-v#{@view.shown}"}
+            phx-hook="EmbedCanvasScale"
+            phx-update="ignore"
+            data-declared-width={@width}
+            data-declared-height={@height}
+            data-min-scale={@min_scale}
+            class="relative overflow-hidden rounded-b-xl"
+            style={"height: #{@height}px;"}
+            data-role="prototype-frame"
+          >
+            <iframe
+              src={@url}
+              sandbox="allow-scripts"
+              referrerpolicy="no-referrer"
+              title={@view.prototype.name}
+              style={"width: #{@width}px; height: #{@height}px; border: 0; display: block;"}
+            >
+            </iframe>
+          </div>
+        </div>
+      <% end %>
+
+      <%!-- Everything conditional sits AFTER the room element, never before
+           it. The room element is keyed (it has an id) and its iframe is
+           phx-update="ignore"; an unkeyed node inserted ahead of it makes
+           morphdom detach and re-append it, which reloads the iframe and
+           re-joins the canvas room. That is what happened on every enter
+           and exit while the Escape listener below was the root's first
+           child (#1236; measured in task 01a1389f stage 1: iframe loads
+           1, 2, 3). The versions/menu panel and its backdrop were inserted
+           there too; prototype_frame_test.exs pins the order. --%>
+      <div
+        :if={@fullscreen}
+        phx-window-keydown="fullscreen"
+        phx-value-on="false"
+        phx-key="Escape"
+        phx-target={@myself}
+        data-role="prototype-fullscreen-escape"
+      >
       </div>
 
       <button
@@ -306,69 +461,6 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrame do
           </p>
         <% end %>
       </div>
-
-      <%= if @view.state == :removed do %>
-        <div
-          class="flex flex-wrap items-center justify-center gap-3 rounded-b-xl bg-base-200 px-4 py-8 text-center text-sm text-base-content/70"
-          data-role="prototype-removed"
-        >
-          <span>
-            {removed_text(@retention_days)} Latest is v{@view.latest}.
-          </span>
-          <button
-            :if={@can_pin?}
-            type="button"
-            phx-click="pin"
-            phx-value-version={@view.latest}
-            phx-target={@myself}
-            class="btn btn-sm rounded-field"
-          >
-            View v{@view.latest}
-          </button>
-          <a
-            :if={not @can_pin?}
-            href={Prototypes.url(@view.prototype.id, @view.latest)}
-            target="_blank"
-            rel="noopener noreferrer"
-            class="btn btn-sm rounded-field"
-          >
-            View v{@view.latest}
-          </a>
-        </div>
-      <% else %>
-        <%!-- The room bridge (task 01a1316b-84fa stage 2) wraps the scale
-             wrapper because an element carries one phx-hook. Its id carries
-             the version too, so a pinned version mounts a fresh bridge on
-             the fresh iframe. --%>
-        <div
-          id={"#{@id}-room-v#{@view.shown}"}
-          {CanvasRoom.frame_attrs(@canvas_id, @node["id"])}
-        >
-          <%!-- The id carries the version: the wrapper is phx-update="ignore"
-             (EmbedCanvasScale owns its inline styles), so a pinned version
-             must replace the element rather than patch the iframe src. --%>
-          <div
-            id={"#{@id}-frame-v#{@view.shown}"}
-            phx-hook="EmbedCanvasScale"
-            phx-update="ignore"
-            data-declared-width={@width}
-            data-declared-height={@height}
-            data-min-scale={@min_scale}
-            class="relative overflow-hidden rounded-b-xl"
-            style={"height: #{@height}px;"}
-            data-role="prototype-frame"
-          >
-            <iframe
-              src={@url}
-              sandbox="allow-scripts"
-              referrerpolicy="no-referrer"
-              title={@view.prototype.name}
-              style={"width: #{@width}px; height: #{@height}px; border: 0; display: block;"}
-            >
-            </iframe>
-          </div>
-        </div>
-      <% end %>
     </div>
     """
   end

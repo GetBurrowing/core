@@ -20,7 +20,7 @@ defmodule Platform.Chat.AgentResponder do
 
   alias Platform.Agents.Agent
   alias Platform.Chat
-  alias Platform.Chat.{ContextPlane, Message, Participant}
+  alias Platform.Chat.{ContextPlane, Message, Participant, ReplyFailure}
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Federation.{AttentionDispatch, DeadLetters, RuntimePresence, ToolSurface}
   alias Platform.Repo
@@ -195,9 +195,13 @@ defmodule Platform.Chat.AgentResponder do
 
         {:error, reason} ->
           Logger.warning("[AgentResponder] skipped reply: #{inspect(reason)}")
+          _ = ReplyFailure.notify(context, reason)
           {:error, reason}
 
-        _ ->
+        # No usable reply (nil or blank content, or an unexpected shape): the
+        # person who asked still gets told (task 01a10322 stage 1).
+        other ->
+          _ = ReplyFailure.notify(context, {:no_reply, other})
           :ok
       end
 
@@ -208,7 +212,25 @@ defmodule Platform.Chat.AgentResponder do
 
   # ── External runtime dispatch ───────────────────────────────────────
 
+  # A native agent the agent host observes as `needs_login` has a connected
+  # runtime but cannot run a turn: dispatching would end in no reply and no
+  # notice, so the notice is posted instead (task 01a10322 stage 7).
   defp dispatch_to_external(signal, context) do
+    case ReplyFailure.refuse_dispatch_cause(context.agent) do
+      nil ->
+        dispatch_to_runtime(signal, context)
+
+      cause ->
+        Logger.warning(
+          "[AgentResponder] not dispatching to #{context.agent.slug}: agent host observes #{cause}"
+        )
+
+        _ = ReplyFailure.notify(context, cause)
+        {:error, cause}
+    end
+  end
+
+  defp dispatch_to_runtime(signal, context) do
     space_id = context.message.space_id
     agent_participant_id = context.agent_participant.id
     runtime_id = context.agent.runtime_id
@@ -218,6 +240,7 @@ defmodule Platform.Chat.AgentResponder do
 
     if is_nil(runtime_id) do
       Logger.warning("[AgentResponder] external agent #{context.agent.id} has no runtime_id")
+      _ = ReplyFailure.notify(context, :no_runtime)
       {:error, :no_runtime}
     else
       runtime = Platform.Federation.get_runtime(runtime_id)
@@ -264,6 +287,7 @@ defmodule Platform.Chat.AgentResponder do
             }
           )
 
+          _ = ReplyFailure.notify(context, :runtime_offline)
           {:error, :runtime_offline}
         else
           bundle = ContextPlane.build_context_bundle(space_id)
@@ -298,6 +322,9 @@ defmodule Platform.Chat.AgentResponder do
                ) do
             :ok ->
               Logger.info("[AgentResponder] broadcast sent successfully to #{topic}")
+              # Delivered; a failure the agent host observes next is still
+              # reported for this message (ReplyFailure.notify_pending/1).
+              :ok = ReplyFailure.remember_delivery(context)
 
               :telemetry.execute(
                 [:platform, :federation, :delivery_success],

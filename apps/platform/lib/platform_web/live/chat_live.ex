@@ -2474,7 +2474,7 @@ defmodule PlatformWeb.ChatLive do
         socket =
           socket
           |> assign(:loading_older, true)
-          |> PlatformWeb.ChatLive.MessagesHooks.load_older_messages(space_id)
+          |> PlatformWeb.ChatLive.MessagesHooks.try_load_older_messages(space_id)
 
         {:noreply, socket}
 

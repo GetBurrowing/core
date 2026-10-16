@@ -1,4 +1,6 @@
+import AppIntents
 import CoreSpotlight
+import UniformTypeIdentifiers
 import XCTest
 
 @testable import App
@@ -13,8 +15,33 @@ final class MemorySearchableIndex: SearchableIndexStore {
     }
 
     func deleteDomains(_ domains: [String]) {
-        lock.withLock { items = items.filter { !domains.contains($0.value.domainIdentifier ?? "") } }
+        lock.withLock {
+            deletedDomains += domains
+            items = items.filter { !domains.contains($0.value.domainIdentifier ?? "") }
+        }
     }
+
+    /// Ids deleted as app entities, in call order.
+    private(set) var deletedEntityIDs: [String] = []
+    private(set) var deletedDomains: [String] = []
+    private(set) var deleteAllCount = 0
+
+    func deleteEntities(_ ids: [String]) {
+        lock.withLock { deletedEntityIDs += ids }
+    }
+
+    func deleteAll() async throws {
+        lock.withLock {
+            deleteAllCount += 1
+            items = [:]
+        }
+    }
+
+    func seed(_ item: CSSearchableItem) {
+        lock.withLock { items[item.uniqueIdentifier] = item }
+    }
+
+    var count: Int { lock.withLock { items.count } }
 
     func items(host: String) -> [CSSearchableItem] {
         lock.withLock { items.values.filter { $0.domainIdentifier == host } }
@@ -38,11 +65,16 @@ final class PersonalIndexTests: XCTestCase {
     private let daltonID = "da000000-0000-4000-8000-000000000001"
     private let priyaID = "9e000000-0000-4000-8000-000000000002"
     private let helperID = "0a0a0a0a-0000-4000-8000-000000000001"
+    /// Priya's id on install B: a bare uuid then names exactly one person.
+    private let priyaIDOnB = "9e000000-0000-4000-8000-00000000000b"
+    /// Hosts whose server predates the directory (it answers 404).
+    private var noDirectory: Set<String> = []
     private var defaultsName = ""
     private var memory = MemorySearchableIndex()
     private var updates = 0
     private var refresh: ShortcutParameterRefresh!
     private var saved: (IntentEnvironment, Bool, ((String, String, [String]) -> Void)?, SearchableIndexStore)!
+    private var savedLedger: IndexedIDLedger!
 
     override func setUp() {
         super.setUp()
@@ -51,6 +83,8 @@ final class PersonalIndexTests: XCTestCase {
         saved = (IntentEnvironment.current, IntentHooks.indexesSpotlight, IntentHooks.didFetchEntities, SpotlightIndex.store)
         memory = MemorySearchableIndex()
         SpotlightIndex.store = memory
+        savedLedger = SpotlightIndex.ledger
+        SpotlightIndex.ledger = IndexedIDLedger(defaults: defaults)
         IntentHooks.indexesSpotlight = true
         updates = 0
         refresh = ShortcutParameterRefresh(defaults: defaults, update: { [unowned self] in self.updates += 1 })
@@ -65,6 +99,7 @@ final class PersonalIndexTests: XCTestCase {
         IntentHooks.indexesSpotlight = saved.1
         IntentHooks.didFetchEntities = saved.2
         SpotlightIndex.store = saved.3
+        SpotlightIndex.ledger = savedLedger
         UserDefaults().removePersistentDomain(forName: defaultsName)
         super.tearDown()
     }
@@ -96,9 +131,10 @@ final class PersonalIndexTests: XCTestCase {
         switch request.url?.path ?? "" {
         case "/api/app/people":
             let directory = request.url?.query == "scope=directory"
+            if directory && noDirectory.contains(host) { return (404, Data(#"{"error":"not_found"}"#.utf8)) }
             var people = [#"{"id":"\#(daltonID)","kind":"user","name":"Dalton \#(tag)","org_names":["Fabrikam"]}"#]
             if directory {
-                people.append(#"{"id":"\#(priyaID)","kind":"user","name":"Priya \#(tag)","org_names":["Fabrikam"]}"#)
+                people.append(#"{"id":"\#(tag == "A" ? priyaID : priyaIDOnB)","kind":"user","name":"Priya \#(tag)","org_names":["Fabrikam"]}"#)
                 people.append(#"{"id":"\#(helperID)","kind":"agent","name":"Burrow Helper \#(tag)","org_names":[]}"#)
             }
             return (200, Data(#"{"people":[\#(people.joined(separator: ","))]}"#.utf8))
@@ -123,7 +159,7 @@ final class PersonalIndexTests: XCTestCase {
     // MARK: Finding 1 and 3: indexed at sign-in, an org mate included
 
     func testSignInIndexesTheHostsPeopleAndConversationsIncludingAnOrgMateWithNoSharedSpace() async throws {
-        guard #available(iOS 27, *) else { throw XCTSkip("PersonEntity and ConversationEntity are iOS 27") }
+        guard #available(iOS 27, *) else { throw XCTSkip("MessagePersonEntity and ConversationEntity are iOS 27") }
         let counts = await indexer().didSignIn(host: a)
 
         XCTAssertEqual(counts, PersonalIndexCounts(people: 3, conversations: 1, agents: 1))
@@ -150,7 +186,7 @@ final class PersonalIndexTests: XCTestCase {
         guard #available(iOS 27, *) else { throw XCTSkip("iOS 27") }
         await indexer().didSignIn(host: a)
         let before = StubURLProtocol.requests.count
-        let found = try await PersonQuery().entities(for: [EntityRef(host: a, uuid: priyaID).id])
+        let found = try await MessagePersonEntityQuery().entities(for: [EntityRef(host: a, uuid: priyaID).id])
         XCTAssertEqual(found.map(\.name), ["Priya A"])
         XCTAssertEqual(StubURLProtocol.requests.count, before)
     }
@@ -158,7 +194,7 @@ final class PersonalIndexTests: XCTestCase {
     func testAColdProcessResolvesAnOrgMateByIdThroughTheDirectory() async throws {
         guard #available(iOS 27, *) else { throw XCTSkip("iOS 27") }
         PeopleCache.shared.removeAll(host: a)
-        let found = try await PersonQuery().entities(for: [EntityRef(host: a, uuid: priyaID).id])
+        let found = try await MessagePersonEntityQuery().entities(for: [EntityRef(host: a, uuid: priyaID).id])
         XCTAssertEqual(found.map(\.name), ["Priya A"], "Priya is outside the recent collaborators; the directory has her")
         XCTAssertEqual(requests(host: a, path: "/api/app/people").last?.url?.query, "scope=directory")
     }
@@ -249,5 +285,290 @@ final class PersonalIndexTests: XCTestCase {
         let active = try body(of: "func sceneDidBecomeActive(", in: "SceneDelegate.swift")
         XCTAssertFalse(active.isEmpty)
         XCTAssertTrue(active.contains("IntentAppHooks.didBecomeActive()"), "foreground must refresh stale installs")
+    }
+
+    // MARK: Round 2: a person shaped the way Siri hands it back
+
+    private func siriPerson(_ identifier: IntentPerson.Identifier, name: String?) -> IntentPerson {
+        IntentPerson(identifier: identifier, name: name.map { .displayName($0) } ?? .unknown, handle: nil)
+    }
+
+    @available(iOS 27, *)
+    private func noChoice(_ name: String, _ people: [MessagePersonEntity]) async throws -> MessagePersonEntity {
+        XCTFail("asked which \(name) among \(people.count)")
+        throw CancellationError()
+    }
+
+    func testASiriPersonWithNoBurrowIdResolvesByName() async throws {
+        guard #available(iOS 27, *) else { throw XCTSkip("iOS 27") }
+        await indexer().didSignIn(host: a)
+        // A display name only, as an unknown identifier: Siri's likeliest shape.
+        let unknown = try await MessageDestination.people([siriPerson(.unknown, name: "Priya A")])
+            .resolvedBurrowDestination(site: "test", choose: noChoice)
+        XCTAssertEqual(unknown.entityID, EntityRef(host: a, uuid: priyaID).id)
+
+        // A contact identifier, the given name only.
+        let contact = try await MessageDestination.people([siriPerson(.contact("ABC-123"), name: "priya a")])
+            .resolvedBurrowDestination(site: "test", choose: noChoice)
+        XCTAssertEqual(contact.entityID, EntityRef(host: a, uuid: priyaID).id)
+
+        // An unresolved entity carried from the import resolves the same way.
+        let carried = try await MessageDestination.messagePerson(MessagePersonEntity(unresolved: siriPerson(.unknown, name: "Dalton A")))
+            .resolvedBurrowDestination(site: "test", choose: noChoice)
+        XCTAssertEqual(carried.entityID, EntityRef(host: a, uuid: daltonID).id)
+    }
+
+    func testABareUuidResolvesOnTheInstallThatHasIt() async throws {
+        guard #available(iOS 27, *) else { throw XCTSkip("iOS 27") }
+        await indexer().didSignIn(host: a)
+        await indexer().didSignIn(host: b)
+        let target = try await MessageDestination.people([siriPerson(.applicationDefined(priyaIDOnB), name: nil)])
+            .resolvedBurrowDestination(site: "test", choose: noChoice)
+        XCTAssertEqual(target.entityID, EntityRef(host: b, uuid: priyaIDOnB).id)
+    }
+
+    func testTwoPeopleWithTheSpokenNameAreAskedAbout() async throws {
+        guard #available(iOS 27, *) else { throw XCTSkip("iOS 27") }
+        await indexer().didSignIn(host: a)
+        await indexer().didSignIn(host: b)
+        var asked: (String, [String])?
+        let target = try await MessageDestination.people([siriPerson(.unknown, name: "Dalton")])
+            .resolvedBurrowDestination(site: "test") { name, people in
+                asked = (name, people.map(\.name).sorted())
+                return people.first { $0.name == "Dalton B" }!
+            }
+        XCTAssertEqual(asked?.0, "Dalton")
+        XCTAssertEqual(asked?.1, ["Dalton A", "Dalton B"], "a given-name match on both installs is asked, not guessed")
+        XCTAssertEqual(target.entityID, EntityRef(host: b, uuid: daltonID).id)
+    }
+
+    func testNobodyByThatNameIsSaidWithTheName() async throws {
+        guard #available(iOS 27, *) else { throw XCTSkip("iOS 27") }
+        await indexer().didSignIn(host: a)
+        do {
+            _ = try await MessageDestination.people([siriPerson(.unknown, name: "Zed")])
+                .resolvedBurrowDestination(site: "test", choose: noChoice)
+            XCTFail("resolved a person nobody is named")
+        } catch let failure as IntentFailure {
+            XCTAssertEqual(failure, .personNotFound(name: "Zed"))
+            XCTAssertTrue(failure.message.contains("Zed"))
+        }
+        XCTAssertFalse(
+            requests(host: a, path: "/api/app/people").filter { $0.url?.query == "q=Zed" }.isEmpty,
+            "the server's search is asked before giving up")
+    }
+
+    func testACallToAPersonWithNoBurrowIdResolvesByName() async throws {
+        guard #available(iOS 27, *) else { throw XCTSkip("iOS 27") }
+        await indexer().didSignIn(host: a)
+        var foreign = CallPersonEntity(id: "contact-xyz", name: "Dalton A", kind: "user", subtitle: "")
+        foreign.person = siriPerson(.contact("contact-xyz"), name: "Dalton A")
+        let found = try await CallPersonResolution.resolve(foreign, choose: noChoice)
+        XCTAssertEqual(found.id, EntityRef(host: a, uuid: daltonID).id)
+    }
+
+    // MARK: Round 8, bug A: a name on two installs is asked about
+
+    /// Rowan's iPad, signed in to prod and suite-exp: "Message Harper" went to
+    /// suite-exp's Harper, the first of the two indexed Jordans Siri found,
+    /// handed to Burrow as a resolved entity and used as is.
+    @available(iOS 27, *)
+    private func jordans() {
+        PeopleCache.shared.removeAll(host: a)
+        PeopleCache.shared.removeAll(host: b)
+        StubURLProtocol.respond = { [unowned self] request in
+            guard request.url?.path == "/api/app/people" else { return (404, Data()) }
+            let people =
+                request.url?.host == self.a
+                ? #"[{"id":"\#(self.jordanOnA)","kind":"user","name":"Harper","org_names":["Exp"]},"#
+                    + #"{"id":"\#(self.inesOnA)","kind":"user","name":"Ines Alvarez","org_names":["Exp"]}]"#
+                : #"[{"id":"\#(self.jordanOnB)","kind":"user","name":"Harper Parker","org_names":["Fabrikam"]}]"#
+            return (200, Data(#"{"people":\#(people)}"#.utf8))
+        }
+    }
+
+    private let jordanOnA = "70000000-0000-4000-8000-00000000000a"
+    private let jordanOnB = "70000000-0000-4000-8000-00000000000b"
+    private let inesOnA = "1e000000-0000-4000-8000-00000000000a"
+
+    @available(iOS 27, *)
+    private func entity(_ uuid: String, on host: String, name: String) -> MessagePersonEntity {
+        MessagePersonEntity(id: EntityRef(host: host, uuid: uuid).id, name: name, kind: "user", subtitle: "Person")
+    }
+
+    func testAPersonSiriPickedIsAskedAboutWhenAnotherInstallHasTheSameName() async throws {
+        guard #available(iOS 27, *) else { throw XCTSkip("iOS 27") }
+        jordans()
+        defer { PeopleCache.shared.removeAll(host: a); PeopleCache.shared.removeAll(host: b) }
+        var asked: (String, [String])?
+        let target = try await MessageDestination.messagePerson(entity(jordanOnA, on: a, name: "Harper"))
+            .resolvedBurrowDestination(site: "test") { name, people in
+                asked = (name, people.map(\.id))
+                return people[1]
+            }
+        XCTAssertEqual(asked?.0, "Harper")
+        XCTAssertEqual(
+            asked?.1, [EntityRef(host: a, uuid: jordanOnA).id, EntityRef(host: b, uuid: jordanOnB).id],
+            "Siri's pick first, then the namesake on the other install")
+        XCTAssertEqual(target.entityID, EntityRef(host: b, uuid: jordanOnB).id, "the person chosen is the one messaged")
+
+        // The other way round: Siri picked Harper Parker; A's Harper answers too.
+        var askedAgain = false
+        _ = try await MessageDestination.messagePeople([entity(jordanOnB, on: b, name: "Harper Parker")])
+            .resolvedBurrowDestination(site: "test") { _, people in
+                askedAgain = true
+                return people[0]
+            }
+        XCTAssertTrue(askedAgain)
+
+        // A Shortcut that scoped the send to one install is not asked.
+        let scoped = try await MessageDestination.messagePerson(entity(jordanOnA, on: a, name: "Harper"))
+            .resolvedBurrowDestination(site: "test", confirmsInstall: false, choose: noChoice)
+        XCTAssertEqual(scoped.entityID, EntityRef(host: a, uuid: jordanOnA).id)
+    }
+
+    func testAPersonWhoseNameIsUniqueAcrossInstallsIsNotAskedAbout() async throws {
+        guard #available(iOS 27, *) else { throw XCTSkip("iOS 27") }
+        jordans()
+        defer { PeopleCache.shared.removeAll(host: a); PeopleCache.shared.removeAll(host: b) }
+        let target = try await MessageDestination.messagePerson(entity(inesOnA, on: a, name: "Ines Alvarez"))
+            .resolvedBurrowDestination(site: "test", choose: noChoice)
+        XCTAssertEqual(target.entityID, EntityRef(host: a, uuid: inesOnA).id)
+        XCTAssertFalse(requests(host: b, path: "/api/app/people").isEmpty, "positive control: the other install was searched")
+    }
+
+    func testASpokenNameMatchedFromOneInstallsCacheIsCheckedOnTheOther() async throws {
+        guard #available(iOS 27, *) else { throw XCTSkip("iOS 27") }
+        jordans()
+        defer { PeopleCache.shared.removeAll(host: a); PeopleCache.shared.removeAll(host: b) }
+        // Only A's people are in this process's cache.
+        PeopleCache.shared.remember([entity(jordanOnA, on: a, name: "Harper")])
+        var asked: [String] = []
+        _ = try await MessageDestination.people([siriPerson(.unknown, name: "Harper")])
+            .resolvedBurrowDestination(site: "test") { _, people in
+                asked = people.map(\.name)
+                return people[0]
+            }
+        XCTAssertEqual(asked, ["Harper", "Harper Parker"])
+    }
+
+    // MARK: Round 8, bug B: a removed install's entities leave Spotlight by id
+
+    func testRemovingAnInstallDeletesItsIndexedEntitiesByIdAsWellAsByDomain() async throws {
+        guard #available(iOS 27, *) else { throw XCTSkip("iOS 27") }
+        await indexer().didSignIn(host: a)
+        await indexer().didSignIn(host: b)
+        XCTAssertFalse(SpotlightIndex.ledger.ids(host: a).isEmpty, "positive control: A's ids were recorded")
+
+        await IntentAppHooks.forget(host: a, donations: Donations(
+            manager: FakeDonationManager(), ledger: DonationLedger(defaults: defaults), resolver: FakeDonationResolver(), isSaved: { _ in true })).value
+
+        let deleted = Set(memory.deletedEntityIDs)
+        for uuid in [daltonID, priyaID, helperID] {
+            XCTAssertTrue(deleted.contains(EntityRef(host: a, uuid: uuid).id), "A's \(uuid) is deleted as an app entity")
+        }
+        XCTAssertTrue(deleted.contains(EntityRef(host: a, uuid: "5a000000-0000-4000-8000-000000000001").id), "A's conversation too")
+        XCTAssertFalse(deleted.contains { $0.hasPrefix(b + "|") }, "B's entities are untouched")
+        XCTAssertTrue(memory.deletedDomains.contains(a))
+        XCTAssertTrue(SpotlightIndex.ledger.ids(host: a).isEmpty)
+        XCTAssertFalse(SpotlightIndex.ledger.ids(host: b).isEmpty)
+    }
+
+    func testHydratingAPersonOnARemovedInstallPurgesItFromSpotlight() async throws {
+        guard #available(iOS 27, *) else { throw XCTSkip("iOS 27") }
+        await indexer().didSignIn(host: a)
+        let gone = "gone.example.com"
+        let stale = EntityRef(host: gone, uuid: daltonID).id
+        let live = EntityRef(host: a, uuid: daltonID).id
+        let found = try await MessagePersonEntityQuery().entities(for: [stale, live])
+        XCTAssertEqual(found.map(\.id), [live])
+        XCTAssertEqual(memory.deletedEntityIDs, [stale], "the removed install's id is purged, the live one kept")
+        XCTAssertEqual(memory.deletedDomains, [gone])
+        XCTAssertGreaterThan(memory.items(host: a).count, 0)
+
+        _ = try await ConversationQuery().entities(for: [EntityRef(host: gone, uuid: "5a000000-0000-4000-8000-000000000001").id])
+        XCTAssertEqual(memory.deletedEntityIDs.count, 2, "a stale conversation is purged too")
+    }
+
+    // MARK: Round 8, bug C: one rebuild after an index schema change
+
+    func testTheFirstForegroundAfterAnUpdateRebuildsTheIndexOnce() async throws {
+        guard #available(iOS 27, *) else { throw XCTSkip("iOS 27") }
+        // An item from an older build (type PersonEntity) on an install
+        // since removed, and a stale one on A.
+        let legacy = CSSearchableItem(uniqueIdentifier: "legacy-person", domainIdentifier: "gone.example.com", attributeSet: CSSearchableItemAttributeSet(contentType: .content))
+        let old = CSSearchableItem(uniqueIdentifier: "old-a", domainIdentifier: a, attributeSet: CSSearchableItemAttributeSet(contentType: .content))
+        memory.seed(legacy)
+        memory.seed(old)
+        let migration = SpotlightIndexMigration(env: IntentEnvironment.current, defaults: defaults, refresh: indexer())
+        XCTAssertTrue(migration.isNeeded)
+
+        _ = await IntentAppHooks.didBecomeActive(refresh: indexer(), migration: migration).value
+
+        XCTAssertEqual(memory.deleteAllCount, 1)
+        XCTAssertEqual(memory.items(host: "gone.example.com").count, 0, "the older build's item is gone")
+        XCTAssertFalse(memory.items(host: a).contains { $0.uniqueIdentifier == "old-a" })
+        XCTAssertTrue(memory.names(host: a).contains("Dalton A"), "A is indexed afresh")
+        XCTAssertTrue(memory.names(host: b).contains("Dalton B"), "and B")
+        XCTAssertEqual(defaults.integer(forKey: SpotlightIndexMigration.versionKey), SpotlightIndexMigration.currentVersion)
+
+        // Later launches leave the index alone.
+        let before = StubURLProtocol.requests.count
+        let again = await migration.runIfNeeded()
+        XCTAssertNil(again)
+        XCTAssertEqual(memory.deleteAllCount, 1)
+        XCTAssertEqual(StubURLProtocol.requests.count, before)
+    }
+
+    // MARK: Round 2: an install whose server has no directory
+
+    func testAnInstallWithoutTheDirectoryStillIndexesItsCollaborators() async throws {
+        guard #available(iOS 27, *) else { throw XCTSkip("iOS 27") }
+        noDirectory = [b]
+        let counts = await indexer().didSignIn(host: b)
+        XCTAssertEqual(
+            requests(host: b, path: "/api/app/people").map { $0.url?.query ?? "" }, ["scope=directory", ""],
+            "the 404 falls back to the recent collaborators")
+        XCTAssertEqual(counts.people, 1)
+        XCTAssertTrue(memory.names(host: b).contains("Dalton B"))
+    }
+}
+
+/// Task 01a111bb stage 7, round 3: on iPadOS 27.0.1 Siri resolved "Message
+/// Dalton saying ..." to the right MessagePersonEntity, then logged "Failed to
+/// extract Person for PersonEntity(...)" (its name then) and never ran the send. The cause
+/// is in the BUILT metadata, not the Swift: Xcode 27's extractor records a
+/// value representation's IntentPerson type only from a key path
+/// (`exporting: \MessagePersonEntity.person`); a closure records nothing. This
+/// reads the host app's own Metadata.appintents, so it fails if the
+/// declaration goes back to a closure.
+final class MessagePersonEntityMetadataTests: XCTestCase {
+    func testMessagePersonEntityIsRecordedAsIntentPersonExportableAndImportable() throws {
+        let url = Bundle.main.bundleURL.appendingPathComponent("Metadata.appintents/extract.actionsdata")
+        let data = try Data(contentsOf: url)
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let entities = try XCTUnwrap(root["entities"] as? [String: Any])
+        let person = try XCTUnwrap(entities["MessagePersonEntity"] as? [String: Any], "MessagePersonEntity missing from the app's metadata")
+        let transfer = try XCTUnwrap(person["transferableContentTypes"] as? [String: Any])
+        func types(_ key: String) -> [String] {
+            ((transfer[key] as? [[String: Any]]) ?? []).compactMap { $0["contentType"] as? String }
+        }
+        XCTAssertEqual(types("exportableTypes"), ["com.apple.appintents.IntentPerson"], "Siri cannot extract a Person from MessagePersonEntity")
+        XCTAssertEqual(types("importableTypes"), ["com.apple.appintents.IntentPerson"], "Siri cannot hand an IntentPerson back to MessagePersonEntity")
+    }
+
+    /// The iOS 27 schema declares MessagePerson's `person` with indexing key
+    /// `primaryRecipients`; Apple's adopters carry it as
+    /// `spotlightAttributeKey`, and without it Siri's planner fails
+    /// converting MessagePersonEntity ("Type identifier conformance failed").
+    func testPersonPropertyCarriesThePrimaryRecipientsSpotlightKey() throws {
+        let url = Bundle.main.bundleURL.appendingPathComponent("Metadata.appintents/extract.actionsdata")
+        let data = try Data(contentsOf: url)
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let entities = try XCTUnwrap(root["entities"] as? [String: Any])
+        let entity = try XCTUnwrap(entities["MessagePersonEntity"] as? [String: Any])
+        let properties = try XCTUnwrap(entity["properties"] as? [[String: Any]])
+        let person = try XCTUnwrap(properties.first { $0["identifier"] as? String == "person" }, "MessagePersonEntity has no `person` property")
+        XCTAssertEqual(person["spotlightAttributeKey"] as? String, "primaryRecipients")
     }
 }

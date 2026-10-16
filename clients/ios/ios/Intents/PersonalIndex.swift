@@ -6,7 +6,7 @@ import Foundation
 //
 // Measured on Rowan's iPad (iPadOS 27.0.1, review of 37737c21): Siri resolves
 // a spoken person or conversation in the messages schema ONLY against what
-// is already on the device. It never called PersonQuery.entities(matching:)
+// is already on the device. It never called MessagePersonEntityQuery.entities(matching:)
 // or ConversationQuery, so "Message Dalton…" failed while the server would
 // have answered `?q=Dalton`. Xcode 27.0's AppIntentSchemas.sqlite says why
 // the index is the input: the `messages.MessagePerson` schema maps its
@@ -89,12 +89,66 @@ struct PersonalIndexRefresh {
     }
 }
 
+/// A one-time rebuild of Burrow's Spotlight index, keyed on an index-schema
+/// version in UserDefaults (task 01a111bb stage 7, round 8).
+///
+/// Measured on Rowan's iPad (iOS 27.0.1, 2026-10-14): Siri still found items
+/// indexed by older builds under the OLD type name `PersonEntity` (renamed
+/// MessagePersonEntity in 0b5b5e85d), and hydrating them failed ("Entity
+/// hydration failed"), as it did for a removed install's people. On the
+/// first launch after an update that raises `currentVersion`, every Burrow
+/// item is deleted and every signed-in install is indexed afresh.
+///
+/// Why deleteAll and not a targeted delete: AppIntents deletes by entity
+/// TYPE (`deleteAppEntities(ofType:)`), and the stale type no longer exists
+/// in the binary, so it cannot be named. A delete by domain needs every
+/// domain ever used, and a removed install's host is no longer known (and
+/// the domain delete alone is what failed to clear the removed install).
+/// `deleteAllSearchableItems` is the one call that reaches all of them; it
+/// is scoped to this app's own items, and every entry it removes is
+/// re-created from the server right after (tasks, meetings and approvals
+/// on their next fetch). Raise `currentVersion` whenever an indexed type is
+/// renamed or its id shape changes.
+struct SpotlightIndexMigration {
+    static let currentVersion = 2
+    static let versionKey = "burrow.spotlight.index-schema-version"
+
+    var env: IntentEnvironment = .current
+    var defaults: UserDefaults = .standard
+    var refresh: PersonalIndexRefresh = PersonalIndexRefresh()
+
+    var isNeeded: Bool { defaults.integer(forKey: Self.versionKey) < Self.currentVersion }
+
+    /// Returns the hosts re-indexed, or nil when nothing was needed (or the
+    /// delete failed; the next launch tries again).
+    @discardableResult
+    func runIfNeeded() async -> [String]? {
+        guard isNeeded else { return nil }
+        do {
+            try await SpotlightIndex.store.deleteAll()
+        } catch {
+            IntentLog.step("index.migrate", "refused=delete_failed")
+            return nil
+        }
+        SpotlightIndex.ledger.removeAll()
+        defaults.set(Self.currentVersion, forKey: Self.versionKey)
+        // Unconditionally, not refreshStale: a foreground refresh that
+        // finished moments ago indexed into what was just deleted.
+        let hosts = env.signedInHosts
+        for host in hosts {
+            await refresh.refresh(host: host)
+        }
+        IntentLog.step("index.migrate", "version=\(Self.currentVersion) installs=\(hosts.count)")
+        return hosts
+    }
+}
+
 /// Indexing for the iOS 27 messages and phone entities, called from the
 /// catalog's fetch path. Below iOS 27 there is nothing to index here.
 enum PersonalIndex {
     static func index(people: [SuitePerson], host: String, env: IntentEnvironment) {
         guard #available(iOS 27, *) else { return }
-        let entities = people.map { PersonEntity($0, host: host, env: env) }
+        let entities = people.map { MessagePersonEntity($0, host: host, env: env) }
         PeopleCache.shared.remember(entities)
         SpotlightIndexer.index(entities, host: host)
         // "Start a meeting with X" uses the phone schema's own person type;
@@ -102,9 +156,16 @@ enum PersonalIndex {
         SpotlightIndexer.index(entities.filter { !$0.isAgent }.map(CallPersonEntity.init), host: host)
     }
 
+    /// Named spaces only, not DMs or groups (which the server names after
+    /// the other member). Xcode 27.0's schema processor refuses a
+    /// conversation as a send destination ("Parameter 'destination' does
+    /// not match required AppSchemaIntent type 'MessageDestinationCases:
+    /// (Array<Person> | Schema<MessagePerson> | Array<Schema<MessagePerson>>)'"),
+    /// so an indexed conversation named "Dalton" could only compete with
+    /// the person Dalton for the spoken name.
     static func index(spaces: [SuiteSpace], host: String, env: IntentEnvironment) {
         guard #available(iOS 27, *) else { return }
-        SpotlightIndexer.index(spaces.map { ConversationEntity($0, host: host, env: env) }, host: host)
+        SpotlightIndexer.index(spaces.filter { !$0.isDirectMessage && $0.kind != "group" }.map { ConversationEntity($0, host: host, env: env) }, host: host)
     }
 
     /// Other names Spotlight may match a person by: the full name and, for a

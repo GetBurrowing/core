@@ -61,6 +61,13 @@ SINGLE_HOST_SERVICES = {
 GOLDEN_CASES = {
     "moon-equivalent": EXAMPLE,
     "moon-equivalent-memory-off": MEMORY_OFF,
+    # Native agents (task 01a10322 stage 3); test_agents_render.py covers the rest.
+    "moon-equivalent-agents-full": os.path.join(
+        RENDER_FIXTURES, "moon-equivalent-agents-full.toml"
+    ),
+    "moon-equivalent-agents-contained": os.path.join(
+        RENDER_FIXTURES, "moon-equivalent-agents-contained.toml"
+    ),
 }
 
 # Host literals and agent-harness settings of ours that must never be rendered
@@ -174,6 +181,12 @@ class GoldenTest(PositiveControlMixin, unittest.TestCase):
 
     def test_golden_moon_equivalent_memory_off(self):
         self.check_golden("moon-equivalent-memory-off")
+
+    def test_golden_moon_equivalent_agents_full(self):
+        self.check_golden("moon-equivalent-agents-full")
+
+    def test_golden_moon_equivalent_agents_contained(self):
+        self.check_golden("moon-equivalent-agents-contained")
 
     def test_golden_files_hold_no_secret_value(self):
         # Positive control for the search: a raw render's secrets.env DOES

@@ -132,6 +132,17 @@ defmodule PlatformWeb.Router do
     plug(PlatformWeb.Plugs.VerifyGithubSignature)
   end
 
+  # Extension HTTP routes (ADR 0055 Follow-up 2): `/api/ext/<prefix>/...` is
+  # dispatched at runtime to the extension claiming `<prefix>`
+  # (`PlatformWeb.Plugs.ExtensionRoutes`). JSON only and NOTHING else on
+  # purpose: no session, no CSRF, no current user. The extension's plug owns
+  # its authentication (e.g. a webhook signature) and halts on failure.
+  # `test/platform_web/plugs/extension_routes_test.exs` pins that this
+  # pipeline never gains `fetch_session`.
+  pipeline :extension_api do
+    plug(:accepts, ["json"])
+  end
+
   # Peer-install inbox pipeline — task 01a0d90f stage 3, ADR 0054. Unlike
   # `:github_webhook`, the body is NOT pre-read: the inbox path is on
   # `PlatformWeb.Plugs.RawBodyPaths`' skip-list, and `VerifyPeerEnvelope`
@@ -896,6 +907,9 @@ defmodule PlatformWeb.Router do
       # Glob route: path-style file_keys (`org/identity.md`) span multiple
       # segments, so `:show` must match `/org_memory/*file_key`.
       live("/org_memory/*file_key", OrgMemoryLive, :show)
+      # A build-time module's LiveView page (`Platform.Extension.live_pages/0`),
+      # looked up per request: an unclaimed prefix or an external user is a 404.
+      live("/m/:prefix", ExtensionPageLive, :show)
     end
 
     # Task 019e2c4b stage 3 — the standalone canvas page, the destination a
@@ -1154,6 +1168,13 @@ defmodule PlatformWeb.Router do
   scope "/api/webhooks", PlatformWeb do
     pipe_through(:livekit_webhook)
     post("/livekit", LivekitWebhookController, :handle)
+  end
+
+  scope "/api/ext" do
+    pipe_through(:extension_api)
+    # `log: false`: an extension's params (a vendor webhook body) are
+    # untrusted and must never reach a log, as with GitHub's above.
+    forward("/", PlatformWeb.Plugs.ExtensionRoutes, [], log: false)
   end
 
   scope "/mcp", PlatformWeb do

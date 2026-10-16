@@ -49,7 +49,10 @@ struct MessagingActions {
     func send(to destination: MessageDestinationRef, text raw: String, confirm: IntentActions.Confirm) async throws -> SentMessageRef {
         let ref = try actions.ref(destination.entityID)
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { throw IntentFailure.emptyMessage }
+        guard !text.isEmpty else {
+            IntentLog.step("messaging", "refused=empty_text")
+            throw IntentFailure.emptyMessage
+        }
         try await confirm(IntentCopy.sendConfirm(message: text, space: destination.name, install: env.disambiguator(ref.host)))
 
         let spaceID: String
@@ -73,7 +76,10 @@ struct MessagingActions {
     func edit(messageID: String, text raw: String) async throws -> String {
         let ref = try actions.ref(messageID)
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { throw IntentFailure.emptyMessage }
+        guard !text.isEmpty else {
+            IntentLog.step("messaging", "refused=empty_text")
+            throw IntentFailure.emptyMessage
+        }
         let outcome = try await call("edit_message", ref.host) { try await env.client.editMessage(host: ref.host, messageID: ref.uuid, text: text) }
         switch outcome {
         case .edited: return IntentCopy.messageEdited
@@ -91,7 +97,10 @@ struct MessagingActions {
     /// do: the server answers 422 `not_supported`, and that is what is said.
     func setRead(messageID: String, conversationID: String, isRead: Bool) async throws -> String {
         let ref = try actions.ref(messageID)
-        guard let conversation = EntityRef(conversationID), conversation.host == ref.host else { throw IntentFailure.notFound }
+        guard let conversation = EntityRef(conversationID), conversation.host == ref.host else {
+            IntentLog.step("messaging", "refused=conversation_not_on_message_host")
+            throw IntentFailure.notFound
+        }
         let outcome = try await call("mark_read", ref.host) {
             try await env.client.markRead(host: ref.host, spaceID: conversation.uuid, messageID: ref.uuid, read: isRead)
         }

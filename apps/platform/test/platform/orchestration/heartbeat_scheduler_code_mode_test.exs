@@ -31,8 +31,22 @@ defmodule Platform.Orchestration.HeartbeatSchedulerCodeModeTest do
   @fixture_task_id "0a114a80-c0de-4000-8000-000000000001"
 
   @pre_change %{
-    planning: {"d638a48d2fbd6cf7041c5d9175c0e64c8e3a1bd123f1e44612cd162d41afaa76", 26_732},
-    in_progress: {"1a5a2c2d5507013c0663d5c757b9f0291761557bfa2d1e8cc01ea0b629056f0f", 16_255},
+    # Repinned by task 01a13ae7 stage 2 (design fidelity section in
+    # dispatch.planning): +2_864 bytes, exactly the new section plus the
+    # item-2 sentence swap and one blank line; in_progress / in_review unchanged.
+    #
+    # Repinned by task 01a13ae7 stage 4 (the section names the canvases block
+    # in prose instead of quoting its heading): -30 bytes, predicted before
+    # the run.
+    planning: {"de1cbe51221fb19eebb7eb69dd4ab93231083614b4fd923015a08d23058ce4c5", 29_566},
+    # Repinned by task 01a13ae7 stage 3 (design fidelity section in
+    # dispatch.in_progress): +1_031 bytes, exactly the 1_030-byte section plus
+    # one blank line before it, predicted before the run; in_review unchanged.
+    #
+    # Repinned by task 01a13ae7 stage 4 (the section names the canvases block
+    # in prose instead of quoting its heading): -24 bytes, predicted before
+    # the run; in_review unchanged.
+    in_progress: {"c19242ab5665beefe5681bb36585cb14c3e682a4693f8192d188b41265d52080", 17_262},
     in_review: {"ffc318b1e8653d2e29a5c64c83c90964eac44353f1d1a7d87b7dd6a0350beb20", 19_140}
   }
 

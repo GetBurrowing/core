@@ -135,6 +135,13 @@ if [ ! -d "$ARCHIVE_PATH" ]; then
 fi
 echo ">>> archive done: $ARCHIVE_PATH"
 
+# 5b. Align the messages destination with Siri's runtime (task 01a111bb; see
+# the script). This can't be a build phase: App's phases run BEFORE its
+# ExtractAppIntentsMetadata step, which rewrites the file. The export below
+# re-signs the app, so editing the archived bundle here is safe.
+/usr/bin/python3 "$SCRIPT_DIR/align_message_destination.py" \
+    "$ARCHIVE_PATH/Products/Applications/App.app"
+
 if [ "$ARCHIVE_ONLY" = "1" ]; then
     exit 0
 fi

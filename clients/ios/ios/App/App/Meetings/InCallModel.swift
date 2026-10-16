@@ -61,8 +61,10 @@ struct InCallModel: Equatable {
         // NEVER sorted by speaking: the ring moves, the list stays still.
         let agents = others.filter(\.isAgent).map { row($0, isYou: false, isMuted: false) }
         let people = others.filter { !$0.isAgent }.map { row($0, isYou: false, isMuted: false) }
+        // A muted mic is never ringed, whatever the last speaker update said.
         let you = Row(
-            id: "you", name: InCallCopy.you, isAgent: false, isYou: true, isMuted: state.isMuted, isSpeaking: false)
+            id: "you", name: InCallCopy.you, isAgent: false, isYou: true, isMuted: state.isMuted,
+            isSpeaking: state.localSpeaking && !state.isMuted)
 
         let headCount = others.count + 1
         let clock = elapsed.map { InCallCopy.clock($0) }

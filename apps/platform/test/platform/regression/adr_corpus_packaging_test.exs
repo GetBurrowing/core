@@ -276,7 +276,7 @@ defmodule Platform.Regression.ADRCorpusPackagingTest do
 
   describe "CI builds from the repo root" do
     test "every docker build step uses the root context and the app's Dockerfile", %{ci: ci} do
-      entries = lines(ci)
+      entries = ci |> without_agent_host_job() |> lines()
 
       build_steps = Enum.count(entries, &(&1 == "uses: docker/build-push-action@v7"))
 
@@ -315,6 +315,53 @@ defmodule Platform.Regression.ADRCorpusPackagingTest do
                "`file: #{file}` is not an image Dockerfile under apps/*/, so the corpus " <>
                  "assertions above never read it"
       end
+    end
+  end
+
+  describe "the agent-host image is the one build outside this contract" do
+    # Task 01a10322 stage 3: `build-and-push-agent-host` builds the native
+    # agents' host image from services/agent-host, which is not a core image
+    # and carries no ADR corpus. It is cut out of the root-context test above
+    # BY JOB NAME, and pinned here to build that one Dockerfile and nothing
+    # else, so a core build step added to that job cannot hide from the guard.
+    test "builds exactly services/agent-host/Dockerfile from its own context", %{ci: ci} do
+      job = agent_host_job(ci)
+      assert job != "", "no `build-and-push-agent-host` job in ci.yml"
+      entries = lines(job)
+
+      assert Enum.count(entries, &(&1 == "uses: docker/build-push-action@v7")) == 1
+
+      assert Enum.filter(entries, &String.starts_with?(&1, "file: ")) ==
+               ["file: services/agent-host/Dockerfile"]
+
+      assert Enum.filter(entries, &String.starts_with?(&1, "context: ")) ==
+               ["context: services/agent-host"]
+
+      # Positive control for the cut: the rest of ci.yml still holds every
+      # other build step, and none of the agent-host job's lines.
+      rest = without_agent_host_job(ci)
+      assert rest =~ "file: apps/platform/Dockerfile"
+      refute rest =~ "services/agent-host"
+    end
+  end
+
+  # The `build-and-push-agent-host` job body: from its `  <name>:` line (job
+  # indent, two spaces) to the next line at job indent. "" when absent.
+  defp agent_host_job(ci) do
+    case String.split(ci, "\n  build-and-push-agent-host:\n", parts: 2) do
+      [_before, rest] ->
+        [body | _] = Regex.split(~r/^  [a-z#]/m, rest, parts: 2)
+        "  build-and-push-agent-host:\n" <> body
+
+      [_] ->
+        ""
+    end
+  end
+
+  defp without_agent_host_job(ci) do
+    case agent_host_job(ci) do
+      "" -> ci
+      job -> String.replace(ci, job, "", global: false)
     end
   end
 

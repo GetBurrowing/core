@@ -145,6 +145,54 @@ defmodule Platform.Mail.Imap.WireClientTest do
       assert ScriptedImapServer.flags(server, "Support", uid) == ["\\Recent"]
     end
 
+    test "UID SEARCH SINCE sends an RFC 3501 date and returns the matching UIDs (task 01a13ba5)" do
+      server = ScriptedImapServer.start!()
+      ScriptedImapServer.put_folder(server, "Support")
+
+      old =
+        ScriptedImapServer.deliver(server, "Support", raw("old@x.test"),
+          internaldate: ~D[2026-09-04]
+        )
+
+      edge =
+        ScriptedImapServer.deliver(server, "Support", raw("edge@x.test"),
+          internaldate: ~D[2026-09-05]
+        )
+
+      new =
+        ScriptedImapServer.deliver(server, "Support", raw("new@x.test"),
+          internaldate: ~D[2026-10-01]
+        )
+
+      conn = connect!(server)
+      assert {:ok, _uidvalidity, 3} = @client.examine(conn, "Support")
+      # SINCE is inclusive of the day itself.
+      assert {:ok, [^edge, ^new]} = @client.uids_since(conn, ~D[2026-09-05])
+      assert {:ok, []} = @client.uids_since(conn, ~D[2026-10-02])
+      assert {:ok, [^old, ^edge, ^new]} = @client.uids_since(conn, ~D[2026-01-01])
+      assert :ok = @client.logout(conn)
+
+      search_lines = Enum.filter(ScriptedImapServer.commands(server), &(&1 =~ "SEARCH"))
+
+      # The exact bytes after the tag: day unpadded, English month, 4-digit year.
+      assert search_lines == [
+               "UID SEARCH SINCE 5-Sep-2026",
+               "UID SEARCH SINCE 2-Oct-2026",
+               "UID SEARCH SINCE 1-Jan-2026"
+             ]
+    end
+
+    test "imap_date/1 is day-Mon-yyyy with English months for every month" do
+      months = ~w(Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec)
+
+      for {name, month} <- Enum.with_index(months, 1) do
+        assert WireClient.imap_date(Date.new!(2026, month, 1)) == "1-#{name}-2026"
+      end
+
+      assert WireClient.imap_date(~D[2026-12-31]) == "31-Dec-2026"
+      assert WireClient.imap_date(~D[0999-03-09]) == "9-Mar-0999"
+    end
+
     test "EXAMINE without UIDNEXT falls back to STATUS" do
       server = ScriptedImapServer.start!(omit_uidnext: true)
       ScriptedImapServer.put_folder(server, "Support")

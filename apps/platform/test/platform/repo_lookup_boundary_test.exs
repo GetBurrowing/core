@@ -151,10 +151,6 @@ defmodule Platform.RepoLookupBoundaryTest do
      "fetch_agent/1's predicate is now Platform.UUID.valid?/1. This is the function stage 4's brief named as the shape to MIRROR: the branch structure was always right, only the predicate was broken"},
     {"platform/agents/orchestration.ex", :get, "Agent", 1, :safe_internal,
      "reached only via fetch_agent/1's Platform.UUID.valid?/1 branch; slugs go to Platform.Agents.SlugLookup.resolve/2 instead, which returns {:error, :ambiguous_slug} rather than raising Ecto.MultipleResultsError when two workspaces share one (task 01a0e77c)"},
-    {"platform/agents/router.ex", :platform_uuid_guard, "-", 1, :safe_internal,
-     "the third copy of fetch_agent/1's predicate, now Platform.UUID.valid?/1. The router resolves agent identifiers straight off dispatch payloads, where slugs are the common case"},
-    {"platform/agents/router.ex", :get, "Agent", 1, :safe_internal,
-     "reached only via fetch_agent/1's Platform.UUID.valid?/1 branch; slugs go to Platform.Agents.SlugLookup.resolve/2 instead, which returns {:error, :ambiguous_slug} rather than raising Ecto.MultipleResultsError when two workspaces share one (task 01a0e77c)"},
     {"platform/agents/workspace_bootstrap.ex", :get!, "Agent", 1, :safe_internal,
      "`agent.id` read off the `%Agent{}` `upsert_agent!/1` just returned in the same function"},
     # ── Architecture (ADR-0046, task 019fa61c) ─────────────────────────
@@ -373,8 +369,8 @@ defmodule Platform.RepoLookupBoundaryTest do
     # ── Email module (task 01a0cf21-29ba-7001-8690-3c59d6cb17c6) ──────
     # Stages 1-3 landed these without classifying them; stage 4 records them
     # together with its own `mailbox.ex` / `email_live.ex` sites.
-    {"platform/mail.ex", :get, "Account", 3, :safe_internal,
-     "two sit behind Platform.UUID.valid?/1 on the same value in the same `with` (`get_account/2` checks org_id AND id; `fetch_account_by_id/1`, the first step of `resolve_sender/3`, checks account_id, which arrives from a draft row or an MCP/deploy payload); the third, `authorize_manage/2`, reads `id` off an `%Account{}` struct the caller already loaded through one of those guarded getters — a `mail_accounts` UUIDv7 PK"},
+    {"platform/mail.ex", :get, "Account", 4, :safe_internal,
+     "two sit behind Platform.UUID.valid?/1 on the same value in the same `with` (`get_account/2` checks org_id AND id; `fetch_account_by_id/1`, the first step of `resolve_sender/3`, checks account_id, which arrives from a draft row or an MCP/deploy payload); the third, `authorize_manage/2`, reads `id` off an `%Account{}` struct the caller already loaded through one of those guarded getters — a `mail_accounts` UUIDv7 PK; the fourth (task 01a13ba5 stage 1, `start_backfill/4`) re-reads the same struct's `id` AFTER `authorize_manage/2` passed, for a fresh eligibility check"},
     {"platform/mail.ex", :get_by, "Sender", 2, :safe_internal,
      "both keyed `account_id:` read off an already-loaded `%Account{}` struct (a `mail_accounts` PK) plus `key:`, a `:string` column that cannot raise a cast error; `fetch_sender/2` additionally requires `is_binary(key)` in its head"},
     {"platform/mail.ex", :platform_uuid_guard, "-", 4, :safe_internal,
@@ -401,6 +397,8 @@ defmodule Platform.RepoLookupBoundaryTest do
      "keyed `account_id:` off the loaded `%Account{}` being polled and `folder:`, a `:string` column holding the IMAP folder name"},
     {"platform/mail/inbound.ex", :get_by, "Participant", 1, :safe_internal,
      "`space_id` is off a `%Space{}` `usable_space/1` just loaded; `participant_id` is built by `email_participant_id/1` from a sha256 hex digest formatted 8-4-4-4-12, so it is uuid-shaped by construction; `participant_type` is the literal \"system\""},
+    {"platform/mail/inbound_access.ex", :platform_uuid_guard, "-", 5, :safe_internal,
+     "task 01a13ba5 stage 2's agent mail reads. Every id arrives from the `mail_inbound_list` / `mail_inbound_get` MCP payload (org_id, account_id, id) or off the caller's context (agent_id), and each is guarded before it reaches `where:`: `list/3` (agent_id, org_id, and account_id when given — three calls) and `get/2` (agent_id and id — two calls). A malformed value becomes the existing miss: `{[], 0}` for the list, `:not_found` for the get, which the tool returns as the one not-found envelope"},
     {"platform/mail/inbound/poller.ex", :get, "Account", 2, :safe_internal,
      "both calls (the timer tick and the `:poll_now` call) reload the poller's `account_id`, its start arg, and both starters pass an `%Account{}` PK: `Inbound.sync_poller/1` (`account.id`) and `start_all_pollers/0` (ids off `Repo.all` of `mail_accounts`)"},
     {"platform/mail/mailbox.ex", :platform_uuid_guard, "-", 10, :safe_internal,
@@ -827,6 +825,21 @@ defmodule Platform.RepoLookupBoundaryTest do
      "the guard itself, paired with the `:get \"Attachment\"` entry above: used as a BOOLEAN in `delete_reservation/2`'s `with`, the original string then reaches `Repo.get/2` unchanged, safe because `valid?/1` is the strict 36-character check"},
     {"platform_web/live/chat_live.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "valid_uuid?/1 is now Platform.UUID.valid?/1. It gates Chat.get_space/1 on the /chat/:slug URL PATH SEGMENT at :522 and :589, passing the ORIGINAL value, so a 16-character channel slug used to clear the bare cast and raise inside Repo on the mount path"},
+    {"platform_web/live/control_center/native_agent_events.ex", :get, "Agent", 2, :must_cast,
+     "task 01a10322 stage 4. `agent_id` is the `phx-value-agent_id` of the native Start / Stop / Restart controls, a LiveView params map anyone with a socket can forge. Guarded with `Platform.UUID.valid?/1` in the same `with`, falling into the handler's existing \"not run by this server\" flash instead of raising Ecto.Query.CastError. Stage 6 adds the second call, `with_manageable/3`, behind the same guard: its `agent_id` is the login form's hidden field and the Remove / Recent output controls' `phx-value-agent_id`, just as forgeable"},
+    {"platform_web/live/control_center/native_agent_events.ex", :platform_uuid_guard, "-", 2,
+     :safe_internal,
+     "the guard itself, paired with the `:get \"Agent\"` entry above: `valid?/1` is the strict 36-character check, so the original string passed to `Repo.get/2` cannot be a 16-byte binary that clears a bare cast"},
+    {"platform/chat/reply_failure.ex", :get, "Agent", 1, :must_cast,
+     "task 01a10322 stage 7. `unanswered/2`'s `agent_id` is, via `notify_pending/1`, the `agent_id` of the agent host's `agent.state` channel payload (and, via `no_response/1`, a watchdog entry built off a loaded `%Agent{}`). Guarded with `Platform.UUID.valid?/1` at the head of the same `with`, falling into its `:none` return instead of raising"},
+    {"platform/chat/reply_failure.ex", :get, "Message", 1, :safe_internal,
+     "task 01a10322 stage 7. `message_id` is read back from `Dedupe.take_pending/1` or a `Watchdog` entry, whose only writer, `remember_delivery/1`, stores `message.id` off a loaded `%Message{}`"},
+    {"platform/chat/reply_failure.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "the guard itself, paired with the `:get \"Agent\"` entry above: `valid?/1` used as a boolean on the original string, safe because it is the strict 36-character check"},
+    {"platform_web/components/reply_failure_row.ex", :get, "Agent", 1, :must_cast,
+     "task 01a10322 stage 4. `agent_id` is read from a chat message's `metadata`, which `ReplyFailure.notify/2` writes but which any message posted through the chat or MCP surface can also carry. Guarded with `Platform.UUID.valid?/1` in `load_agent/1`, returning nil (the row renders \"This agent\" and no action) instead of raising mid-render"},
+    {"platform_web/components/reply_failure_row.ex", :platform_uuid_guard, "-", 1, :safe_internal,
+     "the guard itself, paired with the `:get \"Agent\"` entry above: `valid?/1` used as a boolean on the original string, safe because it is the strict 36-character check"},
     {"platform_web/live/control_center_live.ex", :get, "Agent", 1, :safe_internal,
      "`selected_agent.id` off the `%Agent{}` already in socket assigns"},
     {"platform_web/live/control_center_live.ex", :get!, "Agent", 1, :safe_internal,
@@ -968,6 +981,21 @@ defmodule Platform.RepoLookupBoundaryTest do
     # `fetch_org_project/2`, every pinned id behind Platform.UUID.valid?/1
     # (recorded in @inventory).
     "platform/mail/dispatch.ex" => 2,
+    # Task 01a13ba5 stage 1 (mail backfill). mail.ex: 0 -> 1 —
+    # `latest_backfill/2`, `where: r.account_id == ^account.id` with the id
+    # read off an `%Account{}` struct that `authorize_manage/2` has just
+    # re-loaded by PK. inbound/backfill.ex: 0 -> 1 — the folder-cursor read in
+    # `import_folder/5`, pinning `account.id` off the same kind of loaded
+    # struct and `folder`, a `:string` column that cannot raise a cast error.
+    # Neither pins a boundary-supplied id.
+    "platform/mail.ex" => 1,
+    "platform/mail/inbound/backfill.ex" => 1,
+    # Task 01a13ba5 stage 2: 0 -> 1, `InboundAccess.get/2`. Triaged by hand:
+    # the `where:` pins `m.id == ^id` (an MCP argument) and
+    # `p.participant_id == ^agent_id` (off the caller's context); both are
+    # behind Platform.UUID.valid?/1 in the same `with` (recorded in
+    # @inventory), so a malformed one is `:not_found`, never a raise.
+    "platform/mail/inbound_access.ex" => 1,
     # Task 01a11ec3 stage 2: 0 -> 1, `Feedback.Submission.existing/1`.
     # Triaged by hand: the `where:` pins `r.fingerprint == ^fingerprint`, a
     # `:string` column holding a sha256 hex digest the module computes itself
@@ -1380,6 +1408,13 @@ defmodule Platform.RepoLookupBoundaryTest do
     # that rescues and fails open. No boundary caller exists; one would need
     # `Platform.UUID.valid?/1`.
     "platform/orchestration/runtime_supervision.ex" => 6,
+    # 0 -> 1 for task 01a136c1 stage 1: `open_stack_deployer_blocked_event?/1`
+    # (the unstamped-member sweep's open-blocker check) takes the latest
+    # stack_deployer `execution.blocked` time with `select: max(...)`. Triaged
+    # by hand: the `where:` clause pins `e.task_id == ^task_id`, and that id is
+    # the `id` field of a `%Task{}` the sweep's own query just loaded (a
+    # `Platform.Types.UUIDv7` primary key), never a boundary value.
+    "platform/orchestration/task_router_watcher.ex" => 1,
     "platform/org/context.ex" => 4,
     "platform/org/preamble_builder.ex" => 3,
     "platform/org/tenants_summary.ex" => 2,

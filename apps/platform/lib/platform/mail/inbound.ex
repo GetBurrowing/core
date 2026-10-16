@@ -32,8 +32,12 @@ defmodule Platform.Mail.Inbound do
     2. Each folder is EXAMINEd (read-only). Nothing ever sets `\\Seen`, moves
        or deletes: `Platform.Mail.Imap.Client` has no such function.
     3. First contact with a folder records a cursor at its current maximum
-       UID and ingests nothing older (no backfill). A UIDVALIDITY change
-       resets the cursor to the new maximum and re-ingests nothing.
+       UID and ingests nothing older. A UIDVALIDITY change resets the cursor
+       to the new maximum and re-ingests nothing. Older mail is imported
+       separately, only when an org admin asks, by
+       `Platform.Mail.Inbound.Backfill` (task
+       01a13ba5-42a7-7000-8f2b-4c63003f3f92): it reads cursors and never
+       writes them, and imports quietly (`ingest/6` with `quiet: true`).
     4. New UIDs are fetched, parsed with `mail`, and inserted into
        `mail_inbound_messages` with `ON CONFLICT DO NOTHING` on
        `(account_id, message_id_key)`. The cursor advances after each UID.
@@ -66,6 +70,27 @@ defmodule Platform.Mail.Inbound do
   `Platform.Responsibilities.Router` fires no chat_pattern on it: inbound
   mail is untrusted outside input and must never summon, arm or route an
   agent. Suspicious injection patterns are logged (ids only, never the body).
+
+  ## Agent reads: the post, or a pull
+
+  The chat post above is the live path's only agent-readable form of an
+  email. Quietly ingested (backfilled) rows have no post, so they reach the
+  same audience by pull instead: `Platform.Mail.InboundAccess` (the
+  `mail_inbound_list` / `mail_inbound_get` tools) lets an agent that
+  participates in an account's non-archived `inbound_space_id` list and read
+  that account's stored rows, live and backfilled alike, rendered by
+  `render_content/3` so the cap and wrapper are the post's own. An account
+  with no inbound space has no agent audience (task
+  01a13ba5-42a7-7000-8f2b-4c63003f3f92 stage 2).
+
+  ## Quiet ingest (backfill)
+
+  `ingest/6` with `quiet: true` stores the row exactly as `ingest/5` does
+  (same parse, same `raw` and `text_body`, same dedupe) with
+  `ingest_source: "backfill"`, and still logs suspicious patterns, but posts
+  NOTHING to chat and broadcasts NOTHING on `"mail:inbound"`: an import of
+  older mail must not summon, notify or label anything. `ingest/5` is
+  `ingest/6` with `quiet: false` and is unchanged.
 
   ## Ingest event
 
@@ -276,13 +301,17 @@ defmodule Platform.Mail.Inbound do
     end
   end
 
-  defp configured_client do
+  @doc false
+  # The IMAP client module in use; shared with `Inbound.Backfill`.
+  def configured_client do
     :platform
     |> Application.get_env(__MODULE__, [])
     |> Keyword.get(:client, Platform.Mail.Imap.WireClient)
   end
 
-  defp connect_params(%Account{} = account, password) do
+  @doc false
+  # Shared with `Inbound.Backfill`, so both connect exactly alike.
+  def connect_params(%Account{} = account, password) do
     %{
       host: account.imap_host,
       port: account.imap_port,
@@ -428,11 +457,49 @@ defmodule Platform.Mail.Inbound do
   @doc """
   Store `raw` and, when that wrote a new row, post it. Returns 1 when a row
   was inserted, 0 when `(account_id, message_id_key)` already existed.
-  Public for tests.
+  Public for tests. Same as `ingest/6` with `quiet: false`.
   """
   @spec ingest(Account.t(), String.t(), non_neg_integer(), non_neg_integer(), binary()) ::
           0 | 1
-  def ingest(%Account{} = account, folder, uidvalidity, uid, raw) when is_binary(raw) do
+  def ingest(%Account{} = account, folder, uidvalidity, uid, raw) when is_binary(raw),
+    do: ingest(account, folder, uidvalidity, uid, raw, [])
+
+  @doc """
+  `ingest/5` with options. `quiet: true` (the backfill) stores the row with
+  `ingest_source: "backfill"`, logs suspicious patterns, and does NOT post to
+  chat or broadcast the ingest event. Returns 1 / 0 as `ingest/5` does.
+  """
+  @spec ingest(
+          Account.t(),
+          String.t(),
+          non_neg_integer(),
+          non_neg_integer(),
+          binary(),
+          keyword()
+        ) :: 0 | 1
+  def ingest(%Account{} = account, folder, uidvalidity, uid, raw, opts)
+      when is_binary(raw) and is_list(opts) do
+    quiet? = Keyword.get(opts, :quiet, false) == true
+
+    case store(account, folder, uidvalidity, uid, raw, quiet?) do
+      {:inserted, inbound, parsed} ->
+        log_suspicious(inbound, parsed)
+        if not quiet?, do: announce(account, inbound, parsed)
+        1
+
+      :duplicate ->
+        0
+    end
+  end
+
+  # The live path's side effects for a newly written row: the chat post,
+  # then the ID-only ingest event.
+  defp announce(%Account{} = account, %InboundMessage{} = inbound, parsed) do
+    post(account, inbound, parsed)
+    broadcast_ingested(inbound)
+  end
+
+  defp store(%Account{} = account, folder, uidvalidity, uid, raw, quiet?) do
     parsed = parse(raw)
     now = DateTime.utc_now()
 
@@ -451,6 +518,7 @@ defmodule Platform.Mail.Inbound do
       subject: parsed.subject,
       text_body: parsed.text,
       received_at: parsed.date || now,
+      ingest_source: if(quiet?, do: "backfill", else: "poll"),
       inserted_at: now,
       updated_at: now
     }
@@ -460,14 +528,10 @@ defmodule Platform.Mail.Inbound do
            conflict_target: [:account_id, :message_id_key]
          ) do
       {1, _} ->
-        inbound = Repo.get!(InboundMessage, row.id)
-        log_suspicious(inbound, parsed)
-        post(account, inbound, parsed)
-        broadcast_ingested(inbound)
-        1
+        {:inserted, Repo.get!(InboundMessage, row.id), parsed}
 
       {0, _} ->
-        0
+        :duplicate
     end
   end
 
@@ -765,9 +829,17 @@ defmodule Platform.Mail.Inbound do
       else: trim_partial_codepoint(binary_part(bin, 0, byte_size(bin) - 1))
   end
 
-  defp one_line(nil), do: nil
+  @doc """
+  One header value as a single safe line: control characters and line breaks
+  neutralised by `ExternalContent.sanitize_line/1`, trimmed, capped at
+  #{@line_cap} characters. `nil` stays `nil`. Public so the agent read tools
+  (`Platform.Mail.InboundAccess`) show sender and subject exactly as the
+  chat post's provenance header does.
+  """
+  @spec one_line(String.t() | nil) :: String.t() | nil
+  def one_line(nil), do: nil
 
-  defp one_line(value) when is_binary(value) do
+  def one_line(value) when is_binary(value) do
     value
     |> ExternalContent.sanitize_line()
     |> String.trim()

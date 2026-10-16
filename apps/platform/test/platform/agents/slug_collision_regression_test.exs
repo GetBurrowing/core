@@ -28,7 +28,6 @@ defmodule Platform.Agents.SlugCollisionRegressionTest do
     AgentServer,
     Config,
     Orchestration,
-    Router,
     WorkspaceBootstrap
   }
 
@@ -275,13 +274,13 @@ defmodule Platform.Agents.SlugCollisionRegressionTest do
     end
   end
 
-  # ── 4. Router.fetch_agent/1 ───────────────────────────────────────────────
+  # ── 4. Config.model_chain/2 ───────────────────────────────────────────────
 
-  describe "Router.model_chain/2 (fetch_agent/1)" do
+  describe "Config.model_chain/2 (fetch_agent/1)" do
     test "an ambiguous slug is {:error, :ambiguous_slug}" do
       %{slug: slug} = collide!()
 
-      {result, log} = with_warning_log(fn -> Router.model_chain(slug) end)
+      {result, log} = with_warning_log(fn -> Config.model_chain(slug) end)
 
       assert result == {:error, :ambiguous_slug}
       assert log =~ slug
@@ -289,7 +288,7 @@ defmodule Platform.Agents.SlugCollisionRegressionTest do
 
     test "a unique slug still resolves" do
       agent = solo!()
-      assert {:ok, [_ | _]} = Router.model_chain(agent.slug)
+      assert {:ok, [_ | _]} = Config.model_chain(agent.slug)
     end
   end
 

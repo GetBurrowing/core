@@ -2,6 +2,13 @@ import AppIntents
 import Foundation
 import GeoToolbox
 
+// BURROW_APP: set for the App target only (project.yml). Siri refuses a
+// schema intent that more than one bundle declares (ToolDiscoveryError 4,
+// "Multiple flow tools found"), and ../Intents is compiled into
+// SuiteWidgets and NotificationService too, so every schema intent and
+// everything that names one is App-only (task 01a111bb).
+#if BURROW_APP
+
 // The iOS 27 messages domain (task 01a111bb stage 3). Apple makes this
 // domain all-or-nothing: an app that adopts one of its five schemas must
 // adopt all five, and the build checks it. So all five are here, and each
@@ -35,16 +42,66 @@ extension MessageDestination {
         }
     }
 
-    /// `burrowDestination`, and for a system person whose Burrow id is not
-    /// in this process's cache (Siri launching a cold process), the person
-    /// resolved on the id's own host (task 01a111bb stage 7).
-    func resolvedBurrowDestination() async -> MessageDestinationRef? {
-        if let known = burrowDestination { return known }
-        guard case .people(let people) = self, people.count == 1, case .applicationDefined(let id) = people[0].identifier,
-            let person = try? await PersonQuery().entities(for: [id]).first
-        else { return nil }
-        return .person(id: person.id, name: person.name, isAgent: person.isAgent)
+    /// The case name, for the log.
+    var caseName: String {
+        switch self {
+        case .people(let people): return "people(\(people.count))"
+        case .messagePerson: return "messagePerson"
+        case .messagePeople(let people): return "messagePeople(\(people.count))"
+        }
     }
+
+    /// The one Burrow person this destination names (task 01a111bb stage
+    /// 7): a system person or an unresolved entity through PersonResolver,
+    /// asking `choose` when several match. A resolved entity is the one Siri
+    /// picked from the index, which on two installs may be the wrong
+    /// namesake (round 8, "Message Harper"): unless `confirmsInstall` is
+    /// false (a Shortcut that set the Install), it is used only if no one
+    /// on another signed-in install answers to the same name, else `choose`
+    /// asks (PersonResolver.confirmInstall). Throws a spoken failure, never
+    /// a bare one, and logs each step.
+    func resolvedBurrowDestination(
+        site: String, env: IntentEnvironment = .current, confirmsInstall: Bool = true, choose: PersonResolver.Choose
+    ) async throws -> MessageDestinationRef {
+        IntentLog.step(site, "destination=\(caseName)")
+        let person: MessagePersonEntity
+        switch self {
+        case .messagePerson(let entity):
+            person = entity
+        case .messagePeople(let people):
+            guard people.count == 1 else {
+                IntentLog.step(site, "refused=several_recipients")
+                throw IntentFailure.onePersonAtATime
+            }
+            person = people[0]
+        case .people(let people):
+            guard people.count == 1 else {
+                IntentLog.step(site, "refused=several_recipients")
+                throw IntentFailure.onePersonAtATime
+            }
+            person = MessagePersonEntity(unresolved: people[0])
+        }
+        let found: MessagePersonEntity
+        if person.isUnresolved {
+            found = try await PersonResolver.require(person.person, site: site, env: env, choose: choose)
+        } else if confirmsInstall {
+            found = try await PersonResolver.confirmInstall(person, spoken: nil, site: site, env: env, choose: choose)
+        } else {
+            found = person
+        }
+        return .person(id: found.id, name: found.name, isAgent: found.isAgent)
+    }
+}
+
+/// Builds the "which one?" prompt for an intent: up to five people, each
+/// with its subtitle (org and install), plus Cancel.
+@available(iOS 27, *)
+func choosePerson<I: AppIntent>(_ intent: I, name: String, people: [MessagePersonEntity]) async throws -> MessagePersonEntity {
+    let options = people.map { IntentChoiceOption(title: LocalizedStringResource(stringLiteral: "\($0.name), \($0.subtitle)")) }
+    let picked = try await intent.requestChoice(between: options + [.cancel], dialog: IntentDialog("Which \(name)?"))
+    guard let index = options.firstIndex(of: picked) else { throw CancellationError() }
+    IntentLog.step("person.choose", "picked=\(index)")
+    return people[index]
 }
 
 // MARK: - Send
@@ -58,6 +115,8 @@ extension MessageDestination {
 // Sending to a named space stays with the old SendMessageIntent and its
 // "Message <space> in Burrow" phrase. ConversationEntity is still adopted:
 // the message schema requires it.
+// The processor accepts the cases in any order; the entity cases come first
+// (see MessageDestination).
 
 @available(iOS 27, *)
 @AppIntent(schema: .messages.sendMessage)
@@ -77,51 +136,24 @@ struct MessagesSendIntent {
     var install: InstallEntity?
 
     func perform() async throws -> some ReturnsValue<[MessageEntity]> & ProvidesDialog {
-        guard let target = await destination.resolvedBurrowDestination() else { throw IntentFailure.notFound }
-        let text = content.map { String($0.characters) } ?? ""
-        let sent = try await MessagingActions().send(to: target, text: text) { prompt in
-            try await requestConfirmation(
-                result: .result(dialog: spoken(prompt)), confirmationActionName: .send)
+        // A Shortcut that set the Install chose the person within it.
+        let target = try await destination.resolvedBurrowDestination(site: "send", confirmsInstall: install == nil) { name, people in
+            try await choosePerson(self, name: name, people: people)
         }
+        let text = content.map { String($0.characters) } ?? ""
+        // No confirmation of our own: Siri already shows its "Send / Cancel"
+        // confirmation for this schema intent before calling perform(), and a
+        // second one made Rowan confirm the same message twice (iOS 27.0.1,
+        // 2026-10-14). The legacy SendMessageIntent still confirms.
+        let sent = try await MessagingActions().send(to: target, text: text) { _ in }
         let entity = MessagingIntentSupport.messageEntity(for: sent, destination: destination)
         MessageRegistry.shared.remember(entity)
         IntentHooks.didSucceed?(self)
-        // A message to an AGENT is a question (task 01a111bb stage 7): "Message
-        // Burrow Helper saying what's the build status" waits for the reply
-        // like Ask does, for up to 90 s, and speaks it; past that, the reply
-        // arrives as a notification.
-        if case .person(_, let name, true) = target, let reply = try await awaitAgentReply(to: sent, agentID: target.entityID) {
-            switch reply {
-            case .reply(let text): return .result(value: [entity], dialog: spoken(IntentCopy.agentSays(agent: name, reply: text)))
-            case .timedOut: return .result(value: [entity], dialog: spoken(IntentCopy.agentReplyWillNotify(agent: name)))
-            }
-        }
+        // Fire and forget, to agents too (Rowan, 2026-10-14): the agent's reply
+        // arrives as a normal notification, not through this intent. Waiting
+        // for it showed Siri's progress bar for up to 90 s. Ask is the intent
+        // that waits for and speaks a reply.
         return .result(value: [entity], dialog: spoken(IntentCopy.sent(space: target.name)))
-    }
-}
-
-@available(iOS 27, *)
-extension MessagesSendIntent: LongRunningIntent, CancellableIntent {
-    /// The agent's reply to the message `sent`, or nil if the ids don't
-    /// parse. Cancellation (`.timeout`, `.userCancelled`) ends the wait.
-    func awaitAgentReply(to sent: SentMessageRef, agentID: String) async throws -> AskOutcome? {
-        guard let message = EntityRef(sent.id), let space = EntityRef(sent.conversationID), let agent = EntityRef(agentID) else { return nil }
-        let cancelled = AskCancelFlag()
-        let progress = progress
-        progress.totalUnitCount = 100
-        return try await performBackgroundTask(
-            operation: {
-                try await IntentActions().awaitAgentReply(
-                    host: message.host, agentUUID: agent.uuid, spaceID: space.uuid, after: message.uuid, window: AskAgent.longReplyWindow,
-                    isCancelled: { cancelled.isSet }
-                ) { fraction in
-                    progress.completedUnitCount = Int64(fraction * 100)
-                }
-            },
-            onCancel: { reason in
-                cancelled.set()
-                IntentLog.route(reason == .timeout ? "ask_cancel_timeout" : "ask_cancel_user", host: "-", status: 0)
-            })
     }
 }
 
@@ -145,10 +177,16 @@ struct MessagesDraftIntent {
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let env = IntentEnvironment.current
-        guard let target = destination?.burrowDestination else {
-            guard let host = env.installs.selectedHost else { throw IntentFailure.notFound }
+        guard let destination else {
+            guard let host = env.installs.selectedHost else {
+                IntentLog.step("draft", "refused=no_selected_install")
+                throw IntentFailure.signedOut
+            }
             IntentNavigator.open(DeepLink(host: host, path: "/chat"))
             return .result(dialog: spoken(IntentCopy.draftOpened))
+        }
+        let target = try await destination.resolvedBurrowDestination(site: "draft") { name, people in
+            try await choosePerson(self, name: name, people: people)
         }
         let link = try await MessagingIntentSupport.conversationLink(for: target, env: env)
         IntentNavigator.open(link)
@@ -207,7 +245,7 @@ enum MessagingIntentSupport {
         let conversation = ConversationEntity(
             id: sent.conversationID, name: destination.burrowDestination?.name ?? "Direct message", org: nil, isDirectMessage: true,
             pathSegment: EntityRef(sent.conversationID)?.uuid ?? "", install: env.disambiguator(host))
-        let me = PersonEntity(id: EntityRef(host: host, uuid: "me").id, name: "Me", kind: "user", subtitle: "")
+        let me = MessagePersonEntity(id: EntityRef(host: host, uuid: "me").id, name: "Me", kind: "user", subtitle: "")
         return MessageEntity(id: sent.id, conversation: conversation, author: me, date: env.now())
     }
 
@@ -233,3 +271,4 @@ enum MessagingIntentSupport {
         return link
     }
 }
+#endif

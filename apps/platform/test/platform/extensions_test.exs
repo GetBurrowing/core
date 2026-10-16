@@ -49,6 +49,24 @@ defmodule Platform.ExtensionsTest do
 
   defp unique, do: System.unique_integer([:positive])
 
+  defp insert_ext_user do
+    Repo.insert!(%User{
+      email: "ext-inbox-#{unique()}@example.com",
+      name: "Extensions Inbox User",
+      oidc_sub: "ext-inbox-#{unique()}"
+    })
+  end
+
+  defp fixture_inbox_attrs(user) do
+    %{
+      user_id: user.id,
+      kind: "fixture_request",
+      source_type: "fixture_thing",
+      source_id: Ecto.UUID.generate(),
+      title: "A fixture asks"
+    }
+  end
+
   defp join_runtime do
     user =
       Repo.insert!(%User{
@@ -112,6 +130,36 @@ defmodule Platform.ExtensionsTest do
       # Exact name, never a prefix: a name the bundle does not own is unknown.
       assert {:error, %{error: "Unknown tool: fixture_echo_2"}} =
                ToolSurface.execute("fixture_echo_2", %{}, %{})
+    end
+
+    test "tool context: an extension tool gets the calling agent's home org, never a client's" do
+      tenant = Platform.TenancyFixtures.tenant_org_id("ext-tenant-#{unique()}")
+      other = Platform.TenancyFixtures.tenant_org_id("ext-other-#{unique()}")
+
+      pinned =
+        Repo.insert!(%Platform.Agents.Agent{
+          slug: "ext-pinned-#{unique()}",
+          name: "Pinned",
+          metadata: %{"org_id" => tenant}
+        })
+
+      unpinned =
+        Repo.insert!(%Platform.Agents.Agent{slug: "ext-unpinned-#{unique()}", name: "Unpinned"})
+
+      assert {:ok, %{agent_home_org: {:tenant, ^tenant}}} =
+               ToolSurface.execute("fixture_echo", %{"org_id" => other}, %{
+                 agent_id: pinned.id
+               })
+
+      assert {:ok, %{agent_home_org: :root}} =
+               ToolSurface.execute("fixture_echo", %{}, %{agent_id: unpinned.id})
+
+      # A client-supplied context key is overwritten, not trusted.
+      assert {:ok, %{agent_home_org: {:tenant, ^tenant}}} =
+               ToolSurface.execute("fixture_echo", %{}, %{
+                 agent_id: pinned.id,
+                 agent_home_org: :root
+               })
     end
 
     test "runtime event: an owned frame reaches its extension; an inert one is logged once" do
@@ -194,8 +242,9 @@ defmodule Platform.ExtensionsTest do
     end
 
     test "the deferred optional callbacks have no reader: implementing one changes nothing" do
-      # ADR 0055 section 2: routes, telemetry handlers, responsibility providers
-      # and prompt templates are declared, and deliberately read by nobody yet.
+      # ADR 0055 section 2: telemetry handlers, responsibility providers and
+      # prompt templates are declared, and deliberately read by nobody yet.
+      # routes/0 got its reader in task 01a140a9 (see the routes/0 case).
       optional = Platform.Extension.behaviour_info(:optional_callbacks)
 
       for callback <- [
@@ -207,10 +256,89 @@ defmodule Platform.ExtensionsTest do
         assert callback in optional
       end
 
-      refute function_exported?(Extensions, :routes, 0)
       refute function_exported?(Extensions, :telemetry_handlers, 0)
       refute function_exported?(Extensions, :responsibility_providers, 0)
       refute function_exported?(Extensions, :prompt_templates, 0)
+    end
+
+    test "canvas kind: the inline chat-message path passes the renderer's viewer through" do
+      require Phoenix.LiveViewTest
+
+      canvas = %Platform.Chat.Canvas{
+        id: Ecto.UUID.generate(),
+        title: "Fixture",
+        document: %{
+          "version" => 1,
+          "revision" => 1,
+          "root" => %{"id" => "root", "type" => "fixture_widget", "props" => %{}}
+        }
+      }
+
+      render = fn viewer ->
+        Phoenix.LiveViewTest.render_component(
+          &PlatformWeb.Components.ChatInlineCanvas.inline_canvas/1,
+          msg: %{id: Ecto.UUID.generate()},
+          canvas: canvas,
+          title: "Fixture",
+          mounted_ids: :all,
+          viewer: viewer
+        )
+      end
+
+      assert render.({:user, "u-1"}) =~ ~s(data-viewer="user:u-1")
+      assert render.(nil) =~ ~s(data-viewer="none")
+    end
+
+    test "inbox kind: emitted, kept listed on open, labelled, and never core's push or mobile kind" do
+      user = insert_ext_user()
+
+      assert {:ok, item} = Platform.Inbox.emit(fixture_inbox_attrs(user))
+      assert item.kind == "fixture_request"
+      assert "fixture_request" in Platform.Inbox.Item.kinds()
+      assert "fixture_thing" in Platform.Inbox.Item.source_types()
+      assert "fixture_request" in Platform.Inbox.action_kinds()
+
+      # Opening an action kind marks it read and leaves it listed.
+      assert {:ok, opened} = Platform.Inbox.open_item(item.id, user.id)
+      assert opened.read_at
+      assert opened.dismissed_at == nil
+      assert Enum.any?(Platform.Inbox.list_unread_for_user(user.id), &(&1.id == item.id))
+
+      # The label and icon come from the extension's spec.
+      html =
+        Phoenix.LiveViewTest.rendered_to_string(
+          PlatformWeb.Components.InboxItem.inbox_item(%{
+            id: "inbox-item-#{item.id}",
+            item: opened,
+            space_label: nil,
+            selectable: false,
+            selected: false
+          })
+        )
+
+      assert html =~ "Fixture needs you"
+      assert html =~ "hero-beaker"
+
+      # Core's own lists stay closed: no push, no external reach, no mobile approval.
+      refute "fixture_request" in Platform.Inbox.push_kinds()
+      refute "fixture_request" in Platform.Inbox.core_action_kinds()
+      refute "fixture_request" in Platform.Mobile.AppEntities.approval_kinds()
+      refute "fixture_request" in Platform.Inbox.Item.core_kinds()
+    end
+
+    test "routes/0 has a reader: the fixture's route is listed and found by prefix" do
+      assert [%{prefix: "fixture", plug: FixtureExtension.EchoPlug}] = Extensions.routes()
+      assert %{plug: FixtureExtension.EchoPlug} = Extensions.route_for("fixture")
+      assert Extensions.route_for("nope") == nil
+      assert Extensions.route_for(nil) == nil
+    end
+
+    test "live_pages/0 has a reader: the fixture's page is listed and found by prefix" do
+      assert [%{prefix: "fixture", live_view: FixtureExtension.Page}] = Extensions.live_pages()
+      assert %{live_view: FixtureExtension.Page} = Extensions.live_page_for("fixture")
+      assert Extensions.live_page_for("nope") == nil
+      assert Extensions.live_page_for(nil) == nil
+      assert {:live_pages, 0} in Platform.Extension.behaviour_info(:optional_callbacks)
     end
   end
 
@@ -218,6 +346,19 @@ defmodule Platform.ExtensionsTest do
     setup do
       FixtureExtension.register([])
       :ok
+    end
+
+    test "an extension inbox kind is a changeset error while its extension is not registered" do
+      user = insert_ext_user()
+
+      assert {:error, changeset} = Platform.Inbox.emit(fixture_inbox_attrs(user))
+      assert Keyword.has_key?(changeset.errors, :kind)
+      assert Keyword.has_key?(changeset.errors, :source_type)
+      assert Extensions.inbox_kinds() == []
+      assert Platform.Inbox.Item.kinds() == Platform.Inbox.Item.core_kinds()
+      assert Platform.Inbox.action_kinds() == Platform.Inbox.core_action_kinds()
+      assert PlatformWeb.Components.InboxItem.kind_label("fixture_request") == "Fixture request"
+      assert PlatformWeb.Components.InboxItem.kind_icon("fixture_request") == "hero-bell"
     end
 
     test "the empty generated entry is exactly core's none.js registry" do
@@ -236,6 +377,9 @@ defmodule Platform.ExtensionsTest do
       assert Extensions.migrations_paths() == []
       assert Platform.MixSupport.extension_migration_args() == []
       assert Extensions.live_hooks() == []
+      assert Extensions.routes() == []
+      assert Extensions.live_pages() == []
+      assert Extensions.live_page_for("fixture") == nil
       assert Extensions.runtime_disconnected("nobody") == :ok
       socket = %Phoenix.LiveView.Socket{}
       assert PlatformWeb.Extensions.attach_live_hooks(socket) == socket
@@ -330,6 +474,41 @@ defmodule Platform.ExtensionsTest do
   end
 
   describe "name clashes across merged registries" do
+    defmodule BadRoutePrefix do
+      @moduledoc false
+      @behaviour Platform.Extension
+      def canvas_kinds, do: []
+      def mcp_tool_bundles, do: []
+      def runtime_channel_events, do: []
+      def handle_runtime_event(_e, _r, _p), do: :ok
+      def runtime_disconnected(_r), do: :ok
+      def live_hooks, do: []
+      def experiment_surfaces, do: []
+      def experiment_metrics, do: %{}
+      def migrations_path, do: nil
+      def routes, do: [%{prefix: "Bad/Prefix", plug: Platform.FixtureExtension.EchoPlug}]
+    end
+
+    defmodule BadLivePage do
+      @moduledoc false
+      @behaviour Platform.Extension
+      def canvas_kinds, do: []
+      def mcp_tool_bundles, do: []
+      def runtime_channel_events, do: []
+      def handle_runtime_event(_e, _r, _p), do: :ok
+      def runtime_disconnected(_r), do: :ok
+      def live_hooks, do: []
+      def experiment_surfaces, do: []
+      def experiment_metrics, do: %{}
+      def migrations_path, do: nil
+
+      def live_pages,
+        do: [
+          %{prefix: "fixture", live_view: Platform.FixtureExtension.Page},
+          %{prefix: "Bad/Page", live_view: Platform.FixtureExtension.Page}
+        ]
+    end
+
     defmodule CoreToolClash do
       @moduledoc false
       @behaviour Platform.Extension
@@ -384,6 +563,74 @@ defmodule Platform.ExtensionsTest do
       assert ~s(tool bundle name "fixture" is claimed by #{inspect(FixtureExtension)} and by #{inspect(FixtureExtension.Twin)}) in messages
 
       assert ~s(tool name "fixture_echo" is claimed by #{inspect(FixtureExtension)} and by #{inspect(FixtureExtension.Twin)}) in messages
+
+      assert ~s(route prefix "fixture" is claimed by #{inspect(FixtureExtension)} and by #{inspect(FixtureExtension.Twin)}) in messages
+
+      assert ~s(live page prefix "fixture" is claimed by #{inspect(FixtureExtension)} and by #{inspect(FixtureExtension.Twin)}) in messages
+    end
+
+    test "one live page prefix alone validates; a second claim is the only clash" do
+      FixtureExtension.register([FixtureExtension])
+      assert Extensions.validate() == :ok
+
+      FixtureExtension.register([FixtureExtension, BadLivePage])
+      assert {:error, messages} = Extensions.validate()
+
+      assert ~s(live page prefix "fixture" is claimed by #{inspect(FixtureExtension)} and by #{inspect(BadLivePage)}) in messages
+
+      assert ~s(live page prefix "Bad/Page" of #{inspect(BadLivePage)} is not one lowercase path segment) in messages
+
+      assert length(messages) == 2
+    end
+
+    defmodule CoreInboxClash do
+      @moduledoc false
+      @behaviour Platform.Extension
+      def canvas_kinds, do: []
+      def mcp_tool_bundles, do: []
+      def runtime_channel_events, do: []
+      def handle_runtime_event(_e, _r, _p), do: :ok
+      def runtime_disconnected(_r), do: :ok
+      def live_hooks, do: []
+      def experiment_surfaces, do: []
+      def experiment_metrics, do: %{}
+      def migrations_path, do: nil
+
+      def inbox_kinds,
+        do: [
+          %{
+            kind: "chat_mention",
+            source_type: "task",
+            label: "Mine",
+            icon: "hero-bell",
+            stays_listed_on_open: true
+          }
+        ]
+    end
+
+    test "an inbox kind or source type reusing core's, or another extension's, is refused" do
+      FixtureExtension.register([CoreInboxClash])
+      assert {:error, messages} = Extensions.validate()
+      owner = inspect(CoreInboxClash)
+      assert ~s(inbox kind "chat_mention" is claimed by core and by #{owner}) in messages
+      assert ~s(inbox source type "task" is claimed by core and by #{owner}) in messages
+
+      FixtureExtension.register([FixtureExtension, FixtureExtension.Twin])
+      assert {:error, messages} = Extensions.validate()
+      a = inspect(FixtureExtension)
+      b = inspect(FixtureExtension.Twin)
+      assert ~s(inbox kind "fixture_request" is claimed by #{a} and by #{b}) in messages
+      assert ~s(inbox source type "fixture_thing" is claimed by #{a} and by #{b}) in messages
+
+      FixtureExtension.register([FixtureExtension])
+      assert Extensions.validate() == :ok
+    end
+
+    test "a route prefix that is not one lowercase path segment is refused" do
+      FixtureExtension.register([BadRoutePrefix])
+      assert {:error, messages} = Extensions.validate()
+
+      assert ~s(route prefix "Bad/Prefix" of #{inspect(BadRoutePrefix)} is not one lowercase path segment) in messages
     end
   end
 

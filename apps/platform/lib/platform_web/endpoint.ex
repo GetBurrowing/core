@@ -16,6 +16,12 @@ defmodule PlatformWeb.Endpoint do
     websocket: [timeout: 120_000, check_origin: false],
     longpoll: false
 
+  # The install's agent host dials out to core here (task 01a10322 stage 2).
+  # The token travels in the `x-agent-host-token` header, hence `:x_headers`.
+  socket "/agent-host", PlatformWeb.AgentHostSocket,
+    websocket: [timeout: 120_000, check_origin: false, connect_info: [:x_headers]],
+    longpoll: false
+
   # `:user_agent` is here for `PlatformWeb.ShellLive`, which names the browser
   # in the blocked-notifications row on `/inbox` (task 019ffb7b stage 4). The
   # dead render reads the header off the conn either way; without this the

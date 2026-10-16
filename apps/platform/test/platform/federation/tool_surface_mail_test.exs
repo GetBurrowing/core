@@ -326,8 +326,13 @@ defmodule Platform.Federation.ToolSurfaceMailTest do
     test "with the module on, no tool in any bundle is a mail send tool" do
       names = ToolSurface.list_tools(ToolSurface.all_bundles()) |> Enum.map(& &1.name)
 
+      # The draft tools plus task 01a13ba5 stage 2's two READ tools over
+      # stored inbound mail (`Platform.Federation.MailInboundTools`); neither
+      # of those sends, posts or writes anything.
       mail_tools = Enum.filter(names, &(&1 =~ ~r/mail/i))
-      assert Enum.sort(mail_tools) == Enum.sort(@draft_tools)
+
+      assert Enum.sort(mail_tools) ==
+               Enum.sort(@draft_tools ++ ~w(mail_inbound_list mail_inbound_get))
 
       refute Enum.any?(names, &(&1 =~ ~r/(mail|email).*(send|dispatch|deliver)/i)),
              "an agent-facing mail send tool exists: #{inspect(names)}"
@@ -343,12 +348,18 @@ defmodule Platform.Federation.ToolSurfaceMailTest do
 
       surface = read.("tool_surface.ex")
       definitions = read.("mail_draft_tools.ex")
+      inbound_definitions = read.("mail_inbound_tools.ex")
+
+      inbound_access =
+        Path.expand("../../../lib/platform/mail/inbound_access.ex", __DIR__) |> File.read!()
 
       # Positive controls: the reads prove they opened the right files.
       assert surface =~ ~s(def execute("mail_draft_create")
       assert definitions =~ ~s(name: "mail_draft_create")
+      assert inbound_definitions =~ ~s(name: "mail_inbound_get")
+      assert inbound_access =~ "defmodule Platform.Mail.InboundAccess"
 
-      for source <- [surface, definitions] do
+      for source <- [surface, definitions, inbound_definitions, inbound_access] do
         refute source =~ "Mail.Dispatch"
         refute source =~ "Mail.Deliverer"
         refute source =~ "Mail.Mailer"

@@ -78,11 +78,22 @@ struct CallState: Equatable {
     var phase: CallPhase = .idle
     var meetingName: String?
     var isMuted = false
+    /// The mic state the SDK CONFIRMED, read back from our microphone
+    /// publication after every change (ours, CallKit's, the host's).
+    /// `isMuted` above is the native screen's request-time value; the
+    /// page's mic button and the `SuiteMeetings` plugin read this one.
+    var micEnabled = false
     /// The host (or the SFU) muted our mic track.
     var mutedByHost = false
     /// The current audio output's name ("iPhone", "AirPods Pro", ...).
     var route: String?
     var participants: [CallParticipant] = []
+    /// Whether the SFU reports US as speaking (the local participant's
+    /// `isSpeaking`, from the same speaker update every web viewer's
+    /// `ActiveSpeakersChanged` uses). Drives the "you" row's ring.
+    var localSpeaking = false
+    /// Our own LiveKit identity (`user:<uuid>`), once connected. Never logged.
+    var localIdentity: String?
     var reconnectingSince: Date?
     /// While a short interruption (Siri, an alarm) has the mic.
     var micPausedSince: Date?
@@ -104,6 +115,14 @@ struct CallState: Equatable {
     }
 
     var activeSpeakers: [CallParticipant] { participants.filter(\.isSpeaking) }
+
+    /// Every speaking LiveKit identity, ours included: the set the meeting
+    /// page's tiles ring (`user:<uuid>`, `agent:...`).
+    var speakingIdentities: Set<String> {
+        var ids = Set(activeSpeakers.map(\.id))
+        if localSpeaking, let localIdentity { ids.insert(localIdentity) }
+        return ids
+    }
 
     static func reduce(_ state: CallState, _ event: CallEvent) -> CallState {
         // Ended is terminal.
@@ -155,9 +174,20 @@ struct CallState: Equatable {
             s.participants = participants
             if s.phase == .connected || s.phase == .alone { s.phase = presence(s) }
 
+        case .localParticipantChanged(let identity, let isSpeaking):
+            s.localIdentity = identity
+            s.localSpeaking = isSpeaking
+
         case .setMuted(let muted):
             s.isMuted = muted
             if !muted { s.mutedByHost = false }
+
+        case .micConfirmed(let enabled):
+            s.micEnabled = enabled
+
+        case .micFailed:
+            // The SDK refused the change: the confirmed state stands.
+            break
 
         case .hostMuted(let muted):
             s.mutedByHost = muted
@@ -187,6 +217,8 @@ struct CallState: Equatable {
             s.phase = .ended(reason)
             s.reconnectingSince = nil
             s.micPausedSince = nil
+            s.localSpeaking = false
+            s.micEnabled = false
         }
         return s
     }
@@ -203,7 +235,13 @@ enum CallEvent: Equatable {
     case tick(Date)
     case connectionQuality(poor: Bool)
     case participantsChanged([CallParticipant])
+    /// Our own participant: its identity and whether the SFU says we speak.
+    case localParticipantChanged(identity: String?, isSpeaking: Bool)
     case setMuted(Bool)
+    /// Our microphone publication's state, read back from the SDK.
+    case micConfirmed(Bool)
+    /// A mic change we asked the SDK for failed.
+    case micFailed
     case hostMuted(Bool)
     case routeChanged(String?)
     case held

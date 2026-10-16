@@ -24,6 +24,9 @@ env:
   # The same crash detector for the `Test (with Play)` job's module suite
   # (apps/game_stream's own `mix test`): 196 tests at that tip.
   MIN_PLAY_TEST_COUNT: 150
+  # The same crash detector for the `Test (with Social)` job's module suite
+  # (apps/social's own `mix test`): 47 tests at task 01a140a8's tip.
+  MIN_SOCIAL_TEST_COUNT: 35
 
 on:
   push:
@@ -494,12 +497,25 @@ jobs:
   # and no `||` retry of its own. `Test`'s semantics are unchanged — it stays
   # green on retry-green, so nothing merging today is blocked by this job
   # until protection is told to require `first-run-green`.
-  # `Platform.CiFirstRunGreenTest` pins this job's presence and the literals
-  # it depends on.
+  #
+  # Task 01a136c1. `continue-on-error` below is true ONLY for a push to
+  # refs/heads/main. A main push happens after the merge, so no PR gate reads
+  # that run's `first-run-green`; there, a retry-green build used to drive the
+  # whole workflow conclusion to `failure` (run 38486558565) even though every
+  # image/publish job succeeded. With it, the step still goes red and prints
+  # its `::error::` annotation, and the Test job's `Retry-greened tests`
+  # summary is unchanged, so the signal stays visible; it just stops failing
+  # the workflow. On `pull_request` runs and on pushes to any other branch the
+  # expression is false, so the required `first-run-green` check fails exactly
+  # as before. Do not make it unconditional, and do not rename or move this
+  # job: branch protection matches the check by name.
+  # `Platform.CiFirstRunGreenTest` pins this job's presence, the literals it
+  # depends on, and both clauses of the `continue-on-error` expression.
   first-run-green:
     name: first-run-green
     needs: test
     runs-on: [self-hosted, linux, x64]
+    continue-on-error: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     steps:
       - name: Fail iff the Test job's serial retry fired on this run
         env:
@@ -584,9 +600,10 @@ jobs:
         with:
           path: |
             apps/game_stream/deps
+            apps/social/deps
             apps/suite_release/deps
             apps/platform/deps
-          key: deps-with-play-${{ hashFiles('apps/game_stream/mix.lock', 'apps/suite_release/mix.lock', 'apps/platform/mix.lock') }}
+          key: deps-with-play-${{ hashFiles('apps/game_stream/mix.lock', 'apps/social/mix.lock', 'apps/suite_release/mix.lock', 'apps/platform/mix.lock') }}
           restore-keys: deps-with-play-
 
       # Once per env: core is a path dependency compiled in the module's env
@@ -709,6 +726,107 @@ jobs:
           rm -rf "$GITHUB_WORKSPACE"/apps/*/deps/*/_build || true
           chown -R 1000:1000 "$GITHUB_WORKSPACE" || true
 
+  # The WITH-Social build (task 01a140a8, stack social-tab): the same module
+  # proof `Test (with Play)` runs for Play, for apps/social. The module compiles
+  # against core with --warnings-as-errors in dev and test, is formatted, and
+  # its own ExUnit suite passes (its `test` alias creates the database and
+  # migrates core's path AND the module's, as Platform.Release.migrate/0 does).
+  # The release host and its asset/bundle guards are proven once, in
+  # `Test (with Play)`, whose host config registers both modules.
+  test-with-social:
+    name: Test (with Social)
+    runs-on: [self-hosted, linux, x64]
+    container:
+      image: elixir:1.20.4-otp-28-slim
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MIX_ENV: test
+      PGHOST: postgres
+      PGUSER: postgres
+      PGPASSWORD: postgres
+    defaults:
+      run:
+        working-directory: apps/social
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install system packages (with Social)
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends build-essential ca-certificates git
+          update-ca-certificates
+
+      - name: Install Hex and Rebar (with Social)
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+
+      - name: Cache module deps (with Social)
+        uses: actions/cache@v5
+        with:
+          path: |
+            apps/social/deps
+            apps/platform/deps
+          key: deps-with-social-${{ hashFiles('apps/social/mix.lock', 'apps/platform/mix.lock') }}
+          restore-keys: deps-with-social-
+
+      # Once per env, for the reason given on `Test (with Play)`.
+      - name: Install module dependencies (with Social)
+        run: |
+          MIX_ENV=dev mix deps.get
+          MIX_ENV=test mix deps.get
+
+      - name: Compile the module with warnings as errors (dev + test)
+        run: |
+          if ! MIX_ENV=dev mix compile --force --warnings-as-errors; then
+            echo "::error::apps/social: mix compile --warnings-as-errors failed in MIX_ENV=dev. Fix the warning; never suppress it."
+            exit 1
+          fi
+          if ! MIX_ENV=test mix compile --force --warnings-as-errors; then
+            echo "::error::apps/social: mix compile --warnings-as-errors failed in MIX_ENV=test."
+            exit 1
+          fi
+
+      - name: Check module formatting (with Social)
+        run: mix format --check-formatted
+
+      # Same crash-detector shape as `Run module tests` in `Test (with Play)`.
+      - name: Run module tests (with Social)
+        run: |
+          set -o pipefail
+          log="${RUNNER_TEMP:-.}/mix-test-with-social.log"
+          mix test 2>&1 | tee "$log"
+          summary=$(grep -oE 'Result: [0-9]+(/[0-9]+)? (passed|tests)' "$log" | tail -n1 || true)
+          if [ -z "$summary" ]; then
+            echo
+            echo "::error::apps/social mix test printed no ExUnit summary line (Result: N passed) — the suite did not run to completion"
+            exit 1
+          fi
+          count=$(printf '%s' "$summary" | grep -oE '[0-9]+' | tail -n1)
+          if [ "$count" -lt "$MIN_SOCIAL_TEST_COUNT" ]; then
+            echo
+            echo "::error::apps/social mix test ran $count tests, below MIN_SOCIAL_TEST_COUNT=$MIN_SOCIAL_TEST_COUNT"
+            exit 1
+          fi
+          echo "apps/social mix test ran $count tests (floor MIN_SOCIAL_TEST_COUNT=$MIN_SOCIAL_TEST_COUNT)"
+
+      - name: Hand the workspace back to the runner (with Social)
+        if: always()
+        run: |
+          rm -rf "$GITHUB_WORKSPACE"/apps/*/deps/*/_build || true
+          chown -R 1000:1000 "$GITHUB_WORKSPACE" || true
+
   # MULTI-ARCH IMAGE (task 01a0d6ab). One leg per architecture, each built
   # NATIVELY on a runner of that architecture, never under QEMU: the release
   # compiles every dep under MIX_ENV=prod, copies ERTS out of the build image,
@@ -725,7 +843,7 @@ jobs:
   build-and-push:
     name: Build and push image (${{ matrix.arch }})
     if: github.event_name == 'push'
-    needs: [test, test-with-play]
+    needs: [test, test-with-play, test-with-social]
     strategy:
       fail-fast: true
       matrix:
@@ -767,6 +885,11 @@ jobs:
           # /health reports. On a push event github.sha is the commit being built.
           build-args: |
             GIT_SHA=${{ github.sha }}
+          # Task 01a1449b: optional BuildKit secret for the ffmpeg stage, which
+          # fetches the static tarball from the private vendor-ffmpeg-7.0.2
+          # release (falls back to johnvansickle without it).
+          secrets: |
+            gh_token=${{ secrets.GITHUB_TOKEN }}
           outputs: type=image,name=docker.io/example/suite-core,push-by-digest=true,name-canonical=true,push=true
 
       - name: Export digest
@@ -948,6 +1071,11 @@ jobs:
           # Same build identity as the core flavour (task 01a089d5).
           build-args: |
             GIT_SHA=${{ github.sha }}
+          # Task 01a1449b: optional BuildKit secret for the ffmpeg stage, which
+          # fetches the static tarball from the private vendor-ffmpeg-7.0.2
+          # release (falls back to johnvansickle without it).
+          secrets: |
+            gh_token=${{ secrets.GITHUB_TOKEN }}
           tags: |
             docker.io/example/suite-core:play
             docker.io/example/suite-core:play-${{ github.sha }}
@@ -968,6 +1096,11 @@ jobs:
           # Same build identity as the core flavour (task 01a089d5).
           build-args: |
             GIT_SHA=${{ github.sha }}
+          # Task 01a1449b: optional BuildKit secret for the ffmpeg stage, which
+          # fetches the static tarball from the private vendor-ffmpeg-7.0.2
+          # release (falls back to johnvansickle without it).
+          secrets: |
+            gh_token=${{ secrets.GITHUB_TOKEN }}
           tags: |
             docker.io/example/suite-core:play-${{ steps.vars.outputs.branch_tag }}
             docker.io/example/suite-core:play-${{ github.sha }}
@@ -975,6 +1108,71 @@ jobs:
             docker.io/example/suite-core:${{ steps.vars.outputs.branch_tag }}
             docker.io/example/suite-core:${{ github.sha }}
             docker.io/example/suite-core:${{ steps.vars.outputs.short_sha }}
+
+  build-and-push-agent-host:
+    # Native agents' host image, `contained` profile (task 01a10322 stage 3):
+    # docker.io/example/suite-agent-host:latest and :<sha>, from
+    # services/agent-host/Dockerfile. Pushed ONLY when a push to main changes
+    # services/agent-host/**, because every push restarts every agent on an
+    # AutoUpdate=registry host (fabrikam on moon). Independent of `test`: nothing in
+    # this image is built from the Elixir tree, and its own typecheck and unit
+    # tests gate the push. The full_machine profile copies the daemon out of the
+    # same image at first boot (deployment/installer/suite_install/agents.py).
+    name: Build and push agent-host image
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, linux, x64]
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Did services/agent-host change?
+        id: changed
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          # A new ref (all-zero BEFORE) or an unknown BEFORE counts as changed.
+          if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            echo "agent_host=true" >> "$GITHUB_OUTPUT"
+          elif git diff --quiet "$BEFORE" "$GITHUB_SHA" -- services/agent-host; then
+            echo "agent_host=false" >> "$GITHUB_OUTPUT"
+            echo "services/agent-host unchanged since $BEFORE; not pushing (each push restarts every agent)"
+          else
+            echo "agent_host=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Typecheck and unit-test the agent host
+        if: steps.changed.outputs.agent_host == 'true'
+        run: |
+          docker run --rm -v "$PWD/services/agent-host:/src:ro" docker.io/oven/bun:1 sh -c \
+            'cp -r /src /w && cd /w && bun install --frozen-lockfile && bunx tsc --noEmit && bun test test/unit.test.ts'
+
+      - uses: docker/login-action@v4
+        if: steps.changed.outputs.agent_host == 'true'
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v4
+        if: steps.changed.outputs.agent_host == 'true'
+
+      - name: Build and push agent-host
+        if: steps.changed.outputs.agent_host == 'true'
+        uses: docker/build-push-action@v7
+        with:
+          context: services/agent-host
+          file: services/agent-host/Dockerfile
+          push: true
+          cache-from: type=gha,scope=suite-agent-host
+          cache-to: type=gha,mode=max,scope=suite-agent-host
+          tags: |
+            docker.io/example/suite-agent-host:latest
+            docker.io/example/suite-agent-host:${{ github.sha }}
 
   # Install-manifest tooling (ADR 0053, task 01a0d69d): the validator and the
   # single-host renderer under deployment/installer. Python STANDARD LIBRARY

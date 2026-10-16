@@ -386,7 +386,6 @@ defmodule PlatformWeb.TasksLive do
      |> resubscribe_execution_space(nil)
      |> clear_detail()
      |> assign(:selected_task_canvases, [])
-     |> BoardHooks.refresh_board()
      |> bump_detail_epoch()
      |> push_patch(to: BoardData.tasks_path(socket.assigns))}
   end

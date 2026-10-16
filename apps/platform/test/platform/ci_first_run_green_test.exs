@@ -174,5 +174,37 @@ defmodule Platform.CiFirstRunGreenTest do
       refute code =~ ~r/actions\/checkout/,
              "`first-run-green` checks the repo out; it needs nothing from the tree."
     end
+
+    test "continue-on-error is scoped to pushes to main and nowhere else", %{job: job} do
+      code = code_only(job)
+
+      expr =
+        case Regex.run(~r/^    continue-on-error:\s*(.+?)\s*$/m, code) do
+          [_, expr] ->
+            expr
+
+          nil ->
+            flunk(
+              "`first-run-green` has no job-level `continue-on-error`. Without it a " <>
+                "retry-green push to main concludes the whole workflow as `failure`, " <>
+                "which is what task 01a136c1 stopped. It must be conditional, never a " <>
+                "bare `true`: `first-run-green` is a REQUIRED check on PRs."
+            )
+        end
+
+      assert expr =~ "github.event_name == 'push'",
+             "the `continue-on-error` expression `#{expr}` no longer requires " <>
+               "`github.event_name == 'push'`. `first-run-green` is a REQUIRED status " <>
+               "check; on a pull_request run it must still fail the job."
+
+      assert expr =~ "github.ref == 'refs/heads/main'",
+             "the `continue-on-error` expression `#{expr}` no longer requires " <>
+               "`github.ref == 'refs/heads/main'`. `first-run-green` is a REQUIRED status " <>
+               "check; on a push to any other branch it must still fail the job."
+
+      refute expr in ["true", "${{ true }}"],
+             "`continue-on-error` is unconditional, which un-gates the required " <>
+               "`first-run-green` check on PRs."
+    end
   end
 end

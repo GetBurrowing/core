@@ -167,11 +167,24 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
   attr(:mention_suggestions, :list, required: true)
   attr(:mention_source, :any, required: true)
   attr(:editing_message_id, :any, required: true)
+  # Task 01a10322 stage 4: who is reading, for the reply-failure row.
+  attr(:viewer_user_id, :string, default: nil)
 
   attr(:refused_summons, :map,
     default: %{},
     doc:
       "msg_id => [agent name] for this viewer's own messages whose agent mention was refused (task 01a0fd62). Author-only; see MessagesHooks."
+  )
+
+  attr(:mounted_inline_canvas_ids, :any,
+    required: true,
+    doc:
+      "MapSet of message ids whose inline canvas is mounted, or `:all` (task 01a13884 stage 4). See `PlatformWeb.Components.ChatInlineCanvas`."
+  )
+
+  attr(:load_older_failed?, :boolean,
+    default: false,
+    doc: "True when the last `load_older_messages` raised; the top sentinel offers a retry."
   )
 
   attr(:rendered_message_ids, :any,
@@ -225,16 +238,30 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
     >
       <%!-- Top sentinel: fires `load_older_messages` when visible AND
            :has_more_older is true. --%>
+      <%!-- Copy per the design canvas (task 01a13884 stage 4): neutral text,
+           no spinner; on a failed load, an inline text button that re-fires
+           the load through the hook, so the reading position is held the
+           same way as an ordinary scroll-triggered load. --%>
       <div
         :if={@has_more_older}
         id="chat-scroll-sentinel-top"
         phx-hook="InfiniteScroll"
         data-direction="older"
         data-loading={if @loading_older, do: "true"}
-        class="flex justify-center py-2 text-xs text-base-content/40"
+        data-failed={if @load_older_failed?, do: "true"}
+        class="flex justify-center py-2 text-xs text-neutral"
       >
-        <span :if={@loading_older} class="hero-arrow-path size-3 animate-spin"></span>
-        <span :if={!@loading_older}>Loading older messages…</span>
+        <span :if={!@load_older_failed?} data-role="load-older-status">
+          Loading earlier messages
+        </span>
+        <button
+          :if={@load_older_failed?}
+          type="button"
+          data-role="load-older-retry"
+          class="rounded px-1 underline underline-offset-2 hover:text-base-content focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring"
+        >
+          Couldn't load earlier messages. Retry
+        </button>
       </div>
 
       <div
@@ -268,6 +295,8 @@ defmodule PlatformWeb.ChatLive.Partials.Composer do
           read_only={@active_space != nil && @active_space.archived_at != nil}
           refused_summons={@refused_summons}
           space_kind={@active_space && @active_space.kind}
+          viewer_user_id={@viewer_user_id}
+          mounted_inline_canvas_ids={@mounted_inline_canvas_ids}
         />
       </div>
 

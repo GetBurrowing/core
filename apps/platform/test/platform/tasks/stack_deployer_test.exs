@@ -2609,6 +2609,50 @@ defmodule Platform.Tasks.StackDeployerTest do
     Tasks.get_task_record(task.id)
   end
 
+  describe "satisfied behavior review outcomes" do
+    for {label, statuses, expected} <- [
+          {"all passed", ~w(passed passed passed passed passed), {:ready, :validations_passed}},
+          {"deliberately skipped", ~w(passed passed passed passed skipped),
+           {:ready, :validations_passed}},
+          {"pending still blocks", ~w(passed passed passed skipped pending),
+           {:not_ready, {:stages_pending, 4, 5}}},
+          {"failed still blocks", ~w(passed passed passed skipped failed),
+           {:not_ready, {:stages_pending, 4, 5}}}
+        ] do
+      @review_statuses statuses
+      @review_expected expected
+      test label do
+        start_supervised!({FakeRunner, []})
+        project = project_with_repo!()
+        stack = stack_for!(project, slug: "satisfied-#{uniq()}")
+        task = create_member_task!(project, nil)
+        {:ok, task} = Tasks.update_task(task, %{stack_id: stack.id, stack_position: 1})
+        {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+        review_stage_with_e2e_validations!(plan, @review_statuses, "running")
+
+        assert validation_statuses_for_plan(plan.id) == Enum.sort(@review_statuses)
+        assert StackDeployer.review_readiness(task) == @review_expected
+
+        case @review_expected do
+          {:ready, :validations_passed} ->
+            assert {:ok, %{status: :merged, merge_sha: "f00dbabe"}} =
+                     StackDeployer.merge_member_into_rollup(task)
+
+            assert [call] = FakeRunner.merge_calls()
+            assert call.member_task_id == task.id
+
+            assert Tasks.get_task_record(task.id).metadata["merged_into_rollup_at"]["sha"] ==
+                     "f00dbabe"
+
+          {:not_ready, reason} ->
+            assert StackDeployer.merge_member_into_rollup(task) == {:ok, {:not_ready, reason}}
+            assert FakeRunner.merge_calls() == []
+            assert is_nil(Tasks.get_task_record(task.id).metadata["merged_into_rollup_at"])
+        end
+      end
+    end
+  end
+
   # ── Stage 2 helpers ───────────────────────────────────────────────────────
 
   # `Tasks.create_task/1` autogenerates the UUID, and `:id` is not castable

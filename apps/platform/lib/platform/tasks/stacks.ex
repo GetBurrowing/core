@@ -4082,21 +4082,7 @@ defmodule Platform.Tasks.Stacks do
   def unblocked_in_stack?(%Task{stack_id: nil}), do: false
 
   def unblocked_in_stack?(%Task{stack_id: stack_id} = task) when is_binary(stack_id) do
-    member_ids =
-      Task
-      |> where([t], t.stack_id == ^stack_id and is_nil(t.deleted_at))
-      |> select([t], t.id)
-      |> Repo.all()
-      |> MapSet.new()
-
-    in_stack_dep_ids =
-      task
-      |> Tasks.dependency_task_ids()
-      |> Enum.reject(&(&1 == task.id))
-      |> Enum.uniq()
-      |> Enum.filter(&MapSet.member?(member_ids, &1))
-
-    case in_stack_dep_ids do
+    case in_stack_dependency_ids(task) do
       [] ->
         true
 
@@ -4121,6 +4107,33 @@ defmodule Platform.Tasks.Stacks do
           Enum.all?(deps, &MemberSet.dependency_satisfied?/1) and
           all_dep_shas_reachable?(Enum.reject(deps, &(&1.status == "cancelled")), stack_id)
     end
+  end
+
+  @doc """
+  The task's declared dependency ids that point at a non-deleted member of
+  its OWN stack, self-references and duplicates removed. `[]` for a task
+  with no `stack_id`.
+
+  The partition `unblocked_in_stack?/1` gates on (rollup-merge threshold),
+  and the set `Tasks.apply_dispatch_gate` drops from its `done`-threshold
+  unmet-dependency check (task 01a136c1 stage 2).
+  """
+  @spec in_stack_dependency_ids(Task.t()) :: [String.t()]
+  def in_stack_dependency_ids(%Task{stack_id: nil}), do: []
+
+  def in_stack_dependency_ids(%Task{stack_id: stack_id} = task) when is_binary(stack_id) do
+    member_ids =
+      Task
+      |> where([t], t.stack_id == ^stack_id and is_nil(t.deleted_at))
+      |> select([t], t.id)
+      |> Repo.all()
+      |> MapSet.new()
+
+    task
+    |> Tasks.dependency_task_ids()
+    |> Enum.reject(&(&1 == task.id))
+    |> Enum.uniq()
+    |> Enum.filter(&MapSet.member?(member_ids, &1))
   end
 
   # Bug #2 (task 019f708f): after `threshold_cleared?/1` confirms a stamp

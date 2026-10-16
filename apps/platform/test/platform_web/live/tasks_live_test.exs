@@ -584,7 +584,14 @@ defmodule PlatformWeb.TasksLiveTest do
     _t4 = create_task(project, %{title: "Delta Done", status: "done"})
 
     conn = authenticated_conn(conn)
-    {:ok, _view, html} = live(conn, ~p"/tasks")
+    {:ok, view, html} = live(conn, ~p"/tasks")
+    refute html =~ "Delta Done"
+    # Done renders collapsed by default (task 01a13884 stage 3); open it so
+    # the done card is in the render.
+    html =
+      render_click(view |> with_target("#tasks-board"), "board_toggle_done", %{
+        "expanded" => "true"
+      })
 
     assert html =~ "Alpha Backlog"
     assert html =~ "Beta In Progress"
@@ -621,7 +628,13 @@ defmodule PlatformWeb.TasksLiveTest do
     {:ok, _} = Tasks.transition_task_status(task, "cancelled")
 
     conn = authenticated_conn(conn)
-    {:ok, _view, html} = live(conn, ~p"/tasks")
+    {:ok, view, _html} = live(conn, ~p"/tasks")
+    # Done renders collapsed by default (task 01a13884 stage 3); open it so
+    # the done card is in the render.
+    html =
+      render_click(view |> with_target("#tasks-board"), "board_toggle_done", %{
+        "expanded" => "true"
+      })
 
     # Per `Platform.Tasks.list_by_status/1`, cancelled folds into Done.
     # Assert the card body renders AT ALL (it must, since `list_by_status`
@@ -729,7 +742,12 @@ defmodule PlatformWeb.TasksLiveTest do
       _t3 = create_task(project, %{title: "Gamma Done", status: "done"})
 
       conn = authenticated_conn(conn)
-      {:ok, _view, html} = live(conn, ~p"/tasks")
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      # Done renders collapsed by default (task 01a13884 stage 3).
+      html =
+        render_click(view |> with_target("#tasks-board"), "board_toggle_done", %{
+          "expanded" => "true"
+        })
 
       assert html =~ "Alpha In Progress"
       assert html =~ "Beta Backlog"
@@ -3967,7 +3985,13 @@ defmodule PlatformWeb.TasksLiveTest do
     task = create_task(project, %{title: "Review Flow Task", status: "in_review"})
 
     conn = authenticated_conn(conn)
-    {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+    {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+    # Scoped to the panel (task 01a13884 stage 2): the mobile list now stays
+    # mounted under an open task, and its status pills carry
+    # `phx-value-status` too. They are filters, not status buttons.
+    html = render(element(view, "#tasks-detail"))
+    assert html =~ "Review Flow Task"
 
     refute html =~ "phx-value-status=\"done\""
     refute html =~ "phx-value-status=\"in_progress\""

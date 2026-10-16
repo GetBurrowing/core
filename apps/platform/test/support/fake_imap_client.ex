@@ -12,7 +12,8 @@ defmodule Platform.Mail.Imap.FakeClient do
       FakeClient.deliver("imap.acme.test", "INBOX", raw)   # => uid
 
   Every call is recorded (`calls/1`) so a test can assert the client was
-  never asked to do anything but read. Folders created with
+  never asked to do anything but read. Each message carries an internal date
+  (`deliver/4`'s `internaldate:`, default now) for `uids_since/2`. Folders created with
   `flags: ["\\\\Noselect"]` are listed but carry no messages.
   """
   @behaviour Platform.Mail.Imap.Client
@@ -35,7 +36,8 @@ defmodule Platform.Mail.Imap.FakeClient do
         uidvalidity: Keyword.get(opts, :uidvalidity, 1),
         flags: Keyword.get(opts, :flags, []),
         next_uid: 1,
-        messages: %{}
+        messages: %{},
+        internaldates: %{}
       }
 
       order = if folder in state.order, do: state.order, else: state.order ++ [folder]
@@ -43,32 +45,53 @@ defmodule Platform.Mail.Imap.FakeClient do
     end)
   end
 
-  @doc "Append `raw` to `folder` and return its UID."
-  def deliver(host, folder, raw) do
+  @doc """
+  Append `raw` to `folder` and return its UID. Options: `internaldate:` (a
+  `Date` or `DateTime`, default now), the date `uids_since/2` matches on.
+  """
+  def deliver(host, folder, raw, opts \\ []) do
+    internaldate = opts |> Keyword.get(:internaldate, DateTime.utc_now()) |> to_date()
+
     Agent.get_and_update(name(host), fn state ->
       entry = Map.fetch!(state.folders, folder)
       uid = entry.next_uid
 
-      entry = %{entry | next_uid: uid + 1, messages: Map.put(entry.messages, uid, raw)}
+      entry = %{
+        entry
+        | next_uid: uid + 1,
+          messages: Map.put(entry.messages, uid, raw),
+          internaldates: Map.put(entry.internaldates, uid, internaldate)
+      }
+
       {uid, %{state | folders: Map.put(state.folders, folder, entry)}}
     end)
   end
+
+  defp to_date(%Date{} = date), do: date
+  defp to_date(%DateTime{} = datetime), do: DateTime.to_date(datetime)
 
   @doc "Simulate the server renumbering a folder: new UIDVALIDITY, UIDs restart."
   def renumber(host, folder, uidvalidity) do
     update(host, fn state ->
       entry = Map.fetch!(state.folders, folder)
 
-      messages =
+      renumbered =
         entry.messages
         |> Enum.sort()
         |> Enum.with_index(1)
-        |> Map.new(fn {{_old_uid, raw}, new_uid} -> {new_uid, raw} end)
+
+      messages = Map.new(renumbered, fn {{_old_uid, raw}, new_uid} -> {new_uid, raw} end)
+
+      internaldates =
+        Map.new(renumbered, fn {{old_uid, _raw}, new_uid} ->
+          {new_uid, Map.get(entry.internaldates, old_uid, Date.utc_today())}
+        end)
 
       entry = %{
         entry
         | uidvalidity: uidvalidity,
           messages: messages,
+          internaldates: internaldates,
           next_uid: map_size(messages) + 1
       }
 
@@ -125,6 +148,27 @@ defmodule Platform.Mail.Imap.FakeClient do
     uids =
       Agent.get(name(host), fn state ->
         state.folders[folder].messages |> Map.keys() |> Enum.filter(&(&1 > uid)) |> Enum.sort()
+      end)
+
+    {:ok, uids}
+  end
+
+  # IMAP SINCE: internal date on or after `date`, day granularity.
+  @impl true
+  def uids_since(%{host: host} = conn, %Date{} = date) do
+    folder = Process.get({__MODULE__, conn.folder})
+    record(host, {:uids_since, folder, date})
+
+    uids =
+      Agent.get(name(host), fn state ->
+        entry = state.folders[folder]
+
+        entry.messages
+        |> Map.keys()
+        |> Enum.filter(fn uid ->
+          Date.compare(Map.fetch!(entry.internaldates, uid), date) != :lt
+        end)
+        |> Enum.sort()
       end)
 
     {:ok, uids}

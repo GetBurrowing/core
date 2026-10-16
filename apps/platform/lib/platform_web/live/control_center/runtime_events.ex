@@ -63,6 +63,12 @@ defmodule PlatformWeb.ControlCenter.RuntimeEvents do
       )
       when is_binary(rid) do
     case Federation.get_runtime(rid) do
+      # A native agent's token is minted fresh on every start by the agent
+      # host's reconciler (task 01a10322); a token handed out here would only
+      # knock the running agent off its socket.
+      %{managed_by: "install"} ->
+        {:noreply, put_flash(socket, :error, "This agent gets a new token every time it starts.")}
+
       %{} = runtime ->
         case Federation.generate_runtime_token(socket.assigns.access_scope, runtime) do
           {:ok, _runtime, raw_token} ->

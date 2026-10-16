@@ -16,6 +16,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         center.delegate = NotificationRouter.shared
         SuiteNotificationCategory.register(center: center)
         IntentAppHooks.install()
+        IntentTrace.append("launch sha=\(IntentTrace.buildSHA) state=\(application.applicationState.rawValue)")
         // Rings (stage 5): the CallKit provider exists, then PushKit starts,
         // both before launch returns, so a VoIP push that launched the app
         // is reported to CallKit.
@@ -88,6 +89,18 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
                 let store = InstallStore.shared
                 store.add(host: host)
                 _ = KeychainTokenStore.shared.store("evidence-placeholder", for: host)
+            }
+            // Siri review (01a111bb stage 7, round 3): one person in the
+            // people cache, `<host>|<uuid>|<name>|<kind>` on a signed-in
+            // `*.invalid` host, so a system test can hand the system an
+            // entity ID and watch it resolve through MessagePersonEntityQuery.
+            if #available(iOS 27, *), let spec = args.string(forKey: "SuiteEvidencePerson") {
+                let parts = spec.split(separator: "|").map(String.init)
+                if parts.count == 4, parts[0].hasSuffix(".invalid") {
+                    InstallStore.shared.add(host: parts[0])
+                    _ = KeychainTokenStore.shared.store("evidence-placeholder", for: parts[0])
+                    PeopleCache.shared.remember([MessagePersonEntity(id: "\(parts[0])|\(parts[1])", name: parts[2], kind: parts[3], subtitle: "Person")])
+                }
             }
             // Task 01a120be stage 4 evidence: the large-upload completion
             // notification, posted by the uploader's own code path once

@@ -126,4 +126,72 @@ final class CallStateReducerTests: XCTestCase {
         let s = CallState.reduce(connectedAlone(), .participantsChanged([ada, speaking]))
         XCTAssertEqual(s.activeSpeakers.map(\.id), ["user:b"])
     }
+
+    // MARK: Local speaking (task 01a13c62 stage 1)
+
+    func testLocalSpeakingIsReducedFromTheSessionEvent() {
+        var s = run([.localParticipantChanged(identity: "user:me", isSpeaking: true)], from: connectedAlone())
+        XCTAssertTrue(s.localSpeaking)
+        XCTAssertEqual(s.localIdentity, "user:me")
+        s = CallState.reduce(s, .localParticipantChanged(identity: "user:me", isSpeaking: false))
+        XCTAssertFalse(s.localSpeaking)
+    }
+
+    /// The set stage 2 bridges to the page: remote speakers plus us.
+    func testSpeakingIdentitiesIncludeTheLocalParticipant() {
+        let bo = CallParticipant(id: "user:b", name: "Bo", isAgent: false, isSpeaking: true)
+        var s = run([.participantsChanged([ada, bo]), .localParticipantChanged(identity: "user:me", isSpeaking: true)], from: connectedAlone())
+        XCTAssertEqual(s.speakingIdentities, ["user:b", "user:me"])
+        s = CallState.reduce(s, .localParticipantChanged(identity: "user:me", isSpeaking: false))
+        XCTAssertEqual(s.speakingIdentities, ["user:b"])
+    }
+
+    func testNoLocalIdentityMeansNoLocalEntryInTheSpeakingSet() {
+        let s = run([.localParticipantChanged(identity: nil, isSpeaking: true)], from: connectedAlone())
+        XCTAssertEqual(s.speakingIdentities, [])
+    }
+
+    func testLocalSpeakingDoesNotChangeThePhase() {
+        let s = run([.localParticipantChanged(identity: "user:me", isSpeaking: true)], from: connectedAlone())
+        XCTAssertEqual(s.phase, .alone, "speaking alone is still alone")
+    }
+
+    func testEndingClearsLocalSpeaking() {
+        let s = run([.localParticipantChanged(identity: "user:me", isSpeaking: true), .ended(.local)], from: connectedAlone())
+        XCTAssertFalse(s.localSpeaking)
+        XCTAssertEqual(s.speakingIdentities, [])
+    }
+
+    // MARK: Confirmed mic (task 01a13c62 stage 2)
+
+    func testMicConfirmedSetsTheConfirmedState() {
+        var s = run([.micConfirmed(true)], from: connectedAlone())
+        XCTAssertTrue(s.micEnabled)
+        s = CallState.reduce(s, .micConfirmed(false))
+        XCTAssertFalse(s.micEnabled)
+    }
+
+    func testAMuteRequestAloneDoesNotChangeTheConfirmedState() {
+        let s = run([.micConfirmed(true), .setMuted(true)], from: connectedAlone())
+        XCTAssertTrue(s.isMuted, "the native screen keeps its request-time value")
+        XCTAssertTrue(s.micEnabled, "nothing confirmed the mute yet")
+    }
+
+    func testAFailedSDKCallLeavesMicEnabledUnchanged() {
+        let s = run([.micConfirmed(true), .setMuted(true), .micFailed], from: connectedAlone())
+        XCTAssertTrue(s.micEnabled)
+    }
+
+    func testACallKitMuteConfirmedByTheSDKTurnsTheMicOff() {
+        // CXSetMutedCallAction reduces `.setMuted`, then the session reads
+        // the publication back and emits `.micConfirmed`.
+        let s = run([.micConfirmed(true), .setMuted(true), .micConfirmed(false)], from: connectedAlone())
+        XCTAssertTrue(s.isMuted)
+        XCTAssertFalse(s.micEnabled)
+    }
+
+    func testEndingClearsTheConfirmedMic() {
+        let s = run([.micConfirmed(true), .ended(.local)], from: connectedAlone())
+        XCTAssertFalse(s.micEnabled)
+    }
 }

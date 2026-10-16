@@ -221,7 +221,7 @@ defmodule Platform.Agents.OrchestrationTest do
       # would be vacuous. The positive case is asserted where a discriminating
       # observation DOES exist: Config.export_config/1 in
       # test/platform/agents/config_import_export_test.exs and
-      # Router.model_chain/1 in test/platform/agents/router_test.exs.
+      # Config.model_chain/1 in test/platform/agents/config_model_chain_test.exs.
       assert {:error, :not_found} =
                Orchestration.spawn_child("nosuchagentxxxxx", Ecto.UUID.generate(), %{})
     end

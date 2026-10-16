@@ -5,6 +5,12 @@ The top `## v<version>` section is sent as the build's "What to Test" by
 MARKETING_VERSION, and it is capped at 4000 characters.
 
 ## v1.2
+New in build 9: meetings show when you are talking. On the call screen, your own "You" row now lights up while you speak and are not muted. Your voice always reached the others; only the indicator was missing. The meeting page inside the app can now mute and unmute the call: tap its mic and it shows the call's confirmed state. Camera and screen share are not in the app yet, so the page reads "Audio only in the app".
+
+Please try: join a meeting with someone on a computer, talk, and check that your "You" row lights up. Open the full meeting and mute and unmute from the page, then from Control Centre, and check the button follows. (The page side arrives with the next web update. Until it does, mute from the call screen.)
+
+New in build 8: Siri messaging. Say "Message <name> saying ..." and Siri sends it from Burrow after one confirmation. Messages to agents are sent and done: Siri does not wait, and the agent's reply arrives as a notification. If the same name exists on two of your installs, Siri asks which one. "Ask <agent>" still waits and reads the answer.
+
 New in build 7:
 1. One app, many installs. Burrow now gets notifications from every install you are signed in to. Each notification names its install, and unread counts are kept per install (the app icon badge adds them up). Tap a notification from another install and Burrow switches to it.
 2. Pictures on notifications. Notifications show the agent's or person's picture, or their initial if they have none.

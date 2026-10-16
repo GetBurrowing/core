@@ -363,6 +363,9 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     # After the case, so the served row, the derived default and the
     # hardcoded last resort all pass through the one helper.
     prompt
+    |> insert_before_context(
+      render_design_canvases_section(Keyword.get(opts, :canvases, []), :planning)
+    )
     |> append_experiment_directive("planner.stage_budget", "dispatch.planning", task,
       phase: "planning"
     )
@@ -636,7 +639,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
       end
 
     prompt
-    |> enrich_in_progress_prompt(task, stage)
+    |> enrich_in_progress_prompt(task, stage, opts)
     |> append_experiment_directive("mail.draft.generator", "dispatch.in_progress", task,
       phase: "execution"
     )
@@ -712,7 +715,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
       end
 
     prompt
-    |> enrich_in_review_prompt(task, stage)
+    |> enrich_in_review_prompt(task, stage, opts)
     |> append_code_mode_directive(task, "review")
   end
 
@@ -907,6 +910,152 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   # Renders "" (no header) for a non-stack task, for a root member (no
   # in-stack deps), and when every declared dep points outside the stack —
   # cross-stack deps are gated by the `done`-only sweep, not by landing.
+  # ── Attached design canvases (task 01a13ae7 stage 1) ─────────────────────
+  #
+  # `ContextAssembler.serialize_attached_canvases/1` already puts the task's
+  # attached canvases in the dispatch payload's `context`, but the Claude Code
+  # bridge builds the agent's message from `message.content` only, so for that
+  # runtime the canvases never reached the agent. This renders them INTO the
+  # prompt text. It is inserted in code via `insert_before_context/2`, not a
+  # `{{placeholder}}`, so it reaches stale rows and experiment variant blobs
+  # unchanged.
+  #
+  # Repo-free: the canvases arrive through `opts[:canvases]` (threaded by
+  # `TaskRouter.do_dispatch_resolved/6`), never from a query here.
+  #
+  # Only entries with `canvas_present: true` render; a task whose only canvas
+  # was soft-deleted gets no block. Titles and notes are user/agent-authored:
+  # each is escaped with `ExternalContent.escape_mentions/1` (an `@[...]`
+  # token would otherwise route attention when the engagement copy posts to
+  # the execution space), flattened to one line and capped in length, and the
+  # list is capped at `@design_canvases_max` entries.
+  #
+  # Modes: `:ui` / `:reference` on execution (chosen by
+  # `PlanEngine.ui_touching?/1` over the stage description), `:planning` and
+  # `:review` list the canvases and the recipe only. Non-UI execution stages
+  # get the `:reference` form BY DESIGN: `ui_touching?/1` is a prose
+  # heuristic, and a false negative there must not silently drop the design.
+  @design_canvases_heading "## Attached design canvases — the design spec"
+  @design_canvases_max 5
+  @design_canvas_text_cap 200
+
+  @design_canvases_ui_sentence "Before writing any code for this stage, open every canvas above with canvas_get(mode: \"full\") and capture a screenshot of it using the recipe below; post the screenshots to the execution space before your first commit."
+
+  @design_canvases_reference_sentence "Reference only: this stage's description names no UI file. If this stage nonetheless changes what renders, the screenshot-first rule applies."
+
+  @design_canvases_recipe """
+  ### Render recipe (no production browser session needed)
+
+  Canvases live on prod; read each one over MCP with `canvas_get(canvas_id, mode: "full")`, which returns the whole document. Then:
+
+  (a) `embed` nodes: take `props.srcdoc` and render it in headless Chrome via CDP: `Target.createTarget` about:blank, `Emulation.setDeviceMetricsOverride` at `props.width` if set (else at both 375x812 and 1280x800), `Page.setDocumentContent`, `Page.captureScreenshot`.
+  (b) every other node tree: re-create the document on YOUR dev server (`Platform.Chat.create_canvas/1` in a dev space), log in there with `/dev/login`, and screenshot `/canvases/<dev id>` at the same viewports.
+  (c) `prototype` nodes (multi-file bundles): the bytes sit behind `/proto/` auth with no agent byte read path. Record "could not render prototype <id> v<n>" and do not guess.
+
+  Rig by runtime: Rowan-owned agents use the dev-on-moon-e2e-rig and agent-chrome-cdp skills (chromedp/headless-shell on moon, CDP at 192.0.2.200:9222); other runtimes use their own rig; never run a BEAM or Chrome on hive.
+  """
+
+  @doc false
+  @spec design_canvases_heading() :: String.t()
+  def design_canvases_heading, do: @design_canvases_heading
+
+  @doc false
+  @spec render_design_canvases_section(list() | nil, :ui | :reference | :planning | :review) ::
+          String.t()
+  def render_design_canvases_section(canvases, mode)
+      when mode in [:ui, :reference, :planning, :review] do
+    present =
+      canvases
+      |> List.wrap()
+      |> Enum.filter(&(is_map(&1) and canvas_field(&1, :canvas_present) == true))
+      |> Enum.filter(&is_binary(canvas_field(&1, :id)))
+
+    case present do
+      [] ->
+        ""
+
+      _ ->
+        {shown, rest} = Enum.split(present, @design_canvases_max)
+
+        lines = Enum.map_join(shown, "\n", &design_canvas_line/1)
+
+        more =
+          case length(rest) do
+            0 -> ""
+            n -> "\n- … #{n} more attached; list them with `task_list_canvases`."
+          end
+
+        mode_sentence =
+          case mode do
+            :ui -> "\n" <> @design_canvases_ui_sentence <> "\n"
+            :reference -> "\n" <> @design_canvases_reference_sentence <> "\n"
+            _ -> ""
+          end
+
+        "\n" <>
+          @design_canvases_heading <>
+          "\n\n" <>
+          lines <>
+          more <>
+          "\n" <>
+          mode_sentence <>
+          "\n" <>
+          @design_canvases_recipe
+    end
+  end
+
+  def render_design_canvases_section(_canvases, _mode), do: ""
+
+  defp execution_canvas_mode(stage) do
+    description =
+      if is_map(stage), do: Map.get(stage, :description) || Map.get(stage, "description")
+
+    if Platform.Tasks.PlanEngine.ui_touching?(description), do: :ui, else: :reference
+  end
+
+  defp design_canvas_line(entry) do
+    id = canvas_field(entry, :id)
+    title = design_canvas_text(canvas_field(entry, :title)) || "(untitled)"
+    kind = design_canvas_text(canvas_field(entry, :kind)) || "unknown"
+    view_url = canvas_field(entry, :view_url) || Platform.Chat.Canvas.Links.view_url(id)
+
+    note =
+      case design_canvas_text(canvas_field(entry, :note)) do
+        nil -> ""
+        text -> " — note: " <> text
+      end
+
+    "- `#{id}` — \"#{title}\" (root: #{kind}) — #{view_url}" <> note
+  end
+
+  # One line, capped, mention-escaped. nil/blank → nil.
+  defp design_canvas_text(value) when is_binary(value) do
+    text =
+      value
+      |> String.replace(~r/\s+/u, " ")
+      |> String.trim()
+
+    case text do
+      "" ->
+        nil
+
+      text ->
+        capped =
+          if String.length(text) > @design_canvas_text_cap,
+            do: String.slice(text, 0, @design_canvas_text_cap) <> "…",
+            else: text
+
+        ExternalContent.escape_mentions(capped)
+    end
+  end
+
+  defp design_canvas_text(value) when is_atom(value) and not is_nil(value),
+    do: design_canvas_text(Atom.to_string(value))
+
+  defp design_canvas_text(_), do: nil
+
+  defp canvas_field(entry, key), do: Map.get(entry, key) || Map.get(entry, Atom.to_string(key))
+
   @stack_predecessors_heading "## Stack predecessors (landing state)"
 
   defp render_stack_predecessors_section(task) do
@@ -1287,6 +1436,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     no_ack_notice = PromptTemplates.planning_no_ack_notice()
     experiment_surface_notice = PromptTemplates.planning_experiment_surface_notice()
     ci_evidence_section = PromptTemplates.planning_ci_evidence_section()
+    design_fidelity_section = PromptTemplates.planning_design_fidelity_section()
 
     """
     #{no_ack_notice}
@@ -1411,6 +1561,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     - `code_review` is NOT a supported validation kind — do not include it.
     - Pre-writing `failure_feedback` in the evaluation_payload — observed at review time.
 
+    #{design_fidelity_section}
     ## Stage quality bar
 
     A good stage description explains: what specifically will be changed, which files will be modified
@@ -1449,6 +1600,11 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     # without the seeded template row still get the reservation.
     migration_slot_section = render_migration_slot_section(task, stage)
 
+    # Same section, same position as the `dispatch.in_progress` descriptor
+    # (task 01a13ae7 stage 3): above the migration slot, so it is never inside
+    # the span `strip_bounded_git_workflow/2` removes.
+    design_fidelity_section = PromptTemplates.in_progress_design_fidelity_section()
+
     """
     #{ack_preamble}
     Plan approved — execute the current stage.
@@ -1461,7 +1617,8 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     Push evidence using validation_pass or stage_complete as you finish each step. \
     Post commentary to the execution space so reviewers can follow along. \
     Use report_blocker if you are stuck.
-    #{migration_slot_section}
+
+    #{design_fidelity_section}#{migration_slot_section}
 
     The Stage Description block above is your specification — it is the planner's own authored text for this stage, and it is the authority over any summary of it. The full task hierarchy (project, epic, task body, whole plan) is NOT in this message; fetch it with suite_task_get / suite_plan_get if you need it.
     Start from that stage description and any attached/bundled skill content before re-fetching broad task/project context.
@@ -1788,6 +1945,8 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     title = Map.get(task, :title) || Map.get(task, "title") || ""
     pending_json = Map.get(assigns, :pending_e2e_validations_json, "[]")
     execution_space_id = Map.get(assigns, :execution_space_id, "")
+    # Task 01a13ae7 stage 3: shared with the `dispatch.review_e2e` descriptor.
+    design_fidelity_section = PromptTemplates.review_e2e_design_fidelity_section()
 
     """
     Task is in behavioral review — execute every planner-authored e2e_behavior test case and disposition each validation independently.
@@ -1807,6 +1966,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
 
     For each entry, walk through `setup` → `actions`, then compare observed behavior to `expected`.
 
+    #{design_fidelity_section}
     On success, call `suite_validation_evaluate` with the matching `validation_id`, `status: "passed"` and an `evidence` map describing what you observed.
 
     On failure, call `suite_validation_evaluate` with the matching `validation_id`, `status: "failed"` and an `evidence` map containing what you EXPECTED (verbatim from the payload) and what you ACTUALLY OBSERVED, with diagnostics. Post that same observation into the execution space (#{execution_space_id}) so the implementing agent reads it on the next dispatch — your observation IS the failure_feedback.
@@ -2244,7 +2404,11 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   # deploying   → deploy_contract   → PR, CI, merge (fix-forward only inside the task's diff)
   # nudge       → nudge_contract    → pending validation IDs + ack fork
 
-  defp enrich_in_progress_prompt(prompt, task, stage) do
+  # `opts` carries `:canvases` (task 01a13ae7 stage 1). The hardcoded
+  # last-resort body calls this with `[]` because its caller,
+  # `in_progress_prompt/4`, enriches the returned body again with the real
+  # opts — passing them on both calls would insert the block twice.
+  defp enrich_in_progress_prompt(prompt, task, stage, opts \\ []) do
     prompt
     |> maybe_strip_git_workflow(task)
     |> insert_before_context(execution_contract(task, stage))
@@ -2254,11 +2418,24 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     # call — it never replaces or reflows the section above it). Renders ""
     # for a root member and for a non-stack task.
     |> insert_before_context(render_stack_predecessors_section(task))
+    # Task 01a13ae7 stage 1: the attached design canvases, after the stack
+    # block. `:ui` when the stage description names a UI file, `:reference`
+    # otherwise — see `render_design_canvases_section/2`.
+    |> insert_before_context(
+      render_design_canvases_section(
+        Keyword.get(opts, :canvases, []),
+        execution_canvas_mode(stage)
+      )
+    )
   end
 
-  defp enrich_in_review_prompt(prompt, task, stage) do
+  # Serves BOTH `dispatch.in_review` and `dispatch.review_e2e`.
+  defp enrich_in_review_prompt(prompt, task, stage, opts) do
     prompt
     |> insert_before_context(review_contract(task, stage))
+    |> insert_before_context(
+      render_design_canvases_section(Keyword.get(opts, :canvases, []), :review)
+    )
   end
 
   defp enrich_deploying_prompt(prompt, task, stage) do

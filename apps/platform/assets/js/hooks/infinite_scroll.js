@@ -65,6 +65,9 @@ const InfiniteScroll = {
           if (!entry.isIntersecting) continue;
           if (this._inflight) continue;
           if (this.el.dataset.loading === "true") continue;
+          // A failed load waits for the reader's Retry (below) rather than
+          // re-firing on the next intersection (task 01a13884 stage 4).
+          if (this.el.dataset.failed === "true") continue;
           this._trigger();
         }
       },
@@ -79,9 +82,28 @@ const InfiniteScroll = {
     );
 
     this._observer.observe(this.el);
+
+    // "Couldn't load earlier messages. Retry" (task 01a13884 stage 4). The
+    // retry goes through `_trigger` — not a bare phx-click — so it captures
+    // and restores the reading position exactly like a scroll-fired load.
+    this._onRetryClick = (event) => {
+      const retry = event.target && event.target.closest
+        ? event.target.closest('[data-role="load-older-retry"]')
+        : null;
+      if (!retry) return;
+      event.preventDefault();
+      if (!this._inflight) this._trigger();
+    };
+    if (this.el.addEventListener) {
+      this.el.addEventListener("click", this._onRetryClick);
+    }
   },
 
   destroyed() {
+    if (this._onRetryClick && this.el.removeEventListener) {
+      this.el.removeEventListener("click", this._onRetryClick);
+      this._onRetryClick = null;
+    }
     if (this._observer) {
       this._observer.disconnect();
       this._observer = null;

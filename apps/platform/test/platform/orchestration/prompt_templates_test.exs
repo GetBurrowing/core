@@ -56,6 +56,15 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
                                       "priv/repo/migrations/20260911181500_force_update_deploying_template_auto_merge_conditional.exs"
                                     ])
 
+  @retire_known_flakes_migration Path.join([
+                                   __ENV__.file
+                                   |> Path.dirname()
+                                   |> Path.dirname()
+                                   |> Path.dirname()
+                                   |> Path.dirname(),
+                                   "priv/repo/migrations/20261014160000_force_update_deploying_template_retire_known_flakes.exs"
+                                 ])
+
   @browser_session_migration Path.join([
                                __ENV__.file
                                |> Path.dirname()
@@ -70,6 +79,7 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
     Code.require_file(@deploying_branch_recovery_migration)
     Code.require_file(@browser_session_migration)
     Code.require_file(@auto_merge_conditional_migration)
+    Code.require_file(@retire_known_flakes_migration)
     :ok
   end
 
@@ -270,6 +280,176 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
 
       assert content =~
                "4. Keep the screenshot-canvas evidence instruction on UI-rendering stages (no `manual_approval` — planners never create one); the design stage is additive, not a replacement."
+    end
+
+    test "item 2 asks for a canvas-anchored inventory and one fidelity case per screen (task 01a13ae7 stage 2)" do
+      content = PromptTemplates.default_content_for_slug("dispatch.planning")
+
+      # Inventory row format, anchored to canvas nodes, written literally.
+      assert content =~
+               "`canvas <id> node <node id> | element | states (default/hover/empty/loading/error, as the canvas shows them) | copy (verbatim, quoted) | tokens (semantic slots)`"
+
+      assert content =~ "not in canvas"
+      # Named in prose, never quoted: the heading is the rendered block's own
+      # marker and this section rides in every planning dispatch (stage 4).
+      assert content =~ "this dispatch's Attached design canvases block"
+      refute content =~ HeartbeatScheduler.design_canvases_heading()
+      assert content =~ "`task_list_canvases`"
+      assert content =~ ~s|`canvas_get(canvas_id, mode: "full")`|
+
+      # Fidelity case: one per canvas-backed screen, with the setup prefix
+      # the review template keys on.
+      assert content =~ "Author ONE fidelity `e2e_behavior` case per canvas-backed screen"
+      assert content =~ "Its `setup` begins `Fidelity case — canvas <id>`"
+      assert content =~ "declared under `Design deviations`"
+
+      # The paraphrase instruction this replaces is gone; the rest of item 2
+      # survives.
+      refute content =~ "let it constrain the UI stages you write"
+      assert content =~ ~s(Do NOT author a "Design direction" stage)
+      assert content =~ "proceed and do not wait for one"
+
+      # The `@context_anchors` sentence stage 1 inserts before is untouched.
+      assert content =~
+               "The attention signal that delivered this message includes a `context` field with the full task hierarchy"
+
+      # Single source: the descriptor carries the accessor's text verbatim.
+      assert content =~ PromptTemplates.planning_design_fidelity_section()
+    end
+
+    test "prototype/mockup canvases and design-direction canvases get different fidelity rules (task 01a13ae7 stage 2, Saru)" do
+      content = PromptTemplates.default_content_for_slug("dispatch.planning")
+
+      # How to tell them apart: title prefix or node types, never `kind`.
+      assert content =~ "never by the canvas `kind` field"
+
+      assert content =~
+               "titled `Design direction: …`, or containing no `embed` and no `prototype` node"
+
+      # Prototype/mockup: the spec, layout included.
+      assert content =~ "contains at least one `prototype` or `embed` node"
+      assert content =~ "Match it screen for screen, including layout"
+
+      # Direction: intent only, and the fidelity case does not check layout.
+      assert content =~ "Its wireframes are not a layout to reproduce."
+      assert content =~ "It does NOT check layout resemblance to the wireframes."
+    end
+
+    test "the hardcoded planning fallback carries the design fidelity section (task 01a13ae7 stage 2)" do
+      body =
+        Platform.Orchestration.HeartbeatScheduler.hardcoded_dispatch_planning(
+          %{id: "t", title: "T", description: "D", priority: "high"},
+          "",
+          nil,
+          nil
+        )
+
+      assert body =~ "Its `setup` begins `Fidelity case — canvas <id>`"
+      assert body =~ PromptTemplates.planning_design_fidelity_section()
+    end
+
+    test "dispatch.in_progress carries the design fidelity section before the context anchor (task 01a13ae7 stage 3)" do
+      content = PromptTemplates.default_content_for_slug("dispatch.in_progress")
+      section = PromptTemplates.in_progress_design_fidelity_section()
+
+      assert content =~ "Design deviations — stage"
+      assert content =~ "`canvas <id> node <node id> | what differs | why`"
+      assert content =~ "`Design deviations — stage <n>: none`"
+      assert content =~ "If this dispatch carries an Attached design canvases block"
+      refute content =~ HeartbeatScheduler.design_canvases_heading()
+      assert content =~ section
+
+      {section_at, _} = :binary.match(content, section)
+      {anchor_at, _} = :binary.match(content, "\nThe Stage Description block above")
+      {git_at, _} = :binary.match(content, "{{git_workflow_block}}")
+
+      # The `@context_anchors` line still FOLLOWS the section, so stage 1's
+      # canvases block and every contract still splice in after it.
+      assert section_at < anchor_at
+      # And the section sits above the git block, outside the span
+      # `strip_bounded_git_workflow/2` deletes on a task with no deploy repos.
+      assert section_at < git_at
+
+      # The section never opens a line with an anchor's text, so it cannot
+      # steal the insertion point.
+      for anchor <- HeartbeatScheduler.context_anchors() do
+        refute String.contains?(section, anchor)
+      end
+    end
+
+    test "dispatch.review_e2e carries the fidelity-case review section after How to review (task 01a13ae7 stage 3)" do
+      content = PromptTemplates.default_content_for_slug("dispatch.review_e2e")
+      section = PromptTemplates.review_e2e_design_fidelity_section()
+
+      assert content =~ "Fidelity case — canvas"
+      assert content =~ "side_by_side_canvas_id"
+      assert content =~ "`inventory_results`"
+      assert content =~ "`attachment_upload_start`"
+      assert content =~ "`canvas_create`"
+      assert content =~ "`/chat/attachments/<uuid>`"
+      assert content =~ "`could_not_evaluate` with that reason, never a pass"
+      assert content =~ section
+      assert section =~ "the recipe in this dispatch's Attached design canvases block"
+      refute content =~ HeartbeatScheduler.design_canvases_heading()
+
+      # Saru's rule, consistent with the planning text: discriminate by title
+      # and node types, never by `kind`; a direction canvas gates on the
+      # inventory only.
+      assert section =~ "never by the canvas `kind` field"
+
+      assert section =~
+               "titled `Design direction: …`, or containing no `embed` and no `prototype` node"
+
+      assert section =~ "NOT layout resemblance"
+      assert section =~ "only the inventory check gates"
+
+      # Position: after `## How to review`, before `## Which build answers the
+      # call`, and every rule the template already carried survives.
+      {how_at, _} = :binary.match(content, "## How to review")
+      {section_at, _} = :binary.match(content, section)
+      {which_at, _} = :binary.match(content, "## Which build answers the call")
+      assert how_at < section_at and section_at < which_at
+
+      assert content =~ "print the final URL and the page"
+      assert content =~ "counts only after a positive control in the same session"
+    end
+
+    test "the in-progress and e2e review dispatches deliver the fidelity sections intact (task 01a13ae7 stage 3)" do
+      # Driven through `dispatch_prompt/3`, so this covers what an agent is
+      # served after every splice, including the git-workflow strip that runs
+      # for a task with no deploy repos (a plain-map task has none).
+      task = fn status ->
+        %{
+          id: "00000000-0000-0000-0000-0000000000aa",
+          title: "Fidelity fixture",
+          description: "d",
+          status: status,
+          priority: "high"
+        }
+      end
+
+      plan = %{id: "00000000-0000-0000-0000-0000000000bb", version: 1, stages: []}
+
+      stage = fn kind ->
+        %{
+          id: "00000000-0000-0000-0000-0000000000cc",
+          name: "S",
+          description: "Edit lib/platform_web/live/tasks_live.html.heex",
+          position: 1,
+          status: "running",
+          validations: [%{id: "val-1", kind: kind, status: "pending"}]
+        }
+      end
+
+      in_progress =
+        HeartbeatScheduler.dispatch_prompt(task.("in_progress"), plan, stage.("test_pass"))
+
+      assert in_progress =~ PromptTemplates.in_progress_design_fidelity_section()
+
+      review =
+        HeartbeatScheduler.dispatch_prompt(task.("in_review"), plan, stage.("e2e_behavior"))
+
+      assert review =~ PromptTemplates.review_e2e_design_fidelity_section()
     end
 
     test "the live dispatch.planning row serves the retargeted section, not just the code default (task 019f9b29-5ecd stage 6)" do
@@ -639,7 +819,20 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
 
       assert content =~ "ANNOTATIONS", "the retry-sentinel rule was lost"
       assert content =~ "initial mix test failed"
-      assert content =~ "ProofOfLifeTest", "the known-flake list was lost"
+
+      # Task 01a13aac stage 4 retired the known-flake list: the four names it
+      # carried had 0 retry-green occurrences in 320 CI runs. A retry-green is
+      # now a red run. Pin both halves: the list is gone, and the replacement
+      # rule is present (refuting the names alone passes on an empty body).
+      for name <-
+            ~w(ProofOfLifeTest SandboxHelpersScopedDrainTest conn_case_supervised_orphan_test) do
+        refute content =~ name, "the retired known-flake list is back (#{name})"
+      end
+
+      refute content =~ "LocalRunnerTest force_stop"
+      refute content =~ "may be merged past"
+      assert content =~ "There is no known-flake list", "the no-known-flakes rule was lost"
+      assert content =~ "a test the retry greened is a red run"
       assert content =~ "mergedAt", "the verify-the-field rule was lost"
 
       # Added by the rewrite: a merged `--delete-branch` from a worktree skips
@@ -691,6 +884,31 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
              "the migration must write the descriptor body verbatim"
 
       refute repaired =~ "must NOT arm it yet"
+    end
+
+    test "the retire-known-flakes migration rewrites a row that still carries the list" do
+      # Task 01a13aac stage 4. Fresh test DBs already hold the descriptor, so
+      # make the row stale first or `up/0` would pass as a no-op.
+      stale =
+        "Known flakes (ProofOfLifeTest, LocalRunnerTest force_stop) may be merged past"
+
+      template = PromptTemplates.get_template_by_slug("dispatch.deploying")
+      assert template, "dispatch.deploying row must exist for this test to mean anything"
+
+      {:ok, _} = PromptTemplates.update_template(template, %{content: stale})
+
+      assert PromptTemplates.get_template_by_slug("dispatch.deploying").content == stale,
+             "precondition failed: the row was not actually made stale"
+
+      :ok = Platform.Repo.Migrations.ForceUpdateDeployingTemplateRetireKnownFlakes.up()
+
+      repaired = PromptTemplates.get_template_by_slug("dispatch.deploying").content
+
+      assert repaired == PromptTemplates.default_content_for_slug("dispatch.deploying"),
+             "the migration must write the descriptor body verbatim"
+
+      refute repaired =~ "ProofOfLifeTest"
+      assert repaired =~ "There is no known-flake list"
     end
   end
 

@@ -103,6 +103,141 @@ defmodule PlatformWeb.Components.Canvases.PrototypeFrameTest do
     end
   end
 
+  describe "fullscreen" do
+    test "toggling keeps the bridge element and iframe, adds fullscreen classes and a close control",
+         ctx do
+      {:ok, view, html} =
+        live_isolated(build_conn(), __MODULE__.Host,
+          session: %{"canvas_id" => ctx.canvas.id, "node" => proto_node(ctx.prototype.id)}
+        )
+
+      bridge = ~s([phx-hook="CanvasRoomBridge"])
+
+      assert has_element?(
+               view,
+               ~s([data-role="prototype-canvas"][phx-hook="PrototypeFullscreen"])
+             )
+
+      [before_id] = find(html, bridge) |> LazyHTML.attribute("id")
+      refute has_element?(view, ~s([data-role="prototype-fullscreen-close"]))
+      refute has_element?(view, ~s([data-role="prototype-canvas"].fixed))
+      assert has_element?(view, ~s([data-role="prototype-open"]))
+
+      view |> element(~s([data-role="prototype-fullscreen"])) |> render_click()
+
+      assert has_element?(view, ~s([data-role="prototype-canvas"].fixed.inset-0.z-50.h-dvh))
+      assert has_element?(view, ~s([data-role="prototype-fullscreen-close"]))
+      assert has_element?(view, ~s([data-role="prototype-open"]))
+      [after_id] = find(render(view), bridge) |> LazyHTML.attribute("id")
+      assert after_id == before_id
+      assert has_element?(view, "#{bridge} iframe")
+
+      view |> element(~s([data-role="prototype-fullscreen-close"])) |> render_click()
+      refute has_element?(view, ~s([data-role="prototype-canvas"].fixed))
+      [back_id] = find(render(view), bridge) |> LazyHTML.attribute("id")
+      assert back_id == before_id
+    end
+
+    test "Escape closes it", ctx do
+      {:ok, view, _} =
+        live_isolated(build_conn(), __MODULE__.Host,
+          session: %{"canvas_id" => ctx.canvas.id, "node" => proto_node(ctx.prototype.id)}
+        )
+
+      view |> element(~s([data-role="prototype-fullscreen"])) |> render_click()
+      assert has_element?(view, ~s([phx-window-keydown="fullscreen"][phx-key="Escape"]))
+
+      view
+      |> element(~s([phx-window-keydown="fullscreen"]))
+      |> render_keydown(%{"key" => "Escape"})
+
+      refute has_element?(view, ~s([data-role="prototype-canvas"].fixed))
+    end
+
+    test "the fullscreen root carries the UA-popover resets and never a server-rendered popover",
+         ctx do
+      {:ok, view, _} =
+        live_isolated(build_conn(), __MODULE__.Host,
+          session: %{"canvas_id" => ctx.canvas.id, "node" => proto_node(ctx.prototype.id)}
+        )
+
+      view |> element(~s([data-role="prototype-fullscreen"])) |> render_click()
+
+      [root] = find(render(view), ~s([data-role="prototype-canvas"])) |> Enum.to_list()
+      [class] = LazyHTML.attribute(root, "class")
+      classes = String.split(class)
+
+      safe_area = [
+        "pt-[env(safe-area-inset-top)]",
+        "pr-[env(safe-area-inset-right)]",
+        "pb-[env(safe-area-inset-bottom)]",
+        "pl-[env(safe-area-inset-left)]"
+      ]
+
+      for c <-
+            ~w(m-0 h-dvh w-dvw max-h-none max-w-none border-0 p-0 overflow-hidden text-base-content) ++
+              safe_area do
+        assert c in classes, "fullscreen root is missing #{c}: #{class}"
+      end
+
+      # The hook owns `popover` (a client-side sticky attribute). A server
+      # render of it would either fight the hook or, on the native path,
+      # hide the element (`[popover]:not(:popover-open)` is display: none).
+      assert LazyHTML.attribute(root, "popover") == []
+    end
+
+    # morphdom keys children by id. A node inserted AHEAD of the keyed room
+    # element makes morphdom detach and re-append it, which reloads the
+    # iframe and re-joins the room (measured in task 01a1389f stage 1:
+    # iframe loads 1 -> 2 -> 3 across enter and exit, the bug shipped in
+    # #1236). So the root's children up to and including the room element
+    # must be the same nodes, by tag and id, in every state.
+    test "no state inserts a node ahead of the room element, and its ids never change", ctx do
+      {:ok, view, _} =
+        live_isolated(build_conn(), __MODULE__.Host,
+          session: %{"canvas_id" => ctx.canvas.id, "node" => proto_node(ctx.prototype.id)}
+        )
+
+      prefix = fn ->
+        html = render(view)
+        [root] = find(html, ~s([data-role="prototype-canvas"])) |> Enum.to_list()
+
+        children =
+          root
+          |> LazyHTML.child_nodes()
+          |> LazyHTML.filter("*")
+          |> Enum.map(fn child ->
+            {LazyHTML.tag(child), LazyHTML.attribute(child, "id"),
+             LazyHTML.attribute(child, "phx-hook")}
+          end)
+
+        idx = Enum.find_index(children, fn {_, _, hook} -> hook == ["CanvasRoomBridge"] end)
+        assert idx, "no room element among the root's children: #{inspect(children)}"
+
+        [frame] = find(html, ~s([data-role="prototype-frame"])) |> Enum.to_list()
+        {Enum.take(children, idx + 1), LazyHTML.attribute(frame, "id")}
+      end
+
+      inline = prefix.()
+      view |> element(~s([data-role="prototype-fullscreen"])) |> render_click()
+      assert prefix.() == inline
+
+      view |> element(~s([data-role="prototype-version-stamp"])) |> render_click()
+      assert has_element?(view, ~s([data-role="prototype-versions-panel"]))
+      assert prefix.() == inline
+
+      view |> element(~s([data-role="prototype-menu-button"])) |> render_click()
+      assert has_element?(view, ~s([data-role="prototype-menu-panel"]))
+      assert prefix.() == inline
+
+      view |> element(~s([data-role="prototype-fullscreen-close"])) |> render_click()
+      assert prefix.() == inline
+
+      view |> element(~s([data-role="prototype-menu-button"])) |> render_click()
+      assert prefix.() == inline
+    end
+  end
+
   describe "latest version" do
     test "frames the latest version with sandbox allow-scripts and nothing else", ctx do
       html = render_frame(proto_node(ctx.prototype.id), ctx.canvas.id)

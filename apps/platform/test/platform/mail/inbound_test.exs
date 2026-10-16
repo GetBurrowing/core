@@ -560,13 +560,14 @@ defmodule Platform.Mail.InboundTest do
   # ── read-only seam ────────────────────────────────────────────────────────
 
   describe "the IMAP seam is read-only" do
-    test "the client behaviour has exactly the six read callbacks" do
+    test "the client behaviour has exactly the seven read callbacks" do
       assert Enum.sort(Platform.Mail.Imap.Client.behaviour_info(:callbacks)) ==
                Enum.sort(
                  connect: 1,
                  list_folders: 1,
                  examine: 2,
                  uids_after: 2,
+                 uids_since: 2,
                  fetch_raw: 2,
                  logout: 1
                )

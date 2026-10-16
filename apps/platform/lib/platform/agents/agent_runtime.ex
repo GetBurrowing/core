@@ -14,6 +14,11 @@ defmodule Platform.Agents.AgentRuntime do
   @valid_statuses ~w(pending active suspended revoked)
   @valid_trust_levels ~w(viewer participant collaborator admin)
   @valid_transports ~w(websocket)
+  # Install-managed (native) runtimes, task 01a10322 stage 1. `managed_by` is
+  # nil for a federated runtime and "install" for one this install runs.
+  @valid_managed_by ~w(install)
+  @valid_harnesses ~w(claude_code codex)
+  @valid_desired_states ~w(running stopped)
   # `meetings` is a DEFAULT, not merely grantable (task 01a066af stage 4).
   # `meeting_say` is the only way an invited agent can speak in a room, and it
   # is guarded independently by `Platform.Meetings`' own room check — an agent no
@@ -42,12 +47,22 @@ defmodule Platform.Agents.AgentRuntime do
     field(:auth_token_hash, :string)
     field(:last_connected_at, :utc_datetime_usec)
     field(:metadata, :map, default: %{})
+    field(:managed_by, :string)
+    field(:harness, :string)
+    field(:desired_state, :string, default: "stopped")
 
     timestamps(type: :utc_datetime_usec)
   end
 
   @doc "The default ordered module profile for a new runtime."
   def default_tool_profile, do: @default_tool_profile
+
+  @doc "The harnesses an install-managed runtime may run."
+  def valid_harnesses, do: @valid_harnesses
+
+  @doc "True when this install runs the runtime itself (a native agent)."
+  def install_managed?(%__MODULE__{managed_by: "install"}), do: true
+  def install_managed?(_), do: false
 
   def changeset(runtime, attrs) do
     runtime
@@ -61,13 +76,29 @@ defmodule Platform.Agents.AgentRuntime do
       :trust_level,
       :auth_token_hash,
       :last_connected_at,
-      :metadata
+      :metadata,
+      :managed_by,
+      :harness,
+      :desired_state
     ])
     |> validate_required([:runtime_id, :owner_user_id])
     |> validate_inclusion(:status, @valid_statuses)
     |> validate_inclusion(:trust_level, @valid_trust_levels)
     |> validate_inclusion(:transport, @valid_transports)
+    |> validate_inclusion(:managed_by, @valid_managed_by)
+    |> validate_inclusion(:harness, @valid_harnesses)
+    |> validate_inclusion(:desired_state, @valid_desired_states)
+    |> validate_managed_harness()
     |> unique_constraint(:runtime_id)
+  end
+
+  # An install-managed runtime must name the harness the install runs for it;
+  # a federated runtime (managed_by nil) never carries one.
+  defp validate_managed_harness(changeset) do
+    case get_field(changeset, :managed_by) do
+      "install" -> validate_required(changeset, [:harness])
+      _ -> changeset
+    end
   end
 
   @doc "Hash a raw token for storage."

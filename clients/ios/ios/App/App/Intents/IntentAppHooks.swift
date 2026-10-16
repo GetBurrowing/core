@@ -43,11 +43,19 @@ enum IntentAppHooks {
         Task { await refresh.didSignIn(host: host) }
     }
 
-    /// The app came to the foreground: re-index installs not refreshed in
-    /// the last 15 minutes.
+    /// The app came to the foreground: on the first launch after an index
+    /// schema change, rebuild Burrow's Spotlight items
+    /// (SpotlightIndexMigration); then re-index installs not refreshed in
+    /// the last 15 minutes. In that order, so the rebuild's delete never
+    /// lands after the refresh.
     @discardableResult
-    static func didBecomeActive(refresh: PersonalIndexRefresh = PersonalIndexRefresh()) -> Task<[String: PersonalIndexCounts], Never> {
-        Task { await refresh.refreshStale() }
+    static func didBecomeActive(
+        refresh: PersonalIndexRefresh = PersonalIndexRefresh(), migration: SpotlightIndexMigration = SpotlightIndexMigration()
+    ) -> Task<[String: PersonalIndexCounts], Never> {
+        Task {
+            await migration.runIfNeeded()
+            return await refresh.refreshStale()
+        }
     }
 
     /// Sign-out or removal of an install: its titles stop being searchable,

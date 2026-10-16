@@ -145,6 +145,18 @@ defmodule Platform.Application do
            # owns the :chat_context_summary_cache ETS table. No Repo, no
            # PubSub: a lifecycle owner only, lost on restart by design.
            Platform.Chat.ContextSummaryCache,
+           # Reply-failure notice dedupe (task 01a10322 stage 1) — owns the
+           # :chat_reply_failure_notices table. ETS lifecycle owner only
+           # (NonceCache shape); lost on restart by design.
+           Platform.Chat.ReplyFailure.Dedupe,
+           # No-reply watchdog for native agents (task 01a10322 stage 7) —
+           # timers only; its verdicts run under Platform.TaskSupervisor.
+           # Off in the test env (`:native_reply_watchdog_ms` false).
+           Platform.Chat.ReplyFailure.Watchdog,
+           # Native agents' observed state and the agent host's command
+           # channel (task 01a10322 stage 2). ETS, rebuilt from the host's
+           # inventory on every join.
+           Platform.AgentHost.Reconciler,
            # Active agent mutex — ETS-backed per-space agent tracking (ADR 0027)
            Platform.Chat.ActiveAgentStore,
            # External-agent ephemeral credentials — ETS-backed, lost on
@@ -244,6 +256,7 @@ defmodule Platform.Application do
       |> maybe_add_deploy_merge_reconciler()
       |> maybe_add_canvas_search_backfill()
       |> maybe_add_burrow_docs_seed()
+      |> maybe_add_default_space_seed()
       |> ensure_task_router_watcher_after_endpoint()
 
     # See https://hexdocs.pm/elixir/Supervisor.html
@@ -422,6 +435,26 @@ defmodule Platform.Application do
   #
   # Disabled in config/test.exs — tests call `sync/0` directly inside the
   # DataCase sandbox.
+  # A fresh install's "#general" (task 01a10322 stage 6): a release booted on
+  # an empty database had zero spaces. Same shape as the seeds above: a
+  # one-shot `Task`, `restart: :transient`, entry point `run_at_boot/0`, which
+  # never raises. It creates the channel only when the install has none.
+  # Disabled in config/test.exs; tests call `DefaultSpace.ensure/0`.
+  defp maybe_add_default_space_seed(children) do
+    if Application.get_env(:platform, :start_default_space_seed, true) do
+      children ++
+        [
+          Supervisor.child_spec(
+            {Task, fn -> Platform.Chat.DefaultSpace.run_at_boot() end},
+            id: :default_space_seed,
+            restart: :transient
+          )
+        ]
+    else
+      children
+    end
+  end
+
   defp maybe_add_burrow_docs_seed(children) do
     if Application.get_env(:platform, :start_burrow_docs_seed, true) do
       children ++

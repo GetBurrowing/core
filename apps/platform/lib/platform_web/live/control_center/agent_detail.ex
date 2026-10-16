@@ -12,6 +12,8 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
   import PlatformWeb.ControlCenter.Helpers
 
   alias PlatformWeb.ControlCenter.AgentAvatarUpload
+  alias PlatformWeb.ControlCenter.AgentCard
+  alias PlatformWeb.ControlCenter.NativeStatus
   alias PlatformWeb.ControlCenter.RuntimePanel
   alias PlatformWeb.ControlCenter.VaultEvents
 
@@ -23,6 +25,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
   attr(:selected_agent_directory_entry, :map, default: nil)
   attr(:pending_delete_slug, :string, default: nil)
   attr(:can_manage?, :boolean, default: false)
+  attr(:native, :map, default: nil)
 
   def header(assigns) do
     ~H"""
@@ -36,12 +39,25 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
             <h1 class="truncate text-2xl font-semibold text-base-content">
               {@agent.name}
             </h1>
-            <span class={[
-              "inline-block h-2.5 w-2.5 rounded-full",
-              agent_online?(@agent, @runtime, @federation_online?) && "bg-success",
-              !agent_online?(@agent, @runtime, @federation_online?) &&
-                "bg-base-content/25"
-            ]} />
+            <span
+              :if={is_nil(@native)}
+              class={[
+                "inline-block h-2.5 w-2.5 rounded-full",
+                agent_online?(@agent, @runtime, @federation_online?) && "bg-success",
+                !agent_online?(@agent, @runtime, @federation_online?) &&
+                  "bg-base-content/25"
+              ]}
+            />
+            <span
+              :if={@native}
+              aria-hidden="true"
+              class={[
+                "inline-block h-2.5 w-2.5 rounded-full",
+                @native.view.running? && "bg-success",
+                !@native.view.running? && "bg-base-content/25"
+              ]}
+            />
+            <AgentCard.status_tag :if={@native && @native.view.tag} tag={@native.view.tag} />
             <span class={agent_badge_class(@agent.status)}>
               {humanize_value(@agent.status)}
             </span>
@@ -52,7 +68,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
               Runtime {humanize_value(@runtime.status)}
             </span>
             <span
-              :if={@agent.runtime_type == "external"}
+              :if={@agent.runtime_type == "external" and is_nil(@native)}
               class={[
                 "rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-widest",
                 @federation_online? && "bg-success/15 text-success",
@@ -69,9 +85,16 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
             </span>
           </div>
           <p class="mt-1 text-sm text-base-content/60">{@agent.slug}</p>
+          <p
+            :if={@native}
+            id="native-agent-meta"
+            class="mt-1 text-xs leading-4 text-base-content/60"
+          >
+            {native_meta_line(@native)}
+          </p>
           <div class="mt-3 flex flex-wrap gap-2 text-xs text-base-content/55">
             <span
-              :if={@agent.runtime_type == "external"}
+              :if={@agent.runtime_type == "external" and is_nil(@native)}
               class="inline-flex items-center gap-1 rounded-full bg-info/15 px-2.5 py-1 text-info"
             >
               <span class="hero-globe-alt h-3.5 w-3.5" /> Federated
@@ -100,8 +123,48 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
         <div
           :if={@can_manage?}
           id="agent-primary-actions"
-          class="grid w-full grid-cols-2 gap-2 sm:w-auto sm:grid-cols-2 xl:grid-cols-4"
+          class={[
+            "grid w-full gap-2 sm:w-auto",
+            @native && "grid-cols-3 sm:grid-cols-4",
+            is_nil(@native) && "grid-cols-2 sm:grid-cols-2 xl:grid-cols-4"
+          ]}
         >
+          <%!-- Managed (native) agents: three equal buttons, disabled at the
+               boundaries and never hidden (task 01a10322 stage 4). The server
+               refuses each one unless NativeAgents.can_manage?/2. --%>
+          <button
+            :if={@native}
+            id="native-start"
+            type="button"
+            phx-click="native_start"
+            phx-value-agent_id={@agent.id}
+            class="btn btn-primary btn-sm w-full"
+            disabled={!(@native.can_manage? and @native.buttons.start)}
+          >
+            Start
+          </button>
+          <button
+            :if={@native}
+            id="native-restart"
+            type="button"
+            phx-click="native_restart"
+            phx-value-agent_id={@agent.id}
+            class="btn btn-outline btn-sm w-full"
+            disabled={!(@native.can_manage? and @native.buttons.restart)}
+          >
+            {if @native.restarting?, do: "Restarting", else: "Restart"}
+          </button>
+          <button
+            :if={@native}
+            id="native-stop"
+            type="button"
+            phx-click="native_stop"
+            phx-value-agent_id={@agent.id}
+            class="btn btn-outline btn-sm w-full"
+            disabled={!(@native.can_manage? and @native.buttons.stop)}
+          >
+            Stop
+          </button>
           <button
             :if={@agent.runtime_type != "external"}
             id="start-runtime"
@@ -136,7 +199,10 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
             id="delete-agent"
             type="button"
             phx-click="request_delete_agent"
-            class="btn btn-ghost btn-sm w-full text-error"
+            class={[
+              "btn btn-ghost btn-sm w-full text-error",
+              @native && "col-span-3 sm:col-span-1"
+            ]}
             disabled={
               @selected_agent_directory_entry &&
                 @selected_agent_directory_entry.workspace_managed?
@@ -149,7 +215,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
             id="delete-agent"
             type="button"
             phx-click="delete_agent"
-            class="btn btn-error btn-sm w-full"
+            class={["btn btn-error btn-sm w-full", @native && "col-span-3 sm:col-span-1"]}
             disabled={
               @selected_agent_directory_entry &&
                 @selected_agent_directory_entry.workspace_managed?
@@ -167,6 +233,20 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
       </div>
     </section>
     """
+  end
+
+  # "Claude Code on this server · Contained", plus when it crashed. The
+  # profile is what the host REPORTED; core never configures or branches on it.
+  defp native_meta_line(native) do
+    [
+      NativeStatus.harness_label(native.harness) <> " on this server",
+      native.host && NativeStatus.profile_label(native.host[:profile]),
+      is_nil(native.host) && Platform.AgentHost.describe(),
+      native.view.state == :crashed && native.observed_at &&
+        "Crashed at " <> format_datetime(native.observed_at)
+    ]
+    |> Enum.filter(&is_binary/1)
+    |> Enum.join(" · ")
   end
 
   # ── Stats ─────────────────────────────────────────────────────────
@@ -246,6 +326,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
   attr(:available_spaces, :list, default: [])
   attr(:available_meeting_spaces, :list, default: [])
   attr(:can_manage?, :boolean, default: false)
+  attr(:managed?, :boolean, default: false)
 
   def federation_panels(assigns) do
     ~H"""
@@ -254,18 +335,25 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
       :if={@agent.runtime_id}
       class="rounded-3xl border border-edge bg-base-100 p-5 shadow-sm"
     >
-      <h2 class="text-lg font-semibold text-base-content">
+      <h2 :if={!@managed?} class="text-lg font-semibold text-base-content">
         <span class="hero-globe-alt mr-1 inline-block h-5 w-5 align-text-bottom" />
         Federation Connection
       </h2>
-      <p class="mt-1 text-sm text-base-content/60">
+      <p :if={!@managed?} class="mt-1 text-sm text-base-content/60">
         External runtime linked to this agent.
+      </p>
+      <h2 :if={@managed?} class="text-lg font-semibold text-base-content">
+        <span class="hero-server mr-1 inline-block h-5 w-5 align-text-bottom" /> Runtime
+      </h2>
+      <p :if={@managed?} class="mt-1 text-sm text-base-content/60">
+        Runs on this server.
       </p>
       <RuntimePanel.federation_connection_panel
         agent={@agent}
         regenerated_token={@regenerated_token}
         federation_online?={@federation_online?}
         can_manage?={@can_manage?}
+        managed?={@managed?}
       />
     </section>
 
@@ -291,67 +379,83 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
       phx-change="validate_config"
       class="flex flex-col gap-6"
     >
-      <%!-- Identity section --%>
-      <section class="rounded-3xl border border-edge bg-base-100 p-5 shadow-sm">
-        <h2 class="text-lg font-semibold text-base-content">
-          <span class="hero-identification mr-1 inline-block h-5 w-5 align-text-bottom" /> Identity
-        </h2>
-        <p class="mt-1 text-sm text-base-content/60">
-          How this agent appears in Suite chat. Config and model routing are managed by the remote OpenClaw instance.
-        </p>
-        <div class="mt-4 space-y-4">
-          <label class="form-control max-w-md">
-            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
-              Display name
-            </span>
-            <input
-              type="text"
-              name="config[name]"
-              value={@config_form[:name].value || ""}
-              class="input input-bordered w-full"
-            />
-          </label>
-          <%!-- Color family picker for federated agents --%>
-          <div>
-            <span class="mb-2 block text-xs font-semibold uppercase tracking-widest text-base-content/50">
-              Color family
-            </span>
-            <div class="flex flex-wrap gap-2">
-              <label
-                :for={color <- Platform.Agents.ColorPalette.all()}
-                class="cursor-pointer"
-                title={color.label}
-              >
-                <input
-                  type="radio"
-                  name="config[color]"
-                  value={color.id}
-                  class="sr-only peer"
-                  checked={(@config_form[:color].value || "") == color.id}
-                />
-                <span
-                  class={[
-                    "flex flex-col items-center gap-1 px-2 py-1.5 rounded-lg border-2 transition-all",
-                    "peer-checked:border-current border-transparent hover:border-edge"
-                  ]}
-                  style={"color: #{color.accent};"}
+      <p
+        :if={@managed? and not @can_manage?}
+        id="native-identity-locked"
+        class="text-sm text-base-content/60"
+      >
+        Only the agent's owner or an admin can change its identity and voice.
+      </p>
+      <fieldset
+        id="federated-identity-fieldset"
+        disabled={@managed? and not @can_manage?}
+        class="contents"
+      >
+        <%!-- Identity section --%>
+        <section class="rounded-3xl border border-edge bg-base-100 p-5 shadow-sm">
+          <h2 class="text-lg font-semibold text-base-content">
+            <span class="hero-identification mr-1 inline-block h-5 w-5 align-text-bottom" /> Identity
+          </h2>
+          <p :if={!@managed?} class="mt-1 text-sm text-base-content/60">
+            How this agent appears in Suite chat. Config and model routing are managed by the remote OpenClaw instance.
+          </p>
+          <p :if={@managed?} class="mt-1 text-sm text-base-content/60">
+            How this agent appears in Suite chat.
+          </p>
+          <div class="mt-4 space-y-4">
+            <label class="form-control max-w-md">
+              <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                Display name
+              </span>
+              <input
+                type="text"
+                name="config[name]"
+                value={@config_form[:name].value || ""}
+                class="input input-bordered w-full"
+              />
+            </label>
+            <%!-- Color family picker for federated agents --%>
+            <div>
+              <span class="mb-2 block text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                Color family
+              </span>
+              <div class="flex flex-wrap gap-2">
+                <label
+                  :for={color <- Platform.Agents.ColorPalette.all()}
+                  class="cursor-pointer"
+                  title={color.label}
                 >
-                  <span class="w-5 h-5 rounded-full" style={"background: #{color.accent};"}></span>
-                  <span class="text-[9px] text-base-content/60 font-medium">{color.label}</span>
-                </span>
-              </label>
+                  <input
+                    type="radio"
+                    name="config[color]"
+                    value={color.id}
+                    class="sr-only peer"
+                    checked={(@config_form[:color].value || "") == color.id}
+                  />
+                  <span
+                    class={[
+                      "flex flex-col items-center gap-1 px-2 py-1.5 rounded-lg border-2 transition-all",
+                      "peer-checked:border-current border-transparent hover:border-edge"
+                    ]}
+                    style={"color: #{color.accent};"}
+                  >
+                    <span class="w-5 h-5 rounded-full" style={"background: #{color.accent};"}></span>
+                    <span class="text-[9px] text-base-content/60 font-medium">{color.label}</span>
+                  </span>
+                </label>
+              </div>
+            </div>
+            <.avatar_field agent={@agent} uploads={@uploads} />
+            <div class="flex justify-stretch sm:justify-end">
+              <button type="submit" class="btn btn-neutral w-full sm:w-auto">
+                Update identity
+              </button>
             </div>
           </div>
-          <.avatar_field agent={@agent} uploads={@uploads} />
-          <div class="flex justify-stretch sm:justify-end">
-            <button type="submit" class="btn btn-neutral w-full sm:w-auto">
-              Update identity
-            </button>
-          </div>
-        </div>
-      </section>
+        </section>
 
-      <.voice_card agent={@agent} config_form={@config_form} />
+        <.voice_card agent={@agent} config_form={@config_form} />
+      </fieldset>
     </.form>
 
     <%!-- Spaces section --%>

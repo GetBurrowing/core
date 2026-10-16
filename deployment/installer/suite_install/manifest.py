@@ -57,6 +57,11 @@ UPGRADE_CHANNELS = ("stable", "edge", "pinned")
 TARGETS = ("single-host", "mac")
 ACCESS_MODES = ("cloudflare-tunnel", "tailscale")
 MEDIA_REACH = ("lan", "tailnet", "public")
+# Native agents (core task 01a10322 stage 3). A manifest WITHOUT an [agents]
+# table is "off" (validate.validate sets it), so every manifest written before
+# this table existed renders byte-unchanged; a table that omits `profile` gets
+# "full_machine", the profile for a VM we provision.
+AGENT_PROFILES = ("full_machine", "contained", "off")
 
 # Every key the manifest may contain, at every depth. A key outside this tree
 # is `unknown_key` (or `unknown_service` under [services]), so a typo can never
@@ -147,6 +152,11 @@ SCHEMA = {
     "day2": {
         "upgrade_channel": _enum(UPGRADE_CHANNELS, "stable"),
         "phone_home": _bool(False),
+    },
+    # Native agents' capability profile: install config, realised by
+    # packaging. Core never branches on it; the agent host reports it.
+    "agents": {
+        "profile": _enum(AGENT_PROFILES, "full_machine"),
     },
 }
 

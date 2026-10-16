@@ -646,6 +646,128 @@ defmodule Platform.Orchestration.PromptTemplates do
   @spec planning_ci_evidence_section() :: String.t()
   def planning_ci_evidence_section, do: @planning_ci_evidence_section
 
+  # Task 01a13ae7 stage 2 (Design fidelity). The planner used to read an
+  # attached design canvas and paraphrase it into stage prose, which loses
+  # spacing, hierarchy, states and copy; the executor then built from the
+  # paraphrase. This replaces the paraphrase with an inventory anchored to
+  # canvas nodes and a fidelity e2e_behavior case authored from it. The two
+  # kinds of canvas rule (prototype/mockup vs ADR-0046 design direction) is
+  # from Saru (design agent): a direction canvas states intent, so its
+  # wireframes are never a layout to reproduce. Shared with
+  # `HeartbeatScheduler.hardcoded_dispatch_planning/4` like the sections above.
+  # Edit it HERE; a row-only edit is lost to the next force-update migration
+  # for this slug.
+  @planning_design_fidelity_section """
+  ### Attached design canvases: plan from an inventory, not a paraphrase
+
+  The design canvases for this task are listed in this dispatch's Attached design canvases block, and also by `task_list_canvases`. Do not rely on the `context` field for them: not every runtime bridge surfaces it. Read each canvas whole with `canvas_get(canvas_id, mode: "full")`.
+
+  **Two kinds of design canvas, treated differently.** Tell them apart by the title and the node types, never by the canvas `kind` field: `kind` is the root node type and is `stack` for nearly every canvas.
+  - **Prototype or mockup canvas**: contains at least one `prototype` or `embed` node and is built to look like the product. It IS the spec. Match it screen for screen, including layout, spacing and hierarchy.
+  - **Design-direction canvas** (ADR-0046): titled `Design direction: …`, or containing no `embed` and no `prototype` node. Usually a `stack` of markdown, tables and low-fi ASCII wireframes carrying an "Advisory" line. It states INTENT: a signature element, palette slots, states, copy and truncation rules. Its wireframes are not a layout to reproduce. The title prefix wins: a `Design direction: …` canvas is a direction canvas even if it holds an `embed`.
+
+  **Inventory.** Every UI stage description that builds a canvas-backed screen carries an INVENTORY of that screen, not a prose summary of it. One row per element:
+
+  `canvas <id> node <node id> | element | states (default/hover/empty/loading/error, as the canvas shows them) | copy (verbatim, quoted) | tokens (semantic slots)`
+
+  - For an `embed`, anchor the row at `node <id>` plus a selector or region inside its `srcdoc`.
+  - For a design-direction canvas, the rows record the elements, states, copy and token slots the canvas NAMES, each anchored at the node that names it (the markdown, table or code node). Do not derive layout rows from its wireframes.
+  - If the feature needs a state the canvas does not show, write `not in canvas` in that cell. Do not invent one.
+
+  **Fidelity case.** Author ONE fidelity `e2e_behavior` case per canvas-backed screen. Its `setup` begins `Fidelity case — canvas <id>` and names the viewport(s). Its `expected` enumerates the inventory rows.
+  - Prototype or mockup canvas: `expected` says the case FAILS if any inventory element, state or string is absent, or if the screen contains structure that is neither in the inventory nor declared under `Design deviations` in the executor's stage report.
+  - Design-direction canvas: `expected` checks only that every element, state, string and token slot in the inventory is present, unless declared under `Design deviations`. It does NOT check layout resemblance to the wireframes.
+
+  Fidelity cases count toward the 2-5 e2e_behavior cases. They are the fidelity path with no human gate: they never license a `manual_approval`.
+  """
+
+  @doc """
+  The `### Attached design canvases: plan from an inventory, not a paraphrase`
+  section of the planning dispatch (task 01a13ae7). Shared by the
+  `dispatch.planning` descriptor and the hardcoded planning fallback so the two
+  routes stay byte-identical.
+  """
+  @spec planning_design_fidelity_section() :: String.t()
+  def planning_design_fidelity_section, do: @planning_design_fidelity_section
+
+  # Task 01a13ae7 stage 3 (Design fidelity). The execution half of the
+  # inventory written at plan time: screenshot first, build to the inventory,
+  # declare every difference. Every sentence is conditional on stage 1's
+  # Attached design canvases block, which
+  # `HeartbeatScheduler.render_design_canvases_section/2` splices in BELOW
+  # this paragraph (before the context anchor), so it says "in this
+  # dispatch", not "above". It sits BEFORE the `The Stage Description block
+  # above` line, which is a `@context_anchors` entry
+  # (heartbeat_scheduler.ex): never move it below that line or start one of
+  # its own lines with that text. It also sits ABOVE `{{git_workflow_block}}`
+  # on purpose: `strip_bounded_git_workflow/2` deletes everything from the
+  # `## Git Workflow` heading to the next context anchor when the task has no
+  # deploy repos, so text placed between the two would vanish.
+  #
+  # `stage_complete` takes no evidence argument (tool_surface.ex
+  # `stage_complete` definition: `stage_id` only), so the list rides on the
+  # last `validation_pass` evidence instead. Shared with
+  # `HeartbeatScheduler.hardcoded_dispatch_in_progress/4`. Edit it HERE; a
+  # row-only edit is lost to the next force-update migration for this slug.
+  #
+  # None of the three design fidelity sections may quote the block's heading
+  # (`HeartbeatScheduler.design_canvases_heading/0`) verbatim: they ride in
+  # EVERY dispatch of their phase, so a quoted heading left a plain substring
+  # search for it unable to tell a canvas-present body from a canvas-less one
+  # (task 01a13ae7 stage 4, review gate 01a13af2). Name the block in prose.
+  @in_progress_design_fidelity_section """
+  ## Design fidelity (when an Attached design canvases block is present)
+
+  If this dispatch carries an Attached design canvases block and this stage changes rendered UI:
+  1. Screenshot every canvas FIRST, with that block's render recipe, and post the screenshots to the execution space before your first commit.
+  2. Build to the stage description's inventory: every element, every state and every verbatim string it lists.
+  3. At stage end, post a message to the execution space headed `Design deviations — stage <n>` that lists, for each place the implementation does not match, `canvas <id> node <node id> | what differs | why`. If there is none, post `Design deviations — stage <n>: none`.
+  4. Put the same list in the evidence of your last `validation_pass` for this stage, under `design_deviations` (`stage_complete` takes no evidence argument).
+
+  An undeclared difference fails the fidelity case at task review. Without that block, or on a stage that changes no rendered UI, this section does not apply.
+  """
+
+  @doc """
+  The `## Design fidelity` section of the in-progress dispatch (task
+  01a13ae7). Shared by the `dispatch.in_progress` descriptor and the hardcoded
+  in-progress fallback so the two routes stay byte-identical.
+  """
+  @spec in_progress_design_fidelity_section() :: String.t()
+  def in_progress_design_fidelity_section, do: @in_progress_design_fidelity_section
+
+  # Task 01a13ae7 stage 3. The review half: how a `Fidelity case — canvas
+  # <id>` case (authored by `@planning_design_fidelity_section`) is judged.
+  # The prototype-vs-direction rule is Saru's and matches the planning text:
+  # discriminate by title prefix and node types, never by `canvas.kind`. For a
+  # direction canvas the side-by-side is context and only the inventory gates.
+  # Shared with `HeartbeatScheduler.hardcoded_dispatch_review_e2e/2`. Edit it
+  # HERE; a row-only edit is lost to the next force-update migration.
+  @review_e2e_design_fidelity_section """
+  ## Design fidelity (when an Attached design canvases block is present)
+
+  A case whose `setup` begins `Fidelity case — canvas <id>` is a fidelity case. Render canvases with the recipe in this dispatch's Attached design canvases block.
+
+  Two kinds of design canvas. Tell them apart by the title and the node types, never by the canvas `kind` field: `kind` is the root node type and is `stack` for nearly every canvas.
+  - **Prototype or mockup canvas** (contains a `prototype` or `embed` node): it IS the spec, matched screen for screen.
+  - **Design-direction canvas** (titled `Design direction: …`, or containing no `embed` and no `prototype` node; the title prefix wins): it records intent only. Check the presence of the elements, states, copy and token slots it names, NOT layout resemblance to its wireframes. The side-by-side is context; only the inventory check gates.
+
+  For each fidelity case:
+  1. Render the canvas with the block's recipe AND the implementation on the worktree dev server, at the SAME viewport(s) the case names.
+  2. Upload both screenshots with `attachment_upload_start` and a curl POST of the bytes. Create an evidence canvas in the execution space with `canvas_create`: a `row` of two `card`s, `Design` and `Implementation`, each holding an `image` node whose `src` is `/chat/attachments/<uuid>`. Post its link to the execution space.
+  3. Check every inventory row MECHANICALLY where possible: a DOM query for each verbatim string, a selector-presence check for each element and state. Record a per-row present/missing table. A `missing` row counts only after a positive control in the same session shows the same query finds a known-present string on that page.
+  4. Read the executor's `Design deviations — stage <n>` posts in the execution space. A declared deviation is recorded in the evidence and does not by itself fail the case. A missing inventory row, changed copy, or (prototype or mockup canvas only) structure that is in neither the inventory nor the declarations FAILS the case.
+  5. The evidence map carries `side_by_side_canvas_id`, `inventory_results` (the per-row table) and `viewport`, alongside the `final_url` and `page_title` of the tab you measured (an identity-provider URL or a "Sign in" title means you measured the login screen: `could_not_evaluate`, never a verdict).
+  6. A canvas that could not be rendered (a `prototype` bundle has no agent byte path) makes the case `could_not_evaluate` with that reason, never a pass.
+  """
+
+  @doc """
+  The `## Design fidelity` section of the e2e review dispatch (task
+  01a13ae7). Shared by the `dispatch.review_e2e` descriptor and the hardcoded
+  e2e-review fallback.
+  """
+  @spec review_e2e_design_fidelity_section() :: String.t()
+  def review_e2e_design_fidelity_section, do: @review_e2e_design_fidelity_section
+
   # Federation preamble — canonical block of Claude Code guidance that used
   # to be duplicated across every dispatch template (task 019f5e2a stage 1
   # of the meeting-to-tasks-pipeline stack). Consolidates six sections that
@@ -979,6 +1101,9 @@ defmodule Platform.Orchestration.PromptTemplates do
     planning_no_ack_notice = @planning_no_ack_notice
     planning_experiment_surface_notice = @planning_experiment_surface_notice
     planning_ci_evidence_section = @planning_ci_evidence_section
+    planning_design_fidelity_section = @planning_design_fidelity_section
+    in_progress_design_fidelity_section = @in_progress_design_fidelity_section
+    review_e2e_design_fidelity_section = @review_e2e_design_fidelity_section
 
     # NOTE (task 01a01041 stage 2): a `skills_reference = "## Skill discovery …"`
     # local used to be built here and never interpolated, which the compiler
@@ -1137,8 +1262,9 @@ defmodule Platform.Orchestration.PromptTemplates do
 
         1. **Brand context is already resolved — you do not resolve it and you do not escalate.** The pre-plan design step resolves brand through `Platform.Design.Brand` (project settings, then org identity, then any recorded project decision, with a once-per-project human ask when nothing exists) before this dispatch is sent. Do not re-ask for a brand identity and do not add a stage that asks.
 
-        2. **Design runs BEFORE planning as a responsibility dispatch (ADR-0046) — do not plan it.** If a design direction canvas is attached to this task, read it with `canvas_get` and let it constrain the UI stages you write. Do NOT author a "Design direction" stage and do NOT set `responsibility` on any stage. If no canvas is attached, the design step recorded `not_applicable` or `failed` — proceed and do not wait for one.
+        2. **Design runs BEFORE planning as a responsibility dispatch (ADR-0046) — do not plan it.** If design canvases are attached to this task, they are the design spec: plan the UI stages from them as the subsection below says. Do NOT author a "Design direction" stage and do NOT set `responsibility` on any stage. If no canvas is attached, the design step recorded `not_applicable` or `failed` — proceed and do not wait for one.
 
+        #{planning_design_fidelity_section}
         3. **Reference the resolved brand identity in implementation stage descriptions** — name the semantic token slots the coder must use (primary/on-primary, accent, surface, muted, border, destructive), not raw hex and not "match the brand". If the project is in exploring mode, say so in the stage description instead.
 
         4. Keep the screenshot-canvas evidence instruction on UI-rendering stages (no `manual_approval` — planners never create one); the design stage is additive, not a replacement.
@@ -1179,7 +1305,8 @@ defmodule Platform.Orchestration.PromptTemplates do
         {{provider_specific_guidance}}
 
         Push evidence using validation_pass or stage_complete as you finish each step. Post commentary to the execution space so reviewers can follow along. Use report_blocker if you are stuck.
-        {{migration_slot_section}}
+
+        #{in_progress_design_fidelity_section}{{migration_slot_section}}
         {{git_workflow_block}}
         The Stage Description block above is your specification — it is the planner's own authored text for this stage, and it is the authority over any summary of it. The full task hierarchy (project, epic, task body, whole plan) is NOT in this message; fetch it with suite_task_get / suite_plan_get if you need it.
         Start from that stage description and any attached/bundled skill content before re-fetching broad task/project context.
@@ -1535,6 +1662,7 @@ defmodule Platform.Orchestration.PromptTemplates do
            c. Compare the observed behavior to `expected`.
            d. Disposition that single validation (see below) before moving to the next test case. Failures on one validation do NOT short-circuit the rest — run them all.
 
+        #{review_e2e_design_fidelity_section}
         ## Which build answers the call
 
         Before exercising any MCP tool, HTTP endpoint or LiveView as part of a case, establish which build
@@ -1693,7 +1821,7 @@ defmodule Platform.Orchestration.PromptTemplates do
         ### Merge mechanics on Startup-Suite/core (overrides any "auto-merge is enabled" line above)
         - `auto_merge: true` in the strategy config is a declaration, not an action. Nothing arms GitHub auto-merge except an explicit `gh pr merge <n> --auto`. Arming is safe on this repository ONLY while `main`'s required status checks include BOTH `Test` and `first-run-green` (added 2026-09-11; `first-run-green` is what makes a failed-then-retried `Test` run block the merge, ticket 01a08d81). Verify before arming, every time: `gh api repos/Startup-Suite/core/branches/main/protection/required_status_checks --jq .contexts` must print both. If it does, arm with `gh pr merge <n> --auto --squash --delete-branch` and still watch CI to conclusion. If `first-run-green` is missing from the contexts, do NOT arm: wait for CI in the foreground, read the annotations for the retry sentinel, and merge by hand.
         - Wait for CI in the foreground: `gh run watch <run-id> --exit-status` (or `gh pr checks <n> --watch`). Never end your turn "waiting on CI"; an ended turn is a dead deployer.
-        - Before merging (or before reporting an armed merge as clean), read the run's ANNOTATIONS (not a whole-log grep) for `initial mix test failed`. If it fired, name the tests the retry greened. Known flakes (ProofOfLifeTest, LocalRunnerTest force_stop, SandboxHelpersScopedDrainTest, conn_case_supervised_orphan_test) may be merged past with the names recorded in the PR body; anything else is a red run and goes back to the ONE rule below.
+        - Before merging (or before reporting an armed merge as clean), read the run's ANNOTATIONS (not a whole-log grep) for `initial mix test failed`. If it fired, name the tests the retry greened. There is no known-flake list as of task 01a13aac (the four names it used to carry had 0 retry-green occurrences in 320 CI runs): a test the retry greened is a red run. Name it in the PR body, file it as a task, and it goes back to the ONE rule below.
         - Verify the merge as a field, not an exit code: `gh pr view <n> --json mergedAt,mergeCommit --jq '.mergedAt'` must print a timestamp. `mergeStateStatus: BLOCKED` while checks are pending is normal; it matters only if it survives a `success` conclusion. Confirm the remote branch is gone afterwards; the per-repository steps above say how.
         - The squash commit does not carry the PR body; anything that must survive in `git log` goes in a commit message.
 

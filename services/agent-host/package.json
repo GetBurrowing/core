@@ -1,0 +1,17 @@
+{
+  "name": "suite-agent-host",
+  "version": "0.1.0",
+  "description": "Runs a Suite install's native agents, each as its own OS user under systemd, and takes its orders from core over an outbound socket",
+  "license": "MIT",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "bun run src/main.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5"
+  }
+}
