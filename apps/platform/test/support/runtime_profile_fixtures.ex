@@ -5,7 +5,7 @@ defmodule Platform.RuntimeProfileFixtures do
   alias Platform.Agents.AgentRuntime
   alias Platform.Repo
 
-  def runtime!(owner_user_id, modules, attrs \\ %{}) do
+  def runtime!(owner_user_id, modules, attrs \\ %{}, restriction \\ :translated) do
     runtime =
       %AgentRuntime{}
       |> AgentRuntime.changeset(
@@ -19,11 +19,16 @@ defmodule Platform.RuntimeProfileFixtures do
       )
       |> Repo.insert!()
 
+    restriction =
+      if restriction == :translated,
+        do: RuntimeProfiles.translated_permissions(modules),
+        else: restriction
+
     {:ok, _profile} =
       RuntimeProfiles.create_for_runtime(
         runtime,
         modules,
-        RuntimeProfiles.translated_permissions(modules)
+        restriction
       )
 
     runtime
