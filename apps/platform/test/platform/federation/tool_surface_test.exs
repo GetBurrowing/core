@@ -7006,7 +7006,10 @@ defmodule Platform.Federation.ToolSurfaceTest do
   describe "context read tools" do
     setup do
       agent = create_agent()
-      space = create_space(%{name: "Read Space", description: "A test space"})
+      org = Tenancy.get_org_by_slug!("sxi")
+      owner = insert_user_for_sponsor()
+      Platform.ExternalUserFixtures.plain_member!(owner, org)
+      space = create_space(%{name: "Read Space", description: "A test space", org_id: org.id})
 
       participant =
         create_participant(space.id, %{
@@ -7015,7 +7018,24 @@ defmodule Platform.Federation.ToolSurfaceTest do
           display_name: agent.name
         })
 
-      context = %{agent_id: agent.id, agent_participant_id: participant.id}
+      create_participant(space.id, %{
+        participant_type: "user",
+        participant_id: owner.id,
+        display_name: owner.name
+      })
+
+      {:ok, runtime} =
+        Platform.Federation.register_runtime(owner.id, %{
+          runtime_id: "read-space-#{System.unique_integer([:positive])}",
+          agent_id: agent.id
+        })
+
+      context = %{
+        agent_id: agent.id,
+        agent_participant_id: participant.id,
+        runtime_id: runtime.runtime_id
+      }
+
       %{agent: agent, space: space, participant: participant, context: context}
     end
 

@@ -21,6 +21,10 @@ defmodule Platform.Federation.SpaceSearchMessagesProbeTest do
   @uuid "01a006c2-6c88-7f15-86b6-828cb10f1642"
 
   setup do
+    org = Platform.Tenancy.get_org_by_slug!("sxi")
+    owner = Platform.ExternalUserFixtures.create_user!()
+    Platform.ExternalUserFixtures.plain_member!(owner, org)
+
     {:ok, agent} =
       %Agent{}
       |> Agent.changeset(%{
@@ -37,7 +41,8 @@ defmodule Platform.Federation.SpaceSearchMessagesProbeTest do
       Chat.create_space(%{
         name: "Probe Space",
         slug: "probe-#{System.unique_integer([:positive])}",
-        kind: "channel"
+        kind: "channel",
+        org_id: org.id
       })
 
     {:ok, participant} =
@@ -46,6 +51,20 @@ defmodule Platform.Federation.SpaceSearchMessagesProbeTest do
         participant_id: agent.id,
         display_name: agent.name,
         joined_at: DateTime.utc_now()
+      })
+
+    {:ok, _owner_participant} =
+      Chat.add_participant(space.id, %{
+        participant_type: "user",
+        participant_id: owner.id,
+        display_name: owner.name,
+        joined_at: DateTime.utc_now()
+      })
+
+    {:ok, runtime} =
+      Platform.Federation.register_runtime(owner.id, %{
+        runtime_id: "probe-runtime-#{System.unique_integer([:positive])}",
+        agent_id: agent.id
       })
 
     for content <- [
@@ -64,7 +83,11 @@ defmodule Platform.Federation.SpaceSearchMessagesProbeTest do
 
     %{
       space: space,
-      context: %{agent_id: agent.id, agent_participant_id: participant.id}
+      context: %{
+        agent_id: agent.id,
+        agent_participant_id: participant.id,
+        runtime_id: runtime.runtime_id
+      }
     }
   end
 

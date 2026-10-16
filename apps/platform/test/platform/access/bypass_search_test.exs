@@ -80,7 +80,17 @@ defmodule Platform.Access.BypassSearchTest do
 
   test "message tools return the non-participant envelope after a space deny" do
     n = System.unique_integer([:positive])
-    {:ok, space} = Chat.create_space(%{name: "Search #{n}", slug: "search-#{n}", kind: "channel"})
+    org = Platform.Tenancy.get_org_by_slug!("sxi")
+    owner = Platform.ExternalUserFixtures.create_user!()
+    Platform.ExternalUserFixtures.plain_member!(owner, org)
+
+    {:ok, space} =
+      Chat.create_space(%{
+        name: "Search #{n}",
+        slug: "search-#{n}",
+        kind: "channel",
+        org_id: org.id
+      })
 
     {:ok, agent} =
       %Agent{}
@@ -88,6 +98,20 @@ defmodule Platform.Access.BypassSearchTest do
       |> Repo.insert()
 
     {:ok, participant} = Chat.add_agent_participant(space.id, agent)
+
+    {:ok, _owner_participant} =
+      Chat.add_participant(space.id, %{
+        participant_type: "user",
+        participant_id: owner.id,
+        display_name: owner.name,
+        joined_at: DateTime.utc_now()
+      })
+
+    {:ok, runtime} =
+      Platform.Federation.register_runtime(owner.id, %{
+        runtime_id: "bypass-search-#{n}",
+        agent_id: agent.id
+      })
 
     {:ok, message} =
       Chat.post_message(%{
@@ -101,7 +125,7 @@ defmodule Platform.Access.BypassSearchTest do
     Application.put_env(:platform, :memory_service, provider: SemanticStub, results: [])
     on_exit(fn -> Application.put_env(:platform, :memory_service, previous) end)
 
-    context = %{agent_id: agent.id, access_scope: %Scope{}}
+    context = %{agent_id: agent.id, runtime_id: runtime.runtime_id, access_scope: %Scope{}}
 
     {:ok, before_search} =
       Search.search("ZQX-BYPASS-MESSAGE", source: "message", agent: agent, access_scope: %Scope{})
