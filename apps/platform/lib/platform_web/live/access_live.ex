@@ -36,14 +36,17 @@ defmodule PlatformWeb.AccessLive do
 
     case Grants.reset_ops(subject, scope) do
       ops when is_list(ops) and ops != [] ->
-        case Impact.diff(scope, ops) do
-          {:ok, impact} ->
-            if Proposals.state_hash() == hash do
-              {:noreply, assign(socket, preview: %{ops: ops, impact: impact, hash: hash})}
-            else
-              {:noreply, failure(assign(socket, preview: nil), :stale)}
-            end
+        with {:ok, impact} <- Impact.diff(scope, ops),
+             {:ok, prepared} <- Grants.prepare_ops(ops, scope) do
+          rows = Enum.map(prepared, fn {_op, row} -> Platform.Access.Grant.snapshot(row) end)
 
+          if Proposals.state_hash() == hash do
+            {:noreply,
+             assign(socket, preview: %{ops: ops, rows: rows, impact: impact, hash: hash})}
+          else
+            {:noreply, failure(assign(socket, preview: nil), :stale)}
+          end
+        else
           {:error, reason} ->
             {:noreply, failure(socket, reason)}
         end
@@ -269,13 +272,18 @@ defmodule PlatformWeb.AccessLive do
 
   defp preview_document(preview) do
     impact = preview.impact |> Jason.encode!() |> Jason.decode!()
+    ops = preview.ops |> Jason.encode!() |> Jason.decode!()
+
+    label =
+      (["Reset to role defaults"] ++ Enum.map(preview.rows, &row_label(&1, "Remove")))
+      |> Enum.join("; ")
 
     Platform.Access.ChangeCard.document(%Platform.Access.Proposal{
       id: "panel-reset",
       state: "proposed",
       selected_option: "reset",
       options: [
-        %{"key" => "reset", "label" => "Reset to role defaults", "ops" => [], "impact" => impact}
+        %{"key" => "reset", "label" => label, "ops" => ops, "impact" => impact}
       ]
     })
   end

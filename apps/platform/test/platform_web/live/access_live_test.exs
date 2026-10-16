@@ -106,6 +106,42 @@ defmodule PlatformWeb.AccessLiveTest do
     refute has_element?(view, "[data-role=view-as-rail]")
   end
 
+  test "reset consent names every removed allow and deny before any write", ctx do
+    actor = Scope.for_user(ctx.root)
+    {:ok, other} = Tasks.create_project(%{name: "Second reset project", org_id: ctx.org.id})
+
+    {:ok, _} =
+      Grants.grant(%{principal: ctx.member, permission: "tasks.manage", resource: ctx.project},
+        actor: actor
+      )
+
+    {:ok, _} =
+      Grants.grant(%{principal: ctx.member, permission: "tasks.manage", resource: other},
+        actor: actor
+      )
+
+    {:ok, _} =
+      Grants.deny(%{principal: ctx.member, permission: "tasks.write", resource: ctx.project},
+        actor: actor
+      )
+
+    before = snapshot()
+    count = Repo.aggregate(Change, :count)
+    {:ok, view, _} = live(conn_for(ctx.root), "/access/user/#{ctx.member.id}")
+    view |> element("button[phx-click=reset]") |> render_click()
+    card = view |> element("#reset-card") |> render()
+    assert card =~ "Remove allow tasks.manage on Panel project for Panel member"
+    assert card =~ "Remove allow tasks.manage on Second reset project for Panel member"
+    assert card =~ "Remove deny tasks.write on Panel project for Panel member"
+    assert snapshot() == before
+    assert Repo.aggregate(Change, :count) == count
+    view |> element("#reset-card button[phx-value-action=access_apply]") |> render_click()
+    assert Repo.aggregate(Change, :count) == count + 1
+    change = last_change()
+    view |> element("[data-change-id='#{change.id}'] button") |> render_click()
+    assert snapshot() == before
+  end
+
   test "members are refused while the root positive control mounts", ctx do
     assert {:ok, _, _} = live(conn_for(ctx.root), "/access")
 

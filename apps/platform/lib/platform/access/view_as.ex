@@ -21,11 +21,13 @@ defmodule Platform.Access.ViewAs do
          :ok <- authorize(viewer, org_ids) do
       projects =
         Tasks.list_projects_for_user(subject, access_scope: scope)
-        |> Enum.filter(&Access.can?(viewer, "tasks.read", &1))
+        |> Enum.filter(&Access.can?(scope, "tasks.read", {:project, &1.id}))
+        |> Enum.filter(&Access.can?(viewer, "tasks.read", {:project, &1.id}))
 
       channels =
         Chat.list_spaces(kind: "channel", scope: scope)
-        |> Enum.filter(&Access.can?(viewer, "chat.read", &1))
+        |> Enum.filter(&Access.can?(scope, "chat.read", {:space, &1.id}))
+        |> Enum.filter(&Access.can?(viewer, "chat.read", {:space, &1.id}))
 
       {:ok,
        %{
