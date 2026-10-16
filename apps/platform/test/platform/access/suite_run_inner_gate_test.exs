@@ -5,6 +5,7 @@ defmodule Platform.Access.SuiteRunInnerGateTest do
   import Platform.TenancyFixtures
 
   alias Platform.Access.RuntimeProfiles
+  alias Platform.CodeMode.Docs
   alias Platform.CodeMode.Run
   alias Platform.Federation.ToolAuthorization
   alias Platform.Federation.ToolCallRecord
@@ -32,6 +33,8 @@ defmodule Platform.Access.SuiteRunInnerGateTest do
 
     assert {:ok, _} = RuntimeProfiles.restrict(runtime, %{"skills.read" => "all"})
     refute "task_update" in ToolAuthorization.tool_names(runtime)
+    assert {:ok, index} = Docs.describe(runtime, %{})
+    refute "task_update" in index.tools
 
     for script <- [
           "suite.task_update({task_id: '#{task.id}', title: 'Denied'})",

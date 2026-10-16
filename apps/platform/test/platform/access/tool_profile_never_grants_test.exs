@@ -12,6 +12,7 @@ defmodule Platform.Access.ToolProfileNeverGrantsTest do
   alias Platform.Experiments.Variant
   alias Platform.Federation
   alias Platform.Repo
+  alias Platform.RuntimeBundleSnapshot
   alias Platform.Tenancy
 
   test "new runtime inherits its owner but its default profile keeps catalogue size bounded" do
@@ -69,7 +70,7 @@ defmodule Platform.Access.ToolProfileNeverGrantsTest do
         allowed_bundles: ["task"]
       })
 
-    assert "task_list" in Tools.tool_names(runtime)
+    assert Tools.tool_names(runtime) == RuntimeBundleSnapshot.legacy_tool_names(["task"])
 
     {:ok, experiment} =
       Experiments.create_experiment(%{
