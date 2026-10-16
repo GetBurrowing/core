@@ -116,7 +116,7 @@ defmodule Platform.Access.ChatScopeTest do
         agent_id: agent.id,
         auth_token_hash: AgentRuntime.hash_token(AgentRuntime.generate_token()),
         status: "active",
-        allowed_bundles: AgentRuntime.default_allowed_bundles()
+        allowed_bundles: AgentRuntime.default_tool_profile()
       })
       |> Repo.insert()
 

@@ -205,7 +205,7 @@ defmodule Platform.Access.BypassBytesTest do
         agent_id: agent.id,
         auth_token_hash: AgentRuntime.hash_token(token),
         status: "active",
-        allowed_bundles: AgentRuntime.default_allowed_bundles()
+        allowed_bundles: AgentRuntime.default_tool_profile()
       })
       |> Repo.insert()
 

@@ -20,7 +20,7 @@ defmodule Platform.Access.ToolProfileNeverGrantsTest do
     {:ok, runtime} = Federation.register_runtime(owner.id, %{runtime_id: runtime_id()})
     profile = RuntimeProfiles.get(runtime)
 
-    assert profile.tool_profile == AgentRuntime.default_allowed_bundles()
+    assert profile.tool_profile == AgentRuntime.default_tool_profile()
     assert profile.restricted_permissions == nil
     assert "federation_status" in Tools.tool_names(runtime)
     refute "task_update" in Tools.tool_names(runtime)

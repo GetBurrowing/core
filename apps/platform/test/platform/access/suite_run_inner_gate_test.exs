@@ -18,7 +18,7 @@ defmodule Platform.Access.SuiteRunInnerGateTest do
     {runtime, token} =
       insert_runtime!(agent, ~w(federation space context_read messaging task code_mode))
 
-    assert {:ok, _} = RuntimeProfiles.create_for_runtime(runtime, runtime.allowed_bundles, nil)
+    assert {:ok, _} = RuntimeProfiles.restrict(runtime, nil)
 
     {:ok, project} =
       Tasks.create_project(%{

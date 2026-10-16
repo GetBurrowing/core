@@ -48,7 +48,7 @@ defmodule Platform.Federation.ToolCallTest do
 
   describe "POST /mcp" do
     test "an ok call writes one ledger row through ToolCall", %{agent: agent, task: task} do
-      {runtime, token} = insert_runtime(agent, AgentRuntime.valid_bundles())
+      {runtime, token} = insert_runtime(agent, Platform.Access.RuntimeProfiles.valid_modules())
 
       body = mcp_call(token, "task_get", %{"task_id" => task.id})
       assert body["result"]["isError"] in [false, nil]
@@ -67,7 +67,7 @@ defmodule Platform.Federation.ToolCallTest do
     end
 
     test "a denied call is refused with -32001 and recorded as denied", %{agent: agent} do
-      {runtime, token} = insert_runtime(agent, AgentRuntime.default_allowed_bundles())
+      {runtime, token} = insert_runtime(agent, AgentRuntime.default_tool_profile())
       refute "plan" in runtime.allowed_bundles
 
       body = mcp_call(token, "plan_create", %{"task_id" => Ecto.UUID.generate()})
@@ -80,7 +80,7 @@ defmodule Platform.Federation.ToolCallTest do
     end
 
     test "a handler error is recorded as error", %{agent: agent} do
-      {runtime, token} = insert_runtime(agent, AgentRuntime.valid_bundles())
+      {runtime, token} = insert_runtime(agent, Platform.Access.RuntimeProfiles.valid_modules())
 
       body = mcp_call(token, "task_get", %{"task_id" => Ecto.UUID.generate()})
       assert body["result"]["isError"] == true
@@ -89,7 +89,7 @@ defmodule Platform.Federation.ToolCallTest do
     end
 
     test "SENTINEL in args reaches no ledger row", %{agent: agent, task: task} do
-      {runtime, token} = insert_runtime(agent, AgentRuntime.valid_bundles())
+      {runtime, token} = insert_runtime(agent, Platform.Access.RuntimeProfiles.valid_modules())
 
       mcp_call(token, "task_get", %{"task_id" => task.id, "api_key" => @sentinel})
 
@@ -155,7 +155,7 @@ defmodule Platform.Federation.ToolCallTest do
       agent: agent,
       task: task
     } do
-      {runtime, _token} = insert_runtime(agent, AgentRuntime.valid_bundles())
+      {runtime, _token} = insert_runtime(agent, Platform.Access.RuntimeProfiles.valid_modules())
       args = %{"task_id" => task.id, "api_key" => @sentinel}
 
       expected = ToolCall.invoke("task_get", args, runtime)
@@ -184,7 +184,7 @@ defmodule Platform.Federation.ToolCallTest do
     end
 
     test "parent_run_id is recorded", %{agent: agent, task: task} do
-      {runtime, _token} = insert_runtime(agent, AgentRuntime.valid_bundles())
+      {runtime, _token} = insert_runtime(agent, Platform.Access.RuntimeProfiles.valid_modules())
       run_id = Ecto.UUID.generate()
 
       assert {:ok, _} =
@@ -241,7 +241,7 @@ defmodule Platform.Federation.ToolCallTest do
     end
 
     test "the ledger writes error_kind", %{agent: agent} do
-      {runtime, _token} = insert_runtime(agent, AgentRuntime.valid_bundles())
+      {runtime, _token} = insert_runtime(agent, Platform.Access.RuntimeProfiles.valid_modules())
 
       ToolCallLedger.insert(%{
         tool: "suite_run",
@@ -257,7 +257,7 @@ defmodule Platform.Federation.ToolCallTest do
     end
 
     test "a non-suite_run row over /mcp carries a nil error_kind", %{agent: agent, task: task} do
-      {runtime, token} = insert_runtime(agent, AgentRuntime.valid_bundles())
+      {runtime, token} = insert_runtime(agent, Platform.Access.RuntimeProfiles.valid_modules())
 
       mcp_call(token, "task_get", %{"task_id" => task.id})
       assert [%ToolCallRecord{status: "ok", error_kind: nil}] = rows_for(runtime)
@@ -443,7 +443,7 @@ defmodule Platform.Federation.ToolCallTest do
     {:ok, _} =
       Federation.update_allowed_bundles(
         activated,
-        AgentRuntime.default_allowed_bundles() ++ ["task"]
+        AgentRuntime.default_tool_profile() ++ ["task"]
       )
 
     {Federation.get_runtime(activated.id), raw_token}

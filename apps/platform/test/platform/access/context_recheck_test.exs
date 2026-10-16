@@ -544,7 +544,7 @@ defmodule Platform.Access.ContextRecheckTest do
            actors: actors
          } do
       template = template!()
-      rt = runtime!(actors.root_admin, AgentRuntime.default_allowed_bundles() ++ ["plan"])
+      rt = runtime!(actors.root_admin, AgentRuntime.default_tool_profile() ++ ["plan"])
       ctx = %{runtime_id: rt.runtime_id, agent_id: rt.agent_id}
 
       assert {:ok, %{slug: slug, updated_by: "agent"}} =
@@ -562,7 +562,7 @@ defmodule Platform.Access.ContextRecheckTest do
       actors: actors
     } do
       template = template!()
-      rt = runtime!(actors.root_admin, AgentRuntime.default_allowed_bundles() -- ["plan"])
+      rt = runtime!(actors.root_admin, AgentRuntime.default_tool_profile() -- ["plan"])
       refute "plan" in rt.allowed_bundles
       ctx = %{runtime_id: rt.runtime_id, agent_id: rt.agent_id}
 

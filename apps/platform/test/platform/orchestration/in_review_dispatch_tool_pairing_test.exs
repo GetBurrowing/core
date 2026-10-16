@@ -217,7 +217,7 @@ defmodule Platform.Orchestration.InReviewDispatchToolPairingTest do
     # `validate_subset` rejects, so the raw `all_bundles/0` list cannot be
     # persisted. Both sides stay derived — no bundle name is typed here.
     grant =
-      Enum.filter(ToolSurface.all_bundles(), &(&1 in AgentRuntime.valid_bundles()))
+      Enum.filter(ToolSurface.all_bundles(), &(&1 in Platform.Access.RuntimeProfiles.valid_modules()))
 
     {:ok, granted} = Federation.update_allowed_bundles(activated, grant)
     {:ok, _linked} = Federation.link_agent(granted, agent)

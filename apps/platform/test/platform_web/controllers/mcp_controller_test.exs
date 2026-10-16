@@ -19,7 +19,7 @@ defmodule PlatformWeb.MCPControllerTest do
       owner_user_id: user.id,
       auth_token_hash: AgentRuntime.hash_token(raw_token),
       status: "active",
-      allowed_bundles: AgentRuntime.valid_bundles()
+      allowed_bundles: Platform.Access.RuntimeProfiles.valid_modules()
     }
 
     {:ok, runtime} =

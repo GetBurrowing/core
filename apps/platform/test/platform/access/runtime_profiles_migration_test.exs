@@ -10,6 +10,8 @@ defmodule Platform.Access.RuntimeProfilesMigrationTest do
 
   @version 20_261_016_010_000
   @migration Platform.Repo.Migrations.CreateAccessRuntimeProfiles
+  @drop_version 20_261_016_030_000
+  @drop_migration Platform.Repo.Migrations.DropAgentRuntimesAllowedBundles
   @opts [log: false, log_migrations_sql: false, migration_lock: false]
 
   setup_all do
@@ -17,10 +19,13 @@ defmodule Platform.Access.RuntimeProfilesMigrationTest do
       Path.wildcard(Path.join(:code.priv_dir(:platform), "repo/migrations/#{@version}_*.exs"))
 
     unless Code.ensure_loaded?(@migration), do: Code.require_file(path)
+    [drop_path] = Path.wildcard(Path.join(:code.priv_dir(:platform), "repo/migrations/#{@drop_version}_*.exs"))
+    unless Code.ensure_loaded?(@drop_migration), do: Code.require_file(drop_path)
     :ok
   end
 
   test "up copies every snapshot array in order and down leaves runtime bytes unchanged" do
+    :ok = Ecto.Migrator.down(Repo, @drop_version, @drop_migration, @opts)
     :ok = Ecto.Migrator.down(Repo, @version, @migration, @opts)
     owner = root_admin!()
 
@@ -29,9 +34,10 @@ defmodule Platform.Access.RuntimeProfilesMigrationTest do
         runtime =
           Repo.insert!(%AgentRuntime{
             runtime_id: "profile-migration-#{key}",
-            owner_user_id: owner.id,
-            allowed_bundles: bundles
+            owner_user_id: owner.id
           })
+
+        Repo.query!("UPDATE agent_runtimes SET allowed_bundles = $1::text[] WHERE id = $2", [bundles, Ecto.UUID.dump!(runtime.id)])
 
         {runtime.id, bundles}
       end
@@ -76,6 +82,9 @@ defmodule Platform.Access.RuntimeProfilesMigrationTest do
     assert_raise RuntimeError, ~r/did not preserve every ordered array/, fn ->
       apply(@migration, :assert_copied!, [Repo])
     end
+
+    Repo.query!("UPDATE access_runtime_profiles SET tool_profile = $1::text[] WHERE runtime_id = $2", [hd(runtimes) |> elem(1), Ecto.UUID.dump!(id)])
+    :ok = Ecto.Migrator.up(Repo, @drop_version, @drop_migration, @opts)
   end
 
   defp runtime_hashes do

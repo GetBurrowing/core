@@ -436,7 +436,7 @@ defmodule Platform.Access.ScopeTest do
       runtime = %AgentRuntime{owner_user_id: owner!(ctx, false).id}
       scope = Scope.for_runtime(runtime)
 
-      for bundle <- AgentRuntime.default_allowed_bundles() do
+      for bundle <- AgentRuntime.default_tool_profile() do
         assert scope.permissions["mcp." <> bundle] == :all
       end
 

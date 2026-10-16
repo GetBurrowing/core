@@ -29,12 +29,12 @@ defmodule Platform.CodeMode.SuiteRunTest do
 
   describe "the bundle" do
     test "code_mode is grantable and not a default" do
-      assert "code_mode" in AgentRuntime.valid_bundles()
-      refute "code_mode" in AgentRuntime.default_allowed_bundles()
+      assert "code_mode" in Platform.Access.RuntimeProfiles.valid_modules()
+      refute "code_mode" in AgentRuntime.default_tool_profile()
     end
 
     test "a default runtime does not see suite_run and is refused -32001", %{agent: agent} do
-      {_runtime, token} = insert_runtime!(agent, AgentRuntime.default_allowed_bundles())
+      {_runtime, token} = insert_runtime!(agent, AgentRuntime.default_tool_profile())
 
       tools = mcp(token, "tools/list", %{})["result"]["tools"] |> Enum.map(& &1["name"])
       refute "suite_run" in tools

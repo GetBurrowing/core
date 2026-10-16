@@ -216,7 +216,7 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
   end
 
   # An MCP runtime bound to `agent`. `allowed_bundles` is a LITERAL list rather
-  # than `AgentRuntime.valid_bundles()`: this file is about authorization, and
+  # than `Platform.Access.RuntimeProfiles.valid_modules()`: this file is about authorization, and
   # a capability refusal (`-32001`) would be a different failure wearing the
   # same red.
   defp runtime_token!(agent, bundles \\ ["task", "canvas"]) do

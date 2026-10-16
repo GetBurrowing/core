@@ -3,7 +3,7 @@ defmodule Platform.Access.ToolListEquivalenceTest do
 
   import Platform.TenancyFixtures
 
-  alias Platform.Access.Tools
+  alias Platform.Access.{RuntimeProfiles, Tools}
   alias Platform.Accounts.User
   alias Platform.Agents.AgentRuntime
   alias Platform.Repo
@@ -21,7 +21,7 @@ defmodule Platform.Access.ToolListEquivalenceTest do
   test "ordered tool names are unchanged for each production bundle array except approved Play loss",
        %{admin: admin} do
     for %{key: key, bundles: bundles} <- RuntimeBundleSnapshot.snapshots() do
-      runtime = %AgentRuntime{owner_user_id: admin.id, allowed_bundles: bundles}
+      runtime = runtime!(admin.id, bundles)
       before = RuntimeBundleSnapshot.legacy_tool_names(bundles)
       after_names = Tools.tool_names(runtime)
 
@@ -35,20 +35,18 @@ defmodule Platform.Access.ToolListEquivalenceTest do
   end
 
   test "guest owner gets exactly the six legacy chat tools with every bundle", %{guest: guest} do
-    runtime = %AgentRuntime{
-      owner_user_id: guest.id,
-      allowed_bundles: Platform.Federation.ToolSurface.all_bundles()
-    }
+    bundles = Platform.Federation.ToolSurface.all_bundles()
+    runtime = runtime!(guest.id, bundles)
 
     assert Tools.tool_names(runtime) ==
-             RuntimeBundleSnapshot.legacy_tool_names(runtime.allowed_bundles, true)
+             RuntimeBundleSnapshot.legacy_tool_names(bundles, true)
   end
 
   test "one tool-list decision stays within four database queries", %{admin: admin, guest: guest} do
     Platform.Access.builtin_role_rules()
 
     for owner <- [admin, guest] do
-      runtime = %AgentRuntime{owner_user_id: owner.id, allowed_bundles: ["messaging", "space"]}
+      runtime = runtime!(owner.id, ["messaging", "space"])
       {names, query_count} = count_queries(fn -> Tools.tool_names(runtime) end)
 
       IO.puts(
@@ -58,6 +56,23 @@ defmodule Platform.Access.ToolListEquivalenceTest do
       assert names != []
       assert query_count <= 4, "#{owner.id} used #{query_count} queries for one tool list"
     end
+  end
+
+  defp runtime!(owner_id, bundles) do
+    runtime =
+      Repo.insert!(%AgentRuntime{
+        runtime_id: "ordered-profile-#{System.unique_integer([:positive])}",
+        owner_user_id: owner_id
+      })
+
+    {:ok, _} =
+      RuntimeProfiles.create_for_runtime(
+        runtime,
+        bundles,
+        RuntimeProfiles.translated_permissions(bundles)
+      )
+
+    runtime
   end
 
   defp count_queries(fun) do

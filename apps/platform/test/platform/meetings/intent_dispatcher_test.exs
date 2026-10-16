@@ -309,7 +309,7 @@ defmodule Platform.Meetings.IntentDispatcherTest do
   defp seed_ack_target!(role_key, can_ack?) do
     {agent, runtime} = create_runtime_agent!()
 
-    defaults = AgentRuntime.default_allowed_bundles()
+    defaults = AgentRuntime.default_tool_profile()
 
     assert Federation.get_runtime(runtime.id).allowed_bundles == defaults,
            "the fixture must track whatever the defaults actually are"

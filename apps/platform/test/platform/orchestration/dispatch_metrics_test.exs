@@ -84,7 +84,7 @@ defmodule Platform.Orchestration.DispatchMetricsTest do
       {:ok, runtime} =
         Platform.Federation.update_allowed_bundles(
           ctx.runtime,
-          AgentRuntime.default_allowed_bundles() ++ ["code_mode"]
+          AgentRuntime.default_tool_profile() ++ ["code_mode"]
         )
 
       assert {:ok, %{ok: false, error: %{kind: "script_error"}, run_id: run_id}} =

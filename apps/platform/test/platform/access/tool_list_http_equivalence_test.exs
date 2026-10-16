@@ -3,6 +3,7 @@ defmodule Platform.Access.ToolListHttpEquivalenceTest do
 
   import Platform.TenancyFixtures
 
+  alias Platform.Access.RuntimeProfiles
   alias Platform.Agents.AgentRuntime
   alias Platform.Repo
   alias Platform.RuntimeBundleSnapshot
@@ -15,13 +16,19 @@ defmodule Platform.Access.ToolListHttpEquivalenceTest do
     for %{key: key, bundles: bundles} <- RuntimeBundleSnapshot.snapshots() do
       token = AgentRuntime.generate_token()
 
-      Repo.insert!(%AgentRuntime{
+      runtime = Repo.insert!(%AgentRuntime{
         runtime_id: "http-equivalence-#{key}",
         owner_user_id: owner.id,
         auth_token_hash: AgentRuntime.hash_token(token),
-        status: "active",
-        allowed_bundles: bundles
+        status: "active"
       })
+
+      {:ok, _profile} =
+        RuntimeProfiles.create_for_runtime(
+          runtime,
+          bundles,
+          RuntimeProfiles.translated_permissions(bundles)
+        )
 
       payload = %{"jsonrpc" => "2.0", "id" => 1, "method" => "tools/list", "params" => %{}}
 

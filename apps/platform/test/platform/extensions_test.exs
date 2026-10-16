@@ -96,7 +96,7 @@ defmodule Platform.ExtensionsTest do
 
     test "tool bundle: known, grantable, listed, and its tools dispatched by exact name" do
       assert "fixture" in ToolSurface.all_bundles()
-      assert "fixture" in AgentRuntime.valid_bundles()
+      assert "fixture" in Platform.Access.RuntimeProfiles.valid_modules()
       assert [%{name: "fixture_echo", bundle: "fixture"}] = ToolSurface.list_tools(["fixture"])
       assert Enum.any?(ToolSurface.tool_definitions(), &(&1.name == "fixture_echo"))
 
@@ -228,7 +228,7 @@ defmodule Platform.ExtensionsTest do
     test "no extension entry appears in any seam, and nothing raises" do
       assert Kinds.names() == @core_kinds
       assert ToolSurface.all_bundles() == ToolSurface.core_bundles()
-      refute "play" in AgentRuntime.valid_bundles()
+      refute "play" in Platform.Access.RuntimeProfiles.valid_modules()
       refute Enum.any?(ToolSurface.tool_definitions(), &String.starts_with?(&1.name, "play_"))
       refute Enum.any?(Surfaces.list(), &String.starts_with?(&1.key(), "game_stream."))
       refute Enum.any?(Metrics.known_metrics(), &String.starts_with?(&1, "game_stream"))
@@ -664,7 +664,7 @@ defmodule Platform.ExtensionsTest do
 
     test "bundles, kinds, metrics, surfaces and rail are main's minus the module's entries" do
       assert ToolSurface.all_bundles() == @core_bundles
-      assert AgentRuntime.valid_bundles() == @core_valid_bundles
+      assert Platform.Access.RuntimeProfiles.valid_modules() == @core_valid_bundles
       assert Metrics.known_metrics() == @core_metrics
       assert Enum.map(Metrics.catalog(), & &1.slug) |> Enum.sort() == Enum.sort(@core_metrics)
       assert Enum.map(Surfaces.list(), & &1.key()) == @core_surfaces

@@ -26,8 +26,8 @@ defmodule Platform.Prototypes.ToolsTest do
   test "the bundle is listed and grantable, and not a default" do
     names = ToolSurface.list_tools(["prototype"]) |> Enum.map(& &1.name)
     assert names == ["prototype.publish", "prototype.versions", "prototype.rollback"]
-    assert "prototype" in Platform.Agents.AgentRuntime.valid_bundles()
-    refute "prototype" in Platform.Agents.AgentRuntime.default_allowed_bundles()
+    assert "prototype" in Platform.Agents.Platform.Access.RuntimeProfiles.valid_modules()
+    refute "prototype" in Platform.Agents.AgentRuntime.default_tool_profile()
   end
 
   test "publish with a file map, then versions and rollback", ctx do

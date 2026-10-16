@@ -11,6 +11,7 @@ defmodule Platform.Agents.AgentRuntimeTest do
   import Platform.TenancyFixtures
 
   alias Platform.Agents.AgentRuntime
+  alias Platform.Access.RuntimeProfiles
   alias Platform.Federation
   alias Platform.Federation.ToolAuthorization
   alias Platform.Federation.ToolSurface
@@ -18,12 +19,12 @@ defmodule Platform.Agents.AgentRuntimeTest do
 
   describe "default_allowed_bundles/0 (pure)" do
     test "includes \"skill\" so federated runtimes get DB-shipped skill access by default" do
-      assert "skill" in AgentRuntime.default_allowed_bundles()
+      assert "skill" in AgentRuntime.default_tool_profile()
     end
 
     test "every default bundle is in the valid bundle allowlist" do
-      defaults = AgentRuntime.default_allowed_bundles()
-      valid = AgentRuntime.valid_bundles()
+      defaults = AgentRuntime.default_tool_profile()
+      valid = Platform.Access.RuntimeProfiles.valid_modules()
       assert Enum.all?(defaults, &(&1 in valid))
     end
   end
@@ -39,10 +40,7 @@ defmodule Platform.Agents.AgentRuntimeTest do
     # point is that WHATEVER the defaults are, they reach `meeting_say`.
     # A root-admin owner supplies the permission cap for this positive control.
     test "a runtime on default bundles may call meeting_say" do
-      runtime = %AgentRuntime{
-        owner_user_id: root_admin!().id,
-        allowed_bundles: AgentRuntime.default_allowed_bundles()
-      }
+      {:ok, runtime} = Federation.register_runtime(root_admin!().id, %{runtime_id: "meeting-default-#{System.unique_integer([:positive])}"})
 
       assert :ok = ToolAuthorization.authorize("meeting_say", runtime)
       assert :ok = ToolAuthorization.authorize("meeting_create", runtime)
@@ -66,18 +64,15 @@ defmodule Platform.Agents.AgentRuntimeTest do
     # transport boundaries (`runtime_channel.ex`, `mcp_controller.ex`), so
     # there is nothing to match on here beyond `:ok`.
     test "a runtime on default bundles may call meeting_activity_push" do
-      runtime = %AgentRuntime{
-        owner_user_id: root_admin!().id,
-        allowed_bundles: AgentRuntime.default_allowed_bundles()
-      }
+      {:ok, runtime} = Federation.register_runtime(root_admin!().id, %{runtime_id: "meeting-activity-default-#{System.unique_integer([:positive])}"})
 
       assert :ok = ToolAuthorization.authorize("meeting_activity_push", runtime)
       assert "meeting_activity_push" in ToolAuthorization.tool_names(runtime)
     end
 
     test "\"meetings\" is a default, not merely grantable" do
-      assert "meetings" in AgentRuntime.default_allowed_bundles()
-      assert "meetings" in AgentRuntime.valid_bundles()
+      assert "meetings" in AgentRuntime.default_tool_profile()
+      assert "meetings" in Platform.Access.RuntimeProfiles.valid_modules()
       assert "meetings" in ToolSurface.all_bundles()
     end
   end
@@ -94,7 +89,7 @@ defmodule Platform.Agents.AgentRuntimeTest do
     # addition — which trains people to edit it without reading it.
     test "ToolSurface.all_bundles/0 and AgentRuntime.valid_bundles/0 agree exactly" do
       surface = MapSet.new(ToolSurface.all_bundles())
-      valid = MapSet.new(AgentRuntime.valid_bundles())
+      valid = MapSet.new(Platform.Access.RuntimeProfiles.valid_modules())
 
       registered_but_rejected = surface |> MapSet.difference(valid) |> Enum.sort()
       permitted_but_unregistered = valid |> MapSet.difference(surface) |> Enum.sort()
@@ -132,8 +127,8 @@ defmodule Platform.Agents.AgentRuntimeTest do
         })
 
       reloaded = Repo.get!(AgentRuntime, runtime.id)
-      assert "skill" in reloaded.allowed_bundles
-      assert reloaded.allowed_bundles == AgentRuntime.default_allowed_bundles()
+      assert "skill" in RuntimeProfiles.tool_profile(reloaded)
+      assert RuntimeProfiles.tool_profile(reloaded) == AgentRuntime.default_tool_profile()
     end
   end
 

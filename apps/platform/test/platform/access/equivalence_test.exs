@@ -134,9 +134,9 @@ defmodule Platform.Access.EquivalenceTest do
     # Runtimes: default bundles (internal owner), narrowed bundles (internal
     # owner), default bundles owned by an external user, and the whole
     # catalogue (the wire-format oracle for quantity 5).
-    rt_default = runtime!(root_member, AgentRuntime.default_allowed_bundles(), [w.a])
+    rt_default = runtime!(root_member, AgentRuntime.default_tool_profile(), [w.a])
     rt_narrow = runtime!(w.int, ["task", "messaging"], [w.b])
-    rt_ext = runtime!(w.ext, AgentRuntime.default_allowed_bundles(), [w.a, dm_ext])
+    rt_ext = runtime!(w.ext, AgentRuntime.default_tool_profile(), [w.a, dm_ext])
     rt_full = runtime!(root_member, ToolSurface.all_bundles(), [])
 
     humans = [
@@ -683,10 +683,16 @@ defmodule Platform.Access.EquivalenceTest do
         owner_user_id: owner.id,
         agent_id: agent.id,
         auth_token_hash: AgentRuntime.hash_token(token),
-        status: "active",
-        allowed_bundles: bundles
+        status: "active"
       })
       |> Repo.insert()
+
+    {:ok, _profile} =
+      Platform.Access.RuntimeProfiles.create_for_runtime(
+        rt,
+        bundles,
+        Platform.Access.RuntimeProfiles.translated_permissions(bundles)
+      )
 
     Map.put(rt, :__token__, token)
   end
