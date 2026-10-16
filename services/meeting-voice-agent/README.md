@@ -99,7 +99,7 @@ runtime stage 2 registered (`MVA_MCP_BASE_URL`, `MVA_MCP_AUTH_TOKEN`).
 
 - **No client-side bundle duplication.** Core's
   `Platform.Federation.ToolAuthorization` already enforces the runtime's
-  `allowed_bundles` server-side, fail-closed. This service does not keep its
+  `tool_profile` server-side, fail-closed. This service does not keep its
   own copy of that list; it just connects and calls whatever Core's
   `MCPToolset.setup()` lists, which is provably the same set `authorize/2`
   would allow.
@@ -109,7 +109,7 @@ runtime stage 2 registered (`MVA_MCP_BASE_URL`, `MVA_MCP_AUTH_TOKEN`).
   `messaging` bundle, so any runtime holding `messaging` (this one included)
   got mail-drafting for free. Core's `Platform.Federation.ToolSurface` now
   splits mail drafting into its own `mail` bundle; this persona's
-  `allowed_bundles` was never granted (and still isn't granted) `mail`, so
+  `tool_profile` was never granted (and still isn't granted) `mail`, so
   `mail_draft_create` is refused for this runtime regardless of whether
   Core's Mail module is enabled. See
   `apps/platform/test/platform/federation/seed_meeting_voice_agent_test.exs`'s
@@ -119,7 +119,7 @@ runtime stage 2 registered (`MVA_MCP_BASE_URL`, `MVA_MCP_AUTH_TOKEN`).
   run found the seed still granting `memory` and `space` — every memory
   write tool, plus `space_create`/`space_leave`/`dm_create` — none of which
   this single-purpose voice persona has any business calling.
-  `mix platform.seed_meeting_voice_agent`'s `allowed_bundles` is now just
+  `mix platform.seed_meeting_voice_agent`'s `tool_profile` is now just
   `messaging context_read` (down from `space messaging context_read
   memory`) — see that task's moduledoc for why neither dropped bundle can be
   narrowed any finer than an outright drop (authorization is per-bundle, not
@@ -171,7 +171,7 @@ runtime stage 2 registered (`MVA_MCP_BASE_URL`, `MVA_MCP_AUTH_TOKEN`).
   different tool (mail especially) if it errors — see
   `test_default_instructions_commit_to_one_handoff_tool_deterministically`
   in `tests/test_config.py`. `mail_draft_create` is also no longer reachable
-  at all for this persona regardless of prompt (see the `allowed_bundles`
+  at all for this persona regardless of prompt (see the `tool_profile`
   fix above) — this is defense in depth on the prompt layer, not the only
   layer.
   **Round 3 prompt fix (task 01a0d4a0 stage 5 item 4):** the round-2 prompt

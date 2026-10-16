@@ -4,6 +4,7 @@ defmodule PlatformWeb.MCPControllerTest do
   import Platform.TenancyFixtures
 
   alias Platform.Agents.AgentRuntime
+  alias Platform.Access.RuntimeProfiles
   alias Platform.Repo
   alias Platform.Tasks
   alias Platform.Tasks.Stacks
@@ -14,18 +15,26 @@ defmodule PlatformWeb.MCPControllerTest do
 
     raw_token = AgentRuntime.generate_token()
 
+    modules = Map.get(attrs, :allowed_bundles, RuntimeProfiles.valid_modules())
+
     base_attrs = %{
       runtime_id: "mcp-rt-#{System.unique_integer([:positive])}",
       owner_user_id: user.id,
       auth_token_hash: AgentRuntime.hash_token(raw_token),
-      status: "active",
-      allowed_bundles: Platform.Access.RuntimeProfiles.valid_modules()
+      status: "active"
     }
 
     {:ok, runtime} =
       %AgentRuntime{}
       |> AgentRuntime.changeset(Map.merge(base_attrs, attrs))
       |> Repo.insert()
+
+    {:ok, _profile} =
+      RuntimeProfiles.create_for_runtime(
+        runtime,
+        modules,
+        RuntimeProfiles.translated_permissions(modules)
+      )
 
     {runtime, raw_token}
   end

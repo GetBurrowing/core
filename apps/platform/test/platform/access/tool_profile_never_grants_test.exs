@@ -33,7 +33,7 @@ defmodule Platform.Access.ToolProfileNeverGrantsTest do
     {:ok, runtime} =
       Federation.register_runtime(guest.id, %{
         runtime_id: runtime_id(),
-        allowed_bundles: ["task"]
+        tool_profile: ["task"]
       })
 
     assert RuntimeProfiles.get(runtime).tool_profile == ["task"]
@@ -47,7 +47,7 @@ defmodule Platform.Access.ToolProfileNeverGrantsTest do
     {:ok, runtime} =
       Federation.register_runtime(owner.id, %{
         runtime_id: runtime_id(),
-        allowed_bundles: ["task"]
+        tool_profile: ["task"]
       })
 
     {:ok, profile} = RuntimeProfiles.set_tool_profile(runtime, ["memory", "task"])
@@ -69,7 +69,7 @@ defmodule Platform.Access.ToolProfileNeverGrantsTest do
       Federation.register_runtime(owner.id, %{
         runtime_id: runtime_id(),
         agent_id: agent.id,
-        allowed_bundles: ["task"]
+        tool_profile: ["task"]
       })
 
     assert Tools.tool_names(runtime) == RuntimeBundleSnapshot.legacy_tool_names(["task"])
@@ -107,7 +107,7 @@ defmodule Platform.Access.ToolProfileNeverGrantsTest do
       Federation.register_runtime(owner.id, %{
         runtime_id: runtime_id(),
         agent_id: agent.id,
-        allowed_bundles: ["task"]
+        tool_profile: ["task"]
       })
 
     caller = self()

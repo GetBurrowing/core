@@ -20,7 +20,7 @@ defmodule Platform.Federation do
 
   @doc "Register a new external runtime."
   def register_runtime(owner_user_id, attrs) do
-    modules = Map.get(attrs, :allowed_bundles, Map.get(attrs, "allowed_bundles"))
+    modules = Map.get(attrs, :tool_profile, Map.get(attrs, "tool_profile"))
     tool_profile = modules || AgentRuntime.default_tool_profile()
 
     restriction =

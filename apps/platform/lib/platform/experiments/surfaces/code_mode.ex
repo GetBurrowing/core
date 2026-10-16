@@ -9,7 +9,7 @@ defmodule Platform.Experiments.Surfaces.CodeMode do
   It varies the DIRECTIVE text appended to the planning, in_progress and
   review dispatch prompts (`HeartbeatScheduler.append_experiment_directive/5`).
   It does not grant the `code_mode` bundle: that is a per-runtime
-  `allowed_bundles` entry, set as data in Control Center. A treatment-arm
+  `tool_profile` entry, set as data in Control Center. A treatment-arm
   dispatch to a runtime without the grant is told to use a tool it cannot
   call, so the rollout grants the bundle to every enrolled runtime first.
 

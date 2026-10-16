@@ -166,7 +166,7 @@ defmodule PlatformWeb.RuntimeChannel do
   @impl true
   def handle_info(:send_capabilities, socket) do
     # Advertise only what this runtime may actually call. Previously this
-    # pushed the entire catalogue regardless of `allowed_bundles`, so the
+    # pushed the entire catalogue regardless of `tool_profile`, so the
     # advertised surface and the (HTTP-side) authorized surface disagreed.
     # `ToolAuthorization.effective_tools/1` is the same function
     # `MCPController`'s `tools/list` maps over, so for a given runtime the two

@@ -235,7 +235,7 @@ defmodule Platform.Federation.ToolSurface do
 
   CRITICAL PROPERTY: this is an INTERSECTION applied AFTER `list_tools/1`,
   so it can only ever REMOVE tools, never add one. An external runtime
-  whose `allowed_bundles` do not include a chat bundle still gets zero
+  whose `tool_profile` do not include a chat bundle still gets zero
   chat tools (fail-closed) — the filter never grants a capability the
   runtime's bundles did not already include. The existing bundle scope
   remains the outer bound; external-restriction is layered inside it
@@ -274,7 +274,7 @@ defmodule Platform.Federation.ToolSurface do
     do: tag(Platform.Federation.ExperimentTools.definitions(), "experiments")
 
   # Task 01a114a8 stage 2: `suite_run`. Grantable, never a default
-  # (AgentRuntime's @default_allowed_bundles does not list it).
+  # (AgentRuntime's @default_tool_profile does not list it).
   defp tools_for_bundle("code_mode"), do: tag(code_mode_tools(), "code_mode")
 
   # Task 01a1316b-4e46 stage 1 (ADR 0057): definitions in PrototypeTools,
@@ -1118,14 +1118,14 @@ defmodule Platform.Federation.ToolSurface do
   # its own `mail` bundle (task 01a0d4a0 stage 4 round 2) so a runtime can be
   # granted chat messaging WITHOUT also getting a prod mail-write tool —
   # before this split, ANY runtime holding `messaging` (which includes
-  # `AgentRuntime.default_allowed_bundles/0`) implicitly got
+  # `AgentRuntime.default_tool_profile/0`) implicitly got
   # `mail_draft_create`/`mail_draft_update` too, which is how the
-  # single-purpose "Burrow" persona (whose `allowed_bundles` was
+  # single-purpose "Burrow" persona (whose `tool_profile` was
   # at the time scoped to `space messaging context_read memory`, and is now
   # `messaging context_read` per stage 5's further narrowing, explicitly
   # EXCLUDING task/plan/review either way) could still call
   # `mail_draft_create` — see
-  # `mix platform.seed_meeting_voice_agent`'s `allowed_bundles` moduledoc and
+  # `mix platform.seed_meeting_voice_agent`'s `tool_profile` moduledoc and
   # Dalton's live moon run (rollup space 01a0b5bf). Existing runtimes that
   # already relied on getting mail via `messaging` are preserved by the
   # `mail` bundle backfill migration
@@ -2612,7 +2612,7 @@ defmodule Platform.Federation.ToolSurface do
       # one instruction `design.task_direction.v1` gives her. Putting the exit
       # in the same bundle makes its reachability CO-EXTENSIVE with a path
       # already known to work on every designer runtime that exists, with zero
-      # new `allowed_bundles` grant on any row. A new bundle (or `plan`, which
+      # new `tool_profile` grant on any row. A new bundle (or `plan`, which
       # a designer has no reason to hold) would ship an affordance that stays
       # unreachable until somebody hand-edits every designer runtime — which is
       # precisely the failure mode this task exists to fix, re-committed one
@@ -3145,7 +3145,7 @@ defmodule Platform.Federation.ToolSurface do
 
   # Task 01a066af stage 4 — the `meetings` bundle. `meeting_create` and
   # `meeting_say` were registered in `task_tools/0`, so `tag/2` stamped them
-  # `"task"`, a bundle that is NOT in `AgentRuntime.default_allowed_bundles/0`.
+  # `"task"`, a bundle that is NOT in `AgentRuntime.default_tool_profile/0`.
   # A voice-capable runtime sitting on the defaults was therefore refused by
   # `ToolAuthorization.authorize/2` and could not speak at all. Both tool maps
   # moved here VERBATIM — their descriptions carry the `no_ack` contract
@@ -3156,7 +3156,7 @@ defmodule Platform.Federation.ToolSurface do
   # the class. `intent_ack` shipped in `task_tools/0` (019f70b8 stage 3) on the
   # rationale that every dispatch-capable runtime already holds `task`. That
   # was FALSE WHEN WRITTEN, not a claim that went stale: `task` has never
-  # appeared in `@default_allowed_bundles` on any commit. A runtime on the
+  # appeared in `@default_tool_profile` on any commit. A runtime on the
   # defaults was therefore dispatched meeting intents it could not ack, and
   # because `ToolAuthorization.authorize/2` refuses ABOVE `execute/3` the
   # intent queue never heard about the refusal — the intent held the meeting's
@@ -5425,7 +5425,7 @@ defmodule Platform.Federation.ToolSurface do
   #   (b) "a new capability bundle, e.g. `task_admin`". A bundle is a
   #       VISIBILITY SCOPE, not a privilege level:
   #       `Platform.Federation.ToolAuthorization` deliberately reads
-  #       `allowed_bundles` and nothing else, so encoding privilege there
+  #       `tool_profile` and nothing else, so encoding privilege there
   #       would put an admin grant in a column any runtime row can be
   #       given — an escalation one UPDATE wide, invisible to every
   #       membership check.

@@ -65,7 +65,7 @@ tool it cannot call, so **grant first, then create the experiment.**
 
 For each enrolled runtime: open `/control/<agent_slug>` (`brosnan`, `dalton`,
 `moore`, `oddjob`, `geordi`), open the runtime panel, and tick **code_mode** in
-the allowed bundles. This writes `Federation.update_allowed_bundles/2`. There
+the tool profile. This writes `Platform.Access.RuntimeProfiles.set_tool_profile/3`. There
 is no deploy and no restart.
 
 Keep the other bundles as they are. To check, the runtime's `tools/list` now

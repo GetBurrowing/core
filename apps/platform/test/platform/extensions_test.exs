@@ -60,7 +60,7 @@ defmodule Platform.ExtensionsTest do
     {:ok, runtime} =
       Federation.register_runtime(user.id, %{
         runtime_id: "ext-rt-#{unique()}",
-        allowed_bundles: []
+        tool_profile: []
       })
 
     {:ok, runtime, token} = Federation.activate_runtime(runtime)
@@ -286,7 +286,7 @@ defmodule Platform.ExtensionsTest do
       {1, _} =
         Repo.update_all(
           from(r in AgentRuntime, where: r.id == ^runtime.id),
-          set: [allowed_bundles: ["space", "play"]]
+          set: [tool_profile: ["space", "play"]]
         )
 
       runtime = Repo.get!(AgentRuntime, runtime.id)
@@ -304,7 +304,7 @@ defmodule Platform.ExtensionsTest do
       assert {:error, _} =
                Federation.register_runtime(user.id, %{
                  runtime_id: "new-#{unique()}",
-                 allowed_bundles: ["play"]
+                 tool_profile: ["play"]
                })
     end
   end

@@ -153,7 +153,7 @@ defmodule Platform.Meetings.IntentDispatcher do
 
   Being reachable and being able to answer are different facts, and until
   this stage only the first was checked. `resolve_target/1`'s entire test is
-  `agent.runtime_id != nil`, so a runtime whose `allowed_bundles` did not
+  `agent.runtime_id != nil`, so a runtime whose `tool_profile` did not
   carry the bundle registering `intent_ack` was dispatched to anyway. It then
   tried to ack, `Platform.Federation.ToolAuthorization.authorize/2` refused
   it ABOVE `ToolSurface.execute/3`, and the refusal reached nobody: the MCP

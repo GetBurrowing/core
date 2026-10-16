@@ -40,7 +40,7 @@ defmodule Platform.Extension do
   @typedoc """
   One MCP tool bundle a module contributes.
 
-    * `:name` — the bundle name a runtime is granted in `allowed_bundles`;
+    * `:name` — the bundle name a runtime is granted in `tool_profile`;
     * `:definitions` — the tool definitions `tools/list` shows for it, in the
       `Platform.Federation.ToolSurface` rubric shape (may be `[]`);
     * `:tool_names` — every tool name the bundle OWNS, listed or not. A call
