@@ -39,7 +39,6 @@ defmodule Platform.Federation.SkillMCPParityTest do
       owner_user_id: user.id,
       auth_token_hash: AgentRuntime.hash_token(raw_token),
       status: "active",
-      allowed_bundles: ["skill"],
       metadata: %{"client_info" => %{"product" => product}}
     }
 
@@ -47,6 +46,13 @@ defmodule Platform.Federation.SkillMCPParityTest do
       %AgentRuntime{}
       |> AgentRuntime.changeset(attrs)
       |> Repo.insert()
+
+    {:ok, _profile} =
+      Platform.Access.RuntimeProfiles.create_for_runtime(
+        runtime,
+        ["skill"],
+        Platform.Access.RuntimeProfiles.translated_permissions(["skill"])
+      )
 
     {runtime, raw_token}
   end

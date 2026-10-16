@@ -282,17 +282,23 @@ defmodule Platform.Federation.ToolSurfaceCanvasViewUrlTest do
 
     raw_token = AgentRuntime.generate_token()
 
-    {:ok, _runtime} =
+    {:ok, runtime} =
       %AgentRuntime{}
       |> AgentRuntime.changeset(%{
         runtime_id: "rt-canvas-view-url-#{System.unique_integer([:positive])}",
         owner_user_id: user.id,
         agent_id: agent.id,
         auth_token_hash: AgentRuntime.hash_token(raw_token),
-        status: "active",
-        allowed_bundles: ["canvas"]
+        status: "active"
       })
       |> Repo.insert()
+
+    {:ok, _profile} =
+      Platform.Access.RuntimeProfiles.create_for_runtime(
+        runtime,
+        ["canvas"],
+        Platform.Access.RuntimeProfiles.translated_permissions(["canvas"])
+      )
 
     raw_token
   end

@@ -22,7 +22,7 @@ defmodule Platform.Federation.ToolSurfaceExperimentsTest do
             dispatch_metrics_list code_mode_report)
 
   defp runtime(bundles),
-    do: %AgentRuntime{owner_user_id: root_admin!().id, allowed_bundles: bundles}
+    do: Platform.RuntimeProfileFixtures.runtime!(root_admin!().id, bundles)
 
   test "the bundle is registered, grantable, and lists exactly the experiment tools" do
     assert "experiments" in ToolSurface.all_bundles()
@@ -45,7 +45,7 @@ defmodule Platform.Federation.ToolSurfaceExperimentsTest do
   end
 
   test "a fresh AgentRuntime row does not carry the bundle" do
-    refute "experiments" in %AgentRuntime{}.allowed_bundles
+    refute "experiments" in AgentRuntime.default_tool_profile()
   end
 
   test "present when granted" do

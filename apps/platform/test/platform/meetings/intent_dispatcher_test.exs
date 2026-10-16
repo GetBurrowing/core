@@ -311,7 +311,7 @@ defmodule Platform.Meetings.IntentDispatcherTest do
 
     defaults = AgentRuntime.default_tool_profile()
 
-    assert Federation.get_runtime(runtime.id).allowed_bundles == defaults,
+    assert Platform.Access.RuntimeProfiles.tool_profile(Federation.get_runtime(runtime.id)) == defaults,
            "the fixture must track whatever the defaults actually are"
 
     carriers = ack_carrier_bundles()

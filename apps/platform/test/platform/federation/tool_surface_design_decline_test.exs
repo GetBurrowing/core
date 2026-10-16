@@ -57,7 +57,6 @@ defmodule Platform.Federation.ToolSurfaceDesignDeclineTest do
 
   use Platform.DataCase, async: false
 
-  alias Platform.Agents.AgentRuntime
   alias Platform.Design.PreplanStep
   alias Platform.ExternalUserFixtures, as: World
   alias Platform.Federation.ToolAuthorization
@@ -123,8 +122,8 @@ defmodule Platform.Federation.ToolSurfaceDesignDeclineTest do
     quietly(fn -> ToolSurface.execute("task_design_decline", args, context) end)
   end
 
-  defp runtime(owner_user_id, allowed_bundles) do
-    %AgentRuntime{owner_user_id: owner_user_id, allowed_bundles: allowed_bundles}
+  defp runtime(owner_user_id, modules) do
+    Platform.RuntimeProfileFixtures.runtime!(owner_user_id, modules)
   end
 
   # ── surface registration ──────────────────────────────────────────────────

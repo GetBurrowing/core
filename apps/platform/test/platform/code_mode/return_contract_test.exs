@@ -430,16 +430,24 @@ defmodule Platform.CodeMode.ReturnContractTest do
   @gamma "contract-rt-gamma"
 
   defp runtime!(runtime_id, agent) do
-    %AgentRuntime{}
+    runtime = %AgentRuntime{}
     |> AgentRuntime.changeset(%{
       runtime_id: runtime_id,
       owner_user_id: user!().id,
       agent_id: agent.id,
       auth_token_hash: AgentRuntime.hash_token(AgentRuntime.generate_token()),
-      status: "active",
-      allowed_bundles: AgentRuntime.default_tool_profile()
+      status: "active"
     })
     |> Repo.insert!()
+
+    {:ok, _profile} =
+      Platform.Access.RuntimeProfiles.create_for_runtime(
+        runtime,
+        AgentRuntime.default_tool_profile(),
+        Platform.Access.RuntimeProfiles.translated_permissions(AgentRuntime.default_tool_profile())
+      )
+
+    runtime
   end
 
   # The 13 keys every default row has carried since task 01a0b2ff; the

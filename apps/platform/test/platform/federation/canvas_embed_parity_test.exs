@@ -74,7 +74,6 @@ defmodule Platform.Federation.CanvasEmbedParityTest do
       agent_id: agent.id,
       auth_token_hash: AgentRuntime.hash_token(raw_token),
       status: "active",
-      allowed_bundles: ["canvas"],
       metadata: %{"client_info" => %{"product" => product}}
     }
 
@@ -82,6 +81,13 @@ defmodule Platform.Federation.CanvasEmbedParityTest do
       %AgentRuntime{}
       |> AgentRuntime.changeset(attrs)
       |> Repo.insert()
+
+    {:ok, _profile} =
+      Platform.Access.RuntimeProfiles.create_for_runtime(
+        runtime,
+        ["canvas"],
+        Platform.Access.RuntimeProfiles.translated_permissions(["canvas"])
+      )
 
     {runtime, raw_token, agent}
   end

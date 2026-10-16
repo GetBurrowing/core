@@ -274,7 +274,7 @@ defmodule Platform.Federation.ToolDocWireTest do
 
     raw = AgentRuntime.generate_token()
 
-    Repo.insert!(%AgentRuntime{
+    runtime = Repo.insert!(%AgentRuntime{
       runtime_id: "tool-doc-wire-rt-#{n}",
       owner_user_id: user.id,
       agent_id: agent.id,
@@ -282,8 +282,14 @@ defmodule Platform.Federation.ToolDocWireTest do
       status: "active",
       transport: "http",
       trust_level: "participant",
-      allowed_bundles: ToolSurface.all_bundles(),
       metadata: %{}
+    })
+
+    Repo.insert!(%Platform.Access.RuntimeProfile{
+      runtime_id: runtime.id,
+      tool_profile: ToolSurface.all_bundles(),
+      restricted_permissions:
+        Platform.Access.RuntimeProfiles.translated_permissions(ToolSurface.all_bundles())
     })
 
     raw

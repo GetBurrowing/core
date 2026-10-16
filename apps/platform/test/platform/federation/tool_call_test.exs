@@ -68,7 +68,7 @@ defmodule Platform.Federation.ToolCallTest do
 
     test "a denied call is refused with -32001 and recorded as denied", %{agent: agent} do
       {runtime, token} = insert_runtime(agent, AgentRuntime.default_tool_profile())
-      refute "plan" in runtime.allowed_bundles
+      refute "plan" in Platform.Access.RuntimeProfiles.tool_profile(runtime)
 
       body = mcp_call(token, "plan_create", %{"task_id" => Ecto.UUID.generate()})
       assert body["error"]["code"] == -32001
@@ -425,10 +425,16 @@ defmodule Platform.Federation.ToolCallTest do
         owner_user_id: insert_user().id,
         agent_id: agent.id,
         auth_token_hash: AgentRuntime.hash_token(raw_token),
-        status: "active",
-        allowed_bundles: bundles
+        status: "active"
       })
       |> Repo.insert!()
+
+    {:ok, _profile} =
+      Platform.Access.RuntimeProfiles.create_for_runtime(
+        runtime,
+        bundles,
+        Platform.Access.RuntimeProfiles.translated_permissions(bundles)
+      )
 
     {runtime, raw_token}
   end
