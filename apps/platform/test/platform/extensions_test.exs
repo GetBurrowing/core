@@ -659,6 +659,25 @@ defmodule Platform.ExtensionsTest do
       do:
         :crypto.hash(:sha256, :erlang.term_to_binary(canon(term))) |> Base.encode16(case: :lower)
 
+    defp legacy_kind_props(%{"properties" => %{"type" => %{"const" => kind}}} = node)
+         when kind in ["text", "action_row"] do
+      path = ["properties", "props", "properties"]
+
+      node =
+        if kind == "text",
+          do: update_in(node, path, &Map.delete(&1, "principal_id")),
+          else:
+            update_in(node, path ++ ["actions", "items", "properties"], &Map.delete(&1, "disabled"))
+
+      Map.new(node, fn {key, value} -> {key, legacy_kind_props(value)} end)
+    end
+
+    defp legacy_kind_props(map) when is_map(map),
+      do: Map.new(map, fn {key, value} -> {key, legacy_kind_props(value)} end)
+
+    defp legacy_kind_props(list) when is_list(list), do: Enum.map(list, &legacy_kind_props/1)
+    defp legacy_kind_props(value), do: value
+
     setup do
       assert Extensions.list() == []
       :ok
@@ -672,7 +691,9 @@ defmodule Platform.ExtensionsTest do
                ~w(access_explain access_propose access_apply access_undo)
 
       assert Enum.map(legacy, &{&1.name, &1.bundle}) == @main_tool_names_off
-      assert digest(legacy) == @main_tool_digest_off
+      # canvas.create embeds the kind union. Strip only the two additive
+      # consent-card properties, preserving the legacy definition oracle.
+      assert digest(legacy_kind_props(legacy)) == @main_tool_digest_off
     end
 
     test "bundles, kinds, metrics, surfaces and rail are main's minus the module's entries" do

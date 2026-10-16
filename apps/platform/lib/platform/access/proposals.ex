@@ -274,13 +274,9 @@ defmodule Platform.Access.Proposals do
         human = Scope.for_user(Accounts.get_user(uid))
         row = locked!(id)
         readable!(row, human)
-        updated = fun.(row)
-
-        case render_card(updated) do
-          {:ok, rendered} -> rendered
-          {:error, reason} -> Repo.rollback(reason)
-        end
+        fun.(row) |> persist_card!()
       end)
+      |> publish_result()
     else
       nil -> {:error, :not_found}
       error -> error
@@ -334,36 +330,50 @@ defmodule Platform.Access.Proposals do
 
   @doc "Rebuild the complete consent surface from server-computed facts."
   def render_card(%Proposal{} = row) do
-    # Start the server before holding the DB transaction: its initial load
-    # must not wait on the connection owned by this process.
     with {:ok, _pid} <- Platform.Chat.Canvas.Server.start_server(row.canvas_id) do
-      Repo.transaction(fn ->
-        row = locked!(row.id)
+      Repo.transaction(fn -> locked!(row.id) |> persist_card!() end)
+      |> publish_result()
+    end
+  end
 
-        name =
-          case row.approved_by_user_id && Accounts.get_user(row.approved_by_user_id) do
-            nil -> nil
-            user -> user.name || user.email
-          end
+  # The selected option, stored canvas and consent digest commit together.
+  # Publish through the canonical server after commit: synchronous canvas
+  # persistence cannot check out a sandbox connection held by its caller.
+  defp persist_card!(row) do
+    document = card_document(row)
+    Repo.update_all(from(c in Canvas, where: c.id == ^row.canvas_id), set: [document: document])
+    update!(row, %{card_digest: digest(document)})
+  end
 
-        document = ChangeCard.document(%{row | approved_by_name: name})
-        canvas = Repo.get!(Canvas, row.canvas_id)
+  defp card_document(row) do
+    name =
+      case row.approved_by_user_id && Accounts.get_user(row.approved_by_user_id) do
+        nil -> nil
+        user -> user.name || user.email
+      end
 
-        case Chat.patch_canvas(:system, canvas, [{:replace_document, document}]) do
-          {:ok, _} ->
-            Repo.update_all(from(c in Canvas, where: c.id == ^canvas.id),
-              set: [document: document]
-            )
+    ChangeCard.document(%{row | approved_by_name: name})
+  end
 
-            update!(row, %{card_digest: digest(document)})
+  defp publish_result({:ok, row}), do: publish_card(row, 3)
+  defp publish_result(error), do: error
+  defp publish_card(_row, 0), do: {:error, :card_changed}
 
-          {:error, reason} ->
-            Repo.rollback(reason)
+  defp publish_card(row, remaining) do
+    row = Repo.get!(Proposal, row.id)
+    document = card_document(row)
+    canvas = Repo.get!(Canvas, row.canvas_id)
 
-          {:conflict, reason} ->
-            Repo.rollback(reason)
-        end
-      end)
+    case Chat.patch_canvas(:system, canvas, [{:replace_document, document}]) do
+      {:ok, _} ->
+        current = Repo.get!(Proposal, row.id)
+
+        if current.card_digest == digest(document),
+          do: {:ok, current},
+          else: publish_card(current, remaining - 1)
+
+      error ->
+        error
     end
   end
 
@@ -380,9 +390,20 @@ defmodule Platform.Access.Proposals do
 
     values =
       Enum.map(tables, fn table ->
+        # Viewing a card advances read cursors; runtime connections update
+        # heartbeats. Neither changes access or the displayed loss list.
+        omitted =
+          case table do
+            "chat_participants" -> ~w(last_read_message_id attention_mode attention_config avatar_url)
+            "agent_runtimes" -> ~w(last_connected_at updated_at)
+            _ -> []
+          end
+
         %{rows: rows} =
           Repo.query!(
-            "SELECT row_to_json(t)::text FROM " <> table <> " t ORDER BY row_to_json(t)::text"
+            "SELECT (to_jsonb(t) - $1::text[])::text FROM " <> table <>
+              " t ORDER BY (to_jsonb(t) - $1::text[])::text",
+            [omitted]
           )
 
         {table, rows}

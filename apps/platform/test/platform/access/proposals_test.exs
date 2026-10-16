@@ -152,9 +152,18 @@ defmodule Platform.Access.ProposalsTest do
   test "changed card content refuses apply", ctx do
     row = proposal!(ctx)
 
-    Repo.update_all(from(c in Chat.Canvas, where: c.id == ^ctx.canvas.id),
-      set: [document: %{"root" => %{"type" => "text", "props" => %{"text" => "tampered"}}}]
-    )
+    # Mutate through the same canvas authority as a real editor so the live
+    # document and persisted snapshot cannot overwrite a DB-only test edit.
+    assert {:ok, _} =
+             Chat.patch_canvas({:user, ctx.owner.id}, Repo.get!(Chat.Canvas, ctx.canvas.id), [
+               {:append_child, "root",
+                %{
+                  "id" => "tampered-consent",
+                  "type" => "text",
+                  "props" => %{"value" => "tampered"},
+                  "children" => []
+                }}
+             ])
 
     assert {:error, :card_changed} = Proposals.apply(row.id, ctx.scope)
     assert Repo.get!(Proposal, row.id).state == "stale"

@@ -219,10 +219,35 @@ defmodule Platform.Access.Effective do
         ),
       note:
         if(Grant.target(grant) == target,
-          do: "Explicit access row",
+          do: grant_provenance(grant),
           else: "Inherited from #{grant.resource_type} #{grant.resource_id}"
         )
     })
+  end
+
+  defp grant_provenance(grant) do
+    user = Accounts.get_user(grant.granted_by)
+    name = if user, do: user.name || user.email, else: "System"
+
+    change =
+      Repo.one(
+        from(c in Platform.Access.Change,
+          where: c.org_id == ^grant.org_id and c.action in ["grant", "deny"],
+          where:
+            fragment(
+              "EXISTS (SELECT 1 FROM jsonb_array_elements(?) AS entry WHERE entry->>'id' = ?)",
+              c.after,
+              ^grant.id
+            ),
+          order_by: [asc: c.id],
+          limit: 1
+        )
+      )
+
+    via = if change && change.via_agent_id, do: Federation.get_runtime(change.via_agent_id)
+    attribution = if via, do: "#{name} via #{via.display_name || via.runtime_id}", else: name
+    date = Calendar.strftime(grant.inserted_at, "%Y-%m-%d %H:%M")
+    "#{attribution} · #{date}"
   end
 
   defp capped?(%Scope{own_cap: %Scope{} = own, owner_cap: %Scope{} = owner}, permission, target),

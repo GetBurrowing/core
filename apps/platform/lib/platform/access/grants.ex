@@ -182,7 +182,11 @@ defmodule Platform.Access.Grants do
                   end
 
                 {_op, tuple} ->
-                  case Repo.insert(Grant.changeset(%Grant{}, Map.from_struct(tuple))) do
+                  current = Repo.one(tuple_query(tuple))
+                  changeset = Grant.changeset(current || %Grant{}, Map.from_struct(tuple))
+                  write = if current, do: Repo.update(changeset), else: Repo.insert(changeset)
+
+                  case write do
                     {:ok, row} -> row
                     {:error, reason} -> Repo.rollback(reason)
                   end
@@ -258,7 +262,10 @@ defmodule Platform.Access.Grants do
               g.principal_id == ^principal.principal_id
         )
       )
-      |> Enum.filter(&Platform.Access.can?(actor, "access.manage", Grant.target(&1)))
+      |> Enum.filter(fn grant ->
+        Platform.Access.Delegation.root_admin?(actor) or
+          Platform.Access.can?(actor, "access.manage", Grant.target(grant))
+      end)
       |> Enum.map(&%{action: "revoke", id: &1.id})
     end
   end

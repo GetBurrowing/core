@@ -114,7 +114,7 @@ defmodule PlatformWeb.AccessLive do
     do: put_flash(socket, :error, "Access change refused: #{inspect(reason)}")
 
   defp fresh(socket),
-    do: socket.assigns.current_user.id |> Accounts.get_user() |> Scope.for_user()
+    do: socket.assigns.current_user_id |> Accounts.get_user() |> Scope.for_user()
 
   defp reload(socket) do
     scope = fresh(socket)
@@ -135,13 +135,14 @@ defmodule PlatformWeb.AccessLive do
       Repo.all(Platform.Tenancy.Org)
       |> Enum.flat_map(&Changes.list_changes(&1.id, limit: 200))
       |> Enum.filter(fn c ->
-        Enum.all?(c.before ++ c.after, fn r ->
-          Access.can?(
-            scope,
-            "access.manage",
-            {String.to_existing_atom(r["resource_type"]), r["resource_id"]}
-          )
-        end)
+        Platform.Access.Delegation.root_admin?(scope) or
+          Enum.all?(c.before ++ c.after, fn r ->
+            Access.can?(
+              scope,
+              "access.manage",
+              {String.to_existing_atom(r["resource_type"]), r["resource_id"]}
+            )
+          end)
       end)
       |> Enum.sort_by(& &1.id, :desc)
 
@@ -200,6 +201,70 @@ defmodule PlatformWeb.AccessLive do
     for group <- ["People", "Agents"] do
       {group, for(subject <- subjects, subject.type == group, do: {subject.name, subject.key})}
     end
+  end
+
+  defp rail_chips(view) do
+    active = PlatformWeb.AccessViewAs.rail_keys(view)
+
+    PlatformWeb.Components.IconRail.destinations(root_user: true)
+    |> Enum.map(&%{key: &1.key, label: &1.label, active: &1.key in active})
+  end
+
+  defp subject_role(%{surface: :agent}), do: "agent"
+
+  defp subject_role(%{scope: scope}) do
+    scope.role_keys
+    |> Map.values()
+    |> Enum.flat_map(&MapSet.to_list/1)
+    |> Enum.uniq()
+    |> Enum.sort()
+    |> Enum.join(", ")
+  end
+
+  defp change_label(change) do
+    added = change.after -- change.before
+    removed = change.before -- change.after
+    verb = if change.action == "undo", do: "Restored", else: "Added"
+
+    (Enum.map(removed, &row_label(&1, "Removed")) ++ Enum.map(added, &row_label(&1, verb)))
+    |> Enum.join("; ")
+  end
+
+  defp row_label(row, verb) do
+    subject =
+      case row["principal_type"] do
+        "user" ->
+          actor_name(row["principal_id"])
+
+        "role" ->
+          "role " <> row["principal_role_key"]
+
+        "agent" ->
+          case Repo.get(Platform.Agents.Agent, row["principal_id"]) do
+            nil -> "agent " <> row["principal_id"]
+            agent -> agent.name
+          end
+      end
+
+    schema = %{
+      "project" => Platform.Tasks.Project,
+      "space" => Platform.Chat.Space,
+      "canvas" => Platform.Chat.Canvas,
+      "memory_node" => Platform.Org.Wiki.Node
+    }
+
+    resource =
+      case Map.get(schema, row["resource_type"]) do
+        nil -> nil
+        module -> Repo.get(module, row["resource_id"])
+      end
+
+    where =
+      if resource,
+        do: Map.get(resource, :name) || Map.get(resource, :title) || row["resource_id"],
+        else: row["resource_id"]
+
+    "#{verb} #{row["effect"]} #{row["permission"]} on #{where} for #{subject}"
   end
 
   defp preview_document(preview) do

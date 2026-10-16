@@ -46,7 +46,7 @@ defmodule Platform.Access.ChangeCard do
           else: [
             text(
               "inherited",
-              "Inherits: #{length(inherited)} access effects across child resources",
+              "Inherits: " <> inherited_summary(inherited),
               "text-base-content/60"
             )
           ]
@@ -85,6 +85,23 @@ defmodule Platform.Access.ChangeCard do
       "bindings" => %{},
       "meta" => %{"access_proposal_id" => proposal.id}
     }
+  end
+
+  defp inherited_summary(entries) do
+    entries
+    |> Enum.uniq_by(&{&1["resource"]["type"], &1["resource"]["id"]})
+    |> Enum.frequencies_by(& &1["resource"]["type"])
+    |> Enum.sort()
+    |> Enum.map_join(", ", fn {type, count} ->
+      label =
+        case type do
+          "space" -> if count == 1, do: "execution space", else: "execution spaces"
+          "canvas" -> if count == 1, do: "canvas", else: "canvases"
+          _ -> if count == 1, do: type, else: type <> "s"
+        end
+
+      "#{count} #{label}"
+    end)
   end
 
   defp removal([]), do: []
@@ -167,7 +184,7 @@ defmodule Platform.Access.ChangeCard do
     time = Calendar.strftime(row.approved_at, "%H:%M")
 
     [
-      text("applied", "Applied. Access has changed."),
+      text("applied", "✓ Applied. Access has changed."),
       text("approver", "Applied by #{name}, #{time}", "text-base-content/60"),
       node("action_row", "undo", %{
         "actions" => [%{"label" => "Undo", "value" => "access_undo", "variant" => "outline"}]
@@ -176,7 +193,7 @@ defmodule Platform.Access.ChangeCard do
   end
 
   defp state_nodes(%{state: "undone"}),
-    do: [text("undone", "Undone. Access is back to how it was.")]
+    do: [text("undone", "↺ Undone. Access is back to how it was.")]
 
   defp state_nodes(%{state: "cancelled"}),
     do: [text("cancelled", "Cancelled. Access has not changed.")]

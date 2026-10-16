@@ -72,8 +72,9 @@ defmodule Platform.Access.AgentAccessAcceptanceTest do
 
   describe "an agent cannot apply a change without a human click" do
     test "MCP proposal, status, patch and undo write nothing; human Apply writes once", ctx do
+      view = chat!(ctx.root, ctx.space)
       baseline = counts()
-      proposal = propose!(ctx, [deny_user(ctx.guest, "tasks.read", :project, ctx.p.id)])
+      proposal = propose!(ctx, [%{"action" => "revoke", "id" => ctx.grant.id}])
       status = tool!(ctx.token, "access_apply", %{"proposal_id" => proposal["proposal_id"]})
       assert status["state"] == "awaiting_human_approval"
       canvas = Repo.get!(Chat.Canvas, proposal["canvas_id"])
@@ -97,12 +98,11 @@ defmodule Platform.Access.AgentAccessAcceptanceTest do
 
       assert Repo.get!(Proposal, undo["proposal_id"]).kind == "undo"
       assert counts() == baseline
-      view = chat!(ctx.root, ctx.space)
       apply_card(view, proposal)
       assert flash(view)["error"] =~ "card changed"
       assert counts() == baseline
 
-      fresh = propose!(ctx, [deny_user(ctx.guest, "tasks.read", :project, ctx.p.id)])
+      fresh = propose!(ctx, [%{"action" => "revoke", "id" => ctx.grant.id}])
       apply_card(view, fresh)
       assert Repo.aggregate(Change, :count) == elem(baseline, 1) + 1
       change = last_change()
@@ -177,7 +177,7 @@ defmodule Platform.Access.AgentAccessAcceptanceTest do
   describe "undo from the panel restores prior state" do
     test "panel undo restores every grant snapshot column and refuses a repeated undo", ctx do
       before = snapshots()
-      card = propose!(ctx, [deny_user(ctx.guest, "tasks.read", :project, ctx.p.id)])
+      card = propose!(ctx, [%{"action" => "revoke", "id" => ctx.grant.id}])
       chat = chat!(ctx.root, ctx.space)
       apply_card(chat, card)
       refute snapshots() == before
@@ -196,8 +196,8 @@ defmodule Platform.Access.AgentAccessAcceptanceTest do
     test "a changed grant row refuses the old card and a fresh proposal succeeds", ctx do
       old = propose!(ctx, [%{"action" => "revoke", "id" => ctx.grant.id}])
       assert {:ok, _} = Grants.revoke(ctx.grant)
-      baseline = counts()
       view = chat!(ctx.root, ctx.space)
+      baseline = counts()
       apply_card(view, old)
       assert flash(view)["error"] =~ "stale"
       assert Repo.get!(Proposal, old["proposal_id"]).state == "stale"
@@ -228,8 +228,8 @@ defmodule Platform.Access.AgentAccessAcceptanceTest do
           participant_id: newcomer.id
         })
 
-      baseline = counts()
       view = chat!(ctx.root, ctx.space)
+      baseline = counts()
       apply_card(view, old)
       assert Repo.get!(Proposal, old["proposal_id"]).state == "stale"
       assert counts() == baseline
@@ -261,6 +261,21 @@ defmodule Platform.Access.AgentAccessAcceptanceTest do
           Chat.add_participant(ctx.space.id, %{
             participant_id: user.id,
             participant_type: "user",
+            joined_at: DateTime.utc_now()
+          })
+      end
+
+      # Give the agents an explicit own-half admission. Owner permissions
+      # remain a separate cap; the role/user denies below remove those owner
+      # permissions and must therefore remove the agents too.
+      for runtime <- [internal_runtime, cross_runtime, ctx.guest_runtime] do
+        {:ok, _} =
+          Grants.grant(%{principal: runtime, permission: "chat.read", resource: ctx.space})
+
+        {:ok, _} =
+          Chat.add_participant(ctx.space.id, %{
+            participant_type: "agent",
+            participant_id: runtime.agent_id,
             joined_at: DateTime.utc_now()
           })
       end

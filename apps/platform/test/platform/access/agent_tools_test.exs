@@ -277,7 +277,7 @@ defmodule Platform.Access.AgentToolsTest do
             "ops" => [
               %{
                 "action" => "deny",
-                "principal" => ["user", ctx.guest.id],
+                "principal" => ["role", "guest"],
                 "permission" => "tasks.read",
                 "resource" => ["project", ctx.p.id]
               }
