@@ -97,12 +97,17 @@ defmodule Platform.Chat.HistoryVisibleFromReadBoundTest do
   end
 
   defp tool_ids(space_id, agent, opts \\ []) do
+    runtime = Repo.get_by!(Platform.Agents.AgentRuntime, agent_id: agent.id)
+
     args =
       %{"space_id" => space_id, "limit" => 20}
       |> Map.merge(Map.new(opts, fn {k, v} -> {to_string(k), v} end))
 
     {:ok, %{messages: messages}} =
-      ToolSurface.execute("space_get_messages", args, %{agent_id: agent.id})
+      ToolSurface.execute("space_get_messages", args, %{
+        agent_id: agent.id,
+        runtime_id: runtime.runtime_id
+      })
 
     Enum.map(messages, & &1.id)
   end
