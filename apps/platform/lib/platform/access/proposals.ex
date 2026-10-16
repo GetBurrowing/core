@@ -225,7 +225,6 @@ defmodule Platform.Access.Proposals do
            audit: false
          ) do
       {:ok, canvas, _grant} -> verify_digest!(row, canvas)
-      {:ok, canvas} -> verify_digest!(row, canvas)
       _ -> Repo.rollback(:not_found)
     end
   end
