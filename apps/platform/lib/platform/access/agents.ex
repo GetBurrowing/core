@@ -13,10 +13,20 @@ defmodule Platform.Access.Agents do
   def manage?(%Scope{} = scope, %AgentRuntime{owner_user_id: owner_id}),
     do: manage_owner?(scope, owner_id)
 
+  # An agent may have several runtimes (one per host it federates from), each
+  # with its own owner. Managing the agent means managing every one of them;
+  # an agent with no runtime is ownerless and needs `agents.manage_all`.
   def manage?(%Scope{} = scope, %Agent{} = agent) do
-    runtime = Repo.get_by(AgentRuntime, agent_id: agent.id)
-    runtime = runtime || (agent.runtime_id && Repo.get(AgentRuntime, agent.runtime_id))
-    manage?(scope, runtime)
+    runtimes =
+      case Repo.all(from(r in AgentRuntime, where: r.agent_id == ^agent.id)) do
+        [] -> List.wrap(agent.runtime_id && Repo.get(AgentRuntime, agent.runtime_id))
+        runtimes -> runtimes
+      end
+
+    case runtimes do
+      [] -> manage?(scope, nil)
+      runtimes -> Enum.all?(runtimes, &manage?(scope, &1))
+    end
   end
 
   def manage?(%Scope{} = scope, nil), do: Access.holds_anywhere?(scope, "agents.manage_all")

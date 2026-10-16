@@ -661,8 +661,6 @@ defmodule Platform.RepoLookupBoundaryTest do
     # ── Roles ──────────────────────────────────────────────────────────
     {"platform/access/agents.ex", :get, "AgentRuntime", 1, :safe_internal,
      "`manage?/2` reads `runtime_id` from an already loaded Agent struct; the primary key was decoded by Ecto before this lookup"},
-    {"platform/access/agents.ex", :get_by, "AgentRuntime", 1, :safe_internal,
-     "`manage?/2` reads `agent.id` from an already loaded Agent struct; the id was decoded by Ecto before the agent_id lookup"},
     {"platform/access/runtime_profiles.ex", :get, "RuntimeProfile", 1, :safe_internal,
      "`get/1` reads the primary key from an already loaded AgentRuntime struct; Ecto decoded it before this lookup"},
     {"platform/roles.ex", :get, "Agent", 1, :safe_internal,

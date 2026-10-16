@@ -72,20 +72,29 @@ defmodule Platform.Access.Effective do
         }
       end
 
-    managed =
-      for {type, schema, read} <- [
-            {:project, Platform.Tasks.Project, "tasks.read"},
-            {:space, Platform.Chat.Space, "chat.read"}
-          ],
-          resource <- Repo.all(schema),
-          target = {type, resource.id},
-          Access.can?(viewer, "access.manage", target),
-          do: {read, target}
+    # An install admin may inspect everyone, so skip the per-resource sweep.
+    install_admin? = Access.can?(viewer, "install.admin")
 
+    managed =
+      if install_admin? do
+        []
+      else
+        for {type, schema, read} <- [
+              {:project, Platform.Tasks.Project, "tasks.read"},
+              {:space, Platform.Chat.Space, "chat.read"}
+            ],
+            resource <- Repo.all(schema),
+            target = {type, resource.id},
+            Access.can?(viewer, "access.manage", target),
+            do: {read, target}
+      end
+
+    # ViewAs.scope/2 authorizes exactly as compute/2 does but does not list the
+    # subject's projects and channels, which this filter never reads.
     (people ++ agents ++ roles)
     |> Enum.filter(fn subject ->
-      case ViewAs.compute(viewer, subject.target) do
-        {:ok, view} -> inspectable_subject?(viewer, view.scope, managed)
+      case ViewAs.scope(viewer, subject.target) do
+        {:ok, scope} -> install_admin? or inspectable_subject?(viewer, scope, managed)
         _ -> false
       end
     end)
@@ -100,8 +109,7 @@ defmodule Platform.Access.Effective do
         _ -> []
       end
 
-    Access.can?(viewer, "install.admin") or
-      Enum.any?(memberships, &Access.can?(viewer, "access.manage", &1.org_id)) or
+    Enum.any?(memberships, &Access.can?(viewer, "access.manage", &1.org_id)) or
       Enum.any?(managed, fn {read, resource} -> Access.can?(scope, read, resource) end)
   end
 

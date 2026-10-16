@@ -160,6 +160,43 @@ defmodule Platform.Access.AgentManagementTest do
     assert :ok = Roles.unassign_role("designer", actor: scope)
   end
 
+  test "an agent with two runtimes is managed only by someone who manages both" do
+    root = Repo.get!(Org, acme_org_id())
+    owner = World.create_user!()
+    other = World.create_user!()
+    World.plain_member!(owner, root)
+    World.plain_member!(other, root)
+
+    owner_scope = Scope.for_user(owner)
+    agent = agent!()
+
+    {:ok, _} =
+      Federation.register_runtime(owner_scope, %{
+        runtime_id: unique_runtime_id(),
+        agent_id: agent.id
+      })
+
+    {:ok, _} =
+      Federation.register_runtime(owner_scope, %{
+        runtime_id: unique_runtime_id(),
+        agent_id: agent.id
+      })
+
+    # Two runtimes on one agent used to raise Ecto.MultipleResultsError and
+    # 500 the Control Center for everyone.
+    assert Agents.manage?(owner_scope, agent)
+    assert Agents.manage?(Scope.for_user(root_admin!()), agent)
+    refute Agents.manage?(Scope.for_user(other), agent)
+
+    {:ok, _} =
+      Federation.register_runtime(Scope.for_user(other), %{
+        runtime_id: unique_runtime_id(),
+        agent_id: agent.id
+      })
+
+    refute Agents.manage?(owner_scope, agent)
+  end
+
   defp agent! do
     n = System.unique_integer([:positive])
 

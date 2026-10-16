@@ -39,6 +39,19 @@ defmodule Platform.Access.ViewAs do
     end
   end
 
+  @doc """
+  Resolve and authorize a view-as target WITHOUT enumerating its resources.
+
+  Succeeds exactly when `compute/2` would (resource listing never fails), so
+  callers that only need the target's scope, such as the Access panel's
+  subject list, need not pay for listing every project and channel.
+  """
+  def scope(%Scope{} = viewer, target) do
+    with {:ok, scope, _subject, org_ids, _surface} <- resolve(target),
+         :ok <- authorize(viewer, org_ids),
+         do: {:ok, scope}
+  end
+
   defp resolve({:user, id}) when is_binary(id) do
     case Accounts.get_user(id) do
       nil ->
