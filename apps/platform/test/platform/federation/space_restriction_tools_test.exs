@@ -2,7 +2,7 @@ defmodule Platform.Federation.SpaceRestrictionToolsTest do
   use Platform.DataCase, async: false
   import Platform.ExternalUserFixtures
   import Platform.TenancyFixtures
-  alias Platform.Access.Restrictions
+  alias Platform.Access.{Restrictions, RuntimeProfiles}
   alias Platform.Agents.{Agent, AgentRuntime}
   alias Platform.Federation.ToolSurface
   alias Platform.Repo
@@ -30,6 +30,9 @@ defmodule Platform.Federation.SpaceRestrictionToolsTest do
         runtime_id: "restr-tools-#{System.unique_integer([:positive])}",
         status: "active"
       })
+
+    {:ok, _profile} =
+      RuntimeProfiles.create_for_runtime(rt, AgentRuntime.default_tool_profile(), nil)
 
     context = %{agent_id: agent.id, runtime_id: rt.runtime_id}
     marker = "restrictedfinancemarker"

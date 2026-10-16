@@ -17,6 +17,7 @@ defmodule Platform.Access.PrecedenceTest do
   alias Platform.Access.{Grant, Grants, Scope}
   alias Platform.Accounts
   alias Platform.Accounts.User
+  alias Platform.Agents.Agent
   alias Platform.Chat.{Canvas, Participant, Space}
   alias Platform.Org.Wiki
   alias Platform.Org.Wiki.{Node, NodePath}
@@ -336,17 +337,34 @@ defmodule Platform.Access.PrecedenceTest do
       owner = member!(org)
       p = project!(org)
       t = task!(p)
-      agent_id = Ecto.UUID.generate()
+      agent =
+        Repo.insert!(%Agent{
+          slug: "grant-owner-#{System.unique_integer([:positive])}",
+          name: "Owner agent",
+          status: "active"
+        })
+
+      agent_id = agent.id
+
       {:ok, runtime} =
         Platform.Federation.register_runtime(owner.id, %{
           runtime_id: "grant-owner-#{System.unique_integer([:positive])}",
-          agent_id: agent_id
+          agent_id: agent_id,
+          tool_profile: []
+        })
+
+      stranger_agent =
+        Repo.insert!(%Agent{
+          slug: "grant-stranger-#{System.unique_integer([:positive])}",
+          name: "Stranger agent",
+          status: "active"
         })
 
       {:ok, stranger} =
         Platform.Federation.register_runtime(owner.id, %{
           runtime_id: "grant-stranger-#{System.unique_integer([:positive])}",
-          agent_id: Ecto.UUID.generate()
+          agent_id: stranger_agent.id,
+          tool_profile: []
         })
 
       refute Access.can?(Scope.for_runtime(runtime), "tasks.read", {:task, t.id})

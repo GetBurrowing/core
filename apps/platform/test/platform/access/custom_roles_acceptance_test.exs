@@ -6,7 +6,7 @@ defmodule Platform.Access.CustomRolesAcceptanceTest do
   import Platform.TenancyFixtures
 
   alias Platform.Access
-  alias Platform.Access.{IdpGroupRoles, Restrictions, RoleAssignment, Roles, Scope}
+  alias Platform.Access.{IdpGroupRoles, Restrictions, RoleAssignment, Roles, RuntimeProfiles, Scope}
   alias Platform.Accounts
   alias Platform.Agents.{Agent, AgentRuntime}
   alias Platform.Chat
@@ -48,6 +48,9 @@ defmodule Platform.Access.CustomRolesAcceptanceTest do
           runtime_id: "accept-#{System.unique_integer([:positive])}",
           status: "active"
         })
+
+      {:ok, _profile} =
+        RuntimeProfiles.create_for_runtime(runtime, AgentRuntime.default_tool_profile(), nil)
 
       context = %{agent_id: agent.id, runtime_id: runtime.runtime_id}
       args = %{"space_id" => finance.id}

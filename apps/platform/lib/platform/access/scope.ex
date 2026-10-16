@@ -271,7 +271,7 @@ defmodule Platform.Access.Scope do
 
           if is_nil(restriction),
             do: base,
-            else: Map.take(base, Map.keys(restriction) ++ Map.keys(legacy_permissions))
+            else: Map.take(base, ["chat.read" | Map.keys(restriction) ++ Map.keys(legacy_permissions)])
       end
 
     owner =

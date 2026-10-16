@@ -5,6 +5,7 @@ defmodule Platform.Access.SpaceRestrictionsTest do
   alias Platform.Access
   alias Platform.Access.{Grants, Restrictions, Roles, Scope}
   alias Platform.Agents.{Agent, AgentRuntime}
+  alias Platform.Access.RuntimeProfiles
   alias Platform.Chat.CanvasAccess
   alias Platform.Repo
   alias Platform.Tenancy
@@ -36,6 +37,9 @@ defmodule Platform.Access.SpaceRestrictionsTest do
         runtime_id: "restriction-#{System.unique_integer([:positive])}",
         status: "active"
       })
+
+    {:ok, _profile} =
+      RuntimeProfiles.create_for_runtime(runtime, AgentRuntime.default_tool_profile(), nil)
 
     %{
       root: root,
