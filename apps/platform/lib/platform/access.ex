@@ -472,7 +472,6 @@ defmodule Platform.Access do
 
   def module_access?(_scope, _module_key, _permission), do: false
 
-
   @doc """
   Restricted channels the actor cannot read, in ONE query including org ancestry.
   Rows remain listed; callers use this set to redact their descriptions.

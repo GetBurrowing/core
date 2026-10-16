@@ -4298,7 +4298,6 @@ defmodule PlatformWeb.ChatLive do
     end)
   end
 
-
   # Valid slug pattern: lowercase alphanumerics separated by hyphens (1–64 chars).
   # This intentionally excludes anything with underscores, uppercase, special chars,
   # or tool-artifact strings like "__from_file__" that should never create real spaces.
