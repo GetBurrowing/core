@@ -392,6 +392,14 @@ defmodule PlatformWeb.ControlCenter.NativeAgentsLiveTest do
 
       {:ok, view, _html} = live(as(conn, owner), ~p"/control/#{agent.slug}")
 
+      # Built-in agents have no owner runtime. RBAC requires manage_all for
+      # their controls; ordinary members retain the read-only header.
+      refute has_element?(view, "#start-runtime")
+      refute has_element?(view, "#refresh-runtime")
+      refute has_element?(view, "#stop-runtime")
+      admin = member!("admin")
+      {:ok, view, _html} = live(as(conn, admin), ~p"/control/#{agent.slug}")
+
       assert has_element?(view, "#start-runtime", "Start runtime")
       assert has_element?(view, "#refresh-runtime", "Refresh runtime")
       assert has_element?(view, "#stop-runtime", "Stop runtime")
