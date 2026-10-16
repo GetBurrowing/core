@@ -132,7 +132,7 @@ defmodule Platform.Access.Scope do
   import Ecto.Query, only: [from: 2]
 
   alias Platform.Access
-  alias Platform.Access.{Grants, Registry, RuntimeProfile, RuntimeProfiles, ToolPermissions}
+  alias Platform.Access.{Grants, Registry, RuntimeProfile, RuntimeProfiles}
   alias Platform.Agents.AgentRuntime
   alias Platform.Chat.ExternalScope
   alias Platform.Federation.ToolSurface
@@ -259,13 +259,7 @@ defmodule Platform.Access.Scope do
     permissions =
       case profile do
         nil ->
-          tool_permissions =
-            for bundle <- modules,
-                permission <- ToolPermissions.bundle_permissions(bundle),
-                into: %{},
-                do: {permission, :all}
-
-          put_agent_roster(Map.merge(legacy_permissions, tool_permissions), runtime)
+          %{}
 
         %RuntimeProfile{} ->
           restriction = RuntimeProfiles.restrictions(runtime, profile)
