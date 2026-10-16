@@ -47,7 +47,7 @@ defmodule Platform.Access.RuntimeProfiles do
   end
 
   @spec create_for_runtime(AgentRuntime.t(), [String.t()], map() | nil) ::
-          {:ok, RuntimeProfile.t()} | {:error, Ecto.Changeset.t()}
+          {:ok, RuntimeProfile.t()} | {:error, Ecto.Changeset.t() | :invalid_module}
   def create_for_runtime(%AgentRuntime{} = runtime, modules, restrictions) do
     if is_list(modules) and Enum.all?(modules, &(&1 in valid_modules())) do
       %RuntimeProfile{}

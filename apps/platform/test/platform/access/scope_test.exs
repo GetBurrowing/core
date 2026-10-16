@@ -14,6 +14,7 @@ defmodule Platform.Access.ScopeTest do
   use Platform.DataCase, async: true
 
   import Platform.TenancyFixtures
+  import Platform.RuntimeProfileFixtures
 
   alias Platform.Access
   alias Platform.Access.Scope
@@ -433,7 +434,7 @@ defmodule Platform.Access.ScopeTest do
 
     test "default bundles retain the transitional mcp keys and add capped tool permissions",
          ctx do
-      runtime = %AgentRuntime{owner_user_id: owner!(ctx, false).id}
+      runtime = runtime!(owner!(ctx, false).id, AgentRuntime.default_tool_profile())
       scope = Scope.for_runtime(runtime)
 
       for bundle <- AgentRuntime.default_tool_profile() do
@@ -449,10 +450,7 @@ defmodule Platform.Access.ScopeTest do
     end
 
     test "narrowed bundles, in row order", ctx do
-      runtime = %AgentRuntime{
-        owner_user_id: owner!(ctx, false).id,
-        allowed_bundles: ["task", "messaging"]
-      }
+      runtime = runtime!(owner!(ctx, false).id, ["task", "messaging"])
 
       scope = Scope.for_runtime(runtime)
 
@@ -464,7 +462,7 @@ defmodule Platform.Access.ScopeTest do
     end
 
     test "owned by an external user: marked guest, tools reduced to the chat allowlist", ctx do
-      runtime = %AgentRuntime{owner_user_id: owner!(ctx, true).id}
+      runtime = runtime!(owner!(ctx, true).id, AgentRuntime.default_tool_profile())
       scope = Scope.for_runtime(runtime)
 
       assert ToolAuthorization.external_principal?(runtime)
@@ -474,13 +472,13 @@ defmodule Platform.Access.ScopeTest do
     end
 
     test "no bundles: nothing" do
-      scope = Scope.for_runtime(%AgentRuntime{allowed_bundles: nil})
+      scope = Scope.for_runtime(%AgentRuntime{})
       assert scope.permissions == %{}
       assert Scope.tool_names(scope) == []
     end
 
     test "Access.scope_for/1 dispatches a runtime to for_runtime/1", ctx do
-      runtime = %AgentRuntime{owner_user_id: owner!(ctx, false).id, allowed_bundles: ["task"]}
+      runtime = runtime!(owner!(ctx, false).id, ["task"])
       assert Access.scope_for(runtime) == Scope.for_runtime(runtime)
       assert Access.scope_for(nil) == %Scope{}
     end

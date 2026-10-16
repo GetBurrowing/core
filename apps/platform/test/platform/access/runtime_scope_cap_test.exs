@@ -3,10 +3,10 @@ defmodule Platform.Access.RuntimeScopeCapTest do
 
   alias Platform.Access
   alias Platform.Access.{Grant, Grants, Scope}
-  alias Platform.Agents.AgentRuntime
   alias Platform.Tasks
 
   import Platform.TenancyFixtures
+  import Platform.RuntimeProfileFixtures
 
   test "for_runtime applies an owner's deny after a positive control" do
     owner = root_admin!()
@@ -17,7 +17,7 @@ defmodule Platform.Access.RuntimeScopeCapTest do
         org_id: acme_org_id()
       })
 
-    runtime = %AgentRuntime{owner_user_id: owner.id, allowed_bundles: ["task"]}
+    runtime = runtime!(owner.id, ["task"])
     resource = {:project, project.id}
 
     assert Access.can?(Scope.for_runtime(runtime), "tasks.read", resource)

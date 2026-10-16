@@ -17,7 +17,6 @@ defmodule Platform.Access.PrecedenceTest do
   alias Platform.Access.{Grant, Grants, Scope}
   alias Platform.Accounts
   alias Platform.Accounts.User
-  alias Platform.Agents.AgentRuntime
   alias Platform.Chat.{Canvas, Participant, Space}
   alias Platform.Org.Wiki
   alias Platform.Org.Wiki.{Node, NodePath}
@@ -338,8 +337,17 @@ defmodule Platform.Access.PrecedenceTest do
       p = project!(org)
       t = task!(p)
       agent_id = Ecto.UUID.generate()
-      runtime = %AgentRuntime{agent_id: agent_id, owner_user_id: owner.id, allowed_bundles: []}
-      stranger = %AgentRuntime{agent_id: Ecto.UUID.generate(), owner_user_id: owner.id}
+      {:ok, runtime} =
+        Platform.Federation.register_runtime(owner.id, %{
+          runtime_id: "grant-owner-#{System.unique_integer([:positive])}",
+          agent_id: agent_id
+        })
+
+      {:ok, stranger} =
+        Platform.Federation.register_runtime(owner.id, %{
+          runtime_id: "grant-stranger-#{System.unique_integer([:positive])}",
+          agent_id: Ecto.UUID.generate()
+        })
 
       refute Access.can?(Scope.for_runtime(runtime), "tasks.read", {:task, t.id})
 

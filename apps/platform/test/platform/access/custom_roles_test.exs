@@ -17,7 +17,7 @@ defmodule Platform.Access.CustomRolesTest do
   alias Platform.Access.{Grant, Grants, Registry, Role, RoleAssignment, Roles, Scope}
   alias Platform.Accounts
   alias Platform.Accounts.User
-  alias Platform.Agents.{Agent, AgentRuntime}
+  alias Platform.Agents.Agent
   alias Platform.Repo
   alias Platform.Tasks
   alias Platform.Tenancy
@@ -324,8 +324,17 @@ defmodule Platform.Access.CustomRolesTest do
          ctx do
       owner = member!(ctx.a)
       agent = agent!()
-      runtime = %AgentRuntime{agent_id: agent.id, owner_user_id: owner.id, allowed_bundles: []}
-      other = %AgentRuntime{agent_id: agent!().id, owner_user_id: owner.id, allowed_bundles: []}
+      {:ok, runtime} =
+        Platform.Federation.register_runtime(owner.id, %{
+          runtime_id: "role-agent-#{System.unique_integer([:positive])}",
+          agent_id: agent.id
+        })
+
+      {:ok, other} =
+        Platform.Federation.register_runtime(owner.id, %{
+          runtime_id: "role-other-#{System.unique_integer([:positive])}",
+          agent_id: agent!().id
+        })
       role = role!(ctx.a, "Finance bots", %{"tasks.promote" => "all"})
 
       {:ok, project} =
