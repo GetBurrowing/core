@@ -90,47 +90,50 @@ defmodule Platform.Access.Changes do
     query = Keyword.fetch!(opts, :query)
 
     with {:ok, {actor_type, actor_id}} <- actor_fields(actor) do
-      Repo.transaction(fn ->
-        pre = Repo.all(query)
-        lock_keys(Keyword.get(opts, :keys, []) ++ Enum.map(pre, &Grant.tuple_key/1))
+      transaction(
+        fn ->
+          pre = Repo.all(query)
+          lock_keys(Keyword.get(opts, :keys, []) ++ Enum.map(pre, &Grant.tuple_key/1))
 
-        before = snapshot(query, lock: true)
-        baseline = baseline(actor, before ++ key_resources(Keyword.get(opts, :keys, [])))
+          before = snapshot(query, lock: true)
+          baseline = baseline(actor, before ++ key_resources(Keyword.get(opts, :keys, [])))
 
-        precondition!(opts)
-        inspected_before = inspect_state(opts, :inspect_before)
+          precondition!(opts)
+          inspected_before = inspect_state(opts, :inspect_before)
 
-        result =
-          case mutation_fun.() do
-            {:ok, result} -> result
-            {:error, reason} -> Repo.rollback(reason)
+          result =
+            case mutation_fun.() do
+              {:ok, result} -> result
+              {:error, reason} -> Repo.rollback(reason)
+            end
+
+          after_rows = snapshot(query)
+          bypass = delegate!(actor, before, after_rows, baseline)
+
+          inspected_after = inspect_state(opts, :inspect_after)
+
+          if opts[:dry_run] do
+            Repo.rollback(
+              {:dry_run,
+               %{result: result, change: nil, before: inspected_before, after: inspected_after}}
+            )
           end
 
-        after_rows = snapshot(query)
-        bypass = delegate!(actor, before, after_rows, baseline)
+          change =
+            record!(before, after_rows, %{
+              org_id: Keyword.get(opts, :org_id),
+              actor_type: actor_type,
+              actor_id: actor_id,
+              via_agent_id: Keyword.get(opts, :via_agent_id),
+              bypass: bypass || Keyword.get(opts, :bypass),
+              action: action,
+              undoes_change_id: Keyword.get(opts, :undoes_change_id)
+            })
 
-        inspected_after = inspect_state(opts, :inspect_after)
-
-        if opts[:dry_run] do
-          Repo.rollback(
-            {:dry_run,
-             %{result: result, change: nil, before: inspected_before, after: inspected_after}}
-          )
-        end
-
-        change =
-          record!(before, after_rows, %{
-            org_id: Keyword.get(opts, :org_id),
-            actor_type: actor_type,
-            actor_id: actor_id,
-            via_agent_id: Keyword.get(opts, :via_agent_id),
-            bypass: bypass || Keyword.get(opts, :bypass),
-            action: action,
-            undoes_change_id: Keyword.get(opts, :undoes_change_id)
-          })
-
-        %{result: result, change: change}
-      end)
+          %{result: result, change: change}
+        end,
+        opts
+      )
       |> finish(opts)
     end
   end
@@ -153,7 +156,7 @@ defmodule Platform.Access.Changes do
     with true <- Platform.UUID.valid?(change_id) || {:error, :not_found},
          %Change{} = change <- Repo.get(Change, change_id) || {:error, :not_found},
          {:ok, {actor_type, actor_id}} <- actor_fields(actor) do
-      Repo.transaction(fn -> do_undo(change, actor, actor_type, actor_id, opts) end)
+      transaction(fn -> do_undo(change, actor, actor_type, actor_id, opts) end, opts)
       |> finish(opts)
     end
   end
@@ -373,6 +376,32 @@ defmodule Platform.Access.Changes do
     do: {:ok, {"user", id}}
 
   defp actor_fields(_), do: {:error, :invalid_actor}
+
+  # Ecto nested rollback poisons the enclosing transaction. A dry run inside
+  # human consent therefore needs its own SQL savepoint and must intercept
+  # the rollback before DBConnection marks the outer transaction failed.
+  defp transaction(fun, opts) do
+    if opts[:dry_run] and Repo.in_transaction?() do
+      name = "access_preview_" <> Integer.to_string(System.unique_integer([:positive]))
+      Repo.query!("SAVEPOINT " <> name)
+
+      try do
+        {:ok, fun.()}
+      catch
+        :throw, {DBConnection, _ref, reason} ->
+          Repo.query!("ROLLBACK TO SAVEPOINT " <> name)
+          {:error, reason}
+
+        kind, reason ->
+          Repo.query!("ROLLBACK TO SAVEPOINT " <> name)
+          :erlang.raise(kind, reason, __STACKTRACE__)
+      after
+        Repo.query!("RELEASE SAVEPOINT " <> name)
+      end
+    else
+      Repo.transaction(fun)
+    end
+  end
 
   defp precondition!(opts) do
     case Keyword.get(opts, :precondition, fn -> :ok end).() do
