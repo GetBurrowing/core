@@ -347,7 +347,7 @@ defmodule Platform.GameStream.TransportCapabilityParityTest do
 
   # ── Fixtures ───────────────────────────────────────────────────────────
 
-  defp runtime_for(ctx, owner_user_id, allowed_bundles) do
+  defp runtime_for(ctx, owner_user_id, tool_profile) do
     raw_token = AgentRuntime.generate_token()
 
     {:ok, runtime} =
@@ -357,10 +357,16 @@ defmodule Platform.GameStream.TransportCapabilityParityTest do
         owner_user_id: owner_user_id,
         agent_id: ctx.agent.id,
         auth_token_hash: AgentRuntime.hash_token(raw_token),
-        status: "active",
-        allowed_bundles: allowed_bundles
+        status: "active"
       })
       |> Repo.insert()
+
+    {:ok, _profile} =
+      Platform.Access.RuntimeProfiles.create_for_runtime(
+        runtime,
+        tool_profile,
+        Platform.Access.RuntimeProfiles.translated_permissions(tool_profile)
+      )
 
     {runtime, raw_token}
   end

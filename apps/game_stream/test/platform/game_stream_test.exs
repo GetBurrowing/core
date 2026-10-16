@@ -117,7 +117,7 @@ defmodule Platform.GameStreamTest do
     {:ok, runtime} =
       Federation.register_runtime(user.id, %{
         runtime_id: runtime_id,
-        allowed_bundles: [],
+        tool_profile: [],
         metadata: %{"client_info" => %{"features" => features}}
       })
 

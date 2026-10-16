@@ -15,7 +15,7 @@ defmodule Platform.GameStream.Seed do
     * `metadata["client_info"]["features"] = ["game_stream_host"]`, the same
       declaration the host makes at join, so the row reads as a host even
       before its first connection;
-    * `allowed_bundles: []` — the host calls no tools.
+    * `tool_profile: []` — the host calls no tools.
 
   ## The token goes to a FILE, never to output
 
@@ -25,6 +25,7 @@ defmodule Platform.GameStream.Seed do
   nothing and leaves the file alone.
   """
 
+  alias Platform.Access.RuntimeProfiles
   alias Platform.Accounts.User
   alias Platform.Agents.{Agent, AgentRuntime, SlugLookup}
   alias Platform.Federation
@@ -66,7 +67,7 @@ defmodule Platform.GameStream.Seed do
              runtime_id: runtime_id,
              display_name: "Play host (#{runtime_id})",
              agent_id: agent.id,
-             allowed_bundles: [],
+             tool_profile: [],
              metadata: %{"client_info" => client_info()}
            }),
          {:ok, runtime, raw_token} <- Federation.activate_runtime(runtime),
@@ -77,7 +78,7 @@ defmodule Platform.GameStream.Seed do
 
   defp refresh_runtime(existing, agent, token_path, rotate?) do
     with {:ok, runtime} <- Federation.update_metadata(existing, %{"client_info" => client_info()}),
-         {:ok, runtime} <- Federation.update_allowed_bundles(runtime, []),
+         {:ok, _profile} <- RuntimeProfiles.set_tool_profile(runtime, []),
          {:ok, runtime} <- bind_agent(runtime, agent) do
       if rotate? do
         with {:ok, runtime, raw_token} <- Federation.activate_runtime(runtime),

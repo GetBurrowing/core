@@ -9,6 +9,7 @@ defmodule Platform.GameStream.SeedTest do
 
   import ExUnit.CaptureLog
 
+  alias Platform.Access.RuntimeProfiles
   alias Platform.Accounts.User
   alias Platform.Agents.{Agent, AgentRuntime}
   alias Platform.Federation
@@ -46,7 +47,8 @@ defmodule Platform.GameStream.SeedTest do
 
     assert runtime.runtime_id == ctx.runtime_id
     assert runtime.agent_id == agent.id
-    assert runtime.allowed_bundles == []
+    assert RuntimeProfiles.tool_profile(runtime) == []
+    assert RuntimeProfiles.restrictions(runtime) == %{}
     assert runtime.status == "active"
     assert Federation.declared_features(runtime.metadata) == ["game_stream_host"]
     assert %AgentRuntime{} = Federation.get_runtime_by_token(token)
@@ -60,8 +62,13 @@ defmodule Platform.GameStream.SeedTest do
     {:ok, %{runtime: first}} = Seed.run(opts)
     token = File.read!(path)
 
+    # Refresh restores the no-tools host profile even if it was widened after creation.
+    assert {:ok, _profile} = RuntimeProfiles.set_tool_profile(first, ["federation", "task"])
+    assert RuntimeProfiles.tool_profile(first) == ["federation", "task"]
+
     assert {:ok, %{runtime: again, token_written: false}} = Seed.run(opts)
     assert again.id == first.id
+    assert RuntimeProfiles.tool_profile(again) == []
     assert File.read!(path) == token
 
     assert {:ok, %{token_written: true}} = Seed.run(Keyword.put(opts, :rotate, true))

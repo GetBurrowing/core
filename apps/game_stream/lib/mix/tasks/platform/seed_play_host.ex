@@ -43,7 +43,7 @@ defmodule Mix.Tasks.Platform.SeedPlayHost do
       {:ok, %{runtime: runtime, token_written: written?}} ->
         Mix.shell().info(
           "play host seeded: runtime_id=#{runtime.runtime_id} features=game_stream_host " <>
-            "allowed_bundles=[] " <>
+            "tool_profile=[] " <>
             if(written?,
               do: "token written to #{Path.expand(token_path)}",
               else: "existing row reused; no token minted (pass --rotate to mint one)"

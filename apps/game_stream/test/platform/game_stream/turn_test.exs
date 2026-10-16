@@ -206,7 +206,7 @@ defmodule Platform.GameStream.TurnTest do
       {:ok, runtime} =
         Federation.register_runtime(user.id, %{
           runtime_id: runtime_id,
-          allowed_bundles: [],
+          tool_profile: [],
           metadata: %{"client_info" => %{"features" => ["game_stream_host"]}}
         })
 

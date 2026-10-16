@@ -52,7 +52,7 @@ defmodule PlatformWeb.RuntimeChannelGameStreamTest do
     {:ok, runtime} =
       Federation.register_runtime(user.id, %{
         runtime_id: "play-host-#{unique()}",
-        allowed_bundles: []
+        tool_profile: []
       })
 
     {:ok, runtime, token} = Federation.activate_runtime(runtime)
