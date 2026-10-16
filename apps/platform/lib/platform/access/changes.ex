@@ -381,7 +381,7 @@ defmodule Platform.Access.Changes do
   # human consent therefore needs its own SQL savepoint and must intercept
   # the rollback before DBConnection marks the outer transaction failed.
   defp transaction(fun, opts) do
-    if opts[:dry_run] and Repo.in_transaction?() do
+    if opts[:dry_run] == true and Repo.in_transaction?() do
       name = "access_preview_" <> Integer.to_string(System.unique_integer([:positive]))
       Repo.query!("SAVEPOINT " <> name)
 
