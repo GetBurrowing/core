@@ -26,11 +26,27 @@ defmodule Platform.Chat.HistoryVisibleFromReadBoundTest do
   defp agent! do
     n = System.unique_integer([:positive])
 
-    Repo.insert!(%Platform.Agents.Agent{
-      name: "History Reader #{n}",
-      slug: "history-reader-#{n}",
+    agent =
+      Repo.insert!(%Platform.Agents.Agent{
+        name: "History Reader #{n}",
+        slug: "history-reader-#{n}",
+        status: "active"
+      })
+
+    owner = Platform.TenancyFixtures.root_admin!()
+
+    %Platform.Agents.AgentRuntime{}
+    |> Platform.Agents.AgentRuntime.changeset(%{
+      runtime_id: "history-reader-#{n}",
+      owner_user_id: owner.id,
+      agent_id: agent.id,
+      auth_token_hash:
+        Platform.Agents.AgentRuntime.hash_token(Platform.Agents.AgentRuntime.generate_token()),
       status: "active"
     })
+    |> Repo.insert!()
+
+    agent
   end
 
   defp channel! do

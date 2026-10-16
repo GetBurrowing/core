@@ -293,6 +293,12 @@ defmodule Platform.Orchestration.DispatchMetricsTest do
         oidc_sub: "oidc-metrics-#{u()}"
       })
 
+    Platform.ExternalUserFixtures.plain_member!(
+      user,
+      Platform.Tenancy.get_org!(Platform.TenancyFixtures.acme_org_id()),
+      "admin"
+    )
+
     %AgentRuntime{}
     |> AgentRuntime.changeset(%{
       runtime_id: "metrics-rt-#{u()}",

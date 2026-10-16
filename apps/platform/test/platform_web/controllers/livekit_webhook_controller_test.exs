@@ -675,11 +675,9 @@ defmodule PlatformWeb.LivekitWebhookControllerTest do
       # Segments survive finalize.
       assert length(final.segments) == 3
       assert Enum.map(final.segments, & &1["text"]) == ["One", "Two", "Three"]
-      # Multi-segment path leaves the row at "processing" — the async
-      # summary task advances it to "complete" once the LLM returns.
-      # Accept either since the summarizer is triggered synchronously
-      # under the test task supervisor and MAY have completed already.
-      assert final.status in ["processing", "complete"]
+      # The async summary may finish before this read. The test environment
+      # has no LLM provider, so a completed summary attempt may also fail.
+      assert final.status in ["processing", "complete", "failed"]
     end
 
     test "phantom RM_<random> lifecycle end-to-end never persists a row",

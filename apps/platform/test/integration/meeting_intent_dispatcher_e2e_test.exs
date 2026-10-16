@@ -172,11 +172,20 @@ defmodule Platform.Integration.MeetingIntentDispatcherE2ETest do
   end
 
   defp create_user! do
-    Repo.insert!(%User{
-      email: "e2e_dispatch_#{System.unique_integer([:positive])}@example.com",
-      name: "E2E Dispatch User",
-      oidc_sub: "oidc-e2e-dispatch-#{System.unique_integer([:positive])}"
-    })
+    user =
+      Repo.insert!(%User{
+        email: "e2e_dispatch_#{System.unique_integer([:positive])}@example.com",
+        name: "E2E Dispatch User",
+        oidc_sub: "oidc-e2e-dispatch-#{System.unique_integer([:positive])}"
+      })
+
+    Platform.ExternalUserFixtures.plain_member!(
+      user,
+      Platform.Tenancy.get_org!(Platform.TenancyFixtures.acme_org_id()),
+      "admin"
+    )
+
+    user
   end
 
   # Role assignment + runtime link + topic subscription, in the order a
