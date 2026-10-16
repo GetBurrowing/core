@@ -203,10 +203,11 @@ defmodule PlatformWeb.ChatLiveAgentsDrawerTest do
       {:ok, view, _html} = live_at(conn, "/chat/#{space.slug}")
       drawer = drawer_html(open_drawer(view))
 
+      # The feature block has these stable drawer-specific roles. A generic
+      # aria-label="Agents" can also come from navigation outside the drawer.
       refute drawer =~ ~s(data-role="agents-drawer-block")
       refute drawer =~ ~s(data-role="agents-drawer-row")
       refute drawer =~ ~s(data-role="agents-drawer-row-glyph")
-      refute drawer =~ ~s(aria-label="Agents")
     end
   end
 
