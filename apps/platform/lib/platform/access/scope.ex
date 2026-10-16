@@ -120,9 +120,10 @@ defmodule Platform.Access.Scope do
 
   ## Runtimes
 
-  `for_runtime/1` translates `allowed_bundles` into tool permissions, then
-  intersects them with the owner's scope. Transitional `mcp.<bundle>` fields
-  remain available to the earlier stack member's equivalence checks. An external-owned runtime's
+  `for_runtime/1` reads an Access-owned runtime profile and intersects its
+  permission restriction with the owner's scope. A runtime without a profile
+  row temporarily translates `allowed_bundles` for existing tests. Transitional
+  `mcp.<bundle>` fields remain available to earlier equivalence checks. An external-owned runtime's
   `role_keys` carry its owner's guest keys, which marks the scope external.
   `chat.read` is the agent's roster (`Chat.list_spaces_for_agent/2`), a
   build-time snapshot: a runtime's chat reach is its participation, as today.
@@ -239,6 +240,7 @@ defmodule Platform.Access.Scope do
   @doc """
   The Scope for an agent runtime: tool permissions from the runtime profile,
   intersected with its owner's permissions.
+
   """
   @spec for_runtime(AgentRuntime.t()) :: t()
   def for_runtime(%AgentRuntime{} = runtime),
@@ -484,10 +486,8 @@ defmodule Platform.Access.Scope do
   end
 
   @doc """
-  The tool names this scope lists: the held bundles (a runtime's
-  `allowed_bundles` in row order) through `ToolSurface.list_tools/1`, then
-  `ToolSurface.scope_for_external/2` for a guest scope. The same composition
-  as `ToolAuthorization.effective_tools/1`.
+  Tool names for a runtime delegate to `Access.Tools`, the same decision as
+  the federation transports. Non-runtime scopes use their held bundles.
   """
   @spec tool_names(t()) :: [String.t()]
   def tool_names(%__MODULE__{actor: %AgentRuntime{} = runtime}),

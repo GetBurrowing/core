@@ -1,12 +1,17 @@
 defmodule Platform.Access.ToolProfileNeverGrantsTest do
   use Platform.DataCase, async: false
 
+  import Ecto.Query
+  import Platform.CodeModeFixtures, only: [insert_agent!: 0]
   import Platform.TenancyFixtures
 
   alias Platform.Access.{RuntimeProfiles, Tools}
   alias Platform.Agents.AgentRuntime
   alias Platform.ExternalUserFixtures, as: World
+  alias Platform.Experiments
+  alias Platform.Experiments.Variant
   alias Platform.Federation
+  alias Platform.Repo
   alias Platform.Tenancy
 
   test "new runtime inherits its owner but its default profile keeps catalogue size bounded" do
@@ -51,6 +56,89 @@ defmodule Platform.Access.ToolProfileNeverGrantsTest do
     assert "task_list" in Tools.tool_names(runtime)
     refute "task_update" in Tools.tool_names(runtime)
     assert {:error, :invalid_module} = RuntimeProfiles.set_tool_profile(runtime, ["not_installed"])
+  end
+
+  test "an experiment arm naming a module outside the stored profile adds nothing" do
+    owner = root_admin!()
+    agent = insert_agent!()
+
+    {:ok, runtime} =
+      Federation.register_runtime(owner.id, %{
+        runtime_id: runtime_id(),
+        agent_id: agent.id,
+        allowed_bundles: ["task"]
+      })
+
+    assert "task_list" in Tools.tool_names(runtime)
+
+    {:ok, experiment} =
+      Experiments.create_experiment(%{
+        slug: "profile-#{System.unique_integer([:positive])}",
+        name: "Tool profile",
+        surface_key: "agents.tool_profile",
+        surface_target: "agents.tool_profile"
+      })
+
+    {:ok, _} =
+      Experiments.add_variant(experiment, %{
+        slug: "treatment",
+        payload: %{"modules" => ["memory"]},
+        weight: 1
+      })
+
+    assert {:ok, _} = Experiments.start(experiment, root_admin!())
+
+    Repo.update_all(
+      from(v in Variant, where: v.experiment_id == ^experiment.id and v.slug == "control"),
+      set: [weight: 0]
+    )
+
+    assert Tools.tool_names(runtime) == []
+  end
+
+  test "one profile decision reports its no-experiment query cost" do
+    owner = root_admin!()
+    agent = insert_agent!()
+
+    {:ok, runtime} =
+      Federation.register_runtime(owner.id, %{
+        runtime_id: runtime_id(),
+        agent_id: agent.id,
+        allowed_bundles: ["task"]
+      })
+
+    caller = self()
+    ref = make_ref()
+
+    :ok =
+      :telemetry.attach(
+        ref,
+        [:platform, :repo, :query],
+        fn _, _, _, _ ->
+          if self() == caller, do: send(caller, {ref, :query})
+        end,
+        nil
+      )
+
+    names =
+      try do
+        Tools.tool_names(runtime)
+      after
+        :telemetry.detach(ref)
+      end
+
+    count = drain_queries(ref, 0)
+    IO.puts("profile tool-list queries with no experiment: #{count}")
+    assert "task_list" in names
+    assert count > 0
+  end
+
+  defp drain_queries(ref, count) do
+    receive do
+      {^ref, :query} -> drain_queries(ref, count + 1)
+    after
+      0 -> count
+    end
   end
 
   defp runtime_id, do: "profile-never-grants-#{System.unique_integer([:positive])}"
