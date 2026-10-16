@@ -2637,6 +2637,7 @@ defmodule PlatformWeb.RuntimeChannelTest do
       # `payload.error?.error`, so the message must be a string at error.error.
       assert error.error ==
                "tool 'task_create' requires permission 'tasks.write', which this agent does not hold or is capped at its owner"
+
       assert error.code == "forbidden"
 
       assert Repo.aggregate(Tasks.Task, :count) == before_count
@@ -2716,8 +2717,10 @@ defmodule PlatformWeb.RuntimeChannelTest do
       })
 
       assert_push "tool_result", %{call_id: "call-after", status: "error", error: error}
+
       assert error.error ==
                "tool 'task_list' requires permission 'tasks.read', which this agent does not hold or is capped at its owner"
+
       assert error.code == "forbidden"
     end
 
@@ -2740,8 +2743,10 @@ defmodule PlatformWeb.RuntimeChannelTest do
       })
 
       assert_push "tool_result", %{call_id: "call-gone", status: "error", error: error}
+
       assert error.error ==
                "tool 'space_list' requires permission 'chat.read', which this agent does not hold or is capped at its owner"
+
       assert error.code == "forbidden"
     end
   end
@@ -2797,6 +2802,7 @@ defmodule PlatformWeb.RuntimeChannelTest do
       })
 
       assert_push "tool_result", %{call_id: "call-forbidden", status: "error", error: error}
+
       assert error.error ==
                "tool 'plan_update' requires permission 'tasks.write', which this agent does not hold or is capped at its owner"
     end
@@ -2850,8 +2856,10 @@ defmodule PlatformWeb.RuntimeChannelTest do
       })
 
       assert_push "tool_result", %{call_id: "call-nobundles", status: "error", error: error}
+
       assert error.error ==
                "tool 'task_create' requires permission 'tasks.write', which this agent does not hold or is capped at its owner"
+
       refute error.error =~ "unknown tool"
     end
 

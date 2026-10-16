@@ -22,6 +22,7 @@ defmodule Platform.Federation do
   def register_runtime(owner_user_id, attrs) do
     modules = Map.get(attrs, :allowed_bundles, Map.get(attrs, "allowed_bundles"))
     tool_profile = modules || AgentRuntime.default_allowed_bundles()
+
     restriction =
       if is_nil(modules), do: nil, else: RuntimeProfiles.translated_permissions(modules)
 

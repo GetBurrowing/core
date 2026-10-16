@@ -47,7 +47,7 @@ defmodule Platform.Access.RuntimeProfilesMigrationTest do
         )
 
       assert copied == bundles
-      assert restricted == RuntimeProfiles.translated_permissions(bundles)
+      assert Jason.decode!(restricted) == RuntimeProfiles.translated_permissions(bundles)
     end
 
     assert runtime_hashes() == before

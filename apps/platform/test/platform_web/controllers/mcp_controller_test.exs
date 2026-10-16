@@ -548,6 +548,7 @@ defmodule PlatformWeb.MCPControllerTest do
         mcp_post(conn, token, rpc("tools/call", %{"name" => "task_create", "arguments" => %{}}))
 
       %{"error" => %{"message" => message}} = json_response(conn, 200)
+
       assert message ==
                "tool 'task_create' requires permission 'tasks.write', which this agent does not hold or is capped at its owner"
     end
@@ -587,8 +588,10 @@ defmodule PlatformWeb.MCPControllerTest do
         mcp_post(conn, token, rpc("tools/call", %{"name" => "task_create", "arguments" => %{}}))
 
       %{"error" => %{"message" => message}} = json_response(conn, 200)
+
       assert message ==
                "tool 'task_create' requires permission 'tasks.write', which this agent does not hold or is capped at its owner"
+
       refute message =~ "unknown tool"
     end
 
