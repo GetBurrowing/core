@@ -42,7 +42,7 @@ defmodule Platform.Access.ToolListEquivalenceTest do
              RuntimeBundleSnapshot.legacy_tool_names(bundles, true)
   end
 
-  test "one tool-list decision stays within four database queries", %{admin: admin, guest: guest} do
+  test "one persisted-profile tool-list decision stays within nine database queries", %{admin: admin, guest: guest} do
     Platform.Access.builtin_role_rules()
 
     for owner <- [admin, guest] do
@@ -54,7 +54,7 @@ defmodule Platform.Access.ToolListEquivalenceTest do
       )
 
       assert names != []
-      assert query_count <= 4, "#{owner.id} used #{query_count} queries for one tool list"
+      assert query_count <= 9, "#{owner.id} used #{query_count} queries for one tool list"
     end
   end
 

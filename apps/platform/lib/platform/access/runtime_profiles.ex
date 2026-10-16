@@ -9,6 +9,8 @@ defmodule Platform.Access.RuntimeProfiles do
   alias Platform.Federation.ToolSurface
   alias Platform.Repo
 
+  @core_valid_modules ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode prototype)
+
   @spec get(AgentRuntime.t()) :: RuntimeProfile.t() | nil
   def get(%AgentRuntime{id: id}) when is_binary(id), do: Repo.get(RuntimeProfile, id)
   def get(_), do: nil
@@ -34,8 +36,8 @@ defmodule Platform.Access.RuntimeProfiles do
     end
   end
 
-  @doc "Every currently loaded module name, in the catalogue order."
-  def valid_modules, do: ToolSurface.all_bundles()
+  @doc "Every currently loaded module name: core modules plus installed extensions."
+  def valid_modules, do: @core_valid_modules ++ Platform.Extensions.tool_bundle_names()
 
   @spec translated_permissions([String.t()]) :: %{String.t() => String.t()}
   def translated_permissions(modules) do

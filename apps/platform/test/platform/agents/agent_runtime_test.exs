@@ -17,14 +17,14 @@ defmodule Platform.Agents.AgentRuntimeTest do
   alias Platform.Federation.ToolSurface
   alias Platform.Repo
 
-  describe "default_allowed_bundles/0 (pure)" do
+  describe "default_tool_profile/0 (pure)" do
     test "includes \"skill\" so federated runtimes get DB-shipped skill access by default" do
       assert "skill" in AgentRuntime.default_tool_profile()
     end
 
     test "every default bundle is in the valid bundle allowlist" do
       defaults = AgentRuntime.default_tool_profile()
-      valid = Platform.Access.RuntimeProfiles.valid_modules()
+      valid = RuntimeProfiles.valid_modules()
       assert Enum.all?(defaults, &(&1 in valid))
     end
   end
@@ -57,7 +57,7 @@ defmodule Platform.Agents.AgentRuntimeTest do
     # Built from the accessor, never a literal bundle list: the proposition is
     # that WHATEVER the defaults are, they reach this tool. Hardcoding
     # `["federation", ..., "meetings"]` would assert something else entirely
-    # and would survive removal of `"meetings"` from `@default_allowed_bundles`.
+    # and would survive removal of `"meetings"` from `@default_tool_profile`.
     #
     # `authorize/2` returns a BARE `{:error, :forbidden}`; the readable
     # `tool '...' not in allowed bundles` string is rendered only at the
@@ -72,24 +72,24 @@ defmodule Platform.Agents.AgentRuntimeTest do
 
     test "\"meetings\" is a default, not merely grantable" do
       assert "meetings" in AgentRuntime.default_tool_profile()
-      assert "meetings" in Platform.Access.RuntimeProfiles.valid_modules()
+      assert "meetings" in RuntimeProfiles.valid_modules()
       assert "meetings" in ToolSurface.all_bundles()
     end
   end
 
   describe "bundle registry is a single set" do
     # Task 019ff110. `ToolSurface.all_bundles/0` registered `files` while
-    # `@valid_bundles` rejected it, so the full surface could not be persisted
+    # `@core_valid_modules` rejected it, so the full surface could not be persisted
     # onto a runtime row even deliberately — `all_bundles/0` did not round-trip
-    # into `allowed_bundles`.
+    # into `tool_profile`.
     #
     # Both operands are derived from their own module's accessor ON PURPOSE.
     # A test pinning the names would pass while both lists drifted together in
     # the wrong direction, and would need editing on every legitimate bundle
     # addition — which trains people to edit it without reading it.
-    test "ToolSurface.all_bundles/0 and AgentRuntime.valid_bundles/0 agree exactly" do
+    test "ToolSurface.all_bundles/0 and RuntimeProfiles.valid_modules/0 agree exactly" do
       surface = MapSet.new(ToolSurface.all_bundles())
-      valid = MapSet.new(Platform.Access.RuntimeProfiles.valid_modules())
+      valid = MapSet.new(RuntimeProfiles.valid_modules())
 
       registered_but_rejected = surface |> MapSet.difference(valid) |> Enum.sort()
       permitted_but_unregistered = valid |> MapSet.difference(surface) |> Enum.sort()
@@ -101,16 +101,16 @@ defmodule Platform.Agents.AgentRuntimeTest do
       The bundle registry has drifted into two different sets.
 
       Registered by ToolSurface.all_bundles/0 but REJECTED by \
-      AgentRuntime.valid_bundles/0 (a runtime cannot hold these, so the tools \
+      RuntimeProfiles.valid_modules/0 (a runtime cannot hold these, so the tools \
       in them can never be granted): #{inspect(registered_but_rejected)}
 
-      Permitted by AgentRuntime.valid_bundles/0 but NEVER REGISTERED by \
+      Permitted by RuntimeProfiles.valid_modules/0 but NEVER REGISTERED by \
       ToolSurface.all_bundles/0 (a row may hold these and get nothing): \
       #{inspect(permitted_but_unregistered)}
 
       Fix the side that is stale. Widening the validator makes a bundle \
       grantable; it does not grant it, and it must not change \
-      @default_allowed_bundles.
+      @default_tool_profile.
       """
 
       assert surface == valid, message
@@ -118,7 +118,7 @@ defmodule Platform.Agents.AgentRuntimeTest do
   end
 
   describe "newly-registered runtime (DB)" do
-    test "receives the default allowed_bundles, including \"skill\"" do
+    test "receives the default tool_profile, including \"skill\"" do
       user = create_user()
 
       {:ok, runtime} =
