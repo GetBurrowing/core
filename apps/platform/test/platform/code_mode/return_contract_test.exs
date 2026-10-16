@@ -583,7 +583,13 @@ defmodule Platform.CodeMode.ReturnContractTest do
           joined_at: DateTime.utc_now()
         })
 
-      %{space: space, participant: participant, ctx: %{agent_id: agent.id}}
+      runtime = runtime!("contract-message-#{u()}", agent)
+
+      %{
+        space: space,
+        participant: participant,
+        ctx: %{agent_id: agent.id, runtime_id: runtime.runtime_id}
+      }
     end
 
     test "0, 1 and many messages conform", %{space: space, participant: p, ctx: ctx} do

@@ -187,7 +187,8 @@ defmodule Platform.Access.ResourceBypassAcceptanceTest do
       attachment = attachment!(ctx.eq, ctx.member_in_eq, marker)
       agent = agent!()
       World.add_agent!(ctx.eq.id, agent.id)
-      context = %{agent_id: agent.id, access_scope: %Scope{}}
+      {linked, runtime} = runtime!(ctx.int, agent)
+      context = %{agent_id: linked.id, runtime_id: runtime.runtime_id}
       args = %{"attachment_id" => attachment.id}
 
       assert {:ok, %{data_base64: body}} =
@@ -582,7 +583,7 @@ defmodule Platform.Access.ResourceBypassAcceptanceTest do
           ToolSurface.execute(
             tool,
             %{"space_id" => ctx.eq.id, "query" => marker},
-            %{context | access_scope: denied_scope}
+            context
           )
 
         assert {:error, _} = denied
