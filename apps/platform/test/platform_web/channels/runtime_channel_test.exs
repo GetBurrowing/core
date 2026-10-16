@@ -397,12 +397,12 @@ defmodule PlatformWeb.RuntimeChannelTest do
 
   # Regression guard for the bug this task fixes: the push used to be
   # `ToolSurface.tool_definitions()` — the whole catalogue — regardless
-  # of the runtime's `allowed_bundles`. It must now be exactly the set
+  # of the runtime's `tool_profile`. It must now be exactly the set
   # `ToolAuthorization.effective_tools/1` resolves, which is also what
   # `/mcp tools/list` returns for the same runtime.
   describe "capabilities push" do
     test "is scoped to the runtime's granted bundles, not the full catalogue", ctx do
-      # register_runtime/2 yields AgentRuntime.default_allowed_bundles/0 —
+      # register_runtime/2 yields AgentRuntime.default_tool_profile/0 —
       # six bundles, with canvas/task/plan/memory/review absent.
       payload = join_and_capture_capabilities(ctx.runtime, ctx.raw_token)
 
@@ -2452,7 +2452,7 @@ defmodule PlatformWeb.RuntimeChannelTest do
 
   describe "tool_call" do
     test "executes tool and returns result", ctx do
-      # `canvas` is NOT in AgentRuntime.default_allowed_bundles/0, and
+      # `canvas` is NOT in AgentRuntime.default_tool_profile/0, and
       # `tool_call` is now gated on the same authorization path as /mcp, so
       # the grant has to be explicit. Fixing the fixture rather than widening
       # the default grant is the point of the change.
@@ -2608,7 +2608,7 @@ defmodule PlatformWeb.RuntimeChannelTest do
     end
 
     # The vulnerability this task closes: before the gate, the channel
-    # executed anything it was asked to, so `allowed_bundles` was advisory
+    # executed anything it was asked to, so `tool_profile` was advisory
     # over WebSocket and a default-grant runtime could create tasks.
     test "denies a tool outside the runtime's granted bundles, before executing it", ctx do
       project = create_project()
@@ -2831,7 +2831,7 @@ defmodule PlatformWeb.RuntimeChannelTest do
       assert unknown_error.error != forbidden_error.error
     end
 
-    # `effective_tools/1` resolves a nil/empty `allowed_bundles` column to an
+    # `effective_tools/1` resolves a nil/empty `tool_profile` column to an
     # empty list, so a no-bundles runtime and a narrow-bundles runtime look
     # identical from inside `authorize/2` — this pins that the no-bundles
     # case still gets the grant-denial wording for a real tool, not the

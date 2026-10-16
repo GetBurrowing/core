@@ -401,10 +401,16 @@ defmodule Platform.Security.TransportCapabilityParityTest do
         owner_user_id: owner_user_id,
         agent_id: ctx.agent.id,
         auth_token_hash: AgentRuntime.hash_token(raw_token),
-        status: "active",
-        allowed_bundles: allowed_bundles
+        status: "active"
       })
       |> Repo.insert()
+
+    {:ok, _profile} =
+      Platform.Access.RuntimeProfiles.create_for_runtime(
+        runtime,
+        allowed_bundles,
+        Platform.Access.RuntimeProfiles.translated_permissions(allowed_bundles)
+      )
 
     {runtime, raw_token}
   end
@@ -421,9 +427,15 @@ defmodule Platform.Security.TransportCapabilityParityTest do
         status: "active",
         transport: "websocket",
         trust_level: "participant",
-        allowed_bundles: allowed_bundles,
         metadata: %{}
       })
+
+    {:ok, _profile} =
+      Platform.Access.RuntimeProfiles.create_for_runtime(
+        runtime,
+        allowed_bundles,
+        Platform.Access.RuntimeProfiles.translated_permissions(allowed_bundles)
+      )
 
     {runtime, raw_token}
   end

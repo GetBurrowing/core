@@ -15,7 +15,7 @@ defmodule PlatformWeb.MCPControllerTest do
 
     raw_token = AgentRuntime.generate_token()
 
-    modules = Map.get(attrs, :allowed_bundles, RuntimeProfiles.valid_modules())
+    modules = Map.get(attrs, :tool_profile, RuntimeProfiles.valid_modules())
 
     base_attrs = %{
       runtime_id: "mcp-rt-#{System.unique_integer([:positive])}",
@@ -103,8 +103,8 @@ defmodule PlatformWeb.MCPControllerTest do
       assert Enum.all?(tools, &Map.has_key?(&1, "inputSchema"))
     end
 
-    test "scopes the surface to allowed_bundles", %{conn: conn} do
-      {_runtime, token} = create_runtime(%{allowed_bundles: ["federation"]})
+    test "scopes the surface to tool_profile", %{conn: conn} do
+      {_runtime, token} = create_runtime(%{tool_profile: ["federation"]})
       conn = mcp_post(conn, token, rpc("tools/list"))
       %{"result" => %{"tools" => tools}} = json_response(conn, 200)
 
@@ -115,7 +115,7 @@ defmodule PlatformWeb.MCPControllerTest do
     end
 
     test "returns an empty list when no bundles are allowed", %{conn: conn} do
-      {_runtime, token} = create_runtime(%{allowed_bundles: []})
+      {_runtime, token} = create_runtime(%{tool_profile: []})
       conn = mcp_post(conn, token, rpc("tools/list"))
       %{"result" => %{"tools" => tools}} = json_response(conn, 200)
 
@@ -428,7 +428,7 @@ defmodule PlatformWeb.MCPControllerTest do
 
   describe "tools/call" do
     test "runs a tool that is in scope", %{conn: conn} do
-      {_runtime, token} = create_runtime(%{allowed_bundles: ["federation"]})
+      {_runtime, token} = create_runtime(%{tool_profile: ["federation"]})
 
       conn =
         mcp_post(
@@ -445,7 +445,7 @@ defmodule PlatformWeb.MCPControllerTest do
     end
 
     test "task kind round-trips through the HTTP MCP transport", %{conn: conn} do
-      {_runtime, token} = create_runtime(%{allowed_bundles: ["task"]})
+      {_runtime, token} = create_runtime(%{tool_profile: ["task"]})
 
       {:ok, project} =
         Tasks.create_project(%{name: "HTTP kind #{System.unique_integer([:positive])}"})
@@ -489,7 +489,7 @@ defmodule PlatformWeb.MCPControllerTest do
     end
 
     test "refuses a tool that is out of scope with -32001", %{conn: conn} do
-      {_runtime, token} = create_runtime(%{allowed_bundles: ["federation"]})
+      {_runtime, token} = create_runtime(%{tool_profile: ["federation"]})
 
       conn =
         mcp_post(
@@ -529,7 +529,7 @@ defmodule PlatformWeb.MCPControllerTest do
   describe "tools/call denial message distinguishes unknown-tool from missing-grant" do
     test "an undeclared name (separator mismatch) gets the unknown-tool message with a suggestion",
          %{conn: conn} do
-      {_runtime, token} = create_runtime(%{allowed_bundles: ["federation"]})
+      {_runtime, token} = create_runtime(%{tool_profile: ["federation"]})
 
       conn =
         mcp_post(conn, token, rpc("tools/call", %{"name" => "plan.update", "arguments" => %{}}))
@@ -545,7 +545,7 @@ defmodule PlatformWeb.MCPControllerTest do
     # would also pass the test above.
     test "a real catalogue tool outside this runtime's profile names its permission",
          %{conn: conn} do
-      {_runtime, token} = create_runtime(%{allowed_bundles: ["federation"]})
+      {_runtime, token} = create_runtime(%{tool_profile: ["federation"]})
 
       conn =
         mcp_post(conn, token, rpc("tools/call", %{"name" => "task_create", "arguments" => %{}}))
@@ -557,7 +557,7 @@ defmodule PlatformWeb.MCPControllerTest do
     end
 
     test "the two denial messages differ for the two inputs", %{conn: conn} do
-      {_runtime, token} = create_runtime(%{allowed_bundles: ["federation"]})
+      {_runtime, token} = create_runtime(%{tool_profile: ["federation"]})
 
       unknown_conn =
         mcp_post(conn, token, rpc("tools/call", %{"name" => "plan.update", "arguments" => %{}}))
@@ -578,14 +578,14 @@ defmodule PlatformWeb.MCPControllerTest do
       assert unknown_message != forbidden_message
     end
 
-    # `effective_tools/1` resolves a nil/empty `allowed_bundles` column to an
+    # `effective_tools/1` resolves a nil/empty `tool_profile` column to an
     # empty list, so a no-bundles runtime and a narrow-bundles runtime look
     # identical from inside `authorize/2` — this pins that the no-bundles
     # case still gets the grant-denial wording for a real tool, not the
     # unknown-tool one.
     test "a runtime granted NO bundles still gets a denial for a real tool, not an unknown-tool answer",
          %{conn: conn} do
-      {_runtime, token} = create_runtime(%{allowed_bundles: []})
+      {_runtime, token} = create_runtime(%{tool_profile: []})
 
       conn =
         mcp_post(conn, token, rpc("tools/call", %{"name" => "task_create", "arguments" => %{}}))
@@ -614,7 +614,7 @@ defmodule PlatformWeb.MCPControllerTest do
 
       on_exit(fn -> :telemetry.detach(handler_id) end)
 
-      {_runtime, token} = create_runtime(%{allowed_bundles: ["federation"]})
+      {_runtime, token} = create_runtime(%{tool_profile: ["federation"]})
 
       mcp_post(conn, token, rpc("tools/call", %{"name" => "plan.update", "arguments" => %{}}))
 
@@ -639,7 +639,7 @@ defmodule PlatformWeb.MCPControllerTest do
 
       on_exit(fn -> :telemetry.detach(handler_id) end)
 
-      {_runtime, token} = create_runtime(%{allowed_bundles: ["federation"]})
+      {_runtime, token} = create_runtime(%{tool_profile: ["federation"]})
 
       mcp_post(conn, token, rpc("tools/call", %{"name" => "task_create", "arguments" => %{}}))
 
@@ -665,7 +665,7 @@ defmodule PlatformWeb.MCPControllerTest do
     # the transport dropped it. This asserts it AT THE WIRE.
     test "a structured refusal reaches an HTTP caller with code, recoverable and suggestion",
          %{conn: conn} do
-      {_runtime, token} = create_runtime(%{allowed_bundles: ["task"]})
+      {_runtime, token} = create_runtime(%{tool_profile: ["task"]})
 
       conn =
         mcp_post(
@@ -706,7 +706,7 @@ defmodule PlatformWeb.MCPControllerTest do
     # member is not done" and has no way to learn which, which is precisely how
     # a real stack stranded in `deploying` with no recovery path.
     test "a handler's structured payload survives to the wire", %{conn: conn} do
-      {_runtime, token} = create_runtime(%{allowed_bundles: ["task"]})
+      {_runtime, token} = create_runtime(%{tool_profile: ["task"]})
 
       {:ok, project} =
         Tasks.create_project(%{name: "Envelope #{System.unique_integer([:positive])}"})
@@ -756,7 +756,7 @@ defmodule PlatformWeb.MCPControllerTest do
     end
 
     test "nil-valued keys are dropped but a false recoverable survives", %{conn: conn} do
-      {_runtime, token} = create_runtime(%{allowed_bundles: ["task"]})
+      {_runtime, token} = create_runtime(%{tool_profile: ["task"]})
 
       # `task_start` on an unknown task refuses with `error`, `recoverable`
       # and `suggestion` but NO `code` — the envelope must not invent one,
@@ -784,7 +784,7 @@ defmodule PlatformWeb.MCPControllerTest do
     end
 
     test "the error payload is JSON, symmetric with the success payload", %{conn: conn} do
-      {_runtime, token} = create_runtime(%{allowed_bundles: ["federation", "task"]})
+      {_runtime, token} = create_runtime(%{tool_profile: ["federation", "task"]})
 
       ok_conn =
         mcp_post(
@@ -824,7 +824,7 @@ defmodule PlatformWeb.MCPControllerTest do
     # would notice.
     test "a missing required argument is refused instead of raising through the endpoint",
          %{conn: conn} do
-      {_runtime, token} = create_runtime(%{allowed_bundles: ["plan"]})
+      {_runtime, token} = create_runtime(%{tool_profile: ["plan"]})
 
       # Before the gate, `validation_evaluate` without a validation_id raised
       # `Ecto.NoResultsError` from inside a `Repo.transaction` — a 500 that
@@ -858,7 +858,7 @@ defmodule PlatformWeb.MCPControllerTest do
     end
 
     test "stage_list's conditional rule reaches the wire with its own code", %{conn: conn} do
-      {_runtime, token} = create_runtime(%{allowed_bundles: ["plan"]})
+      {_runtime, token} = create_runtime(%{tool_profile: ["plan"]})
 
       # The tool that motivated the ticket. It is NOT covered by the gate —
       # `plan_id` XOR `task_id` is conditional — so this asserts the handler's
@@ -880,7 +880,7 @@ defmodule PlatformWeb.MCPControllerTest do
 
     test "the refusal replaces a misattributed 'not found', and says the call is retryable",
          %{conn: conn} do
-      {_runtime, token} = create_runtime(%{allowed_bundles: ["context_read"]})
+      {_runtime, token} = create_runtime(%{tool_profile: ["context_read"]})
 
       # `canvas_get` with no canvas_id used to answer `"Canvas not found: "`
       # with `recoverable: false` — a caller told that a canvas it never named
@@ -901,7 +901,7 @@ defmodule PlatformWeb.MCPControllerTest do
 
     test "an alias-only call is not refused — live runtimes send `id` for `task_id`",
          %{conn: conn} do
-      {_runtime, token} = create_runtime(%{allowed_bundles: ["task"]})
+      {_runtime, token} = create_runtime(%{tool_profile: ["task"]})
 
       # The breaking-change guard at the wire. `task_get` declares `task_id`
       # required and its handler reads `task_id || id`; a gate built on the
@@ -929,7 +929,7 @@ defmodule PlatformWeb.MCPControllerTest do
 
     test "task_list advertises assignee_id and assignee_type in its inputSchema (task 01a0acc3)",
          %{conn: conn} do
-      {_runtime, token} = create_runtime(%{allowed_bundles: ["task"]})
+      {_runtime, token} = create_runtime(%{tool_profile: ["task"]})
       conn = mcp_post(conn, token, rpc("tools/list"))
       %{"result" => %{"tools" => tools}} = json_response(conn, 200)
 
@@ -947,7 +947,7 @@ defmodule PlatformWeb.MCPControllerTest do
 
     test "task_list refuses an undeclared key instead of answering unfiltered (task 01a0acc3)",
          %{conn: conn} do
-      {_runtime, token} = create_runtime(%{allowed_bundles: ["task"]})
+      {_runtime, token} = create_runtime(%{tool_profile: ["task"]})
 
       conn =
         mcp_post(
@@ -987,7 +987,7 @@ defmodule PlatformWeb.MCPControllerTest do
     end
 
     test "external owner with broad bundles sees ONLY the six chat tools", %{conn: conn} do
-      {runtime, token} = create_runtime(%{allowed_bundles: @broad_bundles})
+      {runtime, token} = create_runtime(%{tool_profile: @broad_bundles})
       mark_owner_external(runtime)
 
       conn = mcp_post(conn, token, rpc("tools/list"))
@@ -1001,7 +1001,7 @@ defmodule PlatformWeb.MCPControllerTest do
     end
 
     test "external owner: tools/call task_create is forbidden with -32001", %{conn: conn} do
-      {runtime, token} = create_runtime(%{allowed_bundles: @broad_bundles})
+      {runtime, token} = create_runtime(%{tool_profile: @broad_bundles})
       mark_owner_external(runtime)
 
       conn =
@@ -1013,7 +1013,7 @@ defmodule PlatformWeb.MCPControllerTest do
     end
 
     test "external owner: react is NOT gated (chat tool reaches execution)", %{conn: conn} do
-      {runtime, token} = create_runtime(%{allowed_bundles: @broad_bundles})
+      {runtime, token} = create_runtime(%{tool_profile: @broad_bundles})
       mark_owner_external(runtime)
 
       conn =
@@ -1029,7 +1029,7 @@ defmodule PlatformWeb.MCPControllerTest do
     test "external owner with only [task] bundle sees an EMPTY surface (fail-closed)", %{
       conn: conn
     } do
-      {runtime, token} = create_runtime(%{allowed_bundles: ["task"]})
+      {runtime, token} = create_runtime(%{tool_profile: ["task"]})
       mark_owner_external(runtime)
 
       conn = mcp_post(conn, token, rpc("tools/list"))
@@ -1047,7 +1047,7 @@ defmodule PlatformWeb.MCPControllerTest do
 
     test "internal owner with the same bundles is UNAFFECTED", %{conn: conn} do
       # Default create_runtime owner has no external membership → internal.
-      {_runtime, token} = create_runtime(%{allowed_bundles: @broad_bundles})
+      {_runtime, token} = create_runtime(%{tool_profile: @broad_bundles})
 
       conn = mcp_post(conn, token, rpc("tools/list"))
       %{"result" => %{"tools" => tools}} = json_response(conn, 200)

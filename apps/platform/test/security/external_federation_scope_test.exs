@@ -124,10 +124,16 @@ defmodule Platform.Security.ExternalFederationScopeTest do
         runtime_id: "m15-rt-#{System.unique_integer([:positive])}",
         owner_user_id: owner_user_id,
         auth_token_hash: AgentRuntime.hash_token(raw_token),
-        status: "active",
-        allowed_bundles: allowed_bundles
+        status: "active"
       })
       |> Repo.insert()
+
+    {:ok, _profile} =
+      Platform.Access.RuntimeProfiles.create_for_runtime(
+        runtime,
+        allowed_bundles,
+        Platform.Access.RuntimeProfiles.translated_permissions(allowed_bundles)
+      )
 
     {runtime, raw_token}
   end

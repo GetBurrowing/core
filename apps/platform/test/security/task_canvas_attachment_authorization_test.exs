@@ -222,17 +222,23 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
   defp runtime_token!(agent, bundles \\ ["task", "canvas"]) do
     raw = AgentRuntime.generate_token()
 
-    {:ok, _runtime} =
+    {:ok, runtime} =
       %AgentRuntime{}
       |> AgentRuntime.changeset(%{
         runtime_id: "tcaa-rt-#{n()}",
         owner_user_id: user!().id,
         agent_id: agent && agent.id,
         auth_token_hash: AgentRuntime.hash_token(raw),
-        status: "active",
-        allowed_bundles: bundles
+        status: "active"
       })
       |> Repo.insert()
+
+    {:ok, _profile} =
+      Platform.Access.RuntimeProfiles.create_for_runtime(
+        runtime,
+        bundles,
+        Platform.Access.RuntimeProfiles.translated_permissions(bundles)
+      )
 
     raw
   end
@@ -428,17 +434,23 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
       grant_canvas_read!(space, agent)
       raw = AgentRuntime.generate_token()
 
-      {:ok, _rt} =
+      {:ok, rt} =
         %AgentRuntime{}
         |> AgentRuntime.changeset(%{
           runtime_id: "tcaa-rt-#{n()}",
           owner_user_id: sponsor.id,
           agent_id: agent.id,
           auth_token_hash: AgentRuntime.hash_token(raw),
-          status: "active",
-          allowed_bundles: ["task", "canvas"]
+          status: "active"
         })
         |> Repo.insert()
+
+      {:ok, _profile} =
+        Platform.Access.RuntimeProfiles.create_for_runtime(
+          rt,
+          ["task", "canvas"],
+          Platform.Access.RuntimeProfiles.translated_permissions(["task", "canvas"])
+        )
 
       assert {:error, envelope} = attach(conn, raw, task, canvas)
       assert envelope["code"] == "task_forbidden"
