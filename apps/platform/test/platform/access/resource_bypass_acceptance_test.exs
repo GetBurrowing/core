@@ -204,10 +204,11 @@ defmodule Platform.Access.ResourceBypassAcceptanceTest do
         })
 
       denied =
-        ToolSurface.execute("attachment.get_inline", args, %{
-          context
-          | access_scope: %Scope{grants: [grant]}
-        })
+        ToolSurface.execute(
+          "attachment.get_inline",
+          args,
+          Map.put(context, :access_scope, %Scope{grants: [grant]})
+        )
 
       assert {:error, _} = denied
       no_marker!(denied, marker)
@@ -537,12 +538,21 @@ defmodule Platform.Access.ResourceBypassAcceptanceTest do
       marker = "ZQX-ACCEPT-MESSAGE-SEARCH"
       agent = agent!()
       World.add_agent!(ctx.eq.id, agent.id)
+      {linked, runtime} = runtime!(ctx.int, agent)
+
+      {:ok, _owner_grant} =
+        Grants.grant(%{
+          principal: {:user, ctx.int.id},
+          permission: "chat.read",
+          resource: {:project, ctx.q.id}
+        })
+
       message = World.post!(ctx.eq.id, ctx.member_in_eq.id, marker)
       previous = Application.get_env(:platform, :memory_service, [])
       Application.put_env(:platform, :memory_service, provider: MemoryStub, search_results: [])
       on_exit(fn -> Application.put_env(:platform, :memory_service, previous) end)
 
-      context = %{agent_id: agent.id, access_scope: %Scope{}}
+      context = %{agent_id: linked.id, runtime_id: runtime.runtime_id}
 
       assert {:ok, before} =
                Search.search(marker, source: "message", agent: agent, access_scope: %Scope{})

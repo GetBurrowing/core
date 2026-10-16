@@ -429,11 +429,11 @@ defmodule Platform.CodeMode.ReturnContractTest do
   @beta "contract-rt-beta"
   @gamma "contract-rt-gamma"
 
-  defp runtime!(runtime_id, agent) do
+  defp runtime!(runtime_id, agent, owner \\ nil) do
     runtime = %AgentRuntime{}
     |> AgentRuntime.changeset(%{
       runtime_id: runtime_id,
-      owner_user_id: user!().id,
+      owner_user_id: (owner || user!()).id,
       agent_id: agent.id,
       auth_token_hash: AgentRuntime.hash_token(AgentRuntime.generate_token()),
       status: "active"
@@ -583,7 +583,18 @@ defmodule Platform.CodeMode.ReturnContractTest do
           joined_at: DateTime.utc_now()
         })
 
-      runtime = runtime!("contract-message-#{u()}", agent)
+      owner = user!()
+
+      {:ok, _owner_participant} =
+        Chat.add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: owner.id,
+          display_name: owner.name,
+          role: "member",
+          joined_at: DateTime.utc_now()
+        })
+
+      runtime = runtime!("contract-message-#{u()}", agent, owner)
 
       %{
         space: space,
