@@ -295,7 +295,7 @@ defmodule Platform.CodeMode.SuiteRunTest do
 
       assert %{"ok" => true} = Jason.decode!(host.("federation_status", "{}"))
 
-      {:ok, _} = Federation.update_allowed_bundles(runtime, ["code_mode", "space"])
+      {:ok, _} = Platform.Access.RuntimeProfiles.set_tool_profile(runtime, ["code_mode", "space"])
 
       assert %{"ok" => false, "kind" => "forbidden"} =
                Jason.decode!(host.("federation_status", "{}"))

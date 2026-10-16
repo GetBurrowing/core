@@ -3,7 +3,7 @@ defmodule Platform.Access.ToolListEquivalenceTest do
 
   import Platform.TenancyFixtures
 
-  alias Platform.Access.{RuntimeProfiles, Tools}
+  alias Platform.Access.{RuntimeProfile, RuntimeProfiles, Tools}
   alias Platform.Accounts.User
   alias Platform.Agents.AgentRuntime
   alias Platform.Repo
@@ -65,12 +65,11 @@ defmodule Platform.Access.ToolListEquivalenceTest do
         owner_user_id: owner_id
       })
 
-    {:ok, _} =
-      RuntimeProfiles.create_for_runtime(
-        runtime,
-        bundles,
-        RuntimeProfiles.translated_permissions(bundles)
-      )
+    Repo.insert!(%RuntimeProfile{
+      runtime_id: runtime.id,
+      tool_profile: bundles,
+      restricted_permissions: RuntimeProfiles.translated_permissions(bundles)
+    })
 
     runtime
   end

@@ -285,20 +285,22 @@ defmodule Platform.ExtensionsTest do
       # A row written while Play was installed.
       {1, _} =
         Repo.update_all(
-          from(r in AgentRuntime, where: r.id == ^runtime.id),
+          from(r in Platform.Access.RuntimeProfile, where: r.runtime_id == ^runtime.id),
           set: [tool_profile: ["space", "play"]]
         )
 
       runtime = Repo.get!(AgentRuntime, runtime.id)
 
-      assert {:ok, saved} = Federation.update_allowed_bundles(runtime, ["space", "files", "play"])
-      assert saved.allowed_bundles == ["space", "files", "play"]
-      assert Repo.get!(AgentRuntime, runtime.id).allowed_bundles == ["space", "files", "play"]
+      assert {:ok, saved} =
+               Platform.Access.RuntimeProfiles.set_tool_profile(runtime, ["space", "files", "play"])
+
+      assert saved.tool_profile == ["space", "files", "play"]
+      assert Platform.Access.RuntimeProfiles.tool_profile(runtime) == ["space", "files", "play"]
 
       # The same bundle ADDED to a row that never held it is refused.
       {:ok, fresh} = Federation.register_runtime(user.id, %{runtime_id: "fresh-#{unique()}"})
-      assert {:error, changeset} = Federation.update_allowed_bundles(fresh, ["space", "play"])
-      assert {"has an invalid entry", _} = changeset.errors[:allowed_bundles]
+      assert {:error, :invalid_module} =
+               Platform.Access.RuntimeProfiles.set_tool_profile(fresh, ["space", "play"])
 
       # And so is one on a new row.
       assert {:error, _} =

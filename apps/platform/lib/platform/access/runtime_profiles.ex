@@ -49,13 +49,17 @@ defmodule Platform.Access.RuntimeProfiles do
   @spec create_for_runtime(AgentRuntime.t(), [String.t()], map() | nil) ::
           {:ok, RuntimeProfile.t()} | {:error, Ecto.Changeset.t()}
   def create_for_runtime(%AgentRuntime{} = runtime, modules, restrictions) do
-    %RuntimeProfile{}
-    |> RuntimeProfile.changeset(%{
-      runtime_id: runtime.id,
-      tool_profile: modules,
-      restricted_permissions: restrictions
-    })
-    |> Repo.insert()
+    if is_list(modules) and Enum.all?(modules, &(&1 in valid_modules())) do
+      %RuntimeProfile{}
+      |> RuntimeProfile.changeset(%{
+        runtime_id: runtime.id,
+        tool_profile: modules,
+        restricted_permissions: restrictions
+      })
+      |> Repo.insert()
+    else
+      {:error, :invalid_module}
+    end
   end
 
   @spec set_tool_profile(AgentRuntime.t(), [String.t()]) ::

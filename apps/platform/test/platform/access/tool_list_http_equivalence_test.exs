@@ -3,7 +3,7 @@ defmodule Platform.Access.ToolListHttpEquivalenceTest do
 
   import Platform.TenancyFixtures
 
-  alias Platform.Access.RuntimeProfiles
+  alias Platform.Access.{RuntimeProfile, RuntimeProfiles}
   alias Platform.Agents.AgentRuntime
   alias Platform.Repo
   alias Platform.RuntimeBundleSnapshot
@@ -23,12 +23,11 @@ defmodule Platform.Access.ToolListHttpEquivalenceTest do
         status: "active"
       })
 
-      {:ok, _profile} =
-        RuntimeProfiles.create_for_runtime(
-          runtime,
-          bundles,
-          RuntimeProfiles.translated_permissions(bundles)
-        )
+      Repo.insert!(%RuntimeProfile{
+        runtime_id: runtime.id,
+        tool_profile: bundles,
+        restricted_permissions: RuntimeProfiles.translated_permissions(bundles)
+      })
 
       payload = %{"jsonrpc" => "2.0", "id" => 1, "method" => "tools/list", "params" => %{}}
 

@@ -323,7 +323,7 @@ defmodule Platform.Meetings.IntentDispatcherTest do
     bundles =
       if can_ack?, do: Enum.uniq(defaults ++ carriers), else: defaults -- carriers
 
-    {:ok, runtime} = Federation.update_allowed_bundles(runtime, bundles)
+    {:ok, _profile} = Platform.Access.RuntimeProfiles.set_tool_profile(runtime, bundles)
 
     # The fixture is proved to be what the case needs it to be, on the same
     # code path production authorizes through, BEFORE anything is enqueued.

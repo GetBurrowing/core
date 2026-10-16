@@ -219,8 +219,8 @@ defmodule Platform.Orchestration.InReviewDispatchToolPairingTest do
     grant =
       Enum.filter(ToolSurface.all_bundles(), &(&1 in Platform.Access.RuntimeProfiles.valid_modules()))
 
-    {:ok, granted} = Federation.update_allowed_bundles(activated, grant)
-    {:ok, _linked} = Federation.link_agent(granted, agent)
+    {:ok, _profile} = Platform.Access.RuntimeProfiles.set_tool_profile(activated, grant)
+    {:ok, _linked} = Federation.link_agent(activated, agent)
 
     agent
   end

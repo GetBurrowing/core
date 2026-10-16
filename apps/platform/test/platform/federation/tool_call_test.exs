@@ -441,7 +441,7 @@ defmodule Platform.Federation.ToolCallTest do
     {:ok, _linked} = Federation.link_agent(activated, agent)
 
     {:ok, _} =
-      Federation.update_allowed_bundles(
+      Platform.Access.RuntimeProfiles.set_tool_profile(
         activated,
         AgentRuntime.default_tool_profile() ++ ["task"]
       )
