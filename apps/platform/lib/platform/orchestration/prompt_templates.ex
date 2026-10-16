@@ -170,10 +170,8 @@ defmodule Platform.Orchestration.PromptTemplates do
       grants that is the root admin, exactly the actors `/admin/prompts`
       admits today;
     * an agent runtime's Scope (`Platform.Access.Scope.for_runtime/1`, what
-      MCP `prompt_template_update` passes) must hold the permission of the
-      `plan` bundle the tool belongs to (`Platform.Access.authorize/3`). With
-      no grants a runtime holding the bundle keeps the call, as today, and a
-      runtime without it is refused.
+      MCP `prompt_template_update` passes) must hold `prompts.manage` after
+      its own tool permissions are capped by its owner's scope.
 
   Refused: `{:error, :unauthorized}`, nothing written.
   """
