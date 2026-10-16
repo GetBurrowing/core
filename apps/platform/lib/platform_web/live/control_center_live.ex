@@ -818,7 +818,10 @@ defmodule PlatformWeb.ControlCenterLive do
 
             <%!-- Config + model routing (built-in agents only) --%>
             <div
-              :if={@selected_agent.runtime_type != "external" and Platform.Access.Agents.manage?(@access_scope, @selected_agent)}
+              :if={
+                @selected_agent.runtime_type != "external" and
+                  Platform.Access.Agents.manage?(@access_scope, @selected_agent)
+              }
               class="grid gap-6 xl:grid-cols-[minmax(0,1.6fr)_minmax(320px,0.9fr)]"
             >
               <div class="flex min-w-0 flex-col gap-6">

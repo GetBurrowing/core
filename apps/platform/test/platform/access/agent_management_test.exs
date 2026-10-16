@@ -131,10 +131,12 @@ defmodule Platform.Access.AgentManagementTest do
 
     :ok = Roles.unassign_role("designer")
     assert {:ok, _} = Roles.assign_role("designer", owned_agent.id, actor: scope)
+
     assert {:error, :unauthorized} =
              Roles.set_override("design.critique", outsider_agent.id, actor: scope)
 
     assert {:ok, _} = Roles.set_override("design.critique", owned_agent.id, actor: scope)
+
     assert {:error, :unauthorized} =
              Roles.set_override("design.critique", outsider_agent.id, actor: scope)
 

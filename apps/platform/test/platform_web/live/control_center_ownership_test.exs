@@ -13,7 +13,9 @@ defmodule PlatformWeb.ControlCenterOwnershipTest do
   alias Platform.Roles.RoleAssignment
   alias Platform.Tenancy.Org
 
-  test "plain member edits an owned agent's profile and releases its responsibility", %{conn: conn} do
+  test "plain member edits an owned agent's profile and releases its responsibility", %{
+    conn: conn
+  } do
     user = member!()
     {agent, runtime} = federated_agent!(user)
     :ok = Roles.unassign_role("designer")
@@ -44,7 +46,9 @@ defmodule PlatformWeb.ControlCenterOwnershipTest do
     assert Repo.get_by(RoleAssignment, role_key: "designer") == nil
   end
 
-  test "member sees another agent but cannot mutate token, profile, or responsibility", %{conn: conn} do
+  test "member sees another agent but cannot mutate token, profile, or responsibility", %{
+    conn: conn
+  } do
     owner = member!()
     other = member!()
     {agent, runtime} = federated_agent!(owner)

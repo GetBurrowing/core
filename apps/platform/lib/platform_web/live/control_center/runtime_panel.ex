@@ -135,18 +135,35 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
         </div>
       </div>
 
-      <div class="rounded-2xl border border-edge bg-base-200/40 p-4 text-sm" data-role="agent-tool-profile">
+      <div
+        class="rounded-2xl border border-edge bg-base-200/40 p-4 text-sm"
+        data-role="agent-tool-profile"
+      >
         <h3 class="font-semibold">Tool profile</h3>
-        <p class="mt-1 text-xs text-base-content/55">Loads only these modules. Never grants access.</p>
+        <p class="mt-1 text-xs text-base-content/55">
+          Loads only these modules. Never grants access.
+        </p>
         <form :if={@can_manage?} phx-submit="save_tool_profile" class="mt-3 space-y-3">
           <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            <label :for={module <- @module_choices} class="flex items-center gap-2 text-xs"
-              data-role={if module in ToolSurface.all_bundles(), do: nil, else: "orphan-bundle"}>
-              <input :if={module not in ToolSurface.all_bundles()} type="hidden"
-                name="modules[]" value={module} />
-              <input type="checkbox" name="modules[]" value={module}
+            <label
+              :for={module <- @module_choices}
+              class="flex items-center gap-2 text-xs"
+              data-role={if module in ToolSurface.all_bundles(), do: nil, else: "orphan-bundle"}
+            >
+              <input
+                :if={module not in ToolSurface.all_bundles()}
+                type="hidden"
+                name="modules[]"
+                value={module}
+              />
+              <input
+                type="checkbox"
+                name="modules[]"
+                value={module}
                 checked={module in @tool_modules}
-                disabled={module not in ToolSurface.all_bundles()} class="checkbox checkbox-xs" />
+                disabled={module not in ToolSurface.all_bundles()}
+                class="checkbox checkbox-xs"
+              />
               <span class="break-all font-mono">{module}</span>
               <span :if={module not in ToolSurface.all_bundles()}>(module not installed)</span>
             </label>
@@ -154,7 +171,9 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
           <button type="submit" class="btn btn-primary btn-sm">Save tool profile</button>
         </form>
         <div :if={!@can_manage?} class="mt-2 flex flex-wrap gap-2">
-          <code :for={module <- @tool_modules} class="rounded bg-base-100 px-2 py-1 text-xs">{module}</code>
+          <code :for={module <- @tool_modules} class="rounded bg-base-100 px-2 py-1 text-xs">
+            {module}
+          </code>
         </div>
       </div>
 
@@ -162,15 +181,26 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
         <h3 class="font-semibold">Restrict this agent</h3>
         <form :if={@can_manage?} phx-submit="save_agent_restrictions" class="mt-3 space-y-3">
           <input type="hidden" name="inherit" value="false" />
-          <input id="agent-inherit-access" type="checkbox" name="inherit" value="true"
-            checked={is_nil(@restrictions)} class="checkbox checkbox-xs peer"
-            data-role="agent-restrict-toggle" />
+          <input
+            id="agent-inherit-access"
+            type="checkbox"
+            name="inherit"
+            value="true"
+            checked={is_nil(@restrictions)}
+            class="checkbox checkbox-xs peer"
+            data-role="agent-restrict-toggle"
+          />
           <label for="agent-inherit-access" class="ml-2 text-xs">Inherit owner's access</label>
           <div class="grid grid-cols-1 gap-2 peer-checked:hidden sm:grid-cols-2">
             <label :for={permission <- @owner_permissions} class="flex items-center gap-2 text-xs">
-              <input type="checkbox" name="permissions[]" value={permission}
+              <input
+                type="checkbox"
+                name="permissions[]"
+                value={permission}
                 checked={is_nil(@restrictions) or Map.has_key?(@restrictions, permission)}
-                data-role="agent-restrict-permission" class="checkbox checkbox-xs" />
+                data-role="agent-restrict-permission"
+                class="checkbox checkbox-xs"
+              />
               <span class="break-all font-mono">{permission}</span>
             </label>
           </div>
