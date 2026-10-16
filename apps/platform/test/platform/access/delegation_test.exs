@@ -488,30 +488,38 @@ defmodule Platform.Access.DelegationTest do
 
   # ── agents ──────────────────────────────────────────────────────────────
 
-  describe "an agent actor is checked against its own for_runtime/1 scope" do
-    test "uncapped: its own explicit allows count; without them it is refused", ctx do
+  describe "an agent actor is checked against its owner-capped for_runtime/1 scope" do
+    test "an explicit agent allow cannot outlive its owner's matching allow", ctx do
       %{u: u, p: p, pa: pa} = ctx
       runtime = runtime!(pa)
 
-      # Positive control for the premise: the runtime scope does not carry
-      # access.manage by bundle.
-      refute Scope.carries?(Scope.for_runtime(runtime), "access.manage")
+      # Inherit from PA: the positive control succeeds before changing either
+      # actor's grant.
+      assert Access.can?(Scope.for_runtime(runtime), "access.manage", {:project, p.id})
+      assert Access.can?(Scope.for_runtime(runtime), "tasks.read", {:project, p.id})
+      succeeded(fn -> grant_as(Scope.for_runtime(runtime), u, "tasks.read", p) end)
 
-      assert {:not_granted, _} =
-               refused(fn -> grant_as(Scope.for_runtime(runtime), u, "tasks.read", p) end)
+      owner_grant =
+        Repo.get_by!(Grant,
+          principal_type: "user",
+          principal_id: pa.id,
+          permission: "tasks.read",
+          resource_type: "project",
+          resource_id: p.id
+        )
 
-      # MEASURED (stage 2): `Access.can?/3` admits an agent's own explicit
-      # allow, so with access.manage and tasks.read granted to the agent on
-      # P, the agent may grant tasks.read on P. (Listings differ: an agent
-      # allow adds nothing through `Access.Query.where_readable/5` until
-      # stack position 5.) Its owner's grants are NOT consulted: PA holds
-      # both on P, yet the agent was refused above.
-      system_grant!({:agent, runtime.agent_id}, "access.manage", p)
+      assert {:ok, _} = Grants.revoke(owner_grant)
       system_grant!({:agent, runtime.agent_id}, "tasks.read", p)
       agent_scope = Scope.for_runtime(runtime)
       assert Access.can?(agent_scope, "access.manage", {:project, p.id})
+      refute Access.can?(agent_scope, "tasks.read", {:project, p.id})
 
-      succeeded(fn -> grant_as(agent_scope, u, "tasks.read", p) end)
+      next_user = user!("agent-target")
+      assert {:beyond_held, _} =
+               refused(fn -> grant_as(agent_scope, next_user, "tasks.read", p) end)
+
+      system_grant!(pa, "tasks.read", p)
+      succeeded(fn -> grant_as(Scope.for_runtime(runtime), next_user, "tasks.read", p) end)
       assert %Change{actor_type: "agent"} = last_change()
       assert last_change().actor_id == runtime.agent_id
     end
