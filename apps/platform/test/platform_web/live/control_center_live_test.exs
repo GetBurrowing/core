@@ -1466,11 +1466,9 @@ defmodule PlatformWeb.ControlCenterLiveTest do
       assert html =~ "meetings.summarize"
       assert html =~ "tasks.triage"
 
-      # Every row starts UNFILLED with an inline agent picker.
+      # Every row starts UNFILLED. With no agents, there is no picker to fill.
       assert html =~ "UNFILLED"
-      assert html =~ ~s(data-role="fill-role-picker")
-      assert html =~ "Choose an agent…"
-      assert html =~ "+ Create new external agent…"
+      refute html =~ ~s(data-role="fill-role-picker")
 
       # Cost stats stub chips render literal em-dash placeholders.
       assert html =~ "runs —"
