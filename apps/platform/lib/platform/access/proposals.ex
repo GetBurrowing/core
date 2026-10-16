@@ -117,12 +117,14 @@ defmodule Platform.Access.Proposals do
   end
 
   defp factual_label(row, verb) do
-    schema = case row.resource_type do
-      "project" -> Platform.Tasks.Project
-      "space" -> Chat.Space
-      "canvas" -> Canvas
-      "memory_node" -> Platform.Org.Wiki.Node
-    end
+    schema =
+      case row.resource_type do
+        "project" -> Platform.Tasks.Project
+        "space" -> Chat.Space
+        "canvas" -> Canvas
+        "memory_node" -> Platform.Org.Wiki.Node
+      end
+
     resource = Repo.get!(schema, row.resource_id)
     name = Map.get(resource, :name) || Map.get(resource, :title) || row.resource_id
     "#{verb}: #{row.permission} · #{name} · #{principal_label(row)}"

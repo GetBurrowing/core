@@ -74,6 +74,7 @@ defmodule Platform.Access.AgentAccessAcceptanceTest do
     test "MCP proposal, status, patch and undo write nothing; human Apply writes once", ctx do
       view = chat!(ctx.root, ctx.space)
       baseline = counts()
+      audits = audit_types()
       proposal = propose!(ctx, [%{"action" => "revoke", "id" => ctx.grant.id}])
       status = tool!(ctx.token, "access_apply", %{"proposal_id" => proposal["proposal_id"]})
       assert status["state"] == "awaiting_human_approval"
@@ -98,9 +99,20 @@ defmodule Platform.Access.AgentAccessAcceptanceTest do
 
       assert Repo.get!(Proposal, undo["proposal_id"]).kind == "undo"
       assert counts() == baseline
+
+      assert audit_types() ==
+               Enum.sort(audits ++ card_audits() ++ card_audits() ++ ["chat.canvas.updated"])
+
       apply_card(view, proposal)
       assert flash(view)["error"] =~ "card changed"
       assert counts() == baseline
+
+      assert audit_types() ==
+               Enum.sort(
+                 audits ++
+                   card_audits() ++
+                   card_audits() ++ ["chat.canvas.updated", "chat.canvas.updated"]
+               )
 
       fresh = propose!(ctx, [%{"action" => "revoke", "id" => ctx.grant.id}])
       apply_card(view, fresh)
@@ -198,10 +210,12 @@ defmodule Platform.Access.AgentAccessAcceptanceTest do
       assert {:ok, _} = Grants.revoke(ctx.grant)
       view = chat!(ctx.root, ctx.space)
       baseline = counts()
+      audits = audit_types()
       apply_card(view, old)
       assert flash(view)["error"] =~ "stale"
       assert Repo.get!(Proposal, old["proposal_id"]).state == "stale"
       assert counts() == baseline
+      assert audit_types() == Enum.sort(audits ++ ["chat.canvas.updated"])
       fresh = propose!(ctx, [deny_user(ctx.guest, "tasks.read", :project, ctx.p.id)])
       apply_card(view, fresh)
       assert Repo.get!(Proposal, fresh["proposal_id"]).state == "applied"
@@ -230,9 +244,11 @@ defmodule Platform.Access.AgentAccessAcceptanceTest do
 
       view = chat!(ctx.root, ctx.space)
       baseline = counts()
+      audits = audit_types()
       apply_card(view, old)
       assert Repo.get!(Proposal, old["proposal_id"]).state == "stale"
       assert counts() == baseline
+      assert audit_types() == Enum.sort(audits ++ ["chat.canvas.updated"])
       fresh = propose!(ctx, [op])
 
       assert newcomer.id in document_principals(
@@ -416,10 +432,34 @@ defmodule Platform.Access.AgentAccessAcceptanceTest do
   defp flash(view), do: :sys.get_state(view.pid).socket.assigns.flash
   defp snapshots, do: Repo.all(from(g in Grant, order_by: g.id)) |> Enum.map(&Grant.snapshot/1)
 
+  defp card_audits,
+    do: [
+      "chat.canvas.created",
+      "chat.message.posted",
+      "chat.canvas.updated",
+      "chat.canvas.updated"
+    ]
+
+  defp audit_types,
+    do: Repo.all(from(e in Platform.Audit.Event, select: e.event_type, order_by: e.event_type))
+
+  # Cards are audited content: the three explicit artifact event types below
+  # are expected writes. Every other audit row, including grant_changed, stays
+  # unchanged before consent. Total artifact deltas are asserted separately.
   defp counts,
     do:
       {Repo.aggregate(Grant, :count), Repo.aggregate(Change, :count),
-       Repo.aggregate(Platform.Audit.Event, :count)}
+       Repo.aggregate(
+         from(e in Platform.Audit.Event,
+           where:
+             e.event_type not in [
+               "chat.canvas.created",
+               "chat.canvas.updated",
+               "chat.message.posted"
+             ]
+         ),
+         :count
+       )}
 
   defp last_change, do: Repo.one!(from(c in Change, order_by: [desc: c.id], limit: 1))
 

@@ -50,7 +50,6 @@ defmodule PlatformWeb.Layouts do
   def app(%{embedded: true} = assigns) do
     ~H"""
     {render_slot(@inner_block)}
-    <.flash_group flash={@flash} />
     """
   end
 

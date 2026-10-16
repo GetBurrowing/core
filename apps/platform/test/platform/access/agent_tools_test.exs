@@ -146,6 +146,7 @@ defmodule Platform.Access.AgentToolsTest do
 
   test "propose posts one canvas message, binds its digest, and apply only reads status", ctx do
     before = counts()
+    audits = audit_types()
     messages = Repo.aggregate(Chat.Message, :count)
     card = propose!(ctx)
     assert Repo.aggregate(Chat.Message, :count) == messages + 1
@@ -154,12 +155,15 @@ defmodule Platform.Access.AgentToolsTest do
     assert row.card_digest == Proposals.digest(canvas.document)
     assert row.canvas_id == canvas.id
     assert counts() == before
+    assert audit_types() == Enum.sort(audits ++ card_audits())
+    status_audits = audit_types()
 
     for _ <- 1..2 do
       status = ok_call(ctx.token, "access_apply", %{"proposal_id" => row.id})
       assert status["state"] == "awaiting_human_approval"
       assert status["change_id"] == nil
       assert counts() == before
+      assert audit_types() == status_audits
     end
   end
 
@@ -179,17 +183,20 @@ defmodule Platform.Access.AgentToolsTest do
              ])
 
     before = counts()
+    audits = audit_types()
 
     assert {:error, :card_changed} =
              Proposals.apply(card["proposal_id"], Scope.for_user(Accounts.get_user(ctx.root.id)))
 
     assert counts() == before
+    assert audit_types() == Enum.sort(audits ++ ["chat.canvas.updated"])
   end
 
   test "undo creates a consent card and commits nothing", ctx do
     {:ok, _} = Grants.deny(%{principal: ctx.guest, permission: "tasks.write", resource: ctx.q})
     change = Repo.one!(from(c in Change, order_by: [desc: c.id], limit: 1))
     before = counts()
+    audits = audit_types()
 
     response =
       ok_call(ctx.token, "access_undo", %{"change_id" => change.id, "space_id" => ctx.space.id})
@@ -201,6 +208,7 @@ defmodule Platform.Access.AgentToolsTest do
     assert hd(row.options)["label"] =~ ctx.q.name
     assert hd(row.options)["label"] =~ ctx.guest.name
     assert counts() == before
+    assert audit_types() == Enum.sort(audits ++ card_audits())
 
     assert ok_call(ctx.token, "access_apply", %{"proposal_id" => row.id})["state"] ==
              "awaiting_human_approval"
@@ -304,10 +312,34 @@ defmodule Platform.Access.AgentToolsTest do
     {runtime, token}
   end
 
+  defp card_audits,
+    do: [
+      "chat.canvas.created",
+      "chat.message.posted",
+      "chat.canvas.updated",
+      "chat.canvas.updated"
+    ]
+
+  defp audit_types,
+    do: Repo.all(from(e in Platform.Audit.Event, select: e.event_type, order_by: e.event_type))
+
+  # Cards are audited content: the three explicit artifact event types below
+  # are expected writes. Every other audit row, including grant_changed, stays
+  # unchanged before consent. Total artifact deltas are asserted separately.
   defp counts,
     do:
       {Repo.aggregate(Grant, :count), Repo.aggregate(Change, :count),
-       Repo.aggregate(Platform.Audit.Event, :count)}
+       Repo.aggregate(
+         from(e in Platform.Audit.Event,
+           where:
+             e.event_type not in [
+               "chat.canvas.created",
+               "chat.canvas.updated",
+               "chat.message.posted"
+             ]
+         ),
+         :count
+       )}
 
   defp names(token),
     do: rpc(token, "tools/list", %{})["result"]["tools"] |> Enum.map(& &1["name"])

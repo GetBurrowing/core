@@ -1347,10 +1347,15 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   defp handle_info({:canvas_event, canvas_id, event}, socket) when is_map(event) do
     Logger.debug("[canvas_event] canvas=#{canvas_id} #{inspect(event)}")
 
-    {:halt,
-     socket
-     |> assign(:recent_canvas_events, prepend_event(socket, canvas_id, event))
-     |> put_flash(:info, flash_for(event))}
+    socket = assign(socket, :recent_canvas_events, prepend_event(socket, canvas_id, event))
+
+    socket =
+      case flash_for(event) do
+        nil -> socket
+        message -> put_flash(socket, :info, message)
+      end
+
+    {:halt, socket}
   end
 
   # Room traffic is push_event ONLY: no assign changes, so a cursor stream
@@ -1423,6 +1428,13 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
 
     [entry | prior] |> Enum.take(@recent_events_cap)
   end
+
+  # Access actions have their own factual receipt/refusal; retain the
+  # generic signal without overwriting that feedback with transport details.
+  defp flash_for(%{"name" => "action", "value" => value})
+       when value in ["access_apply", "access_cancel", "access_undo"], do: nil
+
+  defp flash_for(%{"name" => "action", "value" => "access_choose:" <> _}), do: nil
 
   defp flash_for(%{"name" => "action", "node_id" => id, "value" => v}),
     do: "Canvas action: #{id} → #{inspect(v)}"
