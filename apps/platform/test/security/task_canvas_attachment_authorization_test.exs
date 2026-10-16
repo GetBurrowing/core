@@ -215,7 +215,9 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
     canvas
   end
 
-  # An MCP runtime bound to `agent`. `tool_profile` is a LITERAL list rather
+  # An MCP runtime bound to `agent` and owned by a root admin. The owner's
+  # grants cover the requested tools so these tests reach the task gate.
+  # `tool_profile` is a LITERAL list rather
   # than `Platform.Access.RuntimeProfiles.valid_modules()`: this file is about authorization, and
   # a capability refusal (`-32001`) would be a different failure wearing the
   # same red.
@@ -226,7 +228,7 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
       %AgentRuntime{}
       |> AgentRuntime.changeset(%{
         runtime_id: "tcaa-rt-#{n()}",
-        owner_user_id: user!().id,
+        owner_user_id: Platform.TenancyFixtures.root_admin!().id,
         agent_id: agent && agent.id,
         auth_token_hash: AgentRuntime.hash_token(raw),
         status: "active"
