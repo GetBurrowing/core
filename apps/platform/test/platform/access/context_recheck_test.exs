@@ -168,16 +168,11 @@ defmodule Platform.Access.ContextRecheckTest do
       |> Agent.changeset(%{slug: "ctx-agent-#{n}", name: "Ctx agent #{n}", status: "active"})
       |> Repo.insert!()
 
-    %AgentRuntime{}
-    |> AgentRuntime.changeset(%{
-      runtime_id: "ctx-rt-#{n}",
-      owner_user_id: owner.id,
+    Platform.RuntimeProfileFixtures.runtime!(owner.id, bundles, %{
       agent_id: agent.id,
       auth_token_hash: AgentRuntime.hash_token(AgentRuntime.generate_token()),
-      status: "active",
-      allowed_bundles: bundles
+      status: "active"
     })
-    |> Repo.insert!()
   end
 
   defp enable_sign_in_admin! do
@@ -563,7 +558,7 @@ defmodule Platform.Access.ContextRecheckTest do
     } do
       template = template!()
       rt = runtime!(actors.root_admin, AgentRuntime.default_tool_profile() -- ["plan"])
-      refute "plan" in rt.allowed_bundles
+      refute "plan" in Platform.Access.RuntimeProfiles.tool_profile(rt)
       ctx = %{runtime_id: rt.runtime_id, agent_id: rt.agent_id}
 
       assert {:error, %{code: :unauthorized}} =
