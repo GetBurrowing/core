@@ -131,7 +131,7 @@ defmodule Platform.Access.Scope do
   import Ecto.Query, only: [from: 2]
 
   alias Platform.Access
-  alias Platform.Access.{Grants, Registry, ToolPermissions}
+  alias Platform.Access.{Grants, Registry, RuntimeProfile, RuntimeProfiles, ToolPermissions}
   alias Platform.Agents.AgentRuntime
   alias Platform.Chat.ExternalScope
   alias Platform.Federation.ToolSurface
@@ -241,20 +241,41 @@ defmodule Platform.Access.Scope do
   intersected with its owner's permissions.
   """
   @spec for_runtime(AgentRuntime.t()) :: t()
-  def for_runtime(%AgentRuntime{} = runtime) do
+  def for_runtime(%AgentRuntime{} = runtime), do: for_runtime(runtime, RuntimeProfiles.get(runtime))
+
+  @spec for_runtime(AgentRuntime.t(), RuntimeProfile.t() | nil) :: t()
+  def for_runtime(%AgentRuntime{} = runtime, profile) do
+    modules = RuntimeProfiles.tool_profile(runtime, profile)
+
     legacy_permissions =
-      for bundle <- bundles(runtime),
+      for bundle <- modules,
           permission = Registry.bundle_permission(bundle),
           into: %{},
           do: {permission, :all}
 
-    tool_permissions =
-      for bundle <- bundles(runtime),
-          permission <- ToolPermissions.bundle_permissions(bundle),
-          into: %{},
-          do: {permission, :all}
+    permissions =
+      case profile do
+        nil ->
+          tool_permissions =
+            for bundle <- modules,
+                permission <- ToolPermissions.bundle_permissions(bundle),
+                into: %{},
+                do: {permission, :all}
 
-    permissions = put_agent_roster(Map.merge(legacy_permissions, tool_permissions), runtime)
+          put_agent_roster(Map.merge(legacy_permissions, tool_permissions), runtime)
+
+        %RuntimeProfile{} ->
+          restriction = RuntimeProfiles.restrictions(runtime, profile)
+
+          base =
+            (Registry.permission_names() ++ Map.keys(legacy_permissions))
+            |> Map.new(&{&1, :all})
+            |> put_agent_roster(runtime)
+
+          if is_nil(restriction),
+            do: base,
+            else: Map.take(base, Map.keys(restriction) ++ Map.keys(legacy_permissions))
+      end
 
     owner =
       case {runtime.owner_user_id, runtime.agent_id} do
@@ -468,6 +489,9 @@ defmodule Platform.Access.Scope do
   as `ToolAuthorization.effective_tools/1`.
   """
   @spec tool_names(t()) :: [String.t()]
+  def tool_names(%__MODULE__{actor: %AgentRuntime{} = runtime}),
+    do: Platform.Access.Tools.tool_names(runtime)
+
   def tool_names(%__MODULE__{actor: actor} = scope) do
     candidates =
       case actor do

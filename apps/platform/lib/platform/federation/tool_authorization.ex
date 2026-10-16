@@ -55,8 +55,8 @@ defmodule Platform.Federation.ToolAuthorization do
   different questions, and only the second one authorizes a call.
   """
 
+  alias Platform.Access.{Scope, ToolPermissions, Tools}
   alias Platform.Federation.ToolSurface
-  alias Platform.Tenancy
 
   @doc """
   The tool set a runtime may see AND call.
@@ -72,17 +72,10 @@ defmodule Platform.Federation.ToolAuthorization do
   A runtime with no bundles (or a nil column) resolves to an empty list —
   fail-closed, never the full surface.
   """
-  def effective_tools(runtime) do
-    runtime
-    |> allowed_bundles()
-    |> ToolSurface.list_tools()
-    |> ToolSurface.scope_for_external(external_principal?(runtime))
-  end
+  def effective_tools(runtime), do: Tools.effective_tools(runtime)
 
   @doc "Convenience projection of `effective_tools/1` for tests and telemetry."
-  def tool_names(runtime) do
-    runtime |> effective_tools() |> Enum.map(& &1.name)
-  end
+  def tool_names(runtime), do: Tools.tool_names(runtime)
 
   @doc """
   Is this runtime owned by an external principal?
@@ -93,7 +86,7 @@ defmodule Platform.Federation.ToolAuthorization do
   `owner_user_id` — a nil owner falls through to `false`.
   """
   def external_principal?(runtime),
-    do: Tenancy.external_user?(%{id: runtime.owner_user_id})
+    do: Scope.guest?(Scope.for_user(%{id: runtime.owner_user_id}))
 
   @doc """
   May `runtime` call the tool named `name`?
@@ -103,11 +96,7 @@ defmodule Platform.Federation.ToolAuthorization do
   from the catalogue is absent from every bundle and is denied. Anything that
   is not a binary name is denied.
   """
-  def authorize(name, runtime) when is_binary(name) do
-    if Enum.any?(effective_tools(runtime), &(&1.name == name)),
-      do: :ok,
-      else: {:error, :forbidden}
-  end
+  def authorize(name, runtime) when is_binary(name), do: Tools.authorize(name, runtime)
 
   def authorize(_name, _runtime), do: {:error, :forbidden}
 
@@ -182,7 +171,8 @@ defmodule Platform.Federation.ToolAuthorization do
   defp deny_message_for_reason(name) do
     case deny_reason(name) do
       :forbidden ->
-        "tool '#{name}' not in allowed bundles"
+        permission = ToolPermissions.for_tool(name) || "undeclared"
+        "tool '#{name}' requires permission '#{permission}', which this agent does not hold or is capped at its owner"
 
       {:unknown_tool, nil} ->
         "unknown tool '#{name}' (no such tool in the catalogue — this is a name lookup miss, not a permissions problem)."
@@ -212,6 +202,4 @@ defmodule Platform.Federation.ToolAuthorization do
     |> String.replace([".", "_", "-"], "")
   end
 
-  defp allowed_bundles(%{allowed_bundles: bundles}) when is_list(bundles), do: bundles
-  defp allowed_bundles(_runtime), do: []
 end

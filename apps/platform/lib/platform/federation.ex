@@ -6,7 +6,9 @@ defmodule Platform.Federation do
 
   require Logger
   import Ecto.Query
+  alias Ecto.Multi
 
+  alias Platform.Access.RuntimeProfiles
   alias Platform.Agents.{Agent, AgentRuntime}
   alias Platform.Chat
   alias Platform.Chat.{Participant, Space}
@@ -18,9 +20,20 @@ defmodule Platform.Federation do
 
   @doc "Register a new external runtime."
   def register_runtime(owner_user_id, attrs) do
-    %AgentRuntime{}
-    |> AgentRuntime.changeset(Map.merge(attrs, %{owner_user_id: owner_user_id}))
-    |> Repo.insert()
+    modules = Map.get(attrs, :allowed_bundles, Map.get(attrs, "allowed_bundles"))
+    tool_profile = modules || AgentRuntime.default_allowed_bundles()
+    restriction = if is_nil(modules), do: nil, else: RuntimeProfiles.translated_permissions(modules)
+
+    Multi.new()
+    |> Multi.insert(:runtime, AgentRuntime.changeset(%AgentRuntime{}, Map.put(attrs, :owner_user_id, owner_user_id)))
+    |> Multi.run(:profile, fn _repo, %{runtime: runtime} ->
+      RuntimeProfiles.create_for_runtime(runtime, tool_profile, restriction)
+    end)
+    |> Repo.transaction()
+    |> case do
+      {:ok, %{runtime: runtime}} -> {:ok, runtime}
+      {:error, _step, reason, _changes} -> {:error, reason}
+    end
   end
 
   @doc "Fetch a runtime by its primary key."
@@ -105,9 +118,19 @@ defmodule Platform.Federation do
   @spec update_allowed_bundles(AgentRuntime.t(), [String.t()]) ::
           {:ok, AgentRuntime.t()} | {:error, Ecto.Changeset.t()}
   def update_allowed_bundles(%AgentRuntime{} = runtime, bundles) when is_list(bundles) do
-    runtime
-    |> AgentRuntime.changeset(%{allowed_bundles: bundles})
-    |> Repo.update()
+    Multi.new()
+    |> Multi.update(:runtime, AgentRuntime.changeset(runtime, %{allowed_bundles: bundles}))
+    |> Multi.run(:profile, fn _repo, %{runtime: updated} ->
+      with {:ok, _} <- RuntimeProfiles.set_tool_profile(updated, bundles),
+           {:ok, profile} <- RuntimeProfiles.restrict(updated, RuntimeProfiles.translated_permissions(bundles)) do
+        {:ok, profile}
+      end
+    end)
+    |> Repo.transaction()
+    |> case do
+      {:ok, %{runtime: updated}} -> {:ok, updated}
+      {:error, _step, reason, _changes} -> {:error, reason}
+    end
   end
 
   @doc """

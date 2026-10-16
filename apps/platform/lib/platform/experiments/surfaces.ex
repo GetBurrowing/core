@@ -68,7 +68,8 @@ defmodule Platform.Experiments.Surfaces do
     Platform.Experiments.Surfaces.ProductDocsPreamble,
     # Task 01a114a8 stage 4: whether a task's dispatches are told to work
     # through suite_run. Enrolment is a task_cohort on agent_id.
-    Platform.Experiments.Surfaces.CodeMode
+    Platform.Experiments.Surfaces.CodeMode,
+    Platform.Experiments.Surfaces.AgentToolProfile
   ]
 
   @prompt_surface "dispatch.prompt"
