@@ -19,6 +19,7 @@ defmodule Platform.Access.Proposal do
     field(:state, :string, default: "proposed")
     field(:approval_id, Ecto.UUID)
     field(:approved_by_user_id, :binary_id)
+    field(:approved_by_name, :string, virtual: true)
     field(:approved_at, :utc_datetime_usec)
     field(:change_id, :binary_id)
     field(:undoes_change_id, :binary_id)

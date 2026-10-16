@@ -6,6 +6,7 @@ defmodule Platform.Access.ToolPermissions do
 
   # Includes tools hidden by runtime flags, so bundle translation is stable.
   @core for {permission, names} <- [
+              {"access.manage", ~w(access_explain access_propose access_apply access_undo)},
               {"agents.manage_own",
                ~w(dm_create federation_status feedback.submit principal_search space_create space_leave space_list_agents)},
               {"canvas.read",
@@ -47,6 +48,7 @@ defmodule Platform.Access.ToolPermissions do
             do: {name, permission}
 
   @core_bundle_names %{
+    "access" => ~w(access_explain access_propose access_apply access_undo),
     "attachment" => ~w(attachment.upload_inline attachment.get_inline attachment.upload_start),
     "canvas" =>
       ~w(canvas.create canvas.patch canvas.describe canvas.list_kinds canvas.template canvas.versions canvas.restore),

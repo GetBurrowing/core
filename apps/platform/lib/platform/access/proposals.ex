@@ -1,13 +1,43 @@
 defmodule Platform.Access.Proposals do
   @moduledoc "Human-only access consent over the existing undo ledger (task 01a1386e-72e1)."
   import Ecto.Query
-  alias Platform.Access.{Change, Changes, Grant, Grants, Impact, Proposal, Scope}
+  alias Platform.Access.{Change, ChangeCard, Changes, Grant, Grants, Impact, Proposal, Scope}
   alias Platform.Accounts.User
   alias Platform.Agents.AgentRuntime
   alias Platform.Chat.{Canvas, CanvasAccess}
   alias Platform.{Accounts, Chat, Repo}
 
   @doc "Proposing agents must pass the ledger's delegation check before any impact is disclosed."
+  def propose(%AgentRuntime{} = runtime, %{kind: "undo", undoes_change_id: change_id} = attrs) do
+    scope = Scope.for_runtime(runtime)
+
+    with {:ok, impact} <- Impact.diff(scope, change_id),
+         %Change{} = change <- Repo.get(Change, change_id),
+         %Canvas{} = canvas <- Repo.get(Canvas, attrs[:canvas_id]) do
+      %Proposal{}
+      |> Proposal.changeset(%{
+        org_id: change.org_id,
+        proposer_runtime_id: runtime.id,
+        space_id: canvas.space_id,
+        canvas_id: canvas.id,
+        kind: "undo",
+        action: "undo",
+        options: [json(%{key: "default", label: "Undo change", ops: [], impact: impact})],
+        selected_option: "default",
+        tuple_keys: change.tuple_keys,
+        base_state_hash: state_hash(),
+        card_digest: digest(canvas.document),
+        undoes_change_id: change.id,
+        expires_at: DateTime.add(DateTime.utc_now(), 86_400)
+      })
+      |> Repo.insert()
+      |> render_result()
+    else
+      {:error, _} = error -> error
+      _ -> {:error, :not_found}
+    end
+  end
+
   def propose(%AgentRuntime{} = runtime, attrs) do
     scope = Scope.for_runtime(runtime)
     options = attrs[:options] || [%{key: "default", label: "Apply change", ops: attrs[:ops]}]
@@ -35,7 +65,10 @@ defmodule Platform.Access.Proposals do
           expires_at: DateTime.add(DateTime.utc_now(), 86_400, :second)
         }
 
-        %Proposal{} |> Proposal.changeset(attrs) |> Repo.insert()
+        %Proposal{}
+        |> Proposal.changeset(attrs)
+        |> Repo.insert()
+        |> render_result()
       end
     end
   end
@@ -73,6 +106,7 @@ defmodule Platform.Access.Proposals do
         row = locked!(id)
         readable!(row, human)
         require_proposed!(row)
+        if state_hash() != row.base_state_hash, do: Repo.rollback(:stale)
 
         option =
           Enum.find(row.options, &(&1["key"] == row.selected_option)) ||
@@ -80,7 +114,8 @@ defmodule Platform.Access.Proposals do
 
         ops = decode_ops(option["ops"])
 
-        with {:ok, impact} <- Impact.diff(human, ops) do
+        with {:ok, impact} <-
+               Impact.diff(human, if(row.kind == "undo", do: row.undoes_change_id, else: ops)) do
           if json(impact) != option["impact"], do: Repo.rollback(:stale)
         else
           {:error, reason} -> Repo.rollback(reason)
@@ -96,14 +131,20 @@ defmodule Platform.Access.Proposals do
             approved_at: DateTime.utc_now()
           })
 
-        case Grants.apply_ops(ops,
-               actor: human,
-               via_agent_id: row.proposer_runtime_id,
-               defer_notifications: true,
-               precondition: fn ->
-                 if state_hash() == row.base_state_hash, do: :ok, else: {:error, :stale}
-               end
-             ) do
+        commit_opts = [
+          via_agent_id: row.proposer_runtime_id,
+          defer_notifications: true,
+          precondition: fn ->
+            if state_hash() == row.base_state_hash, do: :ok, else: {:error, :stale}
+          end
+        ]
+
+        result =
+          if row.kind == "undo",
+            do: Changes.undo(row.undoes_change_id, human, commit_opts),
+            else: Grants.apply_ops(ops, Keyword.put(commit_opts, :actor, human))
+
+        case result do
           {:ok, %{change: %Change{} = change}} ->
             update!(row, %{state: "applied", change_id: change.id})
 
@@ -118,13 +159,14 @@ defmodule Platform.Access.Proposals do
     case result do
       {:ok, %Proposal{change_id: change_id}} ->
         Changes.notify_committed(Repo.get!(Change, change_id))
-        result
+        render_result(result)
 
-      {:error, reason} when reason in [:stale, :card_changed] ->
+      {:error, reason} when reason in [:stale, :card_changed, :expired] ->
         Repo.update_all(from(p in Proposal, where: p.id == ^id and p.state == "proposed"),
           set: [state: "stale", failure: %{reason: Atom.to_string(reason)}]
         )
 
+        render_card(Repo.get!(Proposal, id))
         result
 
       other ->
@@ -200,12 +242,15 @@ defmodule Platform.Access.Proposals do
 
   def status(_, _), do: {:error, :not_found}
 
-  defp mutate(id, human, fun) do
+  defp mutate(id, %Scope{actor: %User{id: uid}}, fun) do
+    human = Scope.for_user(Accounts.get_user(uid))
+
     Repo.transaction(fn ->
       row = locked!(id)
       readable!(row, human)
       fun.(row)
     end)
+    |> render_result()
   end
 
   defp valid_get(id), do: if(Platform.UUID.valid?(id), do: Repo.get(Proposal, id))
@@ -230,7 +275,19 @@ defmodule Platform.Access.Proposals do
   end
 
   defp verify_digest!(row, canvas) do
-    if digest(canvas.document) != row.card_digest, do: Repo.rollback(:card_changed)
+    document =
+      case Platform.Chat.Canvas.Server.whereis(canvas.id) do
+        nil ->
+          canvas.document
+
+        _ ->
+          case Platform.Chat.Canvas.Server.describe(canvas.id) do
+            {:ok, %{document: document}} -> document
+            _ -> Repo.rollback(:not_found)
+          end
+      end
+
+    if digest(document) != row.card_digest, do: Repo.rollback(:card_changed)
   end
 
   defp require_proposed!(row) do
@@ -240,13 +297,38 @@ defmodule Platform.Access.Proposals do
 
   defp update!(row, attrs), do: row |> Proposal.changeset(attrs) |> Repo.update!()
 
+  @doc "Rebuild the complete consent surface from server-computed facts."
+  def render_card(%Proposal{} = row) do
+    name =
+      case row.approved_by_user_id && Accounts.get_user(row.approved_by_user_id) do
+        nil -> nil
+        user -> user.name || user.email
+      end
+
+    document = ChangeCard.document(%{row | approved_by_name: name})
+    canvas = Repo.get!(Canvas, row.canvas_id)
+
+    case Chat.patch_canvas(:system, canvas, [{:replace_document, document}]) do
+      {:ok, _} ->
+        # Persist the same document synchronously: the canvas server persists asynchronously.
+        Repo.update_all(from(c in Canvas, where: c.id == ^canvas.id), set: [document: document])
+        {:ok, update!(row, %{card_digest: digest(document)})}
+
+      error ->
+        error
+    end
+  end
+
+  defp render_result({:ok, %Proposal{} = row}), do: render_card(row)
+  defp render_result(error), do: error
+
   @doc "Bind consent to document content, ignoring only the transport revision."
   def digest(document), do: hash(Map.drop(document, ["revision", :revision]))
 
   @doc "Conservative snapshot: concurrent membership, role, runtime or grant edits invalidate consent."
   def state_hash do
     tables =
-      ~w(access_grants org_memberships access_roles access_role_assignments access_space_restrictions agent_runtimes access_runtime_profiles)
+      ~w(access_grants org_memberships access_roles access_role_assignments access_space_restrictions agent_runtimes access_runtime_profiles chat_participants orgs projects chat_spaces)
 
     values =
       Enum.map(tables, fn table ->

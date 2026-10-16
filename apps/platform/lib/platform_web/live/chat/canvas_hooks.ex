@@ -1097,10 +1097,90 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
     end
   end
 
+  # The clicked canvas is the authority. No proposal id supplied in an
+  # action value can bind a lookalike canvas to a real consent surface.
+  defp handle_canvas_action_value(action, canvas, socket)
+       when action in ["access_apply", "access_cancel", "access_undo"] do
+    access_card_action(action, nil, canvas, socket)
+  end
+
+  defp handle_canvas_action_value("access_choose:" <> key, canvas, socket),
+    do: access_card_action("access_choose", key, canvas, socket)
+
   # Unrecognized action values: keep the generic emit-only contract.
   # Agent-side subscribers still see the click via the CanvasServer.emit_event
   # broadcast above.
   defp handle_canvas_action_value(_value, _canvas, socket), do: {:halt, socket}
+
+  defp access_card_action(action, key, canvas, socket) do
+    alias Platform.Access.{Proposal, Proposals, Scope}
+
+    with %Proposal{} = proposal <- Platform.Repo.get_by(Proposal, canvas_id: canvas.id),
+         user_id when is_binary(user_id) <- current_user_id(socket),
+         %Platform.Accounts.User{} = user <- Platform.Accounts.get_user(user_id) do
+      # Reload the human and their memberships on every click, including
+      # choices, cancellation and undo. Never trust the mounted scope.
+      human = Scope.for_user(user)
+
+      result =
+        case action do
+          "access_apply" -> Proposals.apply(proposal.id, human)
+          "access_cancel" -> Proposals.cancel(proposal.id, human)
+          "access_undo" -> Proposals.undo_applied(proposal.id, human)
+          "access_choose" -> Proposals.choose(proposal.id, key, human)
+        end
+
+      case result do
+        {:ok, _} ->
+          message =
+            case action do
+              "access_apply" -> "Access change applied."
+              "access_cancel" -> "Access change cancelled."
+              "access_undo" -> "Access is back to how it was."
+              "access_choose" -> "Option selected. Review the change, then Apply."
+            end
+
+          {:halt, put_flash(socket, :info, message)}
+
+        {:error, reason} ->
+          {:halt, put_flash(socket, :error, access_card_error(reason, proposal))}
+      end
+    else
+      nil -> {:halt, put_flash(socket, :error, "This card is not a live access change.")}
+      _ -> {:halt, put_flash(socket, :error, "Sign in as a person to approve this change.")}
+    end
+  end
+
+  defp access_card_error(:card_changed, _),
+    do: "This card changed. Ask the agent to propose the change again."
+
+  defp access_card_error(reason, _) when reason in [:stale, :expired],
+    do: "Expired (stale). Ask the agent to propose the change again."
+
+  defp access_card_error(:not_proposed, %{state: "applied"}),
+    do: "This change was already applied."
+
+  defp access_card_error(:not_proposed, %{state: "undone"}),
+    do: "This change was already undone."
+
+  defp access_card_error(:not_proposed, %{state: "stale"}),
+    do: "Expired (stale). Ask the agent to propose the change again."
+
+  defp access_card_error(:choose_option, _), do: "Choose an option before you Apply."
+  defp access_card_error(:already_undone, _), do: "This change was already undone."
+
+  defp access_card_error({:superseded, _}, _),
+    do: "A later change replaced this one. Undo the later change first."
+
+  defp access_card_error(%{rule: :last_admin}, _),
+    do: "This would remove the last admin. Keep someone who can manage access."
+
+  defp access_card_error(%{missing: missing}, _),
+    do: "Not authorized: you need #{missing} for this change."
+
+  defp access_card_error(:not_found, _), do: "Not authorized to use this access card."
+  defp access_card_error(:human_required, _), do: "Sign in as a person to approve this change."
+  defp access_card_error(_, _), do: "This access change could not be applied."
 
   # Authorization for junk_batch: allow the source canvas's creator (by
   # participant id) OR any root-org admin. `current_user` may be

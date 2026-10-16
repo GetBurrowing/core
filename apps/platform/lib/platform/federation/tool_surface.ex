@@ -83,7 +83,7 @@ defmodule Platform.Federation.ToolSurface do
   # Core's own bundles. The full list is these plus every extension bundle
   # (`Platform.Extensions.tool_bundle_names/0`), read per call: never widen
   # this attribute with an extension's name (ADR 0055).
-  @bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode prototype)
+  @bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode prototype access)
 
   # Per-message content cap (graphemes) for space_get_messages /
   # space_search_messages. Anything longer is sliced and flagged via the
@@ -281,6 +281,9 @@ defmodule Platform.Federation.ToolSurface do
   # behaviour in Prototypes.Tools. Grantable, never a default.
   defp tools_for_bundle("prototype"),
     do: tag(Platform.Federation.PrototypeTools.definitions(), "prototype")
+
+  defp tools_for_bundle("access"),
+    do: tag(Platform.Federation.AccessTools.definitions(), "access")
 
   # An extension's bundle (ADR 0055): its definitions as the extension lists
   # them at call time. An unknown name is skipped, as it always was.
@@ -7911,6 +7914,9 @@ defmodule Platform.Federation.ToolSurface do
         args,
         Map.put(context, :agent_home_org, agent_home_org(load_agent(context)))
       )
+
+  def execute("access_" <> _ = tool, args, context),
+    do: Platform.Access.AgentTools.execute(tool, args, context)
 
   # A tool an extension bundle owns (ADR 0055), listed or not: the extension
   # answers it, including any refusal it gives while switched off. Core's

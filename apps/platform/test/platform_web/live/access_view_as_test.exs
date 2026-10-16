@@ -182,7 +182,7 @@ defmodule PlatformWeb.AccessViewAsTest do
              live(conn, "/access/view-as/user/#{ctx.root.id}")
   end
 
-  test "agent target is explicitly labelled uncapped", ctx do
+  test "agent target is explicitly labelled capped", ctx do
     n = System.unique_integer([:positive])
     runtime_id = "view-as-runtime-#{n}"
 
@@ -194,6 +194,6 @@ defmodule PlatformWeb.AccessViewAsTest do
              })
 
     {:ok, _view, html} = conn_for(ctx.root) |> live("/access/view-as/agent/#{runtime_id}")
-    assert html =~ "not capped at owner (pos 5)"
+    assert html =~ "capped at owner."
   end
 end

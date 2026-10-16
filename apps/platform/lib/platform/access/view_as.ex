@@ -32,7 +32,7 @@ defmodule Platform.Access.ViewAs do
          scope: scope,
          resources: %{projects: projects, channels: channels},
          surface: surface,
-         capped: if(match?({:agent, _}, target), do: false, else: nil)
+         capped: if(match?({:agent, _}, target), do: match?(%Scope{}, scope.owner_cap), else: nil)
        }}
     end
   end
