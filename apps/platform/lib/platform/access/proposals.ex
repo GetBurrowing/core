@@ -252,7 +252,9 @@ defmodule Platform.Access.Proposals do
     values =
       Enum.map(tables, fn table ->
         %{rows: rows} =
-          Repo.query!("SELECT row_to_json(t)::text FROM " <> table <> " t ORDER BY id")
+          Repo.query!(
+            "SELECT row_to_json(t)::text FROM " <> table <> " t ORDER BY row_to_json(t)::text"
+          )
 
         {table, rows}
       end)
