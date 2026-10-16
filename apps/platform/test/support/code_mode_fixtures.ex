@@ -35,7 +35,7 @@ defmodule Platform.CodeModeFixtures do
       %AgentRuntime{}
       |> AgentRuntime.changeset(%{
         runtime_id: "codemode-rt-#{u()}",
-        owner_user_id: owner_user_id || insert_user!().id,
+        owner_user_id: owner_user_id || Platform.TenancyFixtures.root_admin!().id,
         agent_id: agent.id,
         auth_token_hash: AgentRuntime.hash_token(raw_token),
         status: "active",

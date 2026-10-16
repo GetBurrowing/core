@@ -3,7 +3,7 @@ defmodule Platform.Access.RuntimeProfilesMigrationTest do
 
   import Platform.TenancyFixtures
 
-  alias Platform.Access.RuntimeProfiles
+  alias Platform.Access.{RuntimeProfiles, Tools}
   alias Platform.Agents.AgentRuntime
   alias Platform.Repo
   alias Platform.RuntimeBundleSnapshot
@@ -48,6 +48,16 @@ defmodule Platform.Access.RuntimeProfilesMigrationTest do
 
       assert copied == bundles
       assert Jason.decode!(restricted) == RuntimeProfiles.translated_permissions(bundles)
+
+      runtime = Repo.get!(AgentRuntime, id)
+      legacy = RuntimeBundleSnapshot.legacy_tool_names(bundles)
+
+      expected =
+        if Enum.member?(bundles, "play"),
+          do: Enum.reject(legacy, &String.starts_with?(&1, "play_session_")),
+          else: legacy
+
+      assert Tools.tool_names(runtime) == expected
     end
 
     assert runtime_hashes() == before
@@ -64,7 +74,7 @@ defmodule Platform.Access.RuntimeProfilesMigrationTest do
     )
 
     assert_raise RuntimeError, ~r/did not preserve every ordered array/, fn ->
-      @migration.assert_copied!(Repo)
+      apply(@migration, :assert_copied!, [Repo])
     end
   end
 
