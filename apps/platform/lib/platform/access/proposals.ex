@@ -83,7 +83,10 @@ defmodule Platform.Access.Proposals do
 
           labels =
             Enum.map(prepared, fn {op, row} ->
-              verb = if op.action == "grant", do: "Gain access", else: "Lose access"
+              verb =
+                if op.action == "grant" or (op.action == "revoke" and row.effect == "deny"),
+                  do: "Gain access",
+                  else: "Lose access"
 
               schema =
                 case row.resource_type do

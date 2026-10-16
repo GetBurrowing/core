@@ -66,8 +66,6 @@ defmodule PlatformWeb.AccessLive do
 
   def handle_event("apply-reset", _, %{assigns: %{preview: preview}} = socket)
       when is_map(preview) do
-    scope = fresh(socket)
-
     result =
       Repo.transaction(fn ->
         Changes.lock_for_consent()
