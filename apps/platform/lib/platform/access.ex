@@ -188,7 +188,9 @@ defmodule Platform.Access do
 
   def can?(%Scope{own_cap: %Scope{} = own, owner_cap: %Scope{} = owner}, permission, resource)
       when is_binary(permission),
-      do: can?(own, permission, resource) and can?(owner, permission, resource)
+      do:
+        can?(own, permission, resource) and
+          can?(owner, permission, owner_resource(permission, resource))
 
   def can?(%Scope{} = scope, permission, resource) when is_binary(permission) do
     if restriction_denied?(scope, permission, resource) do
@@ -202,6 +204,10 @@ defmodule Platform.Access do
   end
 
   def can?(scope, permission, resource), do: Scope.can?(scope, permission, resource)
+
+  defp owner_resource("chat." <> _, id) when is_binary(id), do: {:space, id}
+  defp owner_resource("canvas." <> _, id) when is_binary(id), do: {:canvas, id}
+  defp owner_resource(_, resource), do: resource
 
   @doc """
   Member 2's ROLE-RULE set: `:all`, or the resource ids a role rule names,

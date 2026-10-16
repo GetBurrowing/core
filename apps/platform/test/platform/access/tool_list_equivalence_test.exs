@@ -44,6 +44,49 @@ defmodule Platform.Access.ToolListEquivalenceTest do
              RuntimeBundleSnapshot.legacy_tool_names(runtime.allowed_bundles, true)
   end
 
+  test "one tool-list decision stays within four database queries", %{admin: admin, guest: guest} do
+    Platform.Access.builtin_role_rules()
+
+    for owner <- [admin, guest] do
+      runtime = %AgentRuntime{owner_user_id: owner.id, allowed_bundles: ["messaging", "space"]}
+      {names, query_count} = count_queries(fn -> Tools.tool_names(runtime) end)
+      assert names != []
+      assert query_count <= 4, "#{owner.id} used #{query_count} queries for one tool list"
+    end
+  end
+
+  defp count_queries(fun) do
+    caller = self()
+    ref = make_ref()
+
+    :ok =
+      :telemetry.attach(
+        ref,
+        [:platform, :repo, :query],
+        fn _, _, _, _ ->
+          if self() == caller, do: send(caller, {ref, :query})
+        end,
+        nil
+      )
+
+    result =
+      try do
+        fun.()
+      after
+        :telemetry.detach(ref)
+      end
+
+    {result, drain_queries(ref, 0)}
+  end
+
+  defp drain_queries(ref, count) do
+    receive do
+      {^ref, :query} -> drain_queries(ref, count + 1)
+    after
+      0 -> count
+    end
+  end
+
   defp owner!(org_id, role, external? \\ false) do
     n = System.unique_integer([:positive])
 

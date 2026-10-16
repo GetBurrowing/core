@@ -32,6 +32,7 @@ defmodule Platform.Access.MemoryListingScopeTest do
   alias Platform.Org.WikiPage
   alias Platform.Repo
   alias Platform.Tenancy
+  alias Platform.Tenancy.OrgMembership
 
   # Semantic channel stub (the `Platform.Org.Wiki.SearchTest` pattern): the
   # configured results are returned for every query.
@@ -130,6 +131,16 @@ defmodule Platform.Access.MemoryListingScopeTest do
   end
 
   defp runtime!(owner) do
+    # The owner cap intentionally denies a zero-membership owner's runtime.
+    # Give this listing fixture the member role whose memory.read is tested.
+    %OrgMembership{}
+    |> OrgMembership.changeset(%{
+      user_id: owner.id,
+      org_id: acme_org_id(),
+      role: "member"
+    })
+    |> Repo.insert!()
+
     agent = agent!("ml-agent")
     n = System.unique_integer([:positive])
 

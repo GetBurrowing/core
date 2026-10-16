@@ -539,11 +539,12 @@ defmodule Platform.Access.ContextRecheckTest do
                PromptTemplates.update_template(template!(), %{content: "SYSTEM"})
     end
 
-    test "MCP prompt_template_update: a runtime holding the plan bundle succeeds as before", %{
-      actors: actors
-    } do
+    test "MCP prompt_template_update: a root-admin-owned runtime with the plan bundle succeeds",
+         %{
+           actors: actors
+         } do
       template = template!()
-      rt = runtime!(actors.root_member, AgentRuntime.default_allowed_bundles() ++ ["plan"])
+      rt = runtime!(actors.root_admin, AgentRuntime.default_allowed_bundles() ++ ["plan"])
       ctx = %{runtime_id: rt.runtime_id, agent_id: rt.agent_id}
 
       assert {:ok, %{slug: slug, updated_by: "agent"}} =

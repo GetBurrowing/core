@@ -259,9 +259,16 @@ defmodule Platform.Access.Scope do
     permissions = put_agent_roster(Map.merge(legacy_permissions, tool_permissions), runtime)
 
     owner =
-      %{id: runtime.owner_user_id}
-      |> for_user()
-      |> empty_if_no_membership()
+      case {runtime.owner_user_id, runtime.agent_id} do
+        {owner_id, _} when is_binary(owner_id) ->
+          %{id: owner_id} |> for_user() |> empty_if_no_membership()
+
+        {nil, agent_id} when is_binary(agent_id) ->
+          ownerless_member_scope()
+
+        _ ->
+          %__MODULE__{}
+      end
 
     role_keys = if guest?(owner), do: owner.role_keys, else: %{}
 
@@ -703,6 +710,17 @@ defmodule Platform.Access.Scope do
     do: %{scope | permissions: %{}, grants: []}
 
   defp empty_if_no_membership(scope), do: scope
+
+  # A synthetic runtime built for a local, ownerless agent tool call has no
+  # database runtime row. Its bound is the built-in member vocabulary.
+  defp ownerless_member_scope do
+    permissions =
+      Access.builtin_role_rules()
+      |> Map.get("member", %{})
+      |> Map.new(fn {permission, _rule} -> {permission, :all} end)
+
+    %__MODULE__{permissions: permissions}
+  end
 
   defp normalize(:all), do: :all
 

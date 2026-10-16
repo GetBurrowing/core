@@ -105,9 +105,11 @@ defmodule Platform.Access.BypassDispatchTest do
 
       deny!({:user, u.id}, "tasks.read", {:project, ctx.q.id})
 
-      # The OWNER half is the one that fires: the runtime's own Scope holds
-      # no grant at all.
-      refute Scope.has_grants?(Scope.for_runtime(rt))
+      # The OWNER half is the one that fires: the runtime's own principal
+      # holds no grant, while the capped scope carries the owner's deny.
+      runtime_scope = Scope.for_runtime(rt)
+      refute Scope.has_grants?(runtime_scope.own_cap)
+      assert Scope.has_grants?(runtime_scope)
       assert Scope.has_grants?(Scope.for_user(u))
 
       assert PhaseRuntime.resolve(tq) == {:error, :owner_denied}
