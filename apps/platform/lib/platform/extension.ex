@@ -22,7 +22,7 @@ defmodule Platform.Extension do
 
   ## Optional callbacks with no reader yet
 
-  `routes/0`, `telemetry_handlers/0`, `responsibility_providers/0` and
+  `telemetry_handlers/0`, `responsibility_providers/0` and
   `prompt_templates/0` are declared so a module may implement them, but NO
   reader exists in core for any of them: no module has an entry to put in
   them yet. Implementing one has no effect until its first consumer builds
@@ -30,6 +30,28 @@ defmodule Platform.Extension do
   deferral (ADR 0055, "Optional callbacks, deferred to their first
   consumer"), not an omission. `rail_items/0` is optional and
   DOES have a reader (`PlatformWeb.Components.IconRail`).
+
+  `inbox_kinds/0` is optional and DOES have a reader
+  (`Platform.Extensions.inbox_kinds/0`, read per call by `Platform.Inbox.Item`,
+  `Platform.Inbox` and `PlatformWeb.Components.InboxItem`).
+
+  ## routes/0 has a reader: runtime dispatch under /api/ext
+
+  `routes/0` returns `[%{prefix: String.t(), plug: module(), opts: term()}]`,
+  `prefix` being ONE lowercase path segment. Its reader is runtime dispatch
+  through one generic core route, NOT router macros compiled in: in a
+  with-modules build the module apps depend on `:platform`, so core's router
+  compiles before any module and cannot call `routes/0` at compile time
+  (ADR 0055's `Application.compile_env` sketch cannot work for that reason).
+  `/api/ext/<prefix>/rest...` reaches the claiming extension's plug with
+  `path_info` = `rest...` (`PlatformWeb.Plugs.ExtensionRoutes`, looked up per
+  request through `Platform.Extensions.route_for/1`). `Platform.Extensions.validate/0`
+  refuses two extensions claiming one prefix.
+
+  **A routes/0 plug gets NO session and NO authentication from core.** The
+  `:extension_api` pipeline only accepts JSON: no `fetch_session`, no CSRF,
+  no current user, and params are not logged. The plug owns its auth (a
+  webhook signature, a bearer token) and must halt on failure.
   """
 
   @typedoc """
@@ -42,7 +64,10 @@ defmodule Platform.Extension do
       to one of these names is dispatched to `:execute` even while
       `:definitions` is empty;
     * `:execute` — `(tool_name, args, context) -> result`, the same contract
-      as `ToolSurface.execute/3`;
+      as `ToolSurface.execute/3`. The context also carries `:agent_home_org`,
+      the calling agent's home org by core's rule (`:root` for an unpinned
+      or root-pinned agent or no agent, `{:tenant, org_id}` otherwise), so a
+      module scopes by the agent and never by a client-supplied org id;
     * `:deny_message` (optional) — `(tool_name) -> String.t() | nil`, the
       text a transport reports when it denies one of `:tool_names`; `nil`
       keeps core's own wording;
@@ -113,8 +138,38 @@ defmodule Platform.Extension do
   @doc "Rail destinations in `IconRail.canonical_destinations/0`'s shape."
   @callback rail_items() :: [map()]
 
-  @doc "Deferred: no reader yet (see the moduledoc)."
-  @callback routes() :: [term()]
+  @typedoc "One HTTP route a module contributes (see the moduledoc)."
+  @type route :: %{
+          required(:prefix) => String.t(),
+          required(:plug) => module(),
+          optional(:opts) => term()
+        }
+
+  @doc """
+  HTTP routes, served at `/api/ext/<prefix>/...` with no session and no auth
+  from core (see the moduledoc). Read by `Platform.Extensions.routes/0`.
+  """
+  @callback routes() :: [route()]
+
+  @typedoc "One inbox kind a module contributes (see `c:inbox_kinds/0`)."
+  @type inbox_kind :: %{
+          required(:kind) => String.t(),
+          required(:source_type) => String.t(),
+          required(:label) => String.t(),
+          required(:icon) => String.t(),
+          required(:stays_listed_on_open) => boolean()
+        }
+
+  @doc """
+  Inbox kinds this module emits rows of, each with the `source_type` its rows
+  point at, the label and icon the inbox renders, and whether opening a row
+  leaves it listed (an action kind) or acknowledges it. Optional. Read per
+  call by `Platform.Extensions.inbox_kinds/0`, so `Platform.Inbox.Item`
+  accepts the kind only while the module is registered. An extension kind
+  never pushes, is never shown to an external user and never appears in
+  Mobile's approvals: those lists stay core's own.
+  """
+  @callback inbox_kinds() :: [inbox_kind()]
 
   @doc "Deferred: no reader yet (see the moduledoc)."
   @callback telemetry_handlers() :: [term()]
@@ -128,6 +183,7 @@ defmodule Platform.Extension do
   @optional_callbacks rail_items: 0,
                       assets: 0,
                       routes: 0,
+                      inbox_kinds: 0,
                       telemetry_handlers: 0,
                       responsibility_providers: 0,
                       prompt_templates: 0

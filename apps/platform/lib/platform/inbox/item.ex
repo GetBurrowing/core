@@ -59,13 +59,30 @@ defmodule Platform.Inbox.Item do
     timestamps(type: :utc_datetime_usec, updated_at: false)
   end
 
-  @doc "The allowed `kind` values (extensible enum guarded by the changeset)."
+  @doc """
+  The allowed `kind` values (extensible enum guarded by the changeset):
+  core's own, then every registered extension's (`Platform.Extension`
+  `inbox_kinds/0`). Read per call, never captured in an attribute, so a kind
+  is accepted only while its extension is registered.
+  """
   @spec kinds() :: [String.t()]
-  def kinds, do: @kinds
+  def kinds, do: @kinds ++ Enum.map(Platform.Extensions.inbox_kinds(), & &1.kind)
 
-  @doc "The allowed `source_type` values (extensible enum guarded by the changeset)."
+  @doc """
+  The allowed `source_type` values: core's own, then every registered
+  extension's, read per call like `kinds/0`.
+  """
   @spec source_types() :: [String.t()]
-  def source_types, do: @source_types
+  def source_types,
+    do: Enum.uniq(@source_types ++ Enum.map(Platform.Extensions.inbox_kinds(), & &1.source_type))
+
+  @doc "Core's own kinds, without any extension's (the clash check's reference list)."
+  @spec core_kinds() :: [String.t()]
+  def core_kinds, do: @kinds
+
+  @doc "Core's own source types, without any extension's."
+  @spec core_source_types() :: [String.t()]
+  def core_source_types, do: @source_types
 
   @doc """
   Build a changeset for an inbox item.
@@ -89,8 +106,8 @@ defmodule Platform.Inbox.Item do
       :dismissed_at
     ])
     |> validate_required([:user_id, :kind, :source_type, :source_id, :title])
-    |> validate_inclusion(:kind, @kinds)
-    |> validate_inclusion(:source_type, @source_types)
+    |> validate_inclusion(:kind, kinds())
+    |> validate_inclusion(:source_type, source_types())
     |> foreign_key_constraint(:user_id)
   end
 end

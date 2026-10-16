@@ -35,6 +35,7 @@ ARG GIT_SHA
 # so their mix.exs files must be in place before `deps.get`.
 COPY apps/platform/mix.exs apps/platform/mix.lock platform/
 COPY apps/game_stream/mix.exs apps/game_stream/mix.lock game_stream/
+COPY apps/social/mix.exs apps/social/mix.lock social/
 COPY apps/suite_release/mix.exs apps/suite_release/mix.lock suite_release/
 
 WORKDIR /app/apps/suite_release
@@ -51,6 +52,9 @@ COPY apps/game_stream/config game_stream/config
 COPY apps/game_stream/assets game_stream/assets
 COPY apps/game_stream/priv game_stream/priv
 COPY apps/game_stream/lib game_stream/lib
+COPY apps/social/config social/config
+COPY apps/social/priv social/priv
+COPY apps/social/lib social/lib
 COPY apps/suite_release/config suite_release/config
 
 # The ADR corpus and the build commit go into CORE's priv/, where
@@ -82,6 +86,39 @@ RUN mix phx.digest ../platform/priv/static
 RUN mix compile
 RUN mix release
 
+# ── Stage: ffmpeg (static binaries) ──────────────────────────
+# Clip rendering needs ffmpeg + ffprobe with libass. Debian's apt package
+# pulled ~417 MB of shared libraries into every image; one pinned static
+# build (johnvansickle.com 7.0.2, libass 0.17.3) is two files, ~51-59 MB
+# compressed per arch. Fetched and sha256-verified here so curl and xz never
+# reach the runtime stage, which only COPYs the two binaries. To bump:
+# change FFMPEG_VERSION and both checksums (sha256 of each arch's tarball).
+FROM elixir:1.20.4-otp-28-slim AS ffmpeg
+ARG TARGETARCH
+ARG FFMPEG_VERSION=7.0.2
+ARG FFMPEG_SHA256_AMD64=abda8d77ce8309141f83ab8edf0596834087c52467f6badf376a6a2a4c87cf67
+ARG FFMPEG_SHA256_ARM64=f4149bb2b0784e30e99bdda85471c9b5930d3402014e934a5098b41d0f7201b1
+RUN apt-get update -y \
+ && apt-get install -y --no-install-recommends curl ca-certificates xz-utils \
+ && rm -rf /var/lib/apt/lists/* \
+ && arch="${TARGETARCH:-$(dpkg --print-architecture)}" \
+ && case "$arch" in \
+      amd64) sha="$FFMPEG_SHA256_AMD64" ;; \
+      arm64) sha="$FFMPEG_SHA256_ARM64" ;; \
+      *) echo "no pinned ffmpeg build for $arch" >&2; exit 1 ;; \
+    esac \
+ && curl -fsSL -o /tmp/ffmpeg.tar.xz \
+      "https://johnvansickle.com/ffmpeg/releases/ffmpeg-${FFMPEG_VERSION}-${arch}-static.tar.xz" \
+ && echo "${sha}  /tmp/ffmpeg.tar.xz" | sha256sum -c - \
+ && mkdir -p /out \
+ && tar -xJf /tmp/ffmpeg.tar.xz -C /out --strip-components=1 \
+      "ffmpeg-${FFMPEG_VERSION}-${arch}-static/ffmpeg" \
+      "ffmpeg-${FFMPEG_VERSION}-${arch}-static/ffprobe" \
+ && chmod 0755 /out/ffmpeg /out/ffprobe \
+ && /out/ffmpeg -hide_banner -filters | grep -qE ' subtitles ' \
+ && /out/ffmpeg -hide_banner -filters | grep -qE ' ass ' \
+ && /out/ffprobe -version
+
 # ── Stage 2: Runtime ──────────────────────────────────────────
 FROM elixir:1.20.4-otp-28-slim AS app
 
@@ -91,6 +128,14 @@ FROM elixir:1.20.4-otp-28-slim AS app
 # answers without dumping the environment.
 ARG GIT_SHA
 LABEL org.opencontainers.image.revision="${GIT_SHA:-unknown}"
+
+# ffmpeg: clip rendering (9:16 crop, burned-in captions, end card) shells
+# out to ffmpeg/ffprobe at runtime. The static build from the `ffmpeg` stage
+# is built with libass, so the `subtitles` and `ass` filters the captions need
+# are present; caption fonts come from the release's priv via `fontsdir`, so
+# no system fonts or fontconfig are installed. Every image carries it,
+# because image_flavours_test requires the runtime stages to be identical.
+COPY --from=ffmpeg /out/ffmpeg /out/ffprobe /usr/local/bin/
 
 RUN apt-get update -y \
  && apt-get install -y --no-install-recommends \

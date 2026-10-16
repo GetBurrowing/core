@@ -7876,13 +7876,21 @@ defmodule Platform.Federation.ToolSurface do
 
   # A tool an extension bundle owns (ADR 0055), listed or not: the extension
   # answers it, including any refusal it gives while switched off. Core's
-  # own clauses above always win a name.
+  # own clauses above always win a name. Like the `prototype.*` clause, the
+  # context carries the calling agent's home org (`:agent_home_org`, `:root`
+  # or `{:tenant, org_id}`, core's rule), so an extension never has to trust
+  # a client-supplied org id.
   def execute(tool, args, context) do
     case Platform.Extensions.tool_owner(tool) do
-      %{execute: execute} -> execute.(tool, args, context)
+      %{execute: execute} -> execute.(tool, args, with_agent_home_org(context))
       nil -> unknown_tool_error(tool)
     end
   end
+
+  defp with_agent_home_org(context) when is_map(context),
+    do: Map.put(context, :agent_home_org, agent_home_org(load_agent(context)))
+
+  defp with_agent_home_org(context), do: context
 
   defp unknown_tool_error(unknown_tool) do
     tool_names =

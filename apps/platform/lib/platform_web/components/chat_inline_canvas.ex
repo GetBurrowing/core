@@ -66,6 +66,11 @@ defmodule PlatformWeb.Components.ChatInlineCanvas do
   attr(:title, :string, required: true)
   attr(:mounted_ids, :any, default: :all)
 
+  # The viewing actor (`{:user, id}`), passed through to the renderer like the
+  # expanded panel's `viewer` (partials.ex), for kinds that render per viewer.
+  # nil keeps the old behaviour.
+  attr(:viewer, :any, default: nil)
+
   def inline_canvas(assigns) do
     assigns =
       assign(assigns, :mounted?, mounted?(assigns.mounted_ids, assigns.msg, assigns.canvas))
@@ -84,6 +89,7 @@ defmodule PlatformWeb.Components.ChatInlineCanvas do
         canvas={@canvas}
         inline={true}
         dom_id_base="chat-message-inline"
+        viewer={@viewer}
       />
       <div
         :if={!@mounted?}

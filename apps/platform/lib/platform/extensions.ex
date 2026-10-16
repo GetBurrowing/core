@@ -133,6 +133,41 @@ defmodule Platform.Extensions do
   end
 
   @doc """
+  Every extension's HTTP routes (`routes/0` is optional), in configuration
+  order, each `%{prefix: String.t(), plug: module(), opts: term()}`.
+  Read by `PlatformWeb.Plugs.ExtensionRoutes` under `/api/ext/<prefix>`.
+  """
+  @spec routes() :: [Platform.Extension.route()]
+  def routes do
+    Enum.flat_map(list(), fn ext ->
+      if implements?(ext, :routes, 0), do: ext.routes(), else: []
+    end)
+  end
+
+  @doc """
+  Every extension's inbox kinds (`inbox_kinds/0` is optional), in
+  configuration order (see `t:Platform.Extension.inbox_kind/0`).
+  """
+  @spec inbox_kinds() :: [Platform.Extension.inbox_kind()]
+  def inbox_kinds do
+    Enum.flat_map(list(), &ext_inbox_kinds/1)
+  end
+
+  @doc "The registered extension's inbox kind spec for `kind`, or nil."
+  @spec inbox_kind(term()) :: Platform.Extension.inbox_kind() | nil
+  def inbox_kind(kind) when is_binary(kind), do: Enum.find(inbox_kinds(), &(&1.kind == kind))
+  def inbox_kind(_kind), do: nil
+
+  defp ext_inbox_kinds(ext) do
+    if implements?(ext, :inbox_kinds, 0), do: ext.inbox_kinds(), else: []
+  end
+
+  @doc "The route claiming `prefix` (one path segment), or nil. First claim wins."
+  @spec route_for(String.t()) :: Platform.Extension.route() | nil
+  def route_for(prefix) when is_binary(prefix), do: Enum.find(routes(), &(&1.prefix == prefix))
+  def route_for(_prefix), do: nil
+
+  @doc """
   Every extension's migrations path, in configuration order, without core's.
   Callers put core's path first: `[core_path | migrations_paths()]`.
   """
@@ -164,7 +199,8 @@ defmodule Platform.Extensions do
   Checks that no extension reuses a name core already owns, and that no two
   extensions share one, across every registry the extensions merge into:
   tool bundle names, tool names, runtime-channel event names, canvas kind
-  names, experiment surface keys and experiment metric slugs.
+  names, experiment surface keys, experiment metric slugs, HTTP route
+  prefixes, inbox kinds and inbox source types. A route prefix must also be one lowercase path segment.
 
   Returns `:ok` or `{:error, messages}`, one message per clash, each naming
   both owners. Checks what each callback answers NOW: a kind a module lists
@@ -194,10 +230,15 @@ defmodule Platform.Extensions do
        Enum.map(Platform.Experiments.Surfaces.core_surfaces(), & &1.key()),
        fn ext -> Enum.map(ext.experiment_surfaces(), & &1.key()) end},
       {"experiment metric slug", Platform.Experiments.Metrics.core_metric_slugs(),
-       fn ext -> Map.keys(ext.experiment_metrics()) end}
+       fn ext -> Map.keys(ext.experiment_metrics()) end},
+      {"route prefix", [], &route_prefixes/1},
+      {"inbox kind", Platform.Inbox.Item.core_kinds(),
+       fn ext -> Enum.map(ext_inbox_kinds(ext), & &1.kind) end},
+      {"inbox source type", Platform.Inbox.Item.core_source_types(),
+       fn ext -> Enum.map(ext_inbox_kinds(ext), & &1.source_type) end}
     ]
 
-    case Enum.flat_map(checks, &clashes(&1, extensions)) do
+    case Enum.flat_map(checks, &clashes(&1, extensions)) ++ bad_route_prefixes(extensions) do
       [] -> :ok
       messages -> {:error, messages}
     end
@@ -234,6 +275,17 @@ defmodule Platform.Extensions do
       end
 
     Enum.reverse(messages)
+  end
+
+  defp route_prefixes(ext) do
+    if implements?(ext, :routes, 0), do: Enum.map(ext.routes(), & &1.prefix), else: []
+  end
+
+  defp bad_route_prefixes(extensions) do
+    for ext <- extensions,
+        prefix <- route_prefixes(ext),
+        not (is_binary(prefix) and Regex.match?(~r/\A[a-z0-9][a-z0-9_-]*\z/, prefix)),
+        do: "route prefix #{inspect(prefix)} of #{inspect(ext)} is not one lowercase path segment"
   end
 
   defp core_tool_names do

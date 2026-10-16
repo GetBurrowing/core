@@ -55,13 +55,27 @@ defmodule Platform.Inbox do
   @external_reachable_kinds ["chat_mention"]
 
   @doc """
-  The kinds that stay listed after they are opened: `task_plan_review` and
-  `review_request_pending`. `open_item/2` marks these read and dismisses every
-  other kind. The list is an allowlist, so a new kind is acknowledged on open
-  unless it is added here.
+  The kinds that stay listed after they are opened: core's `task_plan_review`
+  and `review_request_pending`, then every registered extension kind declared
+  with `stays_listed_on_open: true` (`Platform.Extension` `inbox_kinds/0`,
+  read per call). `open_item/2` marks these read and dismisses every other
+  kind. The list is an allowlist, so a new kind is acknowledged on open
+  unless it is added here or declared by its extension.
   """
   @spec action_kinds() :: [String.t()]
-  def action_kinds, do: @action_kinds
+  def action_kinds do
+    @action_kinds ++
+      for %{kind: kind, stays_listed_on_open: true} <- Platform.Extensions.inbox_kinds(),
+          do: kind
+  end
+
+  @doc """
+  Core's own action kinds, without any extension's. Equal to
+  `Platform.Mobile`'s `@approval_kinds`: an extension kind never becomes a
+  mobile approval, because Mobile's `act/3` could not act on it.
+  """
+  @spec core_action_kinds() :: [String.t()]
+  def core_action_kinds, do: @action_kinds
 
   @doc "PubSub topic for a user's inbox stream."
   @spec topic(Ecto.UUID.t()) :: String.t()
@@ -404,19 +418,23 @@ defmodule Platform.Inbox do
     end
   end
 
-  defp acknowledge(%Item{kind: kind} = item, now) when kind in @action_kinds do
+  defp acknowledge(%Item{kind: kind} = item, now) do
+    if kind in action_kinds(), do: mark_read_on_open(item, now), else: dismiss_on_open(item, now)
+  end
+
+  defp mark_read_on_open(item, now) do
     {:ok, updated} = item |> Ecto.Changeset.change(%{read_at: now}) |> Repo.update()
     broadcast_changed(updated.user_id)
     {:ok, updated}
   end
 
-  defp acknowledge(%Item{dismissed_at: %DateTime{}} = item, now) do
+  defp dismiss_on_open(%Item{dismissed_at: %DateTime{}} = item, now) do
     {:ok, updated} = item |> Ecto.Changeset.change(%{read_at: now}) |> Repo.update()
     broadcast_changed(updated.user_id)
     {:ok, updated}
   end
 
-  defp acknowledge(%Item{} = item, now) do
+  defp dismiss_on_open(%Item{} = item, now) do
     {:ok, updated} =
       item
       |> Ecto.Changeset.change(%{read_at: now, dismissed_at: now})
@@ -452,7 +470,7 @@ defmodule Platform.Inbox do
 
     Item
     |> where([i], i.user_id == ^user_id)
-    |> where([i], i.kind not in ^@action_kinds)
+    |> where([i], i.kind not in ^action_kinds())
     |> where([i], not is_nil(i.dismissed_at))
     |> where([i], i.dismissed_at == i.read_at)
     |> where([i], i.dismissed_at > ^since)

@@ -71,7 +71,10 @@ defmodule Platform.FixtureExtension do
     ]
   end
 
-  defp execute(tool, args, _context), do: {:ok, %{tool: tool, args: args}}
+  # Echoes the context's `:agent_home_org` so a test can see core's seam
+  # hand the calling agent's home org to an extension.
+  defp execute(tool, args, context),
+    do: {:ok, %{tool: tool, args: args, agent_home_org: Map.get(context, :agent_home_org)}}
 
   @impl true
   def runtime_channel_events, do: ["fixture_ping", "fixture_inert"]
@@ -144,6 +147,26 @@ defmodule Platform.FixtureExtension do
     ]
   end
 
+  # The positive control for the `routes/0` reader: `/api/ext/fixture/...`
+  # reaches `EchoPlug`, which answers with what it saw.
+  @impl true
+  def routes, do: [%{prefix: "fixture", plug: __MODULE__.EchoPlug, opts: [tag: "fixture"]}]
+
+  # The positive control for the `inbox_kinds/0` reader: an action kind
+  # (stays listed on open) on a source type core does not own.
+  @impl true
+  def inbox_kinds do
+    [
+      %{
+        kind: "fixture_request",
+        source_type: "fixture_thing",
+        label: "Fixture needs you",
+        icon: "hero-beaker",
+        stays_listed_on_open: true
+      }
+    ]
+  end
+
   defmodule Twin do
     @moduledoc "Claims exactly what `Platform.FixtureExtension` claims: the two-extension clash control."
     @behaviour Platform.Extension
@@ -168,6 +191,32 @@ defmodule Platform.FixtureExtension do
     def experiment_metrics, do: F.experiment_metrics()
     @impl true
     def migrations_path, do: nil
+    @impl true
+    def routes, do: F.routes()
+    @impl true
+    def inbox_kinds, do: F.inbox_kinds()
+  end
+
+  defmodule EchoPlug do
+    @moduledoc "The fixture extension's route plug: echoes method, path_info, script_name and opts."
+    @behaviour Plug
+    import Plug.Conn
+
+    @impl true
+    def init(opts), do: opts
+
+    @impl true
+    def call(conn, opts) do
+      body =
+        Jason.encode!(%{
+          method: conn.method,
+          path_info: conn.path_info,
+          script_name: conn.script_name,
+          tag: Keyword.get(opts, :tag)
+        })
+
+      conn |> put_resp_content_type("application/json") |> send_resp(200, body) |> halt()
+    end
   end
 
   defmodule Kinds.FixtureWidget do
@@ -181,13 +230,21 @@ defmodule Platform.FixtureExtension do
     def schema, do: %{"type" => "object", "properties" => %{}}
 
     attr :node, :map, required: true
+    attr :viewer, :any, default: nil
 
+    # `data-viewer` is the positive control for the renderer's `viewer`
+    # reaching a kind on every path (the inline chat-message path included).
     @impl true
     def render(assigns) do
+      assigns = assign(assigns, :viewer_label, viewer_label(assigns[:viewer]))
+
       ~H"""
-      <span data-role="fixture-widget"></span>
+      <span data-role="fixture-widget" data-viewer={@viewer_label}></span>
       """
     end
+
+    defp viewer_label({:user, id}), do: "user:" <> id
+    defp viewer_label(_), do: "none"
   end
 
   defmodule Hooks do

@@ -423,6 +423,7 @@ defmodule PlatformWeb.Components.ChatMessage do
               canvas={Map.get(@canvases_by_id, @msg.canvas_id)}
               title={CanvasHooks.message_canvas_title(@msg, @canvases_by_id)}
               mounted_ids={@mounted_inline_canvas_ids}
+              viewer={@viewer_user_id && {:user, @viewer_user_id}}
             />
 
             <div

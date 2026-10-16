@@ -24,6 +24,9 @@ env:
   # The same crash detector for the `Test (with Play)` job's module suite
   # (apps/game_stream's own `mix test`): 196 tests at that tip.
   MIN_PLAY_TEST_COUNT: 150
+  # The same crash detector for the `Test (with Social)` job's module suite
+  # (apps/social's own `mix test`): 47 tests at task 01a140a8's tip.
+  MIN_SOCIAL_TEST_COUNT: 35
 
 on:
   push:
@@ -597,9 +600,10 @@ jobs:
         with:
           path: |
             apps/game_stream/deps
+            apps/social/deps
             apps/suite_release/deps
             apps/platform/deps
-          key: deps-with-play-${{ hashFiles('apps/game_stream/mix.lock', 'apps/suite_release/mix.lock', 'apps/platform/mix.lock') }}
+          key: deps-with-play-${{ hashFiles('apps/game_stream/mix.lock', 'apps/social/mix.lock', 'apps/suite_release/mix.lock', 'apps/platform/mix.lock') }}
           restore-keys: deps-with-play-
 
       # Once per env: core is a path dependency compiled in the module's env
@@ -722,6 +726,107 @@ jobs:
           rm -rf "$GITHUB_WORKSPACE"/apps/*/deps/*/_build || true
           chown -R 1000:1000 "$GITHUB_WORKSPACE" || true
 
+  # The WITH-Social build (task 01a140a8, stack social-tab): the same module
+  # proof `Test (with Play)` runs for Play, for apps/social. The module compiles
+  # against core with --warnings-as-errors in dev and test, is formatted, and
+  # its own ExUnit suite passes (its `test` alias creates the database and
+  # migrates core's path AND the module's, as Platform.Release.migrate/0 does).
+  # The release host and its asset/bundle guards are proven once, in
+  # `Test (with Play)`, whose host config registers both modules.
+  test-with-social:
+    name: Test (with Social)
+    runs-on: [self-hosted, linux, x64]
+    container:
+      image: elixir:1.20.4-otp-28-slim
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MIX_ENV: test
+      PGHOST: postgres
+      PGUSER: postgres
+      PGPASSWORD: postgres
+    defaults:
+      run:
+        working-directory: apps/social
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install system packages (with Social)
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends build-essential ca-certificates git
+          update-ca-certificates
+
+      - name: Install Hex and Rebar (with Social)
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+
+      - name: Cache module deps (with Social)
+        uses: actions/cache@v5
+        with:
+          path: |
+            apps/social/deps
+            apps/platform/deps
+          key: deps-with-social-${{ hashFiles('apps/social/mix.lock', 'apps/platform/mix.lock') }}
+          restore-keys: deps-with-social-
+
+      # Once per env, for the reason given on `Test (with Play)`.
+      - name: Install module dependencies (with Social)
+        run: |
+          MIX_ENV=dev mix deps.get
+          MIX_ENV=test mix deps.get
+
+      - name: Compile the module with warnings as errors (dev + test)
+        run: |
+          if ! MIX_ENV=dev mix compile --force --warnings-as-errors; then
+            echo "::error::apps/social: mix compile --warnings-as-errors failed in MIX_ENV=dev. Fix the warning; never suppress it."
+            exit 1
+          fi
+          if ! MIX_ENV=test mix compile --force --warnings-as-errors; then
+            echo "::error::apps/social: mix compile --warnings-as-errors failed in MIX_ENV=test."
+            exit 1
+          fi
+
+      - name: Check module formatting (with Social)
+        run: mix format --check-formatted
+
+      # Same crash-detector shape as `Run module tests` in `Test (with Play)`.
+      - name: Run module tests (with Social)
+        run: |
+          set -o pipefail
+          log="${RUNNER_TEMP:-.}/mix-test-with-social.log"
+          mix test 2>&1 | tee "$log"
+          summary=$(grep -oE 'Result: [0-9]+(/[0-9]+)? (passed|tests)' "$log" | tail -n1 || true)
+          if [ -z "$summary" ]; then
+            echo
+            echo "::error::apps/social mix test printed no ExUnit summary line (Result: N passed) — the suite did not run to completion"
+            exit 1
+          fi
+          count=$(printf '%s' "$summary" | grep -oE '[0-9]+' | tail -n1)
+          if [ "$count" -lt "$MIN_SOCIAL_TEST_COUNT" ]; then
+            echo
+            echo "::error::apps/social mix test ran $count tests, below MIN_SOCIAL_TEST_COUNT=$MIN_SOCIAL_TEST_COUNT"
+            exit 1
+          fi
+          echo "apps/social mix test ran $count tests (floor MIN_SOCIAL_TEST_COUNT=$MIN_SOCIAL_TEST_COUNT)"
+
+      - name: Hand the workspace back to the runner (with Social)
+        if: always()
+        run: |
+          rm -rf "$GITHUB_WORKSPACE"/apps/*/deps/*/_build || true
+          chown -R 1000:1000 "$GITHUB_WORKSPACE" || true
+
   # MULTI-ARCH IMAGE (task 01a0d6ab). One leg per architecture, each built
   # NATIVELY on a runner of that architecture, never under QEMU: the release
   # compiles every dep under MIX_ENV=prod, copies ERTS out of the build image,
@@ -738,7 +843,7 @@ jobs:
   build-and-push:
     name: Build and push image (${{ matrix.arch }})
     if: github.event_name == 'push'
-    needs: [test, test-with-play]
+    needs: [test, test-with-play, test-with-social]
     strategy:
       fail-fast: true
       matrix:
