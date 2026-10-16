@@ -862,6 +862,14 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # Per-job Docker config: the self-hosted runners on moon share
+      # ~/.docker/config.json, and a login left behind by a job that dies
+      # before its logout step is sent with every later container pull
+      # (Docker Hub 'too many failed login attempts', 2026-10-16).
+      - name: Isolate Docker credentials to this job
+        run: |
+          mkdir -p "$RUNNER_TEMP/docker-config"
+          echo "DOCKER_CONFIG=$RUNNER_TEMP/docker-config" >> "$GITHUB_ENV"
       - uses: docker/login-action@v4
         with:
           registry: docker.io
@@ -965,6 +973,14 @@ jobs:
           pattern: suite-core-digest-*
           merge-multiple: true
 
+      # Per-job Docker config: the self-hosted runners on moon share
+      # ~/.docker/config.json, and a login left behind by a job that dies
+      # before its logout step is sent with every later container pull
+      # (Docker Hub 'too many failed login attempts', 2026-10-16).
+      - name: Isolate Docker credentials to this job
+        run: |
+          mkdir -p "$RUNNER_TEMP/docker-config"
+          echo "DOCKER_CONFIG=$RUNNER_TEMP/docker-config" >> "$GITHUB_ENV"
       - uses: docker/login-action@v4
         with:
           registry: docker.io
@@ -1051,6 +1067,14 @@ jobs:
           BRANCH_TAG="${BRANCH_TAG//\//-}"
           echo "branch_tag=${BRANCH_TAG}" >> "$GITHUB_OUTPUT"
 
+      # Per-job Docker config: the self-hosted runners on moon share
+      # ~/.docker/config.json, and a login left behind by a job that dies
+      # before its logout step is sent with every later container pull
+      # (Docker Hub 'too many failed login attempts', 2026-10-16).
+      - name: Isolate Docker credentials to this job
+        run: |
+          mkdir -p "$RUNNER_TEMP/docker-config"
+          echo "DOCKER_CONFIG=$RUNNER_TEMP/docker-config" >> "$GITHUB_ENV"
       - uses: docker/login-action@v4
         with:
           registry: docker.io
@@ -1151,6 +1175,14 @@ jobs:
           docker run --rm -v "$PWD/services/agent-host:/src:ro" docker.io/oven/bun:1 sh -c \
             'cp -r /src /w && cd /w && bun install --frozen-lockfile && bunx tsc --noEmit && bun test test/unit.test.ts'
 
+      # Per-job Docker config: the self-hosted runners on moon share
+      # ~/.docker/config.json, and a login left behind by a job that dies
+      # before its logout step is sent with every later container pull
+      # (Docker Hub 'too many failed login attempts', 2026-10-16).
+      - name: Isolate Docker credentials to this job
+        run: |
+          mkdir -p "$RUNNER_TEMP/docker-config"
+          echo "DOCKER_CONFIG=$RUNNER_TEMP/docker-config" >> "$GITHUB_ENV"
       - uses: docker/login-action@v4
         if: steps.changed.outputs.agent_host == 'true'
         with:
