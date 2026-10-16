@@ -172,6 +172,7 @@ defmodule Platform.Federation.ToolAuthorization do
     case deny_reason(name) do
       :forbidden ->
         permission = ToolPermissions.for_tool(name) || "undeclared"
+
         "tool '#{name}' requires permission '#{permission}', which this agent does not hold or is capped at its owner"
 
       {:unknown_tool, nil} ->
@@ -201,5 +202,4 @@ defmodule Platform.Federation.ToolAuthorization do
     |> String.downcase()
     |> String.replace([".", "_", "-"], "")
   end
-
 end

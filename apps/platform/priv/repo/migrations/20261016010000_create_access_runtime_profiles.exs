@@ -52,7 +52,7 @@ defmodule Platform.Repo.Migrations.CreateAccessRuntimeProfiles do
              (SELECT count(*) FROM access_runtime_profiles),
              (SELECT count(*) FROM access_runtime_profiles p
                 JOIN agent_runtimes r ON r.id = p.runtime_id
-               WHERE p.tool_profile IS DISTINCT FROM r.allowed_bundles)
+               WHERE p.tool_profile IS DISTINCT FROM r.allowed_bundles::text[])
       """)
 
     if runtime_count != profile_count or mismatch_count != 0,

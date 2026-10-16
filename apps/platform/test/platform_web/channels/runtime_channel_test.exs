@@ -2635,7 +2635,8 @@ defmodule PlatformWeb.RuntimeChannelTest do
 
       # Shape matters: openclaw-suite-channel rejects with
       # `payload.error?.error`, so the message must be a string at error.error.
-      assert error.error == "tool 'task_create' not in allowed bundles"
+      assert error.error ==
+               "tool 'task_create' requires permission 'tasks.write', which this agent does not hold or is capped at its owner"
       assert error.code == "forbidden"
 
       assert Repo.aggregate(Tasks.Task, :count) == before_count
@@ -2715,7 +2716,8 @@ defmodule PlatformWeb.RuntimeChannelTest do
       })
 
       assert_push "tool_result", %{call_id: "call-after", status: "error", error: error}
-      assert error.error == "tool 'task_list' not in allowed bundles"
+      assert error.error ==
+               "tool 'task_list' requires permission 'tasks.read', which this agent does not hold or is capped at its owner"
       assert error.code == "forbidden"
     end
 
@@ -2738,7 +2740,8 @@ defmodule PlatformWeb.RuntimeChannelTest do
       })
 
       assert_push "tool_result", %{call_id: "call-gone", status: "error", error: error}
-      assert error.error == "tool 'space_list' not in allowed bundles"
+      assert error.error ==
+               "tool 'space_list' requires permission 'chat.read', which this agent does not hold or is capped at its owner"
       assert error.code == "forbidden"
     end
   end
@@ -2776,7 +2779,7 @@ defmodule PlatformWeb.RuntimeChannelTest do
 
     # Load-bearing: without this, rewording every denial to "unknown tool"
     # would also pass the test above.
-    test "a real catalogue tool outside this runtime's granted bundles still says not in allowed bundles",
+    test "a real catalogue tool outside this runtime's profile names its permission",
          ctx do
       {:ok, socket} =
         connect(PlatformWeb.RuntimeSocket, %{
@@ -2794,7 +2797,8 @@ defmodule PlatformWeb.RuntimeChannelTest do
       })
 
       assert_push "tool_result", %{call_id: "call-forbidden", status: "error", error: error}
-      assert error.error == "tool 'plan_update' not in allowed bundles"
+      assert error.error ==
+               "tool 'plan_update' requires permission 'tasks.write', which this agent does not hold or is capped at its owner"
     end
 
     test "the two denial messages differ for the two inputs", ctx do
@@ -2846,7 +2850,8 @@ defmodule PlatformWeb.RuntimeChannelTest do
       })
 
       assert_push "tool_result", %{call_id: "call-nobundles", status: "error", error: error}
-      assert error.error == "tool 'task_create' not in allowed bundles"
+      assert error.error ==
+               "tool 'task_create' requires permission 'tasks.write', which this agent does not hold or is capped at its owner"
       refute error.error =~ "unknown tool"
     end
 

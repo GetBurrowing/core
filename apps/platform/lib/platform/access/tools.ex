@@ -52,5 +52,4 @@ defmodule Platform.Access.Tools do
   end
 
   defp profile_arm(stored, _runtime), do: stored
-
 end

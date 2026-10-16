@@ -497,7 +497,7 @@ defmodule PlatformWeb.MCPControllerTest do
 
       %{"error" => %{"code" => code, "message" => message}} = json_response(conn, 200)
       assert code == -32001
-      assert message =~ "not in allowed bundles"
+      assert message =~ "requires permission 'tasks.write'"
     end
 
     test "returns -32602 when arguments are missing", %{conn: conn} do
@@ -540,7 +540,7 @@ defmodule PlatformWeb.MCPControllerTest do
 
     # Load-bearing: without this, rewording every denial to "unknown tool"
     # would also pass the test above.
-    test "a real catalogue tool outside this runtime's granted bundles still says not in allowed bundles",
+    test "a real catalogue tool outside this runtime's profile names its permission",
          %{conn: conn} do
       {_runtime, token} = create_runtime(%{allowed_bundles: ["federation"]})
 
@@ -548,7 +548,8 @@ defmodule PlatformWeb.MCPControllerTest do
         mcp_post(conn, token, rpc("tools/call", %{"name" => "task_create", "arguments" => %{}}))
 
       %{"error" => %{"message" => message}} = json_response(conn, 200)
-      assert message == "tool 'task_create' not in allowed bundles"
+      assert message ==
+               "tool 'task_create' requires permission 'tasks.write', which this agent does not hold or is capped at its owner"
     end
 
     test "the two denial messages differ for the two inputs", %{conn: conn} do
@@ -586,7 +587,8 @@ defmodule PlatformWeb.MCPControllerTest do
         mcp_post(conn, token, rpc("tools/call", %{"name" => "task_create", "arguments" => %{}}))
 
       %{"error" => %{"message" => message}} = json_response(conn, 200)
-      assert message == "tool 'task_create' not in allowed bundles"
+      assert message ==
+               "tool 'task_create' requires permission 'tasks.write', which this agent does not hold or is capped at its owner"
       refute message =~ "unknown tool"
     end
 
@@ -1001,7 +1003,7 @@ defmodule PlatformWeb.MCPControllerTest do
 
       %{"error" => %{"code" => code, "message" => message}} = json_response(conn, 200)
       assert code == -32001
-      assert message =~ "not in allowed bundles"
+      assert message =~ "requires permission 'tasks.write'"
     end
 
     test "external owner: react is NOT gated (chat tool reaches execution)", %{conn: conn} do

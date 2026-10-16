@@ -69,7 +69,8 @@ defmodule Platform.Access.RuntimeProfiles do
   def set_tool_profile(_, _), do: {:error, :invalid_module}
 
   @spec restrict(AgentRuntime.t(), map() | nil) :: {:ok, RuntimeProfile.t()} | {:error, term()}
-  def restrict(%AgentRuntime{} = runtime, nil), do: upsert(runtime, %{restricted_permissions: nil})
+  def restrict(%AgentRuntime{} = runtime, nil),
+    do: upsert(runtime, %{restricted_permissions: nil})
 
   def restrict(%AgentRuntime{} = runtime, permissions) when is_map(permissions) do
     if Enum.all?(permissions, fn {key, value} ->

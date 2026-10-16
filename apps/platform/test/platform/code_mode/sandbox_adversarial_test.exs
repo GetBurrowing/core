@@ -73,7 +73,7 @@ defmodule Platform.CodeMode.SandboxAdversarialTest do
       body = run(runtime, "suite.plan_create({task_id: '#{Ecto.UUID.generate()}'})")
 
       assert %{ok: false, error: %{kind: "forbidden", message: message}} = body
-      assert message =~ "tool 'plan_create' not in allowed bundles"
+      assert message =~ "tool 'plan_create' requires permission 'tasks.write'"
       assert body.calls == 1
 
       assert [%ToolCallRecord{tool: "plan_create", status: "denied", parent_run_id: parent}] =

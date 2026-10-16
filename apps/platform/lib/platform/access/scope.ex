@@ -241,7 +241,8 @@ defmodule Platform.Access.Scope do
   intersected with its owner's permissions.
   """
   @spec for_runtime(AgentRuntime.t()) :: t()
-  def for_runtime(%AgentRuntime{} = runtime), do: for_runtime(runtime, RuntimeProfiles.get(runtime))
+  def for_runtime(%AgentRuntime{} = runtime),
+    do: for_runtime(runtime, RuntimeProfiles.get(runtime))
 
   @spec for_runtime(AgentRuntime.t(), RuntimeProfile.t() | nil) :: t()
   def for_runtime(%AgentRuntime{} = runtime, profile) do
@@ -804,5 +805,4 @@ defmodule Platform.Access.Scope do
     do: {:agent, agent_id}
 
   defp agent_actor(_runtime), do: nil
-
 end

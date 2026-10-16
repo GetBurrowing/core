@@ -230,9 +230,9 @@ defmodule Platform.Federation.ToolAuthorizationTest do
   # ── deny_message/1 ───────────────────────────────────────────────────────
 
   describe "deny_message/1" do
-    test "a real catalogue tool keeps the pre-existing wording verbatim" do
+    test "a real catalogue tool names the required permission" do
       assert ToolAuthorization.deny_message("plan_update") ==
-               "tool 'plan_update' not in allowed bundles"
+               "tool 'plan_update' requires permission 'tasks.write', which this agent does not hold or is capped at its owner"
     end
 
     test "an undeclared name with a suggestion names the closest declared tool" do

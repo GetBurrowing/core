@@ -22,10 +22,14 @@ defmodule Platform.Federation do
   def register_runtime(owner_user_id, attrs) do
     modules = Map.get(attrs, :allowed_bundles, Map.get(attrs, "allowed_bundles"))
     tool_profile = modules || AgentRuntime.default_allowed_bundles()
-    restriction = if is_nil(modules), do: nil, else: RuntimeProfiles.translated_permissions(modules)
+    restriction =
+      if is_nil(modules), do: nil, else: RuntimeProfiles.translated_permissions(modules)
 
     Multi.new()
-    |> Multi.insert(:runtime, AgentRuntime.changeset(%AgentRuntime{}, Map.put(attrs, :owner_user_id, owner_user_id)))
+    |> Multi.insert(
+      :runtime,
+      AgentRuntime.changeset(%AgentRuntime{}, Map.put(attrs, :owner_user_id, owner_user_id))
+    )
     |> Multi.run(:profile, fn _repo, %{runtime: runtime} ->
       RuntimeProfiles.create_for_runtime(runtime, tool_profile, restriction)
     end)
@@ -122,7 +126,8 @@ defmodule Platform.Federation do
     |> Multi.update(:runtime, AgentRuntime.changeset(runtime, %{allowed_bundles: bundles}))
     |> Multi.run(:profile, fn _repo, %{runtime: updated} ->
       with {:ok, _} <- RuntimeProfiles.set_tool_profile(updated, bundles),
-           {:ok, profile} <- RuntimeProfiles.restrict(updated, RuntimeProfiles.translated_permissions(bundles)) do
+           {:ok, profile} <-
+             RuntimeProfiles.restrict(updated, RuntimeProfiles.translated_permissions(bundles)) do
         {:ok, profile}
       end
     end)

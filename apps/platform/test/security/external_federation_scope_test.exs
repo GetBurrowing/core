@@ -57,7 +57,7 @@ defmodule Platform.Security.ExternalFederationScopeTest do
 
       %{"error" => %{"code" => code, "message" => message}} = json_response(conn, 200)
       assert code == -32001
-      assert message =~ "not in allowed bundles"
+      assert message =~ "requires permission"
     end
 
     test "tools/call react is NOT rejected by the external gate", ctx do
