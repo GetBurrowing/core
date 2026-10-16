@@ -121,7 +121,8 @@ defmodule PlatformWeb.ControlCenter.RuntimeEvents do
         "save_agent_restrictions",
         params,
         %{assigns: %{selected_agent: %Agent{runtime_id: rid}}} = socket
-      ) when is_binary(rid) do
+      )
+      when is_binary(rid) do
     permissions =
       if params["inherit"] == "true" do
         nil

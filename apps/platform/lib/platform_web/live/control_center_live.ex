@@ -221,10 +221,10 @@ defmodule PlatformWeb.ControlCenterLive do
   # form's role <select> renders that role pre-selected and the submit
   # handler picks it up (stage 6 wiring, reused here).
   defp handle_control_event(
-        "assign_role",
-        %{"role_key" => role_key, "agent_id" => "__new_external__"},
-        socket
-      ) do
+         "assign_role",
+         %{"role_key" => role_key, "agent_id" => "__new_external__"},
+         socket
+       ) do
     overrides = %{"role_key" => role_key}
 
     {:noreply,
@@ -246,11 +246,11 @@ defmodule PlatformWeb.ControlCenterLive do
   # unique-constraint failure on `role_key` surfaces as a changeset
   # error and we translate it to a "clear first" flash.
   defp handle_control_event(
-        "assign_role",
-        %{"role_key" => role_key, "agent_id" => agent_id},
-        socket
-      )
-      when is_binary(agent_id) and agent_id != "" do
+         "assign_role",
+         %{"role_key" => role_key, "agent_id" => agent_id},
+         socket
+       )
+       when is_binary(agent_id) and agent_id != "" do
     case Platform.Roles.assign_role(role_key, agent_id, actor: socket.assigns.access_scope) do
       {:ok, _assignment} ->
         {:noreply,
@@ -285,23 +285,25 @@ defmodule PlatformWeb.ControlCenterLive do
   end
 
   defp handle_control_event(
-        "set_responsibility_override",
-        %{"responsibility_key" => key, "agent_id" => ""},
-        socket
-      ) do
+         "set_responsibility_override",
+         %{"responsibility_key" => key, "agent_id" => ""},
+         socket
+       ) do
     case Platform.Roles.clear_override(key, actor: socket.assigns.access_scope) do
-      :ok -> {:noreply, assign_roles_panel(socket)}
+      :ok ->
+        {:noreply, assign_roles_panel(socket)}
+
       {:error, :unauthorized} ->
         {:noreply, put_flash(socket, :error, "You can only manage your own agents.")}
     end
   end
 
   defp handle_control_event(
-        "set_responsibility_override",
-        %{"responsibility_key" => key, "agent_id" => agent_id},
-        socket
-      )
-      when is_binary(agent_id) and agent_id != "" do
+         "set_responsibility_override",
+         %{"responsibility_key" => key, "agent_id" => agent_id},
+         socket
+       )
+       when is_binary(agent_id) and agent_id != "" do
     case Platform.Roles.set_override(key, agent_id, actor: socket.assigns.access_scope) do
       {:ok, _override} ->
         {:noreply,
@@ -319,7 +321,6 @@ defmodule PlatformWeb.ControlCenterLive do
            :error,
            "Could not set override: #{changeset_error_summary(changeset)}"
          )}
-
     end
   end
 
@@ -339,10 +340,10 @@ defmodule PlatformWeb.ControlCenterLive do
   # ── Runtime events (kept here — tightly coupled to socket) ────────
 
   defp handle_control_event(
-        "start_runtime",
-        _params,
-        %{assigns: %{selected_agent: %Agent{} = agent}} = socket
-      ) do
+         "start_runtime",
+         _params,
+         %{assigns: %{selected_agent: %Agent{} = agent}} = socket
+       ) do
     case AgentServer.start_agent(agent) do
       {:ok, pid} ->
         allow_runtime_sandbox(pid)
@@ -360,10 +361,10 @@ defmodule PlatformWeb.ControlCenterLive do
   defp handle_control_event("start_runtime", _params, socket), do: {:noreply, socket}
 
   defp handle_control_event(
-        "stop_runtime",
-        _params,
-        %{assigns: %{selected_agent: %Agent{} = agent}} = socket
-      ) do
+         "stop_runtime",
+         _params,
+         %{assigns: %{selected_agent: %Agent{} = agent}} = socket
+       ) do
     case AgentServer.stop_agent(agent) do
       :ok ->
         {:noreply,
@@ -379,10 +380,10 @@ defmodule PlatformWeb.ControlCenterLive do
   defp handle_control_event("stop_runtime", _params, socket), do: {:noreply, socket}
 
   defp handle_control_event(
-        "refresh_runtime",
-        _params,
-        %{assigns: %{selected_agent: %Agent{} = agent}} = socket
-      ) do
+         "refresh_runtime",
+         _params,
+         %{assigns: %{selected_agent: %Agent{} = agent}} = socket
+       ) do
     case AgentServer.whereis(agent.id) do
       pid when is_pid(pid) ->
         allow_runtime_sandbox(pid)
@@ -413,20 +414,20 @@ defmodule PlatformWeb.ControlCenterLive do
   # form from the submitted params is what keeps the OTHER inputs from being
   # reverted to their assigned values on that re-render.
   defp handle_control_event(
-        "validate_config",
-        %{"config" => params},
-        %{assigns: %{selected_agent: %Agent{} = agent}} = socket
-      ) do
+         "validate_config",
+         %{"config" => params},
+         %{assigns: %{selected_agent: %Agent{} = agent}} = socket
+       ) do
     {:noreply, assign(socket, :config_form, AgentData.build_config_form(agent, params))}
   end
 
   defp handle_control_event("validate_config", _params, socket), do: {:noreply, socket}
 
   defp handle_control_event(
-        "save_config",
-        %{"config" => params},
-        %{assigns: %{selected_agent: %Agent{} = agent}} = socket
-      ) do
+         "save_config",
+         %{"config" => params},
+         %{assigns: %{selected_agent: %Agent{} = agent}} = socket
+       ) do
     case AgentAvatarUpload.consume(socket, agent) do
       {:ok, avatar_attrs} -> save_config_with_avatar(socket, agent, params, avatar_attrs)
       {:error, message} -> {:noreply, reject_config_save(socket, agent, params, message)}
@@ -440,10 +441,10 @@ defmodule PlatformWeb.ControlCenterLive do
   # unreachable once an avatar is set, because an upload-only control has no
   # way to express "none".
   defp handle_control_event(
-        "remove_avatar",
-        _params,
-        %{assigns: %{selected_agent: %Agent{} = agent}} = socket
-      ) do
+         "remove_avatar",
+         _params,
+         %{assigns: %{selected_agent: %Agent{} = agent}} = socket
+       ) do
     previous_key = agent.avatar_storage_key
 
     case agent
@@ -609,10 +610,10 @@ defmodule PlatformWeb.ControlCenterLive do
   end
 
   defp handle_control_event(
-        "add_agent_to_space",
-        %{"space_id" => space_id, "role" => role},
-        %{assigns: %{selected_agent: %Agent{} = agent}} = socket
-      ) do
+         "add_agent_to_space",
+         %{"space_id" => space_id, "role" => role},
+         %{assigns: %{selected_agent: %Agent{} = agent}} = socket
+       ) do
     attention_mode = if role == "principal", do: "all", else: "mention"
 
     case Platform.Chat.add_agent_participant(space_id, agent, attention_mode: attention_mode) do
@@ -898,7 +899,8 @@ defmodule PlatformWeb.ControlCenterLive do
     |> assign(:responsibility_rows, AgentData.responsibility_rows())
     |> assign(
       :selectable_agents,
-      Enum.filter(AgentData.list_selectable_agents(),
+      Enum.filter(
+        AgentData.list_selectable_agents(),
         &Platform.Access.Agents.may_assign?(socket.assigns[:access_scope], &1)
       )
     )

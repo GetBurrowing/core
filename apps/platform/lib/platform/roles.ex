@@ -231,7 +231,9 @@ defmodule Platform.Roles do
 
   def unassign_role(role_key, actor: %Scope{} = scope) do
     case Repo.get_by(RoleAssignment, role_key: role_key) do
-      nil -> :ok
+      nil ->
+        :ok
+
       assignment ->
         if AgentAccess.may_release?(scope, Repo.get(Agent, assignment.agent_id)),
           do: unassign_role(role_key),
@@ -413,8 +415,8 @@ defmodule Platform.Roles do
 
     if AgentAccess.may_assign?(scope, target) and
          (is_nil(prior) or AgentAccess.may_release?(scope, prior_agent)),
-      do: set_override(responsibility_key, agent_id),
-      else: {:error, :unauthorized}
+       do: set_override(responsibility_key, agent_id),
+       else: {:error, :unauthorized}
   end
 
   # Soft-fail runtime-type gate (task 019f2566 stage 4). Looks up the
@@ -479,7 +481,9 @@ defmodule Platform.Roles do
 
   def clear_override(responsibility_key, actor: %Scope{} = scope) do
     case Repo.get_by(ResponsibilityOverride, responsibility_key: responsibility_key) do
-      nil -> :ok
+      nil ->
+        :ok
+
       override ->
         if AgentAccess.may_release?(scope, Repo.get(Agent, override.agent_id)),
           do: clear_override(responsibility_key),

@@ -272,7 +272,7 @@ defmodule PlatformWeb.ControlCenter.OnboardingEvents do
       agent_name == "" ->
         {:noreply, put_flash(socket, :error, "Agent name is required.")}
 
-      is_nil(owner_id) ->
+      is_nil(socket.assigns.current_user_id) ->
         {:noreply, put_flash(socket, :error, "You must be logged in.")}
 
       true ->
@@ -290,7 +290,8 @@ defmodule PlatformWeb.ControlCenter.OnboardingEvents do
           runtime_type: "external"
         }
 
-        with {:ok, runtime} <- Federation.register_runtime(socket.assigns.access_scope, runtime_attrs),
+        with {:ok, runtime} <-
+               Federation.register_runtime(socket.assigns.access_scope, runtime_attrs),
              {:ok, agent} <- Federation.link_agent(runtime, agent_attrs),
              {:ok, _runtime, raw_token} <- Federation.activate_runtime(runtime) do
           ws_url = "wss://#{PlatformWeb.Endpoint.host()}/runtime/ws"

@@ -14,9 +14,9 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
 
   # ── Stat card ──────────────────────────────────────────────────────
 
-  attr :label, :string, required: true
-  attr :value, :any, required: true
-  attr :detail, :string, default: nil
+  attr(:label, :string, required: true)
+  attr(:value, :any, required: true)
+  attr(:detail, :string, default: nil)
 
   def stat_card(assigns) do
     ~H"""
@@ -30,7 +30,7 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
 
   # ── Credential row ─────────────────────────────────────────────────
 
-  attr :credential, :map, required: true
+  attr(:credential, :map, required: true)
 
   def credential_row(assigns) do
     ~H"""
@@ -60,10 +60,10 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
 
   # ── Federation connection panel ────────────────────────────────────
 
-  attr :agent, Agent, required: true
-  attr :regenerated_token, :string, default: nil
-  attr :federation_online?, :boolean, default: false
-  attr :can_manage?, :boolean, default: false
+  attr(:agent, Agent, required: true)
+  attr(:regenerated_token, :string, default: nil)
+  attr(:federation_online?, :boolean, default: false)
+  attr(:can_manage?, :boolean, default: false)
 
   def federation_connection_panel(assigns) do
     runtime = Federation.get_runtime(assigns.agent.runtime_id)
@@ -71,10 +71,16 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
     modules = if runtime, do: RuntimeProfiles.tool_profile(runtime, profile), else: []
     restrictions = if runtime, do: RuntimeProfiles.restrictions(runtime, profile), else: nil
     owner_scope = if runtime, do: Scope.for_user(%{id: runtime.owner_user_id}), else: nil
+
     owner_permissions =
       if owner_scope,
-        do: Enum.filter(Registry.permission_names(), &Platform.Access.holds_anywhere?(owner_scope, &1)),
+        do:
+          Enum.filter(
+            Registry.permission_names(),
+            &Platform.Access.holds_anywhere?(owner_scope, &1)
+          ),
         else: []
+
     module_choices = modules ++ (ToolSurface.all_bundles() -- modules)
 
     assigns =
@@ -134,10 +140,15 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
         <p class="mt-1 text-xs text-base-content/55">Loads only these modules. Never grants access.</p>
         <form :if={@can_manage?} phx-submit="save_tool_profile" class="mt-3 space-y-3">
           <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            <label :for={module <- @module_choices} class="flex items-center gap-2 text-xs">
+            <label :for={module <- @module_choices} class="flex items-center gap-2 text-xs"
+              data-role={if module in ToolSurface.all_bundles(), do: nil, else: "orphan-bundle"}>
+              <input :if={module not in ToolSurface.all_bundles()} type="hidden"
+                name="modules[]" value={module} />
               <input type="checkbox" name="modules[]" value={module}
-                checked={module in @tool_modules} class="checkbox checkbox-xs" />
+                checked={module in @tool_modules}
+                disabled={module not in ToolSurface.all_bundles()} class="checkbox checkbox-xs" />
               <span class="break-all font-mono">{module}</span>
+              <span :if={module not in ToolSurface.all_bundles()}>(module not installed)</span>
             </label>
           </div>
           <button type="submit" class="btn btn-primary btn-sm">Save tool profile</button>
@@ -151,12 +162,11 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
         <h3 class="font-semibold">Restrict this agent</h3>
         <form :if={@can_manage?} phx-submit="save_agent_restrictions" class="mt-3 space-y-3">
           <input type="hidden" name="inherit" value="false" />
-          <label class="flex items-center gap-2 text-xs">
-            <input type="checkbox" name="inherit" value="true" checked={is_nil(@restrictions)}
-              class="checkbox checkbox-xs peer" data-role="agent-restrict-toggle" />
-            Inherit owner's access
-          </label>
-          <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <input id="agent-inherit-access" type="checkbox" name="inherit" value="true"
+            checked={is_nil(@restrictions)} class="checkbox checkbox-xs peer"
+            data-role="agent-restrict-toggle" />
+          <label for="agent-inherit-access" class="ml-2 text-xs">Inherit owner's access</label>
+          <div class="grid grid-cols-1 gap-2 peer-checked:hidden sm:grid-cols-2">
             <label :for={permission <- @owner_permissions} class="flex items-center gap-2 text-xs">
               <input type="checkbox" name="permissions[]" value={permission}
                 checked={is_nil(@restrictions) or Map.has_key?(@restrictions, permission)}

@@ -26,13 +26,13 @@ defmodule PlatformWeb.ControlCenter.RolesPanel do
   alias PlatformWeb.ControlCenter.AgentData
   alias Platform.Access.Agents, as: AgentAccess
 
-  attr :roles, :list, required: true
-  attr :role_bundles, :map, required: true
-  attr :role_assignments_by_key, :map, required: true
-  attr :show_role_advanced, :boolean, default: false
-  attr :responsibility_rows, :list, default: []
-  attr :selectable_agents, :list, default: []
-  attr :access_scope, :any, default: nil
+  attr(:roles, :list, required: true)
+  attr(:role_bundles, :map, required: true)
+  attr(:role_assignments_by_key, :map, required: true)
+  attr(:show_role_advanced, :boolean, default: false)
+  attr(:responsibility_rows, :list, default: [])
+  attr(:selectable_agents, :list, default: [])
+  attr(:access_scope, :any, default: nil)
 
   def panel(assigns) do
     ~H"""
@@ -196,10 +196,10 @@ defmodule PlatformWeb.ControlCenter.RolesPanel do
     """
   end
 
-  attr :role_key, :string, required: true
-  attr :agent, :any, default: nil
-  attr :selectable_agents, :list, default: []
-  attr :access_scope, :any, default: nil
+  attr(:role_key, :string, required: true)
+  attr(:agent, :any, default: nil)
+  attr(:selectable_agents, :list, default: [])
+  attr(:access_scope, :any, default: nil)
 
   defp assignee_cell(%{agent: nil} = assigns) do
     ~H"""

@@ -27,7 +27,6 @@ defmodule Platform.Federation do
     end
   end
 
-  @doc "Register a new external runtime."
   def register_runtime(owner_user_id, attrs) do
     modules = Map.get(attrs, :tool_profile, Map.get(attrs, "tool_profile"))
     tool_profile = modules || AgentRuntime.default_tool_profile()
@@ -38,7 +37,10 @@ defmodule Platform.Federation do
     Multi.new()
     |> Multi.insert(
       :runtime,
-      AgentRuntime.changeset(%AgentRuntime{}, attrs |> Map.delete("owner_user_id") |> Map.put(:owner_user_id, owner_user_id))
+      AgentRuntime.changeset(
+        %AgentRuntime{},
+        attrs |> Map.delete("owner_user_id") |> Map.put(:owner_user_id, owner_user_id)
+      )
     )
     |> Multi.run(:profile, fn _repo, %{runtime: runtime} ->
       RuntimeProfiles.create_for_runtime(runtime, tool_profile, restriction)
@@ -94,7 +96,11 @@ defmodule Platform.Federation do
   end
 
   def suspend_runtime(%Scope{} = scope, %AgentRuntime{} = runtime),
-    do: if(Agents.manage?(scope, runtime), do: suspend_runtime(runtime), else: {:error, :unauthorized})
+    do:
+      if(Agents.manage?(scope, runtime),
+        do: suspend_runtime(runtime),
+        else: {:error, :unauthorized}
+      )
 
   @doc "Revoke a runtime (permanent)."
   def revoke_runtime(%AgentRuntime{} = runtime) do
@@ -104,7 +110,11 @@ defmodule Platform.Federation do
   end
 
   def revoke_runtime(%Scope{} = scope, %AgentRuntime{} = runtime),
-    do: if(Agents.manage?(scope, runtime), do: revoke_runtime(runtime), else: {:error, :unauthorized})
+    do:
+      if(Agents.manage?(scope, runtime),
+        do: revoke_runtime(runtime),
+        else: {:error, :unauthorized}
+      )
 
   @doc """
   Shallow-merge new top-level keys into a runtime's `metadata` map and
@@ -202,7 +212,11 @@ defmodule Platform.Federation do
   end
 
   def generate_runtime_token(%Scope{} = scope, %AgentRuntime{} = runtime),
-    do: if(Agents.manage?(scope, runtime), do: generate_runtime_token(runtime), else: {:error, :unauthorized})
+    do:
+      if(Agents.manage?(scope, runtime),
+        do: generate_runtime_token(runtime),
+        else: {:error, :unauthorized}
+      )
 
   # ── Declared client features ────────────────────────────────────────
 
