@@ -21,6 +21,7 @@ defmodule PlatformWeb.AppApiController do
   import Ecto.Query
 
   alias Platform.Agents.Agent
+  alias Platform.Access
   alias Platform.Chat
   alias Platform.Chat.AttachmentStorage
   alias Platform.Chat.ExternalScope
@@ -134,7 +135,7 @@ defmodule PlatformWeb.AppApiController do
         distinct: true,
         select: {s, o.id, o.name}
       )
-      |> ExternalScope.scope_spaces(ExternalScope.for_user(user))
+      |> ExternalScope.scope_spaces(Access.Scope.for_user(user))
       |> Repo.all()
 
     spaces = Enum.map(rows, &elem(&1, 0))
@@ -344,6 +345,7 @@ defmodule PlatformWeb.AppApiController do
   defp authorize_space(user, space_id) do
     with %Space{archived_at: nil} = space <- Chat.get_space(space_id),
          true <- ExternalScope.authorized_space?(user, space),
+         :ok <- Access.check(Access.Scope.for_user(user), "chat.read", {:space, space.id}),
          %Participant{} = participant <- user_participant(space.id, user.id) do
       {:ok, space, participant}
     else

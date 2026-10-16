@@ -237,7 +237,13 @@ defmodule PlatformWeb.Tasks.LifecycleHooks do
   same recomputation for a create/rename.
   """
   def refresh_containers(socket) do
-    projects = Tasks.list_projects_for_user(socket.assigns[:current_user_record], preload: :org)
+    projects =
+      Tasks.list_projects_for_user(socket.assigns[:current_user_record],
+        preload: :org,
+        # RBAC v2 resource scoping (task 01a1386d-e528 stage 3); nil when
+        # the socket carries no Scope, which is the unchanged read.
+        access_scope: access_scope(socket)
+      )
 
     socket
     |> assign(:projects, projects)
@@ -311,4 +317,11 @@ defmodule PlatformWeb.Tasks.LifecycleHooks do
   the rail passes the entry's own label, so there is nothing left to look up.
   """
   def active_scope_keys(viewer), do: Tenancy.scope_slug_entries(viewer)
+
+  defp access_scope(socket) do
+    case socket.assigns[:access_scope] do
+      %Platform.Access.Scope{} = scope -> scope
+      _ -> nil
+    end
+  end
 end

@@ -769,7 +769,8 @@ defmodule PlatformWeb.ExternalRecoveryLiveTest do
 
       # 1. The mount — static AND connected — is redirected by the inherited
       #    `{PlatformWeb.LiveAuth, :ensure_admin}` hook.
-      assert {:error, {:live_redirect, %{to: "/"}}} = live(conn, "/admin/external-logins")
+      assert {:error, {_, %{to: "/access-denied?module=admin"}}} =
+               live(conn, "/admin/external-logins")
 
       # 2. The handler. `render_submit/2` needs a live view; a non-admin never
       #    gets one, so the write has no transport. Prove the halt happens at
@@ -841,7 +842,7 @@ defmodule PlatformWeb.ExternalRecoveryLiveTest do
       acme = Tenancy.get_org_by_slug!("acme")
       create_membership!(user, acme, "member")
 
-      assert {:error, {:live_redirect, %{to: "/"}}} =
+      assert {:error, {_, %{to: "/access-denied?module=admin"}}} =
                conn |> authenticated_conn(user) |> live("/admin/external-logins")
     end
   end

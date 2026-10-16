@@ -6,7 +6,9 @@ defmodule Platform.Federation do
 
   require Logger
   import Ecto.Query
+  alias Ecto.Multi
 
+  alias Platform.Access.{Agents, RuntimeProfiles, Scope}
   alias Platform.Agents.{Agent, AgentRuntime}
   alias Platform.Chat
   alias Platform.Chat.{Participant, Space}
@@ -16,11 +18,38 @@ defmodule Platform.Federation do
 
   # ── Runtime registration ────────────────────────────────────────────
 
-  @doc "Register a new external runtime."
+  @doc "Register a runtime for the authenticated user, ignoring a supplied owner."
+  def register_runtime(%Scope{} = scope, attrs) do
+    if Agents.may_federate?(scope) and match?(%{id: id} when is_binary(id), scope.actor) do
+      register_runtime(scope.actor.id, attrs)
+    else
+      {:error, :unauthorized}
+    end
+  end
+
   def register_runtime(owner_user_id, attrs) do
-    %AgentRuntime{}
-    |> AgentRuntime.changeset(Map.merge(attrs, %{owner_user_id: owner_user_id}))
-    |> Repo.insert()
+    modules = Map.get(attrs, :tool_profile, Map.get(attrs, "tool_profile"))
+    tool_profile = modules || AgentRuntime.default_tool_profile()
+
+    restriction =
+      if is_nil(modules), do: nil, else: RuntimeProfiles.translated_permissions(modules)
+
+    Multi.new()
+    |> Multi.insert(
+      :runtime,
+      AgentRuntime.changeset(
+        %AgentRuntime{},
+        attrs |> Map.delete("owner_user_id") |> Map.put(:owner_user_id, owner_user_id)
+      )
+    )
+    |> Multi.run(:profile, fn _repo, %{runtime: runtime} ->
+      RuntimeProfiles.create_for_runtime(runtime, tool_profile, restriction)
+    end)
+    |> Repo.transaction()
+    |> case do
+      {:ok, %{runtime: runtime}} -> {:ok, runtime}
+      {:error, _step, reason, _changes} -> {:error, reason}
+    end
   end
 
   @doc "Fetch a runtime by its primary key."
@@ -66,12 +95,26 @@ defmodule Platform.Federation do
     |> Repo.update()
   end
 
+  def suspend_runtime(%Scope{} = scope, %AgentRuntime{} = runtime),
+    do:
+      if(Agents.manage?(scope, runtime),
+        do: suspend_runtime(runtime),
+        else: {:error, :unauthorized}
+      )
+
   @doc "Revoke a runtime (permanent)."
   def revoke_runtime(%AgentRuntime{} = runtime) do
     runtime
     |> AgentRuntime.changeset(%{status: "revoked", auth_token_hash: nil})
     |> Repo.update()
   end
+
+  def revoke_runtime(%Scope{} = scope, %AgentRuntime{} = runtime),
+    do:
+      if(Agents.manage?(scope, runtime),
+        do: revoke_runtime(runtime),
+        else: {:error, :unauthorized}
+      )
 
   @doc """
   Shallow-merge new top-level keys into a runtime's `metadata` map and
@@ -92,21 +135,6 @@ defmodule Platform.Federation do
 
     runtime
     |> AgentRuntime.changeset(%{metadata: merged})
-    |> Repo.update()
-  end
-
-  @doc """
-  Replace a runtime's `allowed_bundles` set.
-
-  Bundles are validated against `AgentRuntime.valid_bundles/0` via the
-  changeset's `validate_subset`. Pass an empty list to deny all bundles
-  (the runtime will still authenticate but `tools/list` returns nothing).
-  """
-  @spec update_allowed_bundles(AgentRuntime.t(), [String.t()]) ::
-          {:ok, AgentRuntime.t()} | {:error, Ecto.Changeset.t()}
-  def update_allowed_bundles(%AgentRuntime{} = runtime, bundles) when is_list(bundles) do
-    runtime
-    |> AgentRuntime.changeset(%{allowed_bundles: bundles})
     |> Repo.update()
   end
 
@@ -195,19 +223,28 @@ defmodule Platform.Federation do
   Under `pg_advisory_xact_lock(#{@first_agent_grant_lock_key})`, the call
   counts agents with `runtime_type: "external"` and `status != "archived"`.
   Federated and native agents both count; `built_in` agents do not. When the
-  count is zero, this agent is the first on the install and its runtime gets
-  `first_agent_bundles/0` (every grantable bundle by default, see
+  count is zero, this agent is the first on the install and its profile loads
+  `first_agent_bundles/0` (every available module by default, see
   `FIRST_AGENT_BUNDLES`) and `metadata["first_agent_grant"] = true`. Otherwise
-  it gets `AgentRuntime.default_allowed_bundles/0`. A caller that passes
-  `allowed_bundles` explicitly decides for itself and the grant is skipped.
+  it gets `AgentRuntime.default_tool_profile/0`. A caller that passes
+  `tool_profile` explicitly decides for itself and the first-agent selection is skipped.
+  The selection only loads tools: Access still caps permissions at the owner.
 
   Returns `{:ok, agent, runtime, raw_token}`. The raw token is returned once
   and never stored; a caller that does not need it discards it. Any failure
   rolls the whole transaction back, so a failed link or activation leaves no
   runtime row behind, and returns `{:error, changeset_or_reason}`.
   """
-  @spec provision_agent_runtime(binary(), map(), map()) ::
+  @spec provision_agent_runtime(binary() | Scope.t(), map(), map()) ::
           {:ok, Agent.t(), AgentRuntime.t(), String.t()} | {:error, term()}
+  def provision_agent_runtime(%Scope{} = scope, agent_attrs, runtime_attrs) do
+    if Agents.may_federate?(scope) and match?(%{id: id} when is_binary(id), scope.actor) do
+      provision_agent_runtime(scope.actor.id, agent_attrs, runtime_attrs)
+    else
+      {:error, :unauthorized}
+    end
+  end
+
   def provision_agent_runtime(owner_user_id, agent_attrs, runtime_attrs)
       when is_map(agent_attrs) and is_map(runtime_attrs) do
     # Atom keys: `register_runtime/2` merges an atom `owner_user_id` in, and a
@@ -237,15 +274,15 @@ defmodule Platform.Federation do
   end
 
   @doc """
-  The bundles the first agent on an install receives. Read per call from
+  The modules loaded for the first agent on an install. Read per call from
   `config :platform, :first_agent_bundles` (`FIRST_AGENT_BUNDLES` in
   `config/runtime.exs`): `"all"` (the default) means
-  `AgentRuntime.valid_bundles/0`; otherwise a comma-separated list of bundle
-  names, of which only grantable ones are kept.
+  `RuntimeProfiles.valid_modules/0`; otherwise a comma-separated list of bundle
+  names, of which only available modules are kept. This does not grant access.
   """
   @spec first_agent_bundles() :: [String.t()]
   def first_agent_bundles do
-    valid = AgentRuntime.valid_bundles()
+    valid = RuntimeProfiles.valid_modules()
 
     case Application.get_env(:platform, :first_agent_bundles, "all") do
       value when value in [nil, "", "all"] ->
@@ -275,7 +312,7 @@ defmodule Platform.Federation do
   end
 
   # Runs inside the provisioning transaction, AFTER the advisory lock.
-  defp apply_first_agent_grant(%{allowed_bundles: bundles} = attrs) when is_list(bundles),
+  defp apply_first_agent_grant(%{tool_profile: bundles} = attrs) when is_list(bundles),
     do: attrs
 
   defp apply_first_agent_grant(attrs) do
@@ -293,14 +330,14 @@ defmodule Platform.Federation do
         |> Map.put("first_agent_grant", true)
 
       attrs
-      |> Map.put(:allowed_bundles, first_agent_bundles())
+      |> Map.put(:tool_profile, first_agent_bundles())
       |> Map.put(:metadata, metadata)
     else
-      Map.put(attrs, :allowed_bundles, AgentRuntime.default_allowed_bundles())
+      Map.put(attrs, :tool_profile, AgentRuntime.default_tool_profile())
     end
   end
 
-  @runtime_attr_keys ~w(runtime_id display_name transport status trust_level allowed_bundles
+  @runtime_attr_keys ~w(runtime_id display_name transport status trust_level tool_profile
                         metadata managed_by harness desired_state agent_id)a
 
   # Only the runtime's own castable fields, so an unknown string key is
@@ -327,6 +364,13 @@ defmodule Platform.Federation do
       error -> error
     end
   end
+
+  def generate_runtime_token(%Scope{} = scope, %AgentRuntime{} = runtime),
+    do:
+      if(Agents.manage?(scope, runtime),
+        do: generate_runtime_token(runtime),
+        else: {:error, :unauthorized}
+      )
 
   # ── Declared client features ────────────────────────────────────────
 

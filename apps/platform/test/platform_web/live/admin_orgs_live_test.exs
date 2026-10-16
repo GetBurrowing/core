@@ -66,16 +66,14 @@ defmodule PlatformWeb.AdminOrgsLiveTest do
       user = create_user!()
       create_membership!(user, Tenancy.get_org_by_slug!("acme"), "member")
 
-      assert {:error, {:live_redirect, %{to: "/", flash: flash}}} =
+      assert {:error, {_, %{to: "/access-denied?module=admin"}}} =
                conn |> authenticated_conn(user) |> live(~p"/admin/orgs")
-
-      assert Phoenix.Flash.get(flash, :error) =~ "don't have access"
     end
 
     test "a user with no memberships is redirected", %{conn: conn} do
       user = create_user!()
 
-      assert {:error, {:live_redirect, %{to: "/"}}} =
+      assert {:error, {_, %{to: "/access-denied?module=admin"}}} =
                conn |> authenticated_conn(user) |> live(~p"/admin/orgs")
     end
   end

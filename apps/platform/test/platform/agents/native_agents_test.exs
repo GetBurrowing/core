@@ -215,11 +215,13 @@ defmodule Platform.Agents.NativeAgentsTest do
       first_rt = Repo.get!(AgentRuntime, first_rt.id)
       second_rt = Repo.get!(AgentRuntime, second_rt.id)
 
-      assert Enum.sort(first_rt.allowed_bundles) == Enum.sort(AgentRuntime.valid_bundles())
+      assert Enum.sort(Platform.Access.RuntimeProfiles.tool_profile(first_rt)) ==
+               Enum.sort(Platform.Access.RuntimeProfiles.valid_modules())
+
       assert first_rt.metadata["first_agent_grant"] == true
 
-      assert Enum.sort(second_rt.allowed_bundles) ==
-               Enum.sort(AgentRuntime.default_allowed_bundles())
+      assert Enum.sort(Platform.Access.RuntimeProfiles.tool_profile(second_rt)) ==
+               Enum.sort(AgentRuntime.default_tool_profile())
 
       refute Map.has_key?(second_rt.metadata, "first_agent_grant")
     end
@@ -232,7 +234,9 @@ defmodule Platform.Agents.NativeAgentsTest do
       {:ok, _agent, rt} = NativeAgents.create(owner.id, %{name: "Late", harness: "claude_code"})
       rt = Repo.get!(AgentRuntime, rt.id)
 
-      assert Enum.sort(rt.allowed_bundles) == Enum.sort(AgentRuntime.default_allowed_bundles())
+      assert Enum.sort(Platform.Access.RuntimeProfiles.tool_profile(rt)) ==
+               Enum.sort(AgentRuntime.default_tool_profile())
+
       refute Map.has_key?(rt.metadata, "first_agent_grant")
     end
 
@@ -266,7 +270,11 @@ defmodule Platform.Agents.NativeAgentsTest do
           NativeAgents.create(owner.id, %{name: "Narrow", harness: "claude_code"})
         end)
 
-      assert Repo.get!(AgentRuntime, rt.id).allowed_bundles == ["task", "plan"]
+      assert Platform.Access.RuntimeProfiles.tool_profile(Repo.get!(AgentRuntime, rt.id)) == [
+               "task",
+               "plan"
+             ]
+
       assert log =~ "not-a-bundle"
     end
   end
@@ -333,12 +341,34 @@ defmodule Platform.Agents.NativeAgentsTest do
       granted = Enum.filter(runtimes, &(&1.metadata["first_agent_grant"] == true))
       assert length(granted) == 1
 
-      all = Enum.sort(AgentRuntime.valid_bundles())
-      assert Enum.count(runtimes, &(Enum.sort(&1.allowed_bundles) == all)) == 1
+      all = Enum.sort(Platform.Access.RuntimeProfiles.valid_modules())
+
+      assert Enum.count(
+               runtimes,
+               &(Enum.sort(Platform.Access.RuntimeProfiles.tool_profile(&1)) == all)
+             ) == 1
     end
   end
 
   describe "can_manage?/2" do
+    test "ownership does not retain management after the owner's Access scope is revoked" do
+      owner = create_member()
+
+      {:ok, agent, _runtime} =
+        NativeAgents.create(owner.id, %{name: "Revoked owner", harness: "codex"})
+
+      assert NativeAgents.can_manage?(owner, agent)
+
+      {:ok, _} =
+        Platform.Tenancy.mark_membership_external(%{
+          user_id: owner.id,
+          org_id: Platform.TenancyFixtures.acme_org_id()
+        })
+
+      refute NativeAgents.can_manage?(owner, agent)
+      refute NativeAgents.can_manage?(owner.id, agent)
+    end
+
     test "true for the runtime owner and an install admin, false for other members" do
       owner = create_user()
       admin = create_admin()

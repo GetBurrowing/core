@@ -552,9 +552,15 @@ defmodule PlatformWeb.Router do
     pipe_through([:browser, :require_auth, :enforce_external_scope])
 
     live_session :external_chat,
-      on_mount: [PlatformWeb.ShellLive, {PlatformWeb.LiveAuth, :default}],
+      on_mount: [
+        PlatformWeb.ShellLive,
+        {PlatformWeb.LiveAuth, :default},
+        {PlatformWeb.ModuleGate, :default}
+      ],
       layout: {PlatformWeb.Layouts, :external},
       session: %{"chat_mode" => "external"} do
+      live("/access/view-as/role/:id/:key", AccessViewAsLive, :show)
+      live("/access/view-as/:type/:id", AccessViewAsLive, :show)
       live("/chat", ChatLive, :index)
       live("/chat/:space_slug", ChatLive, :show)
     end
@@ -828,18 +834,30 @@ defmodule PlatformWeb.Router do
 
     # Root redirects to /chat
     get("/", PageController, :home)
+    get("/access-denied", AccessDeniedController, :show)
+    get("/admin/pipeline", LegacyPipelineController, :show)
 
     get("/artifacts/preview", ArtifactPreviewController, :show)
     get("/api/transcripts/:id/download", TranscriptController, :show)
 
     live_session :authenticated,
-      on_mount: [PlatformWeb.ShellLive, {PlatformWeb.LiveAuth, :default}],
+      on_mount: [
+        PlatformWeb.ShellLive,
+        {PlatformWeb.LiveAuth, :default},
+        {PlatformWeb.ModuleGate, :default}
+      ],
       layout: {PlatformWeb.Layouts, :shell} do
+      live("/access/view-as/role/:id/:key", AccessViewAsLive, :show)
+      live("/access/view-as/:type/:id", AccessViewAsLive, :show)
+      live("/access", AccessLive, :index)
+      live("/access/:type/:id", AccessLive, :show)
       live("/chat", ChatLive, :index)
       live("/chat/:space_slug", ChatLive, :show)
       live("/activity", ActivityLive, :index)
       live("/inbox", InboxLive, :index)
       live("/tasks", TasksLive, :index)
+      # Keep the static module-admin route above the task-id catch-all.
+      live("/tasks/pipeline", PipelineLive, :index)
       live("/tasks/:task_id", TasksLive, :show)
       # ADR-0042 stage 5: project-scoped document store
       live("/files", FilesLive, :index)
@@ -861,6 +879,11 @@ defmodule PlatformWeb.Router do
       live("/skills", SkillsLive, :index)
       live("/skills/:slug", SkillsLive, :show)
       live("/changelog", ChangelogLive, :index)
+      # Prompts is a module-admin view. It retains its stable URL and rail
+      # destination, but belongs to this module-gated session instead of the
+      # install-admin session.
+      live("/admin/prompts", AdminPromptsLive, :index)
+      live("/admin/prompts/:slug", AdminPromptsLive, :edit)
       live("/control", ControlCenterLive, :index)
       live("/control/usage", UsageLive, :index)
       # Task 019fe6ba, ADR-0048. `/control/:agent_slug` below is a catch-all:
@@ -914,7 +937,11 @@ defmodule PlatformWeb.Router do
     # documented above the `chat.` scope does not apply here. Adding a scope
     # would inherit that hazard for no benefit.
     live_session :canvas_standalone,
-      on_mount: [PlatformWeb.ShellLive, {PlatformWeb.LiveAuth, :default}],
+      on_mount: [
+        PlatformWeb.ShellLive,
+        {PlatformWeb.LiveAuth, :default},
+        {PlatformWeb.ModuleGate, :default}
+      ],
       layout: {PlatformWeb.Layouts, :shell} do
       live("/canvases/:id", CanvasLive, :show)
     end
@@ -940,15 +967,15 @@ defmodule PlatformWeb.Router do
       live("/welcome", ExternalHoldingLive, :index)
     end
 
-    # MT/RBAC stack 2 (task 019e3c4a) — `/admin/*` lives in its own
-    # `live_session` so the `:ensure_admin` hook can halt-and-redirect
-    # non-admin mounts. Keeps the same `ShellLive` + `LiveAuth :default`
-    # prefix so the shell chrome renders before the admin gate fires.
+    # ModuleGate runs after LiveAuth on every admin mount. The holding session
+    # above deliberately has no module gate: its zero-membership users have
+    # a dedicated landing. The meet sessions and unauthenticated guest meeting
+    # session keep their invite admission and query fences instead.
     live_session :admin,
       on_mount: [
         PlatformWeb.ShellLive,
         {PlatformWeb.LiveAuth, :default},
-        {PlatformWeb.LiveAuth, :ensure_admin}
+        {PlatformWeb.ModuleGate, :default}
       ],
       layout: {PlatformWeb.Layouts, :shell} do
       live("/admin", AdminLive, :index)
@@ -982,17 +1009,7 @@ defmodule PlatformWeb.Router do
       # live_session's gate is not load-bearing alone.
       live("/admin/vault", AdminVaultLive, :index)
       live("/admin/vault/:slug", AdminVaultLive, :show)
-      live("/admin/prompts", AdminPromptsLive, :index)
-      live("/admin/prompts/:slug", AdminPromptsLive, :edit)
       live("/admin/federation", AdminFederationLive, :index)
-      # Task 019fed1e: pipeline health MOVED here from `/control/pipeline`.
-      # It is a read-only whole-page admin surface with no write handlers,
-      # so `:ensure_admin` on this live_session is the right gate — a
-      # page-local check under `/control` would invent a second pattern for
-      # a case this one already covers. Reached from the Tasks header cog;
-      # no redirect from the old path, which now falls to the
-      # `/control/:agent_slug` catch-all as a URL that should not be typed.
-      live("/admin/pipeline", PipelineLive, :index)
     end
   end
 
@@ -1022,7 +1039,7 @@ defmodule PlatformWeb.Router do
       on_mount: [
         PlatformWeb.ShellLive,
         {PlatformWeb.LiveAuth, :default},
-        {PlatformWeb.LiveAuth, :ensure_admin}
+        {PlatformWeb.ModuleGate, :default}
       ],
       layout: {PlatformWeb.Layouts, :shell} do
       live("/admin/sign-in-users", AdminSignInUsersLive, :index)

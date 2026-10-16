@@ -3,7 +3,7 @@ defmodule Platform.Federation.ToolAuthorizationTest do
   Unit coverage for the shared capability gate both federation transports
   resolve through.
 
-  Every assertion is written against a LITERAL `allowed_bundles` list, never
+  Every assertion is written against a LITERAL `tool_profile` list, never
   against `AgentRuntime.valid_bundles/0` — that list and `ToolSurface`'s
   bundle list are known to disagree (`files`), and that mismatch is tracked
   separately. This suite must not depend on them matching.
@@ -11,9 +11,11 @@ defmodule Platform.Federation.ToolAuthorizationTest do
   use Platform.DataCase, async: false
 
   alias Platform.Agents.AgentRuntime
+  alias Platform.Access.{RuntimeProfile, RuntimeProfiles}
   alias Platform.ExternalUserFixtures, as: World
   alias Platform.Federation.ToolAuthorization
   alias Platform.Federation.ToolSurface
+  alias Platform.Repo
   alias Platform.Tenancy
 
   @chat_names ~w(send_media react space_list space_get_context space_get_messages space_search_messages)
@@ -53,12 +55,12 @@ defmodule Platform.Federation.ToolAuthorizationTest do
       refute "canvas.create" in names
     end
 
-    test "empty allowed_bundles yields an empty list", ctx do
+    test "empty tool_profile yields an empty list", ctx do
       assert ToolAuthorization.effective_tools(runtime(ctx.internal_id, [])) == []
     end
 
-    test "a nil allowed_bundles column fails closed rather than raising" do
-      assert ToolAuthorization.effective_tools(%AgentRuntime{allowed_bundles: nil}) == []
+    test "a missing profile fails closed rather than raising" do
+      assert ToolAuthorization.effective_tools(%AgentRuntime{}) == []
     end
 
     test "unknown bundle names are skipped silently", ctx do
@@ -230,9 +232,9 @@ defmodule Platform.Federation.ToolAuthorizationTest do
   # ── deny_message/1 ───────────────────────────────────────────────────────
 
   describe "deny_message/1" do
-    test "a real catalogue tool keeps the pre-existing wording verbatim" do
+    test "a real catalogue tool names the required permission" do
       assert ToolAuthorization.deny_message("plan_update") ==
-               "tool 'plan_update' not in allowed bundles"
+               "tool 'plan_update' requires permission 'tasks.write', which this agent does not hold or is capped at its owner"
     end
 
     test "an undeclared name with a suggestion names the closest declared tool" do
@@ -253,7 +255,19 @@ defmodule Platform.Federation.ToolAuthorizationTest do
 
   # ── Helpers ────────────────────────────────────────────────────────────
 
-  defp runtime(owner_user_id, allowed_bundles) do
-    %AgentRuntime{owner_user_id: owner_user_id, allowed_bundles: allowed_bundles}
+  defp runtime(owner_user_id, modules) do
+    runtime =
+      Repo.insert!(%AgentRuntime{
+        runtime_id: "authorization-profile-#{System.unique_integer([:positive])}",
+        owner_user_id: owner_user_id
+      })
+
+    Repo.insert!(%RuntimeProfile{
+      runtime_id: runtime.id,
+      tool_profile: modules,
+      restricted_permissions: RuntimeProfiles.translated_permissions(modules)
+    })
+
+    runtime
   end
 end

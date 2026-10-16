@@ -13,7 +13,7 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgent do
     * `Platform.Agents.MemoryContext.upsert_workspace_file/4` writes its
       `SOUL.md` / `IDENTITY.md` / `VOICE.md` — the same workspace-file path
       every other agent's identity goes through.
-    * `agents.voice_config` (jsonb) and `agent_runtimes.allowed_bundles`
+    * `agents.voice_config` (jsonb) and `access_runtime_profiles.tool_profile`
       (array) are pure data columns; no migration needed for either.
 
   ## Usage
@@ -34,7 +34,7 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgent do
       (the marker `register_voice_runtime/3` always writes) and reused
       rather than duplicated;
     * workspace files, `voice_config`, `client_info.features`, and
-      `allowed_bundles` are all re-applied on every run, so a rerun
+      `tool_profile` are all re-applied on every run, so a rerun
       self-heals drift instead of leaving a second agent or a second mouth
       row behind.
 
@@ -57,7 +57,7 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgent do
   runtime connection this task registers. So `kind` is left at its default,
   `"native"`, and no `base_url`/`endpoint_kind`/`model` is set.
 
-  ## `allowed_bundles`
+  ## `tool_profile`
 
   Scoped to what a single-purpose meeting assistant actually calls, per
   Dalton's live moon runs: `messaging` (for the `post_to_meeting_chat`
@@ -100,6 +100,7 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgent do
   use Mix.Task
 
   alias Platform.Accounts.User
+  alias Platform.Access.RuntimeProfiles
   alias Platform.Agents.{Agent, MemoryContext}
   alias Platform.Federation
   alias Platform.Repo
@@ -123,7 +124,7 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgent do
   # side's default ever changes, they must change together.
   @livekit_agent_name "meeting-voice-agent"
 
-  @allowed_bundles ~w(messaging context_read)
+  @tool_profile ~w(messaging context_read)
 
   # Informational only (moduledoc note in Platform.Agents.Voice) — actual
   # synthesis happens in services/meeting-voice-agent's TTS client, pointed
@@ -199,7 +200,7 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgent do
         agent_id:        #{agent.id}
         agent_slug:      #{agent.slug}
         runtime_id:      #{runtime.runtime_id}
-        allowed_bundles: #{Enum.join(runtime.allowed_bundles, ", ")}\
+        tool_profile: #{Enum.join(RuntimeProfiles.tool_profile(runtime), ", ")}\
       """ <> token_line(raw_token)
     )
 
@@ -290,7 +291,7 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgent do
             metadata: %{"client_info" => voice_client_info()}
           })
 
-        {:ok, runtime} = Federation.update_allowed_bundles(runtime, @allowed_bundles)
+        {:ok, _profile} = RuntimeProfiles.set_tool_profile(runtime, @tool_profile)
         {runtime, raw_token}
 
       %Platform.Agents.AgentRuntime{} = existing ->
@@ -299,7 +300,7 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgent do
             "client_info" => voice_client_info()
           })
 
-        {:ok, runtime} = Federation.update_allowed_bundles(runtime, @allowed_bundles)
+        {:ok, _profile} = RuntimeProfiles.set_tool_profile(runtime, @tool_profile)
         {runtime, nil}
     end
   end

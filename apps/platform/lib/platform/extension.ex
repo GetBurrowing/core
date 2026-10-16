@@ -31,6 +31,11 @@ defmodule Platform.Extension do
   consumer"), not an omission. `rail_items/0` is optional and
   DOES have a reader (`PlatformWeb.Components.IconRail`).
 
+  `permissions/0` is optional and DOES have a reader:
+  `Platform.Extensions.permissions/0`, which `Platform.Access.Registry` merges
+  after core's own declarations (task `01a1386d-cb5c`). A module that omits it
+  contributes no permission, rail requirement or bundle mapping.
+
   `inbox_kinds/0` is optional and DOES have a reader
   (`Platform.Extensions.inbox_kinds/0`, read per call by `Platform.Inbox.Item`,
   `Platform.Inbox` and `PlatformWeb.Components.InboxItem`).
@@ -75,7 +80,7 @@ defmodule Platform.Extension do
   @typedoc """
   One MCP tool bundle a module contributes.
 
-    * `:name` — the bundle name a runtime is granted in `allowed_bundles`;
+    * `:name` — the bundle name a runtime is granted in `tool_profile`;
     * `:definitions` — the tool definitions `tools/list` shows for it, in the
       `Platform.Federation.ToolSurface` rubric shape (may be `[]`);
     * `:tool_names` — every tool name the bundle OWNS, listed or not. A call
@@ -99,6 +104,7 @@ defmodule Platform.Extension do
           required(:definitions) => [map()],
           required(:tool_names) => [String.t()],
           required(:execute) => (String.t(), map(), map() -> term()),
+          optional(:permissions) => %{String.t() => String.t()},
           optional(:deny_message) => (String.t() -> String.t() | nil),
           optional(:owns_tool?) => (String.t() -> boolean())
         }
@@ -153,6 +159,28 @@ defmodule Platform.Extension do
               optional(:tailwind_sources) => [String.t()]
             }
 
+  @typedoc """
+  One module's permission declaration, in `Platform.Access.Registry`'s shape.
+
+    * `:module` — the module's permission prefix, e.g. `"play"`. It may not
+      reuse another module's prefix;
+    * `:permissions` — `module.action` strings, or
+      `%{name: String.t(), install_level: boolean(), module_admin: boolean()}`;
+    * `:rail` (optional) — `[%{key: atom(), permission: String.t()}]`, one per
+      destination this module's `rail_items/0` contributes;
+    * `:bundles` (optional) — `%{bundle_name => permission}`, one entry per
+      bundle this module's `mcp_tool_bundles/0` contributes.
+  """
+  @type permission_declaration :: %{
+          required(:module) => String.t(),
+          required(:permissions) => [String.t() | map()],
+          optional(:rail) => [%{key: atom(), permission: String.t()}],
+          optional(:bundles) => %{String.t() => String.t()}
+        }
+
+  @doc "Permission declarations for `Platform.Access.Registry` (optional)."
+  @callback permissions() :: [permission_declaration()]
+
   @doc "Rail destinations in `IconRail.canonical_destinations/0`'s shape."
   @callback rail_items() :: [map()]
 
@@ -173,6 +201,8 @@ defmodule Platform.Extension do
   @type live_page :: %{
           required(:prefix) => String.t(),
           required(:live_view) => module(),
+          required(:module) => atom(),
+          required(:permission) => String.t(),
           optional(:title) => String.t()
         }
 
@@ -212,6 +242,7 @@ defmodule Platform.Extension do
   @callback prompt_templates() :: [term()]
 
   @optional_callbacks rail_items: 0,
+                      permissions: 0,
                       assets: 0,
                       routes: 0,
                       live_pages: 0,

@@ -109,6 +109,7 @@
        `:if={!@embedded and !@external?}` gate moved inside the component with
        it, so this call states no render condition of its own. --%>
   <.rail
+    restricted_channel_ids={@restricted_channel_ids}
     embedded={@embedded}
     external?={@external?}
     sidebar_edit={@sidebar_edit}
@@ -141,6 +142,7 @@
        stage 4). The `@mobile_browser_open and !@embedded and !@external?`
        gate moved INSIDE the component with it. --%>
   <.mobile_browser
+    restricted_channel_ids={@restricted_channel_ids}
     mobile_browser_open={@mobile_browser_open}
     embedded={@embedded}
     external?={@external?}
@@ -250,6 +252,7 @@
         mask_names?={@mask_names?}
         revealed_section_ids={@revealed_section_ids}
         sidebar_sections={@sidebar_sections}
+        restricted_channel_ids={@restricted_channel_ids}
       />
 
       <%!-- Brand-new-user pane for the mobile content region (stage 8). Below

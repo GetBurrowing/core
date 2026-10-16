@@ -132,6 +132,7 @@ defmodule Platform.Chat.Attachments.ToolHandlers do
     with {:ok, attachment_id} <- require_string(args, "attachment_id"),
          {:ok, attachment} <- fetch_attachment(attachment_id),
          :ok <- require_member(attachment.space_id, context),
+         :ok <- require_access(attachment, context),
          :ok <- check_inline_read_size(attachment.byte_size),
          {:ok, bytes} <- read_bytes(attachment.storage_key) do
       result = %{
@@ -367,6 +368,36 @@ defmodule Platform.Chat.Attachments.ToolHandlers do
     end
   end
 
+  # RBAC v2 (task 01a1386e-45a5 stage 1): conjunctive with `require_member/2`
+  # above. A denied attachment answers exactly as an unknown id does
+  # (`fetch_attachment/1`'s not-found envelope), so a deny confirms nothing.
+  # The scope is the in-process caller's `:access_scope`, else the context
+  # user's, else the calling runtime's; with none resolvable it is today's read.
+  #
+  # `require_user_member/2` below is deliberately NOT switched to a
+  # `%Platform.Access.Scope{}`: it dereferences `scope.external?`, which an
+  # Access Scope does not carry, and it also gates the two UPLOAD paths.
+  defp require_access(%Attachment{} = attachment, context) do
+    case Chat.attachment_access_check(attachment, access_scope(context)) do
+      :ok -> :ok
+      {:error, :denied} -> fetch_attachment_not_found(attachment.id)
+    end
+  end
+
+  defp access_scope(%{access_scope: %Platform.Access.Scope{} = scope}), do: scope
+
+  defp access_scope(%{user_id: user_id}) when is_binary(user_id),
+    do: Platform.Access.Scope.for_user(%{id: user_id})
+
+  defp access_scope(%{runtime_id: runtime_id}) when is_binary(runtime_id) do
+    case Platform.Federation.get_runtime_by_runtime_id(runtime_id) do
+      %Platform.Agents.AgentRuntime{} = runtime -> Platform.Access.Scope.for_runtime(runtime)
+      _ -> nil
+    end
+  end
+
+  defp access_scope(_context), do: nil
+
   defp require_user_member(space_id, user_id) do
     scope = Platform.Chat.ExternalScope.for_user(user_id)
 
@@ -455,12 +486,16 @@ defmodule Platform.Chat.Attachments.ToolHandlers do
         {:ok, attachment}
 
       nil ->
-        {:error,
-         %{
-           error: "attachment: not found: #{inspect(id)}",
-           recoverable: false
-         }}
+        fetch_attachment_not_found(id)
     end
+  end
+
+  defp fetch_attachment_not_found(_id) do
+    {:error,
+     %{
+       error: "attachment: not found",
+       recoverable: false
+     }}
   end
 
   defp check_inline_read_size(size) do

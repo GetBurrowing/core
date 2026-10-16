@@ -2348,6 +2348,12 @@ defmodule Platform.Orchestration.TaskRouter do
       {:error, :user_assignee} ->
         {:suppress, suppress_user_phase_assignee(state, task)}
 
+      # Task 01a1386e-45a5 stage 2. MUST stay above the fail-open arm below:
+      # folded into it, the refusal would dispatch to the held assignee,
+      # which is exactly the wake it exists to refuse.
+      {:error, :owner_denied} ->
+        {:suppress, suppress_owner_denied(state, task)}
+
       {:error, reason} ->
         # FAIL OPEN, deliberately asymmetric with the clause above. A
         # transient resolution failure (`:no_runtime`, `:agent_not_found`,
@@ -2411,6 +2417,33 @@ defmodule Platform.Orchestration.TaskRouter do
         state.execution_space_id,
         "Dispatch withheld: #{task.title} | Phase: #{phase} | " <>
           "assigned to a user — no runtime to dispatch to"
+      )
+    end
+
+    state
+  end
+
+  # Task 01a1386e-45a5 stage 2 (RBAC stack member 7). `PhaseRuntime.resolve/1`
+  # found the phase's runtime, but `Platform.Access.check/3` refuses the
+  # task to its owner or to the agent's own grants. Mirrors
+  # `suppress_user_phase_assignee/2`: log, telemetry, one execution-space
+  # line, and no liveness timer, because nothing was dispatched. The line
+  # names the refusal and the router's held runtime id (`state.assignee.id`,
+  # the runtime the fail-open arm would have sent to) only, never a project
+  # or any other resource the owner cannot read.
+  defp suppress_owner_denied(state, _task) do
+    Logger.info(
+      "[TaskRouter] suppressed dispatch for task=#{state.task_id}: " <>
+        "owner_denied for runtime #{state.assignee.id}"
+    )
+
+    emit_dispatch_suppressed_telemetry(state.task_id, :owner_denied)
+
+    if state.execution_space_id do
+      ExecutionSpace.post_log(
+        state.execution_space_id,
+        "Dispatch withheld: owner_denied | Runtime: #{state.assignee.id} | " <>
+          "the agent or its owner may not read this task"
       )
     end
 

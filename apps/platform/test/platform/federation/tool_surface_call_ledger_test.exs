@@ -79,12 +79,15 @@ defmodule Platform.Federation.ToolSurfaceCallLedgerTest do
 
     agent_sxi = create_agent("sxi-ledger", %{"org_id" => sxi.id})
     agent_pt = create_agent("pt-ledger", %{"org_id" => wayne_tech.id})
+    owner = Platform.ExternalUserFixtures.create_user!()
+    Platform.ExternalUserFixtures.plain_member!(owner, sxi)
 
     {:ok, space} =
       Chat.create_space(%{
         name: "Ledger Space",
         slug: "ledger-#{u()}",
-        kind: "channel"
+        kind: "channel",
+        org_id: sxi.id
       })
 
     {:ok, participant} =
@@ -93,6 +96,20 @@ defmodule Platform.Federation.ToolSurfaceCallLedgerTest do
         participant_id: agent_sxi.id,
         display_name: agent_sxi.name,
         joined_at: DateTime.utc_now()
+      })
+
+    {:ok, _owner_participant} =
+      Chat.add_participant(space.id, %{
+        participant_type: "user",
+        participant_id: owner.id,
+        display_name: owner.name,
+        joined_at: DateTime.utc_now()
+      })
+
+    {:ok, runtime} =
+      Platform.Federation.register_runtime(owner.id, %{
+        runtime_id: "ledger-#{u()}",
+        agent_id: agent_sxi.id
       })
 
     {:ok, _} =
@@ -109,6 +126,7 @@ defmodule Platform.Federation.ToolSurfaceCallLedgerTest do
       lease: lease,
       space: space,
       participant: participant,
+      runtime_id: runtime.runtime_id,
       agent_sxi: agent_sxi,
       agent_pt: agent_pt
     }
@@ -116,7 +134,11 @@ defmodule Platform.Federation.ToolSurfaceCallLedgerTest do
 
   describe "PART B — permitted calls, bodies recorded" do
     test "every capability answers a real execute/3 call", ctx do
-      permitted = %{agent_id: ctx.agent_sxi.id, agent_participant_id: ctx.participant.id}
+      permitted = %{
+        agent_id: ctx.agent_sxi.id,
+        agent_participant_id: ctx.participant.id,
+        runtime_id: ctx.runtime_id
+      }
 
       banner("PART B — PERMITTED CALLS")
 
@@ -293,7 +315,11 @@ defmodule Platform.Federation.ToolSurfaceCallLedgerTest do
     # The same-org agent still reads the widened plan: the check denies a
     # sibling, it does not break the capability stage 3 shipped.
     test "plan_get still answers the own-org agent with the rejected plan's prose", ctx do
-      permitted = %{agent_id: ctx.agent_sxi.id, agent_participant_id: ctx.participant.id}
+      permitted = %{
+        agent_id: ctx.agent_sxi.id,
+        agent_participant_id: ctx.participant.id,
+        runtime_id: ctx.runtime_id
+      }
 
       assert {:ok, result} =
                record(
@@ -317,7 +343,12 @@ defmodule Platform.Federation.ToolSurfaceCallLedgerTest do
       {:ok, planless} =
         Tasks.create_task(%{project_id: ctx.task.project_id, title: "No Plan #{u()}"})
 
-      permitted = %{agent_id: ctx.agent_sxi.id, agent_participant_id: ctx.participant.id}
+      permitted = %{
+        agent_id: ctx.agent_sxi.id,
+        agent_participant_id: ctx.participant.id,
+        runtime_id: ctx.runtime_id
+      }
+
       denied_ctx = %{agent_id: ctx.agent_pt.id, agent_participant_id: Ecto.UUID.generate()}
 
       assert {:error, not_found} =

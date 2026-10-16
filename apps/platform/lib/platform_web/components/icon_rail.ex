@@ -62,6 +62,9 @@ defmodule PlatformWeb.Components.IconRail do
 
   import PlatformWeb.CoreComponents, only: [icon: 1]
 
+  alias Platform.Access
+  alias Platform.Access.Scope
+
   attr(:current_path, :string,
     default: "/",
     doc: "current request path; used for active-state styling and aria-current"
@@ -70,6 +73,14 @@ defmodule PlatformWeb.Components.IconRail do
   attr(:root_user, :boolean,
     default: false,
     doc: "when true, the Admin slot renders; otherwise it is omitted from the DOM entirely"
+  )
+
+  attr(:access_scope, :any,
+    default: nil,
+    doc:
+      "the actor's `%Platform.Access.Scope{}` (LiveAuth's `:access_scope`). When set, every " <>
+        "cluster is filtered through `Platform.Access.module_access?/3` and `root_user` is not " <>
+        "consulted (task 01a1386d-fb6e stage 1). nil keeps the legacy `root_user` filter."
   )
 
   attr(:sidebar_collapsed, :boolean,
@@ -120,13 +131,14 @@ defmodule PlatformWeb.Components.IconRail do
   """
   def icon_rail(assigns) do
     root_user = Map.get(assigns, :root_user, false)
+    filter = rail_filter(assigns[:access_scope], root_user)
     current_path = Map.get(assigns, :current_path, "/")
     collapsed = Map.get(assigns, :sidebar_collapsed, false)
     all = assigns[:destinations] || canonical_destinations()
 
-    live = cluster_destinations(all, :live, root_user)
-    working = cluster_destinations(all, :working, root_user)
-    admin = cluster_destinations(all, :admin, root_user)
+    live = cluster_destinations(all, :live, filter)
+    working = cluster_destinations(all, :working, filter)
+    admin = cluster_destinations(all, :admin, filter)
 
     visible = live ++ working ++ admin
 
@@ -148,6 +160,8 @@ defmodule PlatformWeb.Components.IconRail do
       |> assign(:live_destinations, live)
       |> assign(:working_destinations, working)
       |> assign(:admin_destinations, admin)
+      |> assign(:show_admin, show_admin?(filter, admin))
+      |> assign(:show_working, show_working?(filter, working))
       |> assign(:active_key, active_destination_key(pool, current_path))
 
     ~H"""
@@ -219,7 +233,11 @@ defmodule PlatformWeb.Components.IconRail do
         chat_unread_count={@chat_unread_count}
       />
 
-      <.rail_eyebrow label="Working" sidebar_collapsed={@sidebar_collapsed} />
+      <.rail_eyebrow
+        :if={@show_working}
+        label="Working"
+        sidebar_collapsed={@sidebar_collapsed}
+      />
       <.rail_cluster
         destinations={@working_destinations}
         cluster="working"
@@ -230,7 +248,7 @@ defmodule PlatformWeb.Components.IconRail do
       />
 
       <div class="mt-auto" aria-hidden="true"></div>
-      <%= if @root_user do %>
+      <%= if @show_admin do %>
         <%!-- Admin cluster keeps its pinned-bottom position and a hairline
              separator in both rail states, but no "Admin" eyebrow label
              (task 019f575e v2, 2026-07-14). --%>
@@ -361,9 +379,14 @@ defmodule PlatformWeb.Components.IconRail do
   attr(:current_path, :string, default: "/")
   attr(:root_user, :boolean, default: false)
 
+  attr(:access_scope, :any,
+    default: nil,
+    doc: "the actor's Scope; when set the four primary tiles are filtered through it"
+  )
+
   def bottom_rail(assigns) do
     current_path = Map.get(assigns, :current_path, "/")
-    primary = mobile_primary_destinations()
+    primary = mobile_primary_destinations(assigns[:access_scope])
 
     assigns =
       assigns
@@ -420,16 +443,45 @@ defmodule PlatformWeb.Components.IconRail do
     * `:cluster` — `:live | :working | :admin`
     * `:root_only?` — boolean; today `:admin` and `:prompts` are `true`
 
-  When `opts[:root_user]` is `false` (default), all `root_only?: true`
-  entries are omitted from the returned list.
+  With `opts[:scope]` (a `%Platform.Access.Scope{}`, task 01a1386d-fb6e
+  stage 1) an entry is kept when `Platform.Access.module_access?/3` admits
+  its key for that scope, and `root_only?` is not consulted: the registry's
+  install-level and module-admin rail permissions replace it. An entry whose
+  key no registry rail entry declares is dropped (fail closed).
+
+  Without `:scope`, the legacy path: when `opts[:root_user]` is `false`
+  (default), all `root_only?: true` entries are omitted from the returned
+  list. Production callers pick the path through `rail_filter/2`.
   """
   def destinations(opts \\ []) do
-    root_user = Keyword.get(opts, :root_user, false)
+    case Keyword.fetch(opts, :scope) do
+      {:ok, scope} ->
+        canonical_destinations()
+        |> Enum.filter(&Access.module_access?(scope, &1.key))
+        |> Enum.filter(&enabled?/1)
 
-    canonical_destinations()
-    |> Enum.reject(fn dest -> dest.root_only? and not root_user end)
-    |> Enum.filter(&enabled?/1)
+      :error ->
+        root_user = Keyword.get(opts, :root_user, false)
+
+        canonical_destinations()
+        |> Enum.reject(fn dest -> dest.root_only? and not root_user end)
+        |> Enum.filter(&enabled?/1)
+    end
   end
+
+  @doc """
+  The `destinations/1` options for a render: `[scope: scope]` when the
+  caller has the actor's `%Platform.Access.Scope{}`, else the legacy
+  `[root_user: root_user]` (task 01a1386d-fb6e stage 1). The one place the
+  desktop rail, the bottom rail and the More sheet choose between the two,
+  so they cannot disagree. The shell always assigns a Scope
+  (`PlatformWeb.LiveAuth.on_mount(:default)`, pinned for every `:shell`
+  live_session by `icon_rail_scope_test.exs`); the legacy path remains for
+  component renders that pass only `root_user`.
+  """
+  @spec rail_filter(Scope.t() | nil, term()) :: keyword()
+  def rail_filter(%Scope{} = scope, _root_user), do: [scope: scope]
+  def rail_filter(_scope, root_user), do: [root_user: root_user]
 
   @doc """
   Is this destination switched on right now?
@@ -453,12 +505,31 @@ defmodule PlatformWeb.Components.IconRail do
   # Internals
   # ------------------------------------------------------------------
 
-  defp cluster_destinations(all, cluster, root_user) do
+  defp cluster_destinations(all, cluster, filter) do
     all
     |> Enum.filter(&(&1.cluster == cluster))
-    |> filter_root_only(root_user)
+    |> filter_visible(filter)
     |> Enum.filter(&enabled?/1)
   end
+
+  # With a Scope, the module decision is `Platform.Access.module_access?/3`
+  # alone (task 01a1386d-fb6e stage 1); without one, the legacy root_only?
+  # filter below, unchanged.
+  defp filter_visible(destinations, scope: scope),
+    do: Enum.filter(destinations, &Access.module_access?(scope, &1.key))
+
+  defp filter_visible(destinations, root_user: root_user),
+    do: filter_root_only(destinations, root_user)
+
+  # The Admin cluster's divider renders with the cluster: legacy keys it off
+  # `root_user`, the Scope path off whether any admin tile survived.
+  defp show_admin?([scope: _scope], admin), do: admin != []
+  defp show_admin?([root_user: root_user], _admin), do: root_user
+
+  # The Working eyebrow: a guest's Scope admits no Working tile, so the Scope
+  # path drops the label over an empty cluster. Legacy always renders it.
+  defp show_working?([scope: _scope], working), do: working != []
+  defp show_working?([root_user: _root_user], _working), do: true
 
   # Apply the root_only? filter against a per-render root_user flag.
   # Used at the icon_rail/1 render boundary so EVERY cluster (live /
@@ -470,12 +541,20 @@ defmodule PlatformWeb.Components.IconRail do
     Enum.reject(destinations, fn dest -> dest.root_only? and not root_user end)
   end
 
-  defp mobile_primary_destinations do
+  defp mobile_primary_destinations(access_scope) do
     # Chat / Tasks / Inbox / Activity — 4 surfaces; More is the 5th tile,
     # rendered separately because it's a button (phx-click), not a link.
-    canonical_destinations()
-    |> Enum.filter(&(&1.key in [:chat, :tasks, :inbox, :activity]))
-    |> Enum.filter(&enabled?/1)
+    # With a Scope the four are filtered through it (task 01a1386d-fb6e
+    # stage 1); without one they render unfiltered, as before.
+    primary =
+      canonical_destinations()
+      |> Enum.filter(&(&1.key in [:chat, :tasks, :inbox, :activity]))
+      |> Enum.filter(&enabled?/1)
+
+    case access_scope do
+      %Scope{} = scope -> Enum.filter(primary, &Access.module_access?(scope, &1.key))
+      _ -> primary
+    end
   end
 
   # Resolve the single active destination for a path. A destination matches
@@ -712,6 +791,14 @@ defmodule PlatformWeb.Components.IconRail do
       },
 
       # Working cluster — reference / configuration surfaces
+      %{
+        key: :agents,
+        label: "Agents",
+        path: "/control",
+        hero_icon: "hero-cpu-chip",
+        cluster: :working,
+        root_only?: false
+      },
       %{
         key: :skills,
         label: "Skills",

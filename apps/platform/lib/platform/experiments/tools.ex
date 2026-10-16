@@ -10,7 +10,7 @@ defmodule Platform.Experiments.Tools do
   ## Reachability
 
   The bundle is not a default grant. A runtime without `experiments` in its
-  `allowed_bundles` is refused by `Platform.Federation.ToolAuthorization`
+  `tool_profile` is refused by `Platform.Federation.ToolAuthorization`
   before `execute/3` runs — so the Scientist's runtime needs the grant, or
   every tool here is refused. `ToolSurface.execute/3` itself is `@doc false`
   and does not re-check bundles; the transports do.

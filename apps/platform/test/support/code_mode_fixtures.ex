@@ -8,6 +8,7 @@ defmodule Platform.CodeModeFixtures do
 
   alias Platform.Agents.Agent
   alias Platform.Agents.AgentRuntime
+  alias Platform.Access.RuntimeProfiles
   alias Platform.Federation.ToolCallRecord
   alias Platform.Repo
 
@@ -35,19 +36,25 @@ defmodule Platform.CodeModeFixtures do
       %AgentRuntime{}
       |> AgentRuntime.changeset(%{
         runtime_id: "codemode-rt-#{u()}",
-        owner_user_id: owner_user_id || insert_user!().id,
+        owner_user_id: owner_user_id || Platform.TenancyFixtures.root_admin!().id,
         agent_id: agent.id,
         auth_token_hash: AgentRuntime.hash_token(raw_token),
-        status: "active",
-        allowed_bundles: bundles
+        status: "active"
       })
       |> Repo.insert!()
+
+    {:ok, _profile} =
+      RuntimeProfiles.create_for_runtime(
+        runtime,
+        bundles,
+        RuntimeProfiles.translated_permissions(bundles)
+      )
 
     {runtime, raw_token}
   end
 
   @doc "The default bundles plus `extra`."
-  def bundles(extra), do: AgentRuntime.default_allowed_bundles() ++ extra
+  def bundles(extra), do: AgentRuntime.default_tool_profile() ++ extra
 
   @doc "Ledger rows whose parent_run_id is `run_id`, oldest first."
   def inner_rows(run_id) do

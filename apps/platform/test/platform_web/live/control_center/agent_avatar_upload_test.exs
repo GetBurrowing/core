@@ -32,7 +32,6 @@ defmodule PlatformWeb.ControlCenter.AgentAvatarUploadTest do
 
   import Phoenix.LiveViewTest
 
-  alias Platform.Accounts.User
   alias Platform.Agents.Agent
   alias Platform.Chat.AttachmentStorage
   alias Platform.Repo
@@ -65,12 +64,7 @@ defmodule PlatformWeb.ControlCenter.AgentAvatarUploadTest do
   end
 
   defp authenticated_conn(conn) do
-    user =
-      Repo.insert!(%User{
-        email: "avatar_test_#{System.unique_integer([:positive])}@example.com",
-        name: "Avatar Test User",
-        oidc_sub: "oidc-avatar-test-#{System.unique_integer([:positive])}"
-      })
+    user = Platform.TenancyFixtures.root_admin!()
 
     init_test_session(conn, current_user_id: user.id)
   end

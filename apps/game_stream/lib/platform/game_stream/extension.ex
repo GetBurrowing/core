@@ -174,6 +174,14 @@ defmodule Platform.GameStream.Extension do
     }
   end
 
+  # Play's one permission, for `Platform.Access.Registry` (task 01a1386d-cb5c):
+  # the `play` bundle maps to it, as every core bundle maps to its
+  # `mcp.<bundle>` permission. No rail entry, because Play has no destination.
+  @impl true
+  def permissions do
+    [%{module: "play", permissions: ["play.use"], bundles: %{"play" => "play.use"}}]
+  end
+
   # Play has no rail destination
   # (`0055-extension-contract-and-build-time-modules.md § 5. Rail items: which are core and which are module`).
   @impl true

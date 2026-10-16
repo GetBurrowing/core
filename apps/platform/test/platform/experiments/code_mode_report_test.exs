@@ -198,7 +198,7 @@ defmodule Platform.Experiments.CodeModeReportTest do
       })
 
     {:ok, %Experiment{status: "running"} = experiment} =
-      Experiments.start(experiment, %User{id: Ecto.UUID.generate()})
+      Experiments.start(experiment, Platform.TenancyFixtures.root_admin!())
 
     {:ok, project} = Tasks.create_project(%{name: "CM report #{u()}"})
 

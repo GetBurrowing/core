@@ -255,7 +255,7 @@ defmodule Platform.Meetings.MeetingNotifier do
     # Single recipient source for BOTH the #440 push path and the inbox path.
     # Which rule answered is carried on `:source` and drives the push branch
     # below; the inbox branch is the same either way.
-    recipients = Meetings.recipients_for_meeting(meeting)
+    recipients = meeting |> Meetings.recipients_for_meeting() |> readable_recipients(meeting)
 
     payload = %{
       title: "#{host_display_name} started a meeting",
@@ -275,6 +275,31 @@ defmodule Platform.Meetings.MeetingNotifier do
     # human. Independent of the push path above — a per-recipient failure
     # never aborts the push or the remaining rows.
     fan_out_inbox(meeting, recipients, host_display_name)
+  end
+
+  defp readable_recipients(recipients, %Meeting{chat_space_id: space_id}) do
+    allowed? = fn user_id ->
+      user = Repo.get(Platform.Accounts.User, user_id)
+
+      is_nil(user) or
+        Platform.Access.check(
+          Platform.Access.Scope.for_user(user),
+          "chat.read",
+          {:space, space_id}
+        ) == :ok
+    end
+
+    candidate_ids =
+      recipients.user_ids ++
+        Enum.map(Map.get(recipients, :chat_participants, []), & &1.participant_id)
+
+    allowed_set = candidate_ids |> Enum.uniq() |> Enum.filter(allowed?) |> MapSet.new()
+
+    recipients
+    |> Map.put(:user_ids, Enum.filter(recipients.user_ids, &MapSet.member?(allowed_set, &1)))
+    |> Map.update(:chat_participants, [], fn rows ->
+      Enum.filter(rows, &MapSet.member?(allowed_set, &1.participant_id))
+    end)
   end
 
   # No declaration: the #440 participant-row push path, unchanged. Passes the

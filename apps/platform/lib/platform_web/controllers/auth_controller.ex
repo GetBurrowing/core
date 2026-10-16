@@ -2,6 +2,7 @@ defmodule PlatformWeb.AuthController do
   use PlatformWeb, :controller
 
   alias Platform.Accounts.ExternalAdmission
+  alias Platform.Access.IdpGroupRoles
   alias Platform.Mobile
   alias Platform.OIDC
   alias PlatformWeb.ExternalRedirect
@@ -487,12 +488,12 @@ defmodule PlatformWeb.AuthController do
     # marker claim so downstream admission can distinguish an external login
     # from an internal one. Orthogonal to the admin|member role axis —
     # `find_or_create_from_oidc/1` ignores this extra key.
-    external_claim? = OIDC.external_claim?(user)
-
     # Task 019ff7ff stage 2: carry the claim's VALUES through as well, so
     # admission can resolve which org an external login names. Purely
     # additive — `external_claim?` keeps its own callers and its meaning.
     external_groups = OIDC.claim_groups(user)
+    external_claim? = OIDC.external_claim?(user) or IdpGroupRoles.guest_group?(external_groups)
+    groups_claim_present? = Map.has_key?(user, OIDC.external_claim())
 
     case {user["sub"], user["email"], name} do
       {sub, email, n} when is_binary(sub) and is_binary(email) and is_binary(n) ->
@@ -503,7 +504,8 @@ defmodule PlatformWeb.AuthController do
            name: n,
            avatar_url: picture,
            external_claim?: external_claim?,
-           external_groups: external_groups
+           external_groups: external_groups,
+           groups_claim_present?: groups_claim_present?
          }}
 
       _ ->

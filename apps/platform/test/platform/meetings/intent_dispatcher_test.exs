@@ -47,7 +47,8 @@ defmodule Platform.Meetings.IntentDispatcherTest do
 
   import ExUnit.CaptureLog
 
-  alias Platform.Accounts.User
+  import Platform.TenancyFixtures
+
   alias Platform.Agents.Agent
   alias Platform.Agents.AgentRuntime
   alias Platform.Chat
@@ -245,13 +246,7 @@ defmodule Platform.Meetings.IntentDispatcherTest do
     |> Repo.insert!()
   end
 
-  defp create_user! do
-    Repo.insert!(%User{
-      email: "intentdisp_#{System.unique_integer([:positive])}@example.com",
-      name: "Intent Dispatcher Test User",
-      oidc_sub: "oidc-intentdisp-#{System.unique_integer([:positive])}"
-    })
-  end
+  defp create_user!, do: root_admin!()
 
   # The only agent shape that can receive an intent since stage 4: one
   # with a linked AgentRuntime. Agent `kind` is irrelevant to dispatch
@@ -308,15 +303,16 @@ defmodule Platform.Meetings.IntentDispatcherTest do
   # `intent_ack` is the ONE thing that varies.
   #
   # The starting point is PROVEN rather than assumed: `register_runtime/2`
-  # is passed no `allowed_bundles` key, and the row is re-read from the
-  # database and held to `AgentRuntime.default_allowed_bundles/0`. A
+  # is passed no `tool_profile` key, and the row is re-read from the
+  # database and held to `AgentRuntime.default_tool_profile/0`. A
   # hand-written literal list would pass whatever the real defaults became.
   defp seed_ack_target!(role_key, can_ack?) do
     {agent, runtime} = create_runtime_agent!()
 
-    defaults = AgentRuntime.default_allowed_bundles()
+    defaults = AgentRuntime.default_tool_profile()
 
-    assert Federation.get_runtime(runtime.id).allowed_bundles == defaults,
+    assert Platform.Access.RuntimeProfiles.tool_profile(Federation.get_runtime(runtime.id)) ==
+             defaults,
            "the fixture must track whatever the defaults actually are"
 
     carriers = ack_carrier_bundles()
@@ -328,7 +324,7 @@ defmodule Platform.Meetings.IntentDispatcherTest do
     bundles =
       if can_ack?, do: Enum.uniq(defaults ++ carriers), else: defaults -- carriers
 
-    {:ok, runtime} = Federation.update_allowed_bundles(runtime, bundles)
+    {:ok, _profile} = Platform.Access.RuntimeProfiles.set_tool_profile(runtime, bundles)
 
     # The fixture is proved to be what the case needs it to be, on the same
     # code path production authorizes through, BEFORE anything is enqueued.

@@ -48,7 +48,15 @@ defmodule Platform.Social.TransportParityTest do
         oidc_sub: "social-parity-#{System.unique_integer([:positive])}"
       })
 
-    %{owner: owner}
+    org = Platform.Tenancy.get_org_by_slug!("acme")
+
+    Repo.insert!(%Platform.Tenancy.OrgMembership{
+      user_id: owner.id,
+      org_id: org.id,
+      role: "admin"
+    })
+
+    %{owner: owner, org: org}
   end
 
   test "the granted runtime sees exactly the nine social tools on both transports", ctx do
@@ -74,9 +82,32 @@ defmodule Platform.Social.TransportParityTest do
     end
   end
 
+  test "Social profile stays capped by its owner and profile restriction", ctx do
+    {runtime, token} = runtime_for(ctx, ["social"])
+
+    assert token |> http_tools_by_name() |> Map.keys() |> Enum.filter(&social?/1) |> Enum.sort() ==
+             @nine
+
+    assert Platform.Access.can?(Platform.Access.Scope.for_runtime(runtime), "social.use")
+    {:ok, _} = Platform.Access.RuntimeProfiles.restrict(runtime, %{})
+    refute Platform.Access.can?(Platform.Access.Scope.for_runtime(runtime), "social.use")
+    assert token |> http_tools_by_name() |> Map.keys() |> Enum.filter(&social?/1) == []
+    {:ok, _} = Platform.Access.RuntimeProfiles.restrict(runtime, nil)
+
+    assert token |> http_tools_by_name() |> Map.keys() |> Enum.filter(&social?/1) |> Enum.sort() ==
+             @nine
+
+    {:ok, _} =
+      Platform.Tenancy.mark_membership_external(%{user_id: ctx.owner.id, org_id: ctx.org.id})
+
+    refute Platform.Access.can?(Platform.Access.Scope.for_runtime(runtime), "social.use")
+    assert Platform.Access.RuntimeProfiles.tool_profile(runtime) == ["social"]
+    assert token |> http_tools_by_name() |> Map.keys() |> Enum.filter(&social?/1) == []
+  end
+
   test "a default-bundles runtime sees no social tool on either transport", ctx do
-    {runtime, token} = runtime_for(ctx, AgentRuntime.default_allowed_bundles())
-    refute "social" in AgentRuntime.default_allowed_bundles()
+    {runtime, token} = runtime_for(ctx, AgentRuntime.default_tool_profile())
+    refute "social" in AgentRuntime.default_tool_profile()
     {_socket, capabilities} = join_runtime(runtime, token)
 
     assert token |> http_tools_by_name() |> Map.keys() |> Enum.filter(&social?/1) == []
@@ -181,7 +212,7 @@ defmodule Platform.Social.TransportParityTest do
 
   # ── Fixtures ───────────────────────────────────────────────────────────
 
-  defp runtime_for(ctx, allowed_bundles) do
+  defp runtime_for(ctx, modules) do
     raw_token = AgentRuntime.generate_token()
 
     {:ok, agent} =
@@ -200,11 +231,11 @@ defmodule Platform.Social.TransportParityTest do
         owner_user_id: ctx.owner.id,
         agent_id: agent.id,
         auth_token_hash: AgentRuntime.hash_token(raw_token),
-        status: "active",
-        allowed_bundles: allowed_bundles
+        status: "active"
       })
       |> Repo.insert()
 
+    {:ok, _} = Platform.Access.RuntimeProfiles.create_for_runtime(runtime, modules, nil)
     {runtime, raw_token}
   end
 end

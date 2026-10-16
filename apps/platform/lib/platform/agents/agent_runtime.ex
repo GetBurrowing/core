@@ -19,28 +19,6 @@ defmodule Platform.Agents.AgentRuntime do
   @valid_managed_by ~w(install)
   @valid_harnesses ~w(claude_code codex)
   @valid_desired_states ~w(running stopped)
-  # Must equal `ToolSurface.all_bundles/0` as a set — a bundle the surface
-  # registers but this list rejects cannot be persisted at all, so the full
-  # surface could not be granted even deliberately (019ff110). Guarded by
-  # `test/platform/agents/agent_runtime_test.exs`.
-  #
-  # Being GRANTABLE is not being GRANTED: adding a bundle here does not add it
-  # to `@default_allowed_bundles` below, and must not.
-  #
-  # Core's own grantable bundles. The full grantable list is these plus every
-  # build-time module's bundle (`Platform.Extensions.tool_bundle_names/0`,
-  # ADR 0055), read per call: never widen this attribute with a module's
-  # bundle. A module bundle (e.g. `play`, task 01a0db5f, which drives a
-  # physical GPU on a LAN machine) is grantable and NOT a default.
-  #
-  # `code_mode` (task 01a114a8 stage 2, `suite_run`) is grantable and NOT a
-  # default: it runs agent-written programs, so it is granted per runtime as
-  # data (Control Center allowed_bundles), never by a deploy.
-  #
-  # `prototype` (task 01a1316b-4e46 stage 1, ADR 0057) is grantable and NOT a
-  # default either; publishing is also off per install until an admin turns it on.
-  @core_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode prototype)
-
   # `meetings` is a DEFAULT, not merely grantable (task 01a066af stage 4).
   # `meeting_say` is the only way an invited agent can speak in a room, and it
   # is guarded independently by `Platform.Meetings`' own room check — an agent no
@@ -56,7 +34,7 @@ defmodule Platform.Agents.AgentRuntime do
   # this bundle split is about letting a runtime be granted `messaging`
   # WITHOUT `mail` (as `mix platform.seed_meeting_voice_agent` now does by
   # simply not listing `mail`), not about narrowing what the defaults get.
-  @default_allowed_bundles ~w(federation space context_read messaging attachment skill meetings mail)
+  @default_tool_profile ~w(federation space context_read messaging attachment skill meetings mail)
 
   schema "agent_runtimes" do
     field(:runtime_id, :string)
@@ -66,7 +44,6 @@ defmodule Platform.Agents.AgentRuntime do
     field(:transport, :string, default: "websocket")
     field(:status, :string, default: "pending")
     field(:trust_level, :string, default: "participant")
-    field(:allowed_bundles, {:array, :string}, default: @default_allowed_bundles)
     field(:auth_token_hash, :string)
     field(:last_connected_at, :utc_datetime_usec)
     field(:metadata, :map, default: %{})
@@ -77,9 +54,8 @@ defmodule Platform.Agents.AgentRuntime do
     timestamps(type: :utc_datetime_usec)
   end
 
-  @doc "Every grantable bundle: core's, then every build-time module's, per call."
-  def valid_bundles, do: @core_valid_bundles ++ Platform.Extensions.tool_bundle_names()
-  def default_allowed_bundles, do: @default_allowed_bundles
+  @doc "The default ordered module profile for a new runtime."
+  def default_tool_profile, do: @default_tool_profile
 
   @doc "The harnesses an install-managed runtime may run."
   def valid_harnesses, do: @valid_harnesses
@@ -98,7 +74,6 @@ defmodule Platform.Agents.AgentRuntime do
       :transport,
       :status,
       :trust_level,
-      :allowed_bundles,
       :auth_token_hash,
       :last_connected_at,
       :metadata,
@@ -114,7 +89,6 @@ defmodule Platform.Agents.AgentRuntime do
     |> validate_inclusion(:harness, @valid_harnesses)
     |> validate_inclusion(:desired_state, @valid_desired_states)
     |> validate_managed_harness()
-    |> validate_added_bundles(runtime)
     |> unique_constraint(:runtime_id)
   end
 
@@ -126,33 +100,6 @@ defmodule Platform.Agents.AgentRuntime do
       _ -> changeset
     end
   end
-
-  # Validates only the bundles a change ADDS (ADR 0055 section 7). A bundle
-  # already persisted on the row passes even when no loaded module provides
-  # it, so a build without that module cannot strip a grant it cannot see:
-  # the grant survives every save and works again once the module is back.
-  # A bundle the change adds must be grantable now. The error is the one
-  # `validate_subset/3` gives, so callers read it the same way.
-  defp validate_added_bundles(changeset, runtime) do
-    persisted = persisted_bundles(runtime)
-
-    validate_change(changeset, :allowed_bundles, fn :allowed_bundles, bundles ->
-      valid = valid_bundles()
-      added = Enum.reject(bundles, &(&1 in persisted))
-
-      if Enum.all?(added, &(&1 in valid)),
-        do: [],
-        else: [allowed_bundles: {"has an invalid entry", validation: :subset, enum: valid}]
-    end)
-  end
-
-  # Only a row that exists in the database has grants to keep; a new struct's
-  # default list is not a persisted grant.
-  defp persisted_bundles(%__MODULE__{__meta__: %{state: :loaded}, allowed_bundles: bundles})
-       when is_list(bundles),
-       do: bundles
-
-  defp persisted_bundles(_runtime), do: []
 
   @doc "Hash a raw token for storage."
   def hash_token(raw_token) when is_binary(raw_token) do

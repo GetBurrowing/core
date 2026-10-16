@@ -7,7 +7,7 @@ defmodule PlatformWeb.TasksSettingsMenuTest do
 
     * an admin must be able to reach pipeline THROUGH THE RENDERED
       AFFORDANCE. Firing `toggle_settings_menu` by name or GETting
-      `/admin/pipeline` would prove the handler and the route exist while a
+      `/tasks/pipeline` would prove the handler and the route exist while a
       header with no cog in it passed the whole suite. So this drives the UI:
       find the trigger, click it, find the link, follow it.
     * a member must be refused SERVER-SIDE on a direct request that
@@ -100,7 +100,7 @@ defmodule PlatformWeb.TasksSettingsMenuTest do
         view
         |> element("[data-role=tasks-settings-pipeline-link]")
         |> render_click()
-        |> follow_redirect(conn, "/admin/pipeline")
+        |> follow_redirect(conn, "/tasks/pipeline")
 
       assert count(pipeline_html, "[data-role=pipeline-page]") == 1
       assert pipeline_view.module == PlatformWeb.PipelineLive
@@ -122,10 +122,10 @@ defmodule PlatformWeb.TasksSettingsMenuTest do
       assert count(html, "[data-role=tasks-settings-pipeline-link-mobile]") == 0
     end
 
-    test "is refused /admin/pipeline on a direct request that bypasses the affordance",
+    test "is refused /tasks/pipeline on a direct request that bypasses the affordance",
          %{conn: conn} do
-      assert {:error, {:live_redirect, %{to: "/"}}} =
-               conn |> member_conn() |> live("/admin/pipeline")
+      assert {:error, {_, %{to: "/access-denied?module=tasks"}}} =
+               conn |> member_conn() |> live("/tasks/pipeline")
     end
   end
 end

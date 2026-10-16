@@ -34,6 +34,15 @@ defmodule Platform.Tenancy.OrgMembership do
   (`derive_role_from_email/1`, `apply_derived_role/1`) never touches
   `external` — it is set only via `Platform.Tenancy.mark_membership_external/1`
   and the pending-grant apply path.
+
+  ## Access role (derived, read-only)
+
+  `access_role_key` is the built-in `access_roles` row this membership maps
+  to (task 01a1386d-cb5c, `0058-rbac-v2-roles-scopes-and-agent-capping.md § Built-in roles`).
+  It is a Postgres GENERATED column, `CASE WHEN external THEN 'guest' ELSE
+  role END`, so it is derived from `role` and `external` and can never drift
+  from them whichever writer inserted the row. It is `writable: :never` and is
+  not in `cast/3`; it is read back after every insert and update.
   """
 
   use Ecto.Schema
@@ -56,6 +65,8 @@ defmodule Platform.Tenancy.OrgMembership do
     # evaluation for this row — manual grant wins. See Stage 3 migration
     # `20260519220000_add_roles_locked_at_to_org_memberships.exs`.
     field(:roles_locked_at, :utc_datetime_usec)
+    # Derived by the database from `role` + `external`; see "Access role".
+    field(:access_role_key, :string, writable: :never, read_after_writes: true)
 
     timestamps()
   end

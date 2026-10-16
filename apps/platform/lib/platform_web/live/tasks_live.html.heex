@@ -133,7 +133,7 @@
             </div>
           </div>
 
-          <.settings_menu admin?={@root_admin?} open?={@settings_menu_open} />
+          <.settings_menu access_scope={@access_scope} open?={@settings_menu_open} />
         </div>
       </:primary_action>
       <:filters>
@@ -312,7 +312,7 @@
     agents={@agents}
   />
 
-  <.settings_sheet admin?={@root_admin?} open?={@settings_menu_open} />
+  <.settings_sheet access_scope={@access_scope} open?={@settings_menu_open} />
 
   <%!-- Schedule-deletion confirm dialog (task 019f4eaa stage 6). Archive is
        instant + reversible with no modal; only this destructive step confirms. --%>

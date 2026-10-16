@@ -28,7 +28,7 @@ defmodule Platform.Social.Extension do
   @deny_publish_or_approve "There is no publish or approve tool: a human approves in Suite and the platform publishes."
 
   # Grantable, NOT a default grant (like Play): an admin grants `social` per
-  # runtime in `allowed_bundles`. Every `social_*` name is Social's, listed
+  # runtime in its tool profile. Every `social_*` name is Social's, listed
   # or not, so an invented one gets Social's answer, not core's.
   @impl true
   def mcp_tool_bundles do
@@ -40,6 +40,18 @@ defmodule Platform.Social.Extension do
         execute: &Platform.Social.Tools.execute/3,
         deny_message: &deny_message/1,
         owns_tool?: &String.starts_with?(&1, "social_")
+      }
+    ]
+  end
+
+  @impl true
+  def permissions do
+    [
+      %{
+        module: "social",
+        permissions: ["social.use"],
+        rail: [%{key: :social, permission: "social.use"}],
+        bundles: %{"social" => "social.use"}
       }
     ]
   end
@@ -110,7 +122,17 @@ defmodule Platform.Social.Extension do
   # page. Core hands it only the user id; `PlatformWeb.SocialLive`
   # re-reads the user and authorizes everything itself.
   @impl true
-  def live_pages, do: [%{prefix: "social", live_view: PlatformWeb.SocialLive, title: "Social"}]
+  def live_pages do
+    [
+      %{
+        prefix: "social",
+        live_view: PlatformWeb.SocialLive,
+        title: "Social",
+        module: :social,
+        permission: "social.use"
+      }
+    ]
+  end
 
   # The vendor's status webhook (Social 2/7), behind core's generic
   # `/api/ext/<prefix>` seam. Core gives it no session and no auth: the

@@ -215,24 +215,32 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
     canvas
   end
 
-  # An MCP runtime bound to `agent`. `allowed_bundles` is a LITERAL list rather
-  # than `AgentRuntime.valid_bundles()`: this file is about authorization, and
+  # An MCP runtime bound to `agent` and owned by a root admin. The owner's
+  # grants cover the requested tools so these tests reach the task gate.
+  # `tool_profile` is a LITERAL list rather
+  # than `Platform.Access.RuntimeProfiles.valid_modules()`: this file is about authorization, and
   # a capability refusal (`-32001`) would be a different failure wearing the
   # same red.
   defp runtime_token!(agent, bundles \\ ["task", "canvas"]) do
     raw = AgentRuntime.generate_token()
 
-    {:ok, _runtime} =
+    {:ok, runtime} =
       %AgentRuntime{}
       |> AgentRuntime.changeset(%{
         runtime_id: "tcaa-rt-#{n()}",
-        owner_user_id: user!().id,
+        owner_user_id: Platform.TenancyFixtures.root_admin!().id,
         agent_id: agent && agent.id,
         auth_token_hash: AgentRuntime.hash_token(raw),
-        status: "active",
-        allowed_bundles: bundles
+        status: "active"
       })
       |> Repo.insert()
+
+    {:ok, _profile} =
+      Platform.Access.RuntimeProfiles.create_for_runtime(
+        runtime,
+        bundles,
+        Platform.Access.RuntimeProfiles.translated_permissions(bundles)
+      )
 
     raw
   end
@@ -428,17 +436,23 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
       grant_canvas_read!(space, agent)
       raw = AgentRuntime.generate_token()
 
-      {:ok, _rt} =
+      {:ok, rt} =
         %AgentRuntime{}
         |> AgentRuntime.changeset(%{
           runtime_id: "tcaa-rt-#{n()}",
           owner_user_id: sponsor.id,
           agent_id: agent.id,
           auth_token_hash: AgentRuntime.hash_token(raw),
-          status: "active",
-          allowed_bundles: ["task", "canvas"]
+          status: "active"
         })
         |> Repo.insert()
+
+      {:ok, _profile} =
+        Platform.Access.RuntimeProfiles.create_for_runtime(
+          rt,
+          ["task", "canvas"],
+          Platform.Access.RuntimeProfiles.translated_permissions(["task", "canvas"])
+        )
 
       assert {:error, envelope} = attach(conn, raw, task, canvas)
       assert envelope["code"] == "task_forbidden"

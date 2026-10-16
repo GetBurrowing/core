@@ -267,7 +267,6 @@ defmodule PlatformWeb.ControlCenter.OnboardingEvents do
     runtime_id = String.trim(params["runtime_id"] || "")
     display_name = String.trim(params["display_name"] || "")
     agent_name = String.trim(params["agent_name"] || "")
-    owner_id = socket.assigns.current_user_id
 
     cond do
       runtime_id == "" ->
@@ -276,7 +275,7 @@ defmodule PlatformWeb.ControlCenter.OnboardingEvents do
       agent_name == "" ->
         {:noreply, put_flash(socket, :error, "Agent name is required.")}
 
-      is_nil(owner_id) ->
+      is_nil(socket.assigns.current_user_id) ->
         {:noreply, put_flash(socket, :error, "You must be logged in.")}
 
       true ->
@@ -296,7 +295,11 @@ defmodule PlatformWeb.ControlCenter.OnboardingEvents do
 
         # One transaction: register, link, activate (task 01a10322 stage 1).
         # A failed link or activation no longer leaves a pending runtime row.
-        case Federation.provision_agent_runtime(owner_id, agent_attrs, runtime_attrs) do
+        case Federation.provision_agent_runtime(
+               socket.assigns.access_scope,
+               agent_attrs,
+               runtime_attrs
+             ) do
           {:ok, agent, _runtime, raw_token} ->
             ws_url = "wss://#{PlatformWeb.Endpoint.host()}/runtime/ws"
 

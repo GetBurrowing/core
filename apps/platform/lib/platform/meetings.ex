@@ -18,6 +18,7 @@ defmodule Platform.Meetings do
 
   alias Platform.Accounts
   alias Platform.Accounts.User
+  alias Platform.Access
   alias Platform.Agents.Agent
   alias Platform.Agents.AgentRuntime
   alias Platform.Agents.Voice
@@ -169,7 +170,7 @@ defmodule Platform.Meetings do
         {:error, :not_found}
 
       [meeting] ->
-        if ExternalScope.visible_space_id?(meeting.chat_space_id, ExternalScope.for_user(user)) do
+        if ExternalScope.visible_space_id?(meeting.chat_space_id, Access.Scope.for_user(user)) do
           {:ok, Repo.preload(meeting, :chat_space)}
         else
           {:error, :not_found}

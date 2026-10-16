@@ -94,10 +94,16 @@ defmodule PlatformWeb.RuntimeSocketLogFilterTest do
         owner_user_id: owner.id,
         agent_id: agent.id,
         auth_token_hash: AgentRuntime.hash_token(raw_token),
-        status: "active",
-        allowed_bundles: ["federation"]
+        status: "active"
       })
       |> Repo.insert()
+
+    {:ok, _profile} =
+      Platform.Access.RuntimeProfiles.create_for_runtime(
+        runtime,
+        ["federation"],
+        Platform.Access.RuntimeProfiles.translated_permissions(["federation"])
+      )
 
     {runtime, raw_token}
   end

@@ -12,6 +12,7 @@ defmodule Platform.Chat.Canvas.Kinds.Text do
       "required" => ["value"],
       "properties" => %{
         "value" => %{"type" => "string"},
+        "principal_id" => %{"type" => "string"},
         "class_overrides" => %{"type" => "string"}
       }
     }
@@ -28,7 +29,7 @@ defmodule Platform.Chat.Canvas.Kinds.Text do
     }
   end
 
-  attr :node, :map, required: true
+  attr(:node, :map, required: true)
 
   def render(assigns) do
     props = assigns.node["props"] || %{}
@@ -37,10 +38,11 @@ defmodule Platform.Chat.Canvas.Kinds.Text do
       assigns
       |> assign(:text_class, classes(props))
       |> assign(:value, stringify(props["value"]))
+      |> assign(:principal_id, props["principal_id"])
       |> assign(:class_overrides, props["class_overrides"])
 
     ~H"""
-    <p class={[@text_class, @class_overrides]}>{@value}</p>
+    <p data-principal-id={@principal_id} class={[@text_class, @class_overrides]}>{@value}</p>
     """
   end
 

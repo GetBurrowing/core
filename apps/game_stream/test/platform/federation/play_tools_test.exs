@@ -20,6 +20,9 @@ defmodule Platform.Federation.PlayToolsTest do
 
   use Platform.DataCase, async: false
 
+  import Ecto.Query, only: [from: 2]
+
+  alias Platform.Access.{Grant, RuntimeProfiles}
   alias Platform.Accounts.User
   alias Platform.Agents.Agent
   alias Platform.Agents.AgentRuntime
@@ -50,6 +53,7 @@ defmodule Platform.Federation.PlayToolsTest do
   # 128 with `vault_fetch` and `vault_list` after `federation_status`
   # (task 01a131c5 stage 1).
   # 131 with both (rollup merge of stack prototype-runtime onto main).
+  # 135 with the four access tools (RBAC v2 agent-first Access UI).
   @main_tool_names ~w(
     canvas.create canvas.patch canvas.describe canvas.list_kinds canvas.template canvas.versions
     canvas.restore send_media react project_list org_list_descendants project_update epic_list
@@ -77,6 +81,7 @@ defmodule Platform.Federation.PlayToolsTest do
     experiment_results experiment_signals_list experiment_exclude experiment_goal_set
     experiment_goal_list experiment_promote dispatch_metrics_list code_mode_report suite_run
     suite_run_describe prototype.publish prototype.versions prototype.rollback
+    access_explain access_propose access_apply access_undo
   )
 
   @names ~w(play_session_start play_session_stop play_session_status)
@@ -111,7 +116,32 @@ defmodule Platform.Federation.PlayToolsTest do
   end
 
   defp enable!, do: Application.put_env(:game_stream, :enabled, true)
-  defp runtime(bundles), do: %AgentRuntime{owner_user_id: nil, allowed_bundles: bundles}
+
+  defp runtime(modules) do
+    owner = Platform.ExternalUserFixtures.create_user!()
+    org = Platform.Tenancy.get_org_by_slug!("sxi")
+    Platform.ExternalUserFixtures.plain_member!(owner, org)
+    {:ok, project} = Tasks.create_project(%{name: "Play permission #{unique()}", org_id: org.id})
+
+    Repo.insert!(%Grant{
+      org_id: org.id,
+      principal_type: "user",
+      principal_id: owner.id,
+      permission: "play.use",
+      resource_type: "project",
+      resource_id: project.id,
+      effect: "allow"
+    })
+
+    {:ok, runtime} =
+      Federation.register_runtime(owner.id, %{
+        runtime_id: "play-tools-profile-#{unique()}",
+        tool_profile: modules
+      })
+
+    runtime
+  end
+
   defp unique, do: System.unique_integer([:positive])
 
   # Sessions live under a global DynamicSupervisor; one a case left running
@@ -127,8 +157,8 @@ defmodule Platform.Federation.PlayToolsTest do
   defp catalogue_names, do: Enum.map(ToolSurface.tool_definitions(), & &1.name)
 
   describe "GUARD: with GAME_STREAM_ENABLED unset the tool list is main's" do
-    test "tool_definitions/0 names equal main's 131, in order" do
-      assert length(@main_tool_names) == 131
+    test "tool_definitions/0 names equal main's 135, in order" do
+      assert length(@main_tool_names) == 135
       assert catalogue_names() == @main_tool_names
     end
 
@@ -142,7 +172,7 @@ defmodule Platform.Federation.PlayToolsTest do
   describe "flag unset" do
     test "the play bundle lists nothing, even for a runtime granted it" do
       assert ToolSurface.list_tools(["play"]) == []
-      granted = runtime(AgentRuntime.default_allowed_bundles() ++ ["play"])
+      granted = runtime(AgentRuntime.default_tool_profile() ++ ["play"])
       refute Enum.any?(ToolAuthorization.tool_names(granted), &(&1 in @names))
     end
 
@@ -160,7 +190,7 @@ defmodule Platform.Federation.PlayToolsTest do
     end
 
     test "over the transports, the denial message names the flag, not a lookup miss" do
-      granted = runtime(AgentRuntime.default_allowed_bundles() ++ ["play"])
+      granted = runtime(AgentRuntime.default_tool_profile() ++ ["play"])
 
       for name <- @names do
         assert ToolAuthorization.authorize(name, granted) == {:error, :forbidden}
@@ -180,9 +210,9 @@ defmodule Platform.Federation.PlayToolsTest do
 
     test "the bundle is grantable, not a default, and lists exactly the play tools" do
       assert "play" in ToolSurface.all_bundles()
-      assert "play" in AgentRuntime.valid_bundles()
-      refute "play" in AgentRuntime.default_allowed_bundles()
-      refute "play" in %AgentRuntime{}.allowed_bundles
+      assert "play" in RuntimeProfiles.valid_modules()
+      refute "play" in AgentRuntime.default_tool_profile()
+      assert RuntimeProfiles.tool_profile(%AgentRuntime{}) == []
 
       assert Enum.map(ToolSurface.list_tools(["play"]), & &1.name) == @names
       assert Enum.all?(ToolSurface.list_tools(["play"]), &(&1.bundle == "play"))
@@ -192,20 +222,38 @@ defmodule Platform.Federation.PlayToolsTest do
     end
 
     test "without the bundle ToolAuthorization refuses every play tool" do
-      default = runtime(AgentRuntime.default_allowed_bundles())
+      default = runtime(AgentRuntime.default_tool_profile())
 
       for name <- @names do
         assert ToolAuthorization.authorize(name, default) == {:error, :forbidden}
-        assert ToolAuthorization.deny_message(name) == "tool '#{name}' not in allowed bundles"
+
+        assert ToolAuthorization.deny_message(name) ==
+                 "tool '#{name}' requires permission 'play.use', which this agent does not hold or is capped at its owner"
       end
     end
 
     test "with the bundle every play tool is authorized" do
-      granted = runtime(AgentRuntime.default_allowed_bundles() ++ ["play"])
+      granted = runtime(AgentRuntime.default_tool_profile() ++ ["play"])
 
       for name <- @names do
         assert ToolAuthorization.authorize(name, granted) == :ok
       end
+    end
+
+    test "a loaded play profile cannot exceed its owner's permission" do
+      granted = runtime(["play"])
+      assert ToolAuthorization.authorize("play_session_start", granted) == :ok
+      Repo.delete_all(from(g in Grant, where: g.principal_id == ^granted.owner_user_id))
+      assert RuntimeProfiles.tool_profile(granted) == ["play"]
+      assert ToolAuthorization.authorize("play_session_start", granted) == {:error, :forbidden}
+    end
+
+    test "an explicit empty restriction refuses play without unloading its profile" do
+      granted = runtime(["play"])
+      assert ToolAuthorization.authorize("play_session_start", granted) == :ok
+      assert {:ok, _profile} = RuntimeProfiles.restrict(granted, %{})
+      assert RuntimeProfiles.tool_profile(granted) == ["play"]
+      assert ToolAuthorization.authorize("play_session_start", granted) == {:error, :forbidden}
     end
 
     test "every definition carries the six-component rubric" do
@@ -251,7 +299,7 @@ defmodule Platform.Federation.PlayToolsTest do
       {:ok, host} =
         Federation.register_runtime(user.id, %{
           runtime_id: host_id,
-          allowed_bundles: [],
+          tool_profile: [],
           metadata: %{"client_info" => %{"features" => ["game_stream_host"]}}
         })
 

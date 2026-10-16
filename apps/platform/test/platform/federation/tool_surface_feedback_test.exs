@@ -18,8 +18,11 @@ defmodule Platform.Federation.ToolSurfaceFeedbackTest do
   """
   use Platform.DataCase, async: false
 
+  import Platform.TenancyFixtures
+
   alias Platform.Agents.Agent
   alias Platform.Agents.AgentRuntime
+  alias Platform.Access.RuntimeProfiles
   alias Platform.Federation.ToolArguments
   alias Platform.Federation.ToolAuthorization
   alias Platform.Federation.ToolSurface
@@ -58,7 +61,20 @@ defmodule Platform.Federation.ToolSurfaceFeedbackTest do
       })
       |> Repo.insert!()
 
-    %{agent: agent, runtime: %AgentRuntime{allowed_bundles: ["federation"], owner_user_id: nil}}
+    runtime =
+      Repo.insert!(%AgentRuntime{
+        runtime_id: "feedback-surface-#{System.unique_integer([:positive])}",
+        owner_user_id: root_admin!().id
+      })
+
+    {:ok, _profile} =
+      RuntimeProfiles.create_for_runtime(
+        runtime,
+        ["federation"],
+        RuntimeProfiles.translated_permissions(["federation"])
+      )
+
+    %{agent: agent, runtime: runtime}
   end
 
   defp set_policy(value), do: Application.put_env(:platform, :feedback_policy, value)

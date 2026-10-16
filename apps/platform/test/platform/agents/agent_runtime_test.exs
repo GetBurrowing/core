@@ -8,21 +8,23 @@ defmodule Platform.Agents.AgentRuntimeTest do
   """
   use Platform.DataCase, async: false
 
-  alias Platform.Accounts.User
+  import Platform.TenancyFixtures
+
   alias Platform.Agents.AgentRuntime
+  alias Platform.Access.RuntimeProfiles
   alias Platform.Federation
   alias Platform.Federation.ToolAuthorization
   alias Platform.Federation.ToolSurface
   alias Platform.Repo
 
-  describe "default_allowed_bundles/0 (pure)" do
+  describe "default_tool_profile/0 (pure)" do
     test "includes \"skill\" so federated runtimes get DB-shipped skill access by default" do
-      assert "skill" in AgentRuntime.default_allowed_bundles()
+      assert "skill" in AgentRuntime.default_tool_profile()
     end
 
     test "every default bundle is in the valid bundle allowlist" do
-      defaults = AgentRuntime.default_allowed_bundles()
-      valid = AgentRuntime.valid_bundles()
+      defaults = AgentRuntime.default_tool_profile()
+      valid = RuntimeProfiles.valid_modules()
       assert Enum.all?(defaults, &(&1 in valid))
     end
   end
@@ -36,10 +38,12 @@ defmodule Platform.Agents.AgentRuntimeTest do
     #
     # The runtime here is built from the accessor, not a literal list: the
     # point is that WHATEVER the defaults are, they reach `meeting_say`.
-    # `owner_user_id` is nil, so `external_principal?/1` is false without a
-    # query and no external-chat intersection applies.
+    # A root-admin owner supplies the permission cap for this positive control.
     test "a runtime on default bundles may call meeting_say" do
-      runtime = %AgentRuntime{allowed_bundles: AgentRuntime.default_allowed_bundles()}
+      {:ok, runtime} =
+        Federation.register_runtime(root_admin!().id, %{
+          runtime_id: "meeting-default-#{System.unique_integer([:positive])}"
+        })
 
       assert :ok = ToolAuthorization.authorize("meeting_say", runtime)
       assert :ok = ToolAuthorization.authorize("meeting_create", runtime)
@@ -56,39 +60,42 @@ defmodule Platform.Agents.AgentRuntimeTest do
     # Built from the accessor, never a literal bundle list: the proposition is
     # that WHATEVER the defaults are, they reach this tool. Hardcoding
     # `["federation", ..., "meetings"]` would assert something else entirely
-    # and would survive removal of `"meetings"` from `@default_allowed_bundles`.
+    # and would survive removal of `"meetings"` from `@default_tool_profile`.
     #
     # `authorize/2` returns a BARE `{:error, :forbidden}`; the readable
     # `tool '...' not in allowed bundles` string is rendered only at the
     # transport boundaries (`runtime_channel.ex`, `mcp_controller.ex`), so
     # there is nothing to match on here beyond `:ok`.
     test "a runtime on default bundles may call meeting_activity_push" do
-      runtime = %AgentRuntime{allowed_bundles: AgentRuntime.default_allowed_bundles()}
+      {:ok, runtime} =
+        Federation.register_runtime(root_admin!().id, %{
+          runtime_id: "meeting-activity-default-#{System.unique_integer([:positive])}"
+        })
 
       assert :ok = ToolAuthorization.authorize("meeting_activity_push", runtime)
       assert "meeting_activity_push" in ToolAuthorization.tool_names(runtime)
     end
 
     test "\"meetings\" is a default, not merely grantable" do
-      assert "meetings" in AgentRuntime.default_allowed_bundles()
-      assert "meetings" in AgentRuntime.valid_bundles()
+      assert "meetings" in AgentRuntime.default_tool_profile()
+      assert "meetings" in RuntimeProfiles.valid_modules()
       assert "meetings" in ToolSurface.all_bundles()
     end
   end
 
   describe "bundle registry is a single set" do
     # Task 019ff110. `ToolSurface.all_bundles/0` registered `files` while
-    # `@valid_bundles` rejected it, so the full surface could not be persisted
+    # `@core_valid_modules` rejected it, so the full surface could not be persisted
     # onto a runtime row even deliberately — `all_bundles/0` did not round-trip
-    # into `allowed_bundles`.
+    # into `tool_profile`.
     #
     # Both operands are derived from their own module's accessor ON PURPOSE.
     # A test pinning the names would pass while both lists drifted together in
     # the wrong direction, and would need editing on every legitimate bundle
     # addition — which trains people to edit it without reading it.
-    test "ToolSurface.all_bundles/0 and AgentRuntime.valid_bundles/0 agree exactly" do
+    test "ToolSurface.all_bundles/0 and RuntimeProfiles.valid_modules/0 agree exactly" do
       surface = MapSet.new(ToolSurface.all_bundles())
-      valid = MapSet.new(AgentRuntime.valid_bundles())
+      valid = MapSet.new(RuntimeProfiles.valid_modules())
 
       registered_but_rejected = surface |> MapSet.difference(valid) |> Enum.sort()
       permitted_but_unregistered = valid |> MapSet.difference(surface) |> Enum.sort()
@@ -100,16 +107,16 @@ defmodule Platform.Agents.AgentRuntimeTest do
       The bundle registry has drifted into two different sets.
 
       Registered by ToolSurface.all_bundles/0 but REJECTED by \
-      AgentRuntime.valid_bundles/0 (a runtime cannot hold these, so the tools \
+      RuntimeProfiles.valid_modules/0 (a runtime cannot hold these, so the tools \
       in them can never be granted): #{inspect(registered_but_rejected)}
 
-      Permitted by AgentRuntime.valid_bundles/0 but NEVER REGISTERED by \
+      Permitted by RuntimeProfiles.valid_modules/0 but NEVER REGISTERED by \
       ToolSurface.all_bundles/0 (a row may hold these and get nothing): \
       #{inspect(permitted_but_unregistered)}
 
       Fix the side that is stale. Widening the validator makes a bundle \
       grantable; it does not grant it, and it must not change \
-      @default_allowed_bundles.
+      @default_tool_profile.
       """
 
       assert surface == valid, message
@@ -117,7 +124,7 @@ defmodule Platform.Agents.AgentRuntimeTest do
   end
 
   describe "newly-registered runtime (DB)" do
-    test "receives the default allowed_bundles, including \"skill\"" do
+    test "receives the default tool_profile, including \"skill\"" do
       user = create_user()
 
       {:ok, runtime} =
@@ -126,8 +133,8 @@ defmodule Platform.Agents.AgentRuntimeTest do
         })
 
       reloaded = Repo.get!(AgentRuntime, runtime.id)
-      assert "skill" in reloaded.allowed_bundles
-      assert reloaded.allowed_bundles == AgentRuntime.default_allowed_bundles()
+      assert "skill" in RuntimeProfiles.tool_profile(reloaded)
+      assert RuntimeProfiles.tool_profile(reloaded) == AgentRuntime.default_tool_profile()
     end
   end
 
@@ -399,11 +406,5 @@ defmodule Platform.Agents.AgentRuntimeTest do
     end
   end
 
-  defp create_user do
-    Repo.insert!(%User{
-      email: "rt_meta_test_#{System.unique_integer([:positive])}@example.com",
-      name: "Runtime Meta Test User",
-      oidc_sub: "oidc-rt-meta-#{System.unique_integer([:positive])}"
-    })
-  end
+  defp create_user, do: root_admin!()
 end

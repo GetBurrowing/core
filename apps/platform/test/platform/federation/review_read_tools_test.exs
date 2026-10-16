@@ -103,6 +103,8 @@ defmodule Platform.Federation.ReviewReadToolsTest do
 
   import Ecto.Query, only: [from: 2]
 
+  import Platform.TenancyFixtures
+
   alias Platform.Agents.Agent
   alias Platform.Federation.{ToolAuthorization, ToolSurface}
   alias Platform.Repo
@@ -191,13 +193,13 @@ defmodule Platform.Federation.ReviewReadToolsTest do
 
   describe "ToolAuthorization.authorize/2" do
     test "a runtime holding the review bundle may call both tools" do
-      runtime = %{allowed_bundles: ["review"], owner_user_id: nil}
+      runtime = Platform.RuntimeProfileFixtures.runtime!(root_admin!().id, ["review"])
 
       for tool <- @read_tools, do: assert(ToolAuthorization.authorize(tool, runtime) == :ok)
     end
 
     test "a runtime without the review bundle is forbidden on both tools" do
-      runtime = %{allowed_bundles: ["task", "plan"], owner_user_id: nil}
+      runtime = Platform.RuntimeProfileFixtures.runtime!(root_admin!().id, ["task", "plan"])
 
       for tool <- @read_tools do
         assert ToolAuthorization.authorize(tool, runtime) == {:error, :forbidden}

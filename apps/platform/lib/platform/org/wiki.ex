@@ -43,6 +43,8 @@ defmodule Platform.Org.Wiki do
 
   alias Ecto.Adapters.SQL
   alias Platform.Files
+  alias Platform.Org.Wiki.Nodes
+  alias Platform.Org.Wiki.Routing
   alias Platform.Org.WikiJournalEntry
   alias Platform.Org.WikiPage
   alias Platform.Repo
@@ -100,18 +102,25 @@ defmodule Platform.Org.Wiki do
 
   ## Options
     * `:workspace_id` (default `nil` — org-scoped)
+    * `:access_scope` — optional `%Platform.Access.Scope{}` (task
+      01a1386d-e528 stage 4). Given, a page the scope may not
+      `memory.read` (`scope_by/3`) answers `nil`, exactly as an absent page
+      does, whether it was reached directly or through an alias. Absent,
+      the lookup is unchanged.
   """
   @spec get_page(String.t(), keyword()) :: WikiPage.t() | nil
   def get_page(file_key, opts \\ []) when is_binary(file_key) do
     workspace_id = Keyword.get(opts, :workspace_id)
+    access_scope = Keyword.get(opts, :access_scope)
 
     direct =
       WikiPage
       |> where([p], p.file_key == ^file_key)
       |> filter_workspace(workspace_id)
+      |> maybe_scope_by(access_scope)
       |> Repo.one()
 
-    direct || lookup_via_alias(file_key, workspace_id)
+    direct || readable_or_nil(lookup_via_alias(file_key, workspace_id), access_scope)
   end
 
   @doc """
@@ -119,6 +128,9 @@ defmodule Platform.Org.Wiki do
 
   ## Options
     * `:workspace_id` (default `nil` — org-scoped)
+    * `:access_scope` — optional `%Platform.Access.Scope{}` (task
+      01a1386d-e528 stage 4): only the pages it may `memory.read`
+      (`scope_by/3`). Absent, the listing is unchanged.
   """
   @spec list_pages(keyword()) :: [WikiPage.t()]
   def list_pages(opts \\ []) do
@@ -126,8 +138,52 @@ defmodule Platform.Org.Wiki do
 
     WikiPage
     |> filter_workspace(workspace_id)
+    |> maybe_scope_by(Keyword.get(opts, :access_scope))
     |> order_by([p], asc: p.file_key)
     |> Repo.all()
+  end
+
+  @doc """
+  Restrict a `WikiPage` query (its root binding) to the pages `scope` may
+  `memory.read` (task 01a1386d-e528 stage 4,
+  `0058-rbac-v2-roles-scopes-and-agent-capping.md § Memory grants`).
+
+  A thin call to `Platform.Access.Query.where_readable/5` over
+  `file_key` and `workspace_id`. Grants name org-memory NODES
+  (`Platform.Org.Wiki.Nodes`), never a path string; the query reads which
+  node covers each page's path now. Precedence (deny wins, downward only)
+  is decided in `Platform.Access`. With no `memory.read` grant on the scope
+  the query is returned unchanged.
+  """
+  @spec scope_by(Ecto.Queryable.t(), Platform.Access.Scope.t(), :memory_page) ::
+          Ecto.Queryable.t()
+  def scope_by(query, %Platform.Access.Scope{} = scope, :memory_page) do
+    Platform.Access.Query.where_readable(query, scope, "memory.read", :memory_page, %{
+      path: :file_key,
+      workspace_id: :workspace_id
+    })
+  end
+
+  @doc false
+  # The optional `:access_scope` seam shared with `Platform.Org.Wiki.Search`.
+  def maybe_scope_by(query, %Platform.Access.Scope{} = scope),
+    do: scope_by(query, scope, :memory_page)
+
+  def maybe_scope_by(query, _scope), do: query
+
+  # An alias hit is a page at ANOTHER key, so it is checked against the
+  # scope on its own row: a denied page is never reachable by its old name.
+  defp readable_or_nil(nil, _scope), do: nil
+  defp readable_or_nil(%WikiPage{} = page, nil), do: page
+
+  defp readable_or_nil(%WikiPage{id: id} = page, scope) do
+    readable =
+      WikiPage
+      |> where([p], p.id == ^id)
+      |> maybe_scope_by(scope)
+      |> Repo.exists?()
+
+    if readable, do: page, else: nil
   end
 
   # ── The pages / files corpus partition (task 01a0008c stage 4) ───────────
@@ -262,6 +318,8 @@ defmodule Platform.Org.Wiki do
     * `:workspace_id` (default `nil` — org-scoped; matches rows with
       `is_nil(workspace_id)`)
     * `:window_end`   (default `DateTime.utc_now/0`)
+    * `:access_scope` — optional (task 01a1386d-e528 stage 4): only the
+      pages the scope may `memory.read` (`scope_by/3`). Absent, unchanged.
   """
   @spec list_pages_updated_since(DateTime.t(), keyword()) :: [WikiPage.t()]
   def list_pages_updated_since(%DateTime{} = window_start, opts \\ []) do
@@ -311,6 +369,7 @@ defmodule Platform.Org.Wiki do
       p.updated_at >= ^window_start and p.updated_at < ^window_end
     )
     |> filter_workspace(workspace_id)
+    |> maybe_scope_by(Keyword.get(opts, :access_scope))
     |> order_by([p], asc: p.updated_at)
   end
 
@@ -736,6 +795,11 @@ defmodule Platform.Org.Wiki do
                          workspace_id: deleted.workspace_id
                        })
 
+                       # The location identity follows the page, only once
+                       # both page writes succeeded, inside this same
+                       # transaction. See Platform.Org.Wiki.Nodes.
+                       move_node!(deleted.file_key, new_file_key, workspace_id)
+
                        new_page
 
                      {:error, reason} ->
@@ -750,6 +814,143 @@ defmodule Platform.Org.Wiki do
       {:ok, %WikiPage{} = page} -> {:ok, page}
       {:error, _} = err -> err
     end
+  end
+
+  defp move_node!(old_key, new_key, workspace_id) do
+    case Nodes.move(old_key, new_key, workspace_id: workspace_id) do
+      {:ok, _count} -> :ok
+      {:error, reason} -> Repo.rollback(reason)
+    end
+  end
+
+  @doc """
+  Pages whose `file_key` starts with `prefix`, ordered by `file_key asc`.
+  Exact keys only: no alias fallback.
+
+  ## Options
+    * `:workspace_id` (default `nil`)
+  """
+  @spec list_pages_under(String.t(), keyword()) :: [WikiPage.t()]
+  def list_pages_under(prefix, opts \\ []) when is_binary(prefix) do
+    WikiPage
+    |> where([p], fragment("starts_with(?, ?)", p.file_key, ^prefix))
+    |> filter_workspace(Keyword.get(opts, :workspace_id))
+    |> order_by([p], asc: p.file_key)
+    |> Repo.all()
+  end
+
+  @doc """
+  Rename a directory prefix: every page under `old_prefix` moves to the same
+  relative key under `new_prefix`, then every memory node still under
+  `old_prefix` (the prefix node itself, nodes of deleted pages) moves too
+  (task 01a1386d-e528, `0058-rbac-v2-roles-scopes-and-agent-capping.md § Memory grants`).
+
+  All-or-nothing in ONE transaction. Each page goes through the same
+  `do_rename/4` a single `rename_page/3` uses, so per-page content,
+  `version` and `updated_by` are what N single renames would produce.
+
+  Refusals, checked before any write:
+    * `{:error, :not_a_prefix}` unless both end in `/`;
+    * `{:error, :same_path}` when they are equal;
+    * `{:error, :product_owned}` for `burrow/`, as `check_product_owned/2`;
+    * `{:error, :ambiguous_kind}` unless both classify as Historian page
+      namespaces;
+    * `{:error, {:conflict, paths}}` when ANY target location already holds
+      a page or a memory node. The target locations are `new_prefix` itself
+      and the new key of every page and node under `old_prefix`. A subtree
+      rename never overwrites, so the single-page overwrite semantic (and its
+      node merge) never applies here;
+    * `{:error, :not_found}` when there is no page and no node under
+      `old_prefix`, the answer a trailing-slash `rename_page/3` gave before
+      this existed.
+
+  ## Options
+    * `:workspace_id` (default `nil`)
+    * `:updated_by` — as `rename_page/3`
+  """
+  @spec rename_prefix(String.t(), String.t(), keyword()) ::
+          {:ok, [{String.t(), WikiPage.t()}]}
+          | {:error,
+             :not_a_prefix
+             | :same_path
+             | :product_owned
+             | :ambiguous_kind
+             | :not_found
+             | {:conflict, [String.t()]}
+             | term()}
+  def rename_prefix(old_prefix, new_prefix, opts \\ [])
+      when is_binary(old_prefix) and is_binary(new_prefix) do
+    workspace_id = Keyword.get(opts, :workspace_id)
+
+    cond do
+      not (String.ends_with?(old_prefix, "/") and String.ends_with?(new_prefix, "/")) ->
+        {:error, :not_a_prefix}
+
+      old_prefix == new_prefix ->
+        {:error, :same_path}
+
+      check_product_owned([old_prefix, new_prefix], opts) != :ok ->
+        {:error, :product_owned}
+
+      not (historian_page_prefix?(old_prefix) and historian_page_prefix?(new_prefix)) ->
+        {:error, :ambiguous_kind}
+
+      true ->
+        do_rename_prefix(old_prefix, new_prefix, workspace_id, opts)
+    end
+  end
+
+  defp historian_page_prefix?(prefix),
+    do: match?(%{kind: :page, write_role: :historian}, Routing.classify(prefix))
+
+  defp do_rename_prefix(old_prefix, new_prefix, workspace_id, opts) do
+    Repo.transaction(fn ->
+      pages = list_pages_under(old_prefix, workspace_id: workspace_id)
+      nodes = Nodes.current_under(old_prefix, workspace_id: workspace_id)
+
+      if pages == [] and nodes == [] do
+        Repo.rollback(:not_found)
+      end
+
+      retarget = &(new_prefix <> String.replace_prefix(&1, old_prefix, ""))
+      page_moves = Enum.map(pages, &{&1.file_key, retarget.(&1.file_key)})
+      page_targets = Enum.map(page_moves, &elem(&1, 1))
+      node_targets = Enum.map(nodes, &retarget.(&1.path))
+      # The target prefix itself is a target location: a node already there
+      # would otherwise be merged into silently.
+      targets = Enum.uniq([new_prefix | page_targets ++ node_targets])
+
+      case prefix_conflicts(targets, workspace_id) do
+        [] -> :ok
+        conflicts -> Repo.rollback({:conflict, conflicts})
+      end
+
+      renamed =
+        Enum.map(page_moves, fn {from, to} ->
+          case do_rename(from, to, workspace_id, opts) do
+            {:ok, page} -> {from, page}
+            {:error, reason} -> Repo.rollback(reason)
+          end
+        end)
+
+      # Whatever is still under the old prefix: the prefix node itself and
+      # nodes of pages that no longer exist.
+      case Nodes.move(old_prefix, new_prefix, workspace_id: workspace_id) do
+        {:ok, _} -> renamed
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  defp prefix_conflicts(targets, workspace_id) do
+    pages =
+      WikiPage
+      |> where([p], p.file_key in ^targets)
+      |> filter_workspace(workspace_id)
+      |> Repo.all()
+      |> Enum.map(& &1.file_key)
+
+    Enum.sort(Enum.uniq(pages ++ Nodes.occupied(targets, workspace_id: workspace_id)))
   end
 
   # ── Pure parsers (filled in by Stage 2) ───────────────────────────────

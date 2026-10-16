@@ -86,7 +86,25 @@ defmodule Platform.LegacyFabrikamRootOrgTest do
     # Reproduce a from-scratch legacy install: exactly what the OLD
     # `up/0` body inserted, before task 01a068f6 stage 2 rewrote it, plus
     # real pre-existing membership history.
+    #
+    # `access_roles` carries an `org_id` FK to `orgs` (custom roles, task
+    # 01a1386e-59d1 stage 1), so the CASCADE empties it too, built-in rows
+    # included. A from-scratch install has the three built-in rows the roles
+    # migration seeds, and every membership insert below needs them
+    # (`org_memberships.access_role_key` references `access_roles.key`), so
+    # they are copied aside and put back unchanged.
+    Ecto.Adapters.SQL.query!(
+      Repo,
+      "CREATE TEMP TABLE legacy_fabrikam_builtin_roles ON COMMIT DROP AS " <>
+        "SELECT * FROM access_roles WHERE builtin"
+    )
+
     Ecto.Adapters.SQL.query!(Repo, "TRUNCATE orgs CASCADE")
+
+    Ecto.Adapters.SQL.query!(
+      Repo,
+      "INSERT INTO access_roles SELECT * FROM legacy_fabrikam_builtin_roles"
+    )
 
     # The legacy install also configures its own admin domain. The test
     # environment's pin is the neutral `acme.test` (task 01a116de stage 4),

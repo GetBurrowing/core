@@ -154,10 +154,12 @@ defmodule Platform.ExtensionBoundaryTest do
     |> Enum.sort()
   end
 
-  defp needles do
-    Enum.map(module_names(), &{:module, &1}) ++
-      Enum.map(owned_segments(), &{:segment, &1}) ++
-      Enum.map(env_var_names(), &{:env_var, &1})
+  defp needles, do: needles(module_names(), owned_segments(), env_var_names())
+
+  defp needles(names, segments, envs) do
+    Enum.map(names, &{:module, &1}) ++
+      Enum.map(segments, &{:segment, &1}) ++
+      Enum.map(envs, &{:env_var, &1})
   end
 
   # A needle can only match a line that contains it as a plain substring, so
@@ -255,15 +257,21 @@ defmodule Platform.ExtensionBoundaryTest do
   end
 
   test "POSITIVE CONTROL: every planted shape is caught, built from the derived set" do
-    compiled = compile(needles())
+    # Reuse this test's derivation for the scanner and plants. In particular,
+    # owned_segments/0 parses every core declaration; deriving it twice made
+    # this positive control exceed its unchanged timeout under suite load.
+    # Nothing is cached between tests or runs, so source mutations are re-read.
     names = module_names()
+    segments = owned_segments()
+    envs = env_var_names()
+    compiled = compile(needles(names, segments, envs))
     # A lib module filed OUTSIDE the most common top namespace, so a prefix
     # match on that namespace could not see it.
     common = names |> Enum.map(&hd(String.split(&1, "."))) |> Enum.frequencies()
     {top, _} = Enum.max_by(common, &elem(&1, 1))
     [name | _] = Enum.reject(names, &String.starts_with?(&1, top <> "."))
-    [segment | _] = owned_segments()
-    [env | _] = env_var_names()
+    [segment | _] = segments
+    [env | _] = envs
     parts = String.split(Enum.find(names, &String.contains?(&1, segment)), ".")
 
     plants = [
@@ -280,5 +288,14 @@ defmodule Platform.ExtensionBoundaryTest do
     end
 
     assert scan_text("defmodule Platform.Chat do end", "clean", compiled) == []
+  end
+
+  test "literal prefilter preserves a module hit and the regex word boundary" do
+    compiled = compile([{:module, "NimbusBridge"}])
+
+    assert scan_text("alias NimbusBridge", "positive", compiled) ==
+             ["positive:1: module NimbusBridge: alias NimbusBridge"]
+
+    assert scan_text("alias PrefixNimbusBridgeSuffix", "negative", compiled) == []
   end
 end

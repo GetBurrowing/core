@@ -93,6 +93,7 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
   attr(:external?, :boolean, required: true)
   attr(:sidebar_edit, :boolean, required: true)
   attr(:sidebar_admin_edit, :boolean, required: true)
+  attr(:restricted_channel_ids, :any, required: true)
   attr(:sidebar_menu_open, :boolean, required: true)
   attr(:root_admin?, :boolean, required: true)
   attr(:mask_names?, :boolean, required: true)
@@ -167,6 +168,7 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
           user_id={@user_id}
         />
         <.sub_org_sections
+          restricted_channel_ids={@restricted_channel_ids}
           sidebar_sections={@sidebar_sections}
           scope_filter={@scope_filter}
           mask_names?={@mask_names?}
@@ -219,6 +221,7 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
           @channels == [] and @dm_conversations == [] and @archived_channels == []
         } />
         <.archived_section
+          restricted_channel_ids={@restricted_channel_ids}
           archived_channels={@archived_channels}
           archived_open={@archived_open}
           active_space={@active_space}
@@ -951,6 +954,7 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
   attr(:scope_filter, :any, required: true)
   attr(:sidebar_edit, :boolean, required: true)
   attr(:sidebar_admin_edit, :boolean, required: true)
+  attr(:restricted_channel_ids, :any, required: true)
   attr(:active_space, :any, required: true)
   attr(:unread_counts, :map, required: true)
   attr(:root_admin?, :boolean, required: true)
@@ -1372,18 +1376,32 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
                section takes the hint above, and a collapsed quiet one takes
                nothing at all. --%>
         <div :if={rows != []} class={collapsed? && "channel-ajar-group"}>
-          <div
-            :for={{space, idx} <- rows}
-            class={[
-              "channel-row-wrap",
-              (@sidebar_edit || @sidebar_admin_edit) && "channel-row-wrap--editing",
-              @active_space && @active_space.id == space.id && "channel-row-wrap--active"
-            ]}
-            data-channel-id={space.id}
-            data-space-id={space.id}
-            data-section-id={section.id}
-          >
-            <%!-- Grab handle — PERSONAL edit only (Stage 5).
+          <%= for {space, idx} <- rows do %>
+            <%= if MapSet.member?(@restricted_channel_ids, space.id) do %>
+              <div
+                data-role="restricted-channel-row"
+                data-space-id={space.id}
+                aria-disabled="true"
+                class="channel-row text-base-content/50"
+              >
+                <span class="hero-lock-closed-mini size-3.5"></span>
+                <span class="truncate flex-1">
+                  {Platform.Chat.SidebarMask.channel_label(mask_ctx, section, space.name)}
+                </span>
+                <span class="text-xs">Restricted, ask an admin</span>
+              </div>
+            <% else %>
+              <div
+                class={[
+                  "channel-row-wrap",
+                  (@sidebar_edit || @sidebar_admin_edit) && "channel-row-wrap--editing",
+                  @active_space && @active_space.id == space.id && "channel-row-wrap--active"
+                ]}
+                data-channel-id={space.id}
+                data-space-id={space.id}
+                data-section-id={section.id}
+              >
+                <%!-- Grab handle — PERSONAL edit only (Stage 5).
                    This span — not the row-wrap — carries draggable so it is the
                    HTML5 drag SOURCE node: dragstart's e.target is then this span,
                    so the ChannelMembershipDrag hook's `.channel-row-grab` gate
@@ -1399,71 +1417,71 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
                    lives behind the "Move to organisation…" item on the row's
                    overflow menu, with a confirmation dialog. Dragging a row
                    means one thing in one mode: reorder it in my own rail. --%>
-            <span
-              :if={@sidebar_edit}
-              class="channel-row-grab"
-              aria-hidden="true"
-              title="Drag to move"
-              draggable="true"
-            >
-              ⠿
-            </span>
-            <.link
-              patch={~p"/chat/#{ChatLive.space_nav_target(space)}"}
-              class={[
-                "channel-row",
-                @active_space && @active_space.id == space.id && "channel-row--active"
-              ]}
-            >
-              <span class="text-base-content/40">#</span>
-              <span class="truncate flex-1">
-                {Platform.Chat.SidebarMask.channel_label(mask_ctx, section, space.name)}
-              </span>
-              <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
-                <span class="channel-row-unread-pill">
-                  {unread_label(Map.get(@unread_counts, space.id, 0))}
+                <span
+                  :if={@sidebar_edit}
+                  class="channel-row-grab"
+                  aria-hidden="true"
+                  title="Drag to move"
+                  draggable="true"
+                >
+                  ⠿
                 </span>
-              <% end %>
-            </.link>
-            <%!-- Keyboard move controls (Stage 5, edit mode only — WCAG
+                <.link
+                  patch={~p"/chat/#{ChatLive.space_nav_target(space)}"}
+                  class={[
+                    "channel-row",
+                    @active_space && @active_space.id == space.id && "channel-row--active"
+                  ]}
+                >
+                  <span class="text-base-content/40">#</span>
+                  <span class="truncate flex-1">
+                    {Platform.Chat.SidebarMask.channel_label(mask_ctx, section, space.name)}
+                  </span>
+                  <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
+                    <span class="channel-row-unread-pill">
+                      {unread_label(Map.get(@unread_counts, space.id, 0))}
+                    </span>
+                  <% end %>
+                </.link>
+                <%!-- Keyboard move controls (Stage 5, edit mode only — WCAG
                    2.1.1 keyboard alternative to drag). Each posts the same
                    `move_channel` event the keyboard path shares with drag's
                    `channel_moved` persistence. Up is disabled on the first
                    row, Down on the last, so focus can't trigger a no-op
                    that reads as broken. --%>
-            <span :if={@sidebar_edit} class="channel-row-move-controls">
-              <button
-                type="button"
-                class="channel-row-move-button"
-                phx-click="move_channel"
-                phx-value-channel_id={space.id}
-                phx-value-section_id={section.id}
-                phx-value-direction="up"
-                disabled={idx == 0}
-                aria-label={
+                <span :if={@sidebar_edit} class="channel-row-move-controls">
+                  <button
+                    type="button"
+                    class="channel-row-move-button"
+                    phx-click="move_channel"
+                    phx-value-channel_id={space.id}
+                    phx-value-section_id={section.id}
+                    phx-value-direction="up"
+                    disabled={idx == 0}
+                    aria-label={
                     "Move ##{Platform.Chat.SidebarMask.channel_label(mask_ctx, section, space.name)} up"
                   }
-                title="Move up"
-              >
-                <span class="hero-chevron-up size-3"></span>
-              </button>
-              <button
-                type="button"
-                class="channel-row-move-button"
-                phx-click="move_channel"
-                phx-value-channel_id={space.id}
-                phx-value-section_id={section.id}
-                phx-value-direction="down"
-                disabled={idx == length(section_channels) - 1}
-                aria-label={
+                    title="Move up"
+                  >
+                    <span class="hero-chevron-up size-3"></span>
+                  </button>
+                  <button
+                    type="button"
+                    class="channel-row-move-button"
+                    phx-click="move_channel"
+                    phx-value-channel_id={space.id}
+                    phx-value-section_id={section.id}
+                    phx-value-direction="down"
+                    disabled={idx == length(section_channels) - 1}
+                    aria-label={
                     "Move ##{Platform.Chat.SidebarMask.channel_label(mask_ctx, section, space.name)} down"
                   }
-                title="Move down"
-              >
-                <span class="hero-chevron-down size-3"></span>
-              </button>
-            </span>
-            <%!-- The row's only trailing control (task 019ff8ba stage 1,
+                    title="Move down"
+                  >
+                    <span class="hero-chevron-down size-3"></span>
+                  </button>
+                </span>
+                <%!-- The row's only trailing control (task 019ff8ba stage 1,
                    Option C). Pin, "Move to organisation…" and the eye-slash
                    hide button all stood here at rest, on every row of the
                    rail, all the time. Marlowe, 2026-08-13: the pin leaves the
@@ -1477,11 +1495,13 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
                    Rows in this section are unpinned by definition — a pinned
                    channel is lifted into the Pinned block above — so the
                    menu's first item is always the Pin direction here. --%>
-            <.row_actions_trigger
-              space_id={space.id}
-              name={Platform.Chat.SidebarMask.channel_label(mask_ctx, section, space.name)}
-            />
-          </div>
+                <.row_actions_trigger
+                  space_id={space.id}
+                  name={Platform.Chat.SidebarMask.channel_label(mask_ctx, section, space.name)}
+                />
+              </div>
+            <% end %>
+          <% end %>
           <%!-- "Show all (N)": the line that stops a partial list reading as a
                  rendering bug. N is the section's TOTAL channel count, so it
                  answers "where did the rest go" at the moment a person asks it.
@@ -1511,6 +1531,7 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
 
   attr(:archived_channels, :list, required: true)
   attr(:archived_open, :boolean, required: true)
+  attr(:restricted_channel_ids, :any, required: true)
   attr(:active_space, :any, required: true)
 
   # THE MASK ATTRS — see the moduledoc. The archived rows render a space name
@@ -1558,17 +1579,31 @@ defmodule PlatformWeb.ChatLive.Partials.Rail do
         </span>
       </button>
       <div :if={@archived_open} id="archived-channel-list">
-        <.link
-          :for={space <- @archived_channels}
-          patch={~p"/chat/#{ChatLive.space_nav_target(space)}"}
-          class={[
-            "channel-row text-base-content/50",
-            @active_space && @active_space.id == space.id && "channel-row--active"
-          ]}
-        >
-          <span class="hero-archive-box size-3.5 text-base-content/30"></span>
-          <span class="truncate flex-1">{mask_name(@mask_assigns, space.name)}</span>
-        </.link>
+        <%= for space <- @archived_channels do %>
+          <%= if MapSet.member?(@restricted_channel_ids, space.id) do %>
+            <div
+              data-role="restricted-channel-row"
+              data-space-id={space.id}
+              aria-disabled="true"
+              class="channel-row text-base-content/50"
+            >
+              <span class="hero-lock-closed-mini size-3.5"></span>
+              <span class="truncate flex-1">{mask_name(@mask_assigns, space.name)}</span>
+              <span class="text-xs">Restricted, ask an admin</span>
+            </div>
+          <% else %>
+            <.link
+              patch={~p"/chat/#{ChatLive.space_nav_target(space)}"}
+              class={[
+                "channel-row text-base-content/50",
+                @active_space && @active_space.id == space.id && "channel-row--active"
+              ]}
+            >
+              <span class="hero-archive-box size-3.5 text-base-content/30"></span>
+              <span class="truncate flex-1">{mask_name(@mask_assigns, space.name)}</span>
+            </.link>
+          <% end %>
+        <% end %>
       </div>
     </section>
     """

@@ -105,6 +105,7 @@ defmodule PlatformWeb.ExperimentsLive do
   @default_tab "results"
   @prompt_surface "dispatch.prompt"
   @max_feedback 4000
+  @refused_message "Only root-org admins can change experiments."
 
   # Pre-filled rather than blank, and required. The results layer fails
   # closed: `ExperimentResults.min_subjects/1` returns nil for an absent or
@@ -279,84 +280,14 @@ defmodule PlatformWeb.ExperimentsLive do
   end
 
   def handle_event("create_experiment", params, socket) do
-    admin_only(socket, fn ->
-      # `stop_rule` was DROPPED here once: the field could be rendered,
-      # submitted and silently vanish. The shape is exactly what
-      # `ExperimentResults.min_subjects/1` reads — a string key over an
-      # INTEGER value; the string "40" fails that guard and reads as no rule.
-      with {:ok, min_subjects} <- parse_min_subjects(params["min_subjects"]),
-           {:ok, surface_attrs} <- parse_surface(params["surface"]),
-           {:ok, org_id} <- parse_scope_org(params["org_id"]),
-           {:ok, project_id} <- parse_project(params["project_id"]) do
-        attrs =
-          %{
-            "slug" => params["slug"],
-            "name" => params["name"],
-            "hypothesis" => params["hypothesis"],
-            "primary_metric" => params["primary_metric"],
-            "stop_rule" => %{"min_subjects" => min_subjects},
-            "org_id" => org_id,
-            "project_id" => project_id
-          }
-          |> Map.merge(surface_attrs)
-
-        case Experiments.create_experiment(attrs) do
-          {:ok, _experiment} ->
-            {:noreply,
-             socket
-             |> put_flash(:info, "Experiment created as a draft.")
-             |> assign(:show_create, false)
-             |> assign(:create_form, @empty_create_form)
-             |> load_index()}
-
-          {:error, changeset} ->
-            {:noreply,
-             socket
-             |> assign(:create_form, merge_create_form(socket, params))
-             |> put_flash(:error, error_message(changeset))}
-        end
-      else
-        {:error, message} ->
-          {:noreply,
-           socket
-           |> assign(:create_form, merge_create_form(socket, params))
-           |> put_flash(:error, message)}
-      end
-    end)
+    admin_only(socket, fn -> with_user(socket, &create_experiment(socket, params, &1)) end)
   end
 
   # Drafts only. The refusal is the context's (`{:error, :not_draft}`); this
   # handler renders it. Once an experiment has been activated its
   # assignments ARE the evidence trail.
   def handle_event("delete_experiment", %{"slug" => slug}, socket) do
-    admin_only(socket, fn ->
-      case Experiments.get_experiment_by_slug(slug) do
-        nil ->
-          {:noreply, put_flash(socket, :error, "No experiment #{slug}.")}
-
-        experiment ->
-          case Experiments.delete_experiment(experiment) do
-            {:ok, _} ->
-              {:noreply,
-               socket
-               |> put_flash(:info, "Draft deleted.")
-               |> assign(:experiment, nil)
-               |> load_index()
-               |> push_patch(to: ~p"/control/experiments")}
-
-            {:error, :not_draft} ->
-              {:noreply,
-               put_flash(
-                 socket,
-                 :error,
-                 "Only a draft can be deleted. An activated experiment's assignments are its record."
-               )}
-
-            {:error, changeset} ->
-              {:noreply, put_flash(socket, :error, error_message(changeset))}
-          end
-      end
-    end)
+    admin_only(socket, fn -> with_user(socket, &delete_experiment(socket, slug, &1)) end)
   end
 
   def handle_event("delete_experiment", _params, socket) do
@@ -367,14 +298,16 @@ defmodule PlatformWeb.ExperimentsLive do
 
   def handle_event("activate", %{"template_slug" => template_slug}, socket) do
     admin_only(socket, fn ->
-      case Experiments.activate(socket.assigns.experiment, template_slug) do
-        {:ok, experiment} ->
-          {:noreply,
-           socket |> put_flash(:info, "Experiment running.") |> load_experiment(experiment)}
+      with_user(socket, fn user ->
+        case Experiments.activate(socket.assigns.experiment, template_slug, user) do
+          {:ok, experiment} ->
+            {:noreply,
+             socket |> put_flash(:info, "Experiment running.") |> load_experiment(experiment)}
 
-        {:error, changeset} ->
-          {:noreply, put_flash(socket, :error, error_message(changeset))}
-      end
+          {:error, reason} ->
+            {:noreply, put_flash(socket, :error, error_message(reason))}
+        end
+      end)
     end)
   end
 
@@ -474,20 +407,22 @@ defmodule PlatformWeb.ExperimentsLive do
   # tools `experiment_conclude` and `experiment_promote` do not.
   def handle_event("conclude", _params, socket) do
     admin_only(socket, fn ->
-      experiment = socket.assigns.experiment
+      with_user(socket, fn user ->
+        experiment = socket.assigns.experiment
 
-      if experiment && experiment.status == "running" do
-        case Experiments.conclude(experiment) do
-          {:ok, concluded} ->
-            {:noreply,
-             socket |> put_flash(:info, "Experiment concluded.") |> load_experiment(concluded)}
+        if experiment && experiment.status == "running" do
+          case Experiments.conclude(experiment, user) do
+            {:ok, concluded} ->
+              {:noreply,
+               socket |> put_flash(:info, "Experiment concluded.") |> load_experiment(concluded)}
 
-          {:error, changeset} ->
-            {:noreply, put_flash(socket, :error, error_message(changeset))}
+            {:error, reason} ->
+              {:noreply, put_flash(socket, :error, error_message(reason))}
+          end
+        else
+          {:noreply, put_flash(socket, :error, "Only a running experiment can be concluded.")}
         end
-      else
-        {:noreply, put_flash(socket, :error, "Only a running experiment can be concluded.")}
-      end
+      end)
     end)
   end
 
@@ -508,6 +443,7 @@ defmodule PlatformWeb.ExperimentsLive do
 
           true ->
             opts = [
+              actor: user,
               variant: variant_slug,
               trigger: :manual,
               actor_type: "user",
@@ -542,33 +478,7 @@ defmodule PlatformWeb.ExperimentsLive do
   # its error list is shown verbatim. Prompt variants are edited on
   # `/admin/prompts/:slug`, as before.
   def handle_event("add_variant", params, socket) do
-    admin_only(socket, fn ->
-      experiment = socket.assigns.experiment
-
-      with :ok <- variant_addable(experiment),
-           surface when not is_nil(surface) <- Surfaces.get(experiment.surface_key),
-           {:ok, slug} <- variant_slug(params["slug"]),
-           {:ok, raw} <- decode_payload(params["payload"]),
-           {:ok, payload} <- validate_payload(surface, raw),
-           {:ok, weight} <- parse_weight(params["weight"]),
-           {:ok, _variant} <-
-             Experiments.add_variant(experiment, %{
-               "slug" => slug,
-               "payload" => payload,
-               "weight" => weight
-             }) do
-        {:noreply, socket |> put_flash(:info, "Variant added.") |> load_experiment(experiment)}
-      else
-        nil ->
-          {:noreply, put_flash(socket, :error, "This experiment's surface is unknown.")}
-
-        {:error, %Ecto.Changeset{} = cs} ->
-          {:noreply, put_flash(socket, :error, error_message(cs))}
-
-        {:error, message} ->
-          {:noreply, put_flash(socket, :error, message)}
-      end
-    end)
+    admin_only(socket, fn -> with_user(socket, &add_variant(socket, params, &1)) end)
   end
 
   def handle_event("guardrails_save", params, socket) do
@@ -584,12 +494,123 @@ defmodule PlatformWeb.ExperimentsLive do
                 {:noreply,
                  socket |> put_flash(:info, "Guardrails saved.") |> assign_guardrails(org_id)}
 
-              {:error, changeset} ->
-                {:noreply, put_flash(socket, :error, error_message(changeset))}
+              {:error, reason} ->
+                {:noreply, put_flash(socket, :error, error_message(reason))}
             end
         end
       end)
     end)
+  end
+
+  # The add-variant handler's body, with the acting user for the context's
+  # install-level re-check (`Experiments.add_variant/3`, task 01a1386d-fb6e
+  # stage 2).
+  defp add_variant(socket, params, user) do
+    experiment = socket.assigns.experiment
+
+    with :ok <- variant_addable(experiment),
+         surface when not is_nil(surface) <- Surfaces.get(experiment.surface_key),
+         {:ok, slug} <- variant_slug(params["slug"]),
+         {:ok, raw} <- decode_payload(params["payload"]),
+         {:ok, payload} <- validate_payload(surface, raw),
+         {:ok, weight} <- parse_weight(params["weight"]),
+         {:ok, _variant} <-
+           Experiments.add_variant(
+             experiment,
+             %{"slug" => slug, "payload" => payload, "weight" => weight},
+             user
+           ) do
+      {:noreply, socket |> put_flash(:info, "Variant added.") |> load_experiment(experiment)}
+    else
+      nil ->
+        {:noreply, put_flash(socket, :error, "This experiment's surface is unknown.")}
+
+      {:error, %Ecto.Changeset{} = cs} ->
+        {:noreply, put_flash(socket, :error, error_message(cs))}
+
+      {:error, :unauthorized} ->
+        {:noreply, put_flash(socket, :error, @refused_message)}
+
+      {:error, message} ->
+        {:noreply, put_flash(socket, :error, message)}
+    end
+  end
+
+  # The create handler's body (`handle_event("create_experiment", …)`), with
+  # the acting user for the context's install-level re-check
+  # (`Experiments.create_experiment/2`, task 01a1386d-fb6e stage 2).
+  defp create_experiment(socket, params, user) do
+    # `stop_rule` was DROPPED here once: the field could be rendered,
+    # submitted and silently vanish. The shape is exactly what
+    # `ExperimentResults.min_subjects/1` reads — a string key over an
+    # INTEGER value; the string "40" fails that guard and reads as no rule.
+    with {:ok, min_subjects} <- parse_min_subjects(params["min_subjects"]),
+         {:ok, surface_attrs} <- parse_surface(params["surface"]),
+         {:ok, org_id} <- parse_scope_org(params["org_id"]),
+         {:ok, project_id} <- parse_project(params["project_id"]) do
+      attrs =
+        %{
+          "slug" => params["slug"],
+          "name" => params["name"],
+          "hypothesis" => params["hypothesis"],
+          "primary_metric" => params["primary_metric"],
+          "stop_rule" => %{"min_subjects" => min_subjects},
+          "org_id" => org_id,
+          "project_id" => project_id
+        }
+        |> Map.merge(surface_attrs)
+
+      case Experiments.create_experiment(attrs, user) do
+        {:ok, _experiment} ->
+          {:noreply,
+           socket
+           |> put_flash(:info, "Experiment created as a draft.")
+           |> assign(:show_create, false)
+           |> assign(:create_form, @empty_create_form)
+           |> load_index()}
+
+        {:error, reason} ->
+          {:noreply,
+           socket
+           |> assign(:create_form, merge_create_form(socket, params))
+           |> put_flash(:error, error_message(reason))}
+      end
+    else
+      {:error, message} ->
+        {:noreply,
+         socket
+         |> assign(:create_form, merge_create_form(socket, params))
+         |> put_flash(:error, message)}
+    end
+  end
+
+  defp delete_experiment(socket, slug, user) do
+    case Experiments.get_experiment_by_slug(slug) do
+      nil ->
+        {:noreply, put_flash(socket, :error, "No experiment #{slug}.")}
+
+      experiment ->
+        case Experiments.delete_experiment(experiment, user) do
+          {:ok, _} ->
+            {:noreply,
+             socket
+             |> put_flash(:info, "Draft deleted.")
+             |> assign(:experiment, nil)
+             |> load_index()
+             |> push_patch(to: ~p"/control/experiments")}
+
+          {:error, :not_draft} ->
+            {:noreply,
+             put_flash(
+               socket,
+               :error,
+               "Only a draft can be deleted. An activated experiment's assignments are its record."
+             )}
+
+          {:error, reason} ->
+            {:noreply, put_flash(socket, :error, error_message(reason))}
+        end
+    end
   end
 
   # The gate. `fun` is not evaluated at all unless the acting user is a root-org
@@ -598,7 +619,7 @@ defmodule PlatformWeb.ExperimentsLive do
     if socket.assigns[:root_admin?] do
       fun.()
     else
-      {:noreply, put_flash(socket, :error, "Only root-org admins can change experiments.")}
+      {:noreply, put_flash(socket, :error, @refused_message)}
     end
   end
 
@@ -795,6 +816,7 @@ defmodule PlatformWeb.ExperimentsLive do
     do: "Refused: #{message}"
 
   defp describe_error(%Ecto.Changeset{} = changeset), do: error_message(changeset)
+  defp describe_error(:unauthorized), do: @refused_message
   defp describe_error(:not_pending), do: "This experiment is not awaiting approval."
   defp describe_error(:not_draft), do: "Only a draft can be started."
   defp describe_error(:unknown_surface), do: "This experiment's surface is not registered."
@@ -819,6 +841,10 @@ defmodule PlatformWeb.ExperimentsLive do
   defp direction_label(:higher_is_better), do: "higher is better"
   defp direction_label(:neutral), do: "neutral — neither direction is a win"
   defp direction_label(_), do: "direction not stated"
+
+  # The context's install-level refusal (task 01a1386d-fb6e stage 2), worded
+  # as `admin_only/2`'s.
+  defp error_message(:unauthorized), do: @refused_message
 
   defp error_message(%Ecto.Changeset{} = changeset) do
     changeset

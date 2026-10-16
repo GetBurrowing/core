@@ -526,7 +526,7 @@ defmodule Platform.Chat.ContextSummaryTest do
           surface_target: "chat.context_summary"
         })
 
-      assert {:error, _} = Experiments.start(experiment, %User{id: Ecto.UUID.generate()})
+      assert {:error, _} = Experiments.start(experiment, Platform.TenancyFixtures.root_admin!())
     end
   end
 
@@ -553,7 +553,7 @@ defmodule Platform.Chat.ContextSummaryTest do
       })
 
     {:ok, %Experiment{status: "running"} = running} =
-      Experiments.start(experiment, %User{id: Ecto.UUID.generate()})
+      Experiments.start(experiment, Platform.TenancyFixtures.root_admin!())
 
     Repo.update_all(
       from(v in Variant,

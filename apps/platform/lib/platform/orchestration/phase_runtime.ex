@@ -36,13 +36,14 @@ defmodule Platform.Orchestration.PhaseRuntime do
   cannot be deleted once the single-write fold lands: the fold keeps the
   pointer fresh at write time, and case 3 makes it stale at READ time.
 
-  ## Five refusals, five causes, five atoms
+  ## Six refusals, six causes, six atoms
 
   `{:error, reason}` is never a shrug. Each atom names exactly one cause, and
   callers branch on them differently — `TaskRouter` SUPPRESSES a dispatch on
   `:user_assignee` (there is no runtime to send to, and falling back to the
-  previously-held agent is the original bug wearing a different hat) and
-  FAILS OPEN on every other reason (a transient resolution failure costs one
+  previously-held agent is the original bug wearing a different hat) and on
+  `:owner_denied` (sending anyway would be the bypass the refusal closes),
+  and FAILS OPEN on every other reason (a transient resolution failure costs one
   dispatch to a possibly-stale runtime; failing closed strands the task).
   Collapsing any two of these into one atom silently merges those two
   behaviours.
@@ -64,8 +65,19 @@ defmodule Platform.Orchestration.PhaseRuntime do
       than faking a fixture that pretends to produce it. See the caveat
       above `resolve/1` before treating those seams as protective — task
       019fb978 measured this guarding pattern as TOCTOU-racy.
+    * `:owner_denied` — the runtime was found, but `Platform.Access.check/3`
+      refuses `tasks.read` on `{:task, id}` for the runtime's OWNER
+      (`Scope.for_user/1`) or for the agent's own grants
+      (`Scope.for_runtime/1`), through `Platform.Access.AgentWake.check_agent/4`
+      (task 01a1386e-45a5 stage 2, RBAC stack member 7). With no grants
+      reachable from either principal the check is `:ok`, so this atom
+      never occurs on an install without grants. A runtime with no
+      `owner_user_id` skips the owner half. A bare-map task (the
+      `phase_assignee(%{assignee_id: ...})` clause) carries no task id the
+      check could address, so it skips both halves and resolves as before.
   """
 
+  alias Platform.Access.AgentWake
   alias Platform.Agents.Agent
   alias Platform.Federation
   alias Platform.Repo
@@ -74,13 +86,21 @@ defmodule Platform.Orchestration.PhaseRuntime do
 
   @type assignee :: %{type: :federated, id: String.t()}
   @type reason ::
-          :no_assignee | :user_assignee | :agent_not_found | :no_runtime | :sandbox_unowned
+          :no_assignee
+          | :user_assignee
+          | :agent_not_found
+          | :no_runtime
+          | :sandbox_unowned
+          | :owner_denied
+
+  # The registry's read permission for a task (`Platform.Access.Registry`).
+  @tasks_read "tasks.read"
 
   @doc """
   Resolve the federated runtime that owns `task`'s CURRENT phase.
 
   Returns `{:ok, %{type: :federated, id: runtime_id}}` or `{:error, reason}`
-  with one of the five atoms documented on this module.
+  with one of the six atoms documented on this module.
   """
   #
   # PROVENANCE OF THE `rescue` / `catch` CLAUSES BELOW, AND A CAVEAT ON THEM.
@@ -111,7 +131,7 @@ defmodule Platform.Orchestration.PhaseRuntime do
   def resolve(task) do
     task
     |> phase_assignee()
-    |> resolve_assignee()
+    |> resolve_assignee(task_id(task))
   rescue
     DBConnection.OwnershipError ->
       # The watcher is a globally-supervised singleton receiving
@@ -167,9 +187,15 @@ defmodule Platform.Orchestration.PhaseRuntime do
 
   defp phase_assignee(_other), do: {nil, nil}
 
-  defp resolve_assignee({nil, _type}), do: {:error, :no_assignee}
+  # Only a real `%Task{}` names a task the access check can address; a bare
+  # map degrades to the flat pointer above and skips the check (see the
+  # `:owner_denied` entry in the moduledoc).
+  defp task_id(%TaskSchema{id: id}) when is_binary(id), do: id
+  defp task_id(_other), do: nil
 
-  defp resolve_assignee({_id, "user"}), do: {:error, :user_assignee}
+  defp resolve_assignee({nil, _type}, _task_id), do: {:error, :no_assignee}
+
+  defp resolve_assignee({_id, "user"}, _task_id), do: {:error, :user_assignee}
 
   # GUARD, not decoration: unlike the flat `tasks.assignee_id` column (a
   # `Platform.Types.UUIDv7` cast at write time), a phase entry's
@@ -181,17 +207,17 @@ defmodule Platform.Orchestration.PhaseRuntime do
   # `Ecto.Query.CastError` inside the router's dispatch path. See
   # `test/platform/repo_lookup_boundary_test.exs`, where this site is
   # classified `:must_cast` for exactly that provenance.
-  defp resolve_assignee({assignee_id, _type}) when is_binary(assignee_id) do
+  defp resolve_assignee({assignee_id, _type}, task_id) when is_binary(assignee_id) do
     if Platform.UUID.valid?(assignee_id) do
-      resolve_agent(assignee_id)
+      resolve_agent(assignee_id, task_id)
     else
       {:error, :agent_not_found}
     end
   end
 
-  defp resolve_assignee(_other), do: {:error, :no_assignee}
+  defp resolve_assignee(_other, _task_id), do: {:error, :no_assignee}
 
-  defp resolve_agent(agent_id) do
+  defp resolve_agent(agent_id, task_id) do
     case Repo.get(Agent, agent_id) do
       nil ->
         {:error, :agent_not_found}
@@ -199,8 +225,21 @@ defmodule Platform.Orchestration.PhaseRuntime do
       %Agent{} = agent ->
         case Federation.get_runtime_for_agent(agent) do
           nil -> {:error, :no_runtime}
-          runtime -> {:ok, %{type: :federated, id: runtime.runtime_id}}
+          runtime -> authorize_wake(agent, runtime, task_id)
         end
+    end
+  end
+
+  # Task 01a1386e-45a5 stage 2. Conjunctive with everything above: the
+  # runtime is already resolved, and this only decides whether it may be
+  # woken onto the task.
+  defp authorize_wake(_agent, runtime, nil),
+    do: {:ok, %{type: :federated, id: runtime.runtime_id}}
+
+  defp authorize_wake(agent, runtime, task_id) do
+    case AgentWake.check_agent(agent, runtime, @tasks_read, {:task, task_id}) do
+      :ok -> {:ok, %{type: :federated, id: runtime.runtime_id}}
+      {:error, :denied} -> {:error, :owner_denied}
     end
   end
 end

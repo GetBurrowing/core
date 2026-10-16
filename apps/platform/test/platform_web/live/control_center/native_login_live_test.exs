@@ -474,14 +474,19 @@ defmodule PlatformWeb.ControlCenter.NativeLoginLiveTest do
       host = host!()
       agent = native!(owner, "Lou")
       observe!(host, agent, "running")
-      before = NativeAgents.get_managed_runtime(agent).allowed_bundles
+
+      before =
+        Platform.Access.RuntimeProfiles.tool_profile(NativeAgents.get_managed_runtime(agent))
+
       other = member!("member")
 
       {:ok, view, _html} = live(as(conn, other), ~p"/control/#{agent.slug}")
-      html = render_hook(view, "update_runtime_bundles", %{"bundles" => ["memory"]})
+      html = render_hook(view, "save_tool_profile", %{"modules" => ["memory"]})
 
       assert html =~ "Only the agent&#39;s owner or an admin can do that."
-      assert NativeAgents.get_managed_runtime(agent).allowed_bundles == before
+
+      assert Platform.Access.RuntimeProfiles.tool_profile(NativeAgents.get_managed_runtime(agent)) ==
+               before
     end
   end
 end

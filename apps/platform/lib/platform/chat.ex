@@ -265,7 +265,7 @@ defmodule Platform.Chat do
 
   ## Options
 
-    * `:scope` — an optional `%Platform.Chat.ExternalScope{}`. When it is an
+    * `:scope` — an optional `%Platform.Chat.ExternalScope{}` or `%Platform.Access.Scope{}`. When it is an
       external scope, a space the user does not participate in resolves to
       `nil` (a 404-shaped miss, not a leak). Absent / nil / internal scopes are
       pass-through, so `get_space/1` and every existing caller are unchanged.
@@ -367,7 +367,7 @@ defmodule Platform.Chat do
       be derived from the user's session (e.g. `/chat/general` resolving to
       *this user's* tenant General, not the oldest cross-tenant match).
 
-    * `:scope` — optional `%Platform.Chat.ExternalScope{}`. For an external
+    * `:scope` — optional `%Platform.Chat.ExternalScope{}` or `%Platform.Access.Scope{}`. For an external
       scope a slug outside the caller's participant set resolves to `nil`
       (a 404, not a leak). Absent / nil / internal scopes are pass-through.
 
@@ -436,7 +436,7 @@ defmodule Platform.Chat do
     * `:workspace_id` — filter by workspace
     * `:kind`         — filter by kind ("channel", "dm", "group")
     * `:archived`     — `true` for archived only, `false` (default) for active only
-    * `:scope`        — optional `%Platform.Chat.ExternalScope{}`. For an
+    * `:scope`        — optional `%Platform.Chat.ExternalScope{}` or `%Platform.Access.Scope{}`. For an
       external scope the result is narrowed to the caller's participant spaces
       (so `list_spaces(kind: "channel", scope: ext)` returns ONLY their
       channels, never the full channel set). Absent / nil / internal scopes are
@@ -2295,7 +2295,7 @@ defmodule Platform.Chat do
   @doc """
   Fetch a message by primary key. Returns `nil` if not found.
 
-  The optional `:scope` (a `%Platform.Chat.ExternalScope{}`) gates the message
+  The optional `:scope` (a `%Platform.Chat.ExternalScope{}` or `%Platform.Access.Scope{}`) gates the message
   on its space: for an external caller a message in a non-participant space
   resolves to `nil`. Absent / nil / internal scopes are pass-through.
   """
@@ -3134,7 +3134,12 @@ defmodule Platform.Chat do
   def search_canvases(_space_ids, query, _opts) when not is_binary(query), do: []
 
   def search_canvases(space_ids, query, opts) when is_list(space_ids) do
-    trimmed_query = String.trim(query)
+    # An embedded hyphen is part of a canvas title, not websearch's negation
+    # operator. Keep a leading `-term` intact for callers using that syntax.
+    trimmed_query =
+      query
+      |> String.trim()
+      |> String.replace(~r/(?<=[[:alnum:]])-(?=[[:alnum:]])/u, " ")
 
     if space_ids == [] or trimmed_query == "" do
       []
@@ -3196,6 +3201,7 @@ defmodule Platform.Chat do
             )
         }
       )
+      |> maybe_scope_canvases(canvas_access_scope(opts))
       |> Repo.all()
       |> Enum.map(&canvas_search_hit/1)
     end
@@ -4255,7 +4261,7 @@ defmodule Platform.Chat do
   @doc """
   Fetch a canvas. Returns `nil` if not found or soft-deleted.
 
-  The optional `:scope` (a `%Platform.Chat.ExternalScope{}`) gates the canvas
+  The optional `:scope` (a `%Platform.Chat.ExternalScope{}` or `%Platform.Access.Scope{}`) gates the canvas
   on its `space_id`: for an external caller a canvas in a non-participant space
   resolves to `nil`. Absent / nil / internal scopes are pass-through.
   """
@@ -4359,7 +4365,7 @@ defmodule Platform.Chat do
   @doc """
   List canvases in a space (excluding soft-deleted).
 
-  The optional `:scope` (a `%Platform.Chat.ExternalScope{}`) yields `[]` when
+  The optional `:scope` (a `%Platform.Chat.ExternalScope{}` or `%Platform.Access.Scope{}`) yields `[]` when
   the `space_id` is out of the external caller's participant set (canvas embeds
   from an off-limits space can't be resolved from an external session). Absent
   / nil / internal scopes are pass-through.
@@ -4377,6 +4383,10 @@ defmodule Platform.Chat do
   (`chat/canvas/server.ex:429`), so a document edit bumps the row's
   `updated_at`. Confirmed against production, where 228 of 818 canvases carry
   `updated_at > inserted_at`.
+
+  `:access_scope` (a `%Platform.Access.Scope{}`, also read from `:scope` when
+  `:scope` is one) drops every canvas a `canvas.read` deny covers
+  (`scope_by/3`, task 01a1386d-e528 stage 3). Absent, nothing changes.
   """
   @spec list_canvases(binary(), keyword()) :: [Canvas.t()]
   def list_canvases(space_id, opts \\ []) do
@@ -4387,7 +4397,51 @@ defmodule Platform.Chat do
     )
     |> canvas_order(Keyword.get(opts, :order, :inserted_asc))
     |> ExternalScope.scope_by_space_id(scope)
+    |> maybe_scope_canvases(canvas_access_scope(opts))
     |> Repo.all()
+  end
+
+  @doc """
+  Restrict a `Space` or `Canvas` query (its root binding) by explicit grants
+  (task 01a1386d-e528 stage 3,
+  `0058-rbac-v2-roles-scopes-and-agent-capping.md § Precedence`).
+
+    * `:space` — `chat.read`. This is `ExternalScope.scope_spaces/2`'s
+      `%Platform.Access.Scope{}` clause: a guest's live participant subquery,
+      or everything for an internal scope, UNION the spaces a `chat.read`
+      allow covers (a project allow covers its tasks' execution spaces),
+      MINUS the spaces a `chat.read` deny covers.
+    * `:canvas` — `canvas.read`, through `Platform.Access.Query.restrict/5`
+      with no base: the query's own filters are the existing check, and a
+      deny on the canvas, its space or a project above it drops the row.
+
+  With no grant naming the permission the query reads exactly what it read
+  before. The deny-wins condition lives in `Platform.Access.Query`.
+
+  `list_canvases/2` and `list_canvas_groups/2` apply `:canvas` when given
+  `:access_scope` (or a `%Platform.Access.Scope{}` as `:scope`).
+  """
+  @spec scope_by(Ecto.Queryable.t(), Platform.Access.Scope.t(), :space | :canvas) ::
+          Ecto.Queryable.t()
+  def scope_by(query, %Platform.Access.Scope{} = scope, :space),
+    do: ExternalScope.scope_spaces(query, scope)
+
+  def scope_by(query, %Platform.Access.Scope{} = scope, :canvas),
+    do: Platform.Access.Query.restrict(query, scope, "canvas.read", :canvas, %{id: :id})
+
+  defp maybe_scope_canvases(query, %Platform.Access.Scope{} = scope),
+    do: scope_by(query, scope, :canvas)
+
+  defp maybe_scope_canvases(query, _scope), do: query
+
+  # `:access_scope`, else a `%Platform.Access.Scope{}` passed as `:scope`
+  # (ChatLive's `@external_scope` is one since task 01a1386d-e528 stage 3).
+  defp canvas_access_scope(opts) do
+    case {Keyword.get(opts, :access_scope), Keyword.get(opts, :scope)} do
+      {%Platform.Access.Scope{} = scope, _} -> scope
+      {_, %Platform.Access.Scope{} = scope} -> scope
+      _ -> nil
+    end
   end
 
   # Title sort is case-insensitive: an `asc: c.title` would file "Zebra" before
@@ -4497,6 +4551,9 @@ defmodule Platform.Chat do
       paging defect #864 fixed for tasks. The window and the outer query are
       driven from the SAME list, so a page's contents and its sequence cannot
       disagree about what page 2 is.
+    * `:access_scope` — an optional `%Platform.Access.Scope{}`; a canvas a
+      `canvas.read` deny covers leaves both `rows` and `total_count`
+      (`scope_by/3`). Absent, nothing changes.
   """
   @spec list_canvas_groups([binary()], keyword()) :: [canvas_group()]
   def list_canvas_groups(space_ids, opts \\ [])
@@ -4516,8 +4573,11 @@ defmodule Platform.Chat do
       )
       |> Repo.all()
 
-    counts = canvas_group_counts(space_ids)
-    rows_by_space = canvas_group_rows(space_ids, limit, offset, order)
+    # A denied canvas leaves the rows AND the count, or `total_count` would
+    # tell the reader how many hidden canvases a space holds.
+    access_scope = canvas_access_scope(opts)
+    counts = canvas_group_counts(space_ids, access_scope)
+    rows_by_space = canvas_group_rows(space_ids, limit, offset, order, access_scope)
 
     Enum.map(spaces, fn space ->
       %{
@@ -4532,12 +4592,13 @@ defmodule Platform.Chat do
   # The true per-space total, independent of `:limit`. A GROUP BY over the
   # same `is_nil(deleted_at)` filter the rows use, so the header count and the
   # rows can never disagree about what "live" means.
-  defp canvas_group_counts(space_ids) do
+  defp canvas_group_counts(space_ids, access_scope) do
     from(c in Canvas,
       where: c.space_id in ^space_ids and is_nil(c.deleted_at),
       group_by: c.space_id,
       select: {c.space_id, count(c.id)}
     )
+    |> maybe_scope_canvases(access_scope)
     |> Repo.all()
     |> Map.new()
   end
@@ -4550,7 +4611,7 @@ defmodule Platform.Chat do
   # The outer select re-lists the columns rather than passing the subquery row
   # through, so `row_number` is dropped and the returned maps carry exactly the
   # seven documented keys. `document` is absent from both selects.
-  defp canvas_group_rows(space_ids, limit, offset, order) do
+  defp canvas_group_rows(space_ids, limit, offset, order, access_scope) do
     row_order = canvas_group_order(order)
 
     numbered =
@@ -4573,6 +4634,8 @@ defmodule Platform.Chat do
           rank: over(row_number(), :space)
         }
       )
+      # Scoped INSIDE the window, so a denied canvas takes no rank.
+      |> maybe_scope_canvases(access_scope)
 
     from(r in subquery(numbered),
       where: r.rank > ^offset and r.rank <= ^(offset + limit),
@@ -4899,7 +4962,7 @@ defmodule Platform.Chat do
   @doc """
   Fetch an attachment by primary key. Returns `nil` if not found.
 
-  The optional `:scope` (a `%Platform.Chat.ExternalScope{}`) gates the
+  The optional `:scope` (a `%Platform.Chat.ExternalScope{}` or `%Platform.Access.Scope{}`) gates the
   attachment on its `space_id`: for an external caller an attachment in a
   non-participant space resolves to `nil`. Legacy `space_id: nil` rows have no
   space to scope and pass through. Absent / nil / internal scopes are
@@ -4973,12 +5036,51 @@ defmodule Platform.Chat do
         # (a nil-space row is a pre-backfill artifact an internal caller may
         # still need). The space-bound branch below is unchanged — its
         # `principal_is_member?/2` already equals M7's read-scope membership.
-        if external_principal?(principal), do: nil, else: attachment
+        if external_principal?(principal), do: nil, else: attachment_access(attachment, principal)
 
       %Attachment{space_id: space_id} = attachment ->
-        if principal_is_member?(space_id, principal), do: attachment, else: nil
+        if principal_is_member?(space_id, principal),
+          do: attachment_access(attachment, principal),
+          else: nil
     end
   end
+
+  @doc """
+  The RBAC v2 read check on one attachment for an access `scope` (task
+  01a1386e-45a5 stage 1): `Platform.Access.check/3` with `chat.read` on the
+  attachment's space and, when it is canvas-bound, `canvas.read` on its
+  canvas. Conjunctive: callers run it only after their own membership check
+  has admitted. With no grants on the scope it is `:ok`.
+  """
+  @spec attachment_access_check(Attachment.t(), Platform.Access.Scope.t() | nil) ::
+          :ok | {:error, :denied}
+  def attachment_access_check(%Attachment{} = attachment, scope) do
+    with :ok <- maybe_access_check(scope, "chat.read", :space, attachment.space_id) do
+      maybe_access_check(scope, "canvas.read", :canvas, attachment.canvas_id)
+    end
+  end
+
+  defp maybe_access_check(_scope, _permission, _type, nil), do: :ok
+
+  defp maybe_access_check(scope, permission, type, id),
+    do: Platform.Access.check(scope, permission, {type, id})
+
+  # A denied attachment is `nil`, so the download route answers the same 404
+  # a missing id gets, before its range branch (206/416) is reached.
+  defp attachment_access(attachment, principal) do
+    case attachment_access_check(attachment, principal_access_scope(principal)) do
+      :ok -> attachment
+      {:error, :denied} -> nil
+    end
+  end
+
+  defp principal_access_scope({:user, user_id}) when is_binary(user_id),
+    do: Platform.Access.Scope.for_user(%{id: user_id})
+
+  defp principal_access_scope({:runtime, %AgentRuntime{} = runtime}),
+    do: Platform.Access.Scope.for_runtime(runtime)
+
+  defp principal_access_scope(_principal), do: nil
 
   @doc """
   Is the download `principal` an external user? (M9, rbac-external-users.)
@@ -5016,7 +5118,7 @@ defmodule Platform.Chat do
   @doc """
   List attachments for a message, oldest first.
 
-  The optional `:scope` (a `%Platform.Chat.ExternalScope{}`) drops attachments
+  The optional `:scope` (a `%Platform.Chat.ExternalScope{}` or `%Platform.Access.Scope{}`) drops attachments
   whose `space_id` is out of the external caller's participant set. Absent /
   nil / internal scopes are pass-through.
   """
@@ -5035,7 +5137,7 @@ defmodule Platform.Chat do
   @doc """
   Batch-load attachments for a list of message IDs in a single query.
 
-  The optional `:scope` (a `%Platform.Chat.ExternalScope{}`) drops attachments
+  The optional `:scope` (a `%Platform.Chat.ExternalScope{}` or `%Platform.Access.Scope{}`) drops attachments
   whose `space_id` is out of the external caller's participant set. Absent /
   nil / internal scopes are pass-through.
   """
@@ -5171,17 +5273,23 @@ defmodule Platform.Chat do
             # `{:refused, agents}` so the post path can tell the author's own
             # process. Already-present agents are not refused: the mention is
             # honoured by the attention router as before.
+            #
+            # Task 01a1386e-45a5 stage 2 (RBAC stack member 7): an agent whose
+            # owner, or whose own grants, may not read the space is never
+            # summoned, by ANY author. It joins the refused list whether or
+            # not it is already present, because the attention router will
+            # not wake it here either, and the author should be told so.
             matched = mentioned_summonable_agents(space, tokens)
+            unreadable = unreadable_agents(matched, space_id)
+            readable = Enum.reject(matched, &MapSet.member?(unreadable, &1.id))
+            refused_unreadable = Enum.filter(matched, &MapSet.member?(unreadable, &1.id))
 
             result =
               if mention_summon_authorized?(space, msg) do
-                Enum.each(matched, &reinstate_on_mention(space_id, &1))
-                :ok
+                Enum.each(readable, &reinstate_on_mention(space_id, &1))
+                refused_result(refused_unreadable)
               else
-                case reject_present_agents(space_id, matched) do
-                  [] -> :ok
-                  refused -> {:refused, refused}
-                end
+                refused_result(reject_present_agents(space_id, readable) ++ refused_unreadable)
               end
 
             # Stage 3 pin-propagation pass. Only executes when the space is
@@ -5196,6 +5304,39 @@ defmodule Platform.Chat do
   end
 
   defp reinvite_and_pin_mentioned(_), do: :ok
+
+  # The registry's read permission for a chat space (`Platform.Access.Registry`).
+  @chat_read "chat.read"
+
+  defp refused_result([]), do: :ok
+  defp refused_result(agents), do: {:refused, agents}
+
+  defp unreadable_agents(agents, space_id) do
+    agents
+    |> Enum.map(& &1.id)
+    |> Platform.Access.AgentWake.denied(@chat_read, {:space, space_id})
+  end
+
+  @doc """
+  May `agent` be woken in the space `space_id` (task 01a1386e-45a5 stage 2,
+  RBAC stack member 7)? `true` unless `Platform.Access.check/3` refuses
+  `chat.read` on `{:space, space_id}` to the owner of the agent's runtime
+  (`Access.Scope.for_user/1`) or to the agent's own grants
+  (`Access.Scope.for_runtime/1`), through
+  `Platform.Access.AgentWake.check_agent/4`.
+
+  Conjunctive with every existing gate: the mention summon and the attention
+  router still apply their own participation, roster and authorship rules
+  first. With no grants reachable from the agent or its owner this is
+  `true` after one `EXISTS` query.
+  """
+  @spec agent_may_read_space?(Platform.Agents.Agent.t(), binary()) :: boolean()
+  def agent_may_read_space?(%Platform.Agents.Agent{} = agent, space_id)
+      when is_binary(space_id) do
+    runtime = Platform.Federation.get_runtime_for_agent(agent)
+
+    Platform.Access.AgentWake.check_agent(agent, runtime, @chat_read, {:space, space_id}) == :ok
+  end
 
   # Agents a `@[…]` token in `tokens` names (slug OR display name,
   # case-insensitive) among the space's summonable set.
@@ -5318,6 +5459,16 @@ defmodule Platform.Chat do
       |> Enum.filter(&Platform.Chat.AttentionRouter.mentioned?(&1, msg))
       |> Enum.reject(&(&1.participant_id == msg.author_user_id))
       |> Enum.uniq_by(& &1.participant_id)
+      |> Enum.filter(fn p ->
+        user = Repo.get(Platform.Accounts.User, p.participant_id)
+
+        is_nil(user) or
+          Platform.Access.check(
+            Platform.Access.Scope.for_user(user),
+            "chat.read",
+            {:space, space_id}
+          ) == :ok
+      end)
       |> Enum.each(fn p ->
         Platform.Inbox.emit(%{
           user_id: p.participant_id,

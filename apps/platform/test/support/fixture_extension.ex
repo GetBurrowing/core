@@ -62,6 +62,7 @@ defmodule Platform.FixtureExtension do
         ],
         # `fixture_hidden` is owned but not listed, like a switched-off tool.
         tool_names: ["fixture_echo", "fixture_hidden"],
+        permissions: %{"fixture_echo" => "skills.read"},
         execute: &execute/3,
         deny_message: fn
           "fixture_hidden" -> "fixture_hidden is switched off on this install"
@@ -147,6 +148,20 @@ defmodule Platform.FixtureExtension do
     ]
   end
 
+  # Task 01a1386d-cb5c: the positive control for `Platform.Access.Registry`'s
+  # extension seam. `Twin` below omits `permissions/0`, the negative control.
+  @impl true
+  def permissions do
+    [
+      %{
+        module: "fixture",
+        permissions: ["fixture.use"],
+        rail: [%{key: :fixture, permission: "fixture.use"}],
+        bundles: %{"fixture" => "fixture.use"}
+      }
+    ]
+  end
+
   # The positive control for the `routes/0` reader: `/api/ext/fixture/...`
   # reaches `EchoPlug`, which answers with what it saw.
   @impl true
@@ -155,7 +170,16 @@ defmodule Platform.FixtureExtension do
   # The positive control for the `live_pages/0` reader: `/m/fixture` nests
   # `Page`, which shows the one session key core hands it.
   @impl true
-  def live_pages, do: [%{prefix: "fixture", live_view: __MODULE__.Page, title: "Fixture page"}]
+  def live_pages,
+    do: [
+      %{
+        prefix: "fixture",
+        live_view: __MODULE__.Page,
+        title: "Fixture page",
+        module: :skills,
+        permission: "skills.read"
+      }
+    ]
 
   # The positive control for the `inbox_kinds/0` reader: an action kind
   # (stays listed on open) on a source type core does not own.

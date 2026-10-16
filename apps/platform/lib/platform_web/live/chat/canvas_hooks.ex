@@ -151,7 +151,7 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   @spec load_for_space(Phoenix.LiveView.Socket.t(), binary()) :: Phoenix.LiveView.Socket.t()
   def load_for_space(socket, space_id) do
     sort = Map.get(socket.assigns, :canvas_sort, @default_sort)
-    canvases = Chat.list_canvases(space_id, order: sort)
+    canvases = Chat.list_canvases(space_id, [order: sort] ++ access_scope_opts(socket))
 
     unsubscribe_all_canvases(socket)
     Enum.each(canvases, fn c -> ChatPubSub.subscribe_canvas(c.id) end)
@@ -335,7 +335,21 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   """
   @spec find(Phoenix.LiveView.Socket.t(), binary()) :: map() | nil
   def find(socket, canvas_id) do
-    Chat.get_canvas(canvas_id) || Enum.find(socket.assigns.canvases, &(&1.id == canvas_id))
+    canvas =
+      Chat.get_canvas(canvas_id) || Enum.find(socket.assigns.canvases, &(&1.id == canvas_id))
+
+    case {canvas, socket.assigns[:access_scope]} do
+      {nil, _} ->
+        nil
+
+      {canvas, %Platform.Access.Scope{} = scope} ->
+        if Platform.Access.check(scope, "canvas.read", {:canvas, canvas.id}) == :ok,
+          do: canvas,
+          else: nil
+
+      {canvas, _} ->
+        canvas
+    end
   end
 
   defp viewer(socket) do
@@ -359,7 +373,7 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
         # so this deliberately does not re-subscribe or touch `:show_canvases`;
         # going through `load_for_space/2` would close the drawer the user is
         # looking at.
-        canvases = Chat.list_canvases(space_id, order: sort)
+        canvases = Chat.list_canvases(space_id, [order: sort] ++ access_scope_opts(socket))
 
         {:halt,
          socket
@@ -408,7 +422,7 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
 
         results =
           if search_active?(query) do
-            Chat.search_canvases(space_ids, query)
+            Chat.search_canvases(space_ids, query, access_scope_opts(socket))
           else
             []
           end
@@ -1083,10 +1097,90 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
     end
   end
 
+  # The clicked canvas is the authority. No proposal id supplied in an
+  # action value can bind a lookalike canvas to a real consent surface.
+  defp handle_canvas_action_value(action, canvas, socket)
+       when action in ["access_apply", "access_cancel", "access_undo"] do
+    access_card_action(action, nil, canvas, socket)
+  end
+
+  defp handle_canvas_action_value("access_choose:" <> key, canvas, socket),
+    do: access_card_action("access_choose", key, canvas, socket)
+
   # Unrecognized action values: keep the generic emit-only contract.
   # Agent-side subscribers still see the click via the CanvasServer.emit_event
   # broadcast above.
   defp handle_canvas_action_value(_value, _canvas, socket), do: {:halt, socket}
+
+  defp access_card_action(action, key, canvas, socket) do
+    alias Platform.Access.{Proposal, Proposals, Scope}
+
+    with %Proposal{} = proposal <- Platform.Repo.get_by(Proposal, canvas_id: canvas.id),
+         user_id when is_binary(user_id) <- current_user_id(socket),
+         %Platform.Accounts.User{} = user <- Platform.Accounts.get_user(user_id) do
+      # Reload the human and their memberships on every click, including
+      # choices, cancellation and undo. Never trust the mounted scope.
+      human = Scope.for_user(user)
+
+      result =
+        case action do
+          "access_apply" -> Proposals.apply(proposal.id, human)
+          "access_cancel" -> Proposals.cancel(proposal.id, human)
+          "access_undo" -> Proposals.undo_applied(proposal.id, human)
+          "access_choose" -> Proposals.choose(proposal.id, key, human)
+        end
+
+      case result do
+        {:ok, _} ->
+          message =
+            case action do
+              "access_apply" -> "Access change applied."
+              "access_cancel" -> "Access change cancelled."
+              "access_undo" -> "Access is back to how it was."
+              "access_choose" -> "Option selected. Review the change, then Apply."
+            end
+
+          {:halt, put_flash(socket, :info, message)}
+
+        {:error, reason} ->
+          {:halt, put_flash(socket, :error, access_card_error(reason, proposal))}
+      end
+    else
+      nil -> {:halt, put_flash(socket, :error, "This card is not a live access change.")}
+      _ -> {:halt, put_flash(socket, :error, "Sign in as a person to approve this change.")}
+    end
+  end
+
+  defp access_card_error(:card_changed, _),
+    do: "This card changed. Ask the agent to propose the change again."
+
+  defp access_card_error(reason, _) when reason in [:stale, :expired],
+    do: "Expired (stale). Ask the agent to propose the change again."
+
+  defp access_card_error(:not_proposed, %{state: "applied"}),
+    do: "This change was already applied."
+
+  defp access_card_error(:not_proposed, %{state: "undone"}),
+    do: "This change was already undone."
+
+  defp access_card_error(:not_proposed, %{state: "stale"}),
+    do: "Expired (stale). Ask the agent to propose the change again."
+
+  defp access_card_error(:choose_option, _), do: "Choose an option before you Apply."
+  defp access_card_error(:already_undone, _), do: "This change was already undone."
+
+  defp access_card_error({:superseded, _}, _),
+    do: "A later change replaced this one. Undo the later change first."
+
+  defp access_card_error(%{rule: :last_admin}, _),
+    do: "This would remove the last admin. Keep someone who can manage access."
+
+  defp access_card_error(%{missing: missing}, _),
+    do: "Not authorized: you need #{missing} for this change."
+
+  defp access_card_error(:not_found, _), do: "Not authorized to use this access card."
+  defp access_card_error(:human_required, _), do: "Sign in as a person to approve this change."
+  defp access_card_error(_, _), do: "This access change could not be applied."
 
   # Authorization for junk_batch: allow the source canvas's creator (by
   # participant id) OR any root-org admin. `current_user` may be
@@ -1253,10 +1347,15 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   defp handle_info({:canvas_event, canvas_id, event}, socket) when is_map(event) do
     Logger.debug("[canvas_event] canvas=#{canvas_id} #{inspect(event)}")
 
-    {:halt,
-     socket
-     |> assign(:recent_canvas_events, prepend_event(socket, canvas_id, event))
-     |> put_flash(:info, flash_for(event))}
+    socket = assign(socket, :recent_canvas_events, prepend_event(socket, canvas_id, event))
+
+    socket =
+      case flash_for(event) do
+        nil -> socket
+        message -> put_flash(socket, :info, message)
+      end
+
+    {:halt, socket}
   end
 
   # Room traffic is push_event ONLY: no assign changes, so a cursor stream
@@ -1329,6 +1428,13 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
 
     [entry | prior] |> Enum.take(@recent_events_cap)
   end
+
+  # Access actions have their own factual receipt/refusal; retain the
+  # generic signal without overwriting that feedback with transport details.
+  defp flash_for(%{"name" => "action", "value" => value})
+       when value in ["access_apply", "access_cancel", "access_undo"], do: nil
+
+  defp flash_for(%{"name" => "action", "value" => "access_choose:" <> _}), do: nil
 
   defp flash_for(%{"name" => "action", "node_id" => id, "value" => v}),
     do: "Canvas action: #{id} → #{inspect(v)}"
@@ -1517,7 +1623,7 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
     # to read "3 of 41" against the space's real size rather than against the
     # number of matches. That is the whole reason stage 1 made `total_count` a
     # COUNT instead of `length(rows)`.
-    browse_groups = explorer_browse_groups(space_ids, order, offsets)
+    browse_groups = explorer_browse_groups(space_ids, order, offsets, access_scope_opts(socket))
     pinned = explorer_pinned_groups(socket, order)
 
     {groups, pinned} =
@@ -1581,22 +1687,21 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   # is a single `:offset` applied to every space and per-group offsets are the
   # point of a pager. Only paged groups pay for it, and only while they stay
   # paged.
-  defp explorer_browse_groups(space_ids, order, offsets) do
+  defp explorer_browse_groups(space_ids, order, offsets, scope_opts) do
     space_ids
-    |> Chat.list_canvas_groups(limit: @canvas_explorer_page_size, order: order)
+    |> Chat.list_canvas_groups([limit: @canvas_explorer_page_size, order: order] ++ scope_opts)
     |> Enum.map(fn group ->
       case Map.get(offsets, "space:" <> group.space_id, 0) do
-        offset when offset > 0 -> explorer_paged_group(group, offset, order)
+        offset when offset > 0 -> explorer_paged_group(group, offset, order, scope_opts)
         _ -> Map.put(group, :offset, 0)
       end
     end)
   end
 
-  defp explorer_paged_group(group, offset, order) do
-    Chat.list_canvas_groups([group.space_id],
-      limit: @canvas_explorer_page_size,
-      offset: offset,
-      order: order
+  defp explorer_paged_group(group, offset, order, scope_opts) do
+    Chat.list_canvas_groups(
+      [group.space_id],
+      [limit: @canvas_explorer_page_size, offset: offset, order: order] ++ scope_opts
     )
     |> case do
       # An offset past the end renders an empty group with no pager, which is a
@@ -1667,9 +1772,9 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
          %{chat_space_id: chat_space_id} when is_binary(chat_space_id) <-
            Meetings.get_live_meeting_for_space(space_id),
          [group] <-
-           Chat.list_canvas_groups([chat_space_id],
-             limit: @canvas_explorer_page_size,
-             order: order
+           Chat.list_canvas_groups(
+             [chat_space_id],
+             [limit: @canvas_explorer_page_size, order: order] ++ access_scope_opts(socket)
            ) do
       [
         %{
@@ -1691,7 +1796,11 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   defp explorer_task_group(socket) do
     with %{metadata: metadata} <- socket.assigns[:active_space],
          task_id when is_binary(task_id) <- Map.get(metadata || %{}, "task_id"),
-         [_ | _] = rows <- explorer_task_rows(CanvasAttachments.list_task_canvases(task_id)) do
+         [_ | _] = rows <-
+           task_id
+           |> CanvasAttachments.list_task_canvases()
+           |> explorer_task_rows()
+           |> drop_denied_task_rows(socket.assigns[:access_scope]) do
       [%{key: "task", label: "On this task", rows: rows, total_count: length(rows)}]
     else
       _ -> []
@@ -1730,6 +1839,17 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   end
 
   defp explorer_task_row(_entry), do: nil
+
+  # RBAC v2 (task 01a1386d-e528 stage 5): the attachment rows bypass
+  # `Chat.list_canvas_groups/2`, so a `canvas.read` deny is applied here, per
+  # row, through `Platform.Access.within?/4` (the `CanvasAccess.fetch_for_viewer/3`
+  # check). The count is `length(rows)` AFTER this, so a hidden canvas leaves
+  # both the rows and the header count. No Scope on the socket: unchanged.
+  defp drop_denied_task_rows(rows, %Platform.Access.Scope{} = scope) do
+    Enum.filter(rows, &Platform.Access.within?(scope, "canvas.read", {:canvas, &1.id}, true))
+  end
+
+  defp drop_denied_task_rows(rows, _scope), do: rows
 
   # In search mode a pinned group is filtered to its matches, the same way a
   # space group is, so the component's "expand every group holding a match"
@@ -1926,6 +2046,17 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
         |> Platform.Repo.update()
 
         :ok
+    end
+  end
+
+  # RBAC v2 resource scoping (task 01a1386d-e528 stage 3): the viewer's
+  # `@access_scope`, so a `canvas.read` deny drops the canvas from the drawer
+  # and the explorer (rows and counts). No Scope on the socket: no opt, and
+  # the read is unchanged.
+  defp access_scope_opts(socket) do
+    case socket.assigns[:access_scope] do
+      %Platform.Access.Scope{} = scope -> [access_scope: scope]
+      _ -> []
     end
   end
 end

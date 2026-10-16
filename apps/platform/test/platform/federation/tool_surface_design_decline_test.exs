@@ -26,7 +26,7 @@ defmodule Platform.Federation.ToolSurfaceDesignDeclineTest do
   Co-locating the decline makes its reachability co-extensive with a path
   already known to work on every designer runtime in existence. A new
   bundle would ship an affordance nobody can call until someone hand-edits
-  every `allowed_bundles` row — which is the failure mode this task exists
+  every `tool_profile` row — which is the failure mode this task exists
   to fix, re-committed. That co-extensiveness is asserted directly below,
   not left as prose.
 
@@ -57,7 +57,6 @@ defmodule Platform.Federation.ToolSurfaceDesignDeclineTest do
 
   use Platform.DataCase, async: false
 
-  alias Platform.Agents.AgentRuntime
   alias Platform.Design.PreplanStep
   alias Platform.ExternalUserFixtures, as: World
   alias Platform.Federation.ToolAuthorization
@@ -123,8 +122,8 @@ defmodule Platform.Federation.ToolSurfaceDesignDeclineTest do
     quietly(fn -> ToolSurface.execute("task_design_decline", args, context) end)
   end
 
-  defp runtime(owner_user_id, allowed_bundles) do
-    %AgentRuntime{owner_user_id: owner_user_id, allowed_bundles: allowed_bundles}
+  defp runtime(owner_user_id, modules) do
+    Platform.RuntimeProfileFixtures.runtime!(owner_user_id, modules)
   end
 
   # ── surface registration ──────────────────────────────────────────────────
@@ -204,7 +203,7 @@ defmodule Platform.Federation.ToolSurfaceDesignDeclineTest do
 
       # The reachability claim the bundle choice rests on, asserted rather
       # than argued: the decline is grantable by exactly the grant that
-      # already carries the designer's delivery path, so no `allowed_bundles`
+      # already carries the designer's delivery path, so no `tool_profile`
       # row anywhere has to change for a dispatched designer to reach it.
       assert "task_attach_canvas" in designer_names
       refute "task_attach_canvas" in other_names

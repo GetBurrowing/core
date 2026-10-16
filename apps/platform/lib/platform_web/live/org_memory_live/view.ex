@@ -89,7 +89,7 @@ defmodule PlatformWeb.OrgMemoryLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    pages = Wiki.list_pages()
+    pages = Wiki.list_pages(page_access_opts(socket))
     {tree, burrow_docs} = build_trees(pages)
 
     {:ok,
@@ -149,7 +149,7 @@ defmodule PlatformWeb.OrgMemoryLive do
     # Glob route — `file_key` arrives as a list of path segments.
     file_key = if is_list(file_key), do: Enum.join(file_key, "/"), else: file_key
 
-    case Wiki.get_page(file_key) do
+    case Wiki.get_page(file_key, page_access_opts(socket)) do
       nil ->
         {:noreply,
          socket
@@ -364,7 +364,7 @@ defmodule PlatformWeb.OrgMemoryLive do
         |> put_filter("source", corpus)
         |> put_filter("namespace", namespace)
 
-      case tool_surface().execute("memory_search", args, %{agent: nil}) do
+      case tool_surface().execute("memory_search", args, search_context(socket)) do
         # A degraded search with surviving hits (task 01a0941e stage 1):
         # the envelope carries NO `results` key at all, so this clause is
         # the only way those hits reach the page — and it hands them over
@@ -1296,8 +1296,33 @@ defmodule PlatformWeb.OrgMemoryLive do
     |> Enum.sort()
   end
 
+  # RBAC v2 resource grants (task 01a1386d-e528 stage 4): the user's
+  # `@access_scope` (LiveAuth) narrows the tree, the page read and the search
+  # to the pages it may `memory.read`; a denied page reads as absent.
+  defp page_access_opts(socket) do
+    case socket.assigns[:access_scope] do
+      %Platform.Access.Scope{} = scope -> [access_scope: scope]
+      _ -> []
+    end
+  end
+
+  # The search goes through the tool surface with the anonymous UI caller
+  # context `%{agent: nil}`. The scope rides on it only when a `memory.read`
+  # grant applies: with none the search is unchanged, so the context is too.
+  defp search_context(socket) do
+    case socket.assigns[:access_scope] do
+      %Platform.Access.Scope{} = scope ->
+        if Platform.Access.grants_apply?(scope, "memory.read"),
+          do: %{agent: nil, access_scope: scope},
+          else: %{agent: nil}
+
+      _ ->
+        %{agent: nil}
+    end
+  end
+
   defp refresh_pages(socket) do
-    pages = Wiki.list_pages()
+    pages = Wiki.list_pages(page_access_opts(socket))
     {tree, burrow_docs} = build_trees(pages)
 
     socket

@@ -40,6 +40,52 @@ defmodule Platform.Chat.ExternalScope do
   Internal and system (nil) scopes are pass-through everywhere — this is
   external-user-only, so no internal read path regresses.
 
+  ## Accepting a `%Platform.Access.Scope{}`
+
+  Every `:scope` taker here also accepts a `%Platform.Access.Scope{}`
+  (task `01a1386d-cb5c` stage 3,
+  `0058-rbac-v2-roles-scopes-and-agent-capping.md § Permission model`), so
+  `:scope` is "`%ExternalScope{}` or `%Platform.Access.Scope{}`". A Scope
+  whose `chat.read` comes ONLY from the guest role's `participant_spaces`
+  rule, with a user actor, filters through the SAME live
+  `member_space_ids/1` subquery an external `%ExternalScope{}` uses. It never
+  filters from the Scope's participant id list: that list is a build-time
+  snapshot, and a socket that mounted before a participant row was added must
+  still see the new space (`chat_live.ex` builds its scope once per mount).
+  Any other Scope passes through, exactly like an internal scope: a member or
+  admin (`implicit_or_participant`), a zero-membership user, `for_user(nil)`,
+  `system/0`, a meeting invitee, and a runtime (its actor is not a user, which
+  is also what `for_user/1` gives a runtime today). `from_scope/1` is the
+  conversion; every Scope clause goes through it.
+
+  `for_user/1` still returns `%ExternalScope{}`. Callers pattern-match
+  `external?: true` on it (`chat_live.ex`, `Chat.ContextSummary`), and a
+  Scope would read as non-external there. Switching those call sites is
+  resource scoping (stack position 3), not this bridge.
+
+  `authorized_space?/2` takes a user, not a scope, and is unchanged.
+
+  ## Explicit grants compose with the Scope clauses
+
+  Task `01a1386d-e528` stage 3,
+  `0058-rbac-v2-roles-scopes-and-agent-capping.md § Precedence`. The three Scope clauses above hand their filter to
+  `Platform.Access.Query.restrict/5` (including `visible_space_id?/2`) as the EXISTING check, under `chat.read` on
+  resource type `:space`:
+
+    * no grant naming `chat.read` → exactly the filter described above;
+    * otherwise the visible set is that filter (a guest's live
+      `member_space_ids/1` subquery, everything for a pass-through scope)
+      UNION the spaces a `chat.read` allow covers (a project allow covers its
+      tasks' execution spaces), MINUS every space a `chat.read` deny covers.
+
+  The deny-wins condition is written once, in `Platform.Access.Query`; this
+  module only names the base. An `%ExternalScope{}` is unaffected.
+
+  The Scope clauses match `%{__struct__: Scope}` rather than `%Scope{}` on
+  purpose: `Platform.Access.Scope` builds an `%ExternalScope{}` for its
+  participant snapshot, and a struct literal in each direction would make
+  the two modules wait on each other's struct at compile time.
+
   ## Read scope vs admission gate
 
   Two different questions live in this module and collapsing them is a bug in
@@ -57,6 +103,7 @@ defmodule Platform.Chat.ExternalScope do
 
   import Ecto.Query
 
+  alias Platform.Access.{Query, Scope}
   alias Platform.Chat
   alias Platform.Chat.Participant
   alias Platform.Repo
@@ -87,12 +134,45 @@ defmodule Platform.Chat.ExternalScope do
   end
 
   @doc """
+  Convert a `%Platform.Access.Scope{}` to the `%ExternalScope{}` it filters as.
+
+  `external?: true` exactly when the actor carries a binary `:id` and the
+  Scope's contributing roles carry `chat.read` only through the
+  `participant_spaces` rule (`Scope.rules_for/2`, which reads a user's
+  memberships through the same `Scope.guest_dominates/1` path `for_user/1`
+  builds from). For the built-in roles that is a guest-restricted user: an
+  external member, external admin, external root-org member, and a mixed user
+  (guest dominates). Everything else converts to a pass-through scope. The
+  result carries no participant ids; `member_space_ids/1` reads
+  `chat_participants` live on every call.
+
+  An `%AgentRuntime{}` also carries a binary `:id`, so an external-owned
+  runtime's Scope converts to `user_id: <runtime id>, external?: true` and
+  filters to nothing: no `participant_type: "user"` row carries a runtime id.
+  No caller passes a runtime Scope to a Chat read today (task `01a1386d-cb5c`
+  stage 4 pins this in `test/platform/access/equivalence_test.exs`).
+  """
+  @spec from_scope(Scope.t()) :: t()
+  def from_scope(%{__struct__: Scope, actor: %{id: user_id}} = scope) when is_binary(user_id) do
+    %__MODULE__{user_id: user_id, external?: participant_restricted?(scope)}
+  end
+
+  def from_scope(%{__struct__: Scope}), do: %__MODULE__{user_id: nil, external?: false}
+
+  defp participant_restricted?(scope) do
+    Scope.rules_for(scope, "chat.read") == ["participant_spaces"]
+  end
+
+  @doc """
   The composable subquery yielding the set of `space_id`s the scope's user is
   a `participant_type: "user"` member of. This is the authoritative external
   read-scope. Mirrors the membership check in `Chat.principal_is_member?/2`,
   expressed as a set-returning subquery.
   """
-  @spec member_space_ids(t()) :: Ecto.Query.t()
+  @spec member_space_ids(t() | Scope.t()) :: Ecto.Query.t()
+  def member_space_ids(%{__struct__: Scope} = scope),
+    do: scope |> from_scope() |> member_space_ids()
+
   def member_space_ids(%__MODULE__{user_id: user_id}) do
     from(p in Participant,
       where: p.participant_type == "user" and p.participant_id == ^user_id,
@@ -104,7 +184,17 @@ defmodule Platform.Chat.ExternalScope do
   Scope a query whose first binding is `Platform.Chat.Space` to the external
   user's member spaces. Identity for internal and nil (system) scopes.
   """
-  @spec scope_spaces(Ecto.Query.t() | module(), t() | nil) :: Ecto.Query.t() | module()
+  @spec scope_spaces(Ecto.Query.t() | module(), t() | Scope.t() | nil) ::
+          Ecto.Query.t() | module()
+  def scope_spaces(query, %{__struct__: Scope} = scope) do
+    ext = from_scope(scope)
+
+    base =
+      if ext.external?, do: dynamic([s], s.id in subquery(member_space_ids(ext)))
+
+    Query.restrict(query, scope, "chat.read", :space, %{id: :id, base: base})
+  end
+
   def scope_spaces(query, %__MODULE__{external?: true} = scope) do
     where(query, [s], s.id in subquery(member_space_ids(scope)))
   end
@@ -116,7 +206,17 @@ defmodule Platform.Chat.ExternalScope do
   Attachment / Canvas) to the external user's member spaces. Identity for
   internal and nil (system) scopes.
   """
-  @spec scope_by_space_id(Ecto.Query.t() | module(), t() | nil) :: Ecto.Query.t() | module()
+  @spec scope_by_space_id(Ecto.Query.t() | module(), t() | Scope.t() | nil) ::
+          Ecto.Query.t() | module()
+  def scope_by_space_id(query, %{__struct__: Scope} = scope) do
+    ext = from_scope(scope)
+
+    base =
+      if ext.external?, do: dynamic([x], x.space_id in subquery(member_space_ids(ext)))
+
+    Query.restrict(query, scope, "chat.read", :space, %{id: :space_id, base: base})
+  end
+
   def scope_by_space_id(query, %__MODULE__{external?: true} = scope) do
     where(query, [x], x.space_id in subquery(member_space_ids(scope)))
   end
@@ -129,7 +229,17 @@ defmodule Platform.Chat.ExternalScope do
   scope, `true` iff the user is a member of that space — letting `get_*` return
   `nil` for out-of-scope ids without re-issuing the full query.
   """
-  @spec visible_space_id?(binary() | nil, t() | nil) :: boolean()
+  @spec visible_space_id?(binary() | nil, t() | Scope.t() | nil) :: boolean()
+  def visible_space_id?(space_id, %{__struct__: Scope} = scope) when is_binary(space_id) do
+    Platform.Chat.Space
+    |> where([s], s.id == ^space_id)
+    |> scope_spaces(scope)
+    |> Repo.exists?()
+  end
+
+  def visible_space_id?(space_id, %{__struct__: Scope} = scope),
+    do: visible_space_id?(space_id, from_scope(scope))
+
   def visible_space_id?(space_id, %__MODULE__{external?: true} = scope)
       when is_binary(space_id) do
     Repo.exists?(where(member_space_ids(scope), [p], p.space_id == ^space_id))

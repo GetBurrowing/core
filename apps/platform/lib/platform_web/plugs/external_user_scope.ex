@@ -15,8 +15,10 @@ defmodule PlatformWeb.Plugs.ExternalUserScope do
       `/meetings/:slug`, and only a meeting they hold a live invite to
       (`Platform.Meetings.invited_to_slug?/2`). `/chat` on this host is off
       surface.
-    * `:chat` — the external CHAT host (task 019f9257). UNCHANGED: `/`,
-      `/chat`, and a `/chat/:slug` they are scoped to.
+    * `:chat` — the external CHAT host (task 019f9257): `/`, `/chat`,
+      a scoped `/chat/:slug`, and the read-only view-as page. View-as performs
+      its own `access.manage` authorization and intersects resource listings
+      with the viewer's scope.
     * `:app` — the primary Suite host. UNCHANGED, byte for byte: same
       clauses, same order, same reason strings as before the meet surface
       existed.
@@ -44,6 +46,8 @@ defmodule PlatformWeb.Plugs.ExternalUserScope do
 
   alias Platform.Chat
   alias Platform.Chat.ExternalScope
+  alias Platform.Access
+  alias Platform.Access.Registry
   alias Platform.Meetings
   alias Platform.Tenancy
   alias PlatformWeb.ExternalRedirect
@@ -125,8 +129,16 @@ defmodule PlatformWeb.Plugs.ExternalUserScope do
       {:meet, _} ->
         deny(conn, user, "external_off_surface")
 
-      # CHAT and APP surfaces: byte-identical to the pre-meet behaviour —
-      # same clauses, same order, same reason strings.
+      # A project manager on the external chat host may inspect a target's
+      # access. The LiveView performs the resource-scoped access.manage check.
+      {:chat, ["access", "view-as", "role", _org_id, _key]} ->
+        conn
+
+      {:chat, ["access", "view-as", type, _id]} when type in ["user", "agent"] ->
+        conn
+
+      # The remaining CHAT and APP clauses retain their pre-meet order and
+      # reason strings.
       #
       # Root redirects into /chat; the index list is filtered by M5/M7. But an
       # external user reaching the internal /chat index on the SUITE host must
@@ -143,10 +155,29 @@ defmodule PlatformWeb.Plugs.ExternalUserScope do
       {_, ["chat", slug]} ->
         gate_space(conn, user, slug)
 
+      # The app host admits only a registry rail path whose module explicitly
+      # permits guests. The LiveView mount gate then re-checks every view.
+      {:app, [segment | _]} ->
+        entry =
+          Enum.find(Registry.rail_entries(), fn entry ->
+            entry.key != :chat and rail_segment(entry.key) == segment
+          end)
+
+        if entry && Access.module_access?(conn.assigns[:access_scope], entry.key) do
+          conn
+        else
+          deny(conn, user, "external_non_chat_route")
+        end
+
       {_, _} ->
         deny(conn, user, "external_non_chat_route")
     end
   end
+
+  defp rail_segment(:context), do: "org_memory"
+  defp rail_segment(:experiments), do: "control"
+  defp rail_segment(:prompts), do: "admin"
+  defp rail_segment(key), do: Atom.to_string(key)
 
   # task 019f9257: redirect an external user off the internal /chat index to the
   # absolute chat-host external surface. Returns a halted conn (302) when the
@@ -262,16 +293,15 @@ defmodule PlatformWeb.Plugs.ExternalUserScope do
     if Chat.reserved_slug_prefix?(slug), do: Chat.get_space_by_slug(slug, [])
   end
 
-  # On any deny: emit the access-blocked telemetry (mirrors
-  # `RequireAuth.emit_access_blocked/3` — feeds the M15 security suite +
-  # audit), then halt with a uniform 403 rendered via the error views. The
-  # catch-all `render/2` in ErrorHTML/ErrorJSON already yields "Forbidden"
-  # for the `:"403"` template, so no new template clause is needed.
+  # On any deny, emit access-blocked telemetry and render the same standalone
+  # page for every path. The root layout omits its per-response CSRF token
+  # for a denial, giving known and missing resource URLs identical bytes.
   defp deny(conn, user, reason) do
     emit_access_blocked(conn, user, reason)
 
     conn
     |> put_status(:forbidden)
+    |> assign(:access_denied, true)
     |> Phoenix.Controller.put_view(html: PlatformWeb.ErrorHTML, json: PlatformWeb.ErrorJSON)
     |> Phoenix.Controller.render(:"403")
     |> halt()

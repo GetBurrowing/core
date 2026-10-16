@@ -97,6 +97,8 @@ defmodule Platform.Roles do
   require Logger
 
   alias Platform.Agents.Agent
+  alias Platform.Access.Agents, as: AgentAccess
+  alias Platform.Access.Scope
   alias Platform.Repo
   alias Platform.Responsibilities
   alias Platform.Responsibilities.RuntimeGate
@@ -199,6 +201,12 @@ defmodule Platform.Roles do
     |> broadcast_assignment_change(role_key)
   end
 
+  def assign_role(role_key, agent_id, actor: %Scope{} = scope) do
+    if AgentAccess.may_assign?(scope, get_agent_if_valid(agent_id)),
+      do: assign_role(role_key, agent_id),
+      else: {:error, :unauthorized}
+  end
+
   @doc """
   Remove the assignment for `role_key` if any. Returns `:ok`
   regardless of whether a row existed — idempotent for caller
@@ -219,6 +227,18 @@ defmodule Platform.Roles do
     broadcast_assignment_change(role_key)
 
     :ok
+  end
+
+  def unassign_role(role_key, actor: %Scope{} = scope) do
+    case Repo.get_by(RoleAssignment, role_key: role_key) do
+      nil ->
+        :ok
+
+      assignment ->
+        if AgentAccess.may_release?(scope, get_agent_if_valid(assignment.agent_id)),
+          do: unassign_role(role_key),
+          else: {:error, :unauthorized}
+    end
   end
 
   # ── Assignment change notifications (task 019f70b8 stage 7) ───────────
@@ -388,6 +408,17 @@ defmodule Platform.Roles do
     )
   end
 
+  def set_override(responsibility_key, agent_id, actor: %Scope{} = scope) do
+    target = get_agent_if_valid(agent_id)
+    prior = Repo.get_by(ResponsibilityOverride, responsibility_key: responsibility_key)
+    prior_agent = prior && get_agent_if_valid(prior.agent_id)
+
+    if AgentAccess.may_assign?(scope, target) and
+         (is_nil(prior) or AgentAccess.may_release?(scope, prior_agent)),
+       do: set_override(responsibility_key, agent_id),
+       else: {:error, :unauthorized}
+  end
+
   # Soft-fail runtime-type gate (task 019f2566 stage 4). Looks up the
   # responsibility + agent by their natural keys and asks
   # `RuntimeGate.compatible?/2` whether the runtime shape plausibly
@@ -401,7 +432,7 @@ defmodule Platform.Roles do
   # existing `{:error, changeset}` return.
   defp maybe_signal_runtime_mismatch(responsibility_key, agent_id) do
     responsibility = Responsibilities.get_by_key(responsibility_key)
-    agent = Repo.get(Agent, agent_id)
+    agent = get_agent_if_valid(agent_id)
 
     case RuntimeGate.compatible?(responsibility, agent) do
       :ok ->
@@ -446,6 +477,22 @@ defmodule Platform.Roles do
       |> Repo.delete_all()
 
     :ok
+  end
+
+  def clear_override(responsibility_key, actor: %Scope{} = scope) do
+    case Repo.get_by(ResponsibilityOverride, responsibility_key: responsibility_key) do
+      nil ->
+        :ok
+
+      override ->
+        if AgentAccess.may_release?(scope, get_agent_if_valid(override.agent_id)),
+          do: clear_override(responsibility_key),
+          else: {:error, :unauthorized}
+    end
+  end
+
+  defp get_agent_if_valid(agent_id) do
+    if Platform.UUID.valid?(agent_id), do: Repo.get(Agent, agent_id), else: nil
   end
 
   # ── Resolver ──────────────────────────────────────────────────────────

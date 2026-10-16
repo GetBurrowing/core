@@ -81,17 +81,17 @@ defmodule Platform.Orchestration.DispatchMetricsTest do
          ctx do
       # Task 01a115b5 stage 1. The row is written by ToolCall.invoke/4, not
       # inserted here, so the count reads the ledger's classification.
-      {:ok, runtime} =
-        Platform.Federation.update_allowed_bundles(
+      {:ok, _profile} =
+        Platform.Access.RuntimeProfiles.set_tool_profile(
           ctx.runtime,
-          AgentRuntime.default_allowed_bundles() ++ ["code_mode"]
+          AgentRuntime.default_tool_profile() ++ ["code_mode"]
         )
 
       assert {:ok, %{ok: false, error: %{kind: "script_error"}, run_id: run_id}} =
                Platform.Federation.ToolCall.invoke(
                  "suite_run",
                  %{"script" => "nope()", "inputs" => %{"task_id" => ctx.task.id}},
-                 runtime
+                 ctx.runtime
                )
 
       {1, _} =
@@ -292,6 +292,12 @@ defmodule Platform.Orchestration.DispatchMetricsTest do
         name: "Metrics User",
         oidc_sub: "oidc-metrics-#{u()}"
       })
+
+    Platform.ExternalUserFixtures.plain_member!(
+      user,
+      Platform.Tenancy.get_org!(Platform.TenancyFixtures.acme_org_id()),
+      "admin"
+    )
 
     %AgentRuntime{}
     |> AgentRuntime.changeset(%{

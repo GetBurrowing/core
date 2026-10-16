@@ -23,6 +23,13 @@ defmodule Platform.Tenancy.Lifecycle do
   Authorization: every function requires a root-org admin actor. There
   is no creator carve-out (orgs and projects have no owner column) and no
   system path — a `nil`/non-admin actor gets `{:error, :unauthorized}`.
+  The check is `Platform.Access.authorize_install/1` (task 01a1386d-fb6e
+  stage 2), which replaced `Tenancy.root_admin?/1`. It answers the same for
+  every internal actor and is STRICTER for exactly one class, the external
+  root admin (guest dominates,
+  `0058-rbac-v2-roles-scopes-and-agent-capping.md § Root-admin carve-outs`),
+  who is now refused here too. The `ExternalUserScope` plug already refuses
+  that user over HTTP, so HTTP outcomes are unchanged.
 
   Audit: each successful action emits a distinct `[:platform, …]`
   telemetry event AFTER the transaction commits (a rolled-back write must
@@ -38,6 +45,7 @@ defmodule Platform.Tenancy.Lifecycle do
   import Ecto.Query
 
   alias Ecto.Multi
+  alias Platform.Access
   alias Platform.Chat.Space
   alias Platform.Repo
   alias Platform.Tasks.Project
@@ -890,7 +898,7 @@ defmodule Platform.Tenancy.Lifecycle do
 
   defp with_org_authz(actor, %Org{} = org, fun) do
     cond do
-      not Tenancy.root_admin?(actor) -> {:error, :unauthorized}
+      Access.authorize_install(actor) != :ok -> {:error, :unauthorized}
       Tenancy.tier(org) == :root -> {:error, :not_deletable}
       true -> fun.()
     end
@@ -998,7 +1006,7 @@ defmodule Platform.Tenancy.Lifecycle do
   end
 
   defp with_project_authz(actor, fun) do
-    if Tenancy.root_admin?(actor), do: fun.(), else: {:error, :unauthorized}
+    with :ok <- Access.authorize_install(actor), do: fun.()
   end
 
   # ── Selective restore (Recovery hub — task 019f7600 stage 3) ───────────
@@ -1171,7 +1179,7 @@ defmodule Platform.Tenancy.Lifecycle do
   # access must not suffice — the same precedent as the destructive
   # `schedule_space_deletion/2`. A nil / non-admin actor gets :unauthorized.
   defp with_root_admin_authz(actor, fun) do
-    if Tenancy.root_admin?(actor), do: fun.(), else: {:error, :unauthorized}
+    with :ok <- Access.authorize_install(actor), do: fun.()
   end
 
   # ── Create-time guard ─────────────────────────────────────────────────

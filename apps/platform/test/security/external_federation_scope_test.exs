@@ -57,7 +57,7 @@ defmodule Platform.Security.ExternalFederationScopeTest do
 
       %{"error" => %{"code" => code, "message" => message}} = json_response(conn, 200)
       assert code == -32001
-      assert message =~ "not in allowed bundles"
+      assert message =~ "requires permission"
     end
 
     test "tools/call react is NOT rejected by the external gate", ctx do
@@ -115,7 +115,7 @@ defmodule Platform.Security.ExternalFederationScopeTest do
 
   # ── Helpers ────────────────────────────────────────────────────────────
 
-  defp runtime_for(owner_user_id, allowed_bundles) do
+  defp runtime_for(owner_user_id, tool_profile) do
     raw_token = AgentRuntime.generate_token()
 
     {:ok, runtime} =
@@ -124,10 +124,16 @@ defmodule Platform.Security.ExternalFederationScopeTest do
         runtime_id: "m15-rt-#{System.unique_integer([:positive])}",
         owner_user_id: owner_user_id,
         auth_token_hash: AgentRuntime.hash_token(raw_token),
-        status: "active",
-        allowed_bundles: allowed_bundles
+        status: "active"
       })
       |> Repo.insert()
+
+    {:ok, _profile} =
+      Platform.Access.RuntimeProfiles.create_for_runtime(
+        runtime,
+        tool_profile,
+        Platform.Access.RuntimeProfiles.translated_permissions(tool_profile)
+      )
 
     {runtime, raw_token}
   end

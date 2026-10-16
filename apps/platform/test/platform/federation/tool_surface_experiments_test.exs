@@ -8,6 +8,8 @@ defmodule Platform.Federation.ToolSurfaceExperimentsTest do
 
   use Platform.DataCase, async: true
 
+  import Platform.TenancyFixtures
+
   alias Platform.Agents.AgentRuntime
   alias Platform.Federation.ExperimentTools
   alias Platform.Federation.ToolAuthorization
@@ -19,11 +21,12 @@ defmodule Platform.Federation.ToolSurfaceExperimentsTest do
             experiment_goal_set experiment_goal_list experiment_promote
             dispatch_metrics_list code_mode_report)
 
-  defp runtime(bundles), do: %AgentRuntime{owner_user_id: nil, allowed_bundles: bundles}
+  defp runtime(bundles),
+    do: Platform.RuntimeProfileFixtures.runtime!(root_admin!().id, bundles)
 
   test "the bundle is registered, grantable, and lists exactly the experiment tools" do
     assert "experiments" in ToolSurface.all_bundles()
-    assert "experiments" in AgentRuntime.valid_bundles()
+    assert "experiments" in Platform.Access.RuntimeProfiles.valid_modules()
 
     names = ToolSurface.list_tools(["experiments"]) |> Enum.map(& &1.name)
     assert Enum.sort(names) == Enum.sort(@names)
@@ -31,8 +34,8 @@ defmodule Platform.Federation.ToolSurfaceExperimentsTest do
   end
 
   test "absent from a default runtime: every experiment tool is refused" do
-    refute "experiments" in AgentRuntime.default_allowed_bundles()
-    default = runtime(AgentRuntime.default_allowed_bundles())
+    refute "experiments" in AgentRuntime.default_tool_profile()
+    default = runtime(AgentRuntime.default_tool_profile())
 
     refute Enum.any?(ToolAuthorization.tool_names(default), &(&1 in @names))
 
@@ -42,11 +45,11 @@ defmodule Platform.Federation.ToolSurfaceExperimentsTest do
   end
 
   test "a fresh AgentRuntime row does not carry the bundle" do
-    refute "experiments" in %AgentRuntime{}.allowed_bundles
+    refute "experiments" in AgentRuntime.default_tool_profile()
   end
 
   test "present when granted" do
-    granted = runtime(AgentRuntime.default_allowed_bundles() ++ ["experiments"])
+    granted = runtime(AgentRuntime.default_tool_profile() ++ ["experiments"])
 
     for name <- @names do
       assert ToolAuthorization.authorize(name, granted) == :ok

@@ -7,6 +7,7 @@ defmodule PlatformWeb.ControlCenter.RuntimeEvents do
   import Phoenix.LiveView, only: [put_flash: 3]
 
   alias Platform.Agents.Agent
+  alias Platform.Access.RuntimeProfiles
   alias Platform.Federation
 
   def handle(
@@ -17,7 +18,7 @@ defmodule PlatformWeb.ControlCenter.RuntimeEvents do
       when is_binary(rid) do
     case Federation.get_runtime(rid) do
       %{} = runtime ->
-        case Federation.suspend_runtime(runtime) do
+        case Federation.suspend_runtime(socket.assigns.access_scope, runtime) do
           {:ok, _} ->
             {:noreply, socket |> put_flash(:info, "Runtime suspended.") |> reload(socket)}
 
@@ -40,7 +41,7 @@ defmodule PlatformWeb.ControlCenter.RuntimeEvents do
       when is_binary(rid) do
     case Federation.get_runtime(rid) do
       %{} = runtime ->
-        case Federation.revoke_runtime(runtime) do
+        case Federation.revoke_runtime(socket.assigns.access_scope, runtime) do
           {:ok, _} ->
             {:noreply, socket |> put_flash(:info, "Runtime revoked.") |> reload(socket)}
 
@@ -69,7 +70,7 @@ defmodule PlatformWeb.ControlCenter.RuntimeEvents do
         {:noreply, put_flash(socket, :error, "This agent gets a new token every time it starts.")}
 
       %{} = runtime ->
-        case Federation.generate_runtime_token(runtime) do
+        case Federation.generate_runtime_token(socket.assigns.access_scope, runtime) do
           {:ok, _runtime, raw_token} ->
             {:noreply,
              socket
@@ -93,25 +94,25 @@ defmodule PlatformWeb.ControlCenter.RuntimeEvents do
   end
 
   def handle(
-        "update_runtime_bundles",
+        "save_tool_profile",
         params,
         %{assigns: %{selected_agent: %Agent{runtime_id: rid}}} = socket
       )
       when is_binary(rid) do
-    bundles = params |> Map.get("bundles", []) |> List.wrap()
+    modules = params |> Map.get("modules", []) |> List.wrap()
 
     case Federation.get_runtime(rid) do
       %{} = runtime ->
-        case Federation.update_allowed_bundles(runtime, bundles) do
+        case RuntimeProfiles.set_tool_profile(socket.assigns.access_scope, runtime, modules) do
           {:ok, _} ->
-            {:noreply, socket |> put_flash(:info, "Allowed bundles updated.") |> reload(socket)}
+            {:noreply, socket |> put_flash(:info, "Tool profile updated.") |> reload(socket)}
 
           {:error, _changeset} ->
             {:noreply,
              put_flash(
                socket,
                :error,
-               "Could not update bundles. One or more values are not in the valid set."
+               "Could not update tool profile."
              )}
         end
 
@@ -120,7 +121,40 @@ defmodule PlatformWeb.ControlCenter.RuntimeEvents do
     end
   end
 
-  def handle("update_runtime_bundles", _params, socket), do: {:noreply, socket}
+  def handle("save_tool_profile", _params, socket), do: {:noreply, socket}
+
+  def handle(
+        "save_agent_restrictions",
+        params,
+        %{assigns: %{selected_agent: %Agent{runtime_id: rid}}} = socket
+      )
+      when is_binary(rid) do
+    permissions =
+      if params["inherit"] == "true" do
+        nil
+      else
+        params
+        |> Map.get("permissions", [])
+        |> List.wrap()
+        |> Map.new(&{&1, "all"})
+      end
+
+    case Federation.get_runtime(rid) do
+      %{} = runtime ->
+        case RuntimeProfiles.restrict(socket.assigns.access_scope, runtime, permissions) do
+          {:ok, _} ->
+            {:noreply, socket |> put_flash(:info, "Agent access updated.") |> reload(socket)}
+
+          {:error, _} ->
+            {:noreply, put_flash(socket, :error, "Could not update agent access.")}
+        end
+
+      nil ->
+        {:noreply, put_flash(socket, :error, "Runtime not found.")}
+    end
+  end
+
+  def handle("save_agent_restrictions", _params, socket), do: {:noreply, socket}
 
   # Delegate reload back to the main LiveView module
   defp reload(socket, _original_socket) do

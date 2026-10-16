@@ -8,15 +8,11 @@ defmodule PlatformWeb.ControlCenterLiveTest do
   alias Platform.Agents.{Agent, AgentRuntime, AgentServer, MemoryContext}
   alias Platform.Chat
   alias Platform.Federation
+  alias Platform.Access.{RuntimeProfile, RuntimeProfiles}
   alias Platform.Repo
 
   defp authenticated_conn(conn) do
-    user =
-      Repo.insert!(%User{
-        email: "control_test_#{System.unique_integer([:positive])}@example.com",
-        name: "Control Test User",
-        oidc_sub: "oidc-control-test-#{System.unique_integer([:positive])}"
-      })
+    user = Platform.TenancyFixtures.root_admin!()
 
     init_test_session(conn, current_user_id: user.id)
   end
@@ -1194,7 +1190,7 @@ defmodule PlatformWeb.ControlCenterLiveTest do
     refute html =~ "copy-regen-token"
   end
 
-  test "update runtime bundles persists the submitted set", %{conn: conn} do
+  test "update tool profile persists the submitted modules", %{conn: conn} do
     user =
       Repo.insert!(%User{
         email: "fed_bundles_#{System.unique_integer([:positive])}@example.com",
@@ -1220,26 +1216,24 @@ defmodule PlatformWeb.ControlCenterLiveTest do
     conn = init_test_session(conn, current_user_id: user.id)
     {:ok, view, html} = live(conn, ~p"/control/#{agent.slug}")
 
-    # The bundle form should render with the current bundles checked.
-    assert html =~ "Allowed capability bundles"
-    assert html =~ ~s(name="bundles[]")
+    assert html =~ "Tool profile"
+    assert html =~ ~s(name="modules[]")
 
-    new_bundles = ~w(federation space task plan memory)
+    new_modules = ~w(federation space task plan memory)
 
     html =
       view
-      |> element("form[phx-submit=\"update_runtime_bundles\"]")
-      |> render_submit(%{"bundles" => new_bundles})
+      |> element("form[phx-submit=\"save_tool_profile\"]")
+      |> render_submit(%{"modules" => new_modules})
 
-    assert html =~ "Allowed bundles updated"
+    assert html =~ "Tool profile updated"
 
-    assert Enum.sort(Repo.get!(AgentRuntime, runtime.id).allowed_bundles) ==
-             Enum.sort(new_bundles)
+    assert RuntimeProfiles.tool_profile(runtime) == new_modules
   end
 
-  # ADR 0055 section 7 (task 01a0ee08 stage 2): a grant whose module is not
+  # ADR 0055 section 7 (task 01a0ee08 stage 2): a profile module not
   # in this build renders checked and read-only, and a save keeps it.
-  test "a bundle grant from an absent module renders read-only and survives a save",
+  test "an absent profile module renders read-only and survives a save",
        %{conn: conn} do
     user =
       Repo.insert!(%User{
@@ -1259,8 +1253,8 @@ defmodule PlatformWeb.ControlCenterLiveTest do
     # Written by a build that had a module this build does not.
     {1, _} =
       Repo.update_all(
-        from(r in AgentRuntime, where: r.id == ^runtime.id),
-        set: [allowed_bundles: ["space", "gone_module"]]
+        from(p in RuntimeProfile, where: p.runtime_id == ^runtime.id),
+        set: [tool_profile: ["space", "gone_module"]]
       )
 
     agent =
@@ -1279,13 +1273,12 @@ defmodule PlatformWeb.ControlCenterLiveTest do
 
     html =
       view
-      |> form("form[phx-submit=\"update_runtime_bundles\"]")
+      |> form("form[phx-submit=\"save_tool_profile\"]")
       |> render_submit()
 
-    assert html =~ "Allowed bundles updated"
+    assert html =~ "Tool profile updated"
 
-    assert Enum.sort(Repo.get!(AgentRuntime, runtime.id).allowed_bundles) ==
-             ["gone_module", "space"]
+    assert RuntimeProfiles.tool_profile(runtime) == ["space", "gone_module"]
   end
 
   # ── Agent deletion ─────────────────────────────────────────────────
@@ -1473,11 +1466,9 @@ defmodule PlatformWeb.ControlCenterLiveTest do
       assert html =~ "meetings.summarize"
       assert html =~ "tasks.triage"
 
-      # Every row starts UNFILLED with an inline agent picker.
+      # Every row starts UNFILLED. With no agents, there is no picker to fill.
       assert html =~ "UNFILLED"
-      assert html =~ ~s(data-role="fill-role-picker")
-      assert html =~ "Choose an agent…"
-      assert html =~ "+ Create new external agent…"
+      refute html =~ ~s(data-role="fill-role-picker")
 
       # Cost stats stub chips render literal em-dash placeholders.
       assert html =~ "runs —"

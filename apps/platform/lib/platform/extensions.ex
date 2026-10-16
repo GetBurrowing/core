@@ -133,6 +133,18 @@ defmodule Platform.Extensions do
   end
 
   @doc """
+  Permission declarations every extension contributes (`permissions/0` is
+  optional; an extension without it contributes nothing). Read by
+  `Platform.Access.Registry`, per call.
+  """
+  @spec permissions() :: [Platform.Extension.permission_declaration()]
+  def permissions do
+    Enum.flat_map(list(), fn ext ->
+      if implements?(ext, :permissions, 0), do: ext.permissions(), else: []
+    end)
+  end
+
+  @doc """
   Every extension's HTTP routes (`routes/0` is optional), in configuration
   order, each `%{prefix: String.t(), plug: module(), opts: term()}`.
   Read by `PlatformWeb.Plugs.ExtensionRoutes` under `/api/ext/<prefix>`.

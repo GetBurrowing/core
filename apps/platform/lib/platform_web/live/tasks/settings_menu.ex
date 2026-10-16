@@ -1,6 +1,6 @@
 defmodule PlatformWeb.Tasks.SettingsMenu do
   @moduledoc """
-  The admin-only Tasks settings menu (task 019fed1e), lifted out of the
+  The Tasks settings menu (task 019fed1e), lifted out of the
   `TasksLive` shell template so the shell stays inside its surface line
   budget (`scripts/surface-budgets.txt`).
 
@@ -21,9 +21,11 @@ defmodule PlatformWeb.Tasks.SettingsMenu do
   use Phoenix.Component
   use PlatformWeb, :verified_routes
 
+  alias Platform.Access
+
   import PlatformWeb.Components.Sheet, only: [sheet: 1]
 
-  attr :admin?, :boolean, required: true
+  attr :access_scope, :any, required: true
   attr :open?, :boolean, required: true
 
   @doc """
@@ -40,8 +42,15 @@ defmodule PlatformWeb.Tasks.SettingsMenu do
   header.
   """
   def settings_menu(assigns) do
+    assigns =
+      assign(
+        assigns,
+        :show_pipeline?,
+        Access.module_access?(assigns.access_scope, :tasks, "tasks.manage")
+      )
+
     ~H"""
-    <div :if={@admin?} class="relative">
+    <div :if={@show_pipeline?} class="relative">
       <button
         type="button"
         phx-click="toggle_settings_menu"
@@ -73,7 +82,7 @@ defmodule PlatformWeb.Tasks.SettingsMenu do
         style="box-shadow: var(--shadow-dropdown);"
       >
         <.link
-          navigate={~p"/admin/pipeline"}
+          navigate={~p"/tasks/pipeline"}
           role="menuitem"
           class="flex flex-col gap-0.5 rounded-lg px-3 py-2 text-left hover:bg-base-200 focus-visible-ring"
           data-role="tasks-settings-pipeline-link"
@@ -88,7 +97,7 @@ defmodule PlatformWeb.Tasks.SettingsMenu do
     """
   end
 
-  attr :admin?, :boolean, required: true
+  attr :access_scope, :any, required: true
   attr :open?, :boolean, required: true
 
   @doc """
@@ -98,9 +107,16 @@ defmodule PlatformWeb.Tasks.SettingsMenu do
   of scope here.
   """
   def settings_sheet(assigns) do
+    assigns =
+      assign(
+        assigns,
+        :show_pipeline?,
+        Access.module_access?(assigns.access_scope, :tasks, "tasks.manage")
+      )
+
     ~H"""
     <.sheet
-      :if={@admin? and @open?}
+      :if={@show_pipeline? and @open?}
       id="tasks-settings-sheet"
       open={true}
       placement={:bottom}
@@ -110,7 +126,7 @@ defmodule PlatformWeb.Tasks.SettingsMenu do
       <:title>Tasks settings</:title>
       <div class="flex flex-col gap-1">
         <.link
-          navigate={~p"/admin/pipeline"}
+          navigate={~p"/tasks/pipeline"}
           class="flex flex-col gap-0.5 rounded-lg px-4 py-3 text-left hover:bg-base-200 transition-colors focus-visible-ring"
           data-role="tasks-settings-pipeline-link-mobile"
         >

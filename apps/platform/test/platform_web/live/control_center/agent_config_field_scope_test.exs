@@ -37,17 +37,11 @@ defmodule PlatformWeb.ControlCenter.AgentConfigFieldScopeTest do
 
   import Phoenix.LiveViewTest
 
-  alias Platform.Accounts.User
   alias Platform.Agents.Agent
   alias Platform.Repo
 
   defp authenticated_conn(conn) do
-    user =
-      Repo.insert!(%User{
-        email: "cfg_scope_#{System.unique_integer([:positive])}@example.com",
-        name: "Config Scope User",
-        oidc_sub: "oidc-cfg-scope-#{System.unique_integer([:positive])}"
-      })
+    user = Platform.TenancyFixtures.root_admin!()
 
     init_test_session(conn, current_user_id: user.id)
   end

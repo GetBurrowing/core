@@ -135,6 +135,7 @@ defmodule Platform.Experiments.Promotion do
   import Ecto.Query, only: [from: 2]
 
   alias Ecto.Multi
+  alias Platform.Access
   alias Platform.Audit
   alias Platform.Experiments.Assignment
   alias Platform.Experiments.Experiment
@@ -274,6 +275,12 @@ defmodule Platform.Experiments.Promotion do
       event as an override with the actor and the sample size at the time.
     * `:metadata` — extra map merged UNDER the five required keys, so no
       caller can overwrite them.
+    * `:actor` — the acting `%Platform.Accounts.User{}` for a human promotion
+      (`ExperimentsLive`). When given, the promotion re-checks
+      `Platform.Access.authorize_install/1` first and returns
+      `{:error, :unauthorized}` for anyone else, writing nothing (task
+      01a1386d-fb6e stage 2). Absent, nothing changes: the MCP
+      `experiment_promote` and automatic promotions pass none.
 
   Returns `{:ok, %{template:, history:, event:}}`, or `{:error, reason}`
   where reason is a `%#{inspect(__MODULE__)}.Refusal{}` for a guardrail, an
@@ -282,8 +289,18 @@ defmodule Platform.Experiments.Promotion do
   @spec promote(Experiment.t(), keyword()) :: {:ok, promotion() | map()} | {:error, term()}
   def promote(experiment, opts \\ [])
 
-  def promote(%Experiment{surface_key: key} = experiment, opts)
-      when is_binary(key) and key != @prompt_surface do
+  def promote(%Experiment{} = experiment, opts) when is_list(opts) do
+    case Keyword.pop(opts, :actor) do
+      {nil, opts} ->
+        promote_unchecked(experiment, opts)
+
+      {actor, opts} ->
+        with :ok <- Access.authorize_install(actor), do: promote_unchecked(experiment, opts)
+    end
+  end
+
+  defp promote_unchecked(%Experiment{surface_key: key} = experiment, opts)
+       when is_binary(key) and key != @prompt_surface do
     trigger = Keyword.get(opts, :trigger, :manual)
 
     with :ok <- check_trigger(experiment, trigger),
@@ -296,7 +313,7 @@ defmodule Platform.Experiments.Promotion do
     end
   end
 
-  def promote(%Experiment{} = experiment, opts) do
+  defp promote_unchecked(%Experiment{} = experiment, opts) do
     trigger = Keyword.get(opts, :trigger, :manual)
 
     with :ok <- check_trigger(experiment, trigger),

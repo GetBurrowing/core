@@ -175,7 +175,8 @@ defmodule Platform.Federation.ToolSurfaceTest do
       # 126 as of task 019fa1ac-6685 stage 3: `janitor_hand_back` in `task`.
       # 131 as of the stack prototype-runtime rollup: three `prototype.*` tools
       # (01a1316b-4e46) plus `vault_fetch` and `vault_list` (01a131c5).
-      assert length(tools) == 131
+      # Four optional access consent tools (task 01a1386e-72e1).
+      assert length(tools) == 135
 
       tool_names = Enum.map(tools, & &1.name)
       assert "task_close_as_delivered" in tool_names
@@ -322,7 +323,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
 
     # Task 01a066af stage 4 — `meeting_create` and `meeting_say` used to be
     # registered inside `task_tools/0`, so they were stamped `"task"`, a bundle
-    # absent from `AgentRuntime.default_allowed_bundles/0`. A voice-capable
+    # absent from `AgentRuntime.default_tool_profile/0`. A voice-capable
     # runtime on the defaults was refused by `ToolAuthorization.authorize/2`
     # and could not speak at all. Both directions are asserted: presence in
     # `meetings` alone would still pass if the tools had merely been COPIED.
@@ -343,7 +344,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
     # moved the other two meeting tools out, so it was stamped `"task"`.
     #
     # This asserts bundle MEMBERSHIP only, and is deliberately independent of
-    # `AgentRuntime.default_allowed_bundles/0`: removing `"meetings"` from the
+    # `AgentRuntime.default_tool_profile/0`: removing `"meetings"` from the
     # default grant must leave this test green, because a bundle can exist and
     # be populated without being granted by default. The companion test in
     # `agent_runtime_test.exs` is what pins the grant.
@@ -366,7 +367,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
     # the RULE rather than a fourth name, so a future meeting-scoped
     # descriptor added to `task_tools/0` reddens here instead of arriving as
     # yet another follow-up ticket. `task` is absent from
-    # `AgentRuntime.default_allowed_bundles/0`, so a meeting-scoped tool
+    # `AgentRuntime.default_tool_profile/0`, so a meeting-scoped tool
     # landing there is simply unreachable for a default runtime.
     #
     # The class is NOT the `meeting_` name prefix, and that mattered. As
@@ -374,7 +375,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
     # `intent_ack` as a "KNOWN EXCEPTION ... NOT catchable by a prefix guard",
     # justified by the claim that every dispatch-capable runtime already holds
     # `task`. That claim was false when written — `task` has never appeared in
-    # `@default_allowed_bundles` on any commit — and the exemption it bought is
+    # `@default_tool_profile` on any commit — and the exemption it bought is
     # why `intent_ack` survived two cleanups of this exact bug class. The
     # prefix WAS the exemption: with the comment deleted and `intent_ack` put
     # back in `task_tools/0`, the prefix version of this test still passed.
@@ -7006,7 +7007,10 @@ defmodule Platform.Federation.ToolSurfaceTest do
   describe "context read tools" do
     setup do
       agent = create_agent()
-      space = create_space(%{name: "Read Space", description: "A test space"})
+      org = Tenancy.get_org_by_slug!("sxi")
+      owner = insert_user_for_sponsor()
+      Platform.ExternalUserFixtures.plain_member!(owner, org)
+      space = create_space(%{name: "Read Space", description: "A test space", org_id: org.id})
 
       participant =
         create_participant(space.id, %{
@@ -7015,7 +7019,24 @@ defmodule Platform.Federation.ToolSurfaceTest do
           display_name: agent.name
         })
 
-      context = %{agent_id: agent.id, agent_participant_id: participant.id}
+      create_participant(space.id, %{
+        participant_type: "user",
+        participant_id: owner.id,
+        display_name: owner.name
+      })
+
+      {:ok, runtime} =
+        Platform.Federation.register_runtime(owner.id, %{
+          runtime_id: "read-space-#{System.unique_integer([:positive])}",
+          agent_id: agent.id
+        })
+
+      context = %{
+        agent_id: agent.id,
+        agent_participant_id: participant.id,
+        runtime_id: runtime.runtime_id
+      }
+
       %{agent: agent, space: space, participant: participant, context: context}
     end
 
@@ -8939,7 +8960,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
     end
 
     test "intersection is fail-closed: no chat bundle granted → empty, never injected" do
-      # allowed_bundles = [task] only — no messaging/space/context_read.
+      # tool_profile = [task] only — no messaging/space/context_read.
       tools = ToolSurface.list_tools(~w(task))
       assert ToolSurface.scope_for_external(tools, true) == []
     end

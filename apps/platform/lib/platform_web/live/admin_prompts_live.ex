@@ -88,6 +88,8 @@ defmodule PlatformWeb.AdminPromptsLive do
   # the same ~65-second bucket share their first hyphen segment and collapse
   # onto one branch. The sample is a full UUID so the preview shows the branch
   # the executor is actually told to create.
+  @refused_message "Only an admin holding prompts.manage can change prompt templates."
+
   @sample_task_slug "019a1b2c-3d4e-7f80-9abc-def012345678"
 
   # The task shape `deploy_strategy_instructions_for/3` resolves the repository
@@ -210,8 +212,11 @@ defmodule PlatformWeb.AdminPromptsLive do
 
   @impl true
   def handle_params(%{"slug" => slug}, _url, socket) do
-    case PromptTemplates.get_template_by_slug(slug) do
-      nil ->
+    case PromptTemplates.get_template_by_slug(slug, socket.assigns.access_scope) do
+      {:error, :unauthorized} ->
+        {:noreply, push_navigate(socket, to: "/access-denied?module=prompts")}
+
+      {:ok, nil} ->
         # A slug with no row is not automatically "not found": it may be a
         # responsibility key declared in source whose template nobody ever
         # wrote, which is exactly the case this page now renders rather than
@@ -235,7 +240,7 @@ defmodule PlatformWeb.AdminPromptsLive do
              |> assign(:page_title, "Admin · #{entry.slug}")}
         end
 
-      template ->
+      {:ok, template} ->
         edit_form = to_form(PromptTemplate.changeset(template, %{}), as: "template")
         preview = render_preview(template.slug, template.content)
 
@@ -307,7 +312,7 @@ defmodule PlatformWeb.AdminPromptsLive do
 
     attrs = Map.put(params, "updated_by", current_user_id)
 
-    case PromptTemplates.update_template(template, attrs) do
+    case PromptTemplates.update_template(template, attrs, actor(socket)) do
       {:ok, updated} ->
         edit_form = to_form(PromptTemplate.changeset(updated, %{}), as: "template")
         preview = render_preview(updated.slug, updated.content)
@@ -320,6 +325,9 @@ defmodule PlatformWeb.AdminPromptsLive do
          |> assign_list()
          |> assign(:save_status, :saved)
          |> put_flash(:info, "Template saved.")}
+
+      {:error, :unauthorized} ->
+        {:noreply, put_flash(socket, :error, @refused_message)}
 
       {:error, changeset} ->
         {:noreply,
@@ -335,10 +343,11 @@ defmodule PlatformWeb.AdminPromptsLive do
 
     default_content = default_content_for(template.slug)
 
-    case PromptTemplates.update_template(template, %{
-           "content" => default_content,
-           "updated_by" => current_user_id
-         }) do
+    case PromptTemplates.update_template(
+           template,
+           %{"content" => default_content, "updated_by" => current_user_id},
+           actor(socket)
+         ) do
       {:ok, updated} ->
         edit_form = to_form(PromptTemplate.changeset(updated, %{}), as: "template")
         preview = render_preview(updated.slug, updated.content)
@@ -350,6 +359,9 @@ defmodule PlatformWeb.AdminPromptsLive do
          |> assign(:preview_content, preview)
          |> assign(:save_status, :saved)
          |> put_flash(:info, "Template reset to default.")}
+
+      {:error, :unauthorized} ->
+        {:noreply, put_flash(socket, :error, @refused_message)}
 
       {:error, _} ->
         {:noreply, put_flash(socket, :error, "Could not reset template.")}
@@ -380,13 +392,16 @@ defmodule PlatformWeb.AdminPromptsLive do
           "updated_by" => socket.assigns.current_user_id
         }
 
-        case PromptTemplates.create_template(attrs) do
+        case PromptTemplates.create_template(attrs, actor(socket)) do
           {:ok, template} ->
             {:noreply,
              socket
              |> assign_list()
              |> put_flash(:info, "Created #{template.slug}.")
              |> push_patch(to: ~p"/admin/prompts/#{template.slug}")}
+
+          {:error, :unauthorized} ->
+            {:noreply, put_flash(socket, :error, @refused_message)}
 
           {:error, _changeset} ->
             {:noreply, put_flash(socket, :error, "Could not create a template for #{slug}.")}
@@ -413,6 +428,11 @@ defmodule PlatformWeb.AdminPromptsLive do
   # notice: a concluded one no longer constrains what an edit does, and a
   # permanent banner about a finished experiment is the kind of notice people
   # learn to stop reading.
+  # The acting user for the context's `prompts.manage` re-check
+  # (`PromptTemplates.update_template/3`, task 01a1386d-fb6e stage 2). A
+  # missing user is refused by the context, never treated as the system.
+  defp actor(socket), do: socket.assigns[:current_user_record]
+
   defp load_experiment_context(socket, template) do
     experiment =
       template.slug
@@ -555,13 +575,18 @@ defmodule PlatformWeb.AdminPromptsLive do
   # empty state are about templates that exist, and folding orphans into that
   # count would be the badge this design explicitly refuses.
   defp assign_list(socket) do
-    templates = PromptTemplates.list_templates()
-    declared_missing = declared_missing()
+    case PromptTemplates.list_templates(socket.assigns.access_scope) do
+      {:ok, templates} ->
+        declared_missing = declared_missing()
 
-    socket
-    |> assign(:templates, templates)
-    |> assign(:declared_missing, declared_missing)
-    |> assign(:rows, union_rows(templates, declared_missing))
+        socket
+        |> assign(:templates, templates)
+        |> assign(:declared_missing, declared_missing)
+        |> assign(:rows, union_rows(templates, declared_missing))
+
+      {:error, :unauthorized} ->
+        push_navigate(socket, to: "/access-denied?module=prompts")
+    end
   end
 
   # Read through the stage-3 public audit, never re-derived here.

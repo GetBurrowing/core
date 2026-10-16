@@ -66,6 +66,8 @@ defmodule Platform.Orchestration.PromptTemplates do
 
   require Logger
 
+  alias Platform.Access
+  alias Platform.Agents.AgentRuntime
   alias Platform.Experiments
   alias Platform.Experiments.Subject
   alias Platform.Experiments.Surfaces
@@ -83,6 +85,14 @@ defmodule Platform.Orchestration.PromptTemplates do
   @spec list_templates() :: [PromptTemplate.t()]
   def list_templates do
     Repo.all(from(t in PromptTemplate, order_by: [asc: t.slug]))
+  end
+
+  @doc "Actor-checked install-wide template listing for the Prompts administration view."
+  @spec list_templates(term()) :: {:ok, [PromptTemplate.t()]} | {:error, :unauthorized}
+  def list_templates(actor) do
+    with :ok <- Access.authorize_everywhere(actor, "prompts.manage") do
+      {:ok, list_templates()}
+    end
   end
 
   @doc "Get a prompt template by id."
@@ -103,7 +113,20 @@ defmodule Platform.Orchestration.PromptTemplates do
     Repo.get_by(PromptTemplate, slug: slug)
   end
 
-  @doc "Create a new prompt template."
+  @doc "Actor-checked single-template read for the Prompts administration view."
+  @spec get_template_by_slug(String.t(), term()) ::
+          {:ok, PromptTemplate.t() | nil} | {:error, :unauthorized}
+  def get_template_by_slug(slug, actor) do
+    with :ok <- Access.authorize_everywhere(actor, "prompts.manage") do
+      {:ok, get_template_by_slug(slug)}
+    end
+  end
+
+  @doc """
+  Create a new prompt template. Unchecked: for the system (seeding,
+  migrations, tests). A human or agent create goes through
+  `create_template/2`.
+  """
   @spec create_template(map()) :: {:ok, PromptTemplate.t()} | {:error, Ecto.Changeset.t()}
   def create_template(attrs) do
     %PromptTemplate{}
@@ -111,7 +134,21 @@ defmodule Platform.Orchestration.PromptTemplates do
     |> Repo.insert()
   end
 
-  @doc "Update an existing prompt template."
+  @doc """
+  `create_template/1` by `actor`, re-checked as `update_template/3` checks
+  (task 01a1386d-fb6e stage 2). `AdminPromptsLive` calls it.
+  """
+  @spec create_template(map(), term()) ::
+          {:ok, PromptTemplate.t()} | {:error, Ecto.Changeset.t() | :unauthorized}
+  def create_template(attrs, actor) do
+    with :ok <- authorize_manage(actor), do: create_template(attrs)
+  end
+
+  @doc """
+  Update an existing prompt template. Unchecked: for system callers only
+  (migrations, seeding, tests). A human or agent edit goes through
+  `update_template/3`.
+  """
   @spec update_template(PromptTemplate.t(), map()) ::
           {:ok, PromptTemplate.t()} | {:error, Ecto.Changeset.t()}
   def update_template(%PromptTemplate{} = template, attrs) do
@@ -119,6 +156,39 @@ defmodule Platform.Orchestration.PromptTemplates do
     |> PromptTemplate.changeset(attrs)
     |> Repo.update()
   end
+
+  @doc """
+  Update a template on behalf of `actor`, re-checking permission in the
+  context (task 01a1386d-fb6e stage 2;
+  `0058-rbac-v2-roles-scopes-and-agent-capping.md § Root-admin carve-outs`,
+  "Prompts move to a module permission, not install-level"):
+
+    * a `%User{}` (or a user's `%Platform.Access.Scope{}`) must hold
+      `prompts.manage` over EVERY resource
+      (`Platform.Access.authorize_everywhere/2`). Templates are install-wide
+      data, so a grant naming one project does not reach them. With no
+      grants that is the root admin, exactly the actors `/admin/prompts`
+      admits today;
+    * an agent runtime's Scope (`Platform.Access.Scope.for_runtime/1`, what
+      MCP `prompt_template_update` passes) must hold `prompts.manage` after
+      its own tool permissions are capped by its owner's scope.
+
+  Refused: `{:error, :unauthorized}`, nothing written.
+  """
+  @spec update_template(PromptTemplate.t(), map(), term()) ::
+          {:ok, PromptTemplate.t()} | {:error, Ecto.Changeset.t() | :unauthorized}
+  def update_template(%PromptTemplate{} = template, attrs, actor) do
+    with :ok <- authorize_manage(actor), do: update_template(template, attrs)
+  end
+
+  @manage_permission "prompts.manage"
+  defp authorize_manage(%Access.Scope{actor: %AgentRuntime{}} = scope),
+    do: Access.authorize(scope, @manage_permission)
+
+  defp authorize_manage(%AgentRuntime{} = runtime),
+    do: authorize_manage(Access.Scope.for_runtime(runtime))
+
+  defp authorize_manage(actor), do: Access.authorize_everywhere(actor, @manage_permission)
 
   @doc "Delete a prompt template."
   @spec delete_template(PromptTemplate.t()) ::

@@ -76,7 +76,9 @@ defmodule Platform.Federation.CanvasReadEnumerationTest do
 
   alias Ecto.UUID
   alias Platform.Chat
+  alias Platform.Agents.Agent
   alias Platform.Federation.ToolSurface
+  alias Platform.Repo
   alias Platform.Tenancy
 
   @app_root Path.expand("../../..", __DIR__)
@@ -468,8 +470,7 @@ defmodule Platform.Federation.CanvasReadEnumerationTest do
 
       # The positive half: a space member does get the listing. A tool that
       # denied everyone would pass the loop above for the wrong reason.
-      member = UUID.generate()
-      add_agent!(space.id, member)
+      member = rostered_agent!(org_a, space)
 
       assert {:ok, %{canvases: rows}} =
                ToolSurface.execute(
@@ -487,8 +488,7 @@ defmodule Platform.Federation.CanvasReadEnumerationTest do
       # file would still be green.
       space = space!(%{org_id: org_a.id})
       canvas = canvas!(space)
-      member = UUID.generate()
-      add_agent!(space.id, member)
+      member = rostered_agent!(org_a, space)
       context = federation_context(member)
 
       for name <- classified(:tool_access_read) do
@@ -827,6 +827,32 @@ defmodule Platform.Federation.CanvasReadEnumerationTest do
     agent_id = UUID.generate()
     add_agent!(space!(%{org_id: org.id}).id, agent_id)
     agent_id
+  end
+
+  defp rostered_agent!(org, space) do
+    owner = create_user!()
+    plain_member!(owner, org)
+
+    agent =
+      Repo.insert!(%Agent{
+        slug: "canvas-enum-#{System.unique_integer([:positive])}",
+        name: "Canvas enum agent",
+        status: "active"
+      })
+
+    add_agent!(space.id, agent.id)
+
+    {:ok, runtime} =
+      Platform.Federation.register_runtime(owner.id, %{
+        runtime_id: "canvas-enum-#{System.unique_integer([:positive])}",
+        agent_id: agent.id
+      })
+
+    {agent.id, runtime.runtime_id}
+  end
+
+  defp federation_context({agent_id, runtime_id}) do
+    %{space_id: nil, agent_id: agent_id, agent_participant_id: nil, runtime_id: runtime_id}
   end
 
   defp federation_context(agent_id) do

@@ -5,7 +5,7 @@ defmodule PlatformWeb.AdminRouteGuardsTest do
   the `LiveAuth.on_mount(:ensure_admin, ...)` hook:
 
     * lets admin users reach `/admin/prompts` and `/admin/federation`
-    * redirects member / no-membership users to `/` with a flash error
+    * redirects member / no-membership users to `/access-denied?module=admin`
   """
 
   use PlatformWeb.ConnCase, async: false
@@ -74,21 +74,19 @@ defmodule PlatformWeb.AdminRouteGuardsTest do
       refute html =~ "Manage system prompt templates"
     end
 
-    test "member user is redirected to /", %{conn: conn} do
+    test "member user is redirected to access denied", %{conn: conn} do
       user = create_user!()
       acme = Tenancy.get_org_by_slug!("acme")
       create_membership!(user, acme, "member")
 
-      assert {:error, {:live_redirect, %{to: "/", flash: flash}}} =
+      assert {:error, {_, %{to: "/access-denied?module=admin"}}} =
                conn |> authenticated_conn(user) |> live(~p"/admin")
-
-      assert Phoenix.Flash.get(flash, :error) =~ "don't have access"
     end
 
-    test "user with no memberships is redirected to /", %{conn: conn} do
+    test "user with no memberships is redirected to access denied", %{conn: conn} do
       user = create_user!()
 
-      assert {:error, {:live_redirect, %{to: "/"}}} =
+      assert {:error, {_, %{to: "/access-denied?module=admin"}}} =
                conn |> authenticated_conn(user) |> live(~p"/admin")
     end
   end
@@ -113,21 +111,19 @@ defmodule PlatformWeb.AdminRouteGuardsTest do
       refute html =~ "Coming Soon"
     end
 
-    test "member user is redirected to /", %{conn: conn} do
+    test "member user is redirected to access denied", %{conn: conn} do
       user = create_user!()
       acme = Tenancy.get_org_by_slug!("acme")
       create_membership!(user, acme, "member")
 
-      assert {:error, {:live_redirect, %{to: "/", flash: flash}}} =
+      assert {:error, {_, %{to: "/access-denied?module=admin"}}} =
                conn |> authenticated_conn(user) |> live(~p"/admin/users")
-
-      assert Phoenix.Flash.get(flash, :error) =~ "don't have access"
     end
 
-    test "user with no memberships is redirected to /", %{conn: conn} do
+    test "user with no memberships is redirected to access denied", %{conn: conn} do
       user = create_user!()
 
-      assert {:error, {:live_redirect, %{to: "/"}}} =
+      assert {:error, {_, %{to: "/access-denied?module=admin"}}} =
                conn |> authenticated_conn(user) |> live(~p"/admin/users")
     end
   end
@@ -141,21 +137,19 @@ defmodule PlatformWeb.AdminRouteGuardsTest do
       {:ok, _view, _html} = conn |> authenticated_conn(user) |> live(~p"/admin/prompts")
     end
 
-    test "member user is redirected to /", %{conn: conn} do
+    test "member user is redirected to access denied", %{conn: conn} do
       user = create_user!()
       acme = Tenancy.get_org_by_slug!("acme")
       create_membership!(user, acme, "member")
 
-      assert {:error, {:live_redirect, %{to: "/", flash: flash}}} =
+      assert {:error, {_, %{to: "/access-denied?module=prompts"}}} =
                conn |> authenticated_conn(user) |> live(~p"/admin/prompts")
-
-      assert Phoenix.Flash.get(flash, :error) =~ "don't have access"
     end
 
-    test "user with no memberships is redirected to /", %{conn: conn} do
+    test "user with no memberships is redirected to access denied", %{conn: conn} do
       user = create_user!()
 
-      assert {:error, {:live_redirect, %{to: "/"}}} =
+      assert {:error, {_, %{to: "/access-denied?module=prompts"}}} =
                conn |> authenticated_conn(user) |> live(~p"/admin/prompts")
     end
   end
@@ -169,15 +163,13 @@ defmodule PlatformWeb.AdminRouteGuardsTest do
       {:ok, _view, _html} = conn |> authenticated_conn(user) |> live(~p"/admin/federation")
     end
 
-    test "member user is redirected to /", %{conn: conn} do
+    test "member user is redirected to access denied", %{conn: conn} do
       user = create_user!()
       acme = Tenancy.get_org_by_slug!("acme")
       create_membership!(user, acme, "member")
 
-      assert {:error, {:live_redirect, %{to: "/", flash: flash}}} =
+      assert {:error, {_, %{to: "/access-denied?module=admin"}}} =
                conn |> authenticated_conn(user) |> live(~p"/admin/federation")
-
-      assert Phoenix.Flash.get(flash, :error) =~ "don't have access"
     end
   end
 

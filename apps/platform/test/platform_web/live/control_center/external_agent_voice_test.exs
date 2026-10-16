@@ -29,19 +29,13 @@ defmodule PlatformWeb.ControlCenter.ExternalAgentVoiceTest do
 
   import Phoenix.LiveViewTest
 
-  alias Platform.Accounts.User
   alias Platform.Agents.{Agent, Voice}
   alias Platform.Repo
 
   @voice_id "JBFqnCBsd6RMkjVDRZzb"
 
   defp authenticated_conn(conn) do
-    user =
-      Repo.insert!(%User{
-        email: "ext_voice_#{System.unique_integer([:positive])}@example.com",
-        name: "External Voice User",
-        oidc_sub: "oidc-ext-voice-#{System.unique_integer([:positive])}"
-      })
+    user = Platform.TenancyFixtures.root_admin!()
 
     init_test_session(conn, current_user_id: user.id)
   end

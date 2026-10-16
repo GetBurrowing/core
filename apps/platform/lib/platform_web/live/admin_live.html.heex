@@ -12,6 +12,15 @@
   <div class="flex-1 min-h-0 overflow-y-auto p-4">
     <div class="mx-auto max-w-3xl space-y-3">
       <.link
+        :if={Platform.Access.module_access?(@access_scope, :admin)}
+        navigate="/access"
+        class="block rounded-lg border border-edge p-4"
+        data-role="admin-access-link"
+      >
+        <h2 class="font-semibold">Access</h2>
+        <p>Inspect effective access and undo access changes.</p>
+      </.link>
+      <.link
         navigate="/control"
         class="group block rounded-lg border border-edge bg-base-200 p-4 transition-colors hover:border-primary/40 hover:bg-base-300"
       >

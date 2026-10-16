@@ -12,7 +12,8 @@ defmodule Platform.Federation.ToolSurfaceCanvasViewUrlTest do
   """
   use PlatformWeb.ConnCase, async: false
 
-  alias Platform.Accounts.User
+  import Platform.TenancyFixtures
+
   alias Platform.Agents.Agent
   alias Platform.Agents.AgentRuntime
   alias Platform.Chat
@@ -268,12 +269,7 @@ defmodule Platform.Federation.ToolSurfaceCanvasViewUrlTest do
   end
 
   defp canvas_runtime_token!(space) do
-    user =
-      Repo.insert!(%User{
-        email: "canvas_view_url_#{System.unique_integer([:positive])}@example.com",
-        name: "Canvas view_url runtime owner",
-        oidc_sub: "oidc-canvas-view-url-#{System.unique_integer([:positive])}"
-      })
+    user = root_admin!()
 
     agent =
       Repo.insert!(%Agent{
@@ -286,17 +282,23 @@ defmodule Platform.Federation.ToolSurfaceCanvasViewUrlTest do
 
     raw_token = AgentRuntime.generate_token()
 
-    {:ok, _runtime} =
+    {:ok, runtime} =
       %AgentRuntime{}
       |> AgentRuntime.changeset(%{
         runtime_id: "rt-canvas-view-url-#{System.unique_integer([:positive])}",
         owner_user_id: user.id,
         agent_id: agent.id,
         auth_token_hash: AgentRuntime.hash_token(raw_token),
-        status: "active",
-        allowed_bundles: ["canvas"]
+        status: "active"
       })
       |> Repo.insert()
+
+    {:ok, _profile} =
+      Platform.Access.RuntimeProfiles.create_for_runtime(
+        runtime,
+        ["canvas"],
+        Platform.Access.RuntimeProfiles.translated_permissions(["canvas"])
+      )
 
     raw_token
   end

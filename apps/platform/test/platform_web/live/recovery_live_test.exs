@@ -428,7 +428,7 @@ defmodule PlatformWeb.RecoveryLiveTest do
     test "is refused (redirected away from the recovery route)", %{conn: conn} do
       {conn, _user} = member_conn(conn)
 
-      assert {:error, {:live_redirect, %{to: "/"}}} = live(conn, ~p"/admin/recovery")
+      assert {:error, {_, %{to: "/access-denied?module=admin"}}} = live(conn, ~p"/admin/recovery")
     end
   end
 end

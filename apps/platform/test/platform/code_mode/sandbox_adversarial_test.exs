@@ -67,13 +67,13 @@ defmodule Platform.CodeMode.SandboxAdversarialTest do
 
   describe "authorization" do
     test "a tool outside the runtime's bundles is refused as forbidden", %{runtime: runtime} do
-      refute "plan" in runtime.allowed_bundles
-      refute "task" in runtime.allowed_bundles
+      refute "plan" in Platform.Access.RuntimeProfiles.tool_profile(runtime)
+      refute "task" in Platform.Access.RuntimeProfiles.tool_profile(runtime)
 
       body = run(runtime, "suite.plan_create({task_id: '#{Ecto.UUID.generate()}'})")
 
       assert %{ok: false, error: %{kind: "forbidden", message: message}} = body
-      assert message =~ "tool 'plan_create' not in allowed bundles"
+      assert message =~ "tool 'plan_create' requires permission 'tasks.write'"
       assert body.calls == 1
 
       assert [%ToolCallRecord{tool: "plan_create", status: "denied", parent_run_id: parent}] =

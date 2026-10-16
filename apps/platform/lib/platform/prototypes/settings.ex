@@ -20,14 +20,24 @@ defmodule Platform.Prototypes.Settings do
       The latest version is never removed whatever this says.
 
   Stage 2 builds `/admin/prototypes` on `update/2`.
+
+  ## Authorization goes through `Platform.Access` (task 01a1386d-fb6e stage 2)
+
+  The re-check is `Platform.Access.authorize_install/1`, not a local
+  `Tenancy.root_admin?/1`. It answers the same for every internal actor and is
+  STRICTER for exactly one class, the external root admin (guest dominates,
+  `0058-rbac-v2-roles-scopes-and-agent-capping.md § Root-admin carve-outs`),
+  who is now refused here too. Today the `ExternalUserScope` plug already
+  refuses that user over HTTP, so HTTP outcomes are unchanged. The refusal
+  shape stays `{:error, :unauthorized}`.
   """
 
   use Ecto.Schema
   import Ecto.Changeset
   import Ecto.Query, only: [from: 2]
 
+  alias Platform.Access
   alias Platform.Repo
-  alias Platform.Tenancy
 
   @primary_key {:id, Platform.Types.UUIDv7, autogenerate: true}
   @foreign_key_type :binary_id
@@ -56,15 +66,14 @@ defmodule Platform.Prototypes.Settings do
   def get, do: Repo.one!(from(s in __MODULE__, limit: 1))
 
   @doc """
-  Update the settings. Root-admin only, re-checked here because a route gate
-  is not an authorization boundary for a context function.
+  Update the settings. Root-admin only (`Platform.Access.authorize_install/1`),
+  re-checked here because a route gate is not an authorization boundary for a
+  context function.
   """
   @spec update(any(), map()) :: {:ok, t()} | {:error, Ecto.Changeset.t() | :unauthorized}
   def update(actor, attrs) do
-    if Tenancy.root_admin?(actor) do
+    with :ok <- Access.authorize_install(actor) do
       get() |> changeset(attrs) |> Repo.update()
-    else
-      {:error, :unauthorized}
     end
   end
 

@@ -1005,7 +1005,8 @@ defmodule PlatformWeb.TasksLiveShellNonAccretionTest do
   # `{:detail_closed}` clause. Closing the panel re-queried every task and
   # re-sent the board; PubSub already keeps the board fresh (a delete
   # broadcasts `{:task_deleted, _}`). Down, so the promise above holds.
-  @shell_line_count 650
+  # RBAC adds its two-line delegated access refresh callback: 650 + 2 = 652.
+  @shell_line_count 652
 
   defp line_count(source), do: source |> :binary.matches("\n") |> length()
 

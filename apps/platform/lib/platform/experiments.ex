@@ -69,11 +69,36 @@ defmodule Platform.Experiments do
   `stopped`. An agent stop (MCP) goes through `stop/2` with only
   `stop_feedback`, so `stopped_by_user_id` stays null and reads as "not a
   human". Either way the status is `stopped`, never `concluded`.
+
+  ## Human writes are install-level, re-checked here (task 01a1386d-fb6e stage 2)
+
+  Every write a HUMAN makes re-checks `Platform.Access.authorize_install/1`
+  (`0058-rbac-v2-roles-scopes-and-agent-capping.md § Root-admin carve-outs`:
+  human launch, stop and conclude stay install-level). `ExperimentsLive`'s
+  `admin_only/2` was the only gate before; a route gate is not an
+  authorization boundary. A human write is one whose actor is a `%User{}`:
+
+    * `start/2` and `approve_launch/2` with a `%User{}`;
+    * `stop/2` with a `%User{}` and `stop/3`;
+    * the actor forms `create_experiment/2`, `delete_experiment/2`,
+      `add_variant/3`, `activate/3` and `conclude/2` with a `%User{}`, which
+      `ExperimentsLive` calls. `Platform.Experiments.Guardrails.save/3` and
+      `Platform.Experiments.Promotion.promote/2` with an `:actor` opt re-check
+      the same way.
+
+  A refused human write returns `{:error, :unauthorized}` before any read or
+  lock, and writes nothing. The agent path is unchanged: `start/2` with an
+  agent (MCP `experiment_start`) still answers `:pending_human_approval` under
+  approval, and the actor-less forms (`create_experiment/1`,
+  `add_variant/2`, `stop/2` with an attrs map, `conclude/1`) that the MCP
+  tools and the system call are untouched, so every `experiment_*` tool result
+  is the same as before.
   """
 
   import Ecto.Query
 
   alias Ecto.Multi
+  alias Platform.Access
   alias Platform.Accounts.User
   alias Platform.Audit
   alias Platform.Experiments.Experiment
@@ -176,6 +201,13 @@ defmodule Platform.Experiments do
     |> Repo.insert()
   end
 
+  @doc "`create_experiment/1` by a human, re-checked install-level (see the moduledoc)."
+  @spec create_experiment(map(), User.t()) ::
+          {:ok, Experiment.t()} | {:error, Ecto.Changeset.t() | :unauthorized}
+  def create_experiment(attrs, %User{} = user) do
+    with :ok <- Access.authorize_install(user), do: create_experiment(attrs)
+  end
+
   @doc """
   Deletes an experiment, but only while it is a `draft`.
 
@@ -197,6 +229,13 @@ defmodule Platform.Experiments do
   def delete_experiment(%Experiment{status: "draft"} = experiment), do: Repo.delete(experiment)
   def delete_experiment(%Experiment{}), do: {:error, :not_draft}
 
+  @doc "`delete_experiment/1` by a human, re-checked install-level (see the moduledoc)."
+  @spec delete_experiment(Experiment.t(), User.t()) ::
+          {:ok, Experiment.t()} | {:error, :not_draft | :unauthorized | Ecto.Changeset.t()}
+  def delete_experiment(%Experiment{} = experiment, %User{} = user) do
+    with :ok <- Access.authorize_install(user), do: delete_experiment(experiment)
+  end
+
   @doc """
   Adds a variant carrying the FULL prompt blob.
 
@@ -209,6 +248,13 @@ defmodule Platform.Experiments do
     %Variant{}
     |> Variant.changeset(attrs |> stringify() |> Map.put("experiment_id", id))
     |> Repo.insert()
+  end
+
+  @doc "`add_variant/2` by a human, re-checked install-level (see the moduledoc)."
+  @spec add_variant(Experiment.t(), map(), User.t()) ::
+          {:ok, Variant.t()} | {:error, Ecto.Changeset.t() | :unauthorized}
+  def add_variant(%Experiment{} = experiment, attrs, %User{} = user) do
+    with :ok <- Access.authorize_install(user), do: add_variant(experiment, attrs)
   end
 
   @doc """
@@ -224,13 +270,21 @@ defmodule Platform.Experiments do
   """
   @spec activate(Experiment.t(), PromptTemplate.t() | String.t()) ::
           {:ok, Experiment.t()} | {:error, Ecto.Changeset.t()}
-  def activate(experiment, template), do: activate(experiment, template, %{})
+  def activate(experiment, template), do: activate_from(experiment, template, %{})
 
-  defp activate(%Experiment{} = experiment, %PromptTemplate{id: template_id}, extra) do
+  @doc "`activate/2` by a human, re-checked install-level (see the moduledoc)."
+  @spec activate(Experiment.t(), PromptTemplate.t() | String.t(), User.t()) ::
+          {:ok, Experiment.t()} | {:error, Ecto.Changeset.t() | :unauthorized}
+  def activate(experiment, template, %User{} = user) do
+    with :ok <- Access.authorize_install(user), do: activate(experiment, template)
+  end
+
+  defp activate_from(%Experiment{} = experiment, %PromptTemplate{id: template_id}, extra) do
     activate_with_template_id(experiment, template_id, extra)
   end
 
-  defp activate(%Experiment{} = experiment, template_slug, extra) when is_binary(template_slug) do
+  defp activate_from(%Experiment{} = experiment, template_slug, extra)
+       when is_binary(template_slug) do
     case Repo.get_by(PromptTemplate, slug: template_slug) do
       nil -> {:error, missing_template_changeset(experiment, template_slug)}
       %PromptTemplate{id: id} -> activate_with_template_id(experiment, id, extra)
@@ -325,10 +379,15 @@ defmodule Platform.Experiments do
   itself. See the moduledoc.
   """
   @spec stop(Experiment.t(), User.t(), String.t() | nil) ::
-          {:ok, Experiment.t()} | {:error, Ecto.Changeset.t()}
-  def stop(%Experiment{} = experiment, %User{id: user_id}, feedback)
+          {:ok, Experiment.t()} | {:error, Ecto.Changeset.t() | :unauthorized}
+  def stop(%Experiment{} = experiment, %User{id: user_id} = user, feedback)
       when is_nil(feedback) or is_binary(feedback) do
-    update_status(experiment, "stopped", %{stop_feedback: feedback, stopped_by_user_id: user_id})
+    with :ok <- Access.authorize_install(user) do
+      update_status(experiment, "stopped", %{
+        stop_feedback: feedback,
+        stopped_by_user_id: user_id
+      })
+    end
   end
 
   @doc """
@@ -344,6 +403,10 @@ defmodule Platform.Experiments do
   @spec start(Experiment.t(), Guardrails.actor()) ::
           {:ok, Experiment.t() | :pending_human_approval} | {:error, term()}
   def start(%Experiment{} = experiment, actor) do
+    with :ok <- authorize_human(actor), do: start_guarded(experiment, actor)
+  end
+
+  defp start_guarded(experiment, actor) do
     Guardrails.with_start_lock(experiment, fn ->
       fresh = Repo.get!(Experiment, experiment.id)
 
@@ -387,6 +450,10 @@ defmodule Platform.Experiments do
   """
   @spec approve_launch(Experiment.t(), User.t()) :: {:ok, Experiment.t()} | {:error, term()}
   def approve_launch(%Experiment{} = experiment, %User{} = user) do
+    with :ok <- Access.authorize_install(user), do: approve_guarded(experiment, user)
+  end
+
+  defp approve_guarded(experiment, user) do
     Guardrails.with_start_lock(experiment, fn ->
       fresh = Repo.get!(Experiment, experiment.id)
 
@@ -420,6 +487,11 @@ defmodule Platform.Experiments do
   defp human?(%User{}), do: true
   defp human?(_actor), do: false
 
+  # A human actor's write is install-level; an agent's is decided by the
+  # guardrails, as before.
+  defp authorize_human(%User{} = user), do: Access.authorize_install(user)
+  defp authorize_human(_agent), do: :ok
+
   defp ensure_draft(%Experiment{status: "draft"}), do: :ok
   defp ensure_draft(%Experiment{}), do: {:error, :not_draft}
 
@@ -429,7 +501,7 @@ defmodule Platform.Experiments do
   # Runs inside the caller's transaction; a failure rolls the whole start
   # back with the reason.
   defp launch!(%Experiment{surface_key: "dispatch.prompt"} = experiment, extra) do
-    case activate(experiment, experiment.surface_target || "", extra) do
+    case activate_from(experiment, experiment.surface_target || "", extra) do
       {:ok, running} -> running
       {:error, reason} -> Repo.rollback(reason)
     end
@@ -463,8 +535,16 @@ defmodule Platform.Experiments do
 
   Distinct from `stop/2`. Both terminal statuses stay visible.
   """
-  @spec conclude(Experiment.t(), map()) :: {:ok, Experiment.t()} | {:error, Ecto.Changeset.t()}
-  def conclude(%Experiment{} = experiment, attrs \\ %{}) do
+  @spec conclude(Experiment.t(), map() | User.t()) ::
+          {:ok, Experiment.t()} | {:error, Ecto.Changeset.t() | :unauthorized}
+  def conclude(experiment, attrs \\ %{})
+
+  # A human conclude (`ExperimentsLive`), re-checked install-level.
+  def conclude(%Experiment{} = experiment, %User{} = user) do
+    with :ok <- Access.authorize_install(user), do: conclude(experiment, %{})
+  end
+
+  def conclude(%Experiment{} = experiment, attrs) when is_map(attrs) do
     update_status(experiment, "concluded", attrs)
   end
 

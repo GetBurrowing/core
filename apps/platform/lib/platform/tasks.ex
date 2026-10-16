@@ -285,6 +285,7 @@ defmodule Platform.Tasks do
 
     Project
     |> maybe_filter_projects_org(org_id)
+    |> maybe_scope_by(Keyword.get(opts, :access_scope), :project)
     |> order_by([p], asc: p.name)
     |> Repo.all()
     |> Repo.preload(preload)
@@ -339,6 +340,7 @@ defmodule Platform.Tasks do
     Project
     |> Platform.Tenancy.scope(visibility)
     |> maybe_filter_projects_org(org_id)
+    |> maybe_scope_by(Keyword.get(opts, :access_scope), :project)
     |> order_by([p], asc: p.name)
     |> Repo.all()
     |> Repo.preload(preload)
@@ -640,16 +642,28 @@ defmodule Platform.Tasks do
     update_task(task, %{needs_promotion: false})
   end
 
+  @doc """
+  Update a task. When a caller supplies `:access_scope`, re-check `tasks.write`
+  on this task before any write or broadcast. Omitted scope retains the
+  existing system-call behaviour; a supplied nil scope fails closed.
+  """
   def update_task(%Task{} = task, attrs, opts \\ []) do
-    task
-    |> Task.changeset(attrs)
-    |> Repo.update()
-    |> case do
-      {:ok, updated} ->
-        after_task_update(task, updated, opts)
+    with :ok <- authorize_task_update(task, opts) do
+      task
+      |> Task.changeset(attrs)
+      |> Repo.update()
+      |> case do
+        {:ok, updated} -> after_task_update(task, updated, opts)
+        error -> error
+      end
+    end
+  end
 
-      error ->
-        error
+  defp authorize_task_update(task, opts) do
+    if Keyword.has_key?(opts, :access_scope) do
+      Platform.Access.authorize(Keyword.get(opts, :access_scope), "tasks.write", task)
+    else
+      :ok
     end
   end
 
@@ -1755,6 +1769,7 @@ defmodule Platform.Tasks do
     |> maybe_filter_epic(epic_id)
     |> maybe_filter_status(status)
     |> maybe_filter_assignee(assignee_id, assignee_type)
+    |> maybe_scope_by(Keyword.get(opts, :access_scope), :task)
     |> order_by([t], desc: t.inserted_at, desc: t.id)
   end
 
@@ -6561,6 +6576,7 @@ defmodule Platform.Tasks do
     |> maybe_filter_sponsor(sponsor_user_id)
     |> maybe_filter_kind(kind)
     |> maybe_filter_origin(origin)
+    |> maybe_scope_by(Keyword.get(opts, :access_scope), :task)
     |> order_by([t], desc: t.inserted_at)
     |> preload([:project, :epic, :sponsor, plans: :stages])
     |> Repo.all()
@@ -6568,6 +6584,36 @@ defmodule Platform.Tasks do
 
   defp maybe_filter_project(query, nil), do: query
   defp maybe_filter_project(query, id), do: where(query, [t], t.project_id == ^id)
+
+  @doc """
+  Restrict a `Task`, `Project` or `Stack` query (its root binding) to the
+  rows `scope` may `tasks.read` (task 01a1386d-e528 stage 3,
+  `0058-rbac-v2-roles-scopes-and-agent-capping.md § Precedence`).
+
+  A thin call to `Platform.Access.Query.where_readable/5`: explicit grants
+  with deny-wins and downward inheritance, decided in `Platform.Access`. With
+  no grant an internal human's `tasks.read :all` keeps every row, and a
+  runtime's listing keeps today's rows (see `where_readable/5`).
+
+  The listings take it as the OPTIONAL `:access_scope` opt (`list_all_tasks/1`,
+  `list_tasks/1`, `list_tasks_page/2`, `count_tasks/1`, `list_by_status/1`,
+  `list_projects_for_user/2`, `list_projects_unscoped/1`, and the
+  `Platform.Tasks.Stacks` listings). Absent, the query is unchanged, so
+  router, dispatch and system callers read exactly what they read before.
+  """
+  @spec scope_by(Ecto.Queryable.t(), Platform.Access.Scope.t(), :task | :project | :stack) ::
+          Ecto.Queryable.t()
+  def scope_by(query, %Platform.Access.Scope{} = scope, type)
+      when type in [:task, :project, :stack] do
+    Platform.Access.Query.where_readable(query, scope, "tasks.read", type, %{id: :id})
+  end
+
+  @doc false
+  # The optional `:access_scope` seam shared with `Platform.Tasks.Stacks`.
+  def maybe_scope_by(query, %Platform.Access.Scope{} = scope, type),
+    do: scope_by(query, scope, type)
+
+  def maybe_scope_by(query, _scope, _type), do: query
 
   defp maybe_filter_epic(query, nil), do: query
   defp maybe_filter_epic(query, id), do: where(query, [t], t.epic_id == ^id)
@@ -6735,6 +6781,7 @@ defmodule Platform.Tasks do
       |> maybe_filter_sponsor(sponsor_user_id)
       |> maybe_filter_kind(kind)
       |> maybe_filter_origin(origin)
+      |> maybe_scope_by(Keyword.get(opts, :access_scope), :task)
       |> order_by([t], desc: t.updated_at)
       # `plans: :stages` is required by the desktop kanban template,
       # which renders per-card plan progress (`<passed>/<total>` stage
@@ -6839,12 +6886,19 @@ defmodule Platform.Tasks do
   Once `tasks.org_id` lands, swap the body for a `group_by(t.org_id)`
   aggregate joined to `orgs.slug`; the public return shape is already the
   one that query produces.
+
+  ## `:access_scope` (task 01a1386d-e528 stage 3)
+
+  Optional. Given, the total counts only the tasks the scope may
+  `tasks.read` (`scope_by/3`), so the rail badge cannot say how many hidden
+  tasks exist. Absent, the count is unchanged.
   """
-  @spec count_by_scope() :: %{String.t() => non_neg_integer()}
-  def count_by_scope do
+  @spec count_by_scope(keyword()) :: %{String.t() => non_neg_integer()}
+  def count_by_scope(opts \\ []) do
     total =
       Task
       |> where([t], is_nil(t.deleted_at))
+      |> maybe_scope_by(Keyword.get(opts, :access_scope), :task)
       |> Repo.aggregate(:count)
 
     counts =
@@ -6878,6 +6932,12 @@ defmodule Platform.Tasks do
     |> where([t], is_nil(t.deleted_at))
     |> where([t], t.status == "in_progress")
     |> where([t], t.assignee_id == ^user_id)
+    |> Platform.Access.Query.restrict(
+      Platform.Access.Scope.for_user(%{id: user_id}),
+      "tasks.read",
+      :task,
+      %{id: :id}
+    )
     |> Repo.aggregate(:count)
   end
 

@@ -66,6 +66,7 @@ defmodule Platform.Experiments.Guardrails do
 
   import Ecto.Query
 
+  alias Platform.Access
   alias Platform.Accounts.User
   alias Platform.Experiments.Experiment
   alias Platform.Experiments.Guardrail
@@ -170,10 +171,20 @@ defmodule Platform.Experiments.Guardrails do
   `max_live` would silently refuse every surface to every agent in that org.
   The panel pre-fills the same values; this is the server-side half, so a
   caller that never rendered the panel cannot trip it either.
+
+  ## Install-level (task 01a1386d-fb6e stage 2)
+
+  A guardrail save is a human experiments write, so it re-checks
+  `Platform.Access.authorize_install/1` and returns `{:error, :unauthorized}`
+  for anyone else, writing nothing (ADR 0058, "Root-admin carve-outs").
   """
   @spec save(Ecto.UUID.t() | nil, map(), User.t()) ::
-          {:ok, Guardrail.t()} | {:error, Ecto.Changeset.t()}
-  def save(org_id, attrs, %User{id: user_id}) when is_map(attrs) do
+          {:ok, Guardrail.t()} | {:error, Ecto.Changeset.t() | :unauthorized}
+  def save(org_id, attrs, %User{} = user) when is_map(attrs) do
+    with :ok <- Access.authorize_install(user), do: upsert(org_id, attrs, user)
+  end
+
+  defp upsert(org_id, attrs, %User{id: user_id}) do
     effective = for_org(org_id)
     attrs = Map.new(attrs, fn {k, v} -> {to_string(k), v} end)
 

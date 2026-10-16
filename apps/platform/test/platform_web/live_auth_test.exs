@@ -9,7 +9,11 @@ defmodule PlatformWeb.LiveAuthTest do
 
   use Platform.DataCase, async: true
 
+  import Platform.TenancyFixtures
+
   alias Phoenix.LiveView.Socket
+  alias Platform.Access
+  alias Platform.Access.Scope
   alias Platform.Accounts.User
   alias Platform.Repo
   alias Platform.Tenancy
@@ -91,28 +95,91 @@ defmodule PlatformWeb.LiveAuthTest do
     end
   end
 
-  describe "on_mount(:ensure_admin, ...)" do
-    test "continues when :root_admin? is true" do
+  describe "on_mount(:default, ...) :access_scope (task 01a1386d-cb5c stage 2)" do
+    defp mount!(user) do
+      {:cont, socket} = LiveAuth.on_mount(:default, %{}, %{}, socket_with(user))
+      socket
+    end
+
+    test "root admin: scope assigned, :root_admin? unchanged (true)" do
+      user = create_user!()
+      create_membership!(user, Tenancy.get_org_by_slug!("acme"), "admin")
+      socket = mount!(Platform.Accounts.get_user(user.id))
+
+      assert %Scope{} = socket.assigns.access_scope
+      assert socket.assigns.access_scope.actor.id == user.id
+      assert socket.assigns.root_admin? == true
+      assert Access.can?(socket.assigns.access_scope, "install.admin")
+    end
+
+    test "sub-org admin: scope assigned, :root_admin? unchanged (false)" do
+      user = create_user!()
+      org = Tenancy.get_org!(tenant_org_id("rbac_s2_liveauth"))
+      create_membership!(user, org, "admin")
+      socket = mount!(Platform.Accounts.get_user(user.id))
+
+      assert socket.assigns.root_admin? == false
+      assert socket.assigns.access_scope.permissions["access.manage"] == [org.id]
+      refute Access.can?(socket.assigns.access_scope, "install.admin")
+    end
+
+    test "external root admin: :root_admin? unchanged (true), the scope holds no install.admin" do
+      user = create_user!()
+      acme = Tenancy.get_org_by_slug!("acme")
+
+      {:ok, _} =
+        Tenancy.mark_membership_external(%{user_id: user.id, org_id: acme.id, role: "admin"})
+
+      socket = mount!(Platform.Accounts.get_user(user.id))
+
+      # Today's assign is untouched: the ExternalUserScope plug, not this hook,
+      # holds this user off /admin. The shadow scope models it.
+      assert socket.assigns.root_admin? == true
+      assert Scope.guest?(socket.assigns.access_scope)
+      refute Access.can?(socket.assigns.access_scope, "install.admin")
+    end
+
+    test "anonymous and legacy string shapes get the empty, fail-closed scope" do
       socket = %Socket{endpoint: PlatformWeb.Endpoint, assigns: %{__changed__: %{}, flash: %{}}}
-      socket = Phoenix.Component.assign(socket, :root_admin?, true)
+
+      {:cont, anon} =
+        LiveAuth.on_mount(
+          :default,
+          %{},
+          %{},
+          Phoenix.Component.assign(socket, :current_user_record, nil)
+        )
+
+      {:cont, legacy} =
+        LiveAuth.on_mount(
+          :default,
+          %{},
+          %{},
+          Phoenix.Component.assign(socket, :current_user, "Marlowe")
+        )
+
+      assert anon.assigns.access_scope == %Scope{}
+      assert legacy.assigns.access_scope == %Scope{}
+    end
+  end
+
+  describe "on_mount(:ensure_admin, ...) compatibility delegate" do
+    test "uses ModuleGate and the scope for an admin" do
+      user = create_user!()
+      create_membership!(user, Tenancy.get_org_by_slug!("acme"), "admin")
+      socket = socket_with(Platform.Accounts.get_user(user.id))
+      {:cont, socket} = LiveAuth.on_mount(:default, %{}, %{}, socket)
+      socket = %{socket | view: PlatformWeb.AdminLive}
 
       assert {:cont, _socket} = LiveAuth.on_mount(:ensure_admin, %{}, %{}, socket)
     end
 
-    test "halts and pushes a redirect when :root_admin? is false" do
-      socket = %Socket{endpoint: PlatformWeb.Endpoint, assigns: %{__changed__: %{}, flash: %{}}}
-      socket = Phoenix.Component.assign(socket, :root_admin?, false)
-
-      assert {:halt, socket} = LiveAuth.on_mount(:ensure_admin, %{}, %{}, socket)
-
-      # `push_navigate/2` enqueues a redirect operation on the socket's
-      # private state — assert the flash was set as a stable proxy for
-      # "the gate fired" rather than reaching into LV internals.
-      assert Phoenix.Flash.get(socket.assigns.flash, :error) =~ "don't have access"
-    end
-
-    test "halts when :root_admin? assign is missing entirely" do
-      socket = %Socket{endpoint: PlatformWeb.Endpoint, assigns: %{__changed__: %{}, flash: %{}}}
+    test "halts when scope is missing" do
+      socket = %Socket{
+        endpoint: PlatformWeb.Endpoint,
+        view: PlatformWeb.AdminLive,
+        assigns: %{__changed__: %{}, flash: %{}}
+      }
 
       assert {:halt, _socket} = LiveAuth.on_mount(:ensure_admin, %{}, %{}, socket)
     end

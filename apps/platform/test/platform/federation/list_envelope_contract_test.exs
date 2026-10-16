@@ -396,7 +396,7 @@ defmodule Platform.Federation.ListEnvelopeContractTest do
         })
 
       {:ok, _} =
-        Platform.Experiments.start(experiment, %Platform.Accounts.User{id: Ecto.UUID.generate()})
+        Platform.Experiments.start(experiment, root_admin!())
 
       env = call("code_mode_report", %{"experiment_id" => experiment.id})
       assert_unbounded("code_mode_report", env, 6)
@@ -856,9 +856,17 @@ defmodule Platform.Federation.ListEnvelopeContractTest do
   # space_get_messages.
   defp message_space! do
     agent = tenant_agent!(nil)
+    org = Platform.Tenancy.get_org_by_slug!("sxi")
+    owner = Platform.ExternalUserFixtures.create_user!()
+    Platform.ExternalUserFixtures.plain_member!(owner, org)
 
     {:ok, space} =
-      Chat.create_space(%{name: "Envelope #{u()}", slug: "envelope-#{u()}", kind: "channel"})
+      Chat.create_space(%{
+        name: "Envelope #{u()}",
+        slug: "envelope-#{u()}",
+        kind: "channel",
+        org_id: org.id
+      })
 
     {:ok, participant} =
       Chat.add_participant(space.id, %{
@@ -869,7 +877,25 @@ defmodule Platform.Federation.ListEnvelopeContractTest do
         joined_at: DateTime.utc_now()
       })
 
-    %{space: space, participant: participant, ctx: %{agent_id: agent.id}}
+    {:ok, _owner_participant} =
+      Chat.add_participant(space.id, %{
+        participant_type: "user",
+        participant_id: owner.id,
+        display_name: owner.name,
+        joined_at: DateTime.utc_now()
+      })
+
+    {:ok, runtime} =
+      Platform.Federation.register_runtime(owner.id, %{
+        runtime_id: "envelope-#{u()}",
+        agent_id: agent.id
+      })
+
+    %{
+      space: space,
+      participant: participant,
+      ctx: %{agent_id: agent.id, runtime_id: runtime.runtime_id}
+    }
   end
 
   defp post_messages!(space, participant, n) do

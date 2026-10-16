@@ -26,11 +26,35 @@ defmodule Platform.Chat.HistoryVisibleFromReadBoundTest do
   defp agent! do
     n = System.unique_integer([:positive])
 
-    Repo.insert!(%Platform.Agents.Agent{
-      name: "History Reader #{n}",
-      slug: "history-reader-#{n}",
-      status: "active"
-    })
+    agent =
+      Repo.insert!(%Platform.Agents.Agent{
+        name: "History Reader #{n}",
+        slug: "history-reader-#{n}",
+        status: "active"
+      })
+
+    owner = Platform.TenancyFixtures.root_admin!()
+
+    runtime =
+      %Platform.Agents.AgentRuntime{}
+      |> Platform.Agents.AgentRuntime.changeset(%{
+        runtime_id: "history-reader-#{n}",
+        owner_user_id: owner.id,
+        agent_id: agent.id,
+        auth_token_hash:
+          Platform.Agents.AgentRuntime.hash_token(Platform.Agents.AgentRuntime.generate_token()),
+        status: "active"
+      })
+      |> Repo.insert!()
+
+    {:ok, _profile} =
+      Platform.Access.RuntimeProfiles.create_for_runtime(
+        runtime,
+        Platform.Agents.AgentRuntime.default_tool_profile(),
+        nil
+      )
+
+    agent
   end
 
   defp channel! do
@@ -73,12 +97,17 @@ defmodule Platform.Chat.HistoryVisibleFromReadBoundTest do
   end
 
   defp tool_ids(space_id, agent, opts \\ []) do
+    runtime = Repo.get_by!(Platform.Agents.AgentRuntime, agent_id: agent.id)
+
     args =
       %{"space_id" => space_id, "limit" => 20}
       |> Map.merge(Map.new(opts, fn {k, v} -> {to_string(k), v} end))
 
     {:ok, %{messages: messages}} =
-      ToolSurface.execute("space_get_messages", args, %{agent_id: agent.id})
+      ToolSurface.execute("space_get_messages", args, %{
+        agent_id: agent.id,
+        runtime_id: runtime.runtime_id
+      })
 
     Enum.map(messages, & &1.id)
   end

@@ -25,6 +25,7 @@ defmodule Platform.Chat.Canvas.Kinds.ActionRow do
             "properties" => %{
               "label" => %{"type" => "string"},
               "value" => %{"type" => "string"},
+              "disabled" => %{"type" => "boolean"},
               "variant" => %{
                 "type" => "string",
                 "enum" => ["primary", "secondary", "ghost", "outline", "danger"]
@@ -52,15 +53,15 @@ defmodule Platform.Chat.Canvas.Kinds.ActionRow do
     ]
   end
 
-  attr :node, :map, required: true
-  attr :dom_id_scope, :string, default: nil
-  attr :canvas_id, :string, default: nil
+  attr(:node, :map, required: true)
+  attr(:dom_id_scope, :string, default: nil)
+  attr(:canvas_id, :string, default: nil)
 
   # Where the button's `canvas_action_click` is delivered. nil (the default)
   # renders no phx-target, so the click goes to the parent LiveView, which is
   # how ChatLive and MeetingLive handle it. The Tasks page's LiveComponents
   # pass their `@myself`: TasksLive has no clause for this event.
-  attr :event_target, :any, default: nil
+  attr(:event_target, :any, default: nil)
 
   # Bug B (task 019f70ff): LV's `extractMeta` (phoenix_live_view.js:5390-5394)
   # reads `element.value` on non-form elements AFTER walking phx-value-*
@@ -101,6 +102,7 @@ defmodule Platform.Chat.Canvas.Kinds.ActionRow do
         phx-value-canvas-id={@canvas_id}
         phx-value-node-id={@node_id}
         phx-value-action={action["value"]}
+        disabled={action["disabled"] == true}
       >
         {action["label"]}
       </button>

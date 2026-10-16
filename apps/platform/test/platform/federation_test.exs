@@ -3,6 +3,7 @@ defmodule Platform.FederationTest do
 
   alias Platform.Accounts.User
   alias Platform.Agents.{Agent, AgentRuntime}
+  alias Platform.Access.RuntimeProfiles
   alias Platform.Chat
   alias Platform.Federation
   alias Platform.Repo
@@ -120,8 +121,8 @@ defmodule Platform.FederationTest do
     end
   end
 
-  describe "update_allowed_bundles/2" do
-    test "replaces the set of allowed bundles when all values are valid" do
+  describe "RuntimeProfiles.set_tool_profile/2" do
+    test "replaces the ordered module profile when all values are valid" do
       user = create_user()
 
       {:ok, runtime} =
@@ -129,10 +130,9 @@ defmodule Platform.FederationTest do
           runtime_id: "test-runtime-#{System.unique_integer([:positive])}"
         })
 
-      {:ok, updated} =
-        Federation.update_allowed_bundles(runtime, ~w(federation space task plan))
+      {:ok, updated} = RuntimeProfiles.set_tool_profile(runtime, ~w(federation space task plan))
 
-      assert Enum.sort(updated.allowed_bundles) == ~w(federation plan space task)
+      assert updated.tool_profile == ~w(federation space task plan)
     end
 
     test "rejects bundle values outside the valid set" do
@@ -143,11 +143,8 @@ defmodule Platform.FederationTest do
           runtime_id: "test-runtime-#{System.unique_integer([:positive])}"
         })
 
-      assert {:error, %Ecto.Changeset{} = changeset} =
-               Federation.update_allowed_bundles(runtime, ~w(federation not_a_bundle))
-
-      refute changeset.valid?
-      assert Keyword.has_key?(changeset.errors, :allowed_bundles)
+      assert {:error, :invalid_module} =
+               RuntimeProfiles.set_tool_profile(runtime, ~w(federation not_a_bundle))
     end
 
     test "accepts an empty list (denies all bundles)" do
@@ -158,8 +155,8 @@ defmodule Platform.FederationTest do
           runtime_id: "test-runtime-#{System.unique_integer([:positive])}"
         })
 
-      {:ok, updated} = Federation.update_allowed_bundles(runtime, [])
-      assert updated.allowed_bundles == []
+      {:ok, updated} = RuntimeProfiles.set_tool_profile(runtime, [])
+      assert updated.tool_profile == []
     end
   end
 

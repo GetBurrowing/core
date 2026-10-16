@@ -20,6 +20,7 @@ defmodule PlatformWeb.ChatLive do
   use PlatformWeb, :live_view
 
   require Logger
+  import Ecto.Query, only: [from: 2]
 
   import PlatformWeb.ChatLive.Partials
   import PlatformWeb.ChatLive.Partials.Composer
@@ -32,6 +33,8 @@ defmodule PlatformWeb.ChatLive do
   import PlatformWeb.ChatLive.RenderHelpers
 
   alias Platform.Accounts
+  alias Platform.Access
+  alias Platform.Access.Scope
   alias Platform.Chat
   alias Platform.Chat.ClosedDms
   alias Platform.Chat.HiddenChannels
@@ -171,15 +174,34 @@ defmodule PlatformWeb.ChatLive do
   Public only so the subscribe-scope decision is unit-testable without a
   LiveView; not part of the ChatLive public API.
   """
-  @spec presence_subscribe_space_ids([%{id: binary()}], binary()) :: [binary()]
-  def presence_subscribe_space_ids(all_spaces, user_id) do
+  @spec presence_subscribe_space_ids([%{id: binary()}], binary(), Platform.Access.Scope.t() | nil) ::
+          [binary()]
+  def presence_subscribe_space_ids(all_spaces, user_id, access_scope \\ nil) do
     ids = Enum.map(all_spaces, & &1.id)
 
-    if Platform.Tenancy.external_user?(%{id: user_id}) do
-      scope = Platform.Chat.Presence.external_scope_space_ids(user_id)
-      Enum.filter(ids, &MapSet.member?(scope, &1))
-    else
-      ids
+    ids =
+      if Platform.Tenancy.external_user?(%{id: user_id}) do
+        scope = Platform.Chat.Presence.external_scope_space_ids(user_id)
+        Enum.filter(ids, &MapSet.member?(scope, &1))
+      else
+        ids
+      end
+
+    case {ids, access_scope} do
+      {[], _} ->
+        []
+
+      {ids, %Platform.Access.Scope{} = scope} ->
+        readable =
+          from(s in Platform.Chat.Space, where: s.id in ^ids, select: s.id)
+          |> Platform.Access.Query.restrict(scope, "chat.read", :space, %{id: :id})
+          |> Platform.Repo.all()
+          |> MapSet.new()
+
+        Enum.filter(ids, &MapSet.member?(readable, &1))
+
+      {ids, _} ->
+        ids
     end
   end
 
@@ -210,7 +232,7 @@ defmodule PlatformWeb.ChatLive do
     } = socket.assigns
 
     (channels ++ pinned_task_spaces ++ dm_conversations)
-    |> presence_subscribe_space_ids(user_id)
+    |> presence_subscribe_space_ids(user_id, socket.assigns[:access_scope])
     |> MapSet.new()
   end
 
@@ -339,13 +361,31 @@ defmodule PlatformWeb.ChatLive do
     # BOUNDARY: M5 owns the RENDER branch only. The scope threaded here filters
     # what the rail SHOWS; the guarantee that an external user cannot REACH an
     # off-limits space is M6's plug + M7's query filter, not this render.
-    external_scope =
-      if embedded?, do: nil, else: Platform.Chat.ExternalScope.for_user(user_id)
+    #
+    # RBAC v2 (task 01a1386d-e528 stage 3): when LiveAuth assigned an
+    # `@access_scope` for THIS user, it IS the read-scope, so explicit grants
+    # compose into every rail read (`ExternalScope`'s Scope clauses). Otherwise
+    # `ExternalScope.for_user/1`, as before; its return type never changes.
+    #
+    # THE SWITCH HAZARD: a `%Platform.Access.Scope{}` does not match
+    # `%ExternalScope{external?: true}`, so the old `match?/2` would read every
+    # guest as internal and hand them the unscoped archived-channel list below.
+    # `external?` is therefore asked of each struct through `guest_scope?/1`
+    # (`Platform.Access.Scope.guest?/1` for a Scope), never by a struct match.
+    # Both live in `PlatformWeb.ChatLive.ReadScope`. Guard:
+    # `test/platform_web/live/chat_live_access_scope_guest_test.exs`.
+    access_scope = socket.assigns[:access_scope]
 
-    external? = match?(%Platform.Chat.ExternalScope{external?: true}, external_scope)
+    {external_scope, external?} =
+      PlatformWeb.ChatLive.ReadScope.resolve(access_scope, user_id, embedded?)
 
-    channels =
+    readable_channels =
       if embedded?, do: [], else: Chat.list_spaces(kind: "channel", scope: external_scope)
+
+    listed_channels =
+      if embedded?,
+        do: [],
+        else: Chat.list_spaces(kind: "channel", scope: channel_listing_scope(external?, user_id))
 
     # Archived channels (task 019e95ea stage 2) feed ONLY the sidebar's
     # collapsed "Archived" group — they are deliberately kept out of
@@ -356,6 +396,17 @@ defmodule PlatformWeb.ChatLive do
       if embedded? or external?,
         do: [],
         else: Chat.list_spaces(kind: "channel", archived: true)
+
+    restricted_channel_ids =
+      restricted_channel_ids(
+        socket,
+        readable_channels ++ listed_channels,
+        archived_channels,
+        user_id
+      )
+
+    channels =
+      include_restricted_channels(readable_channels, listed_channels, restricted_channel_ids)
 
     # `dm_conversations_for/3` and not the socket-shaped `rail_dm_conversations/1`:
     # none of these three values is in `socket.assigns` yet — they are assigned
@@ -471,6 +522,7 @@ defmodule PlatformWeb.ChatLive do
         if(!embedded?, do: GoalCadenceForm.time_zone(get_connect_params(socket)))
       )
       |> assign(:archived_channels, archived_channels)
+      |> assign(:restricted_channel_ids, restricted_channel_ids)
       # Collapse state for the sidebar's "Archived" group (task 019e95ea
       # stage 2) — collapsed by default, toggled by `toggle_archived_section`.
       |> assign(:archived_open, false)
@@ -777,7 +829,7 @@ defmodule PlatformWeb.ChatLive do
         # two agree once M5's filtered render merges.
         socket =
           all_spaces
-          |> presence_subscribe_space_ids(user_id)
+          |> presence_subscribe_space_ids(user_id, socket.assigns[:access_scope])
           |> Enum.reduce(socket, &subscribe_space(&2, &1, :chat_rail))
 
         ChatPubSub.subscribe_spaces()
@@ -890,7 +942,11 @@ defmodule PlatformWeb.ChatLive do
     # Deliberately NOT the standalone deny. This LiveView is `live_render`ed
     # inside MeetingLive, so `push_navigate/2` would move the PARENT surface out
     # of the meeting. Denial here is silent and local to the pane.
-    space = if space && external_space_denied?(socket, space), do: nil, else: space
+    space =
+      if space &&
+           (external_space_denied?(socket, space) or restricted_space_denied?(socket, space)),
+         do: nil,
+         else: space
 
     case space do
       nil ->
@@ -1035,13 +1091,20 @@ defmodule PlatformWeb.ChatLive do
     # `external_space_denied?/2`: the two ask different questions of different
     # populations, and collapsing them would put the external allowlist in the
     # internal path.
+    restricted? =
+      space && not external_space_denied?(socket, space) &&
+        restricted_space_denied?(socket, space)
+
     if is_nil(space) or external_space_denied?(socket, space) or
-         implicit_join_denied?(socket, space) do
+         implicit_join_denied?(socket, space) or restricted? do
       # The URL saved by the RouteResume hook (`route_resume:chat` in
       # localStorage) points at a space this user can no longer resolve
       # (deleted, unauthorized). Signal the client to clear the entry so the
       # next Chat-tile click falls back to `/chat` rather than looping right
       # back into this dead resolve. See PlatformWeb.RouteResume.
+      socket =
+        if restricted?, do: put_flash(socket, :error, "Restricted, ask an admin"), else: socket
+
       {:noreply,
        socket
        |> handle_route_stale("chat")
@@ -1068,19 +1131,33 @@ defmodule PlatformWeb.ChatLive do
       participants = Chat.list_participants(space.id)
 
       page_title =
-        space_page_title(space, participants, socket.assigns.user_id, space_mask(socket.assigns))
+        space_page_title(
+          space,
+          participants,
+          socket.assigns.user_id,
+          space_mask(socket.assigns)
+        )
 
       # Refresh sidebar lists. rbac-external-users M5: re-thread the same
       # `@external_scope` the mount used so a channel-to-channel nav re-derives
       # the SAME filtered rail rather than re-broadening it workspace-wide.
       # Internal / nil scope is pass-through, so the internal path is unchanged.
-      scope = socket.assigns.external_scope
-      channels = Chat.list_spaces(kind: "channel", scope: scope)
+      scope = socket.assigns[:access_scope] || socket.assigns.external_scope
+      readable_channels = rail_channels(socket)
 
-      archived_channels =
-        if socket.assigns.external?,
-          do: [],
-          else: Chat.list_spaces(kind: "channel", archived: true)
+      listed_channels =
+        Chat.list_spaces(
+          kind: "channel",
+          scope: channel_listing_scope(socket.assigns.external?, socket.assigns.user_id)
+        )
+
+      archived_channels = rail_archived_channels(socket)
+
+      restricted_channel_ids =
+        restricted_channel_ids(socket, readable_channels ++ listed_channels, archived_channels)
+
+      channels =
+        include_restricted_channels(readable_channels, listed_channels, restricted_channel_ids)
 
       dm_convos = rail_dm_conversations(socket)
 
@@ -1125,6 +1202,7 @@ defmodule PlatformWeb.ChatLive do
        |> assign(:mobile_browser_open, false)
        |> assign(:channels, channels)
        |> assign(:archived_channels, archived_channels)
+       |> assign(:restricted_channel_ids, restricted_channel_ids)
        |> assign(:dm_conversations, dm_convos)
        |> assign(:spaces, channels ++ dm_convos)
        |> assign(:closed_dm_at, closed_dm_at)
@@ -1156,7 +1234,22 @@ defmodule PlatformWeb.ChatLive do
   end
 
   def handle_params(_params, _url, socket) do
-    case socket.assigns.channels do
+    restricted_ids =
+      restricted_channel_ids(socket, socket.assigns.channels, socket.assigns.archived_channels)
+
+    socket = assign(socket, :restricted_channel_ids, restricted_ids)
+
+    # A denied deep link navigates here with this flash. Keep /chat as its
+    # landing URL instead of immediately selecting an unrelated channel.
+    if Phoenix.Flash.get(socket.assigns.flash, :error) == "Restricted, ask an admin" do
+      {:noreply, socket}
+    else
+      default_chat_landing(socket, restricted_ids)
+    end
+  end
+
+  defp default_chat_landing(socket, restricted_ids) do
+    case Enum.reject(socket.assigns.channels, &MapSet.member?(restricted_ids, &1.id)) do
       [first | _] ->
         {:noreply, push_navigate(socket, to: ~p"/chat/#{space_nav_target(first)}")}
 
@@ -3267,7 +3360,10 @@ defmodule PlatformWeb.ChatLive do
   # their allowlist. For internal / anonymous sessions `@external_scope` is nil
   # and this is a pass-through — the internal rail is byte-for-byte unchanged.
   defp rail_channels(socket) do
-    Chat.list_spaces(kind: "channel", scope: socket.assigns[:external_scope])
+    Chat.list_spaces(
+      kind: "channel",
+      scope: socket.assigns[:access_scope] || socket.assigns[:external_scope]
+    )
   end
 
   # The rail's ARCHIVED channel list. Sibling of `rail_channels/1` above, and
@@ -3289,7 +3385,8 @@ defmodule PlatformWeb.ChatLive do
   defp rail_archived_channels(socket) do
     if socket.assigns[:external?],
       do: [],
-      else: Chat.list_spaces(kind: "channel", archived: true)
+      else:
+        Chat.list_spaces(kind: "channel", archived: true, scope: socket.assigns[:access_scope])
   end
 
   # The rail's DM and group conversation list, scoped to the acting user.
@@ -3320,7 +3417,7 @@ defmodule PlatformWeb.ChatLive do
   defp rail_dm_conversations(socket) do
     dm_conversations_for(
       socket.assigns[:user_id],
-      socket.assigns[:external_scope],
+      socket.assigns[:access_scope] || socket.assigns[:external_scope],
       socket.assigns[:embedded]
     )
   end
@@ -3867,7 +3964,11 @@ defmodule PlatformWeb.ChatLive do
     # for a topic at once, so a paired call here would silently kill another
     # code path's subscription with no error and no log.
     socket =
-      if space.id in presence_subscribe_space_ids([space], socket.assigns.user_id) do
+      if space.id in presence_subscribe_space_ids(
+           [space],
+           socket.assigns.user_id,
+           socket.assigns[:access_scope]
+         ) do
         subscribe_space(socket, space.id, :chat_rail)
       else
         socket
@@ -4021,71 +4122,7 @@ defmodule PlatformWeb.ChatLive do
   # surfaces have no sidebar and never subscribe (see `do_mount/3`), so they
   # keep their empty lists.
   def handle_info(:sidebar_changed, socket) do
-    if socket.assigns.embedded do
-      {:noreply, socket}
-    else
-      # `rail_channels/1`, not a bare `Chat.list_spaces/1` (task 019ffebf-4745).
-      # This arm runs in the acting user's OTHER tabs, so an unscoped read here
-      # re-broadened an external user's rail to every channel in the workspace
-      # on any sidebar change they made elsewhere.
-      channels = rail_channels(socket)
-      archived_channels = rail_archived_channels(socket)
-
-      # Task 01a01ccf. Being ADDED to an existing DM or group conversation is a
-      # sidebar change like any other — `Chat.do_add_participant/2` already
-      # emits this event for it — but until now the handler re-read only the
-      # two channel lists, so `@dm_conversations` stayed frozen at its
-      # mount-time value. The conversation therefore had no rail row AND no
-      # subscription (`rail_subscribe_space_ids/1` unions this assign), so the
-      # messages arriving in it were missed with no badge, no row and no other
-      # signal until the viewer happened to reload.
-      #
-      # It is assigned BEFORE `recompute_pinned/1` below and that order is
-      # load-bearing: `recompute_pinned/1` builds `@channel_sections` off
-      # `socket.assigns.dm_conversations`, so assigning after it would
-      # subscribe the topic and still not draw the row — the same silent miss,
-      # one layer down.
-      dm_conversations = rail_dm_conversations(socket)
-
-      # `recompute_pinned/1` covers the `@sidebar_sections` re-resolve this
-      # handler used to do inline, and adds the pin refresh. The topic is
-      # per-user (`chat:sidebar:<user_id>`) and the broadcast excludes the
-      # acting process, so this arm runs in the SAME user's other tabs — which
-      # is exactly where a pin has to converge. Without the pin half, tab B
-      # kept rendering a stale Pinned block until its next navigation.
-      #
-      # `@closed_dm_at` is re-read here for the same reason and from the same
-      # place, the user's preferences (task 019ffc5f, Marlowe's pinned-close
-      # report). Close now writes the pin AND the close together, so a tab that
-      # refreshed only the pin list would take the row out of the Pinned block
-      # and leave it in Direct Messages: half the action applied, which is the
-      # shape of the bug being fixed. Safe to overwrite because every writer of
-      # this assign already sets it from the store, so the assign is a cache of
-      # that store and never holds an optimistic value.
-      #
-      # The re-read lives here, not inside `recompute_pinned/1`: its other two
-      # callers act on the tab that just wrote, where the assign is already
-      # fresh, and would pay a preferences read for nothing.
-      socket =
-        socket
-        |> assign(:channels, channels)
-        |> assign(:archived_channels, archived_channels)
-        |> assign(:dm_conversations, dm_conversations)
-        |> assign(:closed_dm_at, Accounts.get_closed_dm_at(socket.assigns.user_id))
-        |> recompute_pinned()
-
-      # Task 01a017a3: reconcile the PubSub subscribe set against the REFRESHED
-      # rail. A session granted access to a channel that already existed gets
-      # no `{:space_created, _}` (that fired when the channel was created, and
-      # its guard correctly declined), so without this the channel appeared in
-      # the rail with a badge that could never move.
-      #
-      # This is where it belongs rather than on a bespoke grant event: nine
-      # sites already emit `:sidebar_changed`, every one of them changes what
-      # the viewer can see, and a grant path added later that forgets a second
-      # bespoke broadcast would re-create this exact defect one layer up.
-      {:noreply, reconcile_rail_subscriptions(socket)}
-    end
+    {:noreply, refresh_rail(socket)}
   end
 
   # Shared org-DEFAULT invalidation (chat sidebar Stage 6). Fired on the
@@ -4150,7 +4187,8 @@ defmodule PlatformWeb.ChatLive do
       if participant.participant_id == socket.assigns.user_id and
            participant.space_id not in presence_subscribe_space_ids(
              [%{id: participant.space_id}],
-             socket.assigns.user_id
+             socket.assigns.user_id,
+             socket.assigns[:access_scope]
            ) do
         socket
         |> unsubscribe_space(participant.space_id, :chat_rail)
@@ -4163,6 +4201,102 @@ defmodule PlatformWeb.ChatLive do
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
+
+  @doc "Refresh this socket's rail after ShellLive rebuilds its access scope."
+  def on_access_changed(socket) do
+    socket = socket |> refresh_rail() |> release_revoked_rail_topics()
+
+    space = socket.assigns[:active_space]
+
+    if socket.assigns[:embedded] or is_nil(space) or
+         Platform.Access.can?(socket.assigns[:access_scope], "chat.read", space) do
+      socket
+    else
+      socket
+      |> unsubscribe_space(space.id, :chat_active)
+      |> put_flash(:error, "You no longer have access to that channel.")
+      |> push_navigate(to: "/chat")
+    end
+  end
+
+  defp refresh_rail(socket) do
+    if socket.assigns.embedded do
+      socket
+    else
+      # `rail_channels/1`, not a bare `Chat.list_spaces/1` (task 019ffebf-4745).
+      # This arm runs in the acting user's OTHER tabs, so an unscoped read here
+      # re-broadened an external user's rail to every channel in the workspace
+      # on any sidebar change they made elsewhere.
+      channels = rail_channels(socket)
+      archived_channels = rail_archived_channels(socket)
+
+      # Task 01a01ccf. Being ADDED to an existing DM or group conversation is a
+      # sidebar change like any other — `Chat.do_add_participant/2` already
+      # emits this event for it — but until now the handler re-read only the
+      # two channel lists, so `@dm_conversations` stayed frozen at its
+      # mount-time value. The conversation therefore had no rail row AND no
+      # subscription (`rail_subscribe_space_ids/1` unions this assign), so the
+      # messages arriving in it were missed with no badge, no row and no other
+      # signal until the viewer happened to reload.
+      #
+      # It is assigned BEFORE `recompute_pinned/1` below and that order is
+      # load-bearing: `recompute_pinned/1` builds `@channel_sections` off
+      # `socket.assigns.dm_conversations`, so assigning after it would
+      # subscribe the topic and still not draw the row — the same silent miss,
+      # one layer down.
+      dm_conversations = rail_dm_conversations(socket)
+
+      # `recompute_pinned/1` covers the `@sidebar_sections` re-resolve this
+      # handler used to do inline, and adds the pin refresh. The topic is
+      # per-user (`chat:sidebar:<user_id>`) and the broadcast excludes the
+      # acting process, so this arm runs in the SAME user's other tabs — which
+      # is exactly where a pin has to converge. Without the pin half, tab B
+      # kept rendering a stale Pinned block until its next navigation.
+      #
+      # `@closed_dm_at` is re-read here for the same reason and from the same
+      # place, the user's preferences (task 019ffc5f, Marlowe's pinned-close
+      # report). Close now writes the pin AND the close together, so a tab that
+      # refreshed only the pin list would take the row out of the Pinned block
+      # and leave it in Direct Messages: half the action applied, which is the
+      # shape of the bug being fixed. Safe to overwrite because every writer of
+      # this assign already sets it from the store, so the assign is a cache of
+      # that store and never holds an optimistic value.
+      #
+      # The re-read lives here, not inside `recompute_pinned/1`: its other two
+      # callers act on the tab that just wrote, where the assign is already
+      # fresh, and would pay a preferences read for nothing.
+      socket =
+        socket
+        |> assign(:channels, channels)
+        |> assign(:archived_channels, archived_channels)
+        |> assign(:dm_conversations, dm_conversations)
+        |> assign(:closed_dm_at, Accounts.get_closed_dm_at(socket.assigns.user_id))
+        |> recompute_pinned()
+
+      # Task 01a017a3: reconcile the PubSub subscribe set against the REFRESHED
+      # rail. A session granted access to a channel that already existed gets
+      # no `{:space_created, _}` (that fired when the channel was created, and
+      # its guard correctly declined), so without this the channel appeared in
+      # the rail with a badge that could never move.
+      #
+      # This is where it belongs rather than on a bespoke grant event: nine
+      # sites already emit `:sidebar_changed`, every one of them changes what
+      # the viewer can see, and a grant path added later that forgets a second
+      # bespoke broadcast would re-create this exact defect one layer up.
+      reconcile_rail_subscriptions(socket)
+    end
+  end
+
+  defp release_revoked_rail_topics(socket) do
+    desired = rail_subscribe_space_ids(socket)
+
+    socket.assigns[:chat_space_holders]
+    |> Enum.reduce(socket, fn {space_id, holders}, acc ->
+      if MapSet.member?(holders, :chat_rail) and not MapSet.member?(desired, space_id),
+        do: unsubscribe_space(acc, space_id, :chat_rail),
+        else: acc
+    end)
+  end
 
   # Valid slug pattern: lowercase alphanumerics separated by hyphens (1–64 chars).
   # This intentionally excludes anything with underscores, uppercase, special chars,
@@ -4292,6 +4426,38 @@ defmodule PlatformWeb.ChatLive do
     external_session?(socket) and
       not Platform.Chat.ExternalScope.authorized_space?(%{id: socket.assigns.user_id}, space)
   end
+
+  defp access_scope(socket, user_id \\ nil) do
+    case socket.assigns[:access_scope] do
+      %Scope{} = scope -> scope
+      _ -> Scope.for_user(Accounts.get_user(user_id || socket.assigns.user_id))
+    end
+  end
+
+  defp restricted_channel_ids(socket, channels, archived_channels, user_id \\ nil) do
+    ids = Enum.map(channels ++ archived_channels, & &1.id)
+    Access.restricted_space_ids(access_scope(socket, user_id), ids)
+  end
+
+  defp channel_listing_scope(false, _user_id), do: nil
+
+  defp channel_listing_scope(true, user_id),
+    do: Platform.Chat.ExternalScope.for_user(user_id)
+
+  defp include_restricted_channels(readable, listed, restricted_ids) do
+    (readable ++ Enum.filter(listed, &MapSet.member?(restricted_ids, &1.id)))
+    |> Enum.uniq_by(& &1.id)
+    |> Enum.sort_by(& &1.inserted_at, DateTime)
+  end
+
+  defp restricted_space_denied?(socket, %{id: id, kind: "channel"}) do
+    scope = access_scope(socket)
+
+    MapSet.member?(Access.restricted_space_ids(scope, [id]), id) and
+      not Access.can?(scope, "chat.read", id)
+  end
+
+  defp restricted_space_denied?(_socket, _space), do: false
 
   # Space kinds an INTERNAL user may open — and therefore implicitly join —
   # without a `chat_participants` row already existing (task 01a01d0e).

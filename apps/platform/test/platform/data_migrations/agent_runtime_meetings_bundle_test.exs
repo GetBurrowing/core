@@ -26,6 +26,10 @@ defmodule Platform.DataMigrations.AgentRuntimeMeetingsBundleTest do
   alias Platform.Repo
   alias Platform.Repo.Migrations.AgentRuntimeMeetingsBundle
 
+  @drop_version 20_261_016_030_000
+  @drop_migration Platform.Repo.Migrations.DropAgentRuntimesAllowedBundles
+  @migration_opts [log: false, log_migrations_sql: false, migration_lock: false]
+
   # Migration source lives under `priv/repo/migrations/` and is not on the
   # compile path — walk up from `test/platform/data_migrations/<this>.exs` to
   # `apps/platform/` and back down into `priv/repo/migrations/`.
@@ -40,6 +44,18 @@ defmodule Platform.DataMigrations.AgentRuntimeMeetingsBundleTest do
 
   setup_all do
     Code.require_file(@migration_path)
+
+    [drop_path] =
+      Path.wildcard(
+        Path.join(:code.priv_dir(:platform), "repo/migrations/#{@drop_version}_*.exs")
+      )
+
+    unless Code.ensure_loaded?(@drop_migration), do: Code.require_file(drop_path)
+    :ok
+  end
+
+  setup do
+    :ok = Ecto.Migrator.down(Repo, @drop_version, @drop_migration, @migration_opts)
     :ok
   end
 

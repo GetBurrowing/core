@@ -6,7 +6,7 @@ defmodule Platform.Federation.CanvasEmbedParityTest do
   Mirrors the structural template of `Platform.Federation.SkillMCPParityTest`
   (task 019dfaea): two `AgentRuntime` rows distinguished only by their
   `metadata.client_info.product` value (`"claude_channel"` vs `"openclaw"`),
-  each granted `allowed_bundles: ["canvas"]`, see byte-equivalent
+  each granted `tool_profile: ["canvas"]`, see byte-equivalent
   responses from the canonical MCP chokepoint at `POST /mcp`.
 
   Both flavors converge on `PlatformWeb.MCPController` regardless of the
@@ -32,7 +32,8 @@ defmodule Platform.Federation.CanvasEmbedParityTest do
 
   use PlatformWeb.ConnCase, async: false
 
-  alias Platform.Accounts.User
+  import Platform.TenancyFixtures
+
   alias Platform.Agents.Agent
   alias Platform.Agents.AgentRuntime
   alias Platform.Chat
@@ -54,12 +55,7 @@ defmodule Platform.Federation.CanvasEmbedParityTest do
 
   defp create_runtime_for(product, space_id)
        when product in ["claude_channel", "openclaw"] do
-    user =
-      Repo.insert!(%User{
-        email: "canvas_embed_parity_#{product}_#{System.unique_integer([:positive])}@example.com",
-        name: "Canvas Embed Parity Test User",
-        oidc_sub: "oidc-canvas-embed-parity-#{System.unique_integer([:positive])}"
-      })
+    user = root_admin!()
 
     agent =
       Repo.insert!(%Agent{
@@ -78,7 +74,6 @@ defmodule Platform.Federation.CanvasEmbedParityTest do
       agent_id: agent.id,
       auth_token_hash: AgentRuntime.hash_token(raw_token),
       status: "active",
-      allowed_bundles: ["canvas"],
       metadata: %{"client_info" => %{"product" => product}}
     }
 
@@ -86,6 +81,13 @@ defmodule Platform.Federation.CanvasEmbedParityTest do
       %AgentRuntime{}
       |> AgentRuntime.changeset(attrs)
       |> Repo.insert()
+
+    {:ok, _profile} =
+      Platform.Access.RuntimeProfiles.create_for_runtime(
+        runtime,
+        ["canvas"],
+        Platform.Access.RuntimeProfiles.translated_permissions(["canvas"])
+      )
 
     {runtime, raw_token, agent}
   end

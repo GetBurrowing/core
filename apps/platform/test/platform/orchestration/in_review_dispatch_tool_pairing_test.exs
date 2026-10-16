@@ -46,13 +46,13 @@ defmodule Platform.Orchestration.InReviewDispatchToolPairingTest do
   `resolvability` says every prefixed tool the body names resolves inside the
   addressed runtime's surface. The fixture runtime is granted the full bundle
   set on purpose, and this is a real limit worth stating rather than hiding:
-  no test-database runtime can stand in for production's `allowed_bundles`
+  no test-database runtime can stand in for production's `tool_profile`
   rows, so this assertion detects a template naming a tool that NO bundle
   carries (a typo, or a tool deleted out from under the instruction) but
   cannot detect a production grant gap. The grant question was answered
   against production data and recorded in the PR body; every runtime the
   dispatcher can address for a review-phase dispatch already carries the
-  `review` bundle, so no `allowed_bundles` migration ships with this stage.
+  `review` bundle, so no `tool_profile` migration ships with this stage.
   """
   use Platform.DataCase, async: true
 
@@ -199,6 +199,12 @@ defmodule Platform.Orchestration.InReviewDispatchToolPairingTest do
         oidc_sub: "oidc-in-review-pairing-#{suffix}"
       })
 
+    Platform.ExternalUserFixtures.plain_member!(
+      user,
+      Platform.Tenancy.get_org!(Platform.TenancyFixtures.acme_org_id()),
+      "admin"
+    )
+
     {:ok, agent} =
       %Agent{}
       |> Agent.changeset(%{
@@ -217,10 +223,13 @@ defmodule Platform.Orchestration.InReviewDispatchToolPairingTest do
     # `validate_subset` rejects, so the raw `all_bundles/0` list cannot be
     # persisted. Both sides stay derived — no bundle name is typed here.
     grant =
-      Enum.filter(ToolSurface.all_bundles(), &(&1 in AgentRuntime.valid_bundles()))
+      Enum.filter(
+        ToolSurface.all_bundles(),
+        &(&1 in Platform.Access.RuntimeProfiles.valid_modules())
+      )
 
-    {:ok, granted} = Federation.update_allowed_bundles(activated, grant)
-    {:ok, _linked} = Federation.link_agent(granted, agent)
+    {:ok, _profile} = Platform.Access.RuntimeProfiles.set_tool_profile(activated, grant)
+    {:ok, _linked} = Federation.link_agent(activated, agent)
 
     agent
   end

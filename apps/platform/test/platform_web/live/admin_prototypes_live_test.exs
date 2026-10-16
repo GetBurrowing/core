@@ -48,7 +48,7 @@ defmodule PlatformWeb.AdminPrototypesLiveTest do
   defp save(view, params), do: view |> form(@form, %{"settings" => params}) |> render_submit()
 
   test "a member (non-admin) mount is redirected by :ensure_admin", %{conn: conn} do
-    assert {:error, {:live_redirect, %{to: "/"}}} =
+    assert {:error, {_, %{to: "/access-denied?module=admin"}}} =
              conn |> conn_for(acme_user!("member")) |> live(~p"/admin/prototypes")
   end
 

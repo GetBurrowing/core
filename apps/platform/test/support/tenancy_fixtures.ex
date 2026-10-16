@@ -96,12 +96,19 @@ defmodule Platform.TenancyFixtures do
     end
   end
 
-  # `Tenancy.create_org/2` is Acme-admin-only (see
-  # `Platform.Tenancy.Lifecycle`) — there is no system/unauthenticated path.
-  # A throwaway admin, scoped to whichever org `acme_org_id/0` resolves as
-  # root, is cheaper than threading a real admin actor through every
-  # `tenant_org_id/1` call site.
-  defp root_admin! do
+  @doc """
+  Insert a user with an internal `admin` membership in this install's root
+  org: a root admin.
+
+  `Tenancy.create_org/2` is Acme-admin-only (see `Platform.Tenancy.Lifecycle`)
+  — there is no system/unauthenticated path — so `tenant_org_id/1` uses one.
+  Public since task 01a1386d-fb6e stage 2: install-level writes
+  (`Platform.Access.authorize_install/1`) need a HUMAN actor that is allowed
+  to make them, and an unsaved `%User{id: Ecto.UUID.generate()}` holds no
+  membership and is refused.
+  """
+  @spec root_admin!() :: User.t()
+  def root_admin! do
     n = System.unique_integer([:positive])
 
     user =

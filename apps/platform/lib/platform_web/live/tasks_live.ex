@@ -51,6 +51,7 @@ defmodule PlatformWeb.TasksLive do
   alias PlatformWeb.SpaceTopics
   alias PlatformWeb.Tasks.BoardData
   alias PlatformWeb.Tasks.BoardHooks
+
   alias PlatformWeb.Tasks.EpicLoaders
   alias PlatformWeb.Tasks.LifecycleHooks
   alias PlatformWeb.Tasks.PinHooks
@@ -69,6 +70,7 @@ defmodule PlatformWeb.TasksLive do
   import PlatformWeb.Tasks.Selection,
     only: [assign_selected_task: 2, bump_detail_epoch: 1, reload_selected_task: 1]
 
+  defdelegate on_access_changed(socket), to: BoardHooks, as: :refresh_board
   @impl true
   def mount(_params, session, socket) do
     if connected?(socket) do
@@ -106,9 +108,9 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:kind_filter, :all)
      |> assign(:task_search_query, "")
      |> assign(:create_menu_open, false)
-     # Task 019fed1e: the admin-only Tasks settings menu (one row today,
-     # Pipeline). The trigger renders only behind `@root_admin?` and the
-     # destination is gated again by `live_session :admin`.
+     # Task 019fed1e: the Tasks settings menu (one row today, Pipeline).
+     # SettingsMenu checks `tasks.manage`; ModuleGate checks its destination.
+     # The menu carries no authorization state of its own.
      |> assign(:settings_menu_open, false)
      |> assign(:agents, agents)
      |> assign(:agents_by_id, Map.new(agents, &{&1.id, &1}))

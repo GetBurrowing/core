@@ -290,8 +290,11 @@ defmodule Platform.CodeMode.ReturnContractTest do
     test "omitted evidence reports its encoded length; returned evidence reports null" do
       plan = plan!(task!(project!()), 1, validations: 2)
 
-      %{"stages" => [%{"validations" => [omitted, whole]}]} =
+      %{"stages" => [%{"validations" => validations}]} =
         conform!("stage_list", %{"plan_id" => plan.id})
+
+      omitted = Enum.find(validations, & &1["evidence_omitted"])
+      whole = Enum.find(validations, &(!&1["evidence_omitted"]))
 
       assert omitted["evidence_omitted"] == true
       assert omitted["evidence_length"] == byte_size(~s({"result":"ok"}))
@@ -426,17 +429,28 @@ defmodule Platform.CodeMode.ReturnContractTest do
   @beta "contract-rt-beta"
   @gamma "contract-rt-gamma"
 
-  defp runtime!(runtime_id, agent) do
-    %AgentRuntime{}
-    |> AgentRuntime.changeset(%{
-      runtime_id: runtime_id,
-      owner_user_id: user!().id,
-      agent_id: agent.id,
-      auth_token_hash: AgentRuntime.hash_token(AgentRuntime.generate_token()),
-      status: "active",
-      allowed_bundles: AgentRuntime.default_allowed_bundles()
-    })
-    |> Repo.insert!()
+  defp runtime!(runtime_id, agent, owner \\ nil) do
+    runtime =
+      %AgentRuntime{}
+      |> AgentRuntime.changeset(%{
+        runtime_id: runtime_id,
+        owner_user_id: (owner || user!()).id,
+        agent_id: agent.id,
+        auth_token_hash: AgentRuntime.hash_token(AgentRuntime.generate_token()),
+        status: "active"
+      })
+      |> Repo.insert!()
+
+    {:ok, _profile} =
+      Platform.Access.RuntimeProfiles.create_for_runtime(
+        runtime,
+        AgentRuntime.default_tool_profile(),
+        Platform.Access.RuntimeProfiles.translated_permissions(
+          AgentRuntime.default_tool_profile()
+        )
+      )
+
+    runtime
   end
 
   # The 13 keys every default row has carried since task 01a0b2ff; the
@@ -559,9 +573,15 @@ defmodule Platform.CodeMode.ReturnContractTest do
   describe "space_get_messages" do
     setup do
       agent = agent!()
+      org = Platform.Tenancy.get_org_by_slug!("sxi")
 
       {:ok, space} =
-        Chat.create_space(%{name: "Contract #{u()}", slug: "contract-#{u()}", kind: "channel"})
+        Chat.create_space(%{
+          name: "Contract #{u()}",
+          slug: "contract-#{u()}",
+          kind: "channel",
+          org_id: org.id
+        })
 
       {:ok, participant} =
         Chat.add_participant(space.id, %{
@@ -572,7 +592,25 @@ defmodule Platform.CodeMode.ReturnContractTest do
           joined_at: DateTime.utc_now()
         })
 
-      %{space: space, participant: participant, ctx: %{agent_id: agent.id}}
+      owner = user!()
+      Platform.ExternalUserFixtures.plain_member!(owner, org)
+
+      {:ok, _owner_participant} =
+        Chat.add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: owner.id,
+          display_name: owner.name,
+          role: "member",
+          joined_at: DateTime.utc_now()
+        })
+
+      runtime = runtime!("contract-message-#{u()}", agent, owner)
+
+      %{
+        space: space,
+        participant: participant,
+        ctx: %{agent_id: agent.id, runtime_id: runtime.runtime_id}
+      }
     end
 
     test "0, 1 and many messages conform", %{space: space, participant: p, ctx: ctx} do

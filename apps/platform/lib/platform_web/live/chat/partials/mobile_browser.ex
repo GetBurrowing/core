@@ -118,6 +118,7 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
   attr(:channels, :list, required: true)
   attr(:dm_conversations, :list, required: true)
   attr(:archived_channels, :list, required: true)
+  attr(:restricted_channel_ids, :any, required: true)
   attr(:archived_open, :boolean, required: true)
   attr(:active_space, :any, required: true)
   attr(:unread_counts, :map, required: true)
@@ -320,6 +321,7 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
           />
 
           <.drawer_sections
+            restricted_channel_ids={@restricted_channel_ids}
             sidebar_edit={@sidebar_edit}
             drawer_query={@drawer_query}
             sidebar_sections={@sidebar_sections}
@@ -355,20 +357,34 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
               </span>
             </button>
             <div :if={@archived_open} id="archived-channel-list-mobile">
-              <.link
-                :for={space <- @archived_channels}
-                patch={~p"/chat/#{ChatLive.space_nav_target(space)}"}
-                phx-click="close_mobile_browser"
-                class={[
-                  "flex items-center gap-3 px-4 py-3 text-sm transition-colors",
-                  "text-base-content/50 hover:bg-base-200",
-                  @active_space && @active_space.id == space.id &&
-                    "bg-base-200 font-semibold"
-                ]}
-              >
-                <span class="hero-archive-box size-4 text-base-content/30"></span>
-                <span class="truncate flex-1">{mask_name(@mask_assigns, space.name)}</span>
-              </.link>
+              <%= for space <- @archived_channels do %>
+                <%= if MapSet.member?(@restricted_channel_ids, space.id) do %>
+                  <div
+                    data-role="restricted-channel-row"
+                    data-space-id={space.id}
+                    aria-disabled="true"
+                    class="flex items-center gap-3 px-4 py-3 text-sm text-base-content/50"
+                  >
+                    <span class="hero-lock-closed-mini size-4"></span>
+                    <span class="truncate flex-1">{mask_name(@mask_assigns, space.name)}</span>
+                    <span class="text-xs">Restricted, ask an admin</span>
+                  </div>
+                <% else %>
+                  <.link
+                    patch={~p"/chat/#{ChatLive.space_nav_target(space)}"}
+                    phx-click="close_mobile_browser"
+                    class={[
+                      "flex items-center gap-3 px-4 py-3 text-sm transition-colors",
+                      "text-base-content/50 hover:bg-base-200",
+                      @active_space && @active_space.id == space.id &&
+                        "bg-base-200 font-semibold"
+                    ]}
+                  >
+                    <span class="hero-archive-box size-4 text-base-content/30"></span>
+                    <span class="truncate flex-1">{mask_name(@mask_assigns, space.name)}</span>
+                  </.link>
+                <% end %>
+              <% end %>
             </div>
           </section>
 
@@ -978,6 +994,7 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
 
   attr(:sidebar_edit, :boolean, required: true)
   attr(:drawer_query, :string, required: true)
+  attr(:restricted_channel_ids, :any, required: true)
   # The three masking attrs again — this component builds its OWN
   # `SidebarMask.context/3` from them, and every heading, aria-label, move
   # button, drag handle and channel row below is derived through it. Drop one
@@ -1137,7 +1154,22 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
             No channels yet — channels in this org appear here.
           </p>
         <% @sidebar_edit && @drawer_query == "" -> %>
-          <%!-- EDIT-MODE rows (channel-row reorder Stage 1; revised in
+          <%= for {space, row_index} <- Enum.with_index(section_channels) do %>
+            <%= if MapSet.member?(@restricted_channel_ids, space.id) do %>
+              <div
+                data-role="restricted-channel-row"
+                data-space-id={space.id}
+                aria-disabled="true"
+                class="flex items-center gap-3 px-4 py-3 text-sm text-base-content/50"
+              >
+                <span class="hero-lock-closed-mini size-4"></span>
+                <span class="truncate flex-1">
+                  {Platform.Chat.SidebarMask.channel_label(drawer_mask_ctx, section, space.name)}
+                </span>
+                <span class="text-xs">Restricted, ask an admin</span>
+              </div>
+            <% else %>
+              <%!-- EDIT-MODE rows (channel-row reorder Stage 1; revised in
              Stage 2). Rows stop being navigation links — a mis-tap
              would navigate + close the drawer, ejecting the user from
              the mode. Every row shows its ▲▼ pair persistently, the
@@ -1151,48 +1183,47 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
              the section buttons. Reorder reuses the EXISTING
              move_channel pipeline (per-user chat_channel_order pref) —
              the same one desktop's row controls persist through. --%>
-          <div
-            :for={{space, row_index} <- Enum.with_index(section_channels)}
-            data-channel-id={space.id}
-            data-section-id={section.id}
-            class="flex items-center gap-3 px-4 py-3 text-sm"
-          >
-            <span class="text-base-content/40 text-lg">#</span>
-            <span class="truncate flex-1">
-              {Platform.Chat.SidebarMask.channel_label(drawer_mask_ctx, section, space.name)}
-            </span>
-            <span class="channel-row-move-controls--touch">
-              <button
-                type="button"
-                class="channel-row-move-button--touch"
-                phx-click="move_channel"
-                phx-value-channel_id={space.id}
-                phx-value-section_id={section.id}
-                phx-value-direction="up"
-                disabled={row_index == 0}
-                aria-label={
+              <div
+                data-channel-id={space.id}
+                data-section-id={section.id}
+                class="flex items-center gap-3 px-4 py-3 text-sm"
+              >
+                <span class="text-base-content/40 text-lg">#</span>
+                <span class="truncate flex-1">
+                  {Platform.Chat.SidebarMask.channel_label(drawer_mask_ctx, section, space.name)}
+                </span>
+                <span class="channel-row-move-controls--touch">
+                  <button
+                    type="button"
+                    class="channel-row-move-button--touch"
+                    phx-click="move_channel"
+                    phx-value-channel_id={space.id}
+                    phx-value-section_id={section.id}
+                    phx-value-direction="up"
+                    disabled={row_index == 0}
+                    aria-label={
                   "Move ##{Platform.Chat.SidebarMask.channel_label(drawer_mask_ctx, section, space.name)} up"
                 }
-                title="Move up"
-              >
-                <span class="hero-chevron-up size-4"></span>
-              </button>
-              <button
-                type="button"
-                class="channel-row-move-button--touch"
-                phx-click="move_channel"
-                phx-value-channel_id={space.id}
-                phx-value-section_id={section.id}
-                phx-value-direction="down"
-                disabled={row_index == length(section_channels) - 1}
-                aria-label={
+                    title="Move up"
+                  >
+                    <span class="hero-chevron-up size-4"></span>
+                  </button>
+                  <button
+                    type="button"
+                    class="channel-row-move-button--touch"
+                    phx-click="move_channel"
+                    phx-value-channel_id={space.id}
+                    phx-value-section_id={section.id}
+                    phx-value-direction="down"
+                    disabled={row_index == length(section_channels) - 1}
+                    aria-label={
                   "Move ##{Platform.Chat.SidebarMask.channel_label(drawer_mask_ctx, section, space.name)} down"
                 }
-                title="Move down"
-              >
-                <span class="hero-chevron-down size-4"></span>
-              </button>
-              <%!-- Touch drag handle (Stage 2) — the ONLY row-drag
+                    title="Move down"
+                  >
+                    <span class="hero-chevron-down size-4"></span>
+                  </button>
+                  <%!-- Touch drag handle (Stage 2) — the ONLY row-drag
                  origin; activates the slot Stage 1 held with an inert
                  placeholder. Lives INSIDE the controls cluster so the
                  row's gap-3 can't wedge 12px between ▼ and ☰ — that
@@ -1201,66 +1232,84 @@ defmodule PlatformWeb.ChatLive.Partials.MobileBrowser do
                  keyboard/a11y reorder path is the always-visible ▲▼
                  buttons beside it, not this gesture affordance
                  (WCAG 2.5.7 coupling, same as sections). --%>
-              <button
-                type="button"
-                class="channel-row-drag-handle"
-                aria-label={
+                  <button
+                    type="button"
+                    class="channel-row-drag-handle"
+                    aria-label={
                   "Reorder ##{Platform.Chat.SidebarMask.channel_label(drawer_mask_ctx, section, space.name)} — touch and hold, then drag"
                 }
-                tabindex="-1"
-              >
-                ☰
-              </button>
-            </span>
-          </div>
+                    tabindex="-1"
+                  >
+                    ☰
+                  </button>
+                </span>
+              </div>
+            <% end %>
+          <% end %>
         <% true -> %>
-          <%!-- Row wrapper (task 019fe998). NORMAL mode only: the
+          <%= for space <- section_channels do %>
+            <%= if MapSet.member?(@restricted_channel_ids, space.id) do %>
+              <div
+                data-role="restricted-channel-row"
+                data-space-id={space.id}
+                aria-disabled="true"
+                class="flex items-center gap-3 px-4 py-3 text-sm text-base-content/50"
+              >
+                <span class="hero-lock-closed-mini size-4"></span>
+                <span class="truncate flex-1">
+                  {Platform.Chat.SidebarMask.channel_label(drawer_mask_ctx, section, space.name)}
+                </span>
+                <span class="text-xs">Restricted, ask an admin</span>
+              </div>
+            <% else %>
+              <%!-- Row wrapper (task 019fe998). NORMAL mode only: the
                edit-mode branch above already carries its own persistent
                ▲▼ + drag cluster, and the sheet deliberately offers no
                Move — arrows are for repeated nudging inside an explicit
                arranging mode, and reordering a list by opening a sheet
                per step would be miserable. --%>
-          <div
-            :for={space <- section_channels}
-            class="flex items-center"
-            data-role="drawer-row-wrap"
-            data-space-id={space.id}
-          >
-            <.link
-              patch={~p"/chat/#{ChatLive.space_nav_target(space)}"}
-              phx-click="close_mobile_browser"
-              class={[
-                "flex flex-1 min-w-0 items-center gap-3 px-4 py-3 text-sm transition-colors",
-                "hover:bg-base-200",
-                @active_space && @active_space.id == space.id &&
-                  "bg-base-200 text-primary font-semibold"
-              ]}
-            >
-              <span class="text-base-content/40 text-lg">#</span>
-              <span class="truncate flex-1">
-                {Platform.Chat.SidebarMask.channel_label(
-                  drawer_mask_ctx,
-                  section,
-                  space.name
-                )}
-              </span>
-              <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
-                <span class="ml-1 flex-shrink-0 min-w-[1.125rem] h-[1.125rem] rounded-full bg-primary text-primary-content text-[0.6rem] font-bold flex items-center justify-center px-1 leading-none">
-                  {unread_label(Map.get(@unread_counts, space.id, 0))}
-                </span>
-              <% end %>
-            </.link>
-            <.row_actions_control
-              space_id={space.id}
-              name={
-                Platform.Chat.SidebarMask.channel_label(
-                  drawer_mask_ctx,
-                  section,
-                  space.name
-                )
-              }
-            />
-          </div>
+              <div
+                class="flex items-center"
+                data-role="drawer-row-wrap"
+                data-space-id={space.id}
+              >
+                <.link
+                  patch={~p"/chat/#{ChatLive.space_nav_target(space)}"}
+                  phx-click="close_mobile_browser"
+                  class={[
+                    "flex flex-1 min-w-0 items-center gap-3 px-4 py-3 text-sm transition-colors",
+                    "hover:bg-base-200",
+                    @active_space && @active_space.id == space.id &&
+                      "bg-base-200 text-primary font-semibold"
+                  ]}
+                >
+                  <span class="text-base-content/40 text-lg">#</span>
+                  <span class="truncate flex-1">
+                    {Platform.Chat.SidebarMask.channel_label(
+                      drawer_mask_ctx,
+                      section,
+                      space.name
+                    )}
+                  </span>
+                  <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
+                    <span class="ml-1 flex-shrink-0 min-w-[1.125rem] h-[1.125rem] rounded-full bg-primary text-primary-content text-[0.6rem] font-bold flex items-center justify-center px-1 leading-none">
+                      {unread_label(Map.get(@unread_counts, space.id, 0))}
+                    </span>
+                  <% end %>
+                </.link>
+                <.row_actions_control
+                  space_id={space.id}
+                  name={
+                    Platform.Chat.SidebarMask.channel_label(
+                      drawer_mask_ctx,
+                      section,
+                      space.name
+                    )
+                  }
+                />
+              </div>
+            <% end %>
+          <% end %>
       <% end %>
     </section>
     """

@@ -24,13 +24,15 @@ defmodule PlatformWeb.ControlCenter.RolesPanel do
   import PlatformWeb.AvatarComponents, only: [agent_avatar: 1]
 
   alias PlatformWeb.ControlCenter.AgentData
+  alias Platform.Access.Agents, as: AgentAccess
 
-  attr :roles, :list, required: true
-  attr :role_bundles, :map, required: true
-  attr :role_assignments_by_key, :map, required: true
-  attr :show_role_advanced, :boolean, default: false
-  attr :responsibility_rows, :list, default: []
-  attr :selectable_agents, :list, default: []
+  attr(:roles, :list, required: true)
+  attr(:role_bundles, :map, required: true)
+  attr(:role_assignments_by_key, :map, required: true)
+  attr(:show_role_advanced, :boolean, default: false)
+  attr(:responsibility_rows, :list, default: [])
+  attr(:selectable_agents, :list, default: [])
+  attr(:access_scope, :any, default: nil)
 
   def panel(assigns) do
     ~H"""
@@ -95,6 +97,7 @@ defmodule PlatformWeb.ControlCenter.RolesPanel do
               role_key={role.key}
               agent={Map.get(@role_assignments_by_key, role.key)}
               selectable_agents={@selectable_agents}
+              access_scope={@access_scope}
             />
           </div>
         </li>
@@ -141,6 +144,7 @@ defmodule PlatformWeb.ControlCenter.RolesPanel do
 
             <div class="flex shrink-0 items-center gap-2">
               <form
+                :if={is_nil(row.assignee) or AgentAccess.may_release?(@access_scope, row.assignee)}
                 phx-change="set_responsibility_override"
                 class="flex items-center gap-2"
               >
@@ -165,7 +169,7 @@ defmodule PlatformWeb.ControlCenter.RolesPanel do
                 </select>
               </form>
               <button
-                :if={row.overridden?}
+                :if={row.overridden? and AgentAccess.may_release?(@access_scope, row.assignee)}
                 type="button"
                 phx-click="clear_responsibility_override"
                 phx-value-key={row.responsibility_key}
@@ -192,16 +196,17 @@ defmodule PlatformWeb.ControlCenter.RolesPanel do
     """
   end
 
-  attr :role_key, :string, required: true
-  attr :agent, :any, default: nil
-  attr :selectable_agents, :list, default: []
+  attr(:role_key, :string, required: true)
+  attr(:agent, :any, default: nil)
+  attr(:selectable_agents, :list, default: [])
+  attr(:access_scope, :any, default: nil)
 
   defp assignee_cell(%{agent: nil} = assigns) do
     ~H"""
     <span class="badge badge-warning gap-1">
       <span class="hero-exclamation-triangle h-3 w-3" /> UNFILLED
     </span>
-    <form phx-change="assign_role" class="flex items-center gap-2">
+    <form :if={@selectable_agents != []} phx-change="assign_role" class="flex items-center gap-2">
       <input type="hidden" name="role_key" value={@role_key} />
       <select
         name="agent_id"
@@ -240,6 +245,7 @@ defmodule PlatformWeb.ControlCenter.RolesPanel do
         </span>
       </div>
       <button
+        :if={AgentAccess.may_release?(@access_scope, @agent)}
         type="button"
         phx-click="clear_role_assignment"
         phx-value-role_key={@role_key}

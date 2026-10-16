@@ -1,11 +1,12 @@
 defmodule PlatformWeb.RuntimeChannelTest do
   use PlatformWeb.ChannelCase, async: false
 
+  import Platform.TenancyFixtures
   import Ecto.Query
 
-  alias Platform.Accounts.User
   alias Platform.Agents.Agent
   alias Platform.Agents.AgentRuntime
+  alias Platform.Access.RuntimeProfiles
   alias Platform.Chat
   alias Platform.Federation
   alias Platform.Federation.DeadLetter
@@ -61,13 +62,12 @@ defmodule PlatformWeb.RuntimeChannelTest do
     }
   end
 
-  defp create_user do
-    Repo.insert!(%User{
-      email: "channel_test_#{System.unique_integer([:positive])}@example.com",
-      name: "Channel Test User",
-      oidc_sub: "oidc-channel-test-#{System.unique_integer([:positive])}"
-    })
+  defp set_runtime_profile(runtime, modules) do
+    {:ok, _profile} = RuntimeProfiles.set_tool_profile(runtime, modules)
+    {:ok, runtime}
   end
+
+  defp create_user, do: root_admin!()
 
   defp create_agent(attrs \\ %{}) do
     defaults = %{
@@ -397,12 +397,12 @@ defmodule PlatformWeb.RuntimeChannelTest do
 
   # Regression guard for the bug this task fixes: the push used to be
   # `ToolSurface.tool_definitions()` — the whole catalogue — regardless
-  # of the runtime's `allowed_bundles`. It must now be exactly the set
+  # of the runtime's `tool_profile`. It must now be exactly the set
   # `ToolAuthorization.effective_tools/1` resolves, which is also what
   # `/mcp tools/list` returns for the same runtime.
   describe "capabilities push" do
     test "is scoped to the runtime's granted bundles, not the full catalogue", ctx do
-      # register_runtime/2 yields AgentRuntime.default_allowed_bundles/0 —
+      # register_runtime/2 yields AgentRuntime.default_tool_profile/0 —
       # six bundles, with canvas/task/plan/memory/review absent.
       payload = join_and_capture_capabilities(ctx.runtime, ctx.raw_token)
 
@@ -424,7 +424,7 @@ defmodule PlatformWeb.RuntimeChannelTest do
     end
 
     test "a federation-only runtime is pushed exactly federation_status", ctx do
-      {:ok, runtime} = Federation.update_allowed_bundles(ctx.runtime, ["federation"])
+      {:ok, runtime} = set_runtime_profile(ctx.runtime, ["federation"])
 
       payload = join_and_capture_capabilities(runtime, ctx.raw_token)
 
@@ -438,7 +438,7 @@ defmodule PlatformWeb.RuntimeChannelTest do
     end
 
     test "a runtime with no bundles is pushed zero tools", ctx do
-      {:ok, runtime} = Federation.update_allowed_bundles(ctx.runtime, [])
+      {:ok, runtime} = set_runtime_profile(ctx.runtime, [])
 
       payload = join_and_capture_capabilities(runtime, ctx.raw_token)
 
@@ -467,7 +467,7 @@ defmodule PlatformWeb.RuntimeChannelTest do
     end
 
     test "emits capabilities_pushed telemetry carrying the scoped count", ctx do
-      {:ok, runtime} = Federation.update_allowed_bundles(ctx.runtime, ["federation"])
+      {:ok, runtime} = set_runtime_profile(ctx.runtime, ["federation"])
 
       handler_id = "capabilities-pushed-test-#{System.unique_integer([:positive])}"
       test_pid = self()
@@ -2452,11 +2452,11 @@ defmodule PlatformWeb.RuntimeChannelTest do
 
   describe "tool_call" do
     test "executes tool and returns result", ctx do
-      # `canvas` is NOT in AgentRuntime.default_allowed_bundles/0, and
+      # `canvas` is NOT in AgentRuntime.default_tool_profile/0, and
       # `tool_call` is now gated on the same authorization path as /mcp, so
       # the grant has to be explicit. Fixing the fixture rather than widening
       # the default grant is the point of the change.
-      {:ok, _granted} = Federation.update_allowed_bundles(ctx.runtime, ["canvas"])
+      {:ok, _granted} = set_runtime_profile(ctx.runtime, ["canvas"])
 
       {:ok, socket} =
         connect(PlatformWeb.RuntimeSocket, %{
@@ -2507,7 +2507,7 @@ defmodule PlatformWeb.RuntimeChannelTest do
     end
 
     test "task kind round-trips through the RuntimeChannel transport", ctx do
-      {:ok, _granted} = Federation.update_allowed_bundles(ctx.runtime, ["task"])
+      {:ok, _granted} = set_runtime_profile(ctx.runtime, ["task"])
       project = create_project()
       socket = joined_socket(ctx)
 
@@ -2608,7 +2608,7 @@ defmodule PlatformWeb.RuntimeChannelTest do
     end
 
     # The vulnerability this task closes: before the gate, the channel
-    # executed anything it was asked to, so `allowed_bundles` was advisory
+    # executed anything it was asked to, so `tool_profile` was advisory
     # over WebSocket and a default-grant runtime could create tasks.
     test "denies a tool outside the runtime's granted bundles, before executing it", ctx do
       project = create_project()
@@ -2635,7 +2635,9 @@ defmodule PlatformWeb.RuntimeChannelTest do
 
       # Shape matters: openclaw-suite-channel rejects with
       # `payload.error?.error`, so the message must be a string at error.error.
-      assert error.error == "tool 'task_create' not in allowed bundles"
+      assert error.error ==
+               "tool 'task_create' requires permission 'tasks.write', which this agent does not hold or is capped at its owner"
+
       assert error.code == "forbidden"
 
       assert Repo.aggregate(Tasks.Task, :count) == before_count
@@ -2684,7 +2686,7 @@ defmodule PlatformWeb.RuntimeChannelTest do
     # a Control Center revocation has to bite on a LIVE socket rather than at
     # next reconnect.
     test "a bundle revoked mid-connection takes effect without a rejoin", ctx do
-      {:ok, _granted} = Federation.update_allowed_bundles(ctx.runtime, ["task"])
+      {:ok, _granted} = set_runtime_profile(ctx.runtime, ["task"])
 
       {:ok, socket} =
         connect(PlatformWeb.RuntimeSocket, %{
@@ -2706,7 +2708,7 @@ defmodule PlatformWeb.RuntimeChannelTest do
       # Revoke everything WITHOUT touching the socket — no rejoin, no
       # reconnect, same channel process.
       runtime = Federation.get_runtime(ctx.runtime.id)
-      {:ok, _revoked} = Federation.update_allowed_bundles(runtime, [])
+      {:ok, _revoked} = set_runtime_profile(runtime, [])
 
       push(socket, "tool_call", %{
         "call_id" => "call-after",
@@ -2715,7 +2717,10 @@ defmodule PlatformWeb.RuntimeChannelTest do
       })
 
       assert_push "tool_result", %{call_id: "call-after", status: "error", error: error}
-      assert error.error == "tool 'task_list' not in allowed bundles"
+
+      assert error.error ==
+               "tool 'task_list' requires permission 'tasks.read', which this agent does not hold or is capped at its owner"
+
       assert error.code == "forbidden"
     end
 
@@ -2738,7 +2743,10 @@ defmodule PlatformWeb.RuntimeChannelTest do
       })
 
       assert_push "tool_result", %{call_id: "call-gone", status: "error", error: error}
-      assert error.error == "tool 'space_list' not in allowed bundles"
+
+      assert error.error ==
+               "tool 'space_list' requires permission 'chat.read', which this agent does not hold or is capped at its owner"
+
       assert error.code == "forbidden"
     end
   end
@@ -2776,7 +2784,7 @@ defmodule PlatformWeb.RuntimeChannelTest do
 
     # Load-bearing: without this, rewording every denial to "unknown tool"
     # would also pass the test above.
-    test "a real catalogue tool outside this runtime's granted bundles still says not in allowed bundles",
+    test "a real catalogue tool outside this runtime's profile names its permission",
          ctx do
       {:ok, socket} =
         connect(PlatformWeb.RuntimeSocket, %{
@@ -2794,7 +2802,9 @@ defmodule PlatformWeb.RuntimeChannelTest do
       })
 
       assert_push "tool_result", %{call_id: "call-forbidden", status: "error", error: error}
-      assert error.error == "tool 'plan_update' not in allowed bundles"
+
+      assert error.error ==
+               "tool 'plan_update' requires permission 'tasks.write', which this agent does not hold or is capped at its owner"
     end
 
     test "the two denial messages differ for the two inputs", ctx do
@@ -2821,14 +2831,14 @@ defmodule PlatformWeb.RuntimeChannelTest do
       assert unknown_error.error != forbidden_error.error
     end
 
-    # `effective_tools/1` resolves a nil/empty `allowed_bundles` column to an
+    # `effective_tools/1` resolves a nil/empty `tool_profile` column to an
     # empty list, so a no-bundles runtime and a narrow-bundles runtime look
     # identical from inside `authorize/2` — this pins that the no-bundles
     # case still gets the grant-denial wording for a real tool, not the
     # unknown-tool one.
     test "a runtime granted NO bundles still gets a denial for a real tool, not an unknown-tool answer",
          ctx do
-      {:ok, _updated} = Federation.update_allowed_bundles(ctx.runtime, [])
+      {:ok, _updated} = set_runtime_profile(ctx.runtime, [])
 
       {:ok, socket} =
         connect(PlatformWeb.RuntimeSocket, %{
@@ -2846,7 +2856,10 @@ defmodule PlatformWeb.RuntimeChannelTest do
       })
 
       assert_push "tool_result", %{call_id: "call-nobundles", status: "error", error: error}
-      assert error.error == "tool 'task_create' not in allowed bundles"
+
+      assert error.error ==
+               "tool 'task_create' requires permission 'tasks.write', which this agent does not hold or is capped at its owner"
+
       refute error.error =~ "unknown tool"
     end
 
@@ -2935,7 +2948,7 @@ defmodule PlatformWeb.RuntimeChannelTest do
     setup ctx do
       # `task_design_decline` lives in the `task` bundle, which is not in the
       # default grant. Same token drives both transports.
-      {:ok, runtime} = Federation.update_allowed_bundles(ctx.runtime, ["task"])
+      {:ok, runtime} = set_runtime_profile(ctx.runtime, ["task"])
       %{runtime: runtime}
     end
 
@@ -2998,7 +3011,7 @@ defmodule PlatformWeb.RuntimeChannelTest do
 
   describe "the argument gate is mounted on both transports" do
     setup ctx do
-      {:ok, runtime} = Federation.update_allowed_bundles(ctx.runtime, ["plan"])
+      {:ok, runtime} = set_runtime_profile(ctx.runtime, ["plan"])
       %{runtime: runtime}
     end
 
@@ -3111,7 +3124,7 @@ defmodule PlatformWeb.RuntimeChannelTest do
 
   describe "task_list undeclared keys over the WebSocket (task 01a0acc3)" do
     setup ctx do
-      {:ok, runtime} = Federation.update_allowed_bundles(ctx.runtime, ["task"])
+      {:ok, runtime} = set_runtime_profile(ctx.runtime, ["task"])
       %{runtime: runtime}
     end
 

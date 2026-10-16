@@ -10,7 +10,7 @@ defmodule Platform.Federation.ExperimentTools do
   ## The bundle is NOT a default grant
 
   `experiments` is deliberately absent from
-  `Platform.Agents.AgentRuntime`'s `@default_allowed_bundles`. Holding it is
+  `Platform.Agents.AgentRuntime`'s `@default_tool_profile`. Holding it is
   the first guardrail: only a runtime an admin granted `experiments` can see
   or call these tools, and `Platform.Federation.ToolAuthorization` refuses a
   call from any other runtime before `execute/3` runs. The Scientist's

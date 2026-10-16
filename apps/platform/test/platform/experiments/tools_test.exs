@@ -16,7 +16,6 @@ defmodule Platform.Experiments.ToolsTest do
 
   import Platform.TenancyFixtures
 
-  alias Platform.Accounts.User
   alias Platform.Agents.Agent
   alias Platform.Experiments
   alias Platform.Experiments.Assignment
@@ -37,18 +36,6 @@ defmodule Platform.Experiments.ToolsTest do
       name: "Scientist #{unique()}",
       status: "active",
       metadata: metadata
-    })
-    |> Repo.insert!()
-  end
-
-  defp user! do
-    n = unique()
-
-    %User{}
-    |> User.changeset(%{
-      email: "exp-#{n}@example.com",
-      name: "Exp #{n}",
-      oidc_sub: "oidc-exp-tools-#{n}"
     })
     |> Repo.insert!()
   end
@@ -151,7 +138,7 @@ defmodule Platform.Experiments.ToolsTest do
       refute Enum.any?(ToolSurface.list_tools(["experiments"]), &(&1.name =~ "approve"))
 
       assert {:ok, %Experiment{status: "running", approval_state: "approved"}} =
-               Experiments.approve_launch(Repo.get!(Experiment, id), user!())
+               Experiments.approve_launch(Repo.get!(Experiment, id), root_admin!())
 
       assert {:ok, %{experiment: %{status: "running", variants: variants}}} =
                call("experiment_get", %{"experiment_id" => id}, ctx.agent)
@@ -408,7 +395,7 @@ defmodule Platform.Experiments.ToolsTest do
       add_arms!(ctx, experiment.id)
       {:ok, _} = call("experiment_start", %{"experiment_id" => experiment.id}, ctx.agent)
 
-      user = user!()
+      user = root_admin!()
 
       assert {:ok, %Experiment{status: "stopped"} = stopped} =
                Experiments.stop(

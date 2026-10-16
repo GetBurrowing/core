@@ -78,7 +78,7 @@ defmodule Platform.ExtensionsTest do
     {:ok, runtime} =
       Federation.register_runtime(user.id, %{
         runtime_id: "ext-rt-#{unique()}",
-        allowed_bundles: []
+        tool_profile: []
       })
 
     {:ok, runtime, token} = Federation.activate_runtime(runtime)
@@ -114,7 +114,7 @@ defmodule Platform.ExtensionsTest do
 
     test "tool bundle: known, grantable, listed, and its tools dispatched by exact name" do
       assert "fixture" in ToolSurface.all_bundles()
-      assert "fixture" in AgentRuntime.valid_bundles()
+      assert "fixture" in Platform.Access.RuntimeProfiles.valid_modules()
       assert [%{name: "fixture_echo", bundle: "fixture"}] = ToolSurface.list_tools(["fixture"])
       assert Enum.any?(ToolSurface.tool_definitions(), &(&1.name == "fixture_echo"))
 
@@ -369,7 +369,7 @@ defmodule Platform.ExtensionsTest do
     test "no extension entry appears in any seam, and nothing raises" do
       assert Kinds.names() == @core_kinds
       assert ToolSurface.all_bundles() == ToolSurface.core_bundles()
-      refute "play" in AgentRuntime.valid_bundles()
+      refute "play" in Platform.Access.RuntimeProfiles.valid_modules()
       refute Enum.any?(ToolSurface.tool_definitions(), &String.starts_with?(&1.name, "play_"))
       refute Enum.any?(Surfaces.list(), &String.starts_with?(&1.key(), "game_stream."))
       refute Enum.any?(Metrics.known_metrics(), &String.starts_with?(&1, "game_stream"))
@@ -429,26 +429,33 @@ defmodule Platform.ExtensionsTest do
       # A row written while Play was installed.
       {1, _} =
         Repo.update_all(
-          from(r in AgentRuntime, where: r.id == ^runtime.id),
-          set: [allowed_bundles: ["space", "play"]]
+          from(r in Platform.Access.RuntimeProfile, where: r.runtime_id == ^runtime.id),
+          set: [tool_profile: ["space", "play"]]
         )
 
       runtime = Repo.get!(AgentRuntime, runtime.id)
 
-      assert {:ok, saved} = Federation.update_allowed_bundles(runtime, ["space", "files", "play"])
-      assert saved.allowed_bundles == ["space", "files", "play"]
-      assert Repo.get!(AgentRuntime, runtime.id).allowed_bundles == ["space", "files", "play"]
+      assert {:ok, saved} =
+               Platform.Access.RuntimeProfiles.set_tool_profile(runtime, [
+                 "space",
+                 "files",
+                 "play"
+               ])
+
+      assert saved.tool_profile == ["space", "files", "play"]
+      assert Platform.Access.RuntimeProfiles.tool_profile(runtime) == ["space", "files", "play"]
 
       # The same bundle ADDED to a row that never held it is refused.
       {:ok, fresh} = Federation.register_runtime(user.id, %{runtime_id: "fresh-#{unique()}"})
-      assert {:error, changeset} = Federation.update_allowed_bundles(fresh, ["space", "play"])
-      assert {"has an invalid entry", _} = changeset.errors[:allowed_bundles]
+
+      assert {:error, :invalid_module} =
+               Platform.Access.RuntimeProfiles.set_tool_profile(fresh, ["space", "play"])
 
       # And so is one on a new row.
       assert {:error, _} =
                Federation.register_runtime(user.id, %{
                  runtime_id: "new-#{unique()}",
-                 allowed_bundles: ["play"]
+                 tool_profile: ["play"]
                })
     end
   end
@@ -845,17 +852,30 @@ defmodule Platform.ExtensionsTest do
     #
     # Re-pinned by the stack prototype-runtime rollup merge (#1235): both of the
     # above. Measured on moon at the merge commit.
-    @main_tool_digest_off "5faf15579570a913f453f9951a5d9b5822afd125dd7423056c1807234fed39b1"
+    #
+    # Re-pinned by task 01a1386d-e528 stage 2 for stage 1's change: the
+    # `memory_rename` tool's description and `limitations` now document the
+    # prefix mode (both paths ending in `/` route to `Wiki.rename_prefix/3`).
+    # Tool names and bundles are unchanged (the name assertion above passes
+    # unmodified). Measured on moon at the stage-2 branch.
+    #
+    # Re-pinned by task 01a1386d-e528 stage 5: the `canvas_get` tool's
+    # `limitations` now says a canvas a `canvas.read` deny covers answers
+    # exactly as a nonexistent one (canvas_get passes the runtime's Access
+    # Scope to `ToolAccess.fetch_for_read/3`). Names and bundles unchanged.
+    # Measured on moon at the stage-5 wip ref.
+    @main_tool_digest_off "f42830845905858ffe772d4c54fba5219a74f8e98cbfb057e2867a35aa2d1fb1"
     @main_kinds_summaries_digest_off "26c0704185201d0926a8bcb6db6be411b821c54fcba3269676c631969944df72"
     @main_kinds_tool_schemas_digest_off "264902e4c54f3146fe5be6e658c4717aafc6382ea233523ca505607d848e0925"
     # main's lists minus exactly `play`.
-    @core_bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode prototype)
-    @core_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode prototype)
+    @core_bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode prototype access)
+    @core_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode prototype access)
     @main_rail [
       :chat,
       :tasks,
       :inbox,
       :activity,
+      :agents,
       :skills,
       :files,
       :context,
@@ -867,7 +887,7 @@ defmodule Platform.ExtensionsTest do
     # main's lists minus exactly Play's two metric slugs and two surface keys,
     # in main's order.
     @core_metrics ~w(cycle_time manual_gate_rejection_rate overscoped_gate_count plan_revision_count stages_per_plan time_in_phase validation_failure_rate)
-    @core_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.open_question_classifier dispatch.product_docs_preamble dispatch.code_mode)
+    @core_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.open_question_classifier dispatch.product_docs_preamble dispatch.code_mode agents.tool_profile)
 
     defp canon(%_{} = s), do: canon(Map.from_struct(s))
 
@@ -886,6 +906,29 @@ defmodule Platform.ExtensionsTest do
       do:
         :crypto.hash(:sha256, :erlang.term_to_binary(canon(term))) |> Base.encode16(case: :lower)
 
+    defp legacy_kind_props(%{"properties" => %{"type" => %{"const" => kind}}} = node)
+         when kind in ["text", "action_row"] do
+      path = ["properties", "props", "properties"]
+
+      node =
+        if kind == "text",
+          do: update_in(node, path, &Map.delete(&1, "principal_id")),
+          else:
+            update_in(
+              node,
+              path ++ ["actions", "items", "properties"],
+              &Map.delete(&1, "disabled")
+            )
+
+      Map.new(node, fn {key, value} -> {key, legacy_kind_props(value)} end)
+    end
+
+    defp legacy_kind_props(map) when is_map(map),
+      do: Map.new(map, fn {key, value} -> {key, legacy_kind_props(value)} end)
+
+    defp legacy_kind_props(list) when is_list(list), do: Enum.map(list, &legacy_kind_props/1)
+    defp legacy_kind_props(value), do: value
+
     setup do
       assert Extensions.list() == []
       :ok
@@ -893,20 +936,56 @@ defmodule Platform.ExtensionsTest do
 
     test "tool_definitions/0 is main's flag-off list, name for name and byte for byte" do
       defs = ToolSurface.tool_definitions()
-      assert Enum.map(defs, &{&1.name, &1.bundle}) == @main_tool_names_off
-      assert digest(defs) == @main_tool_digest_off
+      {access, legacy} = Enum.split_with(defs, &(&1.bundle == "access"))
+
+      assert Enum.map(access, & &1.name) ==
+               ~w(access_explain access_propose access_apply access_undo)
+
+      assert Enum.map(legacy, &{&1.name, &1.bundle}) == @main_tool_names_off
+      # canvas.create embeds the kind union. Strip only the two additive
+      # consent-card properties, preserving the legacy definition oracle.
+      assert digest(legacy_kind_props(legacy)) == @main_tool_digest_off
     end
 
     test "bundles, kinds, metrics, surfaces and rail are main's minus the module's entries" do
       assert ToolSurface.all_bundles() == @core_bundles
-      assert AgentRuntime.valid_bundles() == @core_valid_bundles
+      assert Platform.Access.RuntimeProfiles.valid_modules() == @core_valid_bundles
       assert Metrics.known_metrics() == @core_metrics
       assert Enum.map(Metrics.catalog(), & &1.slug) |> Enum.sort() == Enum.sort(@core_metrics)
       assert Enum.map(Surfaces.list(), & &1.key()) == @core_surfaces
       assert Enum.map(IconRail.destinations(root_user: true), & &1.key) == @main_rail
       assert Kinds.names() == @core_kinds
-      assert digest(Kinds.summaries()) == @main_kinds_summaries_digest_off
-      assert digest(Kinds.tool_schemas()) == @main_kinds_tool_schemas_digest_off
+      # Consent cards add two optional props; retain the byte-level oracle
+      # for every pre-existing field and independently assert each addition.
+      summaries =
+        Enum.map(Kinds.summaries(), fn
+          %{kind: "text"} = row -> %{row | props: Map.delete(row.props, "principal_id")}
+          row -> row
+        end)
+
+      schemas = Kinds.tool_schemas()
+      text_path = ["text", "properties", "props", "properties"]
+
+      action_path = [
+        "action_row",
+        "properties",
+        "props",
+        "properties",
+        "actions",
+        "items",
+        "properties"
+      ]
+
+      assert get_in(schemas, text_path ++ ["principal_id"]) == %{"type" => "string"}
+      assert get_in(schemas, action_path ++ ["disabled"]) == %{"type" => "boolean"}
+
+      legacy_schemas =
+        schemas
+        |> update_in(text_path, &Map.delete(&1, "principal_id"))
+        |> update_in(action_path, &Map.delete(&1, "disabled"))
+
+      assert digest(summaries) == @main_kinds_summaries_digest_off
+      assert digest(legacy_schemas) == @main_kinds_tool_schemas_digest_off
     end
   end
 end

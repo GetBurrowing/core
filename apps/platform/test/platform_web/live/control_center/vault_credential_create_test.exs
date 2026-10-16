@@ -298,7 +298,8 @@ defmodule PlatformWeb.ControlCenter.VaultCredentialCreateTest do
 
       # The absence assertion is not vacuous: the member reached the page and
       # the admin sees the very control the member does not.
-      assert member_html =~ "Vault visibility"
+      assert member_html =~ agent.name
+      refute member_html =~ "Vault visibility"
       assert q(admin_html, ~s([data-role="vault-manage"])) |> Enum.count() == 1
       assert q(member_html, ~s([data-role="vault-manage"])) |> Enum.count() == 0
       assert q(admin_html, ~s([data-role="toggle-credential-form"])) |> Enum.count() == 1

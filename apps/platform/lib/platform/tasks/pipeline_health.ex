@@ -53,10 +53,22 @@ defmodule Platform.Tasks.PipelineHealth do
   `cycle_time_distribution/1` returns median AND mean together. The recorded
   baseline is a mean of 161.7 h against a median of 13.1 h — a twelvefold
   gap. Either figure alone will be quoted and will be wrong.
+
+  ## Who may read it (task 01a1386d-fb6e stage 2)
+
+  The aggregates are install-wide: they have no project or org dimension.
+  `snapshot/2` is the actor-checked read the pipeline view uses. It requires
+  `tasks.manage` over every resource (`Platform.Access.authorize_everywhere/2`,
+  `0058-rbac-v2-roles-scopes-and-agent-capping.md § Root-admin carve-outs`,
+  "Pipeline moves into Tasks"), so a grantee whose `tasks.manage` names one
+  project is refused. With no grants that is the root admin, the actors
+  `/admin/pipeline` admits today. The five window functions stay unchecked
+  for system callers and tests.
   """
 
   import Ecto.Query
 
+  alias Platform.Access
   alias Platform.Agents.Agent
   alias Platform.Repo
   alias Platform.Tasks.{PhaseTransition, PhaseTransitions, Task}
@@ -145,6 +157,27 @@ defmodule Platform.Tasks.PipelineHealth do
     GROUP BY task_id, phase
   )
   """
+
+  @doc """
+  Every aggregate the pipeline view shows, for `window`, read on behalf of
+  `actor_or_scope` (a `%User{}` or a `%Platform.Access.Scope{}`). Returns
+  `{:ok, %{cohort:, breakdown:, distribution:, throughput:, agent_activity:}}`
+  or `{:error, :unauthorized}` before any aggregate is read. See "Who may
+  read it" in the moduledoc.
+  """
+  @spec snapshot(map(), term()) :: {:ok, map()} | {:error, :unauthorized}
+  def snapshot(window, actor_or_scope) do
+    with :ok <- Access.authorize_everywhere(actor_or_scope, "tasks.manage") do
+      {:ok,
+       %{
+         cohort: cohort(window),
+         breakdown: phase_breakdown(window),
+         distribution: cycle_time_distribution(window),
+         throughput: throughput(window),
+         agent_activity: agent_activity(window)
+       }}
+    end
+  end
 
   @doc """
   The cohort for a window: how many tasks reached `done`, and how many of

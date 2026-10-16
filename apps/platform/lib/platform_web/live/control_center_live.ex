@@ -245,13 +245,121 @@ defmodule PlatformWeb.ControlCenterLive do
   defp recent_output_for(_output, _agent), do: nil
 
   # ── Roles panel events (M7 stage 5) ───────────────────────────────
+  # Source-level guard tests compare every handle_control_event name with this map.
+  # Unknown events fail closed before any delegated handler runs.
+  @event_policy %{
+    "switch_control_tab" => :ui,
+    "toggle_role_advanced" => :ui,
+    "assign_role" => :responsibility,
+    "clear_role_assignment" => :responsibility,
+    "set_responsibility_override" => :responsibility,
+    "clear_responsibility_override" => :responsibility,
+    "start_runtime" => :manage_selected,
+    "stop_runtime" => :manage_selected,
+    "refresh_runtime" => :manage_selected,
+    "validate_config" => :manage_selected,
+    "save_config" => :manage_selected,
+    "remove_avatar" => :manage_selected,
+    "cancel_avatar_upload" => :manage_selected,
+    "toggle_credential_form" => :vault,
+    "create_credential" => :vault,
+    "create_agent" => :create_ownerless,
+    "toggle_create_agent" => :create_ownerless,
+    "request_delete_agent" => :manage_selected,
+    "cancel_delete_agent" => :manage_selected,
+    "delete_agent" => :manage_selected,
+    "select_workspace_file" => :ui,
+    "new_workspace_file" => :manage_selected,
+    "save_workspace_file" => :manage_selected,
+    "filter_memories" => :ui,
+    "append_memory" => :manage_selected,
+    "open_onboarding_chooser" => :ui,
+    "close_onboarding" => :ui,
+    "choose_onboarding" => :ui,
+    "select_template" => :ui,
+    "back_to_templates" => :ui,
+    "create_from_template" => :create_ownerless,
+    "submit_federate" => :federate,
+    "federate_done" => :ui,
+    "toggle_import_agent" => :create_ownerless,
+    "submit_import" => :create_ownerless,
+    "external_agent_change" => :create_ownerless,
+    "submit_external" => :create_ownerless,
+    "set_vault_mode" => :vault,
+    "suspend_federated_runtime" => :manage_selected,
+    "revoke_federated_runtime" => :manage_selected,
+    "regenerate_federated_token" => :manage_selected,
+    "dismiss_regenerated_token" => :ui,
+    "save_tool_profile" => :manage_selected,
+    "save_agent_restrictions" => :manage_selected,
+    "show_add_space_modal" => :manage_selected,
+    "hide_add_space_modal" => :ui,
+    "add_agent_to_space" => :manage_selected,
+    "native_start" => :ui,
+    "native_stop" => :ui,
+    "native_restart" => :ui,
+    "submit_native" => :federate,
+    "native_api_key_save" => :ui,
+    "native_api_key_remove" => :ui,
+    "native_recent_output" => :ui,
+    "native_file_change" => :ui,
+    "native_file_save" => :ui
+  }
 
   @impl true
-  def handle_event("switch_control_tab", %{"tab" => tab}, socket) do
+  def handle_event(name, params, socket) do
+    scope = Platform.Access.Scope.for_user(%{id: socket.assigns.current_user_id})
+    socket = assign(socket, :access_scope, scope)
+
+    permitted? =
+      case Map.get(@event_policy, name) do
+        :ui ->
+          true
+
+        :vault ->
+          true
+
+        :manage_selected ->
+          agent = socket.assigns[:selected_agent]
+
+          Platform.Access.Agents.manage?(scope, agent) and
+            (not NativeAgents.managed?(agent) or
+               NativeAgents.can_manage?(socket.assigns.current_user_id, agent))
+
+        :federate ->
+          Platform.Access.Agents.may_federate?(scope)
+
+        :create_ownerless ->
+          Platform.Access.Agents.may_create_ownerless?(scope)
+
+        :responsibility ->
+          Platform.Access.Agents.may_federate?(scope)
+
+        nil ->
+          require Logger
+          Logger.warning("[ControlCenterLive] refused unknown event #{inspect(name)}")
+          false
+      end
+
+    if permitted? do
+      handle_control_event(name, params, socket)
+    else
+      message =
+        if NativeAgents.managed?(socket.assigns[:selected_agent]),
+          do: NativeAgentEvents.refused_message(),
+          else: "You can only manage your own agents."
+
+      {:noreply, put_flash(socket, :error, message)}
+    end
+  end
+
+  # ── Roles panel events (M7 stage 5) ───────────────────────────────
+
+  defp handle_control_event("switch_control_tab", %{"tab" => tab}, socket) do
     {:noreply, assign(socket, :active_tab, normalize_tab(tab))}
   end
 
-  def handle_event("toggle_role_advanced", _params, socket) do
+  defp handle_control_event("toggle_role_advanced", _params, socket) do
     {:noreply, assign(socket, :show_role_advanced, !socket.assigns.show_role_advanced)}
   end
 
@@ -259,11 +367,11 @@ defmodule PlatformWeb.ControlCenterLive do
   # External Agent onboarding flow with the role_key pre-bound so the
   # form's role <select> renders that role pre-selected and the submit
   # handler picks it up (stage 6 wiring, reused here).
-  def handle_event(
-        "assign_role",
-        %{"role_key" => role_key, "agent_id" => "__new_external__"},
-        socket
-      ) do
+  defp handle_control_event(
+         "assign_role",
+         %{"role_key" => role_key, "agent_id" => "__new_external__"},
+         socket
+       ) do
     overrides = %{"role_key" => role_key}
 
     {:noreply,
@@ -276,7 +384,7 @@ defmodule PlatformWeb.ControlCenterLive do
 
   # No-op: picker's "Choose an agent…" placeholder emits an empty
   # agent_id when the row first renders / on re-select of the default.
-  def handle_event("assign_role", %{"role_key" => _key, "agent_id" => ""}, socket) do
+  defp handle_control_event("assign_role", %{"role_key" => _key, "agent_id" => ""}, socket) do
     {:noreply, socket}
   end
 
@@ -284,13 +392,13 @@ defmodule PlatformWeb.ControlCenterLive do
   # `assign_role/2` is documented as no-replace (see roles.ex:142) — a
   # unique-constraint failure on `role_key` surfaces as a changeset
   # error and we translate it to a "clear first" flash.
-  def handle_event(
-        "assign_role",
-        %{"role_key" => role_key, "agent_id" => agent_id},
-        socket
-      )
-      when is_binary(agent_id) and agent_id != "" do
-    case Platform.Roles.assign_role(role_key, agent_id) do
+  defp handle_control_event(
+         "assign_role",
+         %{"role_key" => role_key, "agent_id" => agent_id},
+         socket
+       )
+       when is_binary(agent_id) and agent_id != "" do
+    case Platform.Roles.assign_role(role_key, agent_id, actor: socket.assigns.access_scope) do
       {:ok, _assignment} ->
         {:noreply,
          socket
@@ -304,39 +412,54 @@ defmodule PlatformWeb.ControlCenterLive do
            :error,
            "Role already filled — clear it before reassigning."
          )}
+
+      {:error, :unauthorized} ->
+        {:noreply, put_flash(socket, :error, "You can only manage your own agents.")}
     end
   end
 
-  def handle_event("clear_role_assignment", %{"role_key" => role_key}, socket) do
-    :ok = Platform.Roles.unassign_role(role_key)
+  defp handle_control_event("clear_role_assignment", %{"role_key" => role_key}, socket) do
+    case Platform.Roles.unassign_role(role_key, actor: socket.assigns.access_scope) do
+      :ok ->
+        {:noreply,
+         socket
+         |> assign_roles_panel()
+         |> put_flash(:info, "Cleared assignment for #{role_key}.")}
 
-    {:noreply,
-     socket
-     |> assign_roles_panel()
-     |> put_flash(:info, "Cleared assignment for #{role_key}.")}
+      {:error, :unauthorized} ->
+        {:noreply, put_flash(socket, :error, "You can only manage your own agents.")}
+    end
   end
 
-  def handle_event(
-        "set_responsibility_override",
-        %{"responsibility_key" => key, "agent_id" => ""},
-        socket
-      ) do
-    :ok = Platform.Roles.clear_override(key)
-    {:noreply, assign_roles_panel(socket)}
+  defp handle_control_event(
+         "set_responsibility_override",
+         %{"responsibility_key" => key, "agent_id" => ""},
+         socket
+       ) do
+    case Platform.Roles.clear_override(key, actor: socket.assigns.access_scope) do
+      :ok ->
+        {:noreply, assign_roles_panel(socket)}
+
+      {:error, :unauthorized} ->
+        {:noreply, put_flash(socket, :error, "You can only manage your own agents.")}
+    end
   end
 
-  def handle_event(
-        "set_responsibility_override",
-        %{"responsibility_key" => key, "agent_id" => agent_id},
-        socket
-      )
-      when is_binary(agent_id) and agent_id != "" do
-    case Platform.Roles.set_override(key, agent_id) do
+  defp handle_control_event(
+         "set_responsibility_override",
+         %{"responsibility_key" => key, "agent_id" => agent_id},
+         socket
+       )
+       when is_binary(agent_id) and agent_id != "" do
+    case Platform.Roles.set_override(key, agent_id, actor: socket.assigns.access_scope) do
       {:ok, _override} ->
         {:noreply,
          socket
          |> assign_roles_panel()
          |> put_flash(:info, "Override saved for #{key}.")}
+
+      {:error, :unauthorized} ->
+        {:noreply, put_flash(socket, :error, "You can only manage your own agents.")}
 
       {:error, changeset} ->
         {:noreply,
@@ -348,23 +471,26 @@ defmodule PlatformWeb.ControlCenterLive do
     end
   end
 
-  def handle_event("clear_responsibility_override", %{"key" => key}, socket) do
-    :ok = Platform.Roles.clear_override(key)
+  defp handle_control_event("clear_responsibility_override", %{"key" => key}, socket) do
+    case Platform.Roles.clear_override(key, actor: socket.assigns.access_scope) do
+      :ok ->
+        {:noreply,
+         socket
+         |> assign_roles_panel()
+         |> put_flash(:info, "Cleared override for #{key}.")}
 
-    {:noreply,
-     socket
-     |> assign_roles_panel()
-     |> put_flash(:info, "Cleared override for #{key}.")}
+      {:error, :unauthorized} ->
+        {:noreply, put_flash(socket, :error, "You can only manage your own agents.")}
+    end
   end
 
   # ── Runtime events (kept here — tightly coupled to socket) ────────
 
-  @impl true
-  def handle_event(
-        "start_runtime",
-        _params,
-        %{assigns: %{selected_agent: %Agent{} = agent}} = socket
-      ) do
+  defp handle_control_event(
+         "start_runtime",
+         _params,
+         %{assigns: %{selected_agent: %Agent{} = agent}} = socket
+       ) do
     case AgentServer.start_agent(agent) do
       {:ok, pid} ->
         allow_runtime_sandbox(pid)
@@ -379,13 +505,13 @@ defmodule PlatformWeb.ControlCenterLive do
     end
   end
 
-  def handle_event("start_runtime", _params, socket), do: {:noreply, socket}
+  defp handle_control_event("start_runtime", _params, socket), do: {:noreply, socket}
 
-  def handle_event(
-        "stop_runtime",
-        _params,
-        %{assigns: %{selected_agent: %Agent{} = agent}} = socket
-      ) do
+  defp handle_control_event(
+         "stop_runtime",
+         _params,
+         %{assigns: %{selected_agent: %Agent{} = agent}} = socket
+       ) do
     case AgentServer.stop_agent(agent) do
       :ok ->
         {:noreply,
@@ -398,13 +524,13 @@ defmodule PlatformWeb.ControlCenterLive do
     end
   end
 
-  def handle_event("stop_runtime", _params, socket), do: {:noreply, socket}
+  defp handle_control_event("stop_runtime", _params, socket), do: {:noreply, socket}
 
-  def handle_event(
-        "refresh_runtime",
-        _params,
-        %{assigns: %{selected_agent: %Agent{} = agent}} = socket
-      ) do
+  defp handle_control_event(
+         "refresh_runtime",
+         _params,
+         %{assigns: %{selected_agent: %Agent{} = agent}} = socket
+       ) do
     case AgentServer.whereis(agent.id) do
       pid when is_pid(pid) ->
         allow_runtime_sandbox(pid)
@@ -425,7 +551,7 @@ defmodule PlatformWeb.ControlCenterLive do
     end
   end
 
-  def handle_event("refresh_runtime", _params, socket), do: {:noreply, socket}
+  defp handle_control_event("refresh_runtime", _params, socket), do: {:noreply, socket}
 
   # ── Config save ───────────────────────────────────────────────────
 
@@ -434,61 +560,45 @@ defmodule PlatformWeb.ControlCenterLive do
   # without this the avatar upload never registers an entry. Rebuilding the
   # form from the submitted params is what keeps the OTHER inputs from being
   # reverted to their assigned values on that re-render.
-  def handle_event(
-        "validate_config",
-        %{"config" => params},
-        %{assigns: %{selected_agent: %Agent{} = agent}} = socket
-      ) do
+  defp handle_control_event(
+         "validate_config",
+         %{"config" => params},
+         %{assigns: %{selected_agent: %Agent{} = agent}} = socket
+       ) do
     {:noreply, assign(socket, :config_form, AgentData.build_config_form(agent, params))}
   end
 
-  def handle_event("validate_config", _params, socket), do: {:noreply, socket}
+  defp handle_control_event("validate_config", _params, socket), do: {:noreply, socket}
 
-  def handle_event(
-        "save_config",
-        %{"config" => params},
-        %{assigns: %{selected_agent: %Agent{} = agent}} = socket
-      ) do
+  defp handle_control_event(
+         "save_config",
+         %{"config" => params},
+         %{assigns: %{selected_agent: %Agent{} = agent}} = socket
+       ) do
     with_native_manager(socket, agent, fn -> save_config(socket, agent, params) end)
   end
 
-  def handle_event("save_config", _params, socket), do: {:noreply, socket}
+  defp handle_control_event("save_config", _params, socket), do: {:noreply, socket}
 
   # Clears both columns and takes the blob with them, returning the agent to
   # the color-plus-initials fallback. Without this the fallback is
   # unreachable once an avatar is set, because an upload-only control has no
   # way to express "none".
-  def handle_event(
-        "remove_avatar",
-        params,
-        %{assigns: %{selected_agent: %Agent{} = agent}} = socket
-      ) do
+  defp handle_control_event(
+         "remove_avatar",
+         params,
+         %{assigns: %{selected_agent: %Agent{} = agent}} = socket
+       ) do
     with_native_manager(socket, agent, fn -> remove_avatar(socket, agent, params) end)
   end
 
-  def handle_event("remove_avatar", _params, socket), do: {:noreply, socket}
+  defp handle_control_event("remove_avatar", _params, socket), do: {:noreply, socket}
 
-  # ── Runtime management events (delegated) ─────────────────────────
-  #
-  # For a native agent these change what the install runs (its bundles, or
-  # whether its runtime may connect), so they are refused for anyone
-  # `NativeAgents.can_manage?/2` refuses, like Start and Stop (stage 6).
-  # Federated agents keep their existing behaviour.
-
-  def handle_event(event, params, %{assigns: %{selected_agent: %Agent{} = agent}} = socket)
-      when event in [
-             "suspend_federated_runtime",
-             "revoke_federated_runtime",
-             "update_runtime_bundles"
-           ] do
-    with_native_manager(socket, agent, fn -> RuntimeEvents.handle(event, params, socket) end)
-  end
-
-  def handle_event("cancel_avatar_upload", %{"ref" => ref}, socket) do
+  defp handle_control_event("cancel_avatar_upload", %{"ref" => ref}, socket) do
     {:noreply, cancel_upload(socket, AgentAvatarUpload.upload_name(), ref)}
   end
 
-  def handle_event("cancel_avatar_upload", _params, socket), do: {:noreply, socket}
+  defp handle_control_event("cancel_avatar_upload", _params, socket), do: {:noreply, socket}
 
   # ── Vault write events. Both re-check `@root_admin?` inside VaultEvents ──
   #
@@ -496,127 +606,141 @@ defmodule PlatformWeb.ControlCenterLive do
   # events are: the gate, the scope decision and the reason the secret never
   # enters assigns are one argument, and they belong in one file.
 
-  def handle_event("toggle_credential_form", params, socket),
+  defp handle_control_event("toggle_credential_form", params, socket),
     do: VaultEvents.handle("toggle_credential_form", params, socket)
 
-  def handle_event("create_credential", params, socket),
+  defp handle_control_event("create_credential", params, socket),
     do: VaultEvents.handle("create_credential", params, socket)
 
   # ── Agent CRUD events (delegated) ────────────────────────────────
 
-  def handle_event("create_agent", params, socket),
+  defp handle_control_event("create_agent", params, socket),
     do: AgentCrudEvents.handle("create_agent", params, socket)
 
-  def handle_event("toggle_create_agent", params, socket),
+  defp handle_control_event("toggle_create_agent", params, socket),
     do: AgentCrudEvents.handle("toggle_create_agent", params, socket)
 
-  def handle_event("request_delete_agent", params, socket),
+  defp handle_control_event("request_delete_agent", params, socket),
     do: AgentCrudEvents.handle("request_delete_agent", params, socket)
 
-  def handle_event("cancel_delete_agent", params, socket),
+  defp handle_control_event("cancel_delete_agent", params, socket),
     do: AgentCrudEvents.handle("cancel_delete_agent", params, socket)
 
-  def handle_event("delete_agent", params, socket),
+  defp handle_control_event("delete_agent", params, socket),
     do: AgentCrudEvents.handle("delete_agent", params, socket)
 
   # ── Workspace events (delegated) ─────────────────────────────────
 
-  def handle_event("select_workspace_file", params, socket),
+  defp handle_control_event("select_workspace_file", params, socket),
     do: WorkspaceEvents.handle("select_workspace_file", params, socket)
 
-  def handle_event("new_workspace_file", params, socket),
+  defp handle_control_event("new_workspace_file", params, socket),
     do: WorkspaceEvents.handle("new_workspace_file", params, socket)
 
-  def handle_event("save_workspace_file", params, socket),
+  defp handle_control_event("save_workspace_file", params, socket),
     do: WorkspaceEvents.handle("save_workspace_file", params, socket)
 
   # ── Memory events (delegated) ────────────────────────────────────
 
-  def handle_event("filter_memories", params, socket),
+  defp handle_control_event("filter_memories", params, socket),
     do: MemoryEvents.handle("filter_memories", params, socket)
 
-  def handle_event("append_memory", params, socket),
+  defp handle_control_event("append_memory", params, socket),
     do: MemoryEvents.handle("append_memory", params, socket)
 
   # ── Onboarding flow events (delegated) ────────────────────────────
 
-  def handle_event("open_onboarding_chooser", params, socket),
+  defp handle_control_event("open_onboarding_chooser", params, socket),
     do: OnboardingEvents.handle("open_onboarding_chooser", params, socket)
 
-  def handle_event("close_onboarding", params, socket),
+  defp handle_control_event("close_onboarding", params, socket),
     do: OnboardingEvents.handle("close_onboarding", params, socket)
 
-  def handle_event("choose_onboarding", params, socket),
+  defp handle_control_event("choose_onboarding", params, socket),
     do: OnboardingEvents.handle("choose_onboarding", params, socket)
 
-  def handle_event("select_template", params, socket),
+  defp handle_control_event("select_template", params, socket),
     do: OnboardingEvents.handle("select_template", params, socket)
 
-  def handle_event("back_to_templates", params, socket),
+  defp handle_control_event("back_to_templates", params, socket),
     do: OnboardingEvents.handle("back_to_templates", params, socket)
 
-  def handle_event("create_from_template", params, socket),
+  defp handle_control_event("create_from_template", params, socket),
     do: OnboardingEvents.handle("create_from_template", params, socket)
 
-  def handle_event("submit_federate", params, socket),
+  defp handle_control_event("submit_federate", params, socket),
     do: OnboardingEvents.handle("submit_federate", params, socket)
 
-  def handle_event("federate_done", params, socket),
+  defp handle_control_event("federate_done", params, socket),
     do: OnboardingEvents.handle("federate_done", params, socket)
 
-  def handle_event("toggle_import_agent", params, socket),
+  defp handle_control_event("toggle_import_agent", params, socket),
     do: OnboardingEvents.handle("toggle_import_agent", params, socket)
 
-  def handle_event("submit_import", params, socket),
+  defp handle_control_event("submit_import", params, socket),
     do: OnboardingEvents.handle("submit_import", params, socket)
 
-  def handle_event("external_agent_change", params, socket),
+  defp handle_control_event("external_agent_change", params, socket),
     do: OnboardingEvents.handle("external_agent_change", params, socket)
 
-  def handle_event("submit_external", params, socket),
+  defp handle_control_event("submit_external", params, socket),
     do: OnboardingEvents.handle("submit_external", params, socket)
 
-  def handle_event("set_vault_mode", params, socket),
+  defp handle_control_event("set_vault_mode", params, socket),
     do: OnboardingEvents.handle("set_vault_mode", params, socket)
 
   # ── Native agents (delegated, task 01a10322 stage 4) ──────────────
 
-  def handle_event(event, params, socket)
-      when event in [
-             "native_start",
-             "native_stop",
-             "native_restart",
-             "submit_native",
-             "native_api_key_save",
-             "native_api_key_remove",
-             "native_recent_output"
-           ],
-      do: NativeAgentEvents.handle(event, params, socket)
+  defp handle_control_event("native_start", params, socket),
+    do: NativeAgentEvents.handle("native_start", params, socket)
 
-  def handle_event(event, params, socket)
-      when event in ["native_file_change", "native_file_save"],
-      do: NativeFileEvents.handle(event, params, socket)
+  defp handle_control_event("native_stop", params, socket),
+    do: NativeAgentEvents.handle("native_stop", params, socket)
+
+  defp handle_control_event("native_restart", params, socket),
+    do: NativeAgentEvents.handle("native_restart", params, socket)
+
+  defp handle_control_event("submit_native", params, socket),
+    do: NativeAgentEvents.handle("submit_native", params, socket)
+
+  defp handle_control_event("native_api_key_save", params, socket),
+    do: NativeAgentEvents.handle("native_api_key_save", params, socket)
+
+  defp handle_control_event("native_api_key_remove", params, socket),
+    do: NativeAgentEvents.handle("native_api_key_remove", params, socket)
+
+  defp handle_control_event("native_recent_output", params, socket),
+    do: NativeAgentEvents.handle("native_recent_output", params, socket)
+
+  defp handle_control_event("native_file_change", params, socket),
+    do: NativeFileEvents.handle("native_file_change", params, socket)
+
+  defp handle_control_event("native_file_save", params, socket),
+    do: NativeFileEvents.handle("native_file_save", params, socket)
 
   # ── Runtime management events (delegated) ─────────────────────────
 
-  def handle_event("suspend_federated_runtime", params, socket),
+  defp handle_control_event("suspend_federated_runtime", params, socket),
     do: RuntimeEvents.handle("suspend_federated_runtime", params, socket)
 
-  def handle_event("revoke_federated_runtime", params, socket),
+  defp handle_control_event("revoke_federated_runtime", params, socket),
     do: RuntimeEvents.handle("revoke_federated_runtime", params, socket)
 
-  def handle_event("regenerate_federated_token", params, socket),
+  defp handle_control_event("regenerate_federated_token", params, socket),
     do: RuntimeEvents.handle("regenerate_federated_token", params, socket)
 
-  def handle_event("dismiss_regenerated_token", params, socket),
+  defp handle_control_event("dismiss_regenerated_token", params, socket),
     do: RuntimeEvents.handle("dismiss_regenerated_token", params, socket)
 
-  def handle_event("update_runtime_bundles", params, socket),
-    do: RuntimeEvents.handle("update_runtime_bundles", params, socket)
+  defp handle_control_event("save_tool_profile", params, socket),
+    do: RuntimeEvents.handle("save_tool_profile", params, socket)
+
+  defp handle_control_event("save_agent_restrictions", params, socket),
+    do: RuntimeEvents.handle("save_agent_restrictions", params, socket)
 
   # ── Add agent to space ─────────────────────────────────────────────
 
-  def handle_event("show_add_space_modal", _params, socket) do
+  defp handle_control_event("show_add_space_modal", _params, socket) do
     spaces = Platform.Chat.list_spaces() |> Enum.filter(&(&1.kind != "dm"))
     {others, meetings} = Platform.Chat.MeetingSpaces.partition_for_picker(spaces)
 
@@ -627,15 +751,15 @@ defmodule PlatformWeb.ControlCenterLive do
      |> assign(:available_meeting_spaces, meetings)}
   end
 
-  def handle_event("hide_add_space_modal", _params, socket) do
+  defp handle_control_event("hide_add_space_modal", _params, socket) do
     {:noreply, assign(socket, :show_add_space_modal, false)}
   end
 
-  def handle_event(
-        "add_agent_to_space",
-        %{"space_id" => space_id, "role" => role},
-        %{assigns: %{selected_agent: %Agent{} = agent}} = socket
-      ) do
+  defp handle_control_event(
+         "add_agent_to_space",
+         %{"space_id" => space_id, "role" => role},
+         %{assigns: %{selected_agent: %Agent{} = agent}} = socket
+       ) do
     attention_mode = if role == "principal", do: "all", else: "mention"
 
     case Platform.Chat.add_agent_participant(space_id, agent, attention_mode: attention_mode) do
@@ -660,7 +784,7 @@ defmodule PlatformWeb.ControlCenterLive do
     end
   end
 
-  def handle_event("add_agent_to_space", params, socket) do
+  defp handle_control_event("add_agent_to_space", params, socket) do
     require Logger
 
     Logger.warning(
@@ -677,7 +801,7 @@ defmodule PlatformWeb.ControlCenterLive do
   # verbatim, `:filter_parameters` notwithstanding: a Claude login code sent
   # to a made-up "paste" event would have landed in the log. No event on this
   # page accepts a login code.
-  def handle_event(event, _params, socket) do
+  defp handle_control_event(event, _params, socket) do
     require Logger
     Logger.warning("[ControlCenterLive] refused unknown event #{inspect(event)}")
     {:noreply, socket}
@@ -824,6 +948,7 @@ defmodule PlatformWeb.ControlCenterLive do
           >
             <AgentDetail.header
               agent={@selected_agent}
+              can_manage?={Platform.Access.Agents.manage?(@access_scope, @selected_agent)}
               runtime={@runtime}
               federation_online?={@federation_online?}
               selected_agent_directory_entry={@selected_agent_directory_entry}
@@ -852,7 +977,10 @@ defmodule PlatformWeb.ControlCenterLive do
                 available_spaces={@available_spaces}
                 available_meeting_spaces={@available_meeting_spaces}
                 managed?={not is_nil(@native_header)}
-                can_manage?={is_nil(@native_header) or @native_header.can_manage?}
+                can_manage?={
+                  Platform.Access.Agents.manage?(@access_scope, @selected_agent) and
+                    (is_nil(@native_header) or @native_header.can_manage?)
+                }
               />
 
               <%!-- Login steps (stage 6) replace the files area while the agent
@@ -901,7 +1029,10 @@ defmodule PlatformWeb.ControlCenterLive do
 
             <%!-- Config + model routing (built-in agents only) --%>
             <div
-              :if={@selected_agent.runtime_type != "external"}
+              :if={
+                @selected_agent.runtime_type != "external" and
+                  Platform.Access.Agents.manage?(@access_scope, @selected_agent)
+              }
               class="grid gap-6 xl:grid-cols-[minmax(0,1.6fr)_minmax(320px,0.9fr)]"
             >
               <div class="flex min-w-0 flex-col gap-6">
@@ -954,6 +1085,7 @@ defmodule PlatformWeb.ControlCenterLive do
             show_role_advanced={@show_role_advanced}
             responsibility_rows={@responsibility_rows}
             selectable_agents={@selectable_agents}
+            access_scope={@access_scope}
           />
         </main>
       </div>
@@ -979,7 +1111,13 @@ defmodule PlatformWeb.ControlCenterLive do
     |> assign(:role_bundles, AgentData.role_bundles())
     |> assign(:role_assignments_by_key, AgentData.role_assignments_by_key())
     |> assign(:responsibility_rows, AgentData.responsibility_rows())
-    |> assign(:selectable_agents, AgentData.list_selectable_agents())
+    |> assign(
+      :selectable_agents,
+      Enum.filter(
+        AgentData.list_selectable_agents(),
+        &Platform.Access.Agents.may_assign?(socket.assigns[:access_scope], &1)
+      )
+    )
   end
 
   defp assign_empty_panel(socket) do

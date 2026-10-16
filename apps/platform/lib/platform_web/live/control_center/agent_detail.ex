@@ -19,15 +19,13 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
 
   # ── Header ────────────────────────────────────────────────────────
 
-  attr :agent, :map, required: true
-  attr :runtime, :map, required: true
-  attr :federation_online?, :boolean, required: true
-  attr :selected_agent_directory_entry, :map, default: nil
-  attr :pending_delete_slug, :string, default: nil
-  # The managed-agent header (task 01a10322 stage 4), nil for any other agent:
-  # %{view, buttons, profile, restarting?, can_manage?, host}. See
-  # `ControlCenterLive.native_header/2`.
-  attr :native, :map, default: nil
+  attr(:agent, :map, required: true)
+  attr(:runtime, :map, required: true)
+  attr(:federation_online?, :boolean, required: true)
+  attr(:selected_agent_directory_entry, :map, default: nil)
+  attr(:pending_delete_slug, :string, default: nil)
+  attr(:can_manage?, :boolean, default: false)
+  attr(:native, :map, default: nil)
 
   def header(assigns) do
     ~H"""
@@ -123,6 +121,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
         </div>
 
         <div
+          :if={@can_manage?}
           id="agent-primary-actions"
           class={[
             "grid w-full gap-2 sm:w-auto",
@@ -252,12 +251,12 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
 
   # ── Stats ─────────────────────────────────────────────────────────
 
-  attr :agent, :map, required: true
-  attr :runtime, :map, required: true
-  attr :federation_online?, :boolean, required: true
-  attr :federation_runtime, :map, default: nil
-  attr :federation_spaces, :list, default: []
-  attr :overview_counts, :map, required: true
+  attr(:agent, :map, required: true)
+  attr(:runtime, :map, required: true)
+  attr(:federation_online?, :boolean, required: true)
+  attr(:federation_runtime, :map, default: nil)
+  attr(:federation_spaces, :list, default: [])
+  attr(:overview_counts, :map, required: true)
 
   def stats(assigns) do
     ~H"""
@@ -317,23 +316,17 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
 
   # ── Federation panels ─────────────────────────────────────────────
 
-  attr :agent, :map, required: true
-  attr :config_form, :map, required: true
-  attr :uploads, :map, required: true
-  attr :regenerated_token, :string, default: nil
-  attr :federation_online?, :boolean, required: true
-  attr :federation_spaces, :list, default: []
-  attr :show_add_space_modal, :boolean, default: false
-  attr :available_spaces, :list, default: []
-  attr :available_meeting_spaces, :list, default: []
-  # A native (install-managed) agent renders these same panels (task 01a10322
-  # stage 4) minus token regeneration and connection instructions: its token
-  # is minted fresh on every start, so there is nothing to hand out.
-  attr :managed?, :boolean, default: false
-  # Stage 6: for a native agent, only NativeAgents.can_manage?/2 users may
-  # change its identity and voice. Everyone else sees the form disabled; the
-  # events are refused server-side whatever the form shows.
-  attr :can_manage?, :boolean, default: true
+  attr(:agent, :map, required: true)
+  attr(:config_form, :map, required: true)
+  attr(:uploads, :map, required: true)
+  attr(:regenerated_token, :string, default: nil)
+  attr(:federation_online?, :boolean, required: true)
+  attr(:federation_spaces, :list, default: [])
+  attr(:show_add_space_modal, :boolean, default: false)
+  attr(:available_spaces, :list, default: [])
+  attr(:available_meeting_spaces, :list, default: [])
+  attr(:can_manage?, :boolean, default: false)
+  attr(:managed?, :boolean, default: false)
 
   def federation_panels(assigns) do
     ~H"""
@@ -359,6 +352,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
         agent={@agent}
         regenerated_token={@regenerated_token}
         federation_online?={@federation_online?}
+        can_manage?={@can_manage?}
         managed?={@managed?}
       />
     </section>
@@ -378,6 +372,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
     `live_file_input` needs it to report a picked file. It is also what makes
     the half-set warning on the voice card appear as you type. --%>
     <.form
+      :if={@managed? or @can_manage?}
       for={@config_form}
       id="federated-identity-form"
       phx-submit="save_config"
@@ -494,6 +489,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
       </div>
 
       <button
+        :if={@can_manage?}
         type="button"
         phx-click="show_add_space_modal"
         class="btn btn-sm btn-outline mt-3 w-full"
@@ -503,7 +499,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
     </section>
 
     <div
-      :if={@show_add_space_modal}
+      :if={@can_manage? and @show_add_space_modal}
       class="fixed inset-0 z-50 flex items-center justify-center bg-base-300/60"
     >
       <div class="w-full max-w-md rounded-2xl border border-edge bg-base-100 p-6 shadow-xl">
@@ -565,8 +561,8 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
   agent that has been given an avatar could never get back to its
   color-and-initials fallback.
   """
-  attr :agent, :map, required: true
-  attr :uploads, :map, required: true
+  attr(:agent, :map, required: true)
+  attr(:uploads, :map, required: true)
 
   def avatar_field(assigns) do
     assigns =
@@ -684,11 +680,11 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
 
   # ── Config form ───────────────────────────────────────────────────
 
-  attr :agent, :map, required: true
-  attr :config_form, :map, required: true
-  attr :uploads, :map, required: true
-  attr :model_chain_result, :any, required: true
-  attr :selected_agent_directory_entry, :map, default: nil
+  attr(:agent, :map, required: true)
+  attr(:config_form, :map, required: true)
+  attr(:uploads, :map, required: true)
+  attr(:model_chain_result, :any, required: true)
+  attr(:selected_agent_directory_entry, :map, default: nil)
 
   def config_form(assigns) do
     ~H"""
@@ -901,7 +897,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
   `Platform.Agents.Voice.known_providers/0`, so adding a provider stays one
   entry in that module.
   """
-  attr :config_form, :map, required: true
+  attr(:config_form, :map, required: true)
 
   def voice_fields(assigns) do
     ~H"""
@@ -959,8 +955,8 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
   genuinely transient half-set one; `--color-error` never, because nothing on
   this card is a failure.
   """
-  attr :agent, :map, required: true
-  attr :config_form, :map, required: true
+  attr(:agent, :map, required: true)
+  attr(:config_form, :map, required: true)
 
   def voice_card(assigns) do
     provider = assigns.config_form[:voice_provider].value |> to_string() |> String.trim()
@@ -1069,8 +1065,8 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
   provider is added — a second copy of this select is how the built-in form
   and the external card would drift apart.
   """
-  attr :config_form, :map, required: true
-  attr :class, :string, default: "select select-bordered w-full"
+  attr(:config_form, :map, required: true)
+  attr(:class, :string, default: "select select-bordered w-full")
 
   def voice_provider_select(assigns) do
     ~H"""
@@ -1090,8 +1086,8 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
   end
 
   @doc "The voice id control. `config[voice_id]` is read by `AgentData.voice_config_from_params/1`."
-  attr :config_form, :map, required: true
-  attr :class, :string, default: "input input-bordered w-full"
+  attr(:config_form, :map, required: true)
+  attr(:class, :string, default: "input input-bordered w-full")
 
   def voice_id_input(assigns) do
     ~H"""
@@ -1106,8 +1102,8 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
   end
 
   @doc "The optional voice model control."
-  attr :config_form, :map, required: true
-  attr :class, :string, default: "input input-bordered w-full"
+  attr(:config_form, :map, required: true)
+  attr(:class, :string, default: "input input-bordered w-full")
 
   def voice_model_input(assigns) do
     ~H"""
@@ -1123,10 +1119,10 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
 
   # ── Workspace editor ──────────────────────────────────────────────
 
-  attr :workspace_files, :list, required: true
-  attr :selected_file_key, :string, default: nil
-  attr :selected_workspace_file, :map, default: nil
-  attr :workspace_form, :map, required: true
+  attr(:workspace_files, :list, required: true)
+  attr(:selected_file_key, :string, default: nil)
+  attr(:selected_workspace_file, :map, default: nil)
+  attr(:workspace_form, :map, required: true)
 
   def workspace_editor(assigns) do
     ~H"""
@@ -1228,9 +1224,9 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
 
   # ── Memory browser ────────────────────────────────────────────────
 
-  attr :memory_filter_form, :map, required: true
-  attr :recent_memories, :list, required: true
-  attr :memory_form, :map, required: true
+  attr(:memory_filter_form, :map, required: true)
+  attr(:recent_memories, :list, required: true)
+  attr(:memory_form, :map, required: true)
 
   def memory_browser(assigns) do
     ~H"""
@@ -1379,8 +1375,8 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
 
   # ── Runtime monitor ───────────────────────────────────────────────
 
-  attr :runtime, :map, required: true
-  attr :recent_sessions, :list, required: true
+  attr(:runtime, :map, required: true)
+  attr(:recent_sessions, :list, required: true)
 
   def runtime_monitor(assigns) do
     ~H"""
@@ -1449,12 +1445,12 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
 
   # ── Vault panel ───────────────────────────────────────────────────
 
-  attr :agent_credentials, :list, required: true
-  attr :platform_credentials, :list, required: true
-  attr :all_platform_credentials, :list, default: []
-  attr :root_admin?, :boolean, default: false
-  attr :show_credential_form, :boolean, default: false
-  attr :credential_form, :map, default: %{}
+  attr(:agent_credentials, :list, required: true)
+  attr(:platform_credentials, :list, required: true)
+  attr(:all_platform_credentials, :list, default: [])
+  attr(:root_admin?, :boolean, default: false)
+  attr(:show_credential_form, :boolean, default: false)
+  attr(:credential_form, :map, default: %{})
 
   def vault_panel(assigns) do
     ~H"""

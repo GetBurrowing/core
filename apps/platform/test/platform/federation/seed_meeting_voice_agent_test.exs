@@ -4,7 +4,7 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgentTest do
   runtime are provisioned entirely through already-shipped mechanisms
   (`Federation.register_voice_runtime/3`,
   `MemoryContext.upsert_workspace_file/4`, `agents.voice_config`,
-  `agent_runtimes.allowed_bundles`), and re-running the seed does not
+  `access_runtime_profiles.tool_profile`), and re-running the seed does not
   duplicate either the agent row or its voice runtime row.
 
   `async: false`: `RuntimePresence` is one named process and the seeded
@@ -13,26 +13,19 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgentTest do
   """
   use PlatformWeb.ChannelCase, async: false
 
+  import Platform.TenancyFixtures
   import Ecto.Query, only: [from: 2]
 
   alias Mix.Tasks.Platform.SeedMeetingVoiceAgent
-  alias Platform.Accounts.User
   alias Platform.Agents.{Agent, AgentRuntime}
+  alias Platform.Access.RuntimeProfiles
   alias Platform.Federation
   alias Platform.Federation.ToolAuthorization
   alias Platform.Meetings
   alias Platform.Repo
   alias Platform.Roles
 
-  defp owner! do
-    n = System.unique_integer([:positive])
-
-    Repo.insert!(%User{
-      email: "meeting-assistant-seed-#{n}@example.com",
-      name: "Seed Owner #{n}",
-      oidc_sub: "oidc-mva-seed-#{n}"
-    })
-  end
+  defp owner!, do: root_admin!()
 
   # ── Idempotent seeding ─────────────────────────────────────────────────────
 
@@ -184,19 +177,19 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgentTest do
     end
   end
 
-  # ── allowed_bundles: scoped tool surface ────────────────────────────────────
+  # ── tool_profile: scoped tool surface ────────────────────────────────────
 
-  describe "the voice runtime's allowed_bundles" do
+  describe "the voice runtime's tool_profile" do
     test "denies task/plan/review tool calls and allows a messaging one" do
       owner = owner!()
       assert {:ok, %{runtime: runtime}} = SeedMeetingVoiceAgent.seed!(owner)
 
-      assert MapSet.new(runtime.allowed_bundles) ==
+      assert MapSet.new(RuntimeProfiles.tool_profile(runtime)) ==
                MapSet.new(~w(messaging context_read))
 
-      refute "task" in runtime.allowed_bundles
-      refute "plan" in runtime.allowed_bundles
-      refute "review" in runtime.allowed_bundles
+      refute "task" in RuntimeProfiles.tool_profile(runtime)
+      refute "plan" in RuntimeProfiles.tool_profile(runtime)
+      refute "review" in RuntimeProfiles.tool_profile(runtime)
 
       assert {:error, :forbidden} = ToolAuthorization.authorize("task_create", runtime)
       assert {:error, :forbidden} = ToolAuthorization.authorize("plan_create", runtime)
@@ -219,14 +212,14 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgentTest do
       # still granting `memory_create`/`memory_delete`/`memory_rename`/
       # `memory_str_replace`, `space_create`, `space_leave`, and `dm_create`
       # — none of which a single-purpose meeting assistant has any business
-      # calling. `space`/`memory` are dropped from `allowed_bundles`
+      # calling. `space`/`memory` are dropped from `tool_profile`
       # entirely (see `mix platform.seed_meeting_voice_agent`'s moduledoc
       # for why neither can be narrowed any finer than an outright drop).
       owner = owner!()
       assert {:ok, %{runtime: runtime}} = SeedMeetingVoiceAgent.seed!(owner)
 
-      refute "space" in runtime.allowed_bundles
-      refute "memory" in runtime.allowed_bundles
+      refute "space" in RuntimeProfiles.tool_profile(runtime)
+      refute "memory" in RuntimeProfiles.tool_profile(runtime)
 
       denied = ~w(
         memory_create memory_delete memory_rename memory_str_replace memory_insert
@@ -250,7 +243,7 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgentTest do
       # (`Platform.Federation.ToolSurface`), this runtime's `messaging` grant
       # implicitly carried `mail_draft_create`/`mail_draft_update` too, and
       # the agent used it to attempt a prod write during a hand-off. Pin that
-      # this persona's `allowed_bundles` never includes `mail`, and that
+      # this persona's `tool_profile` never includes `mail`, and that
       # `mail_draft_create` is refused, regardless of the Mail module flag.
       previous = Application.fetch_env(:platform, :mail_enabled)
       Application.put_env(:platform, :mail_enabled, true)
@@ -265,7 +258,7 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgentTest do
       owner = owner!()
       assert {:ok, %{runtime: runtime}} = SeedMeetingVoiceAgent.seed!(owner)
 
-      refute "mail" in runtime.allowed_bundles
+      refute "mail" in RuntimeProfiles.tool_profile(runtime)
       assert {:error, :forbidden} = ToolAuthorization.authorize("mail_draft_create", runtime)
       refute "mail_draft_create" in ToolAuthorization.tool_names(runtime)
     end
@@ -273,7 +266,7 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgentTest do
     # Task 01a0f842 stage 4 (round 2 of Harper's Burrow ticket, item 4): the
     # fix for "Burrow attempts canvas/task work herself instead of routing
     # it" is a prompt change in services/meeting-voice-agent's config.py,
-    # NOT a re-scope of allowed_bundles -- canvas (the write bundle), task,
+    # NOT a re-scope of tool_profile -- canvas (the write bundle), task,
     # and plan were already excluded before this stage, deliberately. Pin
     # that exclusion here so a future change to this list can't silently
     # reopen the tool-grant gap this stage leaves untouched.
@@ -281,9 +274,9 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgentTest do
       owner = owner!()
       assert {:ok, %{runtime: runtime}} = SeedMeetingVoiceAgent.seed!(owner)
 
-      refute "canvas" in runtime.allowed_bundles
-      refute "task" in runtime.allowed_bundles
-      refute "plan" in runtime.allowed_bundles
+      refute "canvas" in RuntimeProfiles.tool_profile(runtime)
+      refute "task" in RuntimeProfiles.tool_profile(runtime)
+      refute "plan" in RuntimeProfiles.tool_profile(runtime)
 
       assert {:error, :forbidden} = ToolAuthorization.authorize("canvas.create", runtime)
       assert {:error, :forbidden} = ToolAuthorization.authorize("canvas.patch", runtime)
@@ -314,11 +307,12 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgentTest do
         )
 
       {:ok, other_runtime, _token} = Federation.register_voice_runtime(owner.id, other_agent)
-      before_bundles = other_runtime.allowed_bundles
+      before_bundles = RuntimeProfiles.tool_profile(other_runtime)
 
       assert {:ok, _} = SeedMeetingVoiceAgent.seed!(owner)
 
-      assert Federation.get_runtime(other_runtime.id).allowed_bundles == before_bundles
+      assert RuntimeProfiles.tool_profile(Federation.get_runtime(other_runtime.id)) ==
+               before_bundles
     end
   end
 
@@ -341,7 +335,7 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgentTest do
   #      mistake, or a stray `target_role` from any other producer),
   #      `IntentDispatcher.authorize_and_dispatch/6` asks
   #      `Platform.Federation.ToolAuthorization.authorize("intent_ack", ...)`
-  #      before ever broadcasting to a runtime — and Burrow's `allowed_bundles`
+  #      before ever broadcasting to a runtime — and Burrow's `tool_profile`
   #      (asserted above to be exactly `messaging` + `context_read`) does not
   #      carry `meetings`, the bundle `intent_ack` lives in. The dispatch
   #      fails closed as `:dispatch_failed{:cannot_ack}` before any subagent
@@ -355,7 +349,7 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgentTest do
       owner = owner!()
       assert {:ok, %{runtime: runtime}} = SeedMeetingVoiceAgent.seed!(owner)
 
-      refute "meetings" in runtime.allowed_bundles
+      refute "meetings" in RuntimeProfiles.tool_profile(runtime)
       assert {:error, :forbidden} = ToolAuthorization.authorize("intent_ack", runtime)
       refute "intent_ack" in ToolAuthorization.tool_names(runtime)
     end

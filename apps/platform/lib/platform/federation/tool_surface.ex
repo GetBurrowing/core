@@ -83,7 +83,7 @@ defmodule Platform.Federation.ToolSurface do
   # Core's own bundles. The full list is these plus every extension bundle
   # (`Platform.Extensions.tool_bundle_names/0`), read per call: never widen
   # this attribute with an extension's name (ADR 0055).
-  @bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode prototype)
+  @bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode prototype access)
 
   # Per-message content cap (graphemes) for space_get_messages /
   # space_search_messages. Anything longer is sliced and flagged via the
@@ -236,7 +236,7 @@ defmodule Platform.Federation.ToolSurface do
 
   CRITICAL PROPERTY: this is an INTERSECTION applied AFTER `list_tools/1`,
   so it can only ever REMOVE tools, never add one. An external runtime
-  whose `allowed_bundles` do not include a chat bundle still gets zero
+  whose `tool_profile` do not include a chat bundle still gets zero
   chat tools (fail-closed) — the filter never grants a capability the
   runtime's bundles did not already include. The existing bundle scope
   remains the outer bound; external-restriction is layered inside it
@@ -275,13 +275,16 @@ defmodule Platform.Federation.ToolSurface do
     do: tag(Platform.Federation.ExperimentTools.definitions(), "experiments")
 
   # Task 01a114a8 stage 2: `suite_run`. Grantable, never a default
-  # (AgentRuntime's @default_allowed_bundles does not list it).
+  # (AgentRuntime's @default_tool_profile does not list it).
   defp tools_for_bundle("code_mode"), do: tag(code_mode_tools(), "code_mode")
 
   # Task 01a1316b-4e46 stage 1 (ADR 0057): definitions in PrototypeTools,
   # behaviour in Prototypes.Tools. Grantable, never a default.
   defp tools_for_bundle("prototype"),
     do: tag(Platform.Federation.PrototypeTools.definitions(), "prototype")
+
+  defp tools_for_bundle("access"),
+    do: tag(Platform.Federation.AccessTools.definitions(), "access")
 
   # An extension's bundle (ADR 0055): its definitions as the extension lists
   # them at call time. An unknown name is skipped, as it always was.
@@ -945,7 +948,7 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "memory_rename",
         description:
-          "Atomically rename a memory page from `old_path` to `new_path`. Same-kind only (page ↔ page, private ↔ private — no cross-kind moves). Page paths only — journal paths return `:journal_immutable`. Gated against BOTH paths: the calling agent must be allowed to write to both `old_path` and `new_path`.",
+          "Atomically rename a memory page from `old_path` to `new_path`. Same-kind only (page ↔ page, private ↔ private — no cross-kind moves). Page paths only — journal paths return `:journal_immutable`. Gated against BOTH paths: the calling agent must be allowed to write to both `old_path` and `new_path`. Subtree mode: when BOTH paths are page-namespace prefixes ending in `/` (e.g. `org/page/eng/` → `org/page/engineering/`), every page under `old_path` moves to the same relative path under `new_path` in one all-or-nothing transaction, and the memory-node identities under it (which resource grants anchor to) move with them; every (old, new) page pair is gated like a single rename.",
         parameters: %{
           old_path: %{type: "string", required: true, description: "Current path."},
           new_path: %{type: "string", required: true, description: "Target path."},
@@ -955,9 +958,10 @@ defmodule Platform.Federation.ToolSurface do
             description: "UUID of the workspace (default: org-level)."
           }
         },
-        returns: "%{path: new_path, version, kind, updated_at, frontmatter}",
+        returns:
+          "%{path: new_path, version, kind, updated_at, frontmatter}. Subtree mode: %{path: new_path, kind, count, renamed: [%{from, to, version}]}",
         limitations:
-          "Cross-kind moves (page ↔ private) → `:ambiguous_kind`. Either-side gate failure surfaces that gate's error. Missing source → `:not_found`.",
+          "Cross-kind moves (page ↔ private) → `:ambiguous_kind`. Either-side gate failure surfaces that gate's error. Missing source → `:not_found`. Subtree mode never overwrites: if ANY target path already holds a page or a memory node the whole rename is refused with `:conflict` and the conflicting paths; a prefix with no pages and no nodes under it → `:not_found`.",
         when_to_use:
           "When you (Historian) want to move a curated page to a new path while preserving its content + embeddings."
       },
@@ -1118,14 +1122,14 @@ defmodule Platform.Federation.ToolSurface do
   # its own `mail` bundle (task 01a0d4a0 stage 4 round 2) so a runtime can be
   # granted chat messaging WITHOUT also getting a prod mail-write tool —
   # before this split, ANY runtime holding `messaging` (which includes
-  # `AgentRuntime.default_allowed_bundles/0`) implicitly got
+  # `AgentRuntime.default_tool_profile/0`) implicitly got
   # `mail_draft_create`/`mail_draft_update` too, which is how the
-  # single-purpose "Burrow" persona (whose `allowed_bundles` was
+  # single-purpose "Burrow" persona (whose `tool_profile` was
   # at the time scoped to `space messaging context_read memory`, and is now
   # `messaging context_read` per stage 5's further narrowing, explicitly
   # EXCLUDING task/plan/review either way) could still call
   # `mail_draft_create` — see
-  # `mix platform.seed_meeting_voice_agent`'s `allowed_bundles` moduledoc and
+  # `mix platform.seed_meeting_voice_agent`'s `tool_profile` moduledoc and
   # Dalton's live moon run (rollup space 01a0b5bf). Existing runtimes that
   # already relied on getting mail via `messaging` are preserved by the
   # `mail` bundle backfill migration
@@ -1642,7 +1646,7 @@ defmodule Platform.Federation.ToolSurface do
         # a `limitations` field is a contract a remote runtime branches on, not
         # a maintainer's note.
         limitations:
-          "Reads only canvases you hold a grant on: a participant of the canvas's space, or an agent bound by phase_assignees to a live task the canvas is attached to. Anything else is denied, and a canvas that does not exist is reported separately from one you may not read. Full mode may return large payloads for complex canvases.",
+          "Reads only canvases you hold a grant on: a participant of the canvas's space, or an agent bound by phase_assignees to a live task the canvas is attached to. Anything else is denied, and a canvas that does not exist is reported separately from one you may not read. A canvas a `canvas.read` deny covers for you answers exactly as a canvas that does not exist. Full mode may return large payloads for complex canvases.",
         when_to_use:
           "When you need to inspect a canvas's content before updating it, to present canvas data to a user, to read a design direction canvas attached to your task, or to get its view_url"
       },
@@ -2622,7 +2626,7 @@ defmodule Platform.Federation.ToolSurface do
       # one instruction `design.task_direction.v1` gives her. Putting the exit
       # in the same bundle makes its reachability CO-EXTENSIVE with a path
       # already known to work on every designer runtime that exists, with zero
-      # new `allowed_bundles` grant on any row. A new bundle (or `plan`, which
+      # new `tool_profile` grant on any row. A new bundle (or `plan`, which
       # a designer has no reason to hold) would ship an affordance that stays
       # unreachable until somebody hand-edits every designer runtime — which is
       # precisely the failure mode this task exists to fix, re-committed one
@@ -3155,7 +3159,7 @@ defmodule Platform.Federation.ToolSurface do
 
   # Task 01a066af stage 4 — the `meetings` bundle. `meeting_create` and
   # `meeting_say` were registered in `task_tools/0`, so `tag/2` stamped them
-  # `"task"`, a bundle that is NOT in `AgentRuntime.default_allowed_bundles/0`.
+  # `"task"`, a bundle that is NOT in `AgentRuntime.default_tool_profile/0`.
   # A voice-capable runtime sitting on the defaults was therefore refused by
   # `ToolAuthorization.authorize/2` and could not speak at all. Both tool maps
   # moved here VERBATIM — their descriptions carry the `no_ack` contract
@@ -3166,7 +3170,7 @@ defmodule Platform.Federation.ToolSurface do
   # the class. `intent_ack` shipped in `task_tools/0` (019f70b8 stage 3) on the
   # rationale that every dispatch-capable runtime already holds `task`. That
   # was FALSE WHEN WRITTEN, not a claim that went stale: `task` has never
-  # appeared in `@default_allowed_bundles` on any commit. A runtime on the
+  # appeared in `@default_tool_profile` on any commit. A runtime on the
   # defaults was therefore dispatched meeting intents it could not ack, and
   # because `ToolAuthorization.authorize/2` refuses ABOVE `execute/3` the
   # intent queue never heard about the refusal — the intent held the meeting's
@@ -4187,12 +4191,18 @@ defmodule Platform.Federation.ToolSurface do
     kind = Map.get(args, "kind")
 
     spaces = Chat.list_spaces_for_agent(agent_id, kind: kind)
+    scope = space_read_scope(context)
+    restricted = Platform.Access.restricted_space_ids(scope, Enum.map(spaces, & &1.id))
 
     # Task 01a04a7a stage 4: `list_spaces_for_agent/2` has no LIMIT, so this
     # head returns everything it read and says so explicitly.
     rows =
       Enum.map(spaces, fn s ->
-        %{id: s.id, name: s.name, kind: s.kind, description: s.description}
+        row = %{id: s.id, name: s.name, kind: s.kind, description: s.description}
+
+        if MapSet.member?(restricted, s.id) or not Platform.Access.can?(scope, "chat.read", s.id),
+          do: Map.merge(row, %{restricted: true, description: nil}),
+          else: row
       end)
 
     {:ok, ResultBound.whole(:spaces, rows)}
@@ -4463,7 +4473,8 @@ defmodule Platform.Federation.ToolSurface do
     query = Map.get(args, "query", "")
     limit = args |> Map.get("limit", 10) |> min(10)
 
-    with :ok <- assert_agent_in_space(space_id, context) do
+    with :ok <- assert_agent_in_space(space_id, context),
+         :ok <- readable_space_or_denied(space_id, context) do
       # Guard (task 01a006c2 stage 4): a query that parses to an EMPTY tsquery
       # — punctuation only, or otherwise no word token the `english` config
       # will keep — matches nothing by construction. Returning a bare `[]` for
@@ -4495,7 +4506,8 @@ defmodule Platform.Federation.ToolSurface do
     limit = args |> Map.get("limit", 20) |> min(20)
     before_id = Map.get(args, "before_id")
 
-    with :ok <- assert_agent_in_space(space_id, context) do
+    with :ok <- assert_agent_in_space(space_id, context),
+         :ok <- readable_space_or_denied(space_id, context) do
       opts = [limit: limit, top_level_only: true]
       opts = if before_id, do: Keyword.put(opts, :before_id, before_id), else: opts
 
@@ -4560,7 +4572,7 @@ defmodule Platform.Federation.ToolSurface do
     space_id = Map.get(args, "space_id")
 
     with :ok <- assert_agent_in_space(space_id, context) do
-      canvases = Chat.list_canvases(space_id)
+      canvases = Chat.list_canvases(space_id, runtime_access_opts(context))
 
       rows =
         Enum.map(canvases, fn c ->
@@ -4588,7 +4600,15 @@ defmodule Platform.Federation.ToolSurface do
     canvas_id = Map.get(args, "canvas_id")
     mode = Map.get(args, "mode", "summary")
 
-    with {:ok, canvas} <- Platform.Chat.Canvas.ToolAccess.fetch_for_read(canvas_id, context) do
+    # Task 01a1386d-e528 stage 5: the calling runtime's Scope, so a canvas an
+    # agent-principal `canvas.read` deny covers answers the same not-found
+    # envelope as a nonexistent id (the `canvas_list` read check, stage 3).
+    with {:ok, canvas} <-
+           Platform.Chat.Canvas.ToolAccess.fetch_for_read(
+             canvas_id,
+             context,
+             runtime_access_opts(context)
+           ) do
       result = %{
         id: canvas.id,
         title: canvas.title,
@@ -4671,12 +4691,14 @@ defmodule Platform.Federation.ToolSurface do
   # separate design with its own authorization layer
   # (`Platform.Federation.ToolAuthorization`) — deliberately deferred rather
   # than papered over with an invented agent-to-org mapping.
-  def execute("project_list", args, _context) do
+  def execute("project_list", args, context) do
     opts =
       case Map.get(args, "org_id") do
         org_id when is_binary(org_id) and org_id != "" -> [org_id: org_id]
         _ -> []
       end
+
+    opts = opts ++ runtime_access_opts(context)
 
     projects =
       opts
@@ -5174,14 +5196,24 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
-  def execute("task_get", args, _context) do
+  def execute("task_get", args, context) do
     task_id = Map.get(args, "task_id") || Map.get(args, "id")
 
     # A malformed id used to reach `Repo.get/2` and raise
     # `Ecto.Query.CastError` (a 500 naming nothing). It now gets the same
     # not-found envelope as a well-formed id that names no task (01a114a8
     # stage 3).
-    record = if Platform.UUID.valid?(task_id), do: Tasks.get_task_record(task_id)
+    #
+    # RBAC v2 (task 01a1386e-45a5 stage 1): a task a `tasks.read` deny covers
+    # for the caller's Scope (`Platform.Access.check/3`) is read as no task,
+    # so the denial confirms nothing, title included.
+    record =
+      with true <- Platform.UUID.valid?(task_id),
+           :ok <- caller_access_check(context, "tasks.read", {:task, task_id}) do
+        Tasks.get_task_record(task_id)
+      else
+        _ -> nil
+      end
 
     case record do
       nil ->
@@ -5407,7 +5439,7 @@ defmodule Platform.Federation.ToolSurface do
   #   (b) "a new capability bundle, e.g. `task_admin`". A bundle is a
   #       VISIBILITY SCOPE, not a privilege level:
   #       `Platform.Federation.ToolAuthorization` deliberately reads
-  #       `allowed_bundles` and nothing else, so encoding privilege there
+  #       `tool_profile` and nothing else, so encoding privilege there
   #       would put an admin grant in a column any runtime row can be
   #       given — an escalation one UPDATE wide, invisible to every
   #       membership check.
@@ -5539,14 +5571,14 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
-  def execute("task_list", args, _context) do
+  def execute("task_list", args, context) do
     # Task 01a0acc3 stage 3: the assignee pair is validated BEFORE any query.
     # A non-UUID id would raise Ecto.Query.CastError inside the flat-column
     # comparison (a 500 to the caller), and an `assignee_type` with no id
     # would be a silently dropped filter — the exact defect this task exists
     # to remove, reintroduced one key over.
     case task_list_assignee_opts(args) do
-      {:ok, assignee_opts} -> do_task_list(args, assignee_opts)
+      {:ok, assignee_opts} -> do_task_list(args, assignee_opts, runtime_access_opts(context))
       {:error, _} = refusal -> refusal
     end
   end
@@ -5803,7 +5835,16 @@ defmodule Platform.Federation.ToolSurface do
                "task_list_canvases"
              ) do
           :ok ->
-            entries = CanvasAttachments.list_task_canvases(task_id)
+            # RBAC v2 (task 01a1386e-45a5 stage 1): a canvas the caller's
+            # `canvas.read` deny covers is dropped before serialization, so
+            # neither its id nor its title is listed.
+            entries =
+              task_id
+              |> CanvasAttachments.list_task_canvases()
+              |> Enum.filter(fn %{attachment: attachment} ->
+                caller_access_check(context, "canvas.read", {:canvas, attachment.canvas_id}) ==
+                  :ok
+              end)
 
             canvases =
               Enum.map(entries, fn %{attachment: attachment, canvas: canvas_env} ->
@@ -6234,11 +6275,12 @@ defmodule Platform.Federation.ToolSurface do
   # per-member inherited-vs-overridden flag (see serialize_stack/1 and
   # serialize_stack_member/1).
 
-  def execute("stack_list", args, _context) do
+  def execute("stack_list", args, context) do
     filters =
       %{}
       |> maybe_put_filter(:project_id, Map.get(args, "project_id"))
       |> maybe_put_filter(:status, Map.get(args, "status"))
+      |> Map.merge(Map.new(runtime_access_opts(context)))
 
     # Task 01a05394-8300 stage 4. Mirrors `task_list` (task 01a04a7a): an
     # ENVELOPE, never a bare array, because a JSON array cannot say whether
@@ -7350,7 +7392,13 @@ defmodule Platform.Federation.ToolSurface do
     {:ok, ResultBound.whole(:templates, result)}
   end
 
-  def execute("prompt_template_update", args, _context) do
+  # The write re-checks permission in the context
+  # (`PromptTemplates.update_template/3`, task 01a1386d-fb6e stage 2) with the
+  # caller's Scope: the calling runtime's `Scope.for_runtime/1`, or an
+  # in-process caller's `:access_scope`. With no grants a runtime holding the
+  # `plan` bundle is answered exactly as before. A call whose runtime cannot be
+  # resolved holds no permission and is refused, not treated as the system.
+  def execute("prompt_template_update", args, context) do
     slug = Map.get(args, "slug")
     content = Map.get(args, "content")
 
@@ -7364,10 +7412,11 @@ defmodule Platform.Federation.ToolSurface do
          }}
 
       template ->
-        case Platform.Orchestration.PromptTemplates.update_template(template, %{
-               "content" => content,
-               "updated_by" => "agent"
-             }) do
+        case Platform.Orchestration.PromptTemplates.update_template(
+               template,
+               %{"content" => content, "updated_by" => "agent"},
+               prompt_update_scope(context)
+             ) do
           {:ok, updated} ->
             {:ok,
              %{
@@ -7377,6 +7426,15 @@ defmodule Platform.Federation.ToolSurface do
                variables: updated.variables,
                updated_by: updated.updated_by,
                updated_at: format_datetime(updated.updated_at)
+             }}
+
+          {:error, :unauthorized} ->
+            {:error,
+             %{
+               error: "unauthorized: prompt_template_update needs the plan bundle",
+               code: :unauthorized,
+               recoverable: false,
+               suggestion: "Ask an admin to grant this runtime the plan bundle."
              }}
 
           {:error, changeset} ->
@@ -7412,8 +7470,8 @@ defmodule Platform.Federation.ToolSurface do
       view_range = Map.get(args, "view_range")
 
       case class.kind do
-        :page -> view_page(path, view_range, workspace_id, class)
-        :private -> view_page(path, view_range, workspace_id, class)
+        :page -> view_page(path, view_range, workspace_id, class, memory_access_opts(context))
+        :private -> view_page(path, view_range, workspace_id, class, memory_access_opts(context))
         :journal -> view_journal(path, class, view_range, workspace_id)
       end
     end
@@ -7489,7 +7547,11 @@ defmodule Platform.Federation.ToolSurface do
          existing_new = Wiki.get_page(new_path, workspace_id: workspace_id),
          :ok <-
            gate_rename_paths(agent, [{old_path, existing_old}, {new_path, existing_new}]) do
-      do_memory_rename(old_path, new_path, agent, workspace_id)
+      if prefix_rename?(old_path, new_path) do
+        do_memory_rename_prefix(old_path, new_path, agent, workspace_id)
+      else
+        do_memory_rename(old_path, new_path, agent, workspace_id)
+      end
     end
   end
 
@@ -7514,7 +7576,9 @@ defmodule Platform.Federation.ToolSurface do
 
       with :ok <- authorize_org_filter(agent, Map.get(args, "org_id")),
            {:ok, opts} <- search_opts_from(args, agent) do
-        query |> Search.search(opts) |> bound_memory_search_payload()
+        query
+        |> Search.search(opts ++ memory_access_opts(context))
+        |> bound_memory_search_payload()
       end
     end
   end
@@ -7532,19 +7596,22 @@ defmodule Platform.Federation.ToolSurface do
   # keeps the tool_surface source clean of any bundle-name-adjacent
   # string literals that the T5 scope-creep guard forbids.
 
-  def execute("org_memory_recently_edited", args, _context) do
-    opts = feedback_read_opts(args, "edit")
+  def execute("org_memory_recently_edited", args, context) do
+    opts = feedback_read_opts(args, "edit") ++ memory_access_opts(context)
     {:ok, Enum.map(Platform.MemoryFeedback.list_recent(opts), &serialize_feedback_entry/1)}
   end
 
-  def execute("org_memory_recently_deleted", args, _context) do
-    opts = feedback_read_opts(args, "delete")
+  def execute("org_memory_recently_deleted", args, context) do
+    opts = feedback_read_opts(args, "delete") ++ memory_access_opts(context)
     {:ok, Enum.map(Platform.MemoryFeedback.list_recent(opts), &serialize_feedback_entry/1)}
   end
 
-  def execute("org_memory_feedback_at_path", args, _context) do
+  def execute("org_memory_feedback_at_path", args, context) do
     with {:ok, path} <- require_string(args, "path", "org_memory_feedback_at_path") do
       workspace_id = Map.get(args, "workspace_id")
+      # Task 01a1386d-e528 stage 4: these rows carry `original_content`, so
+      # an unscoped read here leaks a denied page's CONTENT, not a title.
+      access_opts = memory_access_opts(context)
 
       # Two `list_recent/1` calls (one per feedback_kind) rather than a
       # single unfiltered call + Elixir-side partition — keeps the query
@@ -7554,6 +7621,7 @@ defmodule Platform.Federation.ToolSurface do
       edits =
         [feedback_kind: "edit", path_prefix: path, workspace_id: workspace_id, limit: 100]
         |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+        |> Kernel.++(access_opts)
         |> Platform.MemoryFeedback.list_recent()
         |> Enum.filter(&(&1.path == path))
         |> Enum.map(&serialize_feedback_entry/1)
@@ -7561,6 +7629,7 @@ defmodule Platform.Federation.ToolSurface do
       deletes =
         [feedback_kind: "delete", path_prefix: path, workspace_id: workspace_id, limit: 100]
         |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+        |> Kernel.++(access_opts)
         |> Platform.MemoryFeedback.list_recent()
         |> Enum.filter(&(&1.path == path))
         |> Enum.map(&serialize_feedback_entry/1)
@@ -7595,6 +7664,12 @@ defmodule Platform.Federation.ToolSurface do
          project_id: project.id,
          count: length(files)
        })}
+    else
+      {:error, :access_denied} ->
+        project_not_found_error("file_list", Map.get(args, "project_id"))
+
+      {:error, _} = err ->
+        err
     end
   end
 
@@ -7707,6 +7782,9 @@ defmodule Platform.Federation.ToolSurface do
       nil ->
         file_metadata_not_found_error(Map.get(args, "file_id"))
 
+      {:error, :access_denied} ->
+        file_metadata_not_found_error(Map.get(args, "file_id"))
+
       {:error, _} = err ->
         err
     end
@@ -7753,6 +7831,12 @@ defmodule Platform.Federation.ToolSurface do
                "The embedding service is unavailable or returned an error. Retry shortly; fall back to file_list if it persists."
            }}
       end
+    else
+      {:error, :access_denied} ->
+        project_not_found_error("file_search", Map.get(args, "project_id"))
+
+      {:error, _} = err ->
+        err
     end
   end
 
@@ -7780,6 +7864,9 @@ defmodule Platform.Federation.ToolSurface do
                "For small files pass base64-encoded bytes as `data_base64`; for files over 25 MB pass `byte_size` (positive integer) to reserve a presigned upload slot."
            }}
       end
+    else
+      {:error, :access_denied} -> project_not_found_error("file_add", Map.get(args, "project_id"))
+      {:error, _} = err -> err
     end
   end
 
@@ -7839,6 +7926,9 @@ defmodule Platform.Federation.ToolSurface do
       nil ->
         file_delete_not_found_error(Map.get(args, "file_id"))
 
+      {:error, :access_denied} ->
+        file_delete_not_found_error(Map.get(args, "file_id"))
+
       {:error, _} = err ->
         err
     end
@@ -7873,6 +7963,9 @@ defmodule Platform.Federation.ToolSurface do
         args,
         Map.put(context, :agent_home_org, agent_home_org(load_agent(context)))
       )
+
+  def execute("access_" <> _ = tool, args, context),
+    do: Platform.Access.AgentTools.execute(tool, args, context)
 
   # A tool an extension bundle owns (ADR 0055), listed or not: the extension
   # answers it, including any refusal it gives while switched off. Core's
@@ -12088,6 +12181,9 @@ defmodule Platform.Federation.ToolSurface do
              }}
         end
 
+      {:error, :access_denied} ->
+        file_not_found_error(Map.get(args, "file_id"))
+
       {:error, _} = err ->
         err
     end
@@ -12158,6 +12254,9 @@ defmodule Platform.Federation.ToolSurface do
        }}
     else
       nil ->
+        file_not_found_error(Map.get(args, "file_id"))
+
+      {:error, :access_denied} ->
         file_not_found_error(Map.get(args, "file_id"))
 
       {:error, _} = err ->
@@ -12906,21 +13005,12 @@ defmodule Platform.Federation.ToolSurface do
   # ── Files tool helpers (ADR-0042 Stage 4) ───────────────────────────────
 
   # Loads a project for the file_list / file_get_text dispatch. Surfaces a
-  # not-found envelope keyed to the calling tool so the caller learns
-  # which arg was bad.
+  # not-found envelope keyed to the calling tool. Do not echo the id: a
+  # denied resource must have the same envelope as an unknown resource.
   defp fetch_project_for_files(project_id, tool) when is_binary(project_id) do
     case Platform.Tasks.get_project(project_id) do
-      nil ->
-        {:error,
-         %{
-           error: "#{tool}: project not found (#{project_id})",
-           code: :not_found,
-           recoverable: false,
-           suggestion: "Confirm the project_id — list available projects via the platform UI."
-         }}
-
-      project ->
-        {:ok, project}
+      nil -> project_not_found_error(tool, project_id)
+      project -> {:ok, project}
     end
   end
 
@@ -12948,7 +13038,12 @@ defmodule Platform.Federation.ToolSurface do
   # we permit — same convention `authorize_org_filter/2` uses. The MCP
   # endpoint always provides an agent_id; bare-call test paths exercise
   # the agent-less branch.
-  defp authorize_file_access(context, %Platform.Tasks.Project{org_id: project_org_id}) do
+  defp authorize_file_access(context, %Platform.Tasks.Project{} = project) do
+    with :ok <- authorize_file_org(context, project),
+         do: file_access_check(context, project)
+  end
+
+  defp authorize_file_org(context, %Platform.Tasks.Project{org_id: project_org_id}) do
     agent = load_agent(context)
 
     cond do
@@ -12966,6 +13061,30 @@ defmodule Platform.Federation.ToolSurface do
           {:error, envelope} -> {:error, file_unauthorized_envelope(envelope)}
         end
     end
+  end
+
+  # RBAC v2 (task 01a1386e-45a5 stage 1): `files.read` on the project through
+  # `Platform.Access.check/3`, in conjunction with the org filter above, for
+  # the calling runtime's Scope (or an in-process caller's `:access_scope`).
+  # `{:error, :access_denied}` is mapped by each tool to the envelope an
+  # UNKNOWN id gets, so a deny confirms nothing. `file_add` and `file_delete`
+  # share this helper, so a denied project refuses them too. With no grants
+  # (or no resolvable runtime) it is `:ok`.
+  defp file_access_check(context, %Platform.Tasks.Project{id: project_id}) do
+    case caller_access_check(context, "files.read", {:project, project_id}) do
+      :ok -> :ok
+      {:error, :denied} -> {:error, :access_denied}
+    end
+  end
+
+  defp project_not_found_error(tool, _project_id) do
+    {:error,
+     %{
+       error: "#{tool}: project not found",
+       code: :not_found,
+       recoverable: false,
+       suggestion: "Confirm the project_id — list available projects via the platform UI."
+     }}
   end
 
   # ── External feedback helpers (task 01a11ec3 stage 2) ──────────────────
@@ -13599,20 +13718,20 @@ defmodule Platform.Federation.ToolSurface do
     |> Enum.join()
   end
 
-  defp file_not_found_error(file_id) do
+  defp file_not_found_error(_file_id) do
     {:error,
      %{
-       error: "file_get_text: file not found (#{inspect(file_id)})",
+       error: "file_get_text: file not found",
        code: :not_found,
        recoverable: false,
        suggestion: "Confirm the file_id — use file_list to enumerate the project's files."
      }}
   end
 
-  defp file_metadata_not_found_error(file_id) do
+  defp file_metadata_not_found_error(_file_id) do
     {:error,
      %{
-       error: "file_get_metadata: file not found (#{inspect(file_id)})",
+       error: "file_get_metadata: file not found",
        code: :not_found,
        recoverable: false,
        suggestion: "Confirm the file_id — use file_list to enumerate the project's files."
@@ -14005,8 +14124,10 @@ defmodule Platform.Federation.ToolSurface do
   defp page_count(nil), do: nil
   defp page_count(pages) when is_list(pages), do: length(pages)
 
-  defp view_page(path, view_range, workspace_id, class) do
-    case Wiki.get_page(path, workspace_id: workspace_id) do
+  # `access_opts` (task 01a1386d-e528 stage 4): a page the caller may not
+  # `memory.read` answers the same `not_found` envelope as an absent one.
+  defp view_page(path, view_range, workspace_id, class, access_opts) do
+    case Wiki.get_page(path, [workspace_id: workspace_id] ++ access_opts) do
       nil ->
         not_found_error(path)
 
@@ -14256,6 +14377,79 @@ defmodule Platform.Federation.ToolSurface do
            recoverable: false,
            suggestion: "Check both paths and the workspace_id, then retry."
          }}
+    end
+  end
+
+  # A subtree rename (task 01a1386d-e528 stage 1): BOTH paths end in `/` and
+  # are page-namespace prefixes. Private trailing-slash paths keep the
+  # single-page route, and its answer, unchanged.
+  defp prefix_rename?(old_path, new_path) do
+    String.ends_with?(old_path, "/") and String.ends_with?(new_path, "/") and
+      match?(%{kind: :page}, Routing.classify(old_path)) and
+      match?(%{kind: :page}, Routing.classify(new_path))
+  end
+
+  defp do_memory_rename_prefix(old_prefix, new_prefix, agent, workspace_id) do
+    pairs =
+      old_prefix
+      |> Wiki.list_pages_under(workspace_id: workspace_id)
+      |> Enum.flat_map(fn page ->
+        target = new_prefix <> String.replace_prefix(page.file_key, old_prefix, "")
+
+        [
+          {page.file_key, page},
+          {target, Wiki.get_page(target, workspace_id: workspace_id)}
+        ]
+      end)
+
+    opts =
+      [workspace_id: workspace_id]
+      |> maybe_put(:updated_by, agent && agent.id)
+
+    with :ok <- gate_rename_paths(agent, pairs) do
+      case Wiki.rename_prefix(old_prefix, new_prefix, opts) do
+        {:ok, renamed} ->
+          {:ok,
+           %{
+             path: new_prefix,
+             kind: classify_kind_string(new_prefix),
+             count: length(renamed),
+             renamed:
+               Enum.map(renamed, fn {from, page} ->
+                 %{from: from, to: page.file_key, version: page.version}
+               end)
+           }}
+
+        {:error, {:conflict, paths}} ->
+          {:error,
+           %{
+             error:
+               "memory_rename: the subtree rename would overwrite existing path(s): #{Enum.join(paths, ", ")}. A subtree rename never overwrites.",
+             code: :conflict,
+             recoverable: true,
+             conflicts: paths,
+             suggestion:
+               "Pick a target prefix with nothing under it, or move or delete the conflicting paths first."
+           }}
+
+        {:error, :not_found} ->
+          not_found_error(old_prefix)
+
+        {:error, :stale} ->
+          version_conflict_error(new_prefix)
+
+        {:error, %Ecto.Changeset{} = changeset} ->
+          changeset_error("memory_rename", changeset)
+
+        {:error, reason} ->
+          {:error,
+           %{
+             error: "memory_rename failed: #{inspect(reason)}",
+             code: :rename_failed,
+             recoverable: false,
+             suggestion: "Check both paths and the workspace_id, then retry."
+           }}
+      end
     end
   end
 
@@ -15160,7 +15354,10 @@ defmodule Platform.Federation.ToolSurface do
     end)
   end
 
-  defp do_task_list(args, assignee_opts) do
+  # `access_opts` (task 01a1386d-e528 stage 3) reach the query but NOT the
+  # `filters` echo below: they are the caller's authorization, not a filter it
+  # supplied, and a `%Platform.Access.Scope{}` is not JSON.
+  defp do_task_list(args, assignee_opts, access_opts) do
     # Compose every supplied filter together — passing project_id and status
     # both must AND, not pick one branch. The old `cond` was mutually
     # exclusive and silently dropped the status filter when project_id was
@@ -15203,10 +15400,10 @@ defmodule Platform.Federation.ToolSurface do
     # two pages cannot skip or repeat a row.
     {limit, offset} = ResultBound.page(args)
 
-    total = Tasks.count_tasks(opts)
+    total = Tasks.count_tasks(opts ++ access_opts)
 
     rows =
-      opts
+      (opts ++ access_opts)
       |> Tasks.list_tasks_page(limit: limit, offset: offset)
       |> Enum.map(&serialize_task_row(&1, full_detail?(args)))
 
@@ -15561,6 +15758,71 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
+  # RBAC v2 resource scoping (task 01a1386d-e528 stage 3): the calling
+  # runtime's `Platform.Access.Scope.for_runtime/1`, as `:access_scope`, for
+  # `task_list`, `project_list`, `stack_list` and `canvas_list`. Each listing
+  # keeps its existing check (bundle authorization, `assert_agent_in_space/2`)
+  # and an agent-principal deny now narrows it; with no grant it returns
+  # today's rows (`Platform.Access.Query.where_readable/5`). A call with no
+  # resolvable runtime (no `:runtime_id`, or an unknown one) passes no scope,
+  # which is today's read.
+  # The memory tools' caller scope (task 01a1386d-e528 stage 4): an
+  # `:access_scope` the in-process caller put on the context (the org-memory
+  # LiveView passes its user's Scope; an MCP request never carries one, its
+  # context is built server-side), else the calling runtime's
+  # `runtime_access_opts/1`. Used by `memory_view`, `memory_search` and the
+  # three `org_memory_*` feedback reads.
+  defp memory_access_opts(%{access_scope: %Platform.Access.Scope{} = scope}),
+    do: [access_scope: scope]
+
+  defp memory_access_opts(context), do: runtime_access_opts(context)
+
+  # `Platform.Access.check/3` for the caller behind an MCP `context`: its
+  # `memory_access_opts/1` Scope (an in-process `:access_scope`, else the
+  # calling runtime's). With no resolvable Scope, `:ok` (today's read).
+  defp caller_access_check(context, _permission, _resource) when not is_map(context), do: :ok
+
+  defp caller_access_check(context, permission, resource) do
+    context
+    |> memory_access_opts()
+    |> Keyword.get(:access_scope)
+    |> Platform.Access.check(permission, resource)
+  end
+
+  # The caller Scope `prompt_template_update` re-checks with (task
+  # 01a1386d-fb6e stage 2): an in-process caller's `:access_scope`, else the
+  # calling runtime's, else nil (refused by the context).
+  defp prompt_update_scope(%{access_scope: %Platform.Access.Scope{} = scope}), do: scope
+
+  defp prompt_update_scope(context) do
+    case runtime_access_opts(context) do
+      [access_scope: scope] -> scope
+      [] -> nil
+    end
+  end
+
+  defp runtime_access_opts(context) do
+    with runtime_id when is_binary(runtime_id) <- Map.get(context, :runtime_id),
+         %Platform.Agents.AgentRuntime{} = runtime <-
+           Platform.Federation.get_runtime_by_runtime_id(runtime_id) do
+      [access_scope: Platform.Access.Scope.for_runtime(runtime)]
+    else
+      _ -> []
+    end
+  end
+
+  defp space_read_scope(context) do
+    case runtime_access_opts(context) do
+      [access_scope: scope] ->
+        scope
+
+      [] ->
+        Platform.Access.Scope.for_runtime(%Platform.Agents.AgentRuntime{
+          agent_id: Map.get(context, :agent_id)
+        })
+    end
+  end
+
   defp assert_agent_in_space(space_id, context) do
     agent_id = Map.get(context, :agent_id)
 
@@ -15584,11 +15846,24 @@ defmodule Platform.Federation.ToolSurface do
       true ->
         case Chat.get_agent_participant(space_id, agent_id) do
           %Chat.Participant{} ->
-            :ok
+            scope = space_read_scope(context)
+
+            if Platform.Access.can?(scope, "chat.read", space_id) do
+              :ok
+            else
+              {:error, Map.put(space_write_denied(space_id), :restricted, true)}
+            end
 
           _ ->
             {:error, space_write_denied(space_id)}
         end
+    end
+  end
+
+  defp readable_space_or_denied(space_id, context) do
+    case caller_access_check(context, "chat.read", {:space, space_id}) do
+      :ok -> :ok
+      {:error, :denied} -> {:error, space_write_denied(space_id)}
     end
   end
 

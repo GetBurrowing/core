@@ -1,0 +1,18 @@
+<main class="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center px-6 py-16">
+  <div class="w-full max-w-lg rounded-2xl border border-zinc-800 bg-zinc-900 p-8 shadow-xl">
+    <p class="text-sm font-semibold uppercase tracking-wider text-amber-400">Access denied</p>
+    <h1 class="mt-4 text-3xl font-semibold tracking-tight">
+      You don't have access, ask an admin
+    </h1>
+    <p class="mt-4 text-zinc-300">You don't have access, ask an admin.</p>
+    <p :if={assigns[:module_label]} class="mt-4 text-sm text-zinc-400">
+      Module: {@module_label}
+    </p>
+    <a
+      href="/"
+      class="mt-8 inline-flex rounded-lg bg-zinc-100 px-4 py-2 font-medium text-zinc-950"
+    >
+      Return home
+    </a>
+  </div>
+</main>

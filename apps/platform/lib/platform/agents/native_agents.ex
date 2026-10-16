@@ -11,8 +11,7 @@ defmodule Platform.Agents.NativeAgents do
   marked `managed_by: "install"` with a `harness` and a `desired_state`. That
   is the whole difference. Everything that reads an agent through its runtime
   (`Platform.Orchestration.PhaseRuntime.resolve/1`, `AgentResponder`'s
-  external dispatch, `Platform.Agents.Kind.classify/1`, the bundle grant on
-  `agent_runtimes.allowed_bundles`) treats it exactly as a federated agent,
+  external dispatch, `Platform.Agents.Kind.classify/1`, the Access-owned runtime profile and owner cap) treats it exactly as a federated agent,
   because it is one. A new `runtime_type` value is ruled out.
 
   ## Tokens
@@ -105,7 +104,11 @@ defmodule Platform.Agents.NativeAgents do
 
       Repo.transaction(fn ->
         with {:ok, agent, runtime, _raw_token} <-
-               Federation.provision_agent_runtime(owner_user_id, agent_attrs, runtime_attrs),
+               Federation.provision_agent_runtime(
+                 Platform.Access.Scope.for_user(%{id: owner_user_id}),
+                 agent_attrs,
+                 runtime_attrs
+               ),
              :ok <- seed_files(agent, harness) do
           {agent, runtime}
         else
@@ -191,7 +194,8 @@ defmodule Platform.Agents.NativeAgents do
         _ -> false
       end
 
-    owner? or Tenancy.root_admin?(user)
+    (owner? or Tenancy.root_admin?(user)) and
+      Platform.Access.Agents.manage?(Platform.Access.Scope.for_user(%{id: user_id}), agent)
   end
 
   def can_manage?(_user, _agent), do: false
