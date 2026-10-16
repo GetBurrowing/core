@@ -515,6 +515,7 @@ defmodule Platform.Access.DelegationTest do
       refute Access.can?(agent_scope, "tasks.read", {:project, p.id})
 
       next_user = user!("agent-target")
+
       assert {:beyond_held, _} =
                refused(fn -> grant_as(agent_scope, next_user, "tasks.read", p) end)
 
