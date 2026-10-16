@@ -7,7 +7,9 @@ defmodule Platform.Access.ToolListHttpEquivalenceTest do
   alias Platform.Repo
   alias Platform.RuntimeBundleSnapshot
 
-  test "HTTP tools/list preserves every ordered production array except approved Play loss", %{conn: conn} do
+  test "HTTP tools/list preserves every ordered production array except approved Play loss", %{
+    conn: conn
+  } do
     owner = root_admin!()
 
     for %{key: key, bundles: bundles} <- RuntimeBundleSnapshot.snapshots() do

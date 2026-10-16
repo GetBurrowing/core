@@ -39,7 +39,10 @@ defmodule Platform.Agents.AgentRuntimeTest do
     # point is that WHATEVER the defaults are, they reach `meeting_say`.
     # A root-admin owner supplies the permission cap for this positive control.
     test "a runtime on default bundles may call meeting_say" do
-      runtime = %AgentRuntime{owner_user_id: root_admin!().id, allowed_bundles: AgentRuntime.default_allowed_bundles()}
+      runtime = %AgentRuntime{
+        owner_user_id: root_admin!().id,
+        allowed_bundles: AgentRuntime.default_allowed_bundles()
+      }
 
       assert :ok = ToolAuthorization.authorize("meeting_say", runtime)
       assert :ok = ToolAuthorization.authorize("meeting_create", runtime)
@@ -63,7 +66,10 @@ defmodule Platform.Agents.AgentRuntimeTest do
     # transport boundaries (`runtime_channel.ex`, `mcp_controller.ex`), so
     # there is nothing to match on here beyond `:ok`.
     test "a runtime on default bundles may call meeting_activity_push" do
-      runtime = %AgentRuntime{owner_user_id: root_admin!().id, allowed_bundles: AgentRuntime.default_allowed_bundles()}
+      runtime = %AgentRuntime{
+        owner_user_id: root_admin!().id,
+        allowed_bundles: AgentRuntime.default_allowed_bundles()
+      }
 
       assert :ok = ToolAuthorization.authorize("meeting_activity_push", runtime)
       assert "meeting_activity_push" in ToolAuthorization.tool_names(runtime)
