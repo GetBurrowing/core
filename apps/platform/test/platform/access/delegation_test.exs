@@ -20,7 +20,7 @@ defmodule Platform.Access.DelegationTest do
   import Platform.TenancyFixtures
 
   alias Platform.Access
-  alias Platform.Access.{Change, Changes, Delegation, Grant, Grants, Scope}
+  alias Platform.Access.{Change, Changes, Delegation, Grant, Grants, RuntimeProfiles, Scope}
   alias Platform.Accounts
   alias Platform.Accounts.User
   alias Platform.Agents.{Agent, AgentRuntime}
@@ -532,10 +532,12 @@ defmodule Platform.Access.DelegationTest do
         owner_user_id: owner.id,
         agent_id: agent.id,
         auth_token_hash: AgentRuntime.hash_token(AgentRuntime.generate_token()),
-        status: "active",
-        allowed_bundles: AgentRuntime.default_allowed_bundles()
+        status: "active"
       })
       |> Repo.insert()
+
+    {:ok, _profile} =
+      RuntimeProfiles.create_for_runtime(rt, AgentRuntime.default_tool_profile(), nil)
 
     rt
   end
