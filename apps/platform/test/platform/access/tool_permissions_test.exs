@@ -30,11 +30,12 @@ defmodule Platform.Access.ToolPermissionsTest do
     assert "agents.manage_own" in ToolPermissions.bundle_permissions("federation")
   end
 
-  test "extension tools default to its bundle permission" do
+  test "extension tools use explicit mapping or the bundle fallback" do
     FixtureExtension.register()
-    assert ToolPermissions.for_tool("fixture_echo") == Registry.bundle_permission("fixture")
+    assert ToolPermissions.for_tool("fixture_echo") == "skills.read"
     assert ToolPermissions.for_tool("fixture_hidden") == Registry.bundle_permission("fixture")
+
     assert ToolPermissions.bundle_permissions("fixture") ==
-             MapSet.new([Registry.bundle_permission("fixture")])
+             MapSet.new(["skills.read", Registry.bundle_permission("fixture")])
   end
 end

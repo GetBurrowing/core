@@ -14,19 +14,91 @@ defmodule Platform.RuntimeBundleSnapshot do
 
   @snapshots [
     %{key: :a, bundles: @a, owner: :root_admin, fabrikam: 14, ellis: 0},
-    %{key: :b, bundles: List.insert_at(@a, -1, "code_mode"), owner: :root_admin, fabrikam: 2, ellis: 0},
-    %{key: :c, bundles: ~w(federation space context_read messaging attachment canvas review task plan skill memory files meetings mail play code_mode experiments prototype), owner: :root_admin, fabrikam: 1, ellis: 0},
-    %{key: :d, bundles: ~w(federation space context_read messaging review canvas task plan memory skill attachment meetings mail prototype), owner: :root_admin, fabrikam: 1, ellis: 0},
-    %{key: :e, bundles: ~w(federation space context_read messaging attachment skill meetings mail prototype), owner: :root_admin, fabrikam: 8, ellis: 0},
-    %{key: :f, bundles: ~w(federation space context_read messaging memory skill attachment meetings mail prototype), owner: :root_admin, fabrikam: 1, ellis: 0},
-    %{key: :g, bundles: ~w(federation space context_read messaging review canvas task plan memory skill attachment meetings mail code_mode prototype), owner: :root_admin, fabrikam: 1, ellis: 0},
+    %{
+      key: :b,
+      bundles: List.insert_at(@a, -1, "code_mode"),
+      owner: :root_admin,
+      fabrikam: 2,
+      ellis: 0
+    },
+    %{
+      key: :c,
+      bundles:
+        ~w(federation space context_read messaging attachment canvas review task plan skill memory files meetings mail play code_mode experiments prototype),
+      owner: :root_admin,
+      fabrikam: 1,
+      ellis: 0
+    },
+    %{
+      key: :d,
+      bundles:
+        ~w(federation space context_read messaging review canvas task plan memory skill attachment meetings mail prototype),
+      owner: :root_admin,
+      fabrikam: 1,
+      ellis: 0
+    },
+    %{
+      key: :e,
+      bundles:
+        ~w(federation space context_read messaging attachment skill meetings mail prototype),
+      owner: :root_admin,
+      fabrikam: 8,
+      ellis: 0
+    },
+    %{
+      key: :f,
+      bundles:
+        ~w(federation space context_read messaging memory skill attachment meetings mail prototype),
+      owner: :root_admin,
+      fabrikam: 1,
+      ellis: 0
+    },
+    %{
+      key: :g,
+      bundles:
+        ~w(federation space context_read messaging review canvas task plan memory skill attachment meetings mail code_mode prototype),
+      owner: :root_admin,
+      fabrikam: 1,
+      ellis: 0
+    },
     %{key: :h, bundles: @h, owner: :root_admin, fabrikam: 2, ellis: 1},
-    %{key: :i, bundles: ~w(federation space messaging meetings mail prototype), owner: :root_admin, fabrikam: 1, ellis: 0},
-    %{key: :j, bundles: List.insert_at(@h, -1, "code_mode"), owner: :root_admin, fabrikam: 1, ellis: 0},
-    %{key: :k, bundles: List.insert_at(@h, -1, "experiments") |> List.insert_at(-1, "play"), owner: :root_admin, fabrikam: 1, ellis: 0},
-    %{key: :l, bundles: ~w(messaging context_read prototype), owner: :root_admin, fabrikam: 1, ellis: 0},
+    %{
+      key: :i,
+      bundles: ~w(federation space messaging meetings mail prototype),
+      owner: :root_admin,
+      fabrikam: 1,
+      ellis: 0
+    },
+    %{
+      key: :j,
+      bundles: List.insert_at(@h, -1, "code_mode"),
+      owner: :root_admin,
+      fabrikam: 1,
+      ellis: 0
+    },
+    %{
+      key: :k,
+      bundles: List.insert_at(@h, -1, "experiments") |> List.insert_at(-1, "play"),
+      owner: :root_admin,
+      fabrikam: 1,
+      ellis: 0
+    },
+    %{
+      key: :l,
+      bundles: ~w(messaging context_read prototype),
+      owner: :root_admin,
+      fabrikam: 1,
+      ellis: 0
+    },
     %{key: :m, bundles: ~w(prototype), owner: :root_admin, fabrikam: 2, ellis: 0},
-    %{key: :n, bundles: ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode play prototype), owner: :root_admin_after_promotion, fabrikam: 1, ellis: 0}
+    %{
+      key: :n,
+      bundles:
+        ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode play prototype),
+      owner: :root_admin_after_promotion,
+      fabrikam: 1,
+      ellis: 0
+    }
   ]
 
   def snapshots, do: @snapshots

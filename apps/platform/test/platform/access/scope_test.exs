@@ -431,12 +431,17 @@ defmodule Platform.Access.ScopeTest do
       user
     end
 
-    test "default bundles: one mcp permission each, the same tools as ToolAuthorization", ctx do
+    test "default bundles retain the transitional mcp keys and add capped tool permissions",
+         ctx do
       runtime = %AgentRuntime{owner_user_id: owner!(ctx, false).id}
       scope = Scope.for_runtime(runtime)
 
-      assert scope.permissions ==
-               Map.new(AgentRuntime.default_allowed_bundles(), &{"mcp." <> &1, :all})
+      for bundle <- AgentRuntime.default_allowed_bundles() do
+        assert scope.permissions["mcp." <> bundle] == :all
+      end
+
+      assert is_list(scope.permissions["chat.write"])
+      assert scope.permissions["agents.manage_own"] == :all
 
       refute Scope.guest?(scope)
       assert Scope.tool_names(scope) == ToolAuthorization.tool_names(runtime)
@@ -451,7 +456,10 @@ defmodule Platform.Access.ScopeTest do
 
       scope = Scope.for_runtime(runtime)
 
-      assert scope.permissions == %{"mcp.task" => :all, "mcp.messaging" => :all}
+      assert scope.permissions["mcp.task"] == :all
+      assert scope.permissions["mcp.messaging"] == :all
+      assert scope.permissions["tasks.read"] == :all
+      assert is_list(scope.permissions["chat.write"])
       assert Scope.tool_names(scope) == ToolAuthorization.tool_names(runtime)
     end
 

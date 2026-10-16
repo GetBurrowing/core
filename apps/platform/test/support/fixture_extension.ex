@@ -62,6 +62,7 @@ defmodule Platform.FixtureExtension do
         ],
         # `fixture_hidden` is owned but not listed, like a switched-off tool.
         tool_names: ["fixture_echo", "fixture_hidden"],
+        permissions: %{"fixture_echo" => "skills.read"},
         execute: &execute/3,
         deny_message: fn
           "fixture_hidden" -> "fixture_hidden is switched off on this install"
@@ -194,7 +195,7 @@ defmodule Platform.FixtureExtension do
     @impl true
     def schema, do: %{"type" => "object", "properties" => %{}}
 
-    attr :node, :map, required: true
+    attr(:node, :map, required: true)
 
     @impl true
     def render(assigns) do

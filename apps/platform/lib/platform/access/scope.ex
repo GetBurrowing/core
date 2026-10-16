@@ -690,7 +690,12 @@ defmodule Platform.Access.Scope do
   defp intersect_value(value, :all), do: value
 
   defp intersect_value(own, owner) when is_list(own) and is_list(owner),
-    do: own |> MapSet.new() |> MapSet.intersection(MapSet.new(owner)) |> MapSet.to_list() |> Enum.sort()
+    do:
+      own
+      |> MapSet.new()
+      |> MapSet.intersection(MapSet.new(owner))
+      |> MapSet.to_list()
+      |> Enum.sort()
 
   # `for_user/1` retains the internal user's legacy no-membership baseline.
   # Runtime ownership is stricter: no membership cannot authorize a tool.
@@ -768,5 +773,4 @@ defmodule Platform.Access.Scope do
 
   defp bundles(%AgentRuntime{allowed_bundles: bundles}) when is_list(bundles), do: bundles
   defp bundles(_runtime), do: []
-
 end
