@@ -184,10 +184,8 @@ defmodule Platform.Orchestration.PromptTemplates do
   end
 
   @manage_permission "prompts.manage"
-  @tool_bundle "plan"
-
   defp authorize_manage(%Access.Scope{actor: %AgentRuntime{}} = scope),
-    do: Access.authorize(scope, Access.Registry.bundle_permission(@tool_bundle))
+    do: Access.authorize(scope, @manage_permission)
 
   defp authorize_manage(%AgentRuntime{} = runtime),
     do: authorize_manage(Access.Scope.for_runtime(runtime))

@@ -120,11 +120,9 @@ defmodule Platform.Access.Scope do
 
   ## Runtimes
 
-  `for_runtime/1` translates `allowed_bundles` into the transitional
-  `mcp.<bundle>` permissions at `:all`. There is no owner intersection (agent
-  capping is stack position 5) and `ToolAuthorization` is not consulted for a
-  decision; `tool_names/1` reproduces `ToolAuthorization.effective_tools/1`'s
-  composition, in `allowed_bundles` row order. An external-owned runtime's
+  `for_runtime/1` translates `allowed_bundles` into tool permissions, then
+  intersects them with the owner's scope. Transitional `mcp.<bundle>` fields
+  remain available to the earlier stack member's equivalence checks. An external-owned runtime's
   `role_keys` carry its owner's guest keys, which marks the scope external.
   `chat.read` is the agent's roster (`Chat.list_spaces_for_agent/2`), a
   build-time snapshot: a runtime's chat reach is its participation, as today.
@@ -239,8 +237,8 @@ defmodule Platform.Access.Scope do
   end
 
   @doc """
-  The Scope for an agent runtime: one `mcp.<bundle>` permission at `:all` per
-  `allowed_bundles` entry the registry declares. No owner intersection.
+  The Scope for an agent runtime: tool permissions from the runtime profile,
+  intersected with its owner's permissions.
   """
   @spec for_runtime(AgentRuntime.t()) :: t()
   def for_runtime(%AgentRuntime{} = runtime) do
