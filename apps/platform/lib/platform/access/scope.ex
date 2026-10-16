@@ -492,14 +492,8 @@ defmodule Platform.Access.Scope do
   def tool_names(%__MODULE__{actor: %AgentRuntime{} = runtime}),
     do: Platform.Access.Tools.tool_names(runtime)
 
-  def tool_names(%__MODULE__{actor: actor} = scope) do
-    candidates =
-      case actor do
-        %AgentRuntime{} = runtime -> bundles(runtime)
-        _ -> ToolSurface.all_bundles()
-      end
-
-    candidates
+  def tool_names(%__MODULE__{} = scope) do
+    ToolSurface.all_bundles()
     |> Enum.filter(&holds_bundle?(scope, &1))
     |> ToolSurface.list_tools()
     |> ToolSurface.scope_for_external(guest?(scope))
@@ -811,6 +805,4 @@ defmodule Platform.Access.Scope do
 
   defp agent_actor(_runtime), do: nil
 
-  defp bundles(%AgentRuntime{allowed_bundles: bundles}) when is_list(bundles), do: bundles
-  defp bundles(_runtime), do: []
 end

@@ -41,8 +41,13 @@ defmodule Platform.Repo.Migrations.CreateAccessRuntimeProfiles do
       )
     end)
 
+    assert_copied!(repo())
+  end
+
+  @doc false
+  def assert_copied!(repository) do
     %{rows: [[runtime_count, profile_count, mismatch_count]]} =
-      repo().query!("""
+      repository.query!("""
       SELECT (SELECT count(*) FROM agent_runtimes),
              (SELECT count(*) FROM access_runtime_profiles),
              (SELECT count(*) FROM access_runtime_profiles p
