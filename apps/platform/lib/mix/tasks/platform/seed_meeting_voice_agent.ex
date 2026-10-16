@@ -100,6 +100,7 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgent do
   use Mix.Task
 
   alias Platform.Accounts.User
+  alias Platform.Access.RuntimeProfiles
   alias Platform.Agents.{Agent, MemoryContext}
   alias Platform.Federation
   alias Platform.Repo
@@ -199,7 +200,7 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgent do
         agent_id:        #{agent.id}
         agent_slug:      #{agent.slug}
         runtime_id:      #{runtime.runtime_id}
-        allowed_bundles: #{Enum.join(runtime.allowed_bundles, ", ")}\
+        allowed_bundles: #{Enum.join(RuntimeProfiles.tool_profile(runtime), ", ")}\
       """ <> token_line(raw_token)
     )
 

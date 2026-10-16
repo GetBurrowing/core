@@ -7,7 +7,7 @@ defmodule PlatformWeb.MCPController do
 
   Auth is handled upstream by `PlatformWeb.Plugs.RuntimeBearerAuth`; the
   authenticated runtime lives at `conn.assigns.runtime` and its
-  `allowed_bundles` field scopes both `tools/list` and `tools/call`.
+  Access resolves the runtime profile and owner cap for both `tools/list` and `tools/call`.
 
   Capability scoping itself is NOT implemented here. Both `tools/list` and
   `tools/call` delegate to `Platform.Federation.ToolAuthorization`, the single

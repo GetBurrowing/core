@@ -800,8 +800,8 @@ defmodule Platform.Meetings.IntentDispatcher do
     end
   end
 
-  # `authorize/2` reads `allowed_bundles` off the struct already in hand, but
-  # `external_principal?/1` inside it does one `Repo.exists?` — so this shares
+  # `authorize/2` resolves the runtime profile and owner cap through Access,
+  # which touches the DB — so this shares
   # the sandbox-gone hazard every other DB touch on this path is wrapped for.
   #
   # It fails OPEN, and that direction is deliberate: this gate refuses only
