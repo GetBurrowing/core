@@ -186,6 +186,10 @@ defmodule Platform.Access do
 
   def can?(%Scope{actor: :system}, _permission, _resource), do: true
 
+  def can?(%Scope{own_cap: %Scope{} = own, owner_cap: %Scope{} = owner}, permission, resource)
+      when is_binary(permission),
+      do: can?(own, permission, resource) and can?(owner, permission, resource)
+
   def can?(%Scope{} = scope, permission, resource) when is_binary(permission) do
     if restriction_denied?(scope, permission, resource) do
       false
@@ -237,6 +241,18 @@ defmodule Platform.Access do
   `Platform.Access.Query.where_permitted/5` turns it into a query condition.
   """
   @spec permitted(Scope.t(), String.t(), atom()) :: Permitted.t()
+  def permitted(%Scope{own_cap: %Scope{} = own, owner_cap: %Scope{} = owner}, permission, type) do
+    own_set = permitted(own, permission, type)
+    owner_set = permitted(owner, permission, type)
+
+    %Permitted{
+      resource_type: own_set.resource_type,
+      permission: permission,
+      allow: intersect_allowed(own_set.allow, owner_set.allow),
+      deny: Enum.uniq(own_set.deny ++ owner_set.deny)
+    }
+  end
+
   def permitted(%Scope{actor: :system}, permission, type),
     do: %Permitted{resource_type: permitted_type(type), permission: permission, allow: :all}
 
@@ -289,6 +305,10 @@ defmodule Platform.Access do
         )
     }
   end
+
+  defp intersect_allowed(:all, value), do: value
+  defp intersect_allowed(value, :all), do: value
+  defp intersect_allowed(a, b), do: Enum.filter(a, &(&1 in b))
 
   @doc """
   Does any grant of `scope`'s principals name `permission`? `false` means

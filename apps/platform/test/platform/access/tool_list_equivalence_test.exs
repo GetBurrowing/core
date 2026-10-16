@@ -1,0 +1,72 @@
+defmodule Platform.Access.ToolListEquivalenceTest do
+  use Platform.DataCase, async: false
+
+  import Platform.TenancyFixtures
+
+  alias Platform.Access.Tools
+  alias Platform.Accounts.User
+  alias Platform.Agents.AgentRuntime
+  alias Platform.Repo
+  alias Platform.RuntimeBundleSnapshot
+  alias Platform.Tenancy
+  alias Platform.Tenancy.OrgMembership
+
+  setup do
+    root = acme_org_id()
+    admin = owner!(root, "admin")
+    guest = owner!(root, "member", true)
+    %{admin: admin, guest: guest}
+  end
+
+  test "ordered tool names are unchanged for each production bundle array except approved Play loss",
+       %{admin: admin} do
+    for %{key: key, bundles: bundles} <- RuntimeBundleSnapshot.snapshots() do
+      runtime = %AgentRuntime{owner_user_id: admin.id, allowed_bundles: bundles}
+      before = RuntimeBundleSnapshot.legacy_tool_names(bundles)
+      after_names = Tools.tool_names(runtime)
+
+      expected =
+        if key in [:c, :k, :n],
+          do: Enum.reject(before, &String.starts_with?(&1, "play_session_")),
+          else: before
+
+      assert after_names == expected, "ordered tool list changed for snapshot #{key}"
+    end
+  end
+
+  test "guest owner gets exactly the six legacy chat tools with every bundle", %{guest: guest} do
+    runtime = %AgentRuntime{
+      owner_user_id: guest.id,
+      allowed_bundles: Platform.Federation.ToolSurface.all_bundles()
+    }
+
+    assert Tools.tool_names(runtime) ==
+             RuntimeBundleSnapshot.legacy_tool_names(runtime.allowed_bundles, true)
+  end
+
+  defp owner!(org_id, role, external? \\ false) do
+    n = System.unique_integer([:positive])
+
+    user =
+      Repo.insert!(%User{
+        email: "tool-owner-#{n}@example.com",
+        name: "Tool owner #{n}",
+        oidc_sub: "tool-owner-#{n}"
+      })
+
+    membership =
+      %OrgMembership{}
+      |> OrgMembership.changeset(%{
+        user_id: user.id,
+        org_id: org_id,
+        role: role
+      })
+      |> Repo.insert!()
+
+    if external?,
+      do: Tenancy.mark_membership_external(%{user_id: user.id, org_id: org_id, role: role})
+
+    assert membership.user_id == user.id
+    user
+  end
+end

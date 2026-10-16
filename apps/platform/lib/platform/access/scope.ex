@@ -133,14 +133,20 @@ defmodule Platform.Access.Scope do
   import Ecto.Query, only: [from: 2]
 
   alias Platform.Access
-  alias Platform.Access.{Grants, Registry}
+  alias Platform.Access.{Grants, Registry, ToolPermissions}
   alias Platform.Agents.AgentRuntime
   alias Platform.Chat.ExternalScope
-  alias Platform.Federation.{ToolAuthorization, ToolSurface}
+  alias Platform.Federation.ToolSurface
   alias Platform.Repo
   alias Platform.Tenancy.{Org, OrgMembership}
 
-  defstruct actor: nil, org: nil, permissions: %{}, role_keys: %{}, grants: []
+  defstruct actor: nil,
+            org: nil,
+            permissions: %{},
+            role_keys: %{},
+            grants: [],
+            own_cap: nil,
+            owner_cap: nil
 
   @type permission_value :: :all | [binary()]
   @type t :: %__MODULE__{
@@ -148,7 +154,9 @@ defmodule Platform.Access.Scope do
           org: Org.t() | nil,
           permissions: %{String.t() => permission_value()},
           role_keys: %{(binary() | nil) => MapSet.t(String.t())},
-          grants: [Platform.Access.Grant.t()]
+          grants: [Platform.Access.Grant.t()],
+          own_cap: t() | nil,
+          owner_cap: t() | nil
         }
 
   @implicit_kinds ~w(channel system execution)
@@ -236,27 +244,65 @@ defmodule Platform.Access.Scope do
   """
   @spec for_runtime(AgentRuntime.t()) :: t()
   def for_runtime(%AgentRuntime{} = runtime) do
-    permissions =
+    legacy_permissions =
       for bundle <- bundles(runtime),
           permission = Registry.bundle_permission(bundle),
           into: %{},
           do: {permission, :all}
 
-    permissions = put_agent_roster(permissions, runtime)
+    tool_permissions =
+      for bundle <- bundles(runtime),
+          permission <- ToolPermissions.bundle_permissions(bundle),
+          into: %{},
+          do: {permission, :all}
 
-    role_keys =
-      if ToolAuthorization.external_principal?(runtime),
-        do: owner_guest_keys(runtime.owner_user_id),
-        else: %{}
+    permissions = put_agent_roster(Map.merge(legacy_permissions, tool_permissions), runtime)
+
+    owner =
+      %{id: runtime.owner_user_id}
+      |> for_user()
+      |> empty_if_no_membership()
+
+    role_keys = if guest?(owner), do: owner.role_keys, else: %{}
 
     {grants, assignments} =
       Grants.list_for_actor(agent_principals(runtime), agent_actor(runtime))
 
-    %__MODULE__{
+    own = %__MODULE__{
       actor: runtime,
       permissions: permissions,
       role_keys: assigned_keys(role_keys, assignments),
       grants: grants
+    }
+
+    capped = intersect(own, owner)
+
+    # The member-2 equivalence oracle still reads these transitional fields.
+    # Tool authorization reads only the module permissions in `capped`.
+    legacy = Map.take(permissions, Map.keys(legacy_permissions) ++ ["chat.read"])
+    %{capped | permissions: Map.merge(capped.permissions, legacy)}
+  end
+
+  @doc "Intersect an agent's own permissions and grants with its owner's scope."
+  @spec intersect(t(), t()) :: t()
+  def intersect(%__MODULE__{} = own, %__MODULE__{} = owner) do
+    permissions =
+      for {permission, own_value} <- own.permissions,
+          {:ok, owner_value} <- [Map.fetch(owner.permissions, permission)],
+          into: %{},
+          do: {permission, intersect_value(own_value, owner_value)}
+
+    role_keys =
+      if guest?(owner), do: owner.role_keys, else: own.role_keys
+
+    %__MODULE__{
+      actor: own.actor,
+      org: owner.org,
+      permissions: permissions,
+      role_keys: role_keys,
+      grants: own.grants ++ owner.grants,
+      own_cap: own,
+      owner_cap: owner
     }
   end
 
@@ -640,6 +686,19 @@ defmodule Platform.Access.Scope do
   defp merge(_, :all), do: :all
   defp merge(a, b) when is_list(a) and is_list(b), do: a ++ b
 
+  defp intersect_value(:all, value), do: value
+  defp intersect_value(value, :all), do: value
+
+  defp intersect_value(own, owner) when is_list(own) and is_list(owner),
+    do: own |> MapSet.new() |> MapSet.intersection(MapSet.new(owner)) |> MapSet.to_list() |> Enum.sort()
+
+  # `for_user/1` retains the internal user's legacy no-membership baseline.
+  # Runtime ownership is stricter: no membership cannot authorize a tool.
+  defp empty_if_no_membership(%__MODULE__{actor: %{org_memberships: []}} = scope),
+    do: %{scope | permissions: %{}, grants: []}
+
+  defp empty_if_no_membership(scope), do: scope
+
   defp normalize(:all), do: :all
 
   defp normalize(ids) when is_list(ids),
@@ -710,14 +769,4 @@ defmodule Platform.Access.Scope do
   defp bundles(%AgentRuntime{allowed_bundles: bundles}) when is_list(bundles), do: bundles
   defp bundles(_runtime), do: []
 
-  defp owner_guest_keys(owner_user_id) when is_binary(owner_user_id) do
-    from(m in OrgMembership,
-      where: m.user_id == ^owner_user_id and m.external == true,
-      select: m.org_id
-    )
-    |> Repo.all()
-    |> Map.new(&{&1, MapSet.new(["guest"])})
-  end
-
-  defp owner_guest_keys(_), do: %{}
 end

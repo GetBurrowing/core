@@ -80,6 +80,18 @@ defmodule Platform.Access.Query do
   """
   @spec restrict(Ecto.Queryable.t(), Scope.t(), String.t(), atom(), map()) ::
           Ecto.Queryable.t()
+  def restrict(
+        query,
+        %Scope{own_cap: %Scope{} = own, owner_cap: %Scope{} = owner},
+        permission,
+        resource_type,
+        column_mapping
+      ) do
+    query
+    |> restrict(own, permission, resource_type, column_mapping)
+    |> where_permitted(owner, permission, resource_type, column_mapping)
+  end
+
   def restrict(query, %Scope{} = scope, permission, resource_type, column_mapping) do
     mapping = Map.new(column_mapping)
     base = Map.get(mapping, :base)
@@ -136,6 +148,9 @@ defmodule Platform.Access.Query do
   def where_readable(query, %Scope{} = scope, permission, type, mapping)
       when type in @memory_types do
     cond do
+      match?(%Scope{owner_cap: %Scope{}}, scope) ->
+        restrict(query, scope, permission, type, Map.delete(Map.new(mapping), :base))
+
       not Access.grants_apply?(scope, permission) ->
         query
 

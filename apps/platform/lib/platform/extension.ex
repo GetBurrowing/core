@@ -61,6 +61,7 @@ defmodule Platform.Extension do
           required(:definitions) => [map()],
           required(:tool_names) => [String.t()],
           required(:execute) => (String.t(), map(), map() -> term()),
+          optional(:permissions) => %{String.t() => String.t()},
           optional(:deny_message) => (String.t() -> String.t() | nil),
           optional(:owns_tool?) => (String.t() -> boolean())
         }
