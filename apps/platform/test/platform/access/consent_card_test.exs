@@ -70,6 +70,7 @@ defmodule Platform.Access.ConsentCardTest do
     text = document_text(Repo.get!(Chat.Canvas, proposal.canvas_id).document)
     assert text =~ "Gain access: access.manage"
     assert text =~ ctx.project.name
+    assert text =~ "user #{ctx.guest.name}"
     refute text =~ "harmless agent prose"
 
     assert Proposals.digest(Repo.get!(Chat.Canvas, proposal.canvas_id).document) ==
@@ -108,7 +109,10 @@ defmodule Platform.Access.ConsentCardTest do
     text = document_text(canvas.document)
     assert text =~ "Gain access: access.manage"
     operation = find_node(canvas.document["root"], "operation-0")
-    assert operation["props"]["value"] == "Gain access: access.manage · #{ctx.project.name}"
+
+    assert operation["props"]["value"] ==
+             "Gain access: access.manage · #{ctx.project.name} · user #{ctx.guest.name}"
+
     assert {:ok, applied} = Proposals.apply(stored.id, ctx.human)
     assert applied.state == "applied"
 

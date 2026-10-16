@@ -22,7 +22,7 @@ defmodule Platform.Access.Proposals do
         canvas_id: canvas.id,
         kind: "undo",
         action: "undo",
-        options: [json(%{key: "default", label: "Undo change", ops: [], impact: impact})],
+        options: [json(%{key: "default", label: undo_label(change), ops: [], impact: impact})],
         selected_option: "default",
         tuple_keys: change.tuple_keys,
         base_state_hash: state_hash(),
@@ -88,17 +88,7 @@ defmodule Platform.Access.Proposals do
                   do: "Gain access",
                   else: "Lose access"
 
-              schema =
-                case row.resource_type do
-                  "project" -> Platform.Tasks.Project
-                  "space" -> Chat.Space
-                  "canvas" -> Canvas
-                  "memory_node" -> Platform.Org.Wiki.Node
-                end
-
-              resource = Repo.get!(schema, row.resource_id)
-              name = Map.get(resource, :name) || Map.get(resource, :title) || row.resource_id
-              "#{verb}: #{row.permission} · #{name}"
+              factual_label(row, verb)
             end)
 
           entry = %{
@@ -114,6 +104,41 @@ defmodule Platform.Access.Proposals do
           {:halt, error}
       end
     end)
+  end
+
+  defp undo_label(change) do
+    restored = Enum.map(change.before -- change.after, &{&1, "Restore #{&1["effect"]}"})
+    removed = Enum.map(change.after -- change.before, &{&1, "Remove #{&1["effect"]}"})
+
+    (restored ++ removed)
+    |> Enum.map_join("; ", fn {snapshot, verb} ->
+      snapshot |> Grant.from_snapshot() |> then(&struct(Grant, &1)) |> factual_label(verb)
+    end)
+  end
+
+  defp factual_label(row, verb) do
+    schema = case row.resource_type do
+      "project" -> Platform.Tasks.Project
+      "space" -> Chat.Space
+      "canvas" -> Canvas
+      "memory_node" -> Platform.Org.Wiki.Node
+    end
+    resource = Repo.get!(schema, row.resource_id)
+    name = Map.get(resource, :name) || Map.get(resource, :title) || row.resource_id
+    "#{verb}: #{row.permission} · #{name} · #{principal_label(row)}"
+  end
+
+  defp principal_label(%Grant{principal_type: "role", principal_role_key: key}),
+    do: "role " <> key
+
+  defp principal_label(%Grant{principal_type: type, principal_id: id}) do
+    principal =
+      if type == "user", do: Accounts.get_user(id), else: Repo.get(Platform.Agents.Agent, id)
+
+    name =
+      if principal, do: Map.get(principal, :name) || Map.get(principal, :email) || id, else: id
+
+    "#{type} #{name}"
   end
 
   @doc "The authenticated click process supplies the human; no agent or approval token can commit."
@@ -394,14 +419,20 @@ defmodule Platform.Access.Proposals do
         # heartbeats. Neither changes access or the displayed loss list.
         omitted =
           case table do
-            "chat_participants" -> ~w(last_read_message_id attention_mode attention_config avatar_url)
-            "agent_runtimes" -> ~w(last_connected_at updated_at)
-            _ -> []
+            "chat_participants" ->
+              ~w(last_read_message_id attention_mode attention_config avatar_url)
+
+            "agent_runtimes" ->
+              ~w(last_connected_at updated_at)
+
+            _ ->
+              []
           end
 
         %{rows: rows} =
           Repo.query!(
-            "SELECT (to_jsonb(t) - $1::text[])::text FROM " <> table <>
+            "SELECT (to_jsonb(t) - $1::text[])::text FROM " <>
+              table <>
               " t ORDER BY (to_jsonb(t) - $1::text[])::text",
             [omitted]
           )

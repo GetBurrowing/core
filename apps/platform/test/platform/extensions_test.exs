@@ -667,7 +667,11 @@ defmodule Platform.ExtensionsTest do
         if kind == "text",
           do: update_in(node, path, &Map.delete(&1, "principal_id")),
           else:
-            update_in(node, path ++ ["actions", "items", "properties"], &Map.delete(&1, "disabled"))
+            update_in(
+              node,
+              path ++ ["actions", "items", "properties"],
+              &Map.delete(&1, "disabled")
+            )
 
       Map.new(node, fn {key, value} -> {key, legacy_kind_props(value)} end)
     end

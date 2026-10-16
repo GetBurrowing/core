@@ -197,6 +197,9 @@ defmodule Platform.Access.AgentToolsTest do
     row = Repo.get!(Proposal, response["proposal_id"])
     assert row.kind == "undo"
     assert row.undoes_change_id == change.id
+    assert hd(row.options)["label"] =~ "tasks.write"
+    assert hd(row.options)["label"] =~ ctx.q.name
+    assert hd(row.options)["label"] =~ ctx.guest.name
     assert counts() == before
 
     assert ok_call(ctx.token, "access_apply", %{"proposal_id" => row.id})["state"] ==
