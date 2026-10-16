@@ -290,8 +290,11 @@ defmodule Platform.CodeMode.ReturnContractTest do
     test "omitted evidence reports its encoded length; returned evidence reports null" do
       plan = plan!(task!(project!()), 1, validations: 2)
 
-      %{"stages" => [%{"validations" => [omitted, whole]}]} =
+      %{"stages" => [%{"validations" => validations}]} =
         conform!("stage_list", %{"plan_id" => plan.id})
+
+      omitted = Enum.find(validations, & &1["evidence_omitted"])
+      whole = Enum.find(validations, &(!&1["evidence_omitted"]))
 
       assert omitted["evidence_omitted"] == true
       assert omitted["evidence_length"] == byte_size(~s({"result":"ok"}))
