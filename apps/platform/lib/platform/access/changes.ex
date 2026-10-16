@@ -97,6 +97,9 @@ defmodule Platform.Access.Changes do
         before = snapshot(query, lock: true)
         baseline = baseline(actor, before ++ key_resources(Keyword.get(opts, :keys, [])))
 
+        precondition!(opts)
+        inspected_before = inspect_state(opts, :inspect_before)
+
         result =
           case mutation_fun.() do
             {:ok, result} -> result
@@ -105,6 +108,15 @@ defmodule Platform.Access.Changes do
 
         after_rows = snapshot(query)
         bypass = delegate!(actor, before, after_rows, baseline)
+
+        inspected_after = inspect_state(opts, :inspect_after)
+
+        if opts[:dry_run] do
+          Repo.rollback(
+            {:dry_run,
+             %{result: result, change: nil, before: inspected_before, after: inspected_after}}
+          )
+        end
 
         change =
           record!(before, after_rows, %{
@@ -119,7 +131,7 @@ defmodule Platform.Access.Changes do
 
         %{result: result, change: change}
       end)
-      |> after_commit()
+      |> finish(opts)
     end
   end
 
@@ -142,7 +154,7 @@ defmodule Platform.Access.Changes do
          %Change{} = change <- Repo.get(Change, change_id) || {:error, :not_found},
          {:ok, {actor_type, actor_id}} <- actor_fields(actor) do
       Repo.transaction(fn -> do_undo(change, actor, actor_type, actor_id, opts) end)
-      |> after_commit()
+      |> finish(opts)
     end
   end
 
@@ -166,6 +178,8 @@ defmodule Platform.Access.Changes do
     before = snapshot(query, lock: true)
     baseline = baseline(actor, before ++ change.before)
 
+    precondition!(opts)
+    inspected_before = inspect_state(opts, :inspect_before)
     after_ids = Enum.map(change.after, & &1["id"])
     Repo.delete_all(from(g in Grant, where: g.id in ^after_ids))
 
@@ -173,6 +187,15 @@ defmodule Platform.Access.Changes do
 
     after_rows = snapshot(query)
     bypass = delegate!(actor, before, after_rows, baseline)
+
+    inspected_after = inspect_state(opts, :inspect_after)
+
+    if opts[:dry_run] do
+      Repo.rollback(
+        {:dry_run,
+         %{result: restored, change: nil, before: inspected_before, after: inspected_after}}
+      )
+    end
 
     undo_change =
       record!(before, after_rows, %{
@@ -350,6 +373,29 @@ defmodule Platform.Access.Changes do
     do: {:ok, {"user", id}}
 
   defp actor_fields(_), do: {:error, :invalid_actor}
+
+  defp precondition!(opts) do
+    case Keyword.get(opts, :precondition, fn -> :ok end).() do
+      :ok -> :ok
+      {:error, reason} -> Repo.rollback(reason)
+    end
+  end
+
+  defp inspect_state(opts, key) do
+    case opts[key] do
+      fun when is_function(fun, 0) -> fun.()
+      nil -> nil
+    end
+  end
+
+  defp finish(result, opts) do
+    if opts[:defer_notifications], do: result, else: after_commit(result)
+  end
+
+  @doc "Publish a ledger change after an enclosing transaction commits."
+  def notify_committed(%Change{} = change), do: after_commit({:ok, %{change: change}})
+
+  defp after_commit({:error, {:dry_run, result}}), do: {:ok, result}
 
   defp after_commit({:ok, %{change: %Change{} = change}} = ok) do
     emit(change)

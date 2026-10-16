@@ -151,6 +151,118 @@ defmodule Platform.Access.Grants do
     end
   end
 
+  @doc "Apply a homogeneous batch in one ledger transaction, or inspect it without persisting."
+  def apply_ops(ops, opts) when is_list(ops) and ops != [] do
+    actions = Enum.uniq(Enum.map(ops, &Map.get(&1, :action)))
+
+    case actions do
+      [action] when action in ["grant", "deny", "revoke"] ->
+        with {:ok, prepared} <- prepare_ops(ops, actor!(opts)) do
+          tuples = Enum.map(prepared, fn {_op, tuple} -> tuple end)
+          keys = Enum.map(tuples, &Grant.tuple_key/1)
+
+          condition =
+            Enum.reduce(tuples, false, fn tuple, acc ->
+              Ecto.Query.dynamic(
+                [g],
+                ^acc or
+                  (g.resource_type == ^tuple.resource_type and g.resource_id == ^tuple.resource_id)
+              )
+            end)
+
+          query = from(g in Grant, where: ^condition)
+
+          mutation = fn ->
+            results =
+              Enum.map(prepared, fn
+                {%{action: "revoke", id: id}, _tuple} ->
+                  case Repo.get(Grant, id) do
+                    nil -> Repo.rollback(:not_found)
+                    row -> Repo.delete!(row)
+                  end
+
+                {_op, tuple} ->
+                  case Repo.insert(Grant.changeset(%Grant{}, Map.from_struct(tuple))) do
+                    {:ok, row} -> row
+                    {:error, reason} -> Repo.rollback(reason)
+                  end
+              end)
+
+            {:ok, results}
+          end
+
+          Changes.commit(
+            actor!(opts),
+            action,
+            mutation,
+            Keyword.merge(opts, query: query, keys: keys, org_id: hd(tuples).org_id)
+          )
+        end
+
+      _ ->
+        {:error, :mixed_actions}
+    end
+  end
+
+  def apply_ops([], _opts), do: {:error, :empty_ops}
+
+  @doc "Resolve and validate operations without writing grant rows."
+  def prepare_ops(ops, actor) do
+    Enum.reduce_while(ops, {:ok, []}, fn op, {:ok, acc} ->
+      case prepare_op(op, actor) do
+        {:ok, tuple} -> {:cont, {:ok, acc ++ [{op, tuple}]}}
+        error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp prepare_op(%{action: "revoke", id: id}, _actor) do
+    if Platform.UUID.valid?(id) do
+      case Repo.get(Grant, id) do
+        nil -> {:error, :not_found}
+        row -> {:ok, row}
+      end
+    else
+      {:error, :not_found}
+    end
+  end
+
+  defp prepare_op(%{action: action} = op, actor) when action in ["grant", "deny"] do
+    with {:ok, principal} <- principal_fields(op[:principal]),
+         {:ok, {type, id, org}} <- resource_fields(op[:resource]),
+         {:ok, org} <- org_id(op[:org_id] || org) do
+      fields =
+        Map.merge(principal, %{
+          org_id: org,
+          resource_type: type,
+          resource_id: id,
+          permission: op[:permission],
+          effect: if(action == "grant", do: "allow", else: "deny"),
+          granted_by: actor_user_id(actor)
+        })
+
+      cs = Grant.changeset(%Grant{}, fields)
+      if cs.valid?, do: {:ok, Ecto.Changeset.apply_changes(cs)}, else: {:error, cs}
+    end
+  end
+
+  defp prepare_op(_, _actor), do: {:error, :invalid_op}
+
+  @doc "Explicit principal grants the actor manages; role assignments and restrictions are retained."
+  def reset_ops(subject, %Scope{} = actor) do
+    with {:ok, principal} <- principal_fields(subject) do
+      Repo.all(
+        from(g in Grant,
+          where:
+            g.principal_type == ^principal.principal_type and
+              g.principal_id == ^principal.principal_id
+        )
+      )
+      |> Enum.filter(&Platform.Access.can?(actor, "access.manage", Grant.target(&1)))
+      |> Enum.map(&%{action: "revoke", id: &1.id})
+    end
+  end
+
   @doc """
   Every grant whose principal is one of `principals`, in ONE query.
   `[]` with no principals, without querying.

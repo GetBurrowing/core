@@ -870,8 +870,8 @@ The ledger covers `access_grants` only. Member 8's rows are written outside `Cha
 - Deleting a custom role that still restricts a space is refused, never cascaded (§ Built-in
   roles, Rowan's ruling of 2026-10-14), so a role deletion can never silently remove a restriction.
 
-Member 9's plan adds this paragraph's substance. It is written here so that member 9 finds it
-already present.
+Member 9's proposals use this ledger for grant mutations and reset explicit grants only.
+Role restrictions, assignments and IdP mappings remain outside change cards and undo.
 
 ## Root-admin carve-outs
 
