@@ -10,6 +10,7 @@ defmodule Platform.Access.RuntimeScopeCapTest do
 
   test "for_runtime applies an owner's deny after a positive control" do
     owner = root_admin!()
+
     {:ok, project} =
       Tasks.create_project(%{
         name: "scope-cap-#{System.unique_integer([:positive])}",
@@ -20,7 +21,10 @@ defmodule Platform.Access.RuntimeScopeCapTest do
     resource = {:project, project.id}
 
     assert Access.can?(Scope.for_runtime(runtime), "tasks.read", resource)
-    assert {:ok, _} = Grants.deny(%{principal: owner, permission: "tasks.read", resource: resource})
+
+    assert {:ok, _} =
+             Grants.deny(%{principal: owner, permission: "tasks.read", resource: resource})
+
     refute Access.can?(Scope.for_runtime(runtime), "tasks.read", resource)
   end
 

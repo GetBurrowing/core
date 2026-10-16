@@ -50,9 +50,11 @@ defmodule Platform.Access.ToolListEquivalenceTest do
     for owner <- [admin, guest] do
       runtime = %AgentRuntime{owner_user_id: owner.id, allowed_bundles: ["messaging", "space"]}
       {names, query_count} = count_queries(fn -> Tools.tool_names(runtime) end)
+
       IO.puts(
         "tool-list query count for #{if owner.id == admin.id, do: "admin", else: "guest"}: #{query_count}"
       )
+
       assert names != []
       assert query_count <= 4, "#{owner.id} used #{query_count} queries for one tool list"
     end
