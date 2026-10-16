@@ -1,5 +1,9 @@
 defmodule Platform.Repo.Migrations.GrantAgentManagementToBuiltinAdmin do
-  @moduledoc "Add the agent management rule to the built-in admin role; reversible data change."
+  @moduledoc """
+  Add the agent management rule to the built-in admin role; reversible data change.
+
+  Task 01a1386e-1710-7001-a77b-721b18695f04, stage 3 (ADR 0058).
+  """
   use Ecto.Migration
 
   def up do

@@ -158,22 +158,7 @@ defmodule Platform.Regression.SpaceWriteHandleEventAuditTest do
   # Keyed `{relative_path, event_name}`, NOT path alone. `control_center_live.ex`
   # has 55 `handle_event` clauses; a file-granular exemption would silently
   # exempt every handler anyone adds to it in future.
-  @allowlist [
-    # `ControlCenterLive`'s `"add_agent_to_space"` takes a client-supplied
-    # `space_id` into `Platform.Chat.add_agent_participant/3` and
-    # `Platform.Chat.ensure_space_agent/3`. Its sibling handler already lists
-    # every non-DM space platform-wide, and `ControlCenterLive` sits in
-    # `live_session :authenticated` (NOT `:admin`) with no tenancy or admin
-    # check anywhere in the module.
-    #
-    # The precedent for the other answer exists and is named:
-    # `/control/experiments` is in the SAME live_session and is member-readable
-    # with writes admin-gated through `ExperimentsLive`'s `admin_only/2`.
-    #
-    # Bringing Control Center into line is a user-visible permission change, so
-    # it is Marlowe's call and must not be slipped into a security fix.
-    {"platform_web/live/control_center_live.ex", "add_agent_to_space"}
-  ]
+  @allowlist []
 
   # NOT allowlisted, on purpose, and each one is a claim this file re-checks
   # on every run rather than a memory:

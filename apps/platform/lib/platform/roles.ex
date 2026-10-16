@@ -202,7 +202,7 @@ defmodule Platform.Roles do
   end
 
   def assign_role(role_key, agent_id, actor: %Scope{} = scope) do
-    if AgentAccess.may_assign?(scope, Repo.get(Agent, agent_id)),
+    if AgentAccess.may_assign?(scope, get_agent_if_valid(agent_id)),
       do: assign_role(role_key, agent_id),
       else: {:error, :unauthorized}
   end
@@ -235,7 +235,7 @@ defmodule Platform.Roles do
         :ok
 
       assignment ->
-        if AgentAccess.may_release?(scope, Repo.get(Agent, assignment.agent_id)),
+        if AgentAccess.may_release?(scope, get_agent_if_valid(assignment.agent_id)),
           do: unassign_role(role_key),
           else: {:error, :unauthorized}
     end
@@ -409,9 +409,9 @@ defmodule Platform.Roles do
   end
 
   def set_override(responsibility_key, agent_id, actor: %Scope{} = scope) do
-    target = Repo.get(Agent, agent_id)
+    target = get_agent_if_valid(agent_id)
     prior = Repo.get_by(ResponsibilityOverride, responsibility_key: responsibility_key)
-    prior_agent = prior && Repo.get(Agent, prior.agent_id)
+    prior_agent = prior && get_agent_if_valid(prior.agent_id)
 
     if AgentAccess.may_assign?(scope, target) and
          (is_nil(prior) or AgentAccess.may_release?(scope, prior_agent)),
@@ -432,7 +432,7 @@ defmodule Platform.Roles do
   # existing `{:error, changeset}` return.
   defp maybe_signal_runtime_mismatch(responsibility_key, agent_id) do
     responsibility = Responsibilities.get_by_key(responsibility_key)
-    agent = Repo.get(Agent, agent_id)
+    agent = get_agent_if_valid(agent_id)
 
     case RuntimeGate.compatible?(responsibility, agent) do
       :ok ->
@@ -485,10 +485,14 @@ defmodule Platform.Roles do
         :ok
 
       override ->
-        if AgentAccess.may_release?(scope, Repo.get(Agent, override.agent_id)),
+        if AgentAccess.may_release?(scope, get_agent_if_valid(override.agent_id)),
           do: clear_override(responsibility_key),
           else: {:error, :unauthorized}
     end
+  end
+
+  defp get_agent_if_valid(agent_id) do
+    if Platform.UUID.valid?(agent_id), do: Repo.get(Agent, agent_id), else: nil
   end
 
   # ── Resolver ──────────────────────────────────────────────────────────
