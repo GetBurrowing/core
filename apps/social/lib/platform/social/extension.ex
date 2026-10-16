@@ -122,7 +122,17 @@ defmodule Platform.Social.Extension do
   # page. Core hands it only the user id; `PlatformWeb.SocialLive`
   # re-reads the user and authorizes everything itself.
   @impl true
-  def live_pages, do: [%{prefix: "social", live_view: PlatformWeb.SocialLive, title: "Social"}]
+  def live_pages do
+    [
+      %{
+        prefix: "social",
+        live_view: PlatformWeb.SocialLive,
+        title: "Social",
+        module: :social,
+        permission: "social.use"
+      }
+    ]
+  end
 
   # The vendor's status webhook (Social 2/7), behind core's generic
   # `/api/ext/<prefix>` seam. Core gives it no session and no auth: the

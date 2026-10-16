@@ -529,7 +529,7 @@ defmodule PlatformWeb.ControlCenter.NativeAgentsLiveTest do
 
       {:ok, view, html} = live(as(conn, owner), ~p"/control/#{first.slug}")
 
-      assert html =~ "Allowed capability bundles"
+      assert html =~ "Tool profile"
       assert html =~ "Spaces this agent participates in."
       assert has_element?(view, ~s{[data-role="agent-voice-card"]})
       refute html =~ "Regenerate Token"
@@ -538,7 +538,7 @@ defmodule PlatformWeb.ControlCenter.NativeAgentsLiveTest do
       assert has_element?(
                view,
                "#first-agent-note.bg-info.text-info-content",
-               "Ada is the first agent on this install, so it has every bundle."
+               "Ada is the first agent on this install, so its tool profile starts with the configured modules. Access stays capped at its owner."
              )
 
       {:ok, view, _html} = live(as(conn, owner), ~p"/control/#{second.slug}")

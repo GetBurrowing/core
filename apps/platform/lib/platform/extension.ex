@@ -201,6 +201,8 @@ defmodule Platform.Extension do
   @type live_page :: %{
           required(:prefix) => String.t(),
           required(:live_view) => module(),
+          required(:module) => atom(),
+          required(:permission) => String.t(),
           optional(:title) => String.t()
         }
 

@@ -336,12 +336,21 @@ defmodule PlatformWeb.ControlCenterLive do
           Platform.Access.Agents.may_federate?(scope)
 
         nil ->
+          require Logger
+          Logger.warning("[ControlCenterLive] refused unknown event #{inspect(name)}")
           false
       end
 
-    if permitted?,
-      do: handle_control_event(name, params, socket),
-      else: {:noreply, put_flash(socket, :error, "You can only manage your own agents.")}
+    if permitted? do
+      handle_control_event(name, params, socket)
+    else
+      message =
+        if NativeAgents.managed?(socket.assigns[:selected_agent]),
+          do: NativeAgentEvents.refused_message(),
+          else: "You can only manage your own agents."
+
+      {:noreply, put_flash(socket, :error, message)}
+    end
   end
 
   # ── Roles panel events (M7 stage 5) ───────────────────────────────

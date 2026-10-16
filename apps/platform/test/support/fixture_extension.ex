@@ -170,7 +170,16 @@ defmodule Platform.FixtureExtension do
   # The positive control for the `live_pages/0` reader: `/m/fixture` nests
   # `Page`, which shows the one session key core hands it.
   @impl true
-  def live_pages, do: [%{prefix: "fixture", live_view: __MODULE__.Page, title: "Fixture page"}]
+  def live_pages,
+    do: [
+      %{
+        prefix: "fixture",
+        live_view: __MODULE__.Page,
+        title: "Fixture page",
+        module: :skills,
+        permission: "skills.read"
+      }
+    ]
 
   # The positive control for the `inbox_kinds/0` reader: an action kind
   # (stays listed on open) on a source type core does not own.

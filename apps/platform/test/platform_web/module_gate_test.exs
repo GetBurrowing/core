@@ -59,6 +59,24 @@ defmodule PlatformWeb.ModuleGateTest do
              ~r/live_session :authenticated,\s*on_mount: \[[^]]*\{PlatformWeb.ModuleGate, :default\}/s
   end
 
+  test "the generic extension host checks its registered page permission" do
+    Platform.FixtureExtension.register([Platform.FixtureExtension])
+    user = user!() |> member!("member")
+
+    socket = %Phoenix.LiveView.Socket{
+      endpoint: PlatformWeb.Endpoint,
+      view: PlatformWeb.ExtensionPageLive,
+      assigns: %{
+        __changed__: %{},
+        access_scope: Scope.for_user(Platform.Accounts.get_user(user.id))
+      }
+    }
+
+    assert {:cont, _} = ModuleGate.on_mount(:default, %{"prefix" => "fixture"}, %{}, socket)
+    denied = %{socket | assigns: Map.put(socket.assigns, :access_scope, %Scope{})}
+    assert {:halt, _} = ModuleGate.on_mount(:default, %{"prefix" => "fixture"}, %{}, denied)
+  end
+
   test "member denied an admin deep link reaches the access page", %{conn: conn} do
     user = user!() |> member!("member")
 

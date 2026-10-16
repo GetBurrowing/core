@@ -20,6 +20,7 @@ defmodule PlatformWeb.ModuleGate do
     PlatformWeb.EmailLive => {:email, nil},
     PlatformWeb.SkillsLive => {:skills, nil},
     PlatformWeb.ControlCenterLive => {:agents, "agents.manage_own"},
+    PlatformWeb.ExtensionPageLive => {:extension, nil},
     PlatformWeb.UsageLive => {:admin, "agents.manage_own"},
     PlatformWeb.ExperimentsLive => {:experiments, nil},
     PlatformWeb.OrgMemoryLive => {:context, nil},
@@ -56,6 +57,29 @@ defmodule PlatformWeb.ModuleGate do
 
   def on_mount(:default, _params, _session, %{view: PlatformWeb.AccessViewAsLive} = socket),
     do: {:cont, socket}
+
+  # Build-time modules declare the core module key and permission for each
+  # page. The generic host must not become an exception to authorization.
+  def on_mount(
+        :default,
+        %{"prefix" => prefix},
+        _session,
+        %{view: PlatformWeb.ExtensionPageLive} = socket
+      ) do
+    case Platform.Extensions.live_page_for(prefix) do
+      %{module: key, permission: permission} when is_atom(key) and is_binary(permission) ->
+        if Access.module_access?(socket.assigns[:access_scope], key, permission),
+          do: {:cont, socket},
+          else: {:halt, redirect(socket, to: "/access-denied?module=#{key}")}
+
+      nil ->
+        # The host supplies its existing 404 for an unclaimed prefix.
+        {:cont, socket}
+
+      _ ->
+        {:halt, redirect(socket, to: "/access-denied")}
+    end
+  end
 
   def on_mount(:default, _params, _session, socket) do
     case Map.fetch(@view_modules, socket.view) do

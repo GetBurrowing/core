@@ -16,7 +16,7 @@ defmodule Platform.Social.ToolDefinitions do
 
   ## Grantable, not a default grant
 
-  Like `play`, `social` is grantable (`AgentRuntime.valid_bundles/0` appends
+  Like `play`, `social` is loadable (`RuntimeProfiles.valid_modules/0` appends
   every extension bundle) but absent from the default tool profile: an
   admin grants it per runtime, as data in its tool profile.
   """
