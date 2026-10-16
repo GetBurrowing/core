@@ -1,0 +1,49 @@
+<Layouts.app flash={@flash} embedded={true}>
+<main id="access-panel" class="mx-auto max-w-5xl space-y-6 p-4">
+  <h1 class="text-2xl font-semibold">Access</h1>
+  <p class="rounded border border-warning p-3 text-sm">Break-glass view. Normally your agent does this, and changes made here are logged the same way.</p>
+  <.form for={@subject_form} id="access-subject-form" phx-change="select" class="flex flex-col gap-2">
+    <.input field={@subject_form[:subject]} id="access-subject" type="select" label="Effective access for" options={subject_options(@subjects)} />
+  </.form>
+  <button :if={@subject} phx-click="view-as" role="checkbox" aria-checked={to_string(@viewing)}>View as this person</button>
+  <section :if={@viewing && @view}>
+    <div class="rounded border border-info p-3 text-info">Viewing as {@subject.name} <button phx-click="view-as">Exit</button></div>
+    <PlatformWeb.Components.AccessViewAs.preview result={@view} rail_keys={PlatformWeb.AccessViewAs.rail_keys(@view)} />
+  </section>
+  <div class="overflow-x-auto">
+    <table class="table min-w-[600px]" data-role="effective-access">
+      <thead><tr><th>Can</th><th>Where</th><th>Because</th><th>Action</th></tr></thead>
+      <tbody>
+        <tr :for={line <- @lines} data-source={line.source} data-allowed={to_string(line.allowed)}>
+          <td>{if line.allowed, do: "✓", else: "×"} {line.permission}</td>
+          <td>{line.where.name}</td>
+          <td><span class={["font-mono text-xs", line.source == "grant" && "text-info", line.source in ["deny", "restricted"] && "text-error", line.source == "capped" && "text-warning", line.source in ["role", "inherited"] && "text-base-content/60"]}>{line.source}</span> {line.note}</td>
+          <td><button :if={line.source in ["grant", "deny"]} phx-click="remove" phx-value-id={line.grant_id}>Remove</button></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <section>
+    <h2 class="text-lg font-semibold">Recent changes</h2>
+    <div class="overflow-x-auto">
+      <table class="table min-w-[600px]" data-role="access-changes">
+        <thead><tr><th>When</th><th>Change</th><th>By</th><th>Undo</th></tr></thead>
+        <tbody><tr :for={change <- @changes} data-change-id={change.id} class={MapSet.member?(@undone, change.id) && "line-through text-base-content/60"}>
+          <td>{Calendar.strftime(change.inserted_at, "%Y-%m-%d %H:%M")}</td>
+          <td>{change.action} · {length(change.before)} → {length(change.after)} rows</td>
+          <td>By {actor_name(change.actor_id)}{via_name(change.via_agent_id)}</td>
+          <td><button phx-click="undo" phx-value-id={change.id}>Undo</button></td>
+        </tr></tbody>
+      </table>
+    </div>
+  </section>
+  <section :if={@subject}>
+    <h2 class="text-lg font-semibold">Last resort</h2>
+    <button phx-click="reset" class="btn btn-error">Reset selected person to role defaults</button>
+    <p class="text-sm text-base-content/60">Removes every per-person grant and deny, keeps their role. One undo.</p>
+    <div :if={@preview} id="reset-card">
+      <Platform.Chat.Canvas.Renderer.render_node node={preview_document(@preview)["root"]} canvas_id="panel-reset" event_target={nil} />
+    </div>
+  </section>
+</main>
+</Layouts.app>

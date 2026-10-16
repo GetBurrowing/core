@@ -41,10 +41,18 @@ defmodule PlatformWeb.AccessChangeCardLiveTest do
       })
 
     {:ok, participant} =
-      Chat.add_participant(space.id, %{participant_type: "user", participant_id: admin.id})
+      Chat.add_participant(space.id, %{
+        participant_type: "user",
+        joined_at: DateTime.utc_now(),
+        participant_id: admin.id
+      })
 
     {:ok, agent_participant} =
-      Chat.add_participant(space.id, %{participant_type: "agent", participant_id: agent.id})
+      Chat.add_participant(space.id, %{
+        participant_type: "agent",
+        joined_at: DateTime.utc_now(),
+        participant_id: agent.id
+      })
 
     {:ok, canvas} =
       Chat.create_canvas(%{
@@ -137,7 +145,11 @@ defmodule PlatformWeb.AccessChangeCardLiveTest do
     Repo.insert!(%OrgMembership{user_id: member.id, org_id: acme_org_id(), role: "member"})
 
     {:ok, _} =
-      Chat.add_participant(ctx.space.id, %{participant_type: "user", participant_id: member.id})
+      Chat.add_participant(ctx.space.id, %{
+        participant_type: "user",
+        joined_at: DateTime.utc_now(),
+        participant_id: member.id
+      })
 
     baseline = Repo.aggregate(Change, :count)
     view = mount!(member, ctx.space)

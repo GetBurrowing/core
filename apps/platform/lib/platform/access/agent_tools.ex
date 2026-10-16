@@ -130,21 +130,42 @@ defmodule Platform.Access.AgentTools do
           %{key: "option-#{index + 1}", label: "Access change", ops: ops}
         end)
 
-      {:ok, parsed}
+      if Enum.all?(parsed, fn option -> Enum.all?(option.ops, &valid_op?/1) end),
+        do: {:ok, parsed},
+        else: {:error, :invalid_options}
     rescue
       _ -> {:error, :invalid_options}
     end
   end
 
   defp options(_), do: {:error, :invalid_options}
-  defp target(%{"type" => "user", "id" => id}), do: {:ok, {:user, id}}
+  defp valid_op?(%{action: "revoke", id: id}), do: Platform.UUID.valid?(id)
+
+  defp valid_op?(%{resource: {type, id}}) when type in [:project, :space, :canvas, :memory_node],
+    do: Platform.UUID.valid?(id)
+
+  defp valid_op?(_), do: false
+
+  defp target(%{"type" => "user", "id" => id}),
+    do: if(Platform.UUID.valid?(id), do: {:ok, {:user, id}}, else: {:error, :not_found})
+
   defp target(%{"type" => "agent", "id" => id}), do: {:ok, {:agent, id}}
 
   defp target(%{"type" => "role", "org_id" => org_id, "id" => key})
-       when key in ~w(admin member guest), do: {:ok, {:role, org_id, key}}
+       when key in ~w(admin member guest),
+       do:
+         if(Platform.UUID.valid?(org_id),
+           do: {:ok, {:role, org_id, key}},
+           else: {:error, :not_found}
+         )
 
   defp target(%{"type" => "role", "org_id" => org_id, "key" => key})
-       when key in ~w(admin member guest), do: {:ok, {:role, org_id, key}}
+       when key in ~w(admin member guest),
+       do:
+         if(Platform.UUID.valid?(org_id),
+           do: {:ok, {:role, org_id, key}},
+           else: {:error, :not_found}
+         )
 
   defp target(_), do: {:error, :not_found}
 

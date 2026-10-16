@@ -92,6 +92,7 @@ defmodule Platform.Access.Changes do
     with {:ok, {actor_type, actor_id}} <- actor_fields(actor) do
       transaction(
         fn ->
+          Repo.query!("LOCK TABLE access_grants IN ROW EXCLUSIVE MODE")
           pre = Repo.all(query)
           lock_keys(Keyword.get(opts, :keys, []) ++ Enum.map(pre, &Grant.tuple_key/1))
 
@@ -164,6 +165,7 @@ defmodule Platform.Access.Changes do
   def undo(_change_id, _actor, _opts), do: {:error, :invalid_actor}
 
   defp do_undo(%Change{} = change, actor, actor_type, actor_id, opts) do
+    Repo.query!("LOCK TABLE access_grants IN ROW EXCLUSIVE MODE")
     lock_keys(change.tuple_keys)
 
     # Re-read under the locks: a concurrent undo of the same change, or a
@@ -326,6 +328,18 @@ defmodule Platform.Access.Changes do
         [_type, _principal, "access.manage", rtype, rid] <- [String.split(key, "|")],
         rtype in Grant.resource_types(),
         do: {String.to_existing_atom(rtype), rid}
+  end
+
+  @doc "Serialize consent against grant and principal changes for its transaction."
+  def lock_for_consent do
+    tables =
+      ~w(access_grants access_role_assignments access_roles access_runtime_profiles access_space_restrictions agent_runtimes chat_participants chat_spaces org_memberships orgs projects)
+
+    Repo.query!(
+      "LOCK TABLE " <> Enum.join(Enum.sort(tables), ", ") <> " IN SHARE ROW EXCLUSIVE MODE"
+    )
+
+    :ok
   end
 
   # ── internals ───────────────────────────────────────────────────────────

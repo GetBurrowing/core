@@ -79,9 +79,28 @@ defmodule Platform.Access.Proposals do
     Enum.reduce_while(options, {:ok, []}, fn option, {:ok, acc} ->
       case Impact.diff(scope, option.ops) do
         {:ok, impact} ->
+          {:ok, prepared} = Grants.prepare_ops(option.ops, scope)
+
+          labels =
+            Enum.map(prepared, fn {op, row} ->
+              verb = if op.action == "grant", do: "Gain access", else: "Lose access"
+
+              schema =
+                case row.resource_type do
+                  "project" -> Platform.Tasks.Project
+                  "space" -> Chat.Space
+                  "canvas" -> Canvas
+                  "memory_node" -> Platform.Org.Wiki.Node
+                end
+
+              resource = Repo.get!(schema, row.resource_id)
+              name = Map.get(resource, :name) || Map.get(resource, :title) || row.resource_id
+              "#{verb}: #{row.permission} · #{name}"
+            end)
+
           entry = %{
             key: option.key,
-            label: option.label,
+            label: Enum.join(labels, "; "),
             ops: encode_ops(option.ops),
             impact: impact
           }
@@ -99,14 +118,13 @@ defmodule Platform.Access.Proposals do
 
   def apply(id, %Scope{actor: %User{id: user_id}}, _opts) do
     # Reload memberships and scope at the moment of consent.
-    human = Scope.for_user(Accounts.get_user(user_id))
-
     result =
       Repo.transaction(fn ->
+        Changes.lock_for_consent()
+        human = Scope.for_user(Accounts.get_user(user_id))
         row = locked!(id)
         readable!(row, human)
         require_proposed!(row)
-        if state_hash() != row.base_state_hash, do: Repo.rollback(:stale)
 
         option =
           Enum.find(row.options, &(&1["key"] == row.selected_option)) ||
@@ -118,7 +136,11 @@ defmodule Platform.Access.Proposals do
                Impact.diff(human, if(row.kind == "undo", do: row.undoes_change_id, else: ops)) do
           if json(impact) != option["impact"], do: Repo.rollback(:stale)
         else
-          {:error, reason} -> Repo.rollback(reason)
+          {:error, :not_found} ->
+            Repo.rollback(if(state_hash() != row.base_state_hash, do: :stale, else: :not_found))
+
+          {:error, reason} ->
+            Repo.rollback(reason)
         end
 
         if state_hash() != row.base_state_hash, do: Repo.rollback(:stale)
@@ -243,14 +265,23 @@ defmodule Platform.Access.Proposals do
   def status(_, _), do: {:error, :not_found}
 
   defp mutate(id, %Scope{actor: %User{id: uid}}, fun) do
-    human = Scope.for_user(Accounts.get_user(uid))
+    with %Proposal{} = initial <- valid_get(id),
+         {:ok, _} <- Platform.Chat.Canvas.Server.start_server(initial.canvas_id) do
+      Repo.transaction(fn ->
+        human = Scope.for_user(Accounts.get_user(uid))
+        row = locked!(id)
+        readable!(row, human)
+        updated = fun.(row)
 
-    Repo.transaction(fn ->
-      row = locked!(id)
-      readable!(row, human)
-      fun.(row)
-    end)
-    |> render_result()
+        case render_card(updated) do
+          {:ok, rendered} -> rendered
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
+    else
+      nil -> {:error, :not_found}
+      error -> error
+    end
   end
 
   defp valid_get(id), do: if(Platform.UUID.valid?(id), do: Repo.get(Proposal, id))
@@ -287,7 +318,8 @@ defmodule Platform.Access.Proposals do
           end
       end
 
-    if digest(document) != row.card_digest, do: Repo.rollback(:card_changed)
+    if digest(document) != row.card_digest or digest(canvas.document) != row.card_digest,
+      do: Repo.rollback(:card_changed)
   end
 
   defp require_proposed!(row) do
@@ -299,23 +331,36 @@ defmodule Platform.Access.Proposals do
 
   @doc "Rebuild the complete consent surface from server-computed facts."
   def render_card(%Proposal{} = row) do
-    name =
-      case row.approved_by_user_id && Accounts.get_user(row.approved_by_user_id) do
-        nil -> nil
-        user -> user.name || user.email
-      end
+    # Start the server before holding the DB transaction: its initial load
+    # must not wait on the connection owned by this process.
+    with {:ok, _pid} <- Platform.Chat.Canvas.Server.start_server(row.canvas_id) do
+      Repo.transaction(fn ->
+        row = locked!(row.id)
 
-    document = ChangeCard.document(%{row | approved_by_name: name})
-    canvas = Repo.get!(Canvas, row.canvas_id)
+        name =
+          case row.approved_by_user_id && Accounts.get_user(row.approved_by_user_id) do
+            nil -> nil
+            user -> user.name || user.email
+          end
 
-    case Chat.patch_canvas(:system, canvas, [{:replace_document, document}]) do
-      {:ok, _} ->
-        # Persist the same document synchronously: the canvas server persists asynchronously.
-        Repo.update_all(from(c in Canvas, where: c.id == ^canvas.id), set: [document: document])
-        {:ok, update!(row, %{card_digest: digest(document)})}
+        document = ChangeCard.document(%{row | approved_by_name: name})
+        canvas = Repo.get!(Canvas, row.canvas_id)
 
-      error ->
-        error
+        case Chat.patch_canvas(:system, canvas, [{:replace_document, document}]) do
+          {:ok, _} ->
+            Repo.update_all(from(c in Canvas, where: c.id == ^canvas.id),
+              set: [document: document]
+            )
+
+            update!(row, %{card_digest: digest(document)})
+
+          {:error, reason} ->
+            Repo.rollback(reason)
+
+          {:conflict, reason} ->
+            Repo.rollback(reason)
+        end
+      end)
     end
   end
 

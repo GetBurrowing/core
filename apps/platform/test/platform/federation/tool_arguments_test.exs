@@ -202,7 +202,11 @@ defmodule Platform.Federation.ToolArgumentsTest do
   # which refuses an absent or non-slug name (`invalid_name`) before any
   # lookup. No alias, no context fallback.
   # 180 with both of the above (stack prototype-runtime rollup merge).
-  @surveyed_required_count 180
+  # 187 adds access_explain target/resource, access_propose space_id/options,
+  # access_apply proposal_id and access_undo change_id/space_id. All seven
+  # are HONEST: AgentTools refuses absence under the declared key; none has
+  # an alias, a context fallback or an absence default.
+  @surveyed_required_count 187
 
   defp read_source(relative) do
     # Resolved from __DIR__ (apps/platform/test/platform/federation) rather

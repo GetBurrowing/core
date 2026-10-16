@@ -175,7 +175,8 @@ defmodule Platform.Federation.ToolSurfaceTest do
       # 126 as of task 019fa1ac-6685 stage 3: `janitor_hand_back` in `task`.
       # 131 as of the stack prototype-runtime rollup: three `prototype.*` tools
       # (01a1316b-4e46) plus `vault_fetch` and `vault_list` (01a131c5).
-      assert length(tools) == 131
+      # Four optional access consent tools (task 01a1386e-72e1).
+      assert length(tools) == 135
 
       tool_names = Enum.map(tools, & &1.name)
       assert "task_close_as_delivered" in tool_names

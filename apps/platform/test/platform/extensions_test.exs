@@ -622,7 +622,7 @@ defmodule Platform.ExtensionsTest do
     @main_kinds_tool_schemas_digest_off "264902e4c54f3146fe5be6e658c4717aafc6382ea233523ca505607d848e0925"
     # main's lists minus exactly `play`.
     @core_bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode prototype access)
-    @core_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode prototype)
+    @core_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode prototype access)
     @main_rail [
       :chat,
       :tasks,
@@ -666,8 +666,13 @@ defmodule Platform.ExtensionsTest do
 
     test "tool_definitions/0 is main's flag-off list, name for name and byte for byte" do
       defs = ToolSurface.tool_definitions()
-      assert Enum.map(defs, &{&1.name, &1.bundle}) == @main_tool_names_off
-      assert digest(defs) == @main_tool_digest_off
+      {access, legacy} = Enum.split_with(defs, &(&1.bundle == "access"))
+
+      assert Enum.map(access, & &1.name) ==
+               ~w(access_explain access_propose access_apply access_undo)
+
+      assert Enum.map(legacy, &{&1.name, &1.bundle}) == @main_tool_names_off
+      assert digest(legacy) == @main_tool_digest_off
     end
 
     test "bundles, kinds, metrics, surfaces and rail are main's minus the module's entries" do
@@ -678,8 +683,37 @@ defmodule Platform.ExtensionsTest do
       assert Enum.map(Surfaces.list(), & &1.key()) == @core_surfaces
       assert Enum.map(IconRail.destinations(root_user: true), & &1.key) == @main_rail
       assert Kinds.names() == @core_kinds
-      assert digest(Kinds.summaries()) == @main_kinds_summaries_digest_off
-      assert digest(Kinds.tool_schemas()) == @main_kinds_tool_schemas_digest_off
+      # Consent cards add two optional props; retain the byte-level oracle
+      # for every pre-existing field and independently assert each addition.
+      summaries =
+        Enum.map(Kinds.summaries(), fn
+          %{kind: "text"} = row -> %{row | props: Map.delete(row.props, "principal_id")}
+          row -> row
+        end)
+
+      schemas = Kinds.tool_schemas()
+      text_path = ["text", "properties", "props", "properties"]
+
+      action_path = [
+        "action_row",
+        "properties",
+        "props",
+        "properties",
+        "actions",
+        "items",
+        "properties"
+      ]
+
+      assert get_in(schemas, text_path ++ ["principal_id"]) == %{"type" => "string"}
+      assert get_in(schemas, action_path ++ ["disabled"]) == %{"type" => "boolean"}
+
+      legacy_schemas =
+        schemas
+        |> update_in(text_path, &Map.delete(&1, "principal_id"))
+        |> update_in(action_path, &Map.delete(&1, "disabled"))
+
+      assert digest(summaries) == @main_kinds_summaries_digest_off
+      assert digest(legacy_schemas) == @main_kinds_tool_schemas_digest_off
     end
   end
 end

@@ -61,6 +61,12 @@ defmodule Platform.Access.ChangeCard do
           )
         ]
 
+    details = if chosen, do: [chosen], else: options
+
+    nodes =
+      nodes ++
+        Enum.with_index(details, fn option, i -> text("operation-#{i}", option["label"]) end)
+
     nodes = nodes ++ choices(proposal) ++ state_nodes(proposal)
 
     %{
@@ -136,11 +142,7 @@ defmodule Platform.Access.ChangeCard do
 
   defp choices(_), do: []
 
-  defp option_label(option) do
-    ops = option["ops"]
-
-    "#{length(ops)} access #{if length(ops) == 1, do: "change", else: "changes"} · #{option["impact"]["count"]} affected"
-  end
+  defp option_label(option), do: option["label"]
 
   defp state_nodes(%{state: "proposed"} = row) do
     [

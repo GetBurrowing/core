@@ -52,12 +52,17 @@ defmodule Platform.Access.AgentToolsTest do
       })
 
     {:ok, _} =
-      Chat.add_participant(space.id, %{participant_id: root.id, participant_type: "user"})
+      Chat.add_participant(space.id, %{
+        participant_id: root.id,
+        participant_type: "user",
+        joined_at: DateTime.utc_now()
+      })
 
     {:ok, participant} =
       Chat.add_participant(space.id, %{
         participant_id: runtime.agent_id,
-        participant_type: "agent"
+        participant_type: "agent",
+        joined_at: DateTime.utc_now()
       })
 
     %{

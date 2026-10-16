@@ -43,7 +43,16 @@ defmodule PlatformWeb.Layouts do
     doc: "the current [scope](https://hexdocs.pm/phoenix/scopes.html)"
   )
 
+  attr(:embedded, :boolean, default: false, doc: "Render within the existing application shell")
+
   slot(:inner_block, required: true)
+
+  def app(%{embedded: true} = assigns) do
+    ~H"""
+    {render_slot(@inner_block)}
+    <.flash_group flash={@flash} />
+    """
+  end
 
   def app(assigns) do
     ~H"""

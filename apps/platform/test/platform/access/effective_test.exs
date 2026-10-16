@@ -87,7 +87,12 @@ defmodule Platform.Access.EffectiveTest do
 
   test "restricted channels explain a refusal without claiming an effective allow", ctx do
     {:ok, space} =
-      Platform.Chat.create_space(%{name: "effective-#{uniq()}", kind: "channel", org_id: ctx.org})
+      Platform.Chat.create_space(%{
+        name: "effective-#{uniq()}",
+        slug: "effective-#{uniq()}",
+        kind: "channel",
+        org_id: ctx.org
+      })
 
     assert Access.can?(Scope.for_user(ctx.user), "chat.read", space)
     assert {:ok, _} = Restrictions.restrict_space(space, ["admin"])

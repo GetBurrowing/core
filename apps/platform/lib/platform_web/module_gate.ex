@@ -28,6 +28,8 @@ defmodule PlatformWeb.ModuleGate do
     PlatformWeb.RecoveryLive => {:admin, nil},
     PlatformWeb.ExternalRecoveryLive => {:admin, nil},
     PlatformWeb.UserAccessLive => {:admin, nil},
+    PlatformWeb.AccessLive => {:admin, "access.manage"},
+    PlatformWeb.AccessViewAsLive => {:admin, "access.manage"},
     PlatformWeb.AdminOrgsLive => {:admin, nil},
     PlatformWeb.AdminBrandingLive => {:admin, nil},
     PlatformWeb.AdminPrototypesLive => {:admin, nil},
@@ -40,8 +42,10 @@ defmodule PlatformWeb.ModuleGate do
 
   # Every current gated-session view has a module. Keep an explicit list so
   # any future exception must be deliberate and documented here.
-  # View-as authorizes access.manage against the target in its own mount;
-  # a module gate would incorrectly reject project managers on chat host.
+  # View-as keeps its existing target-scoped authorization on the chat host.
+  # The mapping above inventories its module; this narrow compatibility
+  # exemption admits guest project managers whose ViewAs.compute authorizes
+  # the target. The new AccessLive panel has no exemption.
   @ungated [PlatformWeb.AccessViewAsLive]
 
   @doc "The explicit module mapping used by the mount gate and its route sweep."
@@ -49,6 +53,9 @@ defmodule PlatformWeb.ModuleGate do
 
   @doc "Views intentionally available without a module permission."
   def ungated_views, do: @ungated
+
+  def on_mount(:default, _params, _session, %{view: PlatformWeb.AccessViewAsLive} = socket),
+    do: {:cont, socket}
 
   def on_mount(:default, _params, _session, socket) do
     case Map.fetch(@view_modules, socket.view) do
