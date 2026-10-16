@@ -14,6 +14,7 @@ defmodule Platform.Access.SuiteRunInnerGateTest do
 
   test "owner-capped restriction denies direct and code-mode inner task updates" do
     agent = insert_agent!()
+
     {runtime, token} =
       insert_runtime!(agent, ~w(federation space context_read messaging task code_mode))
 
@@ -48,6 +49,7 @@ defmodule Platform.Access.SuiteRunInnerGateTest do
     end
 
     assert Repo.reload!(task).title == "Allowed"
+
     assert mcp_call(token, "task_update", %{"task_id" => task.id, "title" => "Denied"})["error"][
              "code"
            ] == -32001

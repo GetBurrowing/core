@@ -30,6 +30,9 @@ defmodule Platform.Federation.ToolSurfaceOrchestrationDiagnosticsTest do
 
   use Platform.DataCase, async: false
 
+  import Platform.TenancyFixtures
+
+  alias Platform.Agents.AgentRuntime
   alias Platform.Agents.Agent
   alias Platform.Federation.{ToolAuthorization, ToolSurface}
   alias Platform.Orchestration.{Diagnostics, ExecutionLease, RuntimeEvent}
@@ -102,14 +105,14 @@ defmodule Platform.Federation.ToolSurfaceOrchestrationDiagnosticsTest do
 
     test "a runtime holding the task bundle may call them; one without may not" do
       for tool <- ~w(runtime_event_list execution_lease_list) do
-        assert ToolAuthorization.authorize(tool, %{
+        assert ToolAuthorization.authorize(tool, %AgentRuntime{
                  allowed_bundles: ["task"],
-                 owner_user_id: nil
+                 owner_user_id: root_admin!().id
                }) == :ok
 
-        assert ToolAuthorization.authorize(tool, %{
+        assert ToolAuthorization.authorize(tool, %AgentRuntime{
                  allowed_bundles: ["plan", "review"],
-                 owner_user_id: nil
+                 owner_user_id: root_admin!().id
                }) == {:error, :forbidden}
       end
     end

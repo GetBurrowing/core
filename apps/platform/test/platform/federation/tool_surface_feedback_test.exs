@@ -18,6 +18,8 @@ defmodule Platform.Federation.ToolSurfaceFeedbackTest do
   """
   use Platform.DataCase, async: false
 
+  import Platform.TenancyFixtures
+
   alias Platform.Agents.Agent
   alias Platform.Agents.AgentRuntime
   alias Platform.Federation.ToolArguments
@@ -58,7 +60,7 @@ defmodule Platform.Federation.ToolSurfaceFeedbackTest do
       })
       |> Repo.insert!()
 
-    %{agent: agent, runtime: %AgentRuntime{allowed_bundles: ["federation"], owner_user_id: nil}}
+    %{agent: agent, runtime: %AgentRuntime{allowed_bundles: ["federation"], owner_user_id: root_admin!().id}}
   end
 
   defp set_policy(value), do: Application.put_env(:platform, :feedback_policy, value)

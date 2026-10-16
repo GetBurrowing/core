@@ -19,7 +19,8 @@ defmodule Platform.Federation.SkillMCPParityTest do
 
   use PlatformWeb.ConnCase, async: false
 
-  alias Platform.Accounts.User
+  import Platform.TenancyFixtures
+
   alias Platform.Agents.AgentRuntime
   alias Platform.Orchestration.ContextAssembler
   alias Platform.Repo
@@ -29,12 +30,7 @@ defmodule Platform.Federation.SkillMCPParityTest do
   # ── Setup helpers ────────────────────────────────────────────────────
 
   defp create_runtime(product) when product in ["claude_channel", "openclaw"] do
-    user =
-      Repo.insert!(%User{
-        email: "skill_parity_#{System.unique_integer([:positive])}@example.com",
-        name: "Skill Parity Test User",
-        oidc_sub: "oidc-skill-parity-#{System.unique_integer([:positive])}"
-      })
+    user = root_admin!()
 
     raw_token = AgentRuntime.generate_token()
 

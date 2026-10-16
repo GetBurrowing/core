@@ -12,7 +12,8 @@ defmodule Platform.Federation.ToolSurfaceCanvasViewUrlTest do
   """
   use PlatformWeb.ConnCase, async: false
 
-  alias Platform.Accounts.User
+  import Platform.TenancyFixtures
+
   alias Platform.Agents.Agent
   alias Platform.Agents.AgentRuntime
   alias Platform.Chat
@@ -268,12 +269,7 @@ defmodule Platform.Federation.ToolSurfaceCanvasViewUrlTest do
   end
 
   defp canvas_runtime_token!(space) do
-    user =
-      Repo.insert!(%User{
-        email: "canvas_view_url_#{System.unique_integer([:positive])}@example.com",
-        name: "Canvas view_url runtime owner",
-        oidc_sub: "oidc-canvas-view-url-#{System.unique_integer([:positive])}"
-      })
+    user = root_admin!()
 
     agent =
       Repo.insert!(%Agent{

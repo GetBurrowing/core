@@ -3,7 +3,6 @@ defmodule PlatformWeb.MCPControllerTest do
 
   import Platform.TenancyFixtures
 
-  alias Platform.Accounts.User
   alias Platform.Agents.AgentRuntime
   alias Platform.Repo
   alias Platform.Tasks
@@ -11,12 +10,7 @@ defmodule PlatformWeb.MCPControllerTest do
   alias Platform.Tenancy
 
   defp create_runtime(attrs \\ %{}) do
-    user =
-      Repo.insert!(%User{
-        email: "mcp_test_#{System.unique_integer([:positive])}@example.com",
-        name: "MCP Test User",
-        oidc_sub: "oidc-mcp-test-#{System.unique_integer([:positive])}"
-      })
+    user = root_admin!()
 
     raw_token = AgentRuntime.generate_token()
 

@@ -13,10 +13,10 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgentTest do
   """
   use PlatformWeb.ChannelCase, async: false
 
+  import Platform.TenancyFixtures
   import Ecto.Query, only: [from: 2]
 
   alias Mix.Tasks.Platform.SeedMeetingVoiceAgent
-  alias Platform.Accounts.User
   alias Platform.Agents.{Agent, AgentRuntime}
   alias Platform.Federation
   alias Platform.Federation.ToolAuthorization
@@ -24,15 +24,7 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgentTest do
   alias Platform.Repo
   alias Platform.Roles
 
-  defp owner! do
-    n = System.unique_integer([:positive])
-
-    Repo.insert!(%User{
-      email: "meeting-assistant-seed-#{n}@example.com",
-      name: "Seed Owner #{n}",
-      oidc_sub: "oidc-mva-seed-#{n}"
-    })
-  end
+  defp owner!, do: root_admin!()
 
   # ── Idempotent seeding ─────────────────────────────────────────────────────
 

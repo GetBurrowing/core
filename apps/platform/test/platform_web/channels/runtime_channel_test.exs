@@ -1,9 +1,9 @@
 defmodule PlatformWeb.RuntimeChannelTest do
   use PlatformWeb.ChannelCase, async: false
 
+  import Platform.TenancyFixtures
   import Ecto.Query
 
-  alias Platform.Accounts.User
   alias Platform.Agents.Agent
   alias Platform.Agents.AgentRuntime
   alias Platform.Chat
@@ -61,13 +61,7 @@ defmodule PlatformWeb.RuntimeChannelTest do
     }
   end
 
-  defp create_user do
-    Repo.insert!(%User{
-      email: "channel_test_#{System.unique_integer([:positive])}@example.com",
-      name: "Channel Test User",
-      oidc_sub: "oidc-channel-test-#{System.unique_integer([:positive])}"
-    })
-  end
+  defp create_user, do: root_admin!()
 
   defp create_agent(attrs \\ %{}) do
     defaults = %{

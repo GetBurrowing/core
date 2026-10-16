@@ -8,6 +8,8 @@ defmodule Platform.Federation.ToolSurfaceExperimentsTest do
 
   use Platform.DataCase, async: true
 
+  import Platform.TenancyFixtures
+
   alias Platform.Agents.AgentRuntime
   alias Platform.Federation.ExperimentTools
   alias Platform.Federation.ToolAuthorization
@@ -19,7 +21,7 @@ defmodule Platform.Federation.ToolSurfaceExperimentsTest do
             experiment_goal_set experiment_goal_list experiment_promote
             dispatch_metrics_list code_mode_report)
 
-  defp runtime(bundles), do: %AgentRuntime{owner_user_id: nil, allowed_bundles: bundles}
+  defp runtime(bundles), do: %AgentRuntime{owner_user_id: root_admin!().id, allowed_bundles: bundles}
 
   test "the bundle is registered, grantable, and lists exactly the experiment tools" do
     assert "experiments" in ToolSurface.all_bundles()

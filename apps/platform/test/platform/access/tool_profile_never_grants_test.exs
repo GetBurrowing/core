@@ -56,7 +56,9 @@ defmodule Platform.Access.ToolProfileNeverGrantsTest do
     refute "memory_view" in Tools.tool_names(runtime)
     assert "task_list" in Tools.tool_names(runtime)
     refute "task_update" in Tools.tool_names(runtime)
-    assert {:error, :invalid_module} = RuntimeProfiles.set_tool_profile(runtime, ["not_installed"])
+
+    assert {:error, :invalid_module} =
+             RuntimeProfiles.set_tool_profile(runtime, ["not_installed"])
   end
 
   test "an experiment arm naming a module outside the stored profile adds nothing" do

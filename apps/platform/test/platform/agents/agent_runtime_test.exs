@@ -8,7 +8,8 @@ defmodule Platform.Agents.AgentRuntimeTest do
   """
   use Platform.DataCase, async: false
 
-  alias Platform.Accounts.User
+  import Platform.TenancyFixtures
+
   alias Platform.Agents.AgentRuntime
   alias Platform.Federation
   alias Platform.Federation.ToolAuthorization
@@ -399,11 +400,5 @@ defmodule Platform.Agents.AgentRuntimeTest do
     end
   end
 
-  defp create_user do
-    Repo.insert!(%User{
-      email: "rt_meta_test_#{System.unique_integer([:positive])}@example.com",
-      name: "Runtime Meta Test User",
-      oidc_sub: "oidc-rt-meta-#{System.unique_integer([:positive])}"
-    })
-  end
+  defp create_user, do: root_admin!()
 end

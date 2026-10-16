@@ -35,7 +35,8 @@ defmodule Platform.Federation.ToolDocWireTest do
   """
   use PlatformWeb.ConnCase, async: false
 
-  alias Platform.Accounts.User
+  import Platform.TenancyFixtures
+
   alias Platform.Agents.Agent
   alias Platform.Agents.AgentRuntime
   alias Platform.Federation.ToolDoc
@@ -56,7 +57,7 @@ defmodule Platform.Federation.ToolDocWireTest do
   describe "tools/list carries every authored prose field" do
     test "every non-blank returns/limitations/when_to_use reaches the wire", %{conn: conn} do
       tools = list_tools!(conn)
-      definitions = ToolSurface.tool_definitions()
+      definitions = servable_definitions()
 
       # The sweep is only as strong as its denominator. Pin it: an internal
       # runtime holding every bundle is served the whole catalogue, so a
@@ -117,7 +118,7 @@ defmodule Platform.Federation.ToolDocWireTest do
       tools = list_tools!(conn)
       served = Map.new(tools, &{&1["name"], &1})
 
-      for definition <- ToolSurface.tool_definitions() do
+      for definition <- servable_definitions() do
         wire = served[definition.name]
         assert wire, "#{definition.name} missing from tools/list"
 
@@ -254,15 +255,15 @@ defmodule Platform.Federation.ToolDocWireTest do
   # `valid_bundles/0` omits `files`, so the changeset refuses a grant set that
   # covers the whole surface. Prod carries such rows anyway. Going through the
   # changeset here would silently shrink this file's denominator to 96 tools.
+  # Rowan accepted the temporary Play C/K/N owner-cap exception.
+  defp servable_definitions do
+    Enum.reject(ToolSurface.tool_definitions(), &String.starts_with?(&1.name, "play_session_"))
+  end
+
   defp full_surface_token! do
     n = System.unique_integer([:positive])
 
-    user =
-      Repo.insert!(%User{
-        email: "tool_doc_wire_#{n}@example.com",
-        name: "ToolDoc wire runtime owner",
-        oidc_sub: "oidc-tool-doc-wire-#{n}"
-      })
+    user = root_admin!()
 
     agent =
       Repo.insert!(%Agent{

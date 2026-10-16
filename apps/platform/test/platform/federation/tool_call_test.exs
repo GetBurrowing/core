@@ -11,6 +11,7 @@ defmodule Platform.Federation.ToolCallTest do
 
   use PlatformWeb.ChannelCase, async: false
 
+  import Platform.TenancyFixtures
   import Ecto.Query, only: [from: 2]
   import ExUnit.CaptureLog
   import Phoenix.ConnTest, only: [build_conn: 0, post: 3, json_response: 2]
@@ -412,13 +413,7 @@ defmodule Platform.Federation.ToolCallTest do
     |> Repo.insert!()
   end
 
-  defp insert_user do
-    Repo.insert!(%Platform.Accounts.User{
-      email: "toolcall_#{u()}@example.com",
-      name: "ToolCall User",
-      oidc_sub: "oidc-toolcall-#{u()}"
-    })
-  end
+  defp insert_user, do: root_admin!()
 
   defp insert_runtime(agent, bundles) do
     raw_token = AgentRuntime.generate_token()

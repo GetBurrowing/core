@@ -39,6 +39,9 @@ defmodule Platform.Federation.ToolSurfaceTransitionListTest do
 
   use Platform.DataCase, async: false
 
+  import Platform.TenancyFixtures
+
+  alias Platform.Agents.AgentRuntime
   alias Platform.Agents.Agent
   alias Platform.Federation.{ToolAuthorization, ToolSurface}
   alias Platform.Repo
@@ -84,14 +87,14 @@ defmodule Platform.Federation.ToolSurfaceTransitionListTest do
     end
 
     test "a runtime holding the task bundle may call it; one without may not" do
-      assert ToolAuthorization.authorize("task_transition_list", %{
+      assert ToolAuthorization.authorize("task_transition_list", %AgentRuntime{
                allowed_bundles: ["task"],
-               owner_user_id: nil
+               owner_user_id: root_admin!().id
              }) == :ok
 
-      assert ToolAuthorization.authorize("task_transition_list", %{
+      assert ToolAuthorization.authorize("task_transition_list", %AgentRuntime{
                allowed_bundles: ["plan", "review"],
-               owner_user_id: nil
+               owner_user_id: root_admin!().id
              }) == {:error, :forbidden}
     end
   end

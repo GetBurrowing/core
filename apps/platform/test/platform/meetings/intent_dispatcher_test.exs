@@ -47,7 +47,8 @@ defmodule Platform.Meetings.IntentDispatcherTest do
 
   import ExUnit.CaptureLog
 
-  alias Platform.Accounts.User
+  import Platform.TenancyFixtures
+
   alias Platform.Agents.Agent
   alias Platform.Agents.AgentRuntime
   alias Platform.Chat
@@ -245,13 +246,7 @@ defmodule Platform.Meetings.IntentDispatcherTest do
     |> Repo.insert!()
   end
 
-  defp create_user! do
-    Repo.insert!(%User{
-      email: "intentdisp_#{System.unique_integer([:positive])}@example.com",
-      name: "Intent Dispatcher Test User",
-      oidc_sub: "oidc-intentdisp-#{System.unique_integer([:positive])}"
-    })
-  end
+  defp create_user!, do: root_admin!()
 
   # The only agent shape that can receive an intent since stage 4: one
   # with a linked AgentRuntime. Agent `kind` is irrelevant to dispatch
