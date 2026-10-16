@@ -19,15 +19,15 @@
           options={subject_options(@subjects)}
         />
       </.form>
-      <button
-        :if={@subject}
-        phx-click="view-as"
-        class="btn btn-outline btn-sm"
-        role="checkbox"
-        aria-checked={to_string(@viewing)}
-      >
-        View as this person
-      </button>
+      <label :if={@subject} for="access-view-as" class="flex items-center gap-2 text-sm">
+        <input
+          id="access-view-as"
+          type="checkbox"
+          class="checkbox checkbox-sm"
+          checked={@viewing}
+          phx-click="view-as"
+        /> View as this person
+      </label>
       <section :if={@viewing && @view}>
         <div class="rounded border border-info p-3 text-info">
           Viewing as {@subject.name} <button phx-click="view-as">Exit</button>

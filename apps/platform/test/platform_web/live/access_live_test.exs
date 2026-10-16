@@ -88,7 +88,7 @@ defmodule PlatformWeb.AccessLiveTest do
   test "view-as uses the shared rail renderer", ctx do
     {:ok, expected} = ViewAs.compute(Scope.for_user(ctx.root), {:user, ctx.member.id})
     {:ok, view, _} = live(conn_for(ctx.root), "/access/user/#{ctx.member.id}")
-    html = view |> element("button[phx-click=view-as]") |> render_click()
+    html = view |> element("input[type=checkbox][phx-click=view-as]") |> render_click()
 
     keys =
       html
@@ -100,6 +100,10 @@ defmodule PlatformWeb.AccessLiveTest do
              MapSet.new(Enum.map(PlatformWeb.AccessViewAs.rail_keys(expected), &to_string/1))
 
     assert html =~ "Viewing as Panel member"
+    assert has_element?(view, "input[type=checkbox][phx-click=view-as][checked]")
+    view |> element("button[phx-click=view-as]", "Exit") |> render_click()
+    assert has_element?(view, "input[type=checkbox][phx-click=view-as]:not([checked])")
+    refute has_element?(view, "[data-role=view-as-rail]")
   end
 
   test "members are refused while the root positive control mounts", ctx do
