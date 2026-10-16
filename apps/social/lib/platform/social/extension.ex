@@ -13,12 +13,11 @@ defmodule Platform.Social.Extension do
   Social 3/7 (task 01a140a9-31b0) adds the `social_post_card` canvas kind
   (the approval card, whose clicks `PlatformWeb.SocialCardComponent`
   handles), the `social_post_approval` inbox kind, and `assets/0` so a
-  with-modules build's Tailwind scans the card's classes. Every other
-  registry is empty on purpose:
-
-    * no rail item: the screen is Social 7/7;
-    * no runtime-channel event, LiveView hook (the card's LiveComponent
-      needs none), experiment surface or metric.
+  with-modules build's Tailwind scans the card's classes. Social 7/7 adds
+  the Social rail item and the `/m/social` live page
+  (`PlatformWeb.SocialLive`). Every other registry is empty on purpose: no
+  runtime-channel event, LiveView hook (the card's LiveComponent needs
+  none), experiment surface or metric.
   """
 
   @behaviour Platform.Extension
@@ -89,10 +88,29 @@ defmodule Platform.Social.Extension do
   @impl true
   def assets, do: %{tailwind_sources: [@lib_root]}
 
-  # The Social screen's rail destination lands with Social 7/7
+  # Social 7/7: the Social screen's rail destination
   # (`0055-extension-contract-and-build-time-modules.md § 5. Rail items: which are core and which are module`).
+  # A :working item, so on mobile it lands in the More sheet (the bottom bar
+  # is core's four primary tiles).
   @impl true
-  def rail_items, do: []
+  def rail_items do
+    [
+      %{
+        key: :social,
+        label: "Social",
+        path: "/m/social",
+        hero_icon: "hero-megaphone",
+        cluster: :working,
+        root_only?: false
+      }
+    ]
+  end
+
+  # Social 7/7: the Social screen, nested by core's generic `/m/<prefix>`
+  # page. Core hands it only the user id; `PlatformWeb.SocialLive`
+  # re-reads the user and authorizes everything itself.
+  @impl true
+  def live_pages, do: [%{prefix: "social", live_view: PlatformWeb.SocialLive, title: "Social"}]
 
   # The vendor's status webhook (Social 2/7), behind core's generic
   # `/api/ext/<prefix>` seam. Core gives it no session and no auth: the

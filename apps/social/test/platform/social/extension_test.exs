@@ -39,8 +39,20 @@ defmodule Platform.Social.ExtensionTest do
     refute "social_post_approval" in Platform.Mobile.AppEntities.approval_kinds()
   end
 
-  test "has no rail item yet (the screen is a later stack member)" do
-    assert Extension.rail_items() == []
+  test "contributes the Social rail item and the /m/social live page (Social 7/7)" do
+    assert Extension.rail_items() == [
+             %{
+               key: :social,
+               label: "Social",
+               path: "/m/social",
+               hero_icon: "hero-megaphone",
+               cluster: :working,
+               root_only?: false
+             }
+           ]
+
+    assert [%{prefix: "social", live_view: PlatformWeb.SocialLive}] = Extension.live_pages()
+    assert %{live_view: PlatformWeb.SocialLive} = Platform.Extensions.live_page_for("social")
   end
 
   test "migrations_path is an existing directory and is among the migration paths core runs" do

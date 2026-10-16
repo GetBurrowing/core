@@ -332,6 +332,14 @@ defmodule Platform.ExtensionsTest do
       assert Extensions.route_for("nope") == nil
       assert Extensions.route_for(nil) == nil
     end
+
+    test "live_pages/0 has a reader: the fixture's page is listed and found by prefix" do
+      assert [%{prefix: "fixture", live_view: FixtureExtension.Page}] = Extensions.live_pages()
+      assert %{live_view: FixtureExtension.Page} = Extensions.live_page_for("fixture")
+      assert Extensions.live_page_for("nope") == nil
+      assert Extensions.live_page_for(nil) == nil
+      assert {:live_pages, 0} in Platform.Extension.behaviour_info(:optional_callbacks)
+    end
   end
 
   describe "with :extensions = []" do
@@ -370,6 +378,8 @@ defmodule Platform.ExtensionsTest do
       assert Platform.MixSupport.extension_migration_args() == []
       assert Extensions.live_hooks() == []
       assert Extensions.routes() == []
+      assert Extensions.live_pages() == []
+      assert Extensions.live_page_for("fixture") == nil
       assert Extensions.runtime_disconnected("nobody") == :ok
       socket = %Phoenix.LiveView.Socket{}
       assert PlatformWeb.Extensions.attach_live_hooks(socket) == socket
@@ -472,6 +482,26 @@ defmodule Platform.ExtensionsTest do
       def routes, do: [%{prefix: "Bad/Prefix", plug: Platform.FixtureExtension.EchoPlug}]
     end
 
+    defmodule BadLivePage do
+      @moduledoc false
+      @behaviour Platform.Extension
+      def canvas_kinds, do: []
+      def mcp_tool_bundles, do: []
+      def runtime_channel_events, do: []
+      def handle_runtime_event(_e, _r, _p), do: :ok
+      def runtime_disconnected(_r), do: :ok
+      def live_hooks, do: []
+      def experiment_surfaces, do: []
+      def experiment_metrics, do: %{}
+      def migrations_path, do: nil
+
+      def live_pages,
+        do: [
+          %{prefix: "fixture", live_view: Platform.FixtureExtension.Page},
+          %{prefix: "Bad/Page", live_view: Platform.FixtureExtension.Page}
+        ]
+    end
+
     defmodule CoreToolClash do
       @moduledoc false
       @behaviour Platform.Extension
@@ -528,6 +558,22 @@ defmodule Platform.ExtensionsTest do
       assert ~s(tool name "fixture_echo" is claimed by #{inspect(FixtureExtension)} and by #{inspect(FixtureExtension.Twin)}) in messages
 
       assert ~s(route prefix "fixture" is claimed by #{inspect(FixtureExtension)} and by #{inspect(FixtureExtension.Twin)}) in messages
+
+      assert ~s(live page prefix "fixture" is claimed by #{inspect(FixtureExtension)} and by #{inspect(FixtureExtension.Twin)}) in messages
+    end
+
+    test "one live page prefix alone validates; a second claim is the only clash" do
+      FixtureExtension.register([FixtureExtension])
+      assert Extensions.validate() == :ok
+
+      FixtureExtension.register([FixtureExtension, BadLivePage])
+      assert {:error, messages} = Extensions.validate()
+
+      assert ~s(live page prefix "fixture" is claimed by #{inspect(FixtureExtension)} and by #{inspect(BadLivePage)}) in messages
+
+      assert ~s(live page prefix "Bad/Page" of #{inspect(BadLivePage)} is not one lowercase path segment) in messages
+
+      assert length(messages) == 2
     end
 
     defmodule CoreInboxClash do

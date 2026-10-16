@@ -314,8 +314,12 @@ defmodule Platform.Social do
 
   @doc """
   Lists the org's posts. Filters: `:account_id`, `:profile_id` (posts on any
-  of the profile's accounts), `:status`, `:task_id` (Social 6/7: the drafts
-  linked to one task). Rows carry `status`, `error`,
+  of the profile's accounts), `:status`, `:statuses` (a list), `:task_id`
+  (Social 6/7: the drafts linked to one task), and `:placed_from` /
+  `:placed_to` (Social 7/7's calendar: a half-open `[from, to)` range of
+  `DateTime`s on the post's PLACEMENT time, `scheduled_at`, or `approved_at`
+  for a post published or failed at approval with no schedule; the schema
+  has no published-at column). Rows carry `status`, `error`,
   `rejection_reason` and `rejected_at`.
   """
   @spec list_posts(Ecto.UUID.t(), keyword() | map()) :: [Post.t()]
@@ -347,6 +351,30 @@ defmodule Platform.Social do
       case filters[:status] do
         nil -> q
         status -> where(q, [po], po.status == ^status)
+      end
+    end)
+    |> then(fn q ->
+      case filters[:statuses] do
+        nil -> q
+        statuses when is_list(statuses) -> where(q, [po], po.status in ^statuses)
+      end
+    end)
+    |> then(fn q ->
+      case filters[:placed_from] do
+        %DateTime{} = from ->
+          where(q, [po], fragment("coalesce(?, ?)", po.scheduled_at, po.approved_at) >= ^from)
+
+        nil ->
+          q
+      end
+    end)
+    |> then(fn q ->
+      case filters[:placed_to] do
+        %DateTime{} = to ->
+          where(q, [po], fragment("coalesce(?, ?)", po.scheduled_at, po.approved_at) < ^to)
+
+        nil ->
+          q
       end
     end)
     |> then(fn q ->
@@ -590,6 +618,61 @@ defmodule Platform.Social do
       {:orgs, ids} -> org_id in ids
       _ -> false
     end
+  end
+
+  @doc """
+  The profiles `user` may see, ordered by name (Social 7/7, the Social tab's
+  switcher). Built on the two swap points: `Platform.Tenancy.visibility/1`
+  says which orgs the user reads (`:root_all`, `{:orgs, ids}` or `:none`),
+  and each answer goes through `visible_orgs/1`, so a move to
+  Platform.Access changes the same two places as every other read. A user
+  who sees org A only never gets a profile of org B.
+  """
+  @spec list_profiles_for_user(Platform.Accounts.User.t() | nil) :: [Profile.t()]
+  def list_profiles_for_user(user) do
+    orgs =
+      case Platform.Tenancy.visibility(user) do
+        :root_all -> visible_orgs(:root)
+        {:orgs, ids} -> Enum.flat_map(ids, &visible_orgs/1)
+        _ -> []
+      end
+
+    case orgs do
+      [] ->
+        []
+
+      :all ->
+        Profile |> order_by([p], asc: p.name, asc: p.id) |> Repo.all()
+
+      org_ids ->
+        Profile
+        |> org_filter(org_ids)
+        |> order_by([p], asc: p.name, asc: p.id)
+        |> Repo.all()
+    end
+  end
+
+  @doc """
+  Needs-approval post counts per profile, `%{profile_id => n}`, in ONE
+  grouped query; every id given is a key (0 when it has none). The caller
+  passes ids it already read through the scope (`list_profiles_for_user/1`).
+  """
+  @spec needs_approval_counts([Ecto.UUID.t()]) :: %{Ecto.UUID.t() => non_neg_integer()}
+  def needs_approval_counts([]), do: %{}
+
+  def needs_approval_counts(profile_ids) when is_list(profile_ids) do
+    counts =
+      from(po in Post,
+        join: a in Account,
+        on: a.id == po.account_id,
+        where: a.profile_id in ^profile_ids and po.status == "needs_approval",
+        group_by: a.profile_id,
+        select: {a.profile_id, count(po.id)}
+      )
+      |> Repo.all()
+      |> Map.new()
+
+    Map.new(profile_ids, &{&1, Map.get(counts, &1, 0)})
   end
 
   # Approval moves a draft (or a post awaiting approval) to approved; it never

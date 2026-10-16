@@ -152,6 +152,11 @@ defmodule Platform.FixtureExtension do
   @impl true
   def routes, do: [%{prefix: "fixture", plug: __MODULE__.EchoPlug, opts: [tag: "fixture"]}]
 
+  # The positive control for the `live_pages/0` reader: `/m/fixture` nests
+  # `Page`, which shows the one session key core hands it.
+  @impl true
+  def live_pages, do: [%{prefix: "fixture", live_view: __MODULE__.Page, title: "Fixture page"}]
+
   # The positive control for the `inbox_kinds/0` reader: an action kind
   # (stays listed on open) on a source type core does not own.
   @impl true
@@ -195,6 +200,32 @@ defmodule Platform.FixtureExtension do
     def routes, do: F.routes()
     @impl true
     def inbox_kinds, do: F.inbox_kinds()
+    @impl true
+    def live_pages, do: F.live_pages()
+  end
+
+  defmodule Page do
+    @moduledoc """
+    The fixture extension's live page: renders the session it was given, so
+    a test sees that core passes the user id and nothing else.
+    """
+    use Phoenix.LiveView
+
+    @impl true
+    def mount(_params, session, socket) do
+      {:ok,
+       assign(socket, :session_keys, session |> Map.keys() |> Enum.sort() |> Enum.join(","))
+       |> assign(:user_id, session["user_id"])}
+    end
+
+    @impl true
+    def render(assigns) do
+      ~H"""
+      <div data-role="fixture-page" data-user-id={@user_id} data-session-keys={@session_keys}>
+        Fixture page
+      </div>
+      """
+    end
   end
 
   defmodule EchoPlug do

@@ -52,6 +52,24 @@ defmodule Platform.Extension do
   `:extension_api` pipeline only accepts JSON: no `fetch_session`, no CSRF,
   no current user, and params are not logged. The plug owns its auth (a
   webhook signature, a bearer token) and must halt on failure.
+
+  ## live_pages/0 has a reader: one LiveView page under /m/<prefix>
+
+  `live_pages/0` returns `[%{prefix: String.t(), live_view: module()}]`
+  (optional `:title`, the browser title; the prefix otherwise), `prefix`
+  being ONE lowercase path segment. As with `routes/0`, core's router
+  compiles before any module, so the reader is one generic route,
+  `live "/m/:prefix"` in the `:authenticated` live_session, served by
+  `PlatformWeb.ExtensionPageLive`. That page runs core's shell and auth
+  (`ShellLive`, `LiveAuth`), answers 404 for an unclaimed prefix or an
+  external user, and otherwise nests the claiming module's LiveView with
+  `live_render/3`, id `"ext-page-<prefix>"`.
+
+  **The nested LiveView gets ONLY `%{"user_id" => id}` as its session** and
+  runs no live_session `on_mount` hook. It must re-read the user itself and
+  authorize every read and write on its own; it inherits nothing from the
+  parent page. `Platform.Extensions.validate/0` refuses two extensions
+  claiming one page prefix.
   """
 
   @typedoc """
@@ -151,6 +169,19 @@ defmodule Platform.Extension do
   """
   @callback routes() :: [route()]
 
+  @typedoc "One LiveView page a module contributes (see the moduledoc)."
+  @type live_page :: %{
+          required(:prefix) => String.t(),
+          required(:live_view) => module(),
+          optional(:title) => String.t()
+        }
+
+  @doc """
+  LiveView pages, served at `/m/<prefix>` inside core's authenticated shell
+  (see the moduledoc). Read by `Platform.Extensions.live_pages/0`.
+  """
+  @callback live_pages() :: [live_page()]
+
   @typedoc "One inbox kind a module contributes (see `c:inbox_kinds/0`)."
   @type inbox_kind :: %{
           required(:kind) => String.t(),
@@ -183,6 +214,7 @@ defmodule Platform.Extension do
   @optional_callbacks rail_items: 0,
                       assets: 0,
                       routes: 0,
+                      live_pages: 0,
                       inbox_kinds: 0,
                       telemetry_handlers: 0,
                       responsibility_providers: 0,

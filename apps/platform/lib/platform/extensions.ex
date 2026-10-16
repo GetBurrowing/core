@@ -168,6 +168,25 @@ defmodule Platform.Extensions do
   def route_for(_prefix), do: nil
 
   @doc """
+  Every extension's LiveView pages (`live_pages/0` is optional), in
+  configuration order, each `%{prefix: String.t(), live_view: module()}`.
+  Read by `PlatformWeb.ExtensionPageLive` under `/m/<prefix>`.
+  """
+  @spec live_pages() :: [Platform.Extension.live_page()]
+  def live_pages do
+    Enum.flat_map(list(), fn ext ->
+      if implements?(ext, :live_pages, 0), do: ext.live_pages(), else: []
+    end)
+  end
+
+  @doc "The live page claiming `prefix` (one path segment), or nil. First claim wins."
+  @spec live_page_for(String.t()) :: Platform.Extension.live_page() | nil
+  def live_page_for(prefix) when is_binary(prefix),
+    do: Enum.find(live_pages(), &(&1.prefix == prefix))
+
+  def live_page_for(_prefix), do: nil
+
+  @doc """
   Every extension's migrations path, in configuration order, without core's.
   Callers put core's path first: `[core_path | migrations_paths()]`.
   """
@@ -200,7 +219,8 @@ defmodule Platform.Extensions do
   extensions share one, across every registry the extensions merge into:
   tool bundle names, tool names, runtime-channel event names, canvas kind
   names, experiment surface keys, experiment metric slugs, HTTP route
-  prefixes, inbox kinds and inbox source types. A route prefix must also be one lowercase path segment.
+  prefixes, live page prefixes, inbox kinds and inbox source types. A route
+  prefix and a live page prefix must also each be one lowercase path segment.
 
   Returns `:ok` or `{:error, messages}`, one message per clash, each naming
   both owners. Checks what each callback answers NOW: a kind a module lists
@@ -232,13 +252,16 @@ defmodule Platform.Extensions do
       {"experiment metric slug", Platform.Experiments.Metrics.core_metric_slugs(),
        fn ext -> Map.keys(ext.experiment_metrics()) end},
       {"route prefix", [], &route_prefixes/1},
+      {"live page prefix", [], &live_page_prefixes/1},
       {"inbox kind", Platform.Inbox.Item.core_kinds(),
        fn ext -> Enum.map(ext_inbox_kinds(ext), & &1.kind) end},
       {"inbox source type", Platform.Inbox.Item.core_source_types(),
        fn ext -> Enum.map(ext_inbox_kinds(ext), & &1.source_type) end}
     ]
 
-    case Enum.flat_map(checks, &clashes(&1, extensions)) ++ bad_route_prefixes(extensions) do
+    case Enum.flat_map(checks, &clashes(&1, extensions)) ++
+           bad_route_prefixes(extensions) ++
+           bad_live_page_prefixes(extensions) do
       [] -> :ok
       messages -> {:error, messages}
     end
@@ -287,6 +310,21 @@ defmodule Platform.Extensions do
         not (is_binary(prefix) and Regex.match?(~r/\A[a-z0-9][a-z0-9_-]*\z/, prefix)),
         do: "route prefix #{inspect(prefix)} of #{inspect(ext)} is not one lowercase path segment"
   end
+
+  defp live_page_prefixes(ext) do
+    if implements?(ext, :live_pages, 0), do: Enum.map(ext.live_pages(), & &1.prefix), else: []
+  end
+
+  defp bad_live_page_prefixes(extensions) do
+    for ext <- extensions,
+        prefix <- live_page_prefixes(ext),
+        not one_segment?(prefix),
+        do:
+          "live page prefix #{inspect(prefix)} of #{inspect(ext)} is not one lowercase path segment"
+  end
+
+  defp one_segment?(prefix),
+    do: is_binary(prefix) and Regex.match?(~r/\A[a-z0-9][a-z0-9_-]*\z/, prefix)
 
   defp core_tool_names do
     Platform.Federation.ToolSurface.core_bundles()

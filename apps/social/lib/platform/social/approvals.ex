@@ -129,7 +129,13 @@ defmodule Platform.Social.Approvals do
 
   def request_approval(%Post{}), do: {:error, :not_needs_approval}
 
-  defp live_card(post_id) do
+  @doc """
+  The post's live (pending or deciding) approval card, or nil. READ ONLY:
+  Social 7/7's queue uses it to find the card to embed; every decision still
+  goes through `decide_*` by the card's canvas id.
+  """
+  @spec live_card(Ecto.UUID.t()) :: ApprovalCard.t() | nil
+  def live_card(post_id) do
     Repo.one(
       from(c in ApprovalCard,
         where: c.post_id == ^post_id and c.state in ^ApprovalCard.live_states()

@@ -884,6 +884,9 @@ defmodule PlatformWeb.Router do
       # Glob route: path-style file_keys (`org/identity.md`) span multiple
       # segments, so `:show` must match `/org_memory/*file_key`.
       live("/org_memory/*file_key", OrgMemoryLive, :show)
+      # A build-time module's LiveView page (`Platform.Extension.live_pages/0`),
+      # looked up per request: an unclaimed prefix or an external user is a 404.
+      live("/m/:prefix", ExtensionPageLive, :show)
     end
 
     # Task 019e2c4b stage 3 — the standalone canvas page, the destination a
