@@ -570,9 +570,9 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   # members. The moon guard measured 2521 + 21 = 2542 at the merged SHA.
   # RBAC member 6 stage 3 (7efd11c6d): +27 code lines for the shared
   # access-change/sidebar refresh and active-space revocation navigation.
-  # The member-6 rebase onto rollup 9c5b4eacc measures 2588 with this
+  # The member-6 rebase onto rollup 9c5b4eacc measures 2569 with this
   # guard's code-line rule; the prior sibling-only rollup measured 2542.
-  @chat_live_code_line_count 2588
+  @chat_live_code_line_count 2569
 
   @doc """
   Count the CODE lines of a source file.

@@ -14,7 +14,7 @@ defmodule Platform.Access.ChangesTest do
   use Platform.DataCase, async: false
 
   import Ecto.Query, only: [from: 2]
-  import Platform.TenancyFixtures
+  import Platform.TenancyFixtures, except: [root_admin!: 0]
 
   alias Platform.Access.{Change, Changes, Grant, Grants, Scope}
   alias Platform.Accounts.User
