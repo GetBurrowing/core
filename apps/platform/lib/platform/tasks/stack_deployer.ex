@@ -464,14 +464,14 @@ defmodule Platform.Tasks.StackDeployer do
     * The owning project must exist with a `repo_url` — otherwise
       `{:error, :project_not_found}` / `{:error, :no_repo_url}`.
     * Task status must be `in_review` AND every validation in the
-      task's review-stage(s) must be `passed` — otherwise
+      task's review-stage(s) must be `passed` or `skipped` — otherwise
       `{:ok, {:not_ready, reason}}`. (`:not_ready` is intentionally an
       `:ok` result: the engine fires this hook eagerly on transition; if
-      review validations haven't all passed yet, this is the expected
+      review validations aren't all satisfied yet, this is the expected
       no-op outcome.) The reason is one of:
 
-      * `{:stages_pending, passed, total}` — ROUTINE. The current plan's
-        review-stage validations aren't all `passed` yet. Logged at
+      * `{:stages_pending, satisfied, total}` — ROUTINE. The current plan's
+        review-stage validations aren't all `passed` or `skipped` yet. Logged at
         debug; this fires on every eager transition.
       * `:member_not_in_review` — ROUTINE. The member hasn't reached
         `in_review` yet (the hook also runs from the retry sweep).
@@ -528,7 +528,7 @@ defmodule Platform.Tasks.StackDeployer do
   @typedoc """
   Why the per-member rollup-merge gate declined.
 
-  `{:stages_pending, passed, total}` counts ONLY the current plan's
+  `{:stages_pending, satisfied, total}` counts ONLY the current plan's
   review-stage validations — superseded plan versions are out of scope
   (task 019fa3e0), so the counts double as a witness that the lookup is
   current-plan-scoped.
@@ -751,7 +751,7 @@ defmodule Platform.Tasks.StackDeployer do
   defp already_merged?(_task), do: false
 
   # A task is "review ready" iff it is at `in_review` AND every
-  # validation in any of its review-stage(s) is `passed`. A task with
+  # validation in any of its review-stage(s) is `passed` or `skipped`. A task with
   # no review-stage validations (no review stage at all, or one with
   # zero validations) is vacuously ready — the precondition is "no
   # blocking validations remain".
@@ -801,12 +801,12 @@ defmodule Platform.Tasks.StackDeployer do
           |> Repo.all()
 
         total = length(validations)
-        passed = Enum.count(validations, &(&1.status == "passed"))
+        satisfied = Enum.count(validations, &(&1.status in ["passed", "skipped"]))
 
-        if passed == total do
+        if satisfied == total do
           {:ready, :validations_passed}
         else
-          {:not_ready, {:stages_pending, passed, total}}
+          {:not_ready, {:stages_pending, satisfied, total}}
         end
     end
   end
@@ -858,10 +858,10 @@ defmodule Platform.Tasks.StackDeployer do
             "in_review. Investigate before re-stamping by hand."
         )
 
-      {:stages_pending, passed, total} ->
+      {:stages_pending, satisfied, total} ->
         Logger.debug(
           "[StackDeployer] task #{id} not yet review-ready " <>
-            "(#{passed}/#{total} current-plan review validations passed); " <>
+            "(#{satisfied}/#{total} current-plan review validations satisfied); " <>
             "deferring rollup merge"
         )
 
