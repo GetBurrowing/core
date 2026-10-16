@@ -37,6 +37,10 @@ defmodule Platform.Access.SuiteRunInnerGateTest do
     assert {:ok, index} = Docs.describe(runtime, %{})
     refute "task_update" in index.tools
 
+    assert mcp_call(token, "task_update", %{"task_id" => task.id, "title" => "Denied"})["error"][
+             "code"
+           ] == -32001
+
     for script <- [
           "suite.task_update({task_id: '#{task.id}', title: 'Denied'})",
           "suite.call('task_update', {task_id: '#{task.id}', title: 'Denied'})"
@@ -49,10 +53,6 @@ defmodule Platform.Access.SuiteRunInnerGateTest do
     end
 
     assert Repo.reload!(task).title == "Allowed"
-
-    assert mcp_call(token, "task_update", %{"task_id" => task.id, "title" => "Denied"})["error"][
-             "code"
-           ] == -32001
 
     tools = mcp(token, "tools/list", %{})["result"]["tools"] |> Enum.map(& &1["name"])
     refute "task_update" in tools
