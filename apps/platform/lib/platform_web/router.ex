@@ -548,6 +548,8 @@ defmodule PlatformWeb.Router do
       ],
       layout: {PlatformWeb.Layouts, :external},
       session: %{"chat_mode" => "external"} do
+      live("/access/view-as/role/:id/:key", AccessViewAsLive, :show)
+      live("/access/view-as/:type/:id", AccessViewAsLive, :show)
       live("/chat", ChatLive, :index)
       live("/chat/:space_slug", ChatLive, :show)
     end
@@ -834,6 +836,7 @@ defmodule PlatformWeb.Router do
         {PlatformWeb.ModuleGate, :default}
       ],
       layout: {PlatformWeb.Layouts, :shell} do
+      live("/access/view-as/role/:id/:key", AccessViewAsLive, :show)
       live("/access/view-as/:type/:id", AccessViewAsLive, :show)
       live("/chat", ChatLive, :index)
       live("/chat/:space_slug", ChatLive, :show)

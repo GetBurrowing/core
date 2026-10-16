@@ -6,8 +6,8 @@ defmodule PlatformWeb.AccessViewAsLive do
   alias PlatformWeb.AccessViewAs
 
   @impl true
-  def mount(%{"type" => type, "id" => id}, _session, socket) do
-    target = parse_target(type, id)
+  def mount(params, _session, socket) do
+    target = parse_target(params)
 
     case ViewAs.compute(socket.assigns.access_scope, target) do
       {:ok, result} ->
@@ -25,17 +25,12 @@ defmodule PlatformWeb.AccessViewAsLive do
     end
   end
 
-  defp parse_target("user", id), do: {:user, id}
-  defp parse_target("agent", id), do: {:agent, id}
+  defp parse_target(%{"type" => "user", "id" => id}), do: {:user, id}
+  defp parse_target(%{"type" => "agent", "id" => id}), do: {:agent, id}
+  defp parse_target(%{"type" => "role", "id" => org_id, "key" => key}),
+    do: {:role, org_id, key}
 
-  defp parse_target("role", id) do
-    case String.split(id, ":", parts: 2) do
-      [org_id, key] -> {:role, org_id, key}
-      _ -> :invalid
-    end
-  end
-
-  defp parse_target(_, _), do: :invalid
+  defp parse_target(_), do: :invalid
 
   @impl true
   def render(assigns) do

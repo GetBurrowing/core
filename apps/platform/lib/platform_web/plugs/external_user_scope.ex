@@ -127,6 +127,14 @@ defmodule PlatformWeb.Plugs.ExternalUserScope do
       {:meet, _} ->
         deny(conn, user, "external_off_surface")
 
+      # A project manager on the external chat host may inspect a target's
+      # access. The LiveView performs the resource-scoped access.manage check.
+      {:chat, ["access", "view-as", "role", _org_id, _key]} ->
+        conn
+
+      {:chat, ["access", "view-as", type, _id]} when type in ["user", "agent"] ->
+        conn
+
       # CHAT and APP surfaces: byte-identical to the pre-meet behaviour —
       # same clauses, same order, same reason strings.
       #

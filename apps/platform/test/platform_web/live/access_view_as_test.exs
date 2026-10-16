@@ -84,7 +84,7 @@ defmodule PlatformWeb.AccessViewAsTest do
     assert view_rail_keys(guest_html) == MapSet.new()
 
     {:ok, _role_view, role_html} =
-      conn_for(ctx.root) |> live("/access/view-as/role/#{ctx.org.id}:member")
+      conn_for(ctx.root) |> live("/access/view-as/role/#{ctx.org.id}/member")
 
     expected =
       IconRail.destinations(root_user: false)
@@ -156,6 +156,30 @@ defmodule PlatformWeb.AccessViewAsTest do
 
     assert Enum.map(result.resources.projects, & &1.id) == [p.id]
     refute q.id in Enum.map(result.resources.projects, & &1.id)
+
+    # Admission and host routing must agree with compute: a guest manager
+    # uses the external chat host, not the app host's authenticated shell.
+    chat_conn = %{conn_for(manager) | host: "chat.localhost"}
+    {:ok, _view, html} = live(chat_conn, "/access/view-as/user/#{target.id}")
+    assert html =~ ~s(data-resource-id="#{p.id}")
+    refute html =~ ~s(data-resource-id="#{q.id}")
+
+    assert get(conn_for(manager), "/access/view-as/user/#{target.id}").status == 403
+  end
+
+  test "role URL uses separate safe path segments and reaches the routed page", ctx do
+    path = "/access/view-as/role/#{ctx.org.id}/member"
+    assert get(conn_for(ctx.root), path).status == 200
+
+    {:ok, _view, html} = conn_for(ctx.root) |> live(path)
+    assert html =~ ~s(data-role="view-as-rail")
+  end
+
+  test "external chat admission still refuses a guest without access.manage", ctx do
+    conn = %{conn_for(ctx.guest) | host: "chat.localhost"}
+
+    assert {:error, {:live_redirect, %{to: "/chat"}}} =
+             live(conn, "/access/view-as/user/#{ctx.root.id}")
   end
 
   test "agent target is explicitly labelled uncapped", ctx do
