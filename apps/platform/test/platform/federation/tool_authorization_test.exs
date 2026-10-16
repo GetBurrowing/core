@@ -11,9 +11,11 @@ defmodule Platform.Federation.ToolAuthorizationTest do
   use Platform.DataCase, async: false
 
   alias Platform.Agents.AgentRuntime
+  alias Platform.Access.{RuntimeProfile, RuntimeProfiles}
   alias Platform.ExternalUserFixtures, as: World
   alias Platform.Federation.ToolAuthorization
   alias Platform.Federation.ToolSurface
+  alias Platform.Repo
   alias Platform.Tenancy
 
   @chat_names ~w(send_media react space_list space_get_context space_get_messages space_search_messages)
@@ -57,8 +59,8 @@ defmodule Platform.Federation.ToolAuthorizationTest do
       assert ToolAuthorization.effective_tools(runtime(ctx.internal_id, [])) == []
     end
 
-    test "a nil allowed_bundles column fails closed rather than raising" do
-      assert ToolAuthorization.effective_tools(%AgentRuntime{allowed_bundles: nil}) == []
+    test "a missing profile fails closed rather than raising" do
+      assert ToolAuthorization.effective_tools(%AgentRuntime{}) == []
     end
 
     test "unknown bundle names are skipped silently", ctx do
@@ -253,7 +255,19 @@ defmodule Platform.Federation.ToolAuthorizationTest do
 
   # ── Helpers ────────────────────────────────────────────────────────────
 
-  defp runtime(owner_user_id, allowed_bundles) do
-    %AgentRuntime{owner_user_id: owner_user_id, allowed_bundles: allowed_bundles}
+  defp runtime(owner_user_id, modules) do
+    runtime =
+      Repo.insert!(%AgentRuntime{
+        runtime_id: "authorization-profile-#{System.unique_integer([:positive])}",
+        owner_user_id: owner_user_id
+      })
+
+    Repo.insert!(%RuntimeProfile{
+      runtime_id: runtime.id,
+      tool_profile: modules,
+      restricted_permissions: RuntimeProfiles.translated_permissions(modules)
+    })
+
+    runtime
   end
 end
