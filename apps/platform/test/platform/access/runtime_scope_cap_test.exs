@@ -2,7 +2,27 @@ defmodule Platform.Access.RuntimeScopeCapTest do
   use Platform.DataCase, async: true
 
   alias Platform.Access
-  alias Platform.Access.{Grant, Scope}
+  alias Platform.Access.{Grant, Grants, Scope}
+  alias Platform.Agents.AgentRuntime
+  alias Platform.Tasks
+
+  import Platform.TenancyFixtures
+
+  test "for_runtime applies an owner's deny after a positive control" do
+    owner = root_admin!()
+    {:ok, project} =
+      Tasks.create_project(%{
+        name: "scope-cap-#{System.unique_integer([:positive])}",
+        org_id: acme_org_id()
+      })
+
+    runtime = %AgentRuntime{owner_user_id: owner.id, allowed_bundles: ["task"]}
+    resource = {:project, project.id}
+
+    assert Access.can?(Scope.for_runtime(runtime), "tasks.read", resource)
+    assert {:ok, _} = Grants.deny(%{principal: owner, permission: "tasks.read", resource: resource})
+    refute Access.can?(Scope.for_runtime(runtime), "tasks.read", resource)
+  end
 
   test "permission values intersect and a missing owner permission disappears" do
     own = %Scope{
