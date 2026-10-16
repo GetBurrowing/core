@@ -570,9 +570,15 @@ defmodule Platform.CodeMode.ReturnContractTest do
   describe "space_get_messages" do
     setup do
       agent = agent!()
+      org = Platform.Tenancy.get_org_by_slug!("sxi")
 
       {:ok, space} =
-        Chat.create_space(%{name: "Contract #{u()}", slug: "contract-#{u()}", kind: "channel"})
+        Chat.create_space(%{
+          name: "Contract #{u()}",
+          slug: "contract-#{u()}",
+          kind: "channel",
+          org_id: org.id
+        })
 
       {:ok, participant} =
         Chat.add_participant(space.id, %{
@@ -584,6 +590,7 @@ defmodule Platform.CodeMode.ReturnContractTest do
         })
 
       owner = user!()
+      Platform.ExternalUserFixtures.plain_member!(owner, org)
 
       {:ok, _owner_participant} =
         Chat.add_participant(space.id, %{
