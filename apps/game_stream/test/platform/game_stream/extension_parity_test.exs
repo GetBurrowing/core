@@ -22,6 +22,7 @@ defmodule Platform.GameStream.ExtensionParityTest do
 
   import ExUnit.CaptureLog
 
+  alias Platform.Access.RuntimeProfiles
   alias Platform.Accounts.User
   alias Platform.Agents.AgentRuntime
   alias Platform.Chat.Canvas.Kinds
@@ -259,7 +260,11 @@ defmodule Platform.GameStream.ExtensionParityTest do
       {"suite_run_describe", "code_mode"},
       {"prototype.publish", "prototype"},
       {"prototype.versions", "prototype"},
-      {"prototype.rollback", "prototype"}
+      {"prototype.rollback", "prototype"},
+      {"access_explain", "access"},
+      {"access_propose", "access"},
+      {"access_apply", "access"},
+      {"access_undo", "access"}
     ]
 
     # sha256 of the canonical term of `tool_definitions/0` on main (see
@@ -334,20 +339,25 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # Re-pinned by the stack prototype-runtime rollup merge (#1235): both of the
     # above. All six values measured on moon at the merge commit; off equals
     # extensions_test.exs.
-    @main_tool_digest_off "5faf15579570a913f453f9951a5d9b5822afd125dd7423056c1807234fed39b1"
-    @main_tool_digest_on "470a7430fc29edfa88628b82ceca746cb13e6d56b15d9bae44bdd02eb94c61b6"
-    @main_kinds_summaries_digest_off "26c0704185201d0926a8bcb6db6be411b821c54fcba3269676c631969944df72"
-    @main_kinds_summaries_digest_on "f71832b549f7a8674c01fff90be91d869b6eea222c9cdd888723d5045ec3c450"
-    @main_kinds_tool_schemas_digest_off "264902e4c54f3146fe5be6e658c4717aafc6382ea233523ca505607d848e0925"
-    @main_kinds_tool_schemas_digest_on "cf59e8e3a7215086fa324ffa7c036b076527cd20b7dbdf5bf32eba51fb6cddbe"
+    # RBAC v2 adds four Access tools, text principal_id/action disabled canvas
+    # properties, the Agents rail destination and agents.tool_profile surface.
+    # Re-measured whole definitions/kinds on Moon at 3d831a04, flag off/on;
+    # literal names and whole-payload digests remain strict independent pins.
+    @main_tool_digest_off "e2205dce5e45e1e9d853d675bae01d4624f1ad184c9c7b676e3adf8e24914683"
+    @main_tool_digest_on "5209c4e2aadb41919cef5b467c638691958985677ce6d564ec92c98794a746b9"
+    @main_kinds_summaries_digest_off "c48e9187b0e70ff459441990471e3cd10f836d971c9e17d2676483807ce56c13"
+    @main_kinds_summaries_digest_on "d83fa1bfdaa3e2e3ceeb6064d253c0702675d24bafef4f59184565dc944d5284"
+    @main_kinds_tool_schemas_digest_off "5052ad82722fb7ab6cc5c7773ede0eb52be4fe24a7ea0579ad75ea2efc636d1c"
+    @main_kinds_tool_schemas_digest_on "1c6e04bf2da8eb737af0724a721506bab013d263eab89ca8e125930775c7a955"
     @main_metrics_catalog_digest "95805ed557855b482286544ea8d5ea6063b81e47ce1ee28268467a7df2848ee9"
-    @main_bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode prototype play)
-    @main_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode prototype play)
+    @main_bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode prototype access play)
+    @main_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode prototype access play)
     @main_rail [
       :chat,
       :tasks,
       :inbox,
       :activity,
+      :agents,
       :skills,
       :files,
       :context,
@@ -370,8 +380,8 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # new, so both pins gain it the same way game_stream.touch was added.
     # Task 01a114a8 stage 4 adds dispatch.code_mode, a core surface appended
     # after dispatch.product_docs_preamble, so it too precedes the Play keys.
-    @main_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary game_stream.encoder_preset game_stream.roster meetings.open_question_classifier game_stream.touch dispatch.product_docs_preamble dispatch.code_mode)
-    @branch_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.open_question_classifier dispatch.product_docs_preamble dispatch.code_mode game_stream.encoder_preset game_stream.roster game_stream.touch)
+    @main_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary game_stream.encoder_preset game_stream.roster meetings.open_question_classifier game_stream.touch dispatch.product_docs_preamble dispatch.code_mode agents.tool_profile)
+    @branch_surfaces ~w(dispatch.prompt mail.draft.generator planner.stage_budget chat.context_summary meetings.open_question_classifier dispatch.product_docs_preamble dispatch.code_mode agents.tool_profile game_stream.encoder_preset game_stream.roster game_stream.touch)
 
     defp canon(%_{} = s), do: canon(Map.from_struct(s))
 
@@ -420,7 +430,7 @@ defmodule Platform.GameStream.ExtensionParityTest do
       for flag <- [false, true] do
         Application.put_env(:game_stream, :enabled, flag)
         assert ToolSurface.all_bundles() == @main_bundles
-        assert AgentRuntime.valid_bundles() == @main_valid_bundles
+        assert RuntimeProfiles.valid_modules() == @main_valid_bundles
         assert Metrics.known_metrics() == @main_metrics
         assert digest(Metrics.catalog()) == @main_metrics_catalog_digest
         assert Enum.map(IconRail.destinations(root_user: true), & &1.key) == @main_rail

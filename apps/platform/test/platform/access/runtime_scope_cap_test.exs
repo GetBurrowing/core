@@ -8,6 +8,24 @@ defmodule Platform.Access.RuntimeScopeCapTest do
   import Platform.TenancyFixtures
   import Platform.RuntimeProfileFixtures
 
+  test "a compatibility roster cannot keep tools after the owner loses membership" do
+    owner = root_admin!()
+    runtime = runtime!(owner.id, ["space"])
+    assert Access.holds_anywhere?(Scope.for_runtime(runtime), "chat.read")
+    assert Platform.Federation.ToolAuthorization.authorize("space_list", runtime) == :ok
+
+    memberships = Platform.Repo.all(Ecto.assoc(owner, :org_memberships))
+    Enum.each(memberships, &Platform.Repo.delete!/1)
+
+    scope = Scope.for_runtime(runtime)
+    assert Scope.carries?(scope, "chat.read")
+    assert Platform.Access.RuntimeProfiles.tool_profile(runtime) == ["space"]
+    refute Access.holds_anywhere?(scope, "chat.read")
+
+    assert Platform.Federation.ToolAuthorization.authorize("space_list", runtime) ==
+             {:error, :forbidden}
+  end
+
   test "for_runtime applies an owner's deny after a positive control" do
     owner = root_admin!()
 

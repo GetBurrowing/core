@@ -256,6 +256,12 @@ defmodule Platform.Access.Scope do
           into: %{},
           do: {permission, :all}
 
+    # Only the shadow MCP vocabulary is uncapped compatibility data. An
+    # extension may map its bundle to a real permission (e.g. play.use),
+    # which must remain subject to the profile restriction and owner cap.
+    compatibility_keys =
+      legacy_permissions |> Map.keys() |> Enum.filter(&String.starts_with?(&1, "mcp."))
+
     permissions =
       case profile do
         nil ->
@@ -271,8 +277,7 @@ defmodule Platform.Access.Scope do
 
           if is_nil(restriction),
             do: base,
-            else:
-              Map.take(base, ["chat.read" | Map.keys(restriction) ++ Map.keys(legacy_permissions)])
+            else: Map.take(base, ["chat.read" | Map.keys(restriction) ++ compatibility_keys])
       end
 
     owner =
@@ -303,7 +308,7 @@ defmodule Platform.Access.Scope do
 
     # The member-2 equivalence oracle still reads these transitional fields.
     # Tool authorization reads only the module permissions in `capped`.
-    legacy = Map.take(permissions, Map.keys(legacy_permissions) ++ ["chat.read"])
+    legacy = Map.take(permissions, compatibility_keys ++ ["chat.read"])
     %{capped | permissions: Map.merge(capped.permissions, legacy)}
   end
 

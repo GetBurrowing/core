@@ -467,6 +467,10 @@ defmodule Platform.Access do
   the rows inside a module and does not hide the module.
   """
   @spec holds_anywhere?(Scope.t() | nil, String.t()) :: boolean()
+  def holds_anywhere?(%Scope{own_cap: %Scope{} = own, owner_cap: %Scope{} = owner}, permission)
+      when is_binary(permission),
+      do: holds_anywhere?(own, permission) and holds_anywhere?(owner, permission)
+
   def holds_anywhere?(%Scope{} = scope, permission) when is_binary(permission),
     do: Scope.carries?(scope, permission) or can?(scope, permission, nil)
 

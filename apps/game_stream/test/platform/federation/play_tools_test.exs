@@ -248,6 +248,14 @@ defmodule Platform.Federation.PlayToolsTest do
       assert ToolAuthorization.authorize("play_session_start", granted) == {:error, :forbidden}
     end
 
+    test "an explicit empty restriction refuses play without unloading its profile" do
+      granted = runtime(["play"])
+      assert ToolAuthorization.authorize("play_session_start", granted) == :ok
+      assert {:ok, _profile} = RuntimeProfiles.restrict(granted, %{})
+      assert RuntimeProfiles.tool_profile(granted) == ["play"]
+      assert ToolAuthorization.authorize("play_session_start", granted) == {:error, :forbidden}
+    end
+
     test "every definition carries the six-component rubric" do
       for tool <- PlayTools.definitions() do
         for field <- [:description, :returns, :limitations, :when_to_use] do
