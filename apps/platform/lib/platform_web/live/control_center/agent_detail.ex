@@ -22,6 +22,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
   attr :federation_online?, :boolean, required: true
   attr :selected_agent_directory_entry, :map, default: nil
   attr :pending_delete_slug, :string, default: nil
+  attr :can_manage?, :boolean, default: false
 
   def header(assigns) do
     ~H"""
@@ -97,6 +98,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
         </div>
 
         <div
+          :if={@can_manage?}
           id="agent-primary-actions"
           class="grid w-full grid-cols-2 gap-2 sm:w-auto sm:grid-cols-2 xl:grid-cols-4"
         >
@@ -243,6 +245,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
   attr :show_add_space_modal, :boolean, default: false
   attr :available_spaces, :list, default: []
   attr :available_meeting_spaces, :list, default: []
+  attr :can_manage?, :boolean, default: false
 
   def federation_panels(assigns) do
     ~H"""
@@ -262,6 +265,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
         agent={@agent}
         regenerated_token={@regenerated_token}
         federation_online?={@federation_online?}
+        can_manage?={@can_manage?}
       />
     </section>
 
@@ -280,6 +284,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
     `live_file_input` needs it to report a picked file. It is also what makes
     the half-set warning on the voice card appear as you type. --%>
     <.form
+      :if={@can_manage?}
       for={@config_form}
       id="federated-identity-form"
       phx-submit="save_config"
@@ -380,6 +385,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
       </div>
 
       <button
+        :if={@can_manage?}
         type="button"
         phx-click="show_add_space_modal"
         class="btn btn-sm btn-outline mt-3 w-full"
@@ -389,7 +395,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
     </section>
 
     <div
-      :if={@show_add_space_modal}
+      :if={@can_manage? and @show_add_space_modal}
       class="fixed inset-0 z-50 flex items-center justify-center bg-base-300/60"
     >
       <div class="w-full max-w-md rounded-2xl border border-edge bg-base-100 p-6 shadow-xl">

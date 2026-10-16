@@ -264,7 +264,6 @@ defmodule PlatformWeb.ControlCenter.OnboardingEvents do
     runtime_id = String.trim(params["runtime_id"] || "")
     display_name = String.trim(params["display_name"] || "")
     agent_name = String.trim(params["agent_name"] || "")
-    owner_id = socket.assigns.current_user_id
 
     cond do
       runtime_id == "" ->
@@ -291,7 +290,7 @@ defmodule PlatformWeb.ControlCenter.OnboardingEvents do
           runtime_type: "external"
         }
 
-        with {:ok, runtime} <- Federation.register_runtime(owner_id, runtime_attrs),
+        with {:ok, runtime} <- Federation.register_runtime(socket.assigns.access_scope, runtime_attrs),
              {:ok, agent} <- Federation.link_agent(runtime, agent_attrs),
              {:ok, _runtime, raw_token} <- Federation.activate_runtime(runtime) do
           ws_url = "wss://#{PlatformWeb.Endpoint.host()}/runtime/ws"

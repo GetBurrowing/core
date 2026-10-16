@@ -5,7 +5,9 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
   """
   use Phoenix.Component
 
-  alias Platform.Agents.{Agent, AgentRuntime}
+  alias Platform.Agents.Agent
+  alias Platform.Access.{Registry, RuntimeProfiles, Scope}
+  alias Platform.Federation.ToolSurface
   alias Platform.Federation
 
   import PlatformWeb.ControlCenter.Helpers
@@ -61,10 +63,27 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
   attr :agent, Agent, required: true
   attr :regenerated_token, :string, default: nil
   attr :federation_online?, :boolean, default: false
+  attr :can_manage?, :boolean, default: false
 
   def federation_connection_panel(assigns) do
     runtime = Federation.get_runtime(assigns.agent.runtime_id)
-    assigns = assign(assigns, :fed_runtime, runtime)
+    profile = runtime && RuntimeProfiles.get(runtime)
+    modules = if runtime, do: RuntimeProfiles.tool_profile(runtime, profile), else: []
+    restrictions = if runtime, do: RuntimeProfiles.restrictions(runtime, profile), else: nil
+    owner_scope = if runtime, do: Scope.for_user(%{id: runtime.owner_user_id}), else: nil
+    owner_permissions =
+      if owner_scope,
+        do: Enum.filter(Registry.permission_names(), &Platform.Access.holds_anywhere?(owner_scope, &1)),
+        else: []
+    module_choices = modules ++ (ToolSurface.all_bundles() -- modules)
+
+    assigns =
+      assigns
+      |> assign(:fed_runtime, runtime)
+      |> assign(:tool_modules, modules)
+      |> assign(:module_choices, module_choices)
+      |> assign(:restrictions, restrictions)
+      |> assign(:owner_permissions, owner_permissions)
 
     ~H"""
     <div :if={@fed_runtime} class="mt-4 space-y-3">
@@ -110,52 +129,46 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
         </div>
       </div>
 
-      <%!-- Allowed bundles editor --%>
-      <div class="rounded-2xl border border-edge bg-base-200/40 p-4 text-sm">
-        <div class="flex items-center justify-between gap-3">
-          <span class="font-semibold">Allowed capability bundles</span>
-          <span class="text-[11px] uppercase tracking-widest text-base-content/50">
-            {length(@fed_runtime.allowed_bundles)} of {length(AgentRuntime.valid_bundles())}
-          </span>
-        </div>
-        <p class="mt-1 text-xs text-base-content/55">
-          Scopes both <code>tools/list</code>
-          and <code>tools/call</code>
-          on the MCP endpoint and federation channel.
-        </p>
-        <form phx-submit="update_runtime_bundles" class="mt-3 space-y-2">
-          <div class="grid grid-cols-2 gap-x-3 gap-y-1.5 sm:grid-cols-3">
-            <label
-              :for={bundle <- AgentRuntime.valid_bundles()}
-              class="inline-flex cursor-pointer items-center gap-2 text-xs"
-            >
-              <input
-                type="checkbox"
-                name="bundles[]"
-                value={bundle}
-                checked={bundle in @fed_runtime.allowed_bundles}
-                class="checkbox checkbox-xs"
-              />
-              <span class="font-mono">{bundle}</span>
-            </label>
-            <%!-- A grant whose module is not in this build (ADR 0055 section 7):
-                 shown checked and read-only, and submitted unchanged, so a save
-                 here never strips it. --%>
-            <label
-              :for={bundle <- @fed_runtime.allowed_bundles -- AgentRuntime.valid_bundles()}
-              class="inline-flex items-center gap-2 text-xs text-base-content/55"
-              data-role="orphan-bundle"
-            >
-              <input type="hidden" name="bundles[]" value={bundle} />
-              <input type="checkbox" checked disabled class="checkbox checkbox-xs" />
-              <span class="font-mono">{bundle}</span>
-              <span class="text-[10px]">(module not installed)</span>
+      <div class="rounded-2xl border border-edge bg-base-200/40 p-4 text-sm" data-role="agent-tool-profile">
+        <h3 class="font-semibold">Tool profile</h3>
+        <p class="mt-1 text-xs text-base-content/55">Loads only these modules. Never grants access.</p>
+        <form :if={@can_manage?} phx-submit="save_tool_profile" class="mt-3 space-y-3">
+          <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <label :for={module <- @module_choices} class="flex items-center gap-2 text-xs">
+              <input type="checkbox" name="modules[]" value={module}
+                checked={module in @tool_modules} class="checkbox checkbox-xs" />
+              <span class="break-all font-mono">{module}</span>
             </label>
           </div>
-          <div class="flex justify-end">
-            <button type="submit" class="btn btn-primary btn-sm">Save bundles</button>
-          </div>
+          <button type="submit" class="btn btn-primary btn-sm">Save tool profile</button>
         </form>
+        <div :if={!@can_manage?} class="mt-2 flex flex-wrap gap-2">
+          <code :for={module <- @tool_modules} class="rounded bg-base-100 px-2 py-1 text-xs">{module}</code>
+        </div>
+      </div>
+
+      <div class="rounded-2xl border border-edge bg-base-200/40 p-4 text-sm">
+        <h3 class="font-semibold">Restrict this agent</h3>
+        <form :if={@can_manage?} phx-submit="save_agent_restrictions" class="mt-3 space-y-3">
+          <input type="hidden" name="inherit" value="false" />
+          <label class="flex items-center gap-2 text-xs">
+            <input type="checkbox" name="inherit" value="true" checked={is_nil(@restrictions)}
+              class="checkbox checkbox-xs peer" data-role="agent-restrict-toggle" />
+            Inherit owner's access
+          </label>
+          <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <label :for={permission <- @owner_permissions} class="flex items-center gap-2 text-xs">
+              <input type="checkbox" name="permissions[]" value={permission}
+                checked={is_nil(@restrictions) or Map.has_key?(@restrictions, permission)}
+                data-role="agent-restrict-permission" class="checkbox checkbox-xs" />
+              <span class="break-all font-mono">{permission}</span>
+            </label>
+          </div>
+          <button type="submit" class="btn btn-primary btn-sm">Save restriction</button>
+        </form>
+        <p :if={!@can_manage?} class="mt-2 text-xs text-base-content/60">
+          {if is_nil(@restrictions), do: "Inherits owner's access", else: "Restricted access"}
+        </p>
       </div>
 
       <%!-- Regenerated token display --%>
@@ -188,7 +201,7 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
 
       <div class="flex flex-wrap gap-2">
         <button
-          :if={@fed_runtime.status == "active"}
+          :if={@can_manage? and @fed_runtime.status == "active"}
           type="button"
           phx-click="suspend_federated_runtime"
           class="btn btn-ghost btn-sm"
@@ -196,7 +209,7 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
           Suspend
         </button>
         <button
-          :if={@fed_runtime.status != "revoked"}
+          :if={@can_manage? and @fed_runtime.status != "revoked"}
           type="button"
           phx-click="revoke_federated_runtime"
           class="btn btn-ghost btn-sm text-error"
@@ -204,7 +217,7 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
           Revoke
         </button>
         <button
-          :if={@fed_runtime.status != "revoked"}
+          :if={@can_manage? and @fed_runtime.status != "revoked"}
           type="button"
           phx-click="regenerate_federated_token"
           class="btn btn-ghost btn-sm"

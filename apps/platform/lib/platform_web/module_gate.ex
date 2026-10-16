@@ -19,7 +19,7 @@ defmodule PlatformWeb.ModuleGate do
     PlatformWeb.MeetingLive => {:meetings, nil},
     PlatformWeb.EmailLive => {:email, nil},
     PlatformWeb.SkillsLive => {:skills, nil},
-    PlatformWeb.ControlCenterLive => {:admin, "agents.manage_own"},
+    PlatformWeb.ControlCenterLive => {:agents, "agents.manage_own"},
     PlatformWeb.UsageLive => {:admin, "agents.manage_own"},
     PlatformWeb.ExperimentsLive => {:experiments, nil},
     PlatformWeb.OrgMemoryLive => {:context, nil},

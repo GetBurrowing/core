@@ -284,7 +284,11 @@ defmodule Platform.Access.Registry do
         permissions: ~w(experiments.read experiments.propose),
         rail: [%{key: :experiments, permission: "experiments.read"}]
       },
-      %{module: "agents", permissions: ~w(agents.manage_own agents.manage_all)},
+      %{
+        module: "agents",
+        permissions: ~w(agents.manage_own agents.manage_all),
+        rail: [%{key: :agents, permission: "agents.manage_own"}]
+      },
       %{
         module: "skills",
         permissions: ~w(skills.read skills.write),

@@ -8,7 +8,7 @@ defmodule Platform.Federation do
   import Ecto.Query
   alias Ecto.Multi
 
-  alias Platform.Access.RuntimeProfiles
+  alias Platform.Access.{Agents, RuntimeProfiles, Scope}
   alias Platform.Agents.{Agent, AgentRuntime}
   alias Platform.Chat
   alias Platform.Chat.{Participant, Space}
@@ -17,6 +17,15 @@ defmodule Platform.Federation do
   alias Platform.Repo
 
   # ── Runtime registration ────────────────────────────────────────────
+
+  @doc "Register a runtime for the authenticated user, ignoring a supplied owner."
+  def register_runtime(%Scope{} = scope, attrs) do
+    if Agents.may_federate?(scope) and match?(%{id: id} when is_binary(id), scope.actor) do
+      register_runtime(scope.actor.id, attrs)
+    else
+      {:error, :unauthorized}
+    end
+  end
 
   @doc "Register a new external runtime."
   def register_runtime(owner_user_id, attrs) do
@@ -29,7 +38,7 @@ defmodule Platform.Federation do
     Multi.new()
     |> Multi.insert(
       :runtime,
-      AgentRuntime.changeset(%AgentRuntime{}, Map.put(attrs, :owner_user_id, owner_user_id))
+      AgentRuntime.changeset(%AgentRuntime{}, attrs |> Map.delete("owner_user_id") |> Map.put(:owner_user_id, owner_user_id))
     )
     |> Multi.run(:profile, fn _repo, %{runtime: runtime} ->
       RuntimeProfiles.create_for_runtime(runtime, tool_profile, restriction)
@@ -84,12 +93,18 @@ defmodule Platform.Federation do
     |> Repo.update()
   end
 
+  def suspend_runtime(%Scope{} = scope, %AgentRuntime{} = runtime),
+    do: if(Agents.manage?(scope, runtime), do: suspend_runtime(runtime), else: {:error, :unauthorized})
+
   @doc "Revoke a runtime (permanent)."
   def revoke_runtime(%AgentRuntime{} = runtime) do
     runtime
     |> AgentRuntime.changeset(%{status: "revoked", auth_token_hash: nil})
     |> Repo.update()
   end
+
+  def revoke_runtime(%Scope{} = scope, %AgentRuntime{} = runtime),
+    do: if(Agents.manage?(scope, runtime), do: revoke_runtime(runtime), else: {:error, :unauthorized})
 
   @doc """
   Shallow-merge new top-level keys into a runtime's `metadata` map and
@@ -185,6 +200,9 @@ defmodule Platform.Federation do
       error -> error
     end
   end
+
+  def generate_runtime_token(%Scope{} = scope, %AgentRuntime{} = runtime),
+    do: if(Agents.manage?(scope, runtime), do: generate_runtime_token(runtime), else: {:error, :unauthorized})
 
   # ── Declared client features ────────────────────────────────────────
 

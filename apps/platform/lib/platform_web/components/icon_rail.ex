@@ -792,6 +792,14 @@ defmodule PlatformWeb.Components.IconRail do
 
       # Working cluster — reference / configuration surfaces
       %{
+        key: :agents,
+        label: "Agents",
+        path: "/control",
+        hero_icon: "hero-cpu-chip",
+        cluster: :working,
+        root_only?: false
+      },
+      %{
         key: :skills,
         label: "Skills",
         path: "/skills",

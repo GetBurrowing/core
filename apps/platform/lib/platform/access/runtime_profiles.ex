@@ -4,7 +4,7 @@ defmodule Platform.Access.RuntimeProfiles do
   loaded for a runtime; it never grants a permission absent from its owner.
   """
 
-  alias Platform.Access.{Registry, RuntimeProfile, ToolPermissions}
+  alias Platform.Access.{Agents, Registry, RuntimeProfile, Scope, ToolPermissions}
   alias Platform.Agents.AgentRuntime
   alias Platform.Federation.ToolSurface
   alias Platform.Repo
@@ -77,6 +77,9 @@ defmodule Platform.Access.RuntimeProfiles do
 
   def set_tool_profile(_, _), do: {:error, :invalid_module}
 
+  def set_tool_profile(%Scope{} = scope, %AgentRuntime{} = runtime, modules),
+    do: if(Agents.manage?(scope, runtime), do: set_tool_profile(runtime, modules), else: {:error, :unauthorized})
+
   @spec restrict(AgentRuntime.t(), map() | nil) :: {:ok, RuntimeProfile.t()} | {:error, term()}
   def restrict(%AgentRuntime{} = runtime, nil),
     do: upsert(runtime, %{restricted_permissions: nil})
@@ -92,6 +95,9 @@ defmodule Platform.Access.RuntimeProfiles do
   end
 
   def restrict(_, _), do: {:error, :invalid_permission}
+
+  def restrict(%Scope{} = scope, %AgentRuntime{} = runtime, permissions),
+    do: if(Agents.manage?(scope, runtime), do: restrict(runtime, permissions), else: {:error, :unauthorized})
 
   defp upsert(%AgentRuntime{} = runtime, attrs) do
     profile = get(runtime) || %RuntimeProfile{runtime_id: runtime.id}
