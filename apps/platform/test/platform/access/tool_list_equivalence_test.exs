@@ -42,7 +42,10 @@ defmodule Platform.Access.ToolListEquivalenceTest do
              RuntimeBundleSnapshot.legacy_tool_names(bundles, true)
   end
 
-  test "one persisted-profile tool-list decision stays within nine database queries", %{admin: admin, guest: guest} do
+  test "one persisted-profile tool-list decision stays within nine database queries", %{
+    admin: admin,
+    guest: guest
+  } do
     Platform.Access.builtin_role_rules()
 
     for owner <- [admin, guest] do

@@ -44,7 +44,11 @@ defmodule Platform.CodeModeFixtures do
       |> Repo.insert!()
 
     {:ok, _profile} =
-      RuntimeProfiles.create_for_runtime(runtime, bundles, RuntimeProfiles.translated_permissions(bundles))
+      RuntimeProfiles.create_for_runtime(
+        runtime,
+        bundles,
+        RuntimeProfiles.translated_permissions(bundles)
+      )
 
     {runtime, raw_token}
   end

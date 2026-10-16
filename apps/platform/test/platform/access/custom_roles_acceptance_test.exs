@@ -6,7 +6,16 @@ defmodule Platform.Access.CustomRolesAcceptanceTest do
   import Platform.TenancyFixtures
 
   alias Platform.Access
-  alias Platform.Access.{IdpGroupRoles, Restrictions, RoleAssignment, Roles, RuntimeProfiles, Scope}
+
+  alias Platform.Access.{
+    IdpGroupRoles,
+    Restrictions,
+    RoleAssignment,
+    Roles,
+    RuntimeProfiles,
+    Scope
+  }
+
   alias Platform.Accounts
   alias Platform.Agents.{Agent, AgentRuntime}
   alias Platform.Chat

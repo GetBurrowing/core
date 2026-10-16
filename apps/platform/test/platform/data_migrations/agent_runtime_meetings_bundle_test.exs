@@ -44,8 +44,11 @@ defmodule Platform.DataMigrations.AgentRuntimeMeetingsBundleTest do
 
   setup_all do
     Code.require_file(@migration_path)
+
     [drop_path] =
-      Path.wildcard(Path.join(:code.priv_dir(:platform), "repo/migrations/#{@drop_version}_*.exs"))
+      Path.wildcard(
+        Path.join(:code.priv_dir(:platform), "repo/migrations/#{@drop_version}_*.exs")
+      )
 
     unless Code.ensure_loaded?(@drop_migration), do: Code.require_file(drop_path)
     :ok

@@ -19,7 +19,12 @@ defmodule Platform.Access.RuntimeProfilesMigrationTest do
       Path.wildcard(Path.join(:code.priv_dir(:platform), "repo/migrations/#{@version}_*.exs"))
 
     unless Code.ensure_loaded?(@migration), do: Code.require_file(path)
-    [drop_path] = Path.wildcard(Path.join(:code.priv_dir(:platform), "repo/migrations/#{@drop_version}_*.exs"))
+
+    [drop_path] =
+      Path.wildcard(
+        Path.join(:code.priv_dir(:platform), "repo/migrations/#{@drop_version}_*.exs")
+      )
+
     unless Code.ensure_loaded?(@drop_migration), do: Code.require_file(drop_path)
     :ok
   end
@@ -37,7 +42,10 @@ defmodule Platform.Access.RuntimeProfilesMigrationTest do
             owner_user_id: owner.id
           })
 
-        Repo.query!("UPDATE agent_runtimes SET allowed_bundles = $1::text[] WHERE id = $2", [bundles, Ecto.UUID.dump!(runtime.id)])
+        Repo.query!("UPDATE agent_runtimes SET allowed_bundles = $1::text[] WHERE id = $2", [
+          bundles,
+          Ecto.UUID.dump!(runtime.id)
+        ])
 
         {runtime.id, bundles}
       end
@@ -83,7 +91,11 @@ defmodule Platform.Access.RuntimeProfilesMigrationTest do
       apply(@migration, :assert_copied!, [Repo])
     end
 
-    Repo.query!("UPDATE access_runtime_profiles SET tool_profile = $1::text[] WHERE runtime_id = $2", [hd(runtimes) |> elem(1), Ecto.UUID.dump!(id)])
+    Repo.query!(
+      "UPDATE access_runtime_profiles SET tool_profile = $1::text[] WHERE runtime_id = $2",
+      [hd(runtimes) |> elem(1), Ecto.UUID.dump!(id)]
+    )
+
     :ok = Ecto.Migrator.up(Repo, @drop_version, @drop_migration, @opts)
   end
 

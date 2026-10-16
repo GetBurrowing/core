@@ -16,12 +16,13 @@ defmodule Platform.Access.ToolListHttpEquivalenceTest do
     for %{key: key, bundles: bundles} <- RuntimeBundleSnapshot.snapshots() do
       token = AgentRuntime.generate_token()
 
-      runtime = Repo.insert!(%AgentRuntime{
-        runtime_id: "http-equivalence-#{key}",
-        owner_user_id: owner.id,
-        auth_token_hash: AgentRuntime.hash_token(token),
-        status: "active"
-      })
+      runtime =
+        Repo.insert!(%AgentRuntime{
+          runtime_id: "http-equivalence-#{key}",
+          owner_user_id: owner.id,
+          auth_token_hash: AgentRuntime.hash_token(token),
+          status: "active"
+        })
 
       Repo.insert!(%RuntimeProfile{
         runtime_id: runtime.id,

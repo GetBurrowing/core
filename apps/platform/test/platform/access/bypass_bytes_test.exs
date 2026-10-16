@@ -212,7 +212,9 @@ defmodule Platform.Access.BypassBytesTest do
       Platform.Access.RuntimeProfiles.create_for_runtime(
         rt,
         AgentRuntime.default_tool_profile(),
-        Platform.Access.RuntimeProfiles.translated_permissions(AgentRuntime.default_tool_profile())
+        Platform.Access.RuntimeProfiles.translated_permissions(
+          AgentRuntime.default_tool_profile()
+        )
       )
 
     Map.put(rt, :plain_token, token)

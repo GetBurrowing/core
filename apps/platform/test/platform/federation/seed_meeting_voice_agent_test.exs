@@ -311,7 +311,8 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgentTest do
 
       assert {:ok, _} = SeedMeetingVoiceAgent.seed!(owner)
 
-      assert RuntimeProfiles.tool_profile(Federation.get_runtime(other_runtime.id)) == before_bundles
+      assert RuntimeProfiles.tool_profile(Federation.get_runtime(other_runtime.id)) ==
+               before_bundles
     end
   end
 

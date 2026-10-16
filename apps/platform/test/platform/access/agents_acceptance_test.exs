@@ -18,7 +18,9 @@ defmodule Platform.Access.AgentsAcceptanceTest do
       {:ok, _} = Tenancy.mark_membership_external(%{user_id: guest.id, org_id: acme_org_id()})
       {project_p, task_p} = project_and_task!("guest-p")
       {_project_q, task_q} = project_and_task!("guest-q")
-      {_runtime, token} = runtime_token!(guest.id, ~w(federation space context_read messaging task))
+
+      {_runtime, token} =
+        runtime_token!(guest.id, ~w(federation space context_read messaging task))
 
       assert Enum.sort(listed_names(token)) == Enum.sort(@guest_chat_tools)
       assert get_in(call(token, "task_list", %{"limit" => 200}), ["error", "code"]) == -32001

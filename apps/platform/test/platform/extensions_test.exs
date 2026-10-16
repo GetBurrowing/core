@@ -292,13 +292,18 @@ defmodule Platform.ExtensionsTest do
       runtime = Repo.get!(AgentRuntime, runtime.id)
 
       assert {:ok, saved} =
-               Platform.Access.RuntimeProfiles.set_tool_profile(runtime, ["space", "files", "play"])
+               Platform.Access.RuntimeProfiles.set_tool_profile(runtime, [
+                 "space",
+                 "files",
+                 "play"
+               ])
 
       assert saved.tool_profile == ["space", "files", "play"]
       assert Platform.Access.RuntimeProfiles.tool_profile(runtime) == ["space", "files", "play"]
 
       # The same bundle ADDED to a row that never held it is refused.
       {:ok, fresh} = Federation.register_runtime(user.id, %{runtime_id: "fresh-#{unique()}"})
+
       assert {:error, :invalid_module} =
                Platform.Access.RuntimeProfiles.set_tool_profile(fresh, ["space", "play"])
 

@@ -337,6 +337,7 @@ defmodule Platform.Access.PrecedenceTest do
       owner = member!(org)
       p = project!(org)
       t = task!(p)
+
       agent =
         Repo.insert!(%Agent{
           slug: "grant-owner-#{System.unique_integer([:positive])}",

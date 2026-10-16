@@ -430,21 +430,24 @@ defmodule Platform.CodeMode.ReturnContractTest do
   @gamma "contract-rt-gamma"
 
   defp runtime!(runtime_id, agent, owner \\ nil) do
-    runtime = %AgentRuntime{}
-    |> AgentRuntime.changeset(%{
-      runtime_id: runtime_id,
-      owner_user_id: (owner || user!()).id,
-      agent_id: agent.id,
-      auth_token_hash: AgentRuntime.hash_token(AgentRuntime.generate_token()),
-      status: "active"
-    })
-    |> Repo.insert!()
+    runtime =
+      %AgentRuntime{}
+      |> AgentRuntime.changeset(%{
+        runtime_id: runtime_id,
+        owner_user_id: (owner || user!()).id,
+        agent_id: agent.id,
+        auth_token_hash: AgentRuntime.hash_token(AgentRuntime.generate_token()),
+        status: "active"
+      })
+      |> Repo.insert!()
 
     {:ok, _profile} =
       Platform.Access.RuntimeProfiles.create_for_runtime(
         runtime,
         AgentRuntime.default_tool_profile(),
-        Platform.Access.RuntimeProfiles.translated_permissions(AgentRuntime.default_tool_profile())
+        Platform.Access.RuntimeProfiles.translated_permissions(
+          AgentRuntime.default_tool_profile()
+        )
       )
 
     runtime

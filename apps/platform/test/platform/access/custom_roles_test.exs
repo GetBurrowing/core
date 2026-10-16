@@ -324,6 +324,7 @@ defmodule Platform.Access.CustomRolesTest do
          ctx do
       owner = member!(ctx.a)
       agent = agent!()
+
       {:ok, runtime} =
         Platform.Federation.register_runtime(owner.id, %{
           runtime_id: "role-agent-#{System.unique_integer([:positive])}",
@@ -337,6 +338,7 @@ defmodule Platform.Access.CustomRolesTest do
           agent_id: agent!().id,
           tool_profile: []
         })
+
       role = role!(ctx.a, "Finance bots", %{"tasks.promote" => "all"})
 
       {:ok, project} =
