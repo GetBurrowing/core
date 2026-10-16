@@ -186,13 +186,14 @@ defmodule Platform.Access.RegistryTest do
       end
     end
 
-    test "admin is member plus four membership_org permissions; guest is chat on participant spaces" do
+    test "admin is member plus five membership_org permissions; guest is chat on participant spaces" do
       by_key = Map.new(Repo.all(Role), &{&1.key, &1.permissions})
 
       extra = Map.drop(by_key["admin"], Map.keys(by_key["member"]))
 
       assert extra == %{
                "access.manage" => "membership_org",
+               "agents.manage_all" => "membership_org",
                "mail.manage" => "membership_org",
                "prototypes.publish" => "membership_org",
                "tasks.promote" => "membership_org"

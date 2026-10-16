@@ -114,6 +114,7 @@ defmodule Platform.Access.ScopeTest do
 
     %{
       "access.manage" => orgs,
+      "agents.manage_all" => orgs,
       "mail.manage" => orgs,
       "prototypes.publish" => orgs,
       "tasks.promote" => orgs
