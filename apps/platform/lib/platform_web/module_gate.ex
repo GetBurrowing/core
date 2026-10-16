@@ -40,7 +40,9 @@ defmodule PlatformWeb.ModuleGate do
 
   # Every current gated-session view has a module. Keep an explicit list so
   # any future exception must be deliberate and documented here.
-  @ungated []
+  # View-as authorizes access.manage against the target in its own mount;
+  # a module gate would incorrectly reject project managers on chat host.
+  @ungated [PlatformWeb.AccessViewAsLive]
 
   @doc "The explicit module mapping used by the mount gate and its route sweep."
   def view_modules, do: @view_modules

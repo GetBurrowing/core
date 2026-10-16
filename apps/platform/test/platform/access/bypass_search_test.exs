@@ -145,7 +145,8 @@ defmodule Platform.Access.BypassSearchTest do
     for tool <- ["space_get_messages", "space_search_messages"] do
       args = %{"space_id" => space.id, "query" => "ordinary"}
       assert {:error, denied} = ToolSurface.execute(tool, args, denied_context)
-      assert denied == ToolSurface.space_write_denied(space.id)
+      assert Map.drop(denied, [:restricted]) == ToolSurface.space_write_denied(space.id)
+      assert denied.restricted == true
     end
   end
 end

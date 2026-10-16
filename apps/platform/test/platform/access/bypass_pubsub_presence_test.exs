@@ -127,7 +127,8 @@ defmodule Platform.Access.BypassPubsubPresenceTest do
     refute denied_html =~ task.title
     send(denied_view.pid, {:task_updated, task})
     refute render(denied_view) =~ task.title
-    assert render(before_view) =~ task.title
+    # Live access apply also refreshes the already-open board after the deny.
+    refute render(before_view) =~ task.title
   end
 
   defp registrations(view, space) do
