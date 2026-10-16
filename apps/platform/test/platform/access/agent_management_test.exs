@@ -87,8 +87,10 @@ defmodule Platform.Access.AgentManagementTest do
     assert Agents.may_create_ownerless?(root_scope)
     refute Agents.may_federate?(guest_scope)
     refute Agents.manage?(guest_scope, runtime)
+
     {:ok, guest_runtime} =
       Federation.register_runtime(guest.id, %{runtime_id: unique_runtime_id()})
+
     assert Agents.manage?(root_scope, guest_runtime)
     refute Agents.manage?(owner_scope, ownerless)
     assert Agents.manage?(root_scope, ownerless)

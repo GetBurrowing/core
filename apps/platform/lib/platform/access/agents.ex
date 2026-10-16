@@ -47,7 +47,10 @@ defmodule Platform.Access.Agents do
         true
 
       true ->
-        from(m in OrgMembership, where: m.user_id == ^owner_id and not m.external, select: m.org_id)
+        from(m in OrgMembership,
+          where: m.user_id == ^owner_id and not m.external,
+          select: m.org_id
+        )
         |> Repo.all()
         |> Enum.any?(&Access.can?(scope, "agents.manage_all", &1))
     end

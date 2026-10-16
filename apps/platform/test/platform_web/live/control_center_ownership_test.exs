@@ -23,7 +23,11 @@ defmodule PlatformWeb.ControlCenterOwnershipTest do
     html =
       view
       |> form("#federate-form",
-        federate: %{runtime_id: runtime_id, display_name: "Member Runtime", agent_name: "Member Agent"}
+        federate: %{
+          runtime_id: runtime_id,
+          display_name: "Member Runtime",
+          agent_name: "Member Agent"
+        }
       )
       |> render_submit()
 
