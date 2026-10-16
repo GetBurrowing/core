@@ -27,6 +27,7 @@ defmodule PlatformWeb.AccessViewAsLive do
 
   defp parse_target(%{"type" => "user", "id" => id}), do: {:user, id}
   defp parse_target(%{"type" => "agent", "id" => id}), do: {:agent, id}
+
   defp parse_target(%{"id" => org_id, "key" => key}),
     do: {:role, org_id, key}
 
