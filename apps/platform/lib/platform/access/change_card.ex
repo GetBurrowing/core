@@ -77,7 +77,7 @@ defmodule Platform.Access.ChangeCard do
         "type" => "card",
         "props" => %{
           "class_overrides" =>
-            if(state == "cancelled", do: "opacity-60", else: "bg-base-100 border-base-300")
+            if(state == "cancelled", do: "opacity-60", else: "bg-base-100 border-edge")
         },
         "children" => nodes
       },

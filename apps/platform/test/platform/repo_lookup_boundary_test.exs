@@ -526,16 +526,53 @@ defmodule Platform.RepoLookupBoundaryTest do
      "one call reads `project.org_id` off a preloaded task, one walks `parent_org_id` off a loaded `%Org{}`, and the third takes `opts[:org_id]` which callers set from a resolved `%Org{}`"},
     {"platform/org/wiki/nodes.ex", :platform_uuid_guard, "-", 1, :safe_internal,
      "task 01a1386d-e528 stage 1: `org_of/2` checks the `project/<id>/` or `space/<id>/` path segment with Platform.UUID.valid?/1 before `where: r.id == ^id` (this file's `@repo_one_counts` entry), so a non-UUID segment answers nil and `ensure/2` falls back to the root org instead of raising Ecto.Query.CastError on a path an agent supplied"},
-    {"platform/access/grants.ex", :get, "Grant", 2, :must_cast,
-     "task 01a1386d-e528 stage 2: `revoke/1` takes a raw grant id from its caller. Guarded with Platform.UUID.valid?/1 (this file's :platform_uuid_guard), returning the site's `{:error, :not_found}`; covered by precedence_test.exs \"malformed ids are not found and decide nothing\". 1 → 2 for task 01a1386e-30bd stage 1: `revoke/2` re-reads the same id inside its ledgered mutation (`Platform.Access.Changes.commit/4`), reached only after that guard has passed"},
+    {"platform/access/grants.ex", :get, "Grant", 4, :must_cast,
+     "task 01a1386d-e528 stage 2: `revoke/1` takes a raw grant id from its caller. Guarded with Platform.UUID.valid?/1 (this file's :platform_uuid_guard), returning the site's `{:error, :not_found}`; covered by precedence_test.exs \"malformed ids are not found and decide nothing\". 1 → 2 for task 01a1386e-30bd stage 1: `revoke/2` re-reads the same id inside its ledgered mutation (`Platform.Access.Changes.commit/4`), reached only after that guard has passed. 2 → 4 for member9: prepare_op/revoke guards its supplied id before the preview lookup; apply_ops re-reads that same guarded id inside the ledger mutation"},
     {"platform/access/changes.ex", :get, "Change", 1, :must_cast,
      "task 01a1386e-30bd stage 1: `undo/3` takes a raw change id from its caller (stage 2's delegation and a later MCP tool will pass it through). Guarded with Platform.UUID.valid?/1 (this file's :platform_uuid_guard), returning `{:error, :not_found}`; covered by changes_test.exs \"a second undo is refused; undoing the undo redoes the change\" (`undo(\"nope\", _)`)"},
     {"platform/access/changes.ex", :platform_uuid_guard, "-", 1, :must_cast,
      "task 01a1386e-30bd stage 1: `undo/3`'s change id, checked before the `get(Change)` above. Used as a BOOLEAN and the string discarded"},
     {"platform/access/grants.ex", :get, "Node", 1, :must_cast,
      "task 01a1386d-e528 stage 2: `fetch_resource(:memory_node, id)` is reached only through `resource_fields/1`'s Platform.UUID.valid?/1 check on a caller-supplied `{:memory_node, id}`; a malformed id is `{:error, :resource_not_found}`. Same test as above"},
-    {"platform/access/grants.ex", :platform_uuid_guard, "-", 2, :must_cast,
-     "task 01a1386d-e528 stage 2: (1) `revoke/1`'s grant id; (2) `resource_fields/1`'s `{:project | :space | :canvas | :memory_node, id}` before the three `Repo.one` lookups (this file's `@repo_one_counts` entry) and the `get(Node)` above. Used as a BOOLEAN and the string discarded; covered by precedence_test.exs \"malformed ids are not found and decide nothing\""},
+    {"platform/access/grants.ex", :platform_uuid_guard, "-", 3, :must_cast,
+     "member9 adds prepare_op/revoke Platform.UUID.valid?/1 before its extra get; existing guards remain. task 01a1386d-e528 stage 2: (1) `revoke/1`'s grant id; (2) `resource_fields/1`'s `{:project | :space | :canvas | :memory_node, id}` before the three `Repo.one` lookups (this file's `@repo_one_counts` entry) and the `get(Node)` above. Used as a BOOLEAN and the string discarded; covered by precedence_test.exs \"malformed ids are not found and decide nothing\""},
+    # Member9 access tools/cards: each lookup classified by its actual UUID provenance.
+    {"platform/access/agent_tools.ex", :get, "~schema", 1, :must_cast,
+     "resource/1 guards the raw MCP resource.id with Platform.UUID.valid?/1 before Repo.get on the fixed project/space/canvas/memory-node schema map; malformed ids return not_found"},
+    {"platform/access/agent_tools.ex", :platform_uuid_guard, "-", 7, :must_cast,
+     "MCP space_id, revoke grant id, operation principal/resource ids, user target id, both role org_id forms and resource.id are checked as booleans before typed queries/context lookups"},
+    {"platform/access/effective.ex", :platform_uuid_guard, "-", 1, :must_cast,
+     "scope_for/1 checks the agent target id from panel URL or access_explain before Federation.get_runtime; non-UUID values can resolve only through the slug-safe runtime_id query"},
+    {"platform/access/impact.ex", :get, "Change", 1, :must_cast,
+     "diff/2 receives an undo change id from access_undo and checks Platform.UUID.valid?/1 before Repo.get(Change); malformed ids return not_found"},
+    {"platform/access/impact.ex", :get, "Grant", 1, :must_cast,
+     "op_target/1 checks the revoke operation id with Platform.UUID.valid?/1 before Repo.get(Grant); malformed ids return not_found"},
+    {"platform/access/impact.ex", :platform_uuid_guard, "-", 2, :must_cast,
+     "diff/2 guards the undo change id and op_target/1 guards the revoke grant id before their get lookups; both are MCP-reachable values"},
+    {"platform/access/proposals.ex", :get, "Canvas", 2, :safe_internal,
+     "Both propose clauses receive attrs.canvas_id only from AgentTools.create_card after Chat.create_canvas_with_message returned a persisted Canvas UUID; direct tests likewise use persisted Canvas.id fields"},
+    {"platform/access/proposals.ex", :get, "Change", 1, :must_cast,
+     "The MCP undo change_id passes Impact.diff/2 and its Platform.UUID.valid?/1 guard before propose reaches Repo.get(Change); a refused or malformed id short-circuits the with"},
+    {"platform/access/proposals.ex", :get, "Platform.Agents.Agent", 1, :safe_internal,
+     "principal_label/1 reads Grant.principal_id from a successful Grant.changeset cast in prepare_ops, or a persisted ledger Grant snapshot reconstructed by Grant.from_snapshot; both UUID fields are normalized before the lookup"},
+    {"platform/access/proposals.ex", :get, "Proposal", 1, :must_cast,
+     "valid_get/1 is the MCP proposal-id boundary and checks Platform.UUID.valid?/1 before Repo.get; malformed input returns nil/not_found"},
+    {"platform/access/proposals.ex", :get!, "Canvas", 1, :safe_internal,
+     "publish_card/2 reads row.canvas_id from the persisted Proposal schema UUID FK, never from action or MCP payloads"},
+    {"platform/access/proposals.ex", :get!, "Change", 1, :safe_internal,
+     "apply/3 reads change_id only from the successful ledger commit result stored in Proposal.change_id UUID FK"},
+    {"platform/access/proposals.ex", :get!, "Proposal", 3, :must_cast,
+     "The stale/expired apply arm uses id only after locked!/1 checked Platform.UUID.valid?/1; the other two publish_card calls read row.id from a persisted Proposal UUID PK"},
+    {"platform/access/proposals.ex", :get!, "~schema", 1, :safe_internal,
+     "factual_label/2 reads resource_id from the validated Grant returned by Grants.prepare_ops or persisted Grant snapshot, and selects its schema from the fixed resource_type map"},
+    {"platform/access/proposals.ex", :platform_uuid_guard, "-", 2, :must_cast,
+     "valid_get/1 and locked!/1 guard raw proposal ids from MCP or click entry points before Repo.get and the FOR UPDATE Repo.one id predicate"},
+    {"platform_web/live/access_live.ex", :get, "Platform.Agents.Agent", 1, :safe_internal,
+     "row_label/2 reads principal_id from Changes.list_changes persisted Grant.snapshot ledger rows, whose original Grant.principal_id field is UUID-typed"},
+    {"platform_web/live/access_live.ex", :get, "~module", 1, :safe_internal,
+     "row_label/2 reads resource_id from persisted Grant.snapshot ledger rows and selects the schema from its fixed resource_type module map; Grant.resource_id is UUID-typed"},
+    {"platform_web/live/chat/canvas_hooks.ex", :get_by, "Proposal", 1, :safe_internal,
+     "access_card_action/4 uses canvas.id from the Canvas returned by the authorized find lookup; its UUID PK, rather than an id supplied in the action value, binds the proposal query"},
     {"platform/access/agent_wake.ex", :platform_uuid_guard, "-", 1, :must_cast,
      "task 01a1386e-45a5 stage 2: `valid_id?/1` filters the agent ids `denied/3` and `check_agent/4` receive (participant_id values and `%Agent{}` ids today, but both are public API) before they are pinned with `type(^ids, {:array, :binary_id})`, so a non-UUID id is never queried and decides nothing. Used as a BOOLEAN and the string discarded"},
     {"platform/access.ex", :platform_uuid_guard, "-", 2, :must_cast,
@@ -1352,10 +1389,22 @@ defmodule Platform.RepoLookupBoundaryTest do
     # `org_of/2` pins `r.id == ^id` only behind Platform.UUID.valid?/1 (this
     # file's :platform_uuid_guard entry).
     "platform/org/wiki/nodes.ex" => 2,
+    # 3 → 4 for member9: apply_ops tuple_query receives fields from a
+    # successfully cast Grant changeset (or a loaded Grant for revoke).
     # 0 → 3 for task 01a1386d-e528 stage 2's `Platform.Access.Grants`: the
     # project, space and canvas lookups of `fetch_resource/2`, each reached
     # only through `resource_fields/1`'s Platform.UUID.valid?/1 check.
-    "platform/access/grants.ex" => 3,
+    "platform/access/grants.ex" => 4,
+    # Member9: participant lookup checks MCP space_id first; runtime.agent_id
+    # comes from the loaded AgentRuntime UUID field.
+    "platform/access/agent_tools.ex" => 1,
+    # Provenance uses org/id UUID fields from a loaded Grant, never params.
+    "platform/access/effective.ex" => 1,
+    # Memory NodePath lookup receives a Lineage.typed validated resource id
+    # or a UUID resource_id from the persisted ledger snapshot.
+    "platform/access/impact.ex" => 1,
+    # locked!/1 guards the raw proposal id before its FOR UPDATE query.
+    "platform/access/proposals.ex" => 1,
     # 0 → 1 for task 01a1386e-59d1 stage 2's channel replacement: the
     # caller's space id is checked by Platform.UUID.valid?/1 before the
     # locked query pins it against chat_spaces.id.

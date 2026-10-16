@@ -751,7 +751,9 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
     # schedule, no trigger and no historian surface.
     # (+vault_fetch, +vault_list -> 128)
     # merged: stack prototype-runtime rollup onto main (+3 prototype, +2 vault -> 131)
-    @t6_baseline_tool_count 131
+    # RBAC member9 appends four authorized tools in the optional access bundle;
+    # scheduler T6 adds none. Pin the complete catalogue including that addition.
+    @t6_baseline_tool_count 135
 
     defp t6_root, do: Mix.Project.project_file() |> Path.dirname()
 

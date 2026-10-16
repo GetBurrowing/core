@@ -4,7 +4,7 @@
     <p class="rounded border border-warning p-3 text-sm">
       Break-glass view. Normally your agent does this, and changes made here are logged the same way.
     </p>
-    <section class="overflow-hidden rounded-xl border border-base-300 bg-base-100 p-4 space-y-4">
+    <section class="overflow-hidden rounded-xl border border-edge bg-base-100 p-4 space-y-4">
       <.form
         for={@subject_form}
         id="access-subject-form"
@@ -38,7 +38,7 @@
             data-module={chip.key}
             data-active={to_string(chip.active)}
             class={[
-              "rounded-lg border border-base-300 px-3 py-2 text-sm",
+              "rounded-lg border border-edge px-3 py-2 text-sm",
               !chip.active && "opacity-35 line-through"
             ]}
           >
@@ -98,7 +98,7 @@
         </table>
       </div>
     </section>
-    <section class="overflow-hidden rounded-xl border border-base-300 bg-base-100 p-4">
+    <section class="overflow-hidden rounded-xl border border-edge bg-base-100 p-4">
       <h2 class="text-lg font-semibold">Recent changes</h2>
       <div class="overflow-x-auto">
         <table class="table min-w-[600px]" data-role="access-changes">
@@ -133,7 +133,7 @@
     </section>
     <section
       :if={@subject}
-      class="overflow-hidden rounded-xl border border-base-300 bg-base-100 p-4 space-y-3"
+      class="overflow-hidden rounded-xl border border-edge bg-base-100 p-4 space-y-3"
     >
       <h2 class="text-lg font-semibold">Last resort</h2>
       <button phx-click="reset" class="btn btn-outline btn-error">
