@@ -21,7 +21,7 @@ defmodule Platform.Federation do
   @doc "Register a new external runtime."
   def register_runtime(owner_user_id, attrs) do
     modules = Map.get(attrs, :allowed_bundles, Map.get(attrs, "allowed_bundles"))
-    tool_profile = modules || AgentRuntime.default_allowed_bundles()
+    tool_profile = modules || AgentRuntime.default_tool_profile()
 
     restriction =
       if is_nil(modules), do: nil, else: RuntimeProfiles.translated_permissions(modules)
@@ -111,32 +111,6 @@ defmodule Platform.Federation do
     runtime
     |> AgentRuntime.changeset(%{metadata: merged})
     |> Repo.update()
-  end
-
-  @doc """
-  Replace a runtime's `allowed_bundles` set.
-
-  Bundles are validated against `AgentRuntime.valid_bundles/0` via the
-  changeset's `validate_subset`. Pass an empty list to deny all bundles
-  (the runtime will still authenticate but `tools/list` returns nothing).
-  """
-  @spec update_allowed_bundles(AgentRuntime.t(), [String.t()]) ::
-          {:ok, AgentRuntime.t()} | {:error, Ecto.Changeset.t()}
-  def update_allowed_bundles(%AgentRuntime{} = runtime, bundles) when is_list(bundles) do
-    Multi.new()
-    |> Multi.update(:runtime, AgentRuntime.changeset(runtime, %{allowed_bundles: bundles}))
-    |> Multi.run(:profile, fn _repo, %{runtime: updated} ->
-      with {:ok, _} <- RuntimeProfiles.set_tool_profile(updated, bundles),
-           {:ok, profile} <-
-             RuntimeProfiles.restrict(updated, RuntimeProfiles.translated_permissions(bundles)) do
-        {:ok, profile}
-      end
-    end)
-    |> Repo.transaction()
-    |> case do
-      {:ok, %{runtime: updated}} -> {:ok, updated}
-      {:error, _step, reason, _changes} -> {:error, reason}
-    end
   end
 
   @doc """

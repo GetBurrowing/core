@@ -16,23 +16,26 @@ defmodule Platform.Access.RuntimeProfiles do
   @spec tool_profile(AgentRuntime.t()) :: [String.t()]
   def tool_profile(%AgentRuntime{} = runtime), do: tool_profile(runtime, get(runtime))
 
-  def tool_profile(%AgentRuntime{} = runtime, profile) do
+  def tool_profile(%AgentRuntime{} = _runtime, profile) do
     case profile do
       %RuntimeProfile{tool_profile: modules} when is_list(modules) -> modules
       %RuntimeProfile{tool_profile: nil} -> ToolSurface.all_bundles()
-      nil -> runtime.allowed_bundles || []
+      nil -> []
     end
   end
 
   @spec restrictions(AgentRuntime.t()) :: %{String.t() => String.t()} | nil
   def restrictions(%AgentRuntime{} = runtime), do: restrictions(runtime, get(runtime))
 
-  def restrictions(%AgentRuntime{} = runtime, profile) do
+  def restrictions(%AgentRuntime{} = _runtime, profile) do
     case profile do
       %RuntimeProfile{restricted_permissions: permissions} -> permissions
-      nil -> translated_permissions(runtime.allowed_bundles || [])
+      nil -> %{}
     end
   end
+
+  @doc "Every currently loaded module name, in the catalogue order."
+  def valid_modules, do: ToolSurface.all_bundles()
 
   @spec translated_permissions([String.t()]) :: %{String.t() => String.t()}
   def translated_permissions(modules) do
@@ -59,7 +62,7 @@ defmodule Platform.Access.RuntimeProfiles do
     persisted = tool_profile(runtime)
     added = Enum.reject(modules, &(&1 in persisted))
 
-    if Enum.all?(added, &(&1 in ToolSurface.all_bundles())) do
+    if Enum.all?(added, &(&1 in valid_modules())) do
       upsert(runtime, %{tool_profile: modules})
     else
       {:error, :invalid_module}

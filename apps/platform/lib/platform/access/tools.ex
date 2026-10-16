@@ -2,8 +2,8 @@ defmodule Platform.Access.Tools do
   @moduledoc """
   One permission decision for the MCP catalogue and direct tool calls.
 
-  The runtime's ordered profile is stored in `access_runtime_profiles`; a
-  no-profile bridge reads the legacy array until the column is dropped.
+  The runtime's ordered profile is stored in `access_runtime_profiles`.
+  A missing profile row fails closed.
   """
 
   alias Platform.Access

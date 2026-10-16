@@ -122,7 +122,7 @@ defmodule Platform.Access.Scope do
 
   `for_runtime/1` reads an Access-owned runtime profile and intersects its
   permission restriction with the owner's scope. A runtime without a profile
-  row temporarily translates `allowed_bundles` for existing tests. Transitional
+  row holds no permissions. Transitional
   `mcp.<bundle>` fields remain available to earlier equivalence checks. An external-owned runtime's
   `role_keys` carry its owner's guest keys, which marks the scope external.
   `chat.read` is the agent's roster (`Chat.list_spaces_for_agent/2`), a

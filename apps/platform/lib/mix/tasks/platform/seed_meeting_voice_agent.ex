@@ -291,7 +291,7 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgent do
             metadata: %{"client_info" => voice_client_info()}
           })
 
-        {:ok, runtime} = Federation.update_allowed_bundles(runtime, @allowed_bundles)
+        {:ok, _profile} = RuntimeProfiles.set_tool_profile(runtime, @allowed_bundles)
         {runtime, raw_token}
 
       %Platform.Agents.AgentRuntime{} = existing ->
@@ -300,7 +300,7 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgent do
             "client_info" => voice_client_info()
           })
 
-        {:ok, runtime} = Federation.update_allowed_bundles(runtime, @allowed_bundles)
+        {:ok, _profile} = RuntimeProfiles.set_tool_profile(runtime, @allowed_bundles)
         {runtime, nil}
     end
   end
