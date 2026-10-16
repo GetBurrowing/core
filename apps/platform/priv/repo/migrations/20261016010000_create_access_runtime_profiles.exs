@@ -37,7 +37,7 @@ defmodule Platform.Repo.Migrations.CreateAccessRuntimeProfiles do
 
       repo().query!(
         "UPDATE access_runtime_profiles SET restricted_permissions = $1::jsonb WHERE tool_profile = $2::text[]",
-        [Jason.encode!(permissions), bundles]
+        [permissions, bundles]
       )
     end)
 

@@ -47,7 +47,7 @@ defmodule Platform.Access.RuntimeProfilesMigrationTest do
         )
 
       assert copied == bundles
-      assert Jason.decode!(restricted) == RuntimeProfiles.translated_permissions(bundles)
+      assert restricted == RuntimeProfiles.translated_permissions(bundles)
 
       runtime = Repo.get!(AgentRuntime, id)
       legacy = RuntimeBundleSnapshot.legacy_tool_names(bundles)
