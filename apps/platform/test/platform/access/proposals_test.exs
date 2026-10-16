@@ -64,10 +64,20 @@ defmodule Platform.Access.ProposalsTest do
       {:ok, _} = Grants.grant(%{principal: runtime, resource: project, permission: permission})
     end
 
-    {:ok, space} = Chat.create_space(%{name: "proposal-#{uniq()}", kind: "channel", org_id: org})
+    {:ok, space} =
+      Chat.create_space(%{
+        name: "proposal-#{uniq()}",
+        slug: "proposal-#{uniq()}",
+        kind: "channel",
+        org_id: org
+      })
 
     {:ok, participant} =
-      Chat.add_participant(space.id, %{participant_id: owner.id, participant_type: "user"})
+      Chat.add_participant(space.id, %{
+        participant_id: owner.id,
+        participant_type: "user",
+        joined_at: DateTime.utc_now()
+      })
 
     {:ok, canvas} =
       Chat.create_canvas(%{

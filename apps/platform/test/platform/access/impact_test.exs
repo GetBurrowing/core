@@ -18,7 +18,7 @@ defmodule Platform.Access.ImpactTest do
 
   test "losses name a cross-org explicit grantee and their owner-capped runtime", ctx do
     user = user!("cross-org")
-    member!(user, tenant_org_id("impact-other"), "member")
+    member!(user, tenant_org_id("impact-other"), "guest")
     agent = Platform.RuntimeProfileFixtures.runtime!(user.id, ["task"], %{}, nil)
 
     {:ok, grant} =
@@ -93,7 +93,12 @@ defmodule Platform.Access.ImpactTest do
     member!(user, ctx.org, "guest")
 
     {:ok, space} =
-      Platform.Chat.create_space(%{name: "impact-#{uniq()}", kind: "channel", org_id: ctx.org})
+      Platform.Chat.create_space(%{
+        name: "impact-#{uniq()}",
+        slug: "impact-#{uniq()}",
+        kind: "channel",
+        org_id: ctx.org
+      })
 
     {:ok, _} =
       Platform.Chat.add_participant(space.id, %{
