@@ -6,6 +6,7 @@ defmodule PlatformWeb.RuntimeChannelTest do
 
   alias Platform.Agents.Agent
   alias Platform.Agents.AgentRuntime
+  alias Platform.Access.RuntimeProfiles
   alias Platform.Chat
   alias Platform.Federation
   alias Platform.Federation.DeadLetter
@@ -59,6 +60,11 @@ defmodule PlatformWeb.RuntimeChannelTest do
       agent_participant: agent_participant,
       user: user
     }
+  end
+
+  defp set_runtime_profile(runtime, modules) do
+    {:ok, _profile} = RuntimeProfiles.set_tool_profile(runtime, modules)
+    {:ok, runtime}
   end
 
   defp create_user, do: root_admin!()
@@ -418,7 +424,7 @@ defmodule PlatformWeb.RuntimeChannelTest do
     end
 
     test "a federation-only runtime is pushed exactly federation_status", ctx do
-      {:ok, runtime} = Federation.update_allowed_bundles(ctx.runtime, ["federation"])
+      {:ok, runtime} = set_runtime_profile(ctx.runtime, ["federation"])
 
       payload = join_and_capture_capabilities(runtime, ctx.raw_token)
 
@@ -432,7 +438,7 @@ defmodule PlatformWeb.RuntimeChannelTest do
     end
 
     test "a runtime with no bundles is pushed zero tools", ctx do
-      {:ok, runtime} = Federation.update_allowed_bundles(ctx.runtime, [])
+      {:ok, runtime} = set_runtime_profile(ctx.runtime, [])
 
       payload = join_and_capture_capabilities(runtime, ctx.raw_token)
 
@@ -461,7 +467,7 @@ defmodule PlatformWeb.RuntimeChannelTest do
     end
 
     test "emits capabilities_pushed telemetry carrying the scoped count", ctx do
-      {:ok, runtime} = Federation.update_allowed_bundles(ctx.runtime, ["federation"])
+      {:ok, runtime} = set_runtime_profile(ctx.runtime, ["federation"])
 
       handler_id = "capabilities-pushed-test-#{System.unique_integer([:positive])}"
       test_pid = self()
@@ -2450,7 +2456,7 @@ defmodule PlatformWeb.RuntimeChannelTest do
       # `tool_call` is now gated on the same authorization path as /mcp, so
       # the grant has to be explicit. Fixing the fixture rather than widening
       # the default grant is the point of the change.
-      {:ok, _granted} = Federation.update_allowed_bundles(ctx.runtime, ["canvas"])
+      {:ok, _granted} = set_runtime_profile(ctx.runtime, ["canvas"])
 
       {:ok, socket} =
         connect(PlatformWeb.RuntimeSocket, %{
@@ -2501,7 +2507,7 @@ defmodule PlatformWeb.RuntimeChannelTest do
     end
 
     test "task kind round-trips through the RuntimeChannel transport", ctx do
-      {:ok, _granted} = Federation.update_allowed_bundles(ctx.runtime, ["task"])
+      {:ok, _granted} = set_runtime_profile(ctx.runtime, ["task"])
       project = create_project()
       socket = joined_socket(ctx)
 
@@ -2680,7 +2686,7 @@ defmodule PlatformWeb.RuntimeChannelTest do
     # a Control Center revocation has to bite on a LIVE socket rather than at
     # next reconnect.
     test "a bundle revoked mid-connection takes effect without a rejoin", ctx do
-      {:ok, _granted} = Federation.update_allowed_bundles(ctx.runtime, ["task"])
+      {:ok, _granted} = set_runtime_profile(ctx.runtime, ["task"])
 
       {:ok, socket} =
         connect(PlatformWeb.RuntimeSocket, %{
@@ -2702,7 +2708,7 @@ defmodule PlatformWeb.RuntimeChannelTest do
       # Revoke everything WITHOUT touching the socket — no rejoin, no
       # reconnect, same channel process.
       runtime = Federation.get_runtime(ctx.runtime.id)
-      {:ok, _revoked} = Federation.update_allowed_bundles(runtime, [])
+      {:ok, _revoked} = set_runtime_profile(runtime, [])
 
       push(socket, "tool_call", %{
         "call_id" => "call-after",
@@ -2832,7 +2838,7 @@ defmodule PlatformWeb.RuntimeChannelTest do
     # unknown-tool one.
     test "a runtime granted NO bundles still gets a denial for a real tool, not an unknown-tool answer",
          ctx do
-      {:ok, _updated} = Federation.update_allowed_bundles(ctx.runtime, [])
+      {:ok, _updated} = set_runtime_profile(ctx.runtime, [])
 
       {:ok, socket} =
         connect(PlatformWeb.RuntimeSocket, %{
@@ -2942,7 +2948,7 @@ defmodule PlatformWeb.RuntimeChannelTest do
     setup ctx do
       # `task_design_decline` lives in the `task` bundle, which is not in the
       # default grant. Same token drives both transports.
-      {:ok, runtime} = Federation.update_allowed_bundles(ctx.runtime, ["task"])
+      {:ok, runtime} = set_runtime_profile(ctx.runtime, ["task"])
       %{runtime: runtime}
     end
 
@@ -3005,7 +3011,7 @@ defmodule PlatformWeb.RuntimeChannelTest do
 
   describe "the argument gate is mounted on both transports" do
     setup ctx do
-      {:ok, runtime} = Federation.update_allowed_bundles(ctx.runtime, ["plan"])
+      {:ok, runtime} = set_runtime_profile(ctx.runtime, ["plan"])
       %{runtime: runtime}
     end
 
@@ -3118,7 +3124,7 @@ defmodule PlatformWeb.RuntimeChannelTest do
 
   describe "task_list undeclared keys over the WebSocket (task 01a0acc3)" do
     setup ctx do
-      {:ok, runtime} = Federation.update_allowed_bundles(ctx.runtime, ["task"])
+      {:ok, runtime} = set_runtime_profile(ctx.runtime, ["task"])
       %{runtime: runtime}
     end
 
