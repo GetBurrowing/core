@@ -94,10 +94,23 @@ defmodule PlatformWeb.SocialLiveTest do
       refute conn.resp_body =~ "social-tab"
     end
 
+    # Task 01a14668: a human member with no visible profile now gets the
+    # create form AS the empty state (not the "ask someone" line), and still
+    # no switcher or tabs.
     test "with no visible profile says so, and shows no switcher or tabs", %{conn: conn} do
       lonely = member!(user!(), org_id!())
       {_view, child, _html} = open(conn, lonely)
-      assert has_element?(child, "[data-role='social-no-profiles']", "No social profiles yet.")
+
+      assert has_element?(
+               child,
+               "[data-role='social-create-heading']",
+               "Set up your first social profile"
+             )
+
+      assert has_element?(child, "form#social-create-form[phx-submit='create_profile']")
+      assert has_element?(child, "[data-role='social-create-name']")
+      assert has_element?(child, "[data-role='social-create-submit']", "Create profile")
+      refute has_element?(child, "[data-role='social-no-profiles']")
       refute has_element?(child, "#social-profile-select")
       refute has_element?(child, "[data-role='social-tabs']")
     end
