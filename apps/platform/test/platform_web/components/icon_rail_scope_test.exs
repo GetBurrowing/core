@@ -18,6 +18,8 @@ defmodule PlatformWeb.Components.IconRailScopeTest do
     * A guest mount of `/chat` renders no Tasks, Files or Admin tile.
     * Every `:shell` live_session runs `{PlatformWeb.LiveAuth, :default}`, so
       the rail never renders without a Scope.
+    * A MODULE LOCK (task 01a14721 stage 3) drops the locked modules' tiles
+      from all three surfaces; an unlocked twin's tiles are unchanged.
 
   The actor classes mirror `Platform.Access.EquivalenceTest`'s rows (its
   fixtures are private to that file, so they are rebuilt here the same way).
@@ -29,7 +31,7 @@ defmodule PlatformWeb.Components.IconRailScopeTest do
   import Platform.TenancyFixtures
 
   alias Platform.Access
-  alias Platform.Access.{Grants, Scope}
+  alias Platform.Access.{Grant, Grants, Scope}
   alias Platform.Accounts
   alias Platform.ExternalUserFixtures, as: World
   alias Platform.Repo
@@ -294,6 +296,66 @@ defmodule PlatformWeb.Components.IconRailScopeTest do
 
       assert missing == []
     end
+  end
+
+  # ── Module locks (task 01a14721 stage 3) ────────────────────────────────
+
+  describe "a member locked out of every module but chat, tasks and meetings" do
+    setup ctx do
+      org = ctx.w.org_a.id
+      locked = human!(fn u -> member!(u, org, "member") end)
+      twin = human!(fn u -> member!(u, org, "member") end)
+      %{org: org, locked: locked, twin: twin, before: surfaces(scope_of(locked))}
+    end
+
+    test "sees exactly Chat, Meetings and Tasks on the rail and no Admin in the More sheet",
+         ctx do
+      # Positive control: before the locks the same user sees the working
+      # modules, exactly as the unlocked twin does.
+      assert ctx.before == surfaces(scope_of(ctx.twin))
+      assert Enum.all?([:files, :context, :inbox, :agents], &(&1 in ctx.before.destinations))
+
+      lock_all_but!(ctx.locked, ctx.org, ~w(chat tasks meetings))
+      locked = scope_of(ctx.locked)
+
+      assert Enum.sort(scope_destination_keys(locked)) == [:chat, :meetings, :tasks]
+      assert Enum.sort(desktop_keys(%{access_scope: locked})) == [:chat, :meetings, :tasks]
+      assert mobile_keys(%{access_scope: locked}) == [:chat, :tasks]
+      assert more_sheet_keys(%{access_scope: locked}) == [:meetings]
+
+      sheet = more_sheet_html(%{access_scope: locked})
+      refute sheet =~ ">Admin</p>"
+      refute desktop_html(%{access_scope: locked}) =~ ~s(data-destination="admin")
+
+      # The unlocked twin is unchanged by the other user's locks.
+      assert surfaces(scope_of(ctx.twin)) == ctx.before
+    end
+
+    test "a single lock drops exactly that module's tile", ctx do
+      lock_all_but!(ctx.locked, ctx.org, Grant.lockable_modules() -- ["files"])
+      locked = surfaces(scope_of(ctx.locked))
+
+      assert :files in ctx.before.destinations
+      assert locked.destinations == ctx.before.destinations -- [:files]
+      assert locked.more == ctx.before.more -- [:files]
+      assert locked.mobile == ctx.before.mobile
+    end
+  end
+
+  defp lock_all_but!(user, org, keep) do
+    for module <- Grant.lockable_modules() -- keep do
+      {:ok, _} =
+        Grants.deny(%{principal: {:user, user.id}, permission: module, resource: {:module, org}})
+    end
+  end
+
+  defp surfaces(scope) do
+    %{
+      destinations: scope_destination_keys(scope),
+      desktop: desktop_keys(%{access_scope: scope}),
+      mobile: mobile_keys(%{access_scope: scope}),
+      more: more_sheet_keys(%{access_scope: scope})
+    }
   end
 
   # ── Helpers ─────────────────────────────────────────────────────────────

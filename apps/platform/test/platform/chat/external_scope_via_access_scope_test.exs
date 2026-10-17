@@ -96,6 +96,47 @@ defmodule Platform.Chat.ExternalScopeViaAccessScopeTest do
   end
 
   defp ids(rows), do: rows |> Enum.map(& &1.id) |> Enum.sort()
+
+  # Today's reads narrowed to the org fence (ticket 01a14721), computed from
+  # the rows, never from `Platform.Access`: a space is inside when its org is
+  # one of the user's membership orgs or the user holds a participant row
+  # for it; a message, attachment or canvas when its space is.
+  defp fence_reads(today, user, w) do
+    orgs = Enum.map(Tenancy.list_user_memberships(user), & &1.org_id)
+
+    inside? = fn space_id ->
+      space = Chat.get_space(space_id)
+      space.org_id in orgs or Chat.participant?(space_id, user.id)
+    end
+
+    space_of =
+      Map.new(
+        Enum.map(w.messages, &{&1.id, &1.space_id}) ++
+          Enum.map(w.attachments, &{&1.id, &1.space_id}) ++
+          Enum.map(w.canvases, &{&1.id, &1.space_id}) ++
+          Enum.map(w.spaces, &{&1.slug, &1.id}) ++ Enum.map(w.spaces, &{&1.id, &1.id})
+      )
+
+    keep_key? = fn key -> inside?.(Map.fetch!(space_of, key)) end
+
+    Map.new(today, fn
+      {k, ids} when k in [:channels, :conversations] ->
+        {k, Enum.filter(ids, inside?)}
+
+      {k, ids} when k in [:get_messages_by_ids, :list_attachments_for_messages] ->
+        {k, Enum.filter(ids, keep_key?)}
+
+      {:visible_space_id?, map} ->
+        {:visible_space_id?, Map.new(map, fn {id, v} -> {id, v and inside?.(id)} end)}
+
+      {k, map} when k in [:list_messages, :search_messages, :list_canvases, :list_attachments] ->
+        {k, Map.new(map, fn {key, ids} -> {key, if(keep_key?.(key), do: ids, else: [])} end)}
+
+      {k, map} ->
+        {k, Map.new(map, fn {key, v} -> {key, if(keep_key?.(key), do: v, else: nil)} end)}
+    end)
+  end
+
   defp id_of(nil), do: nil
   defp id_of(%{id: id}), do: id
 
@@ -108,7 +149,20 @@ defmodule Platform.Chat.ExternalScopeViaAccessScopeTest do
       @actor actor
       test "#{actor}: every scoped Chat read returns the same set", w do
         user = Map.fetch!(w, @actor)
+
+        # Named deliberate exception: sub-org-only internal members are fenced to their orgs, ticket 01a14721; prod had 0 such users on 2026-10-16.
+        fenced_actors =
+          for a <- [:ext, :ext2, :int, :mixed, :ext_root],
+              Platform.Access.org_fence(Scope.for_user(Map.fetch!(w, a))) != :unfenced,
+              do: a
+
+        assert fenced_actors == [:int]
+
         {today, via_scope} = both(user, w)
+
+        today =
+          if @actor in fenced_actors, do: fence_reads(today, user, w), else: today
+
         assert via_scope == today
       end
     end

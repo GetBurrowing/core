@@ -2,8 +2,22 @@ defmodule PlatformWeb.AccessLive do
   @moduledoc "Break-glass access inspection and human ledger controls."
   use PlatformWeb, :live_view
   alias Platform.Access
-  alias Platform.Access.{Changes, Effective, Grants, Impact, Proposals, Scope, ViewAs}
+
+  alias Platform.Access.{
+    Changes,
+    Effective,
+    Grant,
+    Grants,
+    Impact,
+    Proposals,
+    Registry,
+    Scope,
+    ViewAs
+  }
+
   alias Platform.{Accounts, Repo}
+
+  @lock_verbs %{"Added" => "Locked", "Removed" => "Unlocked", "Remove" => "Unlock"}
 
   @impl true
   def mount(params, _session, socket) do
@@ -108,6 +122,35 @@ defmodule PlatformWeb.AccessLive do
   def handle_event("undo", %{"id" => id}, socket),
     do: {:noreply, finish(socket, Changes.undo(id, fresh(socket), []))}
 
+  # "Lock module" (task 01a14721 stage 3): a module-scoped deny through
+  # `Grants.deny/2` as the signed-in actor, so `Platform.Access.Delegation`
+  # decides and the ledger records it. The principal is the selected person,
+  # never a client-supplied id; the org is client-supplied and Delegation
+  # refuses one the actor does not manage.
+  # The select opens on a "Choose a module" prompt, so a submit without a
+  # choice locks nothing (a default first option once locked Chat by accident
+  # on the dev rig).
+  def handle_event("lock-module", %{"module" => ""}, socket),
+    do: {:noreply, failure(socket, :choose_a_module)}
+
+  def handle_event("lock-module", %{"module" => module, "org" => org_id}, socket) do
+    case socket.assigns.selected do
+      "user:" <> user_id ->
+        result =
+          Grants.deny(
+            %{principal: {:user, user_id}, permission: module, resource: {:module, org_id}},
+            actor: fresh(socket)
+          )
+
+        {:noreply, finish(socket, result)}
+
+      _ ->
+        {:noreply, failure(socket, :no_subject)}
+    end
+  end
+
+  def handle_event("lock-module", _, socket), do: {:noreply, failure(socket, :invalid_lock)}
+
   defp finish(socket, {:ok, _}),
     do: socket |> reload() |> put_flash(:info, "Access change recorded.")
 
@@ -139,13 +182,7 @@ defmodule PlatformWeb.AccessLive do
       |> Enum.flat_map(&Changes.list_changes(&1.id, limit: 200))
       |> Enum.filter(fn c ->
         Platform.Access.Delegation.root_admin?(scope) or
-          Enum.all?(c.before ++ c.after, fn r ->
-            Access.can?(
-              scope,
-              "access.manage",
-              {String.to_existing_atom(r["resource_type"]), r["resource_id"]}
-            )
-          end)
+          Enum.all?(c.before ++ c.after, &manages_row?(scope, &1))
       end)
       |> Enum.sort_by(& &1.id, :desc)
 
@@ -168,10 +205,23 @@ defmodule PlatformWeb.AccessLive do
     select(socket, key)
   end
 
+  # A module lock's resource is its org (`Platform.Access.Delegation`): it is
+  # managed through `access.manage` over that org, not over a typed resource.
+  defp manages_row?(scope, %{"resource_type" => "module", "org_id" => org_id}),
+    do: Effective.manages_org?(scope, org_id)
+
+  defp manages_row?(scope, row),
+    do:
+      Access.can?(
+        scope,
+        "access.manage",
+        {String.to_existing_atom(row["resource_type"]), row["resource_id"]}
+      )
+
   defp select(socket, key) do
     case Enum.find(socket.assigns.subjects, &(&1.key == key)) do
       nil ->
-        assign(socket, selected: nil, subject: nil, lines: [], view: nil)
+        assign(socket, selected: nil, subject: nil, lines: [], view: nil, lock_form: nil)
 
       subject ->
         with {:ok, view} <- ViewAs.compute(fresh(socket), subject.target),
@@ -181,12 +231,49 @@ defmodule PlatformWeb.AccessLive do
             subject: subject,
             lines: lines,
             view: view,
-            subject_form: to_form(%{"subject" => key})
+            subject_form: to_form(%{"subject" => key}),
+            lock_form: lock_form(fresh(socket), subject, lines)
           )
         else
-          _ -> assign(socket, selected: nil, subject: nil, lines: [], view: nil)
+          _ -> assign(socket, selected: nil, subject: nil, lines: [], view: nil, lock_form: nil)
         end
     end
+  end
+
+  # The "Lock module" form for a person: the lockable modules not already
+  # locked, and the orgs of the person's memberships the viewer manages
+  # (Delegation decides again on submit). nil when nothing can be offered.
+  defp lock_form(viewer, %{target: {:user, user_id}}, lines) do
+    locked = for %{source: "Locked", module: m, where: %{id: org}} <- lines, do: {m, org}
+
+    orgs =
+      for %{org_id: org_id} <- Accounts.get_user(user_id).org_memberships,
+          Effective.manages_org?(viewer, org_id),
+          org = Platform.Tenancy.get_org(org_id),
+          uniq: true,
+          do: {org.name, org.id}
+
+    modules =
+      for m <- Grant.lockable_modules(),
+          not Enum.all?(orgs, fn {_name, org} -> {m, org} in locked end),
+          do: {module_label(m), m}
+
+    if orgs != [] and modules != [],
+      do: %{orgs: orgs, modules: modules, form: to_form(%{"module" => nil, "org" => nil})}
+  end
+
+  defp lock_form(_viewer, _subject, _lines), do: nil
+
+  @doc false
+  # The module's display name: its rail label when it has a rail tile, else
+  # its capitalised name (`canvas` -> "Canvas").
+  def module_label(module) do
+    labels =
+      Map.new(PlatformWeb.Components.IconRail.destinations(root_user: true), &{&1.key, &1.label})
+
+    Enum.find_value(Registry.rail_entries(), fn entry ->
+      entry.module == module && Map.get(labels, entry.key)
+    end) || String.capitalize(module)
   end
 
   defp reset_subject("user:" <> id), do: {:user, id}
@@ -227,27 +314,36 @@ defmodule PlatformWeb.AccessLive do
   defp change_label(change) do
     added = change.after -- change.before
     removed = change.before -- change.after
-    verb = if change.action == "undo", do: "Restored", else: "Added"
+    undo? = change.action == "undo"
+    verb = if undo?, do: "Restored", else: "Added"
 
-    (Enum.map(removed, &row_label(&1, "Removed")) ++ Enum.map(added, &row_label(&1, verb)))
+    (Enum.map(removed, &change_row_label(&1, "Removed", undo?)) ++
+       Enum.map(added, &change_row_label(&1, verb, undo?)))
     |> Enum.join("; ")
   end
 
+  # A module lock reads as what it does to the person (task 01a14721
+  # stage 3): an undo that removes a lock restores the module to them.
+  defp change_row_label(%{"resource_type" => "module"} = row, "Removed", true),
+    do: lock_label(row, "Restored") <> " (lock undone)"
+
+  defp change_row_label(%{"resource_type" => "module"} = row, "Restored", true),
+    do: lock_label(row, "Re-locked") <> " (unlock undone)"
+
+  defp change_row_label(row, verb, _undo?), do: row_label(row, verb)
+
+  defp lock_label(row, verb) do
+    org = Platform.Tenancy.get_org(row["org_id"])
+
+    "#{verb} #{module_label(row["permission"])} module in " <>
+      "#{(org && org.name) || row["resource_id"]} for #{principal_label(row)}"
+  end
+
+  defp row_label(%{"resource_type" => "module"} = row, verb),
+    do: lock_label(row, Map.get(@lock_verbs, verb, verb))
+
   defp row_label(row, verb) do
-    subject =
-      case row["principal_type"] do
-        "user" ->
-          actor_name(row["principal_id"])
-
-        "role" ->
-          "role " <> row["principal_role_key"]
-
-        "agent" ->
-          case Repo.get(Platform.Agents.Agent, row["principal_id"]) do
-            nil -> "agent " <> row["principal_id"]
-            agent -> agent.name
-          end
-      end
+    subject = principal_label(row)
 
     schema = %{
       "project" => Platform.Tasks.Project,
@@ -268,6 +364,22 @@ defmodule PlatformWeb.AccessLive do
         else: row["resource_id"]
 
     "#{verb} #{row["effect"]} #{row["permission"]} on #{where} for #{subject}"
+  end
+
+  defp principal_label(row) do
+    case row["principal_type"] do
+      "user" ->
+        actor_name(row["principal_id"])
+
+      "role" ->
+        "role " <> row["principal_role_key"]
+
+      "agent" ->
+        case Repo.get(Platform.Agents.Agent, row["principal_id"]) do
+          nil -> "agent " <> row["principal_id"]
+          agent -> agent.name
+        end
+    end
   end
 
   defp preview_document(preview) do

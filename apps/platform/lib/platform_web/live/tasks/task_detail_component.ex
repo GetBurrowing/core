@@ -81,6 +81,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
   alias Platform.Tasks.PlanRejection
   alias Platform.Tasks.{Plan, Task}
   alias PlatformWeb.Tasks.ExternalFeedbackComponents
+  alias PlatformWeb.Tasks.Selection
 
   import PlatformWeb.Tasks.StatusLabels, only: [status_label: 1, phase_label: 1]
 
@@ -126,11 +127,24 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
 
   # The promote handler re-reads the row by id; a malformed id is "not found"
   # rather than an Ecto cast raise.
-  defp promotable_task(task_id) when is_binary(task_id) do
-    if Platform.UUID.valid?(task_id), do: Tasks.get_task_record(task_id), else: nil
+  defp promotable_task(socket, task_id) when is_binary(task_id) do
+    if Platform.UUID.valid?(task_id), do: readable_record(socket, task_id), else: nil
   end
 
-  defp promotable_task(_task_id), do: nil
+  defp promotable_task(_socket, _task_id), do: nil
+
+  # Every by-id handler here takes its task id from the client: a task
+  # outside the viewer's `tasks.read` (the org fence, an explicit deny; task
+  # 01a14721 stage 1) reads exactly like a missing one.
+  defp readable_record(socket, task_id) do
+    if Selection.readable_task?(socket.assigns[:access_scope], task_id),
+      do: Tasks.get_task_record(task_id)
+  end
+
+  defp readable_detail(socket, task_id) do
+    if Selection.readable_task?(socket.assigns[:access_scope], task_id),
+      do: Tasks.get_task_detail(task_id)
+  end
 
   # Whether to RENDER the promote control (task 01a11ec3 stage 4). Display
   # only: `detail_promote_from_quarantine` re-asks the same predicate against
@@ -252,7 +266,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
           assign(socket, :editing_task_title_id, nil)
 
         true ->
-          case Tasks.get_task_record(task_id) do
+          case readable_record(socket, task_id) do
             nil ->
               flash(:error, "Task not found.")
               assign(socket, :editing_task_title_id, nil)
@@ -307,7 +321,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
 
     attrs = %{String.to_existing_atom(field) => normalized}
 
-    case Tasks.get_task_record(task_id) do
+    case readable_record(socket, task_id) do
       nil ->
         flash(:error, "Task not found.")
 
@@ -412,7 +426,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
   end
 
   def handle_event("detail_transition", %{"id" => task_id, "status" => new_status}, socket) do
-    task = Tasks.get_task_detail(task_id)
+    task = readable_detail(socket, task_id)
 
     if task do
       # LiveView is user-facing regardless of session state — thread the
@@ -461,7 +475,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
   def handle_event("detail_promote_from_quarantine", %{"id" => task_id}, socket) do
     user_id = socket.assigns[:current_user_id]
 
-    with {:task, %Task{} = task} <- {:task, promotable_task(task_id)},
+    with {:task, %Task{} = task} <- {:task, promotable_task(socket, task_id)},
          {:external, true} <- {:external, task.origin == "external_feedback"},
          {:authorized, true} <-
            {:authorized, Tasks.can_promote_from_quarantine?(%{id: user_id}, task)},

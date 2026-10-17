@@ -1427,7 +1427,10 @@ defmodule Platform.RepoLookupBoundaryTest do
     # 0 → 3 for task 01a1386d-e528 stage 2's `Platform.Access.Grants`: the
     # project, space and canvas lookups of `fetch_resource/2`, each reached
     # only through `resource_fields/1`'s Platform.UUID.valid?/1 check.
-    "platform/access/grants.ex" => 4,
+    # 4 → 5 for task 01a14721 stage 2: `fetch_resource(:module, id)` pins
+    # `o.id == ^id` for a module lock's `{:module, org_id}`, reached only
+    # through the same `resource_fields/1` Platform.UUID.valid?/1 check.
+    "platform/access/grants.ex" => 5,
     # Member9: participant lookup checks MCP space_id first; runtime.agent_id
     # comes from the loaded AgentRuntime UUID field.
     "platform/access/agent_tools.ex" => 1,

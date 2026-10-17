@@ -68,14 +68,25 @@
               :for={line <- @lines}
               data-source={line.source}
               data-allowed={to_string(line.allowed)}
+              data-module={line.source == "Locked" && line.module}
             >
-              <td>{if line.allowed, do: "✓", else: "×"} {line.permission}</td>
+              <td :if={line.source == "Locked"} data-role="module-lock">
+                <span
+                  class="hero-lock-closed size-4 align-text-bottom text-error"
+                  aria-hidden="true"
+                >
+                </span>
+                Locked: {module_label(line.module)}
+              </td>
+              <td :if={line.source != "Locked"}>
+                {if line.allowed, do: "✓", else: "×"} {line.permission}
+              </td>
               <td>{line.where.name}</td>
               <td>
                 <span class={[
                   "font-mono text-xs",
                   line.source == "grant" && "text-info",
-                  line.source in ["deny", "restricted"] && "text-error",
+                  line.source in ["deny", "restricted", "Locked"] && "text-error",
                   line.source == "capped" && "text-warning",
                   line.source in ["role", "inherited"] && "text-base-content/60"
                 ]}>
@@ -92,11 +103,45 @@
                 >
                   Remove
                 </button>
+                <button
+                  :if={line.source == "Locked"}
+                  phx-click="remove"
+                  phx-value-id={line.grant_id}
+                  class="btn btn-outline btn-xs"
+                >
+                  Unlock
+                </button>
               </td>
             </tr>
           </tbody>
         </table>
       </div>
+      <.form
+        :if={@lock_form}
+        for={@lock_form.form}
+        id="access-lock-form"
+        phx-submit="lock-module"
+        class="flex flex-col gap-2 sm:flex-row sm:items-end"
+      >
+        <.input
+          field={@lock_form.form[:module]}
+          id="access-lock-module"
+          type="select"
+          label="Lock module"
+          prompt="Choose a module"
+          options={@lock_form.modules}
+        />
+        <.input
+          field={@lock_form.form[:org]}
+          id="access-lock-org"
+          type="select"
+          label="In org"
+          options={@lock_form.orgs}
+        />
+        <button type="submit" class="btn btn-outline btn-error btn-sm min-h-11 sm:min-h-8">
+          <span class="hero-lock-closed size-4" aria-hidden="true"></span> Lock module
+        </button>
+      </.form>
     </section>
     <section class="overflow-hidden rounded-xl border border-edge bg-base-100 p-4">
       <h2 class="text-lg font-semibold">Recent changes</h2>

@@ -321,12 +321,15 @@ defmodule Platform.Access.Changes do
 
   # The resources named by tuple keys (`Grant.tuple_key/1`) of rows that may
   # not exist yet. Only `access.manage` tuples matter to the guard. Every
-  # field but the role key is a UUID, a registry type or a `module.action`
-  # name, none of which contains `|`.
+  # field but the role key is a UUID, a registry type, a `module.action`
+  # name or a module name, none of which contains `|`. A module lock
+  # (`"module"`, task 01a14721 stage 2) names a module, never
+  # `access.manage` (`access` is not lockable), and is excluded explicitly:
+  # it changes no one's management of anything.
   defp key_resources(keys) do
     for key <- keys,
         [_type, _principal, "access.manage", rtype, rid] <- [String.split(key, "|")],
-        rtype in Grant.resource_types(),
+        rtype in Grant.resource_types() and rtype != "module",
         do: {String.to_existing_atom(rtype), rid}
   end
 

@@ -7473,7 +7473,12 @@ defmodule Platform.Federation.ToolSurfaceTest do
     end
 
     test "canvas_get denied for canvas in non-member space", ctx do
-      other_space = create_space(%{name: "Locked Space"})
+      # In the runtime owner's org (sxi): the owner is a sub-org-only member,
+      # so an org-less space is outside the owner's org fence (ticket
+      # 01a14721) and would answer not-found before the rule under test.
+      other_space =
+        create_space(%{name: "Locked Space", org_id: Tenancy.get_org_by_slug!("sxi").id})
+
       other_participant = create_participant(other_space.id)
 
       {:ok, canvas, _msg} =
@@ -7505,7 +7510,12 @@ defmodule Platform.Federation.ToolSurfaceTest do
     # that instruction was false until this stage.
 
     test "canvas_get resolves for an agent bound to the attached task, not the space", ctx do
-      designer_space = create_space(%{name: "Designer Space"})
+      # In the runtime owner's org (sxi): the owner is a sub-org-only member,
+      # so an org-less space is outside the owner's org fence (ticket
+      # 01a14721) and would answer not-found before the rule under test.
+      designer_space =
+        create_space(%{name: "Designer Space", org_id: Tenancy.get_org_by_slug!("sxi").id})
+
       designer = create_participant(designer_space.id, %{display_name: "Saru"})
 
       {:ok, canvas, _msg} =

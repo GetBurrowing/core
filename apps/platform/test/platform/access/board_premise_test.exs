@@ -11,6 +11,14 @@ defmodule Platform.Access.BoardPremiseTest do
   fails because the board became viewer-scoped, the `member` mapping must be
   revisited with it; narrowing belongs to resource scoping (stack position 3),
   not to this member.
+
+  **Flipped by ticket 01a14721 stage 1 (the org fence).** The board is now
+  viewer-scoped for exactly this user: `Platform.Access.org_fence/1` fences a
+  sub-org-only internal member to their orgs, at the decision point, so the
+  foreign-org tasks are gone while the `member` role still carries
+  `tasks.read` at `"all"` (the fence narrows it; the mapping is unchanged,
+  and a root member still sees every task). The test now pins the fenced
+  answer, with the user's own-org task as its positive control.
   """
   use PlatformWeb.ConnCase, async: false
 
@@ -21,7 +29,7 @@ defmodule Platform.Access.BoardPremiseTest do
   alias Platform.{Repo, Tasks}
   alias Platform.Tenancy.OrgMembership
 
-  test "a sub-org member sees a foreign org's tasks on the board, but not its projects", %{
+  test "a sub-org member sees neither a foreign org's tasks on the board nor its projects", %{
     conn: conn
   } do
     own_org = tenant_org_id("rbac_p5_own")
@@ -63,17 +71,35 @@ defmodule Platform.Access.BoardPremiseTest do
         task
       end
 
+    {:ok, own_project} =
+      Tasks.create_project(%{
+        name: "P5 Own #{n}",
+        repo_url: "git@github.com:test/p5.git",
+        org_id: own_org
+      })
+
+    {:ok, own_task} =
+      Tasks.create_task(%{
+        project_id: own_project.id,
+        title: "P5 own backlog #{n}",
+        status: "backlog",
+        priority: "medium"
+      })
+
     # The project listing is fenced to the viewer's orgs...
     refute foreign_project.id in Enum.map(Tasks.list_projects_for_user(user), & &1.id)
 
-    # ...but the board is not.
+    # ...and, since the org fence, so is the board.
     conn = init_test_session(conn, current_user_id: user.id)
     {:ok, view, _html} = live(conn, "/tasks")
     html = render(view)
 
+    assert html =~ ~s(data-task-id="#{own_task.id}"),
+           "positive control: the member's own-org task must render on the board"
+
     visible = for t <- foreign_tasks, html =~ ~s(data-task-id="#{t.id}"), do: t.id
 
-    assert visible != [],
-           "P5 is false on this base: the board hid every foreign-org task from a sub-org member"
+    assert visible == [],
+           "the org fence is not applied: a sub-org member's board shows foreign-org tasks"
   end
 end

@@ -3,7 +3,7 @@ defmodule PlatformWeb.ModuleGateTest do
 
   import Phoenix.LiveViewTest
 
-  alias Platform.Access.Scope
+  alias Platform.Access.{Grant, Grants, Scope}
   alias Platform.Accounts.User
   alias Platform.Repo
   alias Platform.Tenancy
@@ -140,6 +140,83 @@ defmodule PlatformWeb.ModuleGateTest do
       }
 
       assert {:halt, _socket} = ModuleGate.on_mount(:default, %{}, %{}, socket)
+    end
+  end
+
+  # ── Module locks (task 01a14721 stage 3) ──────────────────────────────
+
+  @locked_paths [
+    {"/control", :agents, PlatformWeb.ControlCenterLive},
+    {"/files", :files, PlatformWeb.FilesLive},
+    {"/org_memory", :context, PlatformWeb.OrgMemoryLive},
+    {"/inbox", :inbox, PlatformWeb.InboxLive},
+    {"/activity", :activity, PlatformWeb.ActivityLive},
+    {"/email", :email, PlatformWeb.EmailLive},
+    {"/skills", :skills, PlatformWeb.SkillsLive},
+    {"/control/experiments", :experiments, PlatformWeb.ExperimentsLive}
+  ]
+
+  defp lock_all_but!(user, keep) do
+    org = Tenancy.get_org_by_slug!("acme").id
+
+    for module <- Grant.lockable_modules() -- keep do
+      {:ok, _} =
+        Grants.deny(%{principal: {:user, user.id}, permission: module, resource: {:module, org}})
+    end
+
+    user
+  end
+
+  defp gate(user, view) do
+    socket = %Phoenix.LiveView.Socket{
+      endpoint: PlatformWeb.Endpoint,
+      view: view,
+      assigns: %{
+        __changed__: %{},
+        access_scope: Scope.for_user(Platform.Accounts.get_user(user.id))
+      }
+    }
+
+    ModuleGate.on_mount(:default, %{}, %{}, socket)
+  end
+
+  describe "a member locked out of every module but chat, tasks and meetings" do
+    setup do
+      locked = user!() |> member!("member") |> lock_all_but!(~w(chat tasks meetings))
+      twin = user!() |> member!("member")
+      %{locked: locked, twin: twin}
+    end
+
+    test "a GET by URL of each locked module's page redirects to its access-denied page", ctx do
+      for {path, key, view} <- @locked_paths do
+        # Positive control: the router maps the path to the view, and the
+        # unlocked twin passes the same gate for it.
+        assert %{phoenix_live_view: {^view, _, _, _}} =
+                 Phoenix.Router.route_info(PlatformWeb.Router, "GET", path, "localhost")
+
+        assert {:cont, _} = gate(ctx.twin, view), path
+        assert {:halt, _} = gate(ctx.locked, view), path
+
+        conn = build_conn() |> authed(ctx.locked) |> get(path)
+        assert redirected_to(conn, 302) == "/access-denied?module=#{key}", path
+
+        assert {:error, {:redirect, %{to: to}}} = build_conn() |> authed(ctx.locked) |> live(path)
+        assert to == "/access-denied?module=#{key}", path
+      end
+    end
+
+    test "a live_redirect from /chat to each locked module's page is refused", ctx do
+      for {path, key, _view} <- @locked_paths do
+        {:ok, chat, _} = build_conn() |> authed(ctx.locked) |> live("/chat")
+        assert {:error, {:redirect, %{to: to}}} = live_redirect(chat, to: path)
+        assert to == "/access-denied?module=#{key}", path
+      end
+    end
+
+    test "/chat, /tasks and /meetings still open", ctx do
+      for path <- ["/chat", "/tasks", "/meetings"] do
+        assert {:ok, _view, _html} = build_conn() |> authed(ctx.locked) |> live(path), path
+      end
     end
   end
 end

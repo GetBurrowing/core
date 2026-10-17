@@ -40,7 +40,11 @@ defmodule Platform.Access.AgentsAcceptanceTest do
 
     test "an internal owner's deny removes only that project's tasks from its agent" do
       owner = World.create_user!()
-      World.plain_member!(owner, Tenancy.get_org_by_slug!("sxi"))
+      # A ROOT-org member: the projects live in the root org, and a
+      # sub-org-only owner's agent is now fenced away from them before any
+      # deny is read (the org fence, ticket 01a14721), which would make the
+      # deny assertion below vacuous.
+      World.plain_member!(owner, Tenancy.get_org_by_slug!("acme"))
       {_project_p, task_p} = project_and_task!("member-p")
       {project_q, task_q} = project_and_task!("member-q")
       {_runtime, token} = runtime_token!(owner.id, ["task"])

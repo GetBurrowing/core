@@ -55,6 +55,7 @@ defmodule PlatformWeb.TasksLive do
   alias PlatformWeb.Tasks.EpicLoaders
   alias PlatformWeb.Tasks.LifecycleHooks
   alias PlatformWeb.Tasks.PinHooks
+  alias PlatformWeb.Tasks.Selection
   alias PlatformWeb.Tasks.SteeringComponent
   alias PlatformWeb.Tasks.TaskDetailComponent
 
@@ -155,7 +156,7 @@ defmodule PlatformWeb.TasksLive do
     # raises — an assert_raise-shaped test cannot see this. Assert the
     # :error branch is taken.
     with {:ok, _} <- Platform.UUID.cast(task_id),
-         task when not is_nil(task) <- Tasks.get_task_detail(task_id) do
+         task when not is_nil(task) <- Selection.readable_task_detail(socket, task_id) do
       pending_reviews = ReviewRequests.list_pending_for_task(task.id)
       Platform.Inbox.dismiss_sponsor_row_on_open(socket.assigns.current_user_id, task.id)
 
@@ -273,7 +274,7 @@ defmodule PlatformWeb.TasksLive do
             {:noreply,
              socket
              |> BoardHooks.refresh_board()
-             |> assign_selected_task(Tasks.get_task_detail(task.id))}
+             |> assign_selected_task(Selection.readable_task_detail(socket, task.id))}
 
           {:error, _} ->
             {:noreply, put_flash(socket, :error, "Failed to assign agent.")}
@@ -541,7 +542,7 @@ defmodule PlatformWeb.TasksLive do
     {:noreply,
      socket
      |> BoardHooks.refresh_board()
-     |> assign_selected_task(Tasks.get_task_detail(task_id))
+     |> assign_selected_task(Selection.readable_task_detail(socket, task_id))
      |> put_flash(:info, "Assignees saved.")}
   end
 
@@ -553,7 +554,7 @@ defmodule PlatformWeb.TasksLive do
     {:noreply,
      socket
      |> put_flash(:info, "Merge requested for #{branch}.")
-     |> assign_selected_task(Tasks.get_task_detail(task_id))}
+     |> assign_selected_task(Selection.readable_task_detail(socket, task_id))}
   end
 
   def handle_info(_message, socket), do: {:noreply, socket}

@@ -318,9 +318,13 @@ defmodule Platform.Access.ScopeTest do
   describe "the implicit_or_participant chat rule" do
     test "internal: any channel by kind, a DM only as participant; guest: participant only",
          ctx do
+      # Org a, the member's own org: an org-b space would now be refused by
+      # the org fence (ticket 01a14721) before the kind rule is asked, which
+      # would make the kind and participant assertions below vacuous.
       other_dm = space!("dm", ctx.a)
-      group = space!("group", ctx.b)
-      exec = space!("execution", ctx.b)
+      group = space!("group", ctx.a)
+      exec = space!("execution", ctx.a)
+      foreign_exec = space!("execution", ctx.b)
 
       internal = create_user!("chat-int")
       member!(internal, ctx.a, "member")
@@ -329,6 +333,8 @@ defmodule Platform.Access.ScopeTest do
 
       assert Access.can?(s, "chat.read", ctx.channel)
       assert Access.can?(s, "chat.write", exec)
+      # The fence: a sub-org-only member's kind admission stops at their orgs.
+      refute Access.can?(s, "chat.write", foreign_exec)
       assert Access.can?(s, "chat.read", ctx.dm)
       assert Access.can?(s, "chat.read", ctx.dm.id)
       refute Access.can?(s, "chat.read", other_dm)

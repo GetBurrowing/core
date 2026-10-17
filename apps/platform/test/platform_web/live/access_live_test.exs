@@ -305,4 +305,154 @@ defmodule PlatformWeb.AccessLiveTest do
     assert snapshot() == before
     assert Repo.aggregate(Change, :count) == count
   end
+
+  # ── Module locks (task 01a14721 stage 3) ───────────────────────────────
+
+  defp files_tile?(html), do: html =~ ~s(data-destination="files")
+
+  test "an admin locks files from the panel; the member's rail drops it live; Undo restores",
+       ctx do
+    before = snapshot()
+    {:ok, member_view, member_html} = live(conn_for(ctx.member), "/chat")
+    # Positive control: the member's rail carries Files before the lock.
+    assert files_tile?(member_html)
+
+    {:ok, panel, _} = live(conn_for(ctx.root), "/access/user/#{ctx.member.id}")
+    refute has_element?(panel, "[data-role=module-lock]")
+
+    # A submit without choosing a module locks nothing.
+    html = render_submit(panel, "lock-module", %{"module" => "", "org" => ctx.org.id})
+    assert html =~ "choose_a_module"
+    assert snapshot() == before
+
+    panel
+    |> form("#access-lock-form", %{"module" => "files", "org" => ctx.org.id})
+    |> render_submit()
+
+    assert has_element?(panel, "[data-source=Locked][data-module=files]", "Locked: Files")
+    assert has_element?(panel, "[data-source=Locked] td", ctx.org.name)
+
+    lock = last_change()
+    assert lock.action == "deny"
+
+    assert has_element?(
+             panel,
+             "[data-change-id='#{lock.id}']",
+             "Locked Files module in #{ctx.org.name} for Panel member"
+           )
+
+    refute files_tile?(render(member_view))
+
+    refute Platform.Access.module_access?(
+             Scope.for_user(Accounts.get_user(ctx.member.id)),
+             :files
+           )
+
+    panel |> element("[data-change-id='#{lock.id}'] button") |> render_click()
+
+    refute has_element?(panel, "[data-role=module-lock]")
+    undo = last_change()
+    assert undo.action == "undo"
+
+    assert has_element?(
+             panel,
+             "[data-change-id='#{undo.id}']",
+             "Restored Files module in #{ctx.org.name} for Panel member (lock undone)"
+           )
+
+    assert files_tile?(render(member_view))
+    assert snapshot() == before
+  end
+
+  test "the Unlock button on a Locked line revokes the lock through the ledger", ctx do
+    {:ok, _} =
+      Grants.deny(
+        %{principal: ctx.member, permission: "skills", resource: {:module, ctx.org.id}},
+        actor: Scope.for_user(ctx.root)
+      )
+
+    {:ok, panel, _} = live(conn_for(ctx.root), "/access/user/#{ctx.member.id}")
+    assert has_element?(panel, "[data-source=Locked][data-module=skills]", "Locked: Skills")
+    count = Repo.aggregate(Change, :count)
+
+    panel
+    |> element("[data-source=Locked][data-module=skills] button", "Unlock")
+    |> render_click()
+
+    refute has_element?(panel, "[data-source=Locked]")
+    assert Repo.aggregate(Change, :count) == count + 1
+
+    assert Platform.Access.module_access?(
+             Scope.for_user(Accounts.get_user(ctx.member.id)),
+             :skills
+           )
+  end
+
+  test "a non-manager of the org is refused a lock by Delegation and nothing is written", ctx do
+    org_id = Platform.TenancyFixtures.tenant_org_id("panel-lock")
+    org = Tenancy.get_org(org_id)
+    manager = user!("Project-only manager")
+    membership!(manager, org, "member")
+    subject = user!("Lock subject")
+    membership!(subject, org, "member")
+    {:ok, own} = Tasks.create_project(%{name: "Lock panel project", org_id: org.id})
+
+    for permission <- ["access.manage", "tasks.read"] do
+      {:ok, _} =
+        Grants.grant(%{principal: manager, permission: permission, resource: own},
+          actor: Scope.for_user(ctx.root)
+        )
+    end
+
+    {:ok, _} =
+      Grants.grant(%{principal: subject, permission: "tasks.read", resource: own},
+        actor: Scope.for_user(ctx.root)
+      )
+
+    {:ok, view, _} = live(conn_for(manager), "/access/user/#{subject.id}")
+    # The manager can inspect the subject (positive control) but is offered
+    # no lock: they manage a project, not the org.
+    assert has_element?(view, "#access-subject option[value='user:#{subject.id}']")
+    refute has_element?(view, "#access-lock-form")
+
+    before = snapshot()
+    count = Repo.aggregate(Change, :count)
+
+    html = render_submit(view, "lock-module", %{"module" => "files", "org" => org.id})
+
+    assert html =~ "Access change refused"
+    assert snapshot() == before
+    assert Repo.aggregate(Change, :count) == count
+    assert Platform.Access.module_access?(Scope.for_user(Accounts.get_user(subject.id)), :files)
+  end
+
+  # Found on dev-on-moon: the root admin's `membership_org` admin rule names
+  # only the root org, so a bare `can?(access.manage, sub_org)` is false for
+  # them. They manage a sub-org through Delegation's root-admin bypass, and
+  # the panel must show and offer that sub-org's locks.
+  test "a root admin sees and sets a sub-org member's module locks", ctx do
+    sub = Platform.TenancyFixtures.tenant_org_id("panel-sub-lock")
+    org = Tenancy.get_org(sub)
+    member = user!("Sub member")
+    membership!(member, org, "member")
+
+    {:ok, _} =
+      Grants.deny(
+        %{principal: member, permission: "inbox", resource: {:module, sub}},
+        actor: Scope.for_user(ctx.root)
+      )
+
+    {:ok, panel, _} = live(conn_for(ctx.root), "/access/user/#{member.id}")
+    assert has_element?(panel, "[data-source=Locked][data-module=inbox]", "Locked: Inbox")
+    assert has_element?(panel, "[data-source=Locked] td", org.name)
+    assert has_element?(panel, "#access-lock-org option[value='#{sub}']")
+    refute has_element?(panel, "#access-lock-module option[value=inbox]")
+
+    panel
+    |> form("#access-lock-form", %{"module" => "files", "org" => sub})
+    |> render_submit()
+
+    assert has_element?(panel, "[data-source=Locked][data-module=files]", "Locked: Files")
+    refute Platform.Access.module_access?(Scope.for_user(Accounts.get_user(member.id)), :files)
+  end
 end

@@ -11,6 +11,8 @@ defmodule PlatformWeb.Tasks.Selection do
       reset its own local state
     * `reload_selected_task/1` — re-read the open task and its review lists
     * `load_attached_canvases/1` — chip-render shape for the canvas strip
+    * `readable_task_detail/2` — `Tasks.get_task_detail/1` for a task the
+      viewer's `@access_scope` may `tasks.read` (task 01a14721 stage 1)
 
   Extracted so `BoardHooks` can reload the selection after a PubSub board
   event without calling back into the shell. A hook that depends on its
@@ -28,6 +30,33 @@ defmodule PlatformWeb.Tasks.Selection do
   alias Platform.Tasks.Task
 
   import PlatformWeb.Tasks.ReviewLoaders, only: [load_review_canvases: 1]
+
+  @doc """
+  `Tasks.get_task_detail/1`, or `nil` when the viewer's `@access_scope` may
+  not `tasks.read` the task (`Platform.Access.can?/3`, which applies the org
+  fence and explicit denies; task 01a14721 stage 1). The access check runs
+  first and a refusal reads exactly like a missing row, so the detail view
+  is no existence oracle. A socket with no Scope reads as before, as the
+  board's listings do (`BoardHooks`).
+  """
+  @spec readable_task_detail(Phoenix.LiveView.Socket.t(), binary()) :: Task.t() | nil
+  def readable_task_detail(socket, task_id) do
+    if readable_task?(socket.assigns[:access_scope], task_id),
+      do: Tasks.get_task_detail(task_id),
+      else: nil
+  end
+
+  @doc """
+  May the viewer behind `access_scope` `tasks.read` the task? The check
+  `readable_task_detail/2` runs, for the Tasks components' by-id event
+  handlers, whose task id arrives from the client. `nil` (no Scope) is
+  `true`, as the board's listings read it.
+  """
+  @spec readable_task?(Platform.Access.Scope.t() | nil, binary()) :: boolean()
+  def readable_task?(%Platform.Access.Scope{} = scope, task_id),
+    do: Platform.Access.can?(scope, "tasks.read", {:task, task_id})
+
+  def readable_task?(_scope, _task_id), do: true
 
   @doc "Centralised assign for `:selected_task`."
   def assign_selected_task(socket, nil) do
@@ -64,7 +93,7 @@ defmodule PlatformWeb.Tasks.Selection do
   """
   def reload_selected_task(socket) do
     if task = socket.assigns[:selected_task] do
-      updated = Tasks.get_task_detail(task.id)
+      updated = readable_task_detail(socket, task.id)
       pending_reviews = if updated, do: ReviewRequests.list_pending_for_task(updated.id), else: []
 
       superseded_reviews =

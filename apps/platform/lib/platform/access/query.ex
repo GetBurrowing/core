@@ -70,6 +70,11 @@ defmodule Platform.Access.Query do
     * **Grants apply** → `(base OR column IN allow) AND column NOT IN deny`,
       over `Platform.Access.granted/3` (explicit grants only, inheritance
       expanded). Deny wins.
+    * **A fenced scope** (`Platform.Access.org_fence/1`) additionally keeps
+      only the rows inside its fence, in every branch above, the grant-less
+      one included (task 01a14721 stage 1).
+    * **A locked permission** (`Platform.Access.locked?/2`, a module lock,
+      task 01a14721 stage 2) yields `where: false` before any branch above.
 
   `column_mapping` is `%{id: column}` plus an optional `:base`, an Ecto
   `dynamic` on the root binding that IS the existing check (for example a
@@ -80,20 +85,34 @@ defmodule Platform.Access.Query do
   """
   @spec restrict(Ecto.Queryable.t(), Scope.t(), String.t(), atom(), map()) ::
           Ecto.Queryable.t()
-  def restrict(
-        query,
-        %Scope{own_cap: %Scope{} = own, owner_cap: %Scope{} = owner},
-        permission,
-        resource_type,
-        column_mapping
-      ) do
+  def restrict(query, %Scope{} = scope, permission, resource_type, column_mapping)
+      when is_binary(permission) do
+    if Access.locked?(scope, permission),
+      do: refuse_all(query),
+      else: restrict_unlocked(query, scope, permission, resource_type, column_mapping)
+  end
+
+  defp restrict_unlocked(
+         query,
+         %Scope{own_cap: %Scope{} = own, owner_cap: %Scope{} = owner},
+         permission,
+         resource_type,
+         column_mapping
+       ) do
     query
     |> restrict(own, permission, resource_type, column_mapping)
     |> where_permitted(owner, permission, resource_type, column_mapping)
   end
 
-  def restrict(query, %Scope{} = scope, permission, resource_type, column_mapping) do
+  defp restrict_unlocked(query, %Scope{} = scope, permission, resource_type, column_mapping) do
     mapping = Map.new(column_mapping)
+
+    query
+    |> restrict_grants(scope, permission, resource_type, mapping)
+    |> within_fence(scope, resource_type, mapping)
+  end
+
+  defp restrict_grants(query, scope, permission, resource_type, mapping) do
     base = Map.get(mapping, :base)
 
     cond do
@@ -111,6 +130,24 @@ defmodule Platform.Access.Query do
 
       true ->
         from(r in query, where: ^base)
+    end
+  end
+
+  # A module lock refuses every row (task 01a14721 stage 2).
+  defp refuse_all(query), do: from(r in query, where: false)
+
+  # The org fence (task 01a14721 stage 1, `Platform.Access.org_fence/1`): a
+  # fenced scope never takes the "no grants, query unchanged" branch above
+  # unfenced. `Platform.Access.fenced_ids/2` is `:unfenced` for every other
+  # scope and for memory, so their queries are untouched.
+  defp within_fence(query, scope, resource_type, mapping) do
+    case Access.fenced_ids(scope, resource_type) do
+      :unfenced ->
+        query
+
+      ids ->
+        col = Map.fetch!(mapping, :id)
+        from(r in query, where: field(r, ^col) in ^ids)
     end
   end
 
@@ -148,6 +185,9 @@ defmodule Platform.Access.Query do
   def where_readable(query, %Scope{} = scope, permission, type, mapping)
       when type in @memory_types do
     cond do
+      Access.locked?(scope, permission) ->
+        refuse_all(query)
+
       match?(%Scope{owner_cap: %Scope{}}, scope) ->
         restrict(query, scope, permission, type, Map.delete(Map.new(mapping), :base))
 
@@ -162,11 +202,17 @@ defmodule Platform.Access.Query do
     end
   end
 
-  def where_readable(query, %Scope{actor: %AgentRuntime{}} = scope, permission, type, mapping),
-    do: restrict(query, scope, permission, type, Map.delete(Map.new(mapping), :base))
+  def where_readable(query, %Scope{actor: %AgentRuntime{}} = scope, permission, type, mapping) do
+    if Access.locked?(scope, permission),
+      do: refuse_all(query),
+      else: restrict(query, scope, permission, type, Map.delete(Map.new(mapping), :base))
+  end
 
-  def where_readable(query, %Scope{} = scope, permission, type, mapping),
-    do: where_permitted(query, scope, permission, type, mapping)
+  def where_readable(query, %Scope{} = scope, permission, type, mapping) do
+    if Access.locked?(scope, permission),
+      do: refuse_all(query),
+      else: where_permitted(query, scope, permission, type, mapping)
+  end
 
   # Memory: `(base OR an allow node covers the path) AND no deny node covers
   # it`; with no `:base`, an allow adds nothing and only denies narrow.

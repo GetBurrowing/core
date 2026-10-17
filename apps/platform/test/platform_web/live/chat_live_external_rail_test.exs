@@ -1543,10 +1543,14 @@ defmodule PlatformWeb.ChatLiveExternalRailTest do
     # ticket's to change.
     test "an internal user patching between two spaces is unaffected", %{conn: conn} do
       insider = create_user!("Ivor Insider")
-      plain_membership!(insider, tenant_org!())
+      org = tenant_org!()
+      plain_membership!(insider, org)
 
-      first = channel!("Ops Intake")
-      second = channel!("Ops Handover")
+      # In the insider's own org: a sub-org-only member is fenced to their
+      # orgs (ticket 01a14721), so an org-less channel is no longer theirs to
+      # open, and this test is about the external gate, not the fence.
+      first = channel!("Ops Intake", org_id: org.id)
+      second = channel!("Ops Handover", org_id: org.id)
 
       refute Chat.participant?(first.id, insider.id)
       refute Chat.participant?(second.id, insider.id)

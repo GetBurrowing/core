@@ -1006,7 +1006,14 @@ defmodule PlatformWeb.TasksLiveShellNonAccretionTest do
   # re-sent the board; PubSub already keeps the board fresh (a delete
   # broadcasts `{:task_deleted, _}`). Down, so the promise above holds.
   # RBAC adds its two-line delegated access refresh callback: 650 + 2 = 652.
-  @shell_line_count 652
+  #
+  # RAISED 652 -> 653 (+1), task 01a14721 stage 1 (the org fence). ARITHMETIC:
+  # 652 + 1 = 653, the single `alias PlatformWeb.Tasks.Selection` line; the
+  # four `Tasks.get_task_detail/1` calls became
+  # `Selection.readable_task_detail/2` in place, line for line, and the
+  # access check and its explanation live in `PlatformWeb.Tasks.Selection`.
+  # 653 is the budget in `scripts/surface-budgets.txt`, which is not raised.
+  @shell_line_count 653
 
   defp line_count(source), do: source |> :binary.matches("\n") |> length()
 

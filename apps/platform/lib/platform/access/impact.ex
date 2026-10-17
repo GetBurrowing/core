@@ -83,6 +83,15 @@ defmodule Platform.Access.Impact do
     end
   end
 
+  # A module lock (task 01a14721 stage 2): a deny names `{:module, org_id}`
+  # and is previewed as whether each principal may still open the module. An
+  # allow on a module is refused, as `Grants.apply_ops/2` refuses it.
+  defp op_target(%{action: "grant", resource: {:module, _}}), do: {:error, :module_allow_refused}
+
+  defp op_target(%{action: "deny", permission: module, resource: {:module, org_id}})
+       when is_binary(module) and is_binary(org_id),
+       do: {:ok, {module, {:module, org_id}}}
+
   defp op_target(%{action: action, permission: permission, resource: target})
        when action in ["grant", "deny"] and is_binary(permission) do
     case Lineage.typed(target) do
@@ -100,6 +109,7 @@ defmodule Platform.Access.Impact do
   defp resource("space", id), do: {:space, id}
   defp resource("canvas", id), do: {:canvas, id}
   defp resource("memory_node", id), do: {:memory_node, id}
+  defp resource("module", id), do: {:module, id}
 
   defp inspect_access(targets, ops) do
     users = Repo.all(from(u in User, order_by: u.id))
@@ -128,7 +138,7 @@ defmodule Platform.Access.Impact do
         Enum.reduce(targets, acc, fn {permission, target}, acc ->
           entry = Map.merge(person, %{permission: permission, resource: encode(target)})
           key = {person.type, person.id, permission, target}
-          allowed = Access.can?(scope, permission, target)
+          allowed = allowed?(scope, permission, target)
           direct = Map.put(acc.direct, key, {entry, allowed})
           inherited = inherited(scope, person, permission, target, acc.inherited)
 
@@ -152,6 +162,11 @@ defmodule Platform.Access.Impact do
     end)
   end
 
+  # A module target's "permission" is the module name: allowed while the
+  # module is not locked for the principal.
+  defp allowed?(scope, module, {:module, _org_id}), do: not Access.module_locked?(scope, module)
+  defp allowed?(scope, permission, target), do: Access.can?(scope, permission, target)
+
   defp proposed_agent_allow?(ops, person, permission, target) do
     Enum.any?(ops, fn
       %{action: "grant", principal: {:agent, id}, permission: ^permission, resource: resource} ->
@@ -161,6 +176,8 @@ defmodule Platform.Access.Impact do
         false
     end)
   end
+
+  defp inherited(_scope, _person, _module, {:module, _org_id}, acc), do: acc
 
   defp inherited(scope, person, permission, {:memory, path, _}, acc),
     do: inherited_memory(scope, person, permission, path, acc)

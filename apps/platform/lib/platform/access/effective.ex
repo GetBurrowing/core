@@ -36,9 +36,51 @@ defmodule Platform.Access.Effective do
             row <- resource_lines(view.scope, permission, target, resource),
             do: row
 
+      rows = rows ++ lock_lines(viewer, view.scope)
+
       {:ok, Enum.sort_by(rows, &{&1.where.type, &1.where.id, &1.permission, &1.source})}
     end
   end
+
+  # One "Locked" line per MODULE LOCK row among the subject's grants (task
+  # 01a14721 stage 3). A capped runtime's scope carries its owner's grants
+  # too, so an owner's lock is listed for the runtime. Only locks in an org
+  # the viewer manages are shown, as the panel's change history does.
+  defp lock_lines(viewer, subject_scope) do
+    for %Grant{resource_type: "module", effect: "deny"} = grant <- subject_scope.grants,
+        manages_org?(viewer, grant.org_id),
+        uniq: true do
+      org = Platform.Tenancy.get_org(grant.org_id)
+
+      %{
+        permission: grant.permission,
+        module: grant.permission,
+        where: %{type: "module", id: grant.org_id, name: (org && org.name) || grant.org_id},
+        allowed: false,
+        source: "Locked",
+        grant_id: grant.id,
+        principal_type: grant.principal_type,
+        principal_id: grant.principal_id,
+        role_key: grant.principal_role_key,
+        inherited_from: nil,
+        note: grant_provenance(grant)
+      }
+    end
+  end
+
+  @doc """
+  Does `viewer` manage access in org `org_id`, the rule a module lock is
+  decided over (`Platform.Access.Delegation`): `access.manage` over the org,
+  or root admin, whose `membership_org` admin rule names only the root org
+  and who is authorized through Delegation's audited bypass instead.
+  """
+  @spec manages_org?(Scope.t(), binary()) :: boolean()
+  def manages_org?(%Scope{} = viewer, org_id) when is_binary(org_id),
+    do:
+      Platform.Access.Delegation.root_admin?(viewer) or
+        Access.can?(viewer, "access.manage", org_id)
+
+  def manages_org?(_viewer, _org_id), do: false
 
   @doc "Named subjects the viewer may inspect, using ViewAs authorization for each."
   def subjects(%Scope{} = viewer) do

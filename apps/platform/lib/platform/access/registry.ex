@@ -147,6 +147,22 @@ defmodule Platform.Access.Registry do
   def permission?(name) when is_binary(name), do: name in permission_names()
   def permission?(_), do: false
 
+  @doc """
+  The `:module` name declaring `permission` (`"tasks.read"` -> `"tasks"`),
+  or nil for an undeclared permission. Read by the module lock
+  (`Platform.Access.locked?/2`, task 01a14721 stage 2).
+  """
+  @spec module_of(String.t()) :: String.t() | nil
+  def module_of(permission) when is_binary(permission),
+    do: Enum.find_value(permissions(), fn p -> p.name == permission && p.module end)
+
+  def module_of(_), do: nil
+
+  @doc "The permissions `module` declares, normalized, in declaration order."
+  @spec module_permissions(String.t()) :: [permission()]
+  def module_permissions(module) when is_binary(module),
+    do: Enum.filter(permissions(), &(&1.module == module))
+
   @doc "Permission names flagged `install_level: true`."
   @spec install_level_permissions() :: [String.t()]
   def install_level_permissions,

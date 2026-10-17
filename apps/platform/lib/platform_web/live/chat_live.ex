@@ -385,17 +385,21 @@ defmodule PlatformWeb.ChatLive do
     listed_channels =
       if embedded?,
         do: [],
-        else: Chat.list_spaces(kind: "channel", scope: channel_listing_scope(external?, user_id))
+        else:
+          Chat.list_spaces(kind: "channel", scope: channel_listing_scope(external?, user_id))
+          |> PlatformWeb.ChatLive.ReadScope.within_org_fence(access_scope)
 
     # Archived channels (task 019e95ea stage 2) feed ONLY the sidebar's
     # collapsed "Archived" group — they are deliberately kept out of
     # `channels` / `channel_sections/4` so no active bucket renders them.
     # External users get NONE: the archived group is an internal discovery
     # surface (design canvas §1 non-goals).
+    archived_scope = PlatformWeb.ChatLive.ReadScope.fenced_scope(access_scope)
+
     archived_channels =
       if embedded? or external?,
         do: [],
-        else: Chat.list_spaces(kind: "channel", archived: true)
+        else: Chat.list_spaces(kind: "channel", archived: true, scope: archived_scope)
 
     restricted_channel_ids =
       restricted_channel_ids(
@@ -1067,7 +1071,7 @@ defmodule PlatformWeb.ChatLive do
       Chat.get_space_by_slug(slug_or_id, org_id: active_org_id) ||
         (valid_uuid?(slug_or_id) && Chat.get_space(slug_or_id)) ||
         system_prefix_fallback(slug_or_id) ||
-        maybe_bootstrap_space(params, slug_or_id, active_org_id, socket.assigns.user_id)
+        maybe_bootstrap_space(params, slug_or_id, active_org_id, socket)
 
     # EXTERNAL ADMISSION GATE (task 01a011ed). Folded into the SAME condition as
     # "did not resolve" on purpose: one branch and one outcome, so an off-limits
@@ -1096,7 +1100,8 @@ defmodule PlatformWeb.ChatLive do
         restricted_space_denied?(socket, space)
 
     if is_nil(space) or external_space_denied?(socket, space) or
-         implicit_join_denied?(socket, space) or restricted? do
+         implicit_join_denied?(socket, space) or restricted? or
+         internal_read_denied?(socket, space) do
       # The URL saved by the RouteResume hook (`route_resume:chat` in
       # localStorage) points at a space this user can no longer resolve
       # (deleted, unauthorized). Signal the client to clear the entry so the
@@ -1150,6 +1155,7 @@ defmodule PlatformWeb.ChatLive do
           kind: "channel",
           scope: channel_listing_scope(socket.assigns.external?, socket.assigns.user_id)
         )
+        |> PlatformWeb.ChatLive.ReadScope.within_org_fence(socket.assigns[:access_scope])
 
       archived_channels = rail_archived_channels(socket)
 
@@ -4322,18 +4328,34 @@ defmodule PlatformWeb.ChatLive do
   # Gate on the deep-link param (task 019fabe8 stage 4). Present => refuse to
   # auto-create; the caller's `is_nil(space)` branch then clears the stale
   # route-resume entry and lands the reader on `/chat`.
-  defp maybe_bootstrap_space(%{"message" => msg} = _params, _slug, _org_id, _user_id)
+  defp maybe_bootstrap_space(%{"message" => msg} = _params, _slug, _org_id, _socket)
        when is_binary(msg) and msg != "",
        do: nil
 
-  defp maybe_bootstrap_space(_params, slug, org_id, user_id),
-    do: bootstrap_space(slug, org_id, user_id)
+  defp maybe_bootstrap_space(_params, slug, org_id, socket),
+    do: bootstrap_space(slug, org_id, socket.assigns.user_id, not fenced_session?(socket))
+
+  # A FENCED session (task 01a14721 stage 4: an internal member of sub-orgs
+  # only, `Access.org_fence/1` != :unfenced) never MINTS a channel on a slug
+  # miss. Before this, `/chat/<slug of a root-org channel>` missed the
+  # org-scoped lookup (the row is in the root org), fell through to the mint
+  # below, and created a NEW channel in the member's own org with them seated
+  # as admin, so the fence only ever saw a space it admits. The refusal is
+  # applied on EVERY miss, not only when the slug exists elsewhere: a random
+  # slug and a foreign one take the same `is_nil(space)` branch in
+  # `handle_params/3` (push_navigate to /chat), so the refusal is not an
+  # existence oracle. Unfenced sessions (root members, admins, zero-membership
+  # users, guests, whom `org_fence/1` reports :unfenced) mint exactly as before.
+  # Adopting an existing ORG-LESS row is left alone: it writes nothing, and the
+  # fence still decides on the adopted row through `internal_read_denied?/2`.
+  defp fenced_session?(socket),
+    do: is_binary(socket.assigns.user_id) and Access.org_fence(access_scope(socket)) != :unfenced
 
   # `user_id` is the navigating user, who is this channel's creator by every
   # definition we have (task 01a0fd62): stamping it as `created_by` makes
   # `Chat.create_space/1` seat them as admin, and `ensure_participant/2` then
   # finds that row and inserts nothing.
-  defp bootstrap_space(slug, org_id, user_id) when is_binary(slug) do
+  defp bootstrap_space(slug, org_id, user_id, mint?) when is_binary(slug) do
     cond do
       # Never bootstrap for UUIDs — those are fetched directly
       valid_uuid?(slug) ->
@@ -4363,6 +4385,10 @@ defmodule PlatformWeb.ChatLive do
       space = Chat.get_orgless_space_by_slug(slug) ->
         space
 
+      # A fenced session never mints (see `fenced_session?/1`).
+      not mint? ->
+        nil
+
       true ->
         name =
           slug
@@ -4383,7 +4409,7 @@ defmodule PlatformWeb.ChatLive do
     end
   end
 
-  defp bootstrap_space(_, _, _), do: nil
+  defp bootstrap_space(_, _, _, _), do: nil
 
   defp maybe_put_created_by(attrs, user_id) when is_binary(user_id),
     do: Map.put(attrs, :created_by, user_id)
@@ -4443,6 +4469,20 @@ defmodule PlatformWeb.ChatLive do
 
   defp channel_listing_scope(true, user_id),
     do: Platform.Chat.ExternalScope.for_user(user_id)
+
+  # URL-open gate for an INTERNAL session (task 01a14721 stage 1): the org
+  # fence and an explicit `chat.read` deny refuse the space. Asked through
+  # `Access.within?/4` with the existing admission (`implicit_join_denied?/2`,
+  # which has already admitted) standing in for the role-rule allow: the
+  # Scope's participant ids are a BUILD-TIME snapshot, so `can?/3` would
+  # refuse a DM created after this socket mounted. The STRUCT is passed, so
+  # an unjoined channel in the member's own org stays openable. (The stage
+  # text named `can?/3`; `within?/4` was accepted by the stack owner for
+  # exactly this snapshot reason.)
+  defp internal_read_denied?(socket, space) do
+    not external_session?(socket) and
+      not Access.within?(access_scope(socket), "chat.read", space, true)
+  end
 
   defp include_restricted_channels(readable, listed, restricted_ids) do
     (readable ++ Enum.filter(listed, &MapSet.member?(restricted_ids, &1.id)))

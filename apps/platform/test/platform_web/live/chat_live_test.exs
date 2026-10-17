@@ -4039,7 +4039,12 @@ defmodule PlatformWeb.ChatLiveTest do
       # inside an org (e.g. Acme), so the org-scoped `get_space_by_slug/2`
       # branch filters this row out. Without the safety net, handle_params
       # push_navigates back to `/chat`.
-      org = insert_org!()
+      #
+      # A ROOT-org viewer: a sub-org-only member is fenced to their orgs
+      # (ticket 01a14721), and a NULL-org execution space with no participant
+      # row is outside that fence, so the safety net under test is only
+      # reachable for an unfenced viewer.
+      org = Tenancy.get_org_by_slug!("acme")
 
       user =
         insert_chat_user(%{
@@ -4114,8 +4119,14 @@ defmodule PlatformWeb.ChatLiveTest do
       # Bystander sits in org-B (different tenant, but got @-mentioned).
       # Bystander's org-scoped lookup misses (org_id: B vs exec.org_id: A);
       # the safety net kicks in because the slug starts with `task-exec-`.
+      #
+      # The bystander is a ROOT-org member: since ticket 01a14721 a
+      # sub-org-only bystander is fenced to their orgs and refused a foreign
+      # org's execution space they hold no participant row in (pinned or
+      # not; `Platform.Access.OrgFenceTest`). A root bystander's org-scoped
+      # lookup still misses, so the safety net is what resolves it.
       sponsor_org = insert_org!()
-      bystander_org = insert_org!()
+      bystander_org = Tenancy.get_org_by_slug!("acme")
 
       short_id =
         Ecto.UUID.generate() |> String.replace("-", "") |> String.slice(0, 12)

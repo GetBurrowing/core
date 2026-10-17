@@ -15,11 +15,12 @@ defmodule Platform.Access.ModuleGatingAcceptanceTest do
   import Platform.TenancyFixtures
 
   alias Platform.Access
-  alias Platform.Access.{Grants, Registry, Scope}
+  alias Platform.Access.{Agents, Grants, Registry, Scope}
   alias Platform.Accounts
   alias Platform.Accounts.User
   alias Platform.Branding
   alias Platform.Experiments
+  alias Platform.Federation
   alias Platform.Prototypes.Settings, as: PrototypeSettings
   alias Platform.Repo
   alias Platform.Tasks
@@ -39,7 +40,16 @@ defmodule Platform.Access.ModuleGatingAcceptanceTest do
     {:ok, q} = Tasks.create_project(%{name: unique("acceptance Q"), org_id: child})
     task = Repo.insert!(%Task{project_id: q.id, title: unique("Q task"), status: "backlog"})
 
-    %{admin: admin, member: member, sub_admin: sub_admin, guest: guest, p: p, q: q, task: task}
+    %{
+      admin: admin,
+      member: member,
+      sub_admin: sub_admin,
+      guest: guest,
+      p: p,
+      q: q,
+      task: task,
+      child: child
+    }
   end
 
   defp unique(prefix), do: "#{prefix} #{System.unique_integer([:positive])}"
@@ -216,4 +226,50 @@ defmodule Platform.Access.ModuleGatingAcceptanceTest do
       assert {:ok, _} = PrototypeSettings.update(ctx.admin, %{})
     end
   end
+
+  describe "5. a module lock closes federation for its holder (task 01a14721 stage 3)" do
+    test "agents locked: may_federate? and every federation entry reading it refuse", ctx do
+      twin = user!("twin", ctx.child, "member")
+      {:ok, own} = Federation.register_runtime(scope(ctx.member), %{runtime_id: unique_rt()})
+
+      # Positive control, before the lock: the member federates and manages
+      # their own runtime; the twin too.
+      assert Agents.may_federate?(scope(ctx.member))
+      assert Agents.manage?(scope(ctx.member), own)
+
+      {:ok, _} =
+        Grants.deny(%{
+          principal: {:user, ctx.member.id},
+          permission: "agents",
+          resource: {:module, ctx.child}
+        })
+
+      locked = scope(ctx.member)
+      refute Agents.may_federate?(locked)
+      refute Access.module_access?(locked, :agents)
+      refute Agents.manage?(locked, own)
+
+      assert {:error, :unauthorized} =
+               Federation.register_runtime(locked, %{runtime_id: unique_rt()})
+
+      assert {:error, :unauthorized} =
+               Federation.provision_agent_runtime(
+                 locked,
+                 %{slug: unique_rt(), name: "Locked agent", status: "active"},
+                 %{runtime_id: unique_rt()}
+               )
+
+      assert {:error, :unauthorized} = Federation.generate_runtime_token(locked, own)
+      assert {:error, :unauthorized} = Federation.suspend_runtime(locked, own)
+
+      assert {:error, {_, %{to: "/access-denied?module=agents"}}} =
+               live(authed(ctx.member), "/control")
+
+      # The twin is unaffected by the member's lock.
+      assert Agents.may_federate?(scope(twin))
+      assert {:ok, _} = Federation.register_runtime(scope(twin), %{runtime_id: unique_rt()})
+    end
+  end
+
+  defp unique_rt, do: "gating-rt-#{System.unique_integer([:positive])}"
 end

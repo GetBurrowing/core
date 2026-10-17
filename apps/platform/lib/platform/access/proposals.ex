@@ -119,6 +119,7 @@ defmodule Platform.Access.Proposals do
   defp factual_label(row, verb) do
     schema =
       case row.resource_type do
+        "module" -> Platform.Tenancy.Org
         "project" -> Platform.Tasks.Project
         "space" -> Chat.Space
         "canvas" -> Canvas
@@ -502,7 +503,8 @@ defmodule Platform.Access.Proposals do
 
   defp decode_tuple(acc, op, key) do
     case op[Atom.to_string(key)] do
-      [type, id] when type in ~w(user agent role project space canvas memory_node memory) ->
+      [type, id]
+      when type in ~w(user agent role project space canvas memory_node memory module) ->
         Map.put(acc, key, {String.to_existing_atom(type), id})
 
       nil ->

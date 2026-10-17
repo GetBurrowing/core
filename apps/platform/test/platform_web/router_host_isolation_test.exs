@@ -105,11 +105,20 @@ defmodule PlatformWeb.RouterHostIsolationTest do
     end
   end
 
+  # In the signed-in user's org (sxi): that user is a sub-org-only member,
+  # fenced to their orgs (ticket 01a14721), so an org-less channel would be
+  # refused for an access reason and this file asserts host routing only.
   defp create_space! do
     slug = "host-iso-#{System.unique_integer([:positive])}"
+    org_id = Tenancy.get_org_by_slug!("sxi").id
 
     {:ok, space} =
-      Chat.create_space(%{name: String.capitalize(slug), slug: slug, kind: "channel"})
+      Chat.create_space(%{
+        name: String.capitalize(slug),
+        slug: slug,
+        kind: "channel",
+        org_id: org_id
+      })
 
     space
   end

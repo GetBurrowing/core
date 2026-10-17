@@ -168,9 +168,18 @@ defmodule Platform.Access.EquivalenceTest do
 
   describe "quantity 1: visible spaces" do
     test "every human row lists the same spaces through ExternalScope and through Scope", ctx do
+      # Named deliberate exception: sub-org-only internal members are fenced to their orgs, ticket 01a14721; prod had 0 such users on 2026-10-16.
+      fenced_rows =
+        for {row, user} <- ctx.humans,
+            Platform.Access.org_fence(Scope.for_user(loaded(user))) != :unfenced,
+            do: row
+
+      assert fenced_rows == [:sub_admin, :sub_member]
+
       diffs =
         for {row, user} <- ctx.humans,
             today = listed_spaces(user, ExternalScope.for_user(user)),
+            today = if(row in fenced_rows, do: in_fence_or_participant(today, user), else: today),
             via_scope = listed_spaces(user, Scope.for_user(loaded(user))),
             today != via_scope,
             do: {row, today: today, scope: via_scope}
@@ -231,10 +240,27 @@ defmodule Platform.Access.EquivalenceTest do
     test "a runtime Scope through the ExternalScope bridge (pinned, no today path)", ctx do
       system = Chat.list_spaces(kind: "channel", scope: ExternalScope.for_user(nil)) |> ids()
 
+      # Named deliberate exception: sub-org-only internal members are fenced to their orgs, ticket 01a14721; prod had 0 such users on 2026-10-16.
+      # Runtimes owned by fenced users inherit the fence (owner_cap).
+      fenced_rows =
+        for row <- [:default, :narrowed],
+            owner = Accounts.get_user(ctx.runtimes[row].owner_user_id),
+            Platform.Access.org_fence(Scope.for_user(owner)) != :unfenced,
+            do: row
+
+      assert fenced_rows == [:narrowed]
+
       for row <- [:default, :narrowed] do
-        scope = Scope.for_runtime(ctx.runtimes[row])
+        rt = ctx.runtimes[row]
+        scope = Scope.for_runtime(rt)
         refute Scope.guest?(scope)
-        assert Chat.list_spaces(kind: "channel", scope: scope) |> ids() == system
+
+        expected =
+          if row in fenced_rows,
+            do: in_fence_or_participant(system, Accounts.get_user(rt.owner_user_id)),
+            else: system
+
+        assert Chat.list_spaces(kind: "channel", scope: scope) |> ids() == expected
       end
 
       rt = ctx.runtimes[:external_owned]
@@ -707,4 +733,16 @@ defmodule Platform.Access.EquivalenceTest do
   end
 
   defp ids(rows), do: rows |> Enum.map(& &1.id) |> Enum.sort()
+
+  # The org fence's expected set (ticket 01a14721), computed from the rows,
+  # never from `Platform.Access`: the space's org is one of the user's
+  # membership orgs, or the user holds a `chat_participants` row for it.
+  defp in_fence_or_participant(space_ids, user) do
+    orgs = Enum.map(Tenancy.list_user_memberships(user), & &1.org_id)
+
+    Enum.filter(space_ids, fn id ->
+      space = Chat.get_space(id)
+      space.org_id in orgs or Chat.participant?(id, user.id)
+    end)
+  end
 end

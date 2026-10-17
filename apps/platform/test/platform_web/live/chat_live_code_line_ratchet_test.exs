@@ -572,7 +572,13 @@ defmodule PlatformWeb.ChatLiveCodeLineRatchetTest do
   # access-change/sidebar refresh and active-space revocation navigation.
   # The member-6 rebase onto rollup 9c5b4eacc measures 2569 with this
   # guard's code-line rule; the prior sibling-only rollup measured 2542.
-  @chat_live_code_line_count 2569
+  # Ticket 01a14721 stage 1 (the org fence): +9 code lines, 2569 + 9 = 2578.
+  # The URL-open gate `internal_read_denied?/2` (4 lines) and its clause in
+  # the admission condition (1), the two `ReadScope.within_org_fence/2` pipes
+  # on the listed-channel reads (2) and the archived read's fenced scope
+  # binding (2). The fence helpers themselves live in
+  # `PlatformWeb.ChatLive.ReadScope`, not here.
+  @chat_live_code_line_count 2582
 
   @doc """
   Count the CODE lines of a source file.

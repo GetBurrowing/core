@@ -56,6 +56,34 @@ defmodule PlatformWeb.ChatLive.ReadScope do
   def guest?(%ExternalScope{external?: external?}), do: external? == true
   def guest?(_scope), do: false
 
+  @doc """
+  The org fence on the rail's listed-channel read (task 01a14721 stage 1,
+  `Platform.Access.org_fence/1`). That read is deliberately unscoped (it
+  feeds the locked restricted-channel entries), so a sub-org-only member's
+  copy is narrowed to the fence alone: their own orgs' restricted channels
+  still list as locked, a foreign org's never list. Unfenced: unchanged.
+  """
+  @spec within_org_fence([%{id: binary()}], term()) :: [%{id: binary()}]
+  def within_org_fence(channels, access_scope) do
+    case Platform.Access.fenced_ids(access_scope, :space) do
+      :unfenced ->
+        channels
+
+      ids ->
+        ids = MapSet.new(ids)
+        Enum.filter(channels, &MapSet.member?(ids, &1.id))
+    end
+  end
+
+  @doc """
+  The scope for the mount's archived-channel read: `nil` (unscoped, as
+  before) for an unfenced user, the Scope itself for a fenced one.
+  """
+  @spec fenced_scope(term()) :: Scope.t() | nil
+  def fenced_scope(access_scope) do
+    if Platform.Access.org_fence(access_scope) == :unfenced, do: nil, else: access_scope
+  end
+
   # LiveAuth builds `@access_scope` from `:current_user_record`; ChatLive
   # mounts as the session's `current_user_id`. Use the Scope only when both
   # name the same user.

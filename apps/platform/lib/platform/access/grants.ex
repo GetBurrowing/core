@@ -23,6 +23,14 @@ defmodule Platform.Access.Grants do
   `{:project, id}`, `{:space, id}`, `{:canvas, id}` (or the matching
   structs), `{:memory, path}` and `{:memory_node, node_id}`.
 
+  **Module locks** (task 01a14721 stage 2, `Platform.Access.Grant`, "Module
+  locks"): `deny/2` takes `resource: {:module, org_id}` with `permission:` a
+  lockable module name (`"tasks"`, `"files"`), and stores a module-scoped
+  deny whose `resource_id` and `org_id` are that org. `grant/2` (and an
+  `apply_ops/2` grant op) refuses a module resource with
+  `{:error, :module_allow_refused}`: an allow on a module would widen past
+  role rules. Revoke and undo work on a lock as on any row.
+
   **A memory grant stores the NODE id, never the path.** `{:memory, path}`
   calls `Platform.Org.Wiki.Nodes.ensure/2` and stores the node it returns, so
   the grant follows renames (`0058-rbac-v2-roles-scopes-and-agent-capping.md § Memory grants`).
@@ -103,7 +111,13 @@ defmodule Platform.Access.Grants do
   accepted shapes. `granted_by` defaults to the actor's user id.
   """
   @spec grant(map(), keyword()) :: {:ok, Grant.t()} | {:error, term()}
-  def grant(attrs, opts), do: insert(attrs, "allow", "grant", opts)
+  def grant(attrs, opts) do
+    if module_resource?(attrs),
+      do: {:error, :module_allow_refused},
+      else: insert(attrs, "allow", "grant", opts)
+  end
+
+  defp module_resource?(attrs), do: match?({:module, _}, Map.get(Map.new(attrs), :resource))
 
   @doc "Insert a `deny` grant as `Platform.Access.Scope.system/0`."
   @spec deny(map()) :: {:ok, Grant.t()} | {:error, term()}
@@ -231,6 +245,9 @@ defmodule Platform.Access.Grants do
     end
   end
 
+  defp prepare_op(%{action: "grant", resource: {:module, _}}, _actor),
+    do: {:error, :module_allow_refused}
+
   defp prepare_op(%{action: action} = op, actor) when action in ["grant", "deny"] do
     with {:ok, principal} <- principal_fields(op[:principal]),
          {:ok, {type, id, org}} <- resource_fields(op[:resource]),
@@ -264,11 +281,16 @@ defmodule Platform.Access.Grants do
       )
       |> Enum.filter(fn grant ->
         Platform.Access.Delegation.root_admin?(actor) or
-          Platform.Access.can?(actor, "access.manage", Grant.target(grant))
+          Platform.Access.can?(actor, "access.manage", manage_target(grant))
       end)
       |> Enum.map(&%{action: "revoke", id: &1.id})
     end
   end
+
+  # A module lock is managed over its org (`Platform.Access.Delegation`);
+  # every other row over its resource.
+  defp manage_target(%Grant{resource_type: "module", org_id: org_id}), do: org_id
+  defp manage_target(grant), do: Grant.target(grant)
 
   @doc """
   Every grant whose principal is one of `principals`, in ONE query.
@@ -551,7 +573,7 @@ defmodule Platform.Access.Grants do
   # Every id below can arrive from a caller: a malformed one is not found,
   # never a query that raises.
   defp resource_fields({type, id})
-       when type in [:project, :space, :canvas, :memory_node] and is_binary(id) do
+       when type in [:project, :space, :canvas, :memory_node, :module] and is_binary(id) do
     if Platform.UUID.valid?(id), do: fetch_resource(type, id), else: not_found()
   end
 
@@ -594,6 +616,15 @@ defmodule Platform.Access.Grants do
     case Repo.one(query) do
       {_, org_id} -> {:ok, {"canvas", id, org_id}}
       nil -> not_found()
+    end
+  end
+
+  # A module lock's resource is its org: `resource_id` and `org_id` are both
+  # that org (task 01a14721 stage 2).
+  defp fetch_resource(:module, id) do
+    case Repo.one(from(o in Platform.Tenancy.Org, where: o.id == ^id, select: o.id)) do
+      nil -> not_found()
+      org_id -> {:ok, {"module", org_id, org_id}}
     end
   end
 

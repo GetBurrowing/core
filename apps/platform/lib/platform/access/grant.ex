@@ -12,6 +12,19 @@ defmodule Platform.Access.Grant do
       path (`0058-rbac-v2-roles-scopes-and-agent-capping.md § Memory grants`).
     * `effect` — `"allow"` or `"deny"`.
 
+  ## Module locks (task 01a14721 stage 2)
+
+  A row with `resource_type: "module"` is a MODULE LOCK: it locks its
+  principal out of a whole module. Its `permission` is a `Registry.modules/0`
+  `:module` name (`"tasks"`, `"files"`), not a `module.action`; its
+  `resource_id` is the org the lock is scoped to and equals its `org_id`; its
+  `effect` is always `"deny"` (an allow on a module would widen past role
+  rules, so the changeset and the `access_grants_module_deny_check` CHECK
+  refuse it). Every permission of a locked module evaluates false for the
+  principal everywhere (`Platform.Access.locked?/2`). `install`, `orgs` and
+  `mcp` are not lockable (not grantable, or derived), nor is `access`
+  (locking it would bypass the last-manager guard): `lockable_modules/0`.
+
   `permission` must be declared in `Platform.Access.Registry`. Install-level
   permissions (`install.admin`) and derived permissions (`orgs.read`) are
   refused: no grant may name either.
@@ -28,7 +41,8 @@ defmodule Platform.Access.Grant do
   @foreign_key_type :binary_id
 
   @principal_types ~w(user role agent)
-  @resource_types ~w(project space canvas memory_node)
+  @resource_types ~w(project space canvas memory_node module)
+  @unlockable_modules ~w(install orgs mcp access)
   @effects ~w(allow deny)
 
   @type t :: %__MODULE__{}
@@ -55,7 +69,31 @@ defmodule Platform.Access.Grant do
   @spec resource_types() :: [String.t()]
   def resource_types, do: @resource_types
 
-  @doc "The grant's resource as `{type_atom, id}`."
+  @doc """
+  The module names a module lock may name: every `Registry.modules/0`
+  `:module` (extensions included, read per call) except `install`, `orgs`,
+  `mcp` and `access`.
+  """
+  @spec lockable_modules() :: [String.t()]
+  def lockable_modules do
+    for %{module: module} <- Registry.modules(),
+        module not in @unlockable_modules,
+        uniq: true,
+        do: module
+  end
+
+  @doc "May a module lock name `module`?"
+  @spec lockable_module?(term()) :: boolean()
+  def lockable_module?(module) when is_binary(module), do: module in lockable_modules()
+  def lockable_module?(_), do: false
+
+  @doc "Is `grant` (a struct or a `snapshot/1` map) a module lock?"
+  @spec module_lock?(t() | map()) :: boolean()
+  def module_lock?(%__MODULE__{resource_type: "module"}), do: true
+  def module_lock?(%{"resource_type" => "module"}), do: true
+  def module_lock?(_), do: false
+
+  @doc "The grant's resource as `{type_atom, id}` (a module lock: `{:module, org_id}`)."
   @spec target(t()) :: {atom(), binary()}
   def target(%__MODULE__{resource_type: type, resource_id: id}),
     do: {String.to_existing_atom(type), id}
@@ -132,9 +170,12 @@ defmodule Platform.Access.Grant do
     |> validate_inclusion(:effect, @effects)
     |> validate_principal()
     |> validate_permission()
+    |> validate_module_lock()
     |> foreign_key_constraint(:org_id)
     |> foreign_key_constraint(:principal_role_key)
     |> check_constraint(:principal_id, name: :access_grants_principal_check)
+    |> check_constraint(:resource_type, name: :access_grants_resource_type_check)
+    |> check_constraint(:effect, name: :access_grants_module_deny_check)
     |> unique_constraint([:principal_type, :principal_id, :permission, :resource_id],
       name: :access_grants_tuple_index,
       message: "this principal already holds a grant or deny for this permission and resource"
@@ -165,8 +206,16 @@ defmodule Platform.Access.Grant do
   end
 
   defp validate_permission(changeset) do
+    module? = get_field(changeset, :resource_type) == "module"
+
     validate_change(changeset, :permission, fn :permission, permission ->
       cond do
+        module? and lockable_module?(permission) ->
+          []
+
+        module? ->
+          [permission: "is not a lockable module"]
+
         not Registry.permission?(permission) ->
           [permission: "is not a declared permission"]
 
@@ -180,5 +229,25 @@ defmodule Platform.Access.Grant do
           []
       end
     end)
+  end
+
+  # A module lock is a deny scoped to its own org: `resource_id` is the org
+  # and equals `org_id`.
+  defp validate_module_lock(changeset) do
+    if get_field(changeset, :resource_type) == "module" do
+      changeset
+      |> then(fn cs ->
+        if get_field(cs, :effect) in [nil, "deny"],
+          do: cs,
+          else: add_error(cs, :effect, "a module lock must be a deny")
+      end)
+      |> then(fn cs ->
+        if get_field(cs, :resource_id) == get_field(cs, :org_id),
+          do: cs,
+          else: add_error(cs, :resource_id, "a module lock names its own org")
+      end)
+    else
+      changeset
+    end
   end
 end

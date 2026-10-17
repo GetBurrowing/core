@@ -35,6 +35,24 @@ defmodule Platform.Access.Delegation do
       a built-in role (roles carry no org until stack position 8, so the
       role is that org's role exactly when the org binding holds).
 
+  ## Module locks (task 01a14721 stage 2)
+
+  A module-lock row (`Platform.Access.Grant`, "Module locks") names org O,
+  not a resource, so its rules are read over O:
+
+    * every lock row needs `access.manage` over O (`Access.can?(actor,
+      "access.manage", O)`, the bare-id reading `managers/1` uses for an
+      org: admin's `membership_org` rule, root admin too);
+    * removing a lock (unlocking) WIDENS access, so it also needs every
+      permission of that module over O, as an added allow needs `p`. The
+      module-admin permissions (`tasks.manage`, `prompts.manage`) are
+      exempt: no non-root role carries them, so an unlock cannot hand one
+      to anybody who did not already hold it through root admin, and a root
+      admin takes the bypass;
+    * adding a lock on a USER needs that user to hold a membership in O, so
+      an org's manager cannot lock a principal of another org (a lock
+      refuses its principal everywhere, `Platform.Access.locked?/2`).
+
   A root admin (`install.admin`) is authorized for every change, as an
   audited bypass: `{:ok, :root_admin_bypass}`, recorded `bypass:
   "root_admin"` on the ledger row. The org binding still applies; it is a
@@ -115,6 +133,34 @@ defmodule Platform.Access.Delegation do
   def root_admin?(%Scope{actor: :system}), do: false
   def root_admin?(%Scope{} = scope), do: Access.can?(scope, "install.admin")
 
+  # A module lock (task 01a14721 stage 2): managed over its org; unlocking
+  # widens, so it also needs the module's permissions over that org; locking
+  # a user needs that user to be a member of the org.
+  defp row_allowed?(actor, %{"resource_type" => "module"} = row, side) do
+    org_id = row["resource_id"]
+    resource = {:module, org_id}
+
+    missing =
+      row["permission"]
+      |> Registry.module_permissions()
+      |> Enum.reject(& &1.module_admin)
+      |> Enum.find(&(not Access.can?(actor, &1.name, org_id)))
+
+    cond do
+      not Access.can?(actor, @manage, org_id) ->
+        {:error, denial(@manage, resource, :not_granted)}
+
+      side == :removed and missing != nil ->
+        {:error, denial(missing.name, resource, :beyond_held)}
+
+      side == :added and not principal_in_org?(row, org_id) ->
+        {:error, denial(row["permission"], resource, :org_mismatch)}
+
+      true ->
+        :ok
+    end
+  end
+
   # An added allow or a removed deny widens access: access.manage AND p.
   # An added deny or a removed allow narrows it: access.manage only.
   defp row_allowed?(actor, %{"effect" => effect, "permission" => permission} = row, side) do
@@ -131,6 +177,12 @@ defmodule Platform.Access.Delegation do
         :ok
     end
   end
+
+  defp principal_in_org?(%{"principal_type" => "user", "principal_id" => user_id}, org_id) do
+    Repo.exists?(from(m in OrgMembership, where: m.user_id == ^user_id and m.org_id == ^org_id))
+  end
+
+  defp principal_in_org?(_row, _org_id), do: true
 
   defp widens?("allow", :added), do: true
   defp widens?("deny", :removed), do: true
@@ -259,6 +311,7 @@ defmodule Platform.Access.Delegation do
   # grant's `org_id`: the project's, the space's, the canvas's space's, the
   # node's, falling back to the install's root org when that is NULL.
   defp resource_org_id({:org, id}), do: id
+  defp resource_org_id({:module, id}), do: id
 
   defp resource_org_id({:project, id}),
     do: Repo.one(from(p in Project, where: p.id == ^id, select: p.org_id)) || root_org_id()

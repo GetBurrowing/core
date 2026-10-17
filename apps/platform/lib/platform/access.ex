@@ -63,6 +63,61 @@ defmodule Platform.Access do
   apply to it. `nil` ("anywhere") is permitted by a role rule or by any
   allow; a deny on one resource does not refuse "anywhere".
 
+  ## The org fence (task `01a14721`, stage 1)
+
+  `org_fence/1` limits an INTERNAL user whose memberships are all in non-root
+  orgs to those orgs. It is `[org_id]` exactly when the scope is a user scope
+  (an actor carrying a binary `:id` and an `:org_memberships` list), is not
+  `Scope.guest?/1`, is not `system/0`, and `Scope.permitted_ids(scope,
+  "orgs.read")` is a NON-EMPTY id list. Everything else is `:unfenced`: a
+  root-org member (`orgs.read :all`), a guest (already participant-scoped),
+  the system scope, a runtime's own side, and a zero-membership user.
+
+  **Known pre-existing exposure, out of scope here:** a zero-membership user
+  resolves `orgs.read` to `[]` and stays unfenced, so they keep the
+  no-membership baseline (every channel, the whole board) exactly as today.
+
+  Inheritance is STRICT membership with no descendant orgs, mirroring
+  `Platform.Tenancy.visibility/1` and `Scope`'s `membership_org` rule.
+
+  A resource is inside the fence when, through `Platform.Access.Lineage`:
+
+    * project / task / stack / canvas: the owning project's (or the
+      canvas's space's) org is in the fence;
+    * space: `space.org_id` is in the fence, OR the user holds a
+      `chat_participants` row for it (read live through
+      `Platform.Chat.ExternalScope.member_space_ids/1`), so the user's own
+      DMs, groups and meeting spaces survive. A canvas in such a space is
+      inside too.
+
+  An untyped resource, `nil` ("anywhere") and memory are not fenced. The
+  fence is wired into every decision function (`can?/3`, `permitted/3`,
+  `granted/3`, `within?/4`, `check/3`) and into `Platform.Access.Query`; a
+  runtime's capped scope is fenced through its `owner_cap`. Member 2's
+  `Scope.can?/3`, `Scope.permitted_ids/2` and `Scope.carries?/2` are not
+  fenced: they are role rules only.
+
+  ## Module locks (task `01a14721`, stage 2)
+
+  A MODULE LOCK is a module-scoped deny grant row
+  (`Platform.Access.Grant`, "Module locks"): `resource_type "module"`,
+  `resource_id` the org, `permission` a module name. When one is among a
+  Scope's grants for the module that declares `permission`
+  (`Registry.module_of/1`), every decision for that permission is false, on
+  any resource and on `nil` ("anywhere"), INCLUDING where a role rule says
+  `"all"`: deny beats allow
+  (`0058-rbac-v2-roles-scopes-and-agent-capping.md § Precedence`). A capped
+  runtime scope is locked when its own side OR its owner is.
+
+  `lock_refuses?/2` is called first (after `system/0`) in `can?/3`,
+  `permitted/3` (allow `[]`), `granted/3` (allow `[]`), `within?/4` and
+  `check/3` (before the grant-less short-circuit: a locked scope has
+  grants), and SEPARATELY in `holds_anywhere?/2`, because `Scope.carries?/2`
+  would otherwise admit; `module_access?/3` inherits it from there.
+  `Platform.Access.Query` refuses a locked permission with `where: false`
+  through `locked?/2`. Module rows never reach a resource decision:
+  `applicable/2` excludes them, so `Lineage` never sees `{:module, _}`.
+
   ## Built-in roles are read once and cached
 
   `builtin_roles/0` reads the `builtin: true` rows of `access_roles` from the
@@ -86,6 +141,7 @@ defmodule Platform.Access do
 
   alias Platform.Access.{Grant, Lineage, Permitted, Registry, Role, Scope}
   alias Platform.Agents.AgentRuntime
+  alias Platform.Chat.ExternalScope
   alias Platform.Repo
 
   @cache_key {__MODULE__, :builtin_roles}
@@ -186,14 +242,22 @@ defmodule Platform.Access do
 
   def can?(%Scope{actor: :system}, _permission, _resource), do: true
 
-  def can?(%Scope{own_cap: %Scope{} = own, owner_cap: %Scope{} = owner}, permission, resource)
-      when is_binary(permission),
-      do:
-        can?(own, permission, resource) and
-          can?(owner, permission, owner_resource(permission, resource))
+  def can?(%Scope{} = scope, permission, resource) when is_binary(permission),
+    do: not lock_refuses?(scope, permission) and can_unlocked?(scope, permission, resource)
 
-  def can?(%Scope{} = scope, permission, resource) when is_binary(permission) do
-    if restriction_denied?(scope, permission, resource) do
+  def can?(scope, permission, resource), do: Scope.can?(scope, permission, resource)
+
+  defp can_unlocked?(
+         %Scope{own_cap: %Scope{} = own, owner_cap: %Scope{} = owner},
+         permission,
+         resource
+       ),
+       do:
+         can?(own, permission, resource) and
+           can?(owner, permission, owner_resource(permission, resource))
+
+  defp can_unlocked?(%Scope{} = scope, permission, resource) do
+    if not fence_admits?(scope, resource) or restriction_denied?(scope, permission, resource) do
       false
     else
       case applicable(scope, permission) do
@@ -202,8 +266,6 @@ defmodule Platform.Access do
       end
     end
   end
-
-  def can?(scope, permission, resource), do: Scope.can?(scope, permission, resource)
 
   defp owner_resource("chat." <> _, id) when is_binary(id), do: {:space, id}
   defp owner_resource("canvas." <> _, id) when is_binary(id), do: {:canvas, id}
@@ -247,7 +309,20 @@ defmodule Platform.Access do
   `Platform.Access.Query.where_permitted/5` turns it into a query condition.
   """
   @spec permitted(Scope.t(), String.t(), atom()) :: Permitted.t()
-  def permitted(%Scope{own_cap: %Scope{} = own, owner_cap: %Scope{} = owner}, permission, type) do
+  def permitted(%Scope{actor: :system}, permission, type),
+    do: %Permitted{resource_type: permitted_type(type), permission: permission, allow: :all}
+
+  def permitted(%Scope{} = scope, permission, type) when is_binary(permission) do
+    if lock_refuses?(scope, permission),
+      do: locked_set(permission, type),
+      else: permitted_unlocked(scope, permission, type)
+  end
+
+  defp permitted_unlocked(
+         %Scope{own_cap: %Scope{} = own, owner_cap: %Scope{} = owner},
+         permission,
+         type
+       ) do
     own_set = permitted(own, permission, type)
     owner_set = permitted(owner, permission, type)
 
@@ -259,10 +334,8 @@ defmodule Platform.Access do
     }
   end
 
-  def permitted(%Scope{actor: :system}, permission, type),
-    do: %Permitted{resource_type: permitted_type(type), permission: permission, allow: :all}
-
-  def permitted(%Scope{} = scope, permission, type) when type in [:memory_page, :memory_node] do
+  defp permitted_unlocked(%Scope{} = scope, permission, type)
+       when type in [:memory_page, :memory_node] do
     {allows, denies} = split(applicable(scope, permission))
 
     allow =
@@ -279,7 +352,7 @@ defmodule Platform.Access do
     }
   end
 
-  def permitted(%Scope{} = scope, permission, type) when is_binary(permission) do
+  defp permitted_unlocked(%Scope{} = scope, permission, type) do
     unless type in Lineage.id_types(),
       do: raise(ArgumentError, "unknown resource type for permitted/3: #{inspect(type)}")
 
@@ -303,7 +376,7 @@ defmodule Platform.Access do
     %Permitted{
       resource_type: type,
       permission: permission,
-      allow: allow,
+      allow: intersect_allowed(allow, fenced_ids(scope, type)),
       deny:
         Enum.uniq(
           Lineage.descendant_ids(type, targets(denies)) ++
@@ -312,6 +385,7 @@ defmodule Platform.Access do
     }
   end
 
+  defp intersect_allowed(value, :unfenced), do: value
   defp intersect_allowed(:all, value), do: value
   defp intersect_allowed(value, :all), do: value
   defp intersect_allowed(a, b), do: Enum.filter(a, &(&1 in b))
@@ -336,8 +410,13 @@ defmodule Platform.Access do
   check, which stands in for the role-rule allow.
   """
   @spec granted(Scope.t(), String.t(), atom()) :: Permitted.t()
-  def granted(%Scope{} = scope, permission, type)
-      when type in [:memory_page, :memory_node] and is_binary(permission) do
+  def granted(%Scope{} = scope, permission, type) when is_binary(permission) do
+    if lock_refuses?(scope, permission),
+      do: locked_set(permission, type),
+      else: granted_unlocked(scope, permission, type)
+  end
+
+  defp granted_unlocked(scope, permission, type) when type in [:memory_page, :memory_node] do
     # Memory (task 01a1386d-e528 stage 4): the NODE ids the explicit allows
     # and denies name, not expanded, read as `permitted/3` reads them.
     {allows, denies} = split(applicable(scope, permission))
@@ -350,7 +429,7 @@ defmodule Platform.Access do
     }
   end
 
-  def granted(%Scope{} = scope, permission, type) when is_binary(permission) do
+  defp granted_unlocked(scope, permission, type) do
     unless type in Lineage.id_types(),
       do: raise(ArgumentError, "unknown resource type for granted/3: #{inspect(type)}")
 
@@ -359,7 +438,8 @@ defmodule Platform.Access do
     %Permitted{
       resource_type: type,
       permission: permission,
-      allow: Lineage.descendant_ids(type, targets(allows)),
+      allow:
+        intersect_allowed(Lineage.descendant_ids(type, targets(allows)), fenced_ids(scope, type)),
       deny:
         Enum.uniq(
           Lineage.descendant_ids(type, targets(denies)) ++
@@ -380,7 +460,8 @@ defmodule Platform.Access do
   @spec within?(Scope.t(), String.t(), term(), boolean()) :: boolean()
   def within?(%Scope{} = scope, permission, resource, base?)
       when is_binary(permission) and is_boolean(base?) do
-    if restriction_denied?(scope, permission, resource) do
+    if lock_refuses?(scope, permission) or not fence_admits?(scope, resource) or
+         restriction_denied?(scope, permission, resource) do
       false
     else
       case applicable(scope, permission) do
@@ -445,11 +526,123 @@ defmodule Platform.Access do
   @spec check(Scope.t() | nil, String.t(), term()) :: :ok | {:error, :denied}
   def check(scope, permission, resource) when is_binary(permission) do
     cond do
+      lock_refuses?(scope, permission) -> {:error, :denied}
+      not fence_admits?(scope, resource) -> {:error, :denied}
       not Scope.has_grants?(scope) -> :ok
       within?(scope, permission, resource, true) -> :ok
       true -> {:error, :denied}
     end
   end
+
+  # ── the org fence (task 01a14721 stage 1) ────────────────────────────────
+
+  @fenced_types [:project, :task, :stack, :space, :canvas]
+
+  @doc """
+  The orgs `scope` is fenced to, or `:unfenced` (see the moduledoc, "The org
+  fence"). `[ids]` exactly when the scope is a user scope, not a guest, not
+  `system/0`, and its `orgs.read` resolves to a non-empty id list. A
+  runtime's capped scope answers `:unfenced` here; the decision functions
+  fence it through its `owner_cap`.
+  """
+  @spec org_fence(Scope.t() | term()) :: :unfenced | [binary()]
+  def org_fence(%Scope{actor: :system}), do: :unfenced
+  def org_fence(%Scope{actor: %AgentRuntime{}}), do: :unfenced
+
+  def org_fence(%Scope{actor: %{id: id, org_memberships: memberships}} = scope)
+      when is_binary(id) and is_list(memberships) do
+    if Scope.guest?(scope) do
+      :unfenced
+    else
+      case Scope.permitted_ids(scope, "orgs.read") do
+        [_ | _] = org_ids -> org_ids
+        _ -> :unfenced
+      end
+    end
+  end
+
+  def org_fence(_scope), do: :unfenced
+
+  @doc """
+  The ids of every `type` resource inside `scope`'s fence, or `:unfenced`.
+  For the listing surfaces that must apply the fence alone, without the
+  rest of a `chat.read` decision (a fenced user's restricted-channel
+  listing, `PlatformWeb.ChatLive`).
+  """
+  @spec fenced_ids(Scope.t() | term(), atom()) :: :unfenced | [binary()]
+  def fenced_ids(scope, type) when type in @fenced_types do
+    case fence_of(scope) do
+      :unfenced ->
+        :unfenced
+
+      {org_ids, user_id} ->
+        case type do
+          type when type in [:space, :canvas] ->
+            Lineage.base_ids(type, org_ids ++ participant_space_ids(user_id), [])
+
+          type ->
+            Lineage.base_ids(type, org_ids, [])
+        end
+    end
+  end
+
+  def fenced_ids(_scope, _type), do: :unfenced
+
+  # The fence a decision applies: a capped runtime scope is fenced through
+  # its owner, every other scope through itself. `{org_ids, user_id}`, the
+  # user being whose `chat_participants` rows keep a space inside.
+  defp fence_of(%Scope{owner_cap: %Scope{} = owner}), do: fence_of(owner)
+
+  defp fence_of(%Scope{actor: %{id: user_id}} = scope) do
+    case org_fence(scope) do
+      :unfenced -> :unfenced
+      org_ids -> {org_ids, user_id}
+    end
+  end
+
+  defp fence_of(_scope), do: :unfenced
+
+  defp fence_admits?(scope, resource) do
+    case fence_of(scope) do
+      :unfenced ->
+        true
+
+      {org_ids, user_id} ->
+        case Lineage.typed(resource) do
+          {type, _id} = typed when type in @fenced_types ->
+            in_fence?(typed, org_ids, user_id)
+
+          _ ->
+            true
+        end
+    end
+  end
+
+  defp in_fence?(typed, org_ids, user_id) do
+    [_self | context] = Lineage.base_candidates(typed)
+    ids = for id <- context, is_binary(id), do: id
+
+    Enum.any?(ids, &(&1 in org_ids)) or
+      (elem(typed, 0) in [:space, :canvas] and
+         participant_in?(user_id, space_ids_of(typed, ids)))
+  end
+
+  # The space a participant row must name: the space itself, or a canvas's
+  # space (the first context id `Lineage.base_candidates/1` returns).
+  defp space_ids_of({:space, id}, _context), do: [id]
+  defp space_ids_of({:canvas, _id}, context), do: Enum.take(context, 1)
+
+  defp participant_in?(_user_id, []), do: false
+
+  defp participant_in?(user_id, space_ids) do
+    %ExternalScope{user_id: user_id}
+    |> ExternalScope.member_space_ids()
+    |> Ecto.Query.where([p], p.space_id in ^space_ids)
+    |> Repo.exists?()
+  end
+
+  defp participant_space_ids(user_id),
+    do: %ExternalScope{user_id: user_id} |> ExternalScope.member_space_ids() |> Repo.all()
 
   # ── modules (task 01a1386d-fb6e stage 1) ─────────────────────────────────
 
@@ -464,7 +657,9 @@ defmodule Platform.Access do
   tile), or when `can?/3` permits it "anywhere" (`nil` resource), which an
   explicit allow grant on any resource does. A deny names one resource and
   never refuses "anywhere" (moduledoc, "Resource forms"), so a deny narrows
-  the rows inside a module and does not hide the module.
+  the rows inside a module and does not hide the module. A MODULE LOCK
+  (moduledoc, "Module locks") does: it refuses here whatever the role rules
+  carry.
   """
   @spec holds_anywhere?(Scope.t() | nil, String.t()) :: boolean()
   def holds_anywhere?(%Scope{own_cap: %Scope{} = own, owner_cap: %Scope{} = owner}, permission)
@@ -472,7 +667,9 @@ defmodule Platform.Access do
       do: holds_anywhere?(own, permission) and holds_anywhere?(owner, permission)
 
   def holds_anywhere?(%Scope{} = scope, permission) when is_binary(permission),
-    do: Scope.carries?(scope, permission) or can?(scope, permission, nil)
+    do:
+      (Scope.carries?(scope, permission) or can?(scope, permission, nil)) and
+        not lock_refuses?(scope, permission)
 
   def holds_anywhere?(_scope, _permission), do: false
 
@@ -605,8 +802,69 @@ defmodule Platform.Access do
 
   # ── precedence ──────────────────────────────────────────────────────────
 
+  # Module locks never take part in a resource decision: their permission
+  # is a module name, never a `module.action`, and they are excluded here
+  # explicitly so `Lineage` never sees `{:module, _}`.
   defp applicable(%Scope{grants: grants}, permission),
-    do: Enum.filter(grants, &(&1.permission == permission))
+    do: Enum.filter(grants, &(&1.permission == permission and &1.resource_type != "module"))
+
+  # ── module locks (task 01a14721 stage 2) ─────────────────────────────────
+
+  @doc """
+  Is `permission` refused for `scope` by a MODULE LOCK (moduledoc, "Module
+  locks")? For the callers that turn a decision into a query
+  (`Platform.Access.Query`) or a listing; every decision function here
+  already applies it.
+  """
+  @spec locked?(Scope.t() | term(), String.t()) :: boolean()
+  def locked?(scope, permission) when is_binary(permission), do: lock_refuses?(scope, permission)
+  def locked?(_scope, _permission), do: false
+
+  @doc "Is `module` (a module name, e.g. `\"files\"`) locked for `scope`?"
+  @spec module_locked?(Scope.t() | term(), String.t()) :: boolean()
+  def module_locked?(scope, module) when is_binary(module), do: module_lock_in?(scope, module)
+  def module_locked?(_scope, _module), do: false
+
+  # The registry lookup runs only for a scope holding some module lock, so
+  # every other decision pays one scan of its (usually empty) grant list.
+  defp lock_refuses?(scope, permission) do
+    any_module_lock?(scope) and
+      case Registry.module_of(permission) do
+        nil -> false
+        module -> module_lock_in?(scope, module)
+      end
+  end
+
+  defp any_module_lock?(%Scope{actor: :system}), do: false
+
+  defp any_module_lock?(%Scope{own_cap: %Scope{} = own, owner_cap: %Scope{} = owner}),
+    do: any_module_lock?(own) or any_module_lock?(owner)
+
+  defp any_module_lock?(%Scope{grants: grants}) when is_list(grants),
+    do: Enum.any?(grants, &(&1.resource_type == "module"))
+
+  defp any_module_lock?(_scope), do: false
+
+  defp module_lock_in?(%Scope{actor: :system}, _module), do: false
+
+  defp module_lock_in?(%Scope{own_cap: %Scope{} = own, owner_cap: %Scope{} = owner}, module),
+    do: module_lock_in?(own, module) or module_lock_in?(owner, module)
+
+  defp module_lock_in?(%Scope{grants: grants}, module) when is_list(grants),
+    do:
+      Enum.any?(
+        grants,
+        &(&1.resource_type == "module" and &1.effect == "deny" and &1.permission == module)
+      )
+
+  defp module_lock_in?(_scope, _module), do: false
+
+  defp locked_set(permission, type) do
+    unless type in [:memory_page, :memory_node] or type in Lineage.id_types(),
+      do: raise(ArgumentError, "unknown resource type: #{inspect(type)}")
+
+    %Permitted{resource_type: permitted_type(type), permission: permission, allow: [], deny: []}
+  end
 
   defp decide(scope, permission, nil, grants) do
     role_allows?(scope, permission, nil) or Enum.any?(grants, &(&1.effect == "allow"))

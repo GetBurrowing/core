@@ -283,6 +283,16 @@ defmodule PlatformWeb.ChatLiveRootOrgRailTest do
       refute Tenancy.root_member?(user)
       assert Tenancy.visibility(user) == {:orgs, [soylent.id]}
 
+      # A participant row keeps the root channel inside the user's org fence
+      # (ticket 01a14721: a sub-org-only member lists only their orgs' spaces
+      # and the spaces they participate in), so the root section renders.
+      {:ok, _} =
+        Chat.add_participant(root_channel.id, %{
+          participant_type: "user",
+          participant_id: user.id,
+          joined_at: DateTime.utc_now()
+        })
+
       {:ok, _view, html} =
         conn
         |> init_test_session(current_user_id: user.id)
