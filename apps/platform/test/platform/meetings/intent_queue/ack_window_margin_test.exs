@@ -428,7 +428,7 @@ defmodule Platform.Meetings.IntentQueue.AckWindowMarginTest do
       {:ok, _} = IntentQueue.transition(meeting_id, row.id, :dispatched)
 
       intent_id = row.id
-      assert_receive {:intent_dispatched, %{id: ^intent_id}}, @window_ms + 2_000
+      assert_receive {:intent_dispatched, %{id: ^intent_id} = dispatched}, @window_ms + 2_000
       t_dispatch = mono_ms()
 
       # Nothing is sent. No `mark_delivered`, no ack — this is the
@@ -451,7 +451,38 @@ defmodule Platform.Meetings.IntentQueue.AckWindowMarginTest do
       # things to go and fix.
       assert timed_out.dispatch_failure_reason == :never_delivered
 
-      assert_in_delta held_ms, outer_ms, @jitter_ms
+      # The hold is read off the server's own stamps, not this process's
+      # clock (task 01a1486f). `dispatched_at` is stamped on the single
+      # write path just before the outer timer is armed, and
+      # `timed_out_at` inside the timer's handler, so their difference is
+      # the bound the server actually ran. The test-process `held_ms`
+      # also carries two `assert_receive` wake-ups — CI run 39004184961
+      # measured 1003ms against an 800ms bound that way — and is kept
+      # only as a reported figure, so a stress log shows where any excess
+      # lives.
+      #
+      # BOTH sides of the delta stay: the `refute_receive` above only
+      # covers the first `@window_ms + @jitter_ms` after dispatch, so an
+      # outer bound firing early but after that window is caught only by
+      # the lower side here.
+      #
+      # Known limit: this still includes the queue server's own latency
+      # in handling the timer message. It removes the test process from
+      # the measurement, not the server.
+      server_held_ms =
+        DateTime.diff(timed_out.timed_out_at, dispatched.dispatched_at, :millisecond)
+
+      IO.puts(
+        "\n  never-delivered hold: server_held_ms=#{server_held_ms} " <>
+          "test_process_held_ms=#{held_ms} outer_ms=#{outer_ms} jitter_ms=#{@jitter_ms}\n"
+      )
+
+      assert_in_delta server_held_ms,
+                      outer_ms,
+                      @jitter_ms,
+                      "the outer bound held a never-delivered intent for #{server_held_ms}ms by the " <>
+                        "server's own dispatched_at/timed_out_at stamps, expected " <>
+                        "#{outer_ms}ms +/- #{@jitter_ms}ms (test-process view: #{held_ms}ms)"
 
       # The whole point: the meeting is free again.
       assert IntentQueue.cursor(meeting_id) == nil
@@ -516,15 +547,40 @@ defmodule Platform.Meetings.IntentQueue.AckWindowMarginTest do
       assert {:ok, repeated} = IntentQueue.mark_delivered(meeting_id, intent_id)
       assert repeated.delivered_at == first.delivered_at
 
-      assert_receive {:intent_timed_out, %{id: ^intent_id}}, @window_ms * 3
+      assert_receive {:intent_timed_out, %{id: ^intent_id} = timed_out}, @window_ms * 3
       held_ms = mono_ms() - t_first_contact
 
-      assert_in_delta held_ms,
+      # The hold is read off the server's own stamps, not this process's
+      # clock (task 01a1486f, as for the never-delivered case above).
+      # `delivered_at` is stamped on first contact just before the
+      # `:awaiting_ack` timer is armed, and `timed_out_at` inside that
+      # timer's handler, so their difference is the window the server
+      # actually ran. The test-process `held_ms` also carries the
+      # `assert_receive` wake-up for the timeout broadcast, so it is
+      # kept only as a reported figure.
+      #
+      # BOTH sides of the delta stay: a re-arm on the repeat moves the
+      # deadline out (upper side), and a window that closes early is
+      # caught only by the lower side.
+      #
+      # Known limit: this still includes the queue server's own latency
+      # in handling the timer message.
+      server_held_ms =
+        DateTime.diff(timed_out.timed_out_at, first.delivered_at, :millisecond)
+
+      IO.puts(
+        "\n  repeated-receipt hold: server_held_ms=#{server_held_ms} " <>
+          "test_process_held_ms=#{held_ms} window_ms=#{@window_ms} jitter_ms=#{@jitter_ms}\n"
+      )
+
+      assert_in_delta server_held_ms,
                       @window_ms,
                       @jitter_ms,
-                      "the deadline moved with the repeated receipt (#{held_ms}ms after first " <>
-                        "contact, window=#{@window_ms}ms) — a runtime could hold the meeting's " <>
-                        "serial cursor open by resending it"
+                      "the deadline moved with the repeated receipt (#{server_held_ms}ms after " <>
+                        "first contact by the server's own delivered_at/timed_out_at stamps, " <>
+                        "window=#{@window_ms}ms +/- #{@jitter_ms}ms, test-process view: " <>
+                        "#{held_ms}ms) — a runtime could hold the meeting's serial cursor open " <>
+                        "by resending it"
     end
 
     # `status: "working"` is the documented way to stop the clock, and
