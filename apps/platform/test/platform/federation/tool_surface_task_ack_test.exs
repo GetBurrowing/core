@@ -65,6 +65,9 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
 
     {:ok, stage} = Tasks.transition_stage(stage, "running")
 
+    task_runtime!(@owner)
+    task_runtime!("runtime-intruder")
+
     on_exit(fn ->
       case :ets.info(:orchestration_lease_manager) do
         :undefined -> :ok
@@ -74,6 +77,13 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
 
     %{project: project, task: task, plan: plan, stage: stage}
   end
+
+  # Every MCP context's `:runtime_id` names a real runtime row that may write
+  # tasks; the Tasks write re-check (task 01a1472d stage 2) refuses one that
+  # names no runtime, so a bare string would test a context production
+  # cannot build.
+  defp task_runtime!(runtime_id),
+    do: Platform.RuntimeProfileFixtures.ensure_task_runtime!(runtime_id)
 
   describe "tool discovery" do
     test "task_ack appears in list_tools([\"task\"]) with the 6-component rubric" do
@@ -383,7 +393,7 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
             "stage_id" => stage.id,
             "subagent_id" => "higgins.moon"
           },
-          %{runtime_id: "runtime-boot-race-#{System.unique_integer([:positive])}"}
+          %{runtime_id: task_runtime!("runtime-boot-race-#{System.unique_integer([:positive])}")}
         )
 
       # No lease was armed, so next_safety_net_at is nil — the runtime

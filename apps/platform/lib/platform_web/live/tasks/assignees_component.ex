@@ -233,7 +233,7 @@ defmodule PlatformWeb.Tasks.AssigneesComponent do
   end
 
   def handle_event("save_assignees", %{"assignees" => params}, socket) do
-    task = socket.assigns.selected_task
+    task = PlatformWeb.Tasks.Selection.writable_selected_task(socket)
 
     if is_nil(task) do
       {:noreply, socket}

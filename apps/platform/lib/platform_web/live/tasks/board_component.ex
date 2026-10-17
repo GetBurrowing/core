@@ -192,7 +192,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
   # tasks silently no-op (the button ought not to render, but this is
   # defense-in-depth against a stale client).
   def handle_event("board_promote_task", %{"id" => task_id}, socket) do
-    case readable_record(socket, task_id) do
+    case writable_record(socket, task_id) do
       nil ->
         send(self(), {:board_flash, :error, "Task not found."})
 
@@ -218,9 +218,7 @@ defmodule PlatformWeb.Tasks.BoardComponent do
   # Kanban drag-and-drop. Pushed by `kanban_drag_drop.js` via
   # `pushEventTo("#tasks-board", ...)`.
   def handle_event("board_drop", %{"task_id" => task_id, "column" => column}, socket) do
-    task =
-      if Selection.readable_task?(socket.assigns[:access_scope], task_id),
-        do: Tasks.get_task_detail(task_id)
+    task = if Selection.permits?(socket, {:task, task_id}), do: Tasks.get_task_detail(task_id)
 
     if is_nil(task) do
       send(self(), {:board_flash, :error, "Task not found."})
@@ -2225,11 +2223,10 @@ defmodule PlatformWeb.Tasks.BoardComponent do
   defp user_seed(%{email: email}, _fallback) when is_binary(email) and email != "", do: email
   defp user_seed(_user, fallback), do: fallback
 
-  # The task id arrives from the client: a task outside the viewer's
-  # `tasks.read` (the org fence, an explicit deny; task 01a14721 stage 1)
-  # reads exactly like a missing one.
-  defp readable_record(socket, task_id) do
-    if Selection.readable_task?(socket.assigns[:access_scope], task_id),
-      do: Tasks.get_task_record(task_id)
+  # The task id arrives from the client: a task the viewer may not
+  # `tasks.write` (the org fence, an explicit deny; tasks 01a14721 stage 1
+  # and 01a1472d stage 1) reads exactly like a missing one.
+  defp writable_record(socket, task_id) do
+    if Selection.permits?(socket, {:task, task_id}), do: Tasks.get_task_record(task_id)
   end
 end

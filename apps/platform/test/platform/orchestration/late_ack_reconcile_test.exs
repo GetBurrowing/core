@@ -161,7 +161,7 @@ defmodule Platform.Orchestration.LateAckReconcileTest do
                  "stage_id" => stage.id,
                  "subagent_id" => "subagent-late-#{System.unique_integer([:positive])}"
                },
-               %{runtime_id: runtime_id}
+               %{runtime_id: Platform.RuntimeProfileFixtures.ensure_task_runtime!(runtime_id)}
              )
 
     :ok
@@ -181,7 +181,7 @@ defmodule Platform.Orchestration.LateAckReconcileTest do
                  "attempts" => ["tried one", "tried two", "tried three"],
                  "unblock_action" => "A person picks option A or B"
                },
-               %{runtime_id: runtime_id}
+               %{runtime_id: Platform.RuntimeProfileFixtures.ensure_task_runtime!(runtime_id)}
              )
 
     :ok

@@ -611,6 +611,11 @@ defmodule PlatformWeb.Tasks.SteeringComponent do
         {:noreply,
          put_steering_feedback(socket, :error, "Enter a message or attach a file before sending.")}
 
+      # The selected task, re-asked on every send (task 01a1472d stage 1):
+      # a viewer who may no longer `tasks.write` it posts nothing.
+      is_nil(PlatformWeb.Tasks.Selection.writable_selected_task(socket)) ->
+        {:noreply, put_steering_feedback(socket, :error, "Task not found.")}
+
       is_nil(socket.assigns.execution_space_id) ->
         {:noreply,
          put_steering_feedback(

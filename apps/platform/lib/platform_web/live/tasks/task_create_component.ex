@@ -830,7 +830,15 @@ defmodule PlatformWeb.Tasks.TaskCreateComponent do
     # The one creation path (task 01a111bb): TaskAttrs, the UI extras,
     # `create_task/1` and the phase assignees, in that order. The native app's
     # `POST /api/app/tasks` calls the same function.
-    create_result = Tasks.create_from_request(raw_attrs)
+    #
+    # The project, epic and stack ids arrive from the form (task 01a1472d
+    # stage 1): one the viewer may not `tasks.write` gets the changeset a
+    # nonexistent id gets, so nothing is inserted and the flash is the same.
+    create_result =
+      case refused_target(socket, params) do
+        nil -> Tasks.create_from_request(raw_attrs)
+        field -> {:error, refused_changeset(params, field)}
+      end
 
     case create_result do
       {:ok, task} ->
@@ -881,6 +889,29 @@ defmodule PlatformWeb.Tasks.TaskCreateComponent do
         flash(:error, "Could not create task: #{inspect(reason)}")
         {:noreply, socket}
     end
+  end
+
+  @fenced_create_fields [{"project_id", :project}, {"epic_id", :epic}, {"stack_id", :stack}]
+
+  defp refused_target(socket, params) do
+    Enum.find_value(@fenced_create_fields, fn {key, type} ->
+      case Map.get(params, key) do
+        id when is_binary(id) and id != "" ->
+          if PlatformWeb.Tasks.Selection.permits?(socket, {type, id}),
+            do: nil,
+            else: String.to_existing_atom(key)
+
+        _ ->
+          nil
+      end
+    end)
+  end
+
+  defp refused_changeset(params, field) do
+    %Task{}
+    |> Task.changeset(params)
+    |> Ecto.Changeset.add_error(field, "does not exist", constraint: :foreign)
+    |> Map.put(:action, :insert)
   end
 
   defp persist_task_attachments(socket, _task) do

@@ -39,6 +39,15 @@ defmodule Platform.Federation.ToolSurfaceTest do
 
   defp unique_slug, do: "test-#{System.unique_integer([:positive])}"
 
+  # Every MCP context's `:runtime_id` names a real runtime row that may write
+  # tasks; the Tasks write re-check (task 01a1472d stage 2) refuses one that
+  # names no runtime.
+  defp task_runtime!,
+    do:
+      Platform.RuntimeProfileFixtures.ensure_task_runtime!(
+        "runtime:test-#{System.unique_integer([:positive])}"
+      )
+
   # A planner-authored e2e_behavior case (task 01a006d1 stage 3).
   defp e2e_case(name) do
     %{
@@ -5020,7 +5029,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
             "unblock_action" => "Rowan pastes the deploy token into the CI secret",
             "category" => "decision"
           },
-          %{runtime_id: "runtime:test", agent_id: "agent:test"}
+          %{runtime_id: task_runtime!(), agent_id: "agent:test"}
         )
 
       assert result.blocked == true
@@ -9642,7 +9651,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
       )
     end
 
-    defp blocker_context, do: %{runtime_id: "runtime:test", agent_id: "agent:cost"}
+    defp blocker_context, do: %{runtime_id: task_runtime!(), agent_id: "agent:cost"}
 
     test "two attempts are refused and nothing is recorded" do
       {task, stage} = blocker_stage()

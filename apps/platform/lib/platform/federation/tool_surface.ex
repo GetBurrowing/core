@@ -3955,9 +3955,113 @@ defmodule Platform.Federation.ToolSurface do
   # and present-but-unusable refusals (`task_design_decline`'s <8-character
   # reason). See the `ToolArguments` moduledoc for the presence-only scope.
   #
+
+  # ── Tasks write targets (task 01a1472d stage 2) ──────────────────────────
+  #
+  # Every tool `Platform.Access.ToolPermissions` maps to `tasks.write` or
+  # `tasks.manage` re-checks the client-supplied ids it acts on against the
+  # caller's Scope, through stage 1's `Platform.Access.task_target/3`
+  # (permission "tasks.write"), BEFORE its handler loads or writes anything.
+  # `task_write_targets/0` names, per tool, which argument (or transport
+  # context key) carries which target form. The tool-level permission gate
+  # (`Tools.authorize`, "held anywhere") is unchanged; this is the
+  # per-resource half it never had.
+  #
+  # THE REFUSAL IS THE HANDLER'S OWN NOT-FOUND PATH, not a new envelope. A
+  # target the caller may not write is replaced, for this one call, by a
+  # fresh UUID that names no row, and the handler runs as it always does:
+  # it reaches exactly the branch (and the argument-validation order) it
+  # takes for a random UUID. The fresh id is then mapped back to the
+  # caller's own id in the returned term, so the answer is the random-UUID
+  # answer for the id the caller sent, and a forbidden id cannot be told
+  # from a missing one. An id that is not a canonical UUID is never swapped:
+  # it cannot name a row, and the handler's malformed-id path stays its own.
+  #
+  # `task_create` with a refused `stack_id` is the one handler whose
+  # not-found path writes (it creates the task and only then fails to add it
+  # to the stack), so that call runs in a transaction that is always rolled
+  # back. Everywhere else the not-found path writes nothing on its own.
+  #
+  # `report_blocker` is checked on `task_id` alone: the blocker event is a
+  # row ON THE TASK, and its `stage_id` is a payload label the handler never
+  # resolves (a random stage id is recorded as given), so the task is the
+  # only target the write lands on.
+  @task_write_targets %{
+    "alarm_silence" => [task: "task_id", stage: "stage_id"],
+    "design_critique_request" => [
+      task: "task_id",
+      review_request: "review_request_id",
+      space: {:context, :space_id}
+    ],
+    "epic_create" => [project: "project_id"],
+    "epic_update" => [epic: "epic_id"],
+    "janitor_hand_back" => [task: "task_id"],
+    "plan_approve" => [plan: "plan_id"],
+    "plan_architecture_verdict" => [plan: "plan_id"],
+    "plan_create" => [task: "task_id"],
+    "plan_reject" => [plan: "plan_id"],
+    "plan_submit" => [plan: "plan_id"],
+    "plan_update" => [plan: "plan_id"],
+    "project_update" => [project: "project_id"],
+    "report_blocker" => [task: "task_id"],
+    "review_request_create" => [validation: "validation_id"],
+    "stack_abandon" => [stack: "stack_id"],
+    "stack_add" => [stack: "stack_id", task: "task_id"],
+    "stack_add_dependency" => [stack: "stack_id", task: "from_task_id", task: "to_task_id"],
+    "stack_assign_agents" => [stack: "stack_id"],
+    "stack_complete" => [stack: "stack_id"],
+    "stack_create" => [project: "project_id", epic: "epic_id"],
+    "stack_eject" => [stack: "stack_id", task: "task_id"],
+    "stack_remove_dependency" => [stack: "stack_id", task: "from_task_id", task: "to_task_id"],
+    "stack_retry_member_merge" => [task: "task_id"],
+    "stack_start" => [stack: "stack_id"],
+    "stack_start_planning" => [stack: "stack_id"],
+    "stack_update" => [stack: "stack_id"],
+    "stage_architecture_audit" => [stage: "stage_id"],
+    "stage_complete" => [stage: "stage_id", stage: "id"],
+    "stage_start" => [stage: "stage_id"],
+    "task_ack" => [task: "task_id", stage: "stage_id"],
+    "task_attach_canvas" => [task: "task_id"],
+    "task_close_as_delivered" => [task: "task_id"],
+    "task_complete" => [task: "task_id"],
+    "task_create" => [project: "project_id", epic: "epic_id", stack: "stack_id"],
+    "task_design_decline" => [task: "task_id"],
+    "task_detach_canvas" => [task: "task_id"],
+    "task_start" => [task: "task_id"],
+    "task_update" => [task: "task_id", task: "id", project: "project_id", epic: "epic_id"],
+    "validation_evaluate" => [validation: "validation_id"],
+    "validation_pass" => [validation: "validation_id"],
+    "validation_payload_amend" => [validation: "validation_id"]
+  }
+
+  # Refused targets whose not-found path still writes (see above).
+  @task_write_rollback_on_swap %{"task_create" => ["stack_id"]}
+
+  @doc false
+  @spec task_write_targets() :: %{String.t() => [{atom(), String.t() | {:context, atom()}}]}
+  def task_write_targets, do: @task_write_targets
+
   # context must include :space_id and :agent_participant_id.
   # Returns {:ok, result} | {:error, %{error: string, recoverable: boolean, suggestion: string}}
   @doc false
+  def execute(tool, args, context)
+      when is_map_key(@task_write_targets, tool) and is_map(args) and is_map(context) and
+             not is_map_key(context, :task_write_fenced) do
+    # Every target is decided on the caller's original context; the swapped
+    # one is what the handler runs with.
+    {fenced_args, fenced_context, swaps} =
+      @task_write_targets
+      |> Map.fetch!(tool)
+      |> Enum.reduce({args, context, %{}}, fn {type, key}, acc ->
+        task_write_fence_target(context, type, key, acc)
+      end)
+
+    rollback? = task_write_rollback?(tool, fenced_args, swaps)
+
+    tool
+    |> task_write_run(fenced_args, Map.put(fenced_context, :task_write_fenced, true), rollback?)
+    |> task_write_unswap(swaps)
+  end
 
   # ── Messaging tools ──────────────────────────────────────────────────────
 
@@ -15788,6 +15892,116 @@ defmodule Platform.Federation.ToolSurface do
     |> Keyword.get(:access_scope)
     |> Platform.Access.check(permission, resource)
   end
+
+  # The Tasks write re-check (task 01a1472d stage 2): `:ok` when the caller
+  # may write every target in `targets`, `:not_found` otherwise. The Scope is
+  # `memory_access_opts/1`'s (an in-process `:access_scope`, else the calling
+  # runtime's `Scope.for_runtime/1`), decided by stage 1's
+  # `Platform.Access.task_target/3` with "tasks.write" for every tool,
+  # `tasks.manage` ones included. No Scope and no `:runtime_id` is today's
+  # in-process caller and is `:ok` (the rule `caller_access_check/3` keeps);
+  # a `:runtime_id` that resolves to no runtime is refused.
+  defp task_write_check(context, targets) when is_map(context) and is_list(targets),
+    do: context |> task_write_scope() |> task_write_decide(targets)
+
+  defp task_write_scope(context) do
+    case Keyword.get(memory_access_opts(context), :access_scope) do
+      %Platform.Access.Scope{} = scope -> {:scope, scope}
+      nil -> if is_nil(Map.get(context, :runtime_id)), do: :unscoped, else: :unresolved
+    end
+  end
+
+  defp task_write_decide(:unscoped, _targets), do: :ok
+  defp task_write_decide(:unresolved, _targets), do: :not_found
+
+  defp task_write_decide({:scope, scope}, targets) do
+    case Platform.Access.task_target(scope, targets, "tasks.write") do
+      {:ok, _typed} -> :ok
+      :not_found -> :not_found
+    end
+  end
+
+  # One target of the `execute/3` intercept. A canonical-UUID id
+  # `task_write_check/2` refuses is swapped for a fresh UUID (case mirrored,
+  # so a handler that cares about case sees the same shape); the same id
+  # named twice gets the same fresh id. The decision is always taken on the
+  # caller's ORIGINAL context, never on one an earlier swap rewrote.
+  defp task_write_fence_target(caller_context, type, key, {args, context, swaps}) do
+    id = task_write_target_id(args, context, key)
+
+    cond do
+      not Platform.UUID.valid?(id) ->
+        {args, context, swaps}
+
+      task_write_check(caller_context, [{type, id}]) == :ok ->
+        {args, context, swaps}
+
+      true ->
+        fresh = Map.get_lazy(swaps, id, fn -> mirror_case(Ecto.UUID.generate(), id) end)
+        {args, context} = task_write_put_target(args, context, key, fresh)
+        {args, context, Map.put(swaps, id, fresh)}
+    end
+  end
+
+  defp task_write_target_id(_args, context, {:context, key}), do: Map.get(context, key)
+  defp task_write_target_id(args, _context, key), do: Map.get(args, key)
+
+  defp task_write_put_target(args, context, {:context, key}, fresh),
+    do: {args, Map.put(context, key, fresh)}
+
+  defp task_write_put_target(args, context, key, fresh), do: {Map.put(args, key, fresh), context}
+
+  defp mirror_case(fresh, original) do
+    fresh
+    |> String.graphemes()
+    |> Enum.zip(String.graphemes(original))
+    |> Enum.map_join(fn {f, o} -> if o == String.upcase(o), do: String.upcase(f), else: f end)
+  end
+
+  defp task_write_rollback?(tool, args, swaps) do
+    fresh_ids = Map.values(swaps)
+
+    @task_write_rollback_on_swap
+    |> Map.get(tool, [])
+    |> Enum.any?(&(Map.get(args, &1) in fresh_ids))
+  end
+
+  defp task_write_run(tool, args, context, false), do: execute(tool, args, context)
+
+  defp task_write_run(tool, args, context, true) do
+    {:error, {:task_write_fenced, result}} =
+      Repo.transaction(fn ->
+        Repo.rollback({:task_write_fenced, execute(tool, args, context)})
+      end)
+
+    result
+  end
+
+  # The fresh ids back to the caller's own, everywhere in the returned term
+  # (map keys and values, lists, tuples, strings). Structs are left as they
+  # are: a tool result is plain data.
+  defp task_write_unswap(term, swaps) when map_size(swaps) == 0, do: term
+
+  defp task_write_unswap(term, swaps),
+    do: unswap_term(term, Enum.map(swaps, fn {original, fresh} -> {fresh, original} end))
+
+  defp unswap_term(term, pairs) when is_binary(term),
+    do:
+      Enum.reduce(pairs, term, fn {fresh, original}, acc ->
+        String.replace(acc, fresh, original)
+      end)
+
+  defp unswap_term(term, pairs) when is_list(term), do: Enum.map(term, &unswap_term(&1, pairs))
+
+  defp unswap_term(term, pairs) when is_tuple(term),
+    do: term |> Tuple.to_list() |> unswap_term(pairs) |> List.to_tuple()
+
+  defp unswap_term(%_{} = struct, _pairs), do: struct
+
+  defp unswap_term(term, pairs) when is_map(term),
+    do: Map.new(term, fn {k, v} -> {unswap_term(k, pairs), unswap_term(v, pairs)} end)
+
+  defp unswap_term(term, _pairs), do: term
 
   # The caller Scope `prompt_template_update` re-checks with (task
   # 01a1386d-fb6e stage 2): an in-process caller's `:access_scope`, else the

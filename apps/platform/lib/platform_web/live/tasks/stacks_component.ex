@@ -45,6 +45,7 @@ defmodule PlatformWeb.Tasks.StacksComponent do
   alias Platform.Repo
   alias Platform.Tasks
   alias Platform.Tasks.{ReviewRequests, Stack, Stacks}
+  alias PlatformWeb.Tasks.Selection
 
   import Platform.Tasks.StackGraph,
     only: [
@@ -1196,7 +1197,14 @@ defmodule PlatformWeb.Tasks.StacksComponent do
   # Defensive: a click on a stale DOM node whose stack id no longer exists
   # in the database is a no-op rather than a crash.
   def handle_event("stack_open_detail", %{"id" => stack_id}, socket) do
-    case Stacks.get_stack(stack_id) do
+    # The stack id arrives from the client (task 01a1472d stage 1): a stack
+    # the viewer may not `tasks.read` is the stale-id no-op, so a foreign
+    # stack never becomes `@selected_stack` and its members never render.
+    stack =
+      if Selection.permits?(socket, {:stack, stack_id}, "tasks.read"),
+        do: Stacks.get_stack(stack_id)
+
+    case stack do
       nil ->
         {:noreply, socket}
 
@@ -1279,7 +1287,12 @@ defmodule PlatformWeb.Tasks.StacksComponent do
   def handle_event("stack_feedback_approve_item", %{"id" => item_id}, socket) do
     reviewed_by = socket.assigns[:current_user_id] || "unknown"
 
-    case ReviewRequests.approve_item(item_id, reviewed_by) do
+    result =
+      if Selection.permits?(socket, {:review_item, item_id}),
+        do: ReviewRequests.approve_item(item_id, reviewed_by),
+        else: {:error, :not_found}
+
+    case result do
       {:ok, _item} ->
         {:noreply, drop_overlay_item(socket, item_id)}
 
@@ -1359,7 +1372,122 @@ defmodule PlatformWeb.Tasks.StacksComponent do
     do: {:noreply, socket}
 
   def handle_event("stack_abandon", _params, socket) do
-    case Stacks.abandon_stack(socket.assigns.selected_stack) do
+    case writable_selected_stack(socket) do
+      nil -> {:noreply, socket}
+      stack -> abandon(socket, stack)
+    end
+  end
+
+  # Ask again on every write (task 01a1472d stage 1): `stack_open_detail`
+  # admitted the stack, but a live scope change can narrow it while the
+  # panel is open. A refusal is the no-stack no-op.
+  def handle_event("stack_start_planning", _params, socket) do
+    case writable_selected_stack(socket) do
+      nil -> {:noreply, socket}
+      stack -> start_planning(socket, stack)
+    end
+  end
+
+  # ── Stack-level assignee modal (ADR 0041) ──────────────────────────────
+
+  def handle_event(
+        "stack_open_assignee_modal",
+        _params,
+        %{assigns: %{selected_stack: nil}} = socket
+      ),
+      do: {:noreply, socket}
+
+  def handle_event("stack_open_assignee_modal", _params, socket) do
+    initial_mode =
+      case Stacks.stack_phase_assignees(socket.assigns.selected_stack) do
+        pa when is_map(pa) and map_size(pa) > 0 ->
+          if all_phases_same_agent?(pa), do: :simple, else: :advanced
+
+        _ ->
+          :simple
+      end
+
+    {:noreply,
+     socket
+     |> assign(:show_stack_assignee_modal, true)
+     |> assign(:stack_assignee_modal_mode, initial_mode)}
+  end
+
+  def handle_event("stack_close_assignee_modal", _params, socket) do
+    {:noreply, assign(socket, :show_stack_assignee_modal, false)}
+  end
+
+  def handle_event("stack_set_assignee_modal_mode", %{"mode" => mode}, socket) do
+    next =
+      case mode do
+        "advanced" -> :advanced
+        _ -> :simple
+      end
+
+    {:noreply, assign(socket, :stack_assignee_modal_mode, next)}
+  end
+
+  def handle_event("stack_save_assignees", %{"assignees" => params}, socket) do
+    stack = writable_selected_stack(socket)
+
+    if is_nil(stack) do
+      {:noreply, socket}
+    else
+      save_stack_assignees(socket, stack, params)
+    end
+  end
+
+  # OWNERSHIP CALL (stage 3): this event was filed under the Assignees
+  # concern in the inventory, but it is reachable ONLY from stack detail and
+  # it reads `:selected_stack_members`. It belongs to Stacks and is renamed
+  # `stack_clear_member_override` here. Stage 5's Assignees component does
+  # NOT carry it.
+  #
+  # The task id arrives from the client (task 01a1472d stage 1): a task the
+  # viewer may not `tasks.write` takes the error branch a missing one takes.
+  def handle_event("stack_clear_member_override", %{"id" => task_id}, socket) do
+    result =
+      if Selection.permits?(socket, {:task, task_id}),
+        do: Stacks.clear_member_override(task_id),
+        else: {:error, :not_found}
+
+    case result do
+      {:ok, _task} ->
+        send(self(), {:stacks_board_refresh})
+
+        send(
+          self(),
+          {:stacks_flash, :info, "Member returned to inheriting the stack default."}
+        )
+
+        {:noreply, reload_selected_stack(socket)}
+
+      {:error, _reason} ->
+        send(self(), {:stacks_flash, :error, "Could not clear the member override."})
+        {:noreply, socket}
+    end
+  end
+
+  # Stack dep-graph fullscreen modal open/close (stage 3 of task 019f487e).
+  # Bare assigns — the modal's `:if` guard in the template already checks
+  # `@stack_graph_expanded && @selected_stack_members not in [nil, []]`.
+  def handle_event("stack_open_graph_expand", _params, socket) do
+    {:noreply, assign(socket, :stack_graph_expanded, true)}
+  end
+
+  def handle_event("stack_close_graph_expand", _params, socket) do
+    {:noreply, assign(socket, :stack_graph_expanded, false)}
+  end
+
+  defp writable_selected_stack(socket) do
+    case socket.assigns[:selected_stack] do
+      %Stack{id: id} = stack -> if Selection.permits?(socket, {:stack, id}), do: stack
+      _ -> nil
+    end
+  end
+
+  defp abandon(socket, stack) do
+    case Stacks.abandon_stack(stack) do
       {:ok, _stack} ->
         send(self(), {:stacks_flash, :info, "Stack abandoned."})
         {:noreply, close_stack_panel(socket)}
@@ -1374,11 +1502,8 @@ defmodule PlatformWeb.Tasks.StacksComponent do
   # wave-gated dispatch (ADR 0045 / task 019f487e), manual mode dispatches
   # wave 0 only; downstream waves advance when each member's plan approves.
   # On success/partial, reloads the panel so member statuses are fresh.
-  def handle_event("stack_start_planning", _params, %{assigns: %{selected_stack: nil}} = socket),
-    do: {:noreply, socket}
-
-  def handle_event("stack_start_planning", _params, socket) do
-    case Stacks.start_planning(socket.assigns.selected_stack) do
+  defp start_planning(socket, stack) do
+    case Stacks.start_planning(stack) do
       {:ok, %{stack: stack, planning: planning}} ->
         send(
           self(),
@@ -1429,120 +1554,41 @@ defmodule PlatformWeb.Tasks.StacksComponent do
     end
   end
 
-  # ── Stack-level assignee modal (ADR 0041) ──────────────────────────────
+  defp save_stack_assignees(socket, stack, params) do
+    attrs_by_phase =
+      case socket.assigns.stack_assignee_modal_mode do
+        :simple ->
+          entry = phase_entry(Map.get(params, "all", ""))
+          %{"planning" => entry, "execution" => entry, "review" => entry}
 
-  def handle_event(
-        "stack_open_assignee_modal",
-        _params,
-        %{assigns: %{selected_stack: nil}} = socket
-      ),
-      do: {:noreply, socket}
-
-  def handle_event("stack_open_assignee_modal", _params, socket) do
-    initial_mode =
-      case Stacks.stack_phase_assignees(socket.assigns.selected_stack) do
-        pa when is_map(pa) and map_size(pa) > 0 ->
-          if all_phases_same_agent?(pa), do: :simple, else: :advanced
-
-        _ ->
-          :simple
+        :advanced ->
+          %{
+            "planning" => phase_entry(Map.get(params, "planning", "")),
+            "execution" => phase_entry(Map.get(params, "execution", "")),
+            "review" => phase_entry(Map.get(params, "review", ""))
+          }
       end
 
-    {:noreply,
-     socket
-     |> assign(:show_stack_assignee_modal, true)
-     |> assign(:stack_assignee_modal_mode, initial_mode)}
-  end
-
-  def handle_event("stack_close_assignee_modal", _params, socket) do
-    {:noreply, assign(socket, :show_stack_assignee_modal, false)}
-  end
-
-  def handle_event("stack_set_assignee_modal_mode", %{"mode" => mode}, socket) do
-    next =
-      case mode do
-        "advanced" -> :advanced
-        _ -> :simple
-      end
-
-    {:noreply, assign(socket, :stack_assignee_modal_mode, next)}
-  end
-
-  def handle_event("stack_save_assignees", %{"assignees" => params}, socket) do
-    stack = socket.assigns.selected_stack
-
-    if is_nil(stack) do
-      {:noreply, socket}
-    else
-      attrs_by_phase =
-        case socket.assigns.stack_assignee_modal_mode do
-          :simple ->
-            entry = phase_entry(Map.get(params, "all", ""))
-            %{"planning" => entry, "execution" => entry, "review" => entry}
-
-          :advanced ->
-            %{
-              "planning" => phase_entry(Map.get(params, "planning", "")),
-              "execution" => phase_entry(Map.get(params, "execution", "")),
-              "review" => phase_entry(Map.get(params, "review", ""))
-            }
-        end
-
-      case Stacks.set_stack_phase_assignees(stack, attrs_by_phase) do
-        {:ok, %{percolated: percolated, skipped: skipped}} ->
-          send(self(), {:stacks_board_refresh})
-
-          send(
-            self(),
-            {:stacks_flash, :info,
-             "Stack assignees saved — #{length(percolated)} member(s) updated" <>
-               skipped_suffix(skipped)}
-          )
-
-          {:noreply,
-           socket
-           |> assign(:show_stack_assignee_modal, false)
-           |> reload_selected_stack()}
-
-        {:error, _} ->
-          send(self(), {:stacks_flash, :error, "Failed to save stack assignees."})
-          {:noreply, socket}
-      end
-    end
-  end
-
-  # OWNERSHIP CALL (stage 3): this event was filed under the Assignees
-  # concern in the inventory, but it is reachable ONLY from stack detail and
-  # it reads `:selected_stack_members`. It belongs to Stacks and is renamed
-  # `stack_clear_member_override` here. Stage 5's Assignees component does
-  # NOT carry it.
-  def handle_event("stack_clear_member_override", %{"id" => task_id}, socket) do
-    case Stacks.clear_member_override(task_id) do
-      {:ok, _task} ->
+    case Stacks.set_stack_phase_assignees(stack, attrs_by_phase) do
+      {:ok, %{percolated: percolated, skipped: skipped}} ->
         send(self(), {:stacks_board_refresh})
 
         send(
           self(),
-          {:stacks_flash, :info, "Member returned to inheriting the stack default."}
+          {:stacks_flash, :info,
+           "Stack assignees saved — #{length(percolated)} member(s) updated" <>
+             skipped_suffix(skipped)}
         )
 
-        {:noreply, reload_selected_stack(socket)}
+        {:noreply,
+         socket
+         |> assign(:show_stack_assignee_modal, false)
+         |> reload_selected_stack()}
 
-      {:error, _reason} ->
-        send(self(), {:stacks_flash, :error, "Could not clear the member override."})
+      {:error, _} ->
+        send(self(), {:stacks_flash, :error, "Failed to save stack assignees."})
         {:noreply, socket}
     end
-  end
-
-  # Stack dep-graph fullscreen modal open/close (stage 3 of task 019f487e).
-  # Bare assigns — the modal's `:if` guard in the template already checks
-  # `@stack_graph_expanded && @selected_stack_members not in [nil, []]`.
-  def handle_event("stack_open_graph_expand", _params, socket) do
-    {:noreply, assign(socket, :stack_graph_expanded, true)}
-  end
-
-  def handle_event("stack_close_graph_expand", _params, socket) do
-    {:noreply, assign(socket, :stack_graph_expanded, false)}
   end
 
   # ── Panel state helpers ────────────────────────────────────────────────
@@ -1733,7 +1779,12 @@ defmodule PlatformWeb.Tasks.StacksComponent do
   defp stack_phase_assignee_id(_, _), do: nil
 
   defp stack_submit_reject(socket, item_id, reviewed_by, feedback) do
-    case ReviewRequests.reject_item(item_id, reviewed_by, feedback) do
+    result =
+      if Selection.permits?(socket, {:review_item, item_id}),
+        do: ReviewRequests.reject_item(item_id, reviewed_by, feedback),
+        else: {:error, :not_found}
+
+    case result do
       {:ok, _item} ->
         {:noreply,
          socket

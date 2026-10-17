@@ -310,7 +310,7 @@ defmodule Platform.Orchestration.TaskRouterLateAckResumeTest do
           "stage_id" => stage.id,
           "subagent_id" => "subagent-late-resume-#{System.unique_integer([:positive])}"
         },
-        %{runtime_id: runtime_id}
+        %{runtime_id: Platform.RuntimeProfileFixtures.ensure_task_runtime!(runtime_id)}
       )
 
     settle!(task.id)

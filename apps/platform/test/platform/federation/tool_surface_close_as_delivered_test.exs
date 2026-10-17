@@ -103,18 +103,32 @@ defmodule Platform.Federation.ToolSurfaceCloseAsDeliveredTest do
     user
   end
 
+  # Carries the `task` bundle, as every runtime that reaches this tool over
+  # MCP must: the transports' tool gate refuses `tasks.write` to a runtime
+  # without it, and the Tasks write re-check (task 01a1472d stage 2) does
+  # the same for a direct `execute/3` call.
   defp runtime!(owner, agent_id \\ nil) do
     n = System.unique_integer([:positive])
 
-    %AgentRuntime{}
-    |> AgentRuntime.changeset(%{
-      runtime_id: "runtime-#{n}",
-      owner_user_id: owner.id,
-      agent_id: agent_id,
-      display_name: "Runtime #{n}",
-      status: "active"
-    })
-    |> Repo.insert!()
+    runtime =
+      %AgentRuntime{}
+      |> AgentRuntime.changeset(%{
+        runtime_id: "runtime-#{n}",
+        owner_user_id: owner.id,
+        agent_id: agent_id,
+        display_name: "Runtime #{n}",
+        status: "active"
+      })
+      |> Repo.insert!()
+
+    {:ok, _profile} =
+      Platform.Access.RuntimeProfiles.create_for_runtime(
+        runtime,
+        ["task"],
+        Platform.Access.RuntimeProfiles.translated_permissions(["task"])
+      )
+
+    runtime
   end
 
   defp admin_context(opts \\ []) do

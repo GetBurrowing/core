@@ -183,7 +183,7 @@ defmodule PlatformWeb.Tasks.SupersedeComponent do
   end
 
   def handle_event("supersede_submit", params, socket) do
-    task = socket.assigns[:selected_task]
+    task = PlatformWeb.Tasks.Selection.writable_selected_task(socket)
 
     reason =
       case Map.get(params, "reason") do

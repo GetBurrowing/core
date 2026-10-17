@@ -259,7 +259,7 @@ defmodule PlatformWeb.TasksLive do
   # event. Forward it to the per-phase path so any external client still
   # works. The modal itself is `AssigneesComponent`.
   def handle_event("assign_agent", %{"agent_id" => agent_id}, socket) do
-    task = socket.assigns.selected_task
+    task = Selection.writable_selected_task(socket)
 
     cond do
       is_nil(task) ->
@@ -313,7 +313,7 @@ defmodule PlatformWeb.TasksLive do
     # out of the sidebar isn't enough on its own. Falling through here also
     # self-heals the stored value, because `push_selected_project_changed/1`
     # writes the corrected id back to localStorage.
-    project = Tasks.get_project(project_id)
+    project = Selection.readable_project(socket, project_id)
 
     resolved_id =
       if is_nil(project) or Platform.Projects.archived?(project), do: nil, else: project_id

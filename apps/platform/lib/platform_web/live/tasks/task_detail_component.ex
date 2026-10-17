@@ -141,9 +141,21 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
       do: Tasks.get_task_record(task_id)
   end
 
-  defp readable_detail(socket, task_id) do
-    if Selection.readable_task?(socket.assigns[:access_scope], task_id),
-      do: Tasks.get_task_detail(task_id)
+  # The write handlers' form (task 01a1472d stage 1): `tasks.write` on the
+  # client-supplied id, through `Platform.Access.task_target/3`. A refusal
+  # is `nil`, the row-missing branch each handler already has.
+  defp writable_record(socket, task_id) do
+    if Selection.permits?(socket, {:task, task_id}), do: Tasks.get_task_record(task_id)
+  end
+
+  defp writable_detail(socket, task_id) do
+    if Selection.permits?(socket, {:task, task_id}), do: Tasks.get_task_detail(task_id)
+  end
+
+  # A client-supplied plan id, admitted only when the viewer may
+  # `tasks.write` the plan's task; a refusal reads as a missing plan.
+  defp writable_plan(socket, plan_id) do
+    if Selection.permits?(socket, {:plan, plan_id}), do: fetch_plan(plan_id)
   end
 
   # Whether to RENDER the promote control (task 01a11ec3 stage 4). Display
@@ -199,7 +211,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
   # budget. Idempotent — `{:error, :not_found}` from a duplicate click is a
   # no-op. `{:error, :task_forbidden}` lands in the same no-op arm.
   def handle_event("detail_detach_canvas", %{"canvas-id" => canvas_id}, socket) do
-    case socket.assigns[:selected_task] do
+    case Selection.writable_selected_task(socket) do
       %Task{id: task_id} = task ->
         actor = {:user, socket.assigns[:current_user_id]}
         _ = CanvasAttachments.detach_canvas(actor, task_id, canvas_id)
@@ -266,7 +278,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
           assign(socket, :editing_task_title_id, nil)
 
         true ->
-          case readable_record(socket, task_id) do
+          case writable_record(socket, task_id) do
             nil ->
               flash(:error, "Task not found.")
               assign(socket, :editing_task_title_id, nil)
@@ -321,7 +333,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
 
     attrs = %{String.to_existing_atom(field) => normalized}
 
-    case readable_record(socket, task_id) do
+    case writable_record(socket, task_id) do
       nil ->
         flash(:error, "Task not found.")
 
@@ -375,7 +387,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
     do: {:noreply, socket}
 
   def handle_event("detail_save_description", %{"description" => new_desc}, socket) do
-    task = socket.assigns.selected_task
+    task = Selection.writable_selected_task(socket)
 
     cond do
       is_nil(task) ->
@@ -406,7 +418,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
   end
 
   def handle_event("detail_confirm_delete", _params, socket) do
-    task = socket.assigns.selected_task
+    task = Selection.writable_selected_task(socket)
 
     if task do
       case Tasks.soft_delete_task(task) do
@@ -426,7 +438,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
   end
 
   def handle_event("detail_transition", %{"id" => task_id, "status" => new_status}, socket) do
-    task = readable_detail(socket, task_id)
+    task = writable_detail(socket, task_id)
 
     if task do
       # LiveView is user-facing regardless of session state — thread the
@@ -537,7 +549,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
   end
 
   def handle_event("detail_submit_reopen", params, socket) do
-    task = socket.assigns.selected_task
+    task = Selection.writable_selected_task(socket)
 
     # Allow the form-submitted `reason` to override the assign for the rare
     # race where phx-change hasn't landed yet.
@@ -591,7 +603,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
   # ── Skills ──────────────────────────────────────────────────────────────
 
   def handle_event("detail_attach_skill", %{"skill_id" => skill_id}, socket) do
-    task = socket.assigns.selected_task
+    task = Selection.writable_selected_task(socket)
 
     if task && skill_id != "" do
       Skills.attach_skill(skill_id, "task", task.id)
@@ -602,7 +614,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
   end
 
   def handle_event("detail_detach_skill", %{"skill_id" => skill_id}, socket) do
-    task = socket.assigns.selected_task
+    task = Selection.writable_selected_task(socket)
 
     if task do
       Skills.detach_skill(skill_id, "task", task.id)
@@ -621,7 +633,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
   # `chat_spaces` row. A bypass would let any authenticated user pin — and
   # thereby materialise the exec space — for any task they can see.
   def handle_event("detail_toggle_chat_pin", _params, socket) do
-    task = socket.assigns[:selected_task]
+    task = Selection.writable_selected_task(socket)
     user_id = socket.assigns[:current_user_id]
     email = socket.assigns[:current_user_email]
 
@@ -675,7 +687,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
   # ── Plan review events ──────────────────────────────────────────────────
 
   def handle_event("plan_approve", %{"plan-id" => plan_id}, socket) do
-    plan = fetch_plan(plan_id)
+    plan = writable_plan(socket, plan_id)
 
     socket =
       if plan && plan.status == "pending_review" do
@@ -707,7 +719,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
   # Rejection without feedback is still a valid power-user shortcut; the
   # inline drawer below is the gold path.
   def handle_event("plan_reject", %{"plan-id" => plan_id}, socket) do
-    plan = fetch_plan(plan_id)
+    plan = writable_plan(socket, plan_id)
 
     socket =
       if plan && plan.status == "pending_review" do
@@ -745,7 +757,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
   end
 
   def handle_event("plan_submit_reject_with_feedback", %{"plan-id" => plan_id}, socket) do
-    plan = fetch_plan(plan_id)
+    plan = writable_plan(socket, plan_id)
     feedback = String.trim(socket.assigns.reject_plan_feedback_text || "")
 
     cond do
@@ -1822,6 +1834,7 @@ defmodule PlatformWeb.Tasks.TaskDetailComponent do
           <.live_component
             module={PlatformWeb.Tasks.GatePanelComponent}
             id="tasks-gate-panel"
+            access_scope={@access_scope}
             pending_reviews={@pending_reviews}
             superseded_reviews={@superseded_reviews}
             review_canvases={@review_canvases}

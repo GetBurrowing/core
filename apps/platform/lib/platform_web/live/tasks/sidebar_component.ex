@@ -235,7 +235,7 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
   end
 
   def handle_event("sidebar_create_project", %{"project" => params}, socket) do
-    case Tasks.create_project(params) do
+    case create_project(socket, params) do
       {:ok, _project} ->
         # No board-level pubsub for projects yet — the parent owns the
         # directory maps and re-fetches them on this notify.
@@ -298,7 +298,7 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
         id -> Map.put_new(params, "project_id", id)
       end
 
-    case Tasks.create_epic(attrs) do
+    case create_epic(socket, attrs) do
       {:ok, _epic} ->
         # create_epic/1 already broadcasts {:epic_created, epic}; the parent
         # re-fetches on this notify for immediacy rather than waiting on it.
@@ -315,6 +315,52 @@ defmodule PlatformWeb.TasksLive.SidebarComponent do
         {:noreply, assign(socket, :epic_form, to_form(changeset, as: "epic"))}
     end
   end
+
+  # ── Fenced creates (task 01a1472d stage 1) ──────────────────────────────
+  #
+  # The org and project ids arrive from the form, so a forged submit can name
+  # any of them. A target the viewer may not `tasks.write` gets the
+  # changeset a nonexistent id gets (the foreign-key "does not exist" error),
+  # so the flash and the form read exactly as they do for a random UUID, and
+  # nothing is inserted.
+
+  defp create_project(socket, params) do
+    if project_org_permitted?(socket, params),
+      do: Tasks.create_project(params),
+      else: {:error, refused(Project.changeset(%Project{}, params), :org_id)}
+  end
+
+  # A fenced viewer must NAME an org inside the fence: `Tasks.create_project/1`
+  # defaults a missing `org_id` to the root org. Unfenced viewers keep that
+  # default, unchanged.
+  defp project_org_permitted?(socket, params) do
+    case {blank_to_nil(params["org_id"]), socket.assigns[:access_scope]} do
+      {nil, %Platform.Access.Scope{} = scope} -> Platform.Access.org_fence(scope) == :unfenced
+      {nil, _no_scope} -> true
+      {org_id, _} -> PlatformWeb.Tasks.Selection.permits?(socket, {:org, org_id})
+    end
+  end
+
+  defp create_epic(socket, attrs) do
+    case blank_to_nil(attrs["project_id"]) do
+      nil ->
+        Tasks.create_epic(attrs)
+
+      project_id ->
+        if PlatformWeb.Tasks.Selection.permits?(socket, {:project, project_id}),
+          do: Tasks.create_epic(attrs),
+          else: {:error, refused(Epic.changeset(%Epic{}, attrs), :project_id)}
+    end
+  end
+
+  defp refused(changeset, field) do
+    changeset
+    |> Ecto.Changeset.add_error(field, "does not exist", constraint: :foreign)
+    |> Map.put(:action, :insert)
+  end
+
+  defp blank_to_nil(value) when value in [nil, ""], do: nil
+  defp blank_to_nil(value), do: value
 
   # ── Form defaults ───────────────────────────────────────────────────────
 

@@ -534,6 +534,70 @@ defmodule Platform.Access do
     end
   end
 
+  # ── Tasks write targets (task 01a1472d stage 1) ──────────────────────────
+
+  @task_target_permissions ["tasks.write", "tasks.read"]
+
+  @doc """
+  The re-check every Tasks handler runs on a CLIENT-SUPPLIED target id
+  before it loads or writes anything (task 01a1472d stage 1).
+
+  `targets` is one `Platform.Access.TaskTarget` form (`{:task, id}`,
+  `{:plan, id}`, `{:review_item, id}`, `{:epic, id}`, `{:org, id}`, ...) or
+  a list of them. Each is resolved to its typed resource by
+  `Platform.Access.TaskTarget.resolve/1`, then decided:
+
+    * a `Platform.Access.Lineage` type (task, project, stack, space) with
+      `can?(scope, permission, typed)`, so the org fence, module locks and
+      explicit denies all apply;
+    * `{:org, id}` with `can?(scope, permission, nil)` AND the org inside
+      the scope's fence (`org_fence/1`, through a capped runtime's
+      `owner_cap`), because an org is not a Lineage type.
+
+  `{:ok, typed}` (or `{:ok, [typed]}` for a list) when every target
+  resolves and is permitted. `:not_found` otherwise. A missing row and a
+  forbidden one give the same answer by construction, so a caller that maps
+  `:not_found` onto the branch it already takes for a nil row is no
+  existence oracle. It builds no fence of its own.
+  """
+  @spec task_target(Scope.t(), term() | [term()], String.t()) ::
+          {:ok, term() | [term()]} | :not_found
+  def task_target(scope, targets, permission)
+      when is_list(targets) and permission in @task_target_permissions do
+    Enum.reduce_while(targets, {:ok, []}, fn target, {:ok, acc} ->
+      case task_target(scope, target, permission) do
+        {:ok, typed} -> {:cont, {:ok, [typed | acc]}}
+        :not_found -> {:halt, :not_found}
+      end
+    end)
+    |> case do
+      {:ok, typed} -> {:ok, Enum.reverse(typed)}
+      :not_found -> :not_found
+    end
+  end
+
+  def task_target(%Scope{} = scope, target, permission)
+      when permission in @task_target_permissions do
+    with {:ok, typed} <- Platform.Access.TaskTarget.resolve(target),
+         true <- target_permitted?(scope, typed, permission) do
+      {:ok, typed}
+    else
+      _ -> :not_found
+    end
+  end
+
+  def task_target(_scope, _target, _permission), do: :not_found
+
+  defp target_permitted?(scope, {:org, org_id}, permission) do
+    can?(scope, permission, nil) and
+      case fence_of(scope) do
+        :unfenced -> true
+        {org_ids, _user_id} -> org_id in org_ids
+      end
+  end
+
+  defp target_permitted?(scope, typed, permission), do: can?(scope, permission, typed)
+
   # ── the org fence (task 01a14721 stage 1) ────────────────────────────────
 
   @fenced_types [:project, :task, :stack, :space, :canvas]

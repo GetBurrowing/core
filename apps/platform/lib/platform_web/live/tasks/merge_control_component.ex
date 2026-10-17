@@ -69,7 +69,8 @@ defmodule PlatformWeb.Tasks.MergeControlComponent do
   # named sentence rather than a flash, a crash, or a vanishing button.
   @impl true
   def handle_event("merge_task_branch", _params, socket) do
-    case {socket.assigns[:selected_task], socket.assigns.merge_control} do
+    case {PlatformWeb.Tasks.Selection.writable_selected_task(socket),
+          socket.assigns.merge_control} do
       {%Task{} = task, %{} = control} ->
         actor = %{id: socket.assigns[:current_user_id], org_id: nil}
 

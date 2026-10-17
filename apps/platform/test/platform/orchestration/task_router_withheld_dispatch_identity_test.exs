@@ -342,7 +342,7 @@ defmodule Platform.Orchestration.TaskRouterWithheldDispatchIdentityTest do
         # Task 01a0c762 stage 2: ack as the DISPATCHED runtime. The router's
         # durable-ack readers now count only the lease owner's rows; an empty
         # context wrote `runtime_id: "tool-surface"`, which no owner matches.
-        %{runtime_id: assignee.id}
+        %{runtime_id: Platform.RuntimeProfileFixtures.ensure_task_runtime!(assignee.id)}
       )
 
     :ok = sync_router(task.id)

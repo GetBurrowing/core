@@ -12,6 +12,7 @@
   <.live_component
     module={PlatformWeb.TasksLive.SidebarComponent}
     id="tasks-sidebar"
+    access_scope={@access_scope}
     project_sections={@project_sections}
     projects_by_org={@projects_by_org}
     orgs={@orgs}
@@ -242,6 +243,7 @@
       <.live_component
         module={PlatformWeb.Tasks.SteeringComponent}
         id="tasks-steering"
+        access_scope={@access_scope}
         detail_epoch={@detail_epoch}
         selected_task={@selected_task}
         current_user_id={@current_user_id}
@@ -259,6 +261,7 @@
       <.live_component
         module={PlatformWeb.Tasks.MergeControlComponent}
         id="tasks-merge-control"
+        access_scope={@access_scope}
         detail_epoch={@detail_epoch}
         selected_task={@selected_task}
         current_user_id={@current_user_id}
@@ -273,6 +276,7 @@
   <.live_component
     module={PlatformWeb.Tasks.StacksComponent}
     id="tasks-stacks"
+    access_scope={@access_scope}
     agents={@agents}
     stacks={@stacks}
     board_review_subscriptions={@review_request_subscriptions}
@@ -285,6 +289,7 @@
   <.live_component
     module={PlatformWeb.Tasks.SupersedeComponent}
     id="tasks-supersede"
+    access_scope={@access_scope}
     selected_task={@selected_task}
     current_user_id={@current_user_id}
   />
@@ -296,6 +301,7 @@
   <.live_component
     module={PlatformWeb.Tasks.TaskCreateComponent}
     id="tasks-create"
+    access_scope={@access_scope}
     selected_task={@selected_task}
     projects_by_org={@projects_by_org}
     mask_names?={@mask_names?}
@@ -310,6 +316,7 @@
   <.live_component
     module={PlatformWeb.Tasks.AssigneesComponent}
     id="tasks-assignees"
+    access_scope={@access_scope}
     selected_task={@selected_task}
     agents={@agents}
   />

@@ -92,6 +92,7 @@ defmodule PlatformWeb.Tasks.GatePanelComponent do
 
   alias Platform.Chat.Canvas
   alias Platform.Tasks.ReviewRequests
+  alias PlatformWeb.Tasks.Selection
 
   @impl true
   def mount(socket) do
@@ -310,7 +311,15 @@ defmodule PlatformWeb.Tasks.GatePanelComponent do
   def handle_event("gate_approve_item", %{"item-id" => item_id}, socket) do
     reviewed_by = socket.assigns[:current_user_id] || "unknown"
 
-    case ReviewRequests.approve_item(item_id, reviewed_by) do
+    # The item id arrives from the client (task 01a1472d stage 1): an item
+    # whose task the viewer may not `tasks.write` takes the error branch a
+    # missing item takes, and nothing is written.
+    result =
+      if Selection.permits?(socket, {:review_item, item_id}),
+        do: ReviewRequests.approve_item(item_id, reviewed_by),
+        else: {:error, :not_found}
+
+    case result do
       {:ok, _} ->
         send(self(), {:gate_reviews_changed})
         {:noreply, socket}
@@ -415,7 +424,12 @@ defmodule PlatformWeb.Tasks.GatePanelComponent do
   end
 
   defp submit_feedback(socket, item_id, reviewed_by, feedback) do
-    case ReviewRequests.reject_item(item_id, reviewed_by, feedback) do
+    result =
+      if Selection.permits?(socket, {:review_item, item_id}),
+        do: ReviewRequests.reject_item(item_id, reviewed_by, feedback),
+        else: {:error, :not_found}
+
+    case result do
       {:ok, _} ->
         send(self(), {:gate_reviews_changed})
 

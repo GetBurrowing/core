@@ -64,6 +64,13 @@ defmodule Platform.Federation.ToolSurfaceAlarmSilenceTest do
     %{project: project, task: task, plan: plan, stage: stage}
   end
 
+  # Every MCP context's `:runtime_id` names a real runtime row that may write
+  # tasks; the Tasks write re-check (task 01a1472d stage 2) refuses one that
+  # names no runtime, so a bare string would test a context production
+  # cannot build.
+  defp task_runtime!(runtime_id),
+    do: Platform.RuntimeProfileFixtures.ensure_task_runtime!(runtime_id)
+
   describe "tool discovery" do
     test "alarm_silence appears in list_tools([\"task\"]) with the 6-component rubric" do
       tools = ToolSurface.list_tools(["task"])
@@ -124,7 +131,7 @@ defmodule Platform.Federation.ToolSurfaceAlarmSilenceTest do
             "until_seconds" => 1800,
             "reason" => "task_ack absent from stale MCP catalog; subagent live"
           },
-          %{runtime_id: "runtime-test-#{System.unique_integer([:positive])}"}
+          %{runtime_id: task_runtime!("runtime-test-#{System.unique_integer([:positive])}")}
         )
 
       after_ = DateTime.utc_now()
@@ -653,7 +660,7 @@ defmodule Platform.Federation.ToolSurfaceAlarmSilenceTest do
             "until_seconds" => 600,
             "reason" => "audit bridging verification"
           },
-          %{runtime_id: "runtime-audit-#{System.unique_integer([:positive])}"}
+          %{runtime_id: task_runtime!("runtime-audit-#{System.unique_integer([:positive])}")}
         )
 
       events = Platform.Audit.list(event_type: "platform.orchestration.alarm_silence")

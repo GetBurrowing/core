@@ -106,7 +106,7 @@ defmodule Platform.Orchestration.RecordAckNotFoundLoggingTest do
           "stage_id" => stage.id,
           "subagent_id" => "subagent-#{System.unique_integer([:positive])}"
         },
-        %{runtime_id: assignee.id}
+        %{runtime_id: Platform.RuntimeProfileFixtures.ensure_task_runtime!(assignee.id)}
       )
 
     :ok = sync_router(task.id)

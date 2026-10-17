@@ -58,6 +58,64 @@ defmodule PlatformWeb.Tasks.Selection do
 
   def readable_task?(_scope, _task_id), do: true
 
+  @doc """
+  May the viewer act on `target` (task 01a1472d stage 1)? Every Tasks
+  `handle_event` that takes a task, project, stack, plan, review-item or
+  epic id from the client asks this BEFORE it loads or writes anything, and
+  on `false` takes the branch it already takes for a missing row, so a
+  forbidden id and a nonexistent one answer the same way.
+
+  `target` is one `Platform.Access.TaskTarget` form or a list of them;
+  `permission` is `"tasks.write"` (the default) or `"tasks.read"` for the
+  by-id reads that put a record on screen (`stack_open_detail`,
+  `sidebar_select_project`). The decision is
+  `Platform.Access.task_target/3`'s. A socket with no Scope answers `true`,
+  as `readable_task?/2` does.
+  """
+  @spec permits?(
+          Phoenix.LiveView.Socket.t() | Platform.Access.Scope.t() | nil,
+          term(),
+          String.t()
+        ) ::
+          boolean()
+  def permits?(socket_or_scope, target, permission \\ "tasks.write")
+
+  def permits?(%Phoenix.LiveView.Socket{assigns: assigns}, target, permission),
+    do: permits?(assigns[:access_scope], target, permission)
+
+  def permits?(%Platform.Access.Scope{} = scope, target, permission),
+    do: match?({:ok, _}, Platform.Access.task_target(scope, target, permission))
+
+  def permits?(_scope, _target, _permission), do: true
+
+  @doc """
+  The socket's `:selected_task`, or `nil` when the viewer may no longer
+  `tasks.write` it. For the handlers that act on the server-held selection
+  rather than a client id: the selection was admitted by the fenced
+  `handle_params`, but a live scope change can narrow it while the panel is
+  open, so each write re-asks. `nil` is the branch every such handler
+  already takes when nothing is selected.
+  """
+  @spec writable_selected_task(Phoenix.LiveView.Socket.t()) :: Task.t() | nil
+  def writable_selected_task(socket) do
+    case socket.assigns[:selected_task] do
+      %{id: id} = task when is_binary(id) -> if permits?(socket, {:task, id}), do: task
+      _ -> nil
+    end
+  end
+
+  @doc """
+  `Tasks.get_project/1` for a project the viewer may `tasks.read`, else
+  `nil` (task 01a1472d stage 1). The sidebar's project selection (and the
+  `last_project.js` replay) sends a client-supplied id; a foreign project
+  takes the stale-id fallback a deleted one takes, so it never becomes the
+  board filter or the pinned `project_id` of a new epic.
+  """
+  @spec readable_project(Phoenix.LiveView.Socket.t(), term()) :: Platform.Tasks.Project.t() | nil
+  def readable_project(socket, project_id) do
+    if permits?(socket, {:project, project_id}, "tasks.read"), do: Tasks.get_project(project_id)
+  end
+
   @doc "Centralised assign for `:selected_task`."
   def assign_selected_task(socket, nil) do
     socket
