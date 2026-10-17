@@ -133,6 +133,9 @@ defmodule Platform.Social.Publisher.Fake do
   def delete(account, external_id), do: record(:delete, [account, external_id], fn -> :ok end)
 
   @impl Platform.Social.Publisher
+  def disconnect_account(account), do: record(:disconnect_account, [account], fn -> :ok end)
+
+  @impl Platform.Social.Publisher
   def verify_webhook(%{raw_body: raw_body, headers: headers} = delivery, secret) do
     record(:verify_webhook, [delivery, secret], fn ->
       with true <- is_binary(raw_body) and is_binary(secret) and secret != "",

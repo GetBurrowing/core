@@ -35,6 +35,13 @@ defmodule Platform.Social.Publisher do
   Fake does, and invents no ids). The caller still re-checks each entry's
   `profile_ref` against the profile it asked about.
 
+  `disconnect_account/1` disconnects one of our accounts at the vendor
+  (task 01a14ac6), by its `provider_account_ref`. An account with no ref was
+  never connected there: `{:error, :not_connected}` and no request is sent.
+  A vendor that answers "already disconnected" counts as `:ok`, so the call is
+  idempotent. It touches no row: archiving ours is the caller's job, and only
+  a human approver may ask for it. The Fake answers `:ok` with no network.
+
   ## Secrets
 
   An adapter never reads a key from config, env, the DB or a struct field.
@@ -141,6 +148,13 @@ defmodule Platform.Social.Publisher do
 
   @doc "Deletes (cancels) a post at the vendor."
   @callback delete(account(), external_id :: String.t()) :: :ok | {:error, term()}
+
+  @doc """
+  Disconnects `account` at the vendor. An account with a nil or blank
+  `provider_account_ref` is `{:error, :not_connected}` and no request is sent;
+  one the vendor already disconnected is `:ok`.
+  """
+  @callback disconnect_account(account()) :: :ok | {:error, term()}
 
   @doc """
   Verifies a webhook delivery's signature over the RAW body with `secret`

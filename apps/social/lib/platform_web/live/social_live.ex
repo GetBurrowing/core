@@ -132,6 +132,8 @@ defmodule PlatformWeb.SocialLive do
       |> assign(:week_start, Cal.week_start(Date.utc_today()))
       |> assign(:detail, nil)
       |> assign(:notice, nil)
+      |> assign(:notice_tone, :info)
+      |> assign(:removing, nil)
       |> assign(:create_open?, false)
       |> assign_creatable(creatable_orgs(user))
       |> assign_profiles(profiles)
@@ -325,7 +327,9 @@ defmodule PlatformWeb.SocialLive do
          %Account{} = account <- profile_account(profile, id),
          {:ok, account} <- Social.update_account(profile.org_id, account, %{approval_mode: mode}) do
       {:noreply,
-       socket |> assign(:notice, nil) |> stream_insert(:accounts, account_item(account))}
+       socket
+       |> assign(:notice, nil)
+       |> stream_insert(:accounts, account_item(account, socket.assigns.removing))}
     else
       {:error, :not_an_approver} ->
         {:noreply, notice(socket, "Only an approver of this profile can change it.")}
@@ -334,6 +338,55 @@ defmodule PlatformWeb.SocialLive do
         {:noreply, notice(socket, "That approval mode could not be saved.")}
     end
   end
+
+  # Remove (task 01a14ac6 stage 3): approvers only, re-checked here AND in
+  # Social.remove_account/4. `open_remove` shows the inline confirm panel
+  # with the real counts from Social.removal_preview/3; one panel is open at
+  # a time (opening another re-streams the old row closed).
+  def handle_event("open_remove", %{"id" => id}, socket) when is_binary(id) do
+    with {:ok, profile, _user} <- authorize(socket),
+         {:ok, preview} <- Social.removal_preview(profile.org_id, profile, id) do
+      removing = %{account_id: preview.account.id, preview: preview}
+
+      {:noreply,
+       socket
+       |> close_removal()
+       |> assign(:removing, removing)
+       |> stream_insert(:accounts, account_item(preview.account, removing))}
+    else
+      {:error, :not_found} -> {:noreply, account_gone(socket)}
+      _ -> {:noreply, notice(socket, "Only an approver of this profile can change it.")}
+    end
+  end
+
+  def handle_event("cancel_remove", _params, socket),
+    do: {:noreply, close_removal(socket)}
+
+  def handle_event("remove_account", %{"id" => id}, socket) when is_binary(id) do
+    with {:ok, profile, user_id} <- authorize(socket),
+         {:ok, account, result} <- Social.remove_account(profile.org_id, profile, user_id, id) do
+      {:noreply,
+       socket
+       |> assign(:removing, nil)
+       |> stream_delete(:accounts, account_item(account, nil))
+       |> assign_account_flags()
+       |> assign_profiles(visible_profiles(socket))
+       |> removed_notice(account, result.vendor)}
+    else
+      {:error, :not_found} ->
+        {:noreply, account_gone(socket)}
+
+      {:error, reason}
+      when reason in [:not_an_approver, :not_a_human, :approver_archived, :approver_no_access] ->
+        {:noreply, notice(socket, "Only an approver of this profile can change it.")}
+
+      _ ->
+        {:noreply, notice(socket, "That account could not be removed. Try again.")}
+    end
+  end
+
+  def handle_event(event, _params, socket) when event in ~w(open_remove remove_account),
+    do: {:noreply, socket}
 
   def handle_event("validate_settings", %{"profile" => params}, socket) do
     {:noreply,
@@ -465,6 +518,7 @@ defmodule PlatformWeb.SocialLive do
   # for rendering; every write handler re-checks through `authorize/1`.
   defp load_connections(%{assigns: %{profile: nil}} = socket) do
     socket
+    |> assign(:removing, nil)
     |> assign(:can_edit?, false)
     |> assign(:accounts_empty?, true)
     |> assign(:pending_accounts?, false)
@@ -483,6 +537,7 @@ defmodule PlatformWeb.SocialLive do
     platforms = Social.connectable_platforms()
 
     socket
+    |> assign(:removing, nil)
     |> assign(:can_edit?, can_edit?)
     |> assign(:accounts_empty?, accounts == [])
     |> assign(:pending_accounts?, Enum.any?(accounts, &never_connected?/1))
@@ -491,10 +546,63 @@ defmodule PlatformWeb.SocialLive do
     |> assign(:add_form, add_form(platforms))
     |> assign(:settings_options, settings_options(profile, can_edit?))
     |> assign(:settings_form, settings_form(profile, %{}))
-    |> stream(:accounts, Enum.map(accounts, &account_item/1), reset: true)
+    |> stream(:accounts, Enum.map(accounts, &account_item(&1, nil)), reset: true)
   end
 
-  defp account_item(account), do: %{id: account.id, account: account}
+  # A stream row; `removal` is the open confirm panel's preview, else nil.
+  defp account_item(account, %{account_id: id, preview: preview}) when id == account.id,
+    do: %{id: account.id, account: account, removal: preview}
+
+  defp account_item(account, _removing), do: %{id: account.id, account: account, removal: nil}
+
+  # Closes the open confirm panel (if any) by re-streaming its row as read
+  # now; a row that is no longer live is dropped from the stream.
+  defp close_removal(%{assigns: %{removing: %{account_id: id}, profile: %{} = profile}} = socket) do
+    socket = assign(socket, :removing, nil)
+
+    case profile_account(profile, id) do
+      %Account{} = account -> stream_insert(socket, :accounts, account_item(account, nil))
+      nil -> stream_delete(socket, :accounts, %{id: id})
+    end
+  end
+
+  defp close_removal(socket), do: assign(socket, :removing, nil)
+
+  defp account_gone(socket) do
+    socket
+    |> assign(:removing, nil)
+    |> restream_accounts()
+    |> notice("That account is already gone.")
+  end
+
+  defp assign_account_flags(%{assigns: %{profile: %{} = profile}} = socket) do
+    accounts = Social.list_accounts(profile.org_id, profile_id: profile.id)
+
+    socket
+    |> assign(:accounts_empty?, accounts == [])
+    |> assign(:pending_accounts?, Enum.any?(accounts, &never_connected?/1))
+  end
+
+  defp assign_account_flags(socket), do: socket
+
+  defp removed_notice(socket, _account, {:unconfirmed, _reason}) do
+    notice(
+      socket,
+      "Removed here. Zernio didn't confirm the disconnect, so check the account in Zernio.",
+      :warning
+    )
+  end
+
+  defp removed_notice(socket, account, _vendor),
+    do: notice(socket, "Removed #{removal_label(account)}.")
+
+  # "LINKEDIN @htc-company": the platform upper-cased, then the handle as
+  # stored (omitted when nil or blank).
+  defp removal_label(%Account{platform: platform, handle: handle}) do
+    [String.upcase(platform || ""), handle]
+    |> Enum.reject(&(is_nil(&1) or String.trim(&1) == ""))
+    |> Enum.join(" ")
+  end
 
   defp restream_accounts(%{assigns: %{profile: nil}} = socket), do: socket
 
@@ -504,7 +612,9 @@ defmodule PlatformWeb.SocialLive do
     socket
     |> assign(:accounts_empty?, accounts == [])
     |> assign(:pending_accounts?, Enum.any?(accounts, &never_connected?/1))
-    |> stream(:accounts, Enum.map(accounts, &account_item/1), reset: true)
+    |> stream(:accounts, Enum.map(accounts, &account_item(&1, socket.assigns.removing)),
+      reset: true
+    )
   end
 
   # The rows `Platform.Social.reconcile_accounts/3` can fill: never connected
@@ -735,7 +845,9 @@ defmodule PlatformWeb.SocialLive do
 
   defp own_url(path), do: PlatformWeb.Endpoint.url() <> path
 
-  defp notice(socket, text), do: assign(socket, :notice, text)
+  # `tone` is :info (the plain notice line) or :warning (alert-warning).
+  defp notice(socket, text, tone \\ :info),
+    do: socket |> assign(:notice, text) |> assign(:notice_tone, tone)
 
   # Who the approver picker offers (HUMAN users who are internal members of
   # the profile's org; agents are not users, so never offered) and the org's
@@ -1183,7 +1295,7 @@ defmodule PlatformWeb.SocialLive do
             />
           </div>
           <div class={[@tab != "connections" && "hidden"]} data-pane="connections">
-            <.notice_line notice={@notice} />
+            <.notice_line notice={@notice} tone={@notice_tone} />
             <div
               :if={@zernio_blocks_connect?}
               role="status"
@@ -1230,11 +1342,16 @@ defmodule PlatformWeb.SocialLive do
                   can_edit?={@can_edit?}
                   can_connect?={@can_edit? and not @zernio_blocks_connect?}
                 />
+                <.remove_panel
+                  :if={@can_edit? and row.removal}
+                  account={row.account}
+                  preview={row.removal}
+                />
               </li>
             </ul>
           </div>
           <div class={[@tab != "settings" && "hidden"]} data-pane="settings">
-            <.notice_line notice={@notice} />
+            <.notice_line notice={@notice} tone={@notice_tone} />
             <.zernio_key
               :if={@zernio_human?}
               status={@zernio_status}
@@ -1404,14 +1521,20 @@ defmodule PlatformWeb.SocialLive do
   end
 
   attr :notice, :string, default: nil
+  attr :tone, :atom, default: :info, values: [:info, :warning]
 
   defp notice_line(assigns) do
     ~H"""
     <p
       :if={@notice}
       role="status"
-      class="mb-3 flex items-center justify-between gap-2 rounded-lg border border-base-300 bg-base-100 px-3 py-2 text-sm"
+      class={[
+        "mb-3 flex items-center justify-between gap-2 px-3 py-2 text-sm",
+        @tone == :warning && "alert alert-warning",
+        @tone != :warning && "rounded-lg border border-base-300 bg-base-100"
+      ]}
       data-role="social-notice"
+      data-tone={@tone}
     >
       <span>{@notice}</span>
       <button type="button" class="btn btn-ghost btn-xs" phx-click="dismiss_notice">Dismiss</button>
@@ -1554,8 +1677,104 @@ defmodule PlatformWeb.SocialLive do
           <span :if={!@can_connect?} class="text-sm text-base-content/70">Not connected</span>
       <% end %>
     </span>
+    <button
+      :if={@can_edit?}
+      type="button"
+      class="btn btn-ghost btn-sm shrink-0 text-base-content/70"
+      phx-click="open_remove"
+      phx-value-id={@account.id}
+      data-role="social-account-remove"
+    >
+      Remove
+    </button>
     """
   end
+
+  attr :account, :map, required: true
+  attr :preview, :map, required: true
+
+  # The inline confirm panel under a row (not a modal): the consequence
+  # sentence with the real counts, then Cancel (focused on open) and
+  # Remove account. Stacked on mobile, Remove account on top.
+  defp remove_panel(assigns) do
+    assigns = assign(assigns, :segments, removal_segments(assigns.account, assigns.preview))
+
+    ~H"""
+    <div
+      id={"social-remove-panel-" <> @account.id}
+      class="w-full basis-full rounded-lg border border-base-300 border-l-4 border-l-error bg-base-100 p-3 text-sm"
+      data-role="social-remove-panel"
+    >
+      <p data-role="social-remove-sentence">
+        <span :for={{class, text} <- @segments} class={class}>{text}</span>
+      </p>
+      <p :if={@account.status} class="mt-1 text-base-content/70" data-role="social-remove-reconnect">
+        You can reconnect this account later.
+      </p>
+      <div class="mt-3 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+        <button
+          id={"social-remove-cancel-" <> @account.id}
+          type="button"
+          class="btn btn-ghost btn-sm"
+          phx-click="cancel_remove"
+          phx-mounted={JS.focus()}
+          data-role="social-remove-cancel"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          class="btn btn-error btn-sm"
+          phx-click="remove_account"
+          phx-value-id={@account.id}
+          phx-disable-with="Removing..."
+          data-role="social-remove-confirm"
+        >
+          Remove account
+        </button>
+      </div>
+    </div>
+    """
+  end
+
+  # The consequence sentence as {class, text} runs: the label in mono xs,
+  # the counts semibold. Only non-zero clauses render.
+  defp removal_segments(account, preview) do
+    label = {"font-mono text-xs", removal_label(account)}
+
+    if is_nil(account.status) do
+      [{nil, "Remove "}, label, {nil, "? It was never connected, so nothing else changes."}]
+    else
+      [{nil, "Remove "}, label, {nil, "? "}] ++
+        removal_clauses(preview.cancelled, preview.shared)
+    end
+  end
+
+  defp removal_clauses(0, 0), do: [{nil, "No scheduled posts are affected."}]
+
+  defp removal_clauses(cancelled, shared) do
+    clauses =
+      [
+        cancelled > 0 &&
+          [
+            {"font-semibold", Integer.to_string(cancelled)},
+            {nil, " scheduled #{posts(cancelled)} will be cancelled"}
+          ],
+        shared > 0 &&
+          [
+            {"font-semibold", Integer.to_string(shared)},
+            {nil, " shared #{posts(shared)} will stop posting here"}
+          ]
+      ]
+      |> Enum.filter(& &1)
+      |> Enum.intersperse([{nil, ", and "}])
+      |> List.flatten()
+
+    clauses ++ [{nil, ". Past posts stay in history."}]
+  end
+
+  defp posts(1), do: "post"
+  defp posts(_n), do: "posts"
 
   # The install's Zernio key: a status, never the value. The input is only
   # there while the key is not set, or after Replace / Try again; Save key

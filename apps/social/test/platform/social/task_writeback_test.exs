@@ -309,7 +309,9 @@ defmodule Platform.Social.TaskWritebackTest do
           line =~ "TaskBridge.post_changed(",
           do: Path.relative_to(path, lib)
 
+    # platform/social.ex: remove_account/4 reports its cancelled posts (01a14ac6).
     assert Enum.sort(calls) == [
+             "platform/social.ex",
              "platform/social/agent_drafts.ex",
              "platform/social/approvals.ex",
              "platform/social/publishing.ex"

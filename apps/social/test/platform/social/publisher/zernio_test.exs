@@ -692,6 +692,92 @@ defmodule Platform.Social.Publisher.ZernioTest do
     end
   end
 
+  describe "disconnect_account/1" do
+    # The key is entered the way a human enters it (Secrets.put_zernio_api_key/2).
+    @disconnect_key "zk_test_9f3a"
+
+    defp put_human_key! do
+      assert {:ok, _} = Platform.Social.Secrets.put_zernio_api_key(@disconnect_key, user!())
+    end
+
+    # Records every request and answers `status`; the tests count what arrived.
+    defp stub_disconnect(status, response) do
+      test = self()
+
+      Req.Test.stub(Zernio, fn conn ->
+        send(test, {:disconnect, conn.method, conn.request_path, conn.req_headers})
+        conn |> Plug.Conn.put_status(status) |> Req.Test.json(response)
+      end)
+    end
+
+    defp disconnect_requests(acc \\ []) do
+      receive do
+        {:disconnect, _, _, _} = msg -> disconnect_requests([msg | acc])
+      after
+        0 -> Enum.reverse(acc)
+      end
+    end
+
+    test "200 is :ok after exactly one DELETE /v1/accounts/<ref> with the Vault key", ctx do
+      {_profile, account} = account!(ctx.org_id, "linkedin", %{provider_account_ref: "zacct_9"})
+      put_human_key!()
+      stub_disconnect(200, %{"message" => "Account disconnected successfully"})
+
+      assert :ok = Zernio.disconnect_account(account)
+
+      assert [{:disconnect, "DELETE", "/api/v1/accounts/zacct_9", headers}] =
+               disconnect_requests()
+
+      assert {"authorization", "Bearer " <> @disconnect_key} in headers
+    end
+
+    test "404 (already disconnected) is :ok", ctx do
+      {_profile, account} = account!(ctx.org_id, "linkedin")
+      put_human_key!()
+      stub_disconnect(404, %{"error" => "Account not found"})
+
+      assert :ok = Zernio.disconnect_account(account)
+      assert [{:disconnect, "DELETE", "/api/v1/accounts/zacct_1", _}] = disconnect_requests()
+    end
+
+    test "503 is an error", ctx do
+      {_profile, account} = account!(ctx.org_id, "linkedin")
+      put_human_key!()
+      stub_disconnect(503, %{"error" => "down"})
+
+      assert {:error, _} = Zernio.disconnect_account(account)
+    end
+
+    test "401 is the credentials error", ctx do
+      {_profile, account} = account!(ctx.org_id, "linkedin")
+      put_human_key!()
+      stub_disconnect(401, %{"error" => "Unauthorized"})
+
+      assert {:error, :credentials_rejected} = Zernio.disconnect_account(account)
+    end
+
+    test "with no Vault key, it errors and sends nothing", ctx do
+      {_profile, account} = account!(ctx.org_id, "linkedin")
+      stub_disconnect(200, %{"message" => "Account disconnected successfully"})
+
+      assert {:error, :credentials_unavailable} = Zernio.disconnect_account(account)
+      assert disconnect_requests() == []
+    end
+
+    for {label, ref} <- [{"nil", nil}, {"blank", "  "}] do
+      test "a #{label} provider_account_ref is :not_connected and sends nothing", ctx do
+        {_profile, account} =
+          account!(ctx.org_id, "linkedin", %{provider_account_ref: unquote(ref)})
+
+        put_human_key!()
+        stub_disconnect(200, %{"message" => "Account disconnected successfully"})
+
+        assert {:error, :not_connected} = Zernio.disconnect_account(account)
+        assert disconnect_requests() == []
+      end
+    end
+  end
+
   describe "verify_webhook/2" do
     defp sign(body, secret),
       do: :crypto.mac(:hmac, :sha256, secret, body) |> Base.encode16(case: :lower)

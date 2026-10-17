@@ -289,6 +289,195 @@ defmodule Platform.Social do
     end
   end
 
+  # ── Removing an account (task 01a14ac6) ──────────────────────────────
+
+  # Posts a removal cancels. Drafts are never touched; published and failed
+  # are terminal already.
+  @cancellable_on_removal ~w(scheduled approved needs_approval)
+  @removed_error "cancelled: account removed"
+
+  @typedoc "What happened at the vendor when an account was removed."
+  @type removal_vendor :: :disconnected | :not_connected | {:unconfirmed, term()}
+
+  @doc """
+  What `remove_account/4` would cancel, read-only. Cancellable posts are the
+  account's posts in `scheduled`, `approved` or `needs_approval` (drafts,
+  published and failed are untouched and not counted). `shared` counts the
+  cancellable posts whose non-nil `task_id` is also on a post of ANOTHER
+  account (a multi-account social task); `cancelled` counts the rest. The
+  account must be a live row of `profile` in the caller's org, else
+  `{:error, :not_found}`.
+  """
+  @spec removal_preview(scope(), Profile.t() | Ecto.UUID.t(), Ecto.UUID.t()) ::
+          {:ok, %{account: Account.t(), cancelled: non_neg_integer(), shared: non_neg_integer()}}
+          | {:error, :not_found}
+  def removal_preview(org_id, profile, account_id) do
+    with {:ok, profile} <- fetch(Profile, org_id, profile),
+         {:ok, account} <- live_account_of(org_id, profile, account_id) do
+      {single, shared} = account |> cancellable_query() |> Repo.all() |> split_shared(account)
+      {:ok, %{account: account, cancelled: length(single), shared: length(shared)}}
+    end
+  end
+
+  @doc """
+  Removes a connected (or never-connected) account: the server-side path
+  behind the Connections "Remove" control. In order:
+
+    1. the profile is re-read through the org scope and the account must be
+       a live (`archived_at` nil) row of it, else `{:error, :not_found}`;
+    2. `approver_check/3` FIRST: a refusal is returned with nothing written
+       and no vendor request;
+    3. ONE transaction under the profile row lock: the cancellable posts
+       (see `removal_preview/3`) are locked and set to `failed` with error
+       "#{@removed_error}" (there is no `cancelled` status), and the account
+       is archived (`archived_at`). Nothing is deleted; post history stays;
+    4. after commit, each cancelled post is reported to
+       `Platform.Social.TaskBridge.post_changed/1`;
+    5. after commit, best effort, through the configured publisher: each
+       cancelled post that was `scheduled` with an `external_id` is deleted at
+       the vendor, then an account with a `provider_account_ref` is
+       disconnected. A never-connected row makes no vendor call.
+
+  Answers `{:ok, archived_account, %{cancelled: n, shared: m, vendor: v}}`.
+  `vendor` is `:disconnected`, `:not_connected` (nothing to tell the vendor)
+  or `{:unconfirmed, reason}` when any vendor call failed (no key, no
+  publisher, a 503): the archive and the cancels STAND either way.
+  """
+  @spec remove_account(scope(), Profile.t() | Ecto.UUID.t(), term(), Ecto.UUID.t()) ::
+          {:ok, Account.t(),
+           %{cancelled: non_neg_integer(), shared: non_neg_integer(), vendor: removal_vendor()}}
+          | {:error, :not_found | approver_refusal() | term()}
+  def remove_account(org_id, profile, user_id, account_id) do
+    with {:ok, profile} <- fetch(Profile, org_id, profile),
+         {:ok, _account} <- live_account_of(org_id, profile, account_id),
+         :ok <- approver_check(org_id, profile, user_id),
+         {:ok, {archived, cancelled}} <- archive_and_cancel(org_id, profile, account_id) do
+      Enum.each(cancelled, &Platform.Social.TaskBridge.post_changed(&1.id))
+      {single, shared} = split_shared(cancelled, archived)
+
+      {:ok, archived,
+       %{
+         cancelled: length(single),
+         shared: length(shared),
+         vendor: tell_vendor(archived, cancelled)
+       }}
+    end
+  end
+
+  defp live_account_of(org_id, %Profile{id: profile_id}, account_id) do
+    case scoped_get(Account, org_id, account_id) do
+      %Account{profile_id: ^profile_id, archived_at: nil} = account -> {:ok, account}
+      _ -> {:error, :not_found}
+    end
+  end
+
+  defp cancellable_query(%Account{id: account_id}) do
+    Post
+    |> where([p], p.account_id == ^account_id and p.status in ^@cancellable_on_removal)
+    |> order_by([p], asc: p.inserted_at, asc: p.id)
+  end
+
+  # Splits posts into {single, shared}: shared when another account holds a
+  # post with the same non-nil task_id.
+  defp split_shared(posts, %Account{id: account_id}) do
+    task_ids = posts |> Enum.map(& &1.task_id) |> Enum.reject(&is_nil/1) |> Enum.uniq()
+
+    shared_tasks =
+      if task_ids == [] do
+        MapSet.new()
+      else
+        Post
+        |> where([p], p.task_id in ^task_ids and p.account_id != ^account_id)
+        |> select([p], p.task_id)
+        |> distinct(true)
+        |> Repo.all()
+        |> MapSet.new()
+      end
+
+    {shared, single} = Enum.split_with(posts, &MapSet.member?(shared_tasks, &1.task_id))
+    {single, shared}
+  end
+
+  # Returns {:ok, {archived_account, cancelled_posts_before_the_write}}: the
+  # pre-write structs keep the old status, which step 5 reads.
+  defp archive_and_cancel(org_id, profile, account_id) do
+    Repo.transaction(fn ->
+      locked = lock_profile(org_id, profile) || Repo.rollback(:not_found)
+
+      account =
+        case live_account_of(org_id, locked, account_id) do
+          {:ok, account} -> account
+          {:error, reason} -> Repo.rollback(reason)
+        end
+
+      posts = account |> cancellable_query() |> lock("FOR UPDATE") |> Repo.all()
+      Enum.each(posts, &cancel_for_removal!/1)
+
+      case archive_account(org_id, account) do
+        {:ok, archived} -> {archived, posts}
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  defp cancel_for_removal!(%Post{} = post) do
+    post
+    |> Changeset.change(status: "failed", error: @removed_error)
+    |> Changeset.check_constraint(:status, name: :social_posts_status_check)
+    |> Changeset.check_constraint(:approved_by_user_id,
+      name: :social_posts_approved_needs_approver_check
+    )
+    |> Repo.update()
+    |> case do
+      {:ok, updated} -> updated
+      {:error, changeset} -> Repo.rollback(changeset)
+    end
+  end
+
+  # Best effort, after commit: never raises past here, never rolls back.
+  defp tell_vendor(account, cancelled) do
+    deletes =
+      Enum.filter(cancelled, &(&1.status == "scheduled" and present?(&1.external_id)))
+
+    connected? = present?(account.provider_account_ref)
+
+    if deletes == [] and not connected? do
+      :not_connected
+    else
+      case Publisher.impl() do
+        {:error, reason} ->
+          {:unconfirmed, reason}
+
+        adapter ->
+          delete_results =
+            Enum.map(deletes, &vendor_call(fn -> adapter.delete(account, &1.external_id) end))
+
+          disconnect =
+            if connected?,
+              do: [vendor_call(fn -> adapter.disconnect_account(account) end)],
+              else: []
+
+          case Enum.find(delete_results ++ disconnect, &(&1 != :ok)) do
+            nil -> if connected?, do: :disconnected, else: :not_connected
+            {:error, reason} -> {:unconfirmed, reason}
+          end
+      end
+    end
+  end
+
+  defp vendor_call(fun) do
+    case fun.() do
+      :ok -> :ok
+      {:error, reason} -> {:error, reason}
+      other -> {:error, {:unexpected_result, other}}
+    end
+  rescue
+    exception -> {:error, Exception.message(exception)}
+  end
+
+  defp present?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present?(_value), do: false
+
   # ── Connecting an account (task 01a14801) ────────────────────────────
 
   @doc """

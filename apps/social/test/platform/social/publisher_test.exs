@@ -52,6 +52,31 @@ defmodule Platform.Social.PublisherTest do
     end
   end
 
+  describe "Fake.disconnect_account/1" do
+    alias Platform.Social.Publisher.Fake
+
+    setup do
+      Fake.reset()
+      :ok
+    end
+
+    test "is a behaviour callback, recorded, :ok by default, and honours fail_next" do
+      assert {:disconnect_account, 1} in Publisher.behaviour_info(:callbacks)
+
+      org_id = org_id!()
+      {_profile, account} = social_account!(org_id, "linkedin", %{provider_account_ref: "fk_1"})
+
+      assert :ok = Fake.disconnect_account(account)
+      assert [{:disconnect_account, [^account], _}] = Fake.calls(:disconnect_account)
+
+      Fake.fail_next(:disconnect_account, :boom)
+      assert {:error, :boom} = Fake.disconnect_account(account)
+      assert length(Fake.calls(:disconnect_account)) == 2
+
+      assert :ok = Fake.disconnect_account(account)
+    end
+  end
+
   describe "posts: is_aigc forcing" do
     setup do
       org_id = org_id!()

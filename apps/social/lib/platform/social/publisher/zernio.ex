@@ -38,6 +38,11 @@ defmodule Platform.Social.Publisher.Zernio do
       `profileId`, `username`, `displayName`, `profileUrl`, `isActive`. The
       multi-tenant guide says to identify accounts by `accountId` (`_id`), never
       by profile + platform. 401 and 503 are listed.
+    * `DELETE /v1/accounts/{accountId}` (https://docs.zernio.com/accounts/delete-account,
+      fetched 2026-10-17): 200 answers `{message: "Account disconnected successfully"}`,
+      401 unauthorized, 404 means the account is already disconnected (it sits in a
+      1h grace window), so `disconnect_account/1` maps 404 to `:ok`. ASSUMPTION: the
+      same `_id` can be reconnected through OAuth later; nothing here depends on it.
     * Webhooks (https://docs.zernio.com/webhooks, https://docs.zernio.com/webhooks/posts):
       `X-Zernio-Signature` (legacy `X-Late-Signature`) = lowercase-hex HMAC-SHA256 of
       the RAW body with the endpoint secret, no timestamp; event id `payload.id`
@@ -230,6 +235,20 @@ defmodule Platform.Social.Publisher.Zernio do
     end
   end
 
+  # Ref first, then the key, then the ONE request: no ref or no key means
+  # nothing is sent. Zernio answers 404 for an account it already
+  # disconnected, so a repeat is :ok; everything else goes through handle/2.
+  @impl true
+  def disconnect_account(account) do
+    with ref when is_binary(ref) <- account_ref(account) || {:error, :not_connected},
+         {:ok, key} <- api_key(account) do
+      case request(key) |> Req.delete(url: "/v1/accounts/#{URI.encode(ref)}") do
+        {:ok, %Req.Response{status: 404}} -> :ok
+        result -> handle(result, fn _ -> :ok end)
+      end
+    end
+  end
+
   @impl true
   def verify_webhook(%{raw_body: raw_body, headers: headers}, secret) do
     with true <- is_binary(raw_body) and is_binary(secret) and secret != "",
@@ -276,6 +295,12 @@ defmodule Platform.Social.Publisher.Zernio do
 
   defp profile_ref(%{provider_profile_ref: ref}) when is_binary(ref) and ref != "", do: ref
   defp profile_ref(_), do: nil
+
+  defp account_ref(%{provider_account_ref: ref}) when is_binary(ref) do
+    if String.trim(ref) == "", do: nil, else: ref
+  end
+
+  defp account_ref(_), do: nil
 
   # A vendor fetches media by URL; one without a URL cannot be sent.
   defp media_items(media) do

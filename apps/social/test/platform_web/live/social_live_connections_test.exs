@@ -825,4 +825,253 @@ defmodule PlatformWeb.SocialLiveConnectionsTest do
       assert Repo.get!(Account, ctx.a_li.id).status == nil
     end
   end
+
+  describe "Remove (task 01a14ac6 stage 3)" do
+    @remove "[data-role='social-account-remove']"
+    @panel "[data-role='social-remove-panel']"
+    @sentence "[data-role='social-remove-sentence']"
+
+    # d (connected, @htc_drafts): 3 cancellable posts of its own plus 1
+    # shared with a post on x through one task. r (reauth): none. a: never
+    # connected.
+    setup ctx do
+      {:ok, x} =
+        Social.create_account(ctx.org_id, ctx.profile, %{
+          platform: "x",
+          handle: "@htc",
+          status: "connected"
+        })
+
+      task = task!(ctx.org_id)
+      d_posts = for _ <- 1..3, do: remove_post!(ctx, ctx.d)
+      shared = remove_post!(ctx, ctx.d, %{task_id: task.id})
+      _sibling = remove_post!(ctx, x, %{task_id: task.id})
+      Fake.reset()
+
+      %{x: x, d_posts: [shared | d_posts]}
+    end
+
+    defp remove_post!(ctx, account, attrs \\ %{}) do
+      {:ok, post} =
+        Social.create_post(
+          ctx.org_id,
+          account,
+          Map.merge(%{body: "Episode 12", status: "needs_approval"}, attrs)
+        )
+
+      post
+    end
+
+    defp post_states(posts),
+      do: Enum.map(posts, &Repo.get!(Platform.Social.Post, &1.id)) |> Enum.map(& &1.status)
+
+    defp open_panel(child, account),
+      do: child |> element(row(account) <> " " <> @remove) |> render_click()
+
+    test "(a) an approver sees Remove on every row; a non-approver and an agent see none",
+         %{conn: conn} = ctx do
+      child = open(conn, ctx.h1)
+
+      for account <- [ctx.a, ctx.d, ctx.r, ctx.x] do
+        assert has_element?(child, row(account) <> " button" <> @remove, "Remove")
+      end
+
+      refute has_element?(child, @remove <> ".btn-error")
+      refute has_element?(child, @remove <> ".btn-primary")
+
+      n_child = open(build_conn(), ctx.n)
+      assert has_element?(n_child, row(ctx.d))
+      refute has_element?(n_child, @remove)
+
+      {:ok, g_view, _html} =
+        live_isolated(build_conn(), PlatformWeb.SocialLive, session: %{"user_id" => ctx.g.id})
+
+      refute has_element?(g_view, @remove)
+    end
+
+    test "(b) forged open_remove and remove_account from a non-approver or an agent change nothing",
+         %{conn: conn} = ctx do
+      before = post_states(ctx.d_posts)
+      n_child = open(conn, ctx.n)
+
+      render_hook(n_child, "open_remove", %{"id" => ctx.d.id})
+      refute has_element?(n_child, @panel)
+      render_hook(n_child, "remove_account", %{"id" => ctx.d.id})
+
+      assert has_element?(
+               n_child,
+               "[data-role='social-notice']",
+               "Only an approver of this profile can change it."
+             )
+
+      assert has_element?(n_child, row(ctx.d))
+
+      {:ok, g_view, _html} =
+        live_isolated(build_conn(), PlatformWeb.SocialLive, session: %{"user_id" => ctx.g.id})
+
+      render_hook(g_view, "open_remove", %{"id" => ctx.d.id})
+      render_hook(g_view, "remove_account", %{"id" => ctx.d.id})
+      assert Process.alive?(g_view.pid)
+
+      assert Repo.get!(Account, ctx.d.id).archived_at == nil
+      assert post_states(ctx.d_posts) == before
+      assert Fake.calls() == []
+    end
+
+    test "(c) the panel shows the real counts, the zero sentence and the never-connected sentence; one panel at a time",
+         %{conn: conn} = ctx do
+      child = open(conn, ctx.h1)
+      refute has_element?(child, @panel)
+
+      open_panel(child, ctx.d)
+
+      assert has_element?(
+               child,
+               row(ctx.d) <> " " <> @sentence,
+               "Remove LINKEDIN @htc_drafts? 3 scheduled posts will be cancelled, and 1 shared post will stop posting here. Past posts stay in history."
+             )
+
+      assert has_element?(child, row(ctx.d) <> " " <> @sentence <> " .font-semibold", "3")
+
+      assert has_element?(
+               child,
+               row(ctx.d) <> " " <> @sentence <> " .font-mono",
+               "LINKEDIN @htc_drafts"
+             )
+
+      assert has_element?(
+               child,
+               row(ctx.d) <> " [data-role='social-remove-reconnect']",
+               "You can reconnect this account later."
+             )
+
+      assert has_element?(
+               child,
+               row(ctx.d) <> " [data-role='social-remove-cancel'][phx-mounted*='focus']",
+               "Cancel"
+             )
+
+      assert has_element?(
+               child,
+               row(ctx.d) <>
+                 " button.btn-error[data-role='social-remove-confirm'][phx-disable-with='Removing...']",
+               "Remove account"
+             )
+
+      # Opening another row's panel closes the first.
+      open_panel(child, ctx.r)
+      refute has_element?(child, row(ctx.d) <> " " <> @panel)
+
+      assert has_element?(
+               child,
+               row(ctx.r) <> " " <> @sentence,
+               "Remove YOUTUBE HTC channel? No scheduled posts are affected."
+             )
+
+      open_panel(child, ctx.x)
+      refute has_element?(child, row(ctx.r) <> " " <> @panel)
+
+      assert has_element?(
+               child,
+               row(ctx.x) <> " " <> @sentence,
+               "Remove X @htc? 1 shared post will stop posting here. Past posts stay in history."
+             )
+
+      open_panel(child, ctx.a)
+
+      assert [_one] =
+               child
+               |> render()
+               |> LazyHTML.from_fragment()
+               |> LazyHTML.query(@panel)
+               |> Enum.to_list()
+
+      assert has_element?(
+               child,
+               row(ctx.a) <> " " <> @sentence,
+               "Remove LINKEDIN @htc_official? It was never connected, so nothing else changes."
+             )
+
+      refute has_element?(child, row(ctx.a) <> " [data-role='social-remove-reconnect']")
+
+      child |> element(row(ctx.a) <> " [data-role='social-remove-cancel']") |> render_click()
+      refute has_element?(child, @panel)
+      assert has_element?(child, row(ctx.a))
+    end
+
+    test "(d) confirm removes the row with the success notice", %{conn: conn} = ctx do
+      child = open(conn, ctx.h1)
+      open_panel(child, ctx.d)
+      child |> element(row(ctx.d) <> " [data-role='social-remove-confirm']") |> render_click()
+
+      refute has_element?(child, row(ctx.d))
+      assert has_element?(child, row(ctx.a))
+
+      assert has_element?(
+               child,
+               "[data-role='social-notice'][data-tone='info']",
+               "Removed LINKEDIN @htc_drafts."
+             )
+
+      refute has_element?(child, ".alert-warning[data-role='social-notice']")
+      refute has_element?(child, @panel)
+      assert %DateTime{} = Repo.get!(Account, ctx.d.id).archived_at
+    end
+
+    test "(d) an unconfirmed vendor disconnect removes the row with the warning notice",
+         %{conn: conn} = ctx do
+      ctx.d |> Ecto.Changeset.change(provider_account_ref: "zacct_d") |> Repo.update!()
+      Fake.fail_next(:disconnect_account, :x)
+
+      child = open(conn, ctx.h1)
+      open_panel(child, ctx.d)
+      child |> element(row(ctx.d) <> " [data-role='social-remove-confirm']") |> render_click()
+
+      refute has_element?(child, row(ctx.d))
+
+      assert has_element?(
+               child,
+               ".alert.alert-warning[data-role='social-notice']",
+               "Removed here. Zernio didn't confirm the disconnect, so check the account in Zernio."
+             )
+
+      assert [{:disconnect_account, _, _}] = Fake.calls(:disconnect_account)
+      assert %DateTime{} = Repo.get!(Account, ctx.d.id).archived_at
+    end
+
+    test "removing the only account shows the empty state; a vanished row says it is gone",
+         %{conn: conn} = ctx do
+      child = open(conn, ctx.h1)
+      open_panel(child, ctx.a)
+
+      {:ok, _, _} = Social.remove_account(ctx.org_id, ctx.profile, ctx.h2.id, ctx.a.id)
+      child |> element(row(ctx.a) <> " [data-role='social-remove-confirm']") |> render_click()
+
+      assert has_element?(child, "[data-role='social-notice']", "That account is already gone.")
+      refute has_element?(child, row(ctx.a))
+
+      for account <- [ctx.d, ctx.r, ctx.x] do
+        open_panel(child, account)
+        child |> element(row(account) <> " [data-role='social-remove-confirm']") |> render_click()
+      end
+
+      assert has_element?(child, "[data-role='social-empty']")
+    end
+
+    test "(e) the Remove copy never says Delete", %{conn: conn} = ctx do
+      child = open(conn, ctx.h1)
+      open_panel(child, ctx.d)
+
+      text =
+        child
+        |> render()
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query("#social-accounts")
+        |> LazyHTML.text()
+
+      assert text =~ "Remove account"
+      assert text =~ "Cancel"
+      refute text =~ ~r/delete/i
+    end
+  end
 end
