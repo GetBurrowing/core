@@ -35,12 +35,26 @@ defmodule Platform.Social.Publisher.ZernioTest do
     {profile, account}
   end
 
-  defp put_key!(account) do
-    {:ok, _} =
-      Platform.Vault.put(account.secret_slug, :api_key, @key,
-        scope: {:integration, account.id},
-        provider: "social"
-      )
+  # The install-level key (task 01a14722): one row at the Zernio slug and
+  # `{:integration, nil}`, whatever account is publishing. A second call (a
+  # loop over platforms) rotates that row, since a second put cannot exist.
+  defp put_key!(_account \\ nil) do
+    case Platform.Vault.put("social:zernio:api_key", :api_key, @key,
+           scope: {:integration, nil},
+           provider: "social"
+         ) do
+      {:ok, cred} ->
+        cred
+
+      {:error, %Ecto.Changeset{}} ->
+        {:ok, cred} =
+          Platform.Vault.rotate("social:zernio:api_key", @key,
+            scope: {:integration, nil},
+            accessor: {:integration, nil}
+          )
+
+        cred
+    end
   end
 
   defp request(platform, overrides \\ %{}) do
@@ -323,20 +337,99 @@ defmodule Platform.Social.Publisher.ZernioTest do
       assert_received {:delete, "DELETE", "/api/v1/posts/zp_9"}
     end
 
+    test "status and delete carry the install key as a Bearer header", ctx do
+      {_, account} = account!(ctx.org_id, "linkedin")
+      put_key!()
+      test = self()
+
+      Req.Test.stub(Zernio, fn conn ->
+        send(test, {:auth, conn.method, Plug.Conn.get_req_header(conn, "authorization")})
+
+        case conn.method do
+          "GET" -> Req.Test.json(conn, %{"post" => %{"status" => "scheduled"}})
+          "DELETE" -> Req.Test.json(conn, %{"deleted" => true})
+        end
+      end)
+
+      assert {:ok, _} = Zernio.status(account, "zp_9")
+      assert_received {:auth, "GET", ["Bearer zernio-test-key-not-real"]}
+      assert :ok = Zernio.delete(account, "zp_9")
+      assert_received {:auth, "DELETE", ["Bearer zernio-test-key-not-real"]}
+    end
+
+    test "one install key serves two accounts in different orgs", ctx do
+      {_, a1} = account!(ctx.org_id, "linkedin")
+      {_, a2} = account!(org_id!(), "x")
+      put_key!()
+      test = self()
+
+      Req.Test.stub(Zernio, fn conn ->
+        send(test, {:auth, Plug.Conn.get_req_header(conn, "authorization")})
+        Req.Test.json(conn, %{"deleted" => true})
+      end)
+
+      assert :ok = Zernio.delete(a1, "zp_1")
+      assert :ok = Zernio.delete(a2, "zp_2")
+      assert_received {:auth, ["Bearer zernio-test-key-not-real"]}
+      assert_received {:auth, ["Bearer zernio-test-key-not-real"]}
+    end
+
+    test "a key stored only at the old per-account slug and scope sends nothing", ctx do
+      {profile, account} = account!(ctx.org_id, "linkedin")
+
+      {:ok, _} =
+        Platform.Vault.put(account.secret_slug, :api_key, @key,
+          scope: {:integration, account.id},
+          provider: "social"
+        )
+
+      refuse_any_request()
+      assert_no_request_sent(account, profile)
+    end
+
+    test "the install slug at the account's scope (not nil) sends nothing", ctx do
+      {profile, account} = account!(ctx.org_id, "linkedin")
+
+      {:ok, _} =
+        Platform.Vault.put("social:zernio:api_key", :api_key, @key,
+          scope: {:integration, account.id},
+          provider: "social"
+        )
+
+      refuse_any_request()
+      assert_no_request_sent(account, profile)
+    end
+
+    for {label, value} <- [{"empty", ""}, {"whitespace", "   \n\t "}] do
+      test "an #{label} key is refused at entry and sends nothing", ctx do
+        {profile, account} = account!(ctx.org_id, "linkedin")
+        refuse_any_request()
+
+        assert {:error, :blank} =
+                 Platform.Social.Secrets.put_zernio_api_key(unquote(value), user!())
+
+        assert_no_request_sent(account, profile)
+      end
+    end
+
     test "with no Vault key, no callback sends a request", ctx do
       {profile, account} = account!(ctx.org_id, "linkedin")
       refuse_any_request()
-
-      assert {:error, :credentials_unavailable} = Zernio.publish(account, request("linkedin"))
-      assert {:error, :credentials_unavailable} = Zernio.status(account, "zp_1")
-      assert {:error, :credentials_unavailable} = Zernio.delete(account, "zp_1")
-
-      assert {:error, :credentials_unavailable} =
-               Zernio.connect_url(account,
-                 redirect_url: "https://suite.example.test/cb",
-                 profile: profile
-               )
+      assert_no_request_sent(account, profile)
     end
+  end
+
+  # Every callback, each failing closed before Req runs (the stub flunks on any call).
+  defp assert_no_request_sent(account, profile) do
+    assert {:error, :credentials_unavailable} = Zernio.publish(account, request("linkedin"))
+    assert {:error, :credentials_unavailable} = Zernio.status(account, "zp_1")
+    assert {:error, :credentials_unavailable} = Zernio.delete(account, "zp_1")
+
+    assert {:error, :credentials_unavailable} =
+             Zernio.connect_url(account,
+               redirect_url: "https://suite.example.test/cb",
+               profile: profile
+             )
   end
 
   describe "verify_webhook/2" do

@@ -4,9 +4,8 @@ defmodule Platform.Social.Publisher.Zernio do
   2/7, stage 4). The ONLY vendor-specific code in Social: if Postiz is picked
   instead, this file, its test and its config entry are what change.
 
-  Opt-in only, and selected nowhere yet (no vendor is chosen, no keys exist):
-
-      config :social, :publisher, Platform.Social.Publisher.Zernio
+  Selected by config (`config :social, :publisher, Platform.Social.Publisher.Zernio`),
+  which prod sets at boot from `SOCIAL_PUBLISHER` (`Platform.Social.RuntimeConfig`).
 
   ## API facts (looked up 2026-10-15)
 
@@ -43,10 +42,13 @@ defmodule Platform.Social.Publisher.Zernio do
 
   ## Secrets and transport
 
-  The API key is read ONLY from the Vault (`Platform.Social.Secrets.account_key/1`:
-  `get_unique` on `account.secret_slug`, scope and accessor `{:integration, account.id}`).
-  Missing or undecryptable is `{:error, :credentials_unavailable}` and NO
-  request is sent. HTTP is Req: `base_url` from
+  The API key is ONE install-level key, read ONLY from the Vault
+  (`Platform.Social.Secrets.zernio_api_key/0`: `get_unique` on
+  `"social:zernio:api_key"`, scope and accessor `{:integration, nil}`), and
+  entered by a human through `Secrets.put_zernio_api_key/2`. The account and
+  profile carry only Zernio's ids (`provider_account_ref`,
+  `provider_profile_ref`). Missing, blank or undecryptable is
+  `{:error, :credentials_unavailable}` and NO request is sent. HTTP is Req: `base_url` from
   `config :social, Platform.Social.Publisher.Zernio, base_url:`, merged with
   `config :social, :zernio_req_options` (tests inject `plug: {Req.Test, __MODULE__}`).
   Config never holds a key. POST is never retried: the Idempotency-Key makes a
@@ -192,8 +194,9 @@ defmodule Platform.Social.Publisher.Zernio do
     |> Req.merge(Application.get_env(:social, :zernio_req_options, []))
   end
 
-  defp api_key(account) do
-    case Secrets.account_key(account) do
+  # One key for the install; the account is not consulted.
+  defp api_key(_account) do
+    case Secrets.zernio_api_key() do
       {:ok, key} -> {:ok, key}
       _ -> {:error, :credentials_unavailable}
     end

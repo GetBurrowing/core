@@ -30,6 +30,20 @@ defmodule PlatformWeb.SocialLive do
   user, never from a client org id; the only write is
   `Platform.Social.create_profile/2`, with the creator as first approver.
   Agent viewers (and anyone without a creatable org) get no control.
+
+  ## The install's Zernio API key (task 01a14722)
+
+  Settings carries ONE write-only row for the install-level Zernio key,
+  shown to any live human (`%User{archived_at: nil}`) who reaches the pane,
+  approver or not. It writes only through
+  `Platform.Social.Secrets.put_zernio_api_key/2`, after `save_zernio_key`
+  re-reads the user. The value is never rendered (not masked, not a prefix,
+  not its fingerprint) and never kept in assigns: the form is rebuilt empty
+  after every submit and has no phx-change, so the value reaches the server
+  only on submit. Status is metadata only: Set or Not set, who and when.
+
+  While the Zernio publisher is selected and no key is set, Connections
+  shows a notice pointing at Settings and hides Connect/Reconnect.
   """
   use PlatformWeb, :live_view
 
@@ -37,7 +51,8 @@ defmodule PlatformWeb.SocialLive do
 
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Social
-  alias Platform.Social.{Account, Approvals, Publisher}
+  alias Platform.Accounts.User
+  alias Platform.Social.{Account, Approvals, Publisher, Secrets}
   alias PlatformWeb.SocialCalendar, as: Cal
 
   @tabs ~w(queue calendar connections settings)
@@ -58,6 +73,10 @@ defmodule PlatformWeb.SocialLive do
       |> assign(:create_open?, false)
       |> assign_creatable(creatable_orgs(user))
       |> assign_profiles(profiles)
+      |> assign(:zernio_human?, human?(user))
+      |> assign(:zernio_mode, :idle)
+      |> assign(:zernio_nonce, 0)
+      |> assign_zernio()
 
     {:ok, load_profile(socket, List.first(profiles))}
   end
@@ -234,6 +253,48 @@ defmodule PlatformWeb.SocialLive do
   def handle_event("dismiss_notice", _params, socket),
     do: {:noreply, assign(socket, :notice, nil)}
 
+  # The install's Zernio key. The user is re-read NOW and must be a live
+  # human; anyone else (an agent session, nil, an archived user) is refused
+  # with nothing written. The submitted value goes straight to Secrets and
+  # is dropped: the form is rebuilt empty whatever the outcome.
+  def handle_event("save_zernio_key", params, socket) do
+    case fresh_user(socket) do
+      %User{archived_at: nil} = user ->
+        mode =
+          case Secrets.put_zernio_api_key(zernio_value(params), user) do
+            {:ok, _credential} -> :idle
+            {:error, _reason} -> :error
+          end
+
+        blocked? = socket.assigns.zernio_blocks_connect?
+        socket = socket |> assign(:zernio_mode, mode) |> assign_zernio()
+
+        # Account rows are a stream: Connect/Reconnect re-render only when
+        # the rows are re-streamed, so do that when the gate flipped.
+        {:noreply,
+         if(socket.assigns.zernio_blocks_connect? == blocked?,
+           do: socket,
+           else: restream_accounts(socket)
+         )}
+
+      _not_a_live_human ->
+        {:noreply, socket |> assign(:zernio_human?, false) |> assign_zernio()}
+    end
+  end
+
+  # Replace (set), Try again (failed save) and Cancel only move the row
+  # between its states; none of them reads or writes the key.
+  def handle_event(event, _params, socket)
+      when event in ~w(replace_zernio_key retry_zernio_key cancel_zernio_key) do
+    mode = if event == "cancel_zernio_key", do: :idle, else: :edit
+
+    {:noreply,
+     if(socket.assigns.zernio_human?,
+       do: socket |> assign(:zernio_mode, mode) |> assign_zernio(),
+       else: socket
+     )}
+  end
+
   # A queued card's canvas changed (a decision here, in chat, or anywhere):
   # the card re-renders from `card_view/2` and the counts are re-read. The
   # row stays in the stream showing the card's decided status until the
@@ -307,6 +368,13 @@ defmodule PlatformWeb.SocialLive do
   end
 
   defp account_item(account), do: %{id: account.id, account: account}
+
+  defp restream_accounts(%{assigns: %{profile: nil}} = socket), do: socket
+
+  defp restream_accounts(%{assigns: %{profile: profile}} = socket) do
+    accounts = Social.list_accounts(profile.org_id, profile_id: profile.id)
+    stream(socket, :accounts, Enum.map(accounts, &account_item/1), reset: true)
+  end
 
   # The user, re-read now, must pass approver_check/3 on the CURRENT profile,
   # itself re-read through the scope.
@@ -481,6 +549,51 @@ defmodule PlatformWeb.SocialLive do
 
   defp fresh_user(%{assigns: %{user: %{id: id}}}), do: Platform.Accounts.get_user(id)
   defp fresh_user(_socket), do: nil
+
+  # ── Zernio key ──────────────────────────────────────────────────────
+
+  defp human?(%User{archived_at: nil}), do: true
+  defp human?(_user), do: false
+
+  defp zernio_value(%{"zernio_key" => %{"api_key" => value}}) when is_binary(value), do: value
+  defp zernio_value(_params), do: nil
+
+  # Re-reads the key's status (Vault metadata only, nothing decrypted) and
+  # rebuilds the form EMPTY under a fresh id, so no submitted value survives
+  # in assigns or in the DOM. `zernio_blocks_connect?` is true only while the
+  # Zernio publisher is selected and no key is set (the Fake needs no key).
+  defp assign_zernio(socket) do
+    status = zernio_status()
+
+    socket
+    |> assign(:zernio_status, status)
+    |> assign(:zernio_form, to_form(%{"api_key" => ""}, as: :zernio_key))
+    |> update(:zernio_nonce, &(&1 + 1))
+    |> assign(
+      :zernio_blocks_connect?,
+      status == :not_set and Publisher.impl() == Platform.Social.Publisher.Zernio
+    )
+  end
+
+  defp zernio_status do
+    case Secrets.zernio_key_status() do
+      :not_set ->
+        :not_set
+
+      {:set, %{changed_at: at, changed_by_user_id: user_id}} ->
+        {:set, %{by: setter_name(user_id), on: Calendar.strftime(at, "%-d %b")}}
+    end
+  end
+
+  defp setter_name(user_id) when is_binary(user_id) do
+    case Platform.Accounts.get_user(user_id) do
+      %User{name: name} when is_binary(name) and name != "" -> name
+      %User{email: email} when is_binary(email) -> email
+      _ -> nil
+    end
+  end
+
+  defp setter_name(_user_id), do: nil
 
   # The ONE place that decides where `user` may create a profile (keep it
   # single: when RBAC gates this, this body is the edit). The orgs of the
@@ -738,6 +851,26 @@ defmodule PlatformWeb.SocialLive do
           </div>
           <div class={[@tab != "connections" && "hidden"]} data-pane="connections">
             <.notice_line notice={@notice} />
+            <div
+              :if={@zernio_blocks_connect?}
+              role="status"
+              class="alert alert-warning mb-3 flex flex-wrap items-center justify-between gap-2 text-sm"
+              data-role="social-zernio-required"
+            >
+              <span class="inline-flex items-start gap-2">
+                <.icon name="hero-exclamation-triangle-micro" class="mt-0.5 size-4 shrink-0" />
+                Add the Zernio API key in Settings before connecting accounts.
+              </span>
+              <button
+                type="button"
+                class="btn btn-sm"
+                phx-click="select_tab"
+                phx-value-tab="settings"
+                data-role="social-zernio-go-settings"
+              >
+                Go to Settings
+              </button>
+            </div>
             <p :if={@accounts_empty?} class="text-base-content/70" data-role="social-empty">
               No accounts connected for {@profile.name} yet
             </p>
@@ -753,12 +886,23 @@ defmodule PlatformWeb.SocialLive do
                 class="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2"
                 data-role="social-account-row"
               >
-                <.account_row account={row.account} can_edit?={@can_edit?} />
+                <.account_row
+                  account={row.account}
+                  can_edit?={@can_edit?}
+                  can_connect?={@can_edit? and not @zernio_blocks_connect?}
+                />
               </li>
             </ul>
           </div>
           <div class={[@tab != "settings" && "hidden"]} data-pane="settings">
             <.notice_line notice={@notice} />
+            <.zernio_key
+              :if={@zernio_human?}
+              status={@zernio_status}
+              mode={@zernio_mode}
+              form={@zernio_form}
+              nonce={@zernio_nonce}
+            />
             <.settings
               profile={@profile}
               form={@settings_form}
@@ -940,6 +1084,7 @@ defmodule PlatformWeb.SocialLive do
 
   attr :account, :map, required: true
   attr :can_edit?, :boolean, required: true
+  attr :can_connect?, :boolean, required: true
 
   defp account_row(assigns) do
     assigns = assign(assigns, :mode_labels, @mode_labels)
@@ -994,7 +1139,7 @@ defmodule PlatformWeb.SocialLive do
               <.icon name="hero-exclamation-triangle-micro" class="size-3" /> Reconnect
             </span>
             <button
-              :if={@can_edit?}
+              :if={@can_connect?}
               type="button"
               class="btn btn-outline btn-sm"
               phx-click="connect_account"
@@ -1006,7 +1151,7 @@ defmodule PlatformWeb.SocialLive do
           </span>
         <% _ -> %>
           <button
-            :if={@can_edit?}
+            :if={@can_connect?}
             type="button"
             class="btn btn-outline btn-sm"
             phx-click="connect_account"
@@ -1015,11 +1160,148 @@ defmodule PlatformWeb.SocialLive do
           >
             Connect
           </button>
-          <span :if={!@can_edit?} class="text-sm text-base-content/70">Not connected</span>
+          <span :if={!@can_connect?} class="text-sm text-base-content/70">Not connected</span>
       <% end %>
     </span>
     """
   end
+
+  # The install's Zernio key: a status, never the value. The input is only
+  # there while the key is not set, or after Replace / Try again; Save key
+  # shows only while the input has text (CSS `peer`, no JS, no phx-change).
+  attr :status, :any, required: true
+  attr :mode, :atom, required: true
+  attr :form, :any, required: true
+  attr :nonce, :integer, required: true
+
+  defp zernio_key(assigns) do
+    assigns =
+      assign(
+        assigns,
+        :input?,
+        assigns.mode == :edit or (assigns.mode == :idle and assigns.status == :not_set)
+      )
+
+    ~H"""
+    <section
+      class="mb-6 max-w-xl rounded-lg border border-base-300 bg-base-100 p-3 sm:p-4"
+      aria-labelledby="social-zernio-key-label"
+      data-role="social-zernio-key"
+      data-state={if @status == :not_set, do: "not_set", else: "set"}
+      data-mode={@mode}
+    >
+      <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+        <h3 id="social-zernio-key-label" class="text-sm font-semibold text-base-content">
+          Zernio API key
+        </h3>
+        <span
+          :if={@status == :not_set}
+          class="inline-flex items-center gap-1.5 text-sm font-medium text-warning"
+          data-role="social-zernio-status"
+        >
+          <span class="size-2 rounded-full bg-warning" aria-hidden="true"></span> Not set
+        </span>
+        <span
+          :if={@status != :not_set}
+          class="inline-flex items-center gap-1.5 text-sm font-medium text-base-content"
+          data-role="social-zernio-status"
+        >
+          <span class="size-2 rounded-full bg-success" aria-hidden="true"></span> Set
+        </span>
+      </div>
+      <p class="mt-0.5 text-sm text-base-content/70" data-role="social-zernio-scope">
+        One key for the whole org. Used by every profile.
+      </p>
+
+      <div
+        :if={match?({:set, _}, @status) and @mode != :edit}
+        class="mt-3 flex flex-wrap items-center justify-between gap-2"
+      >
+        <p class="text-sm text-base-content/70" data-role="social-zernio-changed">
+          {last_changed(@status)}
+        </p>
+        <button
+          :if={@mode == :idle}
+          type="button"
+          class="btn btn-outline btn-sm"
+          phx-click="replace_zernio_key"
+          data-role="social-zernio-replace"
+        >
+          Replace
+        </button>
+      </div>
+
+      <.form
+        :if={@input?}
+        for={@form}
+        id={"social-zernio-key-form-#{@nonce}"}
+        phx-submit="save_zernio_key"
+        phx-auto-recover="ignore"
+        class="mt-3"
+        data-role="social-zernio-key-form"
+      >
+        <div class="flex flex-wrap items-center gap-2">
+          <label for={"social-zernio-key-input-#{@nonce}"} class="sr-only">Zernio API key</label>
+          <input
+            id={"social-zernio-key-input-#{@nonce}"}
+            type="password"
+            name={@form[:api_key].name}
+            value=""
+            placeholder={if @status == :not_set, do: "paste key", else: "paste new key"}
+            autocomplete="off"
+            autocapitalize="off"
+            spellcheck="false"
+            class="peer input min-w-0 flex-1 border-edge bg-base-100 font-mono placeholder:text-base-content/70"
+            data-role="social-zernio-key-input"
+          />
+          <button
+            type="submit"
+            class="btn btn-primary peer-placeholder-shown:hidden"
+            data-role="social-zernio-save"
+          >
+            Save key
+          </button>
+        </div>
+      </.form>
+      <p
+        :if={@input? and @status == :not_set}
+        class="mt-2 text-sm text-base-content/70"
+        data-role="social-zernio-helper"
+      >
+        Find it in Zernio > Settings > API.
+      </p>
+      <button
+        :if={@mode == :edit and @status != :not_set}
+        type="button"
+        class="btn btn-ghost btn-sm mt-2"
+        phx-click="cancel_zernio_key"
+        data-role="social-zernio-cancel"
+      >
+        Cancel
+      </button>
+
+      <div
+        :if={@mode == :error}
+        role="alert"
+        class="alert alert-error mt-3 flex flex-wrap items-center justify-between gap-2 text-sm"
+        data-role="social-zernio-error"
+      >
+        <span>Couldn't save the key. Nothing was changed.</span>
+        <button
+          type="button"
+          class="btn btn-sm"
+          phx-click="retry_zernio_key"
+          data-role="social-zernio-retry"
+        >
+          Try again
+        </button>
+      </div>
+    </section>
+    """
+  end
+
+  defp last_changed({:set, %{by: nil, on: on}}), do: "Last changed #{on}"
+  defp last_changed({:set, %{by: by, on: on}}), do: "Last changed by #{by}, #{on}"
 
   attr :profile, :map, required: true
   attr :form, :any, required: true

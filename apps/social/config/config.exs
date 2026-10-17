@@ -8,9 +8,12 @@ import_config "../../platform/config/config.exs"
 
 config :platform, :extensions, [Platform.Social.Extension]
 
-# The publisher adapter (Social 2/7). Only dev and test select one, the Fake;
-# prod sets NOTHING until a vendor is chosen, so `Platform.Social.Publisher.impl/0`
-# answers `{:error, :publisher_not_configured}` there and nothing publishes.
+# The publisher adapter (Social 2/7). Config selects one only for dev and
+# test, the Fake. prod selects through the SOCIAL_PUBLISHER env var, read by
+# `Platform.Social.RuntimeConfig` at boot in `Platform.Social.Application.start/2`
+# (not a runtime.exs: the release runs core's, which never names Social).
+# `SOCIAL_PUBLISHER=zernio` selects `Platform.Social.Publisher.Zernio`; unset,
+# `Platform.Social.Publisher.impl/0` answers `{:error, :publisher_not_configured}`.
 if config_env() in [:dev, :test] do
   config :social, :publisher, Platform.Social.Publisher.Fake
 end
@@ -19,10 +22,12 @@ end
 # The default matches the vendor's 25 posts/hour per-account velocity cap.
 config :social, :rate_limit, per_window: 25, window_ms: 3_600_000
 
-# The Zernio adapter (Social 2/7 stage 4) is NOT selected in any env: no
-# vendor is chosen and no keys exist. Its tests select it per test, and every
-# request goes to a Req.Test stub, never the network. Config holds only the
-# base URL and Req options, never a key (that is in the Vault).
+# The Zernio adapter (Social 2/7 stage 4) is NOT selected by any config file:
+# prod selects it with SOCIAL_PUBLISHER=zernio at boot (above), and the
+# optional SOCIAL_ZERNIO_BASE_URL overrides its base URL the same way. Its
+# tests select it per test, and every request goes to a Req.Test stub, never
+# the network. Config holds only the base URL and Req options, never a key
+# (that is in the Vault at `social:zernio:api_key`).
 if config_env() == :test do
   config :social, Platform.Social.Publisher.Zernio, base_url: "https://zernio.test/api"
   config :social, :zernio_req_options, plug: {Req.Test, Platform.Social.Publisher.Zernio}

@@ -2,16 +2,18 @@ defmodule Platform.Social.Publisher do
   @moduledoc """
   The vendor-independent publishing contract (task 01a140a9, Social 2/7).
 
-  The vendor is not chosen yet (Zernio vs self-hosted Postiz), so nothing in
-  Social knows which one it talks to except the adapter module and ONE config
-  key:
+  The vendor is Zernio (self-hosted Postiz is plan B), but nothing in Social
+  knows which one it talks to except the adapter module and ONE config key:
 
       config :social, :publisher, Platform.Social.Publisher.Fake
 
   `impl/0` reads that key on every call. dev and test select
-  `Platform.Social.Publisher.Fake` (`apps/social/config/config.exs`); prod
-  sets nothing, so `impl/0` answers `{:error, :publisher_not_configured}`
-  and nothing publishes in prod until a vendor is picked.
+  `Platform.Social.Publisher.Fake` (`apps/social/config/config.exs`). prod
+  selects through the `SOCIAL_PUBLISHER` env var, which
+  `Platform.Social.RuntimeConfig` reads at boot in
+  `Platform.Social.Application.start/2`: `SOCIAL_PUBLISHER=zernio` selects
+  `Platform.Social.Publisher.Zernio`. With it unset, `impl/0` answers
+  `{:error, :publisher_not_configured}` and nothing publishes.
 
   ## Secrets
 

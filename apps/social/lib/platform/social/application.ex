@@ -7,12 +7,21 @@ defmodule Platform.Social.Application do
   Children are Social's own, never core's: Social 2/7 adds the Fake
   publisher's ETS table owner and the publish rate limit; Social 5/7 the
   clip render queue and its task supervisor.
+
+  ## Runtime settings
+
+  `Platform.Social.RuntimeConfig.apply/1` reads Social's OS environment
+  (`SOCIAL_PUBLISHER`, `SOCIAL_ZERNIO_BASE_URL`) here, first, in every
+  build: a release's runtime config is core's `config/runtime.exs`, which
+  never names Social (ADR 0055 section 8).
   """
 
   use Application
 
   @impl true
   def start(_type, _args) do
+    Platform.Social.RuntimeConfig.apply(System.get_env())
+
     children = [
       # Owns the Fake publisher's call log. Idle unless the Fake is selected.
       Platform.Social.Publisher.Fake,

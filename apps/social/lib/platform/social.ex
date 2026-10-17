@@ -17,9 +17,10 @@ defmodule Platform.Social do
 
   ## No secret
 
-  `secret_slug` is set here, never cast: `"social:<account_id>"`, following
-  `Platform.Mail`. The credential itself lives in the Vault at scope
-  `{:integration, account.id}` (written by Social 2/7).
+  `secret_slug` is set here, never cast: `"social:<account_id>"`. It is
+  inert data and no secret is read from it: the Zernio API key is
+  install-level, one Vault row at slug `"social:zernio:api_key"`, scope
+  `{:integration, nil}`, owned by `Platform.Social.Secrets` (task 01a14722).
 
   ## Approver guard
 
