@@ -875,6 +875,11 @@ jobs:
           registry: docker.io
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: docker/setup-buildx-action@v4
 
@@ -898,7 +903,7 @@ jobs:
           # release (falls back to johnvansickle without it).
           secrets: |
             gh_token=${{ secrets.GITHUB_TOKEN }}
-          outputs: type=image,name=docker.io/example/suite-core,push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,"name=docker.io/example/suite-core,ghcr.io/startup-suite/core",push-by-digest=true,name-canonical=true,push=true
 
       - name: Export digest
         env:
@@ -955,6 +960,7 @@ jobs:
     runs-on: [self-hosted, linux, x64]
     permissions:
       contents: read
+      packages: write
 
     steps:
       - name: Derive image tags
@@ -986,6 +992,11 @@ jobs:
           registry: docker.io
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: docker/setup-buildx-action@v4
 
@@ -999,6 +1010,7 @@ jobs:
             exit 1
           fi
           echo "refs=$(printf 'docker.io/example/suite-core@sha256:%s ' *)" >> "$GITHUB_OUTPUT"
+          echo "ghcr_refs=$(printf 'ghcr.io/startup-suite/core@sha256:%s ' *)" >> "$GITHUB_OUTPUT"
 
       - name: Create manifest list (main)
         if: github.ref == 'refs/heads/main'
@@ -1008,6 +1020,11 @@ jobs:
             -t docker.io/example/suite-core:core-${{ github.sha }} \
             -t docker.io/example/suite-core:core-${{ steps.vars.outputs.short_sha }} \
             ${{ steps.digests.outputs.refs }}
+          docker buildx imagetools create \
+            -t ghcr.io/startup-suite/core:core \
+            -t ghcr.io/startup-suite/core:core-${{ github.sha }} \
+            -t ghcr.io/startup-suite/core:core-${{ steps.vars.outputs.short_sha }} \
+            ${{ steps.digests.outputs.ghcr_refs }}
 
       - name: Create manifest list (feature branch)
         if: github.ref != 'refs/heads/main'
@@ -1017,9 +1034,16 @@ jobs:
             -t docker.io/example/suite-core:core-${{ github.sha }} \
             -t docker.io/example/suite-core:core-${{ steps.vars.outputs.short_sha }} \
             ${{ steps.digests.outputs.refs }}
+          docker buildx imagetools create \
+            -t ghcr.io/startup-suite/core:core-${{ steps.vars.outputs.branch_tag }} \
+            -t ghcr.io/startup-suite/core:core-${{ github.sha }} \
+            -t ghcr.io/startup-suite/core:core-${{ steps.vars.outputs.short_sha }} \
+            ${{ steps.digests.outputs.ghcr_refs }}
 
       - name: Inspect published manifest
-        run: docker buildx imagetools inspect docker.io/example/suite-core:core-${{ github.sha }}
+        run: |
+          docker buildx imagetools inspect docker.io/example/suite-core:core-${{ github.sha }}
+          docker buildx imagetools inspect ghcr.io/startup-suite/core:core-${{ github.sha }}
 
   # TWO IMAGE FLAVOURS (ADR 0055 § 9, task 01a0ee08 stage 4), one repo.
   #
@@ -1080,6 +1104,11 @@ jobs:
           registry: docker.io
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: docker/setup-buildx-action@v4
 
@@ -1107,6 +1136,12 @@ jobs:
             docker.io/example/suite-core:latest
             docker.io/example/suite-core:${{ github.sha }}
             docker.io/example/suite-core:${{ steps.vars.outputs.short_sha }}
+            ghcr.io/startup-suite/core:play
+            ghcr.io/startup-suite/core:play-${{ github.sha }}
+            ghcr.io/startup-suite/core:play-${{ steps.vars.outputs.short_sha }}
+            ghcr.io/startup-suite/core:latest
+            ghcr.io/startup-suite/core:${{ github.sha }}
+            ghcr.io/startup-suite/core:${{ steps.vars.outputs.short_sha }}
 
       - name: Build and push play (feature branch)
         if: github.ref != 'refs/heads/main'
@@ -1132,6 +1167,12 @@ jobs:
             docker.io/example/suite-core:${{ steps.vars.outputs.branch_tag }}
             docker.io/example/suite-core:${{ github.sha }}
             docker.io/example/suite-core:${{ steps.vars.outputs.short_sha }}
+            ghcr.io/startup-suite/core:play-${{ steps.vars.outputs.branch_tag }}
+            ghcr.io/startup-suite/core:play-${{ github.sha }}
+            ghcr.io/startup-suite/core:play-${{ steps.vars.outputs.short_sha }}
+            ghcr.io/startup-suite/core:${{ steps.vars.outputs.branch_tag }}
+            ghcr.io/startup-suite/core:${{ github.sha }}
+            ghcr.io/startup-suite/core:${{ steps.vars.outputs.short_sha }}
 
   build-and-push-agent-host:
     # Native agents' host image, `contained` profile (task 01a10322 stage 3):
@@ -1147,6 +1188,7 @@ jobs:
     runs-on: [self-hosted, linux, x64]
     permissions:
       contents: read
+      packages: write
 
     steps:
       - uses: actions/checkout@v5
@@ -1189,6 +1231,12 @@ jobs:
           registry: docker.io
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - uses: docker/login-action@v4
+        if: steps.changed.outputs.agent_host == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: docker/setup-buildx-action@v4
         if: steps.changed.outputs.agent_host == 'true'
@@ -1205,6 +1253,8 @@ jobs:
           tags: |
             docker.io/example/suite-agent-host:latest
             docker.io/example/suite-agent-host:${{ github.sha }}
+            ghcr.io/startup-suite/suite-agent-host:latest
+            ghcr.io/startup-suite/suite-agent-host:${{ github.sha }}
 
   # Install-manifest tooling (ADR 0053, task 01a0d69d): the validator and the
   # single-host renderer under deployment/installer. Python STANDARD LIBRARY
