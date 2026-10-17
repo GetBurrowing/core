@@ -243,7 +243,7 @@ defmodule Platform.Chat.Canvas.ScriptedEmbedsTest do
                CanvasDocument.get_node(updated.document, "e1")["props"]["prototype_ref"]
     end
 
-    test "canvas.restore to an old revision points back at that revision's version", ctx do
+    test "canvas_restore to an old revision points back at that revision's version", ctx do
       canvas = create!(ctx, [embed("e1", @counter_v1)])
       {:ok, %{document: rev1_doc}} = CanvasServer.describe(canvas.id)
 
@@ -292,7 +292,7 @@ defmodule Platform.Chat.Canvas.ScriptedEmbedsTest do
       assert Repo.aggregate(Platform.Chat.Canvas, :count) == before
     end
 
-    test "canvas.create and canvas.patch surface the code, recoverable", ctx do
+    test "canvas_create and canvas_patch surface the code, recoverable", ctx do
       context = %{space_id: ctx.space.id, agent_participant_id: ctx.author.id, agent_id: nil}
       set_settings!(%{enabled: false})
 
@@ -352,7 +352,7 @@ defmodule Platform.Chat.Canvas.ScriptedEmbedsTest do
 
       assert {:error, %{code: :canvas_owned, recoverable: false}} =
                Prototypes.Tools.execute(
-                 "prototype.publish",
+                 "prototype_publish",
                  %{"prototype_id" => prototype.id, "files" => bundle_files("hostile")},
                  %{agent_id: agent.id, agent_home_org: :root}
                )

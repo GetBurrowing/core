@@ -1,7 +1,7 @@
 defmodule Platform.Orchestration.PromptTemplatesFeedbackTest do
   @moduledoc """
   Task 01a11ec3 stage 2: task dispatch and nudge templates advertise
-  `feedback.submit` exactly when the capability predicate is on, in BOTH the
+  `feedback_submit` exactly when the capability predicate is on, in BOTH the
   code defaults and the migrated live rows.
 
   The force-update guard, stated so it is checkable: a descriptor edit alone
@@ -108,8 +108,8 @@ defmodule Platform.Orchestration.PromptTemplatesFeedbackTest do
 
       for value <- ["quarantined", "trusted"] do
         set_policy(value)
-        assert PromptTemplates.feedback_guidance() =~ "`feedback.submit`"
-        assert PromptTemplates.feedback_guidance(:nudge) =~ "`feedback.submit`"
+        assert PromptTemplates.feedback_guidance() =~ "`feedback_submit`"
+        assert PromptTemplates.feedback_guidance(:nudge) =~ "`feedback_submit`"
       end
     end
 
@@ -117,11 +117,11 @@ defmodule Platform.Orchestration.PromptTemplatesFeedbackTest do
       for slug <- @slugs do
         set_policy("quarantined")
         assert {:ok, on} = PromptTemplates.render_default(slug, assigns(form(slug)))
-        assert on =~ "feedback.submit", "#{slug} enabled render must advertise feedback.submit"
+        assert on =~ "feedback_submit", "#{slug} enabled render must advertise feedback_submit"
 
         set_policy("disabled")
         assert {:ok, off} = PromptTemplates.render_default(slug, assigns(form(slug)))
-        refute off =~ "feedback.submit", "#{slug} disabled render must omit the tool"
+        refute off =~ "feedback_submit", "#{slug} disabled render must omit the tool"
         refute off =~ @heading, "#{slug} disabled render must omit all feedback guidance"
         refute off =~ @placeholder
       end
@@ -166,7 +166,7 @@ defmodule Platform.Orchestration.PromptTemplatesFeedbackTest do
 
         {:ok, before} = PromptTemplates.render_template(slug, assigns(form(slug)))
 
-        refute before =~ "feedback.submit",
+        refute before =~ "feedback_submit",
                "#{slug}: the stale row must NOT advertise the tool, or this test proves nothing"
       end
 
@@ -178,7 +178,7 @@ defmodule Platform.Orchestration.PromptTemplatesFeedbackTest do
         assert "feedback_guidance" in row.variables
 
         {:ok, after_up} = PromptTemplates.render_template(slug, assigns(form(slug)))
-        assert after_up =~ "feedback.submit", "#{slug}: migrated row must advertise the tool"
+        assert after_up =~ "feedback_submit", "#{slug}: migrated row must advertise the tool"
       end
 
       set_policy("disabled")
@@ -186,7 +186,7 @@ defmodule Platform.Orchestration.PromptTemplatesFeedbackTest do
       for slug <- @slugs do
         {:ok, off} = PromptTemplates.render_template(slug, assigns(form(slug)))
 
-        refute off =~ "feedback.submit",
+        refute off =~ "feedback_submit",
                "#{slug}: disabled render of the migrated row must omit it"
 
         refute off =~ @heading

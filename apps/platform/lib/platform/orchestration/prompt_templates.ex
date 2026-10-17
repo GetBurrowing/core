@@ -431,7 +431,7 @@ defmodule Platform.Orchestration.PromptTemplates do
   # `{{feedback_guidance}}` sits directly after `{{federation_preamble}}` in
   # every task dispatch body (and at the end of the nudge). Its VALUE is
   # decided at render time by `feedback_guidance/1`, which asks the same
-  # capability predicate `ToolSurface` lists and executes `feedback.submit`
+  # capability predicate `ToolSurface` lists and executes `feedback_submit`
   # under: `Platform.Feedback.Policy.enabled?/0`. Disabled renders `""`, so a
   # disabled installation's prompts are byte-identical to what they were
   # before the placeholder existed.
@@ -448,12 +448,12 @@ defmodule Platform.Orchestration.PromptTemplates do
   @feedback_guidance_dispatch """
 
 
-  ## Reporting a defect in Suite itself — `feedback.submit`
+  ## Reporting a defect in Suite itself — `feedback_submit`
 
-  This installation accepts structured feedback. If you hit a reproducible defect in Suite itself (not in this task's own code), or have a specific improvement to Suite to propose, call `feedback.submit` (`feedback_submit` through the Claude Code MCP wrapper) with `category` (`bug` or `positive_change`), `title`, `expected_behavior`, `observed_behavior`, and optionally `reproduction_steps` and `version_environment`. Only those fields are sent; text is scrubbed for secrets, and diagnostics travel only when you pass `diagnostics: {include: true, scope, content}` deliberately. Never paste logs, session transcripts, environment dumps, credentials or customer data. An identical report returns the existing issue. Filing feedback never substitutes for finishing your stage.\
+  This installation accepts structured feedback. If you hit a reproducible defect in Suite itself (not in this task's own code), or have a specific improvement to Suite to propose, call `feedback_submit` with `category` (`bug` or `positive_change`), `title`, `expected_behavior`, `observed_behavior`, and optionally `reproduction_steps` and `version_environment`. Only those fields are sent; text is scrubbed for secrets, and diagnostics travel only when you pass `diagnostics: {include: true, scope, content}` deliberately. Never paste logs, session transcripts, environment dumps, credentials or customer data. An identical report returns the existing issue. Filing feedback never substitutes for finishing your stage.\
   """
 
-  @feedback_guidance_nudge "\n- Hit a defect in Suite itself? Report it with `feedback.submit` (structured fields only; no logs or secrets), then keep working."
+  @feedback_guidance_nudge "\n- Hit a defect in Suite itself? Report it with `feedback_submit` (structured fields only; no logs or secrets), then keep working."
 
   @doc "The slugs whose bodies carry the `{{feedback_guidance}}` placeholder."
   @spec feedback_guidance_slugs() :: [String.t()]

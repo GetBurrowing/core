@@ -19,7 +19,7 @@ defmodule Platform.Prototypes.Purger do
 
   CANVAS-OWNED prototypes (a `scripts: true` embed, task 01a1316b-677a) are
   exempt while their canvas exists and is not soft-deleted: every version is
-  kept, because the canvas's own version history and `canvas.restore` point
+  kept, because the canvas's own version history and `canvas_restore` point
   at old ones. Growth is bounded by 256 KB (the embed `srcdoc` cap) per
   distinct HTML edit. Once the canvas is soft-deleted, or hard-deleted (the
   FK nilifies `canvas_id`), the ordinary rule above applies. That exemption

@@ -21,11 +21,11 @@ defmodule Platform.Prototypes.ToolsTest do
 
   defp ctx_for(agent), do: %{agent_id: agent.id}
 
-  defp publish(agent, args), do: ToolSurface.execute("prototype.publish", args, ctx_for(agent))
+  defp publish(agent, args), do: ToolSurface.execute("prototype_publish", args, ctx_for(agent))
 
   test "the bundle is listed and grantable, and not a default" do
     names = ToolSurface.list_tools(["prototype"]) |> Enum.map(& &1.name)
-    assert names == ["prototype.publish", "prototype.versions", "prototype.rollback"]
+    assert names == ["prototype_publish", "prototype_versions", "prototype_rollback"]
     assert "prototype" in Platform.Access.RuntimeProfiles.valid_modules()
     refute "prototype" in Platform.Agents.AgentRuntime.default_tool_profile()
   end
@@ -51,7 +51,7 @@ defmodule Platform.Prototypes.ToolsTest do
 
     assert {:ok, list} =
              ToolSurface.execute(
-               "prototype.versions",
+               "prototype_versions",
                %{"prototype_id" => r1.prototype_id},
                ctx_for(ctx.tenant)
              )
@@ -61,7 +61,7 @@ defmodule Platform.Prototypes.ToolsTest do
 
     assert {:ok, %{latest_version: 1}} =
              ToolSurface.execute(
-               "prototype.rollback",
+               "prototype_rollback",
                %{"prototype_id" => r1.prototype_id, "version" => 1},
                ctx_for(ctx.tenant)
              )
@@ -82,7 +82,7 @@ defmodule Platform.Prototypes.ToolsTest do
 
     assert {:error, %{code: :not_found}} =
              ToolSurface.execute(
-               "prototype.versions",
+               "prototype_versions",
                %{"prototype_id" => r.prototype_id},
                ctx_for(ctx.tenant)
              )
@@ -123,7 +123,7 @@ defmodule Platform.Prototypes.ToolsTest do
 
     {:ok, att} =
       ToolSurface.execute(
-        "attachment.upload_inline",
+        "attachment_upload_inline",
         %{
           "space_id" => space.id,
           "filename" => "bundle.zip",

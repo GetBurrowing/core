@@ -613,12 +613,13 @@ defmodule Platform.Integration.MeetingIntentDispatcherE2ETest do
       assert participant.attention_mode == "mention"
       assert participant.role == "member"
 
-      # The same probe, now succeeding. Success is keyed `:id` — there is no
-      # `:canvas_id` on the `ToolSurface` result, though the handler beneath it
-      # uses that name.
+      # The same probe, now succeeding. Success is keyed `:canvas_id`: since
+      # task 01a14a7f stage 3 `canvas_create` is the declared name of
+      # `canvas.create`, whose handler result it returns, and the legacy
+      # execute-only clause that answered with `:id` is gone.
       assert {:ok, created} = canvas_probe(meeting.chat_space_id, target_agent.id)
-      assert is_binary(created.id)
-      refute Map.has_key?(created, :canvas_id)
+      assert is_binary(created.canvas_id)
+      refute Map.has_key?(created, :id)
 
       row = await_single_row(meeting.id, :dispatched)
       assert row.dispatch_failure_reason == nil

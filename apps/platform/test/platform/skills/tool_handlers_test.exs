@@ -4,7 +4,7 @@ defmodule Platform.Skills.ToolHandlersTest do
   alias Platform.Skills
   alias Platform.Skills.ToolHandlers
 
-  describe "skill.list" do
+  describe "skill_list" do
     test "returns summaries for every registered skill" do
       {:ok, _} = Skills.create_skill(%{name: "Alpha Playbook", content: "alpha body"})
       {:ok, _} = Skills.create_skill(%{name: "Beta Playbook", content: "beta body"})
@@ -53,7 +53,7 @@ defmodule Platform.Skills.ToolHandlersTest do
     end
   end
 
-  describe "skill.get" do
+  describe "skill_get" do
     test "returns full content by slug" do
       {:ok, skill} = Skills.create_skill(%{name: "Get Me", content: "the body"})
 
@@ -82,7 +82,7 @@ defmodule Platform.Skills.ToolHandlersTest do
     end
   end
 
-  describe "skill.upsert" do
+  describe "skill_upsert" do
     test "creates a new skill when slug doesn't exist" do
       assert {:ok, payload} =
                ToolHandlers.upsert(

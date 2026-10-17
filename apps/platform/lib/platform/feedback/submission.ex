@@ -1,6 +1,6 @@
 defmodule Platform.Feedback.Submission do
   @moduledoc """
-  The `feedback.submit` boundary (task 01a11ec3 stage 2): an allowlisted,
+  The `feedback_submit` boundary (task 01a11ec3 stage 2): an allowlisted,
   bounded, redacted structure, a duplicate fingerprint and rate limits, all
   checked BEFORE any external call, then one publication through
   `Platform.Feedback.GithubPublisher`.
@@ -163,7 +163,7 @@ defmodule Platform.Feedback.Submission do
   defp actor(%{agent_id: id} = actor) when is_binary(id) and id != "",
     do: {:ok, %{agent_id: id, slug: Map.get(actor, :slug)}}
 
-  defp actor(_), do: error(:unauthorized, "feedback.submit requires an identified agent caller")
+  defp actor(_), do: error(:unauthorized, "feedback_submit requires an identified agent caller")
 
   defp category(value) when is_binary(value) do
     normalized = value |> String.trim() |> String.downcase()

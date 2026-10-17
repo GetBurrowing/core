@@ -234,6 +234,11 @@ defmodule Platform.Extensions do
   prefixes, live page prefixes, inbox kinds and inbox source types. A route
   prefix and a live page prefix must also each be one lowercase path segment.
 
+  Core's tool names include its hidden legacy aliases
+  (`Platform.Federation.ToolAliases`), and tool names are also compared
+  after `normalise_tool_name/1`, so an extension cannot declare `skill_list`,
+  `skill.list` or `skill-list`, nor two extensions `a.b` and `a_b`.
+
   Returns `:ok` or `{:error, messages}`, one message per clash, each naming
   both owners. Checks what each callback answers NOW: a kind a module lists
   only while its flag is on is checked while it is on.
@@ -272,6 +277,7 @@ defmodule Platform.Extensions do
     ]
 
     case Enum.flat_map(checks, &clashes(&1, extensions)) ++
+           normalised_tool_name_clashes(extensions) ++
            bad_route_prefixes(extensions) ++
            bad_live_page_prefixes(extensions) do
       [] -> :ok
@@ -338,10 +344,64 @@ defmodule Platform.Extensions do
   defp one_segment?(prefix),
     do: is_binary(prefix) and Regex.match?(~r/\A[a-z0-9][a-z0-9_-]*\z/, prefix)
 
-  defp core_tool_names do
+  # Core's listed names AND its hidden legacy aliases (task 01a14a7f stage 3):
+  # an extension declaring `skill.list` would otherwise be shadowed by the
+  # alias at `ToolCall.invoke/4` on every call, never reaching its handler.
+  defp core_tool_names,
+    do: core_listed_tool_names() ++ Platform.Federation.ToolAliases.legacy_names()
+
+  defp core_listed_tool_names do
     Platform.Federation.ToolSurface.core_bundles()
     |> Platform.Federation.ToolSurface.list_tools()
     |> Enum.map(& &1.name)
+  end
+
+  @doc """
+  A tool name with its separators read as one (task 01a14a7f stage 3):
+  downcased, with `.` and `-` read as `_`. `skill.list`, `skill-list` and
+  `skill_list` are one name under it. Hyphens are included because OpenClaw
+  rewrites a dot to a hyphen, so `skill-list` is the realistic collision.
+  """
+  @spec normalise_tool_name(String.t()) :: String.t()
+  def normalise_tool_name(name) when is_binary(name),
+    do: name |> String.downcase() |> String.replace([".", "-"], "_")
+
+  # Two DIFFERENT names that are one name once separators are normalised: an
+  # extension name against core's listed names and legacy aliases, or against
+  # another extension's. An identical name is the "tool name" check's to
+  # report, so it is skipped here. Core's canonical name is preferred as the
+  # owner of a key it shares with its own alias.
+  defp normalised_tool_name_clashes(extensions) do
+    owners =
+      Map.new(
+        Platform.Federation.ToolAliases.legacy_names() ++ core_listed_tool_names(),
+        &{normalise_tool_name(&1), {&1, "core"}}
+      )
+
+    {_owners, messages} =
+      for ext <- extensions,
+          name <- Enum.uniq(Enum.flat_map(ext.mcp_tool_bundles(), &owned_tool_names/1)),
+          reduce: {owners, []} do
+        {owners, messages} ->
+          key = normalise_tool_name(name)
+
+          case Map.fetch(owners, key) do
+            {:ok, {^name, _owner}} ->
+              {owners, messages}
+
+            {:ok, {other, owner}} ->
+              message =
+                "tool name #{inspect(name)} of #{inspect(ext)} is #{inspect(other)} of #{owner} " <>
+                  "once separators are normalised (#{inspect(key)})"
+
+              {owners, [message | messages]}
+
+            :error ->
+              {Map.put(owners, key, {name, inspect(ext)}), messages}
+          end
+      end
+
+    Enum.reverse(messages)
   end
 
   defp implements?(module, fun, arity) do

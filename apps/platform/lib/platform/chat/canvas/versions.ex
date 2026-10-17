@@ -172,7 +172,7 @@ defmodule Platform.Chat.Canvas.Versions do
   participant, then user, then `system`.
 
   Lives here rather than beside a single handler because both write paths that
-  have a caller identity — `canvas.patch` and `canvas.restore` — need the same
+  have a caller identity — `canvas_patch` and `canvas_restore` — need the same
   answer. Two copies of an attribution resolver is how those paths drifted to
   two different answers in the first place (task 019fed8d): the restore path
   resolved the agent, the patch path passed nothing and recorded `unknown`.

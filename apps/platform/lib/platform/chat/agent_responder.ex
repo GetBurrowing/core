@@ -401,7 +401,7 @@ defmodule Platform.Chat.AgentResponder do
   @doc """
   Placeholder for the legacy `[canvas:TYPE:TITLE]` regex tag path.
 
-  Per ADR 0036 the `canvas.create` / `canvas.patch` / `canvas.describe` tools
+  Per ADR 0036 the `canvas_create` / `canvas_patch` / `canvas_describe` tools
   are the only sanctioned surface for agent-produced canvases. The regex tag
   path is disabled; agents that still emit tagged markers will have those
   tokens rendered literally in their reply. Remove the emission in agent
@@ -988,9 +988,9 @@ defmodule Platform.Chat.AgentResponder do
   # Shared by `agent_body/2` and `history_message/3` so the current message and
   # a history turn describe an attachment the same way. Byte counts are raw
   # rather than humanised: the agent may need to decide whether a file fits
-  # under `attachment.get_inline`'s 25 MB cap, and a rounded "134 KB" cannot
+  # under `attachment_get_inline`'s 25 MB cap, and a rounded "134 KB" cannot
   # answer that. The URL is included because it is where the attachment UUID
-  # lives — `attachment.get_inline`'s own parameter documentation points the
+  # lives — `attachment_get_inline`'s own parameter documentation points the
   # agent at `message.attachments[].url` for exactly this — so the agent can
   # fetch the bytes without a round trip to the human.
   @spec describe_attachments(list()) :: binary()

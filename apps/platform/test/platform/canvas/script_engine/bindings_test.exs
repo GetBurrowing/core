@@ -112,7 +112,7 @@ defmodule Platform.Canvas.ScriptEngine.BindingsTest do
     |> get_in(["props", "value"])
   end
 
-  describe "canvas.patch as a user principal" do
+  describe "canvas_patch as a user principal" do
     test "a space member patches the owning canvas and the revision bumps", %{
       space: space,
       canvas: canvas
@@ -177,7 +177,7 @@ defmodule Platform.Canvas.ScriptEngine.BindingsTest do
       add_user!(space.id, user.id)
       {"Original", other_before} = served(other.id)
 
-      call = "suite.call('canvas.patch', {canvas_id: '#{other.id}', operations: #{@rename}})"
+      call = "suite.call('canvas_patch', {canvas_id: '#{other.id}', operations: #{@rename}})"
       assert {:ok, ops, []} = run(probe(call), canvas, user_actor(user))
       assert %{"ok" => true, "data" => %{"canvas_id" => id}} = values(ops)
       assert id == canvas.id
@@ -202,14 +202,57 @@ defmodule Platform.Canvas.ScriptEngine.BindingsTest do
     end
   end
 
-  describe "canvas.patch as an agent principal" do
+  describe "the legacy dotted name (task 01a14a7f stage 3)" do
+    test "a persisted script calling suite.call('canvas.patch') still patches, and is counted",
+         %{space: space, canvas: canvas} do
+      user = create_user!()
+      add_user!(space.id, user.id)
+      {"Original", before} = served(canvas.id)
+
+      Platform.TelemetryHelpers.attach_scoped(
+        Platform.Federation.ToolAliases.legacy_event(),
+        {:legacy, "canvas.patch"},
+        self(),
+        tag: :legacy
+      )
+
+      call = "suite.call('canvas.patch', {operations: #{@rename}})"
+      assert {:ok, ops, []} = run(probe(call), canvas, user_actor(user))
+      assert %{"ok" => true, "data" => %{"canvas_id" => id, "revision" => rev}} = values(ops)
+      assert id == canvas.id
+      assert {"Rewritten", ^rev} = served(canvas.id)
+      assert rev > before
+
+      assert_receive {:legacy, _event, %{count: 1},
+                      %{legacy: "canvas.patch", canonical: "canvas_patch", runtime_id: nil}}
+    end
+
+    test "the canonical name emits no legacy event", %{space: space, canvas: canvas} do
+      user = create_user!()
+      add_user!(space.id, user.id)
+
+      Platform.TelemetryHelpers.attach_scoped(
+        Platform.Federation.ToolAliases.legacy_event(),
+        :caller,
+        self(),
+        tag: :legacy
+      )
+
+      call = "suite.call('canvas_patch', {operations: #{@rename}})"
+      assert {:ok, ops, []} = run(probe(call), canvas, user_actor(user))
+      assert %{"ok" => true} = values(ops)
+      refute_received {:legacy, _, _, _}
+    end
+  end
+
+  describe "canvas_patch as an agent principal" do
     setup %{space: space} do
       agent = insert_agent!()
       add_agent!(space.id, agent.id)
       %{agent: agent, actor: %{type: "agent", id: agent.id, display_name: agent.name}}
     end
 
-    test "a participant agent whose runtime holds canvas.patch patches", %{
+    test "a participant agent whose runtime holds canvas_patch patches", %{
       canvas: canvas,
       agent: agent,
       actor: actor
@@ -229,7 +272,7 @@ defmodule Platform.Canvas.ScriptEngine.BindingsTest do
       assert {"Original", _} = served(canvas.id)
     end
 
-    test "a runtime without canvas.patch is refused", %{
+    test "a runtime without canvas_patch is refused", %{
       canvas: canvas,
       agent: agent,
       actor: actor
@@ -255,8 +298,9 @@ defmodule Platform.Canvas.ScriptEngine.BindingsTest do
   end
 
   describe "the registry" do
-    test "canvas.patch is the only binding" do
-      assert Bindings.names() == ["canvas.patch"]
+    test "canvas_patch is the only binding, under its name and its legacy dotted name" do
+      assert Enum.sort(Bindings.names()) == ["canvas.patch", "canvas_patch"]
+      assert Bindings.registry()["canvas.patch"] == Bindings.registry()["canvas_patch"]
     end
 
     test "unregistered names are forbidden / binding_not_registered", %{
@@ -271,7 +315,7 @@ defmodule Platform.Canvas.ScriptEngine.BindingsTest do
             "suite.call('chat.post_message', {content: 'x'})",
             "suite.call('suite_run', {script: '1'})",
             "store.set('k', 1)",
-            "suite.call('canvas.create', {})"
+            "suite.call('canvas_create', {})"
           ] do
         assert {:ok, ops, []} = run(probe(call), canvas, user_actor(user))
 

@@ -54,7 +54,7 @@ defmodule Platform.Federation.ToolAuthorization do
       hold its required permission or its tool profile omits the module.
     * `{:unknown_tool, suggestion}` — `name` is absent from the catalogue
       entirely. There is no grant to be missing — a typo, or a separator
-      mismatch (`canvas.create` vs `canvas_create`) named something that was
+      mismatch (`skill-list` vs `skill_list`) named something that was
       never registered. `suggestion` is a catalogue name reachable by
       separator-normalised equality, or `nil` if none matches.
 

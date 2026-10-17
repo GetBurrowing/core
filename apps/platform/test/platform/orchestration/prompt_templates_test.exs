@@ -4106,6 +4106,8 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
              "skill-discovery section must reference the skill_list MCP tool"
 
       # Evidence workflow anchors
+      # `federation.preamble` is a force-updated slug, so task 01a14a7f stage 3
+      # left its body dotted; the dotted name is a hidden alias that still calls.
       assert preamble =~ "attachment.upload_start",
              "evidence workflow must reference the attachment.upload_start tool (dot form)"
 

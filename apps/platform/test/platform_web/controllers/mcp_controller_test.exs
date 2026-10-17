@@ -97,9 +97,9 @@ defmodule PlatformWeb.MCPControllerTest do
       names = Enum.map(tools, & &1["name"])
       assert "federation_status" in names
       assert "task_create" in names
-      assert "canvas.create" in names
-      assert "canvas.patch" in names
-      assert "canvas.describe" in names
+      assert "canvas_create" in names
+      assert "canvas_patch" in names
+      assert "canvas_describe" in names
       assert Enum.all?(tools, &Map.has_key?(&1, "inputSchema"))
     end
 
@@ -111,7 +111,7 @@ defmodule PlatformWeb.MCPControllerTest do
       names = Enum.map(tools, & &1["name"])
       assert "federation_status" in names
       refute "task_create" in names
-      refute "canvas.create" in names
+      refute "canvas_create" in names
     end
 
     test "returns an empty list when no bundles are allowed", %{conn: conn} do
@@ -324,7 +324,7 @@ defmodule PlatformWeb.MCPControllerTest do
       |> mcp_post(
         token,
         rpc("tools/call", %{
-          "name" => "attachment.get_inline",
+          "name" => "attachment_get_inline",
           "arguments" => %{"attachment_id" => attachment.id}
         })
       )
@@ -996,7 +996,7 @@ defmodule PlatformWeb.MCPControllerTest do
       names = tools |> Enum.map(& &1["name"]) |> Enum.sort()
       assert names == Enum.sort(@chat_names)
       refute "task_create" in names
-      refute "canvas.create" in names
+      refute "canvas_create" in names
       refute "space_leave" in names
     end
 
@@ -1053,7 +1053,7 @@ defmodule PlatformWeb.MCPControllerTest do
       %{"result" => %{"tools" => tools}} = json_response(conn, 200)
       names = Enum.map(tools, & &1["name"])
       assert "task_create" in names
-      assert "canvas.create" in names
+      assert "canvas_create" in names
 
       conn2 =
         build_conn()

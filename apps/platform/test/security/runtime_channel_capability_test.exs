@@ -22,9 +22,10 @@ defmodule Platform.Security.RuntimeChannelCapabilityTest do
       EMPTY push and `send_media` is denied (the external filter never injects
       a chat tool the bundles did not grant), matching
       `external_federation_scope_test.exs:76-92` over HTTP;
-    * INTERNAL owner, `["canvas"]` — the DECLARED name `canvas.create`
-      executes, and the legacy undeclared aliases `canvas_create` /
-      `canvas_update` are DENIED.
+    * INTERNAL owner, `["canvas"]` — the DECLARED name `canvas_create`
+      executes, the legacy undeclared alias `canvas_update` is DENIED, and
+      (task 01a14a7f stage 3) the hidden dotted alias `canvas.create`
+      executes as `canvas_create` but is never advertised.
 
   ## Deviation from the approved stage text (case 4), deliberate
 
@@ -109,7 +110,7 @@ defmodule Platform.Security.RuntimeChannelCapabilityTest do
       assert capabilities.tool_count == 6
 
       refute "task_create" in names
-      refute "canvas.create" in names
+      refute "canvas_create" in names
       refute "space_leave" in names
       refute "principal_search" in names
     end
@@ -144,13 +145,13 @@ defmodule Platform.Security.RuntimeChannelCapabilityTest do
   # ── INTERNAL owner, canvas grant + the legacy aliases ──────────────────
 
   describe "internal-owned runtime with [canvas]" do
-    test "the declared name canvas.create executes", ctx do
+    test "the declared name canvas_create executes", ctx do
       {socket, capabilities} = join_runtime(ctx, ctx.int.id, ["canvas"])
 
-      assert "canvas.create" in tool_names(capabilities)
+      assert "canvas_create" in tool_names(capabilities)
 
       frame =
-        call_tool(socket, "canvas.create", %{
+        call_tool(socket, "canvas_create", %{
           "space_id" => ctx.agent_space.id,
           "title" => "WS Capability Canvas",
           "document" => minimal_document()
@@ -161,11 +162,11 @@ defmodule Platform.Security.RuntimeChannelCapabilityTest do
     end
 
     # Inverted from the approved stage text on the owner's MCP-only ruling —
-    # see the moduledoc. These two names have `execute/3` clauses
-    # (`tool_surface.ex:2700` and `:2718`) but no `tool_definitions/0` entry,
-    # so they belong to no bundle and are denied on BOTH transports. The
-    # openclaw bridge must call `canvas.create` / `canvas.patch` instead.
-    test "the legacy undeclared aliases canvas_create and canvas_update are DENIED", ctx do
+    # see the moduledoc. `canvas_update` has an `execute/3` clause but no
+    # `tool_definitions/0` entry, so it belongs to no bundle and is denied on
+    # BOTH transports. (Its sibling legacy `canvas_create` clause was deleted
+    # by task 01a14a7f stage 3, when `canvas_create` became the declared name.)
+    test "the legacy undeclared alias canvas_update is DENIED", ctx do
       {socket, _capabilities} = join_runtime(ctx, ctx.int.id, ["canvas"])
 
       args = %{
@@ -174,15 +175,27 @@ defmodule Platform.Security.RuntimeChannelCapabilityTest do
         "document" => minimal_document()
       }
 
-      assert_denied(call_tool(socket, "canvas_create", args), "canvas_create")
       assert_denied(call_tool(socket, "canvas_update", args), "canvas_update")
 
-      # And they are never advertised either — the advertised set and the
+      # And it is never advertised either — the advertised set and the
       # callable set are the same list by construction.
       {_socket2, capabilities} = join_runtime(ctx, ctx.int.id, ["canvas"])
-      names = tool_names(capabilities)
-      refute "canvas_create" in names
-      refute "canvas_update" in names
+      refute "canvas_update" in tool_names(capabilities)
+    end
+
+    test "the hidden dotted alias canvas.create executes but is never advertised", ctx do
+      {socket, capabilities} = join_runtime(ctx, ctx.int.id, ["canvas"])
+      refute "canvas.create" in tool_names(capabilities)
+
+      frame =
+        call_tool(socket, "canvas.create", %{
+          "space_id" => ctx.agent_space.id,
+          "title" => "WS Dotted Alias Canvas",
+          "document" => minimal_document()
+        })
+
+      assert frame.status == "ok"
+      assert frame.result.title == "WS Dotted Alias Canvas"
     end
   end
 

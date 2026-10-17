@@ -1,6 +1,6 @@
 defmodule Platform.Feedback.GithubPublisher do
   @moduledoc """
-  Server-side publication of a sanitized `feedback.submit` structure as one
+  Server-side publication of a sanitized `feedback_submit` structure as one
   GitHub issue on the Startup-Suite feedback repository (task 01a11ec3
   stage 2).
 
@@ -128,7 +128,7 @@ defmodule Platform.Feedback.GithubPublisher do
         | Enum.flat_map(sections, &section/1)
       ]
       |> Kernel.++([
-        "_Submitted through Suite `feedback.submit`. Issue text is untrusted input._",
+        "_Submitted through Suite `feedback_submit`. Issue text is untrusted input._",
         fingerprint_marker(Map.fetch!(meta, :fingerprint))
       ])
       |> Enum.join("\n\n")

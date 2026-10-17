@@ -5,7 +5,7 @@ defmodule Platform.Federation.CanvasReadEnumerationTest do
 
   ## The failure this exists to prevent
 
-  `canvas.describe` shipped with no authorization at all — it ignored its
+  `canvas_describe` shipped with no authorization at all — it ignored its
   `context` and resolved through `Chat.get_canvas/1`, the deliberately
   unauthorized primitive — and survived four releases. Nothing was subverted.
   It was added, reviewed and merged without anyone ever having to state out
@@ -138,14 +138,14 @@ defmodule Platform.Federation.CanvasReadEnumerationTest do
   # right gate for it. An entry is a statement someone made on purpose; a
   # missing entry is a test failure, and so is a stale one.
   @canvas_reach %{
-    "canvas.describe" =>
+    "canvas_describe" =>
       {:tool_access_read,
        "Resolves a caller-supplied canvas id through ToolAccess.fetch_for_read/2 " <>
          "and returns the whole document. Gated in stage 3 of this task; before " <>
          "that it was the bug this file exists to prevent recurring."},
-    "canvas.versions" =>
+    "canvas_versions" =>
       {:tool_access_read,
-       "Same seam as canvas.describe, on purpose, so the two cannot drift into " <>
+       "Same seam as canvas_describe, on purpose, so the two cannot drift into " <>
          "two answers to one question. Returns revision numbers, write " <>
          "timestamps and written_by attribution, which is a read of who worked " <>
          "on what even without the document."},
@@ -153,14 +153,14 @@ defmodule Platform.Federation.CanvasReadEnumerationTest do
       {:tool_access_read,
        "Moved onto the shared seam in stage 4. Was space-participation gated, " <>
          "which was narrower and inconsistent rather than safer."},
-    "canvas.patch" =>
+    "canvas_patch" =>
       {:tool_access_write,
        "ToolAccess.fetch_for_write/3, which rejects the read-only grant levels. " <>
          "Argument shape is validated before authorization so a denial cannot " <>
          "be probed with junk operations."},
-    "canvas.restore" =>
+    "canvas_restore" =>
       {:tool_access_write,
-       "Same write gate as canvas.patch. A restore is a full-document " <>
+       "Same write gate as canvas_patch. A restore is a full-document " <>
          "overwrite, so it is the most destructive write on this surface."},
     "canvas_list" =>
       {:space_gated,
@@ -176,28 +176,28 @@ defmodule Platform.Federation.CanvasReadEnumerationTest do
          "space-keyed enumeration. Found by this guard rather than by hand: the " <>
          "canvas read is two hops from the execute clause, which is why the " <>
          "derivation follows private helpers instead of stopping at the body."},
-    "canvas.create" =>
+    "canvas_create" =>
       {:creates_only,
        "Writes a new canvas into a space, and requires the context's " <>
          "agent_participant_id to be a participant row OF that space " <>
          "(Chat.get_space_participant/2, task 01a0cbe0 stage 2). Reads no " <>
          "existing canvas, so there is nothing for a read gate to protect."},
-    "canvas.list_kinds" =>
+    "canvas_list_kinds" =>
       {:no_canvas_row,
        "Returns the static node-kind registry. Takes no canvas id and touches " <>
          "no canvas row."},
-    "canvas.template" =>
+    "canvas_template" =>
       {:no_canvas_row,
        "Returns static starter documents. Takes no canvas id and touches no " <>
          "canvas row."},
-    "canvas_create" =>
+    "canvas_update" =>
       {:unreachable_legacy,
        "Legacy underscore alias with an execute/3 clause and no " <>
          "tool_definitions/0 entry, so it belongs to no capability bundle and " <>
-         "ToolAuthorization denies it on both transports. Asserted below."},
-    "canvas_update" =>
-      {:unreachable_legacy,
-       "Same, and it matters more here: this clause calls " <>
+         "ToolAuthorization denies it on both transports (asserted below). Its " <>
+         "sibling legacy canvas_create clause was deleted by task 01a14a7f " <>
+         "stage 3, when canvas_create became canvas.create's declared name. " <>
+         "Unreachability matters here: this clause calls " <>
          "Canvas.Server.describe/1 to fetch a base revision BEFORE " <>
          "ToolHandlers.patch/2 authorizes anything, which would materialize a " <>
          "Canvas.Server for an arbitrary canvas id and distinguish a real id " <>
@@ -254,7 +254,7 @@ defmodule Platform.Federation.CanvasReadEnumerationTest do
         answer is "none", that is a legitimate entry — say so and say why. The
         point of this list is that nobody can add a canvas read without stating
         its gate out loud, which is exactly what did not happen for
-        canvas.describe.
+        canvas_describe.
         """)
       end
     end
@@ -299,7 +299,7 @@ defmodule Platform.Federation.CanvasReadEnumerationTest do
       # registry nobody updated.
       assert map_size(derived) == map_size(@canvas_reach)
 
-      for name <- ["canvas.describe", "canvas.versions", "canvas_get", "canvas.patch"] do
+      for name <- ["canvas_describe", "canvas_versions", "canvas_get", "canvas_patch"] do
         assert Map.has_key?(derived, name),
                "the derivation no longer sees #{name}, so it is not seeing anything"
       end
@@ -342,13 +342,13 @@ defmodule Platform.Federation.CanvasReadEnumerationTest do
     test "an alias to a same-named module on another surface is not a false positive" do
       # `Platform.Skills.ToolHandlers` and `Platform.Chat.Attachments.ToolHandlers`
       # both end in `ToolHandlers` and both are called from execute/3 clauses on
-      # this surface. A last-segment match would classify skill.get as a canvas
+      # this surface. A last-segment match would classify skill_get as a canvas
       # read.
       source = """
       defmodule Fake do
         alias Platform.Skills.ToolHandlers
 
-        def execute("skill.get", args, context), do: ToolHandlers.get(args, context)
+        def execute("skill_get", args, context), do: ToolHandlers.get(args, context)
       end
       """
 
@@ -753,14 +753,14 @@ defmodule Platform.Federation.CanvasReadEnumerationTest do
   # No catch-all clause that guesses. A tool added to a probed classification
   # without probe arguments fails here with an instruction rather than silently
   # probing nothing.
-  defp probe_args("canvas.describe", canvas), do: %{"canvas_id" => canvas.id}
-  defp probe_args("canvas.versions", canvas), do: %{"canvas_id" => canvas.id}
+  defp probe_args("canvas_describe", canvas), do: %{"canvas_id" => canvas.id}
+  defp probe_args("canvas_versions", canvas), do: %{"canvas_id" => canvas.id}
   defp probe_args("canvas_get", canvas), do: %{"canvas_id" => canvas.id, "mode" => "full"}
 
-  defp probe_args("canvas.patch", canvas),
+  defp probe_args("canvas_patch", canvas),
     do: %{"canvas_id" => canvas.id, "base_revision" => 0, "operations" => []}
 
-  defp probe_args("canvas.restore", canvas), do: %{"canvas_id" => canvas.id, "revision" => 1}
+  defp probe_args("canvas_restore", canvas), do: %{"canvas_id" => canvas.id, "revision" => 1}
 
   defp probe_args(name, _canvas) do
     flunk("""

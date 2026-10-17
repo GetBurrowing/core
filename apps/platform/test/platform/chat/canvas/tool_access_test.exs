@@ -403,11 +403,11 @@ defmodule Platform.Chat.Canvas.ToolAccessTest do
 
       assert {:error, payload} =
                ToolAccess.fetch_for_write(canvas.id, context,
-                 denial: "canvas.restore overwrites the whole document.",
+                 denial: "canvas_restore overwrites the whole document.",
                  suggestion: "Ask a human."
                )
 
-      assert payload.error == "canvas.restore overwrites the whole document."
+      assert payload.error == "canvas_restore overwrites the whole document."
       assert payload.suggestion == "Ask a human."
       assert Enum.sort(Map.keys(payload)) == @allowed_keys
     end

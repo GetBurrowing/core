@@ -50,7 +50,7 @@ defmodule Platform.Chat.Canvas.ToolAccess do
   ## `:not_found` and `:forbidden` stay distinct
 
   Collapsing read denials into not-found would relocate the existence oracle
-  rather than remove it: `canvas.patch` and `canvas.restore` keep the two
+  rather than remove it: `canvas_patch` and `canvas_restore` keep the two
   answers apart, so a caller can probe the write door and read the difference.
   The distinction is also load-bearing for a model caller — not-found means the
   attachment it was handed is stale, forbidden means ask for roster.
@@ -59,7 +59,7 @@ defmodule Platform.Chat.Canvas.ToolAccess do
 
   No title, no `space_id`, no org, no space kind. A denial must not let the
   caller tell a channel canvas from a DM canvas from an execution-space canvas.
-  The SUCCESS payload of `canvas.describe` does return `space_id`; that is a
+  The SUCCESS payload of `canvas_describe` does return `space_id`; that is a
   read the caller was authorized for, and the denial must not inherit it.
 
   ## Every forbidden read is emitted, not only returned
@@ -206,7 +206,7 @@ defmodule Platform.Chat.Canvas.ToolAccess do
   ## Options
 
     * `:denial` — the forbidden sentence. The two write tools differ only here
-      (`canvas.patch` explains that read does not confer write; `canvas.restore`
+      (`canvas_patch` explains that read does not confer write; `canvas_restore`
       explains that it overwrites the whole document), so the sentence is the
       caller's and the resolution is shared.
     * `:suggestion` — the recovery hint. Defaults to asking a human for roster.

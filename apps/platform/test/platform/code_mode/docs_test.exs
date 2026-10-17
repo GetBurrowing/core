@@ -116,10 +116,13 @@ defmodule Platform.CodeMode.DocsTest do
       assert docs =~ "Returns:"
     end
 
-    test "dotted names nest and non-identifier keys are quoted", %{runtime: runtime} do
+    # Task 01a14a7f stage 3: the canvas tools lost their dots. Their legacy
+    # dotted names are still BOUND (`suite.canvas.create`), but are never
+    # described, so nothing nests under `canvas` any more.
+    test "canvas tools render flat by their underscore names", %{runtime: runtime} do
       docs = Docs.render(runtime, bundle: "canvas")
-      assert docs =~ "\n  canvas: {\n"
-      assert docs =~ ~r/^    create\(args/m
+      assert docs =~ ~r/^  canvas_create\(args/m
+      refute docs =~ "\n  canvas: {\n"
       assert docs =~ "call(name: string, args?: Record<string, unknown>): unknown;"
     end
 

@@ -4,15 +4,15 @@ defmodule Platform.Chat.Canvas.Tools do
 
   Three tools:
 
-    * `canvas.create(space_id, title?, document)` — create a new canvas with
+    * `canvas_create(space_id, title?, document)` — create a new canvas with
       a validated canonical document.
-    * `canvas.patch(canvas_id, base_revision, operations)` — apply operations
+    * `canvas_patch(canvas_id, base_revision, operations)` — apply operations
       with rebase-or-reject concurrency. Returns the new revision or a
       structured rejection the agent can use to self-correct.
-    * `canvas.describe(canvas_id)` — return `{document, revision, view_url,
+    * `canvas_describe(canvas_id)` — return `{document, revision, view_url,
       presence, recent_events}`. Idempotent, cheap; agents should call freely.
 
-  The `document` parameter of `canvas.create` and `replace_document` patches
+  The `document` parameter of `canvas_create` and `replace_document` patches
   is a recursive discriminated union over every registered kind. Schemas are
   compiled at runtime from `Platform.Chat.Canvas.Kinds.tool_schemas/0` — the
   next call to `definitions/0` reflects any new kind immediately.
@@ -30,11 +30,11 @@ defmodule Platform.Chat.Canvas.Tools do
   alias Platform.Chat.Canvas.Kinds
 
   @tool_names [
-    "canvas.create",
-    "canvas.patch",
-    "canvas.describe",
-    "canvas.versions",
-    "canvas.restore"
+    "canvas_create",
+    "canvas_patch",
+    "canvas_describe",
+    "canvas_versions",
+    "canvas_restore"
   ]
 
   # The sharing boundary, stated as the code enforces it (task 019e2c4b).
@@ -134,11 +134,11 @@ defmodule Platform.Chat.Canvas.Tools do
     ]
   end
 
-  # ── canvas.create ────────────────────────────────────────────────────────
+  # ── canvas_create ────────────────────────────────────────────────────────
 
   defp create_tool do
     %{
-      "name" => "canvas.create",
+      "name" => "canvas_create",
       "description" =>
         "Create a new live canvas in a space. The document must be a canonical node tree with a root node whose type is one of the registered kinds: #{Enum.join(Kinds.names(), ", ")}. Returns the canvas id, title, kind, revision, and view_url — the canonical page for the canvas, which you can cite back to a human. #{@sharing_boundary}",
       "parameters" => %{
@@ -154,11 +154,11 @@ defmodule Platform.Chat.Canvas.Tools do
     }
   end
 
-  # ── canvas.patch ─────────────────────────────────────────────────────────
+  # ── canvas_patch ─────────────────────────────────────────────────────────
 
   defp patch_tool do
     %{
-      "name" => "canvas.patch",
+      "name" => "canvas_patch",
       "description" =>
         "Apply patch operations to a canvas. Requires the current base_revision so the server can rebase-or-reject. On rejection the response includes a structured reason, the offending op index, the current revision, and (when relevant) the current tree so the agent can retry.",
       "parameters" => %{
@@ -178,11 +178,11 @@ defmodule Platform.Chat.Canvas.Tools do
     }
   end
 
-  # ── canvas.describe ──────────────────────────────────────────────────────
+  # ── canvas_describe ──────────────────────────────────────────────────────
 
   defp describe_tool do
     %{
-      "name" => "canvas.describe",
+      "name" => "canvas_describe",
       "description" =>
         "Return the current document, revision, view_url, presence, and recent events for a canvas you hold a grant on. Cheap and idempotent; call this before emitting patches to ensure the caller's base_revision is fresh, or to recover the view_url of a canvas you did not create. #{@read_gate} #{@sharing_boundary}",
       "parameters" => %{
@@ -196,13 +196,13 @@ defmodule Platform.Chat.Canvas.Tools do
     }
   end
 
-  # ── canvas.versions ──────────────────────────────────────────────────────
+  # ── canvas_versions ──────────────────────────────────────────────────────
 
   defp versions_tool do
     %{
-      "name" => "canvas.versions",
+      "name" => "canvas_versions",
       "description" =>
-        "List a canvas's revision history newest-first. Each entry has revision, written_at, written_by, and a 1-sentence op_summary. Use limit + before_revision to paginate. Same auth gate as canvas.describe, literally: both resolve through Platform.Chat.Canvas.ToolAccess.fetch_for_read/2. #{@read_gate} #{@sharing_boundary}",
+        "List a canvas's revision history newest-first. Each entry has revision, written_at, written_by, and a 1-sentence op_summary. Use limit + before_revision to paginate. Same auth gate as canvas_describe, literally: both resolve through Platform.Chat.Canvas.ToolAccess.fetch_for_read/2. #{@read_gate} #{@sharing_boundary}",
       "parameters" => %{
         "type" => "object",
         "additionalProperties" => false,
@@ -220,13 +220,13 @@ defmodule Platform.Chat.Canvas.Tools do
     }
   end
 
-  # ── canvas.restore ───────────────────────────────────────────────────────
+  # ── canvas_restore ───────────────────────────────────────────────────────
 
   defp restore_tool do
     %{
-      "name" => "canvas.restore",
+      "name" => "canvas_restore",
       "description" =>
-        "Replace the live canvas with the document from a historical revision. The restore is itself a write — it produces a new revision row at current+1. Same auth gate as canvas.patch.",
+        "Replace the live canvas with the document from a historical revision. The restore is itself a write — it produces a new revision row at current+1. Same auth gate as canvas_patch.",
       "parameters" => %{
         "type" => "object",
         "additionalProperties" => false,

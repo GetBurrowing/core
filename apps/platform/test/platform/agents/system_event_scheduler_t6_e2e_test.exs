@@ -742,8 +742,8 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
     # `task` bundle, the janitor's escalation path; no schedule, no trigger
     # and no historian surface.
     # (+janitor_hand_back -> 126)
-    # bumped by task 01a1316b-4e46 stage 1 — `prototype.publish`,
-    # `prototype.versions`, `prototype.rollback` in the new `prototype` bundle
+    # bumped by task 01a1316b-4e46 stage 1 — `prototype_publish`,
+    # `prototype_versions`, `prototype_rollback` in the new `prototype` bundle
     # (ADR 0057); no schedule, no trigger and no historian surface.
     # (+3 prototype tools -> 129)
     # bumped by task 01a131c5 stage 1 — `vault_fetch` and `vault_list` in the

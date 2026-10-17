@@ -95,7 +95,7 @@ defmodule Platform.Chat.Attachments.ToolHandlersTest do
 
       assert {:error, payload} = ToolHandlers.upload_inline(args, context(participant))
       assert payload.limit == 100
-      assert payload.use == "attachment.upload_start"
+      assert payload.use == "attachment_upload_start"
       assert payload.error =~ "exceeds limit"
     end
 

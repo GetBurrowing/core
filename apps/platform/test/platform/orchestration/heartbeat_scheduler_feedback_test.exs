@@ -2,7 +2,7 @@ defmodule Platform.Orchestration.HeartbeatSchedulerFeedbackTest do
   @moduledoc """
   Task 01a11ec3 stage 2: the assigns `HeartbeatScheduler` builds for every
   task dispatch and for the nudge carry `feedback_guidance` from the same
-  capability predicate `ToolSurface` lists `feedback.submit` under, so a
+  capability predicate `ToolSurface` lists `feedback_submit` under, so a
   dispatch advertises the tool exactly when the receiving agent can call it.
 
   Rendered through the real entry points (`dispatch_prompt/4`,
@@ -116,13 +116,13 @@ defmodule Platform.Orchestration.HeartbeatSchedulerFeedbackTest do
     ]
   end
 
-  test "every task dispatch and the nudge advertise feedback.submit when enabled" do
+  test "every task dispatch and the nudge advertise feedback_submit when enabled" do
     for value <- ["quarantined", "trusted"] do
       set_policy(value)
 
       for {phase, render} <- dispatches() do
         prompt = render.()
-        assert prompt =~ "`feedback.submit`", "#{phase} (#{value}) must advertise feedback.submit"
+        assert prompt =~ "`feedback_submit`", "#{phase} (#{value}) must advertise feedback_submit"
         refute prompt =~ "{{feedback_guidance}}", "#{phase} left the placeholder unresolved"
       end
     end
@@ -133,7 +133,7 @@ defmodule Platform.Orchestration.HeartbeatSchedulerFeedbackTest do
 
     for {phase, render} <- dispatches() do
       prompt = render.()
-      refute prompt =~ "feedback.submit", "#{phase} advertised a tool the agent cannot call"
+      refute prompt =~ "feedback_submit", "#{phase} advertised a tool the agent cannot call"
       refute prompt =~ "Reporting a defect in Suite itself"
       refute prompt =~ "{{feedback_guidance}}"
     end
@@ -146,10 +146,10 @@ defmodule Platform.Orchestration.HeartbeatSchedulerFeedbackTest do
     set_policy("quarantined")
 
     assert HeartbeatScheduler.nudge_prompt(task("in_progress"), in_progress) =~
-             "`feedback.submit`"
+             "`feedback_submit`"
 
     set_policy("disabled")
-    refute HeartbeatScheduler.nudge_prompt(task("in_progress"), in_progress) =~ "feedback.submit"
+    refute HeartbeatScheduler.nudge_prompt(task("in_progress"), in_progress) =~ "feedback_submit"
   end
 
   test "the enabled nudge stays inside the short-form budget" do

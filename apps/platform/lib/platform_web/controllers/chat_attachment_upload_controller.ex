@@ -12,7 +12,7 @@ defmodule PlatformWeb.ChatAttachmentUploadController do
 
   A key is reserved in one of two places (task 01a091b7):
 
-    * `chat_attachments` — `attachment.upload_start`; finalized through
+    * `chat_attachments` — `attachment_upload_start`; finalized through
       `Platform.Chat.Attachments.ToolHandlers.finalize_pending/2` (dedup
       included), response `%{id, url, byte_size, content_hash, deduplicated}`.
     * `platform_files` — `file_add`'s presigned branch; finalized through

@@ -95,7 +95,7 @@ defmodule Platform.Federation.ToolArguments do
   requirements leave this module" below). Nine are aspirational:
 
     * Five carry an undeclared alias — four `id`-for-`<x>_id` fallbacks plus
-      `canvas.create`'s `initial_state`-for-`document`.
+      `canvas_create`'s `initial_state`-for-`document`.
     * Three resolve `space_id` from the call context when the argument is
       absent, so a context-bound runtime legitimately omits it.
     * One (`task_create`'s `title`) has an in-source comment declaring the
@@ -155,7 +155,7 @@ defmodule Platform.Federation.ToolArguments do
   Three kinds of check deliberately survived in the handlers, because the gate
   does not and should not model them:
 
-    * **Conditional requirements.** `skill.get`'s "exactly one of `slug` or
+    * **Conditional requirements.** `skill_get`'s "exactly one of `slug` or
       `id`", and since stage 5 `stage_list`'s "exactly one of `plan_id` or
       `task_id`" — both parameters are `required: false`, so there is nothing
       for a per-parameter gate to enforce.
@@ -187,7 +187,7 @@ defmodule Platform.Federation.ToolArguments do
   scope here entirely. A per-parameter gate cannot express "exactly one of
   these two": declaring either one `required: true` would refuse the other's
   callers, and declaring neither leaves nothing to enforce. Both are now
-  `required: false` and the handler refuses on its own, `skill.get`-style,
+  `required: false` and the handler refuses on its own, `skill_get`-style,
   with its own closed code set (`missing_plan_reference`,
   `plan_task_mismatch`, `no_current_plan`) documented in the tool's
   `limitations` and compared against observed behaviour by a test.
@@ -250,11 +250,11 @@ defmodule Platform.Federation.ToolArguments do
   # Aliased parameters are deliberately absent from this list: an alias is
   # still a requirement, just one that a second key can satisfy.
   @behaviour_exempt [
-    {"attachment.upload_inline", "space_id",
+    {"attachment_upload_inline", "space_id",
      "Platform.Chat.Attachments.ToolHandlers.require_space_id/2 falls back to context[:space_id]; a space-bound runtime legitimately omits the argument."},
-    {"attachment.upload_start", "space_id",
+    {"attachment_upload_start", "space_id",
      "Platform.Chat.Attachments.ToolHandlers.require_space_id/2 falls back to context[:space_id]; a space-bound runtime legitimately omits the argument."},
-    {"canvas.create", "space_id",
+    {"canvas_create", "space_id",
      "Platform.Chat.Canvas.ToolHandlers.create/2 falls back to context[:space_id]; a space-bound runtime legitimately omits the argument."},
     {"task_create", "title",
      "ToolSurface's task_create clause applies Map.put_new(\"title\", \"Untitled Task\") under an in-source comment declaring the absent-key defaults preserved for wire compatibility."}

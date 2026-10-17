@@ -6,7 +6,7 @@ defmodule Platform.Chat.Canvas.Theme do
   kind module consumes a small subset at render time. Themes are stored in the
   canvas document under `theme` (or `meta.theme` for per-canvas overrides),
   and are patchable like any other prop — agents and humans can both update
-  them via `canvas.patch`.
+  them via `canvas_patch`.
 
   ## Tokens
 

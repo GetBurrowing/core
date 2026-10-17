@@ -9,8 +9,8 @@ defmodule Platform.Chat.Canvas.Kinds.GameStream do
   time, which lists it (via `Platform.GameStream.Extension`) while
   `Platform.GameStream.enabled?/0` is true, and every other registry reader
   (`by_name/0`, `names/0`, `summaries/0`, `tool_schemas/0`) goes through
-  `all/0`. With the flag unset it is therefore absent from `canvas.list_kinds`,
-  `canvas.create` rejects it as an unknown kind, and an EXISTING document that
+  `all/0`. With the flag unset it is therefore absent from `canvas_list_kinds`,
+  `canvas_create` rejects it as an unknown kind, and an EXISTING document that
   holds a `game_stream` node renders that node through
   `Platform.Chat.Canvas.Renderer`'s fallback (`[unknown node type:
   game_stream]`) — the document itself is untouched, and the node renders

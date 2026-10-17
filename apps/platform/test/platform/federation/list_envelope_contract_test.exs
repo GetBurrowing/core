@@ -1162,17 +1162,17 @@ defmodule Platform.Federation.ListEnvelopeContractTest do
     end
   end
 
-  describe "runtime conformance: canvas.list_kinds" do
+  describe "runtime conformance: canvas_list_kinds" do
     test "every registered kind, whole" do
       corpus = length(Kinds.summaries())
       assert corpus > 0
 
-      env = call("canvas.list_kinds", %{})
-      assert_unbounded("canvas.list_kinds", env, corpus)
+      env = call("canvas_list_kinds", %{})
+      assert_unbounded("canvas_list_kinds", env, corpus)
     end
   end
 
-  describe "runtime conformance: skill.list" do
+  describe "runtime conformance: skill_list" do
     test "every matching skill, whole; count keeps its meaning" do
       marker = "envskill#{u()}"
 
@@ -1180,8 +1180,8 @@ defmodule Platform.Federation.ListEnvelopeContractTest do
         {:ok, _} = Platform.Skills.create_skill(%{name: "#{marker} #{i}", content: "body"})
       end
 
-      env = call("skill.list", %{"query" => marker})
-      assert_unbounded("skill.list", env, 3)
+      env = call("skill_list", %{"query" => marker})
+      assert_unbounded("skill_list", env, 3)
       assert env.count == 3
     end
   end

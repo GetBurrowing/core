@@ -7,9 +7,11 @@ defmodule Platform.CodeMode.Bindings do
 
   `tool_names/1` is `ToolAuthorization.effective_tools/1` minus `suite_run`
   itself: a script sees exactly the tools its runtime may call over `/mcp`
-  (an external principal's chat allowlist included), bound on `suite` with
-  dotted names nested (`suite.canvas.create`, `suite.task_get`), plus the
-  generic `suite.call(name, args)`.
+  (an external principal's chat allowlist included), bound on `suite` by
+  name (`suite.canvas_create`, `suite.task_get`), plus the generic
+  `suite.call(name, args)`. The legacy dotted name of a held tool is bound
+  too and nests (`suite.canvas.create`, task 01a14a7f stage 3); it is never
+  listed by `suite_run_describe`.
 
   ## Every call is a federated tool call
 
@@ -40,18 +42,35 @@ defmodule Platform.CodeMode.Bindings do
   alias Platform.Federation
   alias Platform.Federation.Jsonable
   alias Platform.Federation.McpContent
+  alias Platform.Federation.ToolAliases
   alias Platform.Federation.ToolAuthorization
   alias Platform.Federation.ToolCall
   alias Platform.Federation.ToolCallLedger
 
   @self_tools ~w(suite_run)
 
-  @doc "Names a script may call: the runtime's effective tools minus suite_run."
+  @doc """
+  Names a script may call: the runtime's effective tools minus suite_run,
+  then the legacy dotted name of every one of them that has one (task
+  01a14a7f stage 3), so `suite.canvas.create(...)` keeps resolving. The
+  prelude nests a dotted name; a call through it reaches `ToolCall.invoke/4`
+  under that name, which resolves the alias and authorizes the canonical.
+  """
   @spec tool_names(struct()) :: [String.t()]
   def tool_names(runtime) do
-    runtime
-    |> ToolAuthorization.tool_names()
-    |> Enum.reject(&(&1 in @self_tools))
+    names =
+      runtime
+      |> ToolAuthorization.tool_names()
+      |> Enum.reject(&(&1 in @self_tools))
+
+    held = MapSet.new(names)
+
+    legacy =
+      for {legacy, canonical} <- Enum.sort(ToolAliases.aliases()),
+          MapSet.member?(held, canonical),
+          do: legacy
+
+    names ++ legacy
   end
 
   @doc """

@@ -223,7 +223,7 @@ defmodule Platform.Chat.Canvas.Server do
     # returning `{:error, reason}` — deliberately CONVERTS it into a
     # `{:conflict, …}` with a classified rejection. That is ADR 0036's
     # rebase-or-reject contract: `:conflict` IS this call's failure channel,
-    # and the public `canvas.patch` tool documents a structured rejection
+    # and the public `canvas_patch` tool documents a structured rejection
     # reason rather than an error tuple. So the callee is not missing an error
     # return — it has no error return by design, and the dead arm was removed
     # rather than the callee widened. An unexpected shape now raises
@@ -452,7 +452,7 @@ defmodule Platform.Chat.Canvas.Server do
           Multi.new()
           |> Multi.update(:canvas, Canvas.changeset(canvas, %{"document" => document}))
           # Same transaction as the canvas write, deliberately: this is the hot
-          # path (every patch, autosave, agent `canvas.patch`, and version
+          # path (every patch, autosave, agent `canvas_patch`, and version
           # restore lands here), so an index write that could fail on its own
           # would be a silently unindexed canvas nobody ever hears about.
           |> CanvasSearchIndex.upsert_multi(:canvas_search, & &1.canvas)

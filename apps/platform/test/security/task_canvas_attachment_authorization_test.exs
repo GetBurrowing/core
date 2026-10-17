@@ -1355,7 +1355,7 @@ defmodule Platform.Security.TaskCanvasAttachmentAuthorizationTest do
     # Stage 4 of task 019fb581 found that the refusal taxonomy these tests pin
     # shipped only on the WebSocket capabilities push: an agent on `/mcp` got
     # `description` and `inputSchema` and nothing else, so it learned the gate
-    # existed only by being refused by it. `canvas.create` worked around that
+    # existed only by being refused by it. `canvas_create` worked around that
     # by hand-duplicating its boundary sentence into `description`. Stage 4
     # decided NOT to do the same for these three and wrote a guard recording
     # the decision — the version of this test that asserted the taxonomy did

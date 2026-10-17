@@ -56,7 +56,7 @@ defmodule Platform.Chat.Attachments.ToolHandlers do
         {:error, reason} ->
           {:error,
            %{
-             error: "attachment.upload_inline: persist failed: #{inspect(reason)}",
+             error: "attachment_upload_inline: persist failed: #{inspect(reason)}",
              recoverable: true
            }}
       end
@@ -104,13 +104,13 @@ defmodule Platform.Chat.Attachments.ToolHandlers do
 
               {:error,
                %{
-                 error: "attachment.upload_start: presign failed: #{inspect(reason)}",
+                 error: "attachment_upload_start: presign failed: #{inspect(reason)}",
                  recoverable: true
                }}
           end
 
         {:error, %Ecto.Changeset{} = cs} ->
-          {:error, %{error: "attachment.upload_start: #{inspect(cs.errors)}", recoverable: true}}
+          {:error, %{error: "attachment_upload_start: #{inspect(cs.errors)}", recoverable: true}}
       end
     end
   end
@@ -543,7 +543,7 @@ defmodule Platform.Chat.Attachments.ToolHandlers do
          error: "attachment: inline payload exceeds limit (#{size} > #{limit} bytes)",
          recoverable: true,
          limit: limit,
-         use: "attachment.upload_start"
+         use: "attachment_upload_start"
        }}
     end
   end

@@ -82,7 +82,7 @@ defmodule Platform.Files.Storage do
   Returns a presigned upload URL for `storage_key`. Under the LocalDisk
   adapter (the only one on main) the URL is a host-relative signed route
   served by `PlatformWeb.ChatAttachmentUploadController`, which accepts
-  the byte POST for BOTH chat (`attachment.upload_start`) and Files
+  the byte POST for BOTH chat (`attachment_upload_start`) and Files
   (`file_add` presigned branch) reservations and finalizes whichever
   table owns the key (task 01a091b7). A future native-presign adapter
   (R2/S3 presigned POST) would bypass that controller and needs its own

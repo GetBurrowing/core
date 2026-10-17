@@ -1,6 +1,6 @@
 defmodule Platform.Feedback.Redaction do
   @moduledoc """
-  Secret and credential scrubbing for `feedback.submit` text (task 01a11ec3
+  Secret and credential scrubbing for `feedback_submit` text (task 01a11ec3
   stage 2).
 
   Every allowlisted field passes through `redact/1` BEFORE it is

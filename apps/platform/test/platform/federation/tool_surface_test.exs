@@ -192,21 +192,21 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert "task_delivery_candidate_list" in tool_names
       assert "send_media" in tool_names
       assert "react" in tool_names
-      assert "canvas.versions" in tool_names
-      assert "canvas.restore" in tool_names
+      assert "canvas_versions" in tool_names
+      assert "canvas_restore" in tool_names
       assert "space_create" in tool_names
       assert "dm_create" in tool_names
       assert "space_list" in tool_names
       assert "space_list_agents" in tool_names
       assert "space_leave" in tool_names
-      assert "canvas.create" in tool_names
-      assert "canvas.patch" in tool_names
-      assert "canvas.describe" in tool_names
-      assert "canvas.list_kinds" in tool_names
-      assert "canvas.template" in tool_names
-      assert "skill.list" in tool_names
-      assert "skill.get" in tool_names
-      assert "skill.upsert" in tool_names
+      assert "canvas_create" in tool_names
+      assert "canvas_patch" in tool_names
+      assert "canvas_describe" in tool_names
+      assert "canvas_list_kinds" in tool_names
+      assert "canvas_template" in tool_names
+      assert "skill_list" in tool_names
+      assert "skill_get" in tool_names
+      assert "skill_upsert" in tool_names
       assert "project_list" in tool_names
       assert "project_update" in tool_names
       assert "epic_list" in tool_names
@@ -285,9 +285,9 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert "canvas_list" in tool_names
       assert "canvas_get" in tool_names
       assert "principal_search" in tool_names
-      assert "attachment.upload_inline" in tool_names
-      assert "attachment.upload_start" in tool_names
-      assert "attachment.get_inline" in tool_names
+      assert "attachment_upload_inline" in tool_names
+      assert "attachment_upload_start" in tool_names
+      assert "attachment_get_inline" in tool_names
       # Files MCP bundle — six file_* tools (file_list + file_get_text predate this
       # task; file_get_metadata, file_search, file_add, file_delete landed via
       # task 019efba0 stages 1-4). Keep this set in sync with the registered
@@ -532,7 +532,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
 
       assert result.kind == "stack"
       assert result.title == "Test Table"
-      assert is_binary(result.id)
+      assert is_binary(result.canvas_id)
     end
 
     test "task_create creates a task with project_id" do
@@ -7711,9 +7711,9 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert error.error =~ "Agent identity required"
     end
 
-    # ── attachment.get_inline ──────────────────────────────────────
+    # ── attachment_get_inline ──────────────────────────────────────
 
-    test "attachment.get_inline returns base64 bytes for in-space caller", ctx do
+    test "attachment_get_inline returns base64 bytes for in-space caller", ctx do
       root =
         Path.join(System.tmp_dir!(), "att-inline-test-#{Ecto.UUID.generate()}")
 
@@ -7748,7 +7748,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
 
       {:ok, result} =
         ToolSurface.execute(
-          "attachment.get_inline",
+          "attachment_get_inline",
           %{"attachment_id" => attachment.id},
           ctx.context
         )
@@ -7762,7 +7762,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
       refute Map.has_key?(result, :image_block_skipped)
     end
 
-    test "attachment.get_inline marks a real PNG for an MCP image block and keeps data_base64",
+    test "attachment_get_inline marks a real PNG for an MCP image block and keeps data_base64",
          ctx do
       root =
         Path.join(System.tmp_dir!(), "att-inline-png-test-#{Ecto.UUID.generate()}")
@@ -7803,7 +7803,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
 
       {:ok, result} =
         ToolSurface.execute(
-          "attachment.get_inline",
+          "attachment_get_inline",
           %{"attachment_id" => attachment.id},
           ctx.context
         )
@@ -7816,7 +7816,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
       refute Map.has_key?(result, :image_block_skipped)
     end
 
-    test "attachment.get_inline rejects payloads above the 25MB cap", ctx do
+    test "attachment_get_inline rejects payloads above the 25MB cap", ctx do
       {:ok, attachment} =
         Chat.create_attachment(%{
           space_id: ctx.space.id,
@@ -7830,7 +7830,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
 
       {:error, error} =
         ToolSurface.execute(
-          "attachment.get_inline",
+          "attachment_get_inline",
           %{"attachment_id" => attachment.id},
           ctx.context
         )
@@ -7839,7 +7839,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert error.error =~ "exceeds inline read cap"
     end
 
-    test "attachment.get_inline denied for caller not in attachment's space", ctx do
+    test "attachment_get_inline denied for caller not in attachment's space", ctx do
       other_space = create_space(%{name: "Other"})
 
       {:ok, attachment} =
@@ -7854,7 +7854,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
 
       {:error, error} =
         ToolSurface.execute(
-          "attachment.get_inline",
+          "attachment_get_inline",
           %{"attachment_id" => attachment.id},
           ctx.context
         )
@@ -7862,10 +7862,10 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert error.error =~ "not a participant"
     end
 
-    test "attachment.get_inline 404 when attachment does not exist", ctx do
+    test "attachment_get_inline 404 when attachment does not exist", ctx do
       {:error, error} =
         ToolSurface.execute(
-          "attachment.get_inline",
+          "attachment_get_inline",
           %{"attachment_id" => Ecto.UUID.generate()},
           ctx.context
         )
@@ -8967,7 +8967,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
       # None of the non-chat tools survive — including the mutating
       # space_leave and the context_read extras.
       refute "task_create" in names
-      refute "canvas.create" in names
+      refute "canvas_create" in names
       refute "space_leave" in names
       refute "principal_search" in names
       refute "canvas_list" in names
@@ -9042,7 +9042,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
   # `plan_id`, which makes it a CONDITIONAL requirement and therefore takes it
   # out of `ToolArguments`' scope entirely — that gate is per-parameter and a
   # per-parameter gate cannot express "exactly one of these two". The check
-  # moves into the handler, following the `skill.get` precedent.
+  # moves into the handler, following the `skill_get` precedent.
   #
   # Every test here drives `ToolArguments.dispatch/3` rather than
   # `ToolSurface.execute/3`, because `dispatch/3` is the documented entry

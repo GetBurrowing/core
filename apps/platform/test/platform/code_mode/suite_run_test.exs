@@ -50,12 +50,23 @@ defmodule Platform.CodeMode.SuiteRunTest do
       assert "suite_run" in tools
     end
 
-    test "bindings are the runtime's effective tools minus suite_run", %{agent: agent} do
+    test "bindings are the runtime's effective tools minus suite_run, plus held legacy names",
+         %{agent: agent} do
       {runtime, _token} = insert_runtime!(agent, bundles(["code_mode", "canvas"]))
 
       expected = ToolAuthorization.tool_names(runtime) -- ["suite_run"]
-      assert Bindings.tool_names(runtime) == expected
-      assert "canvas.create" in expected
+      assert "canvas_create" in expected
+
+      # Task 01a14a7f stage 3: the dotted alias of every held tool is bound
+      # after the listed names, and no alias of an unheld tool is.
+      legacy =
+        for {name, canonical} <- Enum.sort(Platform.Federation.ToolAliases.aliases()),
+            canonical in expected,
+            do: name
+
+      assert "canvas.create" in legacy
+      refute "prototype.publish" in legacy
+      assert Bindings.tool_names(runtime) == expected ++ legacy
 
       {:ok, body} = Run.execute(runtime, "[typeof suite.canvas.create, typeof suite.suite_run]")
       # suite_run is not BOUND; an unbound name still resolves to a caller

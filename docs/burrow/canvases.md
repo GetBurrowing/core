@@ -24,11 +24,11 @@ A canvas is a tree of nodes. Each node has an `id`, a `type` (its kind) and `pro
 - **Prototype:** `prototype` frames a published, versioned prototype: a clickable bundle of HTML, CSS, JavaScript and images. Unlike `embed`, its scripts run, sealed in a sandboxed frame with no network and no Suite access. Props: `prototype_id` (required), `version` (pin one; absent follows the latest), and the same `width`, `height` and `min_scale` as `embed`. It only frames a prototype of the same org as the space. A bar above the frame shows the title and the version stamp, which opens the version list.
 - **Game stream:** a playable stream of a task's review build. It comes from the optional Play module and exists only on installs where Play is enabled. Without Play, a document that holds one still opens, and that node shows a placeholder.
 
-Call `canvas.list_kinds` for the props and an example of every kind available on this install.
+Call `canvas_list_kinds` for the props and an example of every kind available on this install.
 
 ### Revisions
 
-Every write creates a new revision. Edits use rebase-or-reject concurrency: you send the revision you last saw, and Burrow applies your change, rebases it over newer writes, or rejects it with a reason. `canvas.versions` lists the history, and `canvas.restore` brings back an earlier revision as a new one.
+Every write creates a new revision. Edits use rebase-or-reject concurrency: you send the revision you last saw, and Burrow applies your change, rebases it over newer writes, or rejects it with a reason. `canvas_versions` lists the history, and `canvas_restore` brings back an earlier revision as a new one.
 
 ### Who can open a canvas
 
@@ -43,9 +43,9 @@ External users never reach the page. There are no share links, so a link cannot 
 
 ### Publishing a prototype
 
-A prototype is published as a bundle: a zip, or a map of files, with an `index.html` entry. Publish with `prototype.publish`, or pick Prototype in the New canvas form and drop a zip there. Publishing has to be turned on by an install admin, who also sets who may publish, the size and file limits and how long old versions are kept. Agents need the `prototype` bundle granted.
+A prototype is published as a bundle: a zip, or a map of files, with an `index.html` entry. Publish with `prototype_publish`, or pick Prototype in the New canvas form and drop a zip there. Publishing has to be turned on by an install admin, who also sets who may publish, the size and file limits and how long old versions are kept. Agents need the `prototype` bundle granted.
 
-- **Versions:** every publish creates the next version, and an older version never changes. `prototype.versions` lists them, and `prototype.rollback` points latest back at an earlier one without copying anything. In the canvas, pick a version from the version list and pin it. Versions older than the retention period are removed, except the latest.
+- **Versions:** every publish creates the next version, and an older version never changes. `prototype_versions` lists them, and `prototype_rollback` points latest back at an earlier one without copying anything. In the canvas, pick a version from the version list and pin it. Versions older than the retention period are removed, except the latest.
 - **What the sandbox blocks:** the bundle cannot read Suite cookies, reach the surrounding page or call any network address, Suite included, and forms cannot be submitted.
 - **What it does not block:** a script can still navigate its own frame to an outside page, so never type a password or anything secret into a prototype. The Open button opens one version in a new tab through a short-lived bearer link: anyone holding that link can view that one version until it expires, so do not paste it outside the org.
 
@@ -62,7 +62,7 @@ Every prototype is multiplayer with nothing to add: Suite puts a small script in
 
 #### Handlers
 
-A canvas can also store small server-side programs, called handlers, that a prototype runs with `suite.call(name, args)`. Set one with the `canvas.patch` operation `["set_binding", name, {"kind": "handler", "engine": "js", "source": "(event, ctx) => { ctx.increment('votes.' + event.args.option) }"}]`, and delete it with `["set_binding", name, null]`. A name is lower case, starts with a letter and is at most 64 characters (`^[a-z][a-z0-9_.-]{0,63}$`). The source is at most 64 KB, and a canvas holds at most 32 handlers. Setting a handler is a canvas edit, so only people who can edit the canvas can set one.
+A canvas can also store small server-side programs, called handlers, that a prototype runs with `suite.call(name, args)`. Set one with the `canvas_patch` operation `["set_binding", name, {"kind": "handler", "engine": "js", "source": "(event, ctx) => { ctx.increment('votes.' + event.args.option) }"}]`, and delete it with `["set_binding", name, null]`. A name is lower case, starts with a letter and is at most 64 characters (`^[a-z][a-z0-9_.-]{0,63}$`). The source is at most 64 KB, and a canvas holds at most 32 handlers. Setting a handler is a canvas edit, so only people who can edit the canvas can set one.
 
 - **Handlers run as the person who clicked.** Every change a handler makes is saved and attributed to the viewer who called it, and its `ctx.patch` edits the canvas with that viewer's own permission. Someone who can only read the canvas cannot call a handler: the call is rejected with kind `forbidden` and code `not_writable`, the same rule as for their own shared-state changes.
 - **The `ctx` API:** `ctx.state` is a read-only copy of the shared state, `ctx.now` is the room's time (and `Date.now()` returns it), and `ctx.actor` is the caller. `ctx.set`, `ctx.increment`, `ctx.add`, `ctx.update` and `ctx.remove` change shared state, `ctx.after(ms, handler, args)`, `ctx.every(ms, handler, args)` and `ctx.cancel(handler)` set timers, and `ctx.patch(operations)` edits this canvas. No other Suite call is available: anything else, such as `tasks.create`, is rejected with kind `forbidden` and code `binding_not_registered`.
@@ -83,17 +83,17 @@ A canvas can also store small server-side programs, called handlers, that a prot
 
 ## How agents use it
 
-- `canvas.create` creates a canvas in a space from a full document and returns its `view_url`. `canvas.template` returns a starter document (empty, text, heading and text, checklist, table, form, code, dashboard) to adapt.
-- `canvas.describe` reads the current document and revision. Call it before every patch.
-- `canvas.patch` applies operations against a base revision. The operations are set props, replace children, append a child, delete a node, replace the whole document, and set a handler binding. A rejection names its reason: the target was deleted, the schema was violated, a child was not allowed there, or your revision was too stale. Describe again and retry.
+- `canvas_create` creates a canvas in a space from a full document and returns its `view_url`. `canvas_template` returns a starter document (empty, text, heading and text, checklist, table, form, code, dashboard) to adapt.
+- `canvas_describe` reads the current document and revision. Call it before every patch.
+- `canvas_patch` applies operations against a base revision. The operations are set props, replace children, append a child, delete a node, replace the whole document, and set a handler binding. A rejection names its reason: the target was deleted, the schema was violated, a child was not allowed there, or your revision was too stale. Describe again and retry.
 - `canvas_list` lists a space's canvases, and `canvas_get` reads one by id.
-- `canvas.versions` and `canvas.restore` read and roll back history.
+- `canvas_versions` and `canvas_restore` read and roll back history.
 - `task_attach_canvas` attaches a canvas to a task, so it rides along in every later dispatch for that task. `task_list_canvases` and `task_detach_canvas` read and remove those attachments.
-- Images must point at an uploaded attachment, `/chat/attachments/<id>`. Upload the bytes first with `attachment.upload_inline` for small files or `attachment.upload_start` for large ones, then use the returned URL as the image's `src`.
+- Images must point at an uploaded attachment, `/chat/attachments/<id>`. Upload the bytes first with `attachment_upload_inline` for small files or `attachment_upload_start` for large ones, then use the returned URL as the image's `src`.
 
 ## Common mistakes
 
-- **Patching from memory.** A patch against an old revision is rebased or rejected. Read the canvas with `canvas.describe` first.
+- **Patching from memory.** A patch against an old revision is rebased or rejected. Read the canvas with `canvas_describe` first.
 - **Pointing an image at an outside URL or a data URI.** Both are rejected. Upload the bytes and use the attachment URL.
 - **Pasting a link the reader cannot open.** A canvas in an execution space opens only through its task. Attach it with `task_attach_canvas` before you share the link.
 - **Putting a script in an embed without `scripts: true`.** The embed is refused. Set `scripts: true` for a single page with scripts, or publish a `prototype` when the design needs several files, several pages or a deep link.

@@ -25,7 +25,7 @@ defmodule Platform.Federation.ToolArgumentsDispatchTest do
   one. Task 019fa609 stage 5 gave it a second entry point (`plan_id` OR
   `task_id`), which makes its requirement CONDITIONAL and therefore not
   something a per-parameter gate can express — both parameters are declared
-  `required: false` and the tool refuses on its own, `skill.get`-style. That
+  `required: false` and the tool refuses on its own, `skill_get`-style. That
   is why the exemplar moved to `space_list_agents`, which fails the same way
   for the same reason and is still gated. `tool_surface_test.exs` owns the
   `stage_list` rule, including a test asserting this module finds nothing to
@@ -100,13 +100,13 @@ defmodule Platform.Federation.ToolArgumentsDispatchTest do
     test "an alias satisfies the requirement in place of the declared key" do
       assert ToolArguments.validate("task_get", %{"id" => Ecto.UUID.generate()}) == :ok
       assert ToolArguments.validate("stage_complete", %{"id" => Ecto.UUID.generate()}) == :ok
-      assert ToolArguments.validate("canvas.create", %{"initial_state" => %{}}) == :ok
+      assert ToolArguments.validate("canvas_create", %{"initial_state" => %{}}) == :ok
     end
 
     test "exempt parameters are never enforced" do
-      # `canvas.create` resolves space_id from the call context; a space-bound
+      # `canvas_create` resolves space_id from the call context; a space-bound
       # runtime legitimately omits it. `document` is still enforced.
-      assert {:error, %{code: :missing_document}} = ToolArguments.validate("canvas.create", %{})
+      assert {:error, %{code: :missing_document}} = ToolArguments.validate("canvas_create", %{})
 
       # task_create's title default is an in-source wire-compat promise.
       assert ToolArguments.validate("task_create", %{"project_id" => Ecto.UUID.generate()}) == :ok

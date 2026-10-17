@@ -272,7 +272,7 @@ defmodule Platform.Chat.CanvasRoom.HandlerTest do
              ]
     end
 
-    test "an agent caller's runtime reaches its canvas.patch binding", ctx do
+    test "an agent caller's runtime reaches its canvas_patch binding", ctx do
       agent = insert_agent!()
       add_agent!(ctx.space.id, agent.id)
       {runtime, _token} = insert_runtime!(agent, bundles(["canvas"]))

@@ -1,6 +1,6 @@
 defmodule Platform.Feedback.SubmissionRecord do
   @moduledoc """
-  One row per distinct `feedback.submit` fingerprint (task 01a11ec3 stage 2):
+  One row per distinct `feedback_submit` fingerprint (task 01a11ec3 stage 2):
   the idempotency key, the rate-limit ledger, and the bounded external
   identity of the issue it produced.
 

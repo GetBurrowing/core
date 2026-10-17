@@ -14,7 +14,7 @@ defmodule Platform.Chat.Canvas.ScriptedEmbeds do
   `/proto/<id>/<n>/` route, exactly as the `prototype` kind does. Stamping at
   WRITE time rather than looking the version up at render keeps render pure
   (no query per node per patch), keeps every canvas version and
-  `canvas.restore` pointing at the HTML that was live then, and costs viewers
+  `canvas_restore` pointing at the HTML that was live then, and costs viewers
   nothing.
 
   ## The rule, per embed node
@@ -31,7 +31,7 @@ defmodule Platform.Chat.Canvas.ScriptedEmbeds do
   ## Where it runs
 
   Every document write: `Platform.Chat.Canvas.Server`'s `apply_patches`
-  success arm (which `canvas.patch`, `canvas.restore`, the LiveView and
+  success arm (which `canvas_patch`, `canvas_restore`, the LiveView and
   `Chat.patch_canvas/3` all reach), and `Platform.Chat`'s
   `create_canvas`, `create_canvas_with_message` and `update_canvas` (when the
   document changes).

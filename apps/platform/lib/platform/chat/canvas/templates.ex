@@ -2,9 +2,9 @@ defmodule Platform.Chat.Canvas.Templates do
   @moduledoc """
   Named canonical canvas documents agents can copy + adjust.
 
-  Returned by the `canvas.template` agent tool and used as prescriptive
+  Returned by the `canvas_template` agent tool and used as prescriptive
   examples in validation error payloads. Each template is a complete,
-  valid `CanvasDocument` — pass it straight to `canvas.create` and it
+  valid `CanvasDocument` — pass it straight to `canvas_create` and it
   works. Adjust node props and children to taste.
   """
 

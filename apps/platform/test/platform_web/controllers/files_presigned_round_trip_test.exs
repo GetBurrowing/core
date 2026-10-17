@@ -273,7 +273,7 @@ defmodule PlatformWeb.FilesPresignedRoundTripTest do
     assert only_id == first.id
   end
 
-  test "(3) a chat attachment.upload_start + POST on the same controller still finalizes ready",
+  test "(3) a chat attachment_upload_start + POST on the same controller still finalizes ready",
        %{conn: conn, agent: agent} do
     {:ok, space} =
       Chat.create_space(%{name: "RT chat", slug: "rt-chat-#{u()}", kind: "channel"})
@@ -290,7 +290,7 @@ defmodule PlatformWeb.FilesPresignedRoundTripTest do
 
     assert {:ok, %{id: attachment_id, upload_url: upload_url}} =
              ToolSurface.execute(
-               "attachment.upload_start",
+               "attachment_upload_start",
                %{
                  "space_id" => space.id,
                  "filename" => "chat.bin",

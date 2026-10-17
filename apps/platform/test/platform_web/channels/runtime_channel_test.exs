@@ -420,7 +420,7 @@ defmodule PlatformWeb.RuntimeChannelTest do
       names = Enum.map(payload.tools, & &1.name)
       assert "federation_status" in names
       refute "task_create" in names
-      refute "canvas.create" in names
+      refute "canvas_create" in names
     end
 
     test "a federation-only runtime is pushed exactly federation_status", ctx do
@@ -2493,7 +2493,7 @@ defmodule PlatformWeb.RuntimeChannelTest do
 
       push(socket, "tool_call", %{
         "call_id" => "call-1",
-        "tool" => "canvas.create",
+        "tool" => "canvas_create",
         "args" => %{
           "space_id" => ctx.space.id,
           "title" => "Runtime Canvas",
@@ -2545,10 +2545,10 @@ defmodule PlatformWeb.RuntimeChannelTest do
       assert Tasks.get_task_record(created.id).kind == "ops"
     end
 
-    # Task 01a0fcfa. `attachment.get_inline` marks an eligible image for an
+    # Task 01a0fcfa. `attachment_get_inline` marks an eligible image for an
     # MCP image block; that marker is `/mcp`-only. Over this socket the result
     # must be the handler's map without it, `data_base64` intact.
-    test "attachment.get_inline on a PNG pushes data_base64 without the image marker", ctx do
+    test "attachment_get_inline on a PNG pushes data_base64 without the image marker", ctx do
       png =
         Base.decode64!(
           "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII="
@@ -2573,7 +2573,7 @@ defmodule PlatformWeb.RuntimeChannelTest do
       # handler result DOES carry the marker for these bytes.
       {:ok, in_process} =
         ToolSurface.execute(
-          "attachment.get_inline",
+          "attachment_get_inline",
           %{"attachment_id" => attachment.id},
           %{agent_id: ctx.agent.id, agent_participant_id: ctx.agent_participant.id}
         )
@@ -2591,7 +2591,7 @@ defmodule PlatformWeb.RuntimeChannelTest do
 
       push(socket, "tool_call", %{
         "call_id" => "call-png",
-        "tool" => "attachment.get_inline",
+        "tool" => "attachment_get_inline",
         "args" => %{"attachment_id" => attachment.id}
       })
 

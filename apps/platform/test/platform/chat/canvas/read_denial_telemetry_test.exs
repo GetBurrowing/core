@@ -36,7 +36,7 @@ defmodule Platform.Chat.Canvas.ReadDenialTelemetryTest do
   The event fires from `ToolAccess.fetch_for_read/2`, which is the MCP tool
   surface only. Denials decided elsewhere do NOT emit:
 
-    * `fetch_for_write/3` denials (`canvas.patch`, `canvas.restore`). A refused
+    * `fetch_for_write/3` denials (`canvas_patch`, `canvas_restore`). A refused
       write is a different signal class and the write itself is what downstream
       audit records.
     * `CanvasAccess.fetch_for_viewer/3` denials reached from the LiveView, which
@@ -286,8 +286,8 @@ defmodule Platform.Chat.Canvas.ReadDenialTelemetryTest do
       # stops a fourth read from being added with the gate and without the
       # signal.
       reads = [
-        {"canvas.describe", fn -> ToolHandlers.describe(args, context) end},
-        {"canvas.versions", fn -> VersionHandlers.versions(args, context) end},
+        {"canvas_describe", fn -> ToolHandlers.describe(args, context) end},
+        {"canvas_versions", fn -> VersionHandlers.versions(args, context) end},
         {"canvas_get", fn -> ToolSurface.execute("canvas_get", args, context) end}
       ]
 

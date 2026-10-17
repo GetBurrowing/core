@@ -88,8 +88,8 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgent do
 
   Still explicitly NOT granted: `task`, `plan`, `review` — this persona
   does not manage tasks, plans, or reviews. Also not granted (and not asked
-  for by the stage): `canvas` (the WRITE bundle — `canvas.create`/
-  `canvas.patch`/etc.; `context_read` already grants the read-only
+  for by the stage): `canvas` (the WRITE bundle — `canvas_create`/
+  `canvas_patch`/etc.; `context_read` already grants the read-only
   `canvas_get`/`canvas_list`), `files`, `federation`, `skill`, `attachment`,
   `meetings`, `mail` — it has no file work, does not administer runtimes or
   skills, handles no attachments, sends no mail, and its presence in a room

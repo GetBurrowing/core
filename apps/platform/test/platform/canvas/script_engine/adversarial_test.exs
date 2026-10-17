@@ -420,9 +420,9 @@ defmodule Platform.Canvas.ScriptEngine.AdversarialTest do
       assert keys(ctx.canvas) == %{}
     end
 
-    test "a canvas.patch naming another canvas_id patches only the owning canvas", ctx do
+    test "a canvas_patch naming another canvas_id patches only the owning canvas", ctx do
       bind!(ctx, "aim", """
-      (e, ctx) => suite.call('canvas.patch', {
+      (e, ctx) => suite.call('canvas_patch', {
         canvas_id: e.args.target,
         operations: [["set_props", "h", {"value": "Hijacked"}]]
       })
@@ -503,7 +503,7 @@ defmodule Platform.Canvas.ScriptEngine.AdversarialTest do
       (e, ctx) => {
         try { ctx.actor.id = e.args.victim } catch (_) {}
         try { Object.defineProperty(ctx, 'actor', {value: {type: 'user', id: e.args.victim}}) } catch (_) {}
-        return suite.call('canvas.patch', {
+        return suite.call('canvas_patch', {
           actor: {type: 'user', id: e.args.victim},
           principal: {type: 'user', id: e.args.victim},
           operations: [["set_props", "h", {"value": "Forged"}]]

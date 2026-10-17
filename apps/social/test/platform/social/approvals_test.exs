@@ -311,7 +311,7 @@ defmodule Platform.Social.ApprovalsTest do
       assert Approvals.card_view(card.id, {:user, ctx.h1.id}).actions == [:copy, :edit, :reject]
     end
 
-    test "an agent's canvas.patch of the real card makes it :card_changed", ctx do
+    test "an agent's canvas_patch of the real card makes it :card_changed", ctx do
       {post, card} = pending_post!(ctx, ctx.a)
       canvas = Platform.Chat.get_canvas(card.canvas_id)
 

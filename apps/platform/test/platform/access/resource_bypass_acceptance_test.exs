@@ -180,7 +180,7 @@ defmodule Platform.Access.ResourceBypassAcceptanceTest do
     end
   end
 
-  describe "MCP attachment.get_inline" do
+  describe "MCP attachment_get_inline" do
     test "agent-principal deny hides inline bytes", ctx do
       marker = "ZQX-ACCEPT-INLINE"
       Root.put_override(Platform.PrototypeFixtures.scratch_storage!("accept_inline"))
@@ -192,7 +192,7 @@ defmodule Platform.Access.ResourceBypassAcceptanceTest do
       args = %{"attachment_id" => attachment.id}
 
       assert {:ok, %{data_base64: body}} =
-               ToolSurface.execute("attachment.get_inline", args, context)
+               ToolSurface.execute("attachment_get_inline", args, context)
 
       assert Base.decode64!(body) == marker
 
@@ -205,7 +205,7 @@ defmodule Platform.Access.ResourceBypassAcceptanceTest do
 
       denied =
         ToolSurface.execute(
-          "attachment.get_inline",
+          "attachment_get_inline",
           args,
           Map.put(context, :access_scope, %Scope{grants: [grant]})
         )

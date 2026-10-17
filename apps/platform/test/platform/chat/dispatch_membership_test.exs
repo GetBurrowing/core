@@ -217,7 +217,7 @@ defmodule Platform.Chat.DispatchMembershipTest do
       assert row.role == "member"
 
       # The byte-identical probe now succeeds. This is the whole claim.
-      assert {:ok, %{id: canvas_id}} = canvas_probe(space.id, agent.id)
+      assert {:ok, %{canvas_id: canvas_id}} = canvas_probe(space.id, agent.id)
       assert is_binary(canvas_id)
       on_exit(fn -> CanvasServer.stop(canvas_id) end)
     end

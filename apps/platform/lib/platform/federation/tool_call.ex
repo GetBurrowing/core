@@ -4,7 +4,8 @@ defmodule Platform.Federation.ToolCall do
   handler (task 01a114a8 stage 1).
 
       invoke(name, args, runtime, opts)
-        = ToolAuthorization.authorize/2
+        = ToolAliases.resolve/1
+          -> ToolAuthorization.authorize/2
           -> build_context/2
           -> ToolArguments.dispatch/3
           -> ToolCallLedger.record/1
@@ -28,6 +29,16 @@ defmodule Platform.Federation.ToolCall do
 
   It does not log. The transports keep their existing log lines.
 
+  ## Legacy names
+
+  `ToolAliases.resolve/1` runs first. A legacy dotted name (`skill.list`) is
+  authorized and dispatched as its underscore name (`skill_list`), so it
+  needs exactly that name's grant. The ledger row records the name the
+  caller SENT, and `[:platform, :federation, :legacy_tool_name]` fires; see
+  `Platform.Federation.ToolAliases` for the removal gate. A denied call is
+  returned as `{:error, :forbidden}` like any other, and each transport
+  words it from the sent name, unchanged.
+
   ## The ledger
 
   Every call, whether ok, error or denied, writes one `dispatch_tool_calls`
@@ -43,6 +54,7 @@ defmodule Platform.Federation.ToolCall do
   alias Platform.Agents.AgentRuntime
   alias Platform.Chat
   alias Platform.CodeMode.Run
+  alias Platform.Federation.ToolAliases
   alias Platform.Federation.ToolArguments
   alias Platform.Federation.ToolAuthorization
   alias Platform.Federation.ToolCallLedger
@@ -71,17 +83,34 @@ defmodule Platform.Federation.ToolCall do
       when is_binary(name) and is_map(args) do
     started = System.monotonic_time(:millisecond)
     call_id = Platform.Types.UUIDv7.generate()
+    canonical = canonical_name(name, runtime)
 
-    case ToolAuthorization.authorize(name, runtime) do
+    case ToolAuthorization.authorize(canonical, runtime) do
       :ok ->
         context = args |> build_context(runtime) |> Map.put(:tool_call_id, call_id)
-        result = name |> ToolArguments.dispatch(args, context) |> normalize()
+        result = canonical |> ToolArguments.dispatch(args, context) |> normalize()
         record(call_id, name, args, runtime, opts, started, result)
         result
 
       {:error, :forbidden} ->
         record(call_id, name, args, runtime, opts, started, :denied)
         {:error, :forbidden}
+    end
+  end
+
+  # A legacy dotted name (task 01a14a7f stage 3) resolves to its underscore
+  # name BEFORE authorization, so it needs exactly its canonical name's grant.
+  # The ledger keeps the name the caller SENT (`record/7` is passed `name`), so
+  # legacy calls stay countable per runtime; the telemetry event counts them
+  # without a query.
+  defp canonical_name(name, runtime) do
+    case ToolAliases.resolve(name) do
+      {:alias, canonical} ->
+        ToolAliases.emit_legacy(name, canonical, runtime.runtime_id)
+        canonical
+
+      :canonical ->
+        name
     end
   end
 

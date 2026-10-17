@@ -1,6 +1,6 @@
 defmodule Platform.Chat.Canvas.VersionHandlersTest do
   @moduledoc """
-  Tests for `canvas.versions` and `canvas.restore` MCP handlers (task 019e0ac0).
+  Tests for `canvas_versions` and `canvas_restore` MCP handlers (task 019e0ac0).
   """
 
   use Platform.DataCase, async: false
@@ -53,7 +53,7 @@ defmodule Platform.Chat.Canvas.VersionHandlersTest do
     ]
   end
 
-  describe "canvas.versions" do
+  describe "canvas_versions" do
     test "returns versions newest-first with required fields", %{
       space: space,
       agent_id: agent_id,
@@ -152,7 +152,7 @@ defmodule Platform.Chat.Canvas.VersionHandlersTest do
     # remote runtime — which could then read any canvas's revision numbers,
     # write timestamps and `written_by` attribution in any org. The fail-open
     # is deleted, not narrowed; this case now mirrors the peer already asserted
-    # on `canvas.restore` below.
+    # on `canvas_restore` below.
     test "403 when the caller carries no identity at all", %{
       space: space,
       agent_participant: ap
@@ -181,7 +181,7 @@ defmodule Platform.Chat.Canvas.VersionHandlersTest do
     end
   end
 
-  describe "canvas.restore" do
+  describe "canvas_restore" do
     test "restores historical document, increments revision, marks ops as restore", %{
       space: space,
       agent_id: agent_id,
@@ -207,7 +207,7 @@ defmodule Platform.Chat.Canvas.VersionHandlersTest do
       reloaded = Chat.get_canvas(canvas.id)
       assert reloaded.document["root"]["children"] in [nil, []]
 
-      # canvas.versions now shows the restore row tagged accordingly.
+      # canvas_versions now shows the restore row tagged accordingly.
       assert {:ok, %{versions: vs}} =
                VersionHandlers.versions(
                  %{"canvas_id" => canvas.id, "limit" => 10},

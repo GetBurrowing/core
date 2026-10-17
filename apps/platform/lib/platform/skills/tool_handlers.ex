@@ -1,7 +1,7 @@
 defmodule Platform.Skills.ToolHandlers do
   @moduledoc """
-  Agent tool handlers for the skill registry — `skill.list`, `skill.get`,
-  `skill.upsert`.
+  Agent tool handlers for the skill registry — `skill_list`, `skill_get`,
+  `skill_upsert`.
 
   Skills are centrally-distributed markdown playbooks (see
   `Platform.Skills`). These tools let agents discover what skills exist
@@ -11,11 +11,11 @@ defmodule Platform.Skills.ToolHandlers do
   alias Platform.Skills
 
   @doc """
-  skill.list — return skill summaries (slug, name, description, size).
+  skill_list — return skill summaries (slug, name, description, size).
 
   Optional `query` arg does a case-insensitive substring match against
   name + description + slug. Content body is omitted from list results
-  to keep payloads small; call `skill.get` to fetch content.
+  to keep payloads small; call `skill_get` to fetch content.
   """
   @spec list(map(), map()) :: {:ok, map()}
   def list(args, _context) do
@@ -37,7 +37,7 @@ defmodule Platform.Skills.ToolHandlers do
   end
 
   @doc """
-  skill.get — fetch a full skill (including markdown content) by `slug` or `id`.
+  skill_get — fetch a full skill (including markdown content) by `slug` or `id`.
   """
   @spec get(map(), map()) :: {:ok, map()} | {:error, map()}
   def get(args, _context) do
@@ -55,7 +55,7 @@ defmodule Platform.Skills.ToolHandlers do
       {nil, nil, nil} ->
         {:error,
          %{
-           error: "skill.get requires either `slug` or `id`",
+           error: "skill_get requires either `slug` or `id`",
            recoverable: true
          }}
 
@@ -74,7 +74,7 @@ defmodule Platform.Skills.ToolHandlers do
   end
 
   @doc """
-  skill.upsert — create or update a skill by name.
+  skill_upsert — create or update a skill by name.
 
   Required: `name`, `content` (full markdown body).
   Optional: `description`.
@@ -119,7 +119,7 @@ defmodule Platform.Skills.ToolHandlers do
         {:error, %Ecto.Changeset{} = cs} ->
           {:error,
            %{
-             error: "skill.upsert: #{format_changeset(cs)}",
+             error: "skill_upsert: #{format_changeset(cs)}",
              recoverable: true,
              field_errors: cs.errors |> Enum.map(fn {k, {m, _}} -> {k, m} end) |> Map.new()
            }}

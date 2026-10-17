@@ -17,14 +17,14 @@ defmodule Platform.Federation.CanvasEmbedParityTest do
   ## What's asserted
 
     * `tools/list` exposes the canvas tool quintet
-      (`canvas.create`, `canvas.patch`, `canvas.describe`,
-      `canvas.list_kinds`, `canvas.template`) to BOTH flavors with set
+      (`canvas_create`, `canvas_patch`, `canvas_describe`,
+      `canvas_list_kinds`, `canvas_template`) to BOTH flavors with set
       equality.
-    * `canvas.list_kinds` includes the `embed` summary (kind, props,
+    * `canvas_list_kinds` includes the `embed` summary (kind, props,
       example) for BOTH flavors with byte-equivalent payload.
     * Each flavor authors a canvas in a SHARED space whose root is a
       `stack` containing one `embed` node with identical `srcdoc` and
-      `height`. Each then calls `canvas.describe` to read its canvas
+      `height`. Each then calls `canvas_describe` to read its canvas
       back. After normalizing volatile fields (canvas_id, space_id,
       revision, node ids), the embed-node payload (`type`, `props`) is
       byte-equivalent across both flavors.
@@ -166,11 +166,11 @@ defmodule Platform.Federation.CanvasEmbedParityTest do
 
       expected =
         MapSet.new([
-          "canvas.create",
-          "canvas.patch",
-          "canvas.describe",
-          "canvas.list_kinds",
-          "canvas.template"
+          "canvas_create",
+          "canvas_patch",
+          "canvas_describe",
+          "canvas_list_kinds",
+          "canvas_template"
         ])
 
       assert MapSet.subset?(expected, claude_tools),
@@ -183,7 +183,7 @@ defmodule Platform.Federation.CanvasEmbedParityTest do
       assert claude_tools == openclaw_tools
     end
 
-    test "canvas.list_kinds responses are byte-equivalent and include `embed`", ctx do
+    test "canvas_list_kinds responses are byte-equivalent and include `embed`", ctx do
       claude_body = call_list_kinds(ctx.claude_token)
       openclaw_body = call_list_kinds(ctx.openclaw_token)
 
@@ -191,7 +191,7 @@ defmodule Platform.Federation.CanvasEmbedParityTest do
       openclaw_norm = normalize_envelope(openclaw_body)
 
       assert claude_norm == openclaw_norm,
-             "canvas.list_kinds diverged between flavors. " <>
+             "canvas_list_kinds diverged between flavors. " <>
                "claude=#{inspect(claude_norm)} openclaw=#{inspect(openclaw_norm)}"
 
       tool_payload = decode_tool_text(claude_norm)
@@ -201,7 +201,7 @@ defmodule Platform.Federation.CanvasEmbedParityTest do
       embed = Enum.find(kinds, &(&1["kind"] == "embed"))
 
       assert is_map(embed),
-             "embed kind missing from canvas.list_kinds payload (got kinds=#{inspect(Enum.map(kinds, & &1["kind"]))})"
+             "embed kind missing from canvas_list_kinds payload (got kinds=#{inspect(Enum.map(kinds, & &1["kind"]))})"
 
       assert embed["accepts_children"] == "none"
       assert is_map(embed["props"])
@@ -211,7 +211,7 @@ defmodule Platform.Federation.CanvasEmbedParityTest do
       assert embed["example"]["type"] == "embed"
     end
 
-    test "canvas.create + canvas.describe round-trip is byte-equivalent for embed nodes",
+    test "canvas_create + canvas_describe round-trip is byte-equivalent for embed nodes",
          ctx do
       # Each flavor authors its own canvas in the shared space with an
       # identical embed-bearing document; we then describe each canvas
@@ -251,7 +251,7 @@ defmodule Platform.Federation.CanvasEmbedParityTest do
       openclaw_norm = normalize_describe(openclaw_describe)
 
       assert claude_norm == openclaw_norm,
-             "canvas.describe envelope diverged between flavors. " <>
+             "canvas_describe envelope diverged between flavors. " <>
                "claude=#{inspect(claude_norm)} openclaw=#{inspect(openclaw_norm)}"
     end
   end
@@ -272,7 +272,7 @@ defmodule Platform.Federation.CanvasEmbedParityTest do
       mcp_post(
         conn,
         token,
-        rpc("tools/call", %{"name" => "canvas.list_kinds", "arguments" => %{}})
+        rpc("tools/call", %{"name" => "canvas_list_kinds", "arguments" => %{}})
       )
 
     json_response(conn, 200)
@@ -286,7 +286,7 @@ defmodule Platform.Federation.CanvasEmbedParityTest do
         conn,
         token,
         rpc("tools/call", %{
-          "name" => "canvas.create",
+          "name" => "canvas_create",
           "arguments" => %{
             "space_id" => space_id,
             "title" => "Canvas Embed Parity",
@@ -306,7 +306,7 @@ defmodule Platform.Federation.CanvasEmbedParityTest do
         conn,
         token,
         rpc("tools/call", %{
-          "name" => "canvas.describe",
+          "name" => "canvas_describe",
           "arguments" => %{"canvas_id" => canvas_id}
         })
       )
@@ -321,7 +321,7 @@ defmodule Platform.Federation.CanvasEmbedParityTest do
     canvas_id = create_payload["canvas_id"]
 
     assert is_binary(canvas_id),
-           "canvas.create did not return a canvas_id; envelope=#{inspect(create_body)}"
+           "canvas_create did not return a canvas_id; envelope=#{inspect(create_body)}"
 
     describe_body = call_describe(token, canvas_id)
 
@@ -345,7 +345,7 @@ defmodule Platform.Federation.CanvasEmbedParityTest do
     Jason.decode!(text)
   end
 
-  # Pluck the embed node from a canvas.describe envelope. The root is a
+  # Pluck the embed node from a canvas_describe envelope. The root is a
   # stack with a single embed child (per `embed_document/0`).
   defp extract_embed_payload(envelope) do
     payload = decode_tool_text(envelope)

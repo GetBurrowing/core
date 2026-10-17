@@ -6,8 +6,9 @@ defmodule Platform.CodeMode.Docs do
   ## Built from the caller's EFFECTIVE tools, never the catalogue
 
   The input is `ToolAuthorization.effective_tools/1` minus `suite_run` — the
-  same set `Platform.CodeMode.Bindings` binds on `suite` — so a runtime is
-  never told about a tool it cannot call. A requested name outside that set
+  set `Platform.CodeMode.Bindings` binds on `suite`, less the hidden legacy
+  dotted aliases it also binds (task 01a14a7f stage 3), which are never
+  described — so a runtime is never told about a tool it cannot call. A requested name outside that set
   is reported under `not_available` without saying whether it exists: the
   answer for "not granted" and "no such tool" is the same.
 
@@ -117,7 +118,7 @@ defmodule Platform.CodeMode.Docs do
     end
   end
 
-  # The script's surface: exactly what Bindings binds.
+  # The script's surface: what Bindings binds, without the hidden aliases.
   defp callable(runtime) do
     runtime
     |> ToolAuthorization.effective_tools()

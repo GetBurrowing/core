@@ -1,7 +1,7 @@
 defmodule Platform.Chat.Canvas.ToolHandlers do
   @moduledoc """
-  Implementations of the `canvas.create` / `canvas.patch` / `canvas.describe` /
-  `canvas.list_kinds` / `canvas.template` agent tools (ADR 0036, Phase 4).
+  Implementations of the `canvas_create` / `canvas_patch` / `canvas_describe` /
+  `canvas_list_kinds` / `canvas_template` agent tools (ADR 0036, Phase 4).
 
   Each handler returns `{:ok, payload}` or `{:error, payload}` so callers in
   `tool_runner.ex` / `tool_surface.ex` can uniformly format responses.
@@ -12,8 +12,8 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
 
   Neither gated handler decides access itself. `describe/2` resolves its canvas
   through `ToolAccess.fetch_for_read/2` and `patch/2` through
-  `ToolAccess.fetch_for_write/3` — the same two calls `canvas.versions` and
-  `canvas.restore` make in `Platform.Chat.Canvas.VersionHandlers`, so the four
+  `ToolAccess.fetch_for_write/3` — the same two calls `canvas_versions` and
+  `canvas_restore` make in `Platform.Chat.Canvas.VersionHandlers`, so the four
   canvas-id-keyed tools on this surface cannot answer one question four ways.
   Handlers keep argument parsing and payload building; they do not keep their
   own authorization.
@@ -29,12 +29,12 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
   classification claiming a gate is driven against a real outsider rather than
   taken at its word.
 
-  `canvas.create` is the one tool here with no canvas to gate. It writes a NEW
+  `canvas_create` is the one tool here with no canvas to gate. It writes a NEW
   canvas and requires the context's `agent_participant_id` to be a participant
   row of the target space; a participant id from any other space is refused
   (task 01a0cbe0 stage 2 — before it, a space_id in args was never compared
-  with the participant's space). `canvas.list_kinds` and
-  `canvas.template` return the static kind registry and the starter templates
+  with the participant's space). `canvas_list_kinds` and
+  `canvas_template` return the static kind registry and the starter templates
   and touch no canvas row at all.
 
   A forbidden READ additionally emits `[:platform, :chat, :canvas_read_denied]`
@@ -55,14 +55,14 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
   alias Platform.Chat.CanvasDocument
   alias Platform.Chat.PubSub, as: ChatPubSub
 
-  @patch_denial "Access denied: canvas.patch requires participation in the canvas's space. " <>
+  @patch_denial "Access denied: canvas_patch requires participation in the canvas's space. " <>
                   "Being able to read a canvas (via a task it is attached to, or via your org) " <>
                   "does not confer write access."
 
   @patch_suggestion "Ask a human to add you to the space that owns this canvas, " <>
-                      "or create your own canvas with canvas.create."
+                      "or create your own canvas with canvas_create."
 
-  @doc "canvas.create — validates the document, inserts a canvas."
+  @doc "canvas_create — validates the document, inserts a canvas."
   @spec create(map(), map()) :: {:ok, map()} | {:error, map()}
   def create(args, context) do
     space_id = Map.get(args, "space_id") || Map.get(context, :space_id)
@@ -88,7 +88,7 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
       not is_binary(space_id) ->
         {:error,
          %{
-           error: "canvas.create requires space_id (string)",
+           error: "canvas_create requires space_id (string)",
            recoverable: true
          }}
 
@@ -96,7 +96,7 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
         {:error,
          %{
            error:
-             "canvas.create: agent #{inspect(agent_id)} is not a participant in space #{inspect(space_id)} — join the space first (ask a human to @mention you there, or be added to the roster) before creating canvases in it.",
+             "canvas_create: agent #{inspect(agent_id)} is not a participant in space #{inspect(space_id)} — join the space first (ask a human to @mention you there, or be added to the roster) before creating canvases in it.",
            recoverable: false,
            agent_id: agent_id,
            space_id: space_id
@@ -104,7 +104,7 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
 
       not is_map(document) ->
         Logger.warning(
-          "[Canvas.ToolHandlers] canvas.create rejected: document unusable. " <>
+          "[Canvas.ToolHandlers] canvas_create rejected: document unusable. " <>
             "agent=#{inspect(agent_id)} space=#{inspect(space_id)} " <>
             "arg_keys=#{inspect(Map.keys(args))} " <>
             "raw_type=#{describe(raw_document)} decoded_type=#{describe(document)} " <>
@@ -114,7 +114,7 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
         {:error,
          %{
            error:
-             "canvas.create requires a canonical document object (got #{describe(document)}). Pass `document` as a nested JSON object, not a string; see canvas.describe on an existing canvas for a valid shape.",
+             "canvas_create requires a canonical document object (got #{describe(document)}). Pass `document` as a nested JSON object, not a string; see canvas_describe on an existing canvas for a valid shape.",
            recoverable: true,
            got_type: describe(document),
            accepted_keys: ["document", "initial_state"],
@@ -144,19 +144,19 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
             {:error, %Ecto.Changeset{} = cs} ->
               {:error,
                %{
-                 error: "canvas.create: #{inspect(cs.errors)}",
+                 error: "canvas_create: #{inspect(cs.errors)}",
                  recoverable: true
                }}
 
             # A refused scripted embed (`prototypes_disabled`,
             # `scripted_embed_requires_org`, ...; task 01a1316b-677a).
             {:error, %{code: code, message: message}} ->
-              {:error, %{error: "canvas.create: #{message}", code: code, recoverable: true}}
+              {:error, %{error: "canvas_create: #{message}", code: code, recoverable: true}}
 
             {:error, reason} ->
               {:error,
                %{
-                 error: "canvas.create failed: #{inspect(reason)}",
+                 error: "canvas_create failed: #{inspect(reason)}",
                  recoverable: true
                }}
           end
@@ -165,13 +165,13 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
   end
 
   @doc """
-  canvas.patch — authorize the caller, then route through
+  canvas_patch — authorize the caller, then route through
   `Canvas.Server.apply_patches/3`.
 
   The authorization gate is task 019e2c4b stage 2. Before it, this handler
   ignored its `context` entirely and patched any `canvas_id` in any space in
   any org for any caller. `Canvas.VersionHandlers`' moduledoc already described
-  `canvas.restore` as using "the same gate as `canvas.patch`" — this makes that
+  `canvas_restore` as using "the same gate as `canvas_patch`" — this makes that
   true rather than aspirational.
 
   Argument shape is validated BEFORE authorization so a malformed call hears
@@ -186,7 +186,7 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
          {:ok, parsed_ops} <- parse_operations(ops_list),
          {:ok, canvas} <- authorize_write(canvas_id, context) do
       # The space comes from the canvas the authorization gate already
-      # fetched, not from an argument: `canvas.patch` args carry no space_id,
+      # fetched, not from an argument: `canvas_patch` args carry no space_id,
       # and adding one would let a caller name a space the canvas isn't in.
       attribution = Versions.attribution_from_context(context, canvas.space_id)
 
@@ -198,24 +198,24 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
         {:conflict, payload} ->
           {:error,
            %{
-             error: "canvas.patch rejected: #{inspect(payload.reason)}",
+             error: "canvas_patch rejected: #{inspect(payload.reason)}",
              recoverable: true,
              conflict: payload,
              suggestion:
-               "Use canvas.describe to fetch the current revision and tree, then retry with a corrected patch."
+               "Use canvas_describe to fetch the current revision and tree, then retry with a corrected patch."
            }}
 
         {:error, %{code: code, message: message}} ->
-          {:error, %{error: "canvas.patch: #{message}", code: code, recoverable: true}}
+          {:error, %{error: "canvas_patch: #{message}", code: code, recoverable: true}}
 
         {:error, reason} ->
-          {:error, %{error: "canvas.patch failed: #{inspect(reason)}", recoverable: true}}
+          {:error, %{error: "canvas_patch failed: #{inspect(reason)}", recoverable: true}}
       end
     end
   end
 
   @doc """
-  canvas.describe — current document, revision, and presence, for a caller
+  canvas_describe — current document, revision, and presence, for a caller
   authorized to read the canvas.
 
   The read gate is task 019fb01b stage 3. Before it, this handler ignored its
@@ -227,7 +227,7 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
   scoped reader would have waved it through.
 
   Resolution lives in `ToolAccess.fetch_for_read/2`, which is also what
-  `canvas.versions` calls, so the two reads on this surface cannot drift into
+  `canvas_versions` calls, so the two reads on this surface cannot drift into
   two different answers to one question. `:not_found` and `:forbidden` stay
   distinct; see that module for why collapsing them relocates the oracle rather
   than removing it.
@@ -260,7 +260,7 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
         {:error, reason} ->
           {:error,
            %{
-             error: "canvas.describe failed: #{inspect(reason)}",
+             error: "canvas_describe failed: #{inspect(reason)}",
              recoverable: true
            }}
       end
@@ -268,7 +268,7 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
   end
 
   @doc """
-  canvas.list_kinds — return ergonomic summaries of every registered node
+  canvas_list_kinds — return ergonomic summaries of every registered node
   kind. Agents call this once to discover what they can emit, without
   having to parse the recursive discriminated-union JSON Schema.
   """
@@ -279,9 +279,9 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
   end
 
   @doc """
-  canvas.template — return a named canonical document. Agents that can't
+  canvas_template — return a named canonical document. Agents that can't
   reason about the schema from scratch can pick a template by name and
-  pass the returned `document` straight to `canvas.create`, adjusting as
+  pass the returned `document` straight to `canvas_create`, adjusting as
   needed. When called with no name, returns the list of available
   templates.
   """
@@ -293,7 +293,7 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
           nil ->
             {:error,
              %{
-               error: "canvas.template: unknown template #{inspect(name)}",
+               error: "canvas_template: unknown template #{inspect(name)}",
                recoverable: true,
                available: Enum.map(Templates.list(), & &1.name)
              }}
@@ -309,10 +309,10 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
 
   # ── Authorization ───────────────────────────────────────────────────────
 
-  # Write gate for `canvas.patch` (task 019e2c4b, stage 2).
+  # Write gate for `canvas_patch` (task 019e2c4b, stage 2).
   #
   # The canvas is resolved from `canvas_id`, NOT from `context.space_id`:
-  # `canvas.patch` args carry only a `canvas_id`, so `context` never has an
+  # `canvas_patch` args carry only a `canvas_id`, so `context` never has an
   # `agent_participant_id` for this call (the MCP controller derives that from
   # `args["space_id"]`). The membership question can only be asked once the
   # canvas has told us which space it lives in.
@@ -402,7 +402,7 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
            recoverable: true,
            reasons: reasons,
            suggestion:
-             "Discover shape via `canvas.list_kinds` (node catalog) or `canvas.template` (named starter docs). The example below is known-good — adjust and retry.",
+             "Discover shape via `canvas_list_kinds` (node catalog) or `canvas_template` (named starter docs). The example below is known-good — adjust and retry.",
            minimal_valid_example: Templates.minimal_example(),
            available_templates: Enum.map(Templates.list(), & &1.name)
          }}
@@ -431,7 +431,7 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
   end
 
   @doc """
-  Parse `canvas.patch`'s wire operations (`[["set_props", id, props], ...]`)
+  Parse `canvas_patch`'s wire operations (`[["set_props", id, props], ...]`)
   into `Platform.Chat.CanvasPatch` operations. Returns `{:ok, ops}` or
   `{:error, %{error: reason, recoverable: true}}` naming the first bad one.
 

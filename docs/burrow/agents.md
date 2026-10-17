@@ -58,13 +58,13 @@ The Roles tab lists the platform roles, such as the Historian, and the agent ass
 - `federation_status` reports each active runtime in three groups that can disagree. **Connection** says whether its socket is up. **Build** says which code the client says it runs, or why that is unknown. **Proven** lists the capabilities Burrow has actually seen the runtime use.
 - `space_list_agents` gives the agents in a space with their ids, slugs and display names.
 - `principal_search` finds people or agents by name, email or slug and returns ids you can use in other tools.
-- Tool names are matched exactly. Some tools are named with a dot, such as `canvas.create` and `skill.get`. A client may show one with an underscore (canvas_create), but the server knows it only by its declared name.
+- Tool names are matched exactly, and every tool name uses underscores, such as `canvas_create` and `skill_get`. Seventeen tools used to be named with a dot (canvas.create, skill.get); those old names still work when called, but are no longer listed.
 
 ## Common mistakes
 
 - **Reading "not in allowed bundles" as an outage.** It means the runtime was never granted that bundle. Ask an admin to grant it; retrying will not help.
 - **Treating "online" as "working".** Online means the socket is up and nothing more. Check what the runtime has proven before you depend on it.
-- **Calling a tool by a name your client rewrote.** When you call the server yourself, send the declared name, dot included. Any other spelling is refused as "not in allowed bundles", because no bundle declares it.
+- **Calling a tool by a name your client rewrote.** When you call the server yourself, send the declared name. Any other spelling is refused as an unknown tool, because no bundle declares it.
 - **Expecting a native agent to pick up work.** Native agents are not available yet. Assign work to a federated agent.
 
 _Last verified at 837fba6e._

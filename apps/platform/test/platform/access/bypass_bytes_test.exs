@@ -380,39 +380,39 @@ defmodule Platform.Access.BypassBytesTest do
     end
   end
 
-  # ── MCP attachment.get_inline ─────────────────────────────────────────
+  # ── MCP attachment_get_inline ─────────────────────────────────────────
 
-  describe "MCP attachment.get_inline" do
+  describe "MCP attachment_get_inline" do
     test "a deny on A's agent principal answers exactly as an unknown id", ctx do
       assert {:ok, %{data_base64: b64}} =
-               call(ctx.a, "attachment.get_inline", %{"attachment_id" => ctx.att.id})
+               call(ctx.a, "attachment_get_inline", %{"attachment_id" => ctx.att.id})
 
       assert Base.decode64!(b64) =~ @marker
 
       deny!({:agent, ctx.a.agent_id}, "chat.read", ctx.q)
 
       random_id = Ecto.UUID.generate()
-      random = call(ctx.a, "attachment.get_inline", %{"attachment_id" => random_id})
-      denied = call(ctx.a, "attachment.get_inline", %{"attachment_id" => ctx.att.id})
+      random = call(ctx.a, "attachment_get_inline", %{"attachment_id" => random_id})
+      denied = call(ctx.a, "attachment_get_inline", %{"attachment_id" => ctx.att.id})
 
       assert denied == random
       refute leaks?(denied)
 
       assert {:ok, %{data_base64: p64}} =
-               call(ctx.a, "attachment.get_inline", %{"attachment_id" => ctx.att_p.id})
+               call(ctx.a, "attachment_get_inline", %{"attachment_id" => ctx.att_p.id})
 
       assert Base.decode64!(p64) == "p message bytes ok"
     end
 
     test "a canvas.read deny on K refuses the canvas-bound attachment", ctx do
-      assert {:ok, _} = call(ctx.a, "attachment.get_inline", %{"attachment_id" => ctx.att_k.id})
+      assert {:ok, _} = call(ctx.a, "attachment_get_inline", %{"attachment_id" => ctx.att_k.id})
 
       deny!({:agent, ctx.a.agent_id}, "canvas.read", ctx.k)
 
       assert {:error, %{error: "attachment: not found"}} =
-               call(ctx.a, "attachment.get_inline", %{"attachment_id" => ctx.att_k.id})
+               call(ctx.a, "attachment_get_inline", %{"attachment_id" => ctx.att_k.id})
 
-      assert {:ok, _} = call(ctx.a, "attachment.get_inline", %{"attachment_id" => ctx.att.id})
+      assert {:ok, _} = call(ctx.a, "attachment_get_inline", %{"attachment_id" => ctx.att.id})
     end
   end
 
@@ -679,7 +679,7 @@ defmodule Platform.Access.BypassBytesTest do
       for {tool, args} <- [
             {"file_list", %{"project_id" => ctx.q.id}},
             {"file_get_text", %{"file_id" => ctx.file_q.id}},
-            {"attachment.get_inline", %{"attachment_id" => ctx.att.id}},
+            {"attachment_get_inline", %{"attachment_id" => ctx.att.id}},
             {"task_get", %{"task_id" => ctx.tq.id}}
           ] do
         refute Scope.has_grants?(Scope.for_runtime(ctx.a))

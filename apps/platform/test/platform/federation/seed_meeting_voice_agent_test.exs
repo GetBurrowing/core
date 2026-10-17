@@ -278,13 +278,13 @@ defmodule Mix.Tasks.Platform.SeedMeetingVoiceAgentTest do
       refute "task" in RuntimeProfiles.tool_profile(runtime)
       refute "plan" in RuntimeProfiles.tool_profile(runtime)
 
-      assert {:error, :forbidden} = ToolAuthorization.authorize("canvas.create", runtime)
-      assert {:error, :forbidden} = ToolAuthorization.authorize("canvas.patch", runtime)
+      assert {:error, :forbidden} = ToolAuthorization.authorize("canvas_create", runtime)
+      assert {:error, :forbidden} = ToolAuthorization.authorize("canvas_patch", runtime)
       assert {:error, :forbidden} = ToolAuthorization.authorize("task_create", runtime)
       assert {:error, :forbidden} = ToolAuthorization.authorize("plan_create", runtime)
 
       tool_names = ToolAuthorization.tool_names(runtime)
-      refute "canvas.create" in tool_names
+      refute "canvas_create" in tool_names
       refute "task_create" in tool_names
       refute "plan_create" in tool_names
 

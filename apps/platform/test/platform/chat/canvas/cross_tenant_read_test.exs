@@ -1,7 +1,7 @@
 defmodule Platform.Chat.Canvas.CrossTenantReadTest do
   @moduledoc """
   Cross-tenant denial for the two canvas READS on the agent tool surface —
-  `canvas.describe` and `canvas.versions` (task 019fb01b stage 3).
+  `canvas_describe` and `canvas_versions` (task 019fb01b stage 3).
 
   Separate from `ToolHandlersTest` and `VersionHandlersTest` because those are
   organized by handler, and the property under test here is not a property of
@@ -49,7 +49,7 @@ defmodule Platform.Chat.Canvas.CrossTenantReadTest do
   alias Platform.Tasks.CanvasAttachments
   alias Platform.Tenancy
 
-  @reads ["canvas.describe", "canvas.versions"]
+  @reads ["canvas_describe", "canvas_versions"]
 
   setup do
     %{org_a: Tenancy.get_org_by_slug!("sxi"), org_b: Tenancy.get_org_by_slug!("soylent")}
@@ -57,8 +57,8 @@ defmodule Platform.Chat.Canvas.CrossTenantReadTest do
 
   # Both reads behind one call, so no case can be written for one and quietly
   # skipped for the other.
-  defp read("canvas.describe", args, context), do: ToolHandlers.describe(args, context)
-  defp read("canvas.versions", args, context), do: VersionHandlers.versions(args, context)
+  defp read("canvas_describe", args, context), do: ToolHandlers.describe(args, context)
+  defp read("canvas_versions", args, context), do: VersionHandlers.versions(args, context)
 
   # ── Builders ──────────────────────────────────────────────────────────────
 

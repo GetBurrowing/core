@@ -48,7 +48,7 @@ defmodule Platform.Chat.Canvas.ToolHandlersTest do
     }
   end
 
-  describe "canvas.create" do
+  describe "canvas_create" do
     test "creates a canvas from a valid document" do
       %{space: space, participant: participant} = setup_space()
 
@@ -312,7 +312,7 @@ defmodule Platform.Chat.Canvas.ToolHandlersTest do
   # context and succeed, because `describe/2` ignored its context entirely and
   # read through `Chat.get_canvas/1`. They now carry the creating agent's id,
   # which is the identity the MCP controller actually puts in the context.
-  describe "canvas.describe" do
+  describe "canvas_describe" do
     test "returns the current document and revision" do
       %{space: space, participant: participant} = setup_space()
 
@@ -414,7 +414,7 @@ defmodule Platform.Chat.Canvas.ToolHandlersTest do
     end
 
     # Forbidden and not-found stay apart. Collapsing read to not-found while
-    # `canvas.patch` keeps them distinct just moves the oracle to the write
+    # `canvas_patch` keeps them distinct just moves the oracle to the write
     # door; the distinction is also what tells a model whether to re-roster or
     # to detach a stale attachment.
     test "forbidden and not-found remain textually distinguishable" do
@@ -441,7 +441,7 @@ defmodule Platform.Chat.Canvas.ToolHandlersTest do
     end
   end
 
-  describe "canvas.list_kinds" do
+  describe "canvas_list_kinds" do
     test "returns summaries for every registered kind" do
       {:ok, %{kinds: kinds}} = ToolHandlers.list_kinds(%{}, %{})
 
@@ -459,7 +459,7 @@ defmodule Platform.Chat.Canvas.ToolHandlersTest do
     end
   end
 
-  describe "canvas.template" do
+  describe "canvas_template" do
     test "lists templates when called with no name" do
       {:ok, %{templates: templates}} = ToolHandlers.template(%{}, %{})
 
@@ -489,7 +489,7 @@ defmodule Platform.Chat.Canvas.ToolHandlersTest do
     end
   end
 
-  describe "canvas.patch" do
+  describe "canvas_patch" do
     test "applies valid operations and bumps revision" do
       %{space: space, participant: participant} = setup_space()
 
@@ -555,7 +555,7 @@ defmodule Platform.Chat.Canvas.ToolHandlersTest do
 
       assert payload.recoverable == true
       assert payload.conflict.reason == :target_deleted
-      assert payload.suggestion =~ "canvas.describe"
+      assert payload.suggestion =~ "canvas_describe"
     end
 
     test "rejects an image src that isn't /chat/attachments/<uuid> (ADR 0039 phase 6)" do
@@ -588,7 +588,7 @@ defmodule Platform.Chat.Canvas.ToolHandlersTest do
       assert payload.recoverable == true
       assert payload.conflict.reason == :schema_violation
       assert payload.conflict.message =~ "path-relative"
-      assert payload.conflict.message =~ "attachment.upload_inline"
+      assert payload.conflict.message =~ "attachment_upload_inline"
     end
 
     test "accepts stringified operation args (MCP stringification fallback)" do
@@ -641,7 +641,7 @@ defmodule Platform.Chat.Canvas.ToolHandlersTest do
       assert payload.minimal_valid_example["root"]["type"] == "stack"
       assert "empty" in payload.available_templates
       assert "checklist" in payload.available_templates
-      assert payload.suggestion =~ "canvas.list_kinds"
+      assert payload.suggestion =~ "canvas_list_kinds"
     end
 
     test "rejects unrecognized operation shapes" do

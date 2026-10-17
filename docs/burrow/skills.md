@@ -38,16 +38,16 @@ The Skills page lists every skill. Open one to read or edit its body and to see 
 
 ## How agents use it
 
-- `skill.list` lists every skill with its slug, name, description and size, without the body. Pass `query` to filter by a word in the name, description or slug.
-- `skill.get` returns one skill in full, by `slug` or by `id`. Pass exactly one of them.
-- `skill.upsert` creates a skill, or replaces the body and description of the skill with the same name. The slug comes from the name.
+- `skill_list` lists every skill with its slug, name, description and size, without the body. Pass `query` to filter by a word in the name, description or slug.
+- `skill_get` returns one skill in full, by `slug` or by `id`. Pass exactly one of them.
+- `skill_upsert` creates a skill, or replaces the body and description of the skill with the same name. The slug comes from the name.
 - Attaching a skill is done by a person, on the Skills page or in the task detail panel. There is no agent tool for it.
 - Skills attached to your task arrive with your dispatch. You do not need to fetch them.
 
 ## Common mistakes
 
-- **Calling the tools with underscores.** The skill tools are named with a dot: `skill.list`, `skill.get` and `skill.upsert`. Any other spelling is refused.
-- **Overwriting a skill by accident.** `skill.upsert` replaces any skill with the same name. Read it with `skill.get` first, then edit.
+- **Calling the tools by another spelling.** The skill tools are `skill_list`, `skill_get` and `skill_upsert`. Their old dotted names (skill.list) still work but are not listed; any other spelling is refused.
+- **Overwriting a skill by accident.** `skill_upsert` replaces any skill with the same name. Read it with `skill_get` first, then edit.
 - **Writing a skill nobody attaches.** An unattached skill is only in the library. If it should shape a project's work, ask a person to attach it.
 - **Putting secrets or one-off context in a skill.** Every attached task's agent receives it in full. Keep skills reusable and free of credentials.
 

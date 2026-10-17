@@ -17,7 +17,7 @@ defmodule Platform.Federation.ToolDocWireTest do
     * `refute served == ""` / `assert served =~ "Limitations"` — non-blank
       assertions PASS TODAY, against the broken serializer, because the
       original description is non-blank.
-    * one hand-picked tool — passes on a special case. `canvas.create` already
+    * one hand-picked tool — passes on a special case. `canvas_create` already
       hand-duplicated its boundary sentence INTO `description`, so a test
       pointed at it proves nothing about the other 103.
     * counting sections (`count == 4`) — passes on four EMPTY headings, which

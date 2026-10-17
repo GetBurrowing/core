@@ -52,7 +52,7 @@ defmodule Platform.Federation.ToolAuthorizationTest do
       assert length(names) < length(ToolSurface.tool_definitions())
       assert "federation_status" in names
       refute "task_create" in names
-      refute "canvas.create" in names
+      refute "canvas_create" in names
     end
 
     test "empty tool_profile yields an empty list", ctx do
@@ -104,7 +104,7 @@ defmodule Platform.Federation.ToolAuthorizationTest do
         ToolAuthorization.tool_names(runtime(ctx.internal_id, ~w(messaging space task canvas)))
 
       assert "task_create" in names
-      assert "canvas.create" in names
+      assert "canvas_create" in names
       assert "space_leave" in names
     end
 
@@ -151,32 +151,38 @@ defmodule Platform.Federation.ToolAuthorizationTest do
   end
 
   # ── Undeclared names are denied (legacy canvas aliases included) ───────
+  #
+  # `canvas_update` is an execute-only legacy clause with no definition. Its
+  # sibling `canvas_create` was one too until task 01a14a7f stage 3 made
+  # `canvas_create` the declared name of `canvas.create`. The dotted names
+  # themselves are hidden aliases resolved by `ToolCall.invoke/4`, NOT here:
+  # `authorize/2` stays strict membership, so it denies them.
 
   describe "executable-but-undeclared tool names" do
-    test "canvas_create / canvas_update really are executable and unlisted" do
+    test "canvas_update really is executable and unlisted; canvas_create is listed" do
       listed = Enum.map(ToolSurface.tool_definitions(), & &1.name)
 
-      refute "canvas_create" in listed
       refute "canvas_update" in listed
-      assert "canvas.create" in listed
-      assert "canvas.patch" in listed
+      refute "canvas.create" in listed
+      assert "canvas_create" in listed
+      assert "canvas_patch" in listed
     end
 
     test "they are denied even when the canvas bundle is granted", ctx do
       runtime = runtime(ctx.internal_id, ["canvas"])
 
-      assert {:error, :forbidden} = ToolAuthorization.authorize("canvas_create", runtime)
       assert {:error, :forbidden} = ToolAuthorization.authorize("canvas_update", runtime)
+      assert {:error, :forbidden} = ToolAuthorization.authorize("canvas.create", runtime)
 
-      assert :ok = ToolAuthorization.authorize("canvas.create", runtime)
-      assert :ok = ToolAuthorization.authorize("canvas.patch", runtime)
+      assert :ok = ToolAuthorization.authorize("canvas_create", runtime)
+      assert :ok = ToolAuthorization.authorize("canvas_patch", runtime)
     end
 
     test "they are denied for an external principal holding canvas", ctx do
       runtime = runtime(ctx.external_id, ~w(canvas messaging))
 
+      assert {:error, :forbidden} = ToolAuthorization.authorize("canvas_update", runtime)
       assert {:error, :forbidden} = ToolAuthorization.authorize("canvas_create", runtime)
-      assert {:error, :forbidden} = ToolAuthorization.authorize("canvas.create", runtime)
       assert :ok = ToolAuthorization.authorize("send_media", runtime)
     end
 
@@ -190,7 +196,7 @@ defmodule Platform.Federation.ToolAuthorizationTest do
 
       listed = MapSet.new(ToolSurface.tool_definitions(), & &1.name)
 
-      for name <- ~w(canvas_create canvas_update no_such_tool) do
+      for name <- ~w(canvas_update canvas.create skill.list no_such_tool) do
         refute MapSet.member?(listed, name)
         assert {:error, :forbidden} = ToolAuthorization.authorize(name, runtime)
       end

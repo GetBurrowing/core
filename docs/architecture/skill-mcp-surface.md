@@ -8,7 +8,7 @@
 
 ## TL;DR
 
-Suite ships three centrally-distributed skill tools (`skill.list`, `skill.get`, `skill.upsert`) over its `/mcp` endpoint. **No federated runtime can call them today**, regardless of which plugin it uses, because the `skill` capability bundle is missing from every existing `AgentRuntime.allowed_bundles` row and from the per-runtime default. The chokepoint is on the Suite side — neither the Claude-channel plugin nor the OpenClaw plugin needs a code change for the *built-in* path to start working once the bundle is granted. (The OpenClaw legacy `agentTools` path is a separate, additive cleanup.)
+Suite ships three centrally-distributed skill tools (`skill_list`, `skill_get`, `skill_upsert`) over its `/mcp` endpoint. **No federated runtime can call them today**, regardless of which plugin it uses, because the `skill` capability bundle is missing from every existing `AgentRuntime.allowed_bundles` row and from the per-runtime default. The chokepoint is on the Suite side — neither the Claude-channel plugin nor the OpenClaw plugin needs a code change for the *built-in* path to start working once the bundle is granted. (The OpenClaw legacy `agentTools` path is a separate, additive cleanup.)
 
 ---
 
@@ -20,12 +20,12 @@ The skill tools are defined and dispatched in
 - `@bundles` (line 20) lists `skill` as one of eleven known bundles.
 - `tools_for_bundle("skill")` (line 54) routes to `skill_tools/0`.
 - `skill_tools/0` (lines 140–209) defines:
-  - `skill.list` — query-filtered summaries, no body.
-  - `skill.get` — full markdown by `slug` or `id`.
-  - `skill.upsert` — create-or-replace by name; slug is derived.
-- `execute("skill.list" | "skill.get" | "skill.upsert", …)` (lines 1574–1581) delegates to `Platform.Skills.ToolHandlers`.
+  - `skill_list` — query-filtered summaries, no body.
+  - `skill_get` — full markdown by `slug` or `id`.
+  - `skill_upsert` — create-or-replace by name; slug is derived.
+- `execute("skill_list" | "skill_get" | "skill_upsert", …)` (lines 1574–1581) delegates to `Platform.Skills.ToolHandlers`.
 
-These tool names use the dotted form (`skill.list`, not `skill_list`). MCP clients see them verbatim through `tools/list`.
+These tool names use underscores (`skill_list`), like every other tool. They used the dotted form (skill.list) until task 01a14a7f; that name is still accepted as a hidden alias but is not listed. MCP clients see the listed names verbatim through `tools/list`.
 
 This module is the **single source of truth** for the federated tool surface — both transports below dispatch through it.
 
@@ -121,14 +121,14 @@ Once the stage-2 migration has been applied, two quick spot-checks confirm parit
 # In a Claude Code session that has the Suite MCP server configured:
 # (the plugin install + `claude mcp add startup-suite ...` from §4)
 > /mcp                       # confirm "startup-suite" connected
-> Use skill.list to show me the registered skills.
+> Use skill_list to show me the registered skills.
 ```
 
-Expected: Claude calls `skill.list` and returns a non-empty count with skill summaries. Pre-fix: `-32001 "tool 'skill.list' not in allowed bundles"`.
+Expected: Claude calls `skill_list` and returns a non-empty count with skill summaries. Pre-fix: `-32001 "tool 'skill.list' not in allowed bundles"`.
 
 ### OpenClaw, `useMcpTools: true`
 
-Same expectation — the federated agent's loop should be able to call `skill.list` directly against `/mcp`. Confirm via the runtime's tool-call log, or with a short conversational prompt.
+Same expectation — the federated agent's loop should be able to call `skill_list` directly against `/mcp`. Confirm via the runtime's tool-call log, or with a short conversational prompt.
 
 ### OpenClaw, `useMcpTools: false`
 
@@ -139,5 +139,5 @@ Stage 2 alone won't help this mode (the WebSocket path doesn't honor bundle conf
 ## 7. Where to look next
 
 - ADR 0034 — design rationale for capability bundles and the per-bundle authorization model.
-- `Platform.Skills.ToolHandlers` — the implementation behind `skill.list/get/upsert`.
+- `Platform.Skills.ToolHandlers` — the implementation behind `skill_list/get/upsert`.
 - Federation overview — context for how attention routing and tool calls reach a runtime.

@@ -183,7 +183,7 @@ defmodule PlatformWeb.AdminPromptsLive do
     "federation_preamble" =>
       "Consolidated Claude Code federation guidance (subagent spawn, org memory, skill discovery, evidence chain, tool-name conventions)",
     "feedback_guidance" =>
-      "feedback.submit guidance, filled at render time only while FEEDBACK_POLICY enables external feedback; empty otherwise",
+      "feedback_submit guidance, filled at render time only while FEEDBACK_POLICY enables external feedback; empty otherwise",
     "stage_name" => "Name of the current stage",
     "stage_status" => "Status of the current stage",
     "elapsed" => "Human-readable elapsed time (e.g. '25 minutes')",

@@ -247,7 +247,7 @@ defmodule Platform.Orchestration.TaskRouterAttentionFunnelTest do
       # `%{id: _, title: _, kind: _, view_url: _}` — there is no `:canvas_id`
       # key on this tool's reply, and the refusal above is keyed `:error`, not
       # `:message`. Both differ from the shapes stage 5's e2e script names.
-      assert {:ok, %{id: canvas_id, kind: "text"}} = canvas_probe(space.id, agent.id)
+      assert {:ok, %{canvas_id: canvas_id, kind: "text"}} = canvas_probe(space.id, agent.id)
       assert is_binary(canvas_id)
     end
 

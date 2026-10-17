@@ -95,13 +95,13 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
 
   1. **Capture** — drive the local headless Chrome via CDP at `127.0.0.1:9222`. Use the `cdp_capture.sh` helper bundled with the dispatch (or invoke directly): `~/sources/core/apps/platform/priv/scripts/cdp_capture.sh <url> <output.jpg> [--width 375 --height 812]`. The script connects to Chrome's CDP, navigates, waits for network idle, optionally applies an `Emulation.setDeviceMetricsOverride` for mobile viewports, and writes a JPG via `Page.captureScreenshot`. The connectivity check is `curl -s http://127.0.0.1:9222/json/version` returning JSON. For non-browser visuals, fall back to `screen.snapshot`.
 
-  2. **Upload** — call `attachment.upload_start` (reserve a presigned URL), then `curl -X POST --data-binary '@<file>' <upload_url>` with the matching `Content-Type` and your CF-Access headers. The response gives `{id, url}` where `url` is `/chat/attachments/<uuid>` — that's what canvas image nodes accept. Do NOT use `attachment.upload_inline` for anything bigger than ~2 KB; long base64 strings round-trip-corrupt through tool-call envelopes and fail with `data_base64 is not valid base64` (a payload error, not a permissions error — easy to misdiagnose).
+  2. **Upload** — call `attachment_upload_start` (reserve a presigned URL), then `curl -X POST --data-binary '@<file>' <upload_url>` with the matching `Content-Type` and your CF-Access headers. The response gives `{id, url}` where `url` is `/chat/attachments/<uuid>` — that's what canvas image nodes accept. Do NOT use `attachment_upload_inline` for anything bigger than ~2 KB; long base64 strings round-trip-corrupt through tool-call envelopes and fail with `data_base64 is not valid base64` (a payload error, not a permissions error — easy to misdiagnose).
 
-  3. **Embed** — call `canvas.create` (or `canvas.patch ["append_child", ...]` on an existing canvas in the execution space) with an `image` node whose `src` is the `/chat/attachments/<uuid>` URL from step 2. Canvas image `src` MUST match `^/chat/attachments/<uuid>$` — external URLs and data URIs are rejected. Group multiple shots in a `stack` of `card`s with markdown captions explaining what's being shown.
+  3. **Embed** — call `canvas_create` (or `canvas_patch ["append_child", ...]` on an existing canvas in the execution space) with an `image` node whose `src` is the `/chat/attachments/<uuid>` URL from step 2. Canvas image `src` MUST match `^/chat/attachments/<uuid>$` — external URLs and data URIs are rejected. Group multiple shots in a `stack` of `card`s with markdown captions explaining what's being shown.
 
   4. **Submit** — call `review_request_create` with `validation_id` set to the `manual_approval` validation (NOT a `validation_evaluate` call — that's only for `test_pass` / `lint_pass`) and `items: [{label, canvas_id}]` pointing at the canvas from step 3. The review items appear inline on the task detail panel with approve/reject buttons. Items can mix `canvas_id` (visual) and `content` (text) — use `content` for tabular evidence, links, test summaries.
 
-  **Tool-name gotcha**: the Suite MCP HTTP endpoint registers tools with dots (`attachment.upload_start`); the Claude Code MCP wrapper exposes them with underscores. If you fall back to raw curl against `/mcp`, use the dot form or you'll get `not in allowed bundles` (which looks like a permissions denial but is actually a name-lookup miss).
+  **Tool names**: every Suite MCP tool name uses underscores (`attachment_upload_start`, `canvas_create`), on the `/mcp` HTTP endpoint and through the Claude Code MCP wrapper alike, so a raw curl against `/mcp` uses the same name. The old dotted names (`attachment.upload_start`, `canvas.create`) still answer as hidden aliases but are no longer listed; do not write new calls with them.
 
   **Do not** post screenshots via `suite_reply_with_media` and call them evidence — those messages don't reliably render in the reviewer's UI and the `manual_approval` gate doesn't watch the chat thread anyway. Evidence flows through `review_request_create`.\
   """
@@ -340,7 +340,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
         PromptTemplates.federation_preamble(%{task_id: contract_id(task, :id) || ""}),
       # Task 01a11ec3 stage 2: `""` unless the installation's feedback
       # capability is on (`Platform.Feedback.Policy.enabled?/0`, the predicate
-      # ToolSurface lists and executes `feedback.submit` under).
+      # ToolSurface lists and executes `feedback_submit` under).
       feedback_guidance: PromptTemplates.feedback_guidance()
     }
 
@@ -623,7 +623,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
         PromptTemplates.federation_preamble(%{task_id: contract_id(task, :id) || ""}),
       # Task 01a11ec3 stage 2: `""` unless the installation's feedback
       # capability is on (`Platform.Feedback.Policy.enabled?/0`, the predicate
-      # ToolSurface lists and executes `feedback.submit` under).
+      # ToolSurface lists and executes `feedback_submit` under).
       feedback_guidance: PromptTemplates.feedback_guidance()
     }
 
@@ -779,7 +779,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
         PromptTemplates.federation_preamble(%{task_id: contract_id(task, :id) || ""}),
       # Task 01a11ec3 stage 2: `""` unless the installation's feedback
       # capability is on (`Platform.Feedback.Policy.enabled?/0`, the predicate
-      # ToolSurface lists and executes `feedback.submit` under).
+      # ToolSurface lists and executes `feedback_submit` under).
       feedback_guidance: PromptTemplates.feedback_guidance()
     }
 
@@ -812,7 +812,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
         PromptTemplates.federation_preamble(%{task_id: contract_id(task, :id) || ""}),
       # Task 01a11ec3 stage 2: `""` unless the installation's feedback
       # capability is on (`Platform.Feedback.Policy.enabled?/0`, the predicate
-      # ToolSurface lists and executes `feedback.submit` under).
+      # ToolSurface lists and executes `feedback_submit` under).
       feedback_guidance: PromptTemplates.feedback_guidance()
     }
 

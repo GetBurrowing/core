@@ -13,7 +13,7 @@ defmodule Platform.Federation.ToolArgumentsTest do
     * a new `required: true` declaration with no classification;
     * an exemption left behind after its declaration changed;
     * an alias fallback appearing in a handler with no matching declaration
-      (the direction that hid `canvas.create`'s `initial_state` alias).
+      (the direction that hid `canvas_create`'s `initial_state` alias).
   """
   use ExUnit.Case, async: true
 
@@ -51,7 +51,7 @@ defmodule Platform.Federation.ToolArgumentsTest do
   # `required: false` when `task_id` joined it as a second entry point. The
   # requirement did not go away — it became CONDITIONAL (`plan_id` XOR
   # `task_id`), which a per-parameter gate cannot express, so the tool now
-  # refuses in its own handler like `skill.get` does. Moving this number DOWN
+  # refuses in its own handler like `skill_get` does. Moving this number DOWN
   # is the same act as moving it up: somebody read the handler and recorded a
   # ruling.
   #
@@ -192,7 +192,7 @@ defmodule Platform.Federation.ToolArgumentsTest do
   # an absent or malformed task_id (`invalid_task_id`) and an absent or
   # unknown reason (`invalid_reason`) before it opens a transaction. No
   # alias, no context fallback.
-  # 179 with `prototype.versions`' `prototype_id` and `prototype.rollback`'s
+  # 179 with `prototype_versions`' `prototype_id` and `prototype_rollback`'s
   # `prototype_id` and `version` (task 01a1316b-4e46 stage 1). HONEST, all
   # three: `Platform.Prototypes.Tools` reads each under its declared key only
   # (`require_string/2`, `require_integer/2`) and refuses an absent value with
@@ -221,7 +221,7 @@ defmodule Platform.Federation.ToolArgumentsTest do
   # default can be attributed to the handler that applies it. Matching a bare
   # key name across the whole file is not good enough: `send_media` defaults
   # `content` and `epic_create` defaults `status`, but both are declared
-  # `required: false` there — while `skill.upsert` and `validation_evaluate`
+  # `required: false` there — while `skill_upsert` and `validation_evaluate`
   # declare the same key names required and do NOT default them.
   defp handler_segments do
     source = read_source("lib/platform/federation/tool_surface.ex")
@@ -325,7 +325,7 @@ defmodule Platform.Federation.ToolArgumentsTest do
   end
 
   describe "handler fallbacks are declared" do
-    # The direction of drift that hid `canvas.create`'s `initial_state`:
+    # The direction of drift that hid `canvas_create`'s `initial_state`:
     # a handler grows `Map.get(args, "a") || Map.get(args, "b")` and the
     # declaration never learns about "b". Scanning the source for the pattern
     # means the next one cannot be missed by reading alone.
@@ -569,7 +569,7 @@ defmodule Platform.Federation.ToolArgumentsTest do
             do: {tool, param.key, param.aliases}
 
       assert Enum.sort(aliased) == [
-               {"canvas.create", "document", ["initial_state"]},
+               {"canvas_create", "document", ["initial_state"]},
                {"plan_get", "task_id", ["id"]},
                {"stage_complete", "stage_id", ["id"]},
                {"task_get", "task_id", ["id"]},

@@ -13,12 +13,16 @@ defmodule Platform.Canvas.ScriptEngine.Bindings do
 
   ## The registry
 
-  `registry/0` maps a binding name to its handler. v1 registers exactly one,
-  `canvas.patch`. Every other name (`tasks.create`, `chat.post_message`,
-  `suite_run`, `$store.*`, anything) is refused with kind `forbidden` and
-  code `binding_not_registered`, before any argument is read.
+  `registry/0` maps a binding name to its handler. v1 registers exactly one
+  binding, `canvas_patch`, under two names: `canvas_patch` and its legacy
+  dotted name `canvas.patch` (task 01a14a7f stage 3), because persisted
+  canvas scripts call `suite.call('canvas.patch', ...)`. A call through the
+  dotted name emits `Platform.Federation.ToolAliases`' legacy-name telemetry.
+  Every other name (`tasks.create`, `chat.post_message`, `suite_run`,
+  `$store.*`, anything) is refused with kind `forbidden` and code
+  `binding_not_registered`, before any argument is read.
 
-  `canvas.patch` parses its `operations` with the canvas.patch MCP tool's
+  `canvas_patch` parses its `operations` with the canvas_patch MCP tool's
   own parser (`Platform.Chat.Canvas.ToolHandlers.parse_operations/1`) and
   writes through `Platform.Chat.patch_canvas/3` as the principal, whose gate
   is `CanvasAccess.fetch_for_writer/2`: the same gate as the MCP tool, so a
@@ -29,7 +33,7 @@ defmodule Platform.Canvas.ScriptEngine.Bindings do
   as the invocation's `:runtime`. Each call reloads that row
   (`Federation.get_runtime/1`, as `Platform.CodeMode.Bindings` does) and
   requires it to be active, to belong to the agent, and to be granted
-  `canvas.patch` by `ToolAuthorization.authorize/2`. No runtime is a refusal.
+  `canvas_patch` by `ToolAuthorization.authorize/2`. No runtime is a refusal.
 
   ## Call limit
 
@@ -51,11 +55,12 @@ defmodule Platform.Canvas.ScriptEngine.Bindings do
   alias Platform.Chat.Canvas.ToolHandlers, as: CanvasToolHandlers
   alias Platform.Federation
   alias Platform.Federation.Jsonable
+  alias Platform.Federation.ToolAliases
   alias Platform.Federation.ToolAuthorization
 
   @doc "The registered bindings: name to `fn args, invocation -> response_json`."
   @spec registry() :: %{String.t() => (map(), map() -> String.t())}
-  def registry, do: %{"canvas.patch" => &canvas_patch/2}
+  def registry, do: %{"canvas_patch" => &canvas_patch/2, "canvas.patch" => &canvas_patch/2}
 
   @doc "The registered binding names."
   @spec names() :: [String.t()]
@@ -105,6 +110,7 @@ defmodule Platform.Canvas.ScriptEngine.Bindings do
     else
       case Map.fetch(registry(), name) do
         {:ok, binding} ->
+          note_legacy(name, invocation)
           with {:ok, args} <- decode(args_json), do: binding.(args, invocation)
 
         :error ->
@@ -117,6 +123,22 @@ defmodule Platform.Canvas.ScriptEngine.Bindings do
     end
   rescue
     error -> fail("tool_error", "#{name} raised #{inspect(error.__struct__)}")
+  end
+
+  defp note_legacy(name, invocation) do
+    case ToolAliases.resolve(name) do
+      {:alias, canonical} ->
+        runtime_id =
+          case Map.get(invocation, :runtime) do
+            %{runtime_id: id} -> id
+            _ -> nil
+          end
+
+        ToolAliases.emit_legacy(name, canonical, runtime_id)
+
+      :canonical ->
+        :ok
+    end
   end
 
   defp canvas_patch(args, invocation) do
@@ -137,17 +159,17 @@ defmodule Platform.Canvas.ScriptEngine.Bindings do
   end
 
   defp operations(_args),
-    do: fail("invalid_args", "canvas.patch needs a non-empty operations array", "invalid_args")
+    do: fail("invalid_args", "canvas_patch needs a non-empty operations array", "invalid_args")
 
   defp agent_runtime({:agent, agent_id}, invocation) do
     with %{id: pk} <- Map.get(invocation, :runtime),
          %{status: "active", agent_id: ^agent_id} = runtime <- Federation.get_runtime(pk) do
-      case ToolAuthorization.authorize("canvas.patch", runtime) do
+      case ToolAuthorization.authorize("canvas_patch", runtime) do
         :ok ->
           :ok
 
         {:error, :forbidden} ->
-          fail("forbidden", "this agent's runtime is not granted canvas.patch", "forbidden")
+          fail("forbidden", "this agent's runtime is not granted canvas_patch", "forbidden")
       end
     else
       _ -> fail("forbidden", "an agent principal needs its active runtime", "no_active_runtime")
@@ -180,7 +202,7 @@ defmodule Platform.Canvas.ScriptEngine.Bindings do
     do:
       fail(
         "forbidden",
-        "canvas.patch requires participation in the canvas's space; a read grant does not confer write",
+        "canvas_patch requires participation in the canvas's space; a read grant does not confer write",
         "forbidden"
       )
 
@@ -188,16 +210,16 @@ defmodule Platform.Canvas.ScriptEngine.Bindings do
     do:
       fail(
         "tool_error",
-        "canvas.patch rejected: #{inspect(Map.get(payload, :reason))}",
+        "canvas_patch rejected: #{inspect(Map.get(payload, :reason))}",
         "conflict"
       )
 
   defp patched({:error, %{code: code, message: message}}, _canvas_id),
-    do: fail("tool_error", "canvas.patch: #{message}", to_string(code))
+    do: fail("tool_error", "canvas_patch: #{message}", to_string(code))
 
   defp patched({:error, reason}, _canvas_id) do
     envelope = Jsonable.error_envelope(reason)
-    fail("tool_error", "canvas.patch failed: #{Map.get(envelope, :error)}", code(reason))
+    fail("tool_error", "canvas_patch failed: #{Map.get(envelope, :error)}", code(reason))
   end
 
   defp code(reason) when is_atom(reason), do: Atom.to_string(reason)

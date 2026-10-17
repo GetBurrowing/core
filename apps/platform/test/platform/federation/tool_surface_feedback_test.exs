@@ -1,6 +1,6 @@
 defmodule Platform.Federation.ToolSurfaceFeedbackTest do
   @moduledoc """
-  Task 01a11ec3 stage 2: `feedback.submit` exists on the federated tool
+  Task 01a11ec3 stage 2: `feedback_submit` exists on the federated tool
   surface exactly when `Platform.Feedback.Policy.enabled?/0` holds.
 
   "Exists" is asserted on every surface a caller can reach it through: the
@@ -28,7 +28,7 @@ defmodule Platform.Federation.ToolSurfaceFeedbackTest do
   alias Platform.Federation.ToolSurface
   alias Platform.Repo
 
-  @tool "feedback.submit"
+  @tool "feedback_submit"
   @broker Platform.Feedback.GithubPublisher.Broker
 
   setup do

@@ -65,7 +65,7 @@ defmodule Platform.Org.BurrowDocsContentTest do
   #
   #   1. after dropping a trailing argument list (`foo(...)` -> `foo`), it is
   #      lowercase words joined by `_` or `.`, at least two words
-  #      (`task_ack`, `canvas.create`). One-word spans (`react`, `degraded`)
+  #      (`task_ack`, `canvas_create`). One-word spans (`react`, `degraded`)
   #      are never checked: the shape cannot tell a tool from an English word.
   #   2. its first word is the first word of some real tool name (`task`,
   #      `canvas`, `memory`, `stack`, `suite`, ...), derived from
@@ -76,10 +76,11 @@ defmodule Platform.Org.BurrowDocsContentTest do
   #      name ends that way, and these are the parameter names docs cite most.
   #   4. it is not on `@non_tool_terms`.
   #
-  # A tool reference must then EXACTLY equal a tool name. Dots are not
-  # normalised to underscores: the server registers `canvas.create`, and a
-  # `canvas_create` call is refused as "not in allowed bundles", so a doc that
-  # spells it with an underscore is teaching a name that does not work.
+  # A tool reference must then EXACTLY equal a listed tool name. Separators
+  # are not normalised: since task 01a14a7f stage 3 every listed name uses
+  # underscores, and a dotted legacy spelling (`canvas.create`) is a hidden
+  # alias that is no longer listed, so a doc that teaches it is teaching a name
+  # agents will not find in `tools/list`.
 
   @tool_shape ~r/\A[a-z][a-z0-9]*(?:[._][a-z0-9]+)+\z/
   @banned_words ~r/\b(acme|ellis|hive|moon)\b/i
@@ -342,7 +343,7 @@ defmodule Platform.Org.BurrowDocsContentTest do
 
     ## What it is
 
-    Text that cites `task_ack`, `canvas.create`, `suite_reply`, `task_id` and `verified_at`.
+    Text that cites `task_ack`, `canvas_create`, `suite_reply`, `task_id` and `verified_at`.
 
     ## When to use it
 
@@ -452,17 +453,17 @@ defmodule Platform.Org.BurrowDocsContentTest do
              ]
     end
 
-    test "check 3 rejects an invented tool and an underscored dotted tool" do
+    test "check 3 rejects an invented tool and a dotted legacy spelling" do
       content =
         String.replace(
           valid_fixture(),
           "Text.\n\n## Common",
-          "Call `task_teleport` and `canvas_create`.\n\n## Common"
+          "Call `task_teleport` and `canvas.create`.\n\n## Common"
         )
 
       assert tool_name_errors(content, known_tools()) == [
                "unknown tool name `task_teleport`",
-               "unknown tool name `canvas_create`"
+               "unknown tool name `canvas.create`"
              ]
     end
 

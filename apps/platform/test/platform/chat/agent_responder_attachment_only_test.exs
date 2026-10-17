@@ -459,7 +459,7 @@ defmodule Platform.Chat.AgentResponderAttachmentOnlyTest do
 
   # ── retrieval: can the agent actually read what it was told about? ──────
 
-  describe "attachment.get_inline round-trip" do
+  describe "attachment_get_inline round-trip" do
     test "the UUID in the dispatched URL fetches the real bytes" do
       root = Path.join(System.tmp_dir!(), "attach-only-#{Ecto.UUID.generate()}")
       previous = Application.get_env(:platform, :chat_attachments_root)
@@ -503,7 +503,7 @@ defmodule Platform.Chat.AgentResponderAttachmentOnlyTest do
 
       {:ok, result} =
         ToolSurface.execute(
-          "attachment.get_inline",
+          "attachment_get_inline",
           %{"attachment_id" => quoted},
           %{agent_id: agent.id, agent_participant_id: participant.id}
         )

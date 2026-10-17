@@ -48,15 +48,15 @@ defmodule Platform.Federation.PlayToolsTest do
   # stage 4).
   # 126 with `janitor_hand_back` after `stack_assign_agents` (task
   # 019fa1ac-6685 stage 3, carried into Play at the PR #1226 main merge).
-  # 129 with `prototype.publish`, `prototype.versions`, `prototype.rollback`
+  # 129 with `prototype_publish`, `prototype_versions`, `prototype_rollback`
   # (bundle `prototype`) last (task 01a1316b-4e46 stage 1).
   # 128 with `vault_fetch` and `vault_list` after `federation_status`
   # (task 01a131c5 stage 1).
   # 131 with both (rollup merge of stack prototype-runtime onto main).
   # 135 with the four access tools (RBAC v2 agent-first Access UI).
   @main_tool_names ~w(
-    canvas.create canvas.patch canvas.describe canvas.list_kinds canvas.template canvas.versions
-    canvas.restore send_media react project_list org_list_descendants project_update epic_list
+    canvas_create canvas_patch canvas_describe canvas_list_kinds canvas_template canvas_versions
+    canvas_restore send_media react project_list org_list_descendants project_update epic_list
     epic_update epic_create task_create task_get task_transition_list runtime_event_list
     execution_lease_list task_list task_complete task_close_as_delivered task_delivery_candidate_list task_update task_start
     task_ack alarm_silence task_dependencies task_attach_canvas task_design_decline
@@ -73,14 +73,14 @@ defmodule Platform.Federation.PlayToolsTest do
     principal_search federation_status vault_fetch vault_list memory_view memory_create
     memory_str_replace memory_insert
     memory_delete memory_rename memory_search org_memory_recently_edited
-    org_memory_recently_deleted org_memory_feedback_at_path skill.list skill.get skill.upsert
-    attachment.upload_inline attachment.get_inline attachment.upload_start file_list
+    org_memory_recently_deleted org_memory_feedback_at_path skill_list skill_get skill_upsert
+    attachment_upload_inline attachment_get_inline attachment_upload_start file_list
     file_get_text file_get_metadata file_search file_add file_delete meeting_create meeting_say
     meeting_activity_push intent_ack experiment_surface_list experiment_list experiment_get
     experiment_create experiment_variant_add experiment_start experiment_stop experiment_conclude
     experiment_results experiment_signals_list experiment_exclude experiment_goal_set
     experiment_goal_list experiment_promote dispatch_metrics_list code_mode_report suite_run
-    suite_run_describe prototype.publish prototype.versions prototype.rollback
+    suite_run_describe prototype_publish prototype_versions prototype_rollback
     access_explain access_propose access_apply access_undo
   )
 

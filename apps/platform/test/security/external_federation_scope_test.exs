@@ -40,7 +40,7 @@ defmodule Platform.Security.ExternalFederationScopeTest do
 
       assert names == Enum.sort(@chat_names)
       refute "task_create" in names
-      refute "canvas.create" in names
+      refute "canvas_create" in names
       refute "space_leave" in names
       refute "principal_search" in names
     end
@@ -94,12 +94,12 @@ defmodule Platform.Security.ExternalFederationScopeTest do
   # ── INTERNAL owner regression ──────────────────────────────────────────
 
   describe "internal-owned runtime with the same broad bundles" do
-    test "tools/list includes task_create + canvas.create and task_create is NOT gated", ctx do
+    test "tools/list includes task_create + canvas_create and task_create is NOT gated", ctx do
       {_rt, token} = runtime_for(ctx.int.id, @broad_bundles)
 
       names = tool_names(build_conn(), token)
       assert "task_create" in names
-      assert "canvas.create" in names
+      assert "canvas_create" in names
 
       conn =
         mcp_post(

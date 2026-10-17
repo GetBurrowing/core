@@ -366,7 +366,7 @@ defmodule Platform.Chat.CanvasPatchTest do
       assert {:ok, _} = CanvasDocument.validate(doc)
     end
 
-    test "the canvas.patch tool parser accepts set_binding" do
+    test "the canvas_patch tool parser accepts set_binding" do
       assert {:ok, [{:set_binding, "vote", %{"kind" => "handler"}}, {:set_binding, "old", nil}]} =
                Platform.Chat.Canvas.ToolHandlers.parse_operations([
                  ["set_binding", "vote", %{"kind" => "handler"}],

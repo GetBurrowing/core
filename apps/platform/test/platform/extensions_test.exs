@@ -658,13 +658,13 @@ defmodule Platform.ExtensionsTest do
     # were registered even with the flag unset; this build has no module, so
     # those entries (and only those) are gone. Everything else is main's.
     @main_tool_names_off [
-      {"canvas.create", "canvas"},
-      {"canvas.patch", "canvas"},
-      {"canvas.describe", "canvas"},
-      {"canvas.list_kinds", "canvas"},
-      {"canvas.template", "canvas"},
-      {"canvas.versions", "canvas"},
-      {"canvas.restore", "canvas"},
+      {"canvas_create", "canvas"},
+      {"canvas_patch", "canvas"},
+      {"canvas_describe", "canvas"},
+      {"canvas_list_kinds", "canvas"},
+      {"canvas_template", "canvas"},
+      {"canvas_versions", "canvas"},
+      {"canvas_restore", "canvas"},
       {"send_media", "messaging"},
       {"react", "messaging"},
       {"project_list", "task"},
@@ -752,12 +752,12 @@ defmodule Platform.ExtensionsTest do
       {"org_memory_recently_edited", "memory"},
       {"org_memory_recently_deleted", "memory"},
       {"org_memory_feedback_at_path", "memory"},
-      {"skill.list", "skill"},
-      {"skill.get", "skill"},
-      {"skill.upsert", "skill"},
-      {"attachment.upload_inline", "attachment"},
-      {"attachment.get_inline", "attachment"},
-      {"attachment.upload_start", "attachment"},
+      {"skill_list", "skill"},
+      {"skill_get", "skill"},
+      {"skill_upsert", "skill"},
+      {"attachment_upload_inline", "attachment"},
+      {"attachment_get_inline", "attachment"},
+      {"attachment_upload_start", "attachment"},
       {"file_list", "files"},
       {"file_get_text", "files"},
       {"file_get_metadata", "files"},
@@ -786,12 +786,12 @@ defmodule Platform.ExtensionsTest do
       {"code_mode_report", "experiments"},
       {"suite_run", "code_mode"},
       {"suite_run_describe", "code_mode"},
-      {"prototype.publish", "prototype"},
-      {"prototype.versions", "prototype"},
-      {"prototype.rollback", "prototype"}
+      {"prototype_publish", "prototype"},
+      {"prototype_versions", "prototype"},
+      {"prototype_rollback", "prototype"}
     ]
 
-    # Re-pinned by task 01a0fcfa stage 1: attachment.get_inline's `returns`
+    # Re-pinned by task 01a0fcfa stage 1: attachment_get_inline's `returns`
     # and `limitations` text now document the MCP image content block. That
     # is the only tool-definition change; names and bundles are unchanged.
     #
@@ -833,15 +833,15 @@ defmodule Platform.ExtensionsTest do
     # tools, last. Measured on moon at the stage's branch.
     #
     # Re-pinned by task 01a1316b-4e46 stage 2: the `prototype` canvas kind,
-    # last in the registry, which also enters canvas.create/patch's document
+    # last in the registry, which also enters canvas_create/patch's document
     # schema. Measured on moon at the stage's branch.
     #
     # Re-pinned by task 01a1316b-677a stage 1: the `embed` kind's `scripts`
     # and `prototype_ref` props and its srcdoc / list_kinds text, which also
-    # enter canvas.create/patch's document schema. Measured on moon at the
+    # enter canvas_create/patch's document schema. Measured on moon at the
     # stage's branch.
     #
-    # Re-pinned by task 01a1316b-aab0 stage 2: canvas.patch's operation
+    # Re-pinned by task 01a1316b-aab0 stage 2: canvas_patch's operation
     # description names the new `set_binding` op (the MCP tool's text in
     # tool_surface.ex and the canvas tool schema in canvas/tools.ex).
     # Measured on moon at the stage's branch.
@@ -864,9 +864,15 @@ defmodule Platform.ExtensionsTest do
     # exactly as a nonexistent one (canvas_get passes the runtime's Access
     # Scope to `ToolAccess.fetch_for_read/3`). Names and bundles unchanged.
     # Measured on moon at the stage-5 wip ref.
-    @main_tool_digest_off "f42830845905858ffe772d4c54fba5219a74f8e98cbfb057e2867a35aa2d1fb1"
+    #
+    # Re-pinned by task 01a14a7f stage 3: the 17 dotted tool names became
+    # underscores (`canvas.create` -> `canvas_create`, ...), in names and in
+    # every description that cites one, including the image kind's `src`
+    # schema text (so the tool-schemas digest moves and the summaries digest
+    # does not). Measured on moon at the stage's branch (ac42fe5e).
+    @main_tool_digest_off "f9b0226dafb2ccbccf27abfc7e5a6f0c895aa944f862bbe54e31ac9b09cb6b07"
     @main_kinds_summaries_digest_off "26c0704185201d0926a8bcb6db6be411b821c54fcba3269676c631969944df72"
-    @main_kinds_tool_schemas_digest_off "264902e4c54f3146fe5be6e658c4717aafc6382ea233523ca505607d848e0925"
+    @main_kinds_tool_schemas_digest_off "565358119f017f2789edb4515a51ddbc89452309fdfa9c392b566a8e3d6fc81e"
     # main's lists minus exactly `play`.
     @core_bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode prototype access)
     @core_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode prototype access)
@@ -942,7 +948,7 @@ defmodule Platform.ExtensionsTest do
                ~w(access_explain access_propose access_apply access_undo)
 
       assert Enum.map(legacy, &{&1.name, &1.bundle}) == @main_tool_names_off
-      # canvas.create embeds the kind union. Strip only the two additive
+      # canvas_create embeds the kind union. Strip only the two additive
       # consent-card properties, preserving the legacy definition oracle.
       assert digest(legacy_kind_props(legacy)) == @main_tool_digest_off
     end

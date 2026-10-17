@@ -72,7 +72,7 @@ defmodule Platform.Chat.Canvas.Kind do
 
   @doc """
   Optional one-line description for `Platform.Chat.Canvas.Kinds.summaries/0`
-  (`canvas.list_kinds`). A kind a build-time module contributes answers it,
+  (`canvas_list_kinds`). A kind a build-time module contributes answers it,
   so core's registry names no kind it does not own (ADR 0055). Core's own
   kinds are described in `Kinds`.
   """

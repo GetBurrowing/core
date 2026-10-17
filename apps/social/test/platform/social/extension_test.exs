@@ -68,4 +68,19 @@ defmodule Platform.Social.ExtensionTest do
     assert Platform.Extensions.validate() == :ok
     assert Platform.Extensions.validate!() == :ok
   end
+
+  # Task 01a14a7f stage 3: core's tool names lost their dots, and the boot
+  # guard now compares names with separators normalised. Social's names count
+  # toward both, so they are checked here with Social actually registered.
+  test "the catalogue with Social lists no dotted name and no normalised duplicate" do
+    names = Enum.map(Platform.Federation.ToolSurface.tool_definitions(), & &1.name)
+
+    assert Enum.any?(names, &String.starts_with?(&1, "social_"))
+    assert Enum.filter(names, &String.contains?(&1, ".")) == []
+
+    normalised = Enum.map(names, &Platform.Extensions.normalise_tool_name/1)
+    assert length(Enum.uniq(normalised)) == length(names)
+
+    for name <- Platform.Federation.ToolAliases.legacy_names(), do: refute(name in names)
+  end
 end

@@ -19,7 +19,7 @@ defmodule Platform.Prototypes.Tools do
   alias Platform.Tenancy
 
   @spec execute(String.t(), map(), map()) :: {:ok, map()} | {:error, map()}
-  def execute("prototype.publish", args, context) do
+  def execute("prototype_publish", args, context) do
     with {:ok, agent_id} <- agent_id(context),
          {:ok, target} <- resolve_target(args, context),
          {:ok, input} <- read_input(args, context) do
@@ -48,7 +48,7 @@ defmodule Platform.Prototypes.Tools do
     end
   end
 
-  def execute("prototype.versions", args, context) do
+  def execute("prototype_versions", args, context) do
     with {:ok, prototype} <- fetch_in_scope(args, context) do
       versions =
         prototype
@@ -79,7 +79,7 @@ defmodule Platform.Prototypes.Tools do
     end
   end
 
-  def execute("prototype.rollback", args, context) do
+  def execute("prototype_rollback", args, context) do
     with {:ok, agent_id} <- agent_id(context),
          {:ok, prototype} <- fetch_in_scope(args, context),
          {:ok, version} <- require_integer(args, "version") do

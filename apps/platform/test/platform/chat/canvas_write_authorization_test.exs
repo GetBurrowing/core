@@ -7,7 +7,7 @@ defmodule Platform.Chat.CanvasWriteAuthorizationTest do
   the three doors in front of it:
 
     * `Chat.patch_canvas/3` and `Chat.update_canvas/3` — the context functions
-    * `Chat.Canvas.ToolHandlers.patch/2` — the MCP `canvas.patch` tool, which
+    * `Chat.Canvas.ToolHandlers.patch/2` — the MCP `canvas_patch` tool, which
       reaches `Canvas.Server.apply_patches/3` WITHOUT going through
       `Chat.patch_canvas/3` and was therefore the actual hole
 
@@ -256,13 +256,13 @@ defmodule Platform.Chat.CanvasWriteAuthorizationTest do
     end
   end
 
-  # ── MCP canvas.patch ──────────────────────────────────────────────────────
+  # ── MCP canvas_patch ──────────────────────────────────────────────────────
   #
   # This handler reaches `Canvas.Server.apply_patches/3` directly, so it is NOT
   # covered by the `Chat.patch_canvas/3` gate above. Before stage 2 it ignored
   # its context entirely and would patch any canvas id in any space in any org.
 
-  describe "ToolHandlers.patch/2 — the MCP canvas.patch tool" do
+  describe "ToolHandlers.patch/2 — the MCP canvas_patch tool" do
     test "a participating agent still writes", %{org_a: org_a} do
       space = space!(%{org_id: org_a.id})
       canvas = canvas!(space)

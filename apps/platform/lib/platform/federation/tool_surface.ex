@@ -9,7 +9,7 @@ defmodule Platform.Federation.ToolSurface do
   `canvas_get` used to ask `assert_agent_in_space/2` one question: is this agent
   a participant of the canvas's space. It now asks
   `Platform.Chat.Canvas.ToolAccess.fetch_for_read/2`, the same seam
-  `canvas.describe` and `canvas.versions` use, so every canvas-id-keyed read on
+  `canvas_describe` and `canvas_versions` use, so every canvas-id-keyed read on
   this surface has one rule.
 
   That move ADDS callers. It denied a non-rostered agent before and it still
@@ -134,7 +134,7 @@ defmodule Platform.Federation.ToolSurface do
   # that path is built.
   @list_envelope_tools %{
     "file_list" => :files,
-    "skill.list" => :skills,
+    "skill_list" => :skills,
     "review_item_list" => :items,
     "space_list" => :spaces,
     "canvas_list" => :canvases,
@@ -159,7 +159,7 @@ defmodule Platform.Federation.ToolSurface do
     "space_list_agents" => :agents,
     "org_list_descendants" => :descendants,
     "task_list_canvases" => :canvases,
-    "canvas.list_kinds" => :kinds,
+    "canvas_list_kinds" => :kinds,
     "task_delivery_candidate_list" => :candidates,
     "vault_list" => :secrets,
     "mail_inbound_list" => :messages
@@ -167,7 +167,7 @@ defmodule Platform.Federation.ToolSurface do
 
   # List-returning tools outside task 01a04a7a's scope, each with the reason.
   @list_envelope_exempt %{
-    "canvas.versions" =>
+    "canvas_versions" =>
       "cursor-paged: `next_cursor` is the continuation signal, so a count/offset envelope would be a second, competing contract",
     "space_search_messages" =>
       "ranked search hits, not an enumeration of a corpus; a total over a relevance ranking is not defined",
@@ -183,7 +183,7 @@ defmodule Platform.Federation.ToolSurface do
       "feedback for one memory path; out of scope for task 01a04a7a",
     "federation_status" =>
       "a status report whose lists are components of one snapshot, not a paged corpus",
-    "canvas.template" => "a static template catalogue returned whole from code, not a data corpus"
+    "canvas_template" => "a static template catalogue returned whole from code, not a data corpus"
   }
 
   @doc """
@@ -254,7 +254,7 @@ defmodule Platform.Federation.ToolSurface do
   defp tools_for_bundle("review"), do: tag(review_tools(), "review")
   defp tools_for_bundle("space"), do: tag(space_tools(), "space")
   defp tools_for_bundle("context_read"), do: tag(context_read_tools(), "context_read")
-  # `feedback.submit` (task 01a11ec3 stage 2) rides the `federation` bundle,
+  # `feedback_submit` (task 01a11ec3 stage 2) rides the `federation` bundle,
   # which every runtime holds by default, and is appended ONLY while
   # `Platform.Feedback.Policy.enabled?/0` is true. A disabled installation
   # therefore lists it nowhere — not in `tool_definitions/0`, not in any
@@ -307,7 +307,7 @@ defmodule Platform.Federation.ToolSurface do
           Enum.join(
             [
               "Run a short JavaScript program (QuickJS, ES2023) that calls your Suite tools and returns one JSON result, instead of making many tool calls one by one.",
-              "1. Bindings: every tool you can call is a function on `suite`: `suite.task_get({task_id})`; dotted names nest (`suite.canvas.create({...})`); `suite.call(name, args)` takes any name.",
+              "1. Bindings: every tool you can call is a function on `suite`: `suite.task_get({task_id})`; `suite.canvas_create({...})`; `suite.call(name, args)` takes any name.",
               "2. Calls are synchronous: each returns the tool's data (the same JSON a direct call returns) or throws an Error with `kind`, `code` and `message`.",
               "3. Thrown kinds: forbidden | tool_error | result_too_large | invalid_args | call_limit | store_error.",
               "4. The last expression is the result (top-level `await` is allowed; a script that uses `return` runs as a function body). `inputs` is the JSON you pass.",
@@ -452,7 +452,7 @@ defmodule Platform.Federation.ToolSurface do
   defp attachment_tools do
     [
       %{
-        name: "attachment.upload_inline",
+        name: "attachment_upload_inline",
         description:
           "Upload bytes as a base64 string in a single call (ADR 0039). Use for payloads up to the configured inline limit (default 25 MB). Returns a /chat/attachments/<id> URL suitable for referencing as a canvas image src or embedding in a message.",
         parameters: %{
@@ -476,12 +476,12 @@ defmodule Platform.Federation.ToolSurface do
         },
         returns: "%{id, url, byte_size, content_hash, content_type, deduplicated}",
         limitations:
-          "Capped at :inline_upload_max_bytes (default 25 MB). Use attachment.upload_start for larger files. Dedup is per-space — identical content in the same space returns the canonical id.",
+          "Capped at :inline_upload_max_bytes (default 25 MB). Use attachment_upload_start for larger files. Dedup is per-space — identical content in the same space returns the canonical id.",
         when_to_use:
           "When you have bytes in hand and they fit under the inline cap. Ideal for screenshots, diagrams, small documents."
       },
       %{
-        name: "attachment.get_inline",
+        name: "attachment_get_inline",
         description:
           "Read an attachment back as base64 inline bytes (ADR 0039 phase 7). Loads the row, fetches the stored bytes, base64-encodes them, and returns the decoded payload along with content_type, byte_size, and filename. Cap is 25 MB; for larger files use a presigned download URL (follow-up).",
         parameters: %{
@@ -500,7 +500,7 @@ defmodule Platform.Federation.ToolSurface do
           "When you need to read attachment bytes — e.g. to OCR an image, summarize a document, or hand bytes to a tool that does not accept URLs."
       },
       %{
-        name: "attachment.upload_start",
+        name: "attachment_upload_start",
         description:
           "Reserve a pending attachment row and get back a presigned POST URL to stream raw bytes to (ADR 0039). Use for files larger than the inline cap, or when the agent wants to hand off bytes via a plain HTTP POST.",
         parameters: %{
@@ -738,7 +738,7 @@ defmodule Platform.Federation.ToolSurface do
   defp skill_tools do
     [
       %{
-        name: "skill.list",
+        name: "skill_list",
         description:
           "List registered skills (centrally-distributed markdown playbooks). Returns summaries without the content body. Use `query` to filter by case-insensitive substring against name, description, or slug.",
         parameters: %{
@@ -751,12 +751,12 @@ defmodule Platform.Federation.ToolSurface do
         returns:
           "%{count, total, has_more, skills: [%{id, slug, name, description, content_size, inserted_at, updated_at}]} — `count` and `total` are both the number of matching skills returned (every match); `has_more` is always false here unless a server-side payload cap dropped records.",
         limitations:
-          "Returns every matching skill in one call — no pagination. Content body is omitted; fetch with skill.get.",
+          "Returns every matching skill in one call — no pagination. Content body is omitted; fetch with skill_get.",
         when_to_use:
           "Before picking a playbook for a task, or when you need to check whether a skill already exists."
       },
       %{
-        name: "skill.get",
+        name: "skill_get",
         description: "Fetch a full skill (including markdown content) by slug or id.",
         parameters: %{
           slug: %{
@@ -773,10 +773,10 @@ defmodule Platform.Federation.ToolSurface do
         returns: "%{id, slug, name, description, content, inserted_at, updated_at}",
         limitations: "Exactly one of `slug` or `id` is required.",
         when_to_use:
-          "After skill.list has told you the skill exists and you want to read it; before skill.upsert to fetch current content for editing."
+          "After skill_list has told you the skill exists and you want to read it; before skill_upsert to fetch current content for editing."
       },
       %{
-        name: "skill.upsert",
+        name: "skill_upsert",
         description:
           "Create or update a skill by name. Slug is derived from the name. Existing skills with the same slug are replaced (content + description).",
         parameters: %{
@@ -788,7 +788,7 @@ defmodule Platform.Federation.ToolSurface do
           description: %{
             type: "string",
             required: false,
-            description: "One-line summary shown in skill.list."
+            description: "One-line summary shown in skill_list."
           },
           content: %{
             type: "string",
@@ -1153,7 +1153,7 @@ defmodule Platform.Federation.ToolSurface do
 
   defp feedback_submit_tool do
     %{
-      name: "feedback.submit",
+      name: "feedback_submit",
       description:
         "Report a defect in Suite itself, or propose a concrete positive change to it, as one structured GitHub issue on the Startup-Suite feedback repository. Only the fields below are read; every other argument is ignored. Text is scrubbed for secrets and credentials before it leaves this installation.",
       parameters: %{
@@ -1687,7 +1687,7 @@ defmodule Platform.Federation.ToolSurface do
   defp canvas_tools do
     [
       %{
-        name: "canvas.create",
+        name: "canvas_create",
         # The boundary lives in `description`, not in `limitations`:
         # `PlatformWeb.MCPController.to_mcp_tool/1` forwards only `name`,
         # `description` and `inputSchema`, so anything stated in the other
@@ -1706,7 +1706,7 @@ defmodule Platform.Federation.ToolSurface do
             required: true,
             aliases: ["initial_state"],
             description:
-              "Canonical document. See canvas.describe on an existing canvas for a valid shape. Pass as a nested object, not a JSON string.",
+              "Canonical document. See canvas_describe on an existing canvas for a valid shape. Pass as a nested object, not a JSON string.",
             schema: Platform.Chat.Canvas.Tools.document_schema()
           }
         },
@@ -1716,7 +1716,7 @@ defmodule Platform.Federation.ToolSurface do
           "When you need to present structured, interactive, or visual data to users. Paste the returned view_url when you want a human to read the canvas outside this space."
       },
       %{
-        name: "canvas.patch",
+        name: "canvas_patch",
         description:
           "Apply patch operations with rebase-or-reject concurrency (ADR 0036). Requires the current base_revision — the server compares it to the live revision and either applies, rebases, or rejects with a structured reason.",
         parameters: %{
@@ -1724,7 +1724,7 @@ defmodule Platform.Federation.ToolSurface do
           base_revision: %{
             type: "integer",
             required: true,
-            description: "Revision the caller last observed (from canvas.describe)"
+            description: "Revision the caller last observed (from canvas_describe)"
           },
           operations: %{
             type: "array",
@@ -1744,11 +1744,11 @@ defmodule Platform.Federation.ToolSurface do
         },
         returns: "%{canvas_id, revision} on success, structured conflict on rejection",
         limitations:
-          "Rejection reasons: target_deleted, schema_violation, illegal_child, too_stale. Refresh with canvas.describe and retry.",
+          "Rejection reasons: target_deleted, schema_violation, illegal_child, too_stale. Refresh with canvas_describe and retry.",
         when_to_use: "When you need to modify the content or state of an existing canvas"
       },
       %{
-        name: "canvas.describe",
+        name: "canvas_describe",
         description:
           "Read the current document, revision, view_url, presence, and recent events for a canvas you hold a grant on. Cheap, idempotent — call before patching so base_revision is fresh, or to recover the view_url of a canvas you did not create. " <>
             Platform.Chat.Canvas.Tools.read_gate() <>
@@ -1767,23 +1767,23 @@ defmodule Platform.Federation.ToolSurface do
         limitations:
           "Reads only canvases you hold a grant on: a participant of the canvas's space, or an agent bound by phase_assignees to a live task the canvas is attached to. Anything else is denied, and a canvas that does not exist is reported separately from one you may not read. The view_url it returns likewise opens only for a viewer who holds a grant.",
         when_to_use:
-          "Before emitting canvas.patch, to present canvas state to a user, or to recover the view_url of a canvas you did not create"
+          "Before emitting canvas_patch, to present canvas state to a user, or to recover the view_url of a canvas you did not create"
       },
       %{
-        name: "canvas.list_kinds",
+        name: "canvas_list_kinds",
         description:
-          "List every registered canvas node kind with a one-line description, its child rule, a props summary, and an example node. Call this first if you're not sure what to emit in canvas.create.",
+          "List every registered canvas node kind with a one-line description, its child rule, a props summary, and an example node. Call this first if you're not sure what to emit in canvas_create.",
         parameters: %{},
         returns:
           "%{kinds: [%{kind, description, accepts_children, props, example}], total, has_more} — `total` is the number of registered kinds returned (this tool has no limit and returns every match); `has_more` is always false here. A server-side payload cap that drops records sets `has_more` to true.",
         limitations: "Static — same output regardless of caller or space.",
         when_to_use:
-          "Before canvas.create when you need to pick a kind or remember props; before canvas.patch when building replacement child nodes."
+          "Before canvas_create when you need to pick a kind or remember props; before canvas_patch when building replacement child nodes."
       },
       %{
-        name: "canvas.template",
+        name: "canvas_template",
         description:
-          "Fetch a named canonical canvas document you can pass directly to canvas.create. With no `name`, returns the list of available templates.",
+          "Fetch a named canonical canvas document you can pass directly to canvas_create. With no `name`, returns the list of available templates.",
         parameters: %{
           name: %{
             type: "string",
@@ -1795,14 +1795,14 @@ defmodule Platform.Federation.ToolSurface do
         returns:
           "%{name, description, document} for a specific template; %{templates: [...]} otherwise",
         limitations:
-          "Templates are static starter shapes. Customize the returned document before passing to canvas.create.",
+          "Templates are static starter shapes. Customize the returned document before passing to canvas_create.",
         when_to_use:
           "When you want a known-good canvas shape to adjust rather than hand-building a document from scratch."
       },
       %{
-        name: "canvas.versions",
+        name: "canvas_versions",
         description:
-          "List a canvas's revision history newest-first. Each entry is the revision number, write timestamp, written_by attribution snapshot, and a 1-sentence op_summary derived from the patch ops. Pair with canvas.restore to roll back. Same gate as canvas.describe, literally: both resolve through one seam. " <>
+          "List a canvas's revision history newest-first. Each entry is the revision number, write timestamp, written_by attribution snapshot, and a 1-sentence op_summary derived from the patch ops. Pair with canvas_restore to roll back. Same gate as canvas_describe, literally: both resolve through one seam. " <>
             Platform.Chat.Canvas.Tools.read_gate() <>
             " " <>
             Platform.Chat.Canvas.Tools.sharing_boundary(),
@@ -1821,7 +1821,7 @@ defmodule Platform.Federation.ToolSurface do
         },
         returns:
           "%{canvas_id, versions: [%{revision, written_at, written_by, op_summary}], next_cursor}",
-        # Same gate as canvas.describe, stated the same way on purpose (task
+        # Same gate as canvas_describe, stated the same way on purpose (task
         # 019fb01b stage 3). The string it replaces claimed participation only,
         # which was wrong in both directions: it omitted the task grant, and
         # the gate it named fell open entirely for a runtime with no linked
@@ -1829,10 +1829,10 @@ defmodule Platform.Federation.ToolSurface do
         limitations:
           "Reads only canvases you hold a grant on: a participant of the canvas's space, or an agent bound by phase_assignees to a live task the canvas is attached to. Anything else is denied. Versions older than the table's existence are not back-filled.",
         when_to_use:
-          "Before canvas.restore so you can show the user (or the model) what's available; or after a destructive patch to find a known-good revision to roll back to."
+          "Before canvas_restore so you can show the user (or the model) what's available; or after a destructive patch to find a known-good revision to roll back to."
       },
       %{
-        name: "canvas.restore",
+        name: "canvas_restore",
         description:
           "Replace the live canvas with the document from a historical revision. The restore is itself a write — it produces a new revision row at current+1 with ops marked as restore_from_revision.",
         parameters: %{
@@ -1845,7 +1845,7 @@ defmodule Platform.Federation.ToolSurface do
         },
         returns: "%{canvas_id, revision (the new revision), restored_from}",
         limitations:
-          "Restore obeys the same authorization gate as canvas.patch. The previous live document remains in history under its original revision number — restore never deletes prior versions.",
+          "Restore obeys the same authorization gate as canvas_patch. The previous live document remains in history under its original revision number — restore never deletes prior versions.",
         when_to_use:
           "When a patch clobbered something the user wanted back, or to revert to an approved snapshot."
       }
@@ -2712,7 +2712,7 @@ defmodule Platform.Federation.ToolSurface do
       # capabilities push, but `PlatformWeb.MCPController.to_mcp_tool/1`
       # forwards only `name`, `description` and `inputSchema`, so a refusal
       # taxonomy stated only in this field never reaches an agent on the
-      # hosted `/mcp` transport. `canvas.create` routes its own boundary
+      # hosted `/mcp` transport. `canvas_create` routes its own boundary
       # through `description` for exactly this reason (see :1097).
       #
       # Deliberately NOT mirrored into `description` here: it would have to be
@@ -2743,7 +2743,7 @@ defmodule Platform.Federation.ToolSurface do
             "unknown, malformed or soft-deleted, for everyone including grant-holders. Over the " <>
             "hosted /mcp transport none of this paragraph is delivered at all — it ships only " <>
             "on the capabilities push. Metadata only: rows carry the canvas title " <>
-            "and your note, never the document. Call `canvas.describe` with the `canvas_id` " <>
+            "and your note, never the document. Call `canvas_describe` with the `canvas_id` " <>
             "for that, and it gates separately.",
         when_to_use:
           "When you need to see which canvases will ride along in the next dispatch for a task, or to find stale attachments whose underlying canvas was soft-deleted."
@@ -3948,7 +3948,7 @@ defmodule Platform.Federation.ToolSurface do
   # not become the first.
   #
   # What `execute/3` still owns is everything the gate deliberately does not:
-  # conditional requirements (`skill.get`'s "exactly one of slug or id", and
+  # conditional requirements (`skill_get`'s "exactly one of slug or id", and
   # `stage_list`'s "exactly one of plan_id or task_id"),
   # value checks (`validation_evaluate`'s status set, `alarm_silence`'s range
   # and reason length), type coercion (`require_string/3`, `require_integer/3`)
@@ -4405,25 +4405,25 @@ defmodule Platform.Federation.ToolSurface do
 
   # ── Canvas tools (ADR 0036) ─────────────────────────────────────────────
 
-  def execute("canvas.create", args, context),
+  def execute("canvas_create", args, context),
     do: Platform.Chat.Canvas.ToolHandlers.create(args, context)
 
-  def execute("canvas.patch", args, context),
+  def execute("canvas_patch", args, context),
     do: Platform.Chat.Canvas.ToolHandlers.patch(args, context)
 
-  def execute("canvas.describe", args, context),
+  def execute("canvas_describe", args, context),
     do: Platform.Chat.Canvas.ToolHandlers.describe(args, context)
 
-  def execute("canvas.list_kinds", args, context),
+  def execute("canvas_list_kinds", args, context),
     do: Platform.Chat.Canvas.ToolHandlers.list_kinds(args, context)
 
-  def execute("canvas.template", args, context),
+  def execute("canvas_template", args, context),
     do: Platform.Chat.Canvas.ToolHandlers.template(args, context)
 
-  def execute("canvas.versions", args, context),
+  def execute("canvas_versions", args, context),
     do: Platform.Chat.Canvas.VersionHandlers.versions(args, context)
 
-  def execute("canvas.restore", args, context),
+  def execute("canvas_restore", args, context),
     do: Platform.Chat.Canvas.VersionHandlers.restore(args, context)
 
   # ── Vault tools (task 01a131c5) ─────────────────────────────────────────
@@ -4436,55 +4436,32 @@ defmodule Platform.Federation.ToolSurface do
 
   # ── Skill tools ─────────────────────────────────────────────────────────
 
-  def execute("skill.list", args, context),
+  def execute("skill_list", args, context),
     do: Platform.Skills.ToolHandlers.list(args, context)
 
-  def execute("skill.get", args, context),
+  def execute("skill_get", args, context),
     do: Platform.Skills.ToolHandlers.get(args, context)
 
-  def execute("skill.upsert", args, context),
+  def execute("skill_upsert", args, context),
     do: Platform.Skills.ToolHandlers.upsert(args, context)
 
   # ── Attachment tools (ADR 0039) ─────────────────────────────────────────
 
-  def execute("attachment.upload_inline", args, context),
+  def execute("attachment_upload_inline", args, context),
     do: Platform.Chat.Attachments.ToolHandlers.upload_inline(args, context)
 
-  def execute("attachment.upload_start", args, context),
+  def execute("attachment_upload_start", args, context),
     do: Platform.Chat.Attachments.ToolHandlers.upload_start(args, context)
 
-  def execute("attachment.get_inline", args, context),
+  def execute("attachment_get_inline", args, context),
     do: Platform.Chat.Attachments.ToolHandlers.get_inline(args, context)
 
-  # Legacy underscore-names kept for one release — delegate to the new handlers.
-  def execute("canvas_create", args, context) do
-    case Platform.Chat.Canvas.ToolHandlers.create(args, context) do
-      {:ok, payload} ->
-        {:ok,
-         %{
-           id: payload.canvas_id,
-           title: payload.title,
-           kind: payload.kind,
-           # `Map.get/2`, not dot-access: this clause is wrapped in a `rescue`
-           # that turns any raise into "Failed to create canvas" for a canvas
-           # that WAS created, inviting a duplicate-creating retry. A missing
-           # key must not be able to produce that.
-           view_url: Map.get(payload, :view_url)
-         }}
-
-      {:error, _} = err ->
-        err
-    end
-  rescue
-    e ->
-      {:error,
-       %{
-         error: "Failed to create canvas: #{Exception.message(e)}",
-         recoverable: true,
-         suggestion: "Verify the space_id is valid and the agent is a participant"
-       }}
-  end
-
+  # Legacy `canvas_update`, an execute-only clause with no definition: no
+  # runtime holds it, so `ToolAuthorization.authorize/2` refuses it on every
+  # transport. Its sibling `canvas_create` clause (an `id`-shaped result) was
+  # deleted by task 01a14a7f stage 3, which made `canvas_create` the canonical
+  # name of `canvas.create` (above); invoking the legacy clause was measured
+  # `{:error, :forbidden}` on main dbecc06b first.
   def execute("canvas_update", args, context) do
     # Legacy canvas_update wrote without base_revision; use a describe lookup
     # to fetch current so callers that haven't migrated don't crash.
@@ -5913,7 +5890,7 @@ defmodule Platform.Federation.ToolSurface do
   # DEFENCE IN DEPTH, stated honestly rather than oversold: this tool returns
   # attachment METADATA (`attachment_id`, `canvas_id`, `title`, `note`,
   # `attached_at`, `canvas_present`), never a canvas document. Bodies go
-  # through `canvas.describe`, which is a different surface with its own gate.
+  # through `canvas_describe`, which is a different surface with its own gate.
   # What the gate closes is the cheap enumeration of which canvases hang off a
   # task the caller has nothing to do with, and the titles that come with it.
   #
@@ -7790,7 +7767,7 @@ defmodule Platform.Federation.ToolSurface do
   # The capability check runs FIRST and again inside `Submission.submit/2`:
   # a disabled installation refuses before an argument is read, whichever
   # path reached this clause.
-  def execute("feedback.submit", args, context) do
+  def execute("feedback_submit", args, context) do
     with :ok <- feedback_enabled() do
       actor =
         case load_agent(context) do
@@ -8057,10 +8034,11 @@ defmodule Platform.Federation.ToolSurface do
   def execute("experiment_" <> _ = tool, args, context),
     do: Platform.Experiments.Tools.execute(tool, args, context)
 
-  # Every `prototype.*` tool (task 01a1316b-4e46 stage 1); no other tool name
-  # has this prefix. The agent's home org is resolved here, by the same rule
+  # Every `prototype_*` tool (task 01a1316b-4e46 stage 1; renamed from
+  # `prototype.*` by task 01a14a7f stage 3); no other tool name has this
+  # prefix. The agent's home org is resolved here, by the same rule
   # every tenant-scoped tool uses, and handed over in the context.
-  def execute("prototype." <> _ = tool, args, context),
+  def execute("prototype_" <> _ = tool, args, context),
     do:
       Platform.Prototypes.Tools.execute(
         tool,
@@ -8073,7 +8051,7 @@ defmodule Platform.Federation.ToolSurface do
 
   # A tool an extension bundle owns (ADR 0055), listed or not: the extension
   # answers it, including any refusal it gives while switched off. Core's
-  # own clauses above always win a name. Like the `prototype.*` clause, the
+  # own clauses above always win a name. Like the `prototype_*` clause, the
   # context carries the calling agent's home org (`:agent_home_org`, `:root`
   # or `{:tenant, org_id}`, core's rule), so an extension never has to trust
   # a client-supplied org id.
@@ -11910,7 +11888,7 @@ defmodule Platform.Federation.ToolSurface do
   # tool sits outside `Platform.Federation.ToolArguments` entirely — a
   # per-parameter gate cannot express "exactly one of these two", and having
   # it pretend to would be the same defect this task exists to close. The
-  # precedent is `skill.get`'s "exactly one of `slug` or `id`".
+  # precedent is `skill_get`'s "exactly one of `slug` or `id`".
   #
   # The rule below is stated in the tool's own `description` and its refusal
   # codes in `limitations`, both guarded by tests. Underdetermination is the
@@ -12325,7 +12303,7 @@ defmodule Platform.Federation.ToolSurface do
 
   # `binary: true` branch — skip the extracted-text cache and stream the
   # bytes back base64-encoded. Capped at 25 MB to mirror
-  # `attachment.get_inline`; bigger files will need a presigned download
+  # `attachment_get_inline`; bigger files will need a presigned download
   # path (deferred follow-up).
   #
   # GATED on `ingest_intent`, using the SAME barrier as the text branch.
@@ -13205,7 +13183,7 @@ defmodule Platform.Federation.ToolSurface do
   # message; publisher responses never reach it.
   defp feedback_error_envelope(:feedback_disabled, _err) do
     %{
-      error: "feedback.submit: feedback submission is not enabled on this installation",
+      error: "feedback_submit: feedback submission is not enabled on this installation",
       code: :feedback_disabled,
       recoverable: false,
       suggestion:
@@ -13215,7 +13193,7 @@ defmodule Platform.Federation.ToolSurface do
 
   defp feedback_error_envelope(:rate_limited, err) do
     %{
-      error: "feedback.submit: #{err.message}",
+      error: "feedback_submit: #{err.message}",
       code: :rate_limited,
       recoverable: true,
       retry_after_seconds: Map.get(err, :retry_after_seconds),
@@ -13231,7 +13209,7 @@ defmodule Platform.Federation.ToolSurface do
               :in_flight
             ] do
     %{
-      error: "feedback.submit: #{err.message}",
+      error: "feedback_submit: #{err.message}",
       code: code,
       recoverable: true,
       suggestion:
@@ -13247,7 +13225,7 @@ defmodule Platform.Federation.ToolSurface do
               :unauthorized
             ] do
     %{
-      error: "feedback.submit: #{err.message}",
+      error: "feedback_submit: #{err.message}",
       code: code,
       recoverable: false,
       suggestion: "Tell the person you are working with; do not retry."
@@ -13256,7 +13234,7 @@ defmodule Platform.Federation.ToolSurface do
 
   defp feedback_error_envelope(code, err) do
     %{
-      error: "feedback.submit: #{err.message}",
+      error: "feedback_submit: #{err.message}",
       code: code,
       recoverable: true,
       field: Map.get(err, :field),

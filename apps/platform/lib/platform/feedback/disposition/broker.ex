@@ -1,7 +1,7 @@
 defmodule Platform.Feedback.Disposition.Broker do
   @moduledoc """
   Applies an intake disposition through the Suite-hosted feedback broker
-  (task 01a11ec3 stage 3), the same broker `feedback.submit` publishes
+  (task 01a11ec3 stage 3), the same broker `feedback_submit` publishes
   through. The installation carries no GitHub credential.
 
   ## Wire contract

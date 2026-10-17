@@ -21,7 +21,7 @@ defmodule Platform.Federation.PrototypeTools do
   def definitions do
     [
       %{
-        name: "prototype.publish",
+        name: "prototype_publish",
         description:
           "Publish a multi-file clickable prototype (HTML/JS/CSS/images) as a new immutable version. Omit prototype_id to create a prototype; pass it to add version N+1 (older versions keep serving). " <>
             @boundary,
@@ -52,7 +52,7 @@ defmodule Platform.Federation.PrototypeTools do
             type: "string",
             required: false,
             description:
-              "A zip uploaded with attachment.upload_start (or upload_inline) in a space you are in. Use this for anything large. Exactly one of zip_attachment_id or files."
+              "A zip uploaded with attachment_upload_start (or upload_inline) in a space you are in. Use this for anything large. Exactly one of zip_attachment_id or files."
           },
           files: %{
             type: "object",
@@ -74,7 +74,7 @@ defmodule Platform.Federation.PrototypeTools do
           "To share a clickable prototype with an org inside Suite instead of on a public tunnel."
       },
       %{
-        name: "prototype.versions",
+        name: "prototype_versions",
         description:
           "List a prototype's versions, newest first, with which one latest points at and which were removed by retention.",
         parameters: %{
@@ -84,10 +84,10 @@ defmodule Platform.Federation.PrototypeTools do
           "%{prototype_id, name, org_id, latest_version, versions: [%{version, url, entry_path, file_count, total_bytes, published_by, inserted_at, removed_at}], total, has_more} — every version is returned; has_more is always false.",
         limitations:
           "not_found for an unknown id and for a prototype outside your org scope (existence is not disclosed).",
-        when_to_use: "Before prototype.rollback, or to find a version's URL."
+        when_to_use: "Before prototype_rollback, or to find a version's URL."
       },
       %{
-        name: "prototype.rollback",
+        name: "prototype_rollback",
         description:
           "Point a prototype's latest at an earlier version. Nothing is copied; /proto/<id>/latest/ then redirects to that version. Same install policy as publishing.",
         parameters: %{

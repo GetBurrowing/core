@@ -4,7 +4,7 @@ defmodule Platform.Feedback.Policy do
 
   ONE environment value, `FEEDBACK_POLICY`, normalised to one of three modes:
 
-    * `:disabled` — the capability does not exist. `feedback.submit` is not
+    * `:disabled` — the capability does not exist. `feedback_submit` is not
       listed by any bundle, a direct call is refused server-side, and no
       dispatch or nudge prompt mentions it.
     * `:quarantined` — the capability exists; an accepted intake stamps the

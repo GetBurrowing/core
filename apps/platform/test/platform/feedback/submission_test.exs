@@ -1,6 +1,6 @@
 defmodule Platform.Feedback.SubmissionTest do
   @moduledoc """
-  Task 01a11ec3 stage 2: the `feedback.submit` boundary against a fake
+  Task 01a11ec3 stage 2: the `feedback_submit` boundary against a fake
   broker (`Req.Test` stub `Platform.Feedback.GithubPublisher.Broker`). Every
   broker call is sent to the test process as `{:broker, method, path, headers,
   body}`, so "no external call" is an assertion about messages, not a mock

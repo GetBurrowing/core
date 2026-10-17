@@ -2,7 +2,7 @@ defmodule Platform.Chat.AttachmentReaper do
   @moduledoc """
   Sweeps expired pending attachment rows (ADR 0039 phase 4+5).
 
-  Agents calling `attachment.upload_start` reserve a row in `state: :pending`
+  Agents calling `attachment_upload_start` reserve a row in `state: :pending`
   with an `upload_expires_at` timestamp. If the agent never POSTs the bytes,
   the row lingers and the storage key (if any) takes up space. This GenServer
   ticks every 5 minutes and deletes any `:pending` row whose expiry is in the

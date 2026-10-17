@@ -83,10 +83,10 @@ defmodule Platform.Federation.ToolSurfaceCanvasViewUrlTest do
                  context
                )
 
-      on_exit(fn -> CanvasServer.stop(result.id) end)
+      on_exit(fn -> CanvasServer.stop(result.canvas_id) end)
 
-      assert result.view_url == Links.view_url(result.id)
-      assert result.view_url == PlatformWeb.Endpoint.url() <> "/canvases/" <> result.id
+      assert result.view_url == Links.view_url(result.canvas_id)
+      assert result.view_url == PlatformWeb.Endpoint.url() <> "/canvases/" <> result.canvas_id
     end
   end
 
@@ -101,13 +101,13 @@ defmodule Platform.Federation.ToolSurfaceCanvasViewUrlTest do
           context
         )
 
-      on_exit(fn -> CanvasServer.stop(created.id) end)
+      on_exit(fn -> CanvasServer.stop(created.canvas_id) end)
 
       assert {:ok, fetched} =
-               ToolSurface.execute("canvas_get", %{"canvas_id" => created.id}, context)
+               ToolSurface.execute("canvas_get", %{"canvas_id" => created.canvas_id}, context)
 
       assert fetched.view_url == created.view_url
-      assert fetched.view_url == Links.view_url(created.id)
+      assert fetched.view_url == Links.view_url(created.canvas_id)
     end
 
     test "carries the view_url in full mode too" do
@@ -120,16 +120,16 @@ defmodule Platform.Federation.ToolSurfaceCanvasViewUrlTest do
           context
         )
 
-      on_exit(fn -> CanvasServer.stop(created.id) end)
+      on_exit(fn -> CanvasServer.stop(created.canvas_id) end)
 
       assert {:ok, fetched} =
                ToolSurface.execute(
                  "canvas_get",
-                 %{"canvas_id" => created.id, "mode" => "full"},
+                 %{"canvas_id" => created.canvas_id, "mode" => "full"},
                  context
                )
 
-      assert fetched.view_url == Links.view_url(created.id)
+      assert fetched.view_url == Links.view_url(created.canvas_id)
       assert fetched.document["root"]["type"] == "stack"
     end
   end
@@ -139,7 +139,7 @@ defmodule Platform.Federation.ToolSurfaceCanvasViewUrlTest do
       boundary = Tools.sharing_boundary()
       defs = ToolSurface.tool_definitions()
 
-      for name <- ["canvas.create", "canvas.describe", "canvas.versions", "canvas_get"] do
+      for name <- ["canvas_create", "canvas_describe", "canvas_versions", "canvas_get"] do
         defn = Enum.find(defs, &(&1.name == name))
         assert defn, "#{name} missing from the federation tool surface"
 
@@ -151,8 +151,8 @@ defmodule Platform.Federation.ToolSurfaceCanvasViewUrlTest do
     test "the documented return shapes include view_url" do
       defs = ToolSurface.tool_definitions()
 
-      assert Enum.find(defs, &(&1.name == "canvas.create")).returns =~ "view_url"
-      assert Enum.find(defs, &(&1.name == "canvas.describe")).returns =~ "view_url"
+      assert Enum.find(defs, &(&1.name == "canvas_create")).returns =~ "view_url"
+      assert Enum.find(defs, &(&1.name == "canvas_describe")).returns =~ "view_url"
       assert Enum.find(defs, &(&1.name == "canvas_get")).returns =~ "view_url"
       assert Enum.find(defs, &(&1.name == "canvas_list")).returns =~ "view_url"
     end
@@ -160,8 +160,8 @@ defmodule Platform.Federation.ToolSurfaceCanvasViewUrlTest do
     # Inverted by task 019fb01b stage 3, which gated the read. Between 019e2c4b
     # and this stage the string honestly advertised the hole; leaving it in
     # place now would be the same defect pointing the other way.
-    test "canvas.describe states the gate it now actually has" do
-      describe = Enum.find(ToolSurface.tool_definitions(), &(&1.name == "canvas.describe"))
+    test "canvas_describe states the gate it now actually has" do
+      describe = Enum.find(ToolSurface.tool_definitions(), &(&1.name == "canvas_describe"))
 
       refute describe.limitations =~ "not gated on space participation"
       assert describe.limitations =~ "participant"
@@ -193,7 +193,7 @@ defmodule Platform.Federation.ToolSurfaceCanvasViewUrlTest do
       gate = Tools.read_gate()
       defs = ToolSurface.tool_definitions()
 
-      for name <- ["canvas.describe", "canvas.versions", "canvas_get"] do
+      for name <- ["canvas_describe", "canvas_versions", "canvas_get"] do
         defn = Enum.find(defs, &(&1.name == name))
         assert defn, "#{name} missing from the federation tool surface"
 
@@ -251,7 +251,7 @@ defmodule Platform.Federation.ToolSurfaceCanvasViewUrlTest do
       tools = resp["result"]["tools"]
       boundary = Tools.sharing_boundary()
 
-      for name <- ["canvas.create", "canvas.describe"] do
+      for name <- ["canvas_create", "canvas_describe"] do
         tool = Enum.find(tools, &(&1["name"] == name))
         assert tool, "#{name} missing from tools/list"
 

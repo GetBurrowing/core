@@ -26,7 +26,7 @@ defmodule Platform.Social.Approvals do
        without a card is `:not_a_social_card` (a lookalike an agent made);
     2. requires the card `pending`, else `:already_decided`;
     3. compares the canvas document's digest with the stored `card_digest`,
-       else `:card_changed` (an agent may `canvas.patch` any canvas in a
+       else `:card_changed` (an agent may `canvas_patch` any canvas in a
        space it is in; `Chat.patch_canvas/3` gates on membership only);
     4. locks the post (`FOR UPDATE`) and requires `needs_approval`, else
        `:already_decided`;

@@ -5,7 +5,7 @@ defmodule Platform.Federation.NodeCommandHandler do
   **Canvas commands are deprecated** per ADR 0036. `canvas.present`,
   `canvas.navigate`, `canvas.hide`, `canvas.a2ui_push`, `canvas.a2ui_reset`
   and their aliases are removed. Agents should use the canonical
-  `canvas.create` / `canvas.patch` / `canvas.describe` tools (Phase 4 of the
+  `canvas_create` / `canvas_patch` / `canvas_describe` tools (Phase 4 of the
   canvas refactor) instead.
 
   Non-canvas stubs (`canvas.eval`, `canvas.snapshot`) are retained as they
@@ -43,6 +43,6 @@ defmodule Platform.Federation.NodeCommandHandler do
 
   defp deprecated(name) do
     {:error, "COMMAND_DEPRECATED",
-     "#{name} has been removed. Use the canvas.create / canvas.patch / canvas.describe agent tools (ADR 0036)."}
+     "#{name} has been removed. Use the canvas_create / canvas_patch / canvas_describe agent tools (ADR 0036)."}
   end
 end

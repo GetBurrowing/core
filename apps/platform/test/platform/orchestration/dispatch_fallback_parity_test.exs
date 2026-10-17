@@ -133,7 +133,7 @@ defmodule Platform.Orchestration.DispatchFallbackParityTest do
     |> MapSet.new()
   end
 
-  # The registry spells some tools with a dot (`canvas.describe`) while the MCP
+  # The registry spells some tools with a dot (`canvas_describe`) while the MCP
   # client surface — and therefore every prompt body — spells them with an
   # underscore, and agent-facing prompts prefix some with `suite_`. Normalize
   # both sides through here so the same tool compares equal whichever

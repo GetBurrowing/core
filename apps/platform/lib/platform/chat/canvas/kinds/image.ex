@@ -4,7 +4,7 @@ defmodule Platform.Chat.Canvas.Kinds.Image do
 
   Per ADR 0039 phase 6, `src` is locked down to path-relative
   `/chat/attachments/<uuid>` URLs. Agents should upload via
-  `attachment.upload_inline` / `attachment.upload_start` and set `src` to
+  `attachment_upload_inline` / `attachment_upload_start` and set `src` to
   the returned URL. External schemes (http(s), data:, javascript:, file:,
   bare hosts) are rejected with a structured validation error.
   """
@@ -27,7 +27,7 @@ defmodule Platform.Chat.Canvas.Kinds.Image do
           "type" => "string",
           "pattern" => "^/chat/attachments/[0-9a-fA-F-]{36}$",
           "description" =>
-            "Path-relative /chat/attachments/<uuid>. Upload bytes via attachment.upload_inline or attachment.upload_start and pass the returned `url` here."
+            "Path-relative /chat/attachments/<uuid>. Upload bytes via attachment_upload_inline or attachment_upload_start and pass the returned `url` here."
         },
         "alt" => %{"type" => "string"},
         "caption" => %{"type" => "string"},
@@ -45,7 +45,7 @@ defmodule Platform.Chat.Canvas.Kinds.Image do
     else
       {:error,
        "image src must be a path-relative /chat/attachments/<uuid> URL. " <>
-         "Upload bytes via attachment.upload_inline and pass the returned `url`. Got #{inspect(src)}"}
+         "Upload bytes via attachment_upload_inline and pass the returned `url`. Got #{inspect(src)}"}
     end
   end
 

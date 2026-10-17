@@ -26,7 +26,7 @@ defmodule Platform.Access.ToolPermissionsTest do
     assert "agents.manage_own" in ToolPermissions.bundle_permissions("federation")
     assert "mail.use" in ToolPermissions.bundle_permissions("mail")
 
-    assert ToolPermissions.for_tool("feedback.submit") == "agents.manage_own"
+    assert ToolPermissions.for_tool("feedback_submit") == "agents.manage_own"
     assert "agents.manage_own" in ToolPermissions.bundle_permissions("federation")
   end
 

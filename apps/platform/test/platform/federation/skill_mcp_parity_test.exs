@@ -5,7 +5,7 @@ defmodule Platform.Federation.SkillMCPParityTest do
   Verifies that two `AgentRuntime` rows distinguished only by their
   `metadata.client_info.product` value (`"claude_channel"` vs `"openclaw"`)
   see byte-equivalent responses from the canonical MCP chokepoint at
-  `POST /mcp` when calling `tools/list`, `skill.list`, and `skill.get`.
+  `POST /mcp` when calling `tools/list`, `skill_list`, and `skill_get`.
 
   Both flavors converge on `PlatformWeb.MCPController` regardless of the
   upstream plugin, so exercising that controller directly via Phoenix
@@ -80,7 +80,7 @@ defmodule Platform.Federation.SkillMCPParityTest do
         # #{name}
 
         This is a deterministic markdown body used to assert that
-        `skill.get` returns identical bytes regardless of which
+        `skill_get` returns identical bytes regardless of which
         federated agent flavor is calling. Includes some prose so
         the JSON round-trip exercises non-trivial content.
         """
@@ -110,7 +110,7 @@ defmodule Platform.Federation.SkillMCPParityTest do
       claude_tools = list_tool_names(ctx.claude_token)
       openclaw_tools = list_tool_names(ctx.openclaw_token)
 
-      expected = MapSet.new(["skill.list", "skill.get", "skill.upsert"])
+      expected = MapSet.new(["skill_list", "skill_get", "skill_upsert"])
 
       assert MapSet.subset?(expected, claude_tools),
              "claude_channel runtime missing skill tools: #{inspect(MapSet.difference(expected, claude_tools))}"
@@ -122,7 +122,7 @@ defmodule Platform.Federation.SkillMCPParityTest do
       assert claude_tools == openclaw_tools
     end
 
-    test "skill.list responses are byte-equivalent across flavors", ctx do
+    test "skill_list responses are byte-equivalent across flavors", ctx do
       claude_body = call_skill_list(ctx.claude_token)
       openclaw_body = call_skill_list(ctx.openclaw_token)
 
@@ -130,7 +130,7 @@ defmodule Platform.Federation.SkillMCPParityTest do
       openclaw_norm = normalize_envelope(openclaw_body)
 
       assert claude_norm == openclaw_norm,
-             "skill.list diverged between flavors. claude=#{inspect(claude_norm)} openclaw=#{inspect(openclaw_norm)}"
+             "skill_list diverged between flavors. claude=#{inspect(claude_norm)} openclaw=#{inspect(openclaw_norm)}"
 
       # Sanity: the seeded skill is actually visible (so the equality assertion above
       # isn't vacuously comparing two empty result sets).
@@ -139,7 +139,7 @@ defmodule Platform.Federation.SkillMCPParityTest do
       assert ctx.skill.slug in slugs
     end
 
-    test "skill.get responses are byte-equivalent across flavors, including markdown content",
+    test "skill_get responses are byte-equivalent across flavors, including markdown content",
          ctx do
       claude_body = call_skill_get(ctx.claude_token, ctx.skill.slug)
       openclaw_body = call_skill_get(ctx.openclaw_token, ctx.skill.slug)
@@ -148,7 +148,7 @@ defmodule Platform.Federation.SkillMCPParityTest do
       openclaw_norm = normalize_envelope(openclaw_body)
 
       assert claude_norm == openclaw_norm,
-             "skill.get diverged between flavors. claude=#{inspect(claude_norm)} openclaw=#{inspect(openclaw_norm)}"
+             "skill_get diverged between flavors. claude=#{inspect(claude_norm)} openclaw=#{inspect(openclaw_norm)}"
 
       tool_payload = decode_tool_text(claude_norm)
       assert tool_payload["slug"] == ctx.skill.slug
@@ -208,7 +208,7 @@ defmodule Platform.Federation.SkillMCPParityTest do
       mcp_post(
         conn,
         token,
-        rpc("tools/call", %{"name" => "skill.list", "arguments" => %{}})
+        rpc("tools/call", %{"name" => "skill_list", "arguments" => %{}})
       )
 
     json_response(conn, 200)
@@ -221,7 +221,7 @@ defmodule Platform.Federation.SkillMCPParityTest do
       mcp_post(
         conn,
         token,
-        rpc("tools/call", %{"name" => "skill.get", "arguments" => %{"slug" => slug}})
+        rpc("tools/call", %{"name" => "skill_get", "arguments" => %{"slug" => slug}})
       )
 
     json_response(conn, 200)

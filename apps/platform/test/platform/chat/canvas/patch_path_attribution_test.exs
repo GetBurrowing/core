@@ -1,6 +1,6 @@
 defmodule Platform.Chat.Canvas.PatchPathAttributionTest do
   @moduledoc """
-  Task 019fed8d stage 2 — a `canvas.patch` performed by an agent must record
+  Task 019fed8d stage 2 — a `canvas_patch` performed by an agent must record
   that agent on the resulting `canvas_versions` row.
 
   The defect this pins: `ToolHandlers.patch/2` called the 3-arity
@@ -89,7 +89,7 @@ defmodule Platform.Chat.Canvas.PatchPathAttributionTest do
     end
   end
 
-  describe "canvas.patch by an agent" do
+  describe "canvas_patch by an agent" do
     test "records the calling agent on the version row it produces", ctx do
       %{canvas: canvas, participant: participant, agent_id: agent_id} = ctx
 

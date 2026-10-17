@@ -33,7 +33,7 @@ defmodule Platform.Chat.Canvas.Kinds.ImageTest do
       test "rejects #{label}: #{bad_src}" do
         assert {:error, reason} = Image.validate_props(%{"src" => unquote(bad_src)})
         assert reason =~ "path-relative"
-        assert reason =~ "attachment.upload_inline"
+        assert reason =~ "attachment_upload_inline"
       end
     end
 

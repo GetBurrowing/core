@@ -124,19 +124,27 @@ defmodule Platform.GameStream.ExtensionParityTest do
       assert Extensions.validate() == :ok
       Application.put_env(:game_stream, :enabled, true)
       assert Extensions.validate() == :ok
+
+      # Task 01a14a7f stage 3: with Play listed, no tool name carries a dot
+      # and none repeats once separators are normalised.
+      names = Enum.map(ToolSurface.tool_definitions(), & &1.name)
+      assert Enum.any?(names, &String.starts_with?(&1, "play_"))
+      assert Enum.filter(names, &String.contains?(&1, ".")) == []
+      normalised = Enum.map(names, &Extensions.normalise_tool_name/1)
+      assert length(Enum.uniq(normalised)) == length(names)
     end
   end
 
   describe "parity with main (eb30c8593): the configured list is Play alone" do
     # Measured on main at eb30c8593 in the test env, flag unset.
     @main_tool_names_off [
-      {"canvas.create", "canvas"},
-      {"canvas.patch", "canvas"},
-      {"canvas.describe", "canvas"},
-      {"canvas.list_kinds", "canvas"},
-      {"canvas.template", "canvas"},
-      {"canvas.versions", "canvas"},
-      {"canvas.restore", "canvas"},
+      {"canvas_create", "canvas"},
+      {"canvas_patch", "canvas"},
+      {"canvas_describe", "canvas"},
+      {"canvas_list_kinds", "canvas"},
+      {"canvas_template", "canvas"},
+      {"canvas_versions", "canvas"},
+      {"canvas_restore", "canvas"},
       {"send_media", "messaging"},
       {"react", "messaging"},
       {"project_list", "task"},
@@ -224,12 +232,12 @@ defmodule Platform.GameStream.ExtensionParityTest do
       {"org_memory_recently_edited", "memory"},
       {"org_memory_recently_deleted", "memory"},
       {"org_memory_feedback_at_path", "memory"},
-      {"skill.list", "skill"},
-      {"skill.get", "skill"},
-      {"skill.upsert", "skill"},
-      {"attachment.upload_inline", "attachment"},
-      {"attachment.get_inline", "attachment"},
-      {"attachment.upload_start", "attachment"},
+      {"skill_list", "skill"},
+      {"skill_get", "skill"},
+      {"skill_upsert", "skill"},
+      {"attachment_upload_inline", "attachment"},
+      {"attachment_get_inline", "attachment"},
+      {"attachment_upload_start", "attachment"},
       {"file_list", "files"},
       {"file_get_text", "files"},
       {"file_get_metadata", "files"},
@@ -258,9 +266,9 @@ defmodule Platform.GameStream.ExtensionParityTest do
       {"code_mode_report", "experiments"},
       {"suite_run", "code_mode"},
       {"suite_run_describe", "code_mode"},
-      {"prototype.publish", "prototype"},
-      {"prototype.versions", "prototype"},
-      {"prototype.rollback", "prototype"},
+      {"prototype_publish", "prototype"},
+      {"prototype_versions", "prototype"},
+      {"prototype_rollback", "prototype"},
       {"access_explain", "access"},
       {"access_propose", "access"},
       {"access_apply", "access"},
@@ -270,7 +278,7 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # sha256 of the canonical term of `tool_definitions/0` on main (see
     # `digest/1`), flag unset and set.
     #
-    # Re-pinned by task 01a0fcfa: attachment.get_inline's `returns` and
+    # Re-pinned by task 01a0fcfa: attachment_get_inline's `returns` and
     # `limitations` text now document the MCP image content block. That is
     # the only tool-definition change. The off digest equals the one
     # apps/platform/test/platform/extensions_test.exs already pins for the
@@ -316,17 +324,17 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # branch; off equals extensions_test.exs.
     #
     # Re-pinned by task 01a1316b-4e46 stage 2: the `prototype` canvas kind,
-    # last in core's registry, which also enters canvas.create/patch's
+    # last in core's registry, which also enters canvas_create/patch's
     # document schema. All six values measured on moon at the stage's branch;
     # off equals extensions_test.exs.
     #
     # Re-pinned by task 01a1316b-677a stage 1: the `embed` kind's `scripts`
     # and `prototype_ref` props and its srcdoc / list_kinds text, which also
-    # enter canvas.create/patch's document schema. All six values measured on
+    # enter canvas_create/patch's document schema. All six values measured on
     # moon at the stage's branch; off equals extensions_test.exs. The metrics
     # catalog digest is unchanged.
     #
-    # Re-pinned by task 01a1316b-aab0 stage 2: canvas.patch's operation
+    # Re-pinned by task 01a1316b-aab0 stage 2: canvas_patch's operation
     # description names the new `set_binding` op. Both values measured on
     # moon at the stage's branch; off equals extensions_test.exs. The kinds
     # and metrics digests are unchanged.
@@ -343,12 +351,17 @@ defmodule Platform.GameStream.ExtensionParityTest do
     # properties, the Agents rail destination and agents.tool_profile surface.
     # Re-measured whole definitions/kinds on Moon at 3d831a04, flag off/on;
     # literal names and whole-payload digests remain strict independent pins.
-    @main_tool_digest_off "e2205dce5e45e1e9d853d675bae01d4624f1ad184c9c7b676e3adf8e24914683"
-    @main_tool_digest_on "5209c4e2aadb41919cef5b467c638691958985677ce6d564ec92c98794a746b9"
+    # Re-pinned by task 01a14a7f stage 3: the 17 dotted tool names became
+    # underscores, in names and in every description and schema text that
+    # cites one (the image kind's `src` text moves the kinds tool-schemas
+    # digests; the summaries digests do not move). Measured on moon at the
+    # stage's branch.
+    @main_tool_digest_off "2b6e1f033939cd6d0941e3d8c81de033e6c3bc4ce42b141ea3e484de5c6b7e92"
+    @main_tool_digest_on "c8c791c0c1b3e014e2c96b89b49fabb9257a745ec4d010223dd43a935d691a77"
     @main_kinds_summaries_digest_off "c48e9187b0e70ff459441990471e3cd10f836d971c9e17d2676483807ce56c13"
     @main_kinds_summaries_digest_on "d83fa1bfdaa3e2e3ceeb6064d253c0702675d24bafef4f59184565dc944d5284"
-    @main_kinds_tool_schemas_digest_off "5052ad82722fb7ab6cc5c7773ede0eb52be4fe24a7ea0579ad75ea2efc636d1c"
-    @main_kinds_tool_schemas_digest_on "1c6e04bf2da8eb737af0724a721506bab013d263eab89ca8e125930775c7a955"
+    @main_kinds_tool_schemas_digest_off "aa8c8af136a38ba16a33a036b005e5b3fd5f639ed9c0ce6125c9a7727fd85348"
+    @main_kinds_tool_schemas_digest_on "dab0878cb64c677ec9ed5e5837c897f74b4e5d85a1992da6eace2db1772bec3b"
     @main_metrics_catalog_digest "95805ed557855b482286544ea8d5ea6063b81e47ce1ee28268467a7df2848ee9"
     @main_bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files meetings mail experiments code_mode prototype access play)
     @main_valid_bundles ~w(federation space context_read messaging review canvas task plan memory skill attachment files meetings mail experiments code_mode prototype access play)

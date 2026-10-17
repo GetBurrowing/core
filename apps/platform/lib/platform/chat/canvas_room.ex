@@ -137,7 +137,7 @@ defmodule Platform.Chat.CanvasRoom do
   A handler is AUTHORED by any canvas writer and RUNS with the CLICKER's
   authority. That is a confused-deputy shape: the author picks the code, the
   clicker lends the permissions. v1 is safe because the only host binding is
-  `canvas.patch` on the OWNING canvas, which every writer already holds, so
+  `canvas_patch` on the OWNING canvas, which every writer already holds, so
   an author can make a clicker do nothing to the document the author could
   not do directly. Any write binding beyond that (`tasks.create`,
   `chat.post_message`, anything that reaches past this canvas) must first
@@ -402,7 +402,7 @@ defmodule Platform.Chat.CanvasRoom do
   `{pid, req}` or nil (no reply). `result` is `{:ok, %{seq, applied}}` or
   `{:error, %{kind, code, message}}`. `actor` is the caller's own session
   identity; an agent actor may carry its `%AgentRuntime{}` (or `%{id: pk}`)
-  under `:runtime`, which its `canvas.patch` binding calls need.
+  under `:runtime`, which its `canvas_patch` binding calls need.
   """
   @spec call_handler(binary(), binary(), map(), term(), term(), {pid(), term()} | nil) :: :ok
   def call_handler(canvas_id, node_id, actor, name, args, reply_to) do

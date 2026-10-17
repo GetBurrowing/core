@@ -102,7 +102,7 @@ defmodule Platform.Chat.Canvas.Kinds do
   Each entry bundles the essentials an agent needs to emit a valid node of
   this kind without parsing the recursive JSON Schema: a one-line
   description, the child rule, a props-summary map ({name => brief}), and
-  an example node. Intended for `canvas.list_kinds` and prescriptive
+  an example node. Intended for `canvas_list_kinds` and prescriptive
   validation error payloads.
   """
   @spec summaries() :: [map()]

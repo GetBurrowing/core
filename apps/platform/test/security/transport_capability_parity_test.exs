@@ -32,11 +32,11 @@ defmodule Platform.Security.TransportCapabilityParityTest do
   instead of shipping — which is precisely how the original bug survived CI:
   `test/security/external_federation_scope_test.exs` drove `/mcp` only.
 
-  The probe `canvas_create` is one of the two legacy undeclared names
-  (`tool_surface.ex:2700` / `:2718` have `execute/3` clauses with no
-  `tool_definitions/0` entry). Per the owner's MCP-only ruling they belong to
-  no bundle and are denied on BOTH transports; that agreement is itself part of
-  what this file pins.
+  The probe `canvas_update` is the legacy undeclared name (an `execute/3`
+  clause with no `tool_definitions/0` entry). Per the owner's MCP-only ruling
+  it belongs to no bundle and is denied on BOTH transports; that agreement is
+  itself part of what this file pins. (Its sibling `canvas_create` was the
+  probe until task 01a14a7f stage 3 made `canvas_create` a declared name.)
 
   ## Explicit non-dependency
 
@@ -82,7 +82,7 @@ defmodule Platform.Security.TransportCapabilityParityTest do
   ]
 
   # Spans granted / ungranted / legacy-alias / external-allowlist names.
-  @probes ~w(task_create space_list canvas_create send_media memory_delete stack_abandon prompt_template_update)
+  @probes ~w(task_create space_list canvas_update send_media memory_delete stack_abandon prompt_template_update)
 
   # The prose a WS runtime reads off the definition map. Literal for the same
   # reason the grant sets are: nothing here reads `ToolDoc`'s section list, so
@@ -148,7 +148,7 @@ defmodule Platform.Security.TransportCapabilityParityTest do
       # Preconditions, so the cross-check cannot pass vacuously: the `:denied`
       # branch must be exercised by an undeclared name, and the `:allowed`
       # branch by a tool the `files` bundle actually resolved to on this row.
-      refute "canvas_create" in advertised
+      refute "canvas_update" in advertised
       assert "file_list" in advertised
 
       for probe <- @probes ++ ~w(file_list) do

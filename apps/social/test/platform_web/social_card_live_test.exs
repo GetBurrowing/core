@@ -225,7 +225,7 @@ defmodule PlatformWeb.SocialCardLiveTest do
     assert Repo.get!(ApprovalCard, ctx.card.id).state == "pending"
   end
 
-  test "after an agent canvas.patch of the real card, Approve is refused as card_changed", ctx do
+  test "after an agent canvas_patch of the real card, Approve is refused as card_changed", ctx do
     canvas = Chat.get_canvas(ctx.card.canvas_id)
 
     {:ok, _} =

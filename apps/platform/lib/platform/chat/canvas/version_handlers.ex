@@ -1,15 +1,15 @@
 defmodule Platform.Chat.Canvas.VersionHandlers do
   @moduledoc """
-  Tool handlers for `canvas.versions` and `canvas.restore` (task 019e0ac0).
+  Tool handlers for `canvas_versions` and `canvas_restore` (task 019e0ac0).
 
   Both tools resolve their canvas through `Platform.Chat.Canvas.ToolAccess`,
   which is the one authorization seam for the canvas MCP surface (task 019fb01b
   stage 1). They ask it different questions:
 
-    * `canvas.versions` — `fetch_for_read/2`, the same call `canvas.describe`
-      makes, so "same auth gate as canvas.describe" in the tool description is
+    * `canvas_versions` — `fetch_for_read/2`, the same call `canvas_describe`
+      makes, so "same auth gate as canvas_describe" in the tool description is
       a fact rather than an aspiration.
-    * `canvas.restore` — `fetch_for_write/3`, the same call `canvas.patch`
+    * `canvas_restore` — `fetch_for_write/3`, the same call `canvas_patch`
       makes. A restore is a full-document overwrite, so it is the most
       destructive write on the canvas surface, not the least.
 
@@ -21,8 +21,8 @@ defmodule Platform.Chat.Canvas.VersionHandlers do
   ever reached from `Platform.Federation.ToolSurface`, i.e. from a remote
   runtime, and `agent_id` is a nullable `:binary_id` on
   `Platform.Agents.AgentRuntime`, so a nil is reachable for an authenticated
-  caller. Task 019e2c4b stage 2 took `canvas.restore` off it; task 019fb01b
-  stage 3 took `canvas.versions` off it and DELETED the function, so nothing
+  caller. Task 019e2c4b stage 2 took `canvas_restore` off it; task 019fb01b
+  stage 3 took `canvas_versions` off it and DELETED the function, so nothing
   added here later can reach it by reflex.
 
   ## The circular-dependency constraint, still in force
@@ -40,13 +40,13 @@ defmodule Platform.Chat.Canvas.VersionHandlers do
   alias Platform.Chat.Canvas.ToolAccess
   alias Platform.Chat.Canvas.Versions
 
-  @restore_denial "Access denied: canvas.restore overwrites the whole document, so it requires " <>
+  @restore_denial "Access denied: canvas_restore overwrites the whole document, so it requires " <>
                     "participation in the canvas's space. Read access does not confer it."
 
   @restore_suggestion "Ask a human to add you to the space that owns this canvas."
 
   @doc """
-  canvas.versions — paginated newest-first version metadata, for a caller
+  canvas_versions — paginated newest-first version metadata, for a caller
   authorized to read the canvas.
 
   Args: `%{"canvas_id" => string, "limit"? => integer, "before_revision"? =>
@@ -91,7 +91,7 @@ defmodule Platform.Chat.Canvas.VersionHandlers do
   end
 
   @doc """
-  canvas.restore — overwrite the live canvas with a historical revision's
+  canvas_restore — overwrite the live canvas with a historical revision's
   document. Produces a new version row at `current_revision + 1` with
   `ops: [["restore_from_revision", revision]]`.
   """
@@ -124,13 +124,13 @@ defmodule Platform.Chat.Canvas.VersionHandlers do
         {:conflict, payload} ->
           {:error,
            %{
-             error: "canvas.restore conflict: #{inspect(payload.reason)}",
+             error: "canvas_restore conflict: #{inspect(payload.reason)}",
              recoverable: true,
              conflict: payload
            }}
 
         {:error, reason} ->
-          {:error, %{error: "canvas.restore failed: #{inspect(reason)}", recoverable: true}}
+          {:error, %{error: "canvas_restore failed: #{inspect(reason)}", recoverable: true}}
       end
     end
   end
@@ -168,7 +168,7 @@ defmodule Platform.Chat.Canvas.VersionHandlers do
          %{
            error: "Canvas #{canvas_id} has no version at revision #{revision}",
            recoverable: false,
-           suggestion: "Use canvas.versions to list available revisions"
+           suggestion: "Use canvas_versions to list available revisions"
          }}
 
       version ->
@@ -176,7 +176,7 @@ defmodule Platform.Chat.Canvas.VersionHandlers do
     end
   end
 
-  # The WRITE gate for `canvas.restore` (task 019e2c4b stage 2). Resolution
+  # The WRITE gate for `canvas_restore` (task 019e2c4b stage 2). Resolution
   # lives in `ToolAccess` (task 019fb01b stage 1); only the denial sentence is
   # this handler's, because only the sentence differs between the canvas write
   # tools. An unidentified actor denies — see the moduledoc for the fail-open

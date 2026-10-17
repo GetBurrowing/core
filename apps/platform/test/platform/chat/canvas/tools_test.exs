@@ -9,21 +9,21 @@ defmodule Platform.Chat.Canvas.ToolsTest do
       defs = Tools.definitions()
       names = Enum.map(defs, & &1["name"])
 
-      assert "canvas.create" in names
-      assert "canvas.patch" in names
-      assert "canvas.describe" in names
+      assert "canvas_create" in names
+      assert "canvas_patch" in names
+      assert "canvas_describe" in names
     end
 
-    test "canvas.create requires space_id and document" do
-      defn = Enum.find(Tools.definitions(), &(&1["name"] == "canvas.create"))
+    test "canvas_create requires space_id and document" do
+      defn = Enum.find(Tools.definitions(), &(&1["name"] == "canvas_create"))
       required = defn["parameters"]["required"]
 
       assert "space_id" in required
       assert "document" in required
     end
 
-    test "canvas.patch requires canvas_id, base_revision, and operations" do
-      defn = Enum.find(Tools.definitions(), &(&1["name"] == "canvas.patch"))
+    test "canvas_patch requires canvas_id, base_revision, and operations" do
+      defn = Enum.find(Tools.definitions(), &(&1["name"] == "canvas_patch"))
       required = defn["parameters"]["required"]
 
       assert "canvas_id" in required
@@ -94,7 +94,7 @@ defmodule Platform.Chat.Canvas.ToolsTest do
       boundary = Tools.sharing_boundary()
       defs = Tools.definitions()
 
-      for name <- ["canvas.create", "canvas.describe", "canvas.versions"] do
+      for name <- ["canvas_create", "canvas_describe", "canvas_versions"] do
         defn = Enum.find(defs, &(&1["name"] == name))
         assert defn, "#{name} missing from definitions/0"
 
@@ -103,10 +103,10 @@ defmodule Platform.Chat.Canvas.ToolsTest do
       end
     end
 
-    test "canvas.create and canvas.describe advertise the view_url they return" do
+    test "canvas_create and canvas_describe advertise the view_url they return" do
       defs = Tools.definitions()
 
-      for name <- ["canvas.create", "canvas.describe"] do
+      for name <- ["canvas_create", "canvas_describe"] do
         defn = Enum.find(defs, &(&1["name"] == name))
         assert defn["description"] =~ "view_url"
       end
