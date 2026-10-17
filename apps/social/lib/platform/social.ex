@@ -444,6 +444,214 @@ defmodule Platform.Social do
     |> Repo.one()
   end
 
+  # ── OAuth return (task 01a14807) ─────────────────────────────────────
+
+  @ref_index :social_accounts_provider_account_ref_live_index
+
+  @typedoc "Why `complete_connect/4` or `reconcile_accounts/3` refused."
+  @type connect_refusal ::
+          approver_refusal()
+          | :not_found
+          | :profile_not_linked
+          | :not_listed
+          | :no_pending_account
+          | :ref_in_use
+          | term()
+
+  @doc """
+  The OAuth return leg: turns "the vendor says account `ref` is connected
+  under this profile" into a stored `provider_account_ref` plus status
+  `"connected"` on our never-connected row. In order:
+
+    1. the profile is re-read through the org scope (`:not_found`);
+    2. `approver_check/3` FIRST, so a refusal sends no request and writes
+       nothing;
+    3. the profile must carry `provider_profile_ref`, else
+       `:profile_not_linked` with no request;
+    4. ONE `list_accounts/1` call. `ref` must be listed with `profile_ref`
+       equal to the profile's ref and `active?` true, else `:not_listed` and
+       nothing is written. The URL's account id is never trusted on its own,
+       and the platform used is the LISTED one: `params.platform` is ignored;
+    5. under the profile row lock, in one transaction: a live row of this
+       profile already holding `ref` answers `{:ok, account,
+       :already_connected}` with no write. Otherwise the never-connected row
+       on (profile, listed platform) gets ONLY `provider_account_ref`,
+       `status` and (when its `handle` is nil) `handle`, through a dedicated
+       `Changeset.change/2`: `{:ok, account, :connected}`. No such row is
+       `:no_pending_account` (no row is created). A ref held by another
+       profile's live row trips the unique index: `:ref_in_use`.
+  """
+  @spec complete_connect(Ecto.UUID.t(), Profile.t() | Ecto.UUID.t(), term(), map()) ::
+          {:ok, Account.t(), :connected | :already_connected} | {:error, connect_refusal()}
+  def complete_connect(org_id, profile, user_id, params) when is_map(params) do
+    ref = Map.get(params, :account_ref)
+
+    with {:ok, profile} <- fetch(Profile, org_id, profile),
+         :ok <- approver_check(org_id, profile, user_id),
+         :ok <- linked(profile),
+         {:ok, entries} <- publisher_list_accounts(profile),
+         {:ok, entry} <- listed_entry(entries, profile, ref) do
+      connect_listed(org_id, profile, entry)
+    end
+  end
+
+  @doc """
+  The pre-ship pickup: fills our never-connected rows from the vendor's list,
+  for a return that never reached us. Same guards as `complete_connect/4`
+  (scope, approver first, ref present). A profile with no never-connected
+  row answers `{:ok, %{connected: [], unmatched: 0}}` with NO request.
+  Otherwise ONE `list_accounts/1` call; each listed entry (matching
+  `profile_ref`, `active?` true) whose ref no live row holds fills the
+  oldest never-connected row on its platform, one entry per row, in list
+  order, under the profile lock. `unmatched` counts the eligible entries
+  that are neither already on one of this profile's rows nor filled now.
+  """
+  @spec reconcile_accounts(Ecto.UUID.t(), Profile.t() | Ecto.UUID.t(), term()) ::
+          {:ok, %{connected: [Account.t()], unmatched: non_neg_integer()}}
+          | {:error, connect_refusal()}
+  def reconcile_accounts(org_id, profile, user_id) do
+    with {:ok, profile} <- fetch(Profile, org_id, profile),
+         :ok <- approver_check(org_id, profile, user_id),
+         :ok <- linked(profile) do
+      if pending_accounts(profile) == [] do
+        {:ok, %{connected: [], unmatched: 0}}
+      else
+        with {:ok, entries} <- publisher_list_accounts(profile) do
+          fill_pending(org_id, profile, Enum.filter(entries, &listed_under?(&1, profile)))
+        end
+      end
+    end
+  end
+
+  defp linked(%Profile{provider_profile_ref: ref}) when is_binary(ref) and ref != "", do: :ok
+  defp linked(_profile), do: {:error, :profile_not_linked}
+
+  defp publisher_list_accounts(profile) do
+    case Publisher.impl() do
+      {:error, :publisher_not_configured} = error -> error
+      module -> module.list_accounts(profile)
+    end
+  end
+
+  defp listed_under?(%{profile_ref: profile_ref, active?: true}, %Profile{
+         provider_profile_ref: profile_ref
+       })
+       when is_binary(profile_ref),
+       do: true
+
+  defp listed_under?(_entry, _profile), do: false
+
+  defp listed_entry(entries, profile, ref) when is_binary(ref) and ref != "" do
+    case Enum.find(entries, &(&1.ref == ref and listed_under?(&1, profile))) do
+      nil -> {:error, :not_listed}
+      entry -> {:ok, entry}
+    end
+  end
+
+  defp listed_entry(_entries, _profile, _ref), do: {:error, :not_listed}
+
+  defp connect_listed(org_id, profile, entry) do
+    Repo.transaction(fn ->
+      locked = lock_profile(org_id, profile) || Repo.rollback(:not_found)
+
+      case live_account_with_ref(locked, entry.ref) do
+        %Account{} = account ->
+          {account, :already_connected}
+
+        nil ->
+          case never_connected_account(locked, entry.platform) do
+            nil -> Repo.rollback(:no_pending_account)
+            account -> {mark_connected!(account, entry), :connected}
+          end
+      end
+    end)
+    |> case do
+      {:ok, {account, outcome}} -> {:ok, account, outcome}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp fill_pending(org_id, profile, entries) do
+    Repo.transaction(fn ->
+      locked = lock_profile(org_id, profile) || Repo.rollback(:not_found)
+      refs = Enum.map(entries, & &1.ref)
+
+      held =
+        Account
+        |> where([a], a.provider_account_ref in ^refs and is_nil(a.archived_at))
+        |> select([a], {a.provider_account_ref, a.profile_id})
+        |> Repo.all()
+        |> Map.new()
+
+      pending = locked |> pending_accounts() |> Enum.group_by(& &1.platform)
+
+      {connected, unmatched, _pending} =
+        entries
+        |> Enum.uniq_by(& &1.ref)
+        |> Enum.reduce({[], 0, pending}, fn entry, {connected, unmatched, pending} ->
+          case {Map.fetch(held, entry.ref), Map.get(pending, entry.platform, [])} do
+            {{:ok, profile_id}, _} when profile_id == locked.id ->
+              {connected, unmatched, pending}
+
+            {{:ok, _another_profile}, _} ->
+              {connected, unmatched + 1, pending}
+
+            {:error, []} ->
+              {connected, unmatched + 1, pending}
+
+            {:error, [account | rest]} ->
+              {[mark_connected!(account, entry) | connected], unmatched,
+               Map.put(pending, entry.platform, rest)}
+          end
+        end)
+
+      %{connected: Enum.reverse(connected), unmatched: unmatched}
+    end)
+  end
+
+  defp live_account_with_ref(%Profile{id: profile_id}, ref) do
+    Account
+    |> where([a], a.profile_id == ^profile_id and a.provider_account_ref == ^ref)
+    |> where([a], is_nil(a.archived_at))
+    |> limit(1)
+    |> Repo.one()
+  end
+
+  # Never-connected rows: the `never_connected_account/2` predicate, oldest first.
+  defp pending_accounts(%Profile{id: profile_id}) do
+    Account
+    |> where([a], a.profile_id == ^profile_id)
+    |> where([a], is_nil(a.archived_at) and is_nil(a.status) and is_nil(a.provider_account_ref))
+    |> order_by([a], asc: a.inserted_at, asc: a.id)
+    |> Repo.all()
+  end
+
+  # The ONLY write: ref, status and a missing handle. Not the editable cast.
+  # Call inside a transaction; a collision on the live-ref index rolls back
+  # with :ref_in_use.
+  defp mark_connected!(%Account{} = account, entry) do
+    changes =
+      [provider_account_ref: entry.ref, status: "connected"] ++
+        if(is_nil(account.handle) and is_binary(entry.username),
+          do: [handle: entry.username],
+          else: []
+        )
+
+    account
+    |> Changeset.change(changes)
+    |> Changeset.unique_constraint(:provider_account_ref, name: @ref_index)
+    |> Repo.update()
+    |> case do
+      {:ok, account} ->
+        account
+
+      {:error, %Changeset{errors: errors} = changeset} ->
+        if Keyword.has_key?(errors, :provider_account_ref),
+          do: Repo.rollback(:ref_in_use),
+          else: Repo.rollback(changeset)
+    end
+  end
+
   # ── Posts ────────────────────────────────────────────────────────────
 
   @spec get_post(Ecto.UUID.t(), Ecto.UUID.t()) :: Post.t() | nil

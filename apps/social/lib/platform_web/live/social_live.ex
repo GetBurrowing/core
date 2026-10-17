@@ -5,7 +5,8 @@ defmodule PlatformWeb.SocialLive do
 
   ## Nothing is inherited from the parent page
 
-  Core hands this LiveView only `%{"user_id" => id}` and runs no live_session
+  Core hands this LiveView `%{"user_id" => id}` (plus the bounded, untrusted
+  `"query"` described under the OAuth return) and runs no live_session
   hook on it. `mount/3` re-reads the user (`Platform.Accounts.get_user/1`),
   lists the profiles that user may see (`Platform.Social.list_profiles_for_user/1`,
   built on the RBAC swap points) and every event re-checks against a fresh
@@ -59,7 +60,52 @@ defmodule PlatformWeb.SocialLive do
   is kept and retried, never deleted. `connect_account` also runs
   `Platform.Social.ensure_provider_profile/2` first, so Connect on a row that
   predates the vendor profile works. The vendor URL and the key are never
-  logged. The OAuth return leg is not handled here.
+  logged.
+
+  ## The OAuth return (task 01a14807)
+
+  The vendor sends the browser back to `/m/social` with its result in the
+  query string. This LiveView is nested, so it gets no `handle_params/3`;
+  core forwards the query as a bounded map of UNTRUSTED strings in
+  `session["query"]`, and `mount/3` reads it through ONE parser,
+  `return_params/1`. Nothing happens on the static render (no vendor
+  request), nor for a viewer who is not a live human (`human?/1`): no
+  request, no notice.
+
+    * Success (`profileId` + `accountId`, both shape-checked; anything else
+      is malformed, with no request): the profile must be one of the
+      viewer's VISIBLE profiles with that `provider_profile_ref`, else a
+      "doesn't match" notice and no request. Then `authorize/1` and
+      `Platform.Social.complete_connect/4` (approver re-checked inside), which
+      asks the vendor's account list before writing. The URL's username and
+      platform are never used for a write.
+    * Failure (`error` present): a notice naming the code when it passes the
+      shape check. No request, no write.
+
+  The return landing does NOT also reconcile, so a return makes exactly one
+  vendor list call.
+
+  ## Picking up connections on opening Connections (task 01a14807)
+
+  Accounts connected at the vendor before the return leg existed (or whose
+  return never reached us) are picked up when the Connections pane opens:
+  `select_tab` "connections", and `load_profile/2` while the tab already is
+  (a profile switch reconciles the NEW profile). It runs only on a connected
+  socket, for a viewer who passes `authorize/1`, on a profile with a
+  `provider_profile_ref`, while at least one never-connected row is listed;
+  `Platform.Social.reconcile_accounts/3` re-checks the approver and the ref
+  and sends nothing when no row is pending. Picked-up rows show Connected
+  with their handle and a "Picked up" notice; a vendor error shows a
+  couldn't-check notice and writes nothing; no key sends nothing and adds no
+  notice (the key alert already says it). RETRY: rows the vendor does not
+  list stay as they are, with Connect, and are retried on the next open.
+  They are never deleted, and no row is created for a vendor account we have
+  no row for.
+
+  The URL keeps the parameters after landing (a nested LiveView cannot patch
+  the host's URL), so a reload replays the return. That is safe because
+  `complete_connect/4` is idempotent: a ref already on the row answers
+  "already connected" with no write.
   """
   use PlatformWeb, :live_view
 
@@ -94,7 +140,16 @@ defmodule PlatformWeb.SocialLive do
       |> assign(:zernio_nonce, 0)
       |> assign_zernio()
 
-    {:ok, load_profile(socket, List.first(profiles))}
+    socket = load_profile(socket, List.first(profiles))
+
+    # The OAuth return: connected mount only (the static render sends no
+    # vendor request, so the vendor is asked once), live humans only.
+    socket =
+      if connected?(socket) and human?(user),
+        do: handle_return(socket, profiles, return_params(session["query"])),
+        else: socket
+
+    {:ok, socket}
   end
 
   # Create a profile. The user and their creatable orgs are re-read NOW; a
@@ -170,7 +225,7 @@ defmodule PlatformWeb.SocialLive do
   end
 
   def handle_event("select_tab", %{"tab" => tab}, socket) when tab in @tabs,
-    do: {:noreply, assign(socket, :tab, tab)}
+    do: {:noreply, socket |> assign(:tab, tab) |> maybe_reconcile()}
 
   def handle_event("select_tab", _params, socket), do: {:noreply, socket}
 
@@ -403,6 +458,7 @@ defmodule PlatformWeb.SocialLive do
     |> assign(:notice, nil)
     |> load_calendar()
     |> load_connections()
+    |> maybe_reconcile()
   end
 
   # Connections and Settings for the current profile. `can_edit?` is ONLY
@@ -411,6 +467,7 @@ defmodule PlatformWeb.SocialLive do
     socket
     |> assign(:can_edit?, false)
     |> assign(:accounts_empty?, true)
+    |> assign(:pending_accounts?, false)
     |> assign(:connectable_platforms, [])
     |> assign(:add_open?, false)
     |> assign(:add_form, add_form([]))
@@ -428,6 +485,7 @@ defmodule PlatformWeb.SocialLive do
     socket
     |> assign(:can_edit?, can_edit?)
     |> assign(:accounts_empty?, accounts == [])
+    |> assign(:pending_accounts?, Enum.any?(accounts, &never_connected?/1))
     |> assign(:connectable_platforms, platforms)
     |> assign(:add_open?, false)
     |> assign(:add_form, add_form(platforms))
@@ -445,8 +503,67 @@ defmodule PlatformWeb.SocialLive do
 
     socket
     |> assign(:accounts_empty?, accounts == [])
+    |> assign(:pending_accounts?, Enum.any?(accounts, &never_connected?/1))
     |> stream(:accounts, Enum.map(accounts, &account_item/1), reset: true)
   end
+
+  # The rows `Platform.Social.reconcile_accounts/3` can fill: never connected
+  # (no status, no vendor ref). Mirrors the context's own predicate.
+  defp never_connected?(%Account{status: nil, provider_account_ref: nil, archived_at: nil}),
+    do: true
+
+  defp never_connected?(_account), do: false
+
+  # ── Reconcile on opening Connections (task 01a14807) ────────────────
+
+  @approver_refusals [:not_an_approver, :not_a_human, :approver_archived, :approver_no_access]
+
+  # Picks up accounts connected at the vendor whose return never reached us.
+  # Runs only on the Connections tab, on a connected socket, for a viewer who
+  # passes `authorize/1`, on a profile with a vendor ref, while a
+  # never-connected row is listed. `reconcile_accounts/3` re-checks the
+  # approver and the ref and sends nothing when no row is pending, so once
+  # every row is connected this costs zero requests. Synchronous: the
+  # publisher's 5s receive_timeout bounds how long the click can block.
+  defp maybe_reconcile(%{assigns: %{tab: "connections", pending_accounts?: true}} = socket) do
+    with true <- connected?(socket),
+         {:ok, fresh, user_id} <- authorize(socket),
+         ref when is_binary(ref) and ref != "" <- fresh.provider_profile_ref do
+      reconciled(socket, Social.reconcile_accounts(fresh.org_id, fresh, user_id))
+    else
+      _ -> socket
+    end
+  end
+
+  defp maybe_reconcile(socket), do: socket
+
+  defp reconciled(socket, {:ok, %{connected: [_ | _] = accounts}}) do
+    n = length(accounts)
+    noun = if n == 1, do: "account", else: "accounts"
+    names = Enum.map_join(accounts, ", ", &account_label/1)
+
+    socket
+    |> restream_accounts()
+    |> notice("Picked up #{n} connected #{noun} from Zernio: #{names}.")
+  end
+
+  defp reconciled(socket, {:ok, _nothing_new}), do: socket
+
+  # The key alert already says it; refusals and an unlinked profile never
+  # reach here for an approver on a linked profile, and say nothing if they do.
+  defp reconciled(socket, {:error, reason})
+       when reason in [:credentials_unavailable, :profile_not_linked, :publisher_not_configured] or
+              reason in @approver_refusals,
+       do: socket
+
+  defp reconciled(socket, _error),
+    do: notice(socket, "Couldn't check Zernio for connected accounts. Try again.")
+
+  defp account_label(%Account{platform: platform, handle: handle})
+       when is_binary(handle) and handle != "",
+       do: "#{platform_label(platform)} #{handle}"
+
+  defp account_label(%Account{platform: platform}), do: platform_label(platform)
 
   # ── Add account ─────────────────────────────────────────────────────
 
@@ -469,8 +586,6 @@ defmodule PlatformWeb.SocialLive do
     assigns.can_edit? and not assigns.zernio_blocks_connect? and
       assigns.connectable_platforms != []
   end
-
-  @approver_refusals [:not_an_approver, :not_a_human, :approver_archived, :approver_no_access]
 
   defp add_error_copy(reason) when reason in @approver_refusals,
     do: "Only an approver of this profile can change it."
@@ -509,6 +624,114 @@ defmodule PlatformWeb.SocialLive do
         nil
     end
   end
+
+  # ── OAuth return (task 01a14807) ─────────────────────────────────────
+
+  @vendor_id ~r/\A[A-Za-z0-9_-]{1,64}\z/
+  @error_code ~r/\A[a-z0-9_]{1,64}\z/
+
+  # The ONE parser for the host's forwarded query (untrusted strings).
+  # Only profileId, accountId and error are read; username, error_message
+  # and every other key are ignored (the handle comes from the vendor list).
+  defp return_params(%{"error" => error} = query) when is_binary(error) do
+    {:return_error, %{code: shaped(error, @error_code), profile_ref: shaped(query["profileId"])}}
+  end
+
+  defp return_params(%{} = query)
+       when is_map_key(query, "connected") or is_map_key(query, "profileId") or
+              is_map_key(query, "accountId") do
+    case {shaped(query["profileId"]), shaped(query["accountId"])} do
+      {profile_ref, account_ref} when is_binary(profile_ref) and is_binary(account_ref) ->
+        {:return_connected, %{profile_ref: profile_ref, account_ref: account_ref}}
+
+      _ ->
+        :return_malformed
+    end
+  end
+
+  defp return_params(_query), do: :no_return
+
+  defp shaped(value, pattern \\ @vendor_id)
+  defp shaped(value, pattern) when is_binary(value), do: if(value =~ pattern, do: value)
+  defp shaped(_value, _pattern), do: nil
+
+  # Only among the viewer's VISIBLE profiles: another org's ref is no match.
+  defp return_profile(profiles, ref) when is_binary(ref),
+    do: Enum.find(profiles, &(&1.provider_profile_ref == ref))
+
+  defp return_profile(_profiles, _ref), do: nil
+
+  defp handle_return(socket, _profiles, :no_return), do: socket
+
+  defp handle_return(socket, _profiles, :return_malformed) do
+    socket
+    |> assign(:tab, "connections")
+    |> notice("That connection couldn't be read. Nothing changed. Try Connect again.")
+  end
+
+  defp handle_return(socket, profiles, {:return_error, %{code: code, profile_ref: ref}}) do
+    socket =
+      case return_profile(profiles, ref) do
+        nil -> socket
+        profile -> load_profile(socket, profile)
+      end
+
+    reason = if code, do: " (#{code})", else: ""
+
+    socket
+    |> assign(:tab, "connections")
+    |> notice("The account wasn't connected#{reason}. Try Connect again.")
+  end
+
+  defp handle_return(socket, profiles, {:return_connected, params}) do
+    case return_profile(profiles, params.profile_ref) do
+      nil ->
+        socket
+        |> assign(:tab, "connections")
+        |> notice("That connection doesn't match a profile you can manage. Nothing changed.")
+
+      profile ->
+        # load_profile/2 resets :notice, so the notice is set AFTER it.
+        socket = socket |> load_profile(profile) |> assign(:tab, "connections")
+
+        result =
+          with {:ok, fresh, user_id} <- authorize(socket) do
+            Social.complete_connect(fresh.org_id, fresh, user_id, %{
+              account_ref: params.account_ref
+            })
+          end
+
+        socket |> restream_accounts() |> notice(return_copy(result, profile))
+    end
+  end
+
+  defp return_copy({:ok, account, :connected}, _profile) do
+    case account.handle do
+      handle when is_binary(handle) and handle != "" ->
+        "#{platform_label(account.platform)} connected as #{handle}."
+
+      _ ->
+        "#{platform_label(account.platform)} connected."
+    end
+  end
+
+  defp return_copy({:ok, account, :already_connected}, _profile),
+    do: "#{platform_label(account.platform)} is already connected."
+
+  defp return_copy({:error, reason}, profile)
+       when reason in [:not_listed, :ref_in_use, :no_pending_account],
+       do:
+         "Zernio didn't confirm that account for #{profile.name}. Nothing changed. Try Connect again."
+
+  defp return_copy({:error, reason}, _profile) when reason in @approver_refusals,
+    do: "Only an approver of this profile can change it."
+
+  defp return_copy({:error, :credentials_unavailable}, _profile),
+    do: "Add the Zernio API key in Settings first."
+
+  defp return_copy(_result, _profile), do: "Couldn't check the connection with Zernio. Try again."
+
+  defp platform_label(platform), do: Map.get(@platform_labels, platform, platform)
 
   defp own_url(path), do: PlatformWeb.Endpoint.url() <> path
 

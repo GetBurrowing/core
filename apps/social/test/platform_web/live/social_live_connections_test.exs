@@ -327,6 +327,11 @@ defmodule PlatformWeb.SocialLiveConnectionsTest do
 
         %{method: "GET", request_path: "/api/v1/connect/" <> _} = conn ->
           Req.Test.json(conn, %{"authUrl" => @auth_url})
+
+        # Opening Connections with a pending row on a linked profile asks
+        # the vendor's account list (task 01a14807); nothing is listed here.
+        %{method: "GET", request_path: "/api/v1/accounts"} = conn ->
+          Req.Test.json(conn, %{"accounts" => []})
       end
     end
 
@@ -393,8 +398,12 @@ defmodule PlatformWeb.SocialLiveConnectionsTest do
       add(child, "x")
       assert_redirect(child, @auth_url)
 
-      assert [{"GET", "/api/v1/connect/twitter", %{"profileId" => "zprof_added_1"}}] =
-               requests()
+      # The reopen reconciles the still-pending linkedin row (one list GET);
+      # the add itself makes only the connect GET, no second profile POST.
+      assert [
+               {"GET", "/api/v1/accounts", %{"profileId" => "zprof_added_1"}},
+               {"GET", "/api/v1/connect/twitter", %{"profileId" => "zprof_added_1"}}
+             ] = requests()
 
       assert accounts_of(ctx.empty) |> Enum.map(& &1.platform) |> Enum.sort() == ["linkedin", "x"]
     end
@@ -623,6 +632,197 @@ defmodule PlatformWeb.SocialLiveConnectionsTest do
       render_hook(child, "add_account", %{"platform" => "myspace"})
       assert Process.alive?(child.pid)
       assert accounts_of(ctx.profile) |> Enum.map(& &1.id) |> Enum.sort() == before
+    end
+  end
+
+  # ── Reconcile on opening Connections (task 01a14807 stage 4) ─────────
+
+  describe "picking up connections on opening Connections" do
+    @ref_a "zprof_pickup_a"
+    @ref_b "zprof_pickup_b"
+
+    setup ctx do
+      select_zernio([key?: !ctx[:no_key]], ctx)
+
+      a = linked_profile!(ctx, "Pickup A", @ref_a)
+      b = linked_profile!(ctx, "Pickup B", @ref_b)
+      solo = linked_profile!(ctx, "Pickup Solo", "zprof_pickup_solo")
+
+      # Rows through the real add path; a linked profile makes no request.
+      {:ok, a_li, _} = Social.add_account(ctx.org_id, a, ctx.h1.id, "linkedin")
+      {:ok, a_x, _} = Social.add_account(ctx.org_id, a, ctx.h1.id, "x")
+      {:ok, b_li, _} = Social.add_account(ctx.org_id, b, ctx.h1.id, "linkedin")
+      {:ok, solo_li, _} = Social.add_account(ctx.org_id, solo, ctx.h1.id, "linkedin")
+
+      %{a: a, b: b, solo: solo, a_li: a_li, a_x: a_x, b_li: b_li, solo_li: solo_li}
+    end
+
+    defp linked_profile!(ctx, name, ref) do
+      {:ok, profile} =
+        Social.create_profile(ctx.org_id, %{
+          name: "#{name} #{unique()}",
+          space_id: ctx.space.id,
+          approver_user_ids: [ctx.h1.id]
+        })
+
+      profile |> Ecto.Changeset.change(provider_profile_ref: ref) |> Repo.update!()
+    end
+
+    # Lists one active linkedin account per profile ref (none for x).
+    defp listing(conn) do
+      ref = conn.query_params["profileId"]
+
+      entries = [
+        %{
+          "_id" => "zacct_li_#{ref}",
+          "platform" => "linkedin",
+          "profileId" => %{"_id" => ref, "name" => "Brand"},
+          "username" => "brand-#{ref}",
+          "isActive" => true
+        }
+      ]
+
+      Req.Test.json(conn, %{"accounts" => entries, "hasAnalyticsAccess" => false})
+    end
+
+    defp list_get(ref), do: {"GET", "/api/v1/accounts", %{"profileId" => ref}}
+    defp notice?(child), do: has_element?(child, "[data-role='social-notice']")
+
+    defp notice?(child, text),
+      do: has_element?(child, "[data-role='social-notice']", text)
+
+    defp reopen(child) do
+      child |> element("[data-role='social-tab-button'][data-tab='queue']") |> render_click()
+
+      child
+      |> element("[data-role='social-tab-button'][data-tab='connections']")
+      |> render_click()
+
+      child
+    end
+
+    test "opening Connections picks up a pending row the vendor lists, with its handle",
+         %{conn: conn} = ctx do
+      record_requests(&listing/1)
+
+      child = open_profile(conn, ctx.h1, ctx.a)
+
+      assert requests() == [list_get(@ref_a)]
+
+      assert has_element?(child, row(ctx.a_li) <> " [data-state='connected']", "Connected")
+
+      assert has_element?(
+               child,
+               row(ctx.a_li) <> " [data-role='social-account-handle']",
+               "brand-#{@ref_a}"
+             )
+
+      assert notice?(
+               child,
+               "Picked up 1 connected account from Zernio: LinkedIn brand-#{@ref_a}."
+             )
+
+      row = Repo.get!(Account, ctx.a_li.id)
+      assert row.provider_account_ref == "zacct_li_#{@ref_a}"
+      assert row.status == "connected"
+      assert row.handle == "brand-#{@ref_a}"
+    end
+
+    test "opening it again with nothing pending makes zero requests", %{conn: conn} = ctx do
+      record_requests(&listing/1)
+
+      child = open_profile(conn, ctx.h1, ctx.solo)
+      assert requests() == [list_get("zprof_pickup_solo")]
+      assert has_element?(child, row(ctx.solo_li) <> " [data-state='connected']")
+
+      reopen(child)
+      assert requests() == []
+
+      _fresh = open_profile(build_conn(), ctx.h1, ctx.solo)
+      assert requests() == []
+    end
+
+    test "a pending x row the vendor does not list stays as it is, with Connect",
+         %{conn: conn} = ctx do
+      record_requests(&listing/1)
+
+      child = open_profile(conn, ctx.h1, ctx.a)
+      assert requests() == [list_get(@ref_a)]
+
+      assert has_element?(child, row(ctx.a_x) <> " [data-state='none'] " <> @connect, "Connect")
+
+      row = Repo.get!(Account, ctx.a_x.id)
+      assert row.status == nil
+      assert row.provider_account_ref == nil
+      assert row.archived_at == nil
+    end
+
+    test "a non-approver opening Connections makes zero requests and changes no row",
+         %{conn: conn} = ctx do
+      record_requests(&listing/1)
+
+      child = open_profile(conn, ctx.n, ctx.a)
+      # The viewer does see the pending row, so the guard is what held.
+      assert has_element?(child, row(ctx.a_li) <> " [data-state='none']")
+      assert requests() == []
+      refute notice?(child)
+
+      assert Repo.get!(Account, ctx.a_li.id).status == nil
+
+      # Positive control: the approver's identical open does reconcile.
+      _child = open_profile(build_conn(), ctx.h1, ctx.a)
+      assert requests() == [list_get(@ref_a)]
+    end
+
+    test "switching profile while on Connections reconciles the new profile, not the first",
+         %{conn: conn} = ctx do
+      record_requests(&listing/1)
+
+      child = open_profile(conn, ctx.h1, ctx.a)
+      assert requests() == [list_get(@ref_a)]
+
+      child |> form("#social-profile-switcher", %{profile_id: ctx.b.id}) |> render_change()
+
+      assert requests() == [list_get(@ref_b)]
+      assert has_element?(child, row(ctx.b_li) <> " [data-state='connected']")
+
+      assert notice?(
+               child,
+               "Picked up 1 connected account from Zernio: LinkedIn brand-#{@ref_b}."
+             )
+
+      assert Repo.get!(Account, ctx.b_li.id).provider_account_ref == "zacct_li_#{@ref_b}"
+    end
+
+    test "a vendor 503 shows the couldn't-check notice and writes nothing",
+         %{conn: conn} = ctx do
+      record_requests(fn conn ->
+        conn |> Plug.Conn.put_status(503) |> Req.Test.json(%{"error" => "unavailable"})
+      end)
+
+      child = open_profile(conn, ctx.h1, ctx.a)
+
+      assert requests() == [list_get(@ref_a)]
+      assert notice?(child, "Couldn't check Zernio for connected accounts. Try again.")
+      assert has_element?(child, row(ctx.a_li) <> " [data-state='none']")
+
+      for account <- [ctx.a_li, ctx.a_x] do
+        row = Repo.get!(Account, account.id)
+        assert row.status == nil
+        assert row.provider_account_ref == nil
+      end
+    end
+
+    @tag no_key: true
+    test "with no key: no request and no notice", %{conn: conn} = ctx do
+      assert Platform.Social.Secrets.zernio_api_key() != {:ok, "zk-add-not-real"}
+      record_requests(&listing/1)
+
+      child = open_profile(conn, ctx.h1, ctx.a)
+
+      assert requests() == []
+      refute notice?(child)
+      assert Repo.get!(Account, ctx.a_li.id).status == nil
     end
   end
 end

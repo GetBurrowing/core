@@ -24,6 +24,17 @@ defmodule Platform.Social.Publisher do
   ref). `platforms/0` lists the platforms the adapter can connect, in our
   names (`Platform.Social.Account.platforms/0`).
 
+  `list_accounts/1` reads the vendor's own list of accounts connected under
+  one of our profiles, fetched with our key (task 01a14807). It is the ONLY
+  authority for marking an account connected: an OAuth return's URL params
+  are never trusted on their own. Each entry's `ref` is the vendor's account
+  id, verbatim, which is exactly what `publish/2` later sends as the account
+  id, so the caller stores it as `provider_account_ref`. `platform` is in our
+  names, and entries on a platform we do not support are dropped. An adapter
+  with no vendor-side profile answers `{:ok, []}` and never calls out (the
+  Fake does, and invents no ids). The caller still re-checks each entry's
+  `profile_ref` against the profile it asked about.
+
   ## Secrets
 
   An adapter never reads a key from config, env, the DB or a struct field.
@@ -86,6 +97,19 @@ defmodule Platform.Social.Publisher do
 
   @type account :: Platform.Social.Account.t()
 
+  @typedoc """
+  One account the vendor lists under a profile. `ref` is the vendor's account
+  id (stored verbatim as `provider_account_ref`); `platform` is in our names;
+  `profile_ref` is the vendor profile id the entry says it belongs to.
+  """
+  @type connected_account :: %{
+          ref: String.t(),
+          platform: String.t(),
+          profile_ref: String.t() | nil,
+          username: String.t() | nil,
+          active?: boolean()
+        }
+
   @doc "Starts OAuth for `account`. `opts` carries `:redirect_url` (and `:profile`)."
   @callback connect_url(account(), keyword()) :: {:ok, String.t()} | {:error, term()}
 
@@ -96,6 +120,14 @@ defmodule Platform.Social.Publisher do
   """
   @callback ensure_profile(Platform.Social.Profile.t()) ::
               {:ok, String.t()} | :not_required | {:error, term()}
+
+  @doc """
+  The accounts the vendor lists under `profile`, read with our key. A
+  profile with no vendor ref is `{:error, :profile_not_linked}` and no request
+  is sent.
+  """
+  @callback list_accounts(Platform.Social.Profile.t()) ::
+              {:ok, [connected_account()]} | {:error, term()}
 
   @doc "The platforms this adapter can connect, in our names."
   @callback platforms() :: [String.t()]

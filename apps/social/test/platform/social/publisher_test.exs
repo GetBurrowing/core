@@ -38,9 +38,10 @@ defmodule Platform.Social.PublisherTest do
   end
 
   describe "behaviour" do
-    test "both adapters implement ensure_profile/1 and platforms/0" do
+    test "both adapters implement ensure_profile/1, list_accounts/1 and platforms/0" do
       callbacks = Publisher.behaviour_info(:callbacks)
       assert {:ensure_profile, 1} in callbacks
+      assert {:list_accounts, 1} in callbacks
       assert {:platforms, 0} in callbacks
 
       for adapter <- [Platform.Social.Publisher.Fake, Platform.Social.Publisher.Zernio] do

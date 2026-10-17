@@ -93,11 +93,19 @@ defmodule PlatformWeb.SocialZernioConnectAcceptanceTest do
 
   test "a human approver saves the key in Settings, clicks Connect, and is sent to Zernio's authUrl",
        %{conn: conn} = ctx do
-    record_requests(&Req.Test.json(&1, %{"authUrl" => @auth_url}))
+    record_requests(fn
+      %{request_path: "/api/v1/accounts"} = conn -> Req.Test.json(conn, %{"accounts" => []})
+      conn -> Req.Test.json(conn, %{"authUrl" => @auth_url})
+    end)
 
     child = conn |> open(ctx.h1, "settings") |> save_key(ctx.key) |> goto("connections")
 
     refute has_element?(child, "[data-role='social-zernio-required']")
+
+    # Opening Connections with a never-connected row (the fixture's `d`)
+    # asks the vendor's account list once (task 01a14807); nothing is listed.
+    assert_receive {:zernio_request, "GET", "/api/v1/accounts", %{"profileId" => "zprof_test_1"},
+                    _headers}
 
     child |> element(connect_button(ctx.account)) |> render_click()
 

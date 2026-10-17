@@ -14,9 +14,16 @@ defmodule PlatformWeb.ExtensionPageLive do
     * an external user: extension pages are internal surfaces.
 
   Otherwise nests the claiming LiveView with `live_render/3`, id
-  `"ext-page-<prefix>"`, passing ONLY `%{"user_id" => id}`. The child runs
-  no live_session `on_mount` hook and inherits no assign: it re-reads the
-  user and authorizes every read and write itself.
+  `"ext-page-<prefix>"`, passing `%{"user_id" => id}` plus, only when the
+  URL carried any, a bounded `"query"`: the URL's query parameters (never
+  `prefix`) as UNTRUSTED strings. Only string keys with string values are
+  kept, at most 16 keys, each key at most 64 bytes and each value at most
+  512 bytes; anything else (lists, maps, oversized entries) is dropped. A
+  nested LiveView gets no `handle_params/3`, so this is the only way a
+  child sees, e.g., a vendor's OAuth return parameters. The child runs no
+  live_session `on_mount` hook and inherits no assign: it re-reads the user,
+  shape-checks anything it reads from `query`, and authorizes every read and
+  write itself.
   """
   use PlatformWeb, :live_view
 
@@ -25,7 +32,7 @@ defmodule PlatformWeb.ExtensionPageLive do
   alias PlatformWeb.ExtensionPageLive.NotFoundError
 
   @impl true
-  def mount(%{"prefix" => prefix}, _session, socket) do
+  def mount(%{"prefix" => prefix} = params, _session, socket) do
     user = socket.assigns[:current_user_record]
     page = Extensions.live_page_for(prefix)
 
@@ -45,7 +52,32 @@ defmodule PlatformWeb.ExtensionPageLive do
      |> assign(:current_path, "/m/" <> prefix)
      |> assign(:page_view, page.live_view)
      |> assign(:child_id, "ext-page-" <> prefix)
-     |> assign(:child_session, %{"user_id" => user.id})}
+     |> assign(:child_session, child_session(user, params))}
+  end
+
+  @max_query_keys 16
+  @max_key_bytes 64
+  @max_value_bytes 512
+
+  defp child_session(user, params) do
+    case forwarded_query(params) do
+      query when map_size(query) == 0 -> %{"user_id" => user.id}
+      query -> %{"user_id" => user.id, "query" => query}
+    end
+  end
+
+  # The URL's query as untrusted data: string key => string value only,
+  # bounded in count and size. `prefix` is the route's own segment.
+  defp forwarded_query(params) do
+    params
+    |> Map.delete("prefix")
+    |> Enum.filter(fn {key, value} ->
+      is_binary(key) and is_binary(value) and byte_size(key) in 1..@max_key_bytes and
+        byte_size(value) <= @max_value_bytes
+    end)
+    |> Enum.sort()
+    |> Enum.take(@max_query_keys)
+    |> Map.new()
   end
 
   @impl true

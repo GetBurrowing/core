@@ -107,6 +107,10 @@ defmodule Platform.Social.Publisher.Fake do
   @impl Platform.Social.Publisher
   def ensure_profile(profile), do: record(:ensure_profile, [profile], fn -> :not_required end)
 
+  # The default is an empty list: no network, and no invented account ids.
+  @impl Platform.Social.Publisher
+  def list_accounts(profile), do: record(:list_accounts, [profile], fn -> {:ok, []} end)
+
   @impl Platform.Social.Publisher
   def platforms, do: Platform.Social.Account.platforms()
 

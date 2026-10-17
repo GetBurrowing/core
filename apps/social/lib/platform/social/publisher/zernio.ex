@@ -31,6 +31,13 @@ defmodule Platform.Social.Publisher.Zernio do
     * `GET /v1/connect/{platform}?profileId=&redirect_url=` answers `{authUrl}`.
       The platform enum says `twitter` for X. TikTok connects through Zernio's own
       TikTok for Business app (direct post, https://docs.zernio.com/platforms/tiktok).
+    * `GET /v1/accounts?profileId=` (https://docs.zernio.com/accounts/list-accounts,
+      fetched 2026-10-17): `page` and `limit` go together or not at all (we send
+      neither, which lists every account). 200 answers `{accounts: [...],
+      hasAnalyticsAccess}`; each entry carries `_id`, `platform` (`twitter` for X),
+      `profileId`, `username`, `displayName`, `profileUrl`, `isActive`. The
+      multi-tenant guide says to identify accounts by `accountId` (`_id`), never
+      by profile + platform. 401 and 503 are listed.
     * Webhooks (https://docs.zernio.com/webhooks, https://docs.zernio.com/webhooks/posts):
       `X-Zernio-Signature` (legacy `X-Late-Signature`) = lowercase-hex HMAC-SHA256 of
       the RAW body with the endpoint secret, no timestamp; event id `payload.id`
@@ -123,6 +130,30 @@ defmodule Platform.Social.Publisher.Zernio do
       |> handle(fn
         %{"authUrl" => url} when is_binary(url) -> {:ok, url}
         _ -> {:error, :unexpected_response}
+      end)
+    end
+  end
+
+  # Profile ref first, then the key, then the ONE request: no ref or no key
+  # means nothing is sent. The short receive_timeout and no retry bound how
+  # long a LiveView event can block on it.
+  @impl true
+  def list_accounts(profile) do
+    with ref when is_binary(ref) <- profile_ref(profile) || {:error, :profile_not_linked},
+         {:ok, key} <- api_key(nil) do
+      request(key)
+      |> Req.get(
+        url: "/v1/accounts",
+        params: [profileId: ref],
+        retry: false,
+        receive_timeout: 5_000
+      )
+      |> handle(fn
+        %{"accounts" => entries} when is_list(entries) ->
+          {:ok, entries |> Enum.map(&connected_account/1) |> Enum.reject(&is_nil/1)}
+
+        _ ->
+          {:error, :unexpected_response}
       end)
     end
   end
@@ -410,6 +441,41 @@ defmodule Platform.Social.Publisher.Zernio do
         present?(entry["publishedUrl"]) or present?(entry["platformPostUrl"])
 
   defp published_entry?(_), do: false
+
+  # ── Account list ─────────────────────────────────────────────────────
+
+  # Zernio's enum back to our names; a platform we don't support is dropped.
+  @our_platforms Map.new(@platforms, fn {ours, theirs} -> {theirs, ours} end)
+
+  defp connected_account(%{"_id" => ref, "platform" => theirs} = entry)
+       when is_binary(ref) and ref != "" do
+    case Map.fetch(@our_platforms, theirs) do
+      {:ok, ours} ->
+        %{
+          ref: ref,
+          platform: ours,
+          profile_ref: entry_profile_ref(entry["profileId"]),
+          username: if(is_binary(entry["username"]), do: entry["username"]),
+          active?: active?(entry)
+        }
+
+      :error ->
+        nil
+    end
+  end
+
+  defp connected_account(_entry), do: nil
+
+  # Documented: the sample shows `profileId` as an object `{_id, name, slug}`.
+  # ASSUMPTION: it may also arrive as a plain id string; accept both.
+  defp entry_profile_ref(%{"_id" => id}) when is_binary(id) and id != "", do: id
+  defp entry_profile_ref(id) when is_binary(id) and id != "", do: id
+  defp entry_profile_ref(_), do: nil
+
+  # ASSUMPTION: `isActive: false` means the account is not usable. Only an
+  # explicit false counts; the entry's status field is undocumented and unread.
+  defp active?(%{"isActive" => false}), do: false
+  defp active?(_entry), do: true
 
   # ── Webhook normalization ────────────────────────────────────────────
 

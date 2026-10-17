@@ -75,6 +75,20 @@ defmodule Platform.Social.Publisher.FakeTest do
       assert Fake.ensure_profile(profile) == :not_required
     end
 
+    test "list_accounts/1 defaults to {:ok, []}, invents no ids, and is recorded" do
+      profile = %Platform.Social.Profile{id: Ecto.UUID.generate(), name: "Brand"}
+      assert Fake.list_accounts(profile) == {:ok, []}
+      assert [{:list_accounts, [^profile], %DateTime{}}] = Fake.calls(:list_accounts)
+
+      listed = [%{ref: "zacct_1", platform: "x", profile_ref: "zp", username: nil, active?: true}]
+      Fake.put_next(:list_accounts, {:ok, listed})
+      assert {:ok, ^listed} = Fake.list_accounts(profile)
+
+      Fake.fail_next(:list_accounts, :vendor_down)
+      assert {:error, :vendor_down} = Fake.list_accounts(profile)
+      assert Fake.list_accounts(profile) == {:ok, []}
+    end
+
     test "platforms/0 is Account.platforms/0" do
       assert Fake.platforms() == Platform.Social.Account.platforms()
     end

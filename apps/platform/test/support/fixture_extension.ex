@@ -231,7 +231,8 @@ defmodule Platform.FixtureExtension do
   defmodule Page do
     @moduledoc """
     The fixture extension's live page: renders the session it was given, so
-    a test sees that core passes the user id and nothing else.
+    a test sees that core passes the user id and, when the URL has one,
+    the bounded `query` (rendered as JSON in `data-query`).
     """
     use Phoenix.LiveView
 
@@ -239,13 +240,19 @@ defmodule Platform.FixtureExtension do
     def mount(_params, session, socket) do
       {:ok,
        assign(socket, :session_keys, session |> Map.keys() |> Enum.sort() |> Enum.join(","))
-       |> assign(:user_id, session["user_id"])}
+       |> assign(:user_id, session["user_id"])
+       |> assign(:query, Jason.encode!(session["query"]))}
     end
 
     @impl true
     def render(assigns) do
       ~H"""
-      <div data-role="fixture-page" data-user-id={@user_id} data-session-keys={@session_keys}>
+      <div
+        data-role="fixture-page"
+        data-user-id={@user_id}
+        data-session-keys={@session_keys}
+        data-query={@query}
+      >
         Fixture page
       </div>
       """

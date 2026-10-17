@@ -135,7 +135,10 @@ defmodule Platform.Social.Publisher.ZernioTest do
             {"instagram", "isAiGenerated"},
             {"youtube", "containsSyntheticMedia"}
           ] do
-        {_, account} = account!(ctx.org_id, platform)
+        # One live row per vendor account id (the unique index, task 01a14807).
+        {_, account} =
+          account!(ctx.org_id, platform, %{provider_account_ref: "zacct_#{platform}"})
+
         put_key!(account)
         capture_post()
 
@@ -359,7 +362,7 @@ defmodule Platform.Social.Publisher.ZernioTest do
 
     test "one install key serves two accounts in different orgs", ctx do
       {_, a1} = account!(ctx.org_id, "linkedin")
-      {_, a2} = account!(org_id!(), "x")
+      {_, a2} = account!(org_id!(), "x", %{provider_account_ref: "zacct_2"})
       put_key!()
       test = self()
 
@@ -540,6 +543,152 @@ defmodule Platform.Social.Publisher.ZernioTest do
 
     test "platforms/0 is every mapped platform in Account.platforms/0 order" do
       assert Zernio.platforms() == Platform.Social.Account.platforms()
+    end
+  end
+
+  describe "list_accounts/1" do
+    defp stub_accounts(status, response) do
+      test = self()
+
+      Req.Test.stub(Zernio, fn conn ->
+        conn = Plug.Conn.fetch_query_params(conn)
+
+        send(
+          test,
+          {:accounts, conn.method, conn.request_path, conn.query_params, conn.req_headers}
+        )
+
+        conn |> Plug.Conn.put_status(status) |> Req.Test.json(response)
+      end)
+    end
+
+    defp linked_profile!(org_id) do
+      {profile, _account} = account!(org_id, "linkedin")
+      profile
+    end
+
+    test "GET /v1/accounts with profileId only (no page/limit) and Bearer", ctx do
+      profile = linked_profile!(ctx.org_id)
+      put_key!()
+      stub_accounts(200, %{"accounts" => [], "hasAnalyticsAccess" => false})
+
+      assert {:ok, []} = Zernio.list_accounts(profile)
+
+      assert_received {:accounts, "GET", "/api/v1/accounts", params, headers}
+      assert params == %{"profileId" => "zprof_1"}
+      refute Map.has_key?(params, "page")
+      refute Map.has_key?(params, "limit")
+      assert {"authorization", "Bearer " <> @key} in headers
+    end
+
+    test "a profile with no vendor ref is :profile_not_linked and sends nothing", ctx do
+      {:ok, profile} = Platform.Social.create_profile(ctx.org_id, %{name: "Bare #{unique()}"})
+      put_key!()
+      refuse_any_request()
+      assert {:error, :profile_not_linked} = Zernio.list_accounts(profile)
+    end
+
+    test "with no Vault key, nothing is sent", ctx do
+      profile = linked_profile!(ctx.org_id)
+      refuse_any_request()
+      assert {:error, :credentials_unavailable} = Zernio.list_accounts(profile)
+    end
+
+    test "maps entries: object and string profileId, twitter to x, unknown dropped, isActive",
+         ctx do
+      profile = linked_profile!(ctx.org_id)
+      put_key!()
+
+      stub_accounts(200, %{
+        "hasAnalyticsAccess" => false,
+        "accounts" => [
+          %{
+            "_id" => "zacct_li",
+            "platform" => "linkedin",
+            "profileId" => %{"_id" => "zprof_1", "name" => "Brand", "slug" => "brand"},
+            "username" => "brand-li",
+            "displayName" => "Brand",
+            "isActive" => true
+          },
+          %{
+            "_id" => "zacct_tw",
+            "platform" => "twitter",
+            "profileId" => "zprof_1",
+            "username" => "brand_x",
+            "isActive" => false
+          },
+          %{
+            "_id" => "zacct_pin",
+            "platform" => "pinterest",
+            "profileId" => "zprof_1",
+            "isActive" => true
+          }
+        ]
+      })
+
+      assert {:ok, accounts} = Zernio.list_accounts(profile)
+
+      assert accounts == [
+               %{
+                 ref: "zacct_li",
+                 platform: "linkedin",
+                 profile_ref: "zprof_1",
+                 username: "brand-li",
+                 active?: true
+               },
+               %{
+                 ref: "zacct_tw",
+                 platform: "x",
+                 profile_ref: "zprof_1",
+                 username: "brand_x",
+                 active?: false
+               }
+             ]
+    end
+
+    test "401 is :credentials_rejected, 503 is an error, a 2xx without accounts is :unexpected_response",
+         ctx do
+      profile = linked_profile!(ctx.org_id)
+      put_key!()
+
+      stub_accounts(401, %{"error" => "bad key"})
+      assert {:error, :credentials_rejected} = Zernio.list_accounts(profile)
+
+      stub_accounts(503, %{"error" => "down"})
+      assert {:error, "Zernio is unavailable (HTTP 503)"} = Zernio.list_accounts(profile)
+
+      stub_accounts(200, %{"hasAnalyticsAccess" => false})
+      assert {:error, :unexpected_response} = Zernio.list_accounts(profile)
+    end
+
+    test "publish/2 sends a listed ref verbatim as platforms[0].accountId", ctx do
+      profile = linked_profile!(ctx.org_id)
+      put_key!()
+
+      stub_accounts(200, %{
+        "accounts" => [
+          %{
+            "_id" => "66f0c0ffee0000000000abcd",
+            "platform" => "twitter",
+            "profileId" => "zprof_1"
+          }
+        ]
+      })
+
+      assert {:ok, [%{ref: ref, platform: "x"}]} = Zernio.list_accounts(profile)
+
+      {:ok, account} =
+        Platform.Social.create_account(ctx.org_id, profile, %{
+          platform: "x",
+          provider_account_ref: ref
+        })
+
+      capture_post()
+      assert {:ok, _} = Zernio.publish(account, request("x"))
+      assert_received {:zernio, "POST", "/api/v1/posts", _headers, body}
+
+      assert [%{"platform" => "twitter", "accountId" => "66f0c0ffee0000000000abcd"}] =
+               body["platforms"]
     end
   end
 
