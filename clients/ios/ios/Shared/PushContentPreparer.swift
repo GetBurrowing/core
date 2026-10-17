@@ -45,6 +45,8 @@ struct PushContentPreparer {
     static func fallbackBody(_ installName: String) -> String { "New message in \(installName)" }
 
     /// The kinds' iOS categories, as `Platform.Push.Notification.category_for/1`.
+    /// Only reached for a sealed map with no `category` (an older core), so
+    /// it stays on the SUITE_* ids; the app registers both sets.
     static func category(forKind kind: String?) -> String? {
         switch kind {
         case "chat_mention": return "SUITE_MENTION"

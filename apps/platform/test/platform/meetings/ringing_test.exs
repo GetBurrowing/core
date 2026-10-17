@@ -506,6 +506,10 @@ defmodule Platform.Meetings.RingingTest do
 
     assert user_id == a.id
     assert n.category == "SUITE_RING_WAITING"
+    # Task 01a14ba1: the struct keeps the legacy id; the APNs body names it
+    # per device scheme.
+    assert Notification.to_apns_payload(n)["aps"]["category"] == "SUITE_RING_WAITING"
+    assert Notification.to_apns_payload(n, :burrow)["aps"]["category"] == "BURROW_RING_WAITING"
     assert n.meeting_id == meeting.id
     assert %Ring{user_id: ^user_id} = Repo.get!(Ring, ring_id)
   end

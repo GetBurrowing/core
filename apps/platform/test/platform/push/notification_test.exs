@@ -173,6 +173,56 @@ defmodule Platform.Push.NotificationTest do
     end
   end
 
+  # Task 01a14ba1: the struct carries the legacy SUITE_* id; the wire id is
+  # chosen per device scheme, and only "burrow" devices get BURROW_*.
+  describe "wire category per device scheme" do
+    @pairs [
+      {"chat_mention", "SUITE_MENTION", "BURROW_MENTION"},
+      {"task_plan_review", "SUITE_OPEN", "BURROW_OPEN"},
+      {"review_request_pending", "SUITE_OPEN", "BURROW_OPEN"},
+      {"meeting_ring_waiting", "SUITE_RING_WAITING", "BURROW_RING_WAITING"}
+    ]
+
+    test "wire_category/2 maps each legacy id for :burrow and leaves :legacy alone" do
+      for {_kind, legacy, burrow} <- @pairs do
+        assert Notification.wire_category(legacy, :legacy) == legacy
+        assert Notification.wire_category(legacy, :burrow) == burrow
+      end
+    end
+
+    test "nil stays nil under both schemes" do
+      assert Notification.wire_category(nil, :legacy) == nil
+      assert Notification.wire_category(nil, :burrow) == nil
+
+      n = Notification.from_map(%{title: "a", body: "b", url: "/"})
+      refute Map.has_key?(Notification.to_apns_payload(n, :burrow)["aps"], "category")
+      refute Map.has_key?(Notification.to_fcm_payload(n, :burrow)["data"], "category")
+    end
+
+    test "the struct keeps the legacy id; the /1 arities are the legacy scheme" do
+      for {kind, legacy, burrow} <- @pairs do
+        n = Notification.new(%{kind: kind, title: "t", body: "b", url: "/"})
+
+        assert n.category == legacy
+        assert Notification.to_apns_payload(n) == Notification.to_apns_payload(n, :legacy)
+        assert Notification.to_fcm_payload(n) == Notification.to_fcm_payload(n, :legacy)
+        assert Notification.to_apns_payload(n)["aps"]["category"] == legacy
+        assert Notification.to_fcm_payload(n)["data"]["category"] == legacy
+        assert Notification.to_apns_payload(n, :burrow)["aps"]["category"] == burrow
+        assert Notification.to_fcm_payload(n, :burrow)["data"]["category"] == burrow
+        assert Notification.to_web_payload(n).category == legacy
+      end
+    end
+
+    test "scheme_for_device/1 is :burrow only for a \"burrow\" row" do
+      assert Notification.scheme_for_device(%{push_category_scheme: "burrow"}) == :burrow
+      assert Notification.scheme_for_device(%{push_category_scheme: nil}) == :legacy
+      assert Notification.scheme_for_device(%{push_category_scheme: "other"}) == :legacy
+      assert Notification.scheme_for_device(%Platform.Mobile.ApnsDevice{}) == :legacy
+      assert Notification.scheme_for_device(%Platform.Mobile.FcmDevice{}) == :legacy
+    end
+  end
+
   describe "categories and grouping" do
     test "a mention gets SUITE_MENTION and is grouped by its space" do
       s = space()

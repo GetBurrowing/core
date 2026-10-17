@@ -99,7 +99,12 @@ defmodule Platform.Push.Relay do
             {:error, :not_configured}
 
           config ->
-            data = Notification.to_fcm_payload(notification)["data"]
+            # The sealed inner map carries the category id for the scheme
+            # each device registered (task 01a14ba1); built once per scheme.
+            data = %{
+              legacy: Notification.to_fcm_payload(notification, :legacy)["data"],
+              burrow: Notification.to_fcm_payload(notification, :burrow)["data"]
+            }
 
             devices
             |> Enum.map(&{&1, item(&1, notification, data)})
@@ -126,7 +131,9 @@ defmodule Platform.Push.Relay do
   defp devices(user_id, :ios), do: APNs.devices_for_user(user_id)
   defp devices(user_id, :android), do: FCM.devices_for_user(user_id)
 
-  defp item(device, %Notification{} = n, data) do
+  defp item(device, %Notification{} = n, data_by_scheme) do
+    data = data_by_scheme[Notification.scheme_for_device(device)]
+
     base = %{
       "token" => device.token,
       "install_host" => n.install_host,

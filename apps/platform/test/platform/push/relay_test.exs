@@ -145,6 +145,43 @@ defmodule Platform.Push.RelayTest do
       refute req.raw =~ n.collapse_id
     end
 
+    # Task 01a14ba1: the sealed map carries the category id for the scheme
+    # each device registered. Open each blob with its own key.
+    test "each sealed blob carries the category id for its device's scheme" do
+      relay_mode!()
+      user = insert_user()
+      {legacy_pub, legacy_priv} = device_keypair()
+      {burrow_pub, burrow_priv} = device_keypair()
+      insert_apns_device!(user, push_public_key: legacy_pub)
+
+      insert_apns_device!(user,
+        token: apns_token_2(),
+        push_public_key: burrow_pub,
+        push_category_scheme: "burrow"
+      )
+
+      ok_relay(self())
+      n = notification()
+      assert :ok = Relay.deliver_to_user(user.id, n, :ios)
+
+      assert_received {:relay_request, %{body: %{"notifications" => items}}}
+      by_token = Map.new(items, &{&1["token"], &1})
+
+      assert {:ok, legacy_json} = Seal.open(legacy_priv, by_token[apns_token()]["sealed"], @host)
+
+      assert {:ok, burrow_json} =
+               Seal.open(burrow_priv, by_token[apns_token_2()]["sealed"], @host)
+
+      legacy = Jason.decode!(legacy_json)
+      burrow = Jason.decode!(burrow_json)
+
+      assert legacy["category"] == "SUITE_MENTION"
+      assert burrow["category"] == "BURROW_MENTION"
+      assert legacy == Notification.to_fcm_payload(n)["data"]
+      assert burrow == Notification.to_fcm_payload(n, :burrow)["data"]
+      assert Map.put(burrow, "category", "SUITE_MENTION") == legacy
+    end
+
     test "the collapse id is a host-bound SHA-256, never the raw id" do
       assert Relay.collapse_id("a.example", "x") ==
                :crypto.hash(:sha256, "a.example|x") |> Base.encode16(case: :lower)

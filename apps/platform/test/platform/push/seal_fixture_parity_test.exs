@@ -11,7 +11,9 @@ defmodule Platform.Push.SealFixtureParityTest do
     2. the server reproduces the fixture's `sealed` blob exactly from its
        inputs (fixed recipient and ephemeral keys through the test-only
        `Seal.seal/4`), and opens it back to `plaintext`;
-    3. `plaintext` is the JSON of `Notification.to_fcm_payload/1`'s `"data"`
+    3. `plaintext` is the JSON of `Notification.to_fcm_payload/2`'s `"data"`
+       under the `:burrow` category scheme (task 01a14ba1: the fixture
+       models a dual-register build, so its category is `BURROW_MENTION`)
        for the sample notification below: one inner shape for both
        platforms, with `unread_count` / `unread_as_of` in it.
 
@@ -90,10 +92,15 @@ defmodule Platform.Push.SealFixtureParityTest do
         unread_as_of: ~U[2026-10-10 15:00:00Z]
       })
 
-    data = Notification.to_fcm_payload(n)["data"]
+    data = Notification.to_fcm_payload(n, :burrow)["data"]
 
     assert Jason.decode!(fixture()["plaintext"]) == data
+    assert data["category"] == "BURROW_MENTION"
     assert data["unread_count"] == "3"
     assert data["unread_as_of"] == "2026-10-10T15:00:00Z"
+
+    # A device that registered no scheme still gets the legacy id.
+    assert Notification.to_fcm_payload(n)["data"]["category"] == "SUITE_MENTION"
+    assert Notification.to_fcm_payload(n)["data"] == Map.put(data, "category", "SUITE_MENTION")
   end
 end

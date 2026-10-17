@@ -66,7 +66,8 @@ struct RingInvite: Equatable, Identifiable {
     }
 
     /// From the `meeting_ring_waiting` alert push (category
-    /// `SUITE_RING_WAITING`): the title is the alert's title.
+    /// `SUITE_RING_WAITING` or `BURROW_RING_WAITING`): the title is the
+    /// alert's title.
     init?(userInfo: [AnyHashable: Any]) {
         guard let ringID = userInfo["ring_id"] as? String, let meetingID = userInfo["meeting_id"] as? String,
             let rawHost = userInfo["install_host"] as? String, let host = InstallStore.normalizeHost(rawHost)

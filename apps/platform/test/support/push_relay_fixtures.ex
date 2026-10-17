@@ -106,6 +106,7 @@ defmodule Platform.PushRelayFixtures do
       environment: Keyword.get(opts, :environment, "production"),
       bundle_id: "com.kobo-ai.burrow",
       push_public_key: opts[:push_public_key],
+      push_category_scheme: opts[:push_category_scheme],
       last_registered_at: DateTime.utc_now()
     })
   end
@@ -121,6 +122,7 @@ defmodule Platform.PushRelayFixtures do
       token: Keyword.get(opts, :token, Platform.FCMFixtures.sentinel_token()),
       package_name: "com.koboai.burrow",
       push_public_key: opts[:push_public_key],
+      push_category_scheme: opts[:push_category_scheme],
       last_registered_at: DateTime.utc_now()
     })
   end

@@ -20,10 +20,41 @@ enum SuiteNotificationCategory {
     /// the in-call invite banner, never as a system banner.
     static let ringWaiting = "SUITE_RING_WAITING"
 
+    // The Burrow names for the same three categories and two actions (task
+    // 01a14ba1). Registered BESIDE the SUITE_* ids, never instead of them:
+    // a device that has not reported `push_category_scheme` keeps getting
+    // SUITE_* from the server, and an already-delivered notification answers
+    // with the action id it was shown with.
+    static let burrowMention = "BURROW_MENTION"
+    static let burrowOpen = "BURROW_OPEN"
+    static let burrowRingWaiting = "BURROW_RING_WAITING"
+    static let burrowReplyAction = "BURROW_REPLY"
+    static let burrowOpenAction = "BURROW_OPEN_ACTION"
+
+    /// The scheme this build reports in `POST /api/app/devices` as
+    /// `push_category_scheme`: it registers the BURROW_* categories too.
+    static let scheme = "burrow"
+
     /// Categories the server's APNs payload names in `aps.category`
-    /// (Platform.Push.Notification: chat_mention -> SUITE_MENTION,
-    /// approvals -> SUITE_OPEN).
+    /// (Platform.Push.Notification: chat_mention -> SUITE_MENTION or
+    /// BURROW_MENTION, approvals -> SUITE_OPEN or BURROW_OPEN,
+    /// meeting_ring_waiting -> SUITE_RING_WAITING or BURROW_RING_WAITING).
+    /// Both sets are registered.
     static func all() -> Set<UNNotificationCategory> {
+        categories(
+            mention: mention, open: Self.open, ringWaiting: ringWaiting,
+            replyAction: replyAction, openAction: openAction
+        )
+        .union(
+            categories(
+                mention: burrowMention, open: burrowOpen, ringWaiting: burrowRingWaiting,
+                replyAction: burrowReplyAction, openAction: burrowOpenAction))
+    }
+
+    private static func categories(
+        mention: String, open openID: String, ringWaiting: String,
+        replyAction: String, openAction: String
+    ) -> Set<UNNotificationCategory> {
         // Reply runs in the background: no `.foreground`, so answering from
         // the lock screen does not open the app. It does need the device
         // unlocked, because it posts as the signed-in person.
@@ -38,11 +69,22 @@ enum SuiteNotificationCategory {
         return [
             UNNotificationCategory(identifier: mention, actions: [reply, open], intentIdentifiers: [], options: []),
             // A stack of approvals reads "3 approvals", not "3 more notifications".
-            UNNotificationCategory(identifier: Self.open, actions: [open], intentIdentifiers: [],
-                                   hiddenPreviewsBodyPlaceholder: nil,
-                                   categorySummaryFormat: "%u approvals", options: []),
-            UNNotificationCategory(identifier: ringWaiting, actions: [], intentIdentifiers: [], options: [])
+            UNNotificationCategory(
+                identifier: openID, actions: [open], intentIdentifiers: [],
+                hiddenPreviewsBodyPlaceholder: nil,
+                categorySummaryFormat: "%u approvals", options: []),
+            UNNotificationCategory(identifier: ringWaiting, actions: [], intentIdentifiers: [], options: []),
         ]
+    }
+
+    /// A busy callee's ring, under either name.
+    static func isRingWaiting(_ category: String) -> Bool {
+        category == ringWaiting || category == burrowRingWaiting
+    }
+
+    /// The Reply action, under either name.
+    static func isReply(_ action: String) -> Bool {
+        action == replyAction || action == burrowReplyAction
     }
 
     static func register(center: UNUserNotificationCenter = .current()) {
@@ -122,7 +164,7 @@ final class PushRegistrar {
         let pending = waiters
         waiters.removeAll()
         lock.unlock()
-        pending.forEach { $0(result) }
+        for waiter in pending { waiter(result) }
     }
 
     static func hex(_ token: Data) -> String {
@@ -145,18 +187,30 @@ enum SuiteAPI {
     }
 
     static func registerDevice(host: String, token: Data, completion: @escaping (Result<Void, Error>) -> Void) {
+        let body = registrationBody(
+            token: token, appInstallID: InstallStore.shared.appInstallID,
+            publicKey: PushKeyStore.shared.publicKey(for: host))
+        post(host: host, path: "/api/app/devices", json: body) { result in
+            completion(result.map { _ in () })
+        }
+    }
+
+    /// The `POST /api/app/devices` body.
+    static func registrationBody(token: Data, appInstallID: String, publicKey: String?) -> [String: Any] {
         var body: [String: Any] = [
             "token": PushRegistrar.hex(token),
             "environment": pushEnvironment,
             "bundle_id": Bundle.main.bundleIdentifier ?? "com.kobo-ai.burrow",
-            "app_install_id": InstallStore.shared.appInstallID
+            "app_install_id": appInstallID,
+            // Task 01a14ba1: this build registers the BURROW_* categories, so
+            // the server may send them. A build that sends no scheme keeps
+            // getting SUITE_*.
+            "push_category_scheme": SuiteNotificationCategory.scheme,
         ]
         // Task 01a1261e: this install's sealed-preview public key. No key
         // (Keychain refused) registers exactly as before: no preview.
-        if let key = PushKeyStore.shared.publicKey(for: host) { body["push_public_key"] = key }
-        post(host: host, path: "/api/app/devices", json: body) { result in
-            completion(result.map { _ in () })
-        }
+        if let publicKey { body["push_public_key"] = publicKey }
+        return body
     }
 
     static func reply(host: String, spaceID: String, replyTo messageID: String?, text: String, completion: @escaping (Result<Void, Error>) -> Void) {
@@ -181,26 +235,28 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
     var openHandler: ((Install, URL) -> Void)?
     private(set) var pendingOpen: (Install, URL)?
 
-    func userNotificationCenter(_ center: UNUserNotificationCenter,
-                                willPresent notification: UNNotification,
-                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
         let content = notification.request.content
         completionHandler(Self.presentation(forCategory: content.categoryIdentifier))
         // The NSE already wrote this push's unread count: refresh the dot.
         NotificationCenter.default.post(name: .burrowInstallBadgesChanged, object: nil)
-        if content.categoryIdentifier == SuiteNotificationCategory.ringWaiting {
+        if SuiteNotificationCategory.isRingWaiting(content.categoryIdentifier) {
             showRingWaiting(content.userInfo)
         }
     }
 
     /// Foreground presentation by category. A busy callee's ring
-    /// (`SUITE_RING_WAITING`, stage 5) gets NO system banner and no sound:
+    /// (`SUITE_RING_WAITING` or `BURROW_RING_WAITING`) gets NO system banner and no sound:
     /// it becomes the in-call invite banner and the call is never interrupted.
     static func presentation(forCategory category: String) -> UNNotificationPresentationOptions {
-        category == SuiteNotificationCategory.ringWaiting ? [] : [.banner, .list, .sound]
+        SuiteNotificationCategory.isRingWaiting(category) ? [] : [.banner, .list, .sound]
     }
 
-    /// Hands a `SUITE_RING_WAITING` payload to the in-call banner.
+    /// Hands a ring-waiting payload to the in-call banner.
     func showRingWaiting(_ userInfo: [AnyHashable: Any]) {
         guard let invite = RingInvite(userInfo: userInfo) else { return }
         DispatchQueue.main.async {
@@ -208,16 +264,20 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
-    func userNotificationCenter(_ center: UNUserNotificationCenter,
-                                didReceive response: UNNotificationResponse,
-                                withCompletionHandler completionHandler: @escaping () -> Void) {
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
         let payload = PushPayload(userInfo: response.notification.request.content.userInfo)
 
         switch response.actionIdentifier {
-        case SuiteNotificationCategory.replyAction:
-            guard let text = (response as? UNTextInputNotificationResponse)?.userText
+        case let id where SuiteNotificationCategory.isReply(id):
+            guard
+                let text = (response as? UNTextInputNotificationResponse)?.userText
                     .trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty,
-                  let host = payload.installHost, let spaceID = payload.spaceID else {
+                let host = payload.installHost, let spaceID = payload.spaceID
+            else {
                 return completionHandler()
             }
             let task = UIApplication.shared.beginBackgroundTask(withName: "suite.reply")
@@ -235,7 +295,7 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate {
         default:
             // A tap on a ring-waiting notification shown while the app was
             // in the background: the banner, not a page.
-            if response.notification.request.content.categoryIdentifier == SuiteNotificationCategory.ringWaiting {
+            if SuiteNotificationCategory.isRingWaiting(response.notification.request.content.categoryIdentifier) {
                 showRingWaiting(response.notification.request.content.userInfo)
                 return completionHandler()
             }

@@ -112,7 +112,7 @@ final class PushRelayTests: XCTestCase {
 
         XCTAssertEqual(out.title, "Dana in launch")
         XCTAssertEqual(out.body, "@Marlowe can you check the deck before 3?")
-        XCTAssertEqual(out.categoryIdentifier, "SUITE_MENTION")
+        XCTAssertEqual(out.categoryIdentifier, "BURROW_MENTION")
         XCTAssertEqual(out.threadIdentifier, "suite-b.localhost:\(f.inner["thread_id"]!)", "the NSE adds the host prefix")
         XCTAssertEqual(out.userInfo["space_id"] as? String, f.inner["space_id"])
         XCTAssertEqual(out.userInfo["url"] as? String, f.inner["url"])

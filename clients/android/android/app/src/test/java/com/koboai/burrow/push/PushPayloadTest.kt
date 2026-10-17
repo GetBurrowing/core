@@ -40,6 +40,16 @@ class PushPayloadTest {
     }
 
     @Test
+    fun `a BURROW_MENTION category parses exactly like SUITE_MENTION, because Android routes on kind`() {
+        val suite = PushPayload.from(mention)
+        val burrow = PushPayload.from(mention + ("category" to "BURROW_MENTION"))
+        assertEquals(suite, burrow)
+        assertEquals("chat_mention", burrow.kind)
+        assertTrue(burrow.isChat)
+        assertTrue(burrow.canReply)
+    }
+
+    @Test
     fun `missing optional keys are null, a blank value is missing, and kind defaults to generic`() {
         val p = PushPayload.from(mapOf("title" to "Hello", "body" to "  "))
         assertEquals("generic", p.kind)

@@ -494,6 +494,140 @@ defmodule Platform.MobileTest do
     end
   end
 
+  describe "push_category_scheme (task 01a14ba1)" do
+    test "a registration declaring burrow stores it, on both tables" do
+      {user, %{session: session}} = signed_in()
+
+      assert {:ok, %ApnsDevice{push_category_scheme: "burrow"}} =
+               Mobile.register_device(
+                 session,
+                 device_attrs(%{"push_category_scheme" => "burrow"})
+               )
+
+      assert {:ok, %FcmDevice{push_category_scheme: "burrow"}} =
+               Mobile.register_device(session, fcm_attrs(%{"push_category_scheme" => "burrow"}))
+
+      assert [%ApnsDevice{push_category_scheme: "burrow"}] = Mobile.list_devices(user)
+      assert [%FcmDevice{push_category_scheme: "burrow"}] = Mobile.list_fcm_devices(user)
+    end
+
+    test "a registration without the field stores nil, on both tables" do
+      {user, %{session: session}} = signed_in()
+
+      {:ok, _} = Mobile.register_device(session, device_attrs())
+      {:ok, _} = Mobile.register_device(session, fcm_attrs())
+
+      assert [%ApnsDevice{push_category_scheme: nil}] = Mobile.list_devices(user)
+      assert [%FcmDevice{push_category_scheme: nil}] = Mobile.list_fcm_devices(user)
+    end
+
+    test "re-registering an APNs token without the field after one with it resets it to nil" do
+      {user, %{session: session}} = signed_in()
+
+      {:ok, first} =
+        Mobile.register_device(session, device_attrs(%{"push_category_scheme" => "burrow"}))
+
+      assert [%ApnsDevice{push_category_scheme: "burrow"}] = Mobile.list_devices(user)
+
+      {:ok, second} = Mobile.register_device(session, device_attrs())
+
+      assert first.id == second.id
+      assert [%ApnsDevice{push_category_scheme: nil}] = Mobile.list_devices(user)
+    end
+
+    test "re-registering an FCM token without the field after one with it resets it to nil" do
+      {user, %{session: session}} = signed_in()
+
+      {:ok, first} =
+        Mobile.register_device(session, fcm_attrs(%{"push_category_scheme" => "burrow"}))
+
+      assert [%FcmDevice{push_category_scheme: "burrow"}] = Mobile.list_fcm_devices(user)
+
+      {:ok, second} = Mobile.register_device(session, fcm_attrs())
+
+      assert first.id == second.id
+      assert [%FcmDevice{push_category_scheme: nil}] = Mobile.list_fcm_devices(user)
+    end
+
+    test "an unknown value is a :push_category_scheme changeset error, on both tables" do
+      {user, %{session: session}} = signed_in()
+
+      for bad <- ["suite", "BURROW", "legacy"] do
+        assert {:error, %Ecto.Changeset{} = cs} =
+                 Mobile.register_device(session, device_attrs(%{"push_category_scheme" => bad}))
+
+        assert Keyword.has_key?(cs.errors, :push_category_scheme), "#{inspect(bad)} on APNs"
+
+        assert {:error, %Ecto.Changeset{} = cs} =
+                 Mobile.register_device(session, fcm_attrs(%{"push_category_scheme" => bad}))
+
+        assert Keyword.has_key?(cs.errors, :push_category_scheme), "#{inspect(bad)} on FCM"
+      end
+
+      assert Mobile.list_devices(user) == []
+      assert Mobile.list_fcm_devices(user) == []
+    end
+
+    test "push_category_adoption/0 splits by platform and excludes a revoked session's rows" do
+      assert Mobile.push_category_adoption() == %{
+               ios: %{burrow: 0, legacy: 0},
+               android: %{burrow: 0, legacy: 0}
+             }
+
+      burrow = %{"push_category_scheme" => "burrow"}
+
+      {_u1, %{session: s1}} = signed_in()
+      {:ok, _} = Mobile.register_device(s1, device_attrs(burrow))
+      {:ok, _} = Mobile.register_device(s1, fcm_attrs(burrow))
+
+      {_u2, %{session: s2}} = signed_in()
+
+      {:ok, _} =
+        Mobile.register_device(s2, device_attrs(%{"token" => String.duplicate("ab", 32)}))
+
+      {_u3, %{session: s3}} = signed_in()
+
+      {:ok, _} =
+        Mobile.register_device(s3, device_attrs(%{"token" => String.duplicate("cd", 32)}))
+
+      {:ok, _} =
+        Mobile.register_device(
+          s3,
+          fcm_attrs(%{"token" => "fcmInstance04:APA91b" <> String.duplicate("L3g", 30)})
+        )
+
+      assert Mobile.push_category_adoption() == %{
+               ios: %{burrow: 1, legacy: 2},
+               android: %{burrow: 1, legacy: 1}
+             }
+
+      # A revoked session whose rows survived (revoke_session/1 deletes them;
+      # the count must not depend on that): stamp revoked_at directly.
+      {_u4, %{session: s4}} = signed_in()
+
+      {:ok, _} =
+        Mobile.register_device(
+          s4,
+          device_attrs(Map.put(burrow, "token", String.duplicate("ef", 32)))
+        )
+
+      {:ok, _} =
+        Mobile.register_device(
+          s4,
+          fcm_attrs(%{"token" => "fcmInstance05:APA91b" <> String.duplicate("R3v", 30)})
+        )
+
+      s4 |> Ecto.Changeset.change(revoked_at: DateTime.utc_now()) |> Repo.update!()
+      assert Repo.aggregate(ApnsDevice, :count) == 4
+      assert Repo.aggregate(FcmDevice, :count) == 3
+
+      assert Mobile.push_category_adoption() == %{
+               ios: %{burrow: 1, legacy: 2},
+               android: %{burrow: 1, legacy: 1}
+             }
+    end
+  end
+
   describe "counts_for_user/1" do
     test "counts approval inbox kinds and the user's open assigned tasks" do
       user = create_user!()

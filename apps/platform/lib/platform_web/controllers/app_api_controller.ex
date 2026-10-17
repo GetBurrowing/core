@@ -90,12 +90,14 @@ defmodule PlatformWeb.AppApiController do
   # ── devices ──────────────────────────────────────────────────────────
 
   def register_device(conn, params) do
-    # `push_public_key` (task 01a1261e) is optional: a registration without
-    # it behaves exactly as before.
+    # `push_public_key` (task 01a1261e) and `push_category_scheme` (task
+    # 01a14ba1) are optional: a registration without them behaves exactly as
+    # before.
     attrs =
       Map.take(
         params,
-        ~w(token environment bundle_id app_install_id platform package_name push_public_key)
+        ~w(token environment bundle_id app_install_id platform package_name
+           push_public_key push_category_scheme)
       )
 
     case Mobile.register_device(conn.assigns.app_session, attrs) do

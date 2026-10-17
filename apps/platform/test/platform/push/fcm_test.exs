@@ -116,6 +116,36 @@ defmodule Platform.Push.FCMTest do
       refute_secrets(log, [form["assertion"]])
     end
 
+    # Task 01a14ba1: per-device category id, as in APNs.
+    test "each device gets the category id for the scheme it registered", %{pem: pem} do
+      configure!(pem)
+      user = insert_user()
+      insert_fcm_device(user)
+
+      user
+      |> insert_fcm_device(other_token())
+      |> Ecto.Changeset.change(push_category_scheme: "burrow")
+      |> Repo.update!()
+
+      stub_fcm(self(), {200, %{"name" => "projects/p/messages/1"}})
+      n = notification()
+
+      log = capture_log(fn -> assert :ok = FCM.deliver_to_user(user.id, n) end)
+
+      assert_received {:fcm_send, first}
+      assert_received {:fcm_send, second}
+      by_token = Map.new([first, second], &{&1.body["message"]["token"], &1.body["message"]})
+
+      legacy = by_token[sentinel_token()]
+      burrow = by_token[other_token()]
+
+      assert legacy["data"]["category"] == "SUITE_MENTION"
+      assert burrow["data"]["category"] == "BURROW_MENTION"
+      assert Map.delete(legacy, "token") == Notification.to_fcm_payload(n)
+      assert Map.delete(burrow, "token") == Notification.to_fcm_payload(n, :burrow)
+      refute_secrets(log)
+    end
+
     test "404 UNREGISTERED deletes the device row", %{pem: pem} do
       configure!(pem)
       user = insert_user()

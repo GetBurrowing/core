@@ -37,8 +37,10 @@ defmodule Platform.Meetings.Ringing do
 
   A callee already active in ANY live room gets no VoIP push (CallKit would
   interrupt the call they are in). They get an ALERT push instead, kind
-  `meeting_ring_waiting` (category `SUITE_RING_WAITING`) carrying `ring_id`,
-  which the app shows as its in-app "Invites you to join" banner.
+  `meeting_ring_waiting` (category `SUITE_RING_WAITING`, sent as
+  `BURROW_RING_WAITING` to a device that registered the `"burrow"` category
+  scheme, task 01a14ba1) carrying `ring_id`, which the app shows as its
+  in-app "Invites you to join" banner.
 
   ## Payload
 

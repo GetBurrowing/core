@@ -76,6 +76,15 @@ class PushRegistrarTest {
         assertEquals("android", body.getString("platform"))
         assertEquals("com.koboai.burrow.debug", body.getString("package_name"))
         assertEquals("install-1", body.getString("app_install_id"))
+        assertEquals("burrow", body.getString("push_category_scheme"))
+    }
+
+    @Test
+    fun `the registration declares the burrow push category scheme, with or without a key`() {
+        tokens.store(host, bearer)
+        val transport = RecordingTransport(mapOf("POST /api/app/devices" to HttpResponse(201, "{}")))
+        assertEquals(EnableOutcome.Registered, registrar(AppApiClient(tokens, transport)).outcome(host))
+        assertEquals("burrow", JSONObject(transport.requests.single().body!!).getString("push_category_scheme"))
     }
 
     @Test

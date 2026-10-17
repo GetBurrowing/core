@@ -186,6 +186,43 @@ defmodule Platform.Push.APNsTest do
       refute_secrets(log, [jwt])
     end
 
+    # Task 01a14ba1: the category id is chosen per device. A row that never
+    # reported a scheme (every shipped build) keeps SUITE_*; only a "burrow"
+    # row gets BURROW_*. Everything else in the two bodies is identical.
+    test "each device gets the category id for the scheme it registered" do
+      configure!()
+      user = insert_user()
+      insert_device(user, @sentinel_token)
+
+      user
+      |> insert_device(@sandbox_token)
+      |> Ecto.Changeset.change(push_category_scheme: "burrow")
+      |> Repo.update!()
+
+      stub(200)
+      n = notification()
+
+      log = capture_log(fn -> assert :ok = APNs.deliver_to_user(user.id, n) end)
+
+      assert_received {:apns_request, first}
+      assert_received {:apns_request, second}
+
+      by_token =
+        Map.new([first, second], fn req ->
+          {String.replace_prefix(req.path, "/3/device/", ""), req.body}
+        end)
+
+      legacy = by_token[@sentinel_token]
+      burrow = by_token[@sandbox_token]
+
+      assert legacy["aps"]["category"] == "SUITE_OPEN"
+      assert burrow["aps"]["category"] == "BURROW_OPEN"
+      assert legacy == Notification.to_apns_payload(n)
+      assert burrow == Notification.to_apns_payload(n, :burrow)
+      assert put_in(burrow, ["aps", "category"], "SUITE_OPEN") == legacy
+      refute_secrets(log, [jwt_from(first)])
+    end
+
     test "a sandbox device is sent to the sandbox host" do
       configure!()
       user = insert_user()

@@ -36,6 +36,9 @@ defmodule Platform.Mobile.FcmDevice do
     # The install's X25519 public key for sealed previews (task 01a1261e),
     # base64url without padding. Optional: nil means no sealed preview.
     field(:push_public_key, :string)
+    # The notification category ids the build registers (task 01a14ba1):
+    # nil = legacy SUITE_* only; "burrow" = BURROW_* as well.
+    field(:push_category_scheme, :string)
     field(:last_registered_at, :utc_datetime_usec)
 
     timestamps(type: :utc_datetime_usec)
@@ -61,7 +64,8 @@ defmodule Platform.Mobile.FcmDevice do
       :token,
       :package_name,
       :last_registered_at,
-      :push_public_key
+      :push_public_key,
+      :push_category_scheme
     ])
     |> validate_required([
       :user_id,
@@ -75,6 +79,7 @@ defmodule Platform.Mobile.FcmDevice do
     |> validate_inclusion(:package_name, allowed_packages())
     |> validate_length(:app_install_id, max: 200)
     |> Platform.Mobile.PushPublicKey.validate()
+    |> validate_inclusion(:push_category_scheme, Platform.Mobile.push_category_schemes())
     |> unique_constraint(:token)
     |> unique_constraint([:user_id, :app_install_id])
     |> foreign_key_constraint(:user_id)

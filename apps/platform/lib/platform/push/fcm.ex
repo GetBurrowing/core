@@ -129,8 +129,16 @@ defmodule Platform.Push.FCM do
             {:error, :not_configured}
 
           {:ok, config} ->
-            message = Notification.to_fcm_payload(notification)
-            Enum.each(devices, &deliver(&1, message, config))
+            # Per device category scheme (task 01a14ba1), as in APNs.
+            messages = %{
+              legacy: Notification.to_fcm_payload(notification, :legacy),
+              burrow: Notification.to_fcm_payload(notification, :burrow)
+            }
+
+            Enum.each(devices, fn device ->
+              deliver(device, messages[Notification.scheme_for_device(device)], config)
+            end)
+
             :ok
         end
     end

@@ -149,9 +149,20 @@ defmodule Platform.Push.APNs do
             {:error, :not_configured}
 
           config ->
-            body = Notification.to_apns_payload(notification)
+            # Both bodies are built once; each device gets the one for the
+            # category scheme it registered (task 01a14ba1): SUITE_* unless
+            # it reported "burrow".
+            bodies = %{
+              legacy: Notification.to_apns_payload(notification, :legacy),
+              burrow: Notification.to_apns_payload(notification, :burrow)
+            }
+
             headers = alert_headers_for(config, notification)
-            Enum.each(devices, &deliver(&1, headers, body, config))
+
+            Enum.each(devices, fn device ->
+              deliver(device, headers, bodies[Notification.scheme_for_device(device)], config)
+            end)
+
             :ok
         end
     end

@@ -198,6 +198,10 @@ class AppApiClient(
      * other status throws STATUS and a transport failure throws NETWORK.
      * [pushPublicKey] (base64url, no padding) is this phone's X25519 key for
      * [host]'s sealed previews; it is omitted when null.
+     * `push_category_scheme` is always `burrow`: this app routes pushes on
+     * `kind` and reads no category id, so it accepts the BURROW_* ids as
+     * well as SUITE_* (task 01a14ba1). The server records it per device row
+     * and counts this phone as adopted for the SUITE_* removal gate.
      */
     fun registerDevice(
         host: String,
@@ -212,6 +216,7 @@ class AppApiClient(
                 .put("platform", "android")
                 .put("package_name", packageName)
                 .put("app_install_id", appInstallId)
+                .put("push_category_scheme", "burrow")
                 .apply { if (pushPublicKey != null) put("push_public_key", pushPublicKey) }
                 .toString()
         send(authorized(host, "POST", DEVICES_PATH, body), DEVICES_PATH)

@@ -41,6 +41,17 @@ defmodule Platform.Push.Notification do
       Approvals group);
     * everything else -> no category; a tap opens the url.
 
+  The struct's `category` is always the LEGACY `SUITE_*` id: it is built once,
+  before the transport split, and knows nothing about the device. The id put
+  on the WIRE is chosen per device (task 01a14ba1): `scheme_for_device/1`
+  reads the `push_category_scheme` the device reported at registration, and
+  `wire_category/2` maps the legacy id to `BURROW_MENTION` / `BURROW_OPEN` /
+  `BURROW_RING_WAITING` only for a device that reported `"burrow"`. A device
+  that reported nothing (every build shipped before the dual-register release)
+  keeps receiving `SUITE_*`. `to_apns_payload/2` and `to_fcm_payload/2` take
+  the scheme; their /1 arities are the legacy scheme. Web push carries the
+  legacy id (`sw.js` reads no category).
+
   Alert pushes only; the VoIP ring itself is
   `Platform.Push.APNs.deliver_voip_to_user/2`. Task 01a10db7 added the ring
   follow-ups as alert kinds (`meeting_ring_waiting` with category
@@ -55,6 +66,13 @@ defmodule Platform.Push.Notification do
   @mention_category "SUITE_MENTION"
   @open_category "SUITE_OPEN"
   @ring_waiting_category "SUITE_RING_WAITING"
+  # The Burrow-named id for each legacy id (task 01a14ba1). Only a device that
+  # registered `push_category_scheme: "burrow"` is sent these.
+  @burrow_ids %{
+    @mention_category => "BURROW_MENTION",
+    @open_category => "BURROW_OPEN",
+    @ring_waiting_category => "BURROW_RING_WAITING"
+  }
   @approvals_thread "approvals"
   @approval_kinds ~w(task_plan_review review_request_pending)
   # Kinds the iOS Notification Service Extension rewrites (task 01a111bb).
@@ -116,6 +134,28 @@ defmodule Platform.Push.Notification do
   def category_for("meeting_ring_waiting"), do: @ring_waiting_category
   def category_for(kind) when kind in @approval_kinds, do: @open_category
   def category_for(_kind), do: nil
+
+  @typedoc "The category naming a device understands (task 01a14ba1)."
+  @type scheme :: :legacy | :burrow
+
+  @doc """
+  The category id to put on the wire for `scheme`. `:legacy` returns the id
+  unchanged; `:burrow` maps a `SUITE_*` id to its `BURROW_*` twin (an id with
+  no twin is unchanged). nil stays nil.
+  """
+  @spec wire_category(String.t() | nil, scheme()) :: String.t() | nil
+  def wire_category(nil, _scheme), do: nil
+  def wire_category(category, :legacy), do: category
+  def wire_category(category, :burrow), do: Map.get(@burrow_ids, category, category)
+
+  @doc """
+  The scheme for a device row: `:burrow` when it registered
+  `push_category_scheme: "burrow"`, `:legacy` for anything else (nil on every
+  build shipped before the dual-register release).
+  """
+  @spec scheme_for_device(map()) :: scheme()
+  def scheme_for_device(%{push_category_scheme: "burrow"}), do: :burrow
+  def scheme_for_device(_device), do: :legacy
 
   @doc """
   Build a notification. `attrs` may carry any struct field; `category`,
@@ -329,13 +369,19 @@ defmodule Platform.Push.Notification do
   conversation for that extension; a redacted copy carries neither.
   """
   @spec to_apns_payload(t()) :: map()
-  def to_apns_payload(%__MODULE__{} = n) do
+  def to_apns_payload(%__MODULE__{} = n), do: to_apns_payload(n, :legacy)
+
+  @doc """
+  `to_apns_payload/1` with the category id for `scheme` (`wire_category/2`).
+  """
+  @spec to_apns_payload(t(), scheme()) :: map()
+  def to_apns_payload(%__MODULE__{} = n, scheme) do
     aps =
       %{
         # A nil body is omitted, never sent as `"body": null`.
         "alert" => drop_nils(%{"title" => n.title, "body" => n.body}),
         "sound" => "default",
-        "category" => n.category,
+        "category" => wire_category(n.category, scheme),
         "thread-id" => apns_thread_id(n),
         "mutable-content" => if(n.kind in @mutable_kinds, do: 1)
       }
@@ -385,14 +431,21 @@ defmodule Platform.Push.Notification do
   values, so every value is a string, and a nil or empty value is dropped.
   """
   @spec to_fcm_payload(t()) :: map()
-  def to_fcm_payload(%__MODULE__{} = n) do
+  def to_fcm_payload(%__MODULE__{} = n), do: to_fcm_payload(n, :legacy)
+
+  @doc """
+  `to_fcm_payload/1` with the category id for `scheme` (`wire_category/2`).
+  The relay seals this same `"data"` map, so it carries the device's id too.
+  """
+  @spec to_fcm_payload(t(), scheme()) :: map()
+  def to_fcm_payload(%__MODULE__{} = n, scheme) do
     data =
       %{
         "kind" => n.kind,
         "title" => n.title,
         "body" => n.body,
         "url" => n.url,
-        "category" => n.category,
+        "category" => wire_category(n.category, scheme),
         "thread_id" => n.thread_id,
         "space_id" => n.space_id,
         "message_id" => n.message_id,

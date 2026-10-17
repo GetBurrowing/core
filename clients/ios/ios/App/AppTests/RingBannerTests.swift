@@ -82,6 +82,23 @@ final class RingBannerTests: XCTestCase {
         XCTAssertTrue(SuiteNotificationCategory.all().contains { $0.identifier == "SUITE_RING_WAITING" })
     }
 
+    /// Task 01a14ba1: the Burrow name for the same ring is presented the same
+    /// way, and a Burrow mention still draws a system banner (the control).
+    func testABurrowRingWaitingPushHasNoSystemPresentation() {
+        XCTAssertEqual(NotificationRouter.presentation(forCategory: "BURROW_RING_WAITING"), [])
+        XCTAssertEqual(NotificationRouter.presentation(forCategory: "BURROW_MENTION"), [.banner, .list, .sound])
+        XCTAssertEqual(NotificationRouter.presentation(forCategory: "SUITE_MENTION"), [.banner, .list, .sound])
+        XCTAssertTrue(SuiteNotificationCategory.all().contains { $0.identifier == "BURROW_RING_WAITING" })
+    }
+
+    func testTheInviteDecodesFromABurrowRingWaitingAlert() {
+        let userInfo: [AnyHashable: Any] = [
+            "aps": ["alert": ["title": "Harper in Design review", "body": "Invites you to join"], "category": "BURROW_RING_WAITING"],
+            "ring_id": harper.ringID, "meeting_id": "m2", "space_id": "s2", "install_host": "suite.example.com",
+        ]
+        XCTAssertEqual(RingInvite(userInfo: userInfo), harper)
+    }
+
     func testBannerColoursAndCopy() {
         XCTAssertEqual(RingBannerStyle.switchFill, .info)
         XCTAssertEqual(RingBannerStyle.switchLabel, .onInfo)

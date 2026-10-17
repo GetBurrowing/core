@@ -177,7 +177,11 @@ Release, matching the `aps-environment` entitlement). It resolves
 `{registered: true}` ONLY when that POST succeeded; `push_subscribe.js` reports
 granted only on that.
 
-Categories: `SUITE_MENTION` (text-input Reply + Open) and `SUITE_OPEN` (Open).
+Categories: `SUITE_MENTION` / `BURROW_MENTION` (text-input Reply + Open),
+`SUITE_OPEN` / `BURROW_OPEN` (Open) and `SUITE_RING_WAITING` /
+`BURROW_RING_WAITING` (no actions; the in-call invite banner). Both sets are
+registered; the app reports `push_category_scheme: "burrow"` when it registers
+its device, and the server sends SUITE_* to any device that did not.
 Reply posts `/api/app/spaces/:space_id/messages` with `reply_to`, using the
 bearer for the payload's `install_host`, without foregrounding. Open and a tap
 switch to `install_host` and load `url` (a URL on any other host falls back to

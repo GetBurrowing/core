@@ -228,6 +228,14 @@ defmodule Platform.Mobile do
   registers exactly as before. A re-registration replaces the stored key
   with whatever the device sends now, so a build that stops sending one
   stops getting sealed previews rather than keeping a key it discarded.
+
+  An optional `push_category_scheme` (task 01a14ba1) names the notification
+  category ids the build registers: `"burrow"` means it registers the
+  `BURROW_*` ids beside the `SUITE_*` ones; absent (nil) means legacy
+  `SUITE_*` only, which is every build shipped before that task. Any other
+  value is a `:push_category_scheme` changeset error. Like the key, it is
+  replaced on re-registration: a build that sends none resets the row to
+  nil, so a downgraded install goes back to `SUITE_*` ids.
   """
   @spec register_device(AppSession.t(), map()) ::
           {:ok, ApnsDevice.t() | FcmDevice.t()} | {:error, Ecto.Changeset.t()}
@@ -258,6 +266,7 @@ defmodule Platform.Mobile do
         environment: fetch(attrs, :environment),
         bundle_id: fetch(attrs, :bundle_id),
         push_public_key: fetch(attrs, :push_public_key),
+        push_category_scheme: fetch(attrs, :push_category_scheme),
         last_registered_at: now
       })
 
@@ -286,6 +295,7 @@ defmodule Platform.Mobile do
                     :environment,
                     :bundle_id,
                     :push_public_key,
+                    :push_category_scheme,
                     :last_registered_at,
                     :updated_at
                   ]},
@@ -314,6 +324,7 @@ defmodule Platform.Mobile do
         token: fetch(attrs, :token),
         package_name: fetch(attrs, :package_name),
         push_public_key: fetch(attrs, :push_public_key),
+        push_category_scheme: fetch(attrs, :push_category_scheme),
         last_registered_at: DateTime.utc_now()
       })
 
@@ -341,6 +352,7 @@ defmodule Platform.Mobile do
                     :app_install_id,
                     :package_name,
                     :push_public_key,
+                    :push_category_scheme,
                     :last_registered_at,
                     :updated_at
                   ]},
@@ -461,6 +473,50 @@ defmodule Platform.Mobile do
   @spec list_fcm_devices(User.t()) :: [FcmDevice.t()]
   def list_fcm_devices(%User{id: user_id}) do
     Repo.all(from(d in FcmDevice, where: d.user_id == ^user_id, order_by: d.inserted_at))
+  end
+
+  @push_category_schemes ["burrow"]
+
+  @doc """
+  Every non-nil `push_category_scheme` a device registration may carry
+  (task 01a14ba1). nil (absent) is the legacy `SUITE_*` scheme.
+  """
+  @spec push_category_schemes() :: [String.t()]
+  def push_category_schemes, do: @push_category_schemes
+
+  @doc """
+  How many live alert-push device rows have declared each notification
+  category scheme (task 01a14ba1), split by platform: APNs rows
+  (`apns_devices`) under `:ios`, FCM rows (`fcm_devices`) under `:android`.
+  `:burrow` counts rows with `push_category_scheme == "burrow"`; `:legacy`
+  counts rows with nil (builds that register only the `SUITE_*` ids). Rows
+  whose app session is revoked are excluded, whether or not they survived
+  the revocation.
+
+  This is the checkable adoption gate: the follow-up that removes SUITE_*
+  may start only when `ios.legacy == 0` on each install it ships to.
+  """
+  @spec push_category_adoption() :: %{
+          ios: %{burrow: non_neg_integer(), legacy: non_neg_integer()},
+          android: %{burrow: non_neg_integer(), legacy: non_neg_integer()}
+        }
+  def push_category_adoption do
+    %{ios: scheme_counts(ApnsDevice), android: scheme_counts(FcmDevice)}
+  end
+
+  defp scheme_counts(schema) do
+    counts =
+      from(d in schema,
+        join: s in AppSession,
+        on: s.id == d.app_session_id,
+        where: is_nil(s.revoked_at),
+        group_by: d.push_category_scheme,
+        select: {d.push_category_scheme, count(d.id)}
+      )
+      |> Repo.all()
+      |> Map.new()
+
+    %{burrow: Map.get(counts, "burrow", 0), legacy: Map.get(counts, nil, 0)}
   end
 
   @doc """

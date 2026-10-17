@@ -500,6 +500,52 @@ defmodule PlatformWeb.AppApiControllerTest do
     end
   end
 
+  describe "push_category_scheme on registration (task 01a14ba1)" do
+    test "an iOS registration declaring burrow stores it",
+         %{conn: conn, token: token, user: user} do
+      conn = register(conn, token, %{"push_category_scheme" => "burrow"})
+
+      assert json_response(conn, 200) == %{"registered" => true}
+      assert [%ApnsDevice{push_category_scheme: "burrow"}] = Mobile.list_devices(user)
+    end
+
+    test "an android registration declaring burrow stores it",
+         %{conn: conn, token: token, user: user} do
+      conn =
+        conn
+        |> bearer(token)
+        |> post("/api/app/devices", %{
+          "platform" => "android",
+          "token" => @fcm_token,
+          "package_name" => "com.koboai.burrow",
+          "app_install_id" => "install-1",
+          "push_category_scheme" => "burrow"
+        })
+
+      assert json_response(conn, 200) == %{"registered" => true}
+      assert [%{push_category_scheme: "burrow"}] = Mobile.list_fcm_devices(user)
+    end
+
+    test "a registration without the field stores nil (every shipped build)",
+         %{conn: conn, token: token, user: user} do
+      assert json_response(register(conn, token, %{}), 200) == %{"registered" => true}
+      assert [%ApnsDevice{push_category_scheme: nil}] = Mobile.list_devices(user)
+    end
+
+    test "an unknown scheme is a 422 naming only the field",
+         %{conn: conn, token: token, user: user} do
+      body = conn |> register(token, %{"push_category_scheme" => "suite"}) |> response(422)
+
+      assert Jason.decode!(body) == %{
+               "error" => "invalid_device",
+               "fields" => ["push_category_scheme"]
+             }
+
+      refute body =~ @device_token
+      assert Mobile.list_devices(user) == []
+    end
+  end
+
   describe "GET /api/app/counts unread (task 01a1261e)" do
     test "unread equals Chat.total_unread_for_viewer/1 and excludes an archived space",
          %{conn: conn, token: token, user: user, space: space} do
