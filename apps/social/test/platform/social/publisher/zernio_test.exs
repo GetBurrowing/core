@@ -432,6 +432,117 @@ defmodule Platform.Social.Publisher.ZernioTest do
              )
   end
 
+  describe "ensure_profile/1 and platforms/0" do
+    defp bare_profile!(org_id) do
+      {:ok, profile} = Platform.Social.create_profile(org_id, %{name: "Brand #{unique()}"})
+      assert profile.provider_profile_ref == nil
+      profile
+    end
+
+    defp stub_profiles(status, response) do
+      test = self()
+
+      Req.Test.stub(Zernio, fn conn ->
+        {:ok, raw, conn} = Plug.Conn.read_body(conn)
+
+        send(
+          test,
+          {:profiles, conn.method, conn.request_path, conn.req_headers, Jason.decode!(raw)}
+        )
+
+        conn |> Plug.Conn.put_status(status) |> Req.Test.json(response)
+      end)
+    end
+
+    test "POST /v1/profiles with name, externalId, Idempotency-Key and Bearer; 201 answers profile._id",
+         ctx do
+      profile = bare_profile!(ctx.org_id)
+      put_key!()
+      stub_profiles(201, %{"message" => "created", "profile" => %{"_id" => "zprof_new"}})
+
+      assert {:ok, "zprof_new"} = Zernio.ensure_profile(profile)
+
+      assert_received {:profiles, "POST", "/api/v1/profiles", headers, body}
+      assert body == %{"name" => profile.name, "externalId" => profile.id}
+      assert {"idempotency-key", profile.id} in headers
+      assert {"authorization", "Bearer " <> @key} in headers
+    end
+
+    test "a root _id is accepted (ASSUMPTION fallback)", ctx do
+      profile = bare_profile!(ctx.org_id)
+      put_key!()
+      stub_profiles(201, %{"_id" => "zprof_root"})
+      assert {:ok, "zprof_root"} = Zernio.ensure_profile(profile)
+    end
+
+    test "a 2xx with no id is :unexpected_response", ctx do
+      profile = bare_profile!(ctx.org_id)
+      put_key!()
+      stub_profiles(201, %{"message" => "created"})
+      assert {:error, :unexpected_response} = Zernio.ensure_profile(profile)
+    end
+
+    test "an existing provider_profile_ref is answered with no request", ctx do
+      {profile, _account} = account!(ctx.org_id, "linkedin")
+      put_key!()
+      refuse_any_request()
+      assert {:ok, "zprof_1"} = Zernio.ensure_profile(profile)
+    end
+
+    test "with no Vault key, nothing is sent", ctx do
+      profile = bare_profile!(ctx.org_id)
+      refuse_any_request()
+      assert {:error, :credentials_unavailable} = Zernio.ensure_profile(profile)
+    end
+
+    test "a 409 name conflict is :profile_name_taken and the existing id is NOT adopted", ctx do
+      profile = bare_profile!(ctx.org_id)
+      put_key!()
+
+      stub_profiles(409, %{
+        "error" => "A profile with this name already exists",
+        "details" => %{"existingProfileId" => "zprof_someone_else"}
+      })
+
+      assert {:error, {:profile_name_taken, name}} = Zernio.ensure_profile(profile)
+      assert name == profile.name
+    end
+
+    test "a 409 externalId conflict with an existing id adopts it", ctx do
+      profile = bare_profile!(ctx.org_id)
+      put_key!()
+
+      stub_profiles(409, %{
+        "code" => "profile_external_id_conflict",
+        "details" => %{"existingProfileId" => "zprof_ours"}
+      })
+
+      assert {:ok, "zprof_ours"} = Zernio.ensure_profile(profile)
+    end
+
+    test "a 409 externalId conflict without an id is :profile_conflict", ctx do
+      profile = bare_profile!(ctx.org_id)
+      put_key!()
+      stub_profiles(409, %{"code" => "profile_external_id_conflict"})
+      assert {:error, :profile_conflict} = Zernio.ensure_profile(profile)
+    end
+
+    test "401 is :credentials_rejected and 500 is an error", ctx do
+      profile = bare_profile!(ctx.org_id)
+      put_key!()
+
+      stub_profiles(401, %{"error" => "bad key"})
+      assert {:error, :credentials_rejected} = Zernio.ensure_profile(profile)
+
+      stub_profiles(500, %{"error" => "boom"})
+      assert {:error, "Zernio is unavailable (HTTP 500)"} = Zernio.ensure_profile(profile)
+    end
+
+    test "platforms/0 is every mapped platform in Account.platforms/0 order" do
+      assert Zernio.platforms() == Platform.Social.Account.platforms()
+    end
+  end
+
   describe "verify_webhook/2" do
     defp sign(body, secret),
       do: :crypto.mac(:hmac, :sha256, secret, body) |> Base.encode16(case: :lower)

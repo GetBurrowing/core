@@ -65,6 +65,20 @@ defmodule Platform.Social.Publisher.FakeTest do
       assert length(Fake.calls(:publish)) == 2
     end
 
+    test "ensure_profile/1 defaults to :not_required, invents no ref, and is recorded" do
+      profile = %Platform.Social.Profile{id: Ecto.UUID.generate(), name: "Brand"}
+      assert Fake.ensure_profile(profile) == :not_required
+      assert [{:ensure_profile, [^profile], %DateTime{}}] = Fake.calls(:ensure_profile)
+
+      Fake.fail_next(:ensure_profile, :vendor_down)
+      assert {:error, :vendor_down} = Fake.ensure_profile(profile)
+      assert Fake.ensure_profile(profile) == :not_required
+    end
+
+    test "platforms/0 is Account.platforms/0" do
+      assert Fake.platforms() == Platform.Social.Account.platforms()
+    end
+
     test "connect_url/2 carries the redirect url" do
       assert {:ok, url} =
                Fake.connect_url(account(), redirect_url: "https://suite.example.test/cb")

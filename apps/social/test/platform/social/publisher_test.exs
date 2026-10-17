@@ -37,6 +37,20 @@ defmodule Platform.Social.PublisherTest do
     end
   end
 
+  describe "behaviour" do
+    test "both adapters implement ensure_profile/1 and platforms/0" do
+      callbacks = Publisher.behaviour_info(:callbacks)
+      assert {:ensure_profile, 1} in callbacks
+      assert {:platforms, 0} in callbacks
+
+      for adapter <- [Platform.Social.Publisher.Fake, Platform.Social.Publisher.Zernio] do
+        Code.ensure_loaded!(adapter)
+        for {fun, arity} <- callbacks, do: assert(function_exported?(adapter, fun, arity))
+        assert Enum.all?(adapter.platforms(), &(&1 in Account.platforms()))
+      end
+    end
+  end
+
   describe "posts: is_aigc forcing" do
     setup do
       org_id = org_id!()

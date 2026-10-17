@@ -19,6 +19,15 @@ defmodule Platform.Social.Publisher.Zernio do
     * `GET` / `DELETE /v1/posts/{postId}`; statuses published, failed, partial,
       scheduled, publishing, draft, cancelled; per-platform `platformPostUrl`,
       `errorMessage`.
+    * `POST /v1/profiles` (https://docs.zernio.com/profiles/create-profile, fetched
+      2026-10-17): `name` required (unique per Zernio team), optional `externalId`
+      (1-255 chars, unique per owner; we send our profile id); optional
+      `Idempotency-Key` header (we send our profile id). 201 answers
+      `{message, profile: {_id}}`. 409 on a duplicate name carries
+      `details.existingProfileId`; 409 code `profile_external_id_conflict` on a
+      duplicate externalId; 422 on an Idempotency-Key reused with another body.
+      A name conflict is NEVER adopted: names are unique per org here
+      (`[org_id, name]`), not per install, so another org's profile can hold it.
     * `GET /v1/connect/{platform}?profileId=&redirect_url=` answers `{authUrl}`.
       The platform enum says `twitter` for X. TikTok connects through Zernio's own
       TikTok for Business app (direct post, https://docs.zernio.com/platforms/tiktok).
@@ -72,6 +81,31 @@ defmodule Platform.Social.Publisher.Zernio do
   }
 
   # ── Callbacks ────────────────────────────────────────────────────────
+
+  @impl true
+  def ensure_profile(profile) do
+    case profile_ref(profile) do
+      ref when is_binary(ref) ->
+        {:ok, ref}
+
+      nil ->
+        with {:ok, key} <- api_key(nil) do
+          request(key)
+          |> Req.post(
+            url: "/v1/profiles",
+            json: %{name: profile.name, externalId: profile.id},
+            headers: [{"idempotency-key", profile.id}],
+            retry: false
+          )
+          |> handle_profile(profile)
+        end
+    end
+  end
+
+  @impl true
+  def platforms do
+    Enum.filter(Platform.Social.Account.platforms(), &Map.has_key?(@platforms, &1))
+  end
 
   @impl true
   def connect_url(account, opts) do
@@ -298,6 +332,50 @@ defmodule Platform.Social.Publisher.Zernio do
   defp message(%{"error" => e}) when is_binary(e), do: e
   defp message(%{"message" => m}) when is_binary(m), do: m
   defp message(_), do: "no detail"
+
+  # 409 is profile-specific here, so it is matched BEFORE the shared handle/2
+  # (whose 409 clause means duplicate post content).
+  defp handle_profile({:ok, %Req.Response{status: 409, body: body}}, profile) do
+    if profile_conflict_code(body) == "profile_external_id_conflict" do
+      # externalId is our own profile id, so the existing profile is ours.
+      case profile_conflict_existing_id(body) do
+        id when is_binary(id) and id != "" -> {:ok, id}
+        _ -> {:error, :profile_conflict}
+      end
+    else
+      # A name conflict: never adopted (another org may own that name).
+      {:error, {:profile_name_taken, profile.name}}
+    end
+  end
+
+  defp handle_profile(result, _profile) do
+    handle(result, fn resp_body ->
+      case profile_id(resp_body) do
+        id when is_binary(id) and id != "" -> {:ok, id}
+        _ -> {:error, :unexpected_response}
+      end
+    end)
+  end
+
+  # Documented: the created profile is `profile._id`.
+  # ASSUMPTION: also accept a root `_id`.
+  defp profile_id(%{"profile" => %{"_id" => id}}) when is_binary(id), do: id
+  defp profile_id(%{"_id" => id}) when is_binary(id), do: id
+  defp profile_id(_), do: nil
+
+  # ASSUMPTION: the conflict `code` and `details` sit at the body root, or
+  # under an `error` object; the docs show neither placement for the
+  # externalId conflict.
+  defp profile_conflict_code(%{"code" => code}) when is_binary(code), do: code
+  defp profile_conflict_code(%{"error" => %{"code" => code}}) when is_binary(code), do: code
+  defp profile_conflict_code(_), do: nil
+
+  defp profile_conflict_existing_id(%{"details" => %{"existingProfileId" => id}}), do: id
+
+  defp profile_conflict_existing_id(%{"error" => %{"details" => %{"existingProfileId" => id}}}),
+    do: id
+
+  defp profile_conflict_existing_id(_), do: nil
 
   # ASSUMPTION: a create response nests the post under "post" (Post._id) or
   # returns it at the root (_id); accept both.

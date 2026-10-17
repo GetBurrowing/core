@@ -101,6 +101,15 @@ defmodule Platform.Social.Publisher.Fake do
     end)
   end
 
+  # The default is :not_required: no network, and no invented ref, since a
+  # made-up ref stored under the Fake would break connect after a switch to
+  # a real vendor.
+  @impl Platform.Social.Publisher
+  def ensure_profile(profile), do: record(:ensure_profile, [profile], fn -> :not_required end)
+
+  @impl Platform.Social.Publisher
+  def platforms, do: Platform.Social.Account.platforms()
+
   @impl Platform.Social.Publisher
   def publish(account, request) do
     record(:publish, [account, request], fn ->

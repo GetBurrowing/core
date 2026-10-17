@@ -44,6 +44,22 @@ defmodule PlatformWeb.SocialLive do
 
   While the Zernio publisher is selected and no key is set, Connections
   shows a notice pointing at Settings and hides Connect/Reconnect.
+
+  ## Adding an account (task 01a14801)
+
+  Connections carries ONE "+ Add account" control, shown only to an approver
+  of the profile (`@can_edit?`), only when Connect is not blocked on the
+  Zernio key, and only when the publisher can connect something. Its picker
+  offers exactly `Platform.Social.connectable_platforms/0` (the module only
+  maps those values to display names). `add_account` re-checks through
+  `authorize/1`, then `Platform.Social.add_account/4` (which ensures the
+  vendor profile first and re-checks the approver itself), then the
+  publisher's `connect_url/2`, then an external redirect. A connect failure
+  AFTER the row exists re-streams the rows so it shows with Connect; the row
+  is kept and retried, never deleted. `connect_account` also runs
+  `Platform.Social.ensure_provider_profile/2` first, so Connect on a row that
+  predates the vendor profile works. The vendor URL and the key are never
+  logged. The OAuth return leg is not handled here.
   """
   use PlatformWeb, :live_view
 
@@ -186,6 +202,7 @@ defmodule PlatformWeb.SocialLive do
     with {:ok, profile, _user} <- authorize(socket),
          %Account{} = account <- profile_account(profile, id),
          publisher when is_atom(publisher) <- Publisher.impl(),
+         {:ok, profile} <- Social.ensure_provider_profile(profile.org_id, profile),
          {:ok, url} <-
            publisher.connect_url(account, redirect_url: own_url("/m/social"), profile: profile) do
       {:noreply, redirect(socket, external: url)}
@@ -196,10 +213,54 @@ defmodule PlatformWeb.SocialLive do
       {:error, :not_an_approver} ->
         {:noreply, notice(socket, "Only an approver of this profile can change it.")}
 
+      {:error, {:profile_name_taken, _name} = reason} ->
+        {:noreply, notice(socket, add_error_copy(reason))}
+
       _ ->
         {:noreply, notice(socket, "That account could not be connected. Try again.")}
     end
   end
+
+  # "+ Add account" opens the picker; it only opens for someone who can edit
+  # (rendering only: add_account re-checks).
+  def handle_event("open_add_account", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:add_open?, add_allowed?(socket.assigns))
+     |> assign(:add_form, add_form(socket.assigns.connectable_platforms))}
+  end
+
+  def handle_event("close_add_account", _params, socket),
+    do: {:noreply, assign(socket, :add_open?, false)}
+
+  # Add an account on `platform`: an approver of the CURRENT profile only
+  # (authorize/1 here, approver_check/3 again inside Social.add_account/4),
+  # which ensures the vendor profile BEFORE any row is written. Then OAuth
+  # starts at once. A connect failure after the row exists re-streams the
+  # rows so it shows with Connect. The vendor URL is never logged.
+  def handle_event("add_account", %{"platform" => platform}, socket) when is_binary(platform) do
+    with {:ok, profile, user_id} <- authorize(socket),
+         {:ok, account, profile} <- Social.add_account(profile.org_id, profile, user_id, platform) do
+      socket = socket |> assign(:profile, profile) |> assign(:add_open?, false)
+
+      with publisher when is_atom(publisher) <- Publisher.impl(),
+           {:ok, url} <-
+             publisher.connect_url(account, redirect_url: own_url("/m/social"), profile: profile) do
+        {:noreply, redirect(socket, external: url)}
+      else
+        _ ->
+          {:noreply,
+           socket
+           |> restream_accounts()
+           |> notice("That account could not be connected. Try again.")}
+      end
+    else
+      {:error, reason} -> {:noreply, notice(socket, add_error_copy(reason))}
+      _ -> {:noreply, notice(socket, add_error_copy(:unknown))}
+    end
+  end
+
+  def handle_event("add_account", _params, socket), do: {:noreply, socket}
 
   # Approval mode is account configuration, not a decision: Approve first or
   # Draft-only, nothing else (Autonomous is dropped). Approvers only.
@@ -350,6 +411,9 @@ defmodule PlatformWeb.SocialLive do
     socket
     |> assign(:can_edit?, false)
     |> assign(:accounts_empty?, true)
+    |> assign(:connectable_platforms, [])
+    |> assign(:add_open?, false)
+    |> assign(:add_form, add_form([]))
     |> assign(:settings_options, %{approvers: [], spaces: []})
     |> assign(:settings_form, nil)
     |> stream(:accounts, [], reset: true)
@@ -359,9 +423,14 @@ defmodule PlatformWeb.SocialLive do
     accounts = Social.list_accounts(profile.org_id, profile_id: profile.id)
     can_edit? = match?({:ok, _, _}, authorize(socket))
 
+    platforms = Social.connectable_platforms()
+
     socket
     |> assign(:can_edit?, can_edit?)
     |> assign(:accounts_empty?, accounts == [])
+    |> assign(:connectable_platforms, platforms)
+    |> assign(:add_open?, false)
+    |> assign(:add_form, add_form(platforms))
     |> assign(:settings_options, settings_options(profile, can_edit?))
     |> assign(:settings_form, settings_form(profile, %{}))
     |> stream(:accounts, Enum.map(accounts, &account_item/1), reset: true)
@@ -373,8 +442,49 @@ defmodule PlatformWeb.SocialLive do
 
   defp restream_accounts(%{assigns: %{profile: profile}} = socket) do
     accounts = Social.list_accounts(profile.org_id, profile_id: profile.id)
-    stream(socket, :accounts, Enum.map(accounts, &account_item/1), reset: true)
+
+    socket
+    |> assign(:accounts_empty?, accounts == [])
+    |> stream(:accounts, Enum.map(accounts, &account_item/1), reset: true)
   end
+
+  # ── Add account ─────────────────────────────────────────────────────
+
+  # Display names only; the option VALUES always come from
+  # Social.connectable_platforms/0.
+  @platform_labels %{
+    "linkedin" => "LinkedIn",
+    "x" => "X",
+    "tiktok" => "TikTok",
+    "instagram" => "Instagram",
+    "youtube" => "YouTube"
+  }
+
+  defp platform_options(platforms),
+    do: Enum.map(platforms, &{Map.get(@platform_labels, &1, &1), &1})
+
+  defp add_form(platforms), do: to_form(%{"platform" => List.first(platforms)})
+
+  defp add_allowed?(assigns) do
+    assigns.can_edit? and not assigns.zernio_blocks_connect? and
+      assigns.connectable_platforms != []
+  end
+
+  @approver_refusals [:not_an_approver, :not_a_human, :approver_archived, :approver_no_access]
+
+  defp add_error_copy(reason) when reason in @approver_refusals,
+    do: "Only an approver of this profile can change it."
+
+  defp add_error_copy(:unsupported_platform),
+    do: "That platform can't be connected on this install."
+
+  defp add_error_copy(:credentials_unavailable), do: "Add the Zernio API key in Settings first."
+
+  defp add_error_copy({:profile_name_taken, name}),
+    do:
+      "Zernio already has a profile named #{name}. Rename this profile in Settings and try again."
+
+  defp add_error_copy(_reason), do: "Couldn't set up this profile at Zernio. Try again."
 
   # The user, re-read now, must pass approver_check/3 on the CURRENT profile,
   # itself re-read through the scope.
@@ -871,9 +981,15 @@ defmodule PlatformWeb.SocialLive do
                 Go to Settings
               </button>
             </div>
-            <p :if={@accounts_empty?} class="text-base-content/70" data-role="social-empty">
+            <p :if={@accounts_empty?} class="mb-3 text-base-content/70" data-role="social-empty">
               No accounts connected for {@profile.name} yet
             </p>
+            <.add_account
+              :if={@can_edit? and not @zernio_blocks_connect? and @connectable_platforms != []}
+              open?={@add_open?}
+              form={@add_form}
+              options={platform_options(@connectable_platforms)}
+            />
             <ul
               id="social-accounts"
               phx-update="stream"
@@ -1077,6 +1193,58 @@ defmodule PlatformWeb.SocialLive do
       <span>{@notice}</span>
       <button type="button" class="btn btn-ghost btn-xs" phx-click="dismiss_notice">Dismiss</button>
     </p>
+    """
+  end
+
+  attr :open?, :boolean, required: true
+  attr :form, :any, required: true
+  attr :options, :list, required: true
+
+  defp add_account(assigns) do
+    ~H"""
+    <div class="mb-3" data-role="social-add-account-control">
+      <button
+        :if={!@open?}
+        type="button"
+        class="btn btn-sm"
+        phx-click="open_add_account"
+        data-role="social-add-account"
+      >
+        <.icon name="hero-plus-micro" class="size-4" /> Add account
+      </button>
+      <.form
+        :if={@open?}
+        for={@form}
+        id="social-add-account-form"
+        phx-submit="add_account"
+        class="flex flex-wrap items-end gap-2 rounded-lg border border-base-300 bg-base-200 p-3"
+        data-role="social-add-account-form"
+      >
+        <div class="min-w-40 flex-1">
+          <.input
+            field={@form[:platform]}
+            type="select"
+            label="Platform"
+            options={@options}
+            class="select select-sm w-full"
+            data-role="social-add-account-platform"
+          />
+        </div>
+        <div class="flex gap-2">
+          <button type="submit" class="btn btn-primary btn-sm" data-role="social-add-account-submit">
+            Continue
+          </button>
+          <button
+            type="button"
+            class="btn btn-ghost btn-sm"
+            phx-click="close_add_account"
+            data-role="social-add-account-cancel"
+          >
+            Cancel
+          </button>
+        </div>
+      </.form>
+    </div>
     """
   end
 

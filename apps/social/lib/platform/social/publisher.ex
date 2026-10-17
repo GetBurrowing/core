@@ -15,6 +15,15 @@ defmodule Platform.Social.Publisher do
   `Platform.Social.Publisher.Zernio`. With it unset, `impl/0` answers
   `{:error, :publisher_not_configured}` and nothing publishes.
 
+  ## Profiles and platforms
+
+  `ensure_profile/1` makes sure the vendor holds a profile for one of ours
+  before `connect_url/2` runs, and answers its id (the caller stores it as
+  `provider_profile_ref`). An adapter that needs no vendor-side profile
+  answers `:not_required` and never calls out (the Fake does, and invents no
+  ref). `platforms/0` lists the platforms the adapter can connect, in our
+  names (`Platform.Social.Account.platforms/0`).
+
   ## Secrets
 
   An adapter never reads a key from config, env, the DB or a struct field.
@@ -79,6 +88,17 @@ defmodule Platform.Social.Publisher do
 
   @doc "Starts OAuth for `account`. `opts` carries `:redirect_url` (and `:profile`)."
   @callback connect_url(account(), keyword()) :: {:ok, String.t()} | {:error, term()}
+
+  @doc """
+  Makes sure the vendor has a profile for `profile`. `{:ok, ref}` is the
+  vendor's profile id (an existing `provider_profile_ref` is answered as-is,
+  with no request); `:not_required` means the adapter needs none.
+  """
+  @callback ensure_profile(Platform.Social.Profile.t()) ::
+              {:ok, String.t()} | :not_required | {:error, term()}
+
+  @doc "The platforms this adapter can connect, in our names."
+  @callback platforms() :: [String.t()]
 
   @doc "Creates (or schedules) the post at the vendor."
   @callback publish(account(), request()) :: {:ok, publish_result()} | {:error, term()}

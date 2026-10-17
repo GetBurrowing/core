@@ -38,7 +38,7 @@ defmodule Platform.Social do
 
   alias Ecto.Changeset
   alias Platform.Repo
-  alias Platform.Social.{Account, Clip, ClipMedia, Post, Profile, RenderQueue}
+  alias Platform.Social.{Account, Clip, ClipMedia, Post, Profile, Publisher, RenderQueue}
 
   @not_a_user "must be a human user"
 
@@ -287,6 +287,161 @@ defmodule Platform.Social do
       |> Changeset.change(archived_at: account.archived_at || DateTime.utc_now())
       |> Repo.update()
     end
+  end
+
+  # ── Connecting an account (task 01a14801) ────────────────────────────
+
+  @doc """
+  The platforms a human can add an account on: `Account.platforms/0`
+  filtered to the configured publisher's `platforms/0`, in
+  `Account.platforms/0` order. `[]` when no publisher is configured. This is
+  the ONE list the Connections picker reads.
+  """
+  @spec connectable_platforms() :: [String.t()]
+  def connectable_platforms do
+    case Publisher.impl() do
+      {:error, :publisher_not_configured} ->
+        []
+
+      module ->
+        supported = module.platforms()
+        Enum.filter(Account.platforms(), &(&1 in supported))
+    end
+  end
+
+  @doc """
+  Makes sure the vendor holds a profile for `profile`, creating it lazily on
+  the first connect (never on `create_profile/2`, so a Fake install never
+  calls out).
+
+  Inside one transaction the profile is re-read through the org scope with
+  `FOR UPDATE` (the `lock_post/2` pattern). A present `provider_profile_ref`
+  answers `{:ok, profile}` with NO publisher call. Otherwise the publisher's
+  `ensure_profile/1` runs: `{:ok, ref}` writes ONLY `provider_profile_ref`
+  (a dedicated `Changeset.change/2`, not the editable cast) and answers the
+  updated profile; `:not_required` answers the profile unchanged, ref still
+  nil; `{:error, reason}` writes nothing and answers `{:error, reason}`.
+
+  Trade-off, accepted: the single profile row lock is held across ONE
+  bounded HTTP call to the vendor. That serialises two concurrent first
+  connects (the second waits, then sees the ref and makes no call); the
+  vendor `Idempotency-Key` (our profile id) is the backstop.
+  """
+  @spec ensure_provider_profile(Ecto.UUID.t(), Profile.t() | Ecto.UUID.t()) ::
+          {:ok, Profile.t()} | {:error, term()}
+  def ensure_provider_profile(org_id, profile) do
+    Repo.transaction(fn ->
+      case lock_profile(org_id, profile) do
+        nil ->
+          Repo.rollback(:not_found)
+
+        %Profile{provider_profile_ref: ref} = locked when is_binary(ref) ->
+          locked
+
+        locked ->
+          case publisher_ensure_profile(locked) do
+            {:ok, ref} when is_binary(ref) ->
+              locked
+              |> Changeset.change(provider_profile_ref: ref)
+              |> Repo.update()
+              |> case do
+                {:ok, updated} -> updated
+                {:error, changeset} -> Repo.rollback(changeset)
+              end
+
+            :not_required ->
+              locked
+
+            {:error, reason} ->
+              Repo.rollback(reason)
+          end
+      end
+    end)
+  end
+
+  defp publisher_ensure_profile(profile) do
+    case Publisher.impl() do
+      {:error, :publisher_not_configured} = error -> error
+      module -> module.ensure_profile(profile)
+    end
+  end
+
+  defp lock_profile(org_id, %Profile{id: id}), do: lock_profile(org_id, id)
+
+  defp lock_profile(org_id, id) do
+    case Ecto.UUID.cast(id) do
+      {:ok, id} ->
+        Profile
+        |> scoped_query(org_id)
+        |> where([x], x.id == ^id)
+        |> lock("FOR UPDATE")
+        |> Repo.one()
+
+      :error ->
+        nil
+    end
+  end
+
+  @doc """
+  Adds an account on `platform` under `profile` for the human `user_id`, the
+  server-side path behind the Connections "Add account" control. In order:
+
+    1. `approver_check/3`: an agent id, an archived user or a non-approver is
+       refused with its reason and nothing is written (defence in depth beside
+       the LiveView's own check);
+    2. `platform` must be in `connectable_platforms/0`, else
+       `{:error, :unsupported_platform}`;
+    3. `ensure_provider_profile/2` BEFORE any row is written, so a vendor
+       failure leaves no orphan account;
+    4. an existing never-connected account on that profile and platform
+       (not archived, `status` nil, `provider_account_ref` nil) is REUSED;
+       otherwise one is created. Abandoning a connect is retried, not
+       deleted, so re-adding never piles up duplicates. Step 4 runs under the
+       profile row lock so two concurrent adds share one row.
+
+  Answers `{:ok, account, profile}` (the profile carries any new ref). It
+  does not start OAuth (`connect_url/2` is the caller's next step).
+  """
+  @spec add_account(Ecto.UUID.t(), Profile.t() | Ecto.UUID.t(), term(), term()) ::
+          {:ok, Account.t(), Profile.t()} | {:error, term()}
+  def add_account(org_id, profile, user_id, platform) do
+    with {:ok, profile} <- fetch(Profile, org_id, profile),
+         :ok <- approver_check(org_id, profile, user_id),
+         :ok <- connectable(platform),
+         {:ok, profile} <- ensure_provider_profile(org_id, profile),
+         {:ok, account} <- reuse_or_create_account(org_id, profile, platform) do
+      {:ok, account, profile}
+    end
+  end
+
+  defp connectable(platform) do
+    if platform in connectable_platforms(), do: :ok, else: {:error, :unsupported_platform}
+  end
+
+  defp reuse_or_create_account(org_id, profile, platform) do
+    Repo.transaction(fn ->
+      _locked = lock_profile(org_id, profile)
+
+      case never_connected_account(profile, platform) do
+        %Account{} = account ->
+          account
+
+        nil ->
+          case create_account(org_id, profile, %{platform: platform}) do
+            {:ok, account} -> account
+            {:error, reason} -> Repo.rollback(reason)
+          end
+      end
+    end)
+  end
+
+  defp never_connected_account(%Profile{id: profile_id}, platform) do
+    Account
+    |> where([a], a.profile_id == ^profile_id and a.platform == ^platform)
+    |> where([a], is_nil(a.archived_at) and is_nil(a.status) and is_nil(a.provider_account_ref))
+    |> order_by([a], asc: a.inserted_at, asc: a.id)
+    |> limit(1)
+    |> Repo.one()
   end
 
   # ── Posts ────────────────────────────────────────────────────────────
