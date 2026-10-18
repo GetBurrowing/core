@@ -448,7 +448,13 @@ defmodule Platform.Meetings.CandidateEventsTest do
 
       mine = drain()
       send(second, :collect)
-      assert_receive {:second, theirs}
+
+      # The reply cannot arrive in under 50ms: `second` replies only after
+      # its own `drain/0` sees 50ms of silence. The default 100ms
+      # `assert_receive` left 50ms for scheduling `second` and that was
+      # not enough on a loaded runner (CI run 39140347024). The timeout
+      # bounds how long to wait; it does not change what is compared.
+      assert_receive {:second, theirs}, 1_000
 
       fingerprint = fn events -> Enum.map(events, &{&1.kind, &1.seq, &1.candidate_id}) end
 
