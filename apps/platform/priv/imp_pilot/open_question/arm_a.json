@@ -1,0 +1,24 @@
+{
+  "name": "open_question_pilot_arm_a",
+  "description": "Arm A (control) of the open_question pilot, task 01a0e8b5: the shipped six-way meetings.intent_classify.v1 prompt, scored offline on the pilot dataset. is_question is the projection intent == open_question.",
+  "prompt_file": "prompt_a.txt",
+  "prompt_sha256": "9f05df840bb9d2bd522c5df4169aec70be5dfbb8435a17d5753432cdf97fb416",
+  "prompt_bytes": 8964,
+  "prompt_provenance": "Byte-identical copy of the @new_content heredoc in apps/platform/priv/repo/migrations/20260911030000_force_update_intent_classify_prompt_agent_roster_on_unmerged.exs, the LATEST force-update of meetings.intent_classify.v1 (commit f5cc396f), re-copied after task 01a14dce replaced one exemplar line with an invented one. It is copied, not referenced, for the reason priv/intent_eval/configs/off_topic_default.json gives: a run whose prompt source only resolves on some other checkout or database is unattributable. The live prompt_templates row was NOT read. open_question_pilot/prompt_a_drift_test.exs fails if this copy and the migrated row diverge.",
+  "agent_roster": [
+    {"role_key": "designer", "agent_slug": "saru", "agent_name": "Saru"},
+    {"role_key": "historian", "agent_slug": "higgins", "agent_name": "Higgins"},
+    {"role_key": "meeting_producer", "agent_slug": "quickwit", "agent_name": "QuickWit"},
+    {"role_key": "meeting_scribe", "agent_slug": "dalton", "agent_name": "Dalton"},
+    {"role_key": "security_guard", "agent_slug": "saru", "agent_name": "Saru"},
+    {"role_key": "triage_officer", "agent_slug": "dalton", "agent_name": "Dalton"}
+  ],
+  "agent_roster_provenance": "Pinned as data, following priv/intent_eval/configs/agent_roster_20260831.json, and copied from it (the production roster as of 2026-08-31). It is rendered through IntentClassifier.format_agent_roster/1 and handed to the gates as entries, exactly as the classifier does. No live lookup is made, so the run reproduces on any box.",
+  "correction_exemplars": "(no prior corrections)",
+  "speaker": "Speaker",
+  "model": "classifier",
+  "base_url": "http://localhost:8085/v1",
+  "temperature": 0.0,
+  "max_tokens": 1024,
+  "chat_template_kwargs": {"enable_thinking": false}
+}

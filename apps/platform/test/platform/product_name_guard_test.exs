@@ -39,19 +39,13 @@ defmodule Platform.ProductNameGuardTest do
     * each allowlisted substring for that file is removed, so an allowlisted
       identifier does not hide a second, new occurrence on the same line.
 
-  ## The sibling-ticket skip
+  ## No sibling-ticket skip
 
-  Lines carrying identifiers that sibling ticket A3 (01a14b9e-c802) owns are
-  skipped whole. Those identifiers must not be published in plaintext, so they
-  are held as sha256 hashes in `@a3_owned_hashes`, the same way A3's own guard
-  stores its denylist. A line is tokenised (lowercase, split on anything that
-  is not `[a-z0-9]`, plus every dotted or hyphenated compound of adjacent
-  tokens), each token is hashed, and the line is skipped when any hash is in
-  the list. A3 has landed. The skip stays because A3 deliberately kept the
-  former default install hosts in the Android and iOS `InstallStore` tests: they
-  are the preimages that prove A3's shipped digest list, and they carry the old
-  product name as a `suite.` host prefix. Remove the skip when sibling task A3b
-  (01a14dce) moves those tests onto its digest seam.
+  Until task A3b (01a14dce-d2d8-7000-becf-79544fe7cf98) stage 3 moved the
+  Android and iOS `InstallStore` tests onto `example.com` stand-ins, lines
+  carrying a former default install host were skipped through a list of A3
+  digests. That skip excused no scanned line after stage 3, so stage 4
+  removed it: every scanned line is now checked.
 
   ## The allowlist fires in both directions
 
@@ -81,24 +75,11 @@ defmodule Platform.ProductNameGuardTest do
   # GitHub organisation and registry names: renamed with the org, last.
   @org_spans ~r/Startup-Suite\/|github\.com\/Startup-Suite|ghcr\.io\/startup-suite/
 
-  # sha256 of each identifier sibling ticket A3 (01a14b9e-c802) owns. Lines
-  # carrying one are A3's to change, so this guard skips them. Removed when A3
-  # lands.
-  @a3_owned_hashes MapSet.new([
-                     "9cfdc719f125bfd24830658f109d785ecca57a0c05022add0f6cf4aaec5dc25c",
-                     "44506f784f8d79f5c01259f925b02d157fc5703fa334313d7575d43f308c9a36",
-                     "b29a46a27acbba77b0aaba113e3d343cbd951a3a848f8356c164c3728b1c8e05",
-                     "b185c3068c145f728a1aab6f00091fb6735ddf72311b368f592cb7b0a2a5f37c",
-                     "344d0bfd9b610f39806a18638c537bfb0d490bca45ea21f9ec0487f0f05cee04"
-                   ])
-
   @client_state "Storage key namespace and browser global, kept by stage 2: renaming it orphans state persisted in users' browsers"
   @earlier_name "States the product's earlier name on purpose"
   @org_name "The GitHub organisation's name, renamed with the org by its own ticket"
   @quoted "Quotes the title of an earlier design artefact or memory page verbatim"
   @plugin_wire "Capacitor plugin wire name: core JS older than task 01a14ba9 looks up only SuiteNative, so the app keeps registering it until every install runs the Burrow-first lookup (docs/runbooks/burrow-rename-deferred.md)"
-
-  @a3b_pinned "Pinned by whole-file sha256 in InstallIdentityGuardTest's @deferred list for A3b (01a14dce); an edit here is a stale pin. Rename when A3b rewrites the file"
 
   @android "clients/android/android/app/src"
 
@@ -165,8 +146,6 @@ defmodule Platform.ProductNameGuardTest do
      "`SuiteNative.donate(detail)`", @plugin_wire},
     {"#{@android}/test/java/com/koboai/burrow/shortcuts/DonateDispatchTest.kt",
      "`SuiteNative.donate`", @plugin_wire},
-    {"#{@android}/test/java/com/koboai/burrow/InstallStoreTest.kt", ~s("suite.example.com"),
-     @a3b_pinned},
     # iOS (task 01a14ba9 stage 5): the Capacitor wire names.
     {"#{@ios}/App/App/Plugins/BurrowNativePlugin.swift", ~s(jsName = "SuiteNative"),
      @plugin_wire},
@@ -223,15 +202,13 @@ defmodule Platform.ProductNameGuardTest do
     {"#{@ios}/Shared/InstallUnreadStore.swift", ~s(keyPrefix = "suite.unread.v1."),
      @persisted_key},
     {"#{@ios}/Shared/ShareSheetModel.swift", ~s("suite.share.last_space.v1.), @persisted_key},
-    # iOS: A3b-pinned InstallStoreTests.swift, left byte-for-byte as A3 pinned it.
-    {"#{@ios}/App/AppTests/InstallStoreTests.swift", ~s("suite.example.com"), @a3b_pinned},
-    {"#{@ios}/App/AppTests/InstallStoreTests.swift", "Suite.Example.com", @a3b_pinned},
-    {"#{@ios}/App/AppTests/InstallStoreTests.swift", ~s(name: "Suite"), @a3b_pinned},
-    {"#{@ios}/App/AppTests/InstallStoreTests.swift", ~s("suite.installs.v1"), @a3b_pinned},
+    # iOS: InstallStoreTests.swift reads the store's persisted keys (A3b,
+    # 01a14dce stage 3, moved its hosts to burrow.example.com stand-ins).
+    {"#{@ios}/App/AppTests/InstallStoreTests.swift", ~s("suite.installs.v1"), @persisted_key},
     {"#{@ios}/App/AppTests/InstallStoreTests.swift", ~s("suite.installs.selected.v1"),
-     @a3b_pinned},
+     @persisted_key},
     {"#{@ios}/App/AppTests/InstallStoreTests.swift", ~s("suite.installs.confirmed.v1"),
-     @a3b_pinned},
+     @persisted_key},
     # iOS: lines bound to the sealed push fixture's host.
     {"#{@ios}/App/AppTests/PushRelayTests.swift", ~s[.body, "New message in SUITE-B")],
      @sealed_fixture},
@@ -359,14 +336,6 @@ defmodule Platform.ProductNameGuardTest do
                ["p.js:1: Suite.ClientState for Suite"]
     end
 
-    test "tokenises compounds so a dotted or hyphenated identifier is one token" do
-      tokens = tokens("See https://a.b-c.d/x and Foo_Bar")
-
-      for t <- ~w(see https a b c d x foo bar a.b b-c c.d a.b-c b-c.d a.b-c.d) do
-        assert t in tokens, "#{t} missing from #{inspect(tokens)}"
-      end
-    end
-
     test "client files also flag Suite-prefixed identifiers and suite-named hosts" do
       for line <- [
             "class SuiteNativePlugin : Plugin()",
@@ -440,11 +409,6 @@ defmodule Platform.ProductNameGuardTest do
       assert offences([renamed_back], "clients/android/p.kt", allowed) ==
                ["clients/android/p.kt:1: #{renamed_back}"]
     end
-
-    test "the skip list holds five sha256 digests" do
-      assert MapSet.size(@a3_owned_hashes) == 5
-      assert Enum.all?(@a3_owned_hashes, &(&1 =~ ~r/\A[0-9a-f]{64}\z/))
-    end
   end
 
   # -- scanning ---------------------------------------------------------------
@@ -501,43 +465,6 @@ defmodule Platform.ProductNameGuardTest do
     stripped =
       Enum.reduce(allowed, Regex.replace(@org_spans, line, ""), &String.replace(&2, &1, ""))
 
-    Enum.any?(forbidden, &Regex.match?(&1, stripped)) and not a3_owned?(line)
-  end
-
-  defp a3_owned?(line) do
-    line
-    |> tokens()
-    |> Enum.any?(&MapSet.member?(@a3_owned_hashes, sha256(&1)))
-  end
-
-  defp sha256(token), do: :crypto.hash(:sha256, token) |> Base.encode16(case: :lower)
-
-  # Lowercase tokens split on anything that is not [a-z0-9], plus every
-  # dotted or hyphenated compound of adjacent tokens ("a.b-c" yields "a.b",
-  # "b-c" and "a.b-c"), so a host name or a hyphenated handle is also tested
-  # whole and by each of its sub-domains.
-  defp tokens(line) do
-    down = String.downcase(line)
-    simple = String.split(down, ~r/[^a-z0-9]+/, trim: true)
-
-    compounds =
-      down
-      |> String.split(~r/[^a-z0-9.\-]+/, trim: true)
-      |> Enum.flat_map(&compounds/1)
-
-    Enum.uniq(simple ++ compounds)
-  end
-
-  defp compounds(chunk) do
-    parts = Regex.split(~r/([.\-])/, chunk, include_captures: true)
-    words = Enum.take_every(parts, 2)
-    seps = parts |> Enum.drop(1) |> Enum.take_every(2)
-    n = length(words)
-
-    for i <- 0..(n - 2)//1, j <- (i + 1)..(n - 1)//1 do
-      Enum.slice(words, i..j)
-      |> Enum.zip(["" | Enum.slice(seps, i..(j - 1))])
-      |> Enum.map_join(fn {w, s} -> s <> w end)
-    end
+    Enum.any?(forbidden, &Regex.match?(&1, stripped))
   end
 end

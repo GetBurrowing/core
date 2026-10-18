@@ -1,0 +1,20 @@
+{
+  "description": "FROZEN 08-31 ARM — do not re-point at a newer prompt body. This is the exact prompt task 01a05997 stage 4 measured, kept byte-for-byte (apart from task 01a14dce's exemplar-name swap, after which the cassette was re-recorded) because `cassettes/agent_roster_20260831.jsonl` is keyed on sha256(rendered_prompt || 0 || chunk_text): change one byte of the body or of the pinned roster and all 9 rows become a cassette miss. `delegation_probe_test.exs` replays this arm. The roster-aware revision: the org's agent roster is rendered into the body via {{agent_roster}}, the addressing rule is stated against that roster (a name on it is an agent, a name off it is a person), and triage_officer is restated to cover ticket/task intake. Scores the fix for 'agent, file a ticket for X' landing off_topic.",
+  "prompt_source": {"inline_file": "priv/intent_eval/prompts/agent_roster_20260831.txt"},
+  "prompt_provenance": "Copy of the @new_content heredoc (8369 bytes as measured) in apps/platform/priv/repo/migrations/20260831120000_force_update_intent_classify_prompt_agent_roster.exs. Copied rather than referenced with a {\"migration\": ..} source for the same reason off_topic_default.json copies its body: a config whose prompt source only resolves on somebody else's checkout is exactly the unattributable run this harness exists to end. force_update_intent_classify_prompt_agent_roster_drift_test.exs guards the two copies against divergence. Task 01a14dce then replaced the one person name in three exemplar lines (the off-roster negatives) with an invented one, so this file is now 8357 bytes, sha256 3a24f0445adda689f1642700b70f386fc97327bf77d309839945311455268fb2, and no longer byte-identical to that migration, which is not in this tree. The cassette was re-recorded against these bytes rather than re-keyed.",
+  "agent_roster": [
+    {"role_key": "designer", "agent_slug": "saru", "agent_name": "Saru"},
+    {"role_key": "historian", "agent_slug": "higgins", "agent_name": "Higgins"},
+    {"role_key": "meeting_producer", "agent_slug": "quickwit", "agent_name": "QuickWit"},
+    {"role_key": "meeting_scribe", "agent_slug": "dalton", "agent_name": "Dalton"},
+    {"role_key": "security_guard", "agent_slug": "saru", "agent_name": "Saru"},
+    {"role_key": "triage_officer", "agent_slug": "dalton", "agent_name": "Dalton"}
+  ],
+  "agent_roster_provenance": "The PRODUCTION roster as of 2026-08-31, read from role_assignments JOIN agents on the production install (`select ra.role_key, a.slug, a.name from role_assignments ra join agents a on a.id = ra.agent_id order by 1`) and rendered through Platform.Meetings.IntentClassifier.format_agent_roster/1 — the same formatter the runtime uses, so the harness scores the block production sends. Pinned as data rather than looked up live because a run whose prompt depends on the caller's database reproduces a different number on every box.",
+  "model": "classifier",
+  "base_url": "http://localhost:8085/v1",
+  "temperature": 0.0,
+  "max_tokens": 1024,
+  "chat_template_kwargs": {"enable_thinking": false},
+  "buffering": {"debounce_ms": 0, "max_hold_ms": 0}
+}

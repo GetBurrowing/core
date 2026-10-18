@@ -78,7 +78,7 @@ defmodule Platform.Meetings.IntentUnaddressedActionItemTest do
   # retraction, no `ask/tell him|her|them` delegation operator and no
   # taxonomy label — so a demotion here would be the prompt's doing and
   # not `IntentFrames`'.
-  @unaddressed_action_item "Nah, I'm gonna get Harper in here."
+  @unaddressed_action_item "Nah, I'm gonna get Sam in here."
 
   # The control. Present as an exemplar in BOTH revisions with the same
   # answer, so the mutation must leave this test green while turning the
@@ -127,8 +127,8 @@ defmodule Platform.Meetings.IntentUnaddressedActionItemTest do
 
     # Matches an exemplar line in either revision:
     #
-    #   - "Nah, I'm gonna get Harper in here."  -> `off_topic` (a person is being pulled in)
-    #   - "Nah, I'm gonna get Harper in here."  -> `action_items`, `target_role: null` (…)
+    #   - "Nah, I'm gonna get Sam in here."  -> `off_topic` (a person is being pulled in)
+    #   - "Nah, I'm gonna get Sam in here."  -> `action_items`, `target_role: null` (…)
     #   - "did you catch the game last night?"  -> `off_topic:small_talk`, evidence_quote `""`
     #
     # The intent is the first backticked token after the arrow, up to any
@@ -428,7 +428,7 @@ defmodule Platform.Meetings.IntentUnaddressedActionItemTest do
     #{@merged_question}
 
     Negative exemplars — all of these are real requests, and all of them are `off_topic`:
-      - "Nah, I'm gonna get Harper in here."                              -> `off_topic` (a person is being pulled in)
+      - "Nah, I'm gonna get Sam in here."                                 -> `off_topic` (a person is being pulled in)
       - "did you catch the game last night?"                              -> `off_topic` (small talk)
     """
 

@@ -151,9 +151,9 @@ defmodule Platform.Meetings.IntentAddresseeTest do
       # suppressing them is the failure mode this gate is most likely
       # to have.
       for text <- [
-            "Capture that as an action item: Alex sends the SXI contract by Friday.",
+            "Capture that as an action item: Alex sends the Globex contract by Friday.",
             "Log an action item for Chris to stand up the podcast control center.",
-            "Put that in the brief — Orion is SXI's brand strategy platform.",
+            "Put that in the brief — Atlas is Globex's brand strategy platform.",
             "Record the decision: we're shipping Tuesday.",
             "Write down that we decided not to swap models, the 2B stays.",
             "Track this open question: who owns the identity system story?",
@@ -187,7 +187,7 @@ defmodule Platform.Meetings.IntentAddresseeTest do
       # name appearing in the block is addressable — see M2.
       for text <- [
             "Designer, make that primary button teal instead of the blue.",
-            "Scribe, take an action item: Alex to send the SXI contract by Friday.",
+            "Scribe, take an action item: Alex to send the Globex contract by Friday.",
             "Historian, record the decision: we're shipping Tuesday.",
             "Triage, open question for someone: what happens to saved prompts?"
           ] do
@@ -211,7 +211,7 @@ defmodule Platform.Meetings.IntentAddresseeTest do
             "No, actually, never mind. As an action item, Chris needs to start developing.",
             "Okay, so I think we need to build a live canvas.",
             "Um, wrong intent.",
-            "Nah, I'm gonna get Harper in here.",
+            "Nah, I'm gonna get Sam in here.",
             "You can see tasks now.",
             "We can ask him to bring it in here.",
             "Let's put together some kind of plan here.",

@@ -82,6 +82,12 @@ class InstallStore(
     private val unread: KeyValueStore? = null,
     /** The hosts holding a bearer, read only by the legacy migration. */
     private val tokenHosts: () -> Set<String> = { emptySet() },
+    /**
+     * The digests the legacy migration treats as former built-in hosts.
+     * Production uses the shipped [LEGACY_DEFAULT_HOST_HASHES]; tests inject
+     * digests of example.com hosts, so no test carries a real former host.
+     */
+    private val legacyHostHashes: Set<String> = LEGACY_DEFAULT_HOST_HASHES,
 ) {
     companion object {
         const val PREFS_FILE = "burrow_installs"
@@ -112,6 +118,12 @@ class InstallStore(
 
         /** True for a pre-2026-10 built-in install host. */
         fun isLegacyDefault(host: String): Boolean = normalizeHost(host)?.let { hostHash(it) in LEGACY_DEFAULT_HOST_HASHES } == true
+
+        /** True when [host], normalized, has its SHA-256 in [hashes]. */
+        internal fun isLegacyHost(
+            host: String,
+            hashes: Set<String>,
+        ): Boolean = normalizeHost(host)?.let { hostHash(it) in hashes } == true
 
         private val LABEL = Regex("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 
@@ -167,7 +179,7 @@ class InstallStore(
      */
     private fun clearUntouchedDefaults(list: List<Install>): List<Install> {
         val signedIn = tokenHosts().mapNotNull { normalizeHost(it) }.toSet()
-        val untouched = list.isNotEmpty() && list.all { isLegacyDefault(it.host) } && list.none { it.host in signedIn }
+        val untouched = list.isNotEmpty() && list.all { isLegacyHost(it.host, legacyHostHashes) } && list.none { it.host in signedIn }
         val result =
             if (untouched) {
                 save(emptyList())

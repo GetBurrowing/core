@@ -119,7 +119,7 @@ defmodule Platform.Repo.Migrations.SeedPromptTemplateIntentClassifyTest do
       assert content =~ "is an AGENT being asked to do something?",
              "template must re-frame the judgement as whether an AGENT is being asked"
 
-      assert content =~ "Nah, I'm gonna get Harper in here.",
+      assert content =~ "Nah, I'm gonna get Sam in here.",
              "template must carry the human-request negative exemplars"
 
       # Existing contract must survive the rewrite: all four original
@@ -207,19 +207,19 @@ defmodule Platform.Repo.Migrations.SeedPromptTemplateIntentClassifyTest do
                  "question 2's answer is `null` and question 1's intent stands unchanged.",
              "an off-roster name must resolve to target_role null, not to a dropped intent"
 
-      # The Harper exemplar is the one 08-31 assertion that is FALSE BY
+      # The Sam exemplar is the one 08-31 assertion that is FALSE BY
       # DESIGN now. `20260902140000` moved it from an `off_topic` negative to
       # an intent-keeping `target_role: null` case, because an off-roster name
       # no longer implies "no intent". Asserting the 08-31 sentence here would
       # re-assert the merged framing the un-merge exists to remove.
-      assert content =~ "- \"Nah, I'm gonna get Harper in here.\"" and
+      assert content =~ "- \"Nah, I'm gonna get Sam in here.\"" and
                content =~
                  "-> `action_items`, `target_role: null` " <>
                    "(a concrete commitment; the owner is a person)",
-             "the Harper exemplar must keep its intent and take a null target"
+             "the Sam exemplar must keep its intent and take a null target"
 
-      refute content =~ "Harper is NOT on the roster above, so Harper is a person",
-             "the 08-31 off_topic framing of the Harper exemplar must not come back"
+      refute content =~ "Sam is NOT on the roster above, so Sam is a person",
+             "the 08-31 off_topic framing of the Sam exemplar must not come back"
 
       # Rebalance discipline: adding the roster must not weaken the default
       # or the evidence requirement.

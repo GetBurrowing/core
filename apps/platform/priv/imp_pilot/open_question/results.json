@@ -1,0 +1,586 @@
+{
+  "arms": {
+    "imp_program": null,
+    "prompt": {
+      "addressee": {
+        "labelled": 3,
+        "named_correctly": 0,
+        "note": "information only; routing unchanged"
+      },
+      "confusion": {
+        "fn": 10,
+        "fp": 0,
+        "tn": 23,
+        "tp": 2
+      },
+      "cost_usd": 0.0,
+      "errors": {
+        "budget_exhausted": 0,
+        "empty_output": 0,
+        "model_error": 0,
+        "parse_error": 0
+      },
+      "latency_ms": {
+        "chunk": {
+          "n": 35,
+          "p50": 590.879,
+          "p95": 699.232
+        },
+        "lm_call": {
+          "n": 35,
+          "p50": 591,
+          "p95": 699
+        },
+        "lm_call_by_purpose": {
+          "prompt_arm": {
+            "n": 35,
+            "p50": 591,
+            "p95": 699
+          }
+        }
+      },
+      "lm_calls": 35,
+      "n": 35,
+      "precision": 1.0,
+      "precision_ci95": [
+        0.3424,
+        1.0
+      ],
+      "privacy": {
+        "artefact_checked": 4,
+        "artefact_not_refused": 1,
+        "ok?": false,
+        "output_routable": 3,
+        "rows": 4
+      },
+      "recall": 0.16666666666666666,
+      "recall_ci95": [
+        0.047,
+        0.448
+      ],
+      "rows": [
+        {
+          "artefact": "not_checked",
+          "demotion_reason": null,
+          "expected": false,
+          "id": "corpus-negatives-01",
+          "imp": null,
+          "intent": "action_items",
+          "latency_ms": 1001.649,
+          "predicted": false
+        },
+        {
+          "artefact": "not_checked",
+          "demotion_reason": null,
+          "expected": false,
+          "id": "corpus-negatives-08",
+          "imp": null,
+          "intent": "off_topic",
+          "latency_ms": 570.971,
+          "predicted": false
+        },
+        {
+          "artefact": "not_checked",
+          "demotion_reason": null,
+          "expected": false,
+          "id": "corpus-negatives-09",
+          "imp": null,
+          "intent": "off_topic",
+          "latency_ms": 525.537,
+          "predicted": false
+        },
+        {
+          "artefact": "not_checked",
+          "demotion_reason": null,
+          "expected": false,
+          "id": "corpus-negatives-13",
+          "imp": null,
+          "intent": "action_items",
+          "latency_ms": 594.073,
+          "predicted": false
+        },
+        {
+          "artefact": "not_checked",
+          "demotion_reason": null,
+          "expected": false,
+          "id": "corpus-negatives-14",
+          "imp": null,
+          "intent": "off_topic",
+          "latency_ms": 598.104,
+          "predicted": false
+        },
+        {
+          "artefact": "not_checked",
+          "demotion_reason": null,
+          "expected": false,
+          "id": "corpus-negatives-15",
+          "imp": null,
+          "intent": "off_topic",
+          "latency_ms": 616.205,
+          "predicted": false
+        },
+        {
+          "artefact": "not_checked",
+          "demotion_reason": null,
+          "expected": false,
+          "id": "corpus-negatives-16",
+          "imp": null,
+          "intent": "action_items",
+          "latency_ms": 600.424,
+          "predicted": false
+        },
+        {
+          "artefact": "not_checked",
+          "demotion_reason": null,
+          "expected": false,
+          "id": "corpus-negatives-23",
+          "imp": null,
+          "intent": "off_topic",
+          "latency_ms": 590.879,
+          "predicted": false
+        },
+        {
+          "artefact": "not_checked",
+          "demotion_reason": null,
+          "expected": false,
+          "id": "corpus-negatives-24",
+          "imp": null,
+          "intent": "off_topic",
+          "latency_ms": 547.113,
+          "predicted": false
+        },
+        {
+          "artefact": "not_checked",
+          "demotion_reason": null,
+          "expected": false,
+          "id": "corpus-negatives-26",
+          "imp": null,
+          "intent": "off_topic",
+          "latency_ms": 552.92,
+          "predicted": false
+        },
+        {
+          "artefact": "not_checked",
+          "demotion_reason": null,
+          "expected": false,
+          "id": "corpus-negatives-30",
+          "imp": null,
+          "intent": "action_items",
+          "latency_ms": 577.469,
+          "predicted": false
+        },
+        {
+          "artefact": "not_checked",
+          "demotion_reason": null,
+          "expected": false,
+          "id": "corpus-negatives-31",
+          "imp": null,
+          "intent": "off_topic",
+          "latency_ms": 564.071,
+          "predicted": false
+        },
+        {
+          "artefact": "not_checked",
+          "demotion_reason": null,
+          "expected": false,
+          "id": "corpus-negatives-34",
+          "imp": null,
+          "intent": "off_topic",
+          "latency_ms": 622.762,
+          "predicted": false
+        },
+        {
+          "artefact": "not_checked",
+          "demotion_reason": null,
+          "expected": false,
+          "id": "corpus-positives-01",
+          "imp": null,
+          "intent": "action_items",
+          "latency_ms": 641.328,
+          "predicted": false
+        },
+        {
+          "artefact": "not_checked",
+          "demotion_reason": null,
+          "expected": false,
+          "id": "corpus-positives-02",
+          "imp": null,
+          "intent": "action_items",
+          "latency_ms": 589.846,
+          "predicted": false
+        },
+        {
+          "artefact": "not_checked",
+          "demotion_reason": null,
+          "expected": false,
+          "id": "corpus-positives-04",
+          "imp": null,
+          "intent": "action_items",
+          "latency_ms": 611.738,
+          "predicted": false
+        },
+        {
+          "artefact": "not_checked",
+          "demotion_reason": null,
+          "expected": true,
+          "id": "corpus-positives-09",
+          "imp": null,
+          "intent": "open_question",
+          "latency_ms": 679.872,
+          "predicted": true
+        },
+        {
+          "artefact": "refused",
+          "demotion_reason": null,
+          "expected": false,
+          "id": "corpus-privacy-01",
+          "imp": null,
+          "intent": "action_items",
+          "latency_ms": 692.906,
+          "predicted": false
+        },
+        {
+          "artefact": "refused",
+          "demotion_reason": null,
+          "expected": false,
+          "id": "corpus-privacy-05",
+          "imp": null,
+          "intent": "action_items",
+          "latency_ms": 635.893,
+          "predicted": false
+        },
+        {
+          "artefact": "not_checked",
+          "demotion_reason": null,
+          "expected": true,
+          "id": "oq-direct-wh-05",
+          "imp": null,
+          "intent": "off_topic",
+          "latency_ms": 568.962,
+          "predicted": false
+        },
+        {
+          "artefact": "not_checked",
+          "demotion_reason": null,
+          "expected": true,
+          "id": "oq-direct-wh-06",
+          "imp": null,
+          "intent": "off_topic",
+          "latency_ms": 534.201,
+          "predicted": false
+        },
+        {
+          "artefact": "not_checked",
+          "demotion_reason": null,
+          "expected": true,
+          "id": "oq-yes-no-02",
+          "imp": null,
+          "intent": "off_topic",
+          "latency_ms": 563.944,
+          "predicted": false
+        },
+        {
+          "artefact": "not_checked",
+          "demotion_reason": null,
+          "expected": true,
+          "id": "oq-yes-no-05",
+          "imp": null,
+          "intent": "off_topic",
+          "latency_ms": 567.53,
+          "predicted": false
+        },
+        {
+          "artefact": "not_checked",
+          "demotion_reason": null,
+          "expected": true,
+          "id": "oq-addressed-01",
+          "imp": null,
+          "intent": "off_topic",
+          "latency_ms": 528.004,
+          "predicted": false
+        },
+        {
+          "artefact": "not_checked",
+          "demotion_reason": null,
+          "expected": true,
+          "id": "oq-addressed-06",
+          "imp": null,
+          "intent": "off_topic",
+          "latency_ms": 605.886,
+          "predicted": false
+        },
+        {
+          "artefact": "not_checked",
+          "demotion_reason": null,
+          "expected": true,
+          "id": "oq-addressed-07",
+          "imp": null,
+          "intent": "off_topic",
+          "latency_ms": 555.373,
+          "predicted": false
+        },
+        {
+          "artefact": "not_checked",
+          "demotion_reason": null,
+          "expected": true,
+          "id": "oq-undecided-05",
+          "imp": null,
+          "intent": "off_topic",
+          "latency_ms": 638.031,
+          "predicted": false
+        },
+        {
+          "artefact": "not_checked",
+          "demotion_reason": null,
+          "expected": true,
+          "id": "oq-undecided-06",
+          "imp": null,
+          "intent": "off_topic",
+          "latency_ms": 524.42,
+          "predicted": false
+        },
+        {
+          "artefact": "not_checked",
+          "demotion_reason": null,
+          "expected": true,
+          "id": "oq-undecided-07",
+          "imp": null,
+          "intent": "open_question",
+          "latency_ms": 647.526,
+          "predicted": true
+        },
+        {
+          "artefact": "not_checked",
+          "demotion_reason": null,
+          "expected": false,
+          "id": "nq-rhetorical-02",
+          "imp": null,
+          "intent": "off_topic",
+          "latency_ms": 572.143,
+          "predicted": false
+        },
+        {
+          "artefact": "not_checked",
+          "demotion_reason": null,
+          "expected": false,
+          "id": "nq-embedded-02",
+          "imp": null,
+          "intent": "off_topic",
+          "latency_ms": 545.398,
+          "predicted": false
+        },
+        {
+          "artefact": "not_checked",
+          "demotion_reason": null,
+          "expected": false,
+          "id": "nq-quoted-01",
+          "imp": null,
+          "intent": "off_topic",
+          "latency_ms": 528.39,
+          "predicted": false
+        },
+        {
+          "artefact": "not_checked",
+          "demotion_reason": null,
+          "expected": false,
+          "id": "nq-quoted-03",
+          "imp": null,
+          "intent": "off_topic",
+          "latency_ms": 597.638,
+          "predicted": false
+        },
+        {
+          "artefact": "not_refused",
+          "demotion_reason": null,
+          "expected": true,
+          "id": "privacy-q-04",
+          "imp": null,
+          "intent": "decision_recorded",
+          "latency_ms": 678.257,
+          "predicted": false
+        },
+        {
+          "artefact": "refused",
+          "demotion_reason": null,
+          "expected": false,
+          "id": "privacy-s-01",
+          "imp": null,
+          "intent": "action_items",
+          "latency_ms": 699.232,
+          "predicted": false
+        }
+      ],
+      "scored": 35,
+      "tokens": {
+        "completion": 1894,
+        "prompt": 79384,
+        "total": 81278
+      }
+    }
+  },
+  "branch_sha": "d05f408b7d928d5ea3671dc7555e9f983c665837",
+  "dataset": {
+    "n": {
+      "all": {
+        "is_question": 35,
+        "n": 100,
+        "not_question": 65,
+        "privacy": 12
+      },
+      "test": {
+        "is_question": 12,
+        "n": 35,
+        "not_question": 23,
+        "privacy": 4
+      },
+      "train": {
+        "is_question": 14,
+        "n": 40,
+        "not_question": 26,
+        "privacy": 5
+      },
+      "val": {
+        "is_question": 9,
+        "n": 25,
+        "not_question": 16,
+        "privacy": 3
+      }
+    },
+    "sha256": "f45df1b645ade7a7c18eaa5a623470af9149d43bfd954705e7580a57a452278a",
+    "split_seed": "01a0e8b5-open-question-split-v1"
+  },
+  "optimiser": {
+    "best_val_score": 0.76,
+    "error": null,
+    "failed_proposals": 0,
+    "full_evaluations": 5,
+    "hard_call_cap": 400,
+    "max_metric_calls": 300,
+    "metric_calls": 302,
+    "reflection_calls": 22,
+    "reflection_cap": 40,
+    "reflection_lm_calls": 22,
+    "reflection_lm_tickets": 22,
+    "seed": 20260929,
+    "stop_reason": [
+      "stopper",
+      [
+        [
+          "max_metric_calls",
+          302,
+          300
+        ]
+      ]
+    ],
+    "task_lm_calls": 304,
+    "task_lm_tickets": 304,
+    "tokens": {
+      "completion": 36384,
+      "prompt": 321725,
+      "total": 358109
+    },
+    "wall_seconds": 232.762
+  },
+  "program_b": null,
+  "prompt_a": {
+    "file": "prompt_a.txt",
+    "sha256": "9f05df840bb9d2bd522c5df4169aec70be5dfbb8435a17d5753432cdf97fb416"
+  },
+  "provider": {
+    "base_url": "http://host.containers.internal:8085/v1",
+    "base_url_host": "host.containers.internal",
+    "build_info": "b9765-73618f27a",
+    "chat_template_kwargs": {
+      "enable_thinking": false
+    },
+    "max_tokens": 1024,
+    "model": "classifier",
+    "model_file": "/models/qwen-3-1.7b/Qwen3-1.7B-Q4_K_M.gguf",
+    "n_ctx": 8192,
+    "temperature": 0.0,
+    "total_slots": 4
+  },
+  "rerecorded": [
+    {
+      "at": "2026-10-18T07:37:32Z",
+      "base_url_host": "localhost",
+      "build_info": "b9765-73618f27a",
+      "lm_calls": 35,
+      "mode": "live; arm A TEST only",
+      "model": "classifier",
+      "model_file": "/models/qwen-3-1.7b/Qwen3-1.7B-Q4_K_M.gguf",
+      "previous_prompt_a_sha256": "5afe1aa91e2ffd9ec566af27815ae1bf481d59ca99bb525f78c3701ba580a6f3",
+      "reason": "prompt_a.txt changed: one exemplar line replaced with an invented one of the same shape (task 01a14dce stage 1). A cassette key covers the system prompt, so arm A was asked again rather than re-keyed.",
+      "sha": "b087ef9854c4e8e0e17e8eeb0d0c5311d028b3cb"
+    }
+  ],
+  "rescored": [
+    {
+      "at": "2026-09-29T03:55:14Z",
+      "mode": "replay; no model calls",
+      "reason": "candid floor extended with :personnel_outcome and :personal_circumstances (task 01a0e8b5 stage 5; closes ticket 01a0eb31)",
+      "sha": "40404ea13c439e612974683473734a01068af70b"
+    }
+  ],
+  "seed": 20260929,
+  "selection": {
+    "admissible": false,
+    "calls": 40,
+    "checked": [
+      {
+        "id": "gepa-3",
+        "val_score": 0.76,
+        "violations": 3
+      },
+      {
+        "id": "gepa-4",
+        "val_score": 0.76,
+        "violations": 3
+      },
+      {
+        "id": "baseline",
+        "val_score": 0.72,
+        "violations": 2
+      },
+      {
+        "id": "gepa-2",
+        "val_score": 0.72,
+        "violations": 3
+      },
+      {
+        "id": "gepa-1",
+        "val_score": 0.68,
+        "violations": 3
+      }
+    ],
+    "chosen_id": null,
+    "chosen_instruction": null,
+    "rule": "best validation score among candidates with zero privacy violations over the privacy rows of train+val; an unanswered row counts as a violation"
+  },
+  "spend": {
+    "calls": {
+      "baseline_a": 35,
+      "compare_b": null,
+      "optimiser_reflection": 22,
+      "optimiser_task": 304,
+      "selection": 40
+    },
+    "cost_basis": "self-hosted llama-server: $0.00 marginal per token",
+    "cost_usd": 0.0,
+    "tokens": {
+      "baseline_a": {
+        "completion": 1894,
+        "prompt": 79384,
+        "total": 81278
+      },
+      "compare_b": null,
+      "optimiser": {
+        "completion": 36384,
+        "prompt": 321725,
+        "total": 358109
+      }
+    }
+  },
+  "task": "01a0e8b5-a1aa-7001-b901-61302f6cc4e6",
+  "wall_seconds": 262.909
+}

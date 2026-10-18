@@ -60,7 +60,7 @@ defmodule Platform.Repo.Migrations.ForceUpdateIntentClassifyPromptOffTopicDefaul
   Do NOT ask "is this actionable?". Almost everything in a meeting is actionable by somebody. Meetings are full of genuine requests, commitments, and instructions aimed at PEOPLE — those are `off_topic` for this classifier, because no agent is being addressed. Detection and addressing are ONE question, not two: if you cannot name the agent role being asked, there is no intent to report.
 
   Negative exemplars — all of these are real requests, and all of them are `off_topic`:
-    - "Nah, I'm gonna get Harper in here."                              -> `off_topic` (a person is being pulled in)
+    - "Nah, I'm gonna get Sam in here."                                 -> `off_topic` (a person is being pulled in)
     - "Try, can you try that link just to see what happened?"            -> `off_topic` (a human is asked to click something)
     - "But I would just say, like, send it to us."                       -> `off_topic` (a human is asked to send something)
     - "Promote to prod. Yeah, I know, me too. Okay, so let's go."        -> `off_topic` (humans coordinating their own work)

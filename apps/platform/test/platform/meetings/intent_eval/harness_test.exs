@@ -124,7 +124,7 @@ defmodule Platform.Meetings.IntentEval.HarnessTest do
       },
       %{
         "id" => "r2",
-        "text" => "Nah, I'm gonna get Harper in here.",
+        "text" => "Nah, I'm gonna get Sam in here.",
         "label" => "off_topic",
         "slice" => "fixture"
       }
@@ -150,7 +150,7 @@ defmodule Platform.Meetings.IntentEval.HarnessTest do
 
       Process.put(:stub_answers, %{
         "Designer, make the button teal." => answer("visual_adjust"),
-        "Nah, I'm gonna get Harper in here." => answer("off_topic")
+        "Nah, I'm gonna get Sam in here." => answer("off_topic")
       })
 
       assert {:ok, recorded} =
@@ -464,7 +464,7 @@ defmodule Platform.Meetings.IntentEval.HarnessTest do
       Process.put(:stub_answers, %{
         "Designer, make the button teal." =>
           ~s({"intent":"visual_adjust","target_role":42,"confidence":0.9}),
-        "Nah, I'm gonna get Harper in here." =>
+        "Nah, I'm gonna get Sam in here." =>
           ~s({"intent":"off_topic","target_role":42,"confidence":0.9})
       })
 
@@ -493,7 +493,7 @@ defmodule Platform.Meetings.IntentEval.HarnessTest do
     test "the clean control: ZERO errors with a non-zero off_topic", %{root: root} do
       Process.put(:stub_answers, %{
         "Designer, make the button teal." => answer("visual_adjust"),
-        "Nah, I'm gonna get Harper in here." => answer("off_topic")
+        "Nah, I'm gonna get Sam in here." => answer("off_topic")
       })
 
       assert {:ok, result} =
@@ -534,13 +534,13 @@ defmodule Platform.Meetings.IntentEval.HarnessTest do
       valid_json = %{
         "Designer, make the button teal." =>
           ~s({"intent":"visual_adjust","target_role":42,"confidence":0.9}),
-        "Nah, I'm gonna get Harper in here." =>
+        "Nah, I'm gonna get Sam in here." =>
           ~s({"intent":"off_topic","target_role":42,"confidence":0.9})
       }
 
       prose = %{
         "Designer, make the button teal." => "Sure! I think this is a visual adjustment.",
-        "Nah, I'm gonna get Harper in here." => "Honestly, that sounds off topic to me."
+        "Nah, I'm gonna get Sam in here." => "Honestly, that sounds off topic to me."
       }
 
       run = fn answers ->
@@ -578,7 +578,7 @@ defmodule Platform.Meetings.IntentEval.HarnessTest do
     test "empty output and model error land in their own buckets, not off_topic", %{root: root} do
       Process.put(:stub_answers, %{
         "Designer, make the button teal." => "   ",
-        "Nah, I'm gonna get Harper in here." => answer("off_topic")
+        "Nah, I'm gonna get Sam in here." => answer("off_topic")
       })
 
       assert {:ok, result} =
@@ -636,7 +636,7 @@ defmodule Platform.Meetings.IntentEval.HarnessTest do
       # `off_topic`, which needs no citation and is never demoted.
       Process.put(:stub_answers, %{
         "Designer, make the button teal." => answer("visual_adjust", "paint the sidebar mauve"),
-        "Nah, I'm gonna get Harper in here." => answer("off_topic")
+        "Nah, I'm gonna get Sam in here." => answer("off_topic")
       })
 
       summary = demote_run(root)["summary"]
@@ -666,7 +666,7 @@ defmodule Platform.Meetings.IntentEval.HarnessTest do
       # every row — or on every off_topic — passes the case above.
       Process.put(:stub_answers, %{
         "Designer, make the button teal." => answer("visual_adjust", "make the button teal"),
-        "Nah, I'm gonna get Harper in here." => answer("off_topic")
+        "Nah, I'm gonna get Sam in here." => answer("off_topic")
       })
 
       summary = demote_run(root)["summary"]
@@ -684,7 +684,7 @@ defmodule Platform.Meetings.IntentEval.HarnessTest do
       # `:demoted_from`, this all-declines run would report 2.
       Process.put(:stub_answers, %{
         "Designer, make the button teal." => answer("off_topic"),
-        "Nah, I'm gonna get Harper in here." => answer("off_topic")
+        "Nah, I'm gonna get Sam in here." => answer("off_topic")
       })
 
       summary = demote_run(root)["summary"]
@@ -696,7 +696,7 @@ defmodule Platform.Meetings.IntentEval.HarnessTest do
     test "the operator report prints the demotion outside the error list", %{root: root} do
       Process.put(:stub_answers, %{
         "Designer, make the button teal." => answer("visual_adjust", "paint the sidebar mauve"),
-        "Nah, I'm gonna get Harper in here." => answer("off_topic")
+        "Nah, I'm gonna get Sam in here." => answer("off_topic")
       })
 
       report = Harness.report(demote_run(root))
@@ -762,6 +762,15 @@ defmodule Platform.Meetings.IntentEval.HarnessTest do
       # AFTER: negatives 3, control 59, probe 11, demoted 5. The five
       # removals are use/mention failures, listed in the test below.
       #
+      # RE-RECORDED (task 01a14dce stage 2, 2026-10-18): real names in the
+      # slices and in one prompt exemplar line were replaced with invented
+      # ones, which re-keys every row of this cassette, so all 183 rows were
+      # asked again on the same local model. negatives 3, control 59 and
+      # probe 11 hold; demoted is now 4, because the model itself now
+      # declines one row the frame gate used to demote (see the test below).
+      # The old prompt and slices asked again the same day reproduced the
+      # old numbers exactly, so the move comes from the text change.
+      #
       # The two unchanged numbers are the load-bearing half of this
       # assertion, not padding: a gate that demoted everything would take
       # negatives to 0 and look like a triumph. `control_60` and
@@ -771,7 +780,7 @@ defmodule Platform.Meetings.IntentEval.HarnessTest do
       assert per_slice["control_60"]["fired"] == 59
       assert per_slice["unaddressed_probe_12"]["fired"] == 11
 
-      assert per_slice["negatives_102"]["demoted"] == 5
+      assert per_slice["negatives_102"]["demoted"] == 4
       assert per_slice["control_60"]["demoted"] == 0
       assert per_slice["unaddressed_probe_12"]["demoted"] == 0
     end
@@ -802,10 +811,12 @@ defmodule Platform.Meetings.IntentEval.HarnessTest do
         |> Enum.map(& &1["text"])
         |> Enum.sort()
 
+      # Four since the task 01a14dce re-record. The fifth, "I do see the
+      # action items, briefly, ...", is still declined: the model now answers
+      # off_topic itself, so the gate has nothing to demote.
       assert suppressed == [
-               "I do see the action items, briefly, visual address, blah, blah, blah, blah.",
                "I wonder if this is really briefworthy.",
-               "No, actually, never mind. As an action item, Chris needs to start developing the podcast.",
+               "No, actually, never mind. As an action item, Casey needs to start developing the podcast.",
                "We can ask him to bring it in here.",
                "Yeah, but the interaction design part is probably wrong."
              ]
@@ -830,7 +841,7 @@ defmodule Platform.Meetings.IntentEval.HarnessTest do
              ]
     end
 
-    test "the binary_actionable cassette demotes 93 of its 174 rows" do
+    test "the binary_actionable cassette demotes 92 of its 174 seed rows (93 before the re-record)" do
       # The measurement that settled task 01a04379: demotion was not rare,
       # it was the single largest outcome on this arm, and the report said
       # zero every time. Pinned so the counter cannot silently return to
@@ -855,12 +866,17 @@ defmodule Platform.Meetings.IntentEval.HarnessTest do
         |> Enum.reject(&(&1["slice"] == "delegation_probe"))
         |> Enum.count(& &1["demoted_from"])
 
-      assert seed_demoted == 93
+      # 92 since task 01a14dce stage 2: 23 rows whose text named a real
+      # person or org were rewritten and asked again; one of them is no
+      # longer demoted. The other 160 rows kept their recorded answers
+      # (same prompt bytes, same text, same cassette key).
+      assert seed_demoted == 92
       assert result["summary"]["errors_total"] == 0
 
       # Task 01a05997 stage 4: this arm demotes 7 of the 9 delegation rows,
-      # so its total is 100. Pinned so the added rows cannot drift unnoticed.
-      assert result["summary"]["demoted"] == 100
+      # so its total is 99 (100 before the task 01a14dce re-record).
+      # Pinned so the added rows cannot drift unnoticed.
+      assert result["summary"]["demoted"] == 99
     end
   end
 
@@ -1102,14 +1118,19 @@ defmodule Platform.Meetings.IntentEval.HarnessTest do
       rows = Harness.load_rows(root, "unaddressed_meeting_speech_48")
       assert length(rows) == 48
 
-      # Harper's utterance, verbatim, is IN the set. It is the one row
-      # with real-speech provenance and the ticket's stated acceptance
-      # example.
-      assert Enum.any?(rows, fn row ->
-               row["text"] ==
-                 "is working um so marlowe is going to be creating some new tasks we need to to " <>
-                   "create some documents it'd be also great if we could um"
-             end)
+      # The row that held the slice's one real utterance until task
+      # 01a14dce is IN the set as its hand-written replacement, still at
+      # its probe tag. The real row named real people, so it was replaced
+      # by an invented one of the same shape and label rather than kept.
+      assert [replacement] = Enum.filter(rows, &(&1["probe"] == "former_verbatim"))
+      assert replacement["label"] == "action_items"
+      assert replacement["origin"] == "hand_written"
+
+      assert replacement["text"] ==
+               "was fine um so riley is going to be drafting a couple of new tickets we need to to " <>
+                 "write up the notes it'd be also nice if we could um"
+
+      assert Enum.all?(rows, &(&1["origin"] == "hand_written"))
 
       # And it is not quietly folded into the default run, which would
       # turn every committed replay into a 48-row miss.
@@ -1156,7 +1177,7 @@ defmodule Platform.Meetings.IntentEval.HarnessTest do
 
     for {name, text} <- [
           {"included", "Designer, make the button teal."},
-          {"excluded", "um so marlowe is going to"}
+          {"excluded", "um so riley is going to"}
         ] do
       body =
         Jason.encode!(%{"id" => name, "text" => text, "label" => "off_topic", "slice" => name}) <>

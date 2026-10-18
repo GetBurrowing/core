@@ -276,7 +276,7 @@ defmodule Platform.Meetings.IntentEvalTest do
 
     slice_rows = [
       row("id-agree", "Designer, make that button teal.", "visual_adjust"),
-      row("id-disagree", "Nah, I'm gonna get Harper in here.", "off_topic"),
+      row("id-disagree", "Nah, I'm gonna get Sam in here.", "off_topic"),
       row("id-unsure", "Capture that as an action item.", "action_items")
     ]
 

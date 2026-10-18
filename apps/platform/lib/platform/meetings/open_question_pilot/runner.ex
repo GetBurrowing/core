@@ -268,6 +268,78 @@ defmodule Platform.Meetings.OpenQuestionPilot.Runner do
     results
   end
 
+  # ── re-recording arm A after a prompt change ─────────────────────────────
+
+  @doc """
+  Re-record arm A's TEST cassette LIVE after `prompt_a.txt` changed, and
+  replace arm A's block in `dir`'s `results.json` with the new measurement.
+
+  A cassette key covers the whole system prompt, so an edit to
+  `prompt_a.txt` leaves every recorded answer unreachable. Re-keying the old
+  answers would claim the model said something it was never asked, so this
+  asks again: one live call per TEST row (cap: TEST rows + 5), through the
+  same `Score.run/3` and recorder `run/1` uses for baseline A.
+
+  Only arm A's results change: `prompt_a`, `arms.prompt`, and the
+  `baseline_a` entries of `spend.calls` and `spend.tokens`. The optimiser,
+  selection and arm B blocks are the original run's and are left as they
+  are. A `rerecorded` entry records when, at which sha, against which model
+  build, and why.
+
+  Options: `:base_url` and `:model` (required: the live endpoint),
+  `:live_module` (default `Platform.Agents.Providers.Ollama`),
+  `:artefact_check`, `:props` and `:git_sha`, as for `run/1`.
+  """
+  @spec rerecord_arm_a!(String.t(), String.t(), keyword()) :: map()
+  def rerecord_arm_a!(dir, reason, opts) when is_binary(reason) and reason != "" do
+    path = Path.join(dir, "results.json")
+    results = path |> File.read!() |> Jason.decode!()
+    test = Dataset.split(Dataset.load(), "test")
+    live = Keyword.get(opts, :live_module, Platform.Agents.Providers.Ollama)
+
+    config = arm_a_config()
+    agent = %{model: Keyword.fetch!(opts, :model), base_url: Keyword.fetch!(opts, :base_url)}
+    args_for = arm_a_args_fn(config, agent)
+
+    check =
+      Keyword.get_lazy(opts, :artefact_check, fn ->
+        room = setup_artefact_room!()
+        Score.gather_context_check(room.meeting_id, room.room_id)
+      end)
+
+    {report, meter} =
+      score_recorded(test, :prompt, args_for, check, live, dir, "test_prompt", length(test) + 5)
+
+    props = Keyword.get_lazy(opts, :props, fn -> fetch_props(agent.base_url) end) || %{}
+
+    entry = %{
+      "at" => DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601(),
+      "sha" => Keyword.get_lazy(opts, :git_sha, &git_sha/0),
+      "mode" => "live; arm A TEST only",
+      "reason" => reason,
+      "base_url_host" => URI.parse(agent.base_url).host,
+      "model" => agent.model,
+      "model_file" => props["model_path"],
+      "build_info" => props["build_info"],
+      "lm_calls" => Meter.tickets(meter),
+      "previous_prompt_a_sha256" => get_in(results, ["prompt_a", "sha256"])
+    }
+
+    results =
+      results
+      |> Map.put("prompt_a", %{
+        "file" => config["prompt_file"],
+        "sha256" => config["prompt_sha256"]
+      })
+      |> put_in(["arms", "prompt"], arm_block(report))
+      |> put_in(["spend", "calls", "baseline_a"], Meter.tickets(meter))
+      |> put_in(["spend", "tokens", "baseline_a"], jsonable(report.tokens))
+      |> Map.put("rerecorded", (results["rerecorded"] || []) ++ [entry])
+
+    File.write!(path, Jason.encode!(results, pretty: true) <> "\n")
+    results
+  end
+
   # ── arm A ────────────────────────────────────────────────────────────────
 
   @doc "Arm A's pinned config (`arm_a.json`), with its prompt loaded and checked."

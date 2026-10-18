@@ -142,6 +142,69 @@ defmodule Platform.Meetings.OpenQuestionPilot.RunnerTest do
     end
   end
 
+  # Task 01a14dce stage 1: prompt_a.txt changed, so arm A is asked again.
+  describe "rerecord_arm_a!/3" do
+    setup do
+      dir = TestTemp.mkdir!("open-question-pilot-rerecord")
+      File.cp!(Path.join(Programs.dir(), "results.json"), Path.join(dir, "results.json"))
+      ref = :counters.new(1, [])
+      :persistent_term.put({StaticProvider, :counter}, ref)
+
+      on_exit(fn ->
+        File.rm_rf!(dir)
+        :persistent_term.erase({StaticProvider, :counter})
+      end)
+
+      {:ok, dir: dir, counter: ref}
+    end
+
+    test "asks the model once per TEST row and replaces arm A's block only", %{
+      dir: dir,
+      counter: counter
+    } do
+      original = Path.join(Programs.dir(), "results.json") |> File.read!() |> Jason.decode!()
+      checked_in_cassette = Path.join([Programs.dir(), "cassettes", "test_prompt.jsonl"])
+      cassette_before = File.read!(checked_in_cassette)
+
+      {results, _log} =
+        with_log(fn ->
+          Runner.rerecord_arm_a!(dir, "test reason",
+            live_module: StaticProvider,
+            base_url: "http://localhost:8085/v1",
+            model: "classifier",
+            props: %{"build_info" => "b-test"},
+            git_sha: "test"
+          )
+        end)
+
+      assert :counters.get(counter, 1) == 35
+      assert results["prompt_a"]["sha256"] == Runner.arm_a_config()["prompt_sha256"]
+      assert results["arms"]["prompt"]["n"] == 35
+      assert results["arms"]["prompt"]["lm_calls"] == 35
+      # StaticProvider answers off_topic to every row: nothing is a question.
+      assert results["arms"]["prompt"]["confusion"]["tp"] == 0
+      assert results["spend"]["calls"]["baseline_a"] == 35
+
+      for key <- ["optimiser", "selection", "dataset", "provider", "program_b", "rescored"] do
+        assert results[key] == original[key], "#{key} must be the original run's"
+      end
+
+      assert results["arms"]["imp_program"] == original["arms"]["imp_program"]
+
+      assert [entry] = results["rerecorded"] -- (original["rerecorded"] || [])
+      assert entry["reason"] == "test reason"
+      assert entry["lm_calls"] == 35
+      assert entry["base_url_host"] == "localhost"
+      assert entry["build_info"] == "b-test"
+      assert entry["previous_prompt_a_sha256"] == original["prompt_a"]["sha256"]
+
+      # Written to the dir it was given, never over the checked-in cassette.
+      assert Path.join(dir, "results.json") |> File.read!() |> Jason.decode!() == results
+      assert File.exists?(Path.join([dir, "cassettes", "test_prompt.jsonl"]))
+      assert File.read!(checked_in_cassette) == cassette_before
+    end
+  end
+
   describe "privacy selection is lexicographic" do
     @candidates [
       %{id: "c-best", val_score: 0.96},

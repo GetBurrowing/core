@@ -2757,10 +2757,10 @@ defmodule Platform.Meetings.IntentClassifierTest do
     end
 
     test "another org's corrections never reach this meeting's prompt" do
-      other_meeting = create_meeting_in_org!(tenant_org_id("sxi"))
+      other_meeting = create_meeting_in_org!(tenant_org_id("globex"))
 
       record_correction!(other_meeting.id, %{
-        transcript_chunk_excerpt: "sxi-only utterance nobody else may see",
+        transcript_chunk_excerpt: "globex-only utterance nobody else may see",
         classified_intent: "off_topic",
         corrected_intent: "brief_worthy"
       })
@@ -2768,7 +2768,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
       meeting = create_meeting_in_org!(tenant_org_id("soylent"))
       prompt = capture_prompt_for!(meeting, "room-exemplars-cross-org")
 
-      refute prompt =~ "sxi-only utterance nobody else may see",
+      refute prompt =~ "globex-only utterance nobody else may see",
              "exemplars must be scoped to the meeting's own org (AC16)"
 
       assert prompt =~ "(no prior corrections)"
@@ -3024,7 +3024,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
     ]
 
     @unaddressed_exemplars [
-      "Nah, I'm gonna get Harper in here.",
+      "Nah, I'm gonna get Sam in here.",
       "Try, can you try that link just to see what happened?",
       "But I would just say, like, send it to us."
     ]

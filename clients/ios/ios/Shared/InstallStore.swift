@@ -96,20 +96,32 @@ final class InstallStore {
         return legacyDefaultHostHashes.contains(hostHash(normalized))
     }
 
+    /// True when `host`, normalized, has its SHA-256 in `hashes`.
+    static func isLegacyHost(_ host: String, in hashes: Set<String>) -> Bool {
+        guard let normalized = normalizeHost(host) else { return false }
+        return hashes.contains(hostHash(normalized))
+    }
+
     static let shared = InstallStore()
 
     private let defaults: UserDefaults
     private let injectedTokenHosts: TokenHostListing?
+    private let legacyHostHashes: Set<String>
 
     /// `tokenHosts` lists the hosts holding a bearer, for the one-time
     /// migration only. Nil means `KeychainTokenStore.shared`, resolved only
-    /// when the migration needs it.
+    /// when the migration needs it. `legacyHostHashes` is the digest set the
+    /// migration treats as former built-in hosts: production uses the shipped
+    /// `legacyDefaultHostHashes`, and tests inject digests of example.com
+    /// hosts, so no test carries a real former host.
     init(
         defaults: UserDefaults? = UserDefaults(suiteName: InstallStore.appGroup),
-        tokenHosts: TokenHostListing? = nil
+        tokenHosts: TokenHostListing? = nil,
+        legacyHostHashes: Set<String> = InstallStore.legacyDefaultHostHashes
     ) {
         self.defaults = defaults ?? .standard
         self.injectedTokenHosts = tokenHosts
+        self.legacyHostHashes = legacyHostHashes
     }
 
     var installs: [Install] {
@@ -126,7 +138,7 @@ final class InstallStore {
     /// Keychain is read only for such a list.
     private func clearUntouchedDefaults(_ list: [Install]) -> [Install] {
         defer { defaults.set(true, forKey: Key.defaultsChecked) }
-        guard !list.isEmpty, list.allSatisfy({ Self.isLegacyDefault($0.host) }) else { return list }
+        guard !list.isEmpty, list.allSatisfy({ Self.isLegacyHost($0.host, in: legacyHostHashes) }) else { return list }
         let tokenHosts = injectedTokenHosts ?? KeychainTokenStore.shared
         let signedIn = Set(tokenHosts.storedHosts().compactMap(Self.normalizeHost))
         guard !list.contains(where: { signedIn.contains($0.host) }) else { return list }

@@ -250,10 +250,10 @@ defmodule Platform.Meetings.IntentEval.DelegationProbeTest do
         |> Enum.sort()
 
       assert gated == [
-               "Chris, can you file a ticket for the purse-based meeting problem?",
-               "Harper, can you write that up?",
+               "Casey, can you file a ticket for the purse-based meeting problem?",
                "Marcus, put together a ticket for that login timeout thing.",
                @off_roster_twin,
+               "Riley, can you write that up?",
                "Sam, open a task to track the flaky deploy, would you?"
              ]
 

@@ -3,8 +3,8 @@ package com.koboai.burrow.push
 import android.app.Application
 import android.app.Notification
 import androidx.core.app.NotificationCompat
-import com.koboai.burrow.FakeTokenCipher
 import com.koboai.burrow.BurrowNativePlugin
+import com.koboai.burrow.FakeTokenCipher
 import com.koboai.burrow.push.PushTestSupport.active
 import com.koboai.burrow.push.PushTestSupport.posted
 import com.koboai.burrow.shortcuts.ConversationShortcuts

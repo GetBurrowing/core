@@ -1,0 +1,11 @@
+{
+  "description": "The shipped off_topic reframe: off_topic stated as the default, the judgement reframed from 'is this actionable?' to 'is an AGENT being asked to do something?', and a required evidence_quote.",
+  "prompt_source": {"inline_file": "priv/intent_eval/prompts/off_topic_default.txt"},
+  "prompt_provenance": "Byte-identical copy (6406 bytes) of the @new_content heredoc in apps/platform/priv/repo/migrations/20260826120000_force_update_intent_classify_prompt_off_topic_default.exs on branch task/01a03f57-362a-709f-801e-fb5cad1195e0. Copied rather than referenced with a {\"migration\": ..} source because that migration is NOT on this branch, and a config whose prompt source only resolves on somebody else's checkout is exactly the unattributable run this harness exists to end. Task 01a14dce replaced one exemplar line (a real person name) with an invented one in that heredoc and in this file together; they are still byte-identical, still 6406 bytes.",
+  "model": "classifier",
+  "base_url": "http://localhost:8085/v1",
+  "temperature": 0.0,
+  "max_tokens": 1024,
+  "chat_template_kwargs": {"enable_thinking": false},
+  "buffering": {"debounce_ms": 0, "max_hold_ms": 0}
+}

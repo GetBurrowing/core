@@ -73,8 +73,16 @@ defmodule Platform.Repo.Migrations.ForceUpdateIntentClassifyPromptAgentRosterOnU
   destroyed by overwriting, and the stop condition (an install carrying
   content the heredoc does not) did not fire.
 
-  What this migration writes: 8964 bytes, sha256
+  What this migration wrote as shipped: 8964 bytes, sha256
   `5afe1aa91e2ffd9ec566af27815ae1bf481d59ca99bb525f78c3701ba580a6f3`.
+
+  Task 01a14dce stage 1 replaced one exemplar line of the heredoc (a real
+  utterance) with an invented one of the same shape, here and in the two
+  earlier bodies, and added
+  `20261018072000_replace_intent_classify_exemplar_span` to make the same
+  one-line swap on rows this migration already wrote. A fresh database ends
+  with the same row either way. The heredoc now writes 8964 bytes, sha256
+  `9f05df840bb9d2bd522c5df4169aec70be5dfbb8435a17d5753432cdf97fb416`.
 
   ## Known contradiction left in place, on purpose
 
@@ -143,7 +151,7 @@ defmodule Platform.Repo.Migrations.ForceUpdateIntentClassifyPromptAgentRosterOnU
   A `null` target is the SAFE answer: the dispatcher routes it to nobody, so the card cannot reach the wrong agent. Deleting a real intent because you could not name a role throws the capture away and buys nothing.
 
   Exemplars — an unaddressed ask KEEPS its intent and carries `target_role: null`:
-    - "Nah, I'm gonna get Harper in here."                              -> `action_items`, `target_role: null` (a concrete commitment; the owner is a person)
+    - "Nah, I'm gonna get Sam in here."                                 -> `action_items`, `target_role: null` (a concrete commitment; the owner is a person)
     - "Try, can you try that link just to see what happened?"            -> `action_items`, `target_role: null` (a concrete ask; the owner is a person)
     - "But I would just say, like, send it to us."                       -> `action_items`, `target_role: null` (a concrete ask; the owner is a person)
 

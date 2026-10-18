@@ -326,7 +326,7 @@ defmodule Platform.Meetings.IntentClassifier do
   Question 2 — TARGET: is an AGENT being asked to do something? Only once question 1 has an answer, ask who should act. If the ask is aimed at a PERSON, or at nobody in particular, the answer is `target_role: null` — a normal answer, and NOT a reason to erase question 1's answer.
 
   An unaddressed ask KEEPS its intent and takes `target_role: null`:
-    - "Nah, I'm gonna get Harper in here."             -> `action_items`, `target_role: null`
+    - "Nah, I'm gonna get Sam in here."                -> `action_items`, `target_role: null`
     - "Try, can you try that link just to see what happened?" -> `action_items`, `target_role: null`
     - "But I would just say, like, send it to us."     -> `action_items`, `target_role: null`
 
