@@ -3,7 +3,8 @@ defmodule PlatformWeb.AppApiController do
   JSON API for the native iOS app (task 01a10882), under `/api/app`.
 
   `POST /session` is unauthenticated: it redeems the PKCE-bound exchange code
-  from the OIDC callback for a bearer token. Every other action runs behind
+  from the OIDC callback for a bearer token. So is `GET /install`, which
+  returns no user data. Every other action runs behind
   `PlatformWeb.Plugs.AppBearerAuth` (`:app_api`), which assigns
   `:current_user` and `:app_session`.
 
@@ -31,6 +32,20 @@ defmodule PlatformWeb.AppApiController do
   alias Platform.Mobile
   alias Platform.Repo
   alias Platform.Tenancy.Org
+
+  # ── install ──────────────────────────────────────────────────────────
+
+  @doc """
+  `GET /api/app/install` (task 01a14d12), unauthenticated: this install's web
+  origin and where an app sign-in starts. The Burrow desktop app knows only
+  the agent (MCP) host, and a login started on any other host that routes
+  here would lose its session cookie to a foreign cookie domain. So
+  `web_url` is the endpoint's configured origin, never the request's Host.
+  No user data and no install id.
+  """
+  def install(conn, _params) do
+    json(conn, %{web_url: PlatformWeb.Endpoint.url(), app_login_path: "/auth/login"})
+  end
 
   # ── session ──────────────────────────────────────────────────────────
 

@@ -21,8 +21,8 @@ defmodule PlatformWeb.AppApiControllerTest do
   @fcm_token "fcmCtrl00001:APA91b" <> String.duplicate("Ctr1_T0k-", 12)
 
   # Every bearer-authenticated route, with a request that would otherwise be
-  # well-formed. `POST /session` is deliberately absent: it is the one
-  # unauthenticated route.
+  # well-formed. `POST /session` and `GET /install` are deliberately absent:
+  # they are the unauthenticated routes.
   @protected_routes [
     {:delete, "/api/app/session", %{}},
     {:post, "/api/app/handoff", %{}},
@@ -123,7 +123,58 @@ defmodule PlatformWeb.AppApiControllerTest do
     end
   end
 
+  # Task 01a14d12: the Burrow desktop app reaches this install on its agent
+  # (MCP) host, and a request can arrive on any host that routes to the
+  # endpoint. Every origin it is handed must be the endpoint's own, never an
+  # echo of the request's Host: a login started on a foreign host loses its
+  # session cookie to that host's cookie domain.
+  @foreign_host "burrow-mcp.example.com"
+
+  # Plug's test adapter takes the Host header from `conn.host` (it refuses a
+  # `host` req header), so this is the request's Host.
+  defp on_foreign_host(conn), do: %{conn | host: @foreign_host}
+
+  defp endpoint_host, do: URI.parse(PlatformWeb.Endpoint.url()).host
+
+  describe "GET /api/app/install" do
+    test "answers the endpoint origin, not the request host, with no bearer", %{conn: conn} do
+      # Positive control: the request host really differs from the endpoint's.
+      refute endpoint_host() == @foreign_host
+
+      body = conn |> on_foreign_host() |> get("/api/app/install") |> json_response(200)
+
+      assert body == %{"web_url" => PlatformWeb.Endpoint.url(), "app_login_path" => "/auth/login"}
+      refute inspect(body) =~ @foreign_host
+    end
+  end
+
   describe "POST /api/app/session" do
+    test "the handoff url is on the endpoint host, not the request host", %{conn: conn} do
+      user = create_user!()
+      {verifier, challenge} = pkce()
+      {:ok, code} = Mobile.issue_exchange_code(user, challenge)
+
+      %{"handoff_url" => handoff_url} =
+        conn
+        |> on_foreign_host()
+        |> post("/api/app/session", %{"code" => code, "code_verifier" => verifier})
+        |> json_response(200)
+
+      assert URI.parse(handoff_url).host == endpoint_host()
+      assert String.starts_with?(handoff_url, PlatformWeb.Endpoint.url() <> "/auth/app/handoff?")
+    end
+
+    test "POST /api/app/handoff's url is on the endpoint host too", %{conn: conn, token: token} do
+      %{"handoff_url" => handoff_url} =
+        conn
+        |> on_foreign_host()
+        |> bearer(token)
+        |> post("/api/app/handoff")
+        |> json_response(200)
+
+      assert URI.parse(handoff_url).host == endpoint_host()
+    end
+
     test "exchanges a code for a bearer and a handoff url", %{conn: conn} do
       user = create_user!()
       {verifier, challenge} = pkce()

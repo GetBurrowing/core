@@ -1106,6 +1106,8 @@ defmodule PlatformWeb.Router do
     pipe_through(:api)
 
     post("/session", AppApiController, :create_session)
+    # Unauthenticated install descriptor for the Burrow desktop app (task 01a14d12).
+    get("/install", AppApiController, :install)
   end
 
   scope "/api/app", PlatformWeb do

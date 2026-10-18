@@ -175,7 +175,13 @@ defmodule PlatformWeb.AuthController do
   # holding user, lands exactly as before.
   @app_callback_url "burrow://auth/callback"
 
-  defp land_callback(conn, %ExternalAdmission.Result{state: :full, user: user} = result) do
+  defp land_callback(conn, result, full_path \\ ~p"/")
+
+  defp land_callback(
+         conn,
+         %ExternalAdmission.Result{state: :full, user: user} = result,
+         full_path
+       ) do
     with challenge when is_binary(challenge) <- get_session(conn, :app_challenge),
          {:ok, code} <- Mobile.issue_exchange_code(user, challenge) do
       conn
@@ -183,11 +189,11 @@ defmodule PlatformWeb.AuthController do
       |> LoginOrigin.clear()
       |> redirect(external: @app_callback_url <> "?" <> URI.encode_query(%{code: code}))
     else
-      _ -> land_admission(conn, result, ~p"/")
+      _ -> land_admission(conn, result, full_path)
     end
   end
 
-  defp land_callback(conn, result), do: land_admission(conn, result, ~p"/")
+  defp land_callback(conn, result, full_path), do: land_admission(conn, result, full_path)
 
   @doc """
   Redeem a one-time app handoff code (task 01a10882) and sign this browser
@@ -300,7 +306,28 @@ defmodule PlatformWeb.AuthController do
     |> redirect(to: ExternalAdmission.post_login_path(result))
   end
 
-  def dev_login(conn, params) do
+  # Task 01a14d12: `app_challenge` makes dev_login the app sign-in that
+  # `login/2` starts, without OIDC, so the Burrow desktop e2e can sign in on
+  # a dev server with no passkey. Same validation as `login/2`, then the same
+  # `land_callback/3` landing as the OIDC callback. Without the param this is
+  # unchanged.
+  def dev_login(conn, %{"app_challenge" => challenge} = params) do
+    case Mobile.begin_app_login(challenge) do
+      {:ok, challenge} ->
+        conn
+        |> put_session(:app_challenge, challenge)
+        |> dev_admit(params, &land_callback(&1, &2, ~p"/chat"))
+
+      {:error, :invalid_challenge} ->
+        conn
+        |> put_status(:bad_request)
+        |> text("Invalid app_challenge")
+    end
+  end
+
+  def dev_login(conn, params), do: dev_admit(conn, params, &land_admission(&1, &2, ~p"/chat"))
+
+  defp dev_admit(conn, params, land) do
     # `?as=<slug>` lets E2E tests log in as distinct users in parallel
     # browser contexts without touching OIDC. The default "dev-local-user"
     # is preserved for the interactive `/dev/login` link.
@@ -340,7 +367,7 @@ defmodule PlatformWeb.AuthController do
         conn
         |> put_session(:current_user_id, user.id)
         |> put_session(:oidc_id_token, "dev-id-token")
-        |> land_admission(result, ~p"/chat")
+        |> land.(result)
 
       {:error, :user_archived} ->
         # Same interstitial the OIDC callback renders — dev_login

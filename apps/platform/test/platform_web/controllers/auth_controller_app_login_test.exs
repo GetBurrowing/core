@@ -120,6 +120,84 @@ defmodule PlatformWeb.AuthControllerAppLoginTest do
     end
   end
 
+  # Task 01a14d12: the `/dev/login` route is compiled only in :dev, so these
+  # call the action directly, as auth_controller_test.exs does.
+  describe "AuthController.dev_login with app_challenge" do
+    defp dev_login(conn, params) do
+      conn
+      |> init_test_session(%{})
+      |> PlatformWeb.AuthController.dev_login(params)
+    end
+
+    test "a valid challenge lands in the app with a redeemable exchange code", %{conn: conn} do
+      {verifier, challenge} = pkce()
+      slug = "appdev#{System.unique_integer([:positive])}"
+
+      conn = dev_login(conn, %{"as" => slug, "app_challenge" => challenge})
+
+      assert %URI{scheme: "burrow", host: "auth", path: "/callback", query: query} =
+               URI.parse(redirected_to(conn, 302))
+
+      assert %{"code" => code} = URI.decode_query(query)
+      assert get_session(conn, :app_challenge) == nil
+
+      user = Repo.get_by!(User, oidc_sub: "dev-#{slug}")
+      assert {:ok, %{token: token}} = Mobile.exchange_code(code, verifier)
+      assert {:ok, %{id: id}, _session} = Mobile.verify_bearer(token)
+      assert id == user.id
+    end
+
+    # The app window carries its own return path, so an app sign-in must
+    # neither honour nor clear a browser's pending return target (the
+    # `:login_return_to` key task 01a14d33 adds). Pinned here before that key
+    # lands so whichever merges second keeps both behaviours.
+    test "neither reads nor clears a stored return target", %{conn: conn} do
+      {_verifier, challenge} = pkce()
+      return_to = %{path: "/m/social?invite=x", at: System.system_time(:second)}
+
+      seed = %{login_return_to: return_to, app_challenge: challenge}
+      seeded = fn -> init_test_session(conn, seed) end
+
+      dev =
+        PlatformWeb.AuthController.dev_login(seeded.(), %{
+          "as" => "appdevret#{System.unique_integer([:positive])}",
+          "app_challenge" => challenge
+        })
+
+      mock_oidc!()
+
+      oidc =
+        seeded.()
+        |> put_session(:oidc_session_params, %{state: "s1", nonce: "n"})
+        |> get(~p"/auth/oidc/callback?code=idp-code&state=s1")
+
+      for conn <- [dev, oidc] do
+        assert redirected_to(conn, 302) =~ ~r{\Aburrow://auth/callback\?code=}
+        assert get_session(conn, :login_return_to) == return_to
+      end
+    end
+
+    test "a malformed challenge is refused and mints nothing", %{conn: conn} do
+      conn = dev_login(conn, %{"as" => "appdevbad", "app_challenge" => "not-s256"})
+
+      assert response(conn, 400) == "Invalid app_challenge"
+      assert get_session(conn, :current_user_id) == nil
+      assert Repo.aggregate(Platform.Mobile.AppLoginCode, :count) == 0
+    end
+
+    test "without the param, the landing is today's /chat and mints nothing", %{conn: conn} do
+      conn = dev_login(conn, %{"as" => "appdevweb#{System.unique_integer([:positive])}"})
+
+      assert get_resp_header(conn, "location") == ["/chat"]
+
+      assert conn.resp_body ==
+               ~s(<html><body>You are being <a href="/chat">redirected</a>.</body></html>)
+
+      assert get_session(conn, :current_user_id)
+      assert Repo.aggregate(Platform.Mobile.AppLoginCode, :count) == 0
+    end
+  end
+
   describe "GET /auth/app/handoff" do
     test "signs the browser in once, then refuses the same code", %{conn: conn} do
       user = Platform.ExternalUserFixtures.create_user!()
