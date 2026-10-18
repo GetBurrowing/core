@@ -40,10 +40,10 @@ from setup_fakes import (
     write_secret_file,
 )
 
-from suite_install.secrets import parse_env_file
-from suite_install.setup import cli, steps
-from suite_install.setup.host import Result
-from suite_install.setup.macos import MacKeychain
+from burrow_install.secrets import parse_env_file
+from burrow_install.setup import cli, steps
+from burrow_install.setup.host import Result
+from burrow_install.setup.macos import MacKeychain
 
 MARKER = "planted-01a0d6ab-marker"
 CF_TOKEN = "cf-FAKE-token-01a0d6ab-9f8e7d6c5b4a"
@@ -154,7 +154,7 @@ class Harness:
         ctx.docker_registry_url = self.hub.url
         ctx.pocketid_url = self.pocket.url if self.pocket else "http://127.0.0.1:9"
         ctx.url_for = self.edge.url_for
-        ctx.backup_root = os.path.join(self.home, "SuiteBackups")
+        ctx.backup_root = os.path.join(self.home, "BurrowBackups")
         ctx.log_root = os.path.join(self.home, "Logs")
         ctx.disk_free_bytes = lambda path: 200 * 2**30
         ctx.health_wait_seconds = 1
@@ -326,7 +326,7 @@ class ScrubberTest(unittest.TestCase):
     def test_scrubber_replaces_known_values_and_can_be_shown_off(self):
         import io
 
-        from suite_install.setup.state import Install
+        from burrow_install.setup.state import Install
 
         tmp = tempfile.mkdtemp(prefix="scrub-01a0d6ab-")
         try:
@@ -349,7 +349,7 @@ class ScrubberTest(unittest.TestCase):
         # win the placeholder; the value must not survive.
         import io
 
-        from suite_install.setup.state import Install
+        from burrow_install.setup.state import Install
 
         tmp = tempfile.mkdtemp(prefix="scrub-01a113ea-")
         value = "static-01a113ea-alias-scrub-me"
@@ -431,14 +431,14 @@ class MacKeychainArgvTest(unittest.TestCase):
         self.assertIn("with hidden answer", stdin)
 
     def test_unstorable_value_is_refused(self):
-        from suite_install.setup.state import SetupError
+        from burrow_install.setup.state import SetupError
 
         with self.assertRaises(SetupError) as caught:
             self.kc.store("suite-install.x", "ITEM", "has\nnewline")
         self.assertEqual(caught.exception.code, "keychain_value_unsupported")
 
     def test_off_darwin_the_backend_says_unavailable(self):
-        from suite_install.setup.state import SetupError
+        from burrow_install.setup.state import SetupError
 
         self.host.platform = "linux"
         with self.assertRaises(SetupError) as caught:
@@ -451,7 +451,7 @@ class RealKeychainTest(unittest.TestCase):
     """One round trip through the real `security` binary (skipped off Darwin)."""
 
     def test_round_trip(self):
-        from suite_install.setup.host import Host
+        from burrow_install.setup.host import Host
 
         kc = MacKeychain(Host())
         service, item = "suite-install.test-01a0d6ab", "ROUNDTRIP"

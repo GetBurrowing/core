@@ -72,7 +72,7 @@ def request(method, url, headers=None, body=None, timeout=30, follow_redirects=T
         data = json.dumps(body).encode("utf-8")
         hdrs.setdefault("Content-Type", "application/json")
     hdrs.setdefault("Accept", "application/json")
-    hdrs.setdefault("User-Agent", "suite-install-setup/1")
+    hdrs.setdefault("User-Agent", "burrow-install-setup/1")
     req = urllib.request.Request(url, data=data, headers=hdrs, method=method)
     handlers = [] if follow_redirects else [_NoRedirect()]
     opener = urllib.request.build_opener(*handlers)

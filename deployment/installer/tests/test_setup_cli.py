@@ -28,10 +28,10 @@ from setup_fakes import (
     write_secret_file,
 )
 
-from suite_install.manifest import load
-from suite_install.secrets import parse_env_file
-from suite_install.setup import cli, steps
-from suite_install.setup.state import dumps_toml
+from burrow_install.manifest import load
+from burrow_install.secrets import parse_env_file
+from burrow_install.setup import cli, steps
+from burrow_install.setup.state import dumps_toml
 
 SECRET = "sk-FAKE-01a0d6ab-never-print-me-123456"
 CF_TOKEN = "cf-FAKE-01a0d6ab-token-for-render"
@@ -51,8 +51,8 @@ class Base(unittest.TestCase):
 
     def init(self, source=MAC_LITE, *flags):
         code, doc, _ = run_cli(
-            self.env, "init", "--from", source, "--dir", self.dir, "--name", "suite-01a0d6ab",
-            "--domain", "suite-01a0d6ab.example.com", *flags,
+            self.env, "init", "--from", source, "--dir", self.dir, "--name", "burrow-01a0d6ab",
+            "--domain", "burrow-01a0d6ab.example.com", *flags,
         )  # fmt: skip
         self.assertEqual(code, 0, doc)
         return doc
@@ -152,23 +152,39 @@ class InitAndStatusTest(Base):
         self.assertEqual(doc["changed"], ["services.meetings"])
         self.assertFalse(load(os.path.join(self.dir, "install.toml"))["services"]["meetings"])
 
-    def test_init_image_namespace_flag_sets_the_required_input(self):
-        # Task 01a14b9e: images.image_namespace has no default; init sets it.
+    def test_init_registry_flag_sets_the_required_input(self):
+        # Task 01a14dd8: images.registry has no default; init sets it.
+        self.init(MAC_LITE)
+        doc = self.init(MAC_LITE, "--registry", "ghcr.io/acme-images")
+        self.assertEqual(doc["changed"], ["images.registry"])
+        m = load(os.path.join(self.dir, "install.toml"))
+        self.assertEqual(m["images"]["registry"], "ghcr.io/acme-images")
+
+    def test_init_image_source_flags_replace_each_other(self):
+        # Exactly one source: the flag given drops the other from the manifest.
         self.init(MAC)
+        doc = self.init(MAC, "--registry", "ghcr.io/acme", "--meetings", "off")
+        self.assertEqual(
+            sorted(doc["changed"]),
+            ["images.image_namespace", "images.registry", "services.meetings"],
+        )
+        m = load(os.path.join(self.dir, "install.toml"))
+        self.assertEqual(m["images"]["registry"], "ghcr.io/acme")
+        self.assertNotIn("image_namespace", m["images"])
         doc = self.init(MAC, "--image-namespace", "acme-images")
-        self.assertEqual(doc["changed"], ["images.image_namespace"])
         m = load(os.path.join(self.dir, "install.toml"))
         self.assertEqual(m["images"]["image_namespace"], "acme-images")
+        self.assertNotIn("registry", m["images"])
 
-    def test_init_refuses_a_manifest_without_an_image_namespace(self):
+    def test_init_refuses_a_manifest_without_an_image_source(self):
         raw = load(MAC_LITE)
-        del raw["images"]["image_namespace"]
-        source = os.path.join(self.tmp, "no-ns.toml")
+        del raw["images"]["registry"]
+        source = os.path.join(self.tmp, "no-source.toml")
         with open(source, "w", encoding="utf-8") as handle:
             handle.write(dumps_toml(raw))
         code, doc, _ = run_cli(self.env, "init", "--from", source, "--dir", self.dir)
         self.assertEqual((code, doc["error_code"]), (2, "manifest_invalid"), doc)
-        self.assertIn("missing_required at images.image_namespace", doc["error"])
+        self.assertIn("missing_required at images.registry", doc["error"])
         self.assertFalse(os.path.exists(os.path.join(self.dir, "install.toml")))
 
     def test_install_dir_inside_git_tree_is_refused(self):
@@ -194,10 +210,10 @@ class SecretCommandTest(Base):
         self.init()
         code, doc, text = run_cli(self.env, "secret", "OPENAI_API_KEY", "--dir", self.dir)
         self.assertEqual(code, 0, doc)
-        self.assertEqual(doc["keychain_service"], "suite-install.suite-01a0d6ab")
+        self.assertEqual(doc["keychain_service"], "suite-install.burrow-01a0d6ab")
         self.assertEqual(doc["length"], len(SECRET))
         self.assertEqual(
-            self.keychain.items[("suite-install.suite-01a0d6ab", "OPENAI_API_KEY")], SECRET
+            self.keychain.items[("suite-install.burrow-01a0d6ab", "OPENAI_API_KEY")], SECRET
         )
         self.assertEqual(self.state()["inputs"]["OPENAI_API_KEY"], "keychain:OPENAI_API_KEY")
         self.assertNotIn(SECRET, text)
@@ -212,7 +228,7 @@ class RenderIdempotenceTest(Base):
 
     def setUp(self):
         super().setUp()
-        from suite_install import registry
+        from burrow_install import registry
 
         self._detectors = dict(registry.MEDIA_IP_DETECTORS)
         registry.MEDIA_IP_DETECTORS["lan"] = lambda: "192.0.2.10"  # RFC 5737
@@ -236,7 +252,7 @@ class RenderIdempotenceTest(Base):
             self.assertEqual(code, 0, doc)
 
     def tearDown(self):
-        from suite_install import registry
+        from burrow_install import registry
 
         registry.MEDIA_IP_DETECTORS.update(self._detectors)
         self.cf.close()
@@ -264,7 +280,7 @@ class RenderIdempotenceTest(Base):
         # Positive control: the sha comparison CAN differ (a fresh install).
         other = os.path.join(self.tmp, "fresh")
         shutil.copytree(self.dir, other, ignore=shutil.ignore_patterns("secrets.env"))
-        from suite_install.setup.state import Install
+        from burrow_install.setup.state import Install
 
         Install(other).upsert_secret("TUNNEL_TOKEN", self.cf.tunnel_token)
         code, doc, _ = run_cli(self.env, "run", "render", "--dir", other)

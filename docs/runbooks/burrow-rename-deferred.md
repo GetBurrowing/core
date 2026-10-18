@@ -107,3 +107,89 @@ Rig scripts outside this repo that pass the old launch arguments (`-SuiteEvidenc
 | "the Suite iPhone app" and "match Suite" | `clients/ios/WHATSNEW.md` | Release notes of an already-shipped build (history). | None. |
 | "Suite iOS colour assets", "Suite web tokens" | `clients/ios/scripts/generate_assets.py` docstring | Out of the guard's scope and of this stage's file set (a build-host script). | Any later cleanup. |
 | the published bundle ids, README history of the old bundle id and URL scheme, real install hostnames | project files, README | Excluded by the plan: published store ids (A3's `@published_ids`), history, and A3/A3b's hosts. | None planned / A3b. |
+
+## Installer and agent host (A2c)
+
+Task 01a14dd8 moved the installer's fresh renders onto Burrow names. A new single-host install
+lives under `/opt/burrow` and runs `burrow-stack.service`, `burrow-agent-host.service` and
+`burrow-agent@<id>`. A new Mac install lives under `~/burrow/<name>` and runs LaunchAgents
+labelled `io.github.getburrowing.install.<name>.<job>`. Images come from `[images] registry`.
+The names below stay because an install that already exists depends on them. Each entry says
+where the name lives, why it stays, how an existing install moves off it, and when the name can go.
+
+### Upgrading an install made before the rename
+
+**Linux single host.** Run `burrow-migrate` as root on the host. The repo copy of the script is
+`deployment/installer/migrate/suite-to-burrow.sh`. Every render since stage 4 of 01a14dd8 also
+writes it into the install as `bin/burrow-migrate`. An old host has no such file, so copy it from
+a checkout at the release you are upgrading to, and check the hash on both ends:
+
+```bash
+sha256sum deployment/installer/migrate/suite-to-burrow.sh deployment/installer/migrate/burrow-to-suite-rollback.sh
+scp deployment/installer/migrate/suite-to-burrow.sh root@host.example.com:/usr/local/sbin/burrow-migrate
+scp deployment/installer/migrate/burrow-to-suite-rollback.sh root@host.example.com:/usr/local/sbin/burrow-migrate-rollback
+ssh root@host.example.com 'chmod 0755 /usr/local/sbin/burrow-migrate*; sha256sum /usr/local/sbin/burrow-migrate*'
+```
+
+1. Native-agent hosts (`[agents] profile = "full_machine"`) first need the Burrow agent-host image
+   on the host. That is the post-rename build, which carries the daemon at
+   `/opt/burrow/agent-host`. Use `docker pull`, or `docker load` it on a preloaded install. If it
+   is not under the ref in the old setup script, pass `--agent-host-image <ref>`. The script
+   refuses (and changes nothing) when the image holds only the pre-rename daemon.
+2. `burrow-migrate` checks first and changes nothing when a check fails: the old root is a real
+   directory, the old stack unit exists, and `/opt/burrow` is absent or empty. It then records
+   `/var/lib/burrow-migrate/<UTC stamp>/` (the old unit files, the agent host's env, versions
+   and sudoers files, the old daemon, `docker compose ls`, `docker volume ls` and the image of
+   every running container). It stops the stack with `compose down` (no `-v`), moves the
+   directory to `/opt/burrow`, leaves a symlink at the old path, and starts
+   `burrow-stack.service`. On a native-agent host it also renames the agents group (the gid is
+   kept), and renames the env, versions and sudoers files (the sudoers file is checked with
+   `visudo -c` first). Then it copies the new daemon out of the image, installs the
+   `burrow-agent-host` units and starts them. The daemon adopts every old agent unit as
+   `burrow-agent@<id>`, and the script then removes the old agent template.
+3. A second run prints the state and exits 0 without changing anything. Exit 3 means the move is
+   done but the daemon has not adopted every agent yet. Check `journalctl -u burrow-agent-host`
+   and run it again.
+4. To undo it, run `burrow-migrate-rollback <stamp>` (the stamp is printed at the end of step 2).
+
+**Migrate before you re-render.** Stage 3 made the paths unconditional. A legacy
+`[images] image_namespace` manifest also renders under `/opt/burrow` with `burrow-*` units, and
+only its image refs stay `docker.io/<ns>/suite-*`. Applying such a render to an old host before
+migrating writes a second install root beside the live one. `burrow-migrate` then refuses
+because `/opt/burrow` is not empty, and nothing has been stopped or moved. To recover, move the
+rendered `/opt/burrow` aside, run `burrow-migrate`, then apply the render again. Keep
+`install.name` unchanged in the manifest: the compose project name is `install.name`, and the
+named volumes (the database among them) are keyed by it.
+
+**Do not refresh the agent-host image on an old host without migrating it.** CI still pushes the
+pre-rename tags, but they are now built from the post-rename Dockerfile, so their daemon lives at
+`/opt/burrow/agent-host`. The old setup unit copies the daemon from the old path. On an old host
+that pulls the new build under the old tag, that copy fails at the next boot, and the agent host
+does not start until the host is migrated.
+
+**Mac.** Run `mac/burrow-install setup run migrate`. It finds the install under `~/suite/<name>`
+and runs `docker compose down` there (no `-v`). It moves the directory to `~/burrow/<name>` and
+runs `compose up -d` there. compose.yaml is unchanged, so the project name and the volumes are
+the same. Each LaunchAgent under an old label is rewritten under the new label and bootstrapped,
+then the old one is booted out. It points at the new directory and sends new backups to
+`~/BurrowBackups/<name>`. `~/SuiteBackups/<name>` is left in place and recorded in state.json as
+`ids.legacy_backup_dir`, the read path for backups taken before the move. The step prints one
+JSON document like every other setup command. A second run moves nothing, and the step refuses
+(exit 2) when both directories exist.
+
+### Names kept or bridged
+
+| name | where | why it stays | upgrade path | removal condition |
+|---|---|---|---|---|
+| `/opt/suite` symlink to `/opt/burrow` | migrated single hosts (made by `burrow-migrate`) | The old `bin/suite-*` helper scripts the migration keeps (e.g. the CA bundle step `burrow-stack.service` runs before start) and any hand-written cron or ops script still name the old path. | None needed; it is the bridge. | The host has had a post-rename render applied. Then `grep -rs /opt/suite /etc/systemd/system /etc/cron* /opt/burrow/bin` returns nothing, and the link is deleted by hand. |
+| old unit, env and sudoers names (`suite-stack.service`, the old agent host and agent units, the old env file, versions dir and sudoers file) | `deployment/installer/migrate/suite-to-burrow.sh` and `burrow-to-suite-rollback.sh`, each defined once on a line marked `# legacy name, kept by burrow-migrate`; also embedded in every render as `bin/burrow-migrate` | The scripts have to name what they move. `tests/test_burrow_names.py` allows them only on the marked lines. | `burrow-migrate`, above. | No supported install predates the rename, in the release that drops the old names from core too. |
+| `suite_install` module shim and `mac/suite-install` | `deployment/installer/suite_install/`, `deployment/installer/mac/suite-install` | Older docs, scripts and the Mac app call the old names. Both still run and print a deprecation line (stage 1). | Call `burrow_install` / `mac/burrow-install`. | The Mac app and every doc call the new names, one release after that. |
+| Keychain service prefix `suite-install.<name>` | `burrow_install/setup/macos.py`, `inputs.py` | Renaming it loses every secret an existing Mac install stored in the Keychain. | None. Moving it needs a read-old, write-new migration of each item. | A Keychain migration step lands and is run on every Mac install. |
+| legacy `[images] image_namespace` and the `docker.io/<ns>/suite-*` refs | `burrow_install/registry.py` (`LEGACY_HUB_IMAGES`), `deployment/examples/mac.install.toml` | Existing manifests set it. CI still pushes those refs. meeting-transcriber has no registry build, so a manifest that runs it under `[images] registry` must pin `images.refs.meeting-transcriber`, and the mac example stays on the legacy key. | `setup init --registry <path>` (or set `[images] registry`), then pull and re-render. | meeting-transcriber publishes a registry build, every known manifest uses `[images] registry`, and CI stops the Docker Hub pushes (backlog task 01a14afe item 1). |
+| GHCR `suite-agent-host` tags | `.github/workflows/ci.yml` (pushed beside `burrow-agent-host`; `ci_build_identity_test.exs` pins both lists) | Hosts set up before the rename pull this name, and so does any deployment outside the installer that was written against it (ci.yml's own note). The installer itself never rendered this GHCR ref, because before stage 3 it rendered only Docker Hub refs. | `burrow-migrate --agent-host-image <registry>/burrow-agent-host:<tag>`, or a re-render after migrating. | No install's setup script names the old ref. |
+| OIDC client id `suite-core` | `burrow_install/registry.py` (core's `OIDC_CLIENT_ID`), `burrow_install/setup/pocketid.py` (`CLIENT_ID`), the pocket-id client on each install | The client is registered under this id in each install's pocket-id. Renaming it in the render breaks sign-in until the client is re-registered. | A step that registers a new client id and switches core to it in one restart. | That step ships and has run on every install. |
+| Cloudflare tunnel name `suite-<install.name>` | `burrow_install/setup/cloudflare.py` (tunnel name), the remotely managed tunnel on each Mac install with a tunnel | The tunnel step finds its tunnel by this name. A new name would make it create a second tunnel and repoint the DNS records, which leaves the old one orphaned. | A step that renames the tunnel in place through the Cloudflare API, keeping its id. | That step ships and has run on every tunnelled install. |
+| LiveKit API key `suite` | `burrow_install/registry.py` (`LIVEKIT_API_KEY`) | LiveKit and core must agree on the key name, and it is part of each install's `LIVEKIT_KEYS` secret. | Re-render with a new key name and restart LiveKit and core together. | Any release that does that restart; nothing outside the install reads the name. |
+| legacy LaunchAgent labels `org.startupsuite.install.<name>.<job>` | `burrow_install/setup/macos.py` (`LEGACY_LABEL_ROOT`), used by teardown, the job steps and `setup run migrate` | Pre-rename Macs run their jobs under these labels. Without the bootout, a job would run twice. | `setup run migrate`, or re-running the job's step. | No supported Mac install predates the rename. |
+| `~/suite/<name>` discovery and `~/SuiteBackups` | `burrow_install/setup/state.py` (`legacy_root`), `burrow_install/setup/migrate.py` | A Mac that has not migrated keeps working: discovery reads the old root and never writes it. Old backups stay where they were taken. | `setup run migrate`. | Discovery: no supported Mac install predates the rename. Backups: the owner deletes `~/SuiteBackups` once the backups there are no longer needed. |
+| suite-cli-owned names: tmux session `suite-agent`, `~/.config/suite/agents/`, `~/.local/state/suite/sessions/`, the `suite` command | `services/agent-host/src/ids.ts` (`SESSION`, `statusFile`), `src/agents.ts`, `src/runner.ts`, the `burrow-agent@.service` template | suite-cli owns these names. The agent host runs the CLI it pins (`BURROW_CLI_REF` in versions.env) and has to use that CLI's names. | Core pins a 0.9 CLI (suite-cli task 01a14cc3) and the agent host switches to its names, reading the old paths as a fallback. | That CLI is pinned on every install's agent host. |

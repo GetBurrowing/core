@@ -1,6 +1,7 @@
 """The install directory: its manifest, its non-secret state and its secrets file.
 
-Layout of ``<install dir>`` (default ``~/suite/<install.name>/``):
+Layout of ``<install dir>`` (default ``~/burrow/<install.name>/``; installs made
+before task 01a14dd8 live under ``~/suite/`` and are still found):
 
 - ``install.toml``   the effective manifest (written by ``setup init``).
 - ``state.json``     NON-SECRET progress: step states, ids (zone, account,
@@ -52,12 +53,30 @@ def now():
 
 
 def default_root():
+    """Where new installs go: ``~/burrow``."""
+    return os.path.join(os.path.expanduser("~"), "burrow")
+
+
+def legacy_root():
+    """``~/suite``: where installs went before task 01a14dd8. Discovery reads it
+    (never writes it), so a Mac that has not migrated keeps working."""
     return os.path.join(os.path.expanduser("~"), "suite")
+
+
+def installs_under(root):
+    """Install dirs (holding an install.toml) directly under ``root``, sorted."""
+    found = []
+    if os.path.isdir(root):
+        for name in sorted(os.listdir(root)):
+            if os.path.exists(os.path.join(root, name, MANIFEST_FILE)):
+                found.append(os.path.join(root, name))
+    return found
 
 
 def resolve_dir(explicit=None, environ=None):
     """``--dir``, else ``$BURROW_INSTALL_DIR`` (legacy ``$SUITE_INSTALL_DIR``),
-    else the single install under ~/suite."""
+    else the single install under ~/burrow, else the single install under the
+    legacy ~/suite."""
     environ = os.environ if environ is None else environ
     if explicit:
         return os.path.abspath(os.path.expanduser(explicit))
@@ -65,11 +84,11 @@ def resolve_dir(explicit=None, environ=None):
     if env_dir:
         return os.path.abspath(os.path.expanduser(env_dir))
     root = default_root()
-    found = []
-    if os.path.isdir(root):
-        for name in sorted(os.listdir(root)):
-            if os.path.exists(os.path.join(root, name, MANIFEST_FILE)):
-                found.append(os.path.join(root, name))
+    found = installs_under(root)
+    if not found:
+        legacy = installs_under(legacy_root())
+        if legacy:
+            root, found = legacy_root(), legacy
     if len(found) == 1:
         return found[0]
     if not found:
@@ -92,7 +111,7 @@ def check_dir_allowed(path):
         raise SetupError(
             "install_dir_inside_git_worktree",
             f"{path} is inside a git work tree",
-            "pick an install directory outside any repository (the default is ~/suite/<name>)",
+            "pick an install directory outside any repository (the default is ~/burrow/<name>)",
             exit_code=2,
         )
 

@@ -7,7 +7,7 @@
 - ``FakeCloudflare`` / ``FakePocketId`` / ``FakeDockerHub`` / ``FakeEdge``:
   stdlib ``http.server`` fakes on 127.0.0.1. Request and response shapes
   follow Cloudflare's API v4 docs and pocket-id v2.16.0's controllers/DTOs
-  (the paths are cited in suite_install/setup/pocketid.py). Each records
+  (the paths are cited in burrow_install/setup/pocketid.py). Each records
   ``(method, path)`` so tests count POSTs.
 """
 
@@ -22,8 +22,8 @@ import urllib.parse
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from suite_install.setup import cli
-from suite_install.setup.host import Host, Result
+from burrow_install.setup import cli
+from burrow_install.setup.host import Host, Result
 
 
 class FakeHost(Host):

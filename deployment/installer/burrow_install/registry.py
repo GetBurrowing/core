@@ -20,7 +20,7 @@ Nothing here is specific to a target. Values are target-neutral:
   named by a manifest ``*_ref`` field). A target decides how secrets reach a
   container; the single-host target writes every secret-bearing env line to
   ``secrets.env``.
-- host mounts are paths relative to the install root (``/opt/suite`` on a
+- host mounts are paths relative to the install root (``/opt/burrow`` on a
   single host).
 
 Target-aware entries (task 01a0d6ab). ``Ctx.target`` exists for the mac
@@ -86,43 +86,113 @@ ACCESS_CONTAINERS = {
 # `full_machine` adds none: its agent host is a service on the HOST, rendered
 # by the target layer (templates.py + agents.py).
 AGENT_HOST = "agent-host"
-AGENT_HOST_IMAGE_NAME = "suite-agent-host:latest"
 
 
 # ---------------------------------------------------------------------------
-# Where the suite-* images come from (task 01a14b9e).
+# Where the Burrow images come from (task 01a14b9e; registry: task 01a14dd8).
 # ---------------------------------------------------------------------------
 
-# Every suite-* image is docker.io/<image_namespace>/<name>. `image_namespace`
-# is a REQUIRED manifest input ([images] image_namespace) with no default:
-# CI publishes under the repo's DOCKERHUB_NAMESPACE variable, and a default
-# here would name one publisher. validate.py refuses a manifest without it;
-# hub_image raises if an unvalidated one gets this far.
+# A manifest names exactly ONE image source, with no default (a default would
+# name one publisher; validate.py refuses neither-or-both, and image_repo
+# raises if an unvalidated manifest gets this far):
+#
+#   [images] registry         `<registry>/<name>`, e.g. ghcr.io/example/core.
+#                             The source for every new install.
+#   [images] image_namespace  LEGACY (deprecated, validate warns): the Docker
+#                             Hub refs every install used before task 01a14dd8,
+#                             rendered unchanged (LEGACY_HUB_IMAGES below).
+IMAGE_REGISTRY_INPUT = "images.registry"
 IMAGE_NAMESPACE_INPUT = "images.image_namespace"
+
+# Image key -> repository name under [images] registry.
+REGISTRY_IMAGES = {
+    "core": "core",
+    "files-service": "files-service",
+    "memory-service": "memory-service",
+    "meeting-transcriber": "meeting-transcriber",
+    "agent-host": "burrow-agent-host",
+}
+
+# Image key -> legacy repository name: docker.io/<image_namespace>/suite-core and
+# the rest, exactly as rendered before task 01a14dd8.
+LEGACY_HUB_IMAGES = {
+    "core": "suite-core",
+    "files-service": "suite-files-service",
+    "memory-service": "suite-memory-service",
+    "meeting-transcriber": "suite-meeting-transcriber",
+    "agent-host": "suite-agent-host",
+}
+
+assert set(REGISTRY_IMAGES) == set(LEGACY_HUB_IMAGES), "every image needs both names"
+
+# Images with no published build under [images] registry yet. Measured on
+# 2026-10-18: meeting-transcriber publishes only on a `v*` tag and has no GHCR
+# package, so a registry install that runs it must pin images.refs for it
+# (validate.py), and its default stays the legacy Docker Hub ref only.
+# Delete the entry once the package exists.
+UNPUBLISHED_IN_REGISTRY = frozenset({"meeting-transcriber"})
 
 
 class ImageNamespaceMissing(ValueError):
-    """A render reached an image default with no images.image_namespace."""
+    """A render reached an image default with no image source in [images]."""
+
+
+class ImageUnpublished(ValueError):
+    """A render reached a registry default for an image that has no build there."""
+
+    def __init__(self, key, container):
+        super().__init__(
+            f"{key} has no published image under images.registry yet; "
+            f"pin images.refs.{container} or use the legacy images.image_namespace"
+        )
+        self.key = key
+        self.container = container
+
+
+# Image key -> the container whose images.refs entry overrides it.
+IMAGE_CONTAINERS = {
+    "core": "core-platform",
+    "files-service": "files-service",
+    "memory-service": "memory-service",
+    "meeting-transcriber": "meeting-transcriber",
+    "agent-host": "agent-host",
+}
 
 
 def image_namespace(manifest):
-    namespace = manifest["images"]["image_namespace"]
-    if not namespace:
-        raise ImageNamespaceMissing(
-            f"{IMAGE_NAMESPACE_INPUT} is required and has no default: the Docker Hub "
-            "namespace the suite-* images are pulled from"
-        )
-    return namespace
+    """The legacy Docker Hub namespace, or None."""
+    return manifest["images"].get("image_namespace")
 
 
-def hub_image(manifest, name):
-    """``docker.io/<image_namespace>/<name>``, e.g. ``suite-files-service:latest``."""
-    return f"docker.io/{image_namespace(manifest)}/{name}"
+def image_registry(manifest):
+    """The ``[images] registry`` path, or None."""
+    return manifest["images"].get("registry")
+
+
+def image_repo(manifest, key):
+    """The repository of image ``key`` for this install, without a tag."""
+    registry = image_registry(manifest)
+    if registry:
+        if key in UNPUBLISHED_IN_REGISTRY:
+            raise ImageUnpublished(key, IMAGE_CONTAINERS[key])
+        return f"{registry}/{REGISTRY_IMAGES[key]}"
+    namespace = image_namespace(manifest)
+    if namespace:
+        return f"docker.io/{namespace}/{LEGACY_HUB_IMAGES[key]}"
+    raise ImageNamespaceMissing(
+        f"{IMAGE_REGISTRY_INPUT} is required and has no default: the registry path "
+        "the Burrow images are pulled from (e.g. ghcr.io/<owner>)"
+    )
+
+
+def default_image(manifest, key):
+    """``<repo>:latest`` for the images that publish one tag."""
+    return f"{image_repo(manifest, key)}:latest"
 
 
 def agent_host_image(manifest):
     """The agent-host image's default ref for this install."""
-    return hub_image(manifest, AGENT_HOST_IMAGE_NAME)
+    return default_image(manifest, "agent-host")
 
 
 # `[auth] mode` -> container it adds (None: the identity provider is external).
@@ -152,8 +222,6 @@ MODULE_CORE_ENV = {
     "play": {"GAME_STREAM_ENABLED": "true"},
 }
 
-CORE_IMAGE_NAME = "suite-core"
-
 # Module set -> the image flavour tag CI publishes for it
 # (.github/workflows/ci.yml, `build-and-push`). One release host is built per
 # supported set, so every set an install may select must be listed here; the
@@ -178,12 +246,12 @@ assert set(IMAGE_FLAVOURS) == set(_subsets(MODULES)), (
 
 
 def core_image_repo(manifest):
-    """``docker.io/<image_namespace>/suite-core``."""
-    return hub_image(manifest, CORE_IMAGE_NAME)
+    """``<registry>/core`` (legacy: ``docker.io/<image_namespace>/<LEGACY_HUB_IMAGES["core"]>``)."""
+    return image_repo(manifest, "core")
 
 
 def core_image(ctx):
-    """The core image for the install's module set, e.g. ``suite-core:play``."""
+    """The core image for the install's module set, e.g. ``<registry>/core:play``."""
     return f"{core_image_repo(ctx.m)}:{IMAGE_FLAVOURS[frozenset(ctx.m['install']['modules'])]}"
 
 
@@ -684,6 +752,8 @@ def _pocket_id_injects(ctx):
     out = {
         "core-platform": {
             "OIDC_ISSUER": f"https://{ctx.auth_host}",
+            # KEPT on purpose (task 01a14dd8): the client id is a row in the
+            # install's pocket-id database; renaming it breaks every sign-in.
             "OIDC_CLIENT_ID": "suite-core",
             "OIDC_CLIENT_SECRET": "{secret:OIDC_CLIENT_SECRET}",
             # core's Users page (Platform.SignInAdmin.Config, task 01a113ea). These
@@ -702,7 +772,8 @@ def _pocket_id_injects(ctx):
 
 # LiveKit's API key id is NOT a secret (it travels in every token's `iss`), so
 # it is a fixed literal and livekit.yaml can name it for the webhook while the
-# secret stays in secrets.env (LIVEKIT_KEYS).
+# secret stays in secrets.env (LIVEKIT_KEYS). KEPT on purpose (task 01a14dd8):
+# paired with stored config, and renaming it buys nothing.
 LIVEKIT_API_KEY = "suite"
 LIVEKIT_SIGNAL_PORT = 7880
 LIVEKIT_TCP_PORT = 7881
@@ -790,7 +861,7 @@ def livekit_yaml(ctx):
             f"# LiveKit for install {ctx.m['install']['name']!r} "
             f"(media_reach = {ctx.m['meetings']['media_reach']})."
         ),
-        "# Generated by suite_install; do not edit, re-render. Holds no secret: the",
+        "# Generated by burrow_install; do not edit, re-render. Holds no secret: the",
         "# key pair arrives as LIVEKIT_KEYS from secrets.env.",
         f"port: {LIVEKIT_SIGNAL_PORT}",
         "rtc:",
@@ -898,7 +969,7 @@ SERVICES = {
         Service(
             "core-platform",
             # The flavour of the install's `install.modules` (ADR 0055):
-            # `suite-core:core` with none, `suite-core:play` with Play. Never
+            # `core:core` with none, `core:play` with Play. Never
             # `latest`, which is a moving tag kept for the hand-maintained
             # reference-install quadlets (deployment/schema/install-modules.md).
             core_image,
@@ -949,7 +1020,7 @@ SERVICES = {
         ),
         Service(
             "files-service",
-            lambda ctx: hub_image(ctx.m, "suite-files-service:latest"),
+            lambda ctx: default_image(ctx.m, "files-service"),
             private_image=True,
             env=lambda ctx: {
                 "PORT": "8200",
@@ -966,7 +1037,7 @@ SERVICES = {
         ),
         Service(
             "memory-service",
-            lambda ctx: hub_image(ctx.m, "suite-memory-service:latest"),
+            lambda ctx: default_image(ctx.m, "memory-service"),
             private_image=True,
             env=_memory_env,
             injects=lambda ctx: {
@@ -1044,7 +1115,7 @@ SERVICES = {
         ),
         Service(
             TRANSCRIBER,
-            lambda ctx: hub_image(ctx.m, "suite-meeting-transcriber:latest"),
+            lambda ctx: default_image(ctx.m, "meeting-transcriber"),
             private_image=True,
             env=_transcriber_env,
             injects=lambda ctx: {

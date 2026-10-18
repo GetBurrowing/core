@@ -43,11 +43,14 @@ AGENT_HOST_DIR = os.path.join(REPO, "services", "agent-host")
 CI_WORKFLOW = os.path.join(REPO, ".github", "workflows", "ci.yml")
 
 sys.path.insert(0, INSTALLER)
+sys.path.insert(0, HERE)
 
-from suite_install import agents
-from suite_install.manifest import load
-from suite_install.render import RenderError, build
-from suite_install.validate import validate
+from migrate_embed import cut_migrate_script
+
+from burrow_install import agents
+from burrow_install.manifest import load
+from burrow_install.render import RenderError, build
+from burrow_install.validate import validate
 
 
 def manifest_from(path):
@@ -108,9 +111,9 @@ class PositiveControl(unittest.TestCase):
     def test_readers_find_the_stack_unit_and_core_platform(self):
         rendered = build(manifest_from(EXAMPLE))
         files = write_files(rendered.files["user-data"][0])
-        self.assertIn("/etc/systemd/system/suite-stack.service", files)
-        self.assertEqual(files["/opt/suite/secrets.env"][0], "0600")
-        self.assertEqual(files["/opt/suite/compose.yaml"][1], rendered.files["compose.yaml"][0])
+        self.assertIn("/etc/systemd/system/burrow-stack.service", files)
+        self.assertEqual(files["/opt/burrow/secrets.env"][0], "0600")
+        self.assertEqual(files["/opt/burrow/compose.yaml"][1], rendered.files["compose.yaml"][0])
         services = compose_services(rendered.files["compose.yaml"][0])
         self.assertIn("core-platform", services)
         self.assertIn("core-postgres", services)
@@ -193,12 +196,14 @@ class OffTest(unittest.TestCase):
             self.assertEqual(absent[rel], explicit[rel], rel)
 
     def test_off_renders_no_agent_literal(self):
-        text = "\n".join(build(manifest_from(EXAMPLE)).redacted().values())
-        for literal in ("AGENT_HOST", "agent-host", "suite-agent", "sudoers", "agents"):
+        # bin/burrow-migrate names the agent host on every render (migrate_embed.py).
+        text, cut = cut_migrate_script("\n".join(build(manifest_from(EXAMPLE)).redacted().values()))
+        self.assertEqual(cut, 1)
+        for literal in ("AGENT_HOST", "agent-host", "burrow-agent", "sudoers", "agents"):
             self.assertNotIn(literal, text)
         # Positive control: the same search hits a full_machine render.
         full = "\n".join(build(manifest_from(FULL)).redacted().values())
-        for literal in ("AGENT_HOST", "agent-host", "suite-agent", "sudoers"):
+        for literal in ("AGENT_HOST", "agent-host", "burrow-agent", "sudoers"):
             self.assertIn(literal, full)
 
 
@@ -214,7 +219,8 @@ class FullMachineTest(unittest.TestCase):
         self.assertEqual(perms, "0440")
         self.assertEqual(text, agents.SUDOERS)
         grants = [ln for ln in text.splitlines() if ln and not ln.startswith("#")]
-        self.assertEqual(grants, ["%suite-agents ALL=(ALL) NOPASSWD:ALL"])
+        self.assertEqual(grants, ["%burrow-agents ALL=(ALL) NOPASSWD:ALL"])
+        self.assertEqual(agents.SUDOERS_PATH, "/etc/sudoers.d/burrow-agents")
 
     def test_sudoers_passes_visudo(self):
         visudo = shutil.which("visudo") or (
@@ -223,7 +229,7 @@ class FullMachineTest(unittest.TestCase):
         if visudo is None:
             self.skipTest("visudo not installed here (the agent-host image build runs it too)")
         with tempfile.TemporaryDirectory(prefix="sudoers-01a10322-") as tmp:
-            good = os.path.join(tmp, "suite-agents")
+            good = os.path.join(tmp, "burrow-agents")
             with open(good, "w", encoding="utf-8") as handle:
                 handle.write(self.files[agents.SUDOERS_PATH][1])
             ok = subprocess.run([visudo, "-cf", good], capture_output=True, text=True, check=False)
@@ -231,31 +237,36 @@ class FullMachineTest(unittest.TestCase):
             # Positive control: visudo really rejects a broken file.
             bad = os.path.join(tmp, "broken")
             with open(bad, "w", encoding="utf-8") as handle:
-                handle.write("%suite-agents ALL=(ALL NOPASSWD:ALL\n")
+                handle.write("%burrow-agents ALL=(ALL NOPASSWD:ALL\n")
             ko = subprocess.run([visudo, "-cf", bad], capture_output=True, text=True, check=False)
             self.assertNotEqual(ko.returncode, 0)
 
     def test_both_units_and_the_setup_unit_are_written(self):
         self.assertEqual(
-            self.files["/etc/systemd/system/suite-agent-host.service"],
+            self.files["/etc/systemd/system/burrow-agent-host.service"],
             ("0644", agents.HOST_UNIT),
         )
         self.assertEqual(
-            self.files["/etc/systemd/system/suite-agent@.service"],
+            self.files["/etc/systemd/system/burrow-agent@.service"],
             ("0644", agents.AGENT_TEMPLATE_UNIT),
         )
-        setup = self.files["/etc/systemd/system/suite-agent-host-setup.service"][1]
-        self.assertIn("ExecStart=/opt/suite/bin/suite-agent-host-setup", setup)
-        dropin = self.files["/etc/systemd/system/suite-agent-host.service.d/10-full-machine.conf"]
-        self.assertIn("Requires=suite-agent-host-setup.service", dropin[1])
+        setup = self.files["/etc/systemd/system/burrow-agent-host-setup.service"][1]
+        self.assertIn("ExecStart=/opt/burrow/bin/burrow-agent-host-setup", setup)
+        dropin = self.files["/etc/systemd/system/burrow-agent-host.service.d/10-full-machine.conf"]
+        self.assertIn("Requires=burrow-agent-host-setup.service", dropin[1])
+        self.assertIn("After=burrow-agent-host-setup.service burrow-stack.service", dropin[1])
         self.assertIn(
-            '["systemctl", "enable", "suite-agent-host-setup.service", "suite-agent-host.service"]',
+            '["systemctl", "enable", "burrow-agent-host-setup.service", "burrow-agent-host.service"]',
             self.user_data,
         )
         self.assertIn(
-            "Wants=suite-agent-host.service",
-            self.files["/etc/systemd/system/suite-stack.service"][1],
+            "Wants=burrow-agent-host.service",
+            self.files["/etc/systemd/system/burrow-stack.service"][1],
         )
+        env = self.files["/etc/burrow-agent-host.env"]
+        self.assertEqual(env[0], "0600")
+        self.assertIn("Read by burrow-agent-host.service only.", env[1])
+        self.assertIn("/etc/burrow-agent-host/versions.env", self.files)
 
     def test_the_cli_pins_are_the_ones_in_versions_env(self):
         pins = [
@@ -278,8 +289,17 @@ class FullMachineTest(unittest.TestCase):
         self.assertEqual(perms, "0644")
         for pin in pins:
             self.assertIn(pin, text.splitlines())
-        script = self.files["/opt/suite/bin/suite-agent-host-setup"][1]
+        script = self.files["/opt/burrow/bin/burrow-agent-host-setup"][1]
         self.assertIn(f'install-tools.sh" {agents.VERSIONS_PATH}', script)
+
+    def test_setup_script_uses_the_burrow_group_and_daemon_path(self):
+        # services/agent-host/src/ids.ts AGENTS_GROUP and the image's WORKDIR.
+        script = self.files["/opt/burrow/bin/burrow-agent-host-setup"][1]
+        self.assertIn("groupadd --system burrow-agents", script)
+        self.assertIn('docker cp "$ctr:/opt/burrow/agent-host" "$dest.incoming"', script)
+        self.assertIn("dest=/opt/burrow/agent-host", script)
+        ids = read(os.path.join(AGENT_HOST_DIR, "src", "ids.ts"))
+        self.assertIn(f'"{agents.AGENTS_GROUP}"', ids)
 
     def test_agent_host_env_is_0600_and_carries_the_same_token_as_core(self):
         perms, text = self.files[agents.HOST_ENV_PATH]
@@ -289,8 +309,8 @@ class FullMachineTest(unittest.TestCase):
         self.assertIn(f"AGENT_HOST_TOKEN={token}\n", self.rendered.files["secrets.env"][0])
         self.assertIn("AGENT_HOST_PROFILE=full_machine\n", text)
         self.assertIn(
-            "BURROW_CORE_URL=https://suite-01a0d69d.test\n"
-            "SUITE_CORE_URL=https://suite-01a0d69d.test\n",
+            "BURROW_CORE_URL=https://burrow-01a0d69d.test\n"
+            "SUITE_CORE_URL=https://burrow-01a0d69d.test\n",
             text,
         )
         # Only that: no other secret of the install reaches the host daemon.
@@ -305,13 +325,15 @@ class FullMachineTest(unittest.TestCase):
         self.assertNotIn("AGENT_HOST_CORE_URL", self.rendered.files["compose.yaml"][0])
 
     def test_internal_tls_root_is_trusted_by_the_host(self):
-        script = self.files["/opt/suite/bin/suite-agent-host-setup"][1]
+        script = self.files["/opt/burrow/bin/burrow-agent-host-setup"][1]
         self.assertIn("update-ca-certificates", script)
         # Positive control: an acme install has no internal root to trust.
         raw = load(FULL)
-        raw["domain"] = {"primary": "suite.example.com", "tls": "acme", "acme_email": "a@b.co"}
+        raw["domain"] = {"primary": "burrow.example.com", "tls": "acme", "acme_email": "a@b.co"}
         _e, m = validate(raw)
-        acme = write_files(build(m).files["user-data"][0])["/opt/suite/bin/suite-agent-host-setup"]
+        acme = write_files(build(m).files["user-data"][0])[
+            "/opt/burrow/bin/burrow-agent-host-setup"
+        ]
         self.assertNotIn("update-ca-certificates", acme[1])
 
     def test_host_packages_are_added_only_for_full_machine(self):
@@ -323,9 +345,9 @@ class FullMachineTest(unittest.TestCase):
     def test_registry_source_needs_registry_auth_for_the_agent_host_image(self):
         raw = load(FULL)
         raw["images"] = {
-            "image_namespace": "example",
+            "registry": "ghcr.io/example",
             "source": "registry",
-            "refs": {"core-platform": "registry.example.com/suite-core:1"},
+            "refs": {"core-platform": "registry.example.com/core:1"},
         }
         _e, m = validate(raw)
         with self.assertRaises(RenderError) as ctx:
@@ -383,7 +405,7 @@ class ContainedTest(unittest.TestCase):
 
     def test_agent_host_runs_systemd_with_persistent_homes(self):
         block = self.services["agent-host"]
-        self.assertIn('image: "docker.io/example/suite-agent-host:latest"', block)
+        self.assertIn('image: "ghcr.io/example/burrow-agent-host:latest"', block)
         self.assertIn('stop_signal: "SIGRTMIN+3"', block)
         self.assertIn('- "agent-homes:/home"', block)
         self.assertIn('- "/run"', block)
@@ -392,9 +414,11 @@ class ContainedTest(unittest.TestCase):
         self.assertTrue(self.files)  # positive control: the reader found write_files
         for path in self.files:
             self.assertNotIn("sudoers", path)
-            self.assertNotIn("suite-agent", path)
-        self.assertNotIn("sudoers", self.rendered.files["user-data"][0])
-        self.assertNotIn("NOPASSWD", self.rendered.files["user-data"][0])
+            self.assertNotIn("burrow-agent", path)
+        user_data, cut = cut_migrate_script(self.rendered.files["user-data"][0])
+        self.assertEqual(cut, 1)  # bin/burrow-migrate (migrate_embed.py)
+        self.assertNotIn("sudoers", user_data)
+        self.assertNotIn("NOPASSWD", user_data)
 
 
 class PackagingTest(unittest.TestCase):
@@ -403,9 +427,9 @@ class PackagingTest(unittest.TestCase):
     def test_embedded_texts_equal_the_agent_host_files(self):
         for name, path in (
             ("VERSIONS_ENV", "versions.env"),
-            ("SUDOERS", "packaging/sudoers-suite-agents"),
-            ("HOST_UNIT", "packaging/suite-agent-host.service"),
-            ("AGENT_TEMPLATE_UNIT", "packaging/suite-agent@.service"),
+            ("SUDOERS", "packaging/sudoers-burrow-agents"),
+            ("HOST_UNIT", "packaging/burrow-agent-host.service"),
+            ("AGENT_TEMPLATE_UNIT", "packaging/burrow-agent@.service"),
         ):
             with self.subTest(name=name):
                 self.assertEqual(getattr(agents, name), read(os.path.join(AGENT_HOST_DIR, path)))
@@ -413,9 +437,12 @@ class PackagingTest(unittest.TestCase):
     def test_the_image_installs_the_same_files_and_checks_the_sudoers(self):
         dockerfile = read(os.path.join(AGENT_HOST_DIR, "Dockerfile"))
         self.assertIn(
-            "install -m 0440 packaging/sudoers-suite-agents /etc/sudoers.d/suite-agents", dockerfile
+            "install -m 0440 packaging/sudoers-burrow-agents /etc/sudoers.d/burrow-agents",
+            dockerfile,
         )
-        self.assertIn("visudo -cf /etc/sudoers.d/suite-agents", dockerfile)
+        self.assertIn("visudo -cf /etc/sudoers.d/burrow-agents", dockerfile)
+        # The setup script copies the daemon from where the image puts it.
+        self.assertIn(f"WORKDIR {agents.INSTALL_ROOT}/agent-host", dockerfile)
         self.assertIn("RUN sh ./packaging/install-tools.sh ./versions.env", dockerfile)
         self.assertIn('CMD ["/sbin/init"]', dockerfile)
 
@@ -426,9 +453,13 @@ class PackagingTest(unittest.TestCase):
         self.assertIn('git diff --quiet "$BEFORE" "$GITHUB_SHA" -- services/agent-host', job)
         push = job.split("- name: Build and push agent-host\n", 1)[1]
         self.assertIn("if: steps.changed.outputs.agent_host == 'true'", push)
-        hub = "docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-agent-host"
-        self.assertIn(f"{hub}:latest", push)
-        self.assertIn(f"{hub}:${{{{ github.sha }}}}", push)
+        # The registry default (task 01a14dd8) and the legacy image_namespace default.
+        for repo in (
+            "ghcr.io/startup-suite/burrow-agent-host",
+            "docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-agent-host",
+        ):
+            self.assertIn(f"{repo}:latest", push)
+            self.assertIn(f"{repo}:${{{{ github.sha }}}}", push)
         self.assertIn("if: github.event_name == 'push' && github.ref == 'refs/heads/main'", job)
 
 

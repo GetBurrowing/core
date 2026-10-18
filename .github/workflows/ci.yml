@@ -944,9 +944,12 @@ jobs:
       # published, not on the first arm64 host that boots the image. The env
       # values are throwaway dummies generated per run (no DB is contacted:
       # `eval` loads config and code but starts no application).
+      # The run pulls the digest from GHCR, not Docker Hub (task 01a14dd8):
+      # the build pushes the same digest under both names, and the job is
+      # already logged in to ghcr.io above.
       - name: Smoke-run the image natively (NIFs load)
         env:
-          IMAGE: docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-core@${{ steps.build.outputs.digest }}
+          IMAGE: ghcr.io/startup-suite/core@${{ steps.build.outputs.digest }}
           EXPECTED_ARCH: ${{ matrix.arch == 'arm64' && 'aarch64' || 'x86_64' }}
         run: |
           d() { head -c 48 /dev/urandom | base64 | tr -d '\n'; }
@@ -1100,7 +1103,7 @@ jobs:
   # image is a named follow-up of task 01a0d6ab (the Mac target runs the
   # `core` flavour).
   #
-  # deployment/installer/suite_install/registry.py IMAGE_FLAVOURS names the
+  # deployment/installer/burrow_install/registry.py IMAGE_FLAVOURS names the
   # flavour tags a rendered install runs; deployment/installer/tests pins
   # that every one of them is published by this workflow.
   build-and-push-play:
@@ -1222,13 +1225,15 @@ jobs:
 
   build-and-push-agent-host:
     # Native agents' host image, `contained` profile (task 01a10322 stage 3):
-    # the Docker Hub and GHCR suite-agent-host images, :latest and :<sha>, from
-    # services/agent-host/Dockerfile. Pushed ONLY when a push to main changes
-    # services/agent-host/**, because every push restarts every agent on an
-    # AutoUpdate=registry host. Independent of `test`: nothing in
+    # ghcr.io/startup-suite/burrow-agent-host, :latest and :<sha>, from
+    # services/agent-host/Dockerfile. The pre-rename suite-agent-host tags
+    # (Docker Hub and GHCR) are still pushed beside it, because hosts installed
+    # before the rename pull that name (task 01a14dd8). Pushed ONLY when a
+    # push to main changes services/agent-host/**, because every push restarts
+    # every agent on an AutoUpdate=registry host. Independent of `test`: nothing in
     # this image is built from the Elixir tree, and its own typecheck and unit
     # tests gate the push. The full_machine profile copies the daemon out of the
-    # same image at first boot (deployment/installer/suite_install/agents.py).
+    # same image at first boot (deployment/installer/burrow_install/agents.py).
     name: Build and push agent-host image
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: [self-hosted, linux, x64]
@@ -1274,7 +1279,7 @@ jobs:
         if: steps.changed.outputs.agent_host == 'true'
         run: |
           docker run --rm -v "$PWD/services/agent-host:/src:ro" docker.io/oven/bun:1 sh -c \
-            'cp -r /src /w && cd /w && bun install --frozen-lockfile && bunx tsc --noEmit && bun test test/unit.test.ts'
+            'cp -r /src /w && cd /w && bun install --frozen-lockfile && bunx tsc --noEmit && bun test test/unit.test.ts test/legacy.test.ts'
 
       # Per-job Docker config: the self-hosted runners on one host share
       # ~/.docker/config.json, and a login left behind by a job that dies
@@ -1314,6 +1319,8 @@ jobs:
             docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-agent-host:${{ github.sha }}
             ghcr.io/startup-suite/suite-agent-host:latest
             ghcr.io/startup-suite/suite-agent-host:${{ github.sha }}
+            ghcr.io/startup-suite/burrow-agent-host:latest
+            ghcr.io/startup-suite/burrow-agent-host:${{ github.sha }}
 
   # Install-manifest tooling (ADR 0053, task 01a0d69d): the validator and the
   # single-host renderer under deployment/installer. Python STANDARD LIBRARY

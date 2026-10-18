@@ -15,11 +15,11 @@
 schema_version = 1
 
 [install]
-name = "suite-01a0d69d"
+name = "burrow-01a0d69d"
 size_tier = "medium"
 
 [domain]
-primary = "suite-01a0d69d.test"
+primary = "burrow-01a0d69d.test"
 tls = "acme"
 
 [host]
@@ -44,7 +44,7 @@ mode = "bundled-pocket-id"
 target = "none"
 
 [images]
-image_namespace = "example"
+registry = "ghcr.io/example"
 source = "preloaded"
 
 [day2]

@@ -2,12 +2,12 @@
 schema_version = 1
 
 [install]
-name = "suite-gpu-test"
+name = "burrow-gpu-test"
 
 [domain]
-primary = "suite-gpu.test"
+primary = "burrow-gpu.test"
 tls = "acme"
-acme_email = "ops@suite-gpu.test"
+acme_email = "ops@burrow-gpu.test"
 
 [host]
 gpu = true
@@ -22,5 +22,5 @@ embeddings = false
 accelerator = "cuda"
 
 [images]
-image_namespace = "example"
+registry = "ghcr.io/example"
 source = "preloaded"

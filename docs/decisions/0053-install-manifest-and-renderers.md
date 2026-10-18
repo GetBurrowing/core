@@ -635,7 +635,7 @@ credentials are off limits. Procedure for a human on a logged-in Mac:
    put `deployment/installer/mac` on `PATH`. Have the domain, a 0600 Cloudflare token file and
    a 0600 OpenAI key file ready.
 2. Make an empty directory and install the skill there as a project skill:
-   `mkdir -p .claude/skills/suite-install-mac && cp ~/suite-src/deployment/installer/skill/SKILL.md .claude/skills/suite-install-mac/`.
+   `mkdir -p .claude/skills/burrow-install-mac && cp ~/suite-src/deployment/installer/skill/SKILL.md .claude/skills/burrow-install-mac/`.
    Start `claude` in that directory. Type `MARKER-01a0d6ab-transcript` as the first message,
    then `Install Burrow on this Mac.` Answer only what the agent asks. Add the passkey in the
    browser window it opens, then say so.

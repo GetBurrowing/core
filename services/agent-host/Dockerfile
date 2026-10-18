@@ -2,7 +2,7 @@
 #
 # A SYSTEMD-INIT image: systemd is PID 1 (podman runs it in systemd mode), so
 # agents use the same `sudo systemctl`, `systemctl --user` and `crontab` as on
-# full_machine, and stage 2's suite-agent@ units run unchanged.
+# full_machine, and stage 2's burrow-agent@ units run unchanged.
 #
 # Agents get passwordless sudo INSIDE this container. Under rootless podman
 # container root is not host root: an agent is root over this container (every
@@ -22,7 +22,7 @@ RUN apt-get update \
     && systemctl mask getty.target console-getty.service systemd-firstboot.service \
        systemd-udevd.service systemd-udevd-control.socket systemd-udevd-kernel.socket
 
-WORKDIR /opt/suite/agent-host
+WORKDIR /opt/burrow/agent-host
 
 # Tools first: the slowest layer changes only with versions.env.
 COPY versions.env ./versions.env
@@ -37,12 +37,12 @@ COPY packaging ./packaging
 # (src/conventions.ts); fail here if the pinned suite-cli no longer exports them.
 RUN bun run src/conventions.ts --check
 
-RUN groupadd --system suite-agents \
-    && install -m 0440 packaging/sudoers-suite-agents /etc/sudoers.d/suite-agents \
-    && visudo -cf /etc/sudoers.d/suite-agents \
-    && install -m 0644 packaging/suite-agent-host.service /etc/systemd/system/suite-agent-host.service \
-    && install -m 0644 "packaging/suite-agent@.service" "/etc/systemd/system/suite-agent@.service" \
-    && systemctl enable suite-agent-host.service
+RUN groupadd --system burrow-agents \
+    && install -m 0440 packaging/sudoers-burrow-agents /etc/sudoers.d/burrow-agents \
+    && visudo -cf /etc/sudoers.d/burrow-agents \
+    && install -m 0644 packaging/burrow-agent-host.service /etc/systemd/system/burrow-agent-host.service \
+    && install -m 0644 "packaging/burrow-agent@.service" "/etc/systemd/system/burrow-agent@.service" \
+    && systemctl enable burrow-agent-host.service
 
 # Read through the unit's PassEnvironment; an EnvironmentFile entry wins.
 ENV AGENT_HOST_PROFILE=contained

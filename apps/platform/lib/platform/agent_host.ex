@@ -14,7 +14,7 @@ defmodule Platform.AgentHost do
 
   ## What runs where
 
-  On the host, every native agent is a systemd unit `suite-agent@<agent_id>`
+  On the host, every native agent is a systemd unit `burrow-agent@<agent_id>`
   running the real Claude Code CLI through suite-cli, as its own OS user
   (`agent-<short id>`). Per-agent users stop agents from crossing into each
   other BY ACCIDENT. They are not a security boundary: an install is one trust

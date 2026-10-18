@@ -1,5 +1,5 @@
 /**
- * What `suite-agent@<id>.service` runs, AS THE AGENT'S OWN USER.
+ * What `burrow-agent@<id>.service` runs, AS THE AGENT'S OWN USER.
  *
  * 1. `suite claude --session suite-agent` in the agent's work dir, with no
  *    terminal. suite-cli does all the Claude wiring (plugin checkout, MCP
@@ -63,7 +63,7 @@ if (import.meta.main) {
       return { exitCode, stdout };
     },
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
-    log: (line) => console.error(`suite-agent: ${line}`),
+    log: (line) => console.error(`burrow-agent: ${line}`),
     stopping: () => stopping,
   };
   process.on("SIGTERM", () => {

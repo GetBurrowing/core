@@ -21,6 +21,7 @@ import { resolve } from "node:path";
 import { readEnv } from "./env.ts";
 import { SecretRegistry, liveRunner } from "./exec.ts";
 import { Host, WATCH_MS } from "./host.ts";
+import { adoptLegacy, liveLegacyFs } from "./legacy.ts";
 import { PhoenixChannel, agentHostUrl, bunSocket } from "./phoenix.ts";
 
 const PROFILES = new Set(["full_machine", "contained"]);
@@ -56,7 +57,7 @@ if (import.meta.main) {
   secrets.add(token);
 
   // The unit execs bun on the runner, as the agent. Both paths must be
-  // readable by every agent user (they are, under /opt/suite or /usr/local).
+  // readable by every agent user (they are, under /opt/burrow or /usr/local).
   const runnerCommand = [process.execPath, "run", resolve(import.meta.dir, "runner.ts")];
   if (runnerCommand.some((p) => /\s/.test(p))) {
     console.error("agent-host: install path contains whitespace; systemd ExecStart cannot carry it");
@@ -64,6 +65,13 @@ if (import.meta.main) {
   }
 
   const deps = { runner: liveRunner(secrets), secrets, runnerCommand, log };
+
+  // Agents a pre-rename host runs as suite-agent@<id> move to burrow-agent@<id>
+  // before any command arrives (legacy.ts). A failure is logged, not fatal.
+  await adoptLegacy({ runner: deps.runner, fs: liveLegacyFs, runnerCommand, log }).catch((e: unknown) =>
+    log(`legacy adoption failed: ${String(e)}`),
+  );
+
   const channel: PhoenixChannel = new PhoenixChannel({
     url: agentHostUrl(coreUrl),
     headers: { "x-agent-host-token": token },

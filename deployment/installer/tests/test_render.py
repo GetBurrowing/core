@@ -41,18 +41,20 @@ GOLDEN = os.path.join(HERE, "golden")
 sys.path.insert(0, INSTALLER)
 
 from identity_terms import identity_hits, planted_term
+from migrate_embed import cut_migrate_script
 
-from suite_install import envcompat, registry
-from suite_install.__main__ import main
-from suite_install.manifest import load
-from suite_install.render import TARGETS, RenderError, build, plan, render
-from suite_install.secrets import parse_env_file
-from suite_install.validate import validate
+from burrow_install import envcompat, registry
+from burrow_install.__main__ import main
+from burrow_install.manifest import load
+from burrow_install.render import TARGETS, RenderError, build, plan, render
+from burrow_install.secrets import parse_env_file
+from burrow_install.validate import validate
 
 MEMORY_OFF = os.path.join(RENDER_FIXTURES, "single-host-memory-off.toml")
 VOICE_CUDA = os.path.join(RENDER_FIXTURES, "voice-cuda-gpu.toml")
 BYO = os.path.join(RENDER_FIXTURES, "byo-endpoint.toml")
 PLAY = os.path.join(RENDER_FIXTURES, "single-host-play.toml")
+MAC_MEETINGS = os.path.join(REPO, "deployment", "examples", "mac.install.toml")
 CI_WORKFLOW = os.path.join(REPO, ".github", "workflows", "ci.yml")
 
 # The knobs the single-host target runs. `meetings` is a mac-only knob in v1
@@ -122,14 +124,14 @@ def run_cli(*argv):
 class TempDirMixin:
     def setUp(self):
         super().setUp()
-        self.tmp = tempfile.mkdtemp(prefix="suite-install-01a0d69d-")
+        self.tmp = tempfile.mkdtemp(prefix="burrow-install-01a0d69d-")
         self.addCleanup(shutil.rmtree, self.tmp, True)
         if _inside_git(self.tmp):
             self.skipTest(f"the temp dir {self.tmp} is inside a git work tree")
 
 
 def _inside_git(path):
-    from suite_install.render import inside_git_worktree
+    from burrow_install.render import inside_git_worktree
 
     return inside_git_worktree(path)
 
@@ -327,7 +329,7 @@ class KnobTest(PositiveControlMixin, unittest.TestCase):
         for rel, (text, mode) in rendered.files.items():
             if rel in ("user-data", "meta-data", "registry-auth.json"):
                 continue
-            entry = by_path[f"/opt/suite/{rel}"]
+            entry = by_path[f"/opt/burrow/{rel}"]
             self.assertEqual(entry["content"], text, rel)
             self.assertEqual(entry["permissions"], f"0{mode:o}", rel)
 
@@ -456,7 +458,7 @@ class SecretsTest(PositiveControlMixin, TempDirMixin, unittest.TestCase):
     def test_preloaded_gates_the_unit_and_never_pulls(self):
         rendered = build(manifest_from(EXAMPLE))
         self.assertIn(
-            "ConditionPathExists=/opt/suite/.images-loaded", rendered.files["user-data"][0]
+            "ConditionPathExists=/opt/burrow/.images-loaded", rendered.files["user-data"][0]
         )
         compose = rendered.files["compose.yaml"][0]
         self.assertEqual(
@@ -629,7 +631,7 @@ class TargetAndTlsTest(PositiveControlMixin, unittest.TestCase):
         self.assertEqual(registry.CASTORE_PATH, "/app/lib/castore-1.0.17/priv/cacerts.pem")
         self.assertIn(f'"./tls/ca-bundle.pem:{registry.CASTORE_PATH}:ro"', compose)
         user_data = rendered.files["user-data"][0]
-        self.assertIn("/opt/suite/bin/suite-root-ca", user_data)
+        self.assertIn("/opt/burrow/bin/burrow-root-ca", user_data)
         self.assertIn(f"castore='{registry.CASTORE_PATH}'", user_data)
         self.assertIn("\ttls internal\n", rendered.files["Caddyfile"][0])
         # The root key is generated on the host; no key material is rendered.
@@ -638,24 +640,24 @@ class TargetAndTlsTest(PositiveControlMixin, unittest.TestCase):
     def test_acme_renders_email_and_no_internal_ca(self):
         rendered = build(manifest_from(VOICE_CUDA))
         caddy = rendered.files["Caddyfile"][0]
-        self.assertIn("\temail ops@suite-gpu.test\n", caddy)
+        self.assertIn("\temail ops@burrow-gpu.test\n", caddy)
         self.assertNotIn("tls internal", caddy)
         text = all_text(rendered)
         self.assertNotIn("ca-bundle", text)
         self.assertNotIn(registry.CASTORE_PATH, text)
-        self.assertNotIn("suite-root-ca", text)
+        self.assertNotIn("burrow-root-ca", text)
 
     def test_bundled_auth_wires_core_to_pocket_id(self):
         compose = build(manifest_from(EXAMPLE)).files["compose.yaml"][0]
         core = compose.split("\n  core-platform:\n", 1)[1].split("\n  core-postgres:\n", 1)[0]
         for line in (
-            'OIDC_ISSUER: "https://auth.suite-01a0d69d.test"',
+            'OIDC_ISSUER: "https://auth.burrow-01a0d69d.test"',
             'OIDC_PKCE_ENABLED: "true"',
-            'APP_URL: "https://suite-01a0d69d.test"',
-            'PHX_HOST: "suite-01a0d69d.test"',
+            'APP_URL: "https://burrow-01a0d69d.test"',
+            'PHX_HOST: "burrow-01a0d69d.test"',
         ):
             self.assertIn(line, core)
-        self.assertIn('- "auth.suite-01a0d69d.test"', compose)
+        self.assertIn('- "auth.burrow-01a0d69d.test"', compose)
 
     def test_external_oidc_drops_pocket_id_and_uses_the_customer_secret(self):
         raw = load(EXAMPLE)
@@ -665,14 +667,14 @@ class TargetAndTlsTest(PositiveControlMixin, unittest.TestCase):
             "client_id": "suite",
             "client_secret_ref": "CUSTOMER_OIDC_SECRET",
         }
-        with tempfile.TemporaryDirectory(prefix="suite-install-01a0d69d-") as tmp:
+        with tempfile.TemporaryDirectory(prefix="burrow-install-01a0d69d-") as tmp:
             supplied = os.path.join(tmp, "c.env")
             with open(supplied, "w") as handle:
                 handle.write("CUSTOMER_OIDC_SECRET=oidc-value-01a0d69d\n")
             rendered = build(valid(raw), customer_secrets=supplied)
         text = all_text(rendered)
         self.assertNotIn("pocket-id", text)
-        self.assertNotIn("auth.suite-01a0d69d.test", text)
+        self.assertNotIn("auth.burrow-01a0d69d.test", text)
         self.assertIn("OIDC_CLIENT_SECRET=oidc-value-01a0d69d", rendered.files["secrets.env"][0])
         self.assertNotIn("customer-secrets.env", rendered.files)
         self.assertIn(
@@ -699,7 +701,7 @@ def external_oidc_render(path):
         "client_id": "suite",
         "client_secret_ref": "CUSTOMER_OIDC_SECRET",
     }
-    with tempfile.TemporaryDirectory(prefix="suite-install-01a113ea-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="burrow-install-01a113ea-") as tmp:
         supplied = os.path.join(tmp, "c.env")
         with open(supplied, "w") as handle:
             handle.write("CUSTOMER_OIDC_SECRET=oidc-value-01a113ea\n")
@@ -851,7 +853,8 @@ def _ci_main_build_steps():
 
 
 # CI publishes Docker Hub refs under the repo variable, never a literal
-# namespace (task 01a14b9e); the installer's are under images.image_namespace.
+# namespace (task 01a14b9e); the installer's legacy refs are under
+# images.image_namespace, its registry refs under images.registry (01a14dd8).
 CI_NAMESPACE = "${{ vars.DOCKERHUB_NAMESPACE }}"
 
 
@@ -861,7 +864,7 @@ def _published_tags(step):
     The namespace expression is read as the token ``<ns>``.
     """
     step = step.replace(CI_NAMESPACE, "<ns>")
-    refs = re.findall(r"^\s+(?:-t )?(docker\.io/\S+?)(?: \\)?$", step, flags=re.MULTILINE)
+    refs = re.findall(r"^\s+(?:-t )?((?:docker|ghcr)\.io/\S+?)(?: \\)?$", step, flags=re.MULTILINE)
     return set(refs)
 
 
@@ -873,10 +876,10 @@ class ModuleFlavourTest(PositiveControlMixin, unittest.TestCase):
         return plan(manifest).core_image
 
     def test_no_modules_runs_the_core_flavour(self):
-        self.assertEqual(self.core_image(EXAMPLE), "docker.io/example/suite-core:core")
+        self.assertEqual(self.core_image(EXAMPLE), "ghcr.io/example/core:core")
 
     def test_play_runs_the_play_flavour(self):
-        self.assertEqual(self.core_image(PLAY), "docker.io/example/suite-core:play")
+        self.assertEqual(self.core_image(PLAY), "ghcr.io/example/core:play")
 
     def test_play_fixture_differs_from_example_in_one_field(self):
         example, play = load(EXAMPLE), load(PLAY)
@@ -903,7 +906,7 @@ class ModuleFlavourTest(PositiveControlMixin, unittest.TestCase):
                     removed = core[rel].splitlines()[i1:i2]
                     added = play[rel].splitlines()[j1:j2]
                     self.assertEqual(
-                        [line.replace("suite-core:core", "suite-core:play") for line in removed],
+                        [line.replace("/core:core", "/core:play") for line in removed],
                         [line for line in added if "GAME_STREAM_ENABLED" not in line],
                         f"{rel}: selecting play changed more than the image and its gate",
                     )
@@ -920,8 +923,8 @@ class ModuleFlavourTest(PositiveControlMixin, unittest.TestCase):
 
     def test_an_explicit_core_image_ref_wins_over_the_flavour(self):
         raw = load(PLAY)
-        raw["images"]["refs"] = {"core-platform": "registry.example/suite-core:play-pinned"}
-        self.assertEqual(self.core_image(raw), "registry.example/suite-core:play-pinned")
+        raw["images"]["refs"] = {"core-platform": "registry.example/core:play-pinned"}
+        self.assertEqual(self.core_image(raw), "registry.example/core:play-pinned")
 
     def test_every_module_set_has_a_flavour(self):
         self.assertEqual(
@@ -940,7 +943,12 @@ class ModuleFlavourTest(PositiveControlMixin, unittest.TestCase):
         published = set().union(*map(_published_tags, steps))
         for module_set, tag in registry.IMAGE_FLAVOURS.items():
             with self.subTest(modules=sorted(module_set)):
-                self.assertIn(f"docker.io/<ns>/{registry.CORE_IMAGE_NAME}:{tag}", published)
+                # The registry default CI publishes, and the legacy Docker Hub one.
+                ghcr = f"ghcr.io/startup-suite/{registry.REGISTRY_IMAGES['core']}:{tag}"
+                self.assertIn(ghcr, published)
+                self.assertIn(
+                    f"docker.io/<ns>/{registry.LEGACY_HUB_IMAGES['core']}:{tag}", published
+                )
 
     def test_ci_names_no_literal_docker_hub_namespace(self):
         # Every suite-* ref CI tags or pushes on Docker Hub is built from the
@@ -954,71 +962,227 @@ class ModuleFlavourTest(PositiveControlMixin, unittest.TestCase):
         self.assertEqual(set(found), {CI_NAMESPACE})
         self.assertEqual(pattern.findall("x docker.io/acme/suite-core:core"), ["acme"])
 
-    def test_the_namespace_reaches_every_suite_image(self):
-        # Task 01a14b9e: every suite-* default is docker.io/<image_namespace>/.
-        def suite_images(path):
+    def test_the_registry_reaches_every_burrow_image(self):
+        # Task 01a14dd8: every Burrow default is <images.registry>/<name>.
+        def burrow_images(path, **refs):
             raw = load(path)
-            raw["images"]["image_namespace"] = "acme-images"
+            raw["images"].pop("image_namespace", None)
+            raw["images"]["registry"] = "registry.example.com/acme"
+            raw["images"]["refs"] = refs
             services = plan(valid(raw)).services
-            return {n: svc.image for n, svc in services.items() if "/suite-" in svc.image}
+            return {
+                n: svc.image
+                for n, svc in services.items()
+                if svc.image.startswith("registry.example.com/")
+            }
 
         contained = os.path.join(RENDER_FIXTURES, "single-host-agents-contained.toml")
-        mac = os.path.join(REPO, "deployment", "examples", "mac.install.toml")
         self.assertEqual(
-            suite_images(contained),
+            burrow_images(contained),
             {
-                "agent-host": "docker.io/acme-images/suite-agent-host:latest",
-                "core-platform": "docker.io/acme-images/suite-core:core",
-                "files-service": "docker.io/acme-images/suite-files-service:latest",
-                "memory-service": "docker.io/acme-images/suite-memory-service:latest",
+                "agent-host": "registry.example.com/acme/burrow-agent-host:latest",
+                "core-platform": "registry.example.com/acme/core:core",
+                "files-service": "registry.example.com/acme/files-service:latest",
+                "memory-service": "registry.example.com/acme/memory-service:latest",
+            },
+        )
+        full = plan(manifest_from(os.path.join(RENDER_FIXTURES, "single-host-agents-full.toml")))
+        self.assertEqual(full.agent_host_image, "ghcr.io/example/burrow-agent-host:latest")
+        # meeting-transcriber has no registry build yet: its ref is pinned.
+        pinned = "registry.example.com/acme/meeting-transcriber:v0-pinned"
+        self.assertEqual(
+            burrow_images(MAC_MEETINGS, **{"meeting-transcriber": pinned})["meeting-transcriber"],
+            pinned,
+        )
+
+    def test_the_legacy_namespace_reaches_every_legacy_image(self):
+        # Task 01a14b9e: every legacy default is docker.io/<image_namespace>/.
+        def legacy_images(path):
+            raw = load(path)
+            raw["images"].pop("registry", None)
+            raw["images"]["image_namespace"] = "acme-images"
+            services = plan(valid(raw)).services
+            return {n: svc.image for n, svc in services.items() if "/acme-images/" in svc.image}
+
+        contained = os.path.join(RENDER_FIXTURES, "single-host-agents-contained.toml")
+        expected = {
+            "agent-host": "agent-host",
+            "core-platform": "core",
+            "files-service": "files-service",
+            "memory-service": "memory-service",
+        }
+        self.assertEqual(
+            legacy_images(contained),
+            {
+                c: f"docker.io/acme-images/{registry.LEGACY_HUB_IMAGES[k]}:"
+                + ("core" if k == "core" else "latest")
+                for c, k in expected.items()
             },
         )
         self.assertEqual(
-            suite_images(mac)["meeting-transcriber"],
-            "docker.io/acme-images/suite-meeting-transcriber:latest",
+            legacy_images(MAC_MEETINGS)["meeting-transcriber"],
+            f"docker.io/acme-images/{registry.LEGACY_HUB_IMAGES['meeting-transcriber']}:latest",
         )
 
 
-class ImageNamespaceRequiredTest(unittest.TestCase):
-    """images.image_namespace is REQUIRED with no default (task 01a14b9e)."""
+class ImageSourceRequiredTest(unittest.TestCase):
+    """Exactly one of images.registry and the legacy images.image_namespace,
+    with no default (tasks 01a14b9e, 01a14dd8)."""
 
-    def test_render_without_it_refuses_naming_the_input_and_writes_nothing(self):
-        work = tempfile.mkdtemp(prefix="suite-ns-")
+    def _manifest_without_a_source(self):
+        work = tempfile.mkdtemp(prefix="burrow-images-01a14dd8-")
         self.addCleanup(shutil.rmtree, work, ignore_errors=True)
         path = os.path.join(work, "install.toml")
         with open(EXAMPLE, encoding="utf-8") as handle:
             text = handle.read()
+        self.assertIn('registry = "ghcr.io/example"\n', text)
         with open(path, "w", encoding="utf-8") as handle:
-            handle.write(text.replace('image_namespace = "example"\n', ""))
-        self.assertNotIn("image_namespace", load(path)["images"])
+            handle.write(text.replace('registry = "ghcr.io/example"\n', ""))
+        self.assertNotIn("registry", load(path)["images"])
+        return work, path
+
+    def test_render_without_it_refuses_naming_the_input_and_writes_nothing(self):
+        work, path = self._manifest_without_a_source()
         out = os.path.join(work, "out")
         code, stdout = run_cli("render", path, "--out", out)
         self.assertEqual(code, 2)
         self.assertEqual(
             stdout,
-            "error missing_required at images.image_namespace: image_namespace is required "
-            "and has no default: the Docker Hub namespace the suite-* images are pulled from "
-            "(docker.io/<image_namespace>/suite-core)\n",
+            "error missing_required at images.registry: registry is required and has no "
+            "default: the registry path the Burrow images are pulled from, e.g. "
+            "ghcr.io/<owner> (<registry>/core)\n",
         )
         self.assertFalse(os.path.exists(out))
 
     def test_render_with_it_uses_it(self):
-        work = tempfile.mkdtemp(prefix="suite-ns-")
+        work = tempfile.mkdtemp(prefix="burrow-images-01a14dd8-")
         self.addCleanup(shutil.rmtree, work, ignore_errors=True)
         out = os.path.join(work, "out")
-        code, stdout = run_cli("render", EXAMPLE, "--out", out)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code, stdout = run_cli("render", EXAMPLE, "--out", out)
         self.assertEqual(code, 0, stdout)
+        self.assertEqual(err.getvalue(), "")
         with open(os.path.join(out, "user-data"), encoding="utf-8") as handle:
-            self.assertIn("image='docker.io/example/suite-core:core'", handle.read())
+            self.assertIn("image='ghcr.io/example/core:core'", handle.read())
+
+    def test_legacy_namespace_renders_the_old_refs_and_warns(self):
+        _work, path = self._manifest_without_a_source()
+        raw = load(path)
+        raw["images"]["image_namespace"] = "example"
+        legacy = valid(raw)
+        self.assertEqual(plan(legacy).core_image, "docker.io/example/suite-core:core")
+        # The CLI says so on stderr; stdout keeps its contract.
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(text.replace("[images]\n", '[images]\nimage_namespace = "example"\n'))
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code, stdout = run_cli("validate", path)
+        self.assertEqual((code, stdout), (0, "ok\n"))
+        self.assertEqual(
+            err.getvalue(),
+            "warning deprecated at images.image_namespace: image_namespace (the legacy Docker "
+            "Hub images) is deprecated; set images.registry instead, e.g. ghcr.io/<owner>\n",
+        )
 
     def test_an_unvalidated_manifest_cannot_reach_a_default_image(self):
         m = manifest_from(EXAMPLE)
+        m["images"]["registry"] = None
         m["images"]["image_namespace"] = None
         with self.assertRaises(RenderError) as ctx:
             build(m)
         self.assertEqual(ctx.exception.code, "missing_required")
-        self.assertEqual(ctx.exception.path, "images.image_namespace")
+        self.assertEqual(ctx.exception.path, "images.registry")
 
+
+class FreshRenderNamesTest(TempDirMixin, unittest.TestCase):
+    """A fresh render (images.registry set) carries no pre-01a14dd8 name (task 01a14dd8)."""
+
+    LEGACY = re.compile(r"/opt/suite\b|suite-[a-z@-]+\.service|docker\.io/\S*suite-")
+
+    def renders(self):
+        # The mac target's renders: test_mac_render.MacFreshRenderNamesTest.
+        cases = {
+            "single-host": manifest_from(EXAMPLE),
+            "single-host-agents-full": manifest_from(
+                os.path.join(RENDER_FIXTURES, "single-host-agents-full.toml")
+            ),
+            "single-host-agents-contained": manifest_from(
+                os.path.join(RENDER_FIXTURES, "single-host-agents-contained.toml")
+            ),
+        }
+        out = {}
+        for name, m in cases.items():
+            self.assertIsNotNone(m["images"]["registry"], name)
+            out[name] = build(m).redacted()
+        return out
+
+    def test_positive_control_the_pattern_finds_each_legacy_form(self):
+        for text in (
+            "WorkingDirectory=/opt/suite",
+            "systemctl enable suite-stack.service",
+            "/etc/systemd/system/suite-agent@.service",
+            'image: "docker.io/example/suite-core:core"',
+        ):
+            self.assertTrue(self.LEGACY.search(text), text)
+        self.assertIsNone(self.LEGACY.search("WorkingDirectory=/opt/burrow burrow-stack.service"))
+
+    @staticmethod
+    def without_migrate_script(user_data):
+        return cut_migrate_script(user_data)
+
+    def test_no_legacy_path_unit_or_image(self):
+        for name, files in self.renders().items():
+            self.assertTrue(files, name)
+            for rel, text in files.items():
+                with self.subTest(case=name, file=rel):
+                    if rel == "user-data":
+                        self.assertIn('path: "/opt/burrow/bin/burrow-migrate"', text)
+                        text, cut = self.without_migrate_script(text)
+                        self.assertEqual(cut, 1, "the script body is embedded exactly once")
+                    self.assertEqual(self.LEGACY.findall(rel + "\n" + text), [])
+
+    def test_the_cut_is_needed_positive_control(self):
+        # Without the cut the scan finds the script's legacy names: the cut is
+        # what the test above relies on, so it must be shown to matter.
+        user_data = self.renders()["single-host"]["user-data"]
+        self.assertTrue(self.LEGACY.findall(user_data))
+        self.assertEqual(self.LEGACY.findall(self.without_migrate_script(user_data)[0]), [])
+
+    def test_single_host_installs_under_opt_burrow_with_the_burrow_stack(self):
+        user_data = self.renders()["single-host"]["user-data"]
+        self.assertIn('path: "/opt/burrow/compose.yaml"', user_data)
+        self.assertIn("/etc/systemd/system/burrow-stack.service", user_data)
+        self.assertIn('["systemctl", "enable", "burrow-stack.service"]', user_data)
+        self.assertIn("WorkingDirectory=/opt/burrow", user_data)
+
+    def test_the_two_image_sources_change_only_image_refs(self):
+        # The legacy key is an image input only: paths and units are the same.
+        legacy_raw = load(EXAMPLE)
+        legacy_raw["images"].pop("registry")
+        legacy_raw["images"]["image_namespace"] = "example"
+        fresh = build(manifest_from(EXAMPLE)).redacted()
+        legacy = build(valid(legacy_raw)).redacted()
+        self.assertEqual(sorted(fresh), sorted(legacy))
+        mapping = {
+            f"ghcr.io/example/{registry.REGISTRY_IMAGES[k]}": (
+                f"docker.io/example/{registry.LEGACY_HUB_IMAGES[k]}"
+            )
+            for k in registry.REGISTRY_IMAGES
+        }
+        changed = 0
+        for rel in fresh:
+            mapped = fresh[rel]
+            for new, old in mapping.items():
+                mapped = mapped.replace(new + ":", old + ":")
+            changed += mapped != fresh[rel]
+            self.assertEqual(mapped, legacy[rel], rel)
+        self.assertTrue(changed, "positive control: the two sources must differ somewhere")
+
+
+class ModuleProjectTest(unittest.TestCase):
     def test_every_module_names_a_project_with_its_own_mix_file(self):
         for name, project in registry.MODULES.items():
             with self.subTest(module=name):

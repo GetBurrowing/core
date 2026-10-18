@@ -24,12 +24,12 @@
 schema_version = 1
 
 [install]
-name = "suite-mac"
+name = "burrow-mac"
 size_tier = "small"
 target = "mac"
 
 [domain]
-primary = "suite.example.test"
+primary = "burrow.example.test"
 
 [services]
 files = true
@@ -65,6 +65,11 @@ mode = "bundled-pocket-id"
 [backup]
 target = "none"
 
+# LEGACY image source on purpose (task 01a14dd8): meeting-transcriber has no
+# build under an [images] registry yet, so a registry install with meetings
+# transcription would have to pin [images.refs] meeting-transcriber. validate
+# prints a deprecation warning for this key. mac-lite.install.toml uses
+# [images] registry.
 [images]
 image_namespace = "example"
 source = "registry"

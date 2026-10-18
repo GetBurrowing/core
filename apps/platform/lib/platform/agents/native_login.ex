@@ -31,7 +31,7 @@ defmodule Platform.Agents.NativeLogin do
       `anthropic-api-key`: encrypted at rest, one per agent.
     * Read only by `start_env/1`, as the agent itself (`accessor: {:agent,
       agent_id}`), when the reconciler builds that agent's `agent.start`.
-    * Delivered ONLY in that agent's env file (`/etc/suite-agents/<id>.env`,
+    * Delivered ONLY in that agent's env file (`/etc/burrow-agents/<id>.env`,
       0600, owned by the agent's uid), as `ANTHROPIC_API_KEY`. Never in the
       agent's files, the agent host's own environment or another agent's unit.
     * suite-cli answers Claude Code's "use this API key?" confirmation only for

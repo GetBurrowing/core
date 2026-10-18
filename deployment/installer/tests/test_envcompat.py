@@ -18,9 +18,9 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 
-from suite_install import envcompat
-from suite_install.setup import state
-from suite_install.setup.state import SetupError
+from burrow_install import envcompat
+from burrow_install.setup import state
+from burrow_install.setup.state import SetupError
 
 LINE = "deprecated: SUITE_INSTALL_DIR is set; rename it to BURROW_INSTALL_DIR"
 

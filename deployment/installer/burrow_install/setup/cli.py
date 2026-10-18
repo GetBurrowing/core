@@ -1,4 +1,4 @@
-"""``python3 -m suite_install setup <command>``: the deterministic setup CLI.
+"""``python3 -m burrow_install setup <command>``: the deterministic setup CLI.
 
 It never prompts on the terminal and is the only thing that mutates install
 state. Every command prints exactly ONE JSON document on stdout (contract
@@ -6,10 +6,11 @@ version 1, documented in deployment/installer/mac/README.md):
 
   setup init --from <manifest> [--dir D] [--name N] [--domain HOST]
              [--auth-host HOST] [--livekit-host HOST] [--meetings on|off]
-             [--image-namespace NS]
+             [--registry PATH | --image-namespace NS (legacy)]
   setup status --json [--dir D]
   setup run <step> [--dir D] [--input NAME=@/path | NAME=env:VAR |
                     NAME=keychain:ITEM | NAME=value (non-secret only)] ...
+  setup run migrate [--dir D]   (move a pre-rename install to ~/burrow/<name>)
   setup secret <NAME> [--item ITEM] [--dir D]      (macOS Keychain dialog)
   setup teardown --confirm <install name> [--dir D]
 
@@ -31,9 +32,17 @@ import sys
 from ..manifest import ManifestLoadError, load
 from ..secrets import redact
 from ..validate import validate
-from . import cloudflare, inputs, macos, steps
+from . import cloudflare, inputs, macos, migrate, steps
 from .host import Host
-from .state import Install, SetupError, check_dir_allowed, default_root, now, resolve_dir
+from .state import (
+    Install,
+    SetupError,
+    check_dir_allowed,
+    default_root,
+    legacy_root,
+    now,
+    resolve_dir,
+)
 
 CONTRACT_VERSION = 1
 
@@ -229,6 +238,19 @@ def run_step(ctx, name, specs):
     return doc, 0
 
 
+def _migrate(install, env, out):
+    """``setup run migrate``: not a STEPS entry, so status never waits on it."""
+    ctx = None
+    try:
+        outputs, ctx = migrate.run(install, lambda i: _ctx(i, env))
+    except SetupError as exc:
+        _emit(_error_doc(exc, "migrate"), ctx, out)
+        return exc.exit_code
+    doc = {"contract_version": CONTRACT_VERSION, "step": "migrate", "ok": True, "outputs": outputs}
+    _emit(doc, ctx, out)
+    return 0
+
+
 def _run(args, env, out):
     install = Install(resolve_dir(args.dir, env.environ))
     if not install.exists():
@@ -239,6 +261,8 @@ def _run(args, env, out):
             exit_code=2,
         )
     check_dir_allowed(install.path)
+    if args.step == migrate.STEP:
+        return _migrate(install, env, out)
     ctx = _ctx(install, env)
     try:
         doc, code = run_step(ctx, args.step, args.input or [])
@@ -269,7 +293,7 @@ def _run(args, env, out):
 # ---------------------------------------------------------------------------
 
 INIT_HEADER = [
-    "Install manifest written by `suite_install setup init` (ADR 0053, task 01a0d6ab).",
+    "Install manifest written by `burrow_install setup init` (ADR 0053, task 01a0d6ab).",
     "Change it with `setup init` flags, not by hand; every write is validated.",
 ]
 
@@ -322,6 +346,14 @@ def _init(args, env, out):
             table[path[-1]] = value
             changed.append(".".join(path))
 
+    def drop(path):
+        table = raw
+        for key in path[:-1]:
+            table = table.get(key, {})
+        if path[-1] in table:
+            del table[path[-1]]
+            changed.append(".".join(path))
+
     if args.name:
         put(["install", "name"], args.name)
     if args.domain:
@@ -332,8 +364,13 @@ def _init(args, env, out):
         put(["domain", "livekit_host"], args.livekit_host)
     if args.meetings:
         put(["services", "meetings"], args.meetings == "on")
+    # Exactly one image source: a flag for one drops the other from the manifest.
+    if args.registry:
+        put(["images", "registry"], args.registry)
+        drop(["images", "image_namespace"])
     if args.image_namespace:
         put(["images", "image_namespace"], args.image_namespace)
+        drop(["images", "registry"])
     errors, normalized = validate(raw)
     if errors:
         raise SetupError(
@@ -343,11 +380,14 @@ def _init(args, env, out):
             exit_code=2,
         )
     name = normalized["install"]["name"]
-    path = (
-        os.path.abspath(os.path.expanduser(install_dir))
-        if install_dir
-        else os.path.join(default_root(), name)
-    )
+    if install_dir:
+        path = os.path.abspath(os.path.expanduser(install_dir))
+    else:
+        path = os.path.join(default_root(), name)
+        legacy = os.path.join(legacy_root(), name)
+        # A Mac that has not migrated keeps its install where it is.
+        if not Install(path).exists() and Install(legacy).exists():
+            path = legacy
     check_dir_allowed(path)
     install = Install(path)
     if install.exists():
@@ -442,19 +482,17 @@ def _teardown(args, env, out):
         outputs["compose_down"] = "ok" if result.ok else f"exit {result.returncode}"
     agents = []
     if ctx.host.platform == "darwin":
+        # The legacy labels too: an install made before task 01a14dd8 has those.
         for job in ("backup", "ip-watch"):
-            label = macos.agent_label(name, job)
-            path = os.path.join(ctx.host.home(), "Library", "LaunchAgents", f"{label}.plist")
-            if os.path.exists(path):
-                ctx.host.run(["launchctl", "bootout", f"gui/{os.getuid()}/{label}"])
-                os.unlink(path)
-                agents.append(label)
+            for label in (macos.agent_label(name, job), macos.legacy_agent_label(name, job)):
+                if macos.remove_agent(ctx.host, label):
+                    agents.append(label)
     outputs["launch_agents_removed"] = agents
     if ctx.state["ids"].get("tunnel_id") and inputs.CLOUDFLARE_API_TOKEN in ctx.state["inputs"]:
         outputs["cloudflare"] = cloudflare.teardown(ctx, ctx.value(inputs.CLOUDFLARE_API_TOKEN))
     ctx.state["steps"] = {}
     install.save_state(ctx.state)
-    outputs["left_in_place"] = [install.path, "backups under ~/SuiteBackups"]
+    outputs["left_in_place"] = [install.path, "backups under ~/BurrowBackups"]
     _emit({"contract_version": CONTRACT_VERSION, "ok": True, "outputs": outputs}, ctx, out)
     return 0
 
@@ -484,7 +522,7 @@ class _Parser(argparse.ArgumentParser):
 
 
 def parser():
-    p = _Parser(prog="suite_install setup", description="deterministic install setup")
+    p = _Parser(prog="burrow_install setup", description="deterministic install setup")
     sub = p.add_subparsers(dest="command", required=True, parser_class=_Parser)
 
     c = sub.add_parser("init", help="create or change the install's manifest")
@@ -496,9 +534,14 @@ def parser():
     c.add_argument("--livekit-host")
     c.add_argument("--meetings", choices=("on", "off"))
     c.add_argument(
+        "--registry",
+        help="registry path of the Burrow images, e.g. ghcr.io/<owner> (images.registry; "
+        "required unless the --from manifest sets an image source)",
+    )
+    c.add_argument(
         "--image-namespace",
-        help="Docker Hub namespace of the suite-* images (images.image_namespace; required "
-        "unless the --from manifest sets it)",
+        help="LEGACY, deprecated: Docker Hub namespace of the old images "
+        "(images.image_namespace); replaces images.registry",
     )
 
     c = sub.add_parser("status", help="every step's state as JSON")
@@ -506,7 +549,7 @@ def parser():
     c.add_argument("--dir")
 
     c = sub.add_parser("run", help="run one step")
-    c.add_argument("step", choices=[s.name for s in steps.STEPS])
+    c.add_argument("step", choices=[s.name for s in steps.STEPS] + [migrate.STEP])
     c.add_argument("--dir")
     c.add_argument("--input", action="append", metavar="NAME=REF")
 

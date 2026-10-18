@@ -1,7 +1,7 @@
 #!/bin/bash
 # proof.sh: data-plane proof of a Burrow install on this Mac (task 01a0d6ab
-# stage 5). A thin door onto `suite-install proof`, which holds the logic
-# (suite_install/proof_mac.py) and its tests. Run it ON the Mac.
+# stage 5). A thin door onto `burrow-install proof`, which holds the logic
+# (burrow_install/proof_mac.py) and its tests. Run it ON the Mac.
 #
 #   proof.sh init --zone example.com --image-namespace NS   # install suite-01a0d6ab, meetings off
 #   proof.sh ports                            # listening ports, 7881/7882, name clashes
@@ -23,4 +23,4 @@ if [ "${1:-}" = "--grep-transcript" ]; then
   shift
   set -- grep-transcript "$@"
 fi
-exec "$here/suite-install" proof "$@"
+exec "$here/burrow-install" proof "$@"

@@ -34,7 +34,7 @@ defmodule Platform.SignInAdmin.PocketId do
   6-character code for a TTL of 15 minutes or less and a 12-character one
   above it, and a 6-character code never auto-submits from `/lc/<code>` on
   the default configuration, which is why the installer pins `LOGIN_TTL` to
-  30m as well (`deployment/installer/suite_install/setup/pocketid.py`).
+  30m as well (`deployment/installer/burrow_install/setup/pocketid.py`).
   """
 
   require Logger

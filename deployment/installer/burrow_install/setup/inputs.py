@@ -62,6 +62,19 @@ def customer_refs(manifest):
     return {ref: where for ref, where in sorted(refs.items()) if ref not in produced}
 
 
+def _registry_auth_text(manifest):
+    if manifest["images"]["registry"]:
+        return (
+            "a docker config.json with a read credential (auths key ghcr.io for a ghcr.io "
+            "path) for the private Burrow images under images.registry (anonymous pulls "
+            "return 401)"
+        )
+    return (
+        "a docker config.json with a Docker Hub read credential for the private legacy "
+        "images under images.image_namespace (anonymous pulls return 401)"
+    )
+
+
 def declared(manifest):
     """``{name: Input}`` for this manifest."""
     out = {}
@@ -76,8 +89,7 @@ def declared(manifest):
         out[REGISTRY_AUTH] = Input(
             REGISTRY_AUTH,
             True,
-            "a docker config.json with a Docker Hub read credential for the private "
-            "suite-* images under images.image_namespace (anonymous pulls return 401)",
+            _registry_auth_text(manifest),
         )
     for ref, where in customer_refs(manifest).items():
         out[ref] = Input(ref, True, f"customer secret named by {where}")

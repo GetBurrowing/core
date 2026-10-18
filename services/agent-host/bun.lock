@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "suite-agent-host",
+      "name": "burrow-agent-host",
       "devDependencies": {
         "@types/bun": "latest",
         "typescript": "^5",

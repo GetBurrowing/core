@@ -21,9 +21,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 INSTALLER = os.path.dirname(HERE)
 sys.path.insert(0, INSTALLER)
 
-from suite_install.manifest import load
-from suite_install.setup import cli, inputs, steps
-from suite_install.validate import validate
+from burrow_install.manifest import load
+from burrow_install.setup import cli, inputs, steps
+from burrow_install.validate import validate
 
 SKILL = os.path.join(INSTALLER, "skill", "SKILL.md")
 REPO = os.path.dirname(os.path.dirname(INSTALLER))
@@ -48,7 +48,7 @@ class SkillTest(unittest.TestCase):
         cls.commands, cls.runs = extract(cls.text)
 
     def test_positive_control_extractor_reports_an_unknown_step(self):
-        commands, runs = extract("run `suite-install setup run frobnicate` then `setup zap`")
+        commands, runs = extract("run `burrow-install setup run frobnicate` then `setup zap`")
         self.assertEqual(runs - set(steps.BY_NAME), {"frobnicate"})
         self.assertEqual(commands - set(cli.COMMANDS), {"zap"})
 

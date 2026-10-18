@@ -2,7 +2,7 @@
 # Install the agent host's pinned tools, system-wide, as root
 # (core task 01a10322 stage 3). Used by BOTH capability profiles:
 #   contained     the Dockerfile, at image build time;
-#   full_machine  suite-agent-host-setup.service, on the host, at first boot.
+#   full_machine  burrow-agent-host-setup.service, on the host, at first boot.
 #
 # Usage: install-tools.sh <versions.env>
 #
@@ -58,7 +58,7 @@ if [ "$(/usr/local/bin/bun --version 2>/dev/null || true)" != "$BUN_VERSION" ]; 
 	chmod 0755 /usr/local/bin/bun
 fi
 
-# Claude Code and Codex. Agents never update them: suite-agent@.service sets
+# Claude Code and Codex. Agents never update them: burrow-agent@.service sets
 # DISABLE_AUTOUPDATER=1, and /usr/local is not theirs to write.
 npm install --global --no-fund --no-audit --loglevel=error \
 	"@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION" "@openai/codex@$CODEX_VERSION"

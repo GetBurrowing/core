@@ -6,10 +6,10 @@ Runs a Burrow install's native agents (core task 01a10322). TypeScript on bun.
   presents `AGENT_HOST_TOKEN` in the `x-agent-host-token` header. Core pushes
   commands down that channel. Core is never given a container-runtime socket
   or the host's D-Bus.
-- Every agent is a systemd unit, `suite-agent@<agent id>.service`, running as
+- Every agent is a systemd unit, `burrow-agent@<agent id>.service`, running as
   its own OS user `agent-<last 12 hex of the id>`. The user has a 0700 home, a
-  0600 env file at `/etc/suite-agents/<id>.env` and a 0700 tmux dir at
-  `/run/suite-agents/<id>`. The unit runs the real Claude Code through
+  0600 env file at `/etc/burrow-agents/<id>.env` and a 0700 tmux dir at
+  `/run/burrow-agents/<id>`. The unit runs the real Claude Code through
   `suite claude`. suite-cli does the wiring, answers the launch dialogs, and
   classifies the pane (`suite pane-status`). This daemon has no pane
   classifier of its own.
@@ -37,8 +37,8 @@ core does not branch on it.
 
 The profile is install config, chosen once (`[agents] profile` in the install
 manifest, deployment/schema/install-manifest.md) and realised by packaging.
-Both profiles run the same daemon, the same `suite-agent-host.service`, the
-same `suite-agent@.service` template (packaging/), the same sudoers grant and
+Both profiles run the same daemon, the same `burrow-agent-host.service`, the
+same `burrow-agent@.service` template (packaging/), the same sudoers grant and
 the same tools at the versions in `versions.env`, installed by
 `packaging/install-tools.sh`. Node comes from nodejs.org, not apt, because
 Claude Code 2.x needs node 22 and neither Debian bookworm nor Ubuntu noble
@@ -46,8 +46,8 @@ ships it.
 
 - **full_machine** (VMs we provision): the daemon is a root systemd service on
   the HOST, so an agent's `sudo apt-get install` and `sudo systemctl` act on the
-  real machine. suite_install renders it into cloud-init user-data; at first
-  boot a setup unit copies `/opt/suite/agent-host` out of this image and runs
+  real machine. burrow_install renders it into cloud-init user-data; at first
+  boot a setup unit copies `/opt/burrow/agent-host` out of this image and runs
   `install-tools.sh`. Agents reach core at the install's public URL through
   Caddy, like a federated agent.
 - **contained** (shared hosts such as the root install on test-host): this directory's
@@ -71,9 +71,21 @@ host or Postgres, because under rootless podman container root is not host
 root.
 
 The image is pushed by CI (`build-and-push-agent-host`) as
-`docker.io/example/suite-agent-host:latest` and `:<sha>` only when a push to
-main changes `services/agent-host/**`, because every push restarts every agent
-on an `AutoUpdate=registry` host.
+`ghcr.io/startup-suite/burrow-agent-host:latest` and `:<sha>`, and under its
+pre-rename name `suite-agent-host` (GHCR and Docker Hub) for hosts installed
+before the rename, only when a push to main changes `services/agent-host/**`,
+because every push restarts every agent on an `AutoUpdate=registry` host.
+
+## Hosts installed before the rename
+
+At start, before it takes any command, the daemon adopts agents a
+pre-rename host runs as `suite-agent@<id>` (`src/legacy.ts`): it writes the
+`burrow-agent@<id>` drop-in, moves `/etc/suite-agents/<id>.env` to
+`/etc/burrow-agents/` (mode and owner kept), runs one `systemctl
+daemon-reload`, stops and disables `suite-agent@<id>`, and enables and starts
+`burrow-agent@<id>`. A `suite-agents` group with no `burrow-agents` beside it
+is renamed with `groupmod -n`, which keeps the gid. A second start finds
+nothing to adopt and runs no command.
 
 ## Tests
 

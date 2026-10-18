@@ -41,12 +41,12 @@ sys.path.insert(0, INSTALLER)
 
 from identity_terms import identity_hits
 
-from suite_install import envcompat, registry
-from suite_install.__main__ import main
-from suite_install.manifest import load
-from suite_install.render import RenderError, build, plan, render
-from suite_install.secrets import parse_env_file
-from suite_install.validate import validate
+from burrow_install import envcompat, registry
+from burrow_install.__main__ import main
+from burrow_install.manifest import load
+from burrow_install.render import RenderError, build, plan, render
+from burrow_install.secrets import parse_env_file
+from burrow_install.validate import validate
 
 DOC_IP = "192.0.2.10"  # RFC 5737 TEST-NET-1
 GOLDEN_CASES = {"mac": MAC, "mac-lite": MAC_LITE}
@@ -128,9 +128,9 @@ class PositiveControlMixin(FixedMediaIpMixin):
 class TempDirMixin:
     def setUp(self):
         super().setUp()
-        self.tmp = tempfile.mkdtemp(prefix="suite-install-01a0d6ab-")
+        self.tmp = tempfile.mkdtemp(prefix="burrow-install-01a0d6ab-")
         self.addCleanup(shutil.rmtree, self.tmp, True)
-        from suite_install.render import inside_git_worktree
+        from burrow_install.render import inside_git_worktree
 
         if inside_git_worktree(self.tmp):
             self.skipTest(f"the temp dir {self.tmp} is inside a git work tree")
@@ -298,7 +298,7 @@ class MacKnobTest(PositiveControlMixin, unittest.TestCase):
                 self.assertEqual(names, p.containers)
 
     def test_reuse_secrets_across_the_meetings_flip_keeps_shared_values(self):
-        with tempfile.TemporaryDirectory(prefix="suite-install-01a0d6ab-") as tmp:
+        with tempfile.TemporaryDirectory(prefix="burrow-install-01a0d6ab-") as tmp:
             out = os.path.join(tmp, "lite")
             lite = render(
                 manifest_from(MAC_LITE), out, customer_secrets=CUSTOMER, registry_auth=REGISTRY_AUTH
@@ -323,7 +323,7 @@ class MacEdgeTest(PositiveControlMixin, unittest.TestCase):
         # Positive control: the single-host tls = "internal" golden case HAS both.
         single = build(manifest_from(SINGLE_HOST))
         single_compose = single.files["compose.yaml"][0]
-        self.assertIn('- "auth.suite-01a0d69d.test"', single_compose)
+        self.assertIn('- "auth.burrow-01a0d69d.test"', single_compose)
         self.assertIn(registry.CASTORE_PATH, single_compose)
         self.assertIn("aliases:", single_compose)
         for path in (MAC, MAC_LITE):
@@ -342,9 +342,9 @@ class MacEdgeTest(PositiveControlMixin, unittest.TestCase):
         self.assertIn("\tauto_https off\n", caddy)
         self.assertIn("\t\ttrusted_proxies static private_ranges\n", caddy)
         for host, upstream in (
-            ("suite.example.test", "core-platform:4000"),
-            ("auth.suite.example.test", "pocket-id:1411"),
-            ("livekit.suite.example.test", "livekit:7880"),
+            ("burrow.example.test", "core-platform:4000"),
+            ("auth.burrow.example.test", "pocket-id:1411"),
+            ("livekit.burrow.example.test", "livekit:7880"),
         ):
             self.assertIn(f"http://{host} {{\n\treverse_proxy {upstream}\n}}", caddy)
         self.assertNotIn("https://", caddy)
@@ -380,11 +380,11 @@ class MacEdgeTest(PositiveControlMixin, unittest.TestCase):
         core = compose_block(compose, "core-platform")
         for line in (
             'TRUST_PROXY_HEADERS: "true"',
-            'PHX_HOST: "suite.example.test"',
-            'APP_URL: "https://suite.example.test"',
-            'OIDC_ISSUER: "https://auth.suite.example.test"',
+            'PHX_HOST: "burrow.example.test"',
+            'APP_URL: "https://burrow.example.test"',
+            'OIDC_ISSUER: "https://auth.burrow.example.test"',
             'OIDC_PKCE_ENABLED: "true"',
-            'LIVEKIT_URL: "wss://livekit.suite.example.test"',
+            'LIVEKIT_URL: "wss://livekit.burrow.example.test"',
             'LIVEKIT_API_KEY: "suite"',
         ):
             self.assertIn(line, core)
@@ -691,6 +691,56 @@ class MacSecretsTest(PositiveControlMixin, TempDirMixin, unittest.TestCase):
             m = manifest_from(path)
             doc = yaml.safe_load(mac_build(m).files["compose.yaml"][0])
             self.assertEqual(sorted(doc["services"]), registry.enabled_containers(m))
+
+
+class MacFreshRenderNamesTest(PositiveControlMixin, unittest.TestCase):
+    """A fresh mac render (images.registry set) carries no pre-01a14dd8 name (task 01a14dd8)."""
+
+    LEGACY = re.compile(r"/opt/suite\b|suite-[a-z@-]+\.service|docker\.io/\S*suite-")
+    PINNED = "ghcr.io/example/meeting-transcriber:v0-pinned"
+
+    def registry_mac(self, pin=True):
+        raw = load(MAC)
+        raw["images"].pop("image_namespace")
+        raw["images"]["registry"] = "ghcr.io/example"
+        if pin:
+            raw["images"]["refs"] = {"meeting-transcriber": self.PINNED}
+        return raw
+
+    def test_mac_lite_and_mac_with_a_registry_carry_no_legacy_name(self):
+        self.assertIsNone(self.LEGACY.search("ghcr.io/example/core:core /opt/burrow"))
+        self.assertTrue(self.LEGACY.search('image: "docker.io/example/suite-core:core"'))
+        for name, m in (("mac-lite", manifest_from(MAC_LITE)), ("mac", valid(self.registry_mac()))):
+            files = mac_build(m).redacted()
+            self.assertTrue(files, name)
+            for rel, text in files.items():
+                with self.subTest(case=name, file=rel):
+                    self.assertEqual(self.LEGACY.findall(rel + "\n" + text), [])
+        compose = mac_build(valid(self.registry_mac())).files["compose.yaml"][0]
+        self.assertIn(f'image: "{self.PINNED}"', compose)
+        self.assertIn('image: "ghcr.io/example/core:core"', compose)
+
+    def test_registry_with_transcription_needs_the_transcriber_pinned(self):
+        errors, _m = validate(self.registry_mac(pin=False))
+        self.assertEqual(
+            [(e.code, e.path) for e in errors],
+            [("missing_required", "images.refs.meeting-transcriber")],
+        )
+        # meetings off (mac-lite) or transcription off needs no pin.
+        raw = self.registry_mac(pin=False)
+        raw["meetings"]["transcription"] = False
+        raw["meetings"].pop("stt_endpoint", None)
+        raw["meetings"].pop("stt_model", None)
+        self.assertEqual(validate(raw)[0], [])
+
+    def test_an_unvalidated_manifest_cannot_reach_an_unpublished_registry_image(self):
+        m = manifest_from(MAC)
+        m["images"]["image_namespace"] = None
+        m["images"]["registry"] = "ghcr.io/example"
+        with self.assertRaises(RenderError) as ctx:
+            mac_build(m)
+        self.assertEqual(ctx.exception.code, "missing_required")
+        self.assertEqual(ctx.exception.path, "images.refs.meeting-transcriber")
 
 
 if __name__ == "__main__":

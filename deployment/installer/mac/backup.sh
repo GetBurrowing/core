@@ -5,7 +5,7 @@
 #
 # Usage: backup.sh <install dir> <backup dir> [keep=14] [postgres user=core_platform]
 #
-# Installed by `suite_install setup run backup` as a user LaunchAgent (daily
+# Installed by `burrow_install setup run backup` as a user LaunchAgent (daily
 # 03:15, no sudo). Dumping to plain files means Time Machine captures
 # consistent dumps instead of a live database inside the runtime's VM disk.
 # The dumps cover core, memory AND pocket-id (sign-in): all three live in the

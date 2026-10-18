@@ -27,14 +27,17 @@ export function userName(agentId: string): string {
   return `agent-${shortId(agentId)}`;
 }
 
-export const AGENTS_GROUP = "suite-agents";
+export const AGENTS_GROUP = "burrow-agents";
 export const HOME_ROOT = "/home";
-export const ENV_DIR = "/etc/suite-agents";
-export const RUN_DIR = "/run/suite-agents";
+export const ENV_DIR = "/etc/burrow-agents";
+export const RUN_DIR = "/run/burrow-agents";
 export const UNIT_DIR = "/etc/systemd/system";
-export const UNIT_TEMPLATE = "suite-agent@.service";
+export const UNIT_TEMPLATE = "burrow-agent@.service";
 
-/** The tmux session `suite claude` is told to use. */
+/**
+ * The tmux session `suite claude` is told to use. suite-cli owns this name, so
+ * it stays until core pins a 0.9 CLI (docs/runbooks/burrow-rename-deferred.md).
+ */
 export const SESSION = "suite-agent";
 
 export function homeDir(agentId: string): string {
@@ -55,7 +58,7 @@ export function runDir(agentId: string): string {
 }
 
 export function unitName(agentId: string): string {
-  return `suite-agent@${agentId}.service`;
+  return `burrow-agent@${agentId}.service`;
 }
 
 export function dropInDir(agentId: string): string {

@@ -7,25 +7,31 @@ The tunnel means no port-forward and no public IP. It was built in task
 
 There are three layers, and each one uses only the layer below it:
 
-1. **`suite-install setup ...`** is a deterministic CLI. It never prompts on
+1. **`burrow-install setup ...`** is a deterministic CLI. It never prompts on
    the terminal, prints one JSON document per command, and is the only thing
-   that changes install state. Its code is in `../suite_install/setup/`.
+   that changes install state. Its code is in `../burrow_install/setup/`.
 2. **`../skill/SKILL.md`** is a harness-agnostic Agent Skill. It offers to do
    the install, then loops on `setup status --json`, asks the human only for
    what a step needs, and explains failures. It contains no infra logic; a
    test checks that every command it cites exists and every step is cited.
 3. **This README** is the human fallback: the same steps, by hand, in order.
 
-## Why `suite-install` and not `suite`
+## Why `burrow-install` and not `burrow`
 
-`suite` is already taken. It is the separate **suite-cli** (repo
-`Startup-Suite/suite-cli`, TypeScript on bun), which wires a Claude Code
-runtime to Burrow (`suite init`, `suite claude`, `suite doctor`, `suite
-status`). That tool connects an *agent* to an existing Burrow install. This one
-*installs* Burrow, and it is Python in core because it drives core's install
-renderer. The two are siblings; neither replaces the other. If suite-cli later
-grows `suite install`, it should exec `deployment/installer/mac/suite-install`
-and pass its JSON through unchanged, not re-implement the steps.
+`burrow` is already taken. It is the separate **Burrow CLI** (repo
+`Startup-Suite/suite-cli`, TypeScript on bun; `suite` is its old name and still
+works as an alias), which wires a Claude Code runtime to Burrow (`burrow init`,
+`burrow claude`, `burrow doctor`, `burrow status`). That tool connects an
+*agent* to an existing Burrow install. This one *installs* Burrow, and it is
+Python in core because it drives core's install renderer. The two are
+siblings; neither replaces the other. If the `burrow` CLI later grows
+`burrow install`, it should exec `deployment/installer/mac/burrow-install` and
+pass its JSON through unchanged, not re-implement the steps.
+
+This CLI was called `suite-install` (Python package `suite_install`) until
+task 01a14dd8. Both old names still work: `mac/suite-install` and
+`python3 -m suite_install` print one deprecation line on stderr and run
+`burrow-install` with the same arguments, stdout and exit code.
 
 A desktop app (task 01a0d6b9) will wrap this CLI. The JSON contract below is
 the stable surface for it.
@@ -34,14 +40,21 @@ the stable surface for it.
 
 - **Docker Desktop or OrbStack**, installed and running. Installing either
   needs the Mac owner's admin password.
-- **The Docker Hub namespace** Burrow's images are published under, and a
-  read credential for its private images (`<namespace>/suite-core`,
-  `suite-files-service`, `suite-memory-service`). The namespace is the
-  manifest's required `[images] image_namespace` (`setup init
-  --image-namespace`); there is no default.
-  Anonymous pulls return 401. You supply it as a docker `config.json` with an
-  inline `auths["https://index.docker.io/v1/"].auth`. Whether these images
-  become public is an open product decision, not something this CLI decides.
+- **The registry path** Burrow's images are published under, and a read
+  credential for its private images (`<registry>/core`, `files-service`,
+  `memory-service`). The path is the manifest's required `[images] registry`,
+  e.g. `ghcr.io/<owner>` (`setup init --registry`); there is no default.
+  Anonymous pulls return 401. You supply the credential as a docker
+  `config.json` with an inline `auths["ghcr.io"].auth` (base64 of
+  `<user>:<token with read:packages>`). Whether these images become public is
+  an open product decision, not something this CLI decides.
+  - `meeting-transcriber` has no build under the registry yet, so an install
+    with `[meetings] transcription = true` must pin
+    `[images.refs] meeting-transcriber`, or stay on the legacy input below.
+  - **Legacy:** `[images] image_namespace` (`setup init --image-namespace`)
+    still renders the old Docker Hub images (`docker.io/<namespace>/...`) and
+    `validate` prints a deprecation warning. Its credential is
+    `auths["https://index.docker.io/v1/"].auth`. Set exactly one of the two.
 - **A domain in a Cloudflare account you control**, and an API token with
   **Zone:Read, DNS:Edit and Account: Cloudflare Tunnel:Edit**.
 - **An OpenAI API key.** Memory search uses `text-embedding-3-small`, and
@@ -63,21 +76,21 @@ any harness that reads Agent Skills) and ask it to set up Burrow on this Mac.
 
 ## The steps, by hand
 
-Run everything from a clone of core. `suite-install` finds a Python 3.11 or
+Run everything from a clone of core. `burrow-install` finds a Python 3.11 or
 later, or installs `uv` to `~/.local/bin` without sudo and uses Python 3.12.
 Stock macOS python3 is 3.9, which has no `tomllib`.
 
 ```sh
-S=deployment/installer/mac/suite-install
+S=deployment/installer/mac/burrow-install
 $S setup init --from deployment/examples/mac-lite.install.toml \
-   --name mysuite --domain suite.example.com --auth-host auth-suite.example.com \
-   --image-namespace <namespace>
+   --name myburrow --domain burrow.example.com --auth-host auth-burrow.example.com \
+   --registry ghcr.io/<owner>
 $S setup status --json
 ```
 
 Keep every hostname exactly one label below the zone. Cloudflare Universal SSL
-covers only one level, so `auth.suite.example.com` would get no edge
-certificate; use `auth-suite.example.com`.
+covers only one level, so `auth.burrow.example.com` would get no edge
+certificate; use `auth-burrow.example.com`.
 
 Supply secrets by **reference**, never as values:
 
@@ -102,7 +115,7 @@ Then run the steps in this order. Re-running any of them is safe.
 | 7 | `setup run pocket-id` | Finds the admin (or creates it), then opens a one-time sign-in link in your browser. Add a passkey on the Account page, then re-run. The step is done once a passkey exists. | no |
 | 8 | `setup run oidc-client` | Creates client `suite-core` (callback `https://<primary>/auth/oidc/callback`, PKCE on) and registers the `OIDC_CLIENT_SECRET` that core already reads. core needs no restart. | no |
 | 9 | `setup run keepalive` | Advisory; it never gates `verify`. Reports `pmset`, FileVault, automatic login and start-at-login. It turns on Docker Desktop's start-at-login when that key already exists in its settings file. | the printed `sudo pmset -a sleep 0 disksleep 0 autorestart 1` does |
-| 10 | `setup run backup` | Installs a LaunchAgent (03:15 daily) that runs `backup.sh`: `pg_dump -Fc` of every database (core, memory and pocket-id) to `~/SuiteBackups/<name>/`, keeping 14. It runs once and checks each dump with `pg_restore --list`. | no |
+| 10 | `setup run backup` | Installs a LaunchAgent (03:15 daily) that runs `backup.sh`: `pg_dump -Fc` of every database (core, memory and pocket-id) to `~/BurrowBackups/<name>/`, keeping 14. It runs once and checks each dump with `pg_restore --list`. | no |
 | 11 | `setup run verify` | Checks `https://<primary>/health` returns 200, `/auth/login` returns a 302 to `https://<auth_host>/`, and that page returns 200 text/html. It uses normal public TLS verification and never `-k`. | no |
 
 Installing Docker Desktop, `sudo pmset`, and FileVault or automatic login in
@@ -119,19 +132,32 @@ is the owner's security trade-off. The CLI reports it and never makes it.
 ### Restoring a backup
 
 ```sh
-cd ~/suite/<name>
+cd ~/burrow/<name>
 docker compose exec -T core-postgres pg_restore -U core_platform -d <db> --clean --if-exists \
-  < ~/SuiteBackups/<name>/<db>-<utc>.dump
+  < ~/BurrowBackups/<name>/<db>-<utc>.dump
 ```
 
-Time Machine picks up `~/SuiteBackups`. Those are consistent dump files, not a
+Time Machine picks up `~/BurrowBackups`. Those are consistent dump files, not a
 live database inside the runtime's VM disk image.
 
 ### Teardown
 
 `setup teardown --confirm <name>` runs `docker compose down -v`, removes the
 two LaunchAgents, and deletes the tunnel and only the DNS records that point
-at it. It leaves the install dir and `~/SuiteBackups` for you to delete.
+at it. It leaves the install dir and `~/BurrowBackups` for you to delete.
+
+### Moving an install made before the rename
+
+An install made before task 01a14dd8 lives under the legacy root and runs its
+jobs under the legacy LaunchAgent labels. Every command still finds it there.
+`setup run migrate` moves it. It runs `docker compose down` there (no `-v`),
+moves the directory to `~/burrow/<name>`, runs `docker compose up -d` from the
+new directory, and rewrites each legacy LaunchAgent under the new label. The
+compose project name comes from compose.yaml, which is unchanged, so the
+volumes are the same. Backups taken before the move stay in the old backup
+directory, recorded in state.json as `ids.legacy_backup_dir`. Running it again
+moves nothing, and it refuses (exit 2) when both directories exist.
+`docs/runbooks/burrow-rename-deferred.md` lists every name kept for old installs.
 
 ## Secrets: what travels where
 
@@ -151,7 +177,8 @@ at it. It leaves the install dir and `~/SuiteBackups` for you to delete.
   shows to any local user. It is read back with `security
   find-generic-password -s suite-install.<name> -a ITEM -w` into the CLI's
   memory only. The item is in your login Keychain under service
-  `suite-install.<install name>`.
+  `suite-install.<install name>`. That prefix is KEPT on purpose: renaming it
+  would orphan every secret an install already stored.
 - **Output.** No step prints a secret value. As a second layer, the CLI
   replaces every secret value it knows of (secrets.env, customer-secrets.env,
   `secrets/*`, and every input it resolved) with `<secret:NAME>` before
@@ -264,18 +291,21 @@ Exit codes:
 
 ## Files
 
-- `suite-install`: wrapper that picks a Python.
+- `burrow-install`: wrapper that picks a Python.
+- `suite-install`: the old name, a three-line wrapper that prints one deprecation
+  line and execs `burrow-install`, so a desktop app or a script holding the old
+  path keeps working.
 - `backup.sh`: the dump, verify and rotate job.
 - `ip-watch.sh`: the public-IP watcher.
 - `proof.sh`: the data-plane proof, run on the Mac after `verify`. It checks memory ranks, a
   file round trip, arm64, RAM, meetings on and off, and the transcript's secret counts. Its
-  logic is in `../suite_install/proof_mac.py`, and the results are recorded in ADR 0053 under
+  logic is in `../burrow_install/proof_mac.py`, and the results are recorded in ADR 0053 under
   "Proof (Mac)".
-- `../suite_install/setup/`: the CLI.
+- `../burrow_install/setup/`: the CLI.
 - `../skill/SKILL.md`: the skill.
 - `../tests/test_setup_*.py`, `../tests/test_mac_proof.py`: the tests.
 
-The two LaunchAgent plists are generated by `suite_install/setup/macos.py`
+The two LaunchAgent plists are generated by `burrow_install/setup/macos.py`
 (`plistlib`), so no template file can drift from the code. Install
 directory layout: `install.toml`, `state.json` (0600, non-secret), the render
 (`compose.yaml`, `Caddyfile`, `secrets.env` 0600, ...), `bin/` (copies of the

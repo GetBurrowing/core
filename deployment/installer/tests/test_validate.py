@@ -31,10 +31,10 @@ EXAMPLE = os.path.join(REPO, "deployment", "examples", "single-host.install.toml
 
 sys.path.insert(0, INSTALLER)
 
-from suite_install import registry
-from suite_install.__main__ import main
-from suite_install.manifest import load
-from suite_install.validate import ERROR_CODES, validate
+from burrow_install import registry
+from burrow_install.__main__ import main
+from burrow_install.manifest import load
+from burrow_install.validate import ERROR_CODES, validate, warnings
 
 # Loader-level codes: the file never reaches the validator.
 LOADER_CODES = ("invalid_toml", "unreadable_manifest")
@@ -123,7 +123,7 @@ class GoodManifestTest(PositiveControlMixin, unittest.TestCase):
     def test_cli_as_a_module_subprocess(self):
         env = dict(os.environ, PYTHONPATH=INSTALLER)
         proc = subprocess.run(
-            [sys.executable, "-m", "suite_install", "services", EXAMPLE],
+            [sys.executable, "-m", "burrow_install", "services", EXAMPLE],
             capture_output=True,
             text=True,
             env=env,
@@ -208,31 +208,87 @@ class NamedCaseTest(PositiveControlMixin, unittest.TestCase):
     def test_gpu_required_path(self):
         self.assert_single("gpu_required.toml", "gpu_required", "voice.accelerator")
 
-    def test_image_namespace_is_required(self):
-        # Task 01a14b9e: no default namespace. Absent is missing_required.
+    def test_an_image_source_is_required(self):
+        # Tasks 01a14b9e, 01a14dd8: no default source. Neither is missing_required.
         raw = load(GOOD)
-        del raw["images"]["image_namespace"]
+        del raw["images"]["registry"]
         errors, _ = validate(raw)
         self.assertEqual(
-            [(e.code, e.path) for e in errors], [("missing_required", "images.image_namespace")]
+            [(e.code, e.path) for e in errors], [("missing_required", "images.registry")]
         )
-        self.assertIn("image_namespace is required and has no default", errors[0].message)
+        self.assertIn("registry is required and has no default", errors[0].message)
 
-    def test_image_namespace_must_be_a_docker_hub_namespace(self):
-        for bad in ("Acme", "acme/images", "", "-acme", "acme..x"):
+    def test_exactly_one_image_source(self):
+        raw = load(GOOD)
+        raw["images"]["image_namespace"] = "example"
+        errors, _ = validate(raw)
+        self.assertEqual(
+            [(e.code, e.path) for e in errors], [("invalid_value", "images.image_namespace")]
+        )
+        self.assertIn("exactly one of images.registry", errors[0].message)
+        # Positive control: either one alone is valid.
+        del raw["images"]["registry"]
+        self.assertEqual(validate(raw)[0], [])
+
+    def test_registry_must_be_a_host_and_path(self):
+        for bad in (
+            "ghcr.io",
+            "https://ghcr.io/acme",
+            "ghcr.io/acme/",
+            "ghcr.io/Acme",
+            "ghcr.io/acme:1",
+            "acme/images",
+            "",
+            "ghcr.io//acme",
+        ):
             with self.subTest(value=bad):
                 raw = load(GOOD)
-                raw["images"]["image_namespace"] = bad
+                raw["images"]["registry"] = bad
                 errors, _ = validate(raw)
+                self.assertEqual(
+                    [(e.code, e.path) for e in errors], [("invalid_value", "images.registry")]
+                )
+        for good in (
+            "ghcr.io/acme",
+            "ghcr.io/acme-images/sub",
+            "registry.example.com:5000/a_b",
+            "localhost:5000/x",
+        ):
+            with self.subTest(value=good):
+                raw = load(GOOD)
+                raw["images"]["registry"] = good
+                self.assertEqual(validate(raw)[0], [])
+
+    def test_image_namespace_must_be_a_docker_hub_namespace(self):
+        def legacy(value):
+            raw = load(GOOD)
+            del raw["images"]["registry"]
+            raw["images"]["image_namespace"] = value
+            return raw
+
+        for bad in ("Acme", "acme/images", "", "-acme", "acme..x"):
+            with self.subTest(value=bad):
+                errors, _ = validate(legacy(bad))
                 self.assertEqual(
                     [(e.code, e.path) for e in errors],
                     [("invalid_value", "images.image_namespace")],
                 )
         for good in ("acme", "acme-images", "acme.io", "a1_b2"):
             with self.subTest(value=good):
-                raw = load(GOOD)
-                raw["images"]["image_namespace"] = good
-                self.assertEqual(validate(raw)[0], [])
+                self.assertEqual(validate(legacy(good))[0], [])
+
+    def test_only_the_legacy_namespace_warns(self):
+        _e, fresh = validate(load(GOOD))
+        self.assertEqual(warnings(fresh), [])
+        raw = load(GOOD)
+        del raw["images"]["registry"]
+        raw["images"]["image_namespace"] = "example"
+        _e, legacy = validate(raw)
+        self.assertEqual(
+            [(w.code, w.path) for w in warnings(legacy)],
+            [("deprecated", "images.image_namespace")],
+        )
+        self.assertIn("set images.registry instead", warnings(legacy)[0].line())
 
     def test_unknown_key_at_depth(self):
         raw = load(GOOD)
@@ -421,7 +477,7 @@ class RuleTest(PositiveControlMixin, unittest.TestCase):
 
     def test_image_ref_override_for_a_known_container(self):
         raw = self.good()
-        raw["images"]["refs"] = {"core-platform": "registry.example.com/suite-core:1.2.3"}
+        raw["images"]["refs"] = {"core-platform": "registry.example.com/core:1.2.3"}
         self.assertEqual(codes(raw), [])
 
     def test_day2_keys_validate(self):
@@ -443,7 +499,7 @@ class RuleTest(PositiveControlMixin, unittest.TestCase):
         raw = tomllib.loads(
             'schema_version = 1\n[install]\nname = "x"\n'
             '[domain]\nprimary = "x.example.com"\ntls = "internal"\n'
-            '[images]\nimage_namespace = "example"\n'
+            '[images]\nregistry = "ghcr.io/example"\n'
         )
         errors, normalized = validate(raw)
         self.assertEqual(errors, [])

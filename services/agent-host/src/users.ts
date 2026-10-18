@@ -2,9 +2,9 @@
  * One OS user per agent.
  *
  * On an agent's first start: user `agent-<short id>` (see ids.ts) in group
- * `suite-agents`, with a 0700 home and a `work` folder; linger enabled, so the
+ * `burrow-agents`, with a 0700 home and a `work` folder; linger enabled, so the
  * agent's own `systemctl --user` services and crontab survive restarts; and a
- * 0700 runtime dir at /run/suite-agents/<agent id> for its tmux server.
+ * 0700 runtime dir at /run/burrow-agents/<agent id> for its tmux server.
  *
  * WHAT THIS IS NOT. Separate users stop one agent from reading or clobbering
  * another's files BY ACCIDENT. They are not a security boundary: an install is

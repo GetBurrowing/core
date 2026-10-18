@@ -302,6 +302,36 @@ defmodule Platform.CiBuildIdentityTest do
     end
   end
 
+  # Task 01a14dd8 stage 2: the agent-host image is pushed under its burrow
+  # name on GHCR, AND under the pre-rename suite-agent-host name on both
+  # registries, because hosts installed before the rename pull that name.
+  # Full lists per registry, so a dropped legacy tag fails as surely as a
+  # missing burrow tag, and so does a burrow tag on Docker Hub.
+  describe "the build-and-push-agent-host job" do
+    @agent_host_hub_tags [
+      "docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-agent-host:latest",
+      "docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/suite-agent-host:${{ github.sha }}"
+    ]
+    @agent_host_ghcr_tags [
+      "ghcr.io/startup-suite/suite-agent-host:latest",
+      "ghcr.io/startup-suite/suite-agent-host:${{ github.sha }}",
+      "ghcr.io/startup-suite/burrow-agent-host:latest",
+      "ghcr.io/startup-suite/burrow-agent-host:${{ github.sha }}"
+    ]
+
+    test "tags burrow-agent-host on GHCR beside the legacy suite-agent-host tags" do
+      step =
+        @ci_workflow
+        |> File.read!()
+        |> String.split("\n")
+        |> job_body("build-and-push-agent-host")
+        |> named_step("Build and push agent-host")
+
+      assert play_tags(step, "docker.io/") == @agent_host_hub_tags
+      assert play_tags(step, "ghcr.io/") == @agent_host_ghcr_tags
+    end
+  end
+
   # Task 01a14b9e: Docker Hub refs are built from the DOCKERHUB_NAMESPACE
   # repository variable. Every job that pushes refuses, as its FIRST step,
   # to run with the variable empty, so nothing is ever pushed to

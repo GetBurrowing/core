@@ -11,10 +11,10 @@ import shutil
 import tempfile
 import unittest
 
-from suite_install.setup import steps
-from suite_install.setup.host import Result
+from burrow_install.setup import steps
+from burrow_install.setup.host import Result
 
-CADDYFILE = "http://suite.example.test {\n\treverse_proxy core-platform:4000\n}\n"
+CADDYFILE = "http://burrow.example.test {\n\treverse_proxy core-platform:4000\n}\n"
 
 
 class _Install:
@@ -66,7 +66,7 @@ class StaleMountTest(unittest.TestCase):
         self.assertEqual(self.recreations(ctx), [])
 
     def test_changed_config_recreates_the_service(self):
-        old = CADDYFILE.replace("suite.example.test", "old.example.test")
+        old = CADDYFILE.replace("burrow.example.test", "old.example.test")
         ctx = _Ctx(self.dir, {("caddy", "/etc/caddy/Caddyfile"): old})
         self.assertEqual(steps._recreate_stale_mounts(ctx), ["caddy"])
         self.assertEqual(

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # preload.sh: load a render's images and host files into the guest, then start
-# the stack. For `images.source = "preloaded"` renders, whose suite-stack.service
-# waits on /opt/suite/.images-loaded and whose compose services never pull.
+# the stack. For `images.source = "preloaded"` renders, whose burrow-stack.service
+# waits on /opt/burrow/.images-loaded and whose compose services never pull.
 #
 #   preload.sh --workdir <dir> --render <dir> [--file <host-path>=<install-rel-path>]...
 #              [--pull-missing-public] [--dry-run]
@@ -11,7 +11,7 @@
 # nothing is written to the workdir; layer diff ids compared). A ref the host
 # store does not hold is an error, unless --pull-missing-public is given: then the GUEST pulls it
 # anonymously. No registry credential is used or copied by this script.
-# --file copies a host file (read-only source) to /opt/suite/<install-rel-path>.
+# --file copies a host file (read-only source) to /opt/burrow/<install-rel-path>.
 set -euo pipefail
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -59,7 +59,7 @@ done
 if ((dry_run)); then
   for ref in "${local_refs[@]}"; do show podman save --format docker-archive "$ref" "|" vm-exec sudo docker load; done
   for ref in "${missing[@]}"; do show vm-exec sudo docker pull "$ref"; done
-  for spec in "${files[@]}"; do show cat "${spec%%=*}" "|" vm-exec "> /opt/suite/${spec#*=}"; done
+  for spec in "${files[@]}"; do show cat "${spec%%=*}" "|" vm-exec "> /opt/burrow/${spec#*=}"; done
   exit 0
 fi
 
@@ -85,7 +85,7 @@ for ref in "${missing[@]}"; do
 done
 
 for spec in "${files[@]}"; do
-  src=${spec%%=*} dst=/opt/suite/${spec#*=}
+  src=${spec%%=*} dst=/opt/burrow/${spec#*=}
   echo "== copy $(basename "$src") -> $dst"
   vx "sudo install -d -m 0755 '$(dirname "$dst")' && sudo sh -c 'cat > \"$dst.tmp\" && mv \"$dst.tmp\" \"$dst\"'" <"$src"
   want=$(sha256sum "$src" | cut -d' ' -f1)
@@ -94,7 +94,7 @@ for spec in "${files[@]}"; do
   echo "$dst sha256 ${want:0:12} matches host"
 done
 
-echo "== start suite-stack.service"
-vx "sudo touch /opt/suite/.images-loaded && sudo systemctl start suite-stack.service"
-vx "systemctl is-active suite-stack.service"
-vx "cd /opt/suite && sudo docker compose ps --format '{{.Service}} {{.State}}'"
+echo "== start burrow-stack.service"
+vx "sudo touch /opt/burrow/.images-loaded && sudo systemctl start burrow-stack.service"
+vx "systemctl is-active burrow-stack.service"
+vx "cd /opt/burrow && sudo docker compose ps --format '{{.Service}} {{.State}}'"

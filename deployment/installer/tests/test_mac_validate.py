@@ -34,10 +34,10 @@ sys.path.insert(0, INSTALLER)
 
 from identity_terms import identity_hits
 
-from suite_install import registry
-from suite_install.__main__ import main
-from suite_install.manifest import load
-from suite_install.validate import ERROR_CODES, MAC_ERROR_CODES, validate
+from burrow_install import registry
+from burrow_install.__main__ import main
+from burrow_install.manifest import load
+from burrow_install.validate import ERROR_CODES, MAC_ERROR_CODES, validate
 
 MAC_SERVICES = [
     "caddy",
@@ -126,6 +126,10 @@ class MacExampleTest(PositiveControlMixin, unittest.TestCase):
         for key in ("meetings", "models"):
             del mac[key]
         mac["services"]["meetings"] = False
+        # The image source differs on purpose (task 01a14dd8): mac keeps the
+        # legacy image_namespace while meeting-transcriber has no registry build.
+        self.assertEqual(mac["images"].pop("image_namespace"), "example")
+        self.assertEqual(lite["images"].pop("registry"), "ghcr.io/example")
         self.assertEqual(mac, lite)
 
     def test_examples_are_non_personal(self):
@@ -138,7 +142,7 @@ class MacExampleTest(PositiveControlMixin, unittest.TestCase):
                 self.assertEqual(identity_hits(text), [])
                 for word in ("192.168.", "10.0.", "sk-", "node_ip ="):
                     self.assertNotIn(word, text)
-                self.assertIn('primary = "suite.example.test"', text)
+                self.assertIn('primary = "burrow.example.test"', text)
 
     def test_single_host_example_is_untouched_by_the_target_field(self):
         raw = load(SINGLE_HOST)
@@ -360,7 +364,7 @@ class MacRuleTest(PositiveControlMixin, unittest.TestCase):
             'schema_version = 1\n[install]\nname = "x"\ntarget = "mac"\n'
             '[domain]\nprimary = "x.example.com"\n'
             '[access]\ntunnel_token_ref = "TUNNEL_TOKEN"\n'
-            '[images]\nimage_namespace = "example"\n'
+            '[images]\nregistry = "ghcr.io/example"\n'
         )
         errors, normalized = validate(raw)
         self.assertEqual(errors, [])

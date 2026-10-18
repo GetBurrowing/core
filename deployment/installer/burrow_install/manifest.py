@@ -127,9 +127,12 @@ SCHEMA = {
         "secret_key_ref": _str(),
     },
     "images": {
-        # REQUIRED, no default (task 01a14b9e): the Docker Hub namespace the
-        # suite-* images are pulled from (docker.io/<image_namespace>/...).
-        # A default would name one publisher.
+        # Exactly ONE of the two, no default (a default would name one
+        # publisher): `registry` is the path the Burrow images are pulled
+        # from (<registry>/core, task 01a14dd8); `image_namespace` is the
+        # LEGACY Docker Hub namespace (task 01a14b9e), still accepted with a
+        # deprecation warning. See registry.image_repo.
+        "registry": _str(),
         "image_namespace": _str(),
         "source": _enum(IMAGE_SOURCES, "registry"),
         "refs": {container: _str() for container in registry.ALL_CONTAINERS},

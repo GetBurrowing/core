@@ -9,7 +9,9 @@ step or a SQL script.
 ## Flavours
 
 CI publishes one image per supported module set (`.github/workflows/ci.yml`,
-`build-and-push`), all in `docker.io/example/suite-core`:
+`build-and-push`), all in `ghcr.io/<owner>/core` (an install's
+`[images] registry` path + `/core`; the legacy `image_namespace` input pulls
+the same tags from `docker.io/<namespace>/suite-core`):
 
 | Module set | Built from | Moving tag | Pinned tags |
 |---|---|---|---|
@@ -21,7 +23,7 @@ that image only so that the three hand-maintained test-host installs keep their
 behaviour until they are repointed (below). Do not point a new install at
 `latest`: it names a flavour by accident of history, not by choice.
 
-`deployment/installer/suite_install/registry.py` (`IMAGE_FLAVOURS`) is the
+`deployment/installer/burrow_install/registry.py` (`IMAGE_FLAVOURS`) is the
 source of the mapping the renderer uses. A test in
 `deployment/installer/tests/test_render.py` fails if CI stops publishing any
 tag listed there.
@@ -40,12 +42,12 @@ tag listed there.
 2. Re-render, keeping the install's secrets, and deploy the output as usual:
 
    ```sh
-   PYTHONPATH=deployment/installer python3 -m suite_install render acme.install.toml \
+   PYTHONPATH=deployment/installer python3 -m burrow_install render acme.install.toml \
      --reuse-secrets <current secrets.env> --out <new dir>
    ```
 
    The render differs from the previous one in two lines only: the
-   core-platform image becomes `suite-core:play`, and core-platform gains
+   core-platform image becomes `<registry>/core:play`, and core-platform gains
    `GAME_STREAM_ENABLED=true` (see "The transitional gate" below). The
    renderer test `test_selecting_play_changes_only_the_core_image_and_its_gate`
    holds that.
@@ -70,8 +72,8 @@ quadlet in core-ops (`~/.config/containers/systemd/<name>.container` on test-hos
 has an `Image=` line, and that line is the module selection:
 
 ```ini
-Image=docker.io/example/suite-core:play   # with Play
-Image=docker.io/example/suite-core:core   # without modules
+Image=ghcr.io/<owner>/core:play   # with Play
+Image=ghcr.io/<owner>/core:core   # without modules
 ```
 
 Change it, then `systemctl --user daemon-reload` and restart the unit. With

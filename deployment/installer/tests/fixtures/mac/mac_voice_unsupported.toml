@@ -24,12 +24,12 @@
 schema_version = 1
 
 [install]
-name = "suite-mac"
+name = "burrow-mac"
 size_tier = "small"
 target = "mac"
 
 [domain]
-primary = "suite.example.test"
+primary = "burrow.example.test"
 
 [services]
 files = true

@@ -328,7 +328,9 @@ def build(
             "set [meetings] node_ip",
         ) from exc
     except registry.ImageNamespaceMissing as exc:
-        raise RenderError("missing_required", registry.IMAGE_NAMESPACE_INPUT, str(exc)) from exc
+        raise RenderError("missing_required", registry.IMAGE_REGISTRY_INPUT, str(exc)) from exc
+    except registry.ImageUnpublished as exc:
+        raise RenderError("missing_required", f"images.refs.{exc.container}", str(exc)) from exc
 
     private_defaults = [
         c

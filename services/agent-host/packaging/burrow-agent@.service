@@ -1,5 +1,5 @@
 # Managed by Burrow's agent host. One instance per native agent; %i is the agent id.
-# The per-agent drop-in in suite-agent@<id>.service.d/ sets User, Group and paths.
+# The per-agent drop-in in burrow-agent@<id>.service.d/ sets User, Group and paths.
 [Unit]
 Description=Burrow native agent %i
 After=network-online.target
@@ -9,7 +9,7 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
-EnvironmentFile=/etc/suite-agents/%i.env
+EnvironmentFile=/etc/burrow-agents/%i.env
 Environment=BURROW_AGENT_ID=%i
 Environment=SUITE_AGENT_ID=%i
 Environment=BURROW_AGENT_SESSION=suite-agent
@@ -18,7 +18,7 @@ Environment=BURROW_UNATTENDED=1
 Environment=SUITE_UNATTENDED=1
 Environment=DISABLE_AUTOUPDATER=1
 Environment=NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
-ExecStart=/usr/local/bin/bun run /opt/suite/agent-host/src/runner.ts
+ExecStart=/usr/local/bin/bun run /opt/burrow/agent-host/src/runner.ts
 Restart=on-failure
 RestartSec=5
 KillMode=control-group

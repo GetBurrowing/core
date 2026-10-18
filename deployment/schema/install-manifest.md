@@ -10,8 +10,8 @@ domain, TLS, service set, model endpoints, auth, backup, size, GPU and images. P
 behaviour (orgs, agents, prompts, feature settings) stays in the admin panel.
 
 - Format: TOML. `tomllib` parses it with the Python standard library, so no pip step is needed.
-- Validator: `PYTHONPATH=deployment/installer python3 -m suite_install validate <manifest>`
-- Service set: `PYTHONPATH=deployment/installer python3 -m suite_install services <manifest>`
+- Validator: `PYTHONPATH=deployment/installer python3 -m burrow_install validate <manifest>`
+- Service set: `PYTHONPATH=deployment/installer python3 -m burrow_install services <manifest>`
 - Examples: [`single-host.install.toml`](../examples/single-host.install.toml)
   (target `single-host`), [`mac.install.toml`](../examples/mac.install.toml) and
   [`mac-lite.install.toml`](../examples/mac-lite.install.toml) (target `mac`, meetings on and off)
@@ -35,7 +35,7 @@ validation instead of silently keeping its default.
 | `name` | string | required | `[a-z][a-z0-9-]{0,62}`. Names the install; becomes `DEPLOY_TARGET`. |
 | `size_tier` | `small` \| `medium` \| `large` | `small` | Sizing hint for renderers (VM size, pool sizes). |
 | `target` | `single-host` \| `mac` | `single-host` | Which renderer the manifest is for (task 01a0d6ab). The validator applies that target's rules; `render --target`, if given, must match (`target_mismatch`). |
-| `modules` | array of strings | `[]` | Build-time modules ([ADR 0055](../../docs/decisions/0055-extension-contract-and-build-time-modules.md)). Each entry must be a known module (`unknown_module`), listed once (`invalid_value`). Known modules: `play`. The set picks the core image flavour: `[]` runs `suite-core:core`, `["play"]` runs `suite-core:play`. A module is compiled into the core image, so this changes nothing else in the render. See [`install-modules.md`](install-modules.md). |
+| `modules` | array of strings | `[]` | Build-time modules ([ADR 0055](../../docs/decisions/0055-extension-contract-and-build-time-modules.md)). Each entry must be a known module (`unknown_module`), listed once (`invalid_value`). Known modules: `play`. The set picks the core image flavour: `[]` runs `<registry>/core:core`, `["play"]` runs `<registry>/core:play` (legacy `image_namespace`: `suite-core:core` / `suite-core:play`). A module is compiled into the core image, so this changes nothing else in the render. See [`install-modules.md`](install-modules.md). |
 
 ## `[domain]`
 
@@ -134,9 +134,10 @@ A missing required field gives one `backup_incomplete` error. A field the target
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
-| `image_namespace` | string | **required**, no default | The Docker Hub namespace the `suite-*` images come from: `docker.io/<image_namespace>/suite-core`, `suite-files-service`, `suite-memory-service`, `suite-meeting-transcriber` and `suite-agent-host`. A default would name one publisher, so a manifest without it is `missing_required`, and one that is not a Docker Hub namespace is `invalid_value`. |
+| `registry` | string | **required** (or the legacy `image_namespace`), no default | The registry path the Burrow images come from, e.g. `ghcr.io/<owner>`: `<registry>/core` (tag = flavour, `core` or `play`), `<registry>/files-service:latest`, `<registry>/memory-service:latest`, `<registry>/meeting-transcriber:latest` and `<registry>/burrow-agent-host:latest`. A registry host (with a dot, or `localhost`; optional port) and at least one lowercase path component, no scheme, tag or trailing `/`, else `invalid_value`. A default would name one publisher. Set exactly one of `registry` and `image_namespace`: neither is `missing_required` at `images.registry`, both is `invalid_value` at `images.image_namespace`. **meeting-transcriber has no published build under a registry yet** (measured 2026-10-18: it publishes only on a `v*` tag and has no GHCR package), so a `registry` manifest that runs it (`services.meetings` with `[meetings] transcription = true`) must pin `refs.meeting-transcriber` (`missing_required` otherwise), or use the legacy key. GHCR packages are private: `images.source = "registry"` needs a credential with an `auths["ghcr.io"]` entry. |
+| `image_namespace` | string | LEGACY, deprecated | The Docker Hub namespace of the images every install used before task 01a14dd8, rendered unchanged: `docker.io/<image_namespace>/suite-core`, `suite-files-service`, `suite-memory-service`, `suite-meeting-transcriber` and `suite-agent-host`. Still accepted; `validate` (and every command that reads a manifest) prints `warning deprecated at images.image_namespace: ...` on stderr. One that is not a Docker Hub namespace is `invalid_value`. Its credential is `auths["https://index.docker.io/v1/"]`. |
 | `source` | `registry` \| `preloaded` | `registry` | `preloaded`: images are loaded onto the host out of band, and nothing is pulled. |
-| `refs.<container>` | string | registry default | Per-container image override. The keys are container names: `caddy`, `cloudflared`, `core-platform`, `core-postgres`, `embeddings`, `files-service`, `livekit`, `meeting-transcriber`, `memory-service`, `pocket-id`, `speaches`, `agent-host`, `tailscale-auth`, `tailscale-livekit`, `tailscale-primary`. The `core-platform` default is the flavour `install.modules` selects; an override replaces it, so a pinned ref must be a build of the same flavour (for example `suite-core:play-<sha>` with `modules = ["play"]`). |
+| `refs.<container>` | string | registry default | Per-container image override. The keys are container names: `caddy`, `cloudflared`, `core-platform`, `core-postgres`, `embeddings`, `files-service`, `livekit`, `meeting-transcriber`, `memory-service`, `pocket-id`, `speaches`, `agent-host`, `tailscale-auth`, `tailscale-livekit`, `tailscale-primary`. The `core-platform` default is the flavour `install.modules` selects; an override replaces it, so a pinned ref must be a build of the same flavour (for example `core:play-<sha>` with `modules = ["play"]`). |
 
 ## `[access]` (target `mac` only)
 
@@ -186,13 +187,14 @@ agent host reports.
 - **`full_machine`** (the default for a VM we provision): the agent host is a root systemd
   service on the HOST. The render adds to `user-data` the tools (tmux, git, curl, cron; node,
   bun, Claude Code, Codex and suite-cli at the versions pinned in
-  `services/agent-host/versions.env`; chromium as a snap), `suite-agent-host.service`, the
-  `suite-agent@.service` template, a first-boot setup unit that copies the daemon out of the
-  agent-host image, `/etc/suite-agent-host.env` (0600 root) and `/etc/sudoers.d/suite-agents`
-  (`%suite-agents ALL=(ALL) NOPASSWD:ALL`, mode 0440). Agents reach core at the install's public
+  `services/agent-host/versions.env`; chromium as a snap), `burrow-agent-host.service`, the
+  `burrow-agent@.service` template, a first-boot setup unit (`burrow-agent-host-setup.service`,
+  `bin/burrow-agent-host-setup`) that copies the daemon out of the agent-host image,
+  `/etc/burrow-agent-host.env` (0600 root) and `/etc/sudoers.d/burrow-agents`
+  (`%burrow-agents ALL=(ALL) NOPASSWD:ALL`, mode 0440). Agents reach core at the install's public
   URL through Caddy; with `tls = "internal"` the install root is added to the system trust store.
 - **`contained`** (shared hosts): the agent host is the `agent-host` container
-  (`docker.io/<image_namespace>/suite-agent-host`, systemd as PID 1) on a dedicated `agents` network.
+  (`<registry>/burrow-agent-host`, systemd as PID 1) on a dedicated `agents` network.
   `core-platform` is the only service on both networks, so the agent host reaches core and the
   internet and not Postgres or any other service. It reads its own `agent-host.env` (0600, only
   `AGENT_HOST_TOKEN`), not `secrets.env`. Under DOCKER (this renderer) the container needs the
@@ -270,7 +272,7 @@ does not raise a second error. So one wrong field produces exactly one error lin
 | `UPSTREAM_SERVICE` | Constant `core-platform` (registry). |
 | `UPSTREAM_PORT` | Constant `4000`. |
 | `HEALTHCHECK_URL` | `https://<domain.primary>/health` |
-| `PLATFORM_IMAGE` | `images.refs.core-platform`, else the flavour of `install.modules` (`suite-core:core` or `suite-core:play`). |
+| `PLATFORM_IMAGE` | `images.refs.core-platform`, else the flavour of `install.modules` (`<registry>/core:core` or `<registry>/core:play`). |
 | `PROMOTION_CHANNEL` | `day2.upgrade_channel` (reserved; not yet acted on). |
 | `PROMOTION_REF` | Not produced: promotion state is private instance state (ADR 0003 §4). |
 
@@ -284,10 +286,10 @@ The manifest also produces values that ADR 0003 predates, and that the renderer 
 
 ## Rendering
 
-`python3 -m suite_install render <manifest> --out <dir>` writes one install. Run it with
+`python3 -m burrow_install render <manifest> --out <dir>` writes one install. Run it with
 `PYTHONPATH=deployment/installer`. The target is the manifest's `install.target`; `--target`, if
 given, must match it (`target_mismatch`). The service semantics live in
-`suite_install/registry.py`, and each target adds its own output layer (`templates.py` for
+`burrow_install/registry.py`, and each target adds its own output layer (`templates.py` for
 `single-host`, `mac.py` for `mac`).
 
 `single-host` writes these files to `--out`:
@@ -298,11 +300,11 @@ given, must match it (`target_mismatch`). The service semantics live in
 | `Caddyfile` | 0644 | One site per route. `tls = "internal"` signs with a root that the host generates at first boot. |
 | `secrets.env` | 0600 | Holds the generated secrets and the customer secrets that a container reads. |
 | `customer-secrets.env` | 0600 | Written only when a customer secret is supplied that no container reads yet. |
-| `services.txt` | 0644 | Same as `suite_install services`. |
+| `services.txt` | 0644 | Same as `burrow_install services`. |
 | `postgres-init/*.sql` | 0644 | Init SQL declared by the enabled services. |
 | `models.json` | 0644 | Written only when `[[models.endpoints]]` is declared. |
 | `agent-host.env` | 0600 | `[agents] profile = "contained"` only: the agent-host container's `AGENT_HOST_TOKEN`, and nothing else. |
-| `user-data` | 0600 | `#cloud-config` for Ubuntu 24.04. Carries every file above plus `suite-stack.service`, and with `[agents] profile = "full_machine"` the agent host's units, setup script, env file and sudoers file. |
+| `user-data` | 0600 | `#cloud-config` for Ubuntu 24.04. Carries every file above plus `burrow-stack.service` (the install lives under `/opt/burrow`), and with `[agents] profile = "full_machine"` the agent host's units, setup script, env file and sudoers file. |
 | `meta-data` | 0644 | NoCloud instance id. |
 | `registry-auth.json` | 0600 | Written only with `--registry-auth`. |
 
@@ -336,5 +338,5 @@ The renderer refuses in these cases:
 - `media_reach` `lan`/`tailnet` without `node_ip` and the address cannot be detected
   (`media_ip_undetected`).
 
-To compare two renders without printing a secret, run `suite_install redact <dir> --out <dir>` on
+To compare two renders without printing a secret, run `burrow_install redact <dir> --out <dir>` on
 each and diff the copies. Do not diff the raw directories: `user-data` carries `secrets.env`.

@@ -202,7 +202,7 @@ def set_json_key(path, key, value):
     with open(path, encoding="utf-8") as handle:
         data = json.load(handle)
     data[key] = value
-    tmp = path + ".suite-install.tmp"
+    tmp = path + ".burrow-install.tmp"
     with open(tmp, "w", encoding="utf-8") as handle:
         json.dump(data, handle, indent=2)
     os.replace(tmp, path)
@@ -213,8 +213,28 @@ def set_json_key(path, key, value):
 # ---------------------------------------------------------------------------
 
 
+# Same reverse-DNS root as the desktop app's bundle id.
+LABEL_ROOT = "io.github.getburrowing.install"
+# Installs made before task 01a14dd8 loaded their jobs under this root.
+LEGACY_LABEL_ROOT = "org.startupsuite.install"
+
+
 def agent_label(install_name, job):
-    return f"org.startupsuite.install.{install_name}.{job}"
+    return f"{LABEL_ROOT}.{install_name}.{job}"
+
+
+def legacy_agent_label(install_name, job):
+    return f"{LEGACY_LABEL_ROOT}.{install_name}.{job}"
+
+
+def remove_agent(host, label):
+    """Boot out and delete ``~/Library/LaunchAgents/<label>.plist``; True if it existed."""
+    path = os.path.join(host.home(), "Library", "LaunchAgents", f"{label}.plist")
+    if not os.path.exists(path):
+        return False
+    host.run(["launchctl", "bootout", f"gui/{os.getuid()}/{label}"], timeout=30)
+    os.unlink(path)
+    return True
 
 
 def agent_plist(label, program_arguments, log_path, calendar=None, interval=None):

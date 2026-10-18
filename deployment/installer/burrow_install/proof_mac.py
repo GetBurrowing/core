@@ -1,17 +1,19 @@
-"""``suite-install proof <command>``: data-plane proof for a Burrow install on a Mac.
+"""``burrow-install proof <command>``: data-plane proof for a Burrow install on a Mac.
 
 Task 01a0d6ab stage 5. Run ON the Mac, against an install made by
-``suite-install setup``. Every command prints ``key value`` lines and ends with
+``burrow-install setup``. Every command prints ``key value`` lines and ends with
 one ``RESULT PASS|FAIL|CHECK <command>`` line; the exit code is 0 only for
 PASS (and for CHECK, which is a listing a human reads). Output carries only
 ids, digests, ranks, scores, counts and names, never a secret value, and it is
 passed through the same scrubber as the setup CLI as a second layer.
 
-Commands (``--dir`` defaults to the single install under ~/suite):
+Commands (``--dir`` defaults to the single install under ~/burrow, then the
+legacy ~/suite):
 
-  init --zone Z [--tag T] [--core-image REF] [--embed-url U --embed-model M]
+  init --zone Z (--registry PATH | --image-namespace NS) [--tag T] [--core-image REF]
+       [--embed-url U --embed-model M]
        [--stt-url U --stt-model M | --no-transcription]
-      Create the proof install ``suite-<T>`` with hostnames ``suite-<T>``,
+      Create the proof install ``burrow-<T>`` with hostnames ``burrow-<T>``,
       ``auth-<T>`` and ``livekit-<T>`` flat under zone Z, from
       deployment/examples/mac.install.toml with meetings OFF. Its render
       equals the mac-lite render in every file except one added models.json
@@ -84,7 +86,7 @@ from .setup.steps import compose_ps
 HERE = os.path.dirname(os.path.abspath(__file__))
 EXAMPLES = os.path.join(os.path.dirname(os.path.dirname(HERE)), "examples")
 DEFAULT_TAG = "01a0d6ab"
-USER_AGENT = "suite-install-proof/1"
+USER_AGENT = "burrow-install-proof/1"
 RELEASE = "/app/bin/platform"
 ARM_SERVICES = ("core-platform", "files-service", "memory-service")
 MEDIA_PORTS = (("tcp", 7881), ("udp", 7882))
@@ -370,14 +372,22 @@ def cmd_init(args, env, stream):
     tag = args.tag
     zone = args.zone.strip().strip(".")
     raw = load(os.path.join(EXAMPLES, "mac.install.toml"))
-    # No default namespace or core image (task 01a14b9e): both name a publisher.
-    raw.setdefault("images", {})["image_namespace"] = args.image_namespace
+    # No default image source or core image (task 01a14b9e): both name a
+    # publisher. Exactly one source (task 01a14dd8): the flag given replaces
+    # whichever the example carries.
+    images = raw.setdefault("images", {})
+    images.pop("registry", None)
+    images.pop("image_namespace", None)
+    if args.registry:
+        images["registry"] = args.registry
+    else:
+        images["image_namespace"] = args.image_namespace
     if args.core_image:
         raw["images"].setdefault("refs", {})["core-platform"] = args.core_image
-    core = args.core_image or "the namespace's suite-core flavour"
+    core = args.core_image or "the image source's core flavour"
     apply_endpoint_overrides(raw, args)
-    work = tempfile.mkdtemp(prefix=f"suite-proof-{tag}-")
-    path = os.path.join(work, f"suite-{tag}.install.toml")
+    work = tempfile.mkdtemp(prefix=f"burrow-proof-{tag}-")
+    path = os.path.join(work, f"burrow-{tag}.install.toml")
     with open(path, "w", encoding="utf-8") as handle:
         handle.write(
             dumps_toml(
@@ -393,9 +403,9 @@ def cmd_init(args, env, stream):
         "--from",
         path,
         "--name",
-        f"suite-{tag}",
+        f"burrow-{tag}",
         "--domain",
-        f"suite-{tag}.{zone}",
+        f"burrow-{tag}.{zone}",
         "--auth-host",
         f"auth-{tag}.{zone}",
         "--livekit-host",
@@ -979,7 +989,7 @@ def cmd_grep_transcript(proof, args):
 
 
 def parser():
-    p = argparse.ArgumentParser(prog="suite-install proof", description=__doc__.splitlines()[0])
+    p = argparse.ArgumentParser(prog="burrow-install proof", description=__doc__.splitlines()[0])
     sub = p.add_subparsers(dest="command", required=True)
 
     def add(name, **kw):
@@ -990,12 +1000,15 @@ def parser():
 
     c = add("init")
     c.add_argument("--zone", required=True)
-    c.add_argument(
-        "--image-namespace",
-        required=True,
-        help="Docker Hub namespace of the suite-* images (images.image_namespace)",
+    source = c.add_mutually_exclusive_group(required=True)
+    source.add_argument(
+        "--registry", help="registry path of the Burrow images, e.g. ghcr.io/<owner>"
     )
-    c.add_argument("--core-image", help="core-platform image ref (default: the namespace's)")
+    source.add_argument(
+        "--image-namespace",
+        help="LEGACY: Docker Hub namespace of the old images (images.image_namespace)",
+    )
+    c.add_argument("--core-image", help="core-platform image ref (default: the image source's)")
     c.add_argument("--embed-url", help="embeddings base_url, no /v1 (default: hosted OpenAI)")
     c.add_argument("--embed-model", help="embeddings model (default: text-embedding-3-small)")
     c.add_argument("--stt-url", help="speech-to-text endpoint base_url ending at /v1")
@@ -1057,7 +1070,7 @@ def main(argv=None, env=None, out=None):
             if args.command not in ("ports", "ram"):
                 raise
             # Before install: no install dir yet, host-level readings only.
-            path = os.path.join(tempfile.gettempdir(), f"suite-proof-{args.tag}-none")
+            path = os.path.join(tempfile.gettempdir(), f"burrow-proof-{args.tag}-none")
         install = Install(path)
         if not install.exists() and args.command not in ("ports", "ram"):
             raise SetupError("install_dir_missing", f"no install at {path}", "run `proof init`")

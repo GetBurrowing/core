@@ -5,7 +5,21 @@
  */
 import { describe, expect, test } from "bun:test";
 import { SecretInArgv, SecretRegistry, assertNoSecretsInArgv } from "../src/exec.ts";
-import { connectionKey, isAgentEnvName, shortId, userName, envFile, runDir, statusFile } from "../src/ids.ts";
+import {
+  AGENTS_GROUP,
+  ENV_DIR,
+  RUN_DIR,
+  UNIT_TEMPLATE,
+  connectionKey,
+  dropInDir,
+  isAgentEnvName,
+  shortId,
+  unitName,
+  userName,
+  envFile,
+  runDir,
+  statusFile,
+} from "../src/ids.ts";
 import { loginScreenStatus, observe, parseShow, parseStart, renderEnvFile } from "../src/agents.ts";
 import { PACKAGED_RUNNER, dropIn, templateUnit } from "../src/units.ts";
 import { readEnv, resetEnvWarnings } from "../src/env.ts";
@@ -40,8 +54,8 @@ describe("names", () => {
   });
 
   test("paths are per agent", () => {
-    expect(envFile(A)).toBe(`/etc/suite-agents/${A}.env`);
-    expect(runDir(A)).toBe(`/run/suite-agents/${A}`);
+    expect(envFile(A)).toBe(`/etc/burrow-agents/${A}.env`);
+    expect(runDir(A)).toBe(`/run/burrow-agents/${A}`);
     expect(statusFile(A)).toBe("/home/agent-98259d347cbe/.local/state/suite/sessions/suite-agent.status.json");
   });
 
@@ -70,6 +84,40 @@ describe("names", () => {
     expect(isAgentEnvName("SUITE_AGENT_SESSION")).toBe(false);
     expect(isAgentEnvName("SUITE_UNATTENDED")).toBe(false);
   });
+
+  test("every reserved name is refused, and a near neighbour of each is not (A1's RESERVED_ENV, kept across the rename)", () => {
+    const reserved = [
+      "HOME",
+      "USER",
+      "PATH",
+      "SHELL",
+      "TMUX",
+      "TMUX_TMPDIR",
+      "BURROW_AGENT_ID",
+      "SUITE_AGENT_ID",
+      "BURROW_AGENT_SESSION",
+      "SUITE_AGENT_SESSION",
+      "BURROW_UNATTENDED",
+      "SUITE_UNATTENDED",
+      "LD_PRELOAD",
+      "LD_LIBRARY_PATH",
+    ];
+    for (const n of reserved) expect([n, isAgentEnvName(n)]).toEqual([n, false]);
+    // Positive control: the same names with a suffix are well-formed and allowed.
+    for (const n of reserved) expect([`${n}_X`, isAgentEnvName(`${n}_X`)]).toEqual([`${n}_X`, true]);
+  });
+
+  test("units and paths carry the burrow names", () => {
+    expect(unitName(A)).toBe(`burrow-agent@${A}.service`);
+    expect(dropInDir(A)).toBe(`/etc/systemd/system/burrow-agent@${A}.service.d`);
+    expect([AGENTS_GROUP, ENV_DIR, RUN_DIR, UNIT_TEMPLATE]).toEqual([
+      "burrow-agents",
+      "/etc/burrow-agents",
+      "/run/burrow-agents",
+      "burrow-agent@.service",
+    ]);
+    expect(PACKAGED_RUNNER).toEqual(["/usr/local/bin/bun", "run", "/opt/burrow/agent-host/src/runner.ts"]);
+  });
 });
 
 // From suite-cli 0.7.2 agentKey("/home/agent-98259d347cbe/work"), run on test-host 2026-10-09.
@@ -77,17 +125,17 @@ const BURROW_CLI_KEY_VECTOR = "work-4e19478c8cac30c4";
 
 describe("units", () => {
   test("the template runs as the drop-in's user, restarts on failure, reads the per-agent env file", () => {
-    const unit = templateUnit(["/usr/local/bin/bun", "run", "/opt/suite/agent-host/src/runner.ts"]);
-    expect(unit).toContain("EnvironmentFile=/etc/suite-agents/%i.env");
+    const unit = templateUnit(["/usr/local/bin/bun", "run", "/opt/burrow/agent-host/src/runner.ts"]);
+    expect(unit).toContain("EnvironmentFile=/etc/burrow-agents/%i.env");
     expect(unit).toContain("Restart=on-failure");
-    expect(unit).toContain("ExecStart=/usr/local/bin/bun run /opt/suite/agent-host/src/runner.ts");
+    expect(unit).toContain("ExecStart=/usr/local/bin/bun run /opt/burrow/agent-host/src/runner.ts");
     expect(unit).not.toContain("User=");
   });
 
   test("the packaged template (image and full_machine user-data) is exactly what the host writes", () => {
-    // Stage 3 ships packaging/suite-agent@.service in both profiles; the host
+    // Stage 3 ships packaging/burrow-agent@.service in both profiles; the host
     // rewrites the template on every start, so a drift would flap the unit.
-    const packaged = readFileSync(resolve(import.meta.dir, "..", "packaging", "suite-agent@.service"), "utf8");
+    const packaged = readFileSync(resolve(import.meta.dir, "..", "packaging", "burrow-agent@.service"), "utf8");
     expect(packaged).toBe(templateUnit(PACKAGED_RUNNER));
   });
 
@@ -115,9 +163,9 @@ describe("units", () => {
   test("the drop-in names the agent's own user and its private tmux dir", () => {
     const d = dropIn(A);
     expect(d).toContain("User=agent-98259d347cbe");
-    expect(d).toContain("Group=suite-agents");
+    expect(d).toContain("Group=burrow-agents");
     expect(d).toContain("WorkingDirectory=/home/agent-98259d347cbe/work");
-    expect(d).toContain(`Environment=TMUX_TMPDIR=/run/suite-agents/${A}`);
+    expect(d).toContain(`Environment=TMUX_TMPDIR=/run/burrow-agents/${A}`);
   });
 });
 
@@ -204,7 +252,7 @@ describe("no secret in argv (mirrors suite-cli's assertNoSecretsInArgv)", () => 
   test("an argv without one passes", () => {
     const s = new SecretRegistry();
     s.add("tok-SECRET-01a10322");
-    expect(() => assertNoSecretsInArgv(["systemctl", "restart", `suite-agent@${A}.service`], s)).not.toThrow();
+    expect(() => assertNoSecretsInArgv(["systemctl", "restart", `burrow-agent@${A}.service`], s)).not.toThrow();
   });
 });
 
@@ -497,7 +545,7 @@ describe("the API key reaches only its own agent's env file", () => {
   test("the unit template does not carry the key; only the per-agent EnvironmentFile does", () => {
     const unit = templateUnit(PACKAGED_RUNNER);
     expect(unit).not.toContain("ANTHROPIC_API_KEY");
-    expect(unit).toContain("EnvironmentFile=/etc/suite-agents/%i.env");
+    expect(unit).toContain("EnvironmentFile=/etc/burrow-agents/%i.env");
     expect(dropIn(A)).not.toContain("ANTHROPIC_API_KEY");
   });
 });

@@ -1,5 +1,5 @@
 /**
- * The systemd units: one template, `suite-agent@.service`, and one drop-in per
+ * The systemd units: one template, `burrow-agent@.service`, and one drop-in per
  * agent naming its user.
  *
  * Why systemd: the same unit works on `full_machine` (the host's systemd) and
@@ -9,13 +9,13 @@
  *
  * Why a drop-in: `User=` cannot come from an EnvironmentFile and no systemd
  * specifier maps an agent id to `agent-<short id>`, so each instance gets
- * `suite-agent@<id>.service.d/10-agent.conf` with its User, Group, home and
+ * `burrow-agent@<id>.service.d/10-agent.conf` with its User, Group, home and
  * runtime dir.
  */
 import { ENV_DIR, SESSION, homeDir, runDir, userName, workDir, AGENTS_GROUP } from "./ids.ts";
 
 /** Where both capability profiles install this daemon (stage 3 packaging). */
-export const PACKAGED_RUNNER = ["/usr/local/bin/bun", "run", "/opt/suite/agent-host/src/runner.ts"];
+export const PACKAGED_RUNNER = ["/usr/local/bin/bun", "run", "/opt/burrow/agent-host/src/runner.ts"];
 
 /**
  * The template. `%i` is the agent id. `runner` is the absolute command the
@@ -25,14 +25,14 @@ export const PACKAGED_RUNNER = ["/usr/local/bin/bun", "run", "/opt/suite/agent-h
  * disappears without a stop, which systemd then restarts; a stop is SIGTERM,
  * which the runner turns into a clean exit 0.
  *
- * packaging/suite-agent@.service is this function's output for
+ * packaging/burrow-agent@.service is this function's output for
  * {@link PACKAGED_RUNNER}, shipped in the image and in full_machine's
  * user-data; test/unit.test.ts fails if the two differ by a byte.
  */
 export function templateUnit(runner: string[]): string {
   return [
     "# Managed by Burrow's agent host. One instance per native agent; %i is the agent id.",
-    "# The per-agent drop-in in suite-agent@<id>.service.d/ sets User, Group and paths.",
+    "# The per-agent drop-in in burrow-agent@<id>.service.d/ sets User, Group and paths.",
     "[Unit]",
     "Description=Burrow native agent %i",
     "After=network-online.target",

@@ -1,4 +1,4 @@
-"""Tests for ``suite-install proof`` / mac/proof.sh (task 01a0d6ab stage 5).
+"""Tests for ``burrow-install proof`` / mac/proof.sh (task 01a0d6ab stage 5).
 
 Run: PYTHONPATH=deployment/installer python3 -m unittest discover -s deployment/installer/tests -v
 
@@ -26,12 +26,12 @@ sys.path.insert(0, HERE)
 
 from setup_fakes import MAC, MAC_LITE, FakeHost, FakeKeychain, run_cli, write_secret_file
 
-from suite_install import proof_mac
-from suite_install.manifest import load
-from suite_install.render import build
-from suite_install.setup import cli
-from suite_install.setup.host import Result
-from suite_install.validate import validate
+from burrow_install import proof_mac
+from burrow_install.manifest import load
+from burrow_install.render import build
+from burrow_install.setup import cli
+from burrow_install.setup.host import Result
+from burrow_install.validate import validate
 
 PROOF_SH = os.path.join(INSTALLER, "mac", "proof.sh")
 FIXTURES = os.path.join(HERE, "render_fixtures")
@@ -52,7 +52,7 @@ def run_proof(env, *argv):
 class Base(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="proof-01a0d6ab-")
-        self.dir = os.path.join(self.tmp, "suite-01a0d6ab")
+        self.dir = os.path.join(self.tmp, "burrow-01a0d6ab")
         self.host = FakeHost(self.tmp)
         self.keychain = FakeKeychain()
         self.env = cli.Env(host=self.host, keychain=self.keychain, environ={})
@@ -62,7 +62,7 @@ class Base(unittest.TestCase):
 
     def init(self):
         code, text = run_proof(
-            self.env, "init", "--zone", "example.com", "--image-namespace", "example",
+            self.env, "init", "--zone", "example.com", "--registry", "ghcr.io/example",
             "--dir", self.dir,
         )  # fmt: skip
         self.assertEqual(code, 0, text)
@@ -91,40 +91,52 @@ class Base(unittest.TestCase):
 class InitTest(Base):
     def test_init_uses_the_01a0d6ab_names_the_pin_and_meetings_off(self):
         doc = self.init()
-        self.assertEqual(doc["install_name"], "suite-01a0d6ab")
+        self.assertEqual(doc["install_name"], "burrow-01a0d6ab")
         m = load(os.path.join(self.dir, "install.toml"))
-        self.assertEqual(m["install"]["name"], "suite-01a0d6ab")
+        self.assertEqual(m["install"]["name"], "burrow-01a0d6ab")
         self.assertEqual(
             (m["domain"]["primary"], m["domain"]["auth_host"], m["domain"]["livekit_host"]),
             (
-                "suite-01a0d6ab.example.com",
+                "burrow-01a0d6ab.example.com",
                 "auth-01a0d6ab.example.com",
                 "livekit-01a0d6ab.example.com",
             ),
         )
         self.assertIs(m["services"]["meetings"], False)
-        # Task 01a14b9e: no default namespace or core pin; init takes them.
-        self.assertEqual(m["images"]["image_namespace"], "example")
+        # Tasks 01a14b9e, 01a14dd8: no default image source or core pin; init
+        # takes them, and the flag replaces the example's legacy namespace.
+        self.assertEqual(m["images"]["registry"], "ghcr.io/example")
+        self.assertNotIn("image_namespace", m["images"])
         self.assertNotIn("core-platform", m["images"].get("refs", {}))
 
     def test_init_pins_the_core_image_only_when_asked(self):
         code, text = run_proof(
+            self.env, "init", "--zone", "example.com", "--registry", "ghcr.io/acme",
+            "--core-image", "ghcr.io/acme/core:core-0123456", "--dir", self.dir,
+        )  # fmt: skip
+        self.assertEqual(code, 0, text)
+        m = load(os.path.join(self.dir, "install.toml"))
+        self.assertEqual(m["images"]["registry"], "ghcr.io/acme")
+        self.assertEqual(m["images"]["refs"]["core-platform"], "ghcr.io/acme/core:core-0123456")
+
+    def test_init_still_takes_the_legacy_namespace(self):
+        code, text = run_proof(
             self.env, "init", "--zone", "example.com", "--image-namespace", "acme",
-            "--core-image", "docker.io/acme/suite-core:core-0123456", "--dir", self.dir,
+            "--dir", self.dir,
         )  # fmt: skip
         self.assertEqual(code, 0, text)
         m = load(os.path.join(self.dir, "install.toml"))
         self.assertEqual(m["images"]["image_namespace"], "acme")
-        self.assertEqual(
-            m["images"]["refs"]["core-platform"], "docker.io/acme/suite-core:core-0123456"
-        )
+        self.assertNotIn("registry", m["images"])
 
-    def test_init_without_an_image_namespace_refuses_naming_it(self):
+    def test_init_without_an_image_source_refuses_naming_it(self):
         err = io.StringIO()
         with contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as ctx:
             run_proof(self.env, "init", "--zone", "example.com", "--dir", self.dir)
         self.assertEqual(ctx.exception.code, 2)
-        self.assertIn("the following arguments are required: --image-namespace", err.getvalue())
+        self.assertIn(
+            "one of the arguments --registry --image-namespace is required", err.getvalue()
+        )
         self.assertFalse(os.path.exists(os.path.join(self.dir, "install.toml")))
 
     def test_default_init_keeps_the_hosted_openai_endpoints(self):
@@ -179,10 +191,22 @@ class InitTest(Base):
         self.assertNotIn("stt_endpoint", m["meetings"])
 
     def test_meetings_flip_is_one_flag_and_a_mac_lite_base_could_not_do_it(self):
+        # One flag on the legacy image source. Under images.registry the flip
+        # also needs images.refs.meeting-transcriber pinned (no registry build
+        # yet, task 01a14dd8), and init says so.
         self.init()
         code, doc, _ = run_cli(self.env, "init", "--dir", self.dir, "--meetings", "on")
+        self.assertEqual((code, doc["error_code"]), (2, "manifest_invalid"), doc)
+        self.assertIn("missing_required at images.refs.meeting-transcriber", doc["error"])
+        code, doc, _ = run_cli(
+            self.env, "init", "--dir", self.dir, "--meetings", "on",
+            "--image-namespace", "example",
+        )  # fmt: skip
         self.assertEqual(code, 0, doc)
-        self.assertEqual(doc["changed"], ["services.meetings"])
+        self.assertEqual(
+            sorted(doc["changed"]),
+            ["images.image_namespace", "images.registry", "services.meetings"],
+        )
         # Negative control: the same flip on a mac-lite manifest is refused,
         # which is why init starts from mac.install.toml.
         other = os.path.join(self.tmp, "lite")
@@ -201,11 +225,17 @@ class RenderEquivalenceTest(unittest.TestCase):
     def render(self, source, meetings=False):
         raw = load(source)
         raw["services"]["meetings"] = meetings
-        raw["install"]["name"] = "suite-01a0d6ab"
-        raw["domain"]["primary"] = "suite-01a0d6ab.example.com"
+        raw["install"]["name"] = "burrow-01a0d6ab"
+        raw["domain"]["primary"] = "burrow-01a0d6ab.example.com"
         raw["domain"]["auth_host"] = "auth-01a0d6ab.example.com"
         raw["domain"]["livekit_host"] = "livekit-01a0d6ab.example.com"
-        raw.setdefault("images", {}).setdefault("refs", {})["core-platform"] = "x/core:pin"
+        # One image source for both (proof init's flag replaces the example's).
+        raw["images"].pop("image_namespace", None)
+        raw["images"]["registry"] = "ghcr.io/example"
+        raw["images"]["refs"] = {
+            "core-platform": "x/core:pin",
+            "meeting-transcriber": "x/meeting-transcriber:pin",
+        }
         errors, manifest = validate(raw)
         self.assertEqual(errors, [])
         return build(
@@ -405,7 +435,7 @@ class FilesCommandTest(Base):
         self.host.add(("cmp",), cmp_rule)
         args = proof_mac.parser().parse_args(["files", "--dir", self.dir, "--size", "4096"])
         out = io.StringIO()
-        from suite_install.setup.state import Install
+        from burrow_install.setup.state import Install
 
         proof = proof_mac.Proof(Install(self.dir), self.env, out)
         code = proof_mac.cmd_files(proof, args, http_fn=suite.http)
@@ -550,7 +580,7 @@ class LivekitCommandTest(Base):
 
         args = proof_mac.parser().parse_args(["livekit", "--dir", self.dir])
         out = io.StringIO()
-        from suite_install.setup.state import Install
+        from burrow_install.setup.state import Install
 
         proof = proof_mac.Proof(Install(self.dir), self.env, out)
         code = proof_mac.cmd_livekit(
@@ -833,7 +863,7 @@ class ProofShTest(unittest.TestCase):
         self.assertTrue(os.access(PROOF_SH, os.X_OK))
         self.assertEqual(subprocess.run(["bash", "-n", PROOF_SH], check=False).returncode, 0)
 
-    @unittest.skipIf(sys.version_info < (3, 11), "suite-install needs python >= 3.11")
+    @unittest.skipIf(sys.version_info < (3, 11), "burrow-install needs python >= 3.11")
     def test_grep_transcript_flag_reaches_the_subcommand(self):
         result = subprocess.run(
             [PROOF_SH, "--grep-transcript", "--help"],

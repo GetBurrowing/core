@@ -15,7 +15,7 @@ second error for it, so one wrong field yields exactly one error line.
 
 import re
 
-from . import SCHEMA_VERSION
+from . import SCHEMA_VERSION, registry
 from .manifest import SCHEMA, ArrayOf, Field, normalize
 
 
@@ -74,6 +74,12 @@ _NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
 # A Docker Hub namespace (user or organisation): lowercase alphanumerics,
 # single separators between them.
 _IMAGE_NAMESPACE_RE = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
+# [images] registry: a registry host (with a dot, or localhost; optional port)
+# and at least one lowercase path component, e.g. ghcr.io/example.
+_IMAGE_REGISTRY_RE = re.compile(
+    r"^(?:localhost|[a-z0-9-]+(?:\.[a-z0-9-]+)+)(?::[0-9]{1,5})?"
+    r"(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)+$"
+)
 _LABEL_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _SECRET_REF_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,127}$")
@@ -418,23 +424,52 @@ def _rules(m, bad, errors, present=frozenset()):
         check_ref("backup.access_key_ref", backup["access_key_ref"])
         check_ref("backup.secret_key_ref", backup["secret_key_ref"])
 
-    # [images] image_namespace: required, no default (task 01a14b9e).
-    namespace = m["images"]["image_namespace"]
-    if namespace is None:
-        if not _is_bad("images.image_namespace", bad):
-            add(
-                "missing_required",
-                "images.image_namespace",
-                "image_namespace is required and has no default: the Docker Hub namespace "
-                "the suite-* images are pulled from (docker.io/<image_namespace>/suite-core)",
-            )
-    elif not _IMAGE_NAMESPACE_RE.match(namespace):
+    # [images]: exactly one of `registry` and the legacy `image_namespace`,
+    # with no default (tasks 01a14b9e, 01a14dd8).
+    images = m["images"]
+    registry_path = images["registry"]
+    namespace = images["image_namespace"]
+    registry_bad = _is_bad("images.registry", bad)
+    namespace_bad = _is_bad("images.image_namespace", bad)
+    if registry_path is not None and namespace is not None:
+        add(
+            "invalid_value",
+            "images.image_namespace",
+            "set exactly one of images.registry and the legacy images.image_namespace; "
+            "remove image_namespace",
+        )
+    elif registry_path is None and namespace is None and not (registry_bad or namespace_bad):
+        add(
+            "missing_required",
+            "images.registry",
+            "registry is required and has no default: the registry path the Burrow images "
+            "are pulled from, e.g. ghcr.io/<owner> (<registry>/core)",
+        )
+    if registry_path is not None and not _IMAGE_REGISTRY_RE.match(registry_path):
+        add(
+            "invalid_value",
+            "images.registry",
+            "must be a registry host and path in lowercase, e.g. ghcr.io/<owner>, "
+            "with no scheme, tag or trailing /",
+        )
+    if namespace is not None and not _IMAGE_NAMESPACE_RE.match(namespace):
         add(
             "invalid_value",
             "images.image_namespace",
             "must be a Docker Hub namespace: lowercase letters and digits, "
             "with single . _ or - between them",
         )
+    # An image with no build under a registry yet needs its ref pinned.
+    if registry_path is not None and namespace is None:
+        for key in sorted(registry.UNPUBLISHED_IN_REGISTRY):
+            container = registry.IMAGE_CONTAINERS[key]
+            if _runs(m, container) and not images["refs"].get(container):
+                add(
+                    "missing_required",
+                    f"images.refs.{container}",
+                    f"{key} has no published image under images.registry yet; pin "
+                    f"images.refs.{container}, or use the legacy images.image_namespace",
+                )
 
     # [images.refs]
     for container, ref in m["images"]["refs"].items():
@@ -564,6 +599,44 @@ def _mac_access_and_meetings(m, bad, present, add, check_ref):
                 "meetings.stt_endpoint",
                 f"{meetings['stt_endpoint']!r} names no [[models.endpoints]] entry",
             )
+
+
+def _runs(m, container):
+    """Whether a manifest that passed the rules above runs ``container``."""
+    if container == registry.TRANSCRIBER:
+        return bool(m["services"]["meetings"] and m["meetings"]["transcription"])
+    # A new UNPUBLISHED_IN_REGISTRY entry must say here when it runs.
+    raise AssertionError(f"_runs does not know {container}")
+
+
+class ValidationWarning:
+    """A manifest that is valid but uses a deprecated input."""
+
+    def __init__(self, code, path, message):
+        self.code = code
+        self.path = path
+        self.message = message
+
+    def __repr__(self):
+        return f"ValidationWarning({self.code!r}, {self.path!r})"
+
+    def line(self):
+        return f"warning {self.code} at {self.path}: {self.message}"
+
+
+def warnings(normalized):
+    """Deprecation warnings for a VALID, normalized manifest (never errors)."""
+    out = []
+    if normalized["images"]["image_namespace"] is not None:
+        out.append(
+            ValidationWarning(
+                "deprecated",
+                "images.image_namespace",
+                "image_namespace (the legacy Docker Hub images) is deprecated; "
+                "set images.registry instead, e.g. ghcr.io/<owner>",
+            )
+        )
+    return out
 
 
 def validate(raw):

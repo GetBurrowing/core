@@ -46,6 +46,8 @@ import urllib.parse
 from . import web
 from .state import SetupError
 
+# KEPT on purpose (task 01a14dd8): a row in the install's pocket-id database;
+# renaming it breaks sign-in on every existing install.
 CLIENT_ID = "suite-core"
 CLIENT_NAME = "Burrow"
 # The one-time sign-in code's lifetime. It MUST stay above 15 minutes.

@@ -19,9 +19,9 @@ sys.path.insert(0, HERE)
 
 from setup_fakes import MAC, MAC_LITE, FakeCloudflare, FakeHost, FakeKeychain, run_cli
 
-from suite_install.secrets import parse_env_file
-from suite_install.setup import cli
-from suite_install.setup.cloudflare import depth_errors
+from burrow_install.secrets import parse_env_file
+from burrow_install.setup import cli
+from burrow_install.setup.cloudflare import depth_errors
 
 TOKEN = "cf-FAKE-01a0d6ab-token-abcdef123456"
 

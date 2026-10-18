@@ -38,10 +38,10 @@ from setup_fakes import (
     run_cli,
 )
 
-from suite_install import envcompat
-from suite_install.setup import cli, pocketid
-from suite_install.setup.host import Result
-from suite_install.setup.state import Install
+from burrow_install import envcompat
+from burrow_install.setup import cli, pocketid
+from burrow_install.setup.host import Result
+from burrow_install.setup.state import Install
 
 PRIMARY = "suite-01a0d6ab.example.com"
 CALLBACK = "https://suite-01a0d6ab.example.com/auth/oidc/callback"

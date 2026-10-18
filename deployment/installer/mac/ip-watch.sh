@@ -1,7 +1,7 @@
 #!/bin/bash
 # Public-IP watcher for LiveKit media (task 01a0d6ab stage 4). Meetings with
 # [meetings] media_reach = "public" only; run every 5 minutes by a user
-# LaunchAgent that `suite_install setup run ddns` installs.
+# LaunchAgent that `burrow_install setup run ddns` installs.
 #
 # Usage: ip-watch.sh <install dir> <zone id|-> <media host|-> <token ref|->
 #   token ref: file:<path of a 0600 file> | keychain:<service>:<item>

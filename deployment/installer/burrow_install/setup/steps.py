@@ -27,7 +27,7 @@ MAC_DIR = os.path.join(INSTALLER_DIR, "mac")
 
 # Compressed linux/arm64 sizes in MiB, measured 2026-09-25 with
 # `docker buildx imagetools inspect --raw` (sum of layer sizes) for the images
-# the mac target pulls. suite-memory-service carries torch and dominates.
+# the mac target pulls. memory-service carries torch and dominates.
 IMAGE_MIB = {
     "core-platform": 276,
     "memory-service": 5851,
@@ -75,8 +75,10 @@ class Ctx:
         self.pocketid_url = None  # default https://<auth_host>
         self.docker_auth_url = "https://auth.docker.io/token"
         self.docker_registry_url = "https://registry-1.docker.io"
+        self.ghcr_auth_url = "https://ghcr.io/token"
+        self.ghcr_registry_url = "https://ghcr.io"
         self.url_for = lambda host, path: f"https://{host}{path}"
-        self.backup_root = None  # default ~/SuiteBackups
+        self.backup_root = None  # default ~/BurrowBackups
         self.log_root = None  # default ~/Library/Logs
         self.disk_free_bytes = lambda path: shutil.disk_usage(path).free
         self.health_wait_seconds = 600
@@ -198,12 +200,32 @@ def _need_registry(m):
 # ---------------------------------------------------------------------------
 
 
-def _docker_hub_repo(image):
+# Registries the credential check knows: host -> (docker config.json `auths`
+# keys tried in order, the human name, the remediation's example key).
+REGISTRY_AUTH_KEYS = {
+    "docker.io": (
+        ("https://index.docker.io/v1/", "index.docker.io", "docker.io", "registry-1.docker.io"),
+        "Docker Hub",
+        "https://index.docker.io/v1/",
+    ),
+    "ghcr.io": (("ghcr.io", "https://ghcr.io"), "GHCR", "ghcr.io"),
+}
+
+
+def _image_parts(image):
+    """``(registry host, repository, tag)`` of an image ref (docker.io when unqualified)."""
     ref = image
     for prefix in ("docker.io/", "index.docker.io/"):
-        ref = ref.removeprefix(prefix)
+        if ref.startswith(prefix):
+            ref = ref.removeprefix(prefix)
+            name, _, tag = ref.partition(":")
+            return "docker.io", name, tag or "latest"
+    first, sep, rest = ref.partition("/")
+    host = "docker.io"
+    if sep and ("." in first or ":" in first or first == "localhost"):
+        host, ref = first, rest
     name, _, tag = ref.partition(":")
-    return name, tag or "latest"
+    return host, name, tag or "latest"
 
 
 def check_registry_auth(ctx, auth_text, image):
@@ -214,48 +236,48 @@ def check_registry_auth(ctx, auth_text, image):
         raise SetupError(
             "registry_auth_invalid", "REGISTRY_AUTH is not JSON", "supply a docker config.json"
         ) from exc
+    host, repo, tag = _image_parts(image)
+    if host not in REGISTRY_AUTH_KEYS:
+        return f"{host}/{repo}:{tag} not checked (no credential check for {host})"
+    keys, label, example = REGISTRY_AUTH_KEYS[host]
     entry = None
-    for key in (
-        "https://index.docker.io/v1/",
-        "index.docker.io",
-        "docker.io",
-        "registry-1.docker.io",
-    ):
+    for key in keys:
         entry = (config.get("auths") or {}).get(key)
         if entry:
             break
     if not entry or not entry.get("auth"):
         raise SetupError(
             "registry_auth_unusable",
-            "REGISTRY_AUTH has no inline Docker Hub `auth` (a credsStore reference cannot be "
+            f"REGISTRY_AUTH has no inline {label} `auth` (a credsStore reference cannot be "
             "used from the install's own DOCKER_CONFIG)",
-            'write {"auths": {"https://index.docker.io/v1/": {"auth": "<base64 of '
+            f'write {{"auths": {{"{example}": {{"auth": "<base64 of '
             'user:read-token>"}}} to a 0600 file and re-supply REGISTRY_AUTH',
         )
-    repo, tag = _docker_hub_repo(image)
     basic = entry["auth"]
     ctx.seen_secrets["registry-auth"] = basic
     try:
         base64.b64decode(basic, validate=True)
     except ValueError as exc:
         raise SetupError("registry_auth_invalid", "REGISTRY_AUTH auth is not base64", None) from exc
+    if host == "ghcr.io":
+        token_url = f"{ctx.ghcr_auth_url}?service=ghcr.io&scope=repository:{repo}:pull"
+        registry_url = ctx.ghcr_registry_url
+    else:
+        token_url = f"{ctx.docker_auth_url}?service=registry.docker.io&scope=repository:{repo}:pull"
+        registry_url = ctx.docker_registry_url
     try:
-        resp = web.request(
-            "GET",
-            f"{ctx.docker_auth_url}?service=registry.docker.io&scope=repository:{repo}:pull",
-            headers={"Authorization": f"Basic {basic}"},
-        )
+        resp = web.request("GET", token_url, headers={"Authorization": f"Basic {basic}"})
         token = (resp.json() or {}).get("token") if resp.status == 200 else None
         if not token:
             raise SetupError(
                 "registry_auth_rejected",
-                f"Docker Hub refused the credential (HTTP {resp.status})",
+                f"{label} refused the credential (HTTP {resp.status})",
                 "check the user and read token in REGISTRY_AUTH",
             )
         ctx.seen_secrets["registry-token"] = token
         head = web.request(
             "HEAD",
-            f"{ctx.docker_registry_url}/v2/{repo}/manifests/{tag}",
+            f"{registry_url}/v2/{repo}/manifests/{tag}",
             headers={
                 "Authorization": f"Bearer {token}",
                 "Accept": "application/vnd.oci.image.index.v1+json, "
@@ -267,10 +289,11 @@ def check_registry_auth(ctx, auth_text, image):
             "registry_unreachable", f"{exc.kind}: {exc.detail}", "check the internet connection"
         ) from exc
     if head.status != 200:
+        source = "images.registry" if host == "ghcr.io" else "images.image_namespace"
         raise SetupError(
             "registry_auth_rejected",
             f"the credential cannot pull {repo}:{tag} (HTTP {head.status})",
-            "the Docker Hub user needs read access to the images.image_namespace repositories",
+            f"the {label} user needs read access to the {source} repositories",
         )
     return f"{repo}:{tag} pullable"
 
@@ -832,14 +855,21 @@ def _copy_script(ctx, name):
     return dest
 
 
+def _drop_legacy_agent(ctx, name, job, outputs):
+    """The job's pre-01a14dd8 label would run it twice beside the new one."""
+    label = macos.legacy_agent_label(name, job)
+    if macos.remove_agent(ctx.host, label):
+        outputs["legacy_launch_agent_removed"] = label
+
+
 def backup(ctx):
     name = ctx.install_name
-    root = ctx.backup_root or os.path.join(ctx.host.home(), "SuiteBackups")
+    root = ctx.backup_root or os.path.join(ctx.host.home(), "BurrowBackups")
     backup_dir = os.path.join(root, name)
     logs = ctx.log_root or os.path.join(ctx.host.home(), "Library", "Logs")
     os.makedirs(backup_dir, mode=0o700, exist_ok=True)
     os.makedirs(logs, exist_ok=True)
-    log = os.path.join(logs, f"suite-install-{name}-backup.log")
+    log = os.path.join(logs, f"burrow-install-{name}-backup.log")
     script = _copy_script(ctx, "backup.sh")
     args = ["/bin/bash", script, ctx.install.path, backup_dir, "14", registry.POSTGRES_USER]
     outputs = {"backup_dir": backup_dir, "log": log, "keep": 14, "schedule": "daily 03:15"}
@@ -847,6 +877,7 @@ def backup(ctx):
         label = macos.agent_label(name, "backup")
         plist = macos.agent_plist(label, args, log, calendar={"Hour": 3, "Minute": 15})
         outputs["launch_agent"] = macos.install_agent(ctx.host, label, plist)
+        _drop_legacy_agent(ctx, name, "backup", outputs)
     else:
         outputs["launch_agent"] = "not installed (not macOS); schedule the same command with cron"
     result = ctx.host.run(args, timeout=3600)
@@ -893,7 +924,7 @@ def ddns(ctx):
             raise SetupError("step_order", "no zone id", "run `setup run domain`", exit_code=2)
     logs = ctx.log_root or os.path.join(ctx.host.home(), "Library", "Logs")
     os.makedirs(logs, exist_ok=True)
-    log = os.path.join(logs, f"suite-install-{name}-ip-watch.log")
+    log = os.path.join(logs, f"burrow-install-{name}-ip-watch.log")
     script = _copy_script(ctx, "ip-watch.sh")
     args = ["/bin/bash", script, ctx.install.path, zone_arg, media_host or "-", token_arg]
     outputs = {"interval_seconds": 300, "log": log, "media_host": media_host or None}
@@ -901,6 +932,7 @@ def ddns(ctx):
         label = macos.agent_label(name, "ip-watch")
         plist = macos.agent_plist(label, args, log, interval=300)
         outputs["launch_agent"] = macos.install_agent(ctx.host, label, plist)
+        _drop_legacy_agent(ctx, name, "ip-watch", outputs)
     human = [
         {
             "why": "LiveKit media from the internet (media_reach = public)",

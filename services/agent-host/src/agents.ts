@@ -7,7 +7,7 @@
  *      credentials file (0600) carrying the runtime token core minted for
  *      this start — suite-cli 0.7.1+'s per-folder format
  *      (`~/.config/suite/agents/<key>.json` + `<key>.credentials.json`);
- *   3. the agent's env file, /etc/suite-agents/<id>.env, 0600, owned by the
+ *   3. the agent's env file, /etc/burrow-agents/<id>.env, 0600, owned by the
  *      agent, holding only that agent's values;
  *   4. the unit drop-in;
  *   5. AS THAT UID: the agent's own files (CLAUDE.md, .claude/settings.json,
@@ -15,7 +15,7 @@
  *   6. AS THAT UID: Burrow's conventions as the agent's USER memory,
  *      `~/.claude/CLAUDE.md` (conventions.ts), which the owner's files cannot
  *      replace;
- *   7. `systemctl restart suite-agent@<id>`.
+ *   7. `systemctl restart burrow-agent@<id>`.
  *
  * Files in an agent's home are written by a child running as the agent
  * (`runuser`), so a symlink the agent left in its own home can never redirect

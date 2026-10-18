@@ -7,12 +7,12 @@ and in the registry. Core never branches on it; the agent host reports it.
 container, so an agent's ``sudo apt-get install`` and ``sudo systemctl`` act on
 the real machine. This module renders, into cloud-init user-data:
 
-- ``/etc/sudoers.d/suite-agents``: passwordless sudo for group suite-agents;
-- ``suite-agent-host.service`` and stage 2's ``suite-agent@.service`` template;
-- ``suite-agent-host-setup.service`` + ``bin/suite-agent-host-setup``, which at
+- ``/etc/sudoers.d/burrow-agents``: passwordless sudo for group burrow-agents;
+- ``burrow-agent-host.service`` and the agent host's ``burrow-agent@.service`` template;
+- ``burrow-agent-host-setup.service`` + ``bin/burrow-agent-host-setup``, which at
   first boot copy the daemon out of the agent-host image (the same artefact
   ``contained`` runs) and install the tools pinned in ``versions.env``;
-- ``/etc/suite-agent-host.env`` (0600 root): AGENT_HOST_TOKEN, the profile and
+- ``/etc/burrow-agent-host.env`` (0600 root): AGENT_HOST_TOKEN, the profile and
   the install's public URL. Agents reach core there, through Caddy, exactly as a
   federated agent does; an internal root CA is put in the system trust store.
 
@@ -29,7 +29,7 @@ services/agent-host/ (the image ships the originals);
 tests/test_agents_render.py fails on any drift.
 """
 
-INSTALL_ROOT = "/opt/suite"
+INSTALL_ROOT = "/opt/burrow"
 
 # services/agent-host/versions.env, verbatim.
 VERSIONS_ENV = """\
@@ -37,12 +37,12 @@ VERSIONS_ENV = """\
 # (core task 01a10322 stage 3). One value per line, NAME=value, no quotes.
 #
 #   contained     Dockerfile runs packaging/install-tools.sh against this file.
-#   full_machine  suite_install renders this file verbatim into cloud-init
-#                 user-data (/etc/suite-agent-host/versions.env), and the host's
+#   full_machine  burrow_install renders this file verbatim into cloud-init
+#                 user-data (/etc/burrow-agent-host/versions.env), and the host's
 #                 setup unit runs the same install-tools.sh against it.
 #
 # deployment/installer/tests/test_agents_render.py fails if the installer's
-# copy (suite_install/agents.py VERSIONS_ENV) differs from this file by a byte.
+# copy (burrow_install/agents.py VERSIONS_ENV) differs from this file by a byte.
 #
 # Claude Code 2.x needs node >= 22 (npm view @anthropic-ai/claude-code engines),
 # which neither Debian bookworm nor Ubuntu noble ship, so node is pinned here
@@ -56,23 +56,23 @@ BURROW_CLI_REF=3f8072830bea22f45584d00a5b6611bee05a05f8
 SUITE_CLI_REF=3f8072830bea22f45584d00a5b6611bee05a05f8
 """
 
-# services/agent-host/packaging/sudoers-suite-agents, verbatim.
+# services/agent-host/packaging/sudoers-burrow-agents, verbatim.
 SUDOERS = """\
 # Installed by Burrow's agent host packaging (core task 01a10322 stage 3).
 # Native agents do anything that needs root themselves, with this grant.
 # An install is ONE trust group: an agent with this grant can read every other
 # agent's home, env file and tokens. Per-agent users are not a security boundary.
-%suite-agents ALL=(ALL) NOPASSWD:ALL
+%burrow-agents ALL=(ALL) NOPASSWD:ALL
 """
 
-# services/agent-host/packaging/suite-agent-host.service, verbatim.
+# services/agent-host/packaging/burrow-agent-host.service, verbatim.
 HOST_UNIT = """\
 # Burrow's agent host (core task 01a10322). The same unit in both capability
 # profiles: on full_machine it is a host service, on contained it runs under
 # the agent-host container's systemd.
 #
-# Configuration comes from /etc/suite-agent-host.env (full_machine: written by
-# suite_install, 0600 root) or, on contained, from the container's environment,
+# Configuration comes from /etc/burrow-agent-host.env (full_machine: written by
+# burrow_install, 0600 root) or, on contained, from the container's environment,
 # which PassEnvironment hands through from systemd. The image sets
 # AGENT_HOST_PROFILE=contained; Environment/EnvironmentFile win over it.
 [Unit]
@@ -83,11 +83,11 @@ Wants=network-online.target
 [Service]
 Type=simple
 PassEnvironment=BURROW_CORE_URL SUITE_CORE_URL AGENT_HOST_TOKEN AGENT_HOST_PROFILE
-EnvironmentFile=-/etc/suite-agent-host.env
+EnvironmentFile=-/etc/burrow-agent-host.env
 # Node and bun read only their bundled roots without this; the system bundle
 # carries an install's internal root CA once update-ca-certificates has run.
 Environment=NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
-ExecStart=/usr/local/bin/bun run /opt/suite/agent-host/src/main.ts
+ExecStart=/usr/local/bin/bun run /opt/burrow/agent-host/src/main.ts
 Restart=always
 RestartSec=5
 
@@ -95,12 +95,12 @@ RestartSec=5
 WantedBy=multi-user.target
 """
 
-# services/agent-host/packaging/suite-agent@.service, verbatim. The agent host
+# services/agent-host/packaging/burrow-agent@.service, verbatim. The agent host
 # writes the same text on every start (src/units.ts templateUnit), so shipping
 # it here only means the unit exists before the first agent does.
 AGENT_TEMPLATE_UNIT = """\
 # Managed by Burrow's agent host. One instance per native agent; %i is the agent id.
-# The per-agent drop-in in suite-agent@<id>.service.d/ sets User, Group and paths.
+# The per-agent drop-in in burrow-agent@<id>.service.d/ sets User, Group and paths.
 [Unit]
 Description=Burrow native agent %i
 After=network-online.target
@@ -110,7 +110,7 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
-EnvironmentFile=/etc/suite-agents/%i.env
+EnvironmentFile=/etc/burrow-agents/%i.env
 Environment=BURROW_AGENT_ID=%i
 Environment=SUITE_AGENT_ID=%i
 Environment=BURROW_AGENT_SESSION=suite-agent
@@ -119,7 +119,7 @@ Environment=BURROW_UNATTENDED=1
 Environment=SUITE_UNATTENDED=1
 Environment=DISABLE_AUTOUPDATER=1
 Environment=NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
-ExecStart=/usr/local/bin/bun run /opt/suite/agent-host/src/runner.ts
+ExecStart=/usr/local/bin/bun run /opt/burrow/agent-host/src/runner.ts
 Restart=on-failure
 RestartSec=5
 KillMode=control-group
@@ -129,13 +129,19 @@ TimeoutStopSec=30
 WantedBy=multi-user.target
 """
 
-HOST_UNIT_NAME = "suite-agent-host.service"
-SETUP_UNIT_NAME = "suite-agent-host-setup.service"
+HOST_UNIT_NAME = "burrow-agent-host.service"
+SETUP_UNIT_NAME = "burrow-agent-host-setup.service"
 FULL_MACHINE_UNITS = (SETUP_UNIT_NAME, HOST_UNIT_NAME)
+AGENT_TEMPLATE_UNIT_NAME = "burrow-agent@.service"
+SETUP_SCRIPT = "burrow-agent-host-setup"
+# The OS group of native agents (services/agent-host/src/ids.ts AGENTS_GROUP).
+AGENTS_GROUP = "burrow-agents"
+# templates.py's stack unit; named here too because templates imports this module.
+STACK_UNIT_NAME = "burrow-stack.service"
 
-VERSIONS_PATH = "/etc/suite-agent-host/versions.env"
-HOST_ENV_PATH = "/etc/suite-agent-host.env"
-SUDOERS_PATH = "/etc/sudoers.d/suite-agents"
+VERSIONS_PATH = "/etc/burrow-agent-host/versions.env"
+HOST_ENV_PATH = "/etc/burrow-agent-host.env"
+SUDOERS_PATH = "/etc/sudoers.d/burrow-agents"
 SUDOERS_MODE = 0o440
 SECRET_MODE = 0o600
 FILE_MODE = 0o644
@@ -156,10 +162,10 @@ def _header(plan):
 
 
 def host_env(plan, token):
-    """/etc/suite-agent-host.env: read by suite-agent-host.service only."""
+    """/etc/burrow-agent-host.env: read by burrow-agent-host.service only."""
     return (
         f"# {_header(plan)}\n"
-        "# SECRET. Mode 0600, root. Read by suite-agent-host.service only.\n"
+        f"# SECRET. Mode 0600, root. Read by {HOST_UNIT_NAME} only.\n"
         "AGENT_HOST_PROFILE=full_machine\n"
         f"AGENT_HOST_TOKEN={token}\n"
         f"BURROW_CORE_URL=https://{plan.primary}\n"
@@ -173,7 +179,7 @@ def host_unit_dropin(plan):
         "# full_machine: the daemon and its tools are installed at first boot.",
         "[Unit]",
         f"Requires={SETUP_UNIT_NAME}",
-        f"After={SETUP_UNIT_NAME} suite-stack.service",
+        f"After={SETUP_UNIT_NAME} {STACK_UNIT_NAME}",
     ]
     return "\n".join(lines) + "\n"
 
@@ -195,7 +201,7 @@ def setup_unit(plan):
         "[Service]",
         "Type=oneshot",
         "RemainAfterExit=yes",
-        f"ExecStart={INSTALL_ROOT}/bin/suite-agent-host-setup",
+        f"ExecStart={INSTALL_ROOT}/bin/{SETUP_SCRIPT}",
         "TimeoutStartSec=30min",
         "",
         "[Install]",
@@ -210,7 +216,7 @@ def setup_script(plan, image):
     if plan.tls == "internal":
         trust = f"""\
 # tls = internal: agents (node, bun, git, curl) must trust this install's root.
-install -m 0644 {INSTALL_ROOT}/tls/root.crt /usr/local/share/ca-certificates/suite-{plan.name}-root.crt
+install -m 0644 {INSTALL_ROOT}/tls/root.crt /usr/local/share/ca-certificates/burrow-{plan.name}-root.crt
 update-ca-certificates >/dev/null
 """
     return f"""\
@@ -221,7 +227,7 @@ update-ca-certificates >/dev/null
 set -eu
 image='{image}'
 dest={INSTALL_ROOT}/agent-host
-getent group suite-agents >/dev/null || groupadd --system suite-agents
+getent group {AGENTS_GROUP} >/dev/null || groupadd --system {AGENTS_GROUP}
 {trust}# Agents reach core at its public URL, through Caddy on this host.
 grep -q ' {plan.primary}$' /etc/hosts || printf '127.0.0.1 {plan.primary}\\n' >> /etc/hosts
 # The daemon ships in the agent-host image, the artefact `contained` runs.
@@ -252,9 +258,9 @@ def full_machine_files(plan, host_env_text):
             host_unit_dropin(plan),
             FILE_MODE,
         ),
-        "/etc/systemd/system/suite-agent@.service": (AGENT_TEMPLATE_UNIT, FILE_MODE),
+        f"/etc/systemd/system/{AGENT_TEMPLATE_UNIT_NAME}": (AGENT_TEMPLATE_UNIT, FILE_MODE),
         f"/etc/systemd/system/{SETUP_UNIT_NAME}": (setup_unit(plan), FILE_MODE),
-        "bin/suite-agent-host-setup": (setup_script(plan, image), EXEC_MODE),
+        f"bin/{SETUP_SCRIPT}": (setup_script(plan, image), EXEC_MODE),
     }
 
 
